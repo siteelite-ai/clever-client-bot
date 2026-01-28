@@ -57,7 +57,7 @@ function parseQuery(message: string): { product: string; brand: string | null } 
     /^(мне нужен|мне нужна|мне нужно|хочу купить|ищу|подскажите|порекомендуйте|посоветуйте|нужен|нужна|нужно|есть ли у вас)\s*/i,
     /^(покажи|найди|поищи|подбери|выбери)\s*/i,
     /\s*(пожалуйста|спасибо)\.?$/i,
-    /^(какие есть|что есть|есть|какой)\s*/i,
+    /^(какие есть|что есть|есть|какой|а есть)\s*/i,
   ];
   
   for (const regex of cleaners) {
@@ -69,8 +69,13 @@ function parseQuery(message: string): { product: string; brand: string | null } 
     product = product.replace(new RegExp(foundBrand, 'gi'), '').trim();
   }
   
+  // Убираем знаки препинания в конце и начале
+  product = product.replace(/^[?!.,\s]+|[?!.,\s]+$/g, '').trim();
+  
+  console.log(`parseQuery: input="${message}" -> product="${product}", brand="${foundBrand}"`);
+  
   return {
-    product: product.trim() || message,
+    product: product.trim() || message.replace(/[?!.,]/g, '').trim(),
     brand: foundBrand,
   };
 }
@@ -117,9 +122,10 @@ async function searchProducts(query: string, brand: string | null, limit: number
       }
 
       const rawData = await response.json();
+      console.log(`Raw API response keys:`, Object.keys(rawData));
       const data = rawData.data || rawData;
       
-      console.log(`Found ${data.results?.length || 0} products`);
+      console.log(`Found ${data.results?.length || 0} products, total: ${data.pagination?.total || 0}`);
       
       return data.results || [];
     } catch (error) {
@@ -181,9 +187,10 @@ function detectIntent(message: string): 'catalog' | 'info' | 'general' {
   const catalogKeywords = [
     'товар', 'цена', 'купить', 'заказать', 'найти', 'поиск', 'подобрать',
     'рекомендовать', 'посоветовать', 'нужен', 'хочу', 'ищу', 'дрель', 'перфоратор',
-    'болгарка', 'шуруповерт', 'пила', 'генератор', 'насос', 'компрессор', 'кабель',
-    'сварка', 'инструмент', 'оборудование', 'техника', 'электро', 'бензо', 'провод',
-    ...KNOWN_BRANDS, 'для дома', 'для дачи', 'для стройки', 'для ремонта', 'покажи'
+    'болгарка', 'шуруповерт', 'пила', 'генератор', 'насос', 'компрессор', 'кабел', // кабель, кабели, кабеля
+    'сварк', 'инструмент', 'оборудование', 'техника', 'электро', 'бензо', 'провод',
+    ...KNOWN_BRANDS, 'для дома', 'для дачи', 'для стройки', 'для ремонта', 'покажи',
+    'есть ли', 'есть', 'какие', 'что есть', 'каталог', 'ассортимент'
   ];
   
   const infoKeywords = [
@@ -194,11 +201,16 @@ function detectIntent(message: string): 'catalog' | 'info' | 'general' {
   
   const lowerMessage = message.toLowerCase();
   
-  if (catalogKeywords.some(k => lowerMessage.includes(k))) {
+  const isCatalog = catalogKeywords.some(k => lowerMessage.includes(k));
+  const isInfo = infoKeywords.some(k => lowerMessage.includes(k));
+  
+  console.log(`Intent detection: catalog=${isCatalog}, info=${isInfo}, message="${lowerMessage}"`);
+  
+  if (isCatalog) {
     return 'catalog';
   }
   
-  if (infoKeywords.some(k => lowerMessage.includes(k))) {
+  if (isInfo) {
     return 'info';
   }
   
