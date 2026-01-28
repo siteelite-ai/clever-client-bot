@@ -30,137 +30,292 @@ interface Product {
   }>;
 }
 
-// Известные бренды для фильтрации
-const KNOWN_BRANDS = [
-  'makita', 'bosch', 'dewalt', 'metabo', 'hitachi', 'milwaukee', 'stihl',
-  'husqvarna', 'karcher', 'вихрь', 'patriot', 'зубр', 'интерскол', 'elitech',
-  'fubag', 'huter', 'champion', 'denzel', 'sturm', 'fit'
-];
+interface SearchCandidate {
+  query: string;
+  brand: string | null;
+  category: string | null;
+}
 
-// Извлечение продукта и бренда из запроса
-function parseQuery(message: string): { product: string; brand: string | null } {
-  const lowerMessage = message.toLowerCase();
+interface ExtractedIntent {
+  intent: 'catalog' | 'info' | 'general';
+  candidates: SearchCandidate[];
+  originalQuery: string;
+}
+
+// Генерация поисковых кандидатов через AI
+async function generateSearchCandidates(
+  message: string, 
+  apiKey: string
+): Promise<ExtractedIntent> {
+  console.log(`[AI Candidates] Extracting search intent from: "${message}"`);
   
-  // Ищем бренд в сообщении
+  const extractionPrompt = `Ты — система извлечения поисковых намерений для интернет-магазина электроинструментов 220volt.kz.
+
+Проанализируй сообщение пользователя и определи:
+1. Тип намерения (intent):
+   - "catalog" — пользователь ищет товары, хочет купить, интересуется ценами/наличием
+   - "info" — вопросы о доставке, оплате, гарантии, контактах
+   - "general" — приветствие, благодарность, общие вопросы
+
+2. Если intent="catalog", сгенерируй 2-5 поисковых запросов-кандидатов для API каталога:
+   - Основной запрос (как написал пользователь, очищенный)
+   - Синонимы и вариации (например: "дрель" -> ["дрель", "шуруповерт", "дрель-шуруповерт"])
+   - Если упомянут бренд — включи его отдельно
+   - Если можно определить категорию — укажи её
+
+ВАЖНО: 
+- Кандидаты должны быть короткими (1-3 слова)
+- Не добавляй вспомогательные слова (нужен, хочу, купить)
+- Бренды выделяй отдельно (Makita, Bosch, DeWalt, Metabo и т.д.)
+
+Сообщение пользователя: "${message}"`;
+
+  try {
+    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'google/gemini-3-flash-preview',
+        messages: [
+          { role: 'system', content: extractionPrompt },
+          { role: 'user', content: message }
+        ],
+        tools: [
+          {
+            type: 'function',
+            function: {
+              name: 'extract_search_intent',
+              description: 'Извлекает намерение пользователя и генерирует поисковые кандидаты',
+              parameters: {
+                type: 'object',
+                properties: {
+                  intent: { 
+                    type: 'string', 
+                    enum: ['catalog', 'info', 'general'],
+                    description: 'Тип намерения пользователя'
+                  },
+                  candidates: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        query: { 
+                          type: 'string',
+                          description: 'Поисковый запрос для API (1-3 слова)'
+                        },
+                        brand: { 
+                          type: 'string',
+                          nullable: true,
+                          description: 'Бренд если указан (Makita, Bosch и т.д.)'
+                        },
+                        category: {
+                          type: 'string', 
+                          nullable: true,
+                          description: 'Категория товара если определена'
+                        }
+                      },
+                      required: ['query'],
+                      additionalProperties: false
+                    },
+                    description: 'Массив поисковых кандидатов (2-5 штук)'
+                  }
+                },
+                required: ['intent', 'candidates'],
+                additionalProperties: false
+              }
+            }
+          }
+        ],
+        tool_choice: { type: 'function', function: { name: 'extract_search_intent' } },
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[AI Candidates] API error: ${response.status}`, errorText);
+      // Fallback на простой парсинг
+      return fallbackParseQuery(message);
+    }
+
+    const data = await response.json();
+    console.log(`[AI Candidates] Raw response:`, JSON.stringify(data, null, 2));
+
+    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    if (toolCall?.function?.arguments) {
+      const parsed = JSON.parse(toolCall.function.arguments);
+      console.log(`[AI Candidates] Extracted:`, JSON.stringify(parsed, null, 2));
+      
+      return {
+        intent: parsed.intent || 'general',
+        candidates: parsed.candidates || [],
+        originalQuery: message
+      };
+    }
+
+    console.log(`[AI Candidates] No tool call found, using fallback`);
+    return fallbackParseQuery(message);
+
+  } catch (error) {
+    console.error(`[AI Candidates] Error:`, error);
+    return fallbackParseQuery(message);
+  }
+}
+
+// Fallback парсинг если AI недоступен
+function fallbackParseQuery(message: string): ExtractedIntent {
+  const KNOWN_BRANDS = [
+    'makita', 'bosch', 'dewalt', 'metabo', 'hitachi', 'milwaukee', 'stihl',
+    'husqvarna', 'karcher', 'вихрь', 'patriot', 'зубр', 'интерскол', 'elitech',
+    'fubag', 'huter', 'champion', 'denzel', 'sturm', 'fit'
+  ];
+  
+  const catalogKeywords = [
+    'товар', 'цена', 'купить', 'заказать', 'найти', 'дрель', 'перфоратор',
+    'болгарка', 'шуруповерт', 'пила', 'генератор', 'насос', 'компрессор', 
+    'кабель', 'сварка', 'инструмент', 'провод', 'есть', 'какие', ...KNOWN_BRANDS
+  ];
+  
+  const infoKeywords = ['доставка', 'оплата', 'гарантия', 'возврат', 'адрес', 'телефон', 'контакт'];
+  
+  const lowerMessage = message.toLowerCase();
+  let product = message.replace(/[?!.,]+/g, ' ').replace(/\s+/g, ' ').trim();
+  
+  // Убираем общие фразы
+  const cleaners = [
+    /^(привет|здравствуйте|добрый день|мне нужен|мне нужна|хочу купить|ищу|нужен|есть ли|какие есть|есть|покажи|найди)\s*/gi,
+    /\s*(пожалуйста|спасибо|есть|в наличии|у вас)$/gi,
+  ];
+  for (const regex of cleaners) {
+    product = product.replace(regex, '').trim();
+  }
+  
+  // Определяем бренд
   let foundBrand: string | null = null;
   for (const brand of KNOWN_BRANDS) {
     if (lowerMessage.includes(brand)) {
       foundBrand = brand;
+      product = product.replace(new RegExp(brand, 'gi'), '').trim();
       break;
     }
   }
   
-  // Убираем знаки препинания сначала
-  let product = message.replace(/[?!.,]+/g, ' ').trim();
+  const isCatalog = catalogKeywords.some(k => lowerMessage.includes(k));
+  const isInfo = infoKeywords.some(k => lowerMessage.includes(k));
   
-  // Чистим от общих фраз (в начале и в конце)
-  const cleanersStart = [
-    /^(привет|здравствуйте|добрый день|доброе утро|добрый вечер)\s*/i,
-    /^(мне нужен|мне нужна|мне нужно|хочу купить|ищу|подскажите|порекомендуйте|посоветуйте|нужен|нужна|нужно|есть ли у вас)\s*/i,
-    /^(покажи|найди|поищи|подбери|выбери|а есть|есть ли|какие есть|что есть|какой|какая|какое|какие)\s*/i,
-    /^(у вас|а у вас|есть)\s*/i,
-  ];
+  const intent = isCatalog ? 'catalog' : isInfo ? 'info' : 'general';
   
-  const cleanersEnd = [
-    /\s*(пожалуйста|спасибо)$/i,
-    /\s*(есть|имеется|в наличии|в продаже)$/i,
-    /\s*(у вас)$/i,
-  ];
-  
-  for (const regex of cleanersStart) {
-    product = product.replace(regex, '').trim();
-  }
-  
-  for (const regex of cleanersEnd) {
-    product = product.replace(regex, '').trim();
-  }
-  
-  // Убираем бренд из запроса, оставляя только продукт
-  if (foundBrand) {
-    product = product.replace(new RegExp(foundBrand, 'gi'), '').trim();
-  }
-  
-  // Финальная очистка пробелов
-  product = product.replace(/\s+/g, ' ').trim();
-  
-  console.log(`parseQuery: input="${message}" -> product="${product}", brand="${foundBrand}"`);
+  console.log(`[Fallback] intent=${intent}, query="${product}", brand="${foundBrand}"`);
   
   return {
-    product: product.trim() || message.replace(/[?!.,]/g, '').trim(),
-    brand: foundBrand,
+    intent,
+    candidates: product ? [{ query: product, brand: foundBrand, category: null }] : [],
+    originalQuery: message
   };
 }
 
-// Поиск товаров в каталоге 220volt.kz с опциональным фильтром по бренду
-async function searchProducts(query: string, brand: string | null, limit: number = 5): Promise<Product[]> {
+// Поиск товаров по одному кандидату
+async function searchProductsByCandidate(
+  candidate: SearchCandidate, 
+  apiToken: string,
+  limit: number = 5
+): Promise<Product[]> {
+  try {
+    const params = new URLSearchParams();
+    
+    if (candidate.query) {
+      params.append('query', candidate.query);
+    }
+    params.append('per_page', limit.toString());
+    
+    if (candidate.brand) {
+      const brandCapitalized = candidate.brand.charAt(0).toUpperCase() + candidate.brand.slice(1).toLowerCase();
+      params.append('options[brend__brend][]', brandCapitalized);
+    }
+    
+    if (candidate.category) {
+      params.append('category', candidate.category);
+    }
+
+    console.log(`[Search] Candidate: query="${candidate.query}", brand="${candidate.brand}", category="${candidate.category}"`);
+
+    const response = await fetch(`${VOLT220_API_URL}?${params}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      console.error(`[Search] API error: ${response.status}`);
+      return [];
+    }
+
+    const rawData = await response.json();
+    const data = rawData.data || rawData;
+    
+    console.log(`[Search] Found ${data.results?.length || 0} products for "${candidate.query}"`);
+    
+    return data.results || [];
+  } catch (error) {
+    console.error(`[Search] Error for "${candidate.query}":`, error);
+    return [];
+  }
+}
+
+// Параллельный поиск по всем кандидатам с дедупликацией
+async function searchProductsMulti(
+  candidates: SearchCandidate[],
+  limit: number = 10
+): Promise<Product[]> {
   const apiToken = Deno.env.get('VOLT220_API_TOKEN');
   
   if (!apiToken) {
-    console.error('VOLT220_API_TOKEN is not configured');
+    console.error('[Search] VOLT220_API_TOKEN is not configured');
     return [];
   }
 
-  async function doSearch(searchQuery: string, brandFilter: string | null): Promise<Product[]> {
-    try {
-      const params = new URLSearchParams();
-      
-      // Добавляем поисковый запрос если есть
-      if (searchQuery) {
-        params.append('query', searchQuery);
+  if (candidates.length === 0) {
+    console.log('[Search] No candidates to search');
+    return [];
+  }
+
+  console.log(`[Search] Searching ${candidates.length} candidates in parallel...`);
+
+  // Параллельный поиск
+  const searchPromises = candidates.map(candidate => 
+    searchProductsByCandidate(candidate, apiToken, limit)
+  );
+  
+  const results = await Promise.all(searchPromises);
+  
+  // Объединяем и дедуплицируем по ID
+  const productMap = new Map<number, Product>();
+  
+  for (const products of results) {
+    for (const product of products) {
+      if (!productMap.has(product.id)) {
+        productMap.set(product.id, product);
       }
-      params.append('per_page', limit.toString());
-      
-      // Добавляем фильтр по бренду если указан
-      if (brandFilter) {
-        const brandCapitalized = brandFilter.charAt(0).toUpperCase() + brandFilter.slice(1);
-        params.append('options[brend__brend][]', brandCapitalized);
-      }
-
-      console.log(`Searching products: query="${searchQuery}", brand="${brandFilter}"`);
-      console.log(`API params: ${params.toString()}`);
-
-      const response = await fetch(`${VOLT220_API_URL}?${params}`, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${apiToken}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        console.error(`220volt API error: ${response.status}`);
-        return [];
-      }
-
-      const rawData = await response.json();
-      console.log(`Raw API response keys:`, Object.keys(rawData));
-      const data = rawData.data || rawData;
-      
-      console.log(`Found ${data.results?.length || 0} products, total: ${data.pagination?.total || 0}`);
-      
-      return data.results || [];
-    } catch (error) {
-      console.error('Error searching products:', error);
-      return [];
     }
   }
-
-  // Первая попытка - поиск с брендом
-  let products = await doSearch(query, brand);
   
-  // Если ничего не найдено с брендом, пробуем без бренда
-  if (products.length === 0 && brand) {
-    console.log(`No products found with brand "${brand}", trying without brand filter`);
-    products = await doSearch(query, null);
-  }
+  const uniqueProducts = Array.from(productMap.values());
+  console.log(`[Search] Total unique products: ${uniqueProducts.length}`);
   
-  // Если запрос пустой или ничего не найдено, попробуем без запроса
-  if (products.length === 0 && !query) {
-    console.log('No products found, trying generic search');
-    products = await doSearch('', null);
-  }
+  // Сортируем по наличию и цене
+  uniqueProducts.sort((a, b) => {
+    // Сначала товары в наличии
+    if (a.amount > 0 && b.amount === 0) return -1;
+    if (a.amount === 0 && b.amount > 0) return 1;
+    // Затем по цене (дешевле первыми)
+    return a.price - b.price;
+  });
   
-  return products;
+  return uniqueProducts.slice(0, limit);
 }
 
 // Форматирование товаров для AI
@@ -170,12 +325,11 @@ function formatProductsForAI(products: Product[]): string {
   }
 
   return products.map((p, i) => {
-    // Извлекаем бренд из options если vendor пустой
     let brand = p.vendor;
     if (!brand && p.options) {
       const brandOption = p.options.find(o => o.key === 'brend__brend');
       if (brandOption) {
-        brand = brandOption.value.split('//')[0]; // Берем только русскую версию
+        brand = brandOption.value.split('//')[0];
       }
     }
     
@@ -186,50 +340,14 @@ function formatProductsForAI(products: Product[]): string {
       p.article ? `   - Артикул: ${p.article}` : '',
       `   - В наличии: ${p.amount > 0 ? `Да (${p.amount} шт.)` : 'Под заказ'}`,
       p.category ? `   - Категория: ${p.category.pagetitle}` : '',
-      `   - Ссылка: ${p.url}`, // Используем готовый URL из API
+      `   - Ссылка: ${p.url}`,
     ].filter(Boolean);
     
     return parts.join('\n');
   }).join('\n\n');
 }
 
-// Определение намерения пользователя
-function detectIntent(message: string): 'catalog' | 'info' | 'general' {
-  const catalogKeywords = [
-    'товар', 'цена', 'купить', 'заказать', 'найти', 'поиск', 'подобрать',
-    'рекомендовать', 'посоветовать', 'нужен', 'хочу', 'ищу', 'дрель', 'перфоратор',
-    'болгарка', 'шуруповерт', 'пила', 'генератор', 'насос', 'компрессор', 'кабел', // кабель, кабели, кабеля
-    'сварк', 'инструмент', 'оборудование', 'техника', 'электро', 'бензо', 'провод',
-    ...KNOWN_BRANDS, 'для дома', 'для дачи', 'для стройки', 'для ремонта', 'покажи',
-    'есть ли', 'есть', 'какие', 'что есть', 'каталог', 'ассортимент'
-  ];
-  
-  const infoKeywords = [
-    'доставка', 'оплата', 'гарантия', 'возврат', 'адрес', 'телефон',
-    'контакт', 'работаете', 'график', 'время', 'магазин', 'самовывоз',
-    'кредит', 'рассрочка'
-  ];
-  
-  const lowerMessage = message.toLowerCase();
-  
-  const isCatalog = catalogKeywords.some(k => lowerMessage.includes(k));
-  const isInfo = infoKeywords.some(k => lowerMessage.includes(k));
-  
-  console.log(`Intent detection: catalog=${isCatalog}, info=${isInfo}, message="${lowerMessage}"`);
-  
-  if (isCatalog) {
-    return 'catalog';
-  }
-  
-  if (isInfo) {
-    return 'info';
-  }
-  
-  return 'general';
-}
-
 serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -245,30 +363,27 @@ serve(async (req) => {
     const lastMessage = messages[messages.length - 1];
     const userMessage = lastMessage?.content || '';
     
-    console.log(`Processing message: ${userMessage}`);
-    console.log(`Conversation ID: ${conversationId}`);
+    console.log(`[Chat] Processing: "${userMessage}"`);
+    console.log(`[Chat] Conversation ID: ${conversationId}`);
 
-    // Определяем намерение
-    const intent = detectIntent(userMessage);
-    console.log(`Detected intent: ${intent}`);
+    // ШАГ 1: AI генерирует поисковые кандидаты
+    const extractedIntent = await generateSearchCandidates(userMessage, LOVABLE_API_KEY);
+    console.log(`[Chat] Intent: ${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}`);
 
     let productContext = '';
     let foundProducts: Product[] = [];
 
-    // Если пользователь ищет товары - делаем поиск
-    if (intent === 'catalog') {
-      const { product, brand } = parseQuery(userMessage);
-      console.log(`Parsed query: product="${product}", brand="${brand}"`);
-      
-      foundProducts = await searchProducts(product, brand, 5);
+    // ШАГ 2: Если каталожный запрос — параллельный поиск по всем кандидатам
+    if (extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
+      foundProducts = await searchProductsMulti(extractedIntent.candidates, 8);
       
       if (foundProducts.length > 0) {
-        const queryDesc = brand ? `${product} ${brand}` : product;
-        productContext = `\n\n**Найденные товары по запросу "${queryDesc}":**\n\n${formatProductsForAI(foundProducts)}`;
+        const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
+        productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**\n\n${formatProductsForAI(foundProducts)}`;
       }
     }
 
-    // Системный промпт для AI
+    // ШАГ 3: Системный промпт с контекстом товаров
     const systemPrompt = `Ты — AI-консультант интернет-магазина 220volt.kz, крупнейшего магазина электроинструментов и оборудования в Казахстане.
 
 ТВОЯ РОЛЬ:
@@ -292,10 +407,11 @@ serve(async (req) => {
 3. Если товары не найдены - честно скажи об этом и предложи уточнить запрос
 4. Используй ТОЛЬКО ссылки из данных товаров, не придумывай URL
 5. Отвечай дружелюбно и профессионально на русском языке
+6. Если найдено много товаров — предложи топ-3 и спроси, нужно ли показать больше
 
 ${productContext ? `НАЙДЕННЫЕ ТОВАРЫ (используй ТОЛЬКО эти данные):${productContext}` : 'ТОВАРЫ НЕ НАЙДЕНЫ. Предложи клиенту уточнить запрос или посмотреть каталог на сайте https://220volt.kz'}`;
 
-    // Отправляем запрос к AI
+    // ШАГ 4: Финальный ответ от AI
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -327,14 +443,13 @@ ${productContext ? `НАЙДЕННЫЕ ТОВАРЫ (используй ТОЛЬ
       }
       
       const errorText = await response.text();
-      console.error('AI Gateway error:', response.status, errorText);
+      console.error('[Chat] AI Gateway error:', response.status, errorText);
       return new Response(
         JSON.stringify({ error: 'Ошибка AI сервиса' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
-    // Возвращаем стриминг ответ
     return new Response(response.body, {
       headers: {
         ...corsHeaders,
@@ -343,7 +458,7 @@ ${productContext ? `НАЙДЕННЫЕ ТОВАРЫ (используй ТОЛЬ
     });
 
   } catch (error) {
-    console.error('Chat consultant error:', error);
+    console.error('[Chat] Error:', error);
     return new Response(
       JSON.stringify({ error: error instanceof Error ? error.message : 'Неизвестная ошибка' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
