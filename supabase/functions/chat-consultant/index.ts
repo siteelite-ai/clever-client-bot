@@ -353,7 +353,24 @@ serve(async (req) => {
   }
 
   try {
-    const { messages, conversationId } = await req.json();
+    const body = await req.json();
+    
+    // Support both formats: { messages } and { message, history, sessionId }
+    let messages: Array<{ role: string; content: string }>;
+    let conversationId: string;
+    
+    if (body.messages) {
+      // Format from admin panel / internal calls
+      messages = body.messages;
+      conversationId = body.conversationId || Date.now().toString();
+    } else if (body.message) {
+      // Format from embed widget
+      const history = body.history || [];
+      messages = [...history, { role: 'user', content: body.message }];
+      conversationId = body.sessionId || Date.now().toString();
+    } else {
+      throw new Error('Invalid request format: missing messages or message');
+    }
     
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     if (!LOVABLE_API_KEY) {
