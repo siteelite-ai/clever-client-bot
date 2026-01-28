@@ -120,7 +120,9 @@
     
     #volt-widget-messages {
       flex: 1;
+      min-height: 0;
       overflow-y: auto;
+      overflow-x: hidden;
       -webkit-overflow-scrolling: touch;
       padding: 16px;
       display: flex;
@@ -128,6 +130,23 @@
       gap: 12px;
       background: #1a1a1a;
       scroll-behavior: smooth;
+    }
+    
+    #volt-widget-messages::-webkit-scrollbar {
+      width: 6px;
+    }
+    
+    #volt-widget-messages::-webkit-scrollbar-track {
+      background: transparent;
+    }
+    
+    #volt-widget-messages::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 3px;
+    }
+    
+    #volt-widget-messages::-webkit-scrollbar-thumb:hover {
+      background: rgba(255, 255, 255, 0.3);
     }
     
     .volt-message {
