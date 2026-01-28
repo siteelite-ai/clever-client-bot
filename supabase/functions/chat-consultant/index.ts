@@ -162,9 +162,6 @@ function formatProductsForAI(products: Product[]): string {
       }
     }
     
-    // Формируем артикул для поиска на сайте
-    const searchTerm = p.article || p.pagetitle;
-    
     const parts = [
       `${i + 1}. **${p.pagetitle}**`,
       `   - Цена: ${p.price.toLocaleString('ru-KZ')} ₸${p.old_price && p.old_price > 0 ? ` (было ${p.old_price.toLocaleString('ru-KZ')} ₸)` : ''}`,
@@ -172,7 +169,7 @@ function formatProductsForAI(products: Product[]): string {
       p.article ? `   - Артикул: ${p.article}` : '',
       `   - В наличии: ${p.amount > 0 ? `Да (${p.amount} шт.)` : 'Под заказ'}`,
       p.category ? `   - Категория: ${p.category.pagetitle}` : '',
-      `   - Найти на сайте: https://220volt.kz (поиск по артикулу "${searchTerm}")`,
+      `   - Ссылка: ${p.url}`, // Используем готовый URL из API
     ].filter(Boolean);
     
     return parts.join('\n');

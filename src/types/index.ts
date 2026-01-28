@@ -50,7 +50,7 @@ export interface Product {
     pagetitle: string;
   };
   alias: string;
-  url: string;
+  url: string; // Полный URL товара, возвращаемый API (например: https://220volt.kz/catalog/.../product-alias)
   article?: string;
   price: number;
   old_price?: number;
