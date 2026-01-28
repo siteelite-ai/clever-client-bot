@@ -30,18 +30,53 @@ interface Product {
   }>;
 }
 
-interface ProductsResponse {
-  results: Product[];
-  pagination: {
-    page: number;
-    per_page: number;
-    pages: number;
-    total: number;
+// Известные бренды для фильтрации
+const KNOWN_BRANDS = [
+  'makita', 'bosch', 'dewalt', 'metabo', 'hitachi', 'milwaukee', 'stihl',
+  'husqvarna', 'karcher', 'вихрь', 'patriot', 'зубр', 'интерскол', 'elitech',
+  'fubag', 'huter', 'champion', 'denzel', 'sturm', 'fit'
+];
+
+// Извлечение продукта и бренда из запроса
+function parseQuery(message: string): { product: string; brand: string | null } {
+  const lowerMessage = message.toLowerCase();
+  
+  // Ищем бренд в сообщении
+  let foundBrand: string | null = null;
+  for (const brand of KNOWN_BRANDS) {
+    if (lowerMessage.includes(brand)) {
+      foundBrand = brand;
+      break;
+    }
+  }
+  
+  // Чистим от общих фраз СНАЧАЛА
+  let product = message;
+  const cleaners = [
+    /^(привет|здравствуйте|добрый день|доброе утро|добрый вечер)[,!.]?\s*/i,
+    /^(мне нужен|мне нужна|мне нужно|хочу купить|ищу|подскажите|порекомендуйте|посоветуйте|нужен|нужна|нужно|есть ли у вас)\s*/i,
+    /^(покажи|найди|поищи|подбери|выбери)\s*/i,
+    /\s*(пожалуйста|спасибо)\.?$/i,
+    /^(какие есть|что есть|есть|какой)\s*/i,
+  ];
+  
+  for (const regex of cleaners) {
+    product = product.replace(regex, '');
+  }
+  
+  // Убираем бренд из запроса, оставляя только продукт
+  if (foundBrand) {
+    product = product.replace(new RegExp(foundBrand, 'gi'), '').trim();
+  }
+  
+  return {
+    product: product.trim() || message,
+    brand: foundBrand,
   };
 }
 
-// Поиск товаров в каталоге 220volt.kz
-async function searchProducts(query: string, limit: number = 5): Promise<Product[]> {
+// Поиск товаров в каталоге 220volt.kz с опциональным фильтром по бренду
+async function searchProducts(query: string, brand: string | null, limit: number = 5): Promise<Product[]> {
   const apiToken = Deno.env.get('VOLT220_API_TOKEN');
   
   if (!apiToken) {
@@ -49,53 +84,95 @@ async function searchProducts(query: string, limit: number = 5): Promise<Product
     return [];
   }
 
-  try {
-    const params = new URLSearchParams({
-      query: query,
-      per_page: limit.toString(),
-    });
+  async function doSearch(searchQuery: string, brandFilter: string | null): Promise<Product[]> {
+    try {
+      const params = new URLSearchParams();
+      
+      // Добавляем поисковый запрос если есть
+      if (searchQuery) {
+        params.append('query', searchQuery);
+      }
+      params.append('per_page', limit.toString());
+      
+      // Добавляем фильтр по бренду если указан
+      if (brandFilter) {
+        const brandCapitalized = brandFilter.charAt(0).toUpperCase() + brandFilter.slice(1);
+        params.append('options[brend__brend][]', brandCapitalized);
+      }
 
-    console.log(`Searching products with query: ${query}`);
+      console.log(`Searching products: query="${searchQuery}", brand="${brandFilter}"`);
+      console.log(`API params: ${params.toString()}`);
 
-    const response = await fetch(`${VOLT220_API_URL}?${params}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${apiToken}`,
-        'Content-Type': 'application/json',
-      },
-    });
+      const response = await fetch(`${VOLT220_API_URL}?${params}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${apiToken}`,
+          'Content-Type': 'application/json',
+        },
+      });
 
-    if (!response.ok) {
-      console.error(`220volt API error: ${response.status}`);
-      const errorText = await response.text();
-      console.error('Response:', errorText);
+      if (!response.ok) {
+        console.error(`220volt API error: ${response.status}`);
+        return [];
+      }
+
+      const rawData = await response.json();
+      const data = rawData.data || rawData;
+      
+      console.log(`Found ${data.results?.length || 0} products`);
+      
+      return data.results || [];
+    } catch (error) {
+      console.error('Error searching products:', error);
       return [];
     }
-
-    const data: ProductsResponse = await response.json();
-    console.log(`Found ${data.results?.length || 0} products`);
-    
-    return data.results || [];
-  } catch (error) {
-    console.error('Error searching products:', error);
-    return [];
   }
+
+  // Первая попытка - поиск с брендом
+  let products = await doSearch(query, brand);
+  
+  // Если ничего не найдено с брендом, пробуем без бренда
+  if (products.length === 0 && brand) {
+    console.log(`No products found with brand "${brand}", trying without brand filter`);
+    products = await doSearch(query, null);
+  }
+  
+  // Если запрос пустой или ничего не найдено, попробуем без запроса
+  if (products.length === 0 && !query) {
+    console.log('No products found, trying generic search');
+    products = await doSearch('', null);
+  }
+  
+  return products;
 }
 
 // Форматирование товаров для AI
 function formatProductsForAI(products: Product[]): string {
   if (products.length === 0) {
-    return 'Товары не найдены.';
+    return 'Товары не найдены в каталоге.';
   }
 
   return products.map((p, i) => {
+    // Извлекаем бренд из options если vendor пустой
+    let brand = p.vendor;
+    if (!brand && p.options) {
+      const brandOption = p.options.find(o => o.key === 'brend__brend');
+      if (brandOption) {
+        brand = brandOption.value.split('//')[0]; // Берем только русскую версию
+      }
+    }
+    
+    // Формируем артикул для поиска на сайте
+    const searchTerm = p.article || p.pagetitle;
+    
     const parts = [
       `${i + 1}. **${p.pagetitle}**`,
-      `   - Цена: ${p.price.toLocaleString('ru-KZ')} ₸${p.old_price ? ` (было ${p.old_price.toLocaleString('ru-KZ')} ₸)` : ''}`,
-      `   - Бренд: ${p.vendor}`,
+      `   - Цена: ${p.price.toLocaleString('ru-KZ')} ₸${p.old_price && p.old_price > 0 ? ` (было ${p.old_price.toLocaleString('ru-KZ')} ₸)` : ''}`,
+      brand ? `   - Бренд: ${brand}` : '',
       p.article ? `   - Артикул: ${p.article}` : '',
-      `   - В наличии: ${p.amount > 0 ? 'Да' : 'Нет'}`,
-      `   - Ссылка: https://220volt.kz${p.url}`,
+      `   - В наличии: ${p.amount > 0 ? `Да (${p.amount} шт.)` : 'Под заказ'}`,
+      p.category ? `   - Категория: ${p.category.pagetitle}` : '',
+      `   - Найти на сайте: https://220volt.kz (поиск по артикулу "${searchTerm}")`,
     ].filter(Boolean);
     
     return parts.join('\n');
@@ -107,10 +184,9 @@ function detectIntent(message: string): 'catalog' | 'info' | 'general' {
   const catalogKeywords = [
     'товар', 'цена', 'купить', 'заказать', 'найти', 'поиск', 'подобрать',
     'рекомендовать', 'посоветовать', 'нужен', 'хочу', 'ищу', 'дрель', 'перфоратор',
-    'болгарка', 'шуруповерт', 'пила', 'генератор', 'насос', 'компрессор',
-    'сварка', 'инструмент', 'оборудование', 'техника', 'электро', 'бензо',
-    'makita', 'bosch', 'dewalt', 'metabo', 'hitachi', 'milwaukee', 'stihl',
-    'husqvarna', 'karcher', 'для дома', 'для дачи', 'для стройки', 'для ремонта'
+    'болгарка', 'шуруповерт', 'пила', 'генератор', 'насос', 'компрессор', 'кабель',
+    'сварка', 'инструмент', 'оборудование', 'техника', 'электро', 'бензо', 'провод',
+    ...KNOWN_BRANDS, 'для дома', 'для дачи', 'для стройки', 'для ремонта', 'покажи'
   ];
   
   const infoKeywords = [
@@ -130,24 +206,6 @@ function detectIntent(message: string): 'catalog' | 'info' | 'general' {
   }
   
   return 'general';
-}
-
-// Извлечение поискового запроса из сообщения
-function extractSearchQuery(message: string): string {
-  // Убираем общие фразы и оставляем суть запроса
-  const cleaners = [
-    /^(привет|здравствуйте|добрый день|доброе утро|добрый вечер)[,!.]?\s*/i,
-    /^(мне нужен|хочу купить|ищу|подскажите|порекомендуйте|посоветуйте|нужна?|есть ли у вас)\s*/i,
-    /^(покажи|найди|поищи)\s*/i,
-    /\s*(пожалуйста|спасибо)\.?$/i,
-  ];
-  
-  let query = message;
-  for (const regex of cleaners) {
-    query = query.replace(regex, '');
-  }
-  
-  return query.trim() || message;
 }
 
 serve(async (req) => {
@@ -179,13 +237,14 @@ serve(async (req) => {
 
     // Если пользователь ищет товары - делаем поиск
     if (intent === 'catalog') {
-      const searchQuery = extractSearchQuery(userMessage);
-      console.log(`Searching for: ${searchQuery}`);
+      const { product, brand } = parseQuery(userMessage);
+      console.log(`Parsed query: product="${product}", brand="${brand}"`);
       
-      foundProducts = await searchProducts(searchQuery, 5);
+      foundProducts = await searchProducts(product, brand, 5);
       
       if (foundProducts.length > 0) {
-        productContext = `\n\n**Найденные товары по запросу "${searchQuery}":**\n\n${formatProductsForAI(foundProducts)}`;
+        const queryDesc = brand ? `${product} ${brand}` : product;
+        productContext = `\n\n**Найденные товары по запросу "${queryDesc}":**\n\n${formatProductsForAI(foundProducts)}`;
       }
     }
 
@@ -207,15 +266,14 @@ serve(async (req) => {
 - Сайт: https://220volt.kz
 - Телефон: 8 (727) 350-52-52
 
-ПРАВИЛА ОТВЕТОВ:
-1. Отвечай дружелюбно и профессионально
-2. Если найдены товары - представь их клиенту с описанием и ценами
-3. Если товар не найден - предложи уточнить запрос или посмотреть каталог
-4. Для сложных технических вопросов - рекомендуй связаться с менеджером
-5. Всегда указывай ссылки на товары
-6. Отвечай на русском языке
+КРИТИЧЕСКИЕ ПРАВИЛА:
+1. ВСЕГДА используй ТОЛЬКО товары из раздела "НАЙДЕННЫЕ ТОВАРЫ" ниже
+2. НИКОГДА не выдумывай товары, цены или ссылки
+3. Если товары не найдены - честно скажи об этом и предложи уточнить запрос
+4. Используй ТОЛЬКО ссылки из данных товаров, не придумывай URL
+5. Отвечай дружелюбно и профессионально на русском языке
 
-${productContext ? `НАЙДЕННЫЕ ТОВАРЫ:\n${productContext}` : ''}`;
+${productContext ? `НАЙДЕННЫЕ ТОВАРЫ (используй ТОЛЬКО эти данные):${productContext}` : 'ТОВАРЫ НЕ НАЙДЕНЫ. Предложи клиенту уточнить запрос или посмотреть каталог на сайте https://220volt.kz'}`;
 
     // Отправляем запрос к AI
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {

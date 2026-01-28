@@ -14,25 +14,29 @@ serve(async (req) => {
   }
 
   try {
-    const { query, page = 1, perPage = 12, categoryId, priceFrom, priceTo, vendors, sortBy } = await req.json();
+    const { query, page = 1, perPage = 12, category, minPrice, maxPrice, brand } = await req.json();
     
     const apiToken = Deno.env.get('VOLT220_API_TOKEN');
     if (!apiToken) {
       throw new Error('VOLT220_API_TOKEN is not configured');
     }
 
-    // Формируем параметры запроса
+    // Формируем параметры запроса согласно документации
     const params = new URLSearchParams();
     
     if (query) params.append('query', query);
     params.append('page', page.toString());
     params.append('per_page', perPage.toString());
     
-    if (categoryId) params.append('parent', categoryId.toString());
-    if (priceFrom) params.append('price_from', priceFrom.toString());
-    if (priceTo) params.append('price_to', priceTo.toString());
-    if (vendors && vendors.length > 0) params.append('vendors', vendors.join(','));
-    if (sortBy) params.append('sort', sortBy);
+    // category - фильтр по категории (pagetitle родительского ресурса)
+    if (category) params.append('category', category);
+    
+    // min_price, max_price - фильтр по цене
+    if (minPrice) params.append('min_price', minPrice.toString());
+    if (maxPrice) params.append('max_price', maxPrice.toString());
+    
+    // options[brend__brend][] - фильтр по бренду
+    if (brand) params.append('options[brend__brend][]', brand);
 
     console.log(`Searching products: ${params.toString()}`);
 
@@ -50,11 +54,18 @@ serve(async (req) => {
       throw new Error(`API error: ${response.status}`);
     }
 
-    const data = await response.json();
+    const rawData = await response.json();
+    
+    // API возвращает: { success: true, data: { results: [...], pagination: {...} } }
+    const data = rawData.data || rawData;
+    
     console.log(`Found ${data.results?.length || 0} products, total: ${data.pagination?.total || 0}`);
 
     return new Response(
-      JSON.stringify(data),
+      JSON.stringify({
+        results: data.results || [],
+        pagination: data.pagination || { page: 1, per_page: perPage, pages: 0, total: 0 }
+      }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
