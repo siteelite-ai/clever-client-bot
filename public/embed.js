@@ -435,13 +435,16 @@
 
         for (const line of lines) {
           if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            if (data === '[DONE]') continue;
+            const data = line.slice(6).trim();
+            if (data === '[DONE]' || data === '') continue;
             
             try {
               const parsed = JSON.parse(data);
-              if (parsed.content) {
-                assistantMessage += parsed.content;
+              // Support both formats: direct content and OpenAI-style delta
+              const content = parsed.content || parsed.choices?.[0]?.delta?.content;
+              
+              if (content) {
+                assistantMessage += content;
                 
                 if (!messageElement) {
                   messageElement = document.createElement('div');
