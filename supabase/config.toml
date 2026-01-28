@@ -1,1 +1,7 @@
 project_id = "yngoixmvmxdfxokuafjp"
+
+[functions.chat-consultant]
+verify_jwt = false
+
+[functions.search-products]
+verify_jwt = false
