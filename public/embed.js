@@ -330,7 +330,7 @@
       
       <div id="volt-widget-messages">
         <div class="volt-message assistant">
-          Здравствуйте! Я консультант 220volt.kz. Помогу подобрать электроинструмент, сварочное оборудование или кабельную продукцию. Что вас интересует?
+          Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?
         </div>
       </div>
       
@@ -373,13 +373,27 @@
 
   // Parse markdown-like formatting
   function formatMessage(text) {
-    return text
-      // Bold
-      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-      // Links
-      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
-      // Line breaks
-      .replace(/\n/g, '<br>');
+    let result = text;
+    
+    // Handle numbered lists (1. 2. 3.)
+    result = result.replace(/^(\d+)\.\s+(.+)$/gm, '<div style="margin-left: 8px; margin-bottom: 4px;">$1. $2</div>');
+    
+    // Handle bullet lists with asterisks or dashes
+    result = result.replace(/^[\*\-]\s+(.+)$/gm, '<div style="margin-left: 8px; margin-bottom: 4px;">• $1</div>');
+    
+    // Bold
+    result = result.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    
+    // Single asterisks that are not bold (leftover)
+    result = result.replace(/(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+    
+    // Links
+    result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    
+    // Line breaks (but not after list items)
+    result = result.replace(/\n(?!<div)/g, '<br>');
+    
+    return result;
   }
 
   // Add message to chat
