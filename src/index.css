@@ -2,95 +2,110 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
-All colors MUST be HSL.
+/* 220volt Admin Panel Design System
+   Brand colors: Yellow-Orange primary, Dark navy/black secondary
 */
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 222.2 84% 4.9%;
+    /* Main brand colors */
+    --background: 0 0% 98%;
+    --foreground: 220 20% 10%;
 
     --card: 0 0% 100%;
-    --card-foreground: 222.2 84% 4.9%;
+    --card-foreground: 220 20% 10%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 222.2 84% 4.9%;
+    --popover-foreground: 220 20% 10%;
 
-    --primary: 222.2 47.4% 11.2%;
-    --primary-foreground: 210 40% 98%;
+    /* Primary: 220volt orange-yellow */
+    --primary: 38 95% 55%;
+    --primary-foreground: 220 20% 10%;
 
-    --secondary: 210 40% 96.1%;
-    --secondary-foreground: 222.2 47.4% 11.2%;
+    /* Secondary: Dark navy */
+    --secondary: 220 25% 15%;
+    --secondary-foreground: 0 0% 98%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215.4 16.3% 46.9%;
+    --muted: 220 15% 94%;
+    --muted-foreground: 220 10% 45%;
 
-    --accent: 210 40% 96.1%;
-    --accent-foreground: 222.2 47.4% 11.2%;
+    /* Accent: Lighter orange */
+    --accent: 38 90% 60%;
+    --accent-foreground: 220 20% 10%;
 
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 222.2 84% 4.9%;
+    --border: 220 15% 88%;
+    --input: 220 15% 88%;
+    --ring: 38 95% 55%;
 
-    --radius: 0.5rem;
+    --radius: 0.75rem;
 
-    --sidebar-background: 0 0% 98%;
+    /* Sidebar - dark theme */
+    --sidebar-background: 220 25% 12%;
+    --sidebar-foreground: 220 10% 85%;
+    --sidebar-primary: 38 95% 55%;
+    --sidebar-primary-foreground: 220 25% 12%;
+    --sidebar-accent: 220 20% 18%;
+    --sidebar-accent-foreground: 220 10% 90%;
+    --sidebar-border: 220 20% 20%;
+    --sidebar-ring: 38 95% 55%;
 
-    --sidebar-foreground: 240 5.3% 26.1%;
+    /* Custom tokens */
+    --success: 145 65% 42%;
+    --success-foreground: 0 0% 100%;
+    --warning: 38 95% 55%;
+    --warning-foreground: 220 20% 10%;
+    --info: 210 100% 50%;
+    --info-foreground: 0 0% 100%;
 
-    --sidebar-primary: 240 5.9% 10%;
+    /* Widget chat bubble */
+    --widget-bg: 220 25% 12%;
+    --widget-user-bubble: 38 95% 55%;
+    --widget-bot-bubble: 220 20% 18%;
+    --widget-text: 220 10% 90%;
 
-    --sidebar-primary-foreground: 0 0% 98%;
+    /* Gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(38 95% 55%) 0%, hsl(28 95% 50%) 100%);
+    --gradient-dark: linear-gradient(180deg, hsl(220 25% 15%) 0%, hsl(220 30% 8%) 100%);
+    --gradient-glow: radial-gradient(ellipse at center, hsl(38 95% 55% / 0.15) 0%, transparent 70%);
 
-    --sidebar-accent: 240 4.8% 95.9%;
-
-    --sidebar-accent-foreground: 240 5.9% 10%;
-
-    --sidebar-border: 220 13% 91%;
-
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    /* Shadows */
+    --shadow-sm: 0 1px 2px hsl(220 20% 10% / 0.05);
+    --shadow-md: 0 4px 12px hsl(220 20% 10% / 0.1);
+    --shadow-lg: 0 10px 40px hsl(220 20% 10% / 0.15);
+    --shadow-glow: 0 0 30px hsl(38 95% 55% / 0.3);
   }
 
   .dark {
-    --background: 222.2 84% 4.9%;
-    --foreground: 210 40% 98%;
+    --background: 220 25% 8%;
+    --foreground: 220 10% 95%;
 
-    --card: 222.2 84% 4.9%;
-    --card-foreground: 210 40% 98%;
+    --card: 220 25% 12%;
+    --card-foreground: 220 10% 95%;
 
-    --popover: 222.2 84% 4.9%;
-    --popover-foreground: 210 40% 98%;
+    --popover: 220 25% 12%;
+    --popover-foreground: 220 10% 95%;
 
-    --primary: 210 40% 98%;
-    --primary-foreground: 222.2 47.4% 11.2%;
+    --primary: 38 95% 55%;
+    --primary-foreground: 220 25% 10%;
 
-    --secondary: 217.2 32.6% 17.5%;
-    --secondary-foreground: 210 40% 98%;
+    --secondary: 220 20% 20%;
+    --secondary-foreground: 220 10% 95%;
 
-    --muted: 217.2 32.6% 17.5%;
-    --muted-foreground: 215 20.2% 65.1%;
+    --muted: 220 20% 18%;
+    --muted-foreground: 220 10% 55%;
 
-    --accent: 217.2 32.6% 17.5%;
-    --accent-foreground: 210 40% 98%;
+    --accent: 38 85% 50%;
+    --accent-foreground: 220 25% 10%;
 
-    --destructive: 0 62.8% 30.6%;
-    --destructive-foreground: 210 40% 98%;
+    --destructive: 0 70% 45%;
+    --destructive-foreground: 0 0% 98%;
 
-    --border: 217.2 32.6% 17.5%;
-    --input: 217.2 32.6% 17.5%;
-    --ring: 212.7 26.8% 83.9%;
-    --sidebar-background: 240 5.9% 10%;
-    --sidebar-foreground: 240 4.8% 95.9%;
-    --sidebar-primary: 224.3 76.3% 48%;
-    --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 240 3.7% 15.9%;
-    --sidebar-accent-foreground: 240 4.8% 95.9%;
-    --sidebar-border: 240 3.7% 15.9%;
-    --sidebar-ring: 217.2 91.2% 59.8%;
+    --border: 220 20% 20%;
+    --input: 220 20% 20%;
+    --ring: 38 95% 55%;
   }
 }
 
@@ -100,6 +115,158 @@ All colors MUST be HSL.
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
+
+  /* Smooth scrolling */
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+@layer components {
+  /* Widget chat styles */
+  .widget-container {
+    @apply fixed bottom-6 right-6 z-50;
+  }
+
+  .widget-bubble {
+    @apply w-14 h-14 rounded-full flex items-center justify-center cursor-pointer transition-all duration-300;
+    background: var(--gradient-primary);
+    box-shadow: var(--shadow-glow);
+  }
+
+  .widget-bubble:hover {
+    transform: scale(1.08);
+    box-shadow: 0 0 40px hsl(38 95% 55% / 0.5);
+  }
+
+  .widget-chat {
+    @apply absolute bottom-20 right-0 w-[380px] h-[560px] rounded-2xl overflow-hidden;
+    background: hsl(var(--widget-bg));
+    box-shadow: var(--shadow-lg);
+    animation: slideUp 0.3s ease-out;
+  }
+
+  @keyframes slideUp {
+    from {
+      opacity: 0;
+      transform: translateY(20px) scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+    }
+  }
+
+  .chat-message-user {
+    background: hsl(var(--widget-user-bubble));
+    color: hsl(var(--foreground));
+  }
+
+  .chat-message-bot {
+    background: hsl(var(--widget-bot-bubble));
+    color: hsl(var(--widget-text));
+  }
+
+  /* Admin card styles */
+  .admin-card {
+    @apply bg-card rounded-xl border border-border p-6 transition-all duration-200;
+    box-shadow: var(--shadow-sm);
+  }
+
+  .admin-card:hover {
+    box-shadow: var(--shadow-md);
+  }
+
+  /* Stats card */
+  .stats-card {
+    @apply relative overflow-hidden bg-card rounded-xl border border-border p-6;
+  }
+
+  .stats-card::before {
+    content: '';
+    @apply absolute top-0 right-0 w-24 h-24 opacity-10;
+    background: var(--gradient-primary);
+    border-radius: 0 0 0 100%;
+  }
+
+  /* Sidebar item */
+  .sidebar-item {
+    @apply flex items-center gap-3 px-4 py-3 rounded-lg text-sidebar-foreground transition-all duration-200;
+  }
+
+  .sidebar-item:hover {
+    @apply bg-sidebar-accent text-sidebar-accent-foreground;
+  }
+
+  .sidebar-item.active {
+    @apply bg-sidebar-primary text-sidebar-primary-foreground;
+  }
+
+  /* Product card in widget */
+  .product-card-widget {
+    @apply flex gap-3 p-3 rounded-lg bg-sidebar-accent/50 hover:bg-sidebar-accent transition-colors cursor-pointer;
+  }
+
+  /* Input field focus */
+  .input-focus {
+    @apply focus:ring-2 focus:ring-primary/30 focus:border-primary;
+  }
+
+  /* Gradient text */
+  .gradient-text {
+    background: var(--gradient-primary);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  /* Pulse animation for online indicator */
+  .pulse-dot {
+    @apply relative;
+  }
+
+  .pulse-dot::after {
+    content: '';
+    @apply absolute inset-0 rounded-full animate-ping;
+    background: hsl(var(--success));
+    opacity: 0.5;
+  }
+
+  /* Loading skeleton with shimmer */
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--muted)) 0%,
+      hsl(var(--muted-foreground) / 0.1) 50%,
+      hsl(var(--muted)) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+  }
+
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+}
+
+/* Custom scrollbar for widget */
+.widget-scrollbar::-webkit-scrollbar {
+  width: 6px;
+}
+
+.widget-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.widget-scrollbar::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.3);
+  border-radius: 3px;
+}
+
+.widget-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.5);
 }
