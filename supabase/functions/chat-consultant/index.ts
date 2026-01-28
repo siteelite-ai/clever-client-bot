@@ -50,18 +50,29 @@ function parseQuery(message: string): { product: string; brand: string | null } 
     }
   }
   
-  // Чистим от общих фраз СНАЧАЛА
-  let product = message;
-  const cleaners = [
-    /^(привет|здравствуйте|добрый день|доброе утро|добрый вечер)[,!.]?\s*/i,
+  // Убираем знаки препинания сначала
+  let product = message.replace(/[?!.,]+/g, ' ').trim();
+  
+  // Чистим от общих фраз (в начале и в конце)
+  const cleanersStart = [
+    /^(привет|здравствуйте|добрый день|доброе утро|добрый вечер)\s*/i,
     /^(мне нужен|мне нужна|мне нужно|хочу купить|ищу|подскажите|порекомендуйте|посоветуйте|нужен|нужна|нужно|есть ли у вас)\s*/i,
-    /^(покажи|найди|поищи|подбери|выбери)\s*/i,
-    /\s*(пожалуйста|спасибо)\.?$/i,
-    /^(какие есть|что есть|есть|какой|а есть)\s*/i,
+    /^(покажи|найди|поищи|подбери|выбери|а есть|есть ли|какие есть|что есть|какой|какая|какое|какие)\s*/i,
+    /^(у вас|а у вас|есть)\s*/i,
   ];
   
-  for (const regex of cleaners) {
-    product = product.replace(regex, '');
+  const cleanersEnd = [
+    /\s*(пожалуйста|спасибо)$/i,
+    /\s*(есть|имеется|в наличии|в продаже)$/i,
+    /\s*(у вас)$/i,
+  ];
+  
+  for (const regex of cleanersStart) {
+    product = product.replace(regex, '').trim();
+  }
+  
+  for (const regex of cleanersEnd) {
+    product = product.replace(regex, '').trim();
   }
   
   // Убираем бренд из запроса, оставляя только продукт
@@ -69,8 +80,8 @@ function parseQuery(message: string): { product: string; brand: string | null } 
     product = product.replace(new RegExp(foundBrand, 'gi'), '').trim();
   }
   
-  // Убираем знаки препинания в конце и начале
-  product = product.replace(/^[?!.,\s]+|[?!.,\s]+$/g, '').trim();
+  // Финальная очистка пробелов
+  product = product.replace(/\s+/g, ' ').trim();
   
   console.log(`parseQuery: input="${message}" -> product="${product}", brand="${foundBrand}"`);
   
