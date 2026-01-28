@@ -121,11 +121,13 @@
     #volt-widget-messages {
       flex: 1;
       overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
       padding: 16px;
       display: flex;
       flex-direction: column;
       gap: 12px;
       background: #1a1a1a;
+      scroll-behavior: smooth;
     }
     
     .volt-message {
@@ -202,16 +204,17 @@
       height: 8px;
       background: ${CONFIG.primaryColor};
       border-radius: 50%;
-      animation: voltBounce 1.4s infinite ease-in-out;
+      animation: voltPulse 1.4s infinite ease-in-out;
+      opacity: 0.4;
     }
     
     .volt-typing span:nth-child(1) { animation-delay: 0s; }
     .volt-typing span:nth-child(2) { animation-delay: 0.2s; }
     .volt-typing span:nth-child(3) { animation-delay: 0.4s; }
     
-    @keyframes voltBounce {
-      0%, 80%, 100% { transform: translateY(0); }
-      40% { transform: translateY(-6px); }
+    @keyframes voltPulse {
+      0%, 100% { opacity: 0.4; transform: scale(1); }
+      50% { opacity: 1; transform: scale(1.1); }
     }
     
     #volt-widget-input-area {
