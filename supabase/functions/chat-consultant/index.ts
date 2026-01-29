@@ -318,7 +318,7 @@ async function searchProductsMulti(
   return uniqueProducts.slice(0, limit);
 }
 
-// Форматирование товаров для AI
+// Форматирование товаров для AI с кликабельными ссылками
 function formatProductsForAI(products: Product[]): string {
   if (products.length === 0) {
     return 'Товары не найдены в каталоге.';
@@ -333,14 +333,16 @@ function formatProductsForAI(products: Product[]): string {
       }
     }
     
+    // Формируем название как ссылку в markdown
+    const nameWithLink = `[${p.pagetitle}](${p.url})`;
+    
     const parts = [
-      `${i + 1}. **${p.pagetitle}**`,
-      `   - Цена: ${p.price.toLocaleString('ru-KZ')} ₸${p.old_price && p.old_price > 0 ? ` (было ${p.old_price.toLocaleString('ru-KZ')} ₸)` : ''}`,
+      `${i + 1}. **${nameWithLink}**`,
+      `   - Цена: ${p.price.toLocaleString('ru-KZ')} ₸${p.old_price && p.old_price > p.price ? ` ~~${p.old_price.toLocaleString('ru-KZ')} ₸~~` : ''}`,
       brand ? `   - Бренд: ${brand}` : '',
       p.article ? `   - Артикул: ${p.article}` : '',
-      `   - В наличии: ${p.amount > 0 ? `Да (${p.amount} шт.)` : 'Под заказ'}`,
-      p.category ? `   - Категория: ${p.category.pagetitle}` : '',
-      `   - Ссылка: ${p.url}`,
+      `   - В наличии: ${p.amount > 0 ? 'Да' : 'Под заказ'}`,
+      p.category ? `   - Категория: [${p.category.pagetitle}](https://220volt.kz/catalog/${p.category.id})` : '',
     ].filter(Boolean);
     
     return parts.join('\n');
@@ -396,37 +398,60 @@ serve(async (req) => {
       
       if (foundProducts.length > 0) {
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
-        productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**\n\n${formatProductsForAI(foundProducts)}`;
+        const formattedProducts = formatProductsForAI(foundProducts);
+        console.log(`[Chat] Formatted products for AI:\n${formattedProducts}`);
+        productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**\n\n${formattedProducts}`;
       }
     }
 
     // ШАГ 3: Системный промпт с контекстом товаров
+    const isGreeting = extractedIntent.intent === 'general' && 
+      /^(привет|здравствуй|добрый|хай|hello|hi|хеллоу|салем)\b/i.test(userMessage.trim());
+    
+    let productInstructions = '';
+    if (productContext) {
+      productInstructions = `
+НАЙДЕННЫЕ ТОВАРЫ (КОПИРУЙ ССЫЛКИ ТОЧНО КАК ДАНО — НЕ МОДИФИЦИРУЙ!):
+${productContext}
+
+ВАЖНО: Ссылки в данных уже готовы! Просто скопируй их как есть в формате [Название](URL). НЕ МЕНЯЙ URL!`;
+    } else if (isGreeting) {
+      productInstructions = ''; // Для приветствий ничего не пишем о товарах
+    } else {
+      productInstructions = 'ТОВАРЫ НЕ НАЙДЕНЫ по запросу. Предложи клиенту уточнить запрос или посмотреть каталог на сайте https://220volt.kz';
+    }
+    
+    const greetingRule = isGreeting 
+      ? `\n\n⚠️ ЭТО ПРИВЕТСТВИЕ! Просто поприветствуй клиента тепло и спроси, что он ищет. 
+         НЕ УПОМИНАЙ: "товары не найдены", "не указали товар", "уточните запрос" — это ЗАПРЕЩЕНО для приветствий!
+         Примеры хороших ответов: "Здравствуйте! Рад вас видеть! Чем могу помочь?" или "Привет! Какой инструмент вас интересует?"`
+      : '';
+    
     const systemPrompt = `Ты — AI-консультант интернет-магазина 220volt.kz, крупнейшего магазина электроинструментов и оборудования в Казахстане.
 
 ТВОЯ РОЛЬ:
 - Помогаешь клиентам выбрать подходящий инструмент или оборудование
-- Отвечаешь на вопросы о товарах, доставке, оплате и гарантии
+- Отвечаешь на вопросы о товарах, доставке, оплате и гарантии  
 - Рекомендуешь товары на основе потребностей клиента
 
 ИНФОРМАЦИЯ О КОМПАНИИ:
-- Название: 220volt.kz
-- Специализация: электроинструменты, бензоинструменты, садовая техника, сварочное оборудование, компрессоры, насосы, генераторы
-- Бренды: Makita, Bosch, DeWalt, Metabo, Hitachi, Milwaukee, Stihl, Husqvarna, Karcher и другие
-- Доставка: по всему Казахстану, бесплатно при заказе от 50 000 ₸
-- Оплата: наличными, картой, безналичный расчёт, рассрочка
-- Гарантия: официальная гарантия производителя на весь товар
-- Сайт: https://220volt.kz
-- Телефон: 8 (727) 350-52-52
+- Сайт: https://220volt.kz | Телефон: 8 (727) 350-52-52
+- Бренды: Makita, Bosch, DeWalt, Metabo, Hitachi, Milwaukee, Stihl, Husqvarna, Karcher и др.
+- Доставка: по всему Казахстану, бесплатно от 50 000 ₸
+- Оплата: наличными, картой, рассрочка
 
-КРИТИЧЕСКИЕ ПРАВИЛА:
-1. ВСЕГДА используй ТОЛЬКО товары из раздела "НАЙДЕННЫЕ ТОВАРЫ" ниже
-2. НИКОГДА не выдумывай товары, цены или ссылки
-3. Если товары не найдены - честно скажи об этом и предложи уточнить запрос
-4. Используй ТОЛЬКО ссылки из данных товаров, не придумывай URL
-5. Отвечай дружелюбно и профессионально на русском языке
-6. Если найдено много товаров — предложи топ-3 и спроси, нужно ли показать больше
+ФОРМАТ ОТВЕТА ДЛЯ ТОВАРОВ:
+1. **[Название товара](ТОЧНАЯ_ССЫЛКА_ИЗ_ДАННЫХ)**
+   - Цена: XXX ₸
+   - Бренд: YYY
 
-${productContext ? `НАЙДЕННЫЕ ТОВАРЫ (используй ТОЛЬКО эти данные):${productContext}` : 'ТОВАРЫ НЕ НАЙДЕНЫ. Предложи клиенту уточнить запрос или посмотреть каталог на сайте https://220volt.kz'}`;
+КРИТИЧЕСКИ ВАЖНО:
+- ИСПОЛЬЗУЙ ТОЛЬКО данные из раздела "НАЙДЕННЫЕ ТОВАРЫ"
+- КОПИРУЙ ссылки ТОЧНО как указано — НЕ ПРИДУМЫВАЙ и НЕ ИЗМЕНЯЙ URL!
+- НЕ выдумывай товары, цены или ссылки
+- Предлагай топ-3 товара, спрашивай нужно ли показать больше${greetingRule}
+
+${productInstructions}`;
 
     // ШАГ 4: Финальный ответ от AI
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
