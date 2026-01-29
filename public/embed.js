@@ -11,7 +11,13 @@
 
   // Generate unique session ID
   const sessionId = 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
-  let conversationHistory = [];
+  
+  // Initial greeting message - add to history so AI doesn't greet again
+  const initialGreeting = 'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?';
+  let conversationHistory = [
+    { role: 'assistant', content: initialGreeting }
+  ];
+  
   let isOpen = false;
   let isLoading = false;
 
@@ -119,34 +125,37 @@
     }
     
     #volt-widget-messages {
-      flex: 1;
+      flex: 1 1 0;
       min-height: 0;
-      overflow-y: auto;
+      height: 0;
+      overflow-y: scroll;
       overflow-x: hidden;
       -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
       padding: 16px;
       display: flex;
       flex-direction: column;
       gap: 12px;
       background: #1a1a1a;
-      scroll-behavior: smooth;
     }
     
     #volt-widget-messages::-webkit-scrollbar {
-      width: 6px;
+      width: 8px;
     }
     
     #volt-widget-messages::-webkit-scrollbar-track {
-      background: transparent;
+      background: #2a2a2a;
+      border-radius: 4px;
     }
     
     #volt-widget-messages::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.2);
-      border-radius: 3px;
+      background: rgba(255, 255, 255, 0.25);
+      border-radius: 4px;
+      min-height: 40px;
     }
     
     #volt-widget-messages::-webkit-scrollbar-thumb:hover {
-      background: rgba(255, 255, 255, 0.3);
+      background: rgba(255, 255, 255, 0.4);
     }
     
     .volt-message {
@@ -375,23 +384,24 @@
   function formatMessage(text) {
     let result = text;
     
-    // Handle numbered lists (1. 2. 3.)
-    result = result.replace(/^(\d+)\.\s+(.+)$/gm, '<div style="margin-left: 8px; margin-bottom: 4px;">$1. $2</div>');
-    
-    // Handle bullet lists with asterisks or dashes
-    result = result.replace(/^[\*\-]\s+(.+)$/gm, '<div style="margin-left: 8px; margin-bottom: 4px;">• $1</div>');
-    
-    // Bold
+    // First, handle bold to preserve **text**
     result = result.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
     
-    // Single asterisks that are not bold (leftover)
-    result = result.replace(/(?<!\*)\*(?!\*)([^*]+)(?<!\*)\*(?!\*)/g, '<em>$1</em>');
+    // Handle numbered lists (1. 2. 3.) - each on new line
+    result = result.replace(/^(\d+)\.\s+(.+)$/gm, '<div style="display: block; padding-left: 12px; margin: 4px 0;">$1. $2</div>');
+    
+    // Handle bullet lists with asterisks or dashes at line start
+    result = result.replace(/^[\*\-]\s+(.+)$/gm, '<div style="display: block; padding-left: 12px; margin: 4px 0;">• $1</div>');
     
     // Links
     result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
     
-    // Line breaks (but not after list items)
-    result = result.replace(/\n(?!<div)/g, '<br>');
+    // Line breaks - but not before list divs
+    result = result.replace(/\n+/g, '<br>');
+    
+    // Clean up excessive breaks before/after list items
+    result = result.replace(/<br>(<div)/g, '$1');
+    result = result.replace(/(<\/div>)<br>/g, '$1');
     
     return result;
   }
