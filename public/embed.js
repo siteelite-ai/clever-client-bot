@@ -510,22 +510,32 @@
         throw new Error('Network error');
       }
 
-      // Handle streaming response
+      // Handle streaming response with proper chunk buffering
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let assistantMessage = '';
       let messageElement = null;
+      let buffer = ''; // Buffer for incomplete SSE data
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
+        // Append new data to buffer
+        buffer += decoder.decode(value, { stream: true });
+        
+        // Split by newlines and process complete lines
+        const lines = buffer.split('\n');
+        
+        // Keep the last potentially incomplete line in buffer
+        buffer = lines.pop() || '';
 
         for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6).trim();
+          const trimmedLine = line.trim();
+          if (!trimmedLine || trimmedLine.startsWith(':')) continue; // Skip empty lines and SSE comments
+          
+          if (trimmedLine.startsWith('data: ')) {
+            const data = trimmedLine.slice(6).trim();
             if (data === '[DONE]' || data === '') continue;
             
             try {
@@ -548,7 +558,10 @@
                 // Don't auto-scroll during streaming - let user control
               }
             } catch (e) {
-              // Skip parse errors
+              // JSON parse error - line might be incomplete, will be handled in next iteration
+              // Put back into buffer for next chunk
+              buffer = trimmedLine + '\n' + buffer;
+              break;
             }
           }
         }

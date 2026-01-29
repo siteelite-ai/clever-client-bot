@@ -405,8 +405,21 @@ serve(async (req) => {
     }
 
     // ШАГ 3: Системный промпт с контекстом товаров
-    const isGreeting = extractedIntent.intent === 'general' && 
-      /^(привет|здравствуй|добрый|хай|hello|hi|хеллоу|салем)\b/i.test(userMessage.trim());
+    const greetingRegex = /^(привет|здравствуй|добрый|хай|hello|hi|хеллоу|салем)/i;
+    const greetingMatch = greetingRegex.test(userMessage.trim());
+    const isGreeting = extractedIntent.intent === 'general' && greetingMatch;
+    
+    console.log(`[Chat] userMessage: "${userMessage}", greetingMatch: ${greetingMatch}, isGreeting: ${isGreeting}`);
+    
+    // Проверяем, было ли уже приветствие в истории (виджет добавляет его первым сообщением)
+    const hasAssistantGreeting = messages.some((m, i) => 
+      i < messages.length - 1 && // Не текущее сообщение
+      m.role === 'assistant' && 
+      m.content &&
+      /здравствуйте|привет|добр(ый|ое|ая)|рад.*видеть/i.test(m.content)
+    );
+    
+    console.log(`[Chat] hasAssistantGreeting: ${hasAssistantGreeting}`);
     
     let productInstructions = '';
     if (productContext) {
@@ -421,11 +434,29 @@ ${productContext}
       productInstructions = 'ТОВАРЫ НЕ НАЙДЕНЫ по запросу. Предложи клиенту уточнить запрос или посмотреть каталог на сайте https://220volt.kz';
     }
     
-    const greetingRule = isGreeting 
-      ? `\n\n⚠️ ЭТО ПРИВЕТСТВИЕ! Просто поприветствуй клиента тепло и спроси, что он ищет. 
-         НЕ УПОМИНАЙ: "товары не найдены", "не указали товар", "уточните запрос" — это ЗАПРЕЩЕНО для приветствий!
-         Примеры хороших ответов: "Здравствуйте! Рад вас видеть! Чем могу помочь?" или "Привет! Какой инструмент вас интересует?"`
-      : '';
+    // Правило о приветствии
+    let greetingRule = '';
+    if (hasAssistantGreeting && isGreeting) {
+      // Бот уже поздоровался раньше — нельзя здороваться снова
+      greetingRule = `
+
+⚠️ КРИТИЧЕСКИ ВАЖНО — НЕ ЗДОРОВАЙСЯ!
+Ты УЖЕ поздоровался с клиентом в начале диалога. Повторное приветствие запрещено!
+
+ТВОЙ ОТВЕТ ДОЛЖЕН НАЧИНАТЬСЯ С:
+- "Рад вас видеть снова! Чем могу помочь?"
+- "Какой инструмент вас интересует?"
+- "Отлично! Что будем искать сегодня?"
+
+ЗАПРЕЩЕНО НАЧИНАТЬ С: "Здравствуйте", "Привет", "Добрый день", "Hello", "Hi"
+НЕ УПОМИНАЙ: "товары не найдены", "уточните запрос"`;
+    } else if (isGreeting) {
+      // Первое сообщение — можно поздороваться
+      greetingRule = `
+
+Это первое приветствие от клиента. Поприветствуй тепло и спроси, что он ищет.
+НЕ УПОМИНАЙ: "товары не найдены", "уточните запрос"`;
+    }
     
     const systemPrompt = `Ты — AI-консультант интернет-магазина 220volt.kz, крупнейшего магазина электроинструментов и оборудования в Казахстане.
 
@@ -454,6 +485,11 @@ ${productContext}
 ${productInstructions}`;
 
     // ШАГ 4: Финальный ответ от AI
+    const messagesForAI = [
+      { role: 'system', content: systemPrompt },
+      ...messages,
+    ];
+    
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -462,10 +498,7 @@ ${productInstructions}`;
       },
       body: JSON.stringify({
         model: 'google/gemini-3-flash-preview',
-        messages: [
-          { role: 'system', content: systemPrompt },
-          ...messages,
-        ],
+        messages: messagesForAI,
         stream: true,
       }),
     });
@@ -490,6 +523,73 @@ ${productInstructions}`;
         JSON.stringify({ error: 'Ошибка AI сервиса' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
+    }
+
+    // Если это повторное приветствие, фильтруем начальные приветствия из ответа
+    if (hasAssistantGreeting && isGreeting) {
+      const reader = response.body?.getReader();
+      if (!reader) {
+        return new Response(
+          JSON.stringify({ error: 'No response body' }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const encoder = new TextEncoder();
+      const decoder = new TextDecoder();
+      let greetingRemoved = false;
+      
+      const stream = new ReadableStream({
+        async pull(controller) {
+          const { done, value } = await reader.read();
+          if (done) {
+            controller.close();
+            return;
+          }
+          
+          let text = decoder.decode(value, { stream: true });
+          
+          // Удаляем приветствие только из первого data-чанка с content
+          if (!greetingRemoved && text.includes('content')) {
+            console.log('[Greeting Filter] Checking chunk:', text.substring(0, 200));
+            
+            const before = text;
+            
+            // Грубая замена приветствий в начале content
+            // Паттерны: "content":"Здравствуйте! ...", "content":"Привет! ..."
+            const greetings = ['Здравствуйте', 'Привет', 'Добрый день', 'Добрый вечер', 'Доброе утро', 'Hello', 'Hi', 'Хай'];
+            
+            for (const greeting of greetings) {
+              // Ищем "content":"Greeting" с возможными знаками препинания и эмоджи после
+              const pattern = new RegExp(
+                `"content":"${greeting}[!.,]?\\s*(?:👋|🛠️|😊)?\\s*`,
+                'gi'
+              );
+              const matched = text.match(pattern);
+              if (matched) {
+                console.log('[Greeting Filter] Found match:', matched[0]);
+              }
+              text = text.replace(pattern, '"content":"');
+            }
+            
+            if (before !== text) {
+              greetingRemoved = true;
+              console.log('[Greeting Filter] Removed greeting from response');
+            } else {
+              console.log('[Greeting Filter] No greeting match found');
+            }
+          }
+          
+          controller.enqueue(encoder.encode(text));
+        }
+      });
+
+      return new Response(stream, {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'text/event-stream',
+        },
+      });
     }
 
     return new Response(response.body, {
