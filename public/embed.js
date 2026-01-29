@@ -158,10 +158,25 @@
     
     .volt-list-item {
       display: block;
-      padding-left: 16px;
-      text-indent: -8px;
-      margin: 6px 0;
+      padding-left: 20px;
+      text-indent: -12px;
+      margin: 4px 0;
       line-height: 1.5;
+    }
+    
+    .volt-list-main {
+      margin-top: 12px;
+      margin-bottom: 4px;
+      padding-left: 0;
+      text-indent: 0;
+    }
+    
+    .volt-list-sub {
+      margin: 2px 0;
+      padding-left: 24px;
+      text-indent: 0;
+      color: #bbb;
+      font-size: 13px;
     }
     
     .volt-list-item:first-child {
@@ -404,24 +419,33 @@
   function formatMessage(text) {
     let result = text;
     
-    // First, handle bold to preserve **text**
-    result = result.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-    
-    // Handle numbered lists (1. 2. 3.) - each on new line with proper class
-    result = result.replace(/^(\d+)\.\s+(.+)$/gm, '<span class="volt-list-item">$1. $2</span>');
-    
-    // Handle bullet lists with asterisks or dashes at line start
-    result = result.replace(/^[\*\-]\s+(.+)$/gm, '<span class="volt-list-item">• $1</span>');
-    
-    // Links
+    // First, handle links before bold (to preserve link text with bold)
     result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
     
-    // Line breaks
+    // Handle bold **text**
+    result = result.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+    
+    // Handle strikethrough ~~text~~
+    result = result.replace(/~~(.*?)~~/g, '<s style="color:#888">$1</s>');
+    
+    // Handle numbered lists (1. 2. 3.) - main product items
+    result = result.replace(/^(\d+)\.\s+(.+)$/gm, '<div class="volt-list-item volt-list-main">$1. $2</div>');
+    
+    // Handle sub-items with dash (- Цена: ...) - these are details
+    result = result.replace(/^\s*[\-•]\s+(.+)$/gm, '<div class="volt-list-item volt-list-sub">• $1</div>');
+    
+    // Handle bullet lists with asterisks at line start (not sub-items)
+    result = result.replace(/^\*\s+(.+)$/gm, '<div class="volt-list-item">• $1</div>');
+    
+    // Line breaks (but not after list items)
     result = result.replace(/\n/g, '<br>');
     
     // Clean up breaks around list items
-    result = result.replace(/<br>(<span class="volt-list-item")/g, '$1');
-    result = result.replace(/(<\/span>)<br>/g, '$1');
+    result = result.replace(/<br>(<div class="volt-list-item)/g, '$1');
+    result = result.replace(/(<\/div>)<br>/g, '$1');
+    
+    // Clean up multiple consecutive breaks
+    result = result.replace(/(<br>){3,}/g, '<br><br>');
     
     return result;
   }
