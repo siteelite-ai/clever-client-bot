@@ -378,23 +378,15 @@
   const sendBtn = document.getElementById('volt-widget-send');
   const messagesContainer = document.getElementById('volt-widget-messages');
 
-  // Force enable wheel scrolling (fix for sites that block it)
+  // Force enable wheel scrolling (fix for Mac and sites that block it)
   messagesContainer.addEventListener('wheel', function(e) {
-    const scrollTop = this.scrollTop;
-    const scrollHeight = this.scrollHeight;
-    const height = this.clientHeight;
-    const delta = e.deltaY;
+    // Prevent parent page from capturing scroll
+    e.preventDefault();
+    e.stopPropagation();
     
-    const atTop = scrollTop === 0 && delta < 0;
-    const atBottom = scrollTop + height >= scrollHeight && delta > 0;
-    
-    if (!atTop && !atBottom) {
-      e.stopPropagation();
-    }
-    
-    // Manually scroll if browser blocks it
-    this.scrollTop += delta;
-  }, { passive: true });
+    // Manually handle scrolling
+    this.scrollTop += e.deltaY;
+  }, { passive: false });
 
   // Toggle widget
   function toggleWidget() {
@@ -524,10 +516,12 @@
                   messageElement = document.createElement('div');
                   messageElement.className = 'volt-message assistant';
                   messagesContainer.appendChild(messageElement);
+                  // Scroll to show user's message and start of AI response (not to end)
+                  messageElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 }
                 
                 messageElement.innerHTML = formatMessage(assistantMessage);
-                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                // Don't auto-scroll during streaming - let user control
               }
             } catch (e) {
               // Skip parse errors
