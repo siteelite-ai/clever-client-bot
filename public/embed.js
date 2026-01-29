@@ -378,6 +378,24 @@
   const sendBtn = document.getElementById('volt-widget-send');
   const messagesContainer = document.getElementById('volt-widget-messages');
 
+  // Force enable wheel scrolling (fix for sites that block it)
+  messagesContainer.addEventListener('wheel', function(e) {
+    const scrollTop = this.scrollTop;
+    const scrollHeight = this.scrollHeight;
+    const height = this.clientHeight;
+    const delta = e.deltaY;
+    
+    const atTop = scrollTop === 0 && delta < 0;
+    const atBottom = scrollTop + height >= scrollHeight && delta > 0;
+    
+    if (!atTop && !atBottom) {
+      e.stopPropagation();
+    }
+    
+    // Manually scroll if browser blocks it
+    this.scrollTop += delta;
+  }, { passive: true });
+
   // Toggle widget
   function toggleWidget() {
     isOpen = !isOpen;
