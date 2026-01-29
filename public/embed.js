@@ -125,13 +125,12 @@
     }
     
     #volt-widget-messages {
-      flex: 1 1 0;
+      flex: 1 1 auto;
       min-height: 0;
-      height: 0;
-      overflow-y: scroll;
-      overflow-x: hidden;
+      max-height: 100%;
+      overflow: auto;
       -webkit-overflow-scrolling: touch;
-      overscroll-behavior: contain;
+      overscroll-behavior-y: contain;
       padding: 16px;
       display: flex;
       flex-direction: column;
@@ -149,13 +148,24 @@
     }
     
     #volt-widget-messages::-webkit-scrollbar-thumb {
-      background: rgba(255, 255, 255, 0.25);
+      background: rgba(255, 255, 255, 0.3);
       border-radius: 4px;
-      min-height: 40px;
     }
     
     #volt-widget-messages::-webkit-scrollbar-thumb:hover {
-      background: rgba(255, 255, 255, 0.4);
+      background: rgba(255, 255, 255, 0.5);
+    }
+    
+    .volt-list-item {
+      display: block;
+      padding-left: 16px;
+      text-indent: -8px;
+      margin: 6px 0;
+      line-height: 1.5;
+    }
+    
+    .volt-list-item:first-child {
+      margin-top: 8px;
     }
     
     .volt-message {
@@ -387,21 +397,21 @@
     // First, handle bold to preserve **text**
     result = result.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
     
-    // Handle numbered lists (1. 2. 3.) - each on new line
-    result = result.replace(/^(\d+)\.\s+(.+)$/gm, '<div style="display: block; padding-left: 12px; margin: 4px 0;">$1. $2</div>');
+    // Handle numbered lists (1. 2. 3.) - each on new line with proper class
+    result = result.replace(/^(\d+)\.\s+(.+)$/gm, '<span class="volt-list-item">$1. $2</span>');
     
     // Handle bullet lists with asterisks or dashes at line start
-    result = result.replace(/^[\*\-]\s+(.+)$/gm, '<div style="display: block; padding-left: 12px; margin: 4px 0;">• $1</div>');
+    result = result.replace(/^[\*\-]\s+(.+)$/gm, '<span class="volt-list-item">• $1</span>');
     
     // Links
     result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
     
-    // Line breaks - but not before list divs
-    result = result.replace(/\n+/g, '<br>');
+    // Line breaks
+    result = result.replace(/\n/g, '<br>');
     
-    // Clean up excessive breaks before/after list items
-    result = result.replace(/<br>(<div)/g, '$1');
-    result = result.replace(/(<\/div>)<br>/g, '$1');
+    // Clean up breaks around list items
+    result = result.replace(/<br>(<span class="volt-list-item")/g, '$1');
+    result = result.replace(/(<\/span>)<br>/g, '$1');
     
     return result;
   }
