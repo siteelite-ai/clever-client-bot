@@ -7,22 +7,8 @@ import { toast } from 'sonner';
 export default function Integration() {
   const [copied, setCopied] = useState(false);
 
-  const embedCode = `<!-- 220volt Widget -->
-<script>
-  (function() {
-    var w = window;
-    var d = document;
-    var s = d.createElement('script');
-    s.src = 'https://widget.220volt.kz/embed.js';
-    s.async = true;
-    s.onload = function() {
-      w.Widget220volt.init({
-        widgetId: 'YOUR_WIDGET_ID'
-      });
-    };
-    d.head.appendChild(s);
-  })();
-</script>`;
+  const embedCode = `<!-- 220volt AI Консультант -->
+<script src="https://clever-client-bot.lovable.app/embed.js" async></script>`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(embedCode);
