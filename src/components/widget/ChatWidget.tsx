@@ -229,10 +229,9 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
             </div>
             <div className="flex items-center gap-3">
               <img 
-                src="https://220volt.kz/assets/templates/img/logo.svg" 
+                src="/logo-220volt-widget.svg" 
                 alt="220volt" 
-                className="h-8 invert brightness-0 invert"
-                style={{ filter: 'brightness(0) invert(1)' }}
+                className="h-8"
               />
               {!isPreview && (
                 <button

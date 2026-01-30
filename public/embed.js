@@ -6,7 +6,7 @@
     supabaseUrl: 'https://yngoixmvmxdfxokuafjp.supabase.co',
     supabaseKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InluZ29peG12bXhkZnhva3VhZmpwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk2MTg0MzQsImV4cCI6MjA4NTE5NDQzNH0.bJTllxYOlRBqmnKqMAH21OkTBvXjqW4AaBLHz2fK2lQ',
     primaryColor: '#F5A623',
-    logo: 'https://220volt.kz/assets/templates/img/logo.svg'
+    logo: 'https://clever-client-bot.lovable.app/logo-220volt-widget.svg'
   };
 
   // Generate unique session ID
@@ -138,7 +138,6 @@
     
     #volt-widget-logo {
       height: 28px;
-      filter: brightness(0) invert(1);
     }
     
     #volt-widget-title {
