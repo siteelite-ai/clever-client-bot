@@ -138,6 +138,7 @@
     
     #volt-widget-logo {
       height: 28px;
+      filter: brightness(0) invert(1);
     }
     
     #volt-widget-title {
