@@ -37,7 +37,7 @@ interface SearchCandidate {
 }
 
 interface ExtractedIntent {
-  intent: 'catalog' | 'info' | 'general';
+  intent: 'catalog' | 'brands' | 'info' | 'general';
   candidates: SearchCandidate[];
   originalQuery: string;
 }
@@ -66,29 +66,34 @@ ${historyContext}
 Проанализируй ТЕКУЩЕЕ сообщение пользователя с учётом контекста и определи:
 
 1. Тип намерения (intent):
-   - "catalog" — пользователь ищет товары, хочет купить, интересуется ценами/наличием, спрашивает о брендах
+   - "brands" — пользователь спрашивает КАКИЕ БРЕНДЫ представлены в каталоге (примеры: "какие бренды есть?", "какие марки?", "какие производители?")
+   - "catalog" — пользователь ищет товары, хочет купить, интересуется ценами/наличием, спрашивает есть ли конкретный бренд
    - "info" — вопросы о доставке, оплате, гарантии, контактах
    - "general" — приветствие, благодарность, общие вопросы
 
-ВАЖНО: Если пользователь спрашивает "есть ли [бренд]?" или "есть [товар]?" — это intent="catalog"!
+ВАЖНО: 
+- "есть ли [бренд]?" или "есть [товар]?" — это intent="catalog"
+- "какие бренды/марки/производители есть?" — это intent="brands"
 
-2. Если intent="catalog", сгенерируй 3-6 поисковых запросов-кандидатов для API каталога.
+2. Генерируй поисковые кандидаты:
 
-API ищет по: названию товара, описанию (content), характеристикам.
-Поэтому генерируй РАЗНООБРАЗНЫЕ запросы:
+Для intent="brands":
+- Генерируй ОДИН кандидат с названием категории товара (без бренда!)
+- Например: "какие бренды перфораторов?" → кандидат {"query": "перфоратор"}
+- "какие марки шуруповертов есть?" → кандидат {"query": "шуруповерт"}
 
-ПРИМЕРЫ ХОРОШИХ КАНДИДАТОВ:
-- "для дома" → ["для дома", "домашний", "бытовой", "для дачи"]
-- "недорогой шуруповерт" → ["шуруповерт бюджетный", "шуруповерт недорогой", "шуруповерт", "дрель-шуруповерт"]
-- "профессиональный перфоратор" → ["перфоратор профессиональный", "перфоратор SDS", "перфоратор мощный"]
-- "аккумуляторный" → ["аккумуляторный", "Li-Ion", "литий-ион", "беспроводной"]
+Для intent="catalog":
+- Генерируй 3-6 кандидатов с синонимами и вариациями
+- НЕ ПРИДУМЫВАЙ бренды! Только если пользователь их указал
 
-ПРАВИЛА ГЕНЕРАЦИИ:
-- Учитывай бренды из контекста разговора!
-- Если упомянут бренд — добавь его в поле "brand" для КАЖДОГО кандидата
-- Генерируй СИНОНИМЫ и ВАРИАЦИИ написания
+ПРИМЕРЫ ХОРОШИХ КАНДИДАТОВ для catalog:
+- "для дома" → ["для дома", "домашний", "бытовой"]
+- "недорогой шуруповерт" → ["шуруповерт", "дрель-шуруповерт", "шуруповерт аккумуляторный"]
+- "аккумуляторный" → ["аккумуляторный", "Li-Ion", "беспроводной"]
+
+ПРАВИЛА:
 - Кандидаты 1-4 слова, без "нужен", "хочу", "купить", "мне"
-- Используй разные формулировки одного запроса
+- НЕ добавляй бренды к кандидатам если пользователь их не указал!
 
 ТЕКУЩЕЕ сообщение пользователя: "${message}"`;
 
@@ -116,8 +121,8 @@ API ищет по: названию товара, описанию (content), х
                 properties: {
                   intent: { 
                     type: 'string', 
-                    enum: ['catalog', 'info', 'general'],
-                    description: 'Тип намерения пользователя'
+                    enum: ['catalog', 'brands', 'info', 'general'],
+                    description: 'Тип намерения: brands — спрашивает какие бренды есть, catalog — ищет товары'
                   },
                   candidates: {
                     type: 'array',
@@ -377,6 +382,31 @@ function formatProductsForAI(products: Product[]): string {
   }).join('\n\n');
 }
 
+// Извлекаем уникальные бренды из товаров
+function extractBrandsFromProducts(products: Product[]): string[] {
+  const brands = new Set<string>();
+  
+  for (const product of products) {
+    // Пробуем vendor
+    if (product.vendor && product.vendor.trim()) {
+      brands.add(product.vendor.trim());
+    }
+    // Пробуем options[brend__brend]
+    if (product.options) {
+      const brandOption = product.options.find(o => o.key === 'brend__brend');
+      if (brandOption && brandOption.value) {
+        // Берём только русскую часть (до //)
+        const brandName = brandOption.value.split('//')[0].trim();
+        if (brandName) {
+          brands.add(brandName);
+        }
+      }
+    }
+  }
+  
+  return Array.from(brands).sort();
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -422,9 +452,28 @@ serve(async (req) => {
 
     let productContext = '';
     let foundProducts: Product[] = [];
+    let brandsContext = '';
 
-    // ШАГ 2: Если каталожный запрос — параллельный поиск по всем кандидатам
-    if (extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
+    // ШАГ 2: Обработка в зависимости от intent
+    if (extractedIntent.intent === 'brands' && extractedIntent.candidates.length > 0) {
+      // Запрос о брендах — ищем товары и извлекаем бренды
+      foundProducts = await searchProductsMulti(extractedIntent.candidates, 50); // Берём больше для полноты брендов
+      
+      if (foundProducts.length > 0) {
+        const brands = extractBrandsFromProducts(foundProducts);
+        const categoryQuery = extractedIntent.candidates[0]?.query || 'инструменты';
+        console.log(`[Chat] Found ${brands.length} brands for "${categoryQuery}": ${brands.join(', ')}`);
+        
+        if (brands.length > 0) {
+          brandsContext = `
+НАЙДЕННЫЕ БРЕНДЫ ПО ЗАПРОСУ "${categoryQuery}":
+${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
+
+Всего найдено ${foundProducts.length} товаров от ${brands.length} брендов.`;
+        }
+      }
+    } else if (extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
+      // Обычный каталожный запрос
       foundProducts = await searchProductsMulti(extractedIntent.candidates, 8);
       
       if (foundProducts.length > 0) {
@@ -453,7 +502,16 @@ serve(async (req) => {
     console.log(`[Chat] hasAssistantGreeting: ${hasAssistantGreeting}`);
     
     let productInstructions = '';
-    if (productContext) {
+    if (brandsContext) {
+      // Запрос о брендах — показываем список брендов
+      productInstructions = `
+${brandsContext}
+
+ТВОЙ ОТВЕТ:
+1. Перечисли найденные бренды списком
+2. Спроси, какой бренд интересует клиента — ты подберёшь лучшие модели
+3. Предложи ссылку на каталог: https://220volt.kz/catalog/`;
+    } else if (productContext) {
       productInstructions = `
 НАЙДЕННЫЕ ТОВАРЫ (КОПИРУЙ ССЫЛКИ ТОЧНО КАК ДАНО — НЕ МОДИФИЦИРУЙ!):
 ${productContext}
