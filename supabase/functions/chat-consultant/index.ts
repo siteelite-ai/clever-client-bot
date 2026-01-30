@@ -554,22 +554,65 @@ ${productContext}
       
       if (uniqueBrands.length > 0) {
         // Искали конкретный бренд — его НЕТ в каталоге
-        productInstructions = `
-🚨 КРИТИЧЕСКИ ВАЖНО — БРЕНД НЕ НАЙДЕН!
+        // FALLBACK: ищем без бренда чтобы показать альтернативы!
+        console.log(`[Chat] Brand ${uniqueBrands.join(', ')} not found. Doing fallback search without brand...`);
+        
+        // Убираем бренд И из параметра brand, И из текста query
+        const brandPattern = new RegExp(`\\b(${uniqueBrands.join('|')})\\b`, 'gi');
+        const candidatesWithoutBrand = extractedIntent.candidates.map(c => ({
+          ...c,
+          brand: null, // Убираем бренд для fallback поиска
+          query: c.query.replace(brandPattern, '').replace(/\s+/g, ' ').trim() // Убираем бренд из query
+        })).filter(c => c.query.length > 1); // Фильтруем пустые query
+        
+        console.log(`[Chat] Fallback candidates:`, candidatesWithoutBrand.map(c => c.query));
+        
+        const fallbackProducts = await searchProductsMulti(candidatesWithoutBrand, 6);
+        
+        if (fallbackProducts.length > 0) {
+          // Нашли альтернативы! Показываем их
+          const availableBrands = extractBrandsFromProducts(fallbackProducts);
+          const formattedAlternatives = formatProductsForAI(fallbackProducts);
+          
+          console.log(`[Chat] Fallback found ${fallbackProducts.length} alternatives from brands: ${availableBrands.join(', ')}`);
+          
+          productInstructions = `
+🚨 БРЕНД НЕ НАЙДЕН, НО ЕСТЬ АЛЬТЕРНАТИВЫ!
 
 Клиент спросил о бренде: ${uniqueBrands.join(', ')}
-Мы выполнили поиск в каталоге — ТОВАРОВ ЭТОГО БРЕНДА НЕТ В НАЛИЧИИ!
+Товаров этого бренда НЕТ В КАТАЛОГЕ.
+
+✅ НО НАШЛИСЬ АНАЛОГИ ОТ ДРУГИХ ПРОИЗВОДИТЕЛЕЙ:
+${formattedAlternatives}
+
+Доступные бренды в этой категории: ${availableBrands.join(', ')}
 
 ТВОЙ ОТВЕТ ДОЛЖЕН БЫТЬ ТАКИМ:
 1. ЧЕСТНО скажи: "К сожалению, товаров бренда ${uniqueBrands.join('/')} сейчас нет в нашем каталоге."
-2. НЕ ГОВОРИ что бренд "популярный" или что у вас "огромное количество позиций" — это ЛОЖЬ!
-3. Предложи альтернативу: "Но у нас есть отличные аналоги! Какой инструмент вас интересует — могу подобрать из доступных брендов."
-4. Или предложи посмотреть каталог: https://220volt.kz/catalog/
+2. СРАЗУ предложи альтернативы: "Но у нас есть отличные аналоги от ${availableBrands.slice(0, 3).join(', ')}!" 
+3. Покажи 2-3 товара из списка выше с ценами и ссылками
+4. Спроси, какой вариант интересует
+
+⚠️ СТРОГОЕ ПРАВИЛО: 
+- Ссылки уже готовы! Копируй их как есть в формате [Название](URL)
+- НЕ МЕНЯЙ URL! НЕ ПРИДУМЫВАЙ URL!`;
+        } else {
+          // Даже fallback не нашёл ничего
+          productInstructions = `
+🚨 КРИТИЧЕСКИ ВАЖНО — БРЕНД НЕ НАЙДЕН И НЕТ АЛЬТЕРНАТИВ!
+
+Клиент спросил о бренде: ${uniqueBrands.join(', ')}
+Мы выполнили поиск в каталоге — ТОВАРОВ ЭТОГО БРЕНДА И ПОХОЖИХ КАТЕГОРИЙ НЕТ!
+
+ТВОЙ ОТВЕТ ДОЛЖЕН БЫТЬ ТАКИМ:
+1. ЧЕСТНО скажи: "К сожалению, товаров бренда ${uniqueBrands.join('/')} сейчас нет в нашем каталоге."
+2. Предложи: "Расскажите подробнее, какой инструмент вам нужен — попробую подобрать из доступных."
+3. Или предложи посмотреть каталог: https://220volt.kz/catalog/
 
 СТРОГО ЗАПРЕЩЕНО:
 - НЕ ДЕЛАЙ ВИД что бренд есть!
-- НЕ ПРОСИ уточнить модель — бренда вообще нет!
-- НЕ ПРИДУМЫВАЙ что "в каталоге огромное количество позиций этого производителя"`;
+- НЕ ПРИДУМЫВАЙ товары!`;
+        }
       } else {
         // Общий запрос без бренда — товары не найдены
         // Определяем категорию из кандидатов
