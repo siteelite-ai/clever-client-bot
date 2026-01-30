@@ -271,7 +271,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
                       <ReactMarkdown
                         components={{
                           a: ({ node, ...props }) => (
-                            <a {...props} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline" />
+                            <a {...props} target="_blank" rel="noopener noreferrer" className="text-primary underline hover:text-primary/80 font-medium" />
                           ),
                           p: ({ node, ...props }) => <p {...props} className="mb-2 last:mb-0" />,
                           ul: ({ node, ...props }) => <ul {...props} className="list-disc pl-4 mb-2" />,
