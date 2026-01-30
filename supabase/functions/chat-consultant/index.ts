@@ -263,9 +263,8 @@ async function searchProductsByCandidate(
       params.append('options[brend__brend][]', brandCapitalized);
     }
     
-    if (candidate.category) {
-      params.append('category', candidate.category);
-    }
+    // НЕ передаём category в API — query уже содержит нужный текст
+    // API фильтрует по category как по точному названию, что ломает поиск
 
     console.log(`[Search] Candidate: query="${candidate.query}", brand="${candidate.brand}", category="${candidate.category}"`);
 
