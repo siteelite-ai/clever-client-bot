@@ -6,14 +6,14 @@
     supabaseUrl: 'https://yngoixmvmxdfxokuafjp.supabase.co',
     supabaseKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InluZ29peG12bXhkZnhva3VhZmpwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk2MTg0MzQsImV4cCI6MjA4NTE5NDQzNH0.bJTllxYOlRBqmnKqMAH21OkTBvXjqW4AaBLHz2fK2lQ',
     primaryColor: '#F5A623',
-    logo: 'https://220volt.testdevops.ru/assets/templates/img/logo.svg'
+    logo: 'https://220volt.kz/assets/templates/img/logo.svg'
   };
 
   // Generate unique session ID
   const sessionId = 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
   
   // Initial greeting message - add to history so AI doesn't greet again
-  const initialGreeting = 'Здравствуйте! 👋 Я AI-консультант 220volt.testdevops.ru. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?';
+  const initialGreeting = 'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?';
   let conversationHistory = [
     { role: 'assistant', content: initialGreeting }
   ];
@@ -364,7 +364,7 @@
       
       <div id="volt-widget-messages">
         <div class="volt-message assistant">
-          Здравствуйте! 👋 Я AI-консультант 220volt.testdevops.ru. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?
+          Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?
         </div>
       </div>
       
