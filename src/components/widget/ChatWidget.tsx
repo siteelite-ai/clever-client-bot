@@ -219,11 +219,6 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
           {/* Header */}
           <div className="h-16 px-4 flex items-center justify-between border-b border-sidebar-border">
             <div className="flex items-center gap-3">
-              <img 
-                src="https://220volt.kz/assets/templates/img/logo.svg" 
-                alt="220volt" 
-                className="h-8"
-              />
               <div>
                 <p className="text-sm font-semibold text-widget-text">AI Консультант</p>
                 <div className="flex items-center gap-1.5">
@@ -232,14 +227,21 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
                 </div>
               </div>
             </div>
-            {!isPreview && (
-              <button
-                onClick={() => setIsOpen(false)}
-                className="p-2 rounded-lg hover:bg-sidebar-accent transition-colors text-widget-text/60"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            )}
+            <div className="flex items-center gap-3">
+              <img 
+                src="https://220volt.kz/assets/templates/img/logo.svg" 
+                alt="220volt" 
+                className="h-8"
+              />
+              {!isPreview && (
+                <button
+                  onClick={() => setIsOpen(false)}
+                  className="p-2 rounded-lg hover:bg-sidebar-accent transition-colors text-widget-text/60"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Messages */}

@@ -91,16 +91,53 @@
     }
     
     #volt-widget-header {
-      background: linear-gradient(135deg, ${CONFIG.primaryColor} 0%, #E8941F 100%);
+      background: #1a1a1a;
       padding: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    
+    .volt-header-left {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    
+    .volt-header-title {
+      color: white;
+      font-size: 15px;
+      font-weight: 600;
+    }
+    
+    .volt-header-status {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    
+    .volt-status-dot {
+      width: 8px;
+      height: 8px;
+      background: #22c55e;
+      border-radius: 50%;
+      animation: voltPulse 2s infinite;
+    }
+    
+    .volt-status-text {
+      color: rgba(255, 255, 255, 0.6);
+      font-size: 12px;
+    }
+    
+    .volt-header-right {
       display: flex;
       align-items: center;
       gap: 12px;
     }
     
     #volt-widget-logo {
-      height: 32px;
-      filter: brightness(0) invert(1);
+      height: 28px;
     }
     
     #volt-widget-title {
@@ -353,13 +390,21 @@
     
     <div id="volt-widget-window">
       <div id="volt-widget-header">
-        <img id="volt-widget-logo" src="${CONFIG.logo}" alt="220volt">
-        <span id="volt-widget-title">Консультант</span>
-        <button id="volt-widget-close" aria-label="Закрыть">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M18 6L6 18M6 6l12 12"/>
-          </svg>
-        </button>
+        <div class="volt-header-left">
+          <span class="volt-header-title">AI Консультант</span>
+          <div class="volt-header-status">
+            <span class="volt-status-dot"></span>
+            <span class="volt-status-text">Онлайн</span>
+          </div>
+        </div>
+        <div class="volt-header-right">
+          <img id="volt-widget-logo" src="${CONFIG.logo}" alt="220volt">
+          <button id="volt-widget-close" aria-label="Закрыть">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 6L6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
       </div>
       
       <div id="volt-widget-messages">
