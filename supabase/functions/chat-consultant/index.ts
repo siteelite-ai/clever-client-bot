@@ -203,54 +203,161 @@ ${historyContext}
   }
 }
 
-// Fallback парсинг если AI недоступен
-function fallbackParseQuery(message: string): ExtractedIntent {
+// Быстрый regex-парсинг для простых запросов (экономит ~2 сек на AI-вызове)
+function fastParseQuery(message: string): ExtractedIntent | null {
   const KNOWN_BRANDS = [
     'makita', 'bosch', 'dewalt', 'metabo', 'hitachi', 'milwaukee', 'stihl',
     'husqvarna', 'karcher', 'вихрь', 'patriot', 'зубр', 'интерскол', 'elitech',
-    'fubag', 'huter', 'champion', 'denzel', 'sturm', 'fit'
+    'fubag', 'huter', 'champion', 'denzel', 'sturm', 'fit', 'legrand', 'abb',
+    'schneider', 'iek', 'ekf', 'chint', 'navigator', 'rexant', 'tdm'
   ];
   
-  const catalogKeywords = [
-    'товар', 'цена', 'купить', 'заказать', 'найти', 'дрель', 'перфоратор',
-    'болгарка', 'шуруповерт', 'пила', 'генератор', 'насос', 'компрессор', 
-    'кабель', 'сварка', 'инструмент', 'провод', 'есть', 'какие', ...KNOWN_BRANDS
-  ];
+  // Ключевые слова товаров с синонимами
+  const PRODUCT_KEYWORDS: Record<string, string[]> = {
+    'дрель': ['дрель', 'дрели', 'дрелью'],
+    'перфоратор': ['перфоратор', 'перфораторы', 'перфа'],
+    'шуруповерт': ['шуруповерт', 'шуруповёрт', 'шурик', 'винтоверт'],
+    'болгарка': ['болгарка', 'ушм', 'угловая шлифовальная'],
+    'пила': ['пила', 'пилы', 'лобзик', 'циркулярка', 'торцовка'],
+    'генератор': ['генератор', 'электростанция', 'бензогенератор'],
+    'насос': ['насос', 'помпа', 'мотопомпа'],
+    'компрессор': ['компрессор', 'компрессоры'],
+    'сварка': ['сварка', 'сварочный', 'инвертор', 'электроды'],
+    'розетка': ['розетка', 'розетки', 'розеток'],
+    'выключатель': ['выключатель', 'выключатели', 'клавиша'],
+    'автомат': ['автомат', 'автоматы', 'автоматический выключатель', 'узо', 'диф'],
+    'кабель': ['кабель', 'провод', 'провода', 'пвс', 'ввг'],
+    'удлинитель': ['удлинитель', 'переноска', 'колодка'],
+    'светильник': ['светильник', 'лампа', 'люстра', 'прожектор', 'led'],
+    'щит': ['щит', 'щиток', 'бокс', 'шкаф электрический'],
+    'клемма': ['клемма', 'клеммы', 'зажим', 'wago'],
+    'инструмент': ['инструмент', 'инструменты', 'набор']
+  };
   
-  const infoKeywords = ['доставка', 'оплата', 'гарантия', 'возврат', 'адрес', 'телефон', 'контакт'];
+  const INFO_KEYWORDS = ['доставка', 'оплата', 'гарантия', 'возврат', 'адрес', 'телефон', 'контакт', 'режим работы', 'часы работы'];
+  const GREETING_WORDS = ['привет', 'здравствуй', 'добрый', 'хай', 'hello', 'hi', 'салем', 'hey'];
   
   const lowerMessage = message.toLowerCase();
-  let product = message.replace(/[?!.,]+/g, ' ').replace(/\s+/g, ' ').trim();
   
-  // Убираем общие фразы
-  const cleaners = [
-    /^(привет|здравствуйте|добрый день|мне нужен|мне нужна|хочу купить|ищу|нужен|есть ли|какие есть|есть|покажи|найди)\s*/gi,
-    /\s*(пожалуйста|спасибо|есть|в наличии|у вас)$/gi,
-  ];
-  for (const regex of cleaners) {
-    product = product.replace(regex, '').trim();
+  // Быстрая проверка на приветствие
+  if (GREETING_WORDS.some(g => lowerMessage.startsWith(g)) && message.length < 30) {
+    console.log(`[FastParse] Quick greeting detected: "${message}"`);
+    return { intent: 'general', candidates: [], originalQuery: message };
   }
   
-  // Определяем бренд
+  // Быстрая проверка на info
+  if (INFO_KEYWORDS.some(k => lowerMessage.includes(k))) {
+    console.log(`[FastParse] Info query detected: "${message}"`);
+    return { intent: 'info', candidates: [], originalQuery: message };
+  }
+  
+  // Ищем продуктовые ключевые слова
+  let foundProduct: string | null = null;
+  let foundCategory: string | null = null;
+  
+  for (const [category, keywords] of Object.entries(PRODUCT_KEYWORDS)) {
+    for (const kw of keywords) {
+      if (lowerMessage.includes(kw)) {
+        foundProduct = kw;
+        foundCategory = category;
+        break;
+      }
+    }
+    if (foundProduct) break;
+  }
+  
+  // Ищем бренд
   let foundBrand: string | null = null;
   for (const brand of KNOWN_BRANDS) {
-    if (lowerMessage.includes(brand)) {
+    if (lowerMessage.includes(brand.toLowerCase())) {
       foundBrand = brand;
-      product = product.replace(new RegExp(brand, 'gi'), '').trim();
       break;
     }
   }
   
-  const isCatalog = catalogKeywords.some(k => lowerMessage.includes(k));
+  // Если нашли товар или бренд — это catalog запрос
+  if (foundProduct || foundBrand) {
+    // Генерируем кандидаты
+    const candidates: SearchCandidate[] = [];
+    
+    // Первый кандидат — базовое слово
+    if (foundCategory) {
+      candidates.push({ query: foundCategory, brand: foundBrand, category: foundCategory });
+    }
+    
+    // Второй кандидат — с брендом если есть
+    if (foundBrand && foundCategory) {
+      candidates.push({ query: `${foundCategory} ${foundBrand}`, brand: foundBrand, category: foundCategory });
+    }
+    
+    // Третий — только бренд
+    if (foundBrand && !foundCategory) {
+      candidates.push({ query: foundBrand, brand: foundBrand, category: null });
+    }
+    
+    // Если ничего не нашли через ключевые слова, пробуем очистить запрос
+    if (candidates.length === 0) {
+      let cleanQuery = message
+        .replace(/[?!.,]+/g, ' ')
+        .replace(/^(мне нужен|мне нужна|нужен|нужна|хочу|ищу|есть ли|покажи|найди|подскажите)\s*/gi, '')
+        .replace(/\s*(пожалуйста|спасибо|есть|в наличии|у вас)$/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      
+      if (cleanQuery.length > 2) {
+        // Берём первое слово как базовый запрос
+        const firstWord = cleanQuery.split(/\s+/)[0];
+        candidates.push({ query: firstWord, brand: foundBrand, category: null });
+        if (cleanQuery !== firstWord) {
+          candidates.push({ query: cleanQuery.split(/\s+/).slice(0, 2).join(' '), brand: foundBrand, category: null });
+        }
+      }
+    }
+    
+    console.log(`[FastParse] Catalog query: "${message}" → candidates: ${candidates.map(c => c.query).join(', ')}`);
+    return { intent: 'catalog', candidates, originalQuery: message };
+  }
+  
+  // Проверяем на вопрос о бренде
+  if (/какие (бренды|марки|производители)/i.test(message)) {
+    console.log(`[FastParse] Brands query detected: "${message}"`);
+    return { intent: 'brands', candidates: [{ query: 'инструмент', brand: null, category: null }], originalQuery: message };
+  }
+  
+  // Если ничего не распознали — возвращаем null, будем использовать AI
+  return null;
+}
+
+// Fallback парсинг если AI недоступен (полная версия)
+function fallbackParseQuery(message: string): ExtractedIntent {
+  // Сначала пробуем быстрый парсинг
+  const fastResult = fastParseQuery(message);
+  if (fastResult) return fastResult;
+  
+  // Если быстрый не справился — базовый fallback
+  const lowerMessage = message.toLowerCase();
+  
+  const catalogKeywords = ['товар', 'цена', 'купить', 'заказать', 'найти', 'есть', 'какие', 'покажи'];
+  const infoKeywords = ['доставка', 'оплата', 'гарантия', 'возврат', 'адрес', 'телефон', 'контакт'];
+  
+  let product = message.replace(/[?!.,]+/g, ' ').replace(/\s+/g, ' ').trim();
+  
+  // Убираем общие фразы
+  product = product
+    .replace(/^(привет|здравствуйте|добрый день|мне нужен|мне нужна|хочу купить|ищу|нужен|есть ли|какие есть|есть|покажи|найди)\s*/gi, '')
+    .replace(/\s*(пожалуйста|спасибо|есть|в наличии|у вас)$/gi, '')
+    .trim();
+  
+  const isCatalog = catalogKeywords.some(k => lowerMessage.includes(k)) && product.length > 2;
   const isInfo = infoKeywords.some(k => lowerMessage.includes(k));
   
   const intent = isCatalog ? 'catalog' : isInfo ? 'info' : 'general';
   
-  console.log(`[Fallback] intent=${intent}, query="${product}", brand="${foundBrand}"`);
+  console.log(`[Fallback] intent=${intent}, query="${product}"`);
   
   return {
     intent,
-    candidates: product ? [{ query: product, brand: foundBrand, category: null }] : [],
+    candidates: product && intent === 'catalog' ? [{ query: product, brand: null, category: null }] : [],
     originalQuery: message
   };
 }
@@ -457,9 +564,17 @@ serve(async (req) => {
     // Подготавливаем историю для контекста (без текущего сообщения)
     const historyForContext = messages.slice(0, -1);
 
-    // ШАГ 1: AI генерирует поисковые кандидаты с учётом истории разговора
-    const extractedIntent = await generateSearchCandidates(userMessage, LOVABLE_API_KEY, historyForContext);
-    console.log(`[Chat] Intent: ${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}`);
+    // ШАГ 1: Сначала пробуем быстрый парсинг (экономит ~2 сек)
+    let extractedIntent = fastParseQuery(userMessage);
+    
+    if (extractedIntent) {
+      console.log(`[Chat] FastParse: Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}`);
+    } else {
+      // Быстрый парсинг не справился — используем AI (сложные запросы)
+      console.log(`[Chat] FastParse failed, using AI for: "${userMessage}"`);
+      extractedIntent = await generateSearchCandidates(userMessage, LOVABLE_API_KEY, historyForContext);
+      console.log(`[Chat] AI: Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}`);
+    }
 
     let productContext = '';
     let foundProducts: Product[] = [];
