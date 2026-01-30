@@ -42,33 +42,46 @@ interface ExtractedIntent {
   originalQuery: string;
 }
 
-// Генерация поисковых кандидатов через AI
+// Генерация поисковых кандидатов через AI с учётом контекста разговора
 async function generateSearchCandidates(
   message: string, 
-  apiKey: string
+  apiKey: string,
+  conversationHistory: Array<{ role: string; content: string }> = []
 ): Promise<ExtractedIntent> {
   console.log(`[AI Candidates] Extracting search intent from: "${message}"`);
   
-  const extractionPrompt = `Ты — система извлечения поисковых намерений для интернет-магазина электроинструментов 220volt.kz.
+  // Формируем контекст из последних сообщений (максимум 6)
+  const recentHistory = conversationHistory.slice(-6);
+  let historyContext = '';
+  if (recentHistory.length > 0) {
+    historyContext = `
+КОНТЕКСТ РАЗГОВОРА (учитывай при генерации кандидатов!):
+${recentHistory.map(m => `${m.role === 'user' ? 'Клиент' : 'Консультант'}: ${m.content.substring(0, 200)}`).join('\n')}
 
-Проанализируй сообщение пользователя и определи:
+`;
+  }
+  
+  const extractionPrompt = `Ты — система извлечения поисковых намерений для интернет-магазина электроинструментов 220volt.kz.
+${historyContext}
+Проанализируй ТЕКУЩЕЕ сообщение пользователя с учётом контекста и определи:
 1. Тип намерения (intent):
    - "catalog" — пользователь ищет товары, хочет купить, интересуется ценами/наличием
    - "info" — вопросы о доставке, оплате, гарантии, контактах
    - "general" — приветствие, благодарность, общие вопросы
 
 2. Если intent="catalog", сгенерируй 2-5 поисковых запросов-кандидатов для API каталога:
+   - ВАЖНО: Учитывай бренды и предпочтения из предыдущих сообщений!
+   - Если клиент ранее указал бренд (Makita, Bosch и т.д.), добавляй его ко ВСЕМ кандидатам
    - Основной запрос (как написал пользователь, очищенный)
-   - Синонимы и вариации (например: "дрель" -> ["дрель", "шуруповерт", "дрель-шуруповерт"])
-   - Если упомянут бренд — включи его отдельно
+   - Синонимы и вариации
    - Если можно определить категорию — укажи её
 
-ВАЖНО: 
+КРИТИЧЕСКИ ВАЖНО: 
+- Если в контексте упоминался конкретный бренд — ОБЯЗАТЕЛЬНО добавь его в поле "brand" для КАЖДОГО кандидата!
 - Кандидаты должны быть короткими (1-3 слова)
 - Не добавляй вспомогательные слова (нужен, хочу, купить)
-- Бренды выделяй отдельно (Makita, Bosch, DeWalt, Metabo и т.д.)
 
-Сообщение пользователя: "${message}"`;
+ТЕКУЩЕЕ сообщение пользователя: "${message}"`;
 
   try {
     const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
@@ -391,8 +404,11 @@ serve(async (req) => {
     console.log(`[Chat] Processing: "${userMessage}"`);
     console.log(`[Chat] Conversation ID: ${conversationId}`);
 
-    // ШАГ 1: AI генерирует поисковые кандидаты
-    const extractedIntent = await generateSearchCandidates(userMessage, LOVABLE_API_KEY);
+    // Подготавливаем историю для контекста (без текущего сообщения)
+    const historyForContext = messages.slice(0, -1);
+
+    // ШАГ 1: AI генерирует поисковые кандидаты с учётом истории разговора
+    const extractedIntent = await generateSearchCandidates(userMessage, LOVABLE_API_KEY, historyForContext);
     console.log(`[Chat] Intent: ${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}`);
 
     let productContext = '';
