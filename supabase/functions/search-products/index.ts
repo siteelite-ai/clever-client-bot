@@ -5,7 +5,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
-const VOLT220_API_URL = 'https://220volt.kz/api/products';
+const VOLT220_API_URL = 'https://220volt.testdevops.ru/api/products';
 
 serve(async (req) => {
   // Handle CORS preflight
