@@ -120,11 +120,16 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [shouldScrollToBottom, setShouldScrollToBottom] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Скроллим только когда явно запрошено (после отправки сообщения пользователем)
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    if (shouldScrollToBottom) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      setShouldScrollToBottom(false);
+    }
+  }, [shouldScrollToBottom]);
 
   const handleSend = useCallback(async () => {
     if (!input.trim() || isLoading) return;
@@ -139,6 +144,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
+    setShouldScrollToBottom(true); // Скроллим к низу после отправки сообщения пользователя
 
     let assistantContent = '';
 
