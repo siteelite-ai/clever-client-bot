@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.search-products]
 verify_jwt = false
+
+[functions.knowledge-process]
+verify_jwt = false
