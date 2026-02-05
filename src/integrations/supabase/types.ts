@@ -20,6 +20,7 @@ export type Database = {
           created_at: string
           embedding: string | null
           id: string
+          search_vector: unknown
           source_url: string | null
           title: string
           type: string
@@ -30,6 +31,7 @@ export type Database = {
           created_at?: string
           embedding?: string | null
           id?: string
+          search_vector?: unknown
           source_url?: string | null
           title: string
           type: string
@@ -40,6 +42,7 @@ export type Database = {
           created_at?: string
           embedding?: string | null
           id?: string
+          search_vector?: unknown
           source_url?: string | null
           title?: string
           type?: string
@@ -62,6 +65,17 @@ export type Database = {
           content: string
           id: string
           similarity: number
+          source_url: string
+          title: string
+          type: string
+        }[]
+      }
+      search_knowledge_fulltext: {
+        Args: { match_count?: number; search_query: string }
+        Returns: {
+          content: string
+          id: string
+          rank: number
           source_url: string
           title: string
           type: string

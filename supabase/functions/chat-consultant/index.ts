@@ -18,47 +18,7 @@ interface KnowledgeResult {
   similarity: number;
 }
 
-// Simple deterministic embedding using semantic hashing (must match knowledge-process)
-function generateEmbedding(text: string): number[] {
-  const embedding: number[] = [];
-  const normalized = text.toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  
-  // Extract key terms using a simple TF approach
-  const words = normalized.split(' ').filter(w => w.length > 2);
-  const termFreq = new Map<string, number>();
-  
-  for (const word of words) {
-    termFreq.set(word, (termFreq.get(word) || 0) + 1);
-  }
-  
-  // Generate embedding based on term frequencies and position
-  for (let i = 0; i < 1536; i++) {
-    let value = 0;
-    
-    // Use multiple hash functions for better distribution
-    const wordIndex = i % words.length;
-    const word = words[wordIndex] || '';
-    
-    // Character-based hashing
-    for (let j = 0; j < word.length; j++) {
-      const charCode = word.charCodeAt(j);
-      value += Math.sin(charCode * (i + 1) * 0.01) * (termFreq.get(word) || 1);
-    }
-    
-    // Position-based component
-    value += Math.cos(i * 0.01) * (normalized.length / 10000);
-    
-    // Normalize to [-1, 1]
-    embedding.push(Math.tanh(value * 0.1));
-  }
-  
-  return embedding;
-}
-
-// Search knowledge base for relevant context
+// Search knowledge base for relevant context using full-text search
 async function searchKnowledgeBase(
   query: string, 
   limit: number = 3
@@ -74,13 +34,11 @@ async function searchKnowledgeBase(
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     
-    // Generate query embedding
-    const queryEmbedding = generateEmbedding(query);
+    console.log(`[Knowledge] Searching for: "${query.substring(0, 50)}..."`);
     
-    // Search using the database function
-    const { data, error } = await supabase.rpc('search_knowledge', {
-      query_embedding: queryEmbedding,
-      match_threshold: 0.3, // Lower threshold for more results
+    // Use full-text search function
+    const { data, error } = await supabase.rpc('search_knowledge_fulltext', {
+      search_query: query,
       match_count: limit,
     });
 
@@ -89,8 +47,17 @@ async function searchKnowledgeBase(
       return [];
     }
 
-    console.log(`[Knowledge] Found ${data?.length || 0} relevant entries for "${query.substring(0, 30)}..."`);
-    return data || [];
+    console.log(`[Knowledge] Found ${data?.length || 0} relevant entries`);
+    
+    // Map to expected interface
+    return (data || []).map((row: { id: string; title: string; content: string; type: string; source_url: string | null; rank: number }) => ({
+      id: row.id,
+      title: row.title,
+      content: row.content,
+      type: row.type,
+      source_url: row.source_url,
+      similarity: row.rank, // Use rank as similarity score
+    }));
   } catch (error) {
     console.error('[Knowledge] Search error:', error);
     return [];
