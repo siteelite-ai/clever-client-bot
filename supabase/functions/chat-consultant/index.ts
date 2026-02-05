@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -6,6 +7,95 @@ const corsHeaders = {
 };
 
 const VOLT220_API_URL = 'https://220volt.testdevops.ru/api/products';
+
+// Knowledge base entry
+interface KnowledgeResult {
+  id: string;
+  title: string;
+  content: string;
+  type: string;
+  source_url: string | null;
+  similarity: number;
+}
+
+// Simple deterministic embedding using semantic hashing (must match knowledge-process)
+function generateEmbedding(text: string): number[] {
+  const embedding: number[] = [];
+  const normalized = text.toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  
+  // Extract key terms using a simple TF approach
+  const words = normalized.split(' ').filter(w => w.length > 2);
+  const termFreq = new Map<string, number>();
+  
+  for (const word of words) {
+    termFreq.set(word, (termFreq.get(word) || 0) + 1);
+  }
+  
+  // Generate embedding based on term frequencies and position
+  for (let i = 0; i < 1536; i++) {
+    let value = 0;
+    
+    // Use multiple hash functions for better distribution
+    const wordIndex = i % words.length;
+    const word = words[wordIndex] || '';
+    
+    // Character-based hashing
+    for (let j = 0; j < word.length; j++) {
+      const charCode = word.charCodeAt(j);
+      value += Math.sin(charCode * (i + 1) * 0.01) * (termFreq.get(word) || 1);
+    }
+    
+    // Position-based component
+    value += Math.cos(i * 0.01) * (normalized.length / 10000);
+    
+    // Normalize to [-1, 1]
+    embedding.push(Math.tanh(value * 0.1));
+  }
+  
+  return embedding;
+}
+
+// Search knowledge base for relevant context
+async function searchKnowledgeBase(
+  query: string, 
+  limit: number = 3
+): Promise<KnowledgeResult[]> {
+  const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
+  const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    console.log('[Knowledge] Supabase not configured, skipping knowledge search');
+    return [];
+  }
+
+  try {
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    
+    // Generate query embedding
+    const queryEmbedding = generateEmbedding(query);
+    
+    // Search using the database function
+    const { data, error } = await supabase.rpc('search_knowledge', {
+      query_embedding: queryEmbedding,
+      match_threshold: 0.3, // Lower threshold for more results
+      match_count: limit,
+    });
+
+    if (error) {
+      console.error('[Knowledge] Search error:', error);
+      return [];
+    }
+
+    console.log(`[Knowledge] Found ${data?.length || 0} relevant entries for "${query.substring(0, 30)}..."`);
+    return data || [];
+  } catch (error) {
+    console.error('[Knowledge] Search error:', error);
+    return [];
+  }
+}
 
 interface Product {
   id: number;
@@ -579,8 +669,27 @@ serve(async (req) => {
     let productContext = '';
     let foundProducts: Product[] = [];
     let brandsContext = '';
+    let knowledgeContext = '';
 
-    // ШАГ 2: Обработка в зависимости от intent
+    // ШАГ 2: Поиск в базе знаний (параллельно с другими запросами)
+    // Ищем для info запросов или общих вопросов
+    if (extractedIntent.intent === 'info' || extractedIntent.intent === 'general') {
+      const knowledgeResults = await searchKnowledgeBase(userMessage, 3);
+      
+      if (knowledgeResults.length > 0) {
+        knowledgeContext = `
+📚 ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ (используй для ответа!):
+
+${knowledgeResults.map((r, i) => `--- ${r.title} ---
+${r.content.substring(0, 1500)}
+${r.source_url ? `Источник: ${r.source_url}` : ''}
+`).join('\n')}
+
+ИНСТРУКЦИЯ: Используй информацию выше для ответа клиенту. Если информация релевантна вопросу — цитируй её.`;
+        
+        console.log(`[Chat] Added ${knowledgeResults.length} knowledge entries to context`);
+      }
+    }
     if (extractedIntent.intent === 'brands' && extractedIntent.candidates.length > 0) {
       // Запрос о брендах — ищем товары и извлекаем бренды
       foundProducts = await searchProductsMulti(extractedIntent.candidates, 50); // Берём больше для полноты брендов
@@ -824,7 +933,10 @@ ${formattedAlternatives}
 
 ПРАВИЛА:
 - Используй ТОЛЬКО данные из раздела "НАЙДЕННЫЕ ТОВАРЫ"  
-- Предлагай топ-3 товара, спрашивай нужно ли показать больше${greetingRule}
+- Предлагай топ-3 товара, спрашивай нужно ли показать больше
+- Если есть информация из БАЗЫ ЗНАНИЙ — используй её для ответа на вопросы о компании${greetingRule}
+
+${knowledgeContext}
 
 ${productInstructions}`;
 
