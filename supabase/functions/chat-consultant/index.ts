@@ -8,6 +8,84 @@ const corsHeaders = {
 
 const VOLT220_API_URL = 'https://220volt.testdevops.ru/api/products';
 
+// Cached settings from DB
+interface CachedSettings {
+  volt220_api_token: string | null;
+  openrouter_api_key: string | null;
+  ai_model: string;
+}
+
+async function getAppSettings(): Promise<CachedSettings> {
+  const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
+  const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+    console.log('[Settings] Supabase not configured, using env vars');
+    return {
+      volt220_api_token: Deno.env.get('VOLT220_API_TOKEN') || null,
+      openrouter_api_key: null,
+      ai_model: 'google/gemini-2.5-flash-preview:free',
+    };
+  }
+
+  try {
+    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    const { data, error } = await supabase
+      .from('app_settings')
+      .select('volt220_api_token, openrouter_api_key, ai_model')
+      .limit(1)
+      .single();
+
+    if (error || !data) {
+      console.error('[Settings] Error reading settings:', error);
+      return {
+        volt220_api_token: Deno.env.get('VOLT220_API_TOKEN') || null,
+        openrouter_api_key: null,
+        ai_model: 'google/gemini-2.5-flash-preview:free',
+      };
+    }
+
+    // Fallback to env vars if DB values are empty
+    return {
+      volt220_api_token: data.volt220_api_token || Deno.env.get('VOLT220_API_TOKEN') || null,
+      openrouter_api_key: data.openrouter_api_key || null,
+      ai_model: data.ai_model || 'google/gemini-2.5-flash-preview:free',
+    };
+  } catch (e) {
+    console.error('[Settings] Failed to load settings:', e);
+    return {
+      volt220_api_token: Deno.env.get('VOLT220_API_TOKEN') || null,
+      openrouter_api_key: null,
+      ai_model: 'google/gemini-2.5-flash-preview:free',
+    };
+  }
+}
+
+// Determine AI endpoint and key based on settings
+function getAIConfig(settings: CachedSettings): { url: string; apiKey: string; model: string } {
+  if (settings.openrouter_api_key) {
+    // Strip :free suffix for OpenRouter API call — it's a UI hint only
+    const model = settings.ai_model;
+    return {
+      url: 'https://openrouter.ai/api/v1/chat/completions',
+      apiKey: settings.openrouter_api_key,
+      model,
+    };
+  }
+
+  // Fallback to Lovable AI Gateway
+  const lovableKey = Deno.env.get('LOVABLE_API_KEY');
+  if (lovableKey) {
+    return {
+      url: 'https://ai.gateway.lovable.dev/v1/chat/completions',
+      apiKey: lovableKey,
+      model: 'google/gemini-3-flash-preview',
+    };
+  }
+
+  throw new Error('No AI provider configured. Set OpenRouter API key in Settings or configure LOVABLE_API_KEY.');
+}
+
 // Knowledge base entry
 interface KnowledgeResult {
   id: string;
@@ -103,7 +181,9 @@ interface ExtractedIntent {
 async function generateSearchCandidates(
   message: string, 
   apiKey: string,
-  conversationHistory: Array<{ role: string; content: string }> = []
+  conversationHistory: Array<{ role: string; content: string }> = [],
+  aiUrl: string = 'https://openrouter.ai/api/v1/chat/completions',
+  aiModel: string = 'google/gemini-2.5-flash-preview:free'
 ): Promise<ExtractedIntent> {
   console.log(`[AI Candidates] Extracting search intent from: "${message}"`);
   
@@ -174,14 +254,18 @@ ${historyContext}
 
 ТЕКУЩЕЕ сообщение пользователя: "${message}"`;
 
+  // Extract model from special :free suffix format
+  const model = apiKey.startsWith('sk-or-') ? aiModel : 'google/gemini-3-flash-preview';
+  
   try {
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    const response = await fetch(aiUrl, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
+        model,
         model: 'google/gemini-3-flash-preview',
         messages: [
           { role: 'system', content: extractionPrompt },
@@ -479,9 +563,10 @@ async function searchProductsByCandidate(
 // Параллельный поиск по всем кандидатам с дедупликацией
 async function searchProductsMulti(
   candidates: SearchCandidate[],
-  limit: number = 10
+  limit: number = 10,
+  apiTokenOverride?: string
 ): Promise<Product[]> {
-  const apiToken = Deno.env.get('VOLT220_API_TOKEN');
+  const apiToken = apiTokenOverride || Deno.env.get('VOLT220_API_TOKEN');
   
   if (!apiToken) {
     console.error('[Search] VOLT220_API_TOKEN is not configured');
@@ -615,10 +700,11 @@ serve(async (req) => {
       throw new Error('Invalid request format: missing messages or message');
     }
     
-    const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-    if (!LOVABLE_API_KEY) {
-      throw new Error('LOVABLE_API_KEY is not configured');
-    }
+    // Load settings from DB (API keys, model selection)
+    const appSettings = await getAppSettings();
+    const aiConfig = getAIConfig(appSettings);
+    
+    console.log(`[Chat] AI Provider: ${aiConfig.url.includes('openrouter') ? 'OpenRouter' : 'Lovable AI'}, Model: ${aiConfig.model}`);
 
     const lastMessage = messages[messages.length - 1];
     const userMessage = lastMessage?.content || '';
@@ -637,7 +723,7 @@ serve(async (req) => {
     } else {
       // Быстрый парсинг не справился — используем AI (сложные запросы)
       console.log(`[Chat] FastParse failed, using AI for: "${userMessage}"`);
-      extractedIntent = await generateSearchCandidates(userMessage, LOVABLE_API_KEY, historyForContext);
+      extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKey, historyForContext, aiConfig.url, aiConfig.model);
       console.log(`[Chat] AI: Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}`);
     }
 
@@ -667,7 +753,7 @@ ${r.source_url ? `Источник: ${r.source_url}` : ''}
     }
     if (extractedIntent.intent === 'brands' && extractedIntent.candidates.length > 0) {
       // Запрос о брендах — ищем товары и извлекаем бренды
-      foundProducts = await searchProductsMulti(extractedIntent.candidates, 50); // Берём больше для полноты брендов
+      foundProducts = await searchProductsMulti(extractedIntent.candidates, 50, appSettings.volt220_api_token || undefined); // Берём больше для полноты брендов
       
       if (foundProducts.length > 0) {
         const brands = extractBrandsFromProducts(foundProducts);
@@ -684,7 +770,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
       }
     } else if (extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
       // Обычный каталожный запрос
-      foundProducts = await searchProductsMulti(extractedIntent.candidates, 8);
+      foundProducts = await searchProductsMulti(extractedIntent.candidates, 8, appSettings.volt220_api_token || undefined);
       
       if (foundProducts.length > 0) {
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
@@ -777,7 +863,7 @@ ${productContext}
         
         console.log(`[Chat] Fallback candidates:`, candidatesWithoutBrand.map(c => c.query));
         
-        const fallbackProducts = await searchProductsMulti(candidatesWithoutBrand, 6);
+        const fallbackProducts = await searchProductsMulti(candidatesWithoutBrand, 6, appSettings.volt220_api_token || undefined);
         
         if (fallbackProducts.length > 0) {
           // Нашли альтернативы! Показываем их
@@ -920,14 +1006,14 @@ ${productInstructions}`;
       ...messages,
     ];
     
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    const response = await fetch(aiConfig.url, {
       method: 'POST',
       headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+        'Authorization': `Bearer ${aiConfig.apiKey}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: 'google/gemini-3-flash-preview',
+        model: aiConfig.model,
         messages: messagesForAI,
         stream: true,
       }),

@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -6,6 +7,29 @@ const corsHeaders = {
 };
 
 const VOLT220_API_URL = 'https://220volt.testdevops.ru/api/products';
+
+async function getApiToken(): Promise<string> {
+  const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
+  const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  
+  if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
+    try {
+      const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      const { data } = await supabase
+        .from('app_settings')
+        .select('volt220_api_token')
+        .limit(1)
+        .single();
+      if (data?.volt220_api_token) return data.volt220_api_token;
+    } catch (e) {
+      console.log('[API Token] DB read failed, falling back to env var');
+    }
+  }
+  
+  const envToken = Deno.env.get('VOLT220_API_TOKEN');
+  if (!envToken) throw new Error('VOLT220_API_TOKEN is not configured');
+  return envToken;
+}
 
 serve(async (req) => {
   // Handle CORS preflight
@@ -16,10 +40,7 @@ serve(async (req) => {
   try {
     const { query, page = 1, perPage = 12, category, minPrice, maxPrice, brand } = await req.json();
     
-    const apiToken = Deno.env.get('VOLT220_API_TOKEN');
-    if (!apiToken) {
-      throw new Error('VOLT220_API_TOKEN is not configured');
-    }
+    const apiToken = await getApiToken();
 
     // Формируем параметры запроса согласно документации
     const params = new URLSearchParams();

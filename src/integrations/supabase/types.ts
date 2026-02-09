@@ -14,6 +14,30 @@ export type Database = {
   }
   public: {
     Tables: {
+      app_settings: {
+        Row: {
+          ai_model: string
+          id: string
+          openrouter_api_key: string | null
+          updated_at: string
+          volt220_api_token: string | null
+        }
+        Insert: {
+          ai_model?: string
+          id?: string
+          openrouter_api_key?: string | null
+          updated_at?: string
+          volt220_api_token?: string | null
+        }
+        Update: {
+          ai_model?: string
+          id?: string
+          openrouter_api_key?: string | null
+          updated_at?: string
+          volt220_api_token?: string | null
+        }
+        Relationships: []
+      }
       knowledge_entries: {
         Row: {
           content: string
