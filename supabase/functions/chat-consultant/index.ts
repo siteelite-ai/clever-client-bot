@@ -994,37 +994,50 @@ ${productInstructions}`;
       ...messages,
     ];
     
-    const response = await fetch(aiConfig.url, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${aiConfig.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: aiConfig.model,
-        messages: messagesForAI,
-        stream: true,
-      }),
-    });
+    // Retry logic for rate-limited free models
+    const MAX_RETRIES = 3;
+    const RETRY_DELAYS = [2000, 5000, 10000]; // 2s, 5s, 10s
+    let response: Response | null = null;
+    
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      response = await fetch(aiConfig.url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${aiConfig.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: aiConfig.model,
+          messages: messagesForAI,
+          stream: true,
+        }),
+      });
 
-    if (!response.ok) {
-      if (response.status === 429) {
+      if (response.status !== 429 || attempt === MAX_RETRIES) break;
+      
+      const errorBody = await response.text();
+      console.log(`[Chat] Rate limit 429 (attempt ${attempt + 1}/${MAX_RETRIES}), retrying in ${RETRY_DELAYS[attempt]}ms...`, errorBody);
+      await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
+    }
+
+    if (!response || !response.ok) {
+      if (response?.status === 429) {
         const errorBody = await response.text();
-        console.error('[Chat] Rate limit 429:', errorBody);
+        console.error('[Chat] Rate limit 429 after all retries:', errorBody);
         return new Response(
           JSON.stringify({ error: 'Превышен лимит запросов к бесплатной модели OpenRouter. Подождите 1-2 минуты и попробуйте снова.' }),
           { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
-      if (response.status === 402) {
+      if (response?.status === 402) {
         return new Response(
           JSON.stringify({ error: 'Требуется пополнение баланса AI.' }),
           { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
       
-      const errorText = await response.text();
-      console.error('[Chat] AI Gateway error:', response.status, errorText);
+      const errorText = await response?.text();
+      console.error('[Chat] AI Gateway error:', response?.status, errorText);
       return new Response(
         JSON.stringify({ error: 'Ошибка AI сервиса' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
