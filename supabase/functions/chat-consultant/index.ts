@@ -1,4 +1,4 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
 const corsHeaders = {
@@ -24,7 +24,7 @@ async function getAppSettings(): Promise<CachedSettings> {
     return {
       volt220_api_token: Deno.env.get('VOLT220_API_TOKEN') || null,
       openrouter_api_key: null,
-      ai_model: 'google/gemini-2.5-flash-preview:free',
+      ai_model: 'google/gemini-2.0-flash-exp:free',
     };
   }
 
@@ -41,7 +41,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       return {
         volt220_api_token: Deno.env.get('VOLT220_API_TOKEN') || null,
         openrouter_api_key: null,
-        ai_model: 'google/gemini-2.5-flash-preview:free',
+        ai_model: 'google/gemini-2.0-flash-exp:free',
       };
     }
 
@@ -49,14 +49,14 @@ async function getAppSettings(): Promise<CachedSettings> {
     return {
       volt220_api_token: data.volt220_api_token || Deno.env.get('VOLT220_API_TOKEN') || null,
       openrouter_api_key: data.openrouter_api_key || null,
-      ai_model: data.ai_model || 'google/gemini-2.5-flash-preview:free',
+      ai_model: data.ai_model || 'google/gemini-2.0-flash-exp:free',
     };
   } catch (e) {
     console.error('[Settings] Failed to load settings:', e);
     return {
       volt220_api_token: Deno.env.get('VOLT220_API_TOKEN') || null,
       openrouter_api_key: null,
-      ai_model: 'google/gemini-2.5-flash-preview:free',
+      ai_model: 'google/gemini-2.0-flash-exp:free',
     };
   }
 }
@@ -183,7 +183,7 @@ async function generateSearchCandidates(
   apiKey: string,
   conversationHistory: Array<{ role: string; content: string }> = [],
   aiUrl: string = 'https://openrouter.ai/api/v1/chat/completions',
-  aiModel: string = 'google/gemini-2.5-flash-preview:free'
+  aiModel: string = 'google/gemini-2.0-flash-exp:free'
 ): Promise<ExtractedIntent> {
   console.log(`[AI Candidates] Extracting search intent from: "${message}"`);
   

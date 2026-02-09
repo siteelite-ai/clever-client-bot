@@ -27,7 +27,7 @@ interface CuratedModel {
 
 const CURATED_MODELS: CuratedModel[] = [
   // Free
-  { id: 'google/gemini-2.5-flash-preview:free', name: 'Gemini 2.5 Flash Preview', provider: 'Google', free: true, description: 'Быстрая модель Google, бесплатный доступ' },
+  { id: 'google/gemini-2.0-flash-exp:free', name: 'Gemini 2.0 Flash', provider: 'Google', free: true, description: 'Быстрая модель Google, бесплатный доступ' },
   { id: 'meta-llama/llama-4-scout:free', name: 'Llama 4 Scout', provider: 'Meta', free: true, description: 'Мощная open-source модель Meta' },
   { id: 'deepseek/deepseek-chat-v3-0324:free', name: 'DeepSeek V3', provider: 'DeepSeek', free: true, description: 'Хорошая модель для диалогов, бесплатная' },
   { id: 'qwen/qwen3-8b:free', name: 'Qwen 3 8B', provider: 'Alibaba', free: true, description: 'Компактная и быстрая модель Alibaba' },
@@ -46,7 +46,7 @@ export default function Settings() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [apiToken, setApiToken] = useState('');
   const [openrouterKey, setOpenrouterKey] = useState('');
-  const [selectedModel, setSelectedModel] = useState('google/gemini-2.5-flash-preview:free');
+  const [selectedModel, setSelectedModel] = useState('google/gemini-2.0-flash-exp:free');
   const [modelFilter, setModelFilter] = useState<ModelFilter>('all');
   const [showApiToken, setShowApiToken] = useState(false);
   const [showOpenrouterKey, setShowOpenrouterKey] = useState(false);
@@ -71,7 +71,7 @@ export default function Settings() {
         setSettings(data as AppSettings);
         setApiToken(data.volt220_api_token || '');
         setOpenrouterKey(data.openrouter_api_key || '');
-        setSelectedModel(data.ai_model || 'google/gemini-2.5-flash-preview:free');
+        setSelectedModel(data.ai_model || 'google/gemini-2.0-flash-exp:free');
       }
     } catch (error) {
       console.error('Error fetching settings:', error);
