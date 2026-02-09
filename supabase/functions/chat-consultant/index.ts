@@ -1009,8 +1009,10 @@ ${productInstructions}`;
 
     if (!response.ok) {
       if (response.status === 429) {
+        const errorBody = await response.text();
+        console.error('[Chat] Rate limit 429:', errorBody);
         return new Response(
-          JSON.stringify({ error: 'Превышен лимит запросов. Попробуйте позже.' }),
+          JSON.stringify({ error: 'Превышен лимит запросов к бесплатной модели OpenRouter. Подождите 1-2 минуты и попробуйте снова.' }),
           { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
