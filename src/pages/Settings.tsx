@@ -27,11 +27,11 @@ interface CuratedModel {
 
 const CURATED_MODELS: CuratedModel[] = [
   // Free
-  { id: 'google/gemini-2.0-flash-exp:free', name: 'Gemini 2.0 Flash', provider: 'Google', free: true, description: 'Быстрая мультимодальная, контекст 1M токенов' },
+  { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B', provider: 'Meta', free: true, description: 'Уровень GPT-4, стабильная и универсальная' },
   { id: 'openai/gpt-oss-120b:free', name: 'GPT-OSS 120B', provider: 'OpenAI', free: true, description: 'MoE 117B, отличные рассуждения и агенты' },
-  { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B', provider: 'Meta', free: true, description: 'Уровень GPT-4, универсальная' },
   { id: 'deepseek/deepseek-r1-0528:free', name: 'DeepSeek R1', provider: 'DeepSeek', free: true, description: 'Сильные рассуждения, аналитика' },
   { id: 'qwen/qwen3-coder-480b-a35b:free', name: 'Qwen3 Coder 480B', provider: 'Alibaba', free: true, description: 'MoE для кода, контекст 262K' },
+  { id: 'openai/gpt-oss-20b:free', name: 'GPT-OSS 20B', provider: 'OpenAI', free: true, description: 'Лёгкая и быстрая MoE модель' },
   // Paid
   { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google', free: false, description: 'Баланс скорости и качества' },
   { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google', free: false, description: 'Лучшее качество в линейке Gemini' },
@@ -46,7 +46,7 @@ export default function Settings() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [apiToken, setApiToken] = useState('');
   const [openrouterKey, setOpenrouterKey] = useState('');
-  const [selectedModel, setSelectedModel] = useState('google/gemini-2.0-flash-exp:free');
+  const [selectedModel, setSelectedModel] = useState('meta-llama/llama-3.3-70b-instruct:free');
   const [modelFilter, setModelFilter] = useState<ModelFilter>('all');
   const [showApiToken, setShowApiToken] = useState(false);
   const [showOpenrouterKey, setShowOpenrouterKey] = useState(false);
@@ -71,7 +71,7 @@ export default function Settings() {
         setSettings(data as AppSettings);
         setApiToken(data.volt220_api_token || '');
         setOpenrouterKey(data.openrouter_api_key || '');
-        setSelectedModel(data.ai_model || 'google/gemini-2.0-flash-exp:free');
+        setSelectedModel(data.ai_model || 'meta-llama/llama-3.3-70b-instruct:free');
       }
     } catch (error) {
       console.error('Error fetching settings:', error);

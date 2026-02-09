@@ -63,27 +63,15 @@ async function getAppSettings(): Promise<CachedSettings> {
 
 // Determine AI endpoint and key based on settings
 function getAIConfig(settings: CachedSettings): { url: string; apiKey: string; model: string } {
-  if (settings.openrouter_api_key) {
-    // Strip :free suffix for OpenRouter API call — it's a UI hint only
-    const model = settings.ai_model;
-    return {
-      url: 'https://openrouter.ai/api/v1/chat/completions',
-      apiKey: settings.openrouter_api_key,
-      model,
-    };
+  if (!settings.openrouter_api_key) {
+    throw new Error('OpenRouter API key не настроен. Добавьте ключ в Настройках.');
   }
 
-  // Fallback to Lovable AI Gateway
-  const lovableKey = Deno.env.get('LOVABLE_API_KEY');
-  if (lovableKey) {
-    return {
-      url: 'https://ai.gateway.lovable.dev/v1/chat/completions',
-      apiKey: lovableKey,
-      model: 'google/gemini-3-flash-preview',
-    };
-  }
-
-  throw new Error('No AI provider configured. Set OpenRouter API key in Settings or configure LOVABLE_API_KEY.');
+  return {
+    url: 'https://openrouter.ai/api/v1/chat/completions',
+    apiKey: settings.openrouter_api_key,
+    model: settings.ai_model,
+  };
 }
 
 // Knowledge base entry
@@ -1006,7 +994,7 @@ ${productInstructions}`;
       ...messages,
     ];
     
-    let response = await fetch(aiConfig.url, {
+    const response = await fetch(aiConfig.url, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${aiConfig.apiKey}`,
@@ -1018,29 +1006,6 @@ ${productInstructions}`;
         stream: true,
       }),
     });
-
-    // Fallback to Lovable AI Gateway if OpenRouter fails (model not found, etc.)
-    if (!response.ok && aiConfig.url.includes('openrouter.ai')) {
-      const errorText = await response.text();
-      console.warn('[Chat] OpenRouter error:', response.status, errorText, '— falling back to Lovable AI Gateway');
-      
-      const lovableKey = Deno.env.get('LOVABLE_API_KEY');
-      if (lovableKey) {
-        response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${lovableKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: 'google/gemini-3-flash-preview',
-            messages: messagesForAI,
-            stream: true,
-          }),
-        });
-        console.log('[Chat] Lovable AI Gateway fallback response:', response.status);
-      }
-    }
 
     if (!response.ok) {
       if (response.status === 429) {
