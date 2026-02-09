@@ -24,7 +24,7 @@ async function getAppSettings(): Promise<CachedSettings> {
     return {
       volt220_api_token: Deno.env.get('VOLT220_API_TOKEN') || null,
       openrouter_api_key: null,
-      ai_model: 'google/gemini-2.0-flash-exp:free',
+      ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
     };
   }
 
@@ -41,7 +41,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       return {
         volt220_api_token: Deno.env.get('VOLT220_API_TOKEN') || null,
         openrouter_api_key: null,
-        ai_model: 'google/gemini-2.0-flash-exp:free',
+        ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
       };
     }
 
@@ -49,14 +49,14 @@ async function getAppSettings(): Promise<CachedSettings> {
     return {
       volt220_api_token: data.volt220_api_token || Deno.env.get('VOLT220_API_TOKEN') || null,
       openrouter_api_key: data.openrouter_api_key || null,
-      ai_model: data.ai_model || 'google/gemini-2.0-flash-exp:free',
+      ai_model: data.ai_model || 'meta-llama/llama-3.3-70b-instruct:free',
     };
   } catch (e) {
     console.error('[Settings] Failed to load settings:', e);
     return {
       volt220_api_token: Deno.env.get('VOLT220_API_TOKEN') || null,
       openrouter_api_key: null,
-      ai_model: 'google/gemini-2.0-flash-exp:free',
+      ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
     };
   }
 }
@@ -183,7 +183,7 @@ async function generateSearchCandidates(
   apiKey: string,
   conversationHistory: Array<{ role: string; content: string }> = [],
   aiUrl: string = 'https://openrouter.ai/api/v1/chat/completions',
-  aiModel: string = 'google/gemini-2.0-flash-exp:free'
+  aiModel: string = 'meta-llama/llama-3.3-70b-instruct:free'
 ): Promise<ExtractedIntent> {
   console.log(`[AI Candidates] Extracting search intent from: "${message}"`);
   
@@ -1006,7 +1006,7 @@ ${productInstructions}`;
       ...messages,
     ];
     
-    const response = await fetch(aiConfig.url, {
+    let response = await fetch(aiConfig.url, {
       method: 'POST',
       headers: {
         'Authorization': `Bearer ${aiConfig.apiKey}`,
@@ -1018,6 +1018,29 @@ ${productInstructions}`;
         stream: true,
       }),
     });
+
+    // Fallback to Lovable AI Gateway if OpenRouter fails (model not found, etc.)
+    if (!response.ok && aiConfig.url.includes('openrouter.ai')) {
+      const errorText = await response.text();
+      console.warn('[Chat] OpenRouter error:', response.status, errorText, '— falling back to Lovable AI Gateway');
+      
+      const lovableKey = Deno.env.get('LOVABLE_API_KEY');
+      if (lovableKey) {
+        response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${lovableKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: 'google/gemini-3-flash-preview',
+            messages: messagesForAI,
+            stream: true,
+          }),
+        });
+        console.log('[Chat] Lovable AI Gateway fallback response:', response.status);
+      }
+    }
 
     if (!response.ok) {
       if (response.status === 429) {
