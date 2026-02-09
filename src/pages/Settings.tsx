@@ -27,16 +27,16 @@ interface CuratedModel {
 
 const CURATED_MODELS: CuratedModel[] = [
   // Free
-  { id: 'google/gemini-2.0-flash-exp:free', name: 'Gemini 2.0 Flash', provider: 'Google', free: true, description: 'Быстрая модель Google, бесплатный доступ' },
-  { id: 'meta-llama/llama-4-scout:free', name: 'Llama 4 Scout', provider: 'Meta', free: true, description: 'Мощная open-source модель Meta' },
-  { id: 'deepseek/deepseek-chat-v3-0324:free', name: 'DeepSeek V3', provider: 'DeepSeek', free: true, description: 'Хорошая модель для диалогов, бесплатная' },
-  { id: 'qwen/qwen3-8b:free', name: 'Qwen 3 8B', provider: 'Alibaba', free: true, description: 'Компактная и быстрая модель Alibaba' },
+  { id: 'google/gemini-2.0-flash-exp:free', name: 'Gemini 2.0 Flash', provider: 'Google', free: true, description: 'Быстрая мультимодальная, контекст 1M токенов' },
+  { id: 'openai/gpt-oss-120b:free', name: 'GPT-OSS 120B', provider: 'OpenAI', free: true, description: 'MoE 117B, отличные рассуждения и агенты' },
+  { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B', provider: 'Meta', free: true, description: 'Уровень GPT-4, универсальная' },
+  { id: 'deepseek/deepseek-r1-0528:free', name: 'DeepSeek R1', provider: 'DeepSeek', free: true, description: 'Сильные рассуждения, аналитика' },
+  { id: 'qwen/qwen3-coder-480b-a35b:free', name: 'Qwen3 Coder 480B', provider: 'Alibaba', free: true, description: 'MoE для кода, контекст 262K' },
   // Paid
   { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google', free: false, description: 'Баланс скорости и качества' },
   { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google', free: false, description: 'Лучшее качество в линейке Gemini' },
   { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', provider: 'Anthropic', free: false, description: 'Отличное понимание контекста' },
   { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini', provider: 'OpenAI', free: false, description: 'Недорогая и быстрая модель OpenAI' },
-  { id: 'openai/gpt-4o', name: 'GPT-4o', provider: 'OpenAI', free: false, description: 'Топовая модель OpenAI' },
   { id: 'deepseek/deepseek-chat-v3-0324', name: 'DeepSeek V3', provider: 'DeepSeek', free: false, description: 'Полная версия без лимитов' },
 ];
 
