@@ -85,7 +85,7 @@ export function AdminSidebar() {
                 <span className="flex-1">{item.label}</span>
               )}
               {!collapsed && 'soon' in item && item.soon && (
-                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">в планах</span>
+                <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-muted text-muted-foreground">пример</span>
               )}
             </Link>
           );
