@@ -64,7 +64,7 @@ export default function Analytics() {
             <h3 className="text-lg font-semibold mb-4">Диалоги по дням</h3>
             <div className="h-64 bg-muted/30 rounded-lg flex items-center justify-center">
               <p className="text-muted-foreground">
-                График будет доступен после подключения Lovable Cloud
+                Будет доступно после настройки
               </p>
             </div>
           </div>
@@ -72,7 +72,7 @@ export default function Analytics() {
             <h3 className="text-lg font-semibold mb-4">Популярные категории</h3>
             <div className="h-64 bg-muted/30 rounded-lg flex items-center justify-center">
               <p className="text-muted-foreground">
-                График будет доступен после подключения Lovable Cloud
+                Будет доступно после настройки
               </p>
             </div>
           </div>
