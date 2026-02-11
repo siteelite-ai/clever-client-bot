@@ -10,23 +10,32 @@ import {
   Code,
   ChevronLeft,
   ChevronRight,
-  Zap
+  Zap,
+  LogOut
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { useAuth } from '@/hooks/useAuth';
 
 const menuItems = [
   { icon: LayoutDashboard, label: 'Дашборд', path: '/' },
   { icon: MessageSquare, label: 'Виджет', path: '/widget' },
   { icon: Database, label: 'База знаний', path: '/knowledge' },
   { icon: BarChart3, label: 'Аналитика', path: '/analytics' },
-  { icon: Users, label: 'Пользователи', path: '/users' },
+  { icon: Users, label: 'Пользователи', path: '/users', requiredRole: 'admin' as const },
   { icon: Code, label: 'Интеграция', path: '/integration' },
-  { icon: Settings, label: 'Настройки', path: '/settings' },
+  { icon: Settings, label: 'Настройки', path: '/settings', requiredRole: 'admin' as const },
 ];
 
 export function AdminSidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
+  const { user, signOut } = useAuth();
+
+  const visibleItems = menuItems.filter(item => {
+    if (!item.requiredRole) return true;
+    const hierarchy = { admin: 3, editor: 2, viewer: 1 };
+    return hierarchy[user?.role || 'viewer'] >= hierarchy[item.requiredRole];
+  });
 
   return (
     <aside
@@ -60,7 +69,7 @@ export function AdminSidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 py-4 px-3 space-y-1 overflow-y-auto">
-        {menuItems.map((item) => {
+        {visibleItems.map((item) => {
           const isActive = location.pathname === item.path;
           return (
             <Link
@@ -85,15 +94,33 @@ export function AdminSidebar() {
           collapsed && "justify-center"
         )}>
           <div className="w-10 h-10 rounded-full bg-sidebar-accent flex items-center justify-center text-sidebar-foreground font-medium">
-            A
+            {user?.displayName?.charAt(0)?.toUpperCase() || '?'}
           </div>
           {!collapsed && (
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-sidebar-foreground truncate">Админ</p>
-              <p className="text-xs text-sidebar-foreground/60 truncate">admin@220volt.kz</p>
+              <p className="text-sm font-medium text-sidebar-foreground truncate">{user?.displayName || 'Пользователь'}</p>
+              <p className="text-xs text-sidebar-foreground/60 truncate">{user?.email}</p>
             </div>
           )}
+          {!collapsed && (
+            <button
+              onClick={signOut}
+              className="p-1.5 rounded-lg hover:bg-sidebar-accent text-sidebar-foreground/60 hover:text-sidebar-foreground transition-colors"
+              title="Выйти"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          )}
         </div>
+        {collapsed && (
+          <button
+            onClick={signOut}
+            className="mt-2 w-full p-1.5 rounded-lg hover:bg-sidebar-accent text-sidebar-foreground/60 hover:text-sidebar-foreground transition-colors flex items-center justify-center"
+            title="Выйти"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
+        )}
       </div>
     </aside>
   );
