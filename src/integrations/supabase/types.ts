@@ -17,6 +17,8 @@ export type Database = {
       app_settings: {
         Row: {
           ai_model: string
+          ai_provider: string
+          google_api_key: string | null
           id: string
           openrouter_api_key: string | null
           updated_at: string
@@ -24,6 +26,8 @@ export type Database = {
         }
         Insert: {
           ai_model?: string
+          ai_provider?: string
+          google_api_key?: string | null
           id?: string
           openrouter_api_key?: string | null
           updated_at?: string
@@ -31,6 +35,8 @@ export type Database = {
         }
         Update: {
           ai_model?: string
+          ai_provider?: string
+          google_api_key?: string | null
           id?: string
           openrouter_api_key?: string | null
           updated_at?: string

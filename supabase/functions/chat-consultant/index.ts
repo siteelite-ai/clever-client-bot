@@ -12,6 +12,8 @@ const VOLT220_API_URL = 'https://220volt.testdevops.ru/api/products';
 interface CachedSettings {
   volt220_api_token: string | null;
   openrouter_api_key: string | null;
+  google_api_key: string | null;
+  ai_provider: string;
   ai_model: string;
 }
 
@@ -24,6 +26,8 @@ async function getAppSettings(): Promise<CachedSettings> {
     return {
       volt220_api_token: Deno.env.get('VOLT220_API_TOKEN') || null,
       openrouter_api_key: null,
+      google_api_key: null,
+      ai_provider: 'openrouter',
       ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
     };
   }
@@ -32,7 +36,7 @@ async function getAppSettings(): Promise<CachedSettings> {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const { data, error } = await supabase
       .from('app_settings')
-      .select('volt220_api_token, openrouter_api_key, ai_model')
+      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model')
       .limit(1)
       .single();
 
@@ -41,6 +45,8 @@ async function getAppSettings(): Promise<CachedSettings> {
       return {
         volt220_api_token: Deno.env.get('VOLT220_API_TOKEN') || null,
         openrouter_api_key: null,
+        google_api_key: null,
+        ai_provider: 'openrouter',
         ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
       };
     }
@@ -49,20 +55,37 @@ async function getAppSettings(): Promise<CachedSettings> {
     return {
       volt220_api_token: data.volt220_api_token || Deno.env.get('VOLT220_API_TOKEN') || null,
       openrouter_api_key: data.openrouter_api_key || null,
+      google_api_key: data.google_api_key || null,
+      ai_provider: data.ai_provider || 'openrouter',
       ai_model: data.ai_model || 'meta-llama/llama-3.3-70b-instruct:free',
     };
   } catch (e) {
     console.error('[Settings] Failed to load settings:', e);
-    return {
-      volt220_api_token: Deno.env.get('VOLT220_API_TOKEN') || null,
-      openrouter_api_key: null,
-      ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
-    };
+      return {
+        volt220_api_token: Deno.env.get('VOLT220_API_TOKEN') || null,
+        openrouter_api_key: null,
+        google_api_key: null,
+        ai_provider: 'openrouter',
+        ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
+      };
   }
 }
 
 // Determine AI endpoint and key based on settings
 function getAIConfig(settings: CachedSettings): { url: string; apiKey: string; model: string } {
+  if (settings.ai_provider === 'google') {
+    if (!settings.google_api_key) {
+      throw new Error('Google AI Studio API key не настроен. Добавьте ключ в Настройках.');
+    }
+    // Google AI Studio uses OpenAI-compatible endpoint
+    return {
+      url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+      apiKey: settings.google_api_key,
+      model: settings.ai_model || 'gemini-2.0-flash',
+    };
+  }
+
+  // Default: OpenRouter
   if (!settings.openrouter_api_key) {
     throw new Error('OpenRouter API key не настроен. Добавьте ключ в Настройках.');
   }
