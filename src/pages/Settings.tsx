@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Save, Key, Database, Zap, Eye, EyeOff, Check, Loader2 } from 'lucide-react';
+import { Save, Key, Zap, Eye, EyeOff, Loader2 } from 'lucide-react';
 import { AdminLayout } from '@/components/layout/AdminLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -193,23 +193,6 @@ export default function Settings() {
             </div>
           </div>
 
-          {/* Database Status */}
-          <div className="admin-card space-y-6">
-            <div className="flex items-center gap-2">
-              <Database className="w-5 h-5 text-primary" />
-              <h3 className="text-lg font-semibold">База данных</h3>
-            </div>
-
-            <div className="p-4 bg-success/10 border border-success/20 rounded-lg">
-              <div className="flex items-center gap-2">
-                <Check className="w-4 h-4 text-success" />
-                <span className="font-medium text-success">Подключено</span>
-              </div>
-              <p className="text-xs text-muted-foreground mt-1">
-                Supabase — хранение данных, база знаний, настройки
-              </p>
-            </div>
-          </div>
 
           {/* AI Settings */}
           <div className="admin-card space-y-6">
