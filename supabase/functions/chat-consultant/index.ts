@@ -265,9 +265,6 @@ ${historyContext}
 
 ТЕКУЩЕЕ сообщение пользователя: "${message}"`;
 
-  // Extract model from special :free suffix format
-  const model = apiKey.startsWith('sk-or-') ? aiModel : 'google/gemini-3-flash-preview';
-  
   try {
     const response = await fetch(aiUrl, {
       method: 'POST',
@@ -276,8 +273,7 @@ ${historyContext}
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model,
-        model: 'google/gemini-3-flash-preview',
+        model: aiModel,
         messages: [
           { role: 'system', content: extractionPrompt },
           { role: 'user', content: message }
@@ -1046,9 +1042,10 @@ ${productInstructions}`;
     if (!response || !response.ok) {
       if (response?.status === 429) {
         const errorBody = await response.text();
-        console.error('[Chat] Rate limit 429 after all retries:', errorBody);
+        const providerName = aiConfig.url.includes('google') ? 'Google AI Studio' : aiConfig.url.includes('openrouter') ? 'OpenRouter' : 'AI';
+        console.error(`[Chat] Rate limit 429 after all retries (${providerName}):`, errorBody);
         return new Response(
-          JSON.stringify({ error: 'Превышен лимит запросов к бесплатной модели OpenRouter. Подождите 1-2 минуты и попробуйте снова.' }),
+          JSON.stringify({ error: `Превышен лимит запросов к ${providerName}. Подождите 1-2 минуты и попробуйте снова, или смените провайдера/модель в настройках.` }),
           { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
