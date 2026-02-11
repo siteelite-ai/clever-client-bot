@@ -46,8 +46,8 @@ const CURATED_MODELS: CuratedModel[] = [
   { id: 'deepseek/deepseek-chat-v3-0324', name: 'DeepSeek V3', provider: 'DeepSeek', free: false, description: 'Полная версия без лимитов', aiProvider: 'openrouter' },
   // Google AI Studio
   { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'Google', free: true, description: '1500 запросов/день бесплатно, быстрая', aiProvider: 'google' },
-  { id: 'gemini-2.5-flash-preview-05-20', name: 'Gemini 2.5 Flash', provider: 'Google', free: true, description: 'Новейшая, баланс скорости и качества', aiProvider: 'google' },
-  { id: 'gemini-2.5-pro-preview-06-05', name: 'Gemini 2.5 Pro', provider: 'Google', free: true, description: 'Топовая модель, 50 запросов/день бесплатно', aiProvider: 'google' },
+  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google', free: true, description: 'Новейшая, баланс скорости и качества', aiProvider: 'google' },
+  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google', free: true, description: 'Топовая модель, 50 запросов/день бесплатно', aiProvider: 'google' },
 ];
 
 type ModelFilter = 'all' | 'free' | 'paid';
