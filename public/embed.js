@@ -616,11 +616,23 @@
       }
     }
 
-    hideTyping();
+    console.log('220volt Widget: loop done, content:', content ? content.substring(0, 50) : 'null');
+
+    try {
+      hideTyping();
+      console.log('220volt Widget: hideTyping done');
+    } catch (e) {
+      console.error('220volt Widget: hideTyping error:', e);
+    }
 
     if (content) {
-      addMessage(content, 'assistant');
-      conversationHistory.push({ role: 'assistant', content: content });
+      try {
+        addMessage(content, 'assistant');
+        console.log('220volt Widget: addMessage done');
+        conversationHistory.push({ role: 'assistant', content: content });
+      } catch (e) {
+        console.error('220volt Widget: addMessage error:', e);
+      }
     } else {
       console.error('220volt Widget: all endpoints failed, last error:', lastError);
       addMessage('Извините, произошла ошибка соединения. Попробуйте позже.', 'assistant');
@@ -628,7 +640,7 @@
 
     isLoading = false;
     sendBtn.disabled = false;
-    input.focus();
+    try { input.focus(); } catch(e) {}
   }
 
   // Event listeners
