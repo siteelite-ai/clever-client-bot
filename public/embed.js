@@ -537,8 +537,6 @@
   // Try a single endpoint
   async function tryEndpoint(baseUrl, message, label) {
     const url = baseUrl + '/functions/v1/chat-consultant';
-    console.log('220volt Widget: trying ' + label + ' → ' + url);
-    
     const response = await fetchWithTimeout(url, {
       method: 'POST',
       headers: {
@@ -554,17 +552,13 @@
       })
     }, 15000);
 
-    console.log('220volt Widget: ' + label + ' status=' + response.status);
-
     if (!response.ok) {
       const errText = await response.text().catch(function() { return 'no body'; });
-      console.error('220volt Widget: ' + label + ' error', response.status, errText);
       throw new Error(label + ' HTTP ' + response.status);
     }
 
     const contentType = response.headers.get('content-type') || '';
     const text = await response.text();
-    console.log('220volt Widget: ' + label + ' raw response (first 200):', text.substring(0, 200));
 
     if (contentType.indexOf('json') === -1 && text.charAt(0) === '<') {
       throw new Error(label + ' returned HTML, not JSON');
@@ -608,33 +602,18 @@
     for (var i = 0; i < endpoints.length; i++) {
       try {
         content = await tryEndpoint(endpoints[i].url, message, endpoints[i].label);
-        console.log('220volt Widget: success via ' + endpoints[i].label);
         break;
       } catch (err) {
-        console.warn('220volt Widget: ' + endpoints[i].label + ' failed:', err.message);
         lastError = err;
       }
     }
 
-    console.log('220volt Widget: loop done, content:', content ? content.substring(0, 50) : 'null');
-
-    try {
-      hideTyping();
-      console.log('220volt Widget: hideTyping done');
-    } catch (e) {
-      console.error('220volt Widget: hideTyping error:', e);
-    }
+    hideTyping();
 
     if (content) {
-      try {
-        addMessage(content, 'assistant');
-        console.log('220volt Widget: addMessage done');
-        conversationHistory.push({ role: 'assistant', content: content });
-      } catch (e) {
-        console.error('220volt Widget: addMessage error:', e);
-      }
+      addMessage(content, 'assistant');
+      conversationHistory.push({ role: 'assistant', content: content });
     } else {
-      console.error('220volt Widget: all endpoints failed, last error:', lastError);
       addMessage('Извините, произошла ошибка соединения. Попробуйте позже.', 'assistant');
     }
 
@@ -657,6 +636,4 @@
     close: () => { if (isOpen) toggleWidget(); },
     toggle: toggleWidget
   };
-
-  console.log('220volt Widget loaded');
 })();
