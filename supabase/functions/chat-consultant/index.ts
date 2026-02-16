@@ -689,6 +689,7 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
+    const useStreaming = body.stream !== false; // Default to streaming, but allow non-streaming
     
     // Support both formats: { messages } and { message, history, sessionId }
     let messages: Array<{ role: string; content: string }>;
@@ -1060,7 +1061,7 @@ ${productInstructions}`;
         body: JSON.stringify({
           model: aiConfig.model,
           messages: messagesForAI,
-          stream: true,
+          stream: useStreaming,
         }),
       });
 
@@ -1096,6 +1097,26 @@ ${productInstructions}`;
       );
     }
 
+    // NON-STREAMING MODE: collect full response and return as JSON
+    if (!useStreaming) {
+      try {
+        const aiData = await response.json();
+        const content = aiData.choices?.[0]?.message?.content || '';
+        console.log(`[Chat] Non-streaming response length: ${content.length}`);
+        return new Response(
+          JSON.stringify({ content }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } catch (e) {
+        console.error('[Chat] Non-streaming parse error:', e);
+        return new Response(
+          JSON.stringify({ error: 'Failed to parse AI response' }),
+          { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
+    // STREAMING MODE: forward SSE stream
     // Если это повторное приветствие, фильтруем начальные приветствия из ответа
     if (hasAssistantGreeting && isGreeting) {
       const reader = response.body?.getReader();
