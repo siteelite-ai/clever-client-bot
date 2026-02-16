@@ -552,7 +552,7 @@
         history: conversationHistory.slice(-10),
         stream: false
       })
-    }, 30000);
+    }, 15000);
 
     console.log('220volt Widget: ' + label + ' status=' + response.status);
 
@@ -596,10 +596,10 @@
 
     showTyping();
 
-    // Try proxy first, then direct Supabase as fallback
+    // Try direct Supabase first (faster), proxy as fallback
     var endpoints = [
-      { url: CONFIG.supabaseUrl, label: 'proxy' },
-      { url: 'https://yngoixmvmxdfxokuafjp.supabase.co', label: 'direct' }
+      { url: 'https://yngoixmvmxdfxokuafjp.supabase.co', label: 'direct' },
+      { url: CONFIG.supabaseUrl, label: 'proxy' }
     ];
 
     var content = null;
