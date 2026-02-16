@@ -545,7 +545,8 @@
         body: JSON.stringify({
           message,
           sessionId,
-          history: conversationHistory.slice(-10) // Last 10 messages for context
+          history: conversationHistory.slice(-10),
+          stream: false // Use non-streaming through proxy for reliability
         })
       });
 
@@ -557,109 +558,19 @@
         throw new Error('HTTP ' + response.status + ': ' + errText);
       }
 
-      const contentType = response.headers.get('content-type') || '';
-      console.log('220volt Widget: response content-type:', contentType, 'status:', response.status);
-
-      // If response is not streaming (e.g. proxy returned JSON), handle it
-      if (!response.body || !contentType.includes('text/event-stream')) {
-        const text = await response.text();
-        console.log('220volt Widget: non-stream response:', text.substring(0, 200));
-        // Try to parse as JSON first
-        try {
-          const json = JSON.parse(text);
-          // Extract content from various possible formats
-          const content = json.content || json.choices?.[0]?.message?.content || json.choices?.[0]?.delta?.content;
-          if (content) {
-            addMessage(content, 'assistant');
-            conversationHistory.push({ role: 'assistant', content });
-          } else {
-            throw new Error('No content in response');
-          }
-        } catch (e) {
-          // Maybe it's SSE text that wasn't marked as event-stream
-          let extracted = '';
-          for (const line of text.split('\n')) {
-            if (line.startsWith('data: ') && !line.includes('[DONE]')) {
-              try {
-                const parsed = JSON.parse(line.slice(6));
-                const c = parsed.content || parsed.choices?.[0]?.delta?.content;
-                if (c) extracted += c;
-              } catch {}
-            }
-          }
-          if (extracted) {
-            addMessage(extracted, 'assistant');
-            conversationHistory.push({ role: 'assistant', content: extracted });
-          } else {
-            console.error('220volt Widget: Could not parse response:', text.substring(0, 300));
-            throw new Error('Unparseable response');
-          }
-        }
-        isLoading = false;
-        sendBtn.disabled = false;
-        input.focus();
-        return;
+      const data = await response.json();
+      console.log('220volt Widget: response received, content length:', (data.content || '').length);
+      
+      if (data.error) {
+        throw new Error(data.error);
       }
-
-      // Handle streaming response with proper chunk buffering
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let assistantMessage = '';
-      let messageElement = null;
-      let buffer = ''; // Buffer for incomplete SSE data
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        // Append new data to buffer
-        buffer += decoder.decode(value, { stream: true });
-        
-        // Split by newlines and process complete lines
-        const lines = buffer.split('\n');
-        
-        // Keep the last potentially incomplete line in buffer
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          const trimmedLine = line.trim();
-          if (!trimmedLine || trimmedLine.startsWith(':')) continue; // Skip empty lines and SSE comments
-          
-          if (trimmedLine.startsWith('data: ')) {
-            const data = trimmedLine.slice(6).trim();
-            if (data === '[DONE]' || data === '') continue;
-            
-            try {
-              const parsed = JSON.parse(data);
-              // Support both formats: direct content and OpenAI-style delta
-              const content = parsed.content || parsed.choices?.[0]?.delta?.content;
-              
-              if (content) {
-                assistantMessage += content;
-                
-                if (!messageElement) {
-                  messageElement = document.createElement('div');
-                  messageElement.className = 'volt-message assistant';
-                  messagesContainer.appendChild(messageElement);
-                  // Scroll to show user's message and start of AI response (not to end)
-                  messageElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                }
-                
-                messageElement.innerHTML = formatMessage(assistantMessage);
-                // Don't auto-scroll during streaming - let user control
-              }
-            } catch (e) {
-              // JSON parse error - line might be incomplete, will be handled in next iteration
-              // Put back into buffer for next chunk
-              buffer = trimmedLine + '\n' + buffer;
-              break;
-            }
-          }
-        }
-      }
-
-      if (assistantMessage) {
-        conversationHistory.push({ role: 'assistant', content: assistantMessage });
+      
+      const content = data.content;
+      if (content) {
+        addMessage(content, 'assistant');
+        conversationHistory.push({ role: 'assistant', content });
+      } else {
+        throw new Error('No content in response');
       }
 
     } catch (error) {
