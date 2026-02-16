@@ -520,7 +520,69 @@
     if (typing) typing.remove();
   }
 
-  // Send message
+  // Attempt fetch with timeout
+  async function fetchWithTimeout(url, options, timeoutMs) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(url, { ...options, signal: controller.signal });
+      clearTimeout(timer);
+      return resp;
+    } catch (e) {
+      clearTimeout(timer);
+      throw e;
+    }
+  }
+
+  // Try a single endpoint
+  async function tryEndpoint(baseUrl, message, label) {
+    const url = baseUrl + '/functions/v1/chat-consultant';
+    console.log('220volt Widget: trying ' + label + ' → ' + url);
+    
+    const response = await fetchWithTimeout(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + CONFIG.supabaseKey,
+        'apikey': CONFIG.supabaseKey
+      },
+      body: JSON.stringify({
+        message: message,
+        sessionId: sessionId,
+        history: conversationHistory.slice(-10),
+        stream: false
+      })
+    }, 30000);
+
+    console.log('220volt Widget: ' + label + ' status=' + response.status);
+
+    if (!response.ok) {
+      const errText = await response.text().catch(function() { return 'no body'; });
+      console.error('220volt Widget: ' + label + ' error', response.status, errText);
+      throw new Error(label + ' HTTP ' + response.status);
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    const text = await response.text();
+    console.log('220volt Widget: ' + label + ' raw response (first 200):', text.substring(0, 200));
+
+    if (contentType.indexOf('json') === -1 && text.charAt(0) === '<') {
+      throw new Error(label + ' returned HTML, not JSON');
+    }
+
+    var data;
+    try {
+      data = JSON.parse(text);
+    } catch (e) {
+      throw new Error(label + ' invalid JSON: ' + text.substring(0, 100));
+    }
+
+    if (data.error) throw new Error(label + ': ' + data.error);
+    if (!data.content) throw new Error(label + ': empty content');
+    return data.content;
+  }
+
+  // Send message with fallback
   async function sendMessage() {
     const message = input.value.trim();
     if (!message || isLoading) return;
@@ -529,54 +591,39 @@
     input.value = '';
     sendBtn.disabled = true;
 
-    // Add user message
     addMessage(message, 'user');
     conversationHistory.push({ role: 'user', content: message });
 
     showTyping();
 
-    try {
-      const response = await fetch(`${CONFIG.supabaseUrl}/functions/v1/chat-consultant`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${CONFIG.supabaseKey}`
-        },
-        body: JSON.stringify({
-          message,
-          sessionId,
-          history: conversationHistory.slice(-10),
-          stream: false // Use non-streaming through proxy for reliability
-        })
-      });
+    // Try proxy first, then direct Supabase as fallback
+    var endpoints = [
+      { url: CONFIG.supabaseUrl, label: 'proxy' },
+      { url: 'https://yngoixmvmxdfxokuafjp.supabase.co', label: 'direct' }
+    ];
 
-      hideTyping();
+    var content = null;
+    var lastError = null;
 
-      if (!response.ok) {
-        const errText = await response.text().catch(() => 'no body');
-        console.error('220volt Widget: HTTP error', response.status, errText);
-        throw new Error('HTTP ' + response.status + ': ' + errText);
+    for (var i = 0; i < endpoints.length; i++) {
+      try {
+        content = await tryEndpoint(endpoints[i].url, message, endpoints[i].label);
+        console.log('220volt Widget: success via ' + endpoints[i].label);
+        break;
+      } catch (err) {
+        console.warn('220volt Widget: ' + endpoints[i].label + ' failed:', err.message);
+        lastError = err;
       }
+    }
 
-      const data = await response.json();
-      console.log('220volt Widget: response received, content length:', (data.content || '').length);
-      
-      if (data.error) {
-        throw new Error(data.error);
-      }
-      
-      const content = data.content;
-      if (content) {
-        addMessage(content, 'assistant');
-        conversationHistory.push({ role: 'assistant', content });
-      } else {
-        throw new Error('No content in response');
-      }
+    hideTyping();
 
-    } catch (error) {
-      hideTyping();
-      console.error('220volt Widget Error:', error);
-      addMessage('Извините, произошла ошибка. Попробуйте позже.', 'assistant');
+    if (content) {
+      addMessage(content, 'assistant');
+      conversationHistory.push({ role: 'assistant', content: content });
+    } else {
+      console.error('220volt Widget: all endpoints failed, last error:', lastError);
+      addMessage('Извините, произошла ошибка соединения. Попробуйте позже.', 'assistant');
     }
 
     isLoading = false;
