@@ -552,7 +552,53 @@
       hideTyping();
 
       if (!response.ok) {
-        throw new Error('Network error');
+        const errText = await response.text().catch(() => 'no body');
+        console.error('220volt Widget: HTTP error', response.status, errText);
+        throw new Error('HTTP ' + response.status + ': ' + errText);
+      }
+
+      const contentType = response.headers.get('content-type') || '';
+      console.log('220volt Widget: response content-type:', contentType, 'status:', response.status);
+
+      // If response is not streaming (e.g. proxy returned JSON), handle it
+      if (!response.body || !contentType.includes('text/event-stream')) {
+        const text = await response.text();
+        console.log('220volt Widget: non-stream response:', text.substring(0, 200));
+        // Try to parse as JSON first
+        try {
+          const json = JSON.parse(text);
+          // Extract content from various possible formats
+          const content = json.content || json.choices?.[0]?.message?.content || json.choices?.[0]?.delta?.content;
+          if (content) {
+            addMessage(content, 'assistant');
+            conversationHistory.push({ role: 'assistant', content });
+          } else {
+            throw new Error('No content in response');
+          }
+        } catch (e) {
+          // Maybe it's SSE text that wasn't marked as event-stream
+          let extracted = '';
+          for (const line of text.split('\n')) {
+            if (line.startsWith('data: ') && !line.includes('[DONE]')) {
+              try {
+                const parsed = JSON.parse(line.slice(6));
+                const c = parsed.content || parsed.choices?.[0]?.delta?.content;
+                if (c) extracted += c;
+              } catch {}
+            }
+          }
+          if (extracted) {
+            addMessage(extracted, 'assistant');
+            conversationHistory.push({ role: 'assistant', content: extracted });
+          } else {
+            console.error('220volt Widget: Could not parse response:', text.substring(0, 300));
+            throw new Error('Unparseable response');
+          }
+        }
+        isLoading = false;
+        sendBtn.disabled = false;
+        input.focus();
+        return;
       }
 
       // Handle streaming response with proper chunk buffering
