@@ -188,7 +188,7 @@ export default function Settings() {
                 </button>
               </div>
               <p className="text-xs text-muted-foreground">
-                Токен для доступа к API каталога товаров 220volt.testdevops.ru
+                Токен для доступа к API каталога товаров 220volt.kz
               </p>
             </div>
           </div>
