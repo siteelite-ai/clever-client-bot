@@ -407,21 +407,16 @@ function fastParseQuery(message: string): ExtractedIntent | null {
     return { intent: 'info', candidates: [], originalQuery: message };
   }
   
-  // Ищем продуктовые ключевые слова — LONGEST MATCH WINS
-  // Сначала собираем ВСЕ совпадения, потом выбираем самое длинное
-  let foundProduct: string | null = null;
-  let foundCategory: string | null = null;
-  let longestMatchLen = 0;
+  // --- СИСТЕМНЫЙ ПОДХОД: очищаем запрос от служебных слов ---
+  // Это даёт нам "смысловое ядро" запроса для анализа
+  const cleanedMessage = lowerMessage
+    .replace(/[?!.,]+/g, ' ')
+    .replace(/^(мне нужен|мне нужна|нужен|нужна|хочу|ищу|есть ли|покажи|найди|подскажите|есть)\s*/gi, '')
+    .replace(/\s*(пожалуйста|спасибо|в наличии|у вас)$/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
   
-  for (const [category, keywords] of Object.entries(PRODUCT_KEYWORDS)) {
-    for (const kw of keywords) {
-      if (lowerMessage.includes(kw) && kw.length > longestMatchLen) {
-        foundProduct = kw;
-        foundCategory = category;
-        longestMatchLen = kw.length;
-      }
-    }
-  }
+  const contentWords = cleanedMessage.split(/\s+/).filter(w => w.length > 2);
   
   // Ищем бренд
   let foundBrand: string | null = null;
@@ -432,47 +427,75 @@ function fastParseQuery(message: string): ExtractedIntent | null {
     }
   }
   
-  // Если нашли товар или бренд — это catalog запрос
-  if (foundProduct || foundBrand) {
-    // Генерируем кандидаты
-    const candidates: SearchCandidate[] = [];
+  // --- КЛЮЧЕВОЕ РЕШЕНИЕ ---
+  // Если смысловое ядро запроса содержит 2+ слова — это СОСТАВНОЙ термин.
+  // Русская морфология (падежи, число, род) делает словарный подход ненадёжным.
+  // Пример: "автоматические выключатели" ≠ "автоматический выключатель" (разные окончания).
+  // Поэтому составные запросы ВСЕГДА отдаём AI или используем как есть.
+  
+  if (contentWords.length >= 2) {
+    // Составной запрос — проверяем, похож ли он на товарный
+    const isLikelyProduct = Object.values(PRODUCT_KEYWORDS).flat().some(kw => {
+      // Проверяем совпадение по основе слова (первые 4+ символа)
+      const kwStem = kw.length > 4 ? kw.substring(0, Math.ceil(kw.length * 0.7)) : kw;
+      return lowerMessage.includes(kwStem);
+    });
     
-    // Первый кандидат — используем найденный термин (если он длиннее имени категории, он точнее)
-    if (foundCategory) {
-      const bestQuery = foundProduct && foundProduct.length > foundCategory.length ? foundProduct : foundCategory;
-      candidates.push({ query: bestQuery, brand: foundBrand, category: foundCategory });
+    if (isLikelyProduct || foundBrand) {
+      // Похоже на товар — используем ОЧИЩЕННЫЙ запрос пользователя КАК ЕСТЬ
+      // API 220volt.kz отлично ищет по естественным фразам (1227 результатов для "автоматические выключатели")
+      const candidates: SearchCandidate[] = [
+        { query: cleanedMessage, brand: foundBrand, category: null }
+      ];
+      
+      // Если есть бренд, добавляем вариант без бренда
+      if (foundBrand) {
+        const withoutBrand = cleanedMessage.replace(new RegExp(foundBrand, 'gi'), '').trim();
+        if (withoutBrand.length > 2) {
+          candidates.push({ query: withoutBrand, brand: null, category: null });
+        }
+      }
+      
+      console.log(`[FastParse] Compound query → using as-is: "${message}" → candidates: ${candidates.map(c => c.query).join(', ')}`);
+      return { intent: 'catalog', candidates, originalQuery: message };
     }
     
-    // Второй кандидат — с брендом если есть
+    // Не похоже на товар из словаря — пусть AI разберётся
+    console.log(`[FastParse] Compound query, not in dictionary → delegating to AI: "${message}"`);
+    return null;
+  }
+  
+  // --- ПРОСТЫЕ ЗАПРОСЫ (1 слово) — словарь работает надёжно ---
+  let foundProduct: string | null = null;
+  let foundCategory: string | null = null;
+  
+  for (const [category, keywords] of Object.entries(PRODUCT_KEYWORDS)) {
+    for (const kw of keywords) {
+      if (lowerMessage.includes(kw)) {
+        foundProduct = kw;
+        foundCategory = category;
+        break;
+      }
+    }
+    if (foundProduct) break;
+  }
+  
+  if (foundProduct || foundBrand) {
+    const candidates: SearchCandidate[] = [];
+    
+    if (foundCategory) {
+      candidates.push({ query: foundCategory, brand: foundBrand, category: foundCategory });
+    }
+    
     if (foundBrand && foundCategory) {
       candidates.push({ query: `${foundCategory} ${foundBrand}`, brand: foundBrand, category: foundCategory });
     }
     
-    // Третий — только бренд
     if (foundBrand && !foundCategory) {
       candidates.push({ query: foundBrand, brand: foundBrand, category: null });
     }
     
-    // Если ничего не нашли через ключевые слова, пробуем очистить запрос
-    if (candidates.length === 0) {
-      let cleanQuery = message
-        .replace(/[?!.,]+/g, ' ')
-        .replace(/^(мне нужен|мне нужна|нужен|нужна|хочу|ищу|есть ли|покажи|найди|подскажите)\s*/gi, '')
-        .replace(/\s*(пожалуйста|спасибо|есть|в наличии|у вас)$/gi, '')
-        .replace(/\s+/g, ' ')
-        .trim();
-      
-      if (cleanQuery.length > 2) {
-        // Берём первое слово как базовый запрос
-        const firstWord = cleanQuery.split(/\s+/)[0];
-        candidates.push({ query: firstWord, brand: foundBrand, category: null });
-        if (cleanQuery !== firstWord) {
-          candidates.push({ query: cleanQuery.split(/\s+/).slice(0, 2).join(' '), brand: foundBrand, category: null });
-        }
-      }
-    }
-    
-    console.log(`[FastParse] Catalog query: "${message}" → candidates: ${candidates.map(c => c.query).join(', ')}`);
+    console.log(`[FastParse] Simple query: "${message}" → candidates: ${candidates.map(c => c.query).join(', ')}`);
     return { intent: 'catalog', candidates, originalQuery: message };
   }
   
