@@ -120,16 +120,16 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [shouldScrollToBottom, setShouldScrollToBottom] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const [shouldScrollToUserMsg, setShouldScrollToUserMsg] = useState(false);
+  const lastUserMsgRef = useRef<HTMLDivElement>(null);
 
-  // Скроллим только когда явно запрошено (после отправки сообщения пользователем)
+  // Скроллим к сообщению пользователя, чтобы ответ бота был виден с начала
   useEffect(() => {
-    if (shouldScrollToBottom) {
-      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-      setShouldScrollToBottom(false);
+    if (shouldScrollToUserMsg) {
+      lastUserMsgRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setShouldScrollToUserMsg(false);
     }
-  }, [shouldScrollToBottom]);
+  }, [shouldScrollToUserMsg]);
 
   const handleSend = useCallback(async () => {
     if (!input.trim() || isLoading) return;
@@ -144,7 +144,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
-    setShouldScrollToBottom(true); // Скроллим к низу после отправки сообщения пользователя
+    setShouldScrollToUserMsg(true);
 
     let assistantContent = '';
 
@@ -252,9 +252,13 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
           {/* Messages */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4 widget-scrollbar h-[400px]">
-            {messages.map((message) => (
+            {messages.map((message, index) => {
+              const isLastUserMsg = message.role === 'user' && 
+                !messages.slice(index + 1).some(m => m.role === 'user');
+              return (
               <div
                 key={message.id}
+                ref={isLastUserMsg ? lastUserMsgRef : undefined}
                 className={cn(
                   "flex",
                   message.role === 'user' ? "justify-end" : "justify-start"
@@ -297,7 +301,8 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
                   )}
                 </div>
               </div>
-            ))}
+              );
+            })}
 
             {isLoading && messages[messages.length - 1]?.role !== 'assistant' && (
               <div className="flex justify-start">
@@ -311,7 +316,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
               </div>
             )}
 
-            <div ref={messagesEndRef} />
+            <div />
           </div>
 
           {/* Input */}
