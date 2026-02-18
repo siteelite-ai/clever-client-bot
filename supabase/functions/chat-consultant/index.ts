@@ -363,10 +363,10 @@ ${historyContext}
 function fastParseQuery(message: string): ExtractedIntent | null {
   const KNOWN_BRANDS = [
     'makita', 'bosch', 'dewalt', 'metabo', 'hitachi', 'milwaukee', 'stihl',
-    'husqvarna', 'karcher', 'вихрь', 'patriot', 'зубр', 'интерскол', 'elitech',
+    'husqvarna', 'karcher', 'patriot', 'elitech',
     'fubag', 'huter', 'champion', 'denzel', 'sturm', 'fit', 'legrand', 'abb',
     'schneider', 'iek', 'ekf', 'chint', 'navigator', 'rexant', 'tdm',
-    'philips', 'филипс', 'osram', 'wago', 'dkc', 'werkel'
+    'philips', 'osram', 'wago', 'dkc', 'werkel'
   ];
   
   // Ключевые слова товаров с синонимами
@@ -419,21 +419,11 @@ function fastParseQuery(message: string): ExtractedIntent | null {
   
   const contentWords = cleanedMessage.split(/\s+/).filter(w => w.length > 2);
   
-  // Маппинг кириллических названий брендов на латинские (для API фильтра brend__brend)
-  const BRAND_ALIASES: Record<string, string> = {
-    'филипс': 'Philips', 'филлипс': 'Philips',
-    'бош': 'Bosch', 'макита': 'Makita', 'деволт': 'DeWalt',
-    'милуоки': 'Milwaukee', 'штиль': 'Stihl', 'хускварна': 'Husqvarna',
-    'кархер': 'Karcher', 'керхер': 'Karcher', 'осрам': 'OSRAM',
-    'шнайдер': 'Schneider Electric', 'легранд': 'Legrand',
-  };
-  
-  // Ищем бренд
+  // Ищем бренд (только латинские — кириллические варианты распознаёт AI)
   let foundBrand: string | null = null;
   for (const brand of KNOWN_BRANDS) {
     if (lowerMessage.includes(brand.toLowerCase())) {
-      // Если есть алиас — используем правильное название для API
-      foundBrand = BRAND_ALIASES[brand.toLowerCase()] || brand;
+      foundBrand = brand;
       break;
     }
   }
