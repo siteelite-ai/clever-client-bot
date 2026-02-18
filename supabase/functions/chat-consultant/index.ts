@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
-const VOLT220_API_URL = 'https://220volt.testdevops.ru/api/products';
+const VOLT220_API_URL = 'https://220volt.kz/api/products';
 
 // Cached settings from DB
 interface CachedSettings {
@@ -209,7 +209,7 @@ ${recentHistory.map(m => `${m.role === 'user' ? 'Клиент' : 'Консуль
 `;
   }
   
-  const extractionPrompt = `Ты — система извлечения поисковых намерений для интернет-магазина электроинструментов 220volt.testdevops.ru (тестовая среда).
+  const extractionPrompt = `Ты — система извлечения поисковых намерений для интернет-магазина электроинструментов 220volt.kz.
 ${historyContext}
 АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщение С УЧЁТОМ КОНТЕКСТА РАЗГОВОРА!
 
@@ -650,7 +650,7 @@ function formatProductsForAI(products: Product[]): string {
       brand ? `   - Бренд: ${brand}` : '',
       p.article ? `   - Артикул: ${p.article}` : '',
       `   - В наличии: ${p.amount > 0 ? 'Да' : 'Под заказ'}`,
-      p.category ? `   - Категория: [${p.category.pagetitle}](https://220volt.testdevops.ru/catalog/${p.category.id})` : '',
+      p.category ? `   - Категория: [${p.category.pagetitle}](https://220volt.kz/catalog/${p.category.id})` : '',
     ].filter(Boolean);
     
     return parts.join('\n');
@@ -814,7 +814,7 @@ ${brandsContext}
 ТВОЙ ОТВЕТ:
 1. Перечисли найденные бренды списком
 2. Спроси, какой бренд интересует клиента — ты подберёшь лучшие модели
-3. Предложи ссылку на каталог: https://220volt.testdevops.ru/catalog/`;
+3. Предложи ссылку на каталог: https://220volt.kz/catalog/`;
     } else if (productContext) {
       productInstructions = `
 НАЙДЕННЫЕ ТОВАРЫ (КОПИРУЙ ССЫЛКИ ТОЧНО КАК ДАНО — НЕ МОДИФИЦИРУЙ!):
@@ -941,7 +941,7 @@ ${formattedAlternatives}
 ТВОЙ ОТВЕТ ДОЛЖЕН БЫТЬ ТАКИМ:
 1. ЧЕСТНО скажи: "К сожалению, товаров бренда ${uniqueBrands.join('/')} сейчас нет в нашем каталоге."
 2. Предложи: "Расскажите подробнее, какой инструмент вам нужен — попробую подобрать из доступных."
-3. Или предложи посмотреть каталог: https://220volt.testdevops.ru/catalog/
+3. Или предложи посмотреть каталог: https://220volt.kz/catalog/
 
 СТРОГО ЗАПРЕЩЕНО:
 - НЕ ДЕЛАЙ ВИД что бренд есть!
@@ -965,14 +965,14 @@ ${formattedAlternatives}
 ТВОЙ ОТВЕТ ДОЛЖЕН БЫТЬ ТАКИМ:
 1. ЧЕСТНО скажи: "К сожалению, ${categoryText} сейчас нет в нашем каталоге."
 2. Предложи альтернативу: "Могу подобрать другой инструмент. Расскажите, какую задачу вы хотите решить?"
-3. Или предложи посмотреть каталог: https://220volt.testdevops.ru/catalog/
+3. Или предложи посмотреть каталог: https://220volt.kz/catalog/
 
 СТРОГО ЗАПРЕЩЕНО:
 - НЕ ДЕЛАЙ ВИД что товар есть!
 - НЕ ПРОСИ уточнить бюджет или тип патрона для товара, которого НЕТ!
 - НЕ ПРИДУМЫВАЙ товары, названия, цены или URL!
 - НЕ ГОВОРИ "у нас есть аналоги" — если товара нет, аналогов тоже нет!
-- НЕ СОЗДАВАЙ ссылки на несуществующие разделы типа https://220volt.testdevops.ru/catalog/perforatory/`;
+- НЕ СОЗДАВАЙ ссылки на несуществующие разделы типа https://220volt.kz/catalog/perforatory/`;
       }
     }
     
@@ -1002,7 +1002,7 @@ ${formattedAlternatives}
 НЕ УПОМИНАЙ: "товары не найдены", "уточните запрос"`;
     }
     
-    const systemPrompt = `Ты — AI-консультант интернет-магазина 220volt.testdevops.ru (тестовая среда), крупнейшего магазина электроинструментов и оборудования в Казахстане.
+    const systemPrompt = `Ты — AI-консультант интернет-магазина 220volt.kz, крупнейшего магазина электроинструментов и оборудования в Казахстане.
 
 ТВОЯ РОЛЬ:
 - Помогаешь клиентам выбрать подходящий инструмент или оборудование
@@ -1024,7 +1024,7 @@ ${formattedAlternatives}
 - НИКОГДА не выдумывай URL, товары, цены, артикулы или модели!
 - НИКОГДА не создавай ссылки которых нет в разделе "НАЙДЕННЫЕ ТОВАРЫ"
 - Если создаёшь ссылку — она ОБЯЗАНА быть скопирована из данных выше
-- Любая ссылка вида [Товар](https://220volt.testdevops.ru/...) БЕЗ точного совпадения с данными = ОШИБКА!
+- Любая ссылка вида [Товар](https://220volt.kz/...) БЕЗ точного совпадения с данными = ОШИБКА!
 - Если товаров нет в данных — НЕ УПОМИНАЙ конкретные модели, просто задай уточняющие вопросы
 - НЕ ВЫДУМЫВАЙ информацию о доставке, оплате, гарантии — ТОЛЬКО из БАЗЫ ЗНАНИЙ!
 
