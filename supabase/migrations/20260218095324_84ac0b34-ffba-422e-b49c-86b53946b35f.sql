@@ -1,0 +1,1 @@
+UPDATE public.app_settings SET volt220_api_token = 'a8f3d9c4b7e24c5fa1e6b0d8c92f4e7b6a1d5c9f2e0b8a4c7d3f6e9b2' WHERE id = '2f4e4596-af1e-4319-92fb-70871fbe730e';
