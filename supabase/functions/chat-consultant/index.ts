@@ -407,19 +407,20 @@ function fastParseQuery(message: string): ExtractedIntent | null {
     return { intent: 'info', candidates: [], originalQuery: message };
   }
   
-  // Ищем продуктовые ключевые слова
+  // Ищем продуктовые ключевые слова — LONGEST MATCH WINS
+  // Сначала собираем ВСЕ совпадения, потом выбираем самое длинное
   let foundProduct: string | null = null;
   let foundCategory: string | null = null;
+  let longestMatchLen = 0;
   
   for (const [category, keywords] of Object.entries(PRODUCT_KEYWORDS)) {
     for (const kw of keywords) {
-      if (lowerMessage.includes(kw)) {
+      if (lowerMessage.includes(kw) && kw.length > longestMatchLen) {
         foundProduct = kw;
         foundCategory = category;
-        break;
+        longestMatchLen = kw.length;
       }
     }
-    if (foundProduct) break;
   }
   
   // Ищем бренд
@@ -436,9 +437,10 @@ function fastParseQuery(message: string): ExtractedIntent | null {
     // Генерируем кандидаты
     const candidates: SearchCandidate[] = [];
     
-    // Первый кандидат — базовое слово
+    // Первый кандидат — используем найденный термин (если он длиннее имени категории, он точнее)
     if (foundCategory) {
-      candidates.push({ query: foundCategory, brand: foundBrand, category: foundCategory });
+      const bestQuery = foundProduct && foundProduct.length > foundCategory.length ? foundProduct : foundCategory;
+      candidates.push({ query: bestQuery, brand: foundBrand, category: foundCategory });
     }
     
     // Второй кандидат — с брендом если есть
