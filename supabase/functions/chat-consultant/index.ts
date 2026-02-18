@@ -393,7 +393,12 @@ async function searchProductsByCandidate(
   try {
     const params = new URLSearchParams();
     
-    if (candidate.query) {
+    // Общие слова, которые не несут поисковой ценности — если есть бренд, не передаём их
+    const GENERIC_QUERIES = ['товары', 'товар', 'изделия', 'изделие', 'продукция', 'продукт', 'продукты', 'всё', 'все', 'ассортимент', 'каталог'];
+    const isGenericQuery = !candidate.query || GENERIC_QUERIES.includes(candidate.query.toLowerCase().trim());
+    
+    if (candidate.query && !(isGenericQuery && candidate.brand)) {
+      // Передаём query только если он конкретный, или если нет бренда
       params.append('query', candidate.query);
     }
     params.append('per_page', limit.toString());
