@@ -177,9 +177,11 @@ interface Product {
 }
 
 interface SearchCandidate {
-  query: string;
+  query: string | null;
   brand: string | null;
   category: string | null;
+  min_price: number | null;
+  max_price: number | null;
 }
 
 interface ExtractedIntent {
@@ -213,55 +215,38 @@ ${recentHistory.map(m => `${m.role === 'user' ? 'Клиент' : 'Консуль
 ${historyContext}
 АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщение С УЧЁТОМ КОНТЕКСТА РАЗГОВОРА!
 
-🔴 КРИТИЧЕСКИ ВАЖНО — ОПРЕДЕЛИ ПРАВИЛЬНЫЙ INTENT:
+📖 ДОКУМЕНТАЦИЯ API КАТАЛОГА (220volt.kz/api/products):
+Ты ДОЛЖЕН формировать корректные запросы к API. Вот доступные параметры:
 
-1. Тип намерения (intent):
-   - "catalog" — пользователь ЯВНО ищет электроинструмент, оборудование, товары магазина:
-     * Примеры: "дрель", "перфоратор", "болгарка", "шуруповерт", "генератор", "насос", "кабель", "сварка", "розетка", "выключатель", "автомат"
-     * "есть ли Makita?", "покажи дрели", "сколько стоит перфоратор?"
-   
-   - "brands" — пользователь спрашивает КАКИЕ БРЕНДЫ представлены:
-     * "какие бренды?", "какие марки?", "какие производители?"
-   
-   - "info" — вопросы о компании, доставке, оплате, гарантии, контактах
-   
-   - "general" — ВСЁ ОСТАЛЬНОЕ! Приветствия, благодарности, шутки, нерелевантные запросы:
-     * "привет", "спасибо", "пока"
-     * "хочу в кино", "закажи пиццу", "какая погода?" — это НЕ каталог!
-     * Любые запросы НЕ связанные с электроинструментом = general
+| Параметр | Описание | Пример |
+|----------|----------|--------|
+| query | Текстовый поиск по названию и описанию товара. КОРОТКИЕ запросы (1-2 слова) работают лучше. НЕ передавай общие слова вроде "товары", "продукция", "изделия" — они бесполезны | "дрель", "УШМ", "кабель 3x2.5" |
+| options[brend__brend][] | Фильтр по бренду. Значение = точное название бренда ЛАТИНИЦЕЙ с заглавной буквы | "Philips", "Bosch", "Makita" |
+| category | Фильтр по категории (pagetitle родительского ресурса) | "Светильники", "Перфораторы" |
+| min_price | Минимальная цена в тенге | 5000 |
+| max_price | Максимальная цена в тенге | 50000 |
 
-🚨 ВАЖНОЕ ПРАВИЛО:
-Если запрос НЕ про электроинструмент/оборудование — это ВСЕГДА intent="general", даже если содержит слова "хочу", "купить", "есть".
-Примеры general: "хочу в кино", "купи мне пиццу", "есть ли у вас кофе" — это НЕ catalog!
+⚠️ ПРАВИЛА СОСТАВЛЕНИЯ ЗАПРОСОВ:
+1. Если пользователь спрашивает о БРЕНДЕ ("есть Philips?", "покажи Makita") — используй ТОЛЬКО фильтр brand, БЕЗ query. API найдёт все товары бренда.
+2. Если пользователь ищет КАТЕГОРИЮ товаров ("дрели", "розетки") — используй query с техническим названием.
+3. Если пользователь ищет ТОВАР КОНКРЕТНОГО БРЕНДА ("дрель Bosch", "светильник Philips") — используй И query, И brand.
+4. query должен содержать ТЕХНИЧЕСКИЕ термины каталога, не разговорные слова.
+5. Бренды ВСЕГДА латиницей: "филипс" → brand="Philips", "бош" → brand="Bosch", "макита" → brand="Makita"
 
-КОНТЕКСТ РАЗГОВОРА:
-Если ранее обсуждали конкретный товар и пользователь спрашивает "какие бренды?" или "а дешевле?" — используй категорию из контекста.
+🧠 СЕМАНТИЧЕСКАЯ ТРАНСФОРМАЦИЯ:
+Пользователь говорит РАЗГОВОРНЫМ языком, каталог использует ТЕХНИЧЕСКИЕ термины:
+- "болгарка" → query="УШМ" (+ вариант "болгарка")
+- "рамка на 2 слота" → query="рамка 2-местная"
+- "дырка под розетку" → query="подрозетник"
+- "провод трёхжильный 2.5" → query="кабель 3x2.5"
 
-🔴 КРИТИЧЕСКИ ВАЖНО — ПРАВИЛА ГЕНЕРАЦИИ КАНДИДАТОВ:
+🔴 ОПРЕДЕЛИ ПРАВИЛЬНЫЙ INTENT:
+- "catalog" — ищет товары/оборудование
+- "brands" — спрашивает какие бренды представлены
+- "info" — вопросы о компании, доставке, оплате
+- "general" — приветствия, шутки, нерелевантное (candidates=[])
 
-🧠 ПРИНЦИП СЕМАНТИЧЕСКОЙ ТРАНСФОРМАЦИИ:
-Ты понимаешь естественный язык. Пользователь говорит РАЗГОВОРНЫМ языком, а каталог использует ТЕХНИЧЕСКИЕ термины.
-Твоя задача — ПОНЯТЬ смысл запроса и ПЕРЕВЕСТИ его на язык каталога электротоваров.
-
-Примеры трансформации (ты должен делать это для ЛЮБЫХ терминов, не только этих):
-- "рамка на 2 слота" → ты понимаешь: пользователь имеет в виду рамку на 2 места/поста → генерируй: "рамка 2-местная", "рамка двухместная"
-- "болгарка" → ты знаешь: это разговорное название УШМ → генерируй: "УШМ", "угловая шлифмашина", "болгарка"
-- "тройник для розетки" → ты понимаешь: это разветвитель/удлинитель → генерируй: "разветвитель", "удлинитель", "колодка"
-
-НЕ КОПИРУЙ разговорные слова пользователя напрямую! ПЕРЕВОДИ их в технические термины каталога.
-
-Для intent="catalog" или "brands":
-- ПЕРВЫЙ кандидат = главный технический термин товара (как он называется В КАТАЛОГЕ)
-- Остальные 2-4 кандидата = вариации технических названий и синонимы из профессиональной лексики
-- КОРОТКИЕ запросы (1-2 слова) работают лучше! API плохо ищет длинные фразы
-
-Примеры правильной генерации:
-- Запрос: "рамка для розетки на 2 слота" → Кандидаты: ["рамка 2-местная", "рамка двухместная", "рамка 2 поста"]
-- Запрос: "провод трёхжильный 2.5" → Кандидаты: ["кабель 3x2.5", "ВВГ 3x2.5", "провод 3x2.5"]
-- Запрос: "дырка под розетку" → Кандидаты: ["подрозетник", "установочная коробка", "монтажная коробка"]
-
-Для intent="general" или "info":
-- candidates = [] (пустой массив!)
+🚨 Если запрос НЕ про электроинструмент/оборудование — это ВСЕГДА intent="general".
 
 ТЕКУЩЕЕ сообщение пользователя: "${message}"`;
 
@@ -283,14 +268,14 @@ ${historyContext}
             type: 'function',
             function: {
               name: 'extract_search_intent',
-              description: 'Извлекает намерение пользователя и генерирует поисковые кандидаты',
+              description: 'Извлекает намерение и формирует параметры запроса к API каталога 220volt.kz/api/products',
               parameters: {
                 type: 'object',
                 properties: {
                   intent: { 
                     type: 'string', 
                     enum: ['catalog', 'brands', 'info', 'general'],
-                    description: 'Тип намерения: brands — спрашивает какие бренды есть, catalog — ищет товары'
+                    description: 'Тип намерения'
                   },
                   candidates: {
                     type: 'array',
@@ -299,23 +284,33 @@ ${historyContext}
                       properties: {
                         query: { 
                           type: 'string',
-                          description: 'Поисковый запрос для API (1-3 слова)'
+                          nullable: true,
+                          description: 'Параметр query для API: текстовый поиск (1-2 слова, технические термины). null если ищем только по бренду/категории'
                         },
                         brand: { 
                           type: 'string',
                           nullable: true,
-                          description: 'Бренд если указан (Makita, Bosch и т.д.)'
+                          description: 'Параметр options[brend__brend][]: точное название бренда ЛАТИНИЦЕЙ (Philips, Bosch, Makita). null если бренд не указан'
                         },
                         category: {
                           type: 'string', 
                           nullable: true,
-                          description: 'Категория товара если определена'
+                          description: 'Параметр category: название категории на сайте. null если не определена'
+                        },
+                        min_price: {
+                          type: 'number',
+                          nullable: true,
+                          description: 'Параметр min_price: минимальная цена в тенге. null если не указана'
+                        },
+                        max_price: {
+                          type: 'number',
+                          nullable: true,
+                          description: 'Параметр max_price: максимальная цена в тенге. null если не указана'
                         }
                       },
-                      required: ['query'],
                       additionalProperties: false
                     },
-                    description: 'Массив поисковых кандидатов (3-6 штук, включая синонимы и вариации)'
+                    description: 'Массив вариантов запросов к API (2-5 штук с разными query-вариациями)'
                   }
                 },
                 required: ['intent', 'candidates'],
@@ -331,7 +326,6 @@ ${historyContext}
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`[AI Candidates] API error: ${response.status}`, errorText);
-      // Fallback на простой парсинг
       return fallbackParseQuery(message);
     }
 
@@ -345,7 +339,13 @@ ${historyContext}
       
       return {
         intent: parsed.intent || 'general',
-        candidates: parsed.candidates || [],
+        candidates: (parsed.candidates || []).map((c: any) => ({
+          query: c.query || null,
+          brand: c.brand || null,
+          category: c.category || null,
+          min_price: c.min_price || null,
+          max_price: c.max_price || null,
+        })),
         originalQuery: message
       };
     }
@@ -374,17 +374,16 @@ function fallbackParseQuery(message: string): ExtractedIntent {
     return { intent: 'info', candidates: [], originalQuery: message };
   }
   
-  // По умолчанию считаем каталожным запросом — пусть API попробует найти
   const cleanQuery = message.replace(/[?!.,]+/g, ' ').replace(/\s+/g, ' ').trim();
   return {
     intent: 'catalog',
-    candidates: cleanQuery.length > 1 ? [{ query: cleanQuery, brand: null, category: null }] : [],
+    candidates: cleanQuery.length > 1 ? [{ query: cleanQuery, brand: null, category: null, min_price: null, max_price: null }] : [],
     originalQuery: message
   };
 }
 
 
-// Поиск товаров по одному кандидату
+// Поиск товаров по одному кандидату — параметры уже сформированы AI
 async function searchProductsByCandidate(
   candidate: SearchCandidate, 
   apiToken: string,
@@ -393,25 +392,29 @@ async function searchProductsByCandidate(
   try {
     const params = new URLSearchParams();
     
-    // Общие слова, которые не несут поисковой ценности — если есть бренд, не передаём их
-    const GENERIC_QUERIES = ['товары', 'товар', 'изделия', 'изделие', 'продукция', 'продукт', 'продукты', 'всё', 'все', 'ассортимент', 'каталог'];
-    const isGenericQuery = !candidate.query || GENERIC_QUERIES.includes(candidate.query.toLowerCase().trim());
-    
-    if (candidate.query && !(isGenericQuery && candidate.brand)) {
-      // Передаём query только если он конкретный, или если нет бренда
+    // AI уже решил какие параметры нужны — просто передаём их в API
+    if (candidate.query) {
       params.append('query', candidate.query);
     }
     params.append('per_page', limit.toString());
     
     if (candidate.brand) {
-      const brandCapitalized = candidate.brand.charAt(0).toUpperCase() + candidate.brand.slice(1).toLowerCase();
-      params.append('options[brend__brend][]', brandCapitalized);
+      params.append('options[brend__brend][]', candidate.brand);
     }
     
-    // НЕ передаём category в API — query уже содержит нужный текст
-    // API фильтрует по category как по точному названию, что ломает поиск
-
-    console.log(`[Search] Candidate: query="${candidate.query}", brand="${candidate.brand}", category="${candidate.category}"`);
+    if (candidate.category) {
+      params.append('category', candidate.category);
+    }
+    
+    if (candidate.min_price) {
+      params.append('min_price', candidate.min_price.toString());
+    }
+    
+    if (candidate.max_price) {
+      params.append('max_price', candidate.max_price.toString());
+    }
+    
+    console.log(`[Search] API params: ${params.toString()}`);
 
     const response = await fetch(`${VOLT220_API_URL}?${params}`, {
       method: 'GET',
