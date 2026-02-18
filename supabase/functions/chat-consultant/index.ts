@@ -365,7 +365,8 @@ function fastParseQuery(message: string): ExtractedIntent | null {
     'makita', 'bosch', 'dewalt', 'metabo', 'hitachi', 'milwaukee', 'stihl',
     'husqvarna', 'karcher', 'вихрь', 'patriot', 'зубр', 'интерскол', 'elitech',
     'fubag', 'huter', 'champion', 'denzel', 'sturm', 'fit', 'legrand', 'abb',
-    'schneider', 'iek', 'ekf', 'chint', 'navigator', 'rexant', 'tdm'
+    'schneider', 'iek', 'ekf', 'chint', 'navigator', 'rexant', 'tdm',
+    'philips', 'филипс', 'osram', 'wago', 'dkc', 'werkel'
   ];
   
   // Ключевые слова товаров с синонимами
@@ -418,11 +419,21 @@ function fastParseQuery(message: string): ExtractedIntent | null {
   
   const contentWords = cleanedMessage.split(/\s+/).filter(w => w.length > 2);
   
+  // Маппинг кириллических названий брендов на латинские (для API фильтра brend__brend)
+  const BRAND_ALIASES: Record<string, string> = {
+    'филипс': 'Philips', 'филлипс': 'Philips',
+    'бош': 'Bosch', 'макита': 'Makita', 'деволт': 'DeWalt',
+    'милуоки': 'Milwaukee', 'штиль': 'Stihl', 'хускварна': 'Husqvarna',
+    'кархер': 'Karcher', 'керхер': 'Karcher', 'осрам': 'OSRAM',
+    'шнайдер': 'Schneider Electric', 'легранд': 'Legrand',
+  };
+  
   // Ищем бренд
   let foundBrand: string | null = null;
   for (const brand of KNOWN_BRANDS) {
     if (lowerMessage.includes(brand.toLowerCase())) {
-      foundBrand = brand;
+      // Если есть алиас — используем правильное название для API
+      foundBrand = BRAND_ALIASES[brand.toLowerCase()] || brand;
       break;
     }
   }
@@ -442,18 +453,21 @@ function fastParseQuery(message: string): ExtractedIntent | null {
     });
     
     if (isLikelyProduct || foundBrand) {
-      // Похоже на товар — используем ОЧИЩЕННЫЙ запрос пользователя КАК ЕСТЬ
-      // API 220volt.kz отлично ищет по естественным фразам (1227 результатов для "автоматические выключатели")
+      // Если есть бренд — убираем его из query и передаём отдельно через brand параметр
+      // Потому что бренд хранится в options[brend__brend], а не в тексте товара
+      const queryWithoutBrand = foundBrand 
+        ? cleanedMessage.replace(new RegExp(foundBrand, 'gi'), '').replace(/\s+/g, ' ').trim()
+        : cleanedMessage;
+      
+      const mainQuery = queryWithoutBrand.length > 2 ? queryWithoutBrand : cleanedMessage;
+      
       const candidates: SearchCandidate[] = [
-        { query: cleanedMessage, brand: foundBrand, category: null }
+        { query: mainQuery, brand: foundBrand, category: null }
       ];
       
-      // Если есть бренд, добавляем вариант без бренда
-      if (foundBrand) {
-        const withoutBrand = cleanedMessage.replace(new RegExp(foundBrand, 'gi'), '').trim();
-        if (withoutBrand.length > 2) {
-          candidates.push({ query: withoutBrand, brand: null, category: null });
-        }
+      // Добавляем вариант без бренда для расширения результатов
+      if (foundBrand && queryWithoutBrand.length > 2) {
+        candidates.push({ query: queryWithoutBrand, brand: null, category: null });
       }
       
       console.log(`[FastParse] Compound query → using as-is: "${message}" → candidates: ${candidates.map(c => c.query).join(', ')}`);
@@ -657,12 +671,17 @@ function formatProductsForAI(products: Product[]): string {
   }
 
   return products.map((p, i) => {
-    let brand = p.vendor;
-    if (!brand && p.options) {
+    // Приоритет: brend__brend (бренд) > vendor (производитель/завод)
+    // Пример: бренд = "Philips", vendor = "Shanghai Bipeng Lighting Company Limited"
+    let brand = '';
+    if (p.options) {
       const brandOption = p.options.find(o => o.key === 'brend__brend');
       if (brandOption) {
-        brand = brandOption.value.split('//')[0];
+        brand = brandOption.value.split('//')[0].trim();
       }
+    }
+    if (!brand) {
+      brand = p.vendor || '';
     }
     
     // Формируем название как ссылку в markdown (заменяем тестовый домен на продакшн)
@@ -687,20 +706,21 @@ function extractBrandsFromProducts(products: Product[]): string[] {
   const brands = new Set<string>();
   
   for (const product of products) {
-    // Пробуем vendor
-    if (product.vendor && product.vendor.trim()) {
-      brands.add(product.vendor.trim());
-    }
-    // Пробуем options[brend__brend]
+    // Приоритет: brend__brend (настоящий бренд) > vendor (завод-производитель)
+    let found = false;
     if (product.options) {
       const brandOption = product.options.find(o => o.key === 'brend__brend');
       if (brandOption && brandOption.value) {
-        // Берём только русскую часть (до //)
         const brandName = brandOption.value.split('//')[0].trim();
         if (brandName) {
           brands.add(brandName);
+          found = true;
         }
       }
+    }
+    // Только если нет brend__brend — используем vendor
+    if (!found && product.vendor && product.vendor.trim()) {
+      brands.add(product.vendor.trim());
     }
   }
   
@@ -785,20 +805,36 @@ ${r.source_url ? `Источник: ${r.source_url}` : ''}
       }
     }
     if (extractedIntent.intent === 'brands' && extractedIntent.candidates.length > 0) {
-      // Запрос о брендах — ищем товары и извлекаем бренды
-      foundProducts = await searchProductsMulti(extractedIntent.candidates, 50, appSettings.volt220_api_token || undefined); // Берём больше для полноты брендов
+      // Проверяем: если кандидаты содержат конкретный бренд — это запрос ТОВАРОВ бренда, а не "какие бренды есть"
+      const hasSpecificBrand = extractedIntent.candidates.some(c => c.brand && c.brand.trim().length > 0);
       
-      if (foundProducts.length > 0) {
-        const brands = extractBrandsFromProducts(foundProducts);
-        const categoryQuery = extractedIntent.candidates[0]?.query || 'инструменты';
-        console.log(`[Chat] Found ${brands.length} brands for "${categoryQuery}": ${brands.join(', ')}`);
+      if (hasSpecificBrand) {
+        // Пользователь спрашивает "а Philips есть?" — это каталожный запрос, а не запрос списка брендов!
+        console.log(`[Chat] "brands" intent with specific brand → treating as catalog search`);
+        foundProducts = await searchProductsMulti(extractedIntent.candidates, 8, appSettings.volt220_api_token || undefined);
         
-        if (brands.length > 0) {
-          brandsContext = `
+        if (foundProducts.length > 0) {
+          const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
+          const formattedProducts = formatProductsForAI(foundProducts);
+          console.log(`[Chat] Formatted products for AI:\n${formattedProducts}`);
+          productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**\n\n${formattedProducts}`;
+        }
+      } else {
+        // Общий вопрос "какие бренды есть?" — ищем товары и извлекаем бренды
+        foundProducts = await searchProductsMulti(extractedIntent.candidates, 50, appSettings.volt220_api_token || undefined);
+        
+        if (foundProducts.length > 0) {
+          const brands = extractBrandsFromProducts(foundProducts);
+          const categoryQuery = extractedIntent.candidates[0]?.query || 'инструменты';
+          console.log(`[Chat] Found ${brands.length} brands for "${categoryQuery}": ${brands.join(', ')}`);
+          
+          if (brands.length > 0) {
+            brandsContext = `
 НАЙДЕННЫЕ БРЕНДЫ ПО ЗАПРОСУ "${categoryQuery}":
 ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
 
 Всего найдено ${foundProducts.length} товаров от ${brands.length} брендов.`;
+          }
         }
       }
     } else if (extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
