@@ -248,6 +248,13 @@ ${historyContext}
 
 🚨 Если запрос НЕ про электроинструмент/оборудование — это ВСЕГДА intent="general".
 
+🔑 ВАЖНОЕ ПРАВИЛО ДЛЯ БРЕНДОВ:
+Когда пользователь спрашивает о бренде В КОНТЕКСТЕ конкретной категории (например, ранее обсуждали автоматические выключатели, а теперь спрашивает "а от Philips есть?"):
+- Генерируй МИНИМУМ 2 кандидата:
+  1. query=<категория из контекста> + brand=<бренд> (проверяем, есть ли бренд В ЭТОЙ категории)
+  2. brand=<бренд> БЕЗ query (проверяем, есть ли бренд ВООБЩЕ в каталоге)
+Это критически важно! Бренд может отсутствовать в одной категории, но быть представлен в другой.
+
 ТЕКУЩЕЕ сообщение пользователя: "${message}"`;
 
   try {
@@ -783,9 +790,9 @@ ${productContext}
         const brandPattern = new RegExp(`\\b(${uniqueBrands.join('|')})\\b`, 'gi');
         const candidatesWithoutBrand = extractedIntent.candidates.map(c => ({
           ...c,
-          brand: null, // Убираем бренд для fallback поиска
-          query: c.query.replace(brandPattern, '').replace(/\s+/g, ' ').trim() // Убираем бренд из query
-        })).filter(c => c.query.length > 1); // Фильтруем пустые query
+          brand: null,
+          query: (c.query || '').replace(brandPattern, '').replace(/\s+/g, ' ').trim()
+        })).filter(c => (c.query || '').length > 1);
         
         console.log(`[Chat] Fallback candidates:`, candidatesWithoutBrand.map(c => c.query));
         
