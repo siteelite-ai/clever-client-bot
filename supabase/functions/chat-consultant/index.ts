@@ -569,6 +569,67 @@ function extractBrandsFromProducts(products: Product[]): string[] {
   return Array.from(brands).sort();
 }
 
+// Format contacts from knowledge base text into clean display format
+function formatContactsForDisplay(contactsText: string): string | null {
+  if (!contactsText || contactsText.trim().length === 0) return null;
+  
+  const lines: string[] = [];
+  
+  // Extract phones
+  const phoneMatches = contactsText.match(/(?:телефон[^:]*:\s*)([\+\d\s\(\)\-]+)/gi);
+  if (phoneMatches) {
+    for (const match of phoneMatches) {
+      const number = match.replace(/телефон[^:]*:\s*/i, '').trim();
+      if (number) lines.push(`📞 ${number}`);
+    }
+  }
+  
+  // Extract messengers (WhatsApp, Telegram, etc.)
+  const messengerPatterns = [
+    { regex: /WhatsApp[^:]*:\s*(https?:\/\/[^\s,]+|[\+\d\s]+)/gi, icon: '💬' },
+    { regex: /Telegram[^:]*:\s*(https?:\/\/[^\s,]+|@[^\s,]+)/gi, icon: '💬' },
+    { regex: /Viber[^:]*:\s*([\+\d\s]+)/gi, icon: '💬' },
+    { regex: /Instagram[^:]*:\s*(https?:\/\/[^\s,]+|@[^\s,]+)/gi, icon: '📷' },
+  ];
+  
+  for (const { regex, icon } of messengerPatterns) {
+    const matches = contactsText.match(regex);
+    if (matches) {
+      for (const match of matches) {
+        const label = match.split(':')[0].trim();
+        const value = match.substring(match.indexOf(':') + 1).trim();
+        if (value) lines.push(`${icon} ${label}: ${value}`);
+      }
+    }
+  }
+  
+  // Extract email
+  const emailMatches = contactsText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g);
+  if (emailMatches) {
+    for (const email of emailMatches) {
+      lines.push(`📧 ${email}`);
+    }
+  }
+  
+  // Extract working hours
+  const hoursMatch = contactsText.match(/режим работы[^:]*:\s*([^\n]+)/i) 
+    || contactsText.match(/график[^:]*:\s*([^\n]+)/i)
+    || contactsText.match(/(Пн[^\n]+)/i);
+  if (hoursMatch) {
+    lines.push(`🕐 ${hoursMatch[1].trim()}`);
+  }
+  
+  // Extract address
+  const addressMatch = contactsText.match(/адрес[^:]*:\s*([^\n]+)/i);
+  if (addressMatch) {
+    lines.push(`📍 ${addressMatch[1].trim()}`);
+  }
+  
+  if (lines.length === 0) return null;
+  
+  return `**Наши контакты:**\n${lines.join('\n')}`;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -948,8 +1009,7 @@ ${formattedAlternatives}
 
 НЕ предлагай менеджера при обычных вопросах, когда ты можешь помочь сам!
 
-Когда предлагаешь связь с менеджером, используй КОНТАКТНЫЕ ДАННЫЕ ниже:
-${contactsInfo ? `📋 КОНТАКТЫ КОМПАНИИ:\n${contactsInfo}` : 'Контакты: позвоните по номеру на сайте 220volt.kz'}
+Когда предлагаешь связаться с менеджером — просто скажи "свяжитесь с нашими менеджерами" или "обратитесь к нашим специалистам". НЕ ПЕРЕЧИСЛЯЙ контактные данные (телефоны, WhatsApp, email) — они будут показаны автоматически отдельным сообщением.
 ${greetingRule}
 
 ${knowledgeContext}
@@ -1015,6 +1075,9 @@ ${productInstructions}`;
       );
     }
 
+    // Format contacts for display as a separate message
+    const formattedContacts = formatContactsForDisplay(contactsInfo);
+
     // NON-STREAMING MODE: collect full response and return as JSON
     if (!useStreaming) {
       try {
@@ -1022,7 +1085,7 @@ ${productInstructions}`;
         const content = aiData.choices?.[0]?.message?.content || '';
         console.log(`[Chat] Non-streaming response length: ${content.length}`);
         return new Response(
-          JSON.stringify({ content }),
+          JSON.stringify({ content, contacts: formattedContacts }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       } catch (e) {
@@ -1053,6 +1116,11 @@ ${productInstructions}`;
         async pull(controller) {
           const { done, value } = await reader.read();
           if (done) {
+            // Append contacts after stream ends
+            if (formattedContacts) {
+              const contactsEvent = `data: ${JSON.stringify({ contacts: formattedContacts })}\n\n`;
+              controller.enqueue(encoder.encode(contactsEvent));
+            }
             controller.close();
             return;
           }
@@ -1061,32 +1129,19 @@ ${productInstructions}`;
           
           // Удаляем приветствие только из первого data-чанка с content
           if (!greetingRemoved && text.includes('content')) {
-            console.log('[Greeting Filter] Checking chunk:', text.substring(0, 200));
-            
             const before = text;
-            
-            // Грубая замена приветствий в начале content
-            // Паттерны: "content":"Здравствуйте! ...", "content":"Привет! ..."
             const greetings = ['Здравствуйте', 'Привет', 'Добрый день', 'Добрый вечер', 'Доброе утро', 'Hello', 'Hi', 'Хай'];
             
             for (const greeting of greetings) {
-              // Ищем "content":"Greeting" с возможными знаками препинания и эмоджи после
               const pattern = new RegExp(
                 `"content":"${greeting}[!.,]?\\s*(?:👋|🛠️|😊)?\\s*`,
                 'gi'
               );
-              const matched = text.match(pattern);
-              if (matched) {
-                console.log('[Greeting Filter] Found match:', matched[0]);
-              }
               text = text.replace(pattern, '"content":"');
             }
             
             if (before !== text) {
               greetingRemoved = true;
-              console.log('[Greeting Filter] Removed greeting from response');
-            } else {
-              console.log('[Greeting Filter] No greeting match found');
             }
           }
           
@@ -1102,7 +1157,36 @@ ${productInstructions}`;
       });
     }
 
-    return new Response(response.body, {
+    // For streaming: wrap original stream to append contacts event at the end
+    const originalStream = response.body;
+    if (!originalStream) {
+      return new Response(
+        JSON.stringify({ error: 'No response body' }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+    
+    const encoder = new TextEncoder();
+    const reader2 = originalStream.getReader();
+    const decoder2 = new TextDecoder();
+    
+    const streamWithContacts = new ReadableStream({
+      async pull(controller) {
+        const { done, value } = await reader2.read();
+        if (done) {
+          // After stream ends, send contacts as a special event
+          if (formattedContacts) {
+            const contactsEvent = `data: ${JSON.stringify({ contacts: formattedContacts })}\n\n`;
+            controller.enqueue(encoder.encode(contactsEvent));
+          }
+          controller.close();
+          return;
+        }
+        controller.enqueue(value);
+      }
+    });
+    
+    return new Response(streamWithContacts, {
       headers: {
         ...corsHeaders,
         'Content-Type': 'text/event-stream',

@@ -573,7 +573,7 @@
 
     if (data.error) throw new Error(label + ': ' + data.error);
     if (!data.content) throw new Error(label + ': empty content');
-    return data.content;
+    return { content: data.content, contacts: data.contacts || null };
   }
 
   // Send message with fallback
@@ -596,12 +596,12 @@
       { url: CONFIG.supabaseUrl, label: 'proxy' }
     ];
 
-    var content = null;
+    var result = null;
     var lastError = null;
 
     for (var i = 0; i < endpoints.length; i++) {
       try {
-        content = await tryEndpoint(endpoints[i].url, message, endpoints[i].label);
+        result = await tryEndpoint(endpoints[i].url, message, endpoints[i].label);
         break;
       } catch (err) {
         lastError = err;
@@ -610,9 +610,14 @@
 
     hideTyping();
 
-    if (content) {
-      addMessage(content, 'assistant');
-      conversationHistory.push({ role: 'assistant', content: content });
+    if (result) {
+      addMessage(result.content, 'assistant');
+      conversationHistory.push({ role: 'assistant', content: result.content });
+      
+      // Always show contacts as second message
+      if (result.contacts) {
+        addMessage(result.contacts, 'assistant');
+      }
     } else {
       addMessage('Извините, произошла ошибка соединения. Попробуйте позже.', 'assistant');
     }
