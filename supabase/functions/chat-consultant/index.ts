@@ -228,10 +228,11 @@ ${historyContext}
 
 ⚠️ ПРАВИЛА СОСТАВЛЕНИЯ ЗАПРОСОВ:
 1. Если пользователь спрашивает о БРЕНДЕ ("есть Philips?", "покажи Makita") — используй ТОЛЬКО фильтр brand, БЕЗ query. API найдёт все товары бренда.
-2. Если пользователь ищет КАТЕГОРИЮ товаров ("дрели", "розетки") — используй query с техническим названием.
+2. Если пользователь ищет КАТЕГОРИЮ товаров ("дрели", "розетки") — используй query с техническим названием. НЕ используй параметр category!
 3. Если пользователь ищет ТОВАР КОНКРЕТНОГО БРЕНДА ("дрель Bosch", "светильник Philips") — используй И query, И brand.
 4. query должен содержать ТЕХНИЧЕСКИЕ термины каталога, не разговорные слова.
 5. Бренды ВСЕГДА латиницей: "филипс" → brand="Philips", "бош" → brand="Bosch", "макита" → brand="Makita"
+6. НЕ ИСПОЛЬЗУЙ параметр category! Ты не знаешь точные названия категорий в каталоге. Используй только query для текстового поиска.
 
 🧠 СЕМАНТИЧЕСКАЯ ТРАНСФОРМАЦИЯ:
 Пользователь говорит РАЗГОВОРНЫМ языком, каталог использует ТЕХНИЧЕСКИЕ термины:
@@ -239,6 +240,11 @@ ${historyContext}
 - "рамка на 2 слота" → query="рамка 2-местная"
 - "дырка под розетку" → query="подрозетник"
 - "провод трёхжильный 2.5" → query="кабель 3x2.5"
+- "перфораторы" → query="перфоратор" (единственное число работает лучше для поиска!)
+
+⚠️ ВАЖНО: Всегда генерируй МИНИМУМ 2 кандидата с разными вариантами написания:
+- Один с техническим названием в единственном числе
+- Один с разговорным вариантом или синонимом
 
 🔴 ОПРЕДЕЛИ ПРАВИЛЬНЫЙ INTENT:
 - "catalog" — ищет товары/оборудование
@@ -302,7 +308,7 @@ ${historyContext}
                         category: {
                           type: 'string', 
                           nullable: true,
-                          description: 'Параметр category: название категории на сайте. null если не определена'
+                          description: 'НЕ ИСПОЛЬЗУЙ этот параметр! Всегда передавай null. Поиск по категории ненадёжен.'
                         },
                         min_price: {
                           type: 'number',
@@ -394,7 +400,7 @@ function fallbackParseQuery(message: string): ExtractedIntent {
 async function searchProductsByCandidate(
   candidate: SearchCandidate, 
   apiToken: string,
-  limit: number = 5
+  limit: number = 20
 ): Promise<Product[]> {
   try {
     const params = new URLSearchParams();
@@ -466,10 +472,13 @@ async function searchProductsMulti(
     return [];
   }
 
-  console.log(`[Search] Searching ${candidates.length} candidates in parallel...`);
+  // Убираем category из всех кандидатов — AI не знает точных названий категорий
+  const cleanedCandidates = candidates.map(c => ({ ...c, category: null }));
+  
+  console.log(`[Search] Searching ${cleanedCandidates.length} candidates in parallel...`);
 
   // Параллельный поиск
-  const searchPromises = candidates.map(candidate => 
+  const searchPromises = cleanedCandidates.map(candidate => 
     searchProductsByCandidate(candidate, apiToken, limit)
   );
   
@@ -486,12 +495,40 @@ async function searchProductsMulti(
     }
   }
   
+  // Если 0 результатов и были фильтры (brand/price), попробуем fallback только с query
+  if (productMap.size === 0) {
+    const queryOnlyCandidates = cleanedCandidates.filter(c => c.query && (c.brand || c.min_price || c.max_price));
+    if (queryOnlyCandidates.length > 0) {
+      console.log(`[Search] 0 results with filters, trying fallback with query only...`);
+      const fallbackPromises = queryOnlyCandidates.map(c => 
+        searchProductsByCandidate({ query: c.query, brand: null, category: null, min_price: null, max_price: null }, apiToken, limit)
+      );
+      const fallbackResults = await Promise.all(fallbackPromises);
+      for (const products of fallbackResults) {
+        for (const product of products) {
+          if (!productMap.has(product.id)) {
+            productMap.set(product.id, product);
+          }
+        }
+      }
+    }
+  }
+  
   const uniqueProducts = Array.from(productMap.values());
   console.log(`[Search] Total unique products: ${uniqueProducts.length}`);
   
-  // Сортируем по наличию и цене
+  // Сортируем: приоритет товарам с query в названии, затем по наличию и цене
+  const queryWords = candidates
+    .map(c => c.query?.toLowerCase())
+    .filter(Boolean) as string[];
+  
   uniqueProducts.sort((a, b) => {
-    // Сначала товары в наличии
+    // Приоритет: query-слово в pagetitle (основной товар, а не аксессуар)
+    const aInTitle = queryWords.some(q => a.pagetitle.toLowerCase().includes(q));
+    const bInTitle = queryWords.some(q => b.pagetitle.toLowerCase().includes(q));
+    if (aInTitle && !bInTitle) return -1;
+    if (!aInTitle && bInTitle) return 1;
+    // Затем товары в наличии
     if (a.amount > 0 && b.amount === 0) return -1;
     if (a.amount === 0 && b.amount > 0) return 1;
     // Затем по цене (дешевле первыми)
