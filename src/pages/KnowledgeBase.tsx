@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Plus, Link, FileText, Upload, Trash2, RefreshCw, Search, ExternalLink, Loader2 } from 'lucide-react';
+import { ContactsCard } from '@/components/knowledge/ContactsCard';
 import { AdminLayout } from '@/components/layout/AdminLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -377,6 +378,9 @@ export default function KnowledgeBase() {
             </DialogContent>
           </Dialog>
         </div>
+
+        {/* Contacts Card */}
+        <ContactsCard onContactsSaved={loadEntries} />
 
         {/* Search */}
         <div className="relative max-w-md">
