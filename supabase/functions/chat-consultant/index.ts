@@ -620,12 +620,22 @@ serve(async (req) => {
     let knowledgeContext = '';
 
     // ШАГ 2: Поиск в базе знаний (параллельно с другими запросами)
-    // Ищем для info запросов или общих вопросов
-    if (extractedIntent.intent === 'info' || extractedIntent.intent === 'general') {
-      const knowledgeResults = await searchKnowledgeBase(userMessage, 3);
-      
-      if (knowledgeResults.length > 0) {
-        knowledgeContext = `
+    // Ищем для info запросов, общих вопросов, а также контакты для fallback
+    const shouldSearchKnowledge = extractedIntent.intent === 'info' || extractedIntent.intent === 'general';
+    const knowledgePromise = shouldSearchKnowledge ? searchKnowledgeBase(userMessage, 3) : Promise.resolve([]);
+    // Всегда ищем контакты — пригодятся если товары не найдены
+    const contactsPromise = searchKnowledgeBase('контакты телефон WhatsApp режим работы менеджер', 2);
+    
+    const [knowledgeResults, contactResults] = await Promise.all([knowledgePromise, contactsPromise]);
+    
+    let contactsInfo = '';
+    if (contactResults.length > 0) {
+      contactsInfo = contactResults.map(r => r.content.substring(0, 500)).join('\n');
+      console.log(`[Chat] Found contacts info in knowledge base`);
+    }
+    
+    if (knowledgeResults.length > 0) {
+      knowledgeContext = `
 📚 ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ (используй для ответа!):
 
 ${knowledgeResults.map((r, i) => `--- ${r.title} ---
@@ -634,9 +644,8 @@ ${r.source_url ? `Источник: ${r.source_url}` : ''}
 `).join('\n')}
 
 ИНСТРУКЦИЯ: Используй информацию выше для ответа клиенту. Если информация релевантна вопросу — цитируй её.`;
-        
-        console.log(`[Chat] Added ${knowledgeResults.length} knowledge entries to context`);
-      }
+      
+      console.log(`[Chat] Added ${knowledgeResults.length} knowledge entries to context`);
     }
     if (extractedIntent.intent === 'brands' && extractedIntent.candidates.length > 0) {
       // Проверяем: если кандидаты содержат конкретный бренд — это запрос ТОВАРОВ бренда, а не "какие бренды есть"
@@ -927,7 +936,21 @@ ${formattedAlternatives}
 - Используй ТОЛЬКО данные из раздела "НАЙДЕННЫЕ ТОВАРЫ" для товаров
 - Предлагай топ-3 товара, спрашивай нужно ли показать больше
 - Для вопросов о доставке, оплате, гарантии, контактах — используй ТОЛЬКО информацию из БАЗЫ ЗНАНИЙ
-- Если нужной информации нет в БАЗЕ ЗНАНИЙ — честно скажи "У меня нет информации об этом" и предложи связаться по телефону с сайта${greetingRule}
+- Если нужной информации нет в БАЗЕ ЗНАНИЙ — честно скажи "У меня нет информации об этом" и предложи связаться с менеджером
+
+🆘 СВЯЗЬ С МЕНЕДЖЕРОМ (крайние случаи):
+Предлагай связаться с менеджером ТОЛЬКО когда:
+- Товар НЕ найден в каталоге и альтернатив тоже нет
+- Вопрос требует индивидуального расчёта, проектирования или подбора комплекта
+- Клиент спрашивает о возврате, рекламации или гарантийном случае
+- Ты НЕ знаешь ответа и в Базе Знаний информации тоже нет
+- Клиент повторно задаёт тот же вопрос (явно неудовлетворён ответом)
+
+НЕ предлагай менеджера при обычных вопросах, когда ты можешь помочь сам!
+
+Когда предлагаешь связь с менеджером, используй КОНТАКТНЫЕ ДАННЫЕ ниже:
+${contactsInfo ? `📋 КОНТАКТЫ КОМПАНИИ:\n${contactsInfo}` : 'Контакты: позвоните по номеру на сайте 220volt.kz'}
+${greetingRule}
 
 ${knowledgeContext}
 
