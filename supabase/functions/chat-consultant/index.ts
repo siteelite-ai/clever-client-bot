@@ -569,45 +569,57 @@ function extractBrandsFromProducts(products: Product[]): string[] {
   return Array.from(brands).sort();
 }
 
-// Format contacts from knowledge base text into clean display format
+// Format contacts from knowledge base text into clean display format with clickable links
 function formatContactsForDisplay(contactsText: string): string | null {
   if (!contactsText || contactsText.trim().length === 0) return null;
   
   const lines: string[] = [];
   
-  // Extract phones
+  // Extract phones — make them clickable tel: links
   const phoneMatches = contactsText.match(/(?:телефон[^:]*:\s*)([\+\d\s\(\)\-]+)/gi);
   if (phoneMatches) {
     for (const match of phoneMatches) {
       const number = match.replace(/телефон[^:]*:\s*/i, '').trim();
-      if (number) lines.push(`📞 ${number}`);
-    }
-  }
-  
-  // Extract messengers (WhatsApp, Telegram, etc.)
-  const messengerPatterns = [
-    { regex: /WhatsApp[^:]*:\s*(https?:\/\/[^\s,]+|[\+\d\s]+)/gi, icon: '💬' },
-    { regex: /Telegram[^:]*:\s*(https?:\/\/[^\s,]+|@[^\s,]+)/gi, icon: '💬' },
-    { regex: /Viber[^:]*:\s*([\+\d\s]+)/gi, icon: '💬' },
-    { regex: /Instagram[^:]*:\s*(https?:\/\/[^\s,]+|@[^\s,]+)/gi, icon: '📷' },
-  ];
-  
-  for (const { regex, icon } of messengerPatterns) {
-    const matches = contactsText.match(regex);
-    if (matches) {
-      for (const match of matches) {
-        const label = match.split(':')[0].trim();
-        const value = match.substring(match.indexOf(':') + 1).trim();
-        if (value) lines.push(`${icon} ${label}: ${value}`);
+      if (number) {
+        const telNumber = number.replace(/[\s\(\)\-]/g, '');
+        lines.push(`📞 [${number}](tel:${telNumber})`);
       }
     }
   }
   
-  // Extract email
+  // Extract messengers (WhatsApp, Telegram, etc.) — make clickable
+  const messengerPatterns = [
+    { regex: /WhatsApp[^:]*:\s*(https?:\/\/[^\s,]+|[\+\d\s]+)/gi, icon: '💬', label: 'WhatsApp', urlPrefix: 'https://wa.me/' },
+    { regex: /Telegram[^:]*:\s*(https?:\/\/[^\s,]+|@[^\s,]+)/gi, icon: '💬', label: 'Telegram', urlPrefix: 'https://t.me/' },
+    { regex: /Viber[^:]*:\s*([\+\d\s]+)/gi, icon: '💬', label: 'Viber', urlPrefix: 'viber://chat?number=' },
+    { regex: /Instagram[^:]*:\s*(https?:\/\/[^\s,]+|@[^\s,]+)/gi, icon: '📷', label: 'Instagram', urlPrefix: 'https://instagram.com/' },
+  ];
+  
+  for (const { regex, icon, label, urlPrefix } of messengerPatterns) {
+    const matches = contactsText.match(regex);
+    if (matches) {
+      for (const match of matches) {
+        const value = match.substring(match.indexOf(':') + 1).trim();
+        if (value) {
+          let url = value;
+          if (value.startsWith('http')) {
+            url = value;
+          } else if (value.startsWith('@')) {
+            url = urlPrefix + value.substring(1);
+          } else {
+            url = urlPrefix + value.replace(/[\s\(\)\-]/g, '');
+          }
+          lines.push(`${icon} [${label}](${url})`);
+        }
+      }
+    }
+  }
+  
+  // Extract email — make clickable mailto:
   const emailMatches = contactsText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g);
   if (emailMatches) {
     for (const email of emailMatches) {
-      lines.push(`📧 ${email}`);
+      lines.push(`📧 [${email}](mailto:${email})`);
     }
   }
   
