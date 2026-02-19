@@ -120,16 +120,6 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [shouldScrollToUserMsg, setShouldScrollToUserMsg] = useState(false);
-  const lastUserMsgRef = useRef<HTMLDivElement>(null);
-
-  // Скроллим к сообщению пользователя, чтобы ответ бота был виден с начала
-  useEffect(() => {
-    if (shouldScrollToUserMsg) {
-      lastUserMsgRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      setShouldScrollToUserMsg(false);
-    }
-  }, [shouldScrollToUserMsg]);
 
   const handleSend = useCallback(async () => {
     if (!input.trim() || isLoading) return;
@@ -144,7 +134,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
-    setShouldScrollToUserMsg(true);
+    // Не скроллим автоматически
 
     let assistantContent = '';
 
@@ -253,12 +243,9 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
           {/* Messages */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4 widget-scrollbar h-[400px]">
             {messages.map((message, index) => {
-              const isLastUserMsg = message.role === 'user' && 
-                !messages.slice(index + 1).some(m => m.role === 'user');
               return (
               <div
                 key={message.id}
-                ref={isLastUserMsg ? lastUserMsgRef : undefined}
                 className={cn(
                   "flex",
                   message.role === 'user' ? "justify-end" : "justify-start"
