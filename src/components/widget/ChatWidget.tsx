@@ -18,11 +18,13 @@ async function streamChat({
   onDelta,
   onDone,
   onError,
+  onContacts,
 }: {
   messages: Msg[];
   onDelta: (deltaText: string) => void;
   onDone: () => void;
   onError: (error: string) => void;
+  onContacts?: (contacts: string) => void;
 }) {
   try {
     const resp = await fetch(`${SUPABASE_URL}/functions/v1/chat-consultant`, {
@@ -75,6 +77,11 @@ async function streamChat({
 
         try {
           const parsed = JSON.parse(jsonStr);
+          // Check for contacts event
+          if (parsed.contacts && onContacts) {
+            onContacts(parsed.contacts);
+            continue;
+          }
           const content = parsed.choices?.[0]?.delta?.content as string | undefined;
           if (content) onDelta(content);
         } catch {
@@ -95,6 +102,10 @@ async function streamChat({
         if (jsonStr === '[DONE]') continue;
         try {
           const parsed = JSON.parse(jsonStr);
+          if (parsed.contacts && onContacts) {
+            onContacts(parsed.contacts);
+            continue;
+          }
           const content = parsed.choices?.[0]?.delta?.content as string | undefined;
           if (content) onDelta(content);
         } catch { /* ignore */ }
@@ -168,6 +179,15 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     await streamChat({
       messages: apiMessages,
       onDelta: updateAssistant,
+      onContacts: (contacts) => {
+        // Add contacts as a separate second message
+        setMessages(prev => [...prev, {
+          id: `contacts-${Date.now()}`,
+          role: 'assistant' as const,
+          content: contacts,
+          timestamp: new Date()
+        }]);
+      },
       onDone: () => setIsLoading(false),
       onError: (error) => {
         setMessages(prev => [...prev, {
