@@ -1021,7 +1021,7 @@ ${formattedAlternatives}
 
 НЕ предлагай менеджера при обычных вопросах, когда ты можешь помочь сам!
 
-Когда предлагаешь связаться с менеджером — просто скажи "свяжитесь с нашими менеджерами" или "обратитесь к нашим специалистам". НЕ ПЕРЕЧИСЛЯЙ контактные данные (телефоны, WhatsApp, email) — они будут показаны автоматически отдельным сообщением.
+Когда предлагаешь связаться с менеджером — добавь в КОНЕЦ своего сообщения маркер [CONTACT_MANAGER] (он будет скрыт от пользователя и заменён на карточку с контактами). НЕ ПЕРЕЧИСЛЯЙ контактные данные сам — они подставятся автоматически.
 ${greetingRule}
 
 ${knowledgeContext}
@@ -1094,10 +1094,20 @@ ${productInstructions}`;
     if (!useStreaming) {
       try {
         const aiData = await response.json();
-        const content = aiData.choices?.[0]?.message?.content || '';
+        let content = aiData.choices?.[0]?.message?.content || '';
         console.log(`[Chat] Non-streaming response length: ${content.length}`);
+        
+        // Check if AI included escalation marker
+        const shouldShowContacts = content.includes('[CONTACT_MANAGER]');
+        content = content.replace(/\s*\[CONTACT_MANAGER\]\s*/g, '').trim();
+        
+        const responseBody: { content: string; contacts?: string | null } = { content };
+        if (shouldShowContacts && formattedContacts) {
+          responseBody.contacts = formattedContacts;
+        }
+        
         return new Response(
-          JSON.stringify({ content, contacts: formattedContacts }),
+          JSON.stringify(responseBody),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       } catch (e) {
@@ -1123,13 +1133,21 @@ ${productInstructions}`;
       const encoder = new TextEncoder();
       const decoder = new TextDecoder();
       let greetingRemoved = false;
+      let fullContent = '';
+      let bufferedChunks: Uint8Array[] = [];
       
       const stream = new ReadableStream({
         async pull(controller) {
           const { done, value } = await reader.read();
           if (done) {
-            // Append contacts after stream ends
-            if (formattedContacts) {
+            // Flush buffered chunks, stripping [CONTACT_MANAGER] marker
+            for (const chunk of bufferedChunks) {
+              let text = decoder.decode(chunk);
+              text = text.replace(/\[CONTACT_MANAGER\]/g, '');
+              controller.enqueue(encoder.encode(text));
+            }
+            // Only send contacts if marker was found
+            if (fullContent.includes('[CONTACT_MANAGER]') && formattedContacts) {
               const contactsEvent = `data: ${JSON.stringify({ contacts: formattedContacts })}\n\n`;
               controller.enqueue(encoder.encode(contactsEvent));
             }
@@ -1138,6 +1156,16 @@ ${productInstructions}`;
           }
           
           let text = decoder.decode(value, { stream: true });
+          
+          // Track full content for marker detection
+          try {
+            const contentMatch = text.match(/"content":"([^"]*)"/g);
+            if (contentMatch) {
+              for (const m of contentMatch) {
+                fullContent += m.replace(/"content":"/, '').replace(/"$/, '');
+              }
+            }
+          } catch {}
           
           // Удаляем приветствие только из первого data-чанка с content
           if (!greetingRemoved && text.includes('content')) {
@@ -1157,6 +1185,8 @@ ${productInstructions}`;
             }
           }
           
+          // Strip marker from chunks as they pass through
+          text = text.replace(/\[CONTACT_MANAGER\]/g, '');
           controller.enqueue(encoder.encode(text));
         }
       });
@@ -1182,19 +1212,36 @@ ${productInstructions}`;
     const reader2 = originalStream.getReader();
     const decoder2 = new TextDecoder();
     
+    let fullContent2 = '';
+    
     const streamWithContacts = new ReadableStream({
       async pull(controller) {
         const { done, value } = await reader2.read();
         if (done) {
-          // After stream ends, send contacts as a special event
-          if (formattedContacts) {
+          // Only send contacts if marker was found in the response
+          if (fullContent2.includes('[CONTACT_MANAGER]') && formattedContacts) {
             const contactsEvent = `data: ${JSON.stringify({ contacts: formattedContacts })}\n\n`;
             controller.enqueue(encoder.encode(contactsEvent));
           }
           controller.close();
           return;
         }
-        controller.enqueue(value);
+        
+        let text = decoder2.decode(value, { stream: true });
+        
+        // Track full content for marker detection
+        try {
+          const contentMatch = text.match(/"content":"([^"]*)"/g);
+          if (contentMatch) {
+            for (const m of contentMatch) {
+              fullContent2 += m.replace(/"content":"/, '').replace(/"$/, '');
+            }
+          }
+        } catch {}
+        
+        // Strip marker from output
+        text = text.replace(/\[CONTACT_MANAGER\]/g, '');
+        controller.enqueue(encoder.encode(text));
       }
     });
     

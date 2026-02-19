@@ -151,19 +151,20 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
     const updateAssistant = (chunk: string) => {
       assistantContent += chunk;
+      const displayContent = assistantContent.replace(/\[CONTACT_MANAGER\]/g, '');
       setMessages(prev => {
         const last = prev[prev.length - 1];
         if (last?.role === 'assistant' && last.id.startsWith('stream-')) {
           return prev.map((m, i) => 
             i === prev.length - 1 
-              ? { ...m, content: assistantContent } 
+              ? { ...m, content: displayContent } 
               : m
           );
         }
         return [...prev, {
           id: `stream-${Date.now()}`,
           role: 'assistant' as const,
-          content: assistantContent,
+          content: displayContent,
           timestamp: new Date()
         }];
       });
