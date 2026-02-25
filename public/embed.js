@@ -460,12 +460,21 @@
   button.addEventListener('click', toggleWidget);
   closeBtn.addEventListener('click', toggleWidget);
 
-  // Parse markdown-like formatting
+  // Escape HTML to prevent XSS
+  function escapeHtml(text) {
+    var div = document.createElement('div');
+    div.appendChild(document.createTextNode(text));
+    return div.innerHTML;
+  }
+
+  // Parse markdown-like formatting (only for assistant messages, input is pre-escaped)
   function formatMessage(text) {
-    let result = text;
+    // First escape ALL HTML to prevent XSS
+    let result = escapeHtml(text);
     
-    // First, handle links before bold (to preserve link text with bold)
-    result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    // Now safely apply markdown formatting on escaped text
+    // Handle links [text](url) - validate URL protocol
+    result = result.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
     
     // Handle bold **text**
     result = result.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
@@ -499,7 +508,13 @@
   function addMessage(content, role) {
     const msg = document.createElement('div');
     msg.className = `volt-message ${role}`;
-    msg.innerHTML = role === 'assistant' ? formatMessage(content) : content;
+    if (role === 'user') {
+      // User messages: use textContent to prevent any HTML execution
+      msg.textContent = content;
+    } else {
+      // Assistant messages: use formatMessage which escapes HTML first, then applies markdown
+      msg.innerHTML = formatMessage(content);
+    }
     messagesContainer.appendChild(msg);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
   }
