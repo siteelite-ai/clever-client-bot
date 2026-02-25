@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { Plus, Link, FileText, Upload, Trash2, RefreshCw, Search, ExternalLink, Loader2 } from 'lucide-react';
+import { SitemapImportDialog } from '@/components/knowledge/SitemapImportDialog';
 import { ContactsCard } from '@/components/knowledge/ContactsCard';
 import { AdminLayout } from '@/components/layout/AdminLayout';
 import { Button } from '@/components/ui/button';
@@ -254,9 +255,11 @@ export default function KnowledgeBase() {
               Управляйте информацией для AI-консультанта • {entries.length} записей
             </p>
           </div>
-          <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>
+          <div className="flex gap-2">
+            <SitemapImportDialog onImportComplete={loadEntries} />
+            <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
+              <DialogTrigger asChild>
+                <Button>
                 <Plus className="w-4 h-4 mr-2" />
                 Добавить
               </Button>
@@ -376,7 +379,8 @@ export default function KnowledgeBase() {
                 </TabsContent>
               </Tabs>
             </DialogContent>
-          </Dialog>
+            </Dialog>
+          </div>
         </div>
 
         {/* Contacts Card */}
