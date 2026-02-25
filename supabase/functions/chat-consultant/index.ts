@@ -695,6 +695,33 @@ function checkRateLimit(ip: string): boolean {
   return entry.count <= RATE_LIMIT_MAX;
 }
 
+// === SECURITY: Input sanitization ===
+function sanitizeUserInput(input: string): string {
+  if (!input || typeof input !== 'string') return '';
+  
+  let sanitized = input;
+  
+  // Remove HTML tags (script, iframe, img with onerror, svg with onload, etc.)
+  sanitized = sanitized.replace(/<\/?[a-z][^>]*>/gi, '');
+  
+  // Remove event handlers (onerror=, onload=, onclick=, etc.)
+  sanitized = sanitized.replace(/\bon\w+\s*=/gi, '');
+  
+  // Remove javascript: protocol
+  sanitized = sanitized.replace(/javascript\s*:/gi, '');
+  
+  // Remove data: protocol (can be used for XSS)
+  sanitized = sanitized.replace(/data\s*:\s*text\/html/gi, '');
+  
+  // Limit message length (prevent abuse)
+  sanitized = sanitized.substring(0, 2000);
+  
+  // Trim whitespace
+  sanitized = sanitized.trim();
+  
+  return sanitized;
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -740,9 +767,18 @@ serve(async (req) => {
     console.log(`[Chat] AI Provider: ${aiConfig.url.includes('openrouter') ? 'OpenRouter' : 'Lovable AI'}, Model: ${aiConfig.model}`);
 
     const lastMessage = messages[messages.length - 1];
-    const userMessage = lastMessage?.content || '';
+    const rawUserMessage = lastMessage?.content || '';
     
-    console.log(`[Chat] Processing: "${userMessage}"`);
+    // === SECURITY: Sanitize user input ===
+    const userMessage = sanitizeUserInput(rawUserMessage);
+    
+    // Sanitize all history messages from user
+    messages = messages.map(m => ({
+      ...m,
+      content: m.role === 'user' ? sanitizeUserInput(m.content) : m.content
+    }));
+    
+    console.log(`[Chat] Processing: "${userMessage.substring(0, 100)}"`);
     console.log(`[Chat] Conversation ID: ${conversationId}`);
 
     // Подготавливаем историю для контекста (без текущего сообщения)
