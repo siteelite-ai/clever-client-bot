@@ -473,8 +473,11 @@
     let result = escapeHtml(text);
     
     // Now safely apply markdown formatting on escaped text
-    // Handle links [text](url) - validate URL protocol
-    result = result.replace(/\[([^\]]+)\]\((https?:\/\/[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    // Handle links [text](url) - validate URL protocol (http, https, tel, mailto, viber)
+    result = result.replace(/\[([^\]]+)\]\(((https?:\/\/|tel:|mailto:|viber:\/\/)[^)]+)\)/g, function(match, text, url) {
+      var isExternal = url.startsWith('http');
+      return '<a href="' + url + '"' + (isExternal ? ' target="_blank" rel="noopener"' : '') + '>' + text + '</a>';
+    });
     
     // Handle bold **text**
     result = result.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
