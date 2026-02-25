@@ -794,9 +794,8 @@ serve(async (req) => {
     let knowledgeContext = '';
 
     // ШАГ 2: Поиск в базе знаний (параллельно с другими запросами)
-    // Ищем для info запросов, общих вопросов, а также контакты для fallback
-    const shouldSearchKnowledge = extractedIntent.intent === 'info' || extractedIntent.intent === 'general';
-    const knowledgePromise = shouldSearchKnowledge ? searchKnowledgeBase(userMessage, 3) : Promise.resolve([]);
+    // Ищем для ВСЕХ запросов — статьи могут быть полезны даже когда товаров нет в каталоге
+    const knowledgePromise = searchKnowledgeBase(userMessage, 3);
     // Всегда ищем контакты — пригодятся если товары не найдены
     const contactsPromise = searchKnowledgeBase('контакты телефон WhatsApp режим работы менеджер', 2);
     
@@ -1010,16 +1009,25 @@ ${formattedAlternatives}
 - НЕ МЕНЯЙ URL! НЕ ПРИДУМЫВАЙ URL!`;
         } else {
           // Даже fallback не нашёл ничего
+          const hasArticlesForBrand = knowledgeResults.length > 0;
+          const brandArticlesHint = hasArticlesForBrand
+            ? `\n\n✅ ОДНАКО, В БАЗЕ ЗНАНИЙ НАЙДЕНЫ СТАТЬИ ПО ЭТОЙ ТЕМЕ!
+Смотри раздел "ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ" выше.
+УПОМЯНИ статью: "Хотя товара сейчас нет в наличии, у нас есть полезная информация по этой теме — подробнее здесь: [ссылка из source_url]"
+Предложи связаться с менеджером для уточнения наличия.`
+            : '';
+          
           productInstructions = `
 🚨 КРИТИЧЕСКИ ВАЖНО — БРЕНД НЕ НАЙДЕН И НЕТ АЛЬТЕРНАТИВ!
 
 Клиент спросил о бренде: ${uniqueBrands.join(', ')}
 Мы выполнили поиск в каталоге — ТОВАРОВ ЭТОГО БРЕНДА И ПОХОЖИХ КАТЕГОРИЙ НЕТ!
+${brandArticlesHint}
 
-ТВОЙ ОТВЕТ ДОЛЖЕН БЫТЬ ТАКИМ:
+${!hasArticlesForBrand ? `ТВОЙ ОТВЕТ ДОЛЖЕН БЫТЬ ТАКИМ:
 1. ЧЕСТНО скажи: "К сожалению, товаров бренда ${uniqueBrands.join('/')} сейчас нет в нашем каталоге."
 2. Предложи: "Расскажите подробнее, какой инструмент вам нужен — попробую подобрать из доступных."
-3. Или предложи посмотреть каталог: https://220volt.kz/catalog/
+3. Или предложи посмотреть каталог: https://220volt.kz/catalog/` : ''}
 
 СТРОГО ЗАПРЕЩЕНО:
 - НЕ ДЕЛАЙ ВИД что бренд есть!
@@ -1034,16 +1042,29 @@ ${formattedAlternatives}
         const uniqueCategories = [...new Set(searchedCategories)];
         const categoryText = uniqueCategories.length > 0 ? uniqueCategories.join(', ') : extractedIntent.originalQuery;
         
+        // Проверяем, есть ли статьи в базе знаний по этой теме
+        const hasRelevantArticles = knowledgeResults.length > 0;
+        const articlesHint = hasRelevantArticles 
+          ? `\n\n✅ ОДНАКО, В БАЗЕ ЗНАНИЙ НАЙДЕНЫ СТАТЬИ ПО ЭТОЙ ТЕМЕ!
+Смотри раздел "ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ" выше. 
+
+ТВОЙ ОТВЕТ ДОЛЖЕН ВКЛЮЧАТЬ:
+1. ЧЕСТНО скажи что товара сейчас нет в наличии в каталоге
+2. НО УПОМЯНИ статью/информацию из Базы Знаний: "Однако у нас есть полезная информация по этой теме — вы можете почитать подробнее здесь: [ссылка из source_url]"
+3. Предложи связаться с менеджером для уточнения наличия и заказа`
+          : '';
+        
         productInstructions = `
-🚨 КРИТИЧЕСКИ ВАЖНО — ТОВАР/КАТЕГОРИЯ НЕ НАЙДЕНА!
+🚨 КРИТИЧЕСКИ ВАЖНО — ТОВАР/КАТЕГОРИЯ НЕ НАЙДЕНА В КАТАЛОГЕ!
 
 Клиент искал: "${categoryText}"
 Мы выполнили поиск в каталоге — ТАКИХ ТОВАРОВ НЕТ В НАЛИЧИИ!
+${articlesHint}
 
-ТВОЙ ОТВЕТ ДОЛЖЕН БЫТЬ ТАКИМ:
+${!hasRelevantArticles ? `ТВОЙ ОТВЕТ ДОЛЖЕН БЫТЬ ТАКИМ:
 1. ЧЕСТНО скажи: "К сожалению, ${categoryText} сейчас нет в нашем каталоге."
 2. Предложи альтернативу: "Могу подобрать другой инструмент. Расскажите, какую задачу вы хотите решить?"
-3. Или предложи посмотреть каталог: https://220volt.kz/catalog/
+3. Или предложи посмотреть каталог: https://220volt.kz/catalog/` : ''}
 
 СТРОГО ЗАПРЕЩЕНО:
 - НЕ ДЕЛАЙ ВИД что товар есть!
