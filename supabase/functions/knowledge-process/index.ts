@@ -190,6 +190,91 @@ serve(async (req) => {
 
     console.log(`[Knowledge] Action: ${action}`);
 
+    if (action === 'fetch_sitemap') {
+      // Fetch and parse sitemap XML
+      if (!url) {
+        throw new Error('URL is required');
+      }
+
+      let sitemapUrl = url.trim();
+      if (!sitemapUrl.startsWith('http')) {
+        sitemapUrl = 'https://' + sitemapUrl;
+      }
+
+      console.log(`[Sitemap] Fetching: ${sitemapUrl}`);
+
+      const response = await fetch(sitemapUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; SitemapParser/1.0)',
+          'Accept': 'application/xml, text/xml, */*',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Ошибка загрузки sitemap: HTTP ${response.status}`);
+      }
+
+      const xml = await response.text();
+      console.log(`[Sitemap] Received ${xml.length} bytes`);
+
+      // Parse URLs from sitemap XML
+      const urls: string[] = [];
+      
+      // Check if it's a sitemap index (contains other sitemaps)
+      const sitemapIndexMatches = xml.matchAll(/<sitemap>\s*<loc>([^<]+)<\/loc>/gi);
+      const subSitemaps: string[] = [];
+      for (const match of sitemapIndexMatches) {
+        subSitemaps.push(match[1].trim());
+      }
+
+      if (subSitemaps.length > 0) {
+        // It's a sitemap index - fetch each sub-sitemap
+        console.log(`[Sitemap] Found sitemap index with ${subSitemaps.length} sub-sitemaps`);
+        for (const subUrl of subSitemaps.slice(0, 10)) { // Limit to 10 sub-sitemaps
+          try {
+            const subResponse = await fetch(subUrl, {
+              headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SitemapParser/1.0)' },
+            });
+            if (subResponse.ok) {
+              const subXml = await subResponse.text();
+              const locMatches = subXml.matchAll(/<url>\s*<loc>([^<]+)<\/loc>/gi);
+              for (const m of locMatches) {
+                urls.push(m[1].trim());
+              }
+            }
+          } catch (e) {
+            console.error(`[Sitemap] Error fetching sub-sitemap ${subUrl}:`, e);
+          }
+        }
+      } else {
+        // Regular sitemap
+        const locMatches = xml.matchAll(/<url>\s*<loc>([^<]+)<\/loc>/gi);
+        for (const match of locMatches) {
+          urls.push(match[1].trim());
+        }
+      }
+
+      // Also try simple <loc> tags (some sitemaps don't wrap in <url>)
+      if (urls.length === 0) {
+        const simpleLocs = xml.matchAll(/<loc>([^<]+)<\/loc>/gi);
+        for (const match of simpleLocs) {
+          const u = match[1].trim();
+          if (u.startsWith('http') && !u.endsWith('.xml')) {
+            urls.push(u);
+          }
+        }
+      }
+
+      // Deduplicate
+      const uniqueUrls = [...new Set(urls)];
+      console.log(`[Sitemap] Found ${uniqueUrls.length} unique URLs`);
+
+      return new Response(
+        JSON.stringify({ success: true, urls: uniqueUrls }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     if (action === 'scrape_url') {
       // Scrape URL and add to knowledge base
       if (!url) {
