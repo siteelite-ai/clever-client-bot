@@ -17,10 +17,10 @@ import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
 
 const menuItems = [
-  { icon: LayoutDashboard, label: 'Дашборд', path: '/', soon: true },
+  // { icon: LayoutDashboard, label: 'Дашборд', path: '/', soon: true },
   { icon: MessageSquare, label: 'Виджет', path: '/widget' },
   { icon: Database, label: 'База знаний', path: '/knowledge' },
-  { icon: BarChart3, label: 'Аналитика', path: '/analytics', soon: true },
+  // { icon: BarChart3, label: 'Аналитика', path: '/analytics', soon: true },
   { icon: Users, label: 'Пользователи', path: '/users', requiredRole: 'admin' as const },
   { icon: Code, label: 'Интеграция', path: '/integration' },
   { icon: Settings, label: 'Настройки', path: '/settings', requiredRole: 'admin' as const },
