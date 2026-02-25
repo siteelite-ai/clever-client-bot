@@ -15,6 +15,7 @@ interface CachedSettings {
   google_api_key: string | null;
   ai_provider: string;
   ai_model: string;
+  system_prompt: string | null;
 }
 
 async function getAppSettings(): Promise<CachedSettings> {
@@ -29,6 +30,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       google_api_key: null,
       ai_provider: 'openrouter',
       ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
+      system_prompt: null,
     };
   }
 
@@ -36,7 +38,7 @@ async function getAppSettings(): Promise<CachedSettings> {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const { data, error } = await supabase
       .from('app_settings')
-      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model')
+      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model, system_prompt')
       .limit(1)
       .single();
 
@@ -48,6 +50,7 @@ async function getAppSettings(): Promise<CachedSettings> {
         google_api_key: null,
         ai_provider: 'openrouter',
         ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
+        system_prompt: null,
       };
     }
 
@@ -58,6 +61,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       google_api_key: data.google_api_key || null,
       ai_provider: data.ai_provider || 'openrouter',
       ai_model: data.ai_model || 'meta-llama/llama-3.3-70b-instruct:free',
+      system_prompt: data.system_prompt || null,
     };
   } catch (e) {
     console.error('[Settings] Failed to load settings:', e);
@@ -67,6 +71,7 @@ async function getAppSettings(): Promise<CachedSettings> {
         google_api_key: null,
         ai_provider: 'openrouter',
         ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
+        system_prompt: null,
       };
   }
 }
@@ -1101,7 +1106,13 @@ ${!hasRelevantArticles ? `ТВОЙ ОТВЕТ ДОЛЖЕН БЫТЬ ТАКИМ:
 НЕ УПОМИНАЙ: "товары не найдены", "уточните запрос"`;
     }
     
+    // Custom tone of voice from settings
+    const toneOfVoice = appSettings.system_prompt 
+      ? `\nТОН ОБЩЕНИЯ (настроен администратором):\n${appSettings.system_prompt}\n`
+      : '';
+
     const systemPrompt = `Ты — AI-консультант интернет-магазина 220volt.kz, крупнейшего магазина электроинструментов и оборудования в Казахстане.
+${toneOfVoice}
 
 ТВОЯ РОЛЬ:
 - Помогаешь клиентам выбрать подходящий инструмент или оборудование

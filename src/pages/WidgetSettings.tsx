@@ -1,26 +1,67 @@
-import { useState } from 'react';
-import { Save, RefreshCw, Eye } from 'lucide-react';
+import { useState, useEffect } from 'react';
+import { Save, Eye, Loader2 } from 'lucide-react';
 import { AdminLayout } from '@/components/layout/AdminLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Switch } from '@/components/ui/switch';
 import { ChatWidget } from '@/components/widget/ChatWidget';
 import { toast } from 'sonner';
+import { supabase } from '@/integrations/supabase/client';
+
+const DEFAULT_SYSTEM_PROMPT = `Ты — вежливый и профессиональный AI-консультант интернет-магазина 220volt.kz. Отвечай дружелюбно, но по делу. Используй простой и понятный язык. Обращайся к клиенту на «вы». Будь кратким — не больше 3-4 предложений, если не нужен развёрнутый ответ. Если не знаешь ответа — честно скажи об этом и предложи связаться с менеджером.`;
 
 export default function WidgetSettings() {
   const [config, setConfig] = useState({
     name: 'Консультант 220volt',
     welcomeMessage: 'Здравствуйте! 👋 Я консультант 220volt.kz. Помогу подобрать электротехническое оборудование, расскажу о доставке и оплате. Что вас интересует?',
     placeholderText: 'Напишите сообщение...',
-    isActive: true,
-    showProductCards: true,
-    enableTypingIndicator: true
+    systemPrompt: DEFAULT_SYSTEM_PROMPT,
   });
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-  const handleSave = () => {
-    toast.success('Настройки сохранены');
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  const loadSettings = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('app_settings')
+        .select('system_prompt')
+        .limit(1)
+        .single();
+      
+      if (!error && data) {
+        setConfig(prev => ({
+          ...prev,
+          systemPrompt: (data as any).system_prompt || DEFAULT_SYSTEM_PROMPT,
+        }));
+      }
+    } catch (e) {
+      console.error('Failed to load settings:', e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const { error } = await supabase
+        .from('app_settings')
+        .update({ system_prompt: config.systemPrompt } as any)
+        .eq('id', (await supabase.from('app_settings').select('id').limit(1).single()).data?.id || '');
+      
+      if (error) throw error;
+      toast.success('Настройки сохранены');
+    } catch (e) {
+      console.error('Failed to save:', e);
+      toast.error('Ошибка сохранения');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -37,8 +78,8 @@ export default function WidgetSettings() {
               <Eye className="w-4 h-4 mr-2" />
               Тест на сайте
             </Button>
-            <Button onClick={handleSave}>
-              <Save className="w-4 h-4 mr-2" />
+            <Button onClick={handleSave} disabled={saving}>
+              {saving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
               Сохранить
             </Button>
           </div>
@@ -82,41 +123,31 @@ export default function WidgetSettings() {
               </div>
             </div>
 
-            <div className="admin-card space-y-6">
-              <h3 className="text-lg font-semibold">Поведение</h3>
+            <div className="admin-card space-y-4">
+              <div>
+                <h3 className="text-lg font-semibold">Tone of Voice</h3>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Системный промпт, определяющий стиль и тон ответов AI-консультанта. Изменения применяются сразу после сохранения.
+                </p>
+              </div>
               
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label>Виджет активен</Label>
-                  <p className="text-sm text-muted-foreground">Показывать виджет на сайте</p>
-                </div>
-                <Switch
-                  checked={config.isActive}
-                  onCheckedChange={(checked) => setConfig({ ...config, isActive: checked })}
-                />
-              </div>
+              <Textarea
+                value={config.systemPrompt}
+                onChange={(e) => setConfig({ ...config, systemPrompt: e.target.value })}
+                rows={8}
+                className="input-focus resize-y font-mono text-sm"
+                placeholder="Опишите, как должен общаться бот..."
+                disabled={loading}
+              />
 
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label>Карточки товаров</Label>
-                  <p className="text-sm text-muted-foreground">Показывать карточки в ответах</p>
-                </div>
-                <Switch
-                  checked={config.showProductCards}
-                  onCheckedChange={(checked) => setConfig({ ...config, showProductCards: checked })}
-                />
-              </div>
-
-              <div className="flex items-center justify-between">
-                <div>
-                  <Label>Индикатор набора</Label>
-                  <p className="text-sm text-muted-foreground">Анимация "печатает..."</p>
-                </div>
-                <Switch
-                  checked={config.enableTypingIndicator}
-                  onCheckedChange={(checked) => setConfig({ ...config, enableTypingIndicator: checked })}
-                />
-              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setConfig({ ...config, systemPrompt: DEFAULT_SYSTEM_PROMPT })}
+                className="text-muted-foreground"
+              >
+                Сбросить по умолчанию
+              </Button>
             </div>
           </div>
 
@@ -124,10 +155,6 @@ export default function WidgetSettings() {
           <div className="admin-card">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold">Предпросмотр</h3>
-              <Button variant="ghost" size="sm">
-                <RefreshCw className="w-4 h-4 mr-2" />
-                Обновить
-              </Button>
             </div>
             <div className="bg-muted/30 rounded-xl p-4 flex items-end justify-end min-h-[600px]">
               <ChatWidget isPreview />
