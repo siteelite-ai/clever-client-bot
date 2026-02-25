@@ -590,10 +590,10 @@
 
     showTyping();
 
-    // Try direct Supabase first (faster), proxy as fallback
+    // Try proxy first (works in RU), direct Supabase as fallback
     var endpoints = [
-      { url: 'https://yngoixmvmxdfxokuafjp.supabase.co', label: 'direct' },
-      { url: CONFIG.supabaseUrl, label: 'proxy' }
+      { url: CONFIG.supabaseUrl, label: 'proxy' },
+      { url: 'https://yngoixmvmxdfxokuafjp.supabase.co', label: 'direct' }
     ];
 
     var result = null;
