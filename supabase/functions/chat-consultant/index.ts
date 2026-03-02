@@ -753,6 +753,70 @@ async function detectCityByIP(ip: string): Promise<GeoResult> {
 }
 
 
+// Smart excerpt extraction: find the most relevant section of a long document
+// instead of blindly taking the first N chars
+function extractRelevantExcerpt(content: string, query: string, maxLen: number = 2000): string {
+  // If content is short enough, return as-is
+  if (content.length <= maxLen) return content;
+
+  // Extract meaningful keywords from the query (>2 chars, no stop words)
+  const stopWords = new Set(['как', 'что', 'где', 'когда', 'почему', 'какой', 'какая', 'какие', 'это', 'для', 'при', 'или', 'так', 'вот', 'можно', 'есть', 'ваш', 'мне', 'вам', 'нас', 'вас', 'они', 'она', 'оно', 'его', 'неё', 'них', 'будет', 'быть', 'если', 'уже', 'ещё', 'еще', 'тоже', 'также', 'только', 'очень', 'просто', 'нужно', 'надо']);
+  const words = query.toLowerCase()
+    .split(/[^а-яёa-z0-9]+/)
+    .filter(w => w.length > 2 && !stopWords.has(w));
+
+  if (words.length === 0) return content.substring(0, maxLen);
+
+  // Find the best window: score each position by keyword density
+  const lowerContent = content.toLowerCase();
+  const windowSize = maxLen;
+  const step = 200; // slide by 200 chars
+  
+  let bestStart = 0;
+  let bestScore = -1;
+
+  for (let start = 0; start < content.length - step; start += step) {
+    const end = Math.min(start + windowSize, content.length);
+    const window = lowerContent.substring(start, end);
+    
+    let score = 0;
+    for (const word of words) {
+      // Count occurrences of each keyword in this window
+      let idx = 0;
+      while ((idx = window.indexOf(word, idx)) !== -1) {
+        score += 1;
+        idx += word.length;
+      }
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestStart = start;
+    }
+  }
+
+  // If no keywords found at all, return the beginning
+  if (bestScore <= 0) return content.substring(0, maxLen);
+
+  // Snap to nearest paragraph/section boundary for cleaner cuts
+  let snapStart = bestStart;
+  if (snapStart > 0) {
+    // Look back up to 200 chars for a section header or double newline
+    const lookBack = content.substring(Math.max(0, snapStart - 200), snapStart);
+    const sectionMatch = lookBack.lastIndexOf('\n\n');
+    if (sectionMatch >= 0) {
+      snapStart = Math.max(0, snapStart - 200) + sectionMatch + 2;
+    }
+  }
+
+  const excerpt = content.substring(snapStart, snapStart + maxLen);
+  
+  // Add ellipsis indicators
+  const prefix = snapStart > 0 ? '...\n' : '';
+  const suffix = (snapStart + maxLen) < content.length ? '\n...' : '';
+  
+  return prefix + excerpt.trim() + suffix;
+}
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -860,12 +924,15 @@ serve(async (req) => {
       knowledgeContext = `
 📚 ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ (используй для ответа!):
 
-${knowledgeResults.map((r, i) => `--- ${r.title} ---
-${r.content.substring(0, 1500)}
-${r.source_url ? `Источник: ${r.source_url}` : ''}
-`).join('\n')}
+${knowledgeResults.map((r, i) => {
+        // Smart extraction: find the most relevant section of the content
+        const excerpt = extractRelevantExcerpt(r.content, userMessage, 2000);
+        return `--- ${r.title} ---
+${excerpt}
+${r.source_url ? `Источник: ${r.source_url}` : ''}`;
+      }).join('\n\n')}
 
-ИНСТРУКЦИЯ: Используй информацию выше для ответа клиенту. Если информация релевантна вопросу — цитируй её.`;
+ИНСТРУКЦИЯ: Используй информацию выше для ответа клиенту. Если информация релевантна вопросу — цитируй её, ссылайся на конкретные пункты.`;
       
       console.log(`[Chat] Added ${knowledgeResults.length} knowledge entries to context`);
     }
