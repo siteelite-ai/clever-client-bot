@@ -10,6 +10,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
+import { extractTextFromPdf } from '@/lib/pdf-extract';
 import { supabase } from '@/integrations/supabase/client';
 
 interface KnowledgeEntry {
@@ -135,31 +136,30 @@ export default function KnowledgeBase() {
 
     setIsProcessing(true);
     try {
-      // Read file as base64
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = reader.result as string;
-          // Remove data URL prefix
-          const base64Data = result.split(',')[1];
-          resolve(base64Data);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(file);
-      });
+      // Extract text client-side using pdfjs-dist (all pages)
+      toast.info('Извлечение текста из PDF...');
+      const { title: extractedTitle, content } = await extractTextFromPdf(file);
 
+      if (content.length < 50) {
+        throw new Error('PDF содержит слишком мало текста');
+      }
+
+      toast.info(`Извлечено ${content.length} символов. Сохранение...`);
+
+      // Send extracted text as a text entry (not base64)
       const { data, error } = await supabase.functions.invoke('knowledge-process', {
         body: { 
-          action: 'process_pdf',
-          pdfBase64: base64,
-          title: file.name.replace('.pdf', '')
+          action: 'add_text',
+          title: file.name.replace(/\.pdf$/i, ''),
+          text: content,
+          entryType: 'pdf'
         }
       });
 
       if (error) throw error;
       if (!data.success) throw new Error(data.error);
 
-      toast.success('PDF успешно обработан');
+      toast.success(`PDF успешно обработан (${Math.round(content.length / 1000)}К символов)`);
       setIsAddDialogOpen(false);
       loadEntries();
     } catch (error) {

@@ -173,7 +173,7 @@ serve(async (req) => {
   }
 
   try {
-    const { action, url, text, title, pdfBase64, entryId } = await req.json();
+    const { action, url, text, title, pdfBase64, entryId, entryType } = await req.json();
     
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
@@ -296,7 +296,7 @@ serve(async (req) => {
         .insert({
           type: 'url',
           title: extractedTitle,
-          content: content.substring(0, 50000), // Limit content size
+          content: content.substring(0, 200000), // Limit content size
           source_url: url,
           embedding,
         })
@@ -339,9 +339,9 @@ serve(async (req) => {
       const { data, error } = await supabase
         .from('knowledge_entries')
         .insert({
-          type: 'text',
+          type: entryType || 'text',
           title,
-          content: text.substring(0, 50000),
+          content: text.substring(0, 200000),
           embedding,
         })
         .select()
@@ -390,7 +390,7 @@ serve(async (req) => {
         .insert({
           type: 'pdf',
           title: title || extractedTitle,
-          content: content.substring(0, 50000),
+          content: content.substring(0, 200000),
           embedding,
         })
         .select()
@@ -449,7 +449,7 @@ serve(async (req) => {
         .from('knowledge_entries')
         .update({
           title: extractedTitle,
-          content: content.substring(0, 50000),
+          content: content.substring(0, 200000),
           embedding,
           updated_at: new Date().toISOString(),
         })
