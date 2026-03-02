@@ -27,16 +27,33 @@ interface EntryViewDialogProps {
 export function EntryViewDialog({ entry, open, onOpenChange, onSaved }: EntryViewDialogProps) {
   const [isEditing, setIsEditing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoadingFull, setIsLoadingFull] = useState(false);
   const [editTitle, setEditTitle] = useState('');
   const [editContent, setEditContent] = useState('');
+  const [fullContent, setFullContent] = useState('');
 
   useEffect(() => {
-    if (entry) {
+    if (entry && open) {
       setEditTitle(entry.title);
       setEditContent(entry.content);
+      setFullContent('');
       setIsEditing(false);
+      // Load full content from DB
+      setIsLoadingFull(true);
+      supabase
+        .from('knowledge_entries')
+        .select('content')
+        .eq('id', entry.id)
+        .single()
+        .then(({ data, error }) => {
+          if (!error && data) {
+            setFullContent(data.content);
+            setEditContent(data.content);
+          }
+          setIsLoadingFull(false);
+        });
     }
-  }, [entry]);
+  }, [entry, open]);
 
   const handleSave = async () => {
     if (!entry || !editTitle.trim() || !editContent.trim()) return;
@@ -67,10 +84,12 @@ export function EntryViewDialog({ entry, open, onOpenChange, onSaved }: EntryVie
   const handleCancel = () => {
     if (entry) {
       setEditTitle(entry.title);
-      setEditContent(entry.content);
+      setEditContent(fullContent || entry.content);
     }
     setIsEditing(false);
   };
+
+  const displayContent = fullContent || entry?.content || '';
 
   if (!entry) return null;
 
@@ -130,7 +149,11 @@ export function EntryViewDialog({ entry, open, onOpenChange, onSaved }: EntryVie
         </DialogHeader>
 
         <div className="flex-1 overflow-y-auto mt-4 min-h-0">
-          {isEditing ? (
+          {isLoadingFull ? (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="w-6 h-6 animate-spin text-primary" />
+            </div>
+          ) : isEditing ? (
             <Textarea
               value={editContent}
               onChange={(e) => setEditContent(e.target.value)}
@@ -139,7 +162,7 @@ export function EntryViewDialog({ entry, open, onOpenChange, onSaved }: EntryVie
           ) : (
             <div className="prose prose-sm max-w-none dark:prose-invert">
               <pre className="whitespace-pre-wrap font-sans text-sm text-foreground bg-muted/30 rounded-lg p-4 leading-relaxed">
-                {entry.content}
+                {displayContent}
               </pre>
             </div>
           )}
