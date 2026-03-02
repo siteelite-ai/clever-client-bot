@@ -306,7 +306,7 @@ export function ContactsCard({ onContactsSaved }: Props) {
 
   // Group branches by city for display
   const branchesByCity = new Map<string, Branch[]>();
-  for (const b of contacts.branches) {
+  for (const b of (contacts.branches || [])) {
     const city = b.city.trim() || 'Другой';
     if (!branchesByCity.has(city)) branchesByCity.set(city, []);
     branchesByCity.get(city)!.push(b);
@@ -582,11 +582,11 @@ export function ContactsCard({ onContactsSaved }: Props) {
           </div>
 
           {/* Branches by city */}
-          {contacts.branches.length > 0 && (
+          {(contacts.branches || []).length > 0 && (
             <div className="space-y-4">
               <div className="flex items-center gap-2">
                 <Building2 className="w-4 h-4 text-primary" />
-                <h4 className="font-semibold text-sm">Филиалы и пункты выдачи ({contacts.branches.length})</h4>
+                <h4 className="font-semibold text-sm">Филиалы и пункты выдачи ({(contacts.branches || []).length})</h4>
               </div>
               
               <div className="space-y-3">
