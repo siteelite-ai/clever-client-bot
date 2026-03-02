@@ -612,71 +612,45 @@ function extractBrandsFromProducts(products: Product[]): string[] {
 }
 
 // Format contacts from knowledge base text into clean display format with clickable links
+// IMPORTANT: Show only GENERAL company contacts (main phones, WhatsApp, email), NOT all branch details
 function formatContactsForDisplay(contactsText: string): string | null {
   if (!contactsText || contactsText.trim().length === 0) return null;
   
   const lines: string[] = [];
+  const seen = new Set<string>(); // deduplicate
   
-  // Extract phones — make them clickable tel: links
-  const phoneMatches = contactsText.match(/(?:телефон[^:]*:\s*)([\+\d\s\(\)\-]+)/gi);
+  // Extract unique phones — make them clickable tel: links
+  const phoneRegex = /(?:\+7|8)[\s\(\)\-]*\d{3}[\s\(\)\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/g;
+  const phoneMatches = contactsText.match(phoneRegex);
   if (phoneMatches) {
-    for (const match of phoneMatches) {
-      const number = match.replace(/телефон[^:]*:\s*/i, '').trim();
-      if (number) {
-        const telNumber = number.replace(/[\s\(\)\-]/g, '');
-        lines.push(`📞 [${number}](tel:${telNumber})`);
+    for (const raw of phoneMatches) {
+      const telNumber = raw.replace(/[\s\(\)\-]/g, '');
+      if (!seen.has(telNumber)) {
+        seen.add(telNumber);
+        const formatted = raw.trim();
+        lines.push(`📞 [${formatted}](tel:${telNumber})`);
       }
+      if (lines.filter(l => l.startsWith('📞')).length >= 2) break; // max 2 phones
     }
   }
   
-  // Extract messengers (WhatsApp, Telegram, etc.) — make clickable
-  const messengerPatterns = [
-    { regex: /WhatsApp[^:]*:\s*(https?:\/\/[^\s,]+|[\+\d\s]+)/gi, icon: '💬', label: 'WhatsApp', urlPrefix: 'https://wa.me/' },
-    { regex: /Telegram[^:]*:\s*(https?:\/\/[^\s,]+|@[^\s,]+)/gi, icon: '💬', label: 'Telegram', urlPrefix: 'https://t.me/' },
-    { regex: /Viber[^:]*:\s*([\+\d\s]+)/gi, icon: '💬', label: 'Viber', urlPrefix: 'viber://chat?number=' },
-    { regex: /Instagram[^:]*:\s*(https?:\/\/[^\s,]+|@[^\s,]+)/gi, icon: '📷', label: 'Instagram', urlPrefix: 'https://instagram.com/' },
-  ];
-  
-  for (const { regex, icon, label, urlPrefix } of messengerPatterns) {
-    const matches = contactsText.match(regex);
-    if (matches) {
-      for (const match of matches) {
-        const value = match.substring(match.indexOf(':') + 1).trim();
-        if (value) {
-          let url = value;
-          if (value.startsWith('http')) {
-            url = value;
-          } else if (value.startsWith('@')) {
-            url = urlPrefix + value.substring(1);
-          } else {
-            url = urlPrefix + value.replace(/[\s\(\)\-]/g, '');
-          }
-          lines.push(`${icon} [${label}](${url})`);
-        }
-      }
+  // Extract WhatsApp — deduplicated
+  const waMatch = contactsText.match(/https?:\/\/wa\.me\/\d+/i) 
+    || contactsText.match(/WhatsApp[^:]*:\s*([\+\d\s]+)/i);
+  if (waMatch) {
+    const value = waMatch[0];
+    if (value.startsWith('http')) {
+      lines.push(`💬 [WhatsApp](${value})`);
+    } else {
+      const num = waMatch[1]?.replace(/[\s\(\)\-]/g, '') || '';
+      if (num) lines.push(`💬 [WhatsApp](https://wa.me/${num})`);
     }
   }
   
-  // Extract email — make clickable mailto:
-  const emailMatches = contactsText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g);
-  if (emailMatches) {
-    for (const email of emailMatches) {
-      lines.push(`📧 [${email}](mailto:${email})`);
-    }
-  }
-  
-  // Extract working hours
-  const hoursMatch = contactsText.match(/режим работы[^:]*:\s*([^\n]+)/i) 
-    || contactsText.match(/график[^:]*:\s*([^\n]+)/i)
-    || contactsText.match(/(Пн[^\n]+)/i);
-  if (hoursMatch) {
-    lines.push(`🕐 ${hoursMatch[1].trim()}`);
-  }
-  
-  // Extract address
-  const addressMatch = contactsText.match(/адрес[^:]*:\s*([^\n]+)/i);
-  if (addressMatch) {
-    lines.push(`📍 ${addressMatch[1].trim()}`);
+  // Extract unique email — max 1
+  const emailMatch = contactsText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+  if (emailMatch) {
+    lines.push(`📧 [${emailMatch[0]}](mailto:${emailMatch[0]})`);
   }
   
   if (lines.length === 0) return null;
