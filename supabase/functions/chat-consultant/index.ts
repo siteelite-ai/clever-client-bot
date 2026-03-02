@@ -727,6 +727,30 @@ function sanitizeUserInput(input: string): string {
   return sanitized;
 }
 
+// IP-based city detection
+async function detectCityByIP(ip: string): Promise<string | null> {
+  if (!ip || ip === 'unknown' || ip === '127.0.0.1' || ip.startsWith('192.168.') || ip.startsWith('10.')) {
+    return null;
+  }
+  try {
+    const resp = await fetch(`http://ip-api.com/json/${ip}?fields=status,city,regionName,country&lang=ru`, {
+      signal: AbortSignal.timeout(2000), // 2s timeout
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    if (data.status === 'success' && data.city) {
+      console.log(`[GeoIP] Detected city: ${data.city}, region: ${data.regionName}, country: ${data.country}`);
+      return data.city;
+    }
+    return null;
+  } catch (e) {
+    console.warn('[GeoIP] Detection failed:', e);
+    return null;
+  }
+}
+
+
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
@@ -789,6 +813,9 @@ serve(async (req) => {
     // Подготавливаем историю для контекста (без текущего сообщения)
     const historyForContext = messages.slice(0, -1);
 
+    // Геолокация по IP (параллельно с остальными запросами)
+    const detectedCityPromise = detectCityByIP(clientIp);
+
     // ШАГ 1: AI определяет интент и генерирует поисковые кандидаты (никакого хардкода)
     const extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKey, historyForContext, aiConfig.url, aiConfig.model);
     console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}`);
@@ -804,7 +831,8 @@ serve(async (req) => {
     // Всегда ищем контакты — пригодятся если товары не найдены
     const contactsPromise = searchKnowledgeBase('контакты телефон WhatsApp режим работы менеджер', 2);
     
-    const [knowledgeResults, contactResults] = await Promise.all([knowledgePromise, contactsPromise]);
+    const [knowledgeResults, contactResults, detectedCity] = await Promise.all([knowledgePromise, contactsPromise, detectedCityPromise]);
+    console.log(`[Chat] Detected city from IP: ${detectedCity || 'unknown'}`);
     
     let contactsInfo = '';
     if (contactResults.length > 0) {
@@ -1159,12 +1187,15 @@ ${toneOfVoice}
 Единые для всех филиалов контакты — только WhatsApp и Email (они указаны в Базе Знаний).
 
 Когда клиент спрашивает о филиалах, адресах, пунктах выдачи, самовывозе, режиме работы, телефоне или "где вы находитесь":
-1. ОБЯЗАТЕЛЬНО уточни, в каком он городе (если город не был назван ранее в диалоге)
-2. Если клиент назвал город — покажи ТОЛЬКО филиалы в его городе с адресами, телефонами и режимом работы
-3. Если в городе несколько филиалов (например, Караганда) — покажи все, чтобы клиент мог выбрать ближайший
-4. Если клиент уточняет район или улицу — подскажи ближайший к нему филиал
-5. Данные о филиалах бери ТОЛЬКО из БАЗЫ ЗНАНИЙ (запись "Контакты и режим работы")
-6. НЕ ВЫДУМЫВАЙ телефоны и адреса! Если данных нет в Базе Знаний — так и скажи
+1. Если город определён автоматически (см. ниже) — скажи: "Я вижу, что вы из [город]. Вот наши филиалы в вашем городе:" и покажи филиалы. Если город определён неверно — клиент поправит.
+2. Если город НЕ определён — уточни: "Подскажите, в каком вы городе?"
+3. Если клиент назвал город — покажи ТОЛЬКО филиалы в его городе с адресами, телефонами и режимом работы
+4. Если в городе несколько филиалов (например, Караганда) — покажи все, чтобы клиент мог выбрать ближайший
+5. Если клиент уточняет район или улицу — подскажи ближайший к нему филиал
+6. Данные о филиалах бери ТОЛЬКО из БАЗЫ ЗНАНИЙ (запись "Контакты и режим работы")
+7. НЕ ВЫДУМЫВАЙ телефоны и адреса! Если данных нет в Базе Знаний — так и скажи
+
+${detectedCity ? '🌍 АВТООПРЕДЕЛЕНИЕ ГОРОДА: По IP клиента определён город: ' + detectedCity + '. Используй эту информацию для автоматического подбора ближайших филиалов. Но помни — определение может быть неточным, поэтому формулируй мягко: "Я вижу, что вы из ' + detectedCity + '" вместо категоричного утверждения.' : '🌍 Город клиента НЕ удалось определить автоматически. Уточни город, если вопрос касается филиалов.'}
 
 Когда предлагаешь связаться с менеджером — добавь в КОНЕЦ своего сообщения маркер [CONTACT_MANAGER] (он будет скрыт от пользователя и заменён на карточку с контактами). НЕ ПЕРЕЧИСЛЯЙ контактные данные сам — они подставятся автоматически.
 ${greetingRule}
