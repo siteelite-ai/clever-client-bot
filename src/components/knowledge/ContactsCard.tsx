@@ -14,15 +14,15 @@ interface Branch {
 }
 
 interface ContactsData {
-  phones: string[];
+  phones: string[]; // legacy, kept for parsing compatibility
   messengers: { type: string; value: string }[];
   emails: string[];
   branches: Branch[];
-  workingHours: string;
+  workingHours: string; // legacy, kept for parsing compatibility
 }
 
 const DEFAULT_CONTACTS: ContactsData = {
-  phones: ['+7 (701) 302-97-75', '+7 (701) 459-17-73'],
+  phones: [], // no general phones — each branch has its own
   messengers: [{ type: 'WhatsApp', value: '+77013029775' }],
   emails: ['intermag@220volt.kz'],
   branches: [
@@ -37,7 +37,7 @@ const DEFAULT_CONTACTS: ContactsData = {
     { city: 'Караганда', address: 'ул. Ермекова 114', name: '', phone: '', workingHours: '' },
     { city: 'Караганда', address: 'ул. Затаевича 2/1', name: '', phone: '', workingHours: 'Пн-Пт 09:00-18:00, Сб 10:00-17:00' },
   ],
-  workingHours: 'Пн-Пт 9:00–18:00, Сб 10:00–15:00',
+  workingHours: '', // no general working hours — each branch has its own
 };
 
 const CONTACTS_TITLE = '📞 Контакты и режим работы';
@@ -252,8 +252,8 @@ export function ContactsCard({ onContactsSaved }: Props) {
         workingHours: editData.workingHours,
       };
       
-      if (cleaned.phones.length === 0) {
-        toast.error('Добавьте хотя бы один телефон');
+      if (cleaned.messengers.length === 0 && cleaned.emails.length === 0) {
+        toast.error('Добавьте хотя бы один мессенджер или email');
         setIsSaving(false);
         return;
       }
@@ -371,29 +371,7 @@ export function ContactsCard({ onContactsSaved }: Props) {
         <div className="space-y-6">
           {/* General contacts */}
           <div className="space-y-4">
-            <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Общие контакты</h4>
-            
-            {/* Phones */}
-            <EditSection
-              icon={<Phone className="w-3.5 h-3.5" />}
-              label="Телефоны"
-              onAdd={addPhone}
-            >
-              {editData.phones.map((phone, i) => (
-                <div key={i} className="flex gap-2">
-                  <Input
-                    value={phone}
-                    onChange={(e) => updatePhone(i, e.target.value)}
-                    placeholder="+7 (XXX) XXX-XX-XX"
-                  />
-                  {editData.phones.length > 1 && (
-                    <Button variant="ghost" size="icon" className="shrink-0 text-muted-foreground hover:text-destructive" onClick={() => removePhone(i)}>
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
-                  )}
-                </div>
-              ))}
-            </EditSection>
+            <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">Единые контакты</h4>
 
             {/* Messengers */}
             <EditSection
@@ -446,18 +424,6 @@ export function ContactsCard({ onContactsSaved }: Props) {
                 </div>
               ))}
             </EditSection>
-
-            {/* Working hours */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
-                <Clock className="w-3.5 h-3.5" /> Общий режим работы
-              </label>
-              <Input
-                value={editData.workingHours}
-                onChange={(e) => setEditData(d => ({ ...d, workingHours: e.target.value }))}
-                placeholder="Пн-Пт 9:00–18:00"
-              />
-            </div>
           </div>
 
           {/* Branches */}
@@ -543,21 +509,10 @@ export function ContactsCard({ onContactsSaved }: Props) {
       ) : (
         <div className="relative">
           <div
-            className={`space-y-6 overflow-hidden transition-all duration-300 ${!expanded ? 'max-h-[200px]' : ''}`}
+            className={`space-y-6 overflow-hidden transition-all duration-300 ${!expanded ? 'max-h-[280px]' : ''}`}
           >
-          {/* General contacts */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {/* Phones */}
-            <div className="flex items-start gap-3">
-              <Phone className="w-4 h-4 text-muted-foreground flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="text-xs text-muted-foreground">Телефоны</p>
-                {contacts.phones.map((p, i) => (
-                  <p key={i} className="font-medium">{p}</p>
-                ))}
-              </div>
-            </div>
-
+          {/* Unified contacts: messengers + emails */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* Messengers */}
             {contacts.messengers.length > 0 && (
               <div className="flex items-start gap-3">
@@ -594,15 +549,6 @@ export function ContactsCard({ onContactsSaved }: Props) {
                 {contacts.emails.map((e, i) => (
                   <a key={i} href={`mailto:${e}`} className="font-medium hover:underline block">{e}</a>
                 ))}
-              </div>
-            </div>
-
-            {/* Working hours */}
-            <div className="flex items-center gap-3">
-              <Clock className="w-4 h-4 text-muted-foreground flex-shrink-0" />
-              <div>
-                <p className="text-xs text-muted-foreground">Общий режим работы</p>
-                <p className="font-medium">{contacts.workingHours}</p>
               </div>
             </div>
           </div>
@@ -642,21 +588,23 @@ export function ContactsCard({ onContactsSaved }: Props) {
           )}
           </div> {/* end space-y-6 overflow wrapper */}
 
-          {/* Gradient overlay + expand button */}
+          {/* Gradient overlay */}
           {!expanded && (
-            <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-background to-transparent pointer-events-none" />
+            <div className="absolute bottom-8 left-0 right-0 h-20 bg-gradient-to-t from-card to-transparent pointer-events-none" />
           )}
-          <div className="flex justify-center pt-1">
+
+          {/* Expand button — always visible, below gradient */}
+          <div className="relative z-10 flex justify-center pt-2">
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
-              className="text-xs text-muted-foreground hover:text-foreground"
+              className="text-xs text-muted-foreground hover:text-foreground bg-card"
               onClick={() => setExpanded(!expanded)}
             >
               {expanded ? (
                 <><ChevronUp className="w-4 h-4 mr-1" /> Свернуть</>
               ) : (
-                <><ChevronDown className="w-4 h-4 mr-1" /> Показать всё</>
+                <><ChevronDown className="w-4 h-4 mr-1" /> Показать всё ({(contacts.branches || []).length} филиалов)</>
               )}
             </Button>
           </div>
