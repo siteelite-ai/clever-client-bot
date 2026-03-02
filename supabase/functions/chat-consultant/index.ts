@@ -727,25 +727,38 @@ function sanitizeUserInput(input: string): string {
   return sanitized;
 }
 
-// IP-based city detection
-async function detectCityByIP(ip: string): Promise<string | null> {
+// IP-based city detection with VPN/proxy awareness
+interface GeoResult {
+  city: string | null;
+  isVPN: boolean;
+}
+
+async function detectCityByIP(ip: string): Promise<GeoResult> {
   if (!ip || ip === 'unknown' || ip === '127.0.0.1' || ip.startsWith('192.168.') || ip.startsWith('10.')) {
-    return null;
+    return { city: null, isVPN: false };
   }
   try {
-    const resp = await fetch(`http://ip-api.com/json/${ip}?fields=status,city,regionName,country&lang=ru`, {
-      signal: AbortSignal.timeout(2000), // 2s timeout
+    const resp = await fetch(`http://ip-api.com/json/${ip}?fields=status,city,regionName,country,proxy,hosting&lang=ru`, {
+      signal: AbortSignal.timeout(2000),
     });
-    if (!resp.ok) return null;
+    if (!resp.ok) return { city: null, isVPN: false };
     const data = await resp.json();
+    
+    const isVPN = !!(data.proxy || data.hosting);
+    
+    if (isVPN) {
+      console.log(`[GeoIP] VPN/proxy detected for IP ${ip} (proxy=${data.proxy}, hosting=${data.hosting}), city=${data.city}`);
+      return { city: null, isVPN: true };
+    }
+    
     if (data.status === 'success' && data.city) {
       console.log(`[GeoIP] Detected city: ${data.city}, region: ${data.regionName}, country: ${data.country}`);
-      return data.city;
+      return { city: data.city, isVPN: false };
     }
-    return null;
+    return { city: null, isVPN: false };
   } catch (e) {
     console.warn('[GeoIP] Detection failed:', e);
-    return null;
+    return { city: null, isVPN: false };
   }
 }
 
@@ -831,8 +844,10 @@ serve(async (req) => {
     // Всегда ищем контакты — пригодятся если товары не найдены
     const contactsPromise = searchKnowledgeBase('контакты телефон WhatsApp режим работы менеджер', 2);
     
-    const [knowledgeResults, contactResults, detectedCity] = await Promise.all([knowledgePromise, contactsPromise, detectedCityPromise]);
-    console.log(`[Chat] Detected city from IP: ${detectedCity || 'unknown'}`);
+    const [knowledgeResults, contactResults, geoResult] = await Promise.all([knowledgePromise, contactsPromise, detectedCityPromise]);
+    const detectedCity = geoResult.city;
+    const isVPN = geoResult.isVPN;
+    console.log(`[Chat] Detected city from IP: ${detectedCity || 'unknown'}, VPN: ${isVPN}`);
     
     let contactsInfo = '';
     if (contactResults.length > 0) {
@@ -1195,7 +1210,7 @@ ${toneOfVoice}
 6. Данные о филиалах бери ТОЛЬКО из БАЗЫ ЗНАНИЙ (запись "Контакты и режим работы")
 7. НЕ ВЫДУМЫВАЙ телефоны и адреса! Если данных нет в Базе Знаний — так и скажи
 
-${detectedCity ? '🌍 АВТООПРЕДЕЛЕНИЕ ГОРОДА: По IP клиента определён город: ' + detectedCity + '. Используй эту информацию для автоматического подбора ближайших филиалов. Но помни — определение может быть неточным, поэтому формулируй мягко: "Я вижу, что вы из ' + detectedCity + '" вместо категоричного утверждения.' : '🌍 Город клиента НЕ удалось определить автоматически. Уточни город, если вопрос касается филиалов.'}
+${detectedCity ? '🌍 АВТООПРЕДЕЛЕНИЕ ГОРОДА: По IP клиента определён город: ' + detectedCity + '. Используй эту информацию для автоматического подбора ближайших филиалов. Но помни — определение может быть неточным, поэтому формулируй мягко: "Я вижу, что вы из ' + detectedCity + '" вместо категоричного утверждения.' : isVPN ? '🌍 У клиента обнаружен VPN/прокси, поэтому город определить не удалось. Мягко сообщи: "К сожалению, не удалось автоматически определить ваш город (возможно, вы используете VPN). Подскажите, из какого вы города?" — и после ответа подбери ближайшие филиалы.' : '🌍 Город клиента НЕ удалось определить автоматически. Уточни город, если вопрос касается филиалов.'}
 
 Когда предлагаешь связаться с менеджером — добавь в КОНЕЦ своего сообщения маркер [CONTACT_MANAGER] (он будет скрыт от пользователя и заменён на карточку с контактами). НЕ ПЕРЕЧИСЛЯЙ контактные данные сам — они подставятся автоматически.
 ${greetingRule}
