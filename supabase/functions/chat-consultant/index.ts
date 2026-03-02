@@ -731,17 +731,20 @@ function sanitizeUserInput(input: string): string {
 interface GeoResult {
   city: string | null;
   isVPN: boolean;
+  country: string | null;      // e.g. "Россия", "Казахстан"
+  countryCode: string | null;  // e.g. "RU", "KZ"
 }
 
 async function detectCityByIP(ip: string): Promise<GeoResult> {
+  const empty: GeoResult = { city: null, isVPN: false, country: null, countryCode: null };
   if (!ip || ip === 'unknown' || ip === '127.0.0.1' || ip.startsWith('192.168.') || ip.startsWith('10.')) {
-    return { city: null, isVPN: false };
+    return empty;
   }
   try {
     const resp = await fetch(`http://ip-api.com/json/${ip}?fields=status,city,regionName,country,countryCode,proxy,hosting&lang=ru`, {
       signal: AbortSignal.timeout(2000),
     });
-    if (!resp.ok) return { city: null, isVPN: false };
+    if (!resp.ok) return empty;
     const data = await resp.json();
     
     const isVPN = !!(data.proxy || data.hosting);
@@ -749,23 +752,29 @@ async function detectCityByIP(ip: string): Promise<GeoResult> {
     // Если VPN/прокси обнаружен — не доверяем геолокации
     if (isVPN) {
       console.log(`[GeoIP] VPN/proxy detected for IP ${ip} (proxy=${data.proxy}, hosting=${data.hosting}), city=${data.city}`);
-      return { city: null, isVPN: true };
+      return { city: null, isVPN: true, country: data.country || null, countryCode: data.countryCode || null };
     }
     
-    // Если страна НЕ Казахстан — скорее всего VPN или нерелевантная локация
+    // Россия — реальный пользователь, но из другой страны
+    if (data.countryCode === 'RU') {
+      console.log(`[GeoIP] Russian user detected: ${data.city}, ${data.country}`);
+      return { city: data.city || null, isVPN: false, country: data.country, countryCode: 'RU' };
+    }
+    
+    // Другие страны (не KZ, не RU) — скорее всего VPN
     if (data.countryCode && data.countryCode !== 'KZ') {
-      console.log(`[GeoIP] Non-KZ country detected: ${data.country} (${data.countryCode}), city=${data.city} — treating as VPN/unreliable`);
-      return { city: null, isVPN: true };
+      console.log(`[GeoIP] Non-KZ/RU country detected: ${data.country} (${data.countryCode}), city=${data.city} — treating as VPN`);
+      return { city: null, isVPN: true, country: data.country || null, countryCode: data.countryCode || null };
     }
     
     if (data.status === 'success' && data.city) {
       console.log(`[GeoIP] Detected city: ${data.city}, region: ${data.regionName}, country: ${data.country}`);
-      return { city: data.city, isVPN: false };
+      return { city: data.city, isVPN: false, country: data.country, countryCode: 'KZ' };
     }
-    return { city: null, isVPN: false };
+    return empty;
   } catch (e) {
     console.warn('[GeoIP] Detection failed:', e);
-    return { city: null, isVPN: false };
+    return { city: null, isVPN: false, country: null, countryCode: null };
   }
 }
 
@@ -854,12 +863,14 @@ serve(async (req) => {
     const [knowledgeResults, contactResults, geoResult] = await Promise.all([knowledgePromise, contactsPromise, detectedCityPromise]);
     const detectedCity = geoResult.city;
     const isVPN = geoResult.isVPN;
-    console.log(`[Chat] Detected city from IP: ${detectedCity || 'unknown'}, VPN: ${isVPN}`);
+    const userCountryCode = geoResult.countryCode;
+    const userCountry = geoResult.country;
+    console.log(`[Chat] GeoIP: city=${detectedCity || 'unknown'}, VPN=${isVPN}, country=${userCountry || 'unknown'} (${userCountryCode || '?'})`);
     
     let contactsInfo = '';
     if (contactResults.length > 0) {
-      contactsInfo = contactResults.map(r => r.content.substring(0, 500)).join('\n');
-      console.log(`[Chat] Found contacts info in knowledge base`);
+      contactsInfo = contactResults.map(r => r.content.substring(0, 3000)).join('\n');
+      console.log(`[Chat] Found contacts info in knowledge base (${contactsInfo.length} chars)`);
     }
     
     if (knowledgeResults.length > 0) {
@@ -1217,7 +1228,10 @@ ${toneOfVoice}
 6. Данные о филиалах бери ТОЛЬКО из БАЗЫ ЗНАНИЙ (запись "Контакты и режим работы")
 7. НЕ ВЫДУМЫВАЙ телефоны и адреса! Если данных нет в Базе Знаний — так и скажи
 
-${detectedCity ? '🌍 АВТООПРЕДЕЛЕНИЕ ГОРОДА: По IP клиента определён город: ' + detectedCity + '. Используй эту информацию для автоматического подбора ближайших филиалов. Но помни — определение может быть неточным, поэтому формулируй мягко: "Я вижу, что вы из ' + detectedCity + '" вместо категоричного утверждения.' : isVPN ? '🌍 У клиента обнаружен VPN/прокси, поэтому город определить не удалось. Мягко сообщи: "К сожалению, не удалось автоматически определить ваш город (возможно, вы используете VPN). Подскажите, из какого вы города?" — и после ответа подбери ближайшие филиалы.' : '🌍 Город клиента НЕ удалось определить автоматически. Уточни город, если вопрос касается филиалов.'}
+${contactsInfo ? `📋 ДАННЫЕ О ФИЛИАЛАХ И КОНТАКТАХ (из Базы Знаний):
+${contactsInfo}` : ''}
+
+${detectedCity && userCountryCode === 'KZ' ? '🌍 АВТООПРЕДЕЛЕНИЕ ГОРОДА: По IP клиента определён город: ' + detectedCity + ' (Казахстан). Используй эту информацию для автоматического подбора ближайших филиалов. Формулируй мягко: "Я вижу, что вы из ' + detectedCity + '" вместо категоричного утверждения.' : userCountryCode === 'RU' ? '🌍 Клиент находится в РОССИИ' + (detectedCity ? ' (город: ' + detectedCity + ')' : '') + '. Наши магазины расположены в Казахстане. Мягко сообщи: "Я вижу, что вы из ' + (detectedCity || 'России') + '. Наши магазины расположены в Казахстане, но мы можем помочь вам с доставкой! Подскажите, в какой город Казахстана вам нужна доставка?" Если клиент спрашивает о филиалах — покажи все города присутствия. Предложи также связаться с менеджером для уточнения условий доставки в Россию.' : isVPN ? '🌍 У клиента обнаружен VPN/прокси, поэтому город определить не удалось. Мягко сообщи: "К сожалению, не удалось автоматически определить ваш город (возможно, вы используете VPN). Подскажите, из какого вы города?" — и после ответа подбери ближайшие филиалы.' : '🌍 Город клиента НЕ удалось определить автоматически. Уточни город, если вопрос касается филиалов.'}
 
 Когда предлагаешь связаться с менеджером — добавь в КОНЕЦ своего сообщения маркер [CONTACT_MANAGER] (он будет скрыт от пользователя и заменён на карточку с контактами). НЕ ПЕРЕЧИСЛЯЙ контактные данные сам — они подставятся автоматически.
 ${greetingRule}
