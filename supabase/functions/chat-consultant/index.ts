@@ -738,7 +738,7 @@ async function detectCityByIP(ip: string): Promise<GeoResult> {
     return { city: null, isVPN: false };
   }
   try {
-    const resp = await fetch(`http://ip-api.com/json/${ip}?fields=status,city,regionName,country,proxy,hosting&lang=ru`, {
+    const resp = await fetch(`http://ip-api.com/json/${ip}?fields=status,city,regionName,country,countryCode,proxy,hosting&lang=ru`, {
       signal: AbortSignal.timeout(2000),
     });
     if (!resp.ok) return { city: null, isVPN: false };
@@ -746,8 +746,15 @@ async function detectCityByIP(ip: string): Promise<GeoResult> {
     
     const isVPN = !!(data.proxy || data.hosting);
     
+    // Если VPN/прокси обнаружен — не доверяем геолокации
     if (isVPN) {
       console.log(`[GeoIP] VPN/proxy detected for IP ${ip} (proxy=${data.proxy}, hosting=${data.hosting}), city=${data.city}`);
+      return { city: null, isVPN: true };
+    }
+    
+    // Если страна НЕ Казахстан — скорее всего VPN или нерелевантная локация
+    if (data.countryCode && data.countryCode !== 'KZ') {
+      console.log(`[GeoIP] Non-KZ country detected: ${data.country} (${data.countryCode}), city=${data.city} — treating as VPN/unreliable`);
       return { city: null, isVPN: true };
     }
     
