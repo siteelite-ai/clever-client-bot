@@ -26,15 +26,16 @@ const DEFAULT_CONTACTS: ContactsData = {
   messengers: [{ type: 'WhatsApp', value: '+77013029775' }],
   emails: ['intermag@220volt.kz'],
   branches: [
-    { city: 'Караганда', address: 'ул. Ермекова 114', name: 'Магазин 220 VOLT (головной офис)', phone: '+7 (721) 230-35-51', workingHours: 'Пн-Пт 09:00-18:00, Сб 10:00-17:00' },
-    { city: 'Караганда', address: 'ул. Дуйсембекова 19', name: 'Магазин 220VOLT', phone: '+7 (701) 781-15-86', workingHours: 'Пн-Пт 09:00-18:00, Сб 10:00-17:00' },
-    { city: 'Караганда', address: 'ул. Ерубаева 31', name: 'Магазин 220 VOLT', phone: '+7 (702) 214-52-71', workingHours: 'Пн-Пт 09:00-18:00, Сб 10:00-17:00' },
-    { city: 'Караганда', address: '137 уч. квартал, стр. 139, бутик 41', name: 'Отдел 220 VOLT в Строймарт', phone: '+7 (701) 543-84-69', workingHours: 'Пн-Вс 10:00-19:00' },
+    { city: 'Астана', address: 'ул. Сембинова, 20/1, Акмолинская область', name: '', phone: '', workingHours: '' },
+    { city: 'Алматы', address: 'район Алмалинский, проспект Толе Би 180, квартал 1017, нежилое помещение', name: '', phone: '', workingHours: '' },
+    { city: 'Актобе', address: 'Богословская трасса, здание 5А, Актюбинская область', name: '', phone: '', workingHours: '' },
+    { city: 'Караганда', address: 'ул. Ерубаева, д.31', name: 'Магазин 220 VOLT', phone: '+7 (702) 214-52-71', workingHours: 'Пн-Пт 09:00-18:00, Обед 13:00-14:00, Сб 10:00-17:00' },
+    { city: 'Караганда', address: 'ул. Камали Дуйсембекова, строение 19', name: 'Магазин 220VOLT', phone: '+7 (701) 781-15-86', workingHours: 'Пн-Пт 09:00-18:00, Сб 10:00-17:00' },
+    { city: 'Караганда', address: '137 учетный квартал, строение 139, бутик 41', name: 'Отдел 220 VOLT в Строймарт', phone: '+7 (701) 543-84-69', workingHours: 'Пн-Вс 10:00-19:00' },
+    { city: 'Караганда', address: 'ул. Ермекова, строение 114', name: 'Магазин 220 VOLT (головной офис)', phone: '+7 (721) 230-35-51', workingHours: 'Пн-Пт 09:00-18:00, Сб 10:00-17:00' },
+    { city: 'Шымкент', address: 'ул. Аймаутова, 61, Туркестанская область', name: '', phone: '', workingHours: '' },
+    { city: 'Караганда', address: 'ул. Ермекова 114', name: '', phone: '', workingHours: '' },
     { city: 'Караганда', address: 'ул. Затаевича 2/1', name: '', phone: '', workingHours: 'Пн-Пт 09:00-18:00, Сб 10:00-17:00' },
-    { city: 'Астана', address: 'ул. Сембинова 20/1', name: '', phone: '', workingHours: '' },
-    { city: 'Алматы', address: 'проспект Толе Би 180', name: '', phone: '', workingHours: '' },
-    { city: 'Актобе', address: 'Богословская трасса, здание 5А', name: '', phone: '', workingHours: '' },
-    { city: 'Шымкент', address: 'ул. Аймаутова 61', name: '', phone: '', workingHours: '' },
   ],
   workingHours: 'Пн-Пт 9:00–18:00, Сб 10:00–15:00',
 };
@@ -181,8 +182,29 @@ export function ContactsCard({ onContactsSaved }: Props) {
 
       if (data && data.length > 0) {
         const parsed = textToContacts(data[0].content);
-        setContacts(parsed);
         setEntryId(data[0].id);
+        
+        // If parsed branches are empty or all have no city (legacy format), migrate to full data
+        const hasBranches = (parsed.branches || []).some(b => b.city.trim());
+        if (!hasBranches) {
+          // Legacy data without proper branch format — save DEFAULT_CONTACTS to DB
+          const fullData: ContactsData = {
+            phones: parsed.phones.length ? parsed.phones : DEFAULT_CONTACTS.phones,
+            messengers: parsed.messengers.length ? parsed.messengers : DEFAULT_CONTACTS.messengers,
+            emails: parsed.emails.length ? parsed.emails : DEFAULT_CONTACTS.emails,
+            branches: DEFAULT_CONTACTS.branches,
+            workingHours: parsed.workingHours || DEFAULT_CONTACTS.workingHours,
+          };
+          // Save migrated data
+          await supabase
+            .from('knowledge_entries')
+            .update({ content: contactsToText(fullData), title: CONTACTS_TITLE })
+            .eq('id', data[0].id);
+          setContacts(fullData);
+          console.log('Contacts migrated to structured branch format');
+        } else {
+          setContacts(parsed);
+        }
       } else {
         await createContactsEntry(DEFAULT_CONTACTS);
       }
