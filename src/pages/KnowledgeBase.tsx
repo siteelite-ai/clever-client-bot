@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import { Plus, Link, FileText, Upload, Trash2, RefreshCw, Search, ExternalLink, Loader2 } from 'lucide-react';
+import { Plus, Link, FileText, Upload, Trash2, RefreshCw, Search, ExternalLink, Loader2, Eye } from 'lucide-react';
 import { SitemapImportDialog } from '@/components/knowledge/SitemapImportDialog';
 import { ContactsCard } from '@/components/knowledge/ContactsCard';
+import { EntryViewDialog } from '@/components/knowledge/EntryViewDialog';
 import { AdminLayout } from '@/components/layout/AdminLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -34,6 +35,7 @@ export default function KnowledgeBase() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [viewEntry, setViewEntry] = useState<KnowledgeEntry | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -413,7 +415,11 @@ export default function KnowledgeBase() {
               const isDeleting = deletingId === entry.id;
               
               return (
-                <div key={entry.id} className="admin-card">
+                <div 
+                  key={entry.id} 
+                  className="admin-card cursor-pointer hover:ring-1 hover:ring-primary/30 transition-all"
+                  onClick={() => setViewEntry(entry)}
+                >
                   <div className="flex items-start gap-4">
                     <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
                       <Icon className="w-5 h-5 text-primary" />
@@ -443,7 +449,7 @@ export default function KnowledgeBase() {
                         Обновлено: {formatDate(entry.updated_at)}
                       </p>
                     </div>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2" onClick={(e) => e.stopPropagation()}>
                       {entry.type === 'url' && (
                         <Button
                           variant="outline"
@@ -483,6 +489,16 @@ export default function KnowledgeBase() {
             )}
           </div>
         )}
+
+        <EntryViewDialog
+          entry={viewEntry}
+          open={!!viewEntry}
+          onOpenChange={(open) => !open && setViewEntry(null)}
+          onSaved={() => {
+            loadEntries();
+            setViewEntry(null);
+          }}
+        />
       </div>
     </AdminLayout>
   );
