@@ -27,6 +27,7 @@ export default function KnowledgeBase() {
   const [entries, setEntries] = useState<KnowledgeEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'url' | 'text' | 'pdf'>('all');
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   
   // Form states
@@ -222,10 +223,12 @@ export default function KnowledgeBase() {
     }
   };
 
-  const filteredEntries = entries.filter(e =>
-    e.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    e.content.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredEntries = entries.filter(e => {
+    const matchesType = typeFilter === 'all' || e.type === typeFilter;
+    const matchesSearch = e.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      e.content.toLowerCase().includes(searchQuery.toLowerCase());
+    return matchesType && matchesSearch;
+  });
 
   const getIcon = (type: KnowledgeEntry['type']) => {
     switch (type) {
@@ -388,15 +391,29 @@ export default function KnowledgeBase() {
         {/* Contacts Card */}
         <ContactsCard onContactsSaved={loadEntries} />
 
-        {/* Search */}
-        <div className="relative max-w-md">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-          <Input
-            placeholder="Поиск по базе знаний..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="pl-10 input-focus"
-          />
+        {/* Search & Filter */}
+        <div className="flex items-center gap-3 flex-wrap">
+          <div className="relative max-w-md flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+            <Input
+              placeholder="Поиск по базе знаний..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-10 input-focus"
+            />
+          </div>
+          <div className="flex gap-1">
+            {(['all', 'url', 'text', 'pdf'] as const).map((type) => (
+              <Button
+                key={type}
+                variant={typeFilter === type ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => setTypeFilter(type)}
+              >
+                {type === 'all' ? 'Все' : type.toUpperCase()}
+              </Button>
+            ))}
+          </div>
         </div>
 
         {/* Loading state */}
