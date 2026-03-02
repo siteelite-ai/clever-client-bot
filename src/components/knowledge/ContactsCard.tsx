@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Phone, MessageCircle, Mail, MapPin, Clock, Pencil, Save, X, Loader2, Plus, Trash2, Building2 } from 'lucide-react';
+import { Phone, MessageCircle, Mail, MapPin, Clock, Pencil, Save, X, Loader2, Plus, Trash2, Building2, ChevronDown, ChevronUp } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
@@ -163,6 +163,7 @@ export function ContactsCard({ onContactsSaved }: Props) {
   const [isEditing, setIsEditing] = useState(false);
   const [editData, setEditData] = useState<ContactsData>(DEFAULT_CONTACTS);
   const [isLoading, setIsLoading] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -540,7 +541,10 @@ export function ContactsCard({ onContactsSaved }: Props) {
           </div>
         </div>
       ) : (
-        <div className="space-y-6">
+        <div className="relative">
+          <div
+            className={`space-y-6 overflow-hidden transition-all duration-300 ${!expanded ? 'max-h-[200px]' : ''}`}
+          >
           {/* General contacts */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {/* Phones */}
@@ -636,6 +640,26 @@ export function ContactsCard({ onContactsSaved }: Props) {
               </div>
             </div>
           )}
+          </div> {/* end space-y-6 overflow wrapper */}
+
+          {/* Gradient overlay + expand button */}
+          {!expanded && (
+            <div className="absolute bottom-0 left-0 right-0 h-24 bg-gradient-to-t from-background to-transparent pointer-events-none" />
+          )}
+          <div className="flex justify-center pt-1">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs text-muted-foreground hover:text-foreground"
+              onClick={() => setExpanded(!expanded)}
+            >
+              {expanded ? (
+                <><ChevronUp className="w-4 h-4 mr-1" /> Свернуть</>
+              ) : (
+                <><ChevronDown className="w-4 h-4 mr-1" /> Показать всё</>
+              )}
+            </Button>
+          </div>
         </div>
       )}
     </div>
