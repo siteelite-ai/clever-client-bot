@@ -252,12 +252,14 @@ ${historyContext}
 - Один с разговорным вариантом или синонимом
 
 🔧 ХАРАКТЕРИСТИКИ НЕ ВКЛЮЧАТЬ В QUERY!
-Когда пользователь указывает параметры (длина, мощность, вес, количество розеток, сечение и т.д.):
-- НЕ добавляй числовые характеристики в query! API ищет по названию товара, а характеристики — это отдельные поля.
-- Ищи только по ТИПУ товара, а AI потом отфильтрует по характеристикам из данных.
+Когда пользователь указывает параметры (длина, мощность, вес, количество розеток, сечение, тип цоколя, напряжение и т.д.):
+- НЕ добавляй числовые характеристики и коды в query! API ищет по названию товара, а характеристики — это отдельные поля.
+- Ищи только по ТИПУ/ФОРМЕ товара, а AI потом отфильтрует по характеристикам из данных.
 - Примеры:
   - "удлинитель на 5 метров" → query="удлинитель" (НЕ "удлинитель 5м"!)
   - "дрель 800 Вт" → query="дрель" (НЕ "дрель 800"!)
+  - "лампа-свеча на цоколь E14" → query="лампа свеча" (НЕ "лампа свеча E14"! Цоколь — характеристика!)
+  - "автомат на 16А" → query="автомат" (НЕ "автомат 16А"!)
   - "кабель 3x2.5 50 метров" → query="кабель 3x2.5" (размер сечения — часть названия, длина — нет)
   - "розетка тройная" → query="розетка 3-местная" (это название, не характеристика)
 
@@ -563,6 +565,14 @@ const EXCLUDED_OPTION_KEYS = new Set([
   'kodnomenklatury', 'identifikator_sayta__sayt_identifikatory',
   'edinica_izmereniya__Өlsheu_bіrlіgі', 'garantiynyy_srok__let__kepіldіk_merzіmі__ghyl_',
   'brend__brend', // already shown separately as brand
+  'fayl', // internal file path
+  'kod_tn_ved__kod_tn_syed', // customs code
+  'poiskovyy_zapros', // internal search terms
+  'novinka', // internal flag
+  'obem', // internal volume
+  'ogranichennyy_prosmotr__sheқtelgen_қarau', // internal flag
+  'populyarnyy', // internal flag
+  'prodaetsya_tolko_v_gruppovoy_upakovke__tek_toptyқ_қaptamada_ғana_satylady', // internal flag
 ]);
 
 // Clean bilingual option values: "Нет//Жоқ" → "Нет", "ПВХ пластикат//ПВХ пластикат" → "ПВХ пластикат"
