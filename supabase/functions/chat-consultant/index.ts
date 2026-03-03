@@ -190,26 +190,8 @@ interface SearchCandidate {
   option_filters?: Record<string, string>; // API option key → value for filtering by characteristics
 }
 
-// Known API option keys for common characteristics
-// These allow filtering at the API level (much more efficient than post-filtering)
-const KNOWN_OPTION_KEYS: Record<string, { key: string; values?: string[] }> = {
-  'страна_происхождения': {
-    key: 'strana_proishoghdeniya__Өndіrіlgen_memleketі_',
-    values: ['БЕЛАРУСЬ', 'КАЗАХСТАН', 'КИТАЙ', 'РОССИЯ', 'ТУРЦИЯ', 'ГЕРМАНИЯ', 'ИТАЛИЯ', 'ПОЛЬША', 'ЧЕХИЯ', 'ЯПОНИЯ', 'ЮЖНАЯ КОРЕЯ', 'ТАЙВАНЬ', 'ИНДИЯ'],
-  },
-  'способ_монтажа': {
-    key: 'sposob_montagha__montagh_әdіsі',
-  },
-  'тип_цоколя': {
-    key: 'tip_cokolya__tsokoldyng_turі',
-  },
-  'степень_защиты': {
-    key: 'stepen_zaschity__қorғau_dәreghesі',
-  },
-  'напряжение': {
-    key: 'napryaghenie__v__kerneu__v',
-  },
-};
+// NO hardcoded option keys! We discover them dynamically from API results.
+// See discoverOptionKeys() and two-pass search in searchProductsMulti().
 
 interface ExtractedIntent {
   intent: 'catalog' | 'brands' | 'info' | 'general';
@@ -253,13 +235,22 @@ ${historyContext}
 | min_price | Минимальная цена в тенге | 5000 |
 | max_price | Максимальная цена в тенге | 50000 |
 
-🔧 ФИЛЬТРЫ ПО ХАРАКТЕРИСТИКАМ (options):
-API поддерживает фильтрацию по техническим характеристикам! Используй поле option_filters, когда пользователь упоминает:
-- **Страна происхождения** ("белорусского производства", "китайский", "российский"): ключ="страна_происхождения", значение=СТРАНА ЗАГЛАВНЫМИ (БЕЛАРУСЬ, КАЗАХСТАН, КИТАЙ, РОССИЯ, ТУРЦИЯ, ГЕРМАНИЯ, ИТАЛИЯ, ПОЛЬША)
-- **Способ монтажа** ("накладной", "встраиваемый", "подвесной"): ключ="способ_монтажа", значение как есть
-- **Тип цоколя** ("E14", "E27", "GU10"): ключ="тип_цоколя", значение как есть
-- **Степень защиты** ("IP44", "IP65"): ключ="степень_защиты", значение как есть
-- **Напряжение** ("220В", "12В"): ключ="напряжение", значение как есть
+🔧 ФИЛЬТРЫ ПО ХАРАКТЕРИСТИКАМ (option_filters):
+Когда пользователь упоминает ЛЮБУЮ техническую характеристику — извлеки её в option_filters!
+Ключ = КРАТКОЕ человекочитаемое название (на русском, без пробелов, через подчёркивание).
+Значение = значение характеристики.
+
+Примеры:
+- "белорусского производства" → option_filters: {"страна": "Беларусь"}
+- "с цоколем E14" → option_filters: {"цоколь": "E14"}
+- "накладной монтаж" → option_filters: {"монтаж": "накладной"}
+- "степень защиты IP65" → option_filters: {"защита": "IP65"}
+- "напряжение 220В" → option_filters: {"напряжение": "220"}
+- "3 розетки" → option_filters: {"розетки": "3"}
+- "сечение 2.5" → option_filters: {"сечение": "2.5"}
+- "длина 5м" → option_filters: {"длина": "5"}
+
+Ключи НЕ обязаны совпадать с API — система автоматически найдёт правильные ключи!
 
 ⚠️ ПРАВИЛА СОСТАВЛЕНИЯ ЗАПРОСОВ:
 1. Если пользователь спрашивает о БРЕНДЕ ("есть Philips?", "покажи Makita") — используй ТОЛЬКО фильтр brand, БЕЗ query. API найдёт все товары бренда.
@@ -268,7 +259,7 @@ API поддерживает фильтрацию по техническим х
 4. query должен содержать ТЕХНИЧЕСКИЕ термины каталога, не разговорные слова.
 5. Бренды ВСЕГДА латиницей: "филипс" → brand="Philips", "бош" → brand="Bosch", "макита" → brand="Makita"
 6. НЕ ИСПОЛЬЗУЙ параметр category! Ты не знаешь точные названия категорий в каталоге. Используй только query для текстового поиска.
-7. Если пользователь упоминает ХАРАКТЕРИСТИКУ (страна, тип монтажа, цоколь и т.д.) — используй option_filters! Это ГОРАЗДО надёжнее, чем включать характеристики в query.
+7. Если пользователь упоминает ХАРАКТЕРИСТИКУ — ОБЯЗАТЕЛЬНО помести её в option_filters! НЕ включай характеристики в query!
 
 🧠 СЕМАНТИЧЕСКАЯ ТРАНСФОРМАЦИЯ:
 Пользователь говорит РАЗГОВОРНЫМ языком, каталог использует ТЕХНИЧЕСКИЕ термины:
@@ -277,8 +268,10 @@ API поддерживает фильтрацию по техническим х
 - "дырка под розетку" → query="подрозетник"
 - "провод трёхжильный 2.5" → query="кабель 3x2.5"
 - "перфораторы" → query="перфоратор" (единственное число работает лучше для поиска!)
-- "белорусский светильник" → query="светильник" + option_filters={"страна_происхождения": "БЕЛАРУСЬ"}
-- "лампа E14" → query="лампа" + option_filters={"тип_цоколя": "E14"}
+- "белорусский светильник" → query="светильник" + option_filters={"страна": "Беларусь"}
+- "лампа E14" → query="лампа" + option_filters={"цоколь": "E14"}
+- "удлинитель на 5 метров" → query="удлинитель" + option_filters={"длина": "5"}
+- "кабель сечением 2.5" → query="кабель" + option_filters={"сечение": "2.5"}
 
 ⚠️ ВАЖНО: Всегда генерируй МИНИМУМ 2 кандидата с разными вариантами написания:
 - Один с техническим названием в единственном числе
@@ -363,7 +356,7 @@ API поддерживает фильтрацию по техническим х
                         option_filters: {
                           type: 'object',
                           nullable: true,
-                          description: 'Фильтры по характеристикам товара. Ключ = название характеристики (страна_происхождения, способ_монтажа, тип_цоколя, степень_защиты, напряжение). Значение = значение фильтра (БЕЛАРУСЬ, E14, IP65 и т.д.). null если фильтры не нужны.',
+                          description: 'Фильтры по характеристикам товара. Ключ = краткое человекочитаемое название характеристики на русском (страна, цоколь, монтаж, защита, напряжение, длина, сечение, розетки и т.д.). Значение = значение характеристики. Система АВТОМАТИЧЕСКИ найдёт правильные ключи API. null если фильтры не нужны.',
                           additionalProperties: { type: 'string' }
                         }
                       },
@@ -397,21 +390,17 @@ API поддерживает фильтрацию по техническим х
       console.log(`[AI Candidates] Extracted:`, JSON.stringify(parsed, null, 2));
       
       const candidates = (parsed.candidates || []).map((c: any) => {
-        // Resolve option_filters: map human-readable keys to actual API option keys
-        let resolvedOptionFilters: Record<string, string> | undefined;
+        // Store option_filters as-is (human-readable keys like "страна", "цоколь")
+        // They will be resolved to actual API keys dynamically via two-pass search
+        let humanFilters: Record<string, string> | undefined;
         if (c.option_filters && typeof c.option_filters === 'object') {
-          resolvedOptionFilters = {};
+          humanFilters = {};
           for (const [filterName, filterValue] of Object.entries(c.option_filters)) {
-            const known = KNOWN_OPTION_KEYS[filterName];
-            if (known) {
-              resolvedOptionFilters[known.key] = String(filterValue);
-              console.log(`[AI Candidates] Resolved option filter: ${filterName} → ${known.key}=${filterValue}`);
-            } else {
-              console.log(`[AI Candidates] Unknown option filter: ${filterName}=${filterValue} (skipped)`);
-            }
+            humanFilters[filterName] = String(filterValue);
+            console.log(`[AI Candidates] Human filter: ${filterName}=${filterValue}`);
           }
-          if (Object.keys(resolvedOptionFilters).length === 0) {
-            resolvedOptionFilters = undefined;
+          if (Object.keys(humanFilters).length === 0) {
+            humanFilters = undefined;
           }
         }
         
@@ -421,7 +410,7 @@ API поддерживает фильтрацию по техническим х
           category: c.category || null,
           min_price: c.min_price || null,
           max_price: c.max_price || null,
-          option_filters: resolvedOptionFilters,
+          option_filters: humanFilters,
         };
       });
       
@@ -456,13 +445,15 @@ API поддерживает фильтрацию по техническим х
  * so it works for ANY query without needing to enumerate characteristics.
  */
 /**
- * SYSTEMIC BROAD CANDIDATE GENERATION v2
+/**
+ * SYSTEMIC BROAD CANDIDATE GENERATION v3
  * 
- * Two-layer safety net:
- * 1. Strip AI-generated queries to core nouns (as before)
- * 2. Extract meaningful product terms directly from the user's ORIGINAL message,
- *    so even if AI loses words (e.g. drops "свеча" from "лампу-свечу"), 
- *    the system still searches for them.
+ * Two-layer safety net (NO hardcoded option keys!):
+ * 1. Strip AI-generated queries to core nouns
+ * 2. Extract meaningful product terms directly from the user's ORIGINAL message
+ * 
+ * option_filters are kept as human-readable keys — they'll be resolved
+ * dynamically in searchProductsMulti via two-pass search.
  */
 function generateBroadCandidates(candidates: SearchCandidate[], originalMessage: string): SearchCandidate[] {
   const existingQueries = new Set(
@@ -471,7 +462,7 @@ function generateBroadCandidates(candidates: SearchCandidate[], originalMessage:
   
   const broadCandidates: SearchCandidate[] = [...candidates];
   
-  // Collect option_filters from AI candidates (they apply to ALL broad candidates too)
+  // Collect human-readable option_filters from AI candidates
   const sharedOptionFilters = candidates.find(c => c.option_filters)?.option_filters;
   
   // === Layer 1: Strip AI candidates to shorter forms ===
@@ -499,67 +490,28 @@ function generateBroadCandidates(candidates: SearchCandidate[], originalMessage:
   }
   
   // === Layer 2: Extract product nouns from the ORIGINAL user message ===
-  // This catches terms AI might have missed or transformed incorrectly
   const stopWords = new Set([
     'подбери', 'покажи', 'найди', 'есть', 'нужен', 'нужна', 'нужно', 'хочу', 'дай', 'какие', 'какой', 'какая',
     'мне', 'для', 'под', 'над', 'при', 'без', 'или', 'что', 'как', 'где', 'все', 'вся', 'это',
     'пожалуйста', 'можно', 'будет', 'если', 'еще', 'уже', 'тоже', 'только', 'очень', 'самый',
     'цоколь', 'цоколем', 'мощность', 'мощностью', 'длина', 'длиной', 'ампер', 'метр', 'метров', 'ватт',
-    // Also exclude country-related words from query (they should be in option_filters, not query)
-    'белорусского', 'белорусский', 'белорусская', 'белорусское', 'белорусские',
-    'российского', 'российский', 'российская', 'российское', 'российские',
-    'китайского', 'китайский', 'китайская', 'китайское', 'китайские',
-    'казахстанского', 'казахстанский', 'казахстанская', 'казахстанское',
-    'турецкого', 'турецкий', 'турецкая', 'турецкое', 'турецкие',
-    'немецкого', 'немецкий', 'немецкая', 'немецкое', 'немецкие',
     'производства', 'производство', 'происхождения',
   ]);
   
   // Normalize: "лампу-свечу" → "лампу свечу", remove punctuation
   const normalized = originalMessage.toLowerCase()
-    .replace(/[-–—]/g, ' ')  // hyphens to spaces
+    .replace(/[-–—]/g, ' ')
     .replace(/[?!.,;:()«»""]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
   
-  // === Layer 3: Programmatic option_filters detection from original message ===
-  // Safety net: even if AI misses, we detect country/characteristic mentions
-  const detectedOptionFilters: Record<string, string> = {};
-  if (sharedOptionFilters) {
-    Object.assign(detectedOptionFilters, sharedOptionFilters);
-  }
-  
-  // Country detection from adjective forms in Russian
-  const countryPatterns: Array<{ pattern: RegExp; value: string }> = [
-    { pattern: /белорус/i, value: 'БЕЛАРУСЬ' },
-    { pattern: /росси[йя]/i, value: 'РОССИЯ' },
-    { pattern: /кита[йя]/i, value: 'КИТАЙ' },
-    { pattern: /казахстан/i, value: 'КАЗАХСТАН' },
-    { pattern: /туре[цч]/i, value: 'ТУРЦИЯ' },
-    { pattern: /неме[цч]/i, value: 'ГЕРМАНИЯ' },
-    { pattern: /итальян/i, value: 'ИТАЛИЯ' },
-    { pattern: /польск/i, value: 'ПОЛЬША' },
-    { pattern: /японск/i, value: 'ЯПОНИЯ' },
-  ];
-  
-  const countryKey = KNOWN_OPTION_KEYS['страна_происхождения']?.key;
-  if (countryKey && !detectedOptionFilters[countryKey]) {
-    for (const { pattern, value } of countryPatterns) {
-      if (pattern.test(originalMessage)) {
-        detectedOptionFilters[countryKey] = value;
-        console.log(`[Broad L3] Detected country filter: ${value} from original message`);
-        break;
-      }
-    }
-  }
-  
-  // If we detected option_filters, apply them to ALL existing candidates
-  if (Object.keys(detectedOptionFilters).length > 0) {
+  // Propagate option_filters to all candidates
+  if (sharedOptionFilters && Object.keys(sharedOptionFilters).length > 0) {
     for (const candidate of broadCandidates) {
       if (!candidate.option_filters) {
-        candidate.option_filters = { ...detectedOptionFilters };
+        candidate.option_filters = { ...sharedOptionFilters };
       } else {
-        for (const [k, v] of Object.entries(detectedOptionFilters)) {
+        for (const [k, v] of Object.entries(sharedOptionFilters)) {
           if (!candidate.option_filters[k]) {
             candidate.option_filters[k] = v;
           }
@@ -568,49 +520,150 @@ function generateBroadCandidates(candidates: SearchCandidate[], originalMessage:
     }
   }
   
-  // Extract meaningful words (≥3 chars, not stop words, not numbers/specs like "E14", "16A", "5м")
-  const specPattern = /^[a-zA-Z]?\d+[а-яa-z]*$/; // matches E14, 16A, 5м, 220в etc.
+  // Extract meaningful words (≥3 chars, not stop words, not numbers/specs)
+  const specPattern = /^[a-zA-Z]?\d+[а-яa-z]*$/;
+  // Also filter out adjective forms of countries/characteristics — they belong in option_filters
+  const adjectivePattern = /^(белорус|росси|кита|казахстан|туре|неме|итальян|польск|японск|накладн|встраив|подвесн|потолочн|настенн)/i;
   const msgWords = normalized.split(' ')
-    .filter(w => w.length >= 3 && !stopWords.has(w) && !specPattern.test(w));
+    .filter(w => w.length >= 3 && !stopWords.has(w) && !specPattern.test(w) && !adjectivePattern.test(w));
   
-  // Lemmatize: simple suffix stripping for Russian nouns (accusative/genitive → nominative)
+  // Lemmatize
   const lemmatize = (word: string): string => {
     return word
-      .replace(/(ку|чку|цу)$/, (m) => m === 'ку' ? 'ка' : m === 'чку' ? 'чка' : 'ца') // лампочку→лампочка
-      .replace(/у$/, 'а')   // лампу→лампа, свечу→свеча
-      .replace(/ой$/, 'ый') // длинной→длинный
-      .replace(/ей$/, 'ь')  // дверей→дверь
-      .replace(/ы$/, '')    // лампы→ламп (imperfect but ok for search)
-      .replace(/и$/, 'ь');  // двери→дверь
+      .replace(/(ку|чку|цу)$/, (m) => m === 'ку' ? 'ка' : m === 'чку' ? 'чка' : 'ца')
+      .replace(/у$/, 'а')
+      .replace(/ой$/, 'ый')
+      .replace(/ей$/, 'ь')
+      .replace(/ы$/, '')
+      .replace(/и$/, 'ь');
   };
   
   const lemmatized = msgWords.map(lemmatize);
+  const hasFilters = sharedOptionFilters && Object.keys(sharedOptionFilters).length > 0;
   
-  const hasOptionFilters = Object.keys(detectedOptionFilters).length > 0;
-  
-  // Generate candidates from consecutive pairs and individual words
   if (lemmatized.length >= 2) {
     for (let i = 0; i < lemmatized.length - 1; i++) {
       const pair = `${lemmatized[i]} ${lemmatized[i + 1]}`;
       if (!existingQueries.has(pair)) {
         existingQueries.add(pair);
-        broadCandidates.push({ query: pair, brand: null, category: null, min_price: null, max_price: null, option_filters: hasOptionFilters ? { ...detectedOptionFilters } : undefined });
+        broadCandidates.push({ query: pair, brand: null, category: null, min_price: null, max_price: null, option_filters: hasFilters ? { ...sharedOptionFilters } : undefined });
         console.log(`[Broad L2] Added pair "${pair}" from original message`);
       }
     }
   }
   
-  // Add individual lemmatized words not already covered
   for (const word of lemmatized) {
     if (word.length >= 3 && !existingQueries.has(word)) {
       existingQueries.add(word);
-      broadCandidates.push({ query: word, brand: null, category: null, min_price: null, max_price: null, option_filters: hasOptionFilters ? { ...detectedOptionFilters } : undefined });
+      broadCandidates.push({ query: word, brand: null, category: null, min_price: null, max_price: null, option_filters: hasFilters ? { ...sharedOptionFilters } : undefined });
       console.log(`[Broad L2] Added word "${word}" from original message`);
     }
   }
   
   console.log(`[Broad Candidates] ${candidates.length} original → ${broadCandidates.length} total candidates`);
   return broadCandidates;
+}
+
+/**
+ * DYNAMIC OPTION KEY DISCOVERY
+ * 
+ * Given products with options and human-readable filter requirements,
+ * discover the actual API option keys by fuzzy-matching captions.
+ * 
+ * Example: human filter {"страна": "Беларусь"} + product option {key: "strana_proishoghdeniya__...", caption: "Страна происхождения//..."} 
+ * → resolved: {"strana_proishoghdeniya__...": "БЕЛАРУСЬ"}
+ */
+function discoverOptionKeys(
+  products: Product[], 
+  humanFilters: Record<string, string>
+): Record<string, string> {
+  if (!humanFilters || Object.keys(humanFilters).length === 0) return {};
+  
+  // Collect all unique option keys with their captions and values
+  const optionIndex: Map<string, { key: string; caption: string; values: Set<string> }> = new Map();
+  
+  for (const product of products) {
+    if (!product.options) continue;
+    for (const opt of product.options) {
+      if (isExcludedOption(opt.key)) continue;
+      if (!optionIndex.has(opt.key)) {
+        optionIndex.set(opt.key, { key: opt.key, caption: opt.caption, values: new Set() });
+      }
+      optionIndex.get(opt.key)!.values.add(opt.value);
+    }
+  }
+  
+  const resolved: Record<string, string> = {};
+  
+  for (const [humanKey, humanValue] of Object.entries(humanFilters)) {
+    const normalizedKey = humanKey.toLowerCase().replace(/[_\s]+/g, '');
+    const normalizedValue = humanValue.toLowerCase().trim();
+    
+    let bestMatch: { apiKey: string; matchedValue: string; score: number } | null = null;
+    
+    for (const [apiKey, info] of optionIndex.entries()) {
+      // Clean the caption: "Страна происхождения//Өндірілген мемлекеті" → "страна происхождения"
+      const cleanCaption = (info.caption.split('//')[0] || '').toLowerCase().trim().replace(/[_\s]+/g, '');
+      
+      // Score: how well does the human key match the caption?
+      let score = 0;
+      if (cleanCaption === normalizedKey) {
+        score = 100; // exact match
+      } else if (cleanCaption.includes(normalizedKey) || normalizedKey.includes(cleanCaption)) {
+        score = 80; // substring match
+      } else {
+        // Check if key words overlap (e.g. "страна" matches "странапроисхождения")
+        const keyWords = normalizedKey.split(/[^а-яёa-z0-9]/i).filter(w => w.length >= 3);
+        for (const kw of keyWords) {
+          if (cleanCaption.includes(kw)) score += 30;
+        }
+        // Also check API key itself (transliterated): "strana" ≈ "страна"
+        const apiKeyLower = apiKey.toLowerCase();
+        for (const kw of keyWords) {
+          // Simple transliteration check: first 4 chars
+          if (apiKeyLower.includes(kw.substring(0, 4).replace(/а/g, 'a').replace(/с/g, 's').replace(/т/g, 't').replace(/р/g, 'r').replace(/н/g, 'n'))) {
+            score += 20;
+          }
+        }
+      }
+      
+      if (score <= 0) continue;
+      
+      // Now find the best matching value
+      for (const rawVal of info.values) {
+        const cleanVal = (rawVal.split('//')[0] || '').trim();
+        const lowerVal = cleanVal.toLowerCase();
+        
+        let valScore = 0;
+        if (lowerVal === normalizedValue) {
+          valScore = 100;
+        } else if (lowerVal.includes(normalizedValue) || normalizedValue.includes(lowerVal)) {
+          valScore = 80;
+        } else if (lowerVal.toUpperCase() === humanValue.toUpperCase()) {
+          valScore = 90;
+        }
+        
+        const totalScore = score + valScore;
+        if (totalScore > (bestMatch?.score || 0) && valScore > 0) {
+          bestMatch = { apiKey, matchedValue: cleanVal, score: totalScore };
+        }
+      }
+      
+      // If we matched the KEY but couldn't match the VALUE, still use the key with original value
+      if (score >= 80 && !bestMatch) {
+        bestMatch = { apiKey, matchedValue: humanValue.toUpperCase(), score };
+      }
+    }
+    
+    if (bestMatch) {
+      resolved[bestMatch.apiKey] = bestMatch.matchedValue;
+      console.log(`[Discovery] "${humanKey}=${humanValue}" → API key "${bestMatch.apiKey}"="${bestMatch.matchedValue}" (score=${bestMatch.score})`);
+    } else {
+      console.log(`[Discovery] "${humanKey}=${humanValue}" → no matching API key found among ${optionIndex.size} options`);
+    }
+  }
+  
+  return resolved;
 }
 
 // Простой fallback если AI недоступен — передаём запрос как есть
@@ -638,15 +691,16 @@ function fallbackParseQuery(message: string): ExtractedIntent {
 
 
 // Поиск товаров по одному кандидату — параметры уже сформированы AI
+// resolvedApiFilters are ACTUAL API keys (discovered dynamically), not human-readable
 async function searchProductsByCandidate(
   candidate: SearchCandidate, 
   apiToken: string,
-  limit: number = 20
+  limit: number = 20,
+  resolvedApiFilters?: Record<string, string>
 ): Promise<Product[]> {
   try {
     const params = new URLSearchParams();
     
-    // AI уже решил какие параметры нужны — просто передаём их в API
     if (candidate.query) {
       params.append('query', candidate.query);
     }
@@ -668,11 +722,11 @@ async function searchProductsByCandidate(
       params.append('max_price', candidate.max_price.toString());
     }
     
-    // Pass arbitrary option filters to API (e.g. country, mounting type)
-    if (candidate.option_filters) {
-      for (const [optionKey, optionValue] of Object.entries(candidate.option_filters)) {
+    // Pass RESOLVED (actual API) option filters — these come from dynamic discovery
+    if (resolvedApiFilters) {
+      for (const [optionKey, optionValue] of Object.entries(resolvedApiFilters)) {
         params.append(`options[${optionKey}][]`, optionValue);
-        console.log(`[Search] Option filter: ${optionKey}=${optionValue}`);
+        console.log(`[Search] API option filter: ${optionKey}=${optionValue}`);
       }
     }
     
@@ -703,7 +757,14 @@ async function searchProductsByCandidate(
   }
 }
 
-// Параллельный поиск по всем кандидатам с дедупликацией
+/**
+ * TWO-PASS SEARCH with dynamic option key discovery
+ * 
+ * Pass 1: Broad search WITHOUT option filters → get products with their options
+ * Pass 2: Discover actual API keys from product options, then re-search WITH filters
+ * 
+ * This means we NEVER need to hardcode any option key mappings!
+ */
 async function searchProductsMulti(
   candidates: SearchCandidate[],
   limit: number = 10,
@@ -721,22 +782,35 @@ async function searchProductsMulti(
     return [];
   }
 
-  // Убираем category из всех кандидатов — AI не знает точных названий категорий
+  // Убираем category из всех кандидатов
   const cleanedCandidates = candidates.map(c => ({ ...c, category: null }));
   
-  console.log(`[Search] Searching ${cleanedCandidates.length} candidates in parallel...`);
+  // Check if any candidates have human-readable option_filters that need resolution
+  const humanFilters = cleanedCandidates.find(c => c.option_filters)?.option_filters || {};
+  const hasHumanFilters = Object.keys(humanFilters).length > 0;
+  
+  console.log(`[Search] Searching ${cleanedCandidates.length} candidates, humanFilters: ${JSON.stringify(humanFilters)}`);
 
-  // Параллельный поиск
-  const searchPromises = cleanedCandidates.map(candidate => 
+  // === PASS 1: Broad search WITHOUT option filters ===
+  // This gets us products whose `options` we can inspect to discover real API keys
+  const pass1Candidates = cleanedCandidates.map(c => ({ ...c, option_filters: undefined }));
+  // Deduplicate pass1 candidates by query+brand
+  const seen1 = new Set<string>();
+  const uniquePass1 = pass1Candidates.filter(c => {
+    const key = `${c.query || ''}|${c.brand || ''}`;
+    if (seen1.has(key)) return false;
+    seen1.add(key);
+    return true;
+  });
+  
+  const pass1Promises = uniquePass1.map(candidate => 
     searchProductsByCandidate(candidate, apiToken, limit)
   );
+  const pass1Results = await Promise.all(pass1Promises);
   
-  const results = await Promise.all(searchPromises);
-  
-  // Объединяем и дедуплицируем по ID
+  // Collect all products from pass 1
   const productMap = new Map<number, Product>();
-  
-  for (const products of results) {
+  for (const products of pass1Results) {
     for (const product of products) {
       if (!productMap.has(product.id)) {
         productMap.set(product.id, product);
@@ -744,7 +818,60 @@ async function searchProductsMulti(
     }
   }
   
-  // Если 0 результатов и были фильтры (brand/price), попробуем fallback только с query
+  console.log(`[Search] Pass 1 (broad): ${productMap.size} unique products`);
+  
+  // === PASS 2: If we have human filters, discover API keys and re-search ===
+  if (hasHumanFilters && productMap.size > 0) {
+    const resolvedFilters = discoverOptionKeys(Array.from(productMap.values()), humanFilters);
+    
+    if (Object.keys(resolvedFilters).length > 0) {
+      console.log(`[Search] Pass 2: Discovered ${Object.keys(resolvedFilters).length} API filters, re-searching...`);
+      
+      // Store resolved filters on candidates for describeAppliedFilters
+      for (const c of cleanedCandidates) {
+        c.option_filters = resolvedFilters;
+      }
+      
+      // Re-search with actual API filters — only unique query+brand combos
+      const seen2 = new Set<string>();
+      const pass2Candidates = cleanedCandidates.filter(c => {
+        if (!c.query && !c.brand) return false;
+        const key = `${c.query || ''}|${c.brand || ''}`;
+        if (seen2.has(key)) return false;
+        seen2.add(key);
+        return true;
+      });
+      
+      const pass2Promises = pass2Candidates.map(candidate => 
+        searchProductsByCandidate(candidate, apiToken, limit, resolvedFilters)
+      );
+      const pass2Results = await Promise.all(pass2Promises);
+      
+      // Replace results with filtered ones (pass 2 is more precise)
+      const filteredMap = new Map<number, Product>();
+      for (const products of pass2Results) {
+        for (const product of products) {
+          if (!filteredMap.has(product.id)) {
+            filteredMap.set(product.id, product);
+          }
+        }
+      }
+      
+      if (filteredMap.size > 0) {
+        console.log(`[Search] Pass 2 (filtered): ${filteredMap.size} products (replaced pass 1 results)`);
+        productMap.clear();
+        for (const [id, product] of filteredMap) {
+          productMap.set(id, product);
+        }
+      } else {
+        console.log(`[Search] Pass 2 returned 0 results, keeping pass 1 results (AI will post-filter by characteristics)`);
+      }
+    } else {
+      console.log(`[Search] Could not discover API keys for filters, AI will post-filter by characteristics`);
+    }
+  }
+  
+  // Fallback: if 0 results and had brand/price filters, try without
   if (productMap.size === 0) {
     const queryOnlyCandidates = cleanedCandidates.filter(c => c.query && (c.brand || c.min_price || c.max_price));
     if (queryOnlyCandidates.length > 0) {
@@ -766,21 +893,18 @@ async function searchProductsMulti(
   const uniqueProducts = Array.from(productMap.values());
   console.log(`[Search] Total unique products: ${uniqueProducts.length}`);
   
-  // Сортируем: приоритет товарам с query в названии, затем по наличию и цене
+  // Sort: priority to products with query in title, then availability, then price
   const queryWords = candidates
     .map(c => c.query?.toLowerCase())
     .filter(Boolean) as string[];
   
   uniqueProducts.sort((a, b) => {
-    // Приоритет: query-слово в pagetitle (основной товар, а не аксессуар)
     const aInTitle = queryWords.some(q => a.pagetitle.toLowerCase().includes(q));
     const bInTitle = queryWords.some(q => b.pagetitle.toLowerCase().includes(q));
     if (aInTitle && !bInTitle) return -1;
     if (!aInTitle && bInTitle) return 1;
-    // Затем товары в наличии
     if (a.amount > 0 && b.amount === 0) return -1;
     if (a.amount === 0 && b.amount > 0) return 1;
-    // Затем по цене (дешевле первыми)
     return a.price - b.price;
   });
   
@@ -886,16 +1010,12 @@ function describeAppliedFilters(candidates: SearchCandidate[]): string {
   const filters: string[] = [];
   const seen = new Set<string>();
   
-  // Reverse mapping: API key → human-readable name
-  const keyToName: Record<string, string> = {};
-  for (const [name, config] of Object.entries(KNOWN_OPTION_KEYS)) {
-    keyToName[config.key] = name.replace(/_/g, ' ');
-  }
-  
   for (const candidate of candidates) {
     if (!candidate.option_filters) continue;
     for (const [key, value] of Object.entries(candidate.option_filters)) {
-      const desc = `${keyToName[key] || key}=${value}`;
+      // Clean the key for display: remove transliterated suffixes
+      const displayKey = cleanOptionCaption(key.replace(/__.*/, '').replace(/_/g, ' '));
+      const desc = `${displayKey}=${cleanOptionValue(value)}`;
       if (!seen.has(desc)) {
         seen.add(desc);
         filters.push(desc);
