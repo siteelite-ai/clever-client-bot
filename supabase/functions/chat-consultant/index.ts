@@ -979,6 +979,117 @@ async function searchProductsMulti(
   return uniqueProducts.slice(0, limit);
 }
 
+/**
+ * TRANSLATION FALLBACK: Translate Russian search terms to English
+ * 
+ * Some products in the catalog use English names (e.g. "corn" for кукуруза-type lamps).
+ * When Russian search yields 0 results, we translate and retry.
+ * Uses AI for accurate contextual translation.
+ */
+async function translateSearchTerms(
+  queries: string[],
+  aiUrl: string,
+  apiKeys: string[],
+  aiModel: string
+): Promise<string[]> {
+  if (queries.length === 0) return [];
+  
+  const uniqueQueries = [...new Set(queries.filter(q => q && q.trim().length > 0))];
+  if (uniqueQueries.length === 0) return [];
+  
+  // Skip if queries are already in English
+  const hasRussian = uniqueQueries.some(q => /[а-яёА-ЯЁ]/.test(q));
+  if (!hasRussian) {
+    console.log(`[Translate] Queries already in English, skipping`);
+    return [];
+  }
+  
+  console.log(`[Translate] Translating ${uniqueQueries.length} queries to English: ${uniqueQueries.join(', ')}`);
+  
+  try {
+    const response = await callAIWithKeyFallback(aiUrl, apiKeys, {
+      model: aiModel,
+      messages: [
+        { 
+          role: 'system', 
+          content: `Ты переводчик терминов для поиска товаров в каталоге электроинструментов и оборудования. 
+Переведи каждый поисковый запрос на английский язык. 
+Учитывай контекст электротоваров: "кукуруза" → "corn" (тип лампы), "свеча" → "candle" (тип лампы), "груша" → "pear" (тип лампы).
+Возвращай ТОЛЬКО переводы, по одному на строку, в том же порядке что и входные запросы.
+Если слово уже на английском — верни его как есть.
+Если у термина есть несколько возможных переводов — верни самый вероятный для контекста электротоваров.`
+        },
+        { role: 'user', content: uniqueQueries.join('\n') }
+      ],
+    }, 'Translate');
+    
+    if (!response.ok) {
+      console.error(`[Translate] AI error: ${response.status}`);
+      return [];
+    }
+    
+    const data = await response.json();
+    const translatedText = data.choices?.[0]?.message?.content || '';
+    const translated = translatedText
+      .split('\n')
+      .map((line: string) => line.trim().toLowerCase())
+      .filter((line: string) => line.length > 0 && /[a-z]/.test(line));
+    
+    console.log(`[Translate] Results: ${translated.join(', ')}`);
+    return translated;
+  } catch (error) {
+    console.error(`[Translate] Error:`, error);
+    return [];
+  }
+}
+
+/**
+ * Search with English translation fallback.
+ * If original search returns 0 results, translate queries to English and retry.
+ */
+async function searchWithTranslationFallback(
+  candidates: SearchCandidate[],
+  limit: number,
+  apiToken: string | undefined,
+  aiUrl: string,
+  apiKeys: string[],
+  aiModel: string
+): Promise<Product[]> {
+  // First: normal search
+  const results = await searchProductsMulti(candidates, limit, apiToken);
+  if (results.length > 0) return results;
+  
+  // Extract unique queries to translate
+  const queries = candidates
+    .map(c => c.query)
+    .filter((q): q is string => q !== null && q !== undefined && q.trim().length > 0);
+  
+  if (queries.length === 0) return results;
+  
+  // Translate to English
+  const translatedQueries = await translateSearchTerms(queries, aiUrl, apiKeys, aiModel);
+  if (translatedQueries.length === 0) return results;
+  
+  // Build translated candidates
+  const translatedCandidates: SearchCandidate[] = translatedQueries.map(q => ({
+    query: q,
+    brand: candidates[0]?.brand || null,
+    category: null,
+    min_price: candidates[0]?.min_price || null,
+    max_price: candidates[0]?.max_price || null,
+    option_filters: candidates[0]?.option_filters,
+  }));
+  
+  console.log(`[Search] Retrying with English translations: ${translatedQueries.join(', ')}`);
+  const translatedResults = await searchProductsMulti(translatedCandidates, limit, apiToken);
+  
+  if (translatedResults.length > 0) {
+    console.log(`[Search] Translation fallback found ${translatedResults.length} products!`);
+  }
+  
+  return translatedResults;
+}
+
 // Возвращает URL как есть (тестовый домен для тестирования)
 function toProductionUrl(url: string): string {
   return url;
@@ -1452,7 +1563,7 @@ ${r.source_url ? `Источник: ${r.source_url}` : ''}`;
       if (hasSpecificBrand) {
         // Пользователь спрашивает "а Philips есть?" — это каталожный запрос, а не запрос списка брендов!
         console.log(`[Chat] "brands" intent with specific brand → treating as catalog search`);
-        foundProducts = await searchProductsMulti(extractedIntent.candidates, 8, appSettings.volt220_api_token || undefined);
+        foundProducts = await searchWithTranslationFallback(extractedIntent.candidates, 8, appSettings.volt220_api_token || undefined, aiConfig.url, aiConfig.apiKeys, aiConfig.model);
         
         if (foundProducts.length > 0) {
           const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
@@ -1462,7 +1573,7 @@ ${r.source_url ? `Источник: ${r.source_url}` : ''}`;
         }
       } else {
         // Общий вопрос "какие бренды есть?" — ищем товары и извлекаем бренды
-        foundProducts = await searchProductsMulti(extractedIntent.candidates, 50, appSettings.volt220_api_token || undefined);
+        foundProducts = await searchWithTranslationFallback(extractedIntent.candidates, 50, appSettings.volt220_api_token || undefined, aiConfig.url, aiConfig.apiKeys, aiConfig.model);
         
         if (foundProducts.length > 0) {
           const brands = extractBrandsFromProducts(foundProducts);
@@ -1480,7 +1591,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
       }
     } else if (extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
       // Обычный каталожный запрос
-      foundProducts = await searchProductsMulti(extractedIntent.candidates, 8, appSettings.volt220_api_token || undefined);
+      foundProducts = await searchWithTranslationFallback(extractedIntent.candidates, 8, appSettings.volt220_api_token || undefined, aiConfig.url, aiConfig.apiKeys, aiConfig.model);
       
       if (foundProducts.length > 0) {
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
@@ -1608,7 +1719,7 @@ ${productContext}
         
         console.log(`[Chat] Fallback candidates:`, candidatesWithoutBrand.map(c => c.query));
         
-        const fallbackProducts = await searchProductsMulti(candidatesWithoutBrand, 6, appSettings.volt220_api_token || undefined);
+        const fallbackProducts = await searchWithTranslationFallback(candidatesWithoutBrand, 6, appSettings.volt220_api_token || undefined, aiConfig.url, aiConfig.apiKeys, aiConfig.model);
         
         if (fallbackProducts.length > 0) {
           // Нашли альтернативы! Показываем их
