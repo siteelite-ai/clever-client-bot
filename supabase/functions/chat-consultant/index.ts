@@ -250,18 +250,7 @@ ${historyContext}
 ⚠️ ВАЖНО: Всегда генерируй МИНИМУМ 2 кандидата с разными вариантами написания:
 - Один с техническим названием в единственном числе
 - Один с разговорным вариантом или синонимом
-
-🔧 ХАРАКТЕРИСТИКИ НЕ ВКЛЮЧАТЬ В QUERY!
-Когда пользователь указывает параметры (длина, мощность, вес, количество розеток, сечение, тип цоколя, напряжение и т.д.):
-- НЕ добавляй числовые характеристики и коды в query! API ищет по названию товара, а характеристики — это отдельные поля.
-- Ищи только по ТИПУ/ФОРМЕ товара, а AI потом отфильтрует по характеристикам из данных.
-- Примеры:
-  - "удлинитель на 5 метров" → query="удлинитель" (НЕ "удлинитель 5м"!)
-  - "дрель 800 Вт" → query="дрель" (НЕ "дрель 800"!)
-  - "лампа-свеча на цоколь E14" → query="лампа свеча" (НЕ "лампа свеча E14"! Цоколь — характеристика!)
-  - "автомат на 16А" → query="автомат" (НЕ "автомат 16А"!)
-  - "кабель 3x2.5 50 метров" → query="кабель 3x2.5" (размер сечения — часть названия, длина — нет)
-  - "розетка тройная" → query="розетка 3-местная" (это название, не характеристика)
+- query должен содержать ТОЛЬКО тип/название товара (1-2 слова). Характеристики (размер, мощность, цоколь, ампераж и т.д.) будут автоматически отфильтрованы на следующем этапе — НЕ включай их в query.
 
 🔴 ОПРЕДЕЛИ ПРАВИЛЬНЫЙ INTENT:
 - "catalog" — ищет товары/оборудование
@@ -367,15 +356,20 @@ ${historyContext}
       const parsed = JSON.parse(toolCall.function.arguments);
       console.log(`[AI Candidates] Extracted:`, JSON.stringify(parsed, null, 2));
       
+      const candidates = (parsed.candidates || []).map((c: any) => ({
+        query: c.query || null,
+        brand: c.brand || null,
+        category: c.category || null,
+        min_price: c.min_price || null,
+        max_price: c.max_price || null,
+      }));
+      
+      // SYSTEMIC: Always add broad candidates by extracting core product nouns
+      const broadened = generateBroadCandidates(candidates);
+      
       return {
         intent: parsed.intent || 'general',
-        candidates: (parsed.candidates || []).map((c: any) => ({
-          query: c.query || null,
-          brand: c.brand || null,
-          category: c.category || null,
-          min_price: c.min_price || null,
-          max_price: c.max_price || null,
-        })),
+        candidates: broadened,
         originalQuery: message
       };
     }
@@ -387,6 +381,69 @@ ${historyContext}
     console.error(`[AI Candidates] Error:`, error);
     return fallbackParseQuery(message);
   }
+}
+
+/**
+ * SYSTEMIC BROAD CANDIDATE GENERATION
+ * 
+ * Problem: AI sometimes includes characteristics (E14, 5м, 800Вт) in the query,
+ * but the API only searches by product name/description, not by option values.
+ * This means "лампа свеча E14" → 0 results, while "лампа свеча" → 142 results.
+ * 
+ * Solution: Programmatically generate "broad" candidates by stripping queries
+ * down to just the core product noun(s). This runs AFTER AI extraction,
+ * so it works for ANY query without needing to enumerate characteristics.
+ */
+function generateBroadCandidates(candidates: SearchCandidate[]): SearchCandidate[] {
+  const existingQueries = new Set(
+    candidates.map(c => c.query?.toLowerCase().trim()).filter(Boolean)
+  );
+  
+  const broadCandidates: SearchCandidate[] = [...candidates];
+  
+  for (const candidate of candidates) {
+    if (!candidate.query) continue;
+    
+    const query = candidate.query.trim();
+    
+    // Split query into words and try progressively shorter versions
+    const words = query.split(/\s+/);
+    
+    if (words.length <= 1) continue; // Already as short as possible
+    
+    // Strategy 1: First word only (core product noun: "лампа", "удлинитель", "дрель")
+    const firstWord = words[0];
+    if (firstWord.length >= 3 && !existingQueries.has(firstWord.toLowerCase())) {
+      existingQueries.add(firstWord.toLowerCase());
+      broadCandidates.push({
+        query: firstWord,
+        brand: candidate.brand,
+        category: null,
+        min_price: candidate.min_price,
+        max_price: candidate.max_price,
+      });
+      console.log(`[Broad Candidate] Added "${firstWord}" from "${query}"`);
+    }
+    
+    // Strategy 2: First two words if query has 3+ words (e.g. "лампа свеча" from "лампа свеча E14")
+    if (words.length >= 3) {
+      const twoWords = words.slice(0, 2).join(' ');
+      if (!existingQueries.has(twoWords.toLowerCase())) {
+        existingQueries.add(twoWords.toLowerCase());
+        broadCandidates.push({
+          query: twoWords,
+          brand: candidate.brand,
+          category: null,
+          min_price: candidate.min_price,
+          max_price: candidate.max_price,
+        });
+        console.log(`[Broad Candidate] Added "${twoWords}" from "${query}"`);
+      }
+    }
+  }
+  
+  console.log(`[Broad Candidates] ${candidates.length} original → ${broadCandidates.length} total candidates`);
+  return broadCandidates;
 }
 
 // Простой fallback если AI недоступен — передаём запрос как есть
