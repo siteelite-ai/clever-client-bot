@@ -187,7 +187,29 @@ interface SearchCandidate {
   category: string | null;
   min_price: number | null;
   max_price: number | null;
+  option_filters?: Record<string, string>; // API option key → value for filtering by characteristics
 }
+
+// Known API option keys for common characteristics
+// These allow filtering at the API level (much more efficient than post-filtering)
+const KNOWN_OPTION_KEYS: Record<string, { key: string; values?: string[] }> = {
+  'страна_происхождения': {
+    key: 'strana_proishoghdeniya__Өndіrіlgen_memleketі_',
+    values: ['БЕЛАРУСЬ', 'КАЗАХСТАН', 'КИТАЙ', 'РОССИЯ', 'ТУРЦИЯ', 'ГЕРМАНИЯ', 'ИТАЛИЯ', 'ПОЛЬША', 'ЧЕХИЯ', 'ЯПОНИЯ', 'ЮЖНАЯ КОРЕЯ', 'ТАЙВАНЬ', 'ИНДИЯ'],
+  },
+  'способ_монтажа': {
+    key: 'sposob_montagha__montagh_әdіsі',
+  },
+  'тип_цоколя': {
+    key: 'tip_cokolya__tsokoldyng_turі',
+  },
+  'степень_защиты': {
+    key: 'stepen_zaschity__қorғau_dәreghesі',
+  },
+  'напряжение': {
+    key: 'napryaghenie__v__kerneu__v',
+  },
+};
 
 interface ExtractedIntent {
   intent: 'catalog' | 'brands' | 'info' | 'general';
@@ -231,6 +253,14 @@ ${historyContext}
 | min_price | Минимальная цена в тенге | 5000 |
 | max_price | Максимальная цена в тенге | 50000 |
 
+🔧 ФИЛЬТРЫ ПО ХАРАКТЕРИСТИКАМ (options):
+API поддерживает фильтрацию по техническим характеристикам! Используй поле option_filters, когда пользователь упоминает:
+- **Страна происхождения** ("белорусского производства", "китайский", "российский"): ключ="страна_происхождения", значение=СТРАНА ЗАГЛАВНЫМИ (БЕЛАРУСЬ, КАЗАХСТАН, КИТАЙ, РОССИЯ, ТУРЦИЯ, ГЕРМАНИЯ, ИТАЛИЯ, ПОЛЬША)
+- **Способ монтажа** ("накладной", "встраиваемый", "подвесной"): ключ="способ_монтажа", значение как есть
+- **Тип цоколя** ("E14", "E27", "GU10"): ключ="тип_цоколя", значение как есть
+- **Степень защиты** ("IP44", "IP65"): ключ="степень_защиты", значение как есть
+- **Напряжение** ("220В", "12В"): ключ="напряжение", значение как есть
+
 ⚠️ ПРАВИЛА СОСТАВЛЕНИЯ ЗАПРОСОВ:
 1. Если пользователь спрашивает о БРЕНДЕ ("есть Philips?", "покажи Makita") — используй ТОЛЬКО фильтр brand, БЕЗ query. API найдёт все товары бренда.
 2. Если пользователь ищет КАТЕГОРИЮ товаров ("дрели", "розетки") — используй query с техническим названием. НЕ используй параметр category!
@@ -238,6 +268,7 @@ ${historyContext}
 4. query должен содержать ТЕХНИЧЕСКИЕ термины каталога, не разговорные слова.
 5. Бренды ВСЕГДА латиницей: "филипс" → brand="Philips", "бош" → brand="Bosch", "макита" → brand="Makita"
 6. НЕ ИСПОЛЬЗУЙ параметр category! Ты не знаешь точные названия категорий в каталоге. Используй только query для текстового поиска.
+7. Если пользователь упоминает ХАРАКТЕРИСТИКУ (страна, тип монтажа, цоколь и т.д.) — используй option_filters! Это ГОРАЗДО надёжнее, чем включать характеристики в query.
 
 🧠 СЕМАНТИЧЕСКАЯ ТРАНСФОРМАЦИЯ:
 Пользователь говорит РАЗГОВОРНЫМ языком, каталог использует ТЕХНИЧЕСКИЕ термины:
@@ -246,11 +277,14 @@ ${historyContext}
 - "дырка под розетку" → query="подрозетник"
 - "провод трёхжильный 2.5" → query="кабель 3x2.5"
 - "перфораторы" → query="перфоратор" (единственное число работает лучше для поиска!)
+- "белорусский светильник" → query="светильник" + option_filters={"страна_происхождения": "БЕЛАРУСЬ"}
+- "лампа E14" → query="лампа" + option_filters={"тип_цоколя": "E14"}
 
 ⚠️ ВАЖНО: Всегда генерируй МИНИМУМ 2 кандидата с разными вариантами написания:
 - Один с техническим названием в единственном числе
 - Один с разговорным вариантом или синонимом
-- query должен содержать ТОЛЬКО тип/название товара (1-2 слова). Характеристики (размер, мощность, цоколь, ампераж и т.д.) будут автоматически отфильтрованы на следующем этапе — НЕ включай их в query.
+- query должен содержать ТОЛЬКО тип/название товара (1-2 слова). Характеристики (размер, мощность, цоколь, ампераж и т.д.) передавай через option_filters, НЕ включай их в query.
+- Если есть option_filters, дублируй их во все кандидаты!
 
 🔴 ОПРЕДЕЛИ ПРАВИЛЬНЫЙ INTENT:
 - "catalog" — ищет товары/оборудование
@@ -325,6 +359,12 @@ ${historyContext}
                           type: 'number',
                           nullable: true,
                           description: 'Параметр max_price: максимальная цена в тенге. null если не указана'
+                        },
+                        option_filters: {
+                          type: 'object',
+                          nullable: true,
+                          description: 'Фильтры по характеристикам товара. Ключ = название характеристики (страна_происхождения, способ_монтажа, тип_цоколя, степень_защиты, напряжение). Значение = значение фильтра (БЕЛАРУСЬ, E14, IP65 и т.д.). null если фильтры не нужны.',
+                          additionalProperties: { type: 'string' }
                         }
                       },
                       additionalProperties: false
@@ -356,13 +396,34 @@ ${historyContext}
       const parsed = JSON.parse(toolCall.function.arguments);
       console.log(`[AI Candidates] Extracted:`, JSON.stringify(parsed, null, 2));
       
-      const candidates = (parsed.candidates || []).map((c: any) => ({
-        query: c.query || null,
-        brand: c.brand || null,
-        category: c.category || null,
-        min_price: c.min_price || null,
-        max_price: c.max_price || null,
-      }));
+      const candidates = (parsed.candidates || []).map((c: any) => {
+        // Resolve option_filters: map human-readable keys to actual API option keys
+        let resolvedOptionFilters: Record<string, string> | undefined;
+        if (c.option_filters && typeof c.option_filters === 'object') {
+          resolvedOptionFilters = {};
+          for (const [filterName, filterValue] of Object.entries(c.option_filters)) {
+            const known = KNOWN_OPTION_KEYS[filterName];
+            if (known) {
+              resolvedOptionFilters[known.key] = String(filterValue);
+              console.log(`[AI Candidates] Resolved option filter: ${filterName} → ${known.key}=${filterValue}`);
+            } else {
+              console.log(`[AI Candidates] Unknown option filter: ${filterName}=${filterValue} (skipped)`);
+            }
+          }
+          if (Object.keys(resolvedOptionFilters).length === 0) {
+            resolvedOptionFilters = undefined;
+          }
+        }
+        
+        return {
+          query: c.query || null,
+          brand: c.brand || null,
+          category: c.category || null,
+          min_price: c.min_price || null,
+          max_price: c.max_price || null,
+          option_filters: resolvedOptionFilters,
+        };
+      });
       
       // SYSTEMIC: Always add broad candidates + original message terms
       const broadened = generateBroadCandidates(candidates, message);
@@ -410,6 +471,9 @@ function generateBroadCandidates(candidates: SearchCandidate[], originalMessage:
   
   const broadCandidates: SearchCandidate[] = [...candidates];
   
+  // Collect option_filters from AI candidates (they apply to ALL broad candidates too)
+  const sharedOptionFilters = candidates.find(c => c.option_filters)?.option_filters;
+  
   // === Layer 1: Strip AI candidates to shorter forms ===
   for (const candidate of candidates) {
     if (!candidate.query) continue;
@@ -420,7 +484,7 @@ function generateBroadCandidates(candidates: SearchCandidate[], originalMessage:
     const firstWord = words[0];
     if (firstWord.length >= 3 && !existingQueries.has(firstWord.toLowerCase())) {
       existingQueries.add(firstWord.toLowerCase());
-      broadCandidates.push({ query: firstWord, brand: candidate.brand, category: null, min_price: candidate.min_price, max_price: candidate.max_price });
+      broadCandidates.push({ query: firstWord, brand: candidate.brand, category: null, min_price: candidate.min_price, max_price: candidate.max_price, option_filters: candidate.option_filters });
       console.log(`[Broad L1] Added "${firstWord}" from "${query}"`);
     }
     
@@ -428,7 +492,7 @@ function generateBroadCandidates(candidates: SearchCandidate[], originalMessage:
       const twoWords = words.slice(0, 2).join(' ');
       if (!existingQueries.has(twoWords.toLowerCase())) {
         existingQueries.add(twoWords.toLowerCase());
-        broadCandidates.push({ query: twoWords, brand: candidate.brand, category: null, min_price: candidate.min_price, max_price: candidate.max_price });
+        broadCandidates.push({ query: twoWords, brand: candidate.brand, category: null, min_price: candidate.min_price, max_price: candidate.max_price, option_filters: candidate.option_filters });
         console.log(`[Broad L1] Added "${twoWords}" from "${query}"`);
       }
     }
@@ -441,6 +505,14 @@ function generateBroadCandidates(candidates: SearchCandidate[], originalMessage:
     'мне', 'для', 'под', 'над', 'при', 'без', 'или', 'что', 'как', 'где', 'все', 'вся', 'это',
     'пожалуйста', 'можно', 'будет', 'если', 'еще', 'уже', 'тоже', 'только', 'очень', 'самый',
     'цоколь', 'цоколем', 'мощность', 'мощностью', 'длина', 'длиной', 'ампер', 'метр', 'метров', 'ватт',
+    // Also exclude country-related words from query (they should be in option_filters, not query)
+    'белорусского', 'белорусский', 'белорусская', 'белорусское', 'белорусские',
+    'российского', 'российский', 'российская', 'российское', 'российские',
+    'китайского', 'китайский', 'китайская', 'китайское', 'китайские',
+    'казахстанского', 'казахстанский', 'казахстанская', 'казахстанское',
+    'турецкого', 'турецкий', 'турецкая', 'турецкое', 'турецкие',
+    'немецкого', 'немецкий', 'немецкая', 'немецкое', 'немецкие',
+    'производства', 'производство', 'происхождения',
   ]);
   
   // Normalize: "лампу-свечу" → "лампу свечу", remove punctuation
@@ -449,6 +521,52 @@ function generateBroadCandidates(candidates: SearchCandidate[], originalMessage:
     .replace(/[?!.,;:()«»""]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+  
+  // === Layer 3: Programmatic option_filters detection from original message ===
+  // Safety net: even if AI misses, we detect country/characteristic mentions
+  const detectedOptionFilters: Record<string, string> = {};
+  if (sharedOptionFilters) {
+    Object.assign(detectedOptionFilters, sharedOptionFilters);
+  }
+  
+  // Country detection from adjective forms in Russian
+  const countryPatterns: Array<{ pattern: RegExp; value: string }> = [
+    { pattern: /белорус/i, value: 'БЕЛАРУСЬ' },
+    { pattern: /росси[йя]/i, value: 'РОССИЯ' },
+    { pattern: /кита[йя]/i, value: 'КИТАЙ' },
+    { pattern: /казахстан/i, value: 'КАЗАХСТАН' },
+    { pattern: /туре[цч]/i, value: 'ТУРЦИЯ' },
+    { pattern: /неме[цч]/i, value: 'ГЕРМАНИЯ' },
+    { pattern: /итальян/i, value: 'ИТАЛИЯ' },
+    { pattern: /польск/i, value: 'ПОЛЬША' },
+    { pattern: /японск/i, value: 'ЯПОНИЯ' },
+  ];
+  
+  const countryKey = KNOWN_OPTION_KEYS['страна_происхождения']?.key;
+  if (countryKey && !detectedOptionFilters[countryKey]) {
+    for (const { pattern, value } of countryPatterns) {
+      if (pattern.test(originalMessage)) {
+        detectedOptionFilters[countryKey] = value;
+        console.log(`[Broad L3] Detected country filter: ${value} from original message`);
+        break;
+      }
+    }
+  }
+  
+  // If we detected option_filters, apply them to ALL existing candidates
+  if (Object.keys(detectedOptionFilters).length > 0) {
+    for (const candidate of broadCandidates) {
+      if (!candidate.option_filters) {
+        candidate.option_filters = { ...detectedOptionFilters };
+      } else {
+        for (const [k, v] of Object.entries(detectedOptionFilters)) {
+          if (!candidate.option_filters[k]) {
+            candidate.option_filters[k] = v;
+          }
+        }
+      }
+    }
+  }
   
   // Extract meaningful words (≥3 chars, not stop words, not numbers/specs like "E14", "16A", "5м")
   const specPattern = /^[a-zA-Z]?\d+[а-яa-z]*$/; // matches E14, 16A, 5м, 220в etc.
@@ -468,13 +586,15 @@ function generateBroadCandidates(candidates: SearchCandidate[], originalMessage:
   
   const lemmatized = msgWords.map(lemmatize);
   
+  const hasOptionFilters = Object.keys(detectedOptionFilters).length > 0;
+  
   // Generate candidates from consecutive pairs and individual words
   if (lemmatized.length >= 2) {
     for (let i = 0; i < lemmatized.length - 1; i++) {
       const pair = `${lemmatized[i]} ${lemmatized[i + 1]}`;
       if (!existingQueries.has(pair)) {
         existingQueries.add(pair);
-        broadCandidates.push({ query: pair, brand: null, category: null, min_price: null, max_price: null });
+        broadCandidates.push({ query: pair, brand: null, category: null, min_price: null, max_price: null, option_filters: hasOptionFilters ? { ...detectedOptionFilters } : undefined });
         console.log(`[Broad L2] Added pair "${pair}" from original message`);
       }
     }
@@ -484,7 +604,7 @@ function generateBroadCandidates(candidates: SearchCandidate[], originalMessage:
   for (const word of lemmatized) {
     if (word.length >= 3 && !existingQueries.has(word)) {
       existingQueries.add(word);
-      broadCandidates.push({ query: word, brand: null, category: null, min_price: null, max_price: null });
+      broadCandidates.push({ query: word, brand: null, category: null, min_price: null, max_price: null, option_filters: hasOptionFilters ? { ...detectedOptionFilters } : undefined });
       console.log(`[Broad L2] Added word "${word}" from original message`);
     }
   }
@@ -546,6 +666,14 @@ async function searchProductsByCandidate(
     
     if (candidate.max_price) {
       params.append('max_price', candidate.max_price.toString());
+    }
+    
+    // Pass arbitrary option filters to API (e.g. country, mounting type)
+    if (candidate.option_filters) {
+      for (const [optionKey, optionValue] of Object.entries(candidate.option_filters)) {
+        params.append(`options[${optionKey}][]`, optionValue);
+        console.log(`[Search] Option filter: ${optionKey}=${optionValue}`);
+      }
     }
     
     console.log(`[Search] API params: ${params.toString()}`);
@@ -664,20 +792,32 @@ function toProductionUrl(url: string): string {
   return url;
 }
 
-// Keys to exclude from product characteristics (service/internal fields)
-const EXCLUDED_OPTION_KEYS = new Set([
-  'kodnomenklatury', 'identifikator_sayta__sayt_identifikatory',
-  'edinica_izmereniya__Өlsheu_bіrlіgі', 'garantiynyy_srok__let__kepіldіk_merzіmі__ghyl_',
-  'brend__brend', // already shown separately as brand
-  'fayl', // internal file path
-  'kod_tn_ved__kod_tn_syed', // customs code
-  'poiskovyy_zapros', // internal search terms
-  'novinka', // internal flag
-  'obem', // internal volume
-  'ogranichennyy_prosmotr__sheқtelgen_қarau', // internal flag
-  'populyarnyy', // internal flag
-  'prodaetsya_tolko_v_gruppovoy_upakovke__tek_toptyқ_қaptamada_ғana_satylady', // internal flag
-]);
+// Prefixes to exclude from product characteristics (service/internal fields)
+// Using prefix matching to handle bilingual key suffixes (e.g. novinka__ghaңa)
+const EXCLUDED_OPTION_PREFIXES = [
+  'kodnomenklatury',          // internal ID
+  'identifikator_sayta',      // site identifier  
+  'edinica_izmereniya',       // unit of measurement
+  'garantiynyy_srok',         // warranty (shown separately if needed)
+  'brend__brend',             // already shown separately as brand
+  'fayl',                     // internal file path
+  'kod_tn_ved',               // customs code
+  'poiskovyy_zapros',         // internal search terms
+  'novinka',                  // internal flag
+  'obyem',                    // internal volume
+  'obem',                     // internal volume (alt spelling)
+  'ogranichennyy_prosmotr',   // internal flag
+  'populyarnyy',              // internal flag
+  'prodaetsya_to',            // "sold only in group packaging" flag
+  'tovar_internet_magazina',  // internal flag
+  'soputstvuyuschiy',         // related product ID
+  'opisaniefayla',            // file description
+  'naimenovanie_na_kazahskom', // Kazakh name (redundant)
+];
+
+function isExcludedOption(key: string): boolean {
+  return EXCLUDED_OPTION_PREFIXES.some(prefix => key.startsWith(prefix));
+}
 
 // Clean bilingual option values: "Нет//Жоқ" → "Нет", "ПВХ пластикат//ПВХ пластикат" → "ПВХ пластикат"
 function cleanOptionValue(value: string): string {
@@ -728,9 +868,9 @@ function formatProductsForAI(products: Product[]): string {
     // Add product characteristics from options (excluding service fields)
     if (p.options && p.options.length > 0) {
       const specs = p.options
-        .filter(o => !EXCLUDED_OPTION_KEYS.has(o.key))
+        .filter(o => !isExcludedOption(o.key))
         .map(o => `${cleanOptionCaption(o.caption)}: ${cleanOptionValue(o.value)}`)
-        .slice(0, 10); // max 10 characteristics per product
+        .slice(0, 15); // max 15 characteristics per product (increased from 10)
       
       if (specs.length > 0) {
         parts.push(`   - Характеристики: ${specs.join('; ')}`);
@@ -739,6 +879,31 @@ function formatProductsForAI(products: Product[]): string {
     
     return parts.filter(Boolean).join('\n');
   }).join('\n\n');
+}
+
+// Describe which option filters were applied to help AI explain results to user
+function describeAppliedFilters(candidates: SearchCandidate[]): string {
+  const filters: string[] = [];
+  const seen = new Set<string>();
+  
+  // Reverse mapping: API key → human-readable name
+  const keyToName: Record<string, string> = {};
+  for (const [name, config] of Object.entries(KNOWN_OPTION_KEYS)) {
+    keyToName[config.key] = name.replace(/_/g, ' ');
+  }
+  
+  for (const candidate of candidates) {
+    if (!candidate.option_filters) continue;
+    for (const [key, value] of Object.entries(candidate.option_filters)) {
+      const desc = `${keyToName[key] || key}=${value}`;
+      if (!seen.has(desc)) {
+        seen.add(desc);
+        filters.push(desc);
+      }
+    }
+  }
+  
+  return filters.join(', ');
 }
 
 // Извлекаем уникальные бренды из товаров
@@ -1133,7 +1298,12 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
         const formattedProducts = formatProductsForAI(foundProducts);
         console.log(`[Chat] Formatted products for AI:\n${formattedProducts}`);
-        productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**\n\n${formattedProducts}`;
+        
+        // Describe applied option filters so AI knows what was filtered
+        const appliedFilters = describeAppliedFilters(extractedIntent.candidates);
+        const filterNote = appliedFilters ? `\n⚠️ ПРИМЕНЁННЫЕ ФИЛЬТРЫ: ${appliedFilters}\nВсе товары ниже УЖЕ отфильтрованы по этим характеристикам — ты можешь уверенно это сообщить клиенту!\n` : '';
+        
+        productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**${filterNote}\n${formattedProducts}`;
       }
     }
 
