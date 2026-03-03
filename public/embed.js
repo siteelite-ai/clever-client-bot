@@ -519,7 +519,14 @@
       msg.innerHTML = formatMessage(content);
     }
     messagesContainer.appendChild(msg);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    if (role === 'user') {
+      // User messages: scroll to bottom so they see their own message
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    } else {
+      // Assistant messages: scroll so the START of the response is visible (not the end)
+      // This lets the user read from the beginning without scrolling back up
+      msg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   }
 
   // Show typing indicator
