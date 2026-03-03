@@ -364,8 +364,8 @@ ${historyContext}
         max_price: c.max_price || null,
       }));
       
-      // SYSTEMIC: Always add broad candidates by extracting core product nouns
-      const broadened = generateBroadCandidates(candidates);
+      // SYSTEMIC: Always add broad candidates + original message terms
+      const broadened = generateBroadCandidates(candidates, message);
       
       return {
         intent: parsed.intent || 'general',
@@ -394,51 +394,98 @@ ${historyContext}
  * down to just the core product noun(s). This runs AFTER AI extraction,
  * so it works for ANY query without needing to enumerate characteristics.
  */
-function generateBroadCandidates(candidates: SearchCandidate[]): SearchCandidate[] {
+/**
+ * SYSTEMIC BROAD CANDIDATE GENERATION v2
+ * 
+ * Two-layer safety net:
+ * 1. Strip AI-generated queries to core nouns (as before)
+ * 2. Extract meaningful product terms directly from the user's ORIGINAL message,
+ *    so even if AI loses words (e.g. drops "свеча" from "лампу-свечу"), 
+ *    the system still searches for them.
+ */
+function generateBroadCandidates(candidates: SearchCandidate[], originalMessage: string): SearchCandidate[] {
   const existingQueries = new Set(
     candidates.map(c => c.query?.toLowerCase().trim()).filter(Boolean)
   );
   
   const broadCandidates: SearchCandidate[] = [...candidates];
   
+  // === Layer 1: Strip AI candidates to shorter forms ===
   for (const candidate of candidates) {
     if (!candidate.query) continue;
-    
     const query = candidate.query.trim();
-    
-    // Split query into words and try progressively shorter versions
     const words = query.split(/\s+/);
+    if (words.length <= 1) continue;
     
-    if (words.length <= 1) continue; // Already as short as possible
-    
-    // Strategy 1: First word only (core product noun: "лампа", "удлинитель", "дрель")
     const firstWord = words[0];
     if (firstWord.length >= 3 && !existingQueries.has(firstWord.toLowerCase())) {
       existingQueries.add(firstWord.toLowerCase());
-      broadCandidates.push({
-        query: firstWord,
-        brand: candidate.brand,
-        category: null,
-        min_price: candidate.min_price,
-        max_price: candidate.max_price,
-      });
-      console.log(`[Broad Candidate] Added "${firstWord}" from "${query}"`);
+      broadCandidates.push({ query: firstWord, brand: candidate.brand, category: null, min_price: candidate.min_price, max_price: candidate.max_price });
+      console.log(`[Broad L1] Added "${firstWord}" from "${query}"`);
     }
     
-    // Strategy 2: First two words if query has 3+ words (e.g. "лампа свеча" from "лампа свеча E14")
     if (words.length >= 3) {
       const twoWords = words.slice(0, 2).join(' ');
       if (!existingQueries.has(twoWords.toLowerCase())) {
         existingQueries.add(twoWords.toLowerCase());
-        broadCandidates.push({
-          query: twoWords,
-          brand: candidate.brand,
-          category: null,
-          min_price: candidate.min_price,
-          max_price: candidate.max_price,
-        });
-        console.log(`[Broad Candidate] Added "${twoWords}" from "${query}"`);
+        broadCandidates.push({ query: twoWords, brand: candidate.brand, category: null, min_price: candidate.min_price, max_price: candidate.max_price });
+        console.log(`[Broad L1] Added "${twoWords}" from "${query}"`);
       }
+    }
+  }
+  
+  // === Layer 2: Extract product nouns from the ORIGINAL user message ===
+  // This catches terms AI might have missed or transformed incorrectly
+  const stopWords = new Set([
+    'подбери', 'покажи', 'найди', 'есть', 'нужен', 'нужна', 'нужно', 'хочу', 'дай', 'какие', 'какой', 'какая',
+    'мне', 'для', 'под', 'над', 'при', 'без', 'или', 'что', 'как', 'где', 'все', 'вся', 'это',
+    'пожалуйста', 'можно', 'будет', 'если', 'еще', 'уже', 'тоже', 'только', 'очень', 'самый',
+    'цоколь', 'цоколем', 'мощность', 'мощностью', 'длина', 'длиной', 'ампер', 'метр', 'метров', 'ватт',
+  ]);
+  
+  // Normalize: "лампу-свечу" → "лампу свечу", remove punctuation
+  const normalized = originalMessage.toLowerCase()
+    .replace(/[-–—]/g, ' ')  // hyphens to spaces
+    .replace(/[?!.,;:()«»""]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  
+  // Extract meaningful words (≥3 chars, not stop words, not numbers/specs like "E14", "16A", "5м")
+  const specPattern = /^[a-zA-Z]?\d+[а-яa-z]*$/; // matches E14, 16A, 5м, 220в etc.
+  const msgWords = normalized.split(' ')
+    .filter(w => w.length >= 3 && !stopWords.has(w) && !specPattern.test(w));
+  
+  // Lemmatize: simple suffix stripping for Russian nouns (accusative/genitive → nominative)
+  const lemmatize = (word: string): string => {
+    return word
+      .replace(/(ку|чку|цу)$/, (m) => m === 'ку' ? 'ка' : m === 'чку' ? 'чка' : 'ца') // лампочку→лампочка
+      .replace(/у$/, 'а')   // лампу→лампа, свечу→свеча
+      .replace(/ой$/, 'ый') // длинной→длинный
+      .replace(/ей$/, 'ь')  // дверей→дверь
+      .replace(/ы$/, '')    // лампы→ламп (imperfect but ok for search)
+      .replace(/и$/, 'ь');  // двери→дверь
+  };
+  
+  const lemmatized = msgWords.map(lemmatize);
+  
+  // Generate candidates from consecutive pairs and individual words
+  if (lemmatized.length >= 2) {
+    for (let i = 0; i < lemmatized.length - 1; i++) {
+      const pair = `${lemmatized[i]} ${lemmatized[i + 1]}`;
+      if (!existingQueries.has(pair)) {
+        existingQueries.add(pair);
+        broadCandidates.push({ query: pair, brand: null, category: null, min_price: null, max_price: null });
+        console.log(`[Broad L2] Added pair "${pair}" from original message`);
+      }
+    }
+  }
+  
+  // Add individual lemmatized words not already covered
+  for (const word of lemmatized) {
+    if (word.length >= 3 && !existingQueries.has(word)) {
+      existingQueries.add(word);
+      broadCandidates.push({ query: word, brand: null, category: null, min_price: null, max_price: null });
+      console.log(`[Broad L2] Added word "${word}" from original message`);
     }
   }
   
