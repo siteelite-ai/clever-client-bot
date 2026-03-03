@@ -548,7 +548,28 @@ function toProductionUrl(url: string): string {
   return url;
 }
 
-// Форматирование товаров для AI с кликабельными ссылками
+// Keys to exclude from product characteristics (service/internal fields)
+const EXCLUDED_OPTION_KEYS = new Set([
+  'kodnomenklatury', 'identifikator_sayta__sayt_identifikatory',
+  'edinica_izmereniya__Өlsheu_bіrlіgі', 'garantiynyy_srok__let__kepіldіk_merzіmі__ghyl_',
+  'brend__brend', // already shown separately as brand
+]);
+
+// Clean bilingual option values: "Нет//Жоқ" → "Нет", "ПВХ пластикат//ПВХ пластикат" → "ПВХ пластикат"
+function cleanOptionValue(value: string): string {
+  if (!value) return value;
+  const parts = value.split('//');
+  return parts[0].trim();
+}
+
+// Clean bilingual caption: "Бронированный//Сауытты" → "Бронированный"
+function cleanOptionCaption(caption: string): string {
+  if (!caption) return caption;
+  const parts = caption.split('//');
+  return parts[0].trim();
+}
+
+// Форматирование товаров для AI с кликабельными ссылками и характеристиками
 function formatProductsForAI(products: Product[]): string {
   if (products.length === 0) {
     return 'Товары не найдены в каталоге.';
@@ -556,7 +577,6 @@ function formatProductsForAI(products: Product[]): string {
 
   return products.map((p, i) => {
     // Приоритет: brend__brend (бренд) > vendor (производитель/завод)
-    // Пример: бренд = "Philips", vendor = "Shanghai Bipeng Lighting Company Limited"
     let brand = '';
     if (p.options) {
       const brandOption = p.options.find(o => o.key === 'brend__brend');
@@ -579,9 +599,21 @@ function formatProductsForAI(products: Product[]): string {
       p.article ? `   - Артикул: ${p.article}` : '',
       `   - В наличии: ${p.amount > 0 ? 'Да' : 'Под заказ'}`,
       p.category ? `   - Категория: [${p.category.pagetitle}](https://220volt.kz/catalog/${p.category.id})` : '',
-    ].filter(Boolean);
+    ];
     
-    return parts.join('\n');
+    // Add product characteristics from options (excluding service fields)
+    if (p.options && p.options.length > 0) {
+      const specs = p.options
+        .filter(o => !EXCLUDED_OPTION_KEYS.has(o.key))
+        .map(o => `${cleanOptionCaption(o.caption)}: ${cleanOptionValue(o.value)}`)
+        .slice(0, 10); // max 10 characteristics per product
+      
+      if (specs.length > 0) {
+        parts.push(`   - Характеристики: ${specs.join('; ')}`);
+      }
+    }
+    
+    return parts.filter(Boolean).join('\n');
   }).join('\n\n');
 }
 
@@ -1249,6 +1281,14 @@ ${toneOfVoice ? `\nТон общения: ${toneOfVoice}` : ''}
 **[Название](ссылка_из_данных)** — *цена* ₸, бренд
 
 Ссылки копируй точно из данных. Если товаров нет — задай уточняющие вопросы.
+
+# Фильтрация по характеристикам
+Каждый товар содержит раздел «Характеристики» (длина, мощность, сечение, количество розеток и т.д.).
+Когда клиент указывает конкретные параметры (например, «5 метров», «2000 Вт», «3 розетки»):
+1. Просмотри характеристики ВСЕХ найденных товаров
+2. Отбери ТОЛЬКО те, что соответствуют запрошенным параметрам
+3. Если подходящих товаров нет среди найденных — честно скажи и предложи ближайшие варианты
+4. НЕ выдумывай характеристики — бери ТОЛЬКО из данных
 
 # Формат ответа: филиалы и контакты
 Когда клиент спрашивает про филиалы, адреса, контакты:
