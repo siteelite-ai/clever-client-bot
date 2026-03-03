@@ -1045,7 +1045,10 @@ async function translateSearchTerms(
 
 /**
  * Search with English translation fallback.
- * If original search returns 0 results, translate queries to English and retry.
+ * 
+ * Instead of only triggering when ALL results are 0, we check which individual
+ * query terms returned 0 results. If any "zero-result" terms exist, we translate
+ * them to English and merge additional results.
  */
 async function searchWithTranslationFallback(
   candidates: SearchCandidate[],
@@ -1057,20 +1060,55 @@ async function searchWithTranslationFallback(
 ): Promise<Product[]> {
   // First: normal search
   const results = await searchProductsMulti(candidates, limit, apiToken);
-  if (results.length > 0) return results;
   
-  // Extract unique queries to translate
+  // Extract unique query terms to check which ones found nothing
   const queries = candidates
     .map(c => c.query)
     .filter((q): q is string => q !== null && q !== undefined && q.trim().length > 0);
   
   if (queries.length === 0) return results;
   
-  // Translate to English
-  const translatedQueries = await translateSearchTerms(queries, aiUrl, apiKeys, aiModel);
+  // Find terms that individually returned 0 results by testing each unique word
+  // Extract individual words from all queries
+  const allWords = new Set<string>();
+  for (const q of queries) {
+    for (const word of q.toLowerCase().split(/\s+/)) {
+      const cleaned = word.replace(/[^а-яёa-z0-9]/gi, '');
+      if (cleaned.length > 2) allWords.add(cleaned);
+    }
+  }
+  
+  // Check which words appear in ANY result title/content
+  const resultTitles = results.map(p => p.pagetitle.toLowerCase()).join(' ');
+  const resultContent = results.map(p => (p.content || '').toLowerCase()).join(' ');
+  const allResultText = resultTitles + ' ' + resultContent;
+  
+  // Words that didn't match anything in results — these are candidates for translation
+  const zeroMatchWords = [...allWords].filter(word => {
+    // Check if this word (or its stem) appears in any result
+    const stem = word.replace(/(а|у|ы|и|е|о|ё|я|ь|ъ|ой|ий|ый|ая|ое|ые)$/i, '');
+    return !allResultText.includes(word) && (stem.length < 3 || !allResultText.includes(stem));
+  });
+  
+  if (zeroMatchWords.length === 0) {
+    return results; // All terms matched something
+  }
+  
+  // Also check: are these "zero-match" words just common Russian words?
+  const skipWords = new Set(['лампа', 'лампы', 'ламп', 'светильник', 'кабель', 'провод', 'розетк', 'выключател', 'автомат', 'щит']);
+  const wordsToTranslate = zeroMatchWords.filter(w => !skipWords.has(w));
+  
+  if (wordsToTranslate.length === 0) {
+    return results;
+  }
+  
+  console.log(`[Translate] Zero-match words found: ${wordsToTranslate.join(', ')} — translating to English`);
+  
+  // Translate zero-match words
+  const translatedQueries = await translateSearchTerms(wordsToTranslate, aiUrl, apiKeys, aiModel);
   if (translatedQueries.length === 0) return results;
   
-  // Build translated candidates
+  // Build translated candidates: combine translated words with original non-zero-match terms
   const translatedCandidates: SearchCandidate[] = translatedQueries.map(q => ({
     query: q,
     brand: candidates[0]?.brand || null,
@@ -1080,14 +1118,35 @@ async function searchWithTranslationFallback(
     option_filters: candidates[0]?.option_filters,
   }));
   
-  console.log(`[Search] Retrying with English translations: ${translatedQueries.join(', ')}`);
+  // Also try combining: e.g. "лампа" + "corn" for "лампа кукуруза" → "лампа corn"
+  const commonProductWords = [...allWords].filter(w => !wordsToTranslate.includes(w));
+  if (commonProductWords.length > 0 && translatedQueries.length > 0) {
+    for (const translated of translatedQueries) {
+      for (const productWord of commonProductWords.slice(0, 2)) {
+        translatedCandidates.push({
+          query: `${productWord} ${translated}`,
+          brand: candidates[0]?.brand || null,
+          category: null,
+          min_price: candidates[0]?.min_price || null,
+          max_price: candidates[0]?.max_price || null,
+        });
+      }
+    }
+  }
+  
+  console.log(`[Search] Retrying with English translations: ${translatedCandidates.map(c => c.query).join(', ')}`);
   const translatedResults = await searchProductsMulti(translatedCandidates, limit, apiToken);
   
   if (translatedResults.length > 0) {
     console.log(`[Search] Translation fallback found ${translatedResults.length} products!`);
+    // Merge: translation results first (more relevant), then original results
+    const mergedMap = new Map<number, Product>();
+    for (const p of translatedResults) mergedMap.set(p.id, p);
+    for (const p of results) { if (!mergedMap.has(p.id)) mergedMap.set(p.id, p); }
+    return Array.from(mergedMap.values()).slice(0, limit);
   }
   
-  return translatedResults;
+  return results;
 }
 
 // Возвращает URL как есть (тестовый домен для тестирования)
