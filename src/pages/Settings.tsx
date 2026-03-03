@@ -245,30 +245,39 @@ export default function Settings() {
 
               <TabsContent value="google" className="space-y-4 mt-4">
                 <div className="space-y-2">
-                  <Label htmlFor="googleApiKey">API ключ Google AI Studio</Label>
+                  <Label htmlFor="googleApiKey">API ключи Google AI Studio</Label>
                   <div className="relative">
-                    <Input
+                    <textarea
                       id="googleApiKey"
-                      type={showGoogleKey ? 'text' : 'password'}
-                      placeholder="AIzaSy..."
-                      value={googleApiKey}
+                      placeholder={"AIzaSy...ключ1\nAIzaSy...ключ2\nAIzaSy...ключ3"}
+                      value={showGoogleKey ? googleApiKey : googleApiKey.split(/[,\n]/).filter(k => k.trim()).map(() => '••••••••••••').join('\n')}
                       onChange={(e) => setGoogleApiKey(e.target.value)}
-                      className="input-focus pr-10"
+                      onFocus={() => setShowGoogleKey(true)}
+                      className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 min-h-[80px] resize-y pr-10"
+                      rows={3}
                     />
                     <button
                       type="button"
                       onClick={() => setShowGoogleKey(!showGoogleKey)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                      className="absolute right-3 top-3 text-muted-foreground hover:text-foreground transition-colors"
                     >
                       {showGoogleKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
+                  {(() => {
+                    const keyCount = googleApiKey.split(/[,\n]/).filter(k => k.trim().length > 0).length;
+                    return keyCount > 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        🔑 {keyCount} {keyCount === 1 ? 'ключ' : keyCount < 5 ? 'ключа' : 'ключей'} — при ошибке автоматически переключится на следующий
+                      </p>
+                    ) : null;
+                  })()}
                   <p className="text-xs text-muted-foreground">
-                    Получите ключ на{' '}
+                    По одному ключу на строку. Получите на{' '}
                     <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
                       aistudio.google.com/apikey
                     </a>
-                    {' '}— бесплатно до 1500 запросов/день
+                    {' '}— бесплатно до 1500 запросов/день на ключ
                   </p>
                 </div>
 

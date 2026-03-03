@@ -76,30 +76,105 @@ async function getAppSettings(): Promise<CachedSettings> {
   }
 }
 
-// Determine AI endpoint and key based on settings
-function getAIConfig(settings: CachedSettings): { url: string; apiKey: string; model: string } {
+// Determine AI endpoint and keys based on settings
+// For Google AI Studio, supports multiple comma-separated keys for automatic fallback
+function getAIConfig(settings: CachedSettings): { url: string; apiKeys: string[]; model: string } {
   if (settings.ai_provider === 'google') {
     if (!settings.google_api_key) {
       throw new Error('Google AI Studio API key не настроен. Добавьте ключ в Настройках.');
     }
-    // Google AI Studio uses OpenAI-compatible endpoint
+    // Parse comma/newline-separated keys, trim whitespace, filter empty
+    const keys = settings.google_api_key
+      .split(/[,\n]/)
+      .map(k => k.trim())
+      .filter(k => k.length > 0);
+    if (keys.length === 0) {
+      throw new Error('Google AI Studio API key не настроен. Добавьте ключ в Настройках.');
+    }
+    console.log(`[AIConfig] Google AI Studio: ${keys.length} key(s) configured`);
     return {
       url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-      apiKey: settings.google_api_key,
+      apiKeys: keys,
       model: settings.ai_model || 'gemini-2.0-flash',
     };
   }
 
-  // Default: OpenRouter
+  // Default: OpenRouter (single key)
   if (!settings.openrouter_api_key) {
     throw new Error('OpenRouter API key не настроен. Добавьте ключ в Настройках.');
   }
 
   return {
     url: 'https://openrouter.ai/api/v1/chat/completions',
-    apiKey: settings.openrouter_api_key,
+    apiKeys: [settings.openrouter_api_key],
     model: settings.ai_model,
   };
+}
+
+// Call AI with automatic key rotation on errors (429, 500, 503, etc.)
+async function callAIWithKeyFallback(
+  url: string,
+  apiKeys: string[],
+  body: Record<string, unknown>,
+  label: string = 'AI'
+): Promise<Response> {
+  const RETRY_DELAYS = [2000, 5000]; // retry delays within same key
+  
+  for (let keyIdx = 0; keyIdx < apiKeys.length; keyIdx++) {
+    const apiKey = apiKeys[keyIdx];
+    const keyLabel = apiKeys.length > 1 ? `key ${keyIdx + 1}/${apiKeys.length}` : 'key';
+    
+    // Try this key with retries for 429
+    for (let attempt = 0; attempt <= 1; attempt++) {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (response.ok) {
+        if (keyIdx > 0) {
+          console.log(`[${label}] Success with ${keyLabel} (previous keys exhausted)`);
+        }
+        return response;
+      }
+
+      const isRetryable = response.status === 429 || response.status === 500 || response.status === 503;
+      
+      if (!isRetryable) {
+        // Non-retryable error (400, 401, 402, etc.) — return immediately
+        console.error(`[${label}] Non-retryable error ${response.status} with ${keyLabel}`);
+        return response;
+      }
+
+      // Retryable error
+      const hasMoreKeys = keyIdx < apiKeys.length - 1;
+      
+      if (attempt === 0 && !hasMoreKeys) {
+        // Only key — retry once after delay
+        const errorBody = await response.text();
+        console.log(`[${label}] ${response.status} with ${keyLabel}, retrying in ${RETRY_DELAYS[0]}ms...`, errorBody);
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[0]));
+        continue;
+      }
+      
+      if (hasMoreKeys) {
+        // More keys available — skip to next key immediately
+        console.log(`[${label}] ${response.status} with ${keyLabel}, switching to next key`);
+        break; // break retry loop, continue key loop
+      }
+      
+      // Last key, last attempt — return the error response
+      console.error(`[${label}] All ${apiKeys.length} key(s) exhausted, last status: ${response.status}`);
+      return response;
+    }
+  }
+
+  // Should never reach here, but just in case
+  throw new Error(`[${label}] All API keys exhausted`);
 }
 
 // Knowledge base entry
@@ -202,7 +277,7 @@ interface ExtractedIntent {
 // Генерация поисковых кандидатов через AI с учётом контекста разговора
 async function generateSearchCandidates(
   message: string, 
-  apiKey: string,
+  apiKeys: string[],
   conversationHistory: Array<{ role: string; content: string }> = [],
   aiUrl: string = 'https://openrouter.ai/api/v1/chat/completions',
   aiModel: string = 'meta-llama/llama-3.3-70b-instruct:free'
@@ -297,83 +372,76 @@ ${historyContext}
 ТЕКУЩЕЕ сообщение пользователя: "${message}"`;
 
   try {
-    const response = await fetch(aiUrl, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: aiModel,
-        messages: [
-          { role: 'system', content: extractionPrompt },
-          { role: 'user', content: message }
-        ],
-        tools: [
-          {
-            type: 'function',
-            function: {
-              name: 'extract_search_intent',
-              description: 'Извлекает намерение и формирует параметры запроса к API каталога 220volt.kz/api/products',
-              parameters: {
-                type: 'object',
-                properties: {
-                  intent: { 
-                    type: 'string', 
-                    enum: ['catalog', 'brands', 'info', 'general'],
-                    description: 'Тип намерения'
-                  },
-                  candidates: {
-                    type: 'array',
-                    items: {
-                      type: 'object',
-                      properties: {
-                        query: { 
-                          type: 'string',
-                          nullable: true,
-                          description: 'Параметр query для API: текстовый поиск (1-2 слова, технические термины). null если ищем только по бренду/категории'
-                        },
-                        brand: { 
-                          type: 'string',
-                          nullable: true,
-                          description: 'Параметр options[brend__brend][]: точное название бренда ЛАТИНИЦЕЙ (Philips, Bosch, Makita). null если бренд не указан'
-                        },
-                        category: {
-                          type: 'string', 
-                          nullable: true,
-                          description: 'НЕ ИСПОЛЬЗУЙ этот параметр! Всегда передавай null. Поиск по категории ненадёжен.'
-                        },
-                        min_price: {
-                          type: 'number',
-                          nullable: true,
-                          description: 'Параметр min_price: минимальная цена в тенге. null если не указана'
-                        },
-                        max_price: {
-                          type: 'number',
-                          nullable: true,
-                          description: 'Параметр max_price: максимальная цена в тенге. null если не указана'
-                        },
-                        option_filters: {
-                          type: 'object',
-                          nullable: true,
-                          description: 'Фильтры по характеристикам товара. Ключ = краткое человекочитаемое название характеристики на русском (страна, цоколь, монтаж, защита, напряжение, длина, сечение, розетки и т.д.). Значение = значение характеристики. Система АВТОМАТИЧЕСКИ найдёт правильные ключи API. null если фильтры не нужны.',
-                          additionalProperties: { type: 'string' }
-                        }
-                      },
-                      additionalProperties: false
-                    },
-                    description: 'Массив вариантов запросов к API (2-5 штук с разными query-вариациями)'
-                  }
+    const response = await callAIWithKeyFallback(aiUrl, apiKeys, {
+      model: aiModel,
+      messages: [
+        { role: 'system', content: extractionPrompt },
+        { role: 'user', content: message }
+      ],
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: 'extract_search_intent',
+            description: 'Извлекает намерение и формирует параметры запроса к API каталога 220volt.kz/api/products',
+            parameters: {
+              type: 'object',
+              properties: {
+                intent: { 
+                  type: 'string', 
+                  enum: ['catalog', 'brands', 'info', 'general'],
+                  description: 'Тип намерения'
                 },
-                required: ['intent', 'candidates'],
-                additionalProperties: false
-              }
+                candidates: {
+                  type: 'array',
+                  items: {
+                    type: 'object',
+                    properties: {
+                      query: { 
+                        type: 'string',
+                        nullable: true,
+                        description: 'Параметр query для API: текстовый поиск (1-2 слова, технические термины). null если ищем только по бренду/категории'
+                      },
+                      brand: { 
+                        type: 'string',
+                        nullable: true,
+                        description: 'Параметр options[brend__brend][]: точное название бренда ЛАТИНИЦЕЙ (Philips, Bosch, Makita). null если бренд не указан'
+                      },
+                      category: {
+                        type: 'string', 
+                        nullable: true,
+                        description: 'НЕ ИСПОЛЬЗУЙ этот параметр! Всегда передавай null. Поиск по категории ненадёжен.'
+                      },
+                      min_price: {
+                        type: 'number',
+                        nullable: true,
+                        description: 'Параметр min_price: минимальная цена в тенге. null если не указана'
+                      },
+                      max_price: {
+                        type: 'number',
+                        nullable: true,
+                        description: 'Параметр max_price: максимальная цена в тенге. null если не указана'
+                      },
+                      option_filters: {
+                        type: 'object',
+                        nullable: true,
+                        description: 'Фильтры по характеристикам товара. Ключ = краткое человекочитаемое название характеристики на русском (страна, цоколь, монтаж, защита, напряжение, длина, сечение, розетки и т.д.). Значение = значение характеристики. Система АВТОМАТИЧЕСКИ найдёт правильные ключи API. null если фильтры не нужны.',
+                        additionalProperties: { type: 'string' }
+                      }
+                    },
+                    additionalProperties: false
+                  },
+                  description: 'Массив вариантов запросов к API (2-5 штук с разными query-вариациями)'
+                }
+              },
+              required: ['intent', 'candidates'],
+              additionalProperties: false
             }
           }
-        ],
-        tool_choice: { type: 'function', function: { name: 'extract_search_intent' } },
-      }),
-    });
+        }
+      ],
+      tool_choice: { type: 'function', function: { name: 'extract_search_intent' } },
+    }, 'AI Candidates');
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -1325,7 +1393,7 @@ serve(async (req) => {
     const detectedCityPromise = detectCityByIP(clientIp);
 
     // ШАГ 1: AI определяет интент и генерирует поисковые кандидаты (никакого хардкода)
-    const extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKey, historyForContext, aiConfig.url, aiConfig.model);
+    const extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, aiConfig.model);
     console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}`);
 
     let productContext = '';
@@ -1740,51 +1808,31 @@ ${productInstructions}`;
       ...messages,
     ];
     
-    // Retry logic for rate-limited free models
-    const MAX_RETRIES = 3;
-    const RETRY_DELAYS = [2000, 5000, 10000]; // 2s, 5s, 10s
-    let response: Response | null = null;
-    
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      response = await fetch(aiConfig.url, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${aiConfig.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: aiConfig.model,
-          messages: messagesForAI,
-          stream: useStreaming,
-        }),
-      });
+    // Call AI with automatic key rotation on errors
+    const response = await callAIWithKeyFallback(aiConfig.url, aiConfig.apiKeys, {
+      model: aiConfig.model,
+      messages: messagesForAI,
+      stream: useStreaming,
+    }, 'Chat');
 
-      if (response.status !== 429 || attempt === MAX_RETRIES) break;
-      
-      const errorBody = await response.text();
-      console.log(`[Chat] Rate limit 429 (attempt ${attempt + 1}/${MAX_RETRIES}), retrying in ${RETRY_DELAYS[attempt]}ms...`, errorBody);
-      await new Promise(resolve => setTimeout(resolve, RETRY_DELAYS[attempt]));
-    }
-
-    if (!response || !response.ok) {
-      if (response?.status === 429) {
-        const errorBody = await response.text();
+    if (!response.ok) {
+      if (response.status === 429) {
         const providerName = aiConfig.url.includes('google') ? 'Google AI Studio' : aiConfig.url.includes('openrouter') ? 'OpenRouter' : 'AI';
-        console.error(`[Chat] Rate limit 429 after all retries (${providerName}):`, errorBody);
+        console.error(`[Chat] Rate limit 429 after all keys exhausted (${providerName})`);
         return new Response(
           JSON.stringify({ error: `Превышен лимит запросов к ${providerName}. Подождите 1-2 минуты и попробуйте снова, или смените провайдера/модель в настройках.` }),
           { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
-      if (response?.status === 402) {
+      if (response.status === 402) {
         return new Response(
           JSON.stringify({ error: 'Требуется пополнение баланса AI.' }),
           { status: 402, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
       
-      const errorText = await response?.text();
-      console.error('[Chat] AI Gateway error:', response?.status, errorText);
+      const errorText = await response.text();
+      console.error('[Chat] AI Gateway error:', response.status, errorText);
       return new Response(
         JSON.stringify({ error: 'Ошибка AI сервиса' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
