@@ -2070,12 +2070,46 @@ ${productInstructions}`;
     // Format contacts for display as a separate message
     const formattedContacts = formatContactsForDisplay(contactsInfo);
 
+    // Helper: log token usage to ai_usage_logs (fire-and-forget)
+    const logTokenUsage = async (inputTokens: number, outputTokens: number, model: string) => {
+      try {
+        const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
+        const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+        if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return;
+        
+        const totalTokens = inputTokens + outputTokens;
+        // Gemini 2.5 Flash pricing: input $0.30/1M, output $2.50/1M
+        const inputCost = (inputTokens / 1_000_000) * 0.30;
+        const outputCost = (outputTokens / 1_000_000) * 2.50;
+        const estimatedCost = inputCost + outputCost;
+        
+        const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+        await sb.from('ai_usage_logs').insert({
+          client_ip: clientIp,
+          input_tokens: inputTokens,
+          output_tokens: outputTokens,
+          total_tokens: totalTokens,
+          model: model,
+          estimated_cost_usd: estimatedCost,
+        });
+        console.log(`[Usage] Logged: ${inputTokens} in / ${outputTokens} out = $${estimatedCost.toFixed(6)}`);
+      } catch (e) {
+        console.error('[Usage] Failed to log:', e);
+      }
+    };
+
     // NON-STREAMING MODE: collect full response and return as JSON
     if (!useStreaming) {
       try {
         const aiData = await response.json();
         let content = aiData.choices?.[0]?.message?.content || '';
         console.log(`[Chat] Non-streaming response length: ${content.length}`);
+        
+        // Log token usage from API response
+        const usage = aiData.usage;
+        if (usage) {
+          logTokenUsage(usage.prompt_tokens || 0, usage.completion_tokens || 0, aiConfig.model);
+        }
         
         // Check if AI included escalation marker
         const shouldShowContacts = content.includes('[CONTACT_MANAGER]');
@@ -2131,6 +2165,10 @@ ${productInstructions}`;
               const contactsEvent = `data: ${JSON.stringify({ contacts: formattedContacts })}\n\n`;
               controller.enqueue(encoder.encode(contactsEvent));
             }
+            // Log estimated token usage for streaming (rough: 1 token ≈ 3 chars for Russian)
+            const estInputTokens = Math.ceil(systemPrompt.length / 3);
+            const estOutputTokens = Math.ceil(fullContent.length / 3);
+            logTokenUsage(estInputTokens, estOutputTokens, aiConfig.model);
             controller.close();
             return;
           }
@@ -2203,6 +2241,10 @@ ${productInstructions}`;
             const contactsEvent = `data: ${JSON.stringify({ contacts: formattedContacts })}\n\n`;
             controller.enqueue(encoder.encode(contactsEvent));
           }
+          // Log estimated token usage
+          const estInputTokens = Math.ceil(systemPrompt.length / 3);
+          const estOutputTokens = Math.ceil(fullContent2.length / 3);
+          logTokenUsage(estInputTokens, estOutputTokens, aiConfig.model);
           controller.close();
           return;
         }
