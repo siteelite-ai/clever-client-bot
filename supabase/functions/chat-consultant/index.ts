@@ -1629,10 +1629,9 @@ serve(async (req) => {
 📚 ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ (используй для ответа!):
 
 ${knowledgeResults.map((r, i) => {
-        // Smart extraction: find the most relevant section of the content
-        const excerpt = extractRelevantExcerpt(r.content, userMessage, 2000);
+        // Send FULL content — no truncation, LLM can handle it
         return `--- ${r.title} ---
-${excerpt}
+${r.content}
 ${r.source_url ? `Источник: ${r.source_url}` : ''}`;
       }).join('\n\n')}
 
