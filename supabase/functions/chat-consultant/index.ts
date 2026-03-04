@@ -1705,8 +1705,9 @@ ${productContext}
 - Если хочешь упомянуть товар — бери ссылку ТОЛЬКО из списка выше`;
     } else if (isGreeting) {
       productInstructions = ''; // Для приветствий ничего не пишем о товарах
-    } else if (extractedIntent.intent === 'general' || extractedIntent.intent === 'info') {
-      // ПРИОРИТЕТ 1: Если база знаний нашла релевантные статьи — отвечаем из БЗ
+    } else if (extractedIntent.intent === 'info') {
+      // ИНТЕНТ: INFO — вопрос о компании, оферте, условиях, юридических данных
+      // Всегда используем базу знаний для этого интента
       if (knowledgeResults.length > 0) {
         productInstructions = `
 💡 ВОПРОС О КОМПАНИИ / УСЛОВИЯХ / ДОКУМЕНТАХ
@@ -1727,16 +1728,30 @@ ${productContext}
 - НЕ отказывайся отвечать на вопросы об оферте, БИН, юрлицах — это публичная информация!
 - НЕ переключай тему на товары, если клиент спрашивает о документах/условиях`;
       } else {
-        // ПРИОРИТЕТ 2: Проверяем контекст разговора о товарах (только если НЕТ результатов из БЗ)
-        const hasProductContext = historyForContext.some(m => 
-          m.role === 'assistant' && (
-            /₸|цена|бренд|в наличии/i.test(m.content) ||
-            /\[.*\]\(https?:\/\/.*\)/i.test(m.content)
-          )
-        );
-        
-        if (hasProductContext) {
-          productInstructions = `
+        // intent=info, но в БЗ ничего не нашлось
+        productInstructions = `
+💡 ВОПРОС О КОМПАНИИ / УСЛОВИЯХ
+
+Клиент написал: "${extractedIntent.originalQuery}"
+
+К сожалению, в Базе Знаний не найдено релевантной информации по этому вопросу.
+
+ТВОЙ ОТВЕТ:
+1. Честно скажи, что у тебя нет точной информации по этому вопросу
+2. Предложи связаться с менеджером для уточнения
+3. НЕ выдумывай данные!`;
+      }
+    } else if (extractedIntent.intent === 'general') {
+      // ИНТЕНТ: GENERAL — приветствия, шутки, нерелевантное, продолжение диалога
+      const hasProductContext = historyForContext.some(m => 
+        m.role === 'assistant' && (
+          /₸|цена|бренд|в наличии/i.test(m.content) ||
+          /\[.*\]\(https?:\/\/.*\)/i.test(m.content)
+        )
+      );
+      
+      if (hasProductContext) {
+        productInstructions = `
 💡 ПРОДОЛЖЕНИЕ ДИАЛОГА О ТОВАРАХ
 
 Клиент написал: "${extractedIntent.originalQuery}"
@@ -1751,9 +1766,8 @@ ${productContext}
 ЗАПРЕЩЕНО:
 - НЕ теряй контекст разговора!
 - НЕ переключайся на другие инструменты без причины`;
-        } else {
-          // Нерелевантный запрос
-          productInstructions = `
+      } else {
+        productInstructions = `
 💡 НЕРЕЛЕВАНТНЫЙ ЗАПРОС ИЛИ ВОПРОС ОБ УСЛУГАХ
 
 Клиент написал: "${extractedIntent.originalQuery}"
@@ -1766,9 +1780,8 @@ ${productContext}
 3. Спроси, чем можешь помочь по части инструментов
 
 ВАЖНО:
-- НЕ говори "товар не найден в каталоге" — это звучит глупо для запроса типа "хочу в кино"
+- НЕ говори "товар не найден в каталоге"
 - Будь остроумным и дружелюбным`;
-        }
       }
     } else if (extractedIntent.candidates.length > 0) {
       // Был поиск в каталоге, но товары не найдены
