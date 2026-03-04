@@ -1216,8 +1216,10 @@ function formatProductsForAI(products: Product[]): string {
     }
     
     // Формируем название как ссылку в markdown (заменяем тестовый домен на продакшн)
+    // Экранируем скобки в названии товара, чтобы не ломать markdown-ссылку
     const productUrl = toProductionUrl(p.url);
-    const nameWithLink = `[${p.pagetitle}](${productUrl})`;
+    const safeName = p.pagetitle.replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+    const nameWithLink = `[${safeName}](${productUrl})`;
     
     const parts = [
       `${i + 1}. **${nameWithLink}**`,
