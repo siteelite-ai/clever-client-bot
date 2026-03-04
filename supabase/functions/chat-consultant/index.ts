@@ -1433,8 +1433,8 @@ async function detectCityByIP(ip: string): Promise<GeoResult> {
 }
 
 
-// Smart excerpt extraction: find the most relevant section of a long document
-// instead of blindly taking the first N chars
+// Smart excerpt extraction: find the MOST RELEVANT sections of a long document
+// For long documents, extracts MULTIPLE non-overlapping windows to cover different sections
 function extractRelevantExcerpt(content: string, query: string, maxLen: number = 2000): string {
   // If content is short enough, return as-is
   if (content.length <= maxLen) return content;
@@ -1447,13 +1447,13 @@ function extractRelevantExcerpt(content: string, query: string, maxLen: number =
 
   if (words.length === 0) return content.substring(0, maxLen);
 
-  // Find the best window: score each position by keyword density
+  // Score each window position by keyword density
   const lowerContent = content.toLowerCase();
-  const windowSize = maxLen;
-  const step = 200; // slide by 200 chars
+  const windowSize = 1500; // each window
+  const step = 200;
   
-  let bestStart = 0;
-  let bestScore = -1;
+  // Collect all scored windows
+  const scoredWindows: { start: number; score: number }[] = [];
 
   for (let start = 0; start < content.length - step; start += step) {
     const end = Math.min(start + windowSize, content.length);
@@ -1461,7 +1461,6 @@ function extractRelevantExcerpt(content: string, query: string, maxLen: number =
     
     let score = 0;
     for (const word of words) {
-      // Count occurrences of each keyword in this window
       let idx = 0;
       while ((idx = window.indexOf(word, idx)) !== -1) {
         score += 1;
@@ -1469,33 +1468,58 @@ function extractRelevantExcerpt(content: string, query: string, maxLen: number =
       }
     }
 
-    if (score > bestScore) {
-      bestScore = score;
-      bestStart = start;
+    if (score > 0) {
+      scoredWindows.push({ start, score });
     }
   }
 
-  // If no keywords found at all, return the beginning
-  if (bestScore <= 0) return content.substring(0, maxLen);
+  if (scoredWindows.length === 0) return content.substring(0, maxLen);
 
-  // Snap to nearest paragraph/section boundary for cleaner cuts
-  let snapStart = bestStart;
-  if (snapStart > 0) {
-    // Look back up to 200 chars for a section header or double newline
-    const lookBack = content.substring(Math.max(0, snapStart - 200), snapStart);
-    const sectionMatch = lookBack.lastIndexOf('\n\n');
-    if (sectionMatch >= 0) {
-      snapStart = Math.max(0, snapStart - 200) + sectionMatch + 2;
+  // Sort by score descending
+  scoredWindows.sort((a, b) => b.score - a.score);
+
+  // For long documents (>10K), take up to 3 non-overlapping windows
+  // For shorter ones, take 1 window
+  const numWindows = content.length > 10000 ? 3 : 1;
+  const totalBudget = maxLen; // total chars budget
+  const perWindowBudget = Math.floor(totalBudget / numWindows);
+
+  const selectedWindows: { start: number; score: number }[] = [];
+  
+  for (const w of scoredWindows) {
+    if (selectedWindows.length >= numWindows) break;
+    // Check non-overlap with already selected windows
+    const overlaps = selectedWindows.some(sel => 
+      Math.abs(sel.start - w.start) < perWindowBudget
+    );
+    if (!overlaps) {
+      selectedWindows.push(w);
     }
   }
 
-  const excerpt = content.substring(snapStart, snapStart + maxLen);
-  
-  // Add ellipsis indicators
-  const prefix = snapStart > 0 ? '...\n' : '';
-  const suffix = (snapStart + maxLen) < content.length ? '\n...' : '';
-  
-  return prefix + excerpt.trim() + suffix;
+  // Sort selected windows by position in document (for coherent reading order)
+  selectedWindows.sort((a, b) => a.start - b.start);
+
+  // Build the final excerpt from multiple windows
+  const parts: string[] = [];
+  for (const w of selectedWindows) {
+    // Snap to nearest paragraph boundary
+    let snapStart = w.start;
+    if (snapStart > 0) {
+      const lookBack = content.substring(Math.max(0, snapStart - 200), snapStart);
+      const sectionMatch = lookBack.lastIndexOf('\n\n');
+      if (sectionMatch >= 0) {
+        snapStart = Math.max(0, snapStart - 200) + sectionMatch + 2;
+      }
+    }
+
+    const excerpt = content.substring(snapStart, snapStart + perWindowBudget).trim();
+    const prefix = snapStart > 0 ? '...' : '';
+    const suffix = (snapStart + perWindowBudget) < content.length ? '...' : '';
+    parts.push(prefix + excerpt + suffix);
+  }
+
+  return parts.join('\n\n---\n\n');
 }
 
 serve(async (req) => {
