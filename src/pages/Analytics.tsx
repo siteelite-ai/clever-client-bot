@@ -1,6 +1,7 @@
 import { BarChart3, TrendingUp, Users, MessageSquare, Clock, ShoppingCart } from 'lucide-react';
 import { AdminLayout } from '@/components/layout/AdminLayout';
 import { StatsCard } from '@/components/dashboard/StatsCard';
+import { TokenUsageCard } from '@/components/dashboard/TokenUsageCard';
 
 export default function Analytics() {
   return (
@@ -57,6 +58,9 @@ export default function Analytics() {
             icon={TrendingUp}
           />
         </div>
+
+        {/* Token Usage */}
+        <TokenUsageCard />
 
         {/* Charts placeholder */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
