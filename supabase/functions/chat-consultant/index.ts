@@ -272,6 +272,7 @@ interface ExtractedIntent {
   intent: 'catalog' | 'brands' | 'info' | 'general';
   candidates: SearchCandidate[];
   originalQuery: string;
+  usage_context?: string; // Abstract usage context like "для улицы", "в ванную" — triggers AI post-filtering
 }
 
 // Генерация поисковых кандидатов через AI с учётом контекста разговора
@@ -335,24 +336,21 @@ ${historyContext}
 5. Бренды ВСЕГДА латиницей: "филипс" → brand="Philips", "бош" → brand="Bosch", "макита" → brand="Makita"
 6. НЕ ИСПОЛЬЗУЙ параметр category! Ты не знаешь точные названия категорий в каталоге. Используй только query для текстового поиска.
 7. Если пользователь упоминает ХАРАКТЕРИСТИКУ — ОБЯЗАТЕЛЬНО помести её в option_filters! НЕ включай характеристики в query!
+8. Если пользователь описывает КОНТЕКСТ ИСПОЛЬЗОВАНИЯ (место, условия), а не конкретную характеристику — заполни поле usage_context! НЕ пытайся угадать конкретные значения характеристик для абстрактных контекстов!
 
-🧠 СЕМАНТИЧЕСКАЯ ТРАНСФОРМАЦИЯ:
-Пользователь говорит РАЗГОВОРНЫМ языком, каталог использует ТЕХНИЧЕСКИЕ термины:
-- "болгарка" → query="УШМ" (+ вариант "болгарка")
-- "рамка на 2 слота" → query="рамка 2-местная"
-- "дырка под розетку" → query="подрозетник"
-- "провод трёхжильный 2.5" → query="кабель 3x2.5"
-- "перфораторы" → query="перфоратор" (единственное число работает лучше для поиска!)
-- "белорусский светильник" → query="светильник" + option_filters={"страна": "Беларусь"}
-- "лампа E14" → query="лампа" + option_filters={"цоколь": "E14"}
-- "удлинитель на 5 метров" → query="удлинитель" + option_filters={"длина": "5"}
-- "кабель сечением 2.5" → query="кабель" + option_filters={"сечение": "2.5"}
+🌍 КОНТЕКСТЫ ИСПОЛЬЗОВАНИЯ (usage_context):
+Когда пользователь описывает ГДЕ или КАК будет использоваться товар, но НЕ указывает конкретную техническую характеристику:
+- "для улицы" → usage_context="наружное использование, нужна защита от влаги и пыли"
+- "в ванную" → usage_context="влажное помещение, нужна защита от воды"
+- "для детской" → usage_context="детская комната, нужна безопасность, шторки, защита от детей"
+- "на производство" → usage_context="промышленное использование, повышенная нагрузка"
+- "в гараж" → usage_context="гараж, неотапливаемое помещение, пыль"
 
-⚠️ ВАЖНО: Всегда генерируй МИНИМУМ 2 кандидата с разными вариантами написания:
-- Один с техническим названием в единственном числе
-- Один с разговорным вариантом или синонимом
-- query должен содержать ТОЛЬКО тип/название товара (1-2 слова). Характеристики (размер, мощность, цоколь, ампераж и т.д.) передавай через option_filters, НЕ включай их в query.
-- Если есть option_filters, дублируй их во все кандидаты!
+⚠️ ВАЖНО: usage_context и option_filters — РАЗНЫЕ вещи!
+- option_filters: конкретные значения ("IP65", "E14", "2.5мм²") — пользователь ЗНАЕТ что ему нужно
+- usage_context: абстрактный контекст ("для улицы", "в ванную") — пользователь НЕ ЗНАЕТ конкретных характеристик
+- "розетка IP65" → option_filters={"защита": "IP65"}, usage_context=null
+- "розетка для улицы" → option_filters=null, usage_context="наружное использование, нужна защита от влаги и пыли"
 
 🔴 ОПРЕДЕЛИ ПРАВИЛЬНЫЙ INTENT:
 - "catalog" — ищет товары/оборудование
@@ -433,6 +431,11 @@ ${historyContext}
                     additionalProperties: false
                   },
                   description: 'Массив вариантов запросов к API (2-5 штук с разными query-вариациями)'
+                },
+                usage_context: {
+                  type: 'string',
+                  nullable: true,
+                  description: 'Абстрактный контекст использования, когда пользователь НЕ указывает конкретную характеристику, а описывает МЕСТО или УСЛОВИЯ (для улицы, в ванную, для детской, на производство). null если пользователь указывает конкретные параметры или контекст не задан.'
                 }
               },
               required: ['intent', 'candidates'],
@@ -486,10 +489,16 @@ ${historyContext}
       // SYSTEMIC: Always add broad candidates + original message terms
       const broadened = generateBroadCandidates(candidates, message);
       
+      const usageContext = parsed.usage_context || undefined;
+      if (usageContext) {
+        console.log(`[AI Candidates] Usage context detected: "${usageContext}"`);
+      }
+      
       return {
         intent: parsed.intent || 'general',
         candidates: broadened,
-        originalQuery: message
+        originalQuery: message,
+        usage_context: usageContext,
       };
     }
 
@@ -1196,6 +1205,152 @@ function cleanOptionCaption(caption: string): string {
   return parts[0].trim();
 }
 
+/**
+ * AI POST-FILTERING BY USAGE CONTEXT (Dynamic Intent Mapping)
+ * 
+ * When user specifies an abstract usage context ("для улицы", "в ванную"),
+ * we can't pre-guess which specific option values match. Instead:
+ * 1. Broad search returns products with ALL their options
+ * 2. We extract ALL unique option key→values from results
+ * 3. AI analyzes which products match the usage context based on real data
+ */
+async function aiFilterProductsByIntent(
+  products: Product[],
+  usageContext: string,
+  originalQuery: string,
+  aiUrl: string,
+  apiKeys: string[],
+  aiModel: string
+): Promise<{ filtered: Product[]; reasoning: string }> {
+  if (products.length === 0 || !usageContext) return { filtered: products, reasoning: '' };
+  
+  console.log(`[AI Filter] Filtering ${products.length} products by usage context: "${usageContext}"`);
+  
+  // Collect unique option keys and their values across all products
+  const optionIndex: Map<string, { caption: string; values: Set<string> }> = new Map();
+  for (const product of products) {
+    if (!product.options) continue;
+    for (const opt of product.options) {
+      if (isExcludedOption(opt.key)) continue;
+      if (!optionIndex.has(opt.key)) {
+        optionIndex.set(opt.key, { caption: cleanOptionCaption(opt.caption), values: new Set() });
+      }
+      optionIndex.get(opt.key)!.values.add(cleanOptionValue(opt.value));
+    }
+  }
+  
+  // Build a summary of available characteristics
+  const charSummary = Array.from(optionIndex.entries())
+    .map(([_key, info]) => `- ${info.caption}: [${[...info.values].join(', ')}]`)
+    .join('\n');
+  
+  // Build compact product list with their options
+  const productList = products.map((p) => {
+    const opts = (p.options || [])
+      .filter(o => !isExcludedOption(o.key))
+      .map(o => `${cleanOptionCaption(o.caption)}=${cleanOptionValue(o.value)}`)
+      .join('; ');
+    return `ID=${p.id}: "${p.pagetitle}" | ${opts}`;
+  }).join('\n');
+  
+  console.log(`[AI Filter] Found ${optionIndex.size} unique option keys across products`);
+  
+  const filterPrompt = `Ты — эксперт по электротоварам. Пользователь ищет товар для конкретного контекста использования.
+
+ЗАПРОС ПОЛЬЗОВАТЕЛЯ: "${originalQuery}"
+КОНТЕКСТ ИСПОЛЬЗОВАНИЯ: ${usageContext}
+
+ДОСТУПНЫЕ ХАРАКТЕРИСТИКИ В КАТАЛОГЕ:
+${charSummary}
+
+СПИСОК ТОВАРОВ С ХАРАКТЕРИСТИКАМИ:
+${productList}
+
+ЗАДАЧА: Выбери ТОЛЬКО те товары (по ID), которые ПОДХОДЯТ для указанного контекста использования.
+
+Пример рассуждения для "для улицы":
+- Нужна защита от влаги/пыли → Степень защиты IP44 и выше (IP44, IP54, IP55, IP65, IP66, IP67, IP68) подходит
+- IP20 — только для сухих помещений → НЕ подходит
+- Если у товара НЕТ характеристики "степень защиты" — он скорее НЕ подходит для улицы
+
+ВАЖНО:
+- Анализируй ВСЕ характеристики, не только одну
+- Возвращай минимум 2 товара (если столько есть)
+- Если НИКАКИЕ характеристики не позволяют отфильтровать — верни все товары`;
+
+  try {
+    const response = await callAIWithKeyFallback(aiUrl, apiKeys, {
+      model: aiModel,
+      messages: [
+        { role: 'system', content: filterPrompt },
+        { role: 'user', content: `Выбери подходящие товары для контекста: ${usageContext}` }
+      ],
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: 'filter_products',
+            description: 'Возвращает список ID товаров, подходящих для указанного контекста использования',
+            parameters: {
+              type: 'object',
+              properties: {
+                suitable_product_ids: {
+                  type: 'array',
+                  items: { type: 'number' },
+                  description: 'Массив ID товаров, подходящих для контекста использования'
+                },
+                reasoning: {
+                  type: 'string',
+                  description: 'Краткое объяснение, по каким характеристикам были отобраны товары (1-2 предложения на русском)'
+                }
+              },
+              required: ['suitable_product_ids', 'reasoning'],
+              additionalProperties: false
+            }
+          }
+        }
+      ],
+      tool_choice: { type: 'function', function: { name: 'filter_products' } },
+    }, 'AI Filter');
+
+    if (!response.ok) {
+      console.error(`[AI Filter] API error: ${response.status}`);
+      return { filtered: products, reasoning: '' };
+    }
+
+    const data = await response.json();
+    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    
+    if (toolCall?.function?.arguments) {
+      const parsed = JSON.parse(toolCall.function.arguments);
+      const suitableIds = new Set<number>(parsed.suitable_product_ids || []);
+      const reasoning = parsed.reasoning || '';
+      
+      console.log(`[AI Filter] AI selected ${suitableIds.size}/${products.length} products. Reasoning: ${reasoning}`);
+      
+      if (suitableIds.size === 0) {
+        console.log(`[AI Filter] AI returned 0 — safety fallback to all`);
+        return { filtered: products, reasoning: '' };
+      }
+      
+      const filtered = products.filter(p => suitableIds.has(p.id));
+      
+      if (filtered.length === 0) {
+        console.log(`[AI Filter] No ID matches — safety fallback to all`);
+        return { filtered: products, reasoning: '' };
+      }
+      
+      console.log(`[AI Filter] Result: ${filtered.length} products match usage context`);
+      return { filtered, reasoning };
+    }
+    
+    return { filtered: products, reasoning: '' };
+  } catch (error) {
+    console.error(`[AI Filter] Error:`, error);
+    return { filtered: products, reasoning: '' };
+  }
+}
+
 // Форматирование товаров для AI с кликабельными ссылками и характеристиками
 function formatProductsForAI(products: Product[]): string {
   if (products.length === 0) {
@@ -1676,7 +1831,26 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
       }
     } else if (extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
       // Обычный каталожный запрос
-      foundProducts = await searchWithTranslationFallback(extractedIntent.candidates, 8, appSettings.volt220_api_token || undefined, aiConfig.url, aiConfig.apiKeys, aiConfig.model);
+      // When usage_context is present, fetch MORE products for AI filtering
+      const searchLimit = extractedIntent.usage_context ? 30 : 8;
+      foundProducts = await searchWithTranslationFallback(extractedIntent.candidates, searchLimit, appSettings.volt220_api_token || undefined, aiConfig.url, aiConfig.apiKeys, aiConfig.model);
+      
+      // === DYNAMIC INTENT MAPPING: AI post-filtering by usage context ===
+      let filterReasoning = '';
+      if (foundProducts.length > 0 && extractedIntent.usage_context) {
+        console.log(`[Chat] Usage context detected: "${extractedIntent.usage_context}" — applying AI post-filter on ${foundProducts.length} products`);
+        const { filtered, reasoning } = await aiFilterProductsByIntent(
+          foundProducts,
+          extractedIntent.usage_context,
+          extractedIntent.originalQuery,
+          aiConfig.url,
+          aiConfig.apiKeys,
+          aiConfig.model
+        );
+        filterReasoning = reasoning;
+        foundProducts = filtered.slice(0, 8); // Limit to 8 after filtering
+        console.log(`[Chat] After AI filter: ${foundProducts.length} products remain`);
+      }
       
       if (foundProducts.length > 0) {
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
@@ -1686,8 +1860,9 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
         // Describe applied option filters so AI knows what was filtered
         const appliedFilters = describeAppliedFilters(extractedIntent.candidates);
         const filterNote = appliedFilters ? `\n⚠️ ПРИМЕНЁННЫЕ ФИЛЬТРЫ: ${appliedFilters}\nВсе товары ниже УЖЕ отфильтрованы по этим характеристикам — ты можешь уверенно это сообщить клиенту!\n` : '';
+        const contextNote = filterReasoning ? `\n🎯 AI-ФИЛЬТРАЦИЯ ПО КОНТЕКСТУ: ${filterReasoning}\nТовары ниже отобраны специально для контекста "${extractedIntent.usage_context}" — объясни клиенту ПОЧЕМУ эти товары подходят!\n` : '';
         
-        productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**${filterNote}\n${formattedProducts}`;
+        productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**${filterNote}${contextNote}\n${formattedProducts}`;
       }
     }
 
