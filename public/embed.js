@@ -507,26 +507,22 @@
     return result;
   }
 
-  // Add message to chat
+  // Add message to chat (returns the DOM element)
   function addMessage(content, role) {
     const msg = document.createElement('div');
     msg.className = `volt-message ${role}`;
     if (role === 'user') {
-      // User messages: use textContent to prevent any HTML execution
       msg.textContent = content;
     } else {
-      // Assistant messages: use formatMessage which escapes HTML first, then applies markdown
       msg.innerHTML = formatMessage(content);
     }
     messagesContainer.appendChild(msg);
     if (role === 'user') {
-      // User messages: scroll to bottom so they see their own message
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
     } else {
-      // Assistant messages: scroll so the START of the response is visible (not the end)
-      // This lets the user read from the beginning without scrolling back up
       msg.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
+    return msg;
   }
 
   // Show typing indicator
@@ -545,24 +541,27 @@
     if (typing) typing.remove();
   }
 
-  // Attempt fetch with timeout
-  async function fetchWithTimeout(url, options, timeoutMs) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-      const resp = await fetch(url, { ...options, signal: controller.signal });
-      clearTimeout(timer);
-      return resp;
-    } catch (e) {
-      clearTimeout(timer);
-      throw e;
+  // Parse SSE lines from a text buffer, returns { lines: string[], remaining: string }
+  function parseSSELines(buffer) {
+    var lines = [];
+    var remaining = buffer;
+    var idx;
+    while ((idx = remaining.indexOf('\n')) !== -1) {
+      var line = remaining.slice(0, idx);
+      remaining = remaining.slice(idx + 1);
+      if (line.endsWith('\r')) line = line.slice(0, -1);
+      lines.push(line);
     }
+    return { lines: lines, remaining: remaining };
   }
 
-  // Try a single endpoint
-  async function tryEndpoint(baseUrl, message, label) {
-    const url = baseUrl + '/functions/v1/chat-consultant';
-    const response = await fetchWithTimeout(url, {
+  // Try streaming from a single endpoint, updating msgEl progressively
+  async function tryStreamEndpoint(baseUrl, message, label, msgEl) {
+    var url = baseUrl + '/functions/v1/chat-consultant';
+    var controller = new AbortController();
+    var timer = setTimeout(function() { controller.abort(); }, 90000);
+
+    var response = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -573,37 +572,101 @@
         message: message,
         sessionId: sessionId,
         history: conversationHistory.slice(-10),
-        stream: false
-      })
-    }, 60000);
+        stream: true
+      }),
+      signal: controller.signal
+    });
+
+    clearTimeout(timer);
 
     if (!response.ok) {
-      const errText = await response.text().catch(function() { return 'no body'; });
       throw new Error(label + ' HTTP ' + response.status);
     }
 
-    const contentType = response.headers.get('content-type') || '';
-    const text = await response.text();
+    var reader = response.body.getReader();
+    var decoder = new TextDecoder();
+    var textBuffer = '';
+    var fullContent = '';
+    var contacts = null;
+    var done = false;
+    var lastScrollTime = 0;
 
-    if (contentType.indexOf('json') === -1 && text.charAt(0) === '<') {
-      throw new Error(label + ' returned HTML, not JSON');
+    while (!done) {
+      var chunk = await reader.read();
+      if (chunk.done) break;
+      textBuffer += decoder.decode(chunk.value, { stream: true });
+
+      var parsed = parseSSELines(textBuffer);
+      textBuffer = parsed.remaining;
+
+      for (var i = 0; i < parsed.lines.length; i++) {
+        var line = parsed.lines[i];
+        if (line.startsWith(':') || line.trim() === '') continue;
+        if (!line.startsWith('data: ')) continue;
+
+        var jsonStr = line.slice(6).trim();
+        if (jsonStr === '[DONE]') {
+          done = true;
+          break;
+        }
+
+        try {
+          var obj = JSON.parse(jsonStr);
+          // Check for contacts event
+          if (obj.contacts) {
+            contacts = obj.contacts;
+            continue;
+          }
+          var delta = obj.choices && obj.choices[0] && obj.choices[0].delta && obj.choices[0].delta.content;
+          if (delta) {
+            fullContent += delta;
+            // Update message element with progressive content
+            msgEl.innerHTML = formatMessage(fullContent);
+            // Throttle scroll to avoid jank
+            var now = Date.now();
+            if (now - lastScrollTime > 300) {
+              lastScrollTime = now;
+              messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }
+          }
+        } catch (e) {
+          // Partial JSON - put line back into buffer
+          textBuffer = line + '\n' + textBuffer;
+          break;
+        }
+      }
     }
 
-    var data;
-    try {
-      data = JSON.parse(text);
-    } catch (e) {
-      throw new Error(label + ' invalid JSON: ' + text.substring(0, 100));
+    // Final flush of remaining buffer
+    if (textBuffer.trim()) {
+      var leftover = textBuffer.split('\n');
+      for (var j = 0; j < leftover.length; j++) {
+        var raw = leftover[j];
+        if (!raw) continue;
+        if (raw.endsWith('\r')) raw = raw.slice(0, -1);
+        if (raw.startsWith(':') || raw.trim() === '') continue;
+        if (!raw.startsWith('data: ')) continue;
+        var js2 = raw.slice(6).trim();
+        if (js2 === '[DONE]') continue;
+        try {
+          var o2 = JSON.parse(js2);
+          if (o2.contacts) { contacts = o2.contacts; continue; }
+          var d2 = o2.choices && o2.choices[0] && o2.choices[0].delta && o2.choices[0].delta.content;
+          if (d2) {
+            fullContent += d2;
+            msgEl.innerHTML = formatMessage(fullContent);
+          }
+        } catch(e) {}
+      }
     }
 
-    if (data.error) throw new Error(label + ': ' + data.error);
-    if (!data.content) throw new Error(label + ': empty content');
-    return { content: data.content, contacts: data.contacts || null };
+    if (!fullContent) throw new Error(label + ': empty streaming content');
+    return { content: fullContent, contacts: contacts };
   }
 
-  // Send message with fallback
+  // Send message with streaming and fallback
   async function sendMessage() {
-    const message = input.value.trim();
+    var message = input.value.trim();
     if (!message || isLoading) return;
 
     isLoading = true;
@@ -615,36 +678,52 @@
 
     showTyping();
 
-    // Try proxy first (works in RU), direct Supabase as fallback
     var endpoints = [
       { url: CONFIG.supabaseUrl, label: 'proxy' },
       { url: 'https://yngoixmvmxdfxokuafjp.supabase.co', label: 'direct' }
     ];
+
+    // Create assistant message element for streaming
+    var assistantMsg = document.createElement('div');
+    assistantMsg.className = 'volt-message assistant';
+    assistantMsg.innerHTML = '';
 
     var result = null;
     var lastError = null;
 
     for (var i = 0; i < endpoints.length; i++) {
       try {
-        result = await tryEndpoint(endpoints[i].url, message, endpoints[i].label);
+        // Remove typing indicator before streaming starts
+        hideTyping();
+        messagesContainer.appendChild(assistantMsg);
+        assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+
+        result = await tryStreamEndpoint(endpoints[i].url, message, endpoints[i].label, assistantMsg);
         break;
       } catch (err) {
         lastError = err;
+        // Remove the empty assistant msg if this endpoint failed, will retry
+        if (assistantMsg.parentNode) assistantMsg.remove();
+        if (i < endpoints.length - 1) showTyping();
       }
     }
 
     hideTyping();
 
     if (result) {
-      addMessage(result.content, 'assistant');
+      // Final render with full content
+      assistantMsg.innerHTML = formatMessage(result.content);
       conversationHistory.push({ role: 'assistant', content: result.content });
-      
-      // Always show contacts as second message
+
       if (result.contacts) {
         addMessage(result.contacts, 'assistant');
       }
     } else {
-      addMessage('Извините, произошла ошибка соединения. Попробуйте позже.', 'assistant');
+      // All endpoints failed
+      if (!assistantMsg.parentNode) {
+        messagesContainer.appendChild(assistantMsg);
+      }
+      assistantMsg.innerHTML = formatMessage('Извините, произошла ошибка соединения. Попробуйте позже.');
     }
 
     isLoading = false;
@@ -654,7 +733,7 @@
 
   // Event listeners
   sendBtn.addEventListener('click', sendMessage);
-  input.addEventListener('keypress', (e) => {
+  input.addEventListener('keypress', function(e) {
     if (e.key === 'Enter') {
       sendMessage();
     }
@@ -662,8 +741,8 @@
 
   // Expose API
   window.Widget220volt = {
-    open: () => { if (!isOpen) toggleWidget(); },
-    close: () => { if (isOpen) toggleWidget(); },
+    open: function() { if (!isOpen) toggleWidget(); },
+    close: function() { if (isOpen) toggleWidget(); },
     toggle: toggleWidget
   };
 })();
