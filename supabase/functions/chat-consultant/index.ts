@@ -881,7 +881,13 @@ async function searchProductsMulti(
     return true;
   });
   
-  const pass1Promises = uniquePass1.map(candidate => 
+  // === OPTIMIZATION: Limit parallel API calls to max 5 to avoid overload ===
+  const cappedPass1 = uniquePass1.slice(0, 5);
+  if (uniquePass1.length > 5) {
+    console.log(`[Search] Capped candidates from ${uniquePass1.length} to 5`);
+  }
+  
+  const pass1Promises = cappedPass1.map(candidate => 
     searchProductsByCandidate(candidate, apiToken, limit)
   );
   const pass1Results = await Promise.all(pass1Promises);
@@ -1071,6 +1077,14 @@ async function searchWithTranslationFallback(
   // First: normal search
   const results = await searchProductsMulti(candidates, limit, apiToken);
   
+  // === OPTIMIZATION: Skip translation if we already have enough products ===
+  // Translation is only useful when the main search found NOTHING or very little.
+  // If we have ≥3 products, translation won't add meaningful value — it just wastes 4-6 seconds.
+  if (results.length >= 3) {
+    console.log(`[Translate] Skipping — already found ${results.length} products`);
+    return results;
+  }
+  
   // Extract unique query terms to check which ones found nothing
   const queries = candidates
     .map(c => c.query)
@@ -1079,7 +1093,6 @@ async function searchWithTranslationFallback(
   if (queries.length === 0) return results;
   
   // Find terms that individually returned 0 results by testing each unique word
-  // Extract individual words from all queries
   const allWords = new Set<string>();
   for (const q of queries) {
     for (const word of q.toLowerCase().split(/\s+/)) {
@@ -1095,7 +1108,6 @@ async function searchWithTranslationFallback(
   
   // Words that didn't match anything in results — these are candidates for translation
   const zeroMatchWords = [...allWords].filter(word => {
-    // Check if this word (or its stem) appears in any result
     const stem = word.replace(/(а|у|ы|и|е|о|ё|я|ь|ъ|ой|ий|ый|ая|ое|ые)$/i, '');
     return !allResultText.includes(word) && (stem.length < 3 || !allResultText.includes(stem));
   });
@@ -1104,8 +1116,16 @@ async function searchWithTranslationFallback(
     return results; // All terms matched something
   }
   
-  // Also check: are these "zero-match" words just common Russian words?
-  const skipWords = new Set(['лампа', 'лампы', 'ламп', 'светильник', 'кабель', 'провод', 'розетк', 'выключател', 'автомат', 'щит']);
+  // Skip common Russian words that are NOT product names — these waste translation time
+  const skipWords = new Set([
+    'лампа', 'лампы', 'ламп', 'светильник', 'кабель', 'провод', 'розетк', 'выключател', 'автомат', 'щит',
+    // Pronouns, verbs, prepositions — NEVER translate these
+    'какую', 'какой', 'какая', 'какие', 'каком', 'каких', 'какого',
+    'купить', 'покупк', 'нужен', 'нужна', 'нужно', 'подбер', 'подобр', 'покажи', 'найди',
+    'улиц', 'улице', 'улицы', 'ванну', 'ванной', 'гараж', 'дачи', 'дачу', 'кухни', 'кухню',
+    'дома', 'домой', 'квартир', 'офис', 'склад', 'цеха', 'цехе',
+    'хочу', 'можно', 'лучше', 'подходит', 'стоит', 'посоветуй',
+  ]);
   const wordsToTranslate = zeroMatchWords.filter(w => !skipWords.has(w));
   
   if (wordsToTranslate.length === 0) {
@@ -1114,11 +1134,9 @@ async function searchWithTranslationFallback(
   
   console.log(`[Translate] Zero-match words found: ${wordsToTranslate.join(', ')} — translating to English`);
   
-  // Translate zero-match words
   const translatedQueries = await translateSearchTerms(wordsToTranslate, aiUrl, apiKeys, aiModel);
   if (translatedQueries.length === 0) return results;
   
-  // Build translated candidates: combine translated words with original non-zero-match terms
   const translatedCandidates: SearchCandidate[] = translatedQueries.map(q => ({
     query: q,
     brand: candidates[0]?.brand || null,
@@ -1128,7 +1146,6 @@ async function searchWithTranslationFallback(
     option_filters: candidates[0]?.option_filters,
   }));
   
-  // Also try combining: e.g. "лампа" + "corn" for "лампа кукуруза" → "лампа corn"
   const commonProductWords = [...allWords].filter(w => !wordsToTranslate.includes(w));
   if (commonProductWords.length > 0 && translatedQueries.length > 0) {
     for (const translated of translatedQueries) {
@@ -1149,7 +1166,6 @@ async function searchWithTranslationFallback(
   
   if (translatedResults.length > 0) {
     console.log(`[Search] Translation fallback found ${translatedResults.length} products!`);
-    // Merge: translation results first (more relevant), then original results
     const mergedMap = new Map<number, Product>();
     for (const p of translatedResults) mergedMap.set(p.id, p);
     for (const p of results) { if (!mergedMap.has(p.id)) mergedMap.set(p.id, p); }
@@ -1226,57 +1242,23 @@ async function aiFilterProductsByIntent(
   
   console.log(`[AI Filter] Filtering ${products.length} products by usage context: "${usageContext}"`);
   
-  // Collect unique option keys and their values across all products
-  const optionIndex: Map<string, { caption: string; values: Set<string> }> = new Map();
-  for (const product of products) {
-    if (!product.options) continue;
-    for (const opt of product.options) {
-      if (isExcludedOption(opt.key)) continue;
-      if (!optionIndex.has(opt.key)) {
-        optionIndex.set(opt.key, { caption: cleanOptionCaption(opt.caption), values: new Set() });
-      }
-      optionIndex.get(opt.key)!.values.add(cleanOptionValue(opt.value));
-    }
-  }
-  
-  // Build a summary of available characteristics
-  const charSummary = Array.from(optionIndex.entries())
-    .map(([_key, info]) => `- ${info.caption}: [${[...info.values].join(', ')}]`)
-    .join('\n');
-  
-  // Build compact product list with their options
+  // Build compact product list with ONLY relevant options (max 8 per product)
   const productList = products.map((p) => {
     const opts = (p.options || [])
       .filter(o => !isExcludedOption(o.key))
       .map(o => `${cleanOptionCaption(o.caption)}=${cleanOptionValue(o.value)}`)
-      .join('; ');
-    return `ID=${p.id}: "${p.pagetitle}" | ${opts}`;
+      .slice(0, 8);
+    return `ID=${p.id}: "${p.pagetitle}" | ${opts.join('; ')}`;
   }).join('\n');
   
-  console.log(`[AI Filter] Found ${optionIndex.size} unique option keys across products`);
+  console.log(`[AI Filter] Sending ${products.length} products for filtering`);
   
-  const filterPrompt = `Ты — эксперт по электротоварам. Пользователь ищет товар для конкретного контекста использования.
+  const filterPrompt = `Ты эксперт по электротоварам. Выбери товары подходящие для контекста: ${usageContext}
 
-ЗАПРОС ПОЛЬЗОВАТЕЛЯ: "${originalQuery}"
-КОНТЕКСТ ИСПОЛЬЗОВАНИЯ: ${usageContext}
-
-ДОСТУПНЫЕ ХАРАКТЕРИСТИКИ В КАТАЛОГЕ:
-${charSummary}
-
-СПИСОК ТОВАРОВ С ХАРАКТЕРИСТИКАМИ:
+ТОВАРЫ:
 ${productList}
 
-ЗАДАЧА: Выбери ТОЛЬКО те товары (по ID), которые ПОДХОДЯТ для указанного контекста использования.
-
-Пример рассуждения для "для улицы":
-- Нужна защита от влаги/пыли → Степень защиты IP44 и выше (IP44, IP54, IP55, IP65, IP66, IP67, IP68) подходит
-- IP20 — только для сухих помещений → НЕ подходит
-- Если у товара НЕТ характеристики "степень защиты" — он скорее НЕ подходит для улицы
-
-ВАЖНО:
-- Анализируй ВСЕ характеристики, не только одну
-- Возвращай минимум 2 товара (если столько есть)
-- Если НИКАКИЕ характеристики не позволяют отфильтровать — верни все товары`;
+Выбери ТОЛЬКО подходящие (минимум 2 если есть). Если невозможно определить — верни все.`;
 
   try {
     const response = await callAIWithKeyFallback(aiUrl, apiKeys, {
@@ -1832,7 +1814,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
     } else if (extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
       // Обычный каталожный запрос
       // When usage_context is present, fetch MORE products for AI filtering
-      const searchLimit = extractedIntent.usage_context ? 30 : 8;
+      const searchLimit = extractedIntent.usage_context ? 15 : 8;
       foundProducts = await searchWithTranslationFallback(extractedIntent.candidates, searchLimit, appSettings.volt220_api_token || undefined, aiConfig.url, aiConfig.apiKeys, aiConfig.model);
       
       // === DYNAMIC INTENT MAPPING: AI post-filtering by usage context ===
