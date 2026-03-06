@@ -903,6 +903,9 @@ async function searchProductsMulti(
     return [];
   }
 
+  // per_page for each API call — cast a wide net, then deduplicate & slice at the end
+  const perPage = Math.max(limit, 30);
+
   // Убираем category из всех кандидатов
   const cleanedCandidates = candidates.map(c => ({ ...c, category: null }));
   
@@ -910,7 +913,7 @@ async function searchProductsMulti(
   const humanFilters = cleanedCandidates.find(c => c.option_filters)?.option_filters || {};
   const hasHumanFilters = Object.keys(humanFilters).length > 0;
   
-  console.log(`[Search] Searching ${cleanedCandidates.length} candidates, humanFilters: ${JSON.stringify(humanFilters)}`);
+  console.log(`[Search] Searching ${cleanedCandidates.length} candidates (perPage=${perPage}, finalLimit=${limit}), humanFilters: ${JSON.stringify(humanFilters)}`);
 
   // === PASS 1: Broad search WITHOUT option filters ===
   // This gets us products whose `options` we can inspect to discover real API keys
@@ -924,14 +927,14 @@ async function searchProductsMulti(
     return true;
   });
   
-  // === OPTIMIZATION: Limit parallel API calls to max 5 to avoid overload ===
-  const cappedPass1 = uniquePass1.slice(0, 5);
-  if (uniquePass1.length > 5) {
-    console.log(`[Search] Capped candidates from ${uniquePass1.length} to 5`);
+  // === OPTIMIZATION: Limit parallel API calls to max 6 to avoid overload ===
+  const cappedPass1 = uniquePass1.slice(0, 6);
+  if (uniquePass1.length > 6) {
+    console.log(`[Search] Capped candidates from ${uniquePass1.length} to 6`);
   }
   
   const pass1Promises = cappedPass1.map(candidate => 
-    searchProductsByCandidate(candidate, apiToken, limit)
+    searchProductsByCandidate(candidate, apiToken, perPage)
   );
   const pass1Results = await Promise.all(pass1Promises);
   
@@ -970,7 +973,7 @@ async function searchProductsMulti(
       });
       
       const pass2Promises = pass2Candidates.map(candidate => 
-        searchProductsByCandidate(candidate, apiToken, limit, resolvedFilters)
+        searchProductsByCandidate(candidate, apiToken, perPage, resolvedFilters)
       );
       const pass2Results = await Promise.all(pass2Promises);
       
@@ -1004,7 +1007,7 @@ async function searchProductsMulti(
     if (queryOnlyCandidates.length > 0) {
       console.log(`[Search] 0 results with filters, trying fallback with query only...`);
       const fallbackPromises = queryOnlyCandidates.map(c => 
-        searchProductsByCandidate({ query: c.query, brand: null, category: null, min_price: null, max_price: null }, apiToken, limit)
+        searchProductsByCandidate({ query: c.query, brand: null, category: null, min_price: null, max_price: null }, apiToken, perPage)
       );
       const fallbackResults = await Promise.all(fallbackPromises);
       for (const products of fallbackResults) {
@@ -1856,7 +1859,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
       }
     } else if (extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
       // Обычный каталожный запрос
-      const searchLimit = extractedIntent.usage_context ? 15 : 8;
+      const searchLimit = extractedIntent.usage_context ? 25 : 15;
       foundProducts = await searchProductsMulti(extractedIntent.candidates, searchLimit, appSettings.volt220_api_token || undefined);
       
       // === ENGLISH FALLBACK: если мало результатов и есть английские переводы ===
