@@ -501,23 +501,10 @@ ${historyContext}
         console.log(`[AI Candidates] Usage context detected: "${usageContext}"`);
       }
       
-      // English translations from intent extractor (eliminates separate translation LLM call)
+      // English translations — stored for fallback use only (NOT added to candidates)
       const englishQueries = parsed.english_queries || [];
       if (englishQueries.length > 0) {
-        console.log(`[AI Candidates] English queries: ${englishQueries.join(', ')}`);
-        for (const eq of englishQueries) {
-          if (eq && eq.trim().length > 0) {
-            broadened.push({
-              query: eq.trim().toLowerCase(),
-              brand: candidates[0]?.brand || null,
-              category: null,
-              min_price: candidates[0]?.min_price || null,
-              max_price: candidates[0]?.max_price || null,
-              option_filters: candidates[0]?.option_filters,
-            });
-          }
-        }
-        console.log(`[AI Candidates] Added ${englishQueries.length} English candidates, total: ${broadened.length}`);
+        console.log(`[AI Candidates] English queries available for fallback: ${englishQueries.join(', ')}`);
       }
       
       return {
@@ -1840,20 +1827,39 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
       }
     } else if (extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
       // Обычный каталожный запрос
-      // When usage_context is present, fetch MORE products so final LLM can filter inline
       const searchLimit = extractedIntent.usage_context ? 15 : 8;
       foundProducts = await searchProductsMulti(extractedIntent.candidates, searchLimit, appSettings.volt220_api_token || undefined);
+      
+      // === ENGLISH FALLBACK: если мало результатов и есть английские переводы ===
+      if (foundProducts.length < 3 && extractedIntent.english_queries && extractedIntent.english_queries.length > 0) {
+        console.log(`[Chat] Only ${foundProducts.length} products found, trying English fallback: ${extractedIntent.english_queries.join(', ')}`);
+        const englishCandidates: SearchCandidate[] = extractedIntent.english_queries.map(eq => ({
+          query: eq.trim().toLowerCase(),
+          brand: extractedIntent.candidates[0]?.brand || null,
+          category: null,
+          min_price: extractedIntent.candidates[0]?.min_price || null,
+          max_price: extractedIntent.candidates[0]?.max_price || null,
+          option_filters: extractedIntent.candidates[0]?.option_filters,
+        }));
+        const englishResults = await searchProductsMulti(englishCandidates, searchLimit, appSettings.volt220_api_token || undefined);
+        if (englishResults.length > 0) {
+          console.log(`[Chat] English fallback found ${englishResults.length} additional products`);
+          // Merge: English results first (they matched translation), then existing
+          const mergedMap = new Map<number, Product>();
+          for (const p of englishResults) mergedMap.set(p.id, p);
+          for (const p of foundProducts) { if (!mergedMap.has(p.id)) mergedMap.set(p.id, p); }
+          foundProducts = Array.from(mergedMap.values()).slice(0, searchLimit);
+        }
+      }
       
       if (foundProducts.length > 0) {
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
         const formattedProducts = formatProductsForAI(foundProducts);
         console.log(`[Chat] Formatted products for AI:\n${formattedProducts}`);
         
-        // Describe applied option filters so AI knows what was filtered
         const appliedFilters = describeAppliedFilters(extractedIntent.candidates);
         const filterNote = appliedFilters ? `\n⚠️ ПРИМЕНЁННЫЕ ФИЛЬТРЫ: ${appliedFilters}\nВсе товары ниже УЖЕ отфильтрованы по этим характеристикам — ты можешь уверенно это сообщить клиенту!\n` : '';
         
-        // If usage_context is present, instruct final LLM to filter inline (saves a separate AI call!)
         const contextNote = extractedIntent.usage_context 
           ? `\n🎯 КОНТЕКСТ ИСПОЛЬЗОВАНИЯ: "${extractedIntent.usage_context}"\nСреди товаров ниже ВЫБЕРИ ТОЛЬКО подходящие для этого контекста на основе их характеристик (степень защиты, тип монтажа и т.д.). Объясни клиенту ПОЧЕМУ выбранные товары подходят для его задачи. Если не можешь определить — покажи все.\n` 
           : '';
