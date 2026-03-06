@@ -730,7 +730,13 @@
 
     showTyping();
 
-    var endpoints = [
+    // For streaming: try direct Supabase first (supports SSE), proxy buffers SSE
+    // For non-streaming fallback: try proxy first (works in Russia)
+    var streamEndpoints = [
+      { url: 'https://yngoixmvmxdfxokuafjp.supabase.co', label: 'direct' },
+      { url: CONFIG.supabaseUrl, label: 'proxy' }
+    ];
+    var fallbackEndpoints = [
       { url: CONFIG.supabaseUrl, label: 'proxy' },
       { url: 'https://yngoixmvmxdfxokuafjp.supabase.co', label: 'direct' }
     ];
@@ -743,12 +749,11 @@
 
     var result = null;
     var lastError = null;
-    var streamingWorked = false;
 
-    // Try streaming first
-    for (var i = 0; i < endpoints.length; i++) {
+    // Try streaming first (direct Supabase → proxy)
+    for (var i = 0; i < streamEndpoints.length; i++) {
       try {
-        result = await tryStreamEndpoint(endpoints[i].url, message, endpoints[i].label, assistantMsg, function() {
+        result = await tryStreamEndpoint(streamEndpoints[i].url, message, streamEndpoints[i].label, assistantMsg, function() {
           // Called on first token — hide typing, show message
           hideTyping();
           if (!msgInserted) {
@@ -757,7 +762,6 @@
             msgInserted = true;
           }
         });
-        streamingWorked = true;
         break;
       } catch (err) {
         lastError = err;
@@ -767,11 +771,11 @@
       }
     }
 
-    // Fallback to non-streaming if streaming failed
+    // Fallback to non-streaming if streaming failed (proxy → direct)
     if (!result) {
-      for (var k = 0; k < endpoints.length; k++) {
+      for (var k = 0; k < fallbackEndpoints.length; k++) {
         try {
-          result = await tryNonStreamEndpoint(endpoints[k].url, message, endpoints[k].label);
+          result = await tryNonStreamEndpoint(fallbackEndpoints[k].url, message, fallbackEndpoints[k].label);
           break;
         } catch (err) {
           lastError = err;
