@@ -556,7 +556,8 @@
   }
 
   // Try streaming from a single endpoint, updating msgEl progressively
-  async function tryStreamEndpoint(baseUrl, message, label, msgEl) {
+  // onFirstToken is called when the first token arrives (to hide typing indicator)
+  async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken) {
     var url = baseUrl + '/functions/v1/chat-consultant';
     var controller = new AbortController();
     var timer = setTimeout(function() { controller.abort(); }, 90000);
@@ -583,6 +584,19 @@
       throw new Error(label + ' HTTP ' + response.status);
     }
 
+    // Check if we actually got a streaming response
+    var contentType = response.headers.get('content-type') || '';
+    if (contentType.indexOf('event-stream') === -1) {
+      // Non-streaming response (proxy might not support SSE) — parse as JSON
+      var text = await response.text();
+      var data;
+      try { data = JSON.parse(text); } catch(e) { throw new Error(label + ' invalid JSON'); }
+      if (data.error) throw new Error(label + ': ' + data.error);
+      if (!data.content) throw new Error(label + ': empty content');
+      onFirstToken();
+      return { content: data.content, contacts: data.contacts || null };
+    }
+
     var reader = response.body.getReader();
     var decoder = new TextDecoder();
     var textBuffer = '';
@@ -590,6 +604,7 @@
     var contacts = null;
     var done = false;
     var lastScrollTime = 0;
+    var firstTokenReceived = false;
 
     while (!done) {
       var chunk = await reader.read();
@@ -619,10 +634,12 @@
           }
           var delta = obj.choices && obj.choices[0] && obj.choices[0].delta && obj.choices[0].delta.content;
           if (delta) {
+            if (!firstTokenReceived) {
+              firstTokenReceived = true;
+              onFirstToken();
+            }
             fullContent += delta;
-            // Update message element with progressive content
             msgEl.innerHTML = formatMessage(fullContent);
-            // Throttle scroll to avoid jank
             var now = Date.now();
             if (now - lastScrollTime > 300) {
               lastScrollTime = now;
@@ -630,14 +647,13 @@
             }
           }
         } catch (e) {
-          // Partial JSON - put line back into buffer
           textBuffer = line + '\n' + textBuffer;
           break;
         }
       }
     }
 
-    // Final flush of remaining buffer
+    // Final flush
     if (textBuffer.trim()) {
       var leftover = textBuffer.split('\n');
       for (var j = 0; j < leftover.length; j++) {
@@ -664,7 +680,43 @@
     return { content: fullContent, contacts: contacts };
   }
 
-  // Send message with streaming and fallback
+  // Fallback: non-streaming fetch
+  async function tryNonStreamEndpoint(baseUrl, message, label) {
+    var url = baseUrl + '/functions/v1/chat-consultant';
+    var controller = new AbortController();
+    var timer = setTimeout(function() { controller.abort(); }, 60000);
+
+    var response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + CONFIG.supabaseKey,
+        'apikey': CONFIG.supabaseKey
+      },
+      body: JSON.stringify({
+        message: message,
+        sessionId: sessionId,
+        history: conversationHistory.slice(-10),
+        stream: false
+      }),
+      signal: controller.signal
+    });
+
+    clearTimeout(timer);
+
+    if (!response.ok) {
+      throw new Error(label + ' HTTP ' + response.status);
+    }
+
+    var text = await response.text();
+    var data;
+    try { data = JSON.parse(text); } catch(e) { throw new Error(label + ' invalid JSON'); }
+    if (data.error) throw new Error(label + ': ' + data.error);
+    if (!data.content) throw new Error(label + ': empty content');
+    return { content: data.content, contacts: data.contacts || null };
+  }
+
+  // Send message with streaming + fallback
   async function sendMessage() {
     var message = input.value.trim();
     if (!message || isLoading) return;
@@ -687,43 +739,63 @@
     var assistantMsg = document.createElement('div');
     assistantMsg.className = 'volt-message assistant';
     assistantMsg.innerHTML = '';
+    var msgInserted = false;
 
     var result = null;
     var lastError = null;
+    var streamingWorked = false;
 
+    // Try streaming first
     for (var i = 0; i < endpoints.length; i++) {
       try {
-        // Remove typing indicator before streaming starts
-        hideTyping();
-        messagesContainer.appendChild(assistantMsg);
-        assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
-
-        result = await tryStreamEndpoint(endpoints[i].url, message, endpoints[i].label, assistantMsg);
+        result = await tryStreamEndpoint(endpoints[i].url, message, endpoints[i].label, assistantMsg, function() {
+          // Called on first token — hide typing, show message
+          hideTyping();
+          if (!msgInserted) {
+            messagesContainer.appendChild(assistantMsg);
+            assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            msgInserted = true;
+          }
+        });
+        streamingWorked = true;
         break;
       } catch (err) {
         lastError = err;
-        // Remove the empty assistant msg if this endpoint failed, will retry
-        if (assistantMsg.parentNode) assistantMsg.remove();
-        if (i < endpoints.length - 1) showTyping();
+        // Remove if inserted but failed mid-stream
+        if (assistantMsg.parentNode && !assistantMsg.innerHTML) assistantMsg.remove();
+        msgInserted = false;
+      }
+    }
+
+    // Fallback to non-streaming if streaming failed
+    if (!result) {
+      for (var k = 0; k < endpoints.length; k++) {
+        try {
+          result = await tryNonStreamEndpoint(endpoints[k].url, message, endpoints[k].label);
+          break;
+        } catch (err) {
+          lastError = err;
+        }
       }
     }
 
     hideTyping();
 
     if (result) {
-      // Final render with full content
+      if (!msgInserted) {
+        messagesContainer.appendChild(assistantMsg);
+        msgInserted = true;
+      }
       assistantMsg.innerHTML = formatMessage(result.content);
+      assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
       conversationHistory.push({ role: 'assistant', content: result.content });
 
       if (result.contacts) {
         addMessage(result.contacts, 'assistant');
       }
     } else {
-      // All endpoints failed
-      if (!assistantMsg.parentNode) {
-        messagesContainer.appendChild(assistantMsg);
-      }
-      assistantMsg.innerHTML = formatMessage('Извините, произошла ошибка соединения. Попробуйте позже.');
+      hideTyping();
+      addMessage('Извините, произошла ошибка соединения. Попробуйте позже.', 'assistant');
     }
 
     isLoading = false;
