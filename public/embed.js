@@ -647,7 +647,9 @@
             }
           }
         } catch (e) {
-          textBuffer = line + '\n' + textBuffer;
+          // If JSON parse fails, put this line AND all remaining unparsed lines back into buffer
+          var remainingLines = parsed.lines.slice(i).join('\n');
+          textBuffer = remainingLines + (textBuffer ? '\n' + textBuffer : '');
           break;
         }
       }
