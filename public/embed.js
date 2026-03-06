@@ -575,7 +575,7 @@
         history: conversationHistory.slice(-10),
         stream: false
       })
-    }, 15000);
+    }, 60000);
 
     if (!response.ok) {
       const errText = await response.text().catch(function() { return 'no body'; });
