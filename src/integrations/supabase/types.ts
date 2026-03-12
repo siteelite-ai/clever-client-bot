@@ -196,6 +196,21 @@ export type Database = {
           type: string
         }[]
       }
+      search_knowledge_hybrid: {
+        Args: {
+          match_count?: number
+          query_embedding?: string
+          search_query: string
+        }
+        Returns: {
+          content: string
+          id: string
+          score: number
+          source_url: string
+          title: string
+          type: string
+        }[]
+      }
     }
     Enums: {
       app_role: "admin" | "editor" | "viewer"
