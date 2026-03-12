@@ -39,6 +39,7 @@ export default function KnowledgeBase() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [viewEntry, setViewEntry] = useState<KnowledgeEntry | null>(null);
   
+  const [isRegenerating, setIsRegenerating] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load entries on mount
