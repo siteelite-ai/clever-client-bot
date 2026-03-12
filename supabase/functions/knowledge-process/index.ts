@@ -641,6 +641,58 @@ serve(async (req) => {
       );
     }
 
+    // ==================== REGENERATE EMBEDDINGS ====================
+    if (action === 'regenerate_embeddings') {
+      if (!googleApiKey) {
+        throw new Error('Google API key не настроен. Добавьте его в настройках.');
+      }
+
+      // Fetch all entries without embeddings (or all if force=true)
+      const { data: entries, error: fetchErr } = await supabase
+        .from('knowledge_entries')
+        .select('id, title, content')
+        .is('embedding', null)
+        .order('created_at', { ascending: true });
+
+      if (fetchErr) throw new Error(`Ошибка загрузки: ${fetchErr.message}`);
+
+      const total = entries?.length || 0;
+      console.log(`[Embeddings] Regenerating for ${total} entries without embeddings`);
+
+      let processed = 0;
+      let errors = 0;
+
+      for (const entry of (entries || [])) {
+        try {
+          const embedding = await generateEmbedding(entry.content, googleApiKey);
+          if (embedding) {
+            const { error: updErr } = await supabase
+              .from('knowledge_entries')
+              .update({ embedding: JSON.stringify(embedding) })
+              .eq('id', entry.id);
+            if (updErr) {
+              console.error(`[Embeddings] Update error for ${entry.id}:`, updErr);
+              errors++;
+            } else {
+              processed++;
+            }
+          } else {
+            errors++;
+          }
+        } catch (e) {
+          console.error(`[Embeddings] Error for ${entry.id}:`, e);
+          errors++;
+        }
+      }
+
+      console.log(`[Embeddings] Done: ${processed} processed, ${errors} errors out of ${total}`);
+
+      return new Response(
+        JSON.stringify({ success: true, total, processed, errors }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     throw new Error(`Unknown action: ${action}`);
 
   } catch (error) {
