@@ -281,6 +281,18 @@ export default function KnowledgeBase() {
             </p>
           </div>
           <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={handleRegenerateEmbeddings}
+              disabled={isRegenerating}
+            >
+              {isRegenerating ? (
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4 mr-2" />
+              )}
+              {isRegenerating ? 'Генерация...' : 'Обновить эмбеддинги'}
+            </Button>
             <SitemapImportDialog onImportComplete={loadEntries} />
             <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
               <DialogTrigger asChild>
