@@ -6,51 +6,178 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
-// Simple deterministic embedding using semantic hashing
-// This is a fast, reliable fallback that doesn't require external API calls
-function generateEmbedding(text: string): number[] {
-  console.log(`[Embedding] Generating embedding for text (${text.length} chars)...`);
-  
-  const embedding: number[] = [];
-  const normalized = text.toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-  
-  // Extract key terms using a simple TF approach
-  const words = normalized.split(' ').filter(w => w.length > 2);
-  const termFreq = new Map<string, number>();
-  
-  for (const word of words) {
-    termFreq.set(word, (termFreq.get(word) || 0) + 1);
-  }
-  
-  // Generate embedding based on term frequencies and position
-  for (let i = 0; i < 1536; i++) {
-    let value = 0;
-    
-    // Use multiple hash functions for better distribution
-    const wordIndex = i % words.length;
-    const word = words[wordIndex] || '';
-    
-    // Character-based hashing
-    for (let j = 0; j < word.length; j++) {
-      const charCode = word.charCodeAt(j);
-      value += Math.sin(charCode * (i + 1) * 0.01) * (termFreq.get(word) || 1);
+// ============================================================
+// EMBEDDING GENERATION via Google Gemini text-embedding-004
+// ============================================================
+
+async function getGoogleApiKey(supabase: any): Promise<string | null> {
+  try {
+    const { data } = await supabase
+      .from('app_settings')
+      .select('google_api_key')
+      .limit(1)
+      .single();
+    if (data?.google_api_key) {
+      // May have multiple comma-separated keys; use first one
+      const keys = data.google_api_key.split(/[,\n]/).map((k: string) => k.trim()).filter((k: string) => k.length > 0);
+      return keys[0] || null;
     }
-    
-    // Position-based component
-    value += Math.cos(i * 0.01) * (normalized.length / 10000);
-    
-    // Normalize to [-1, 1]
-    embedding.push(Math.tanh(value * 0.1));
+    return null;
+  } catch {
+    return null;
   }
-  
-  console.log(`[Embedding] Generated embedding with ${embedding.length} dimensions`);
-  return embedding;
 }
 
-// Extract text content from URL
+async function generateEmbedding(text: string, googleApiKey: string | null): Promise<number[] | null> {
+  if (!googleApiKey) {
+    console.log('[Embedding] No Google API key available, skipping embedding generation');
+    return null;
+  }
+
+  // Truncate to ~8000 tokens (~24000 chars) to stay within model limits
+  const truncated = text.substring(0, 24000);
+  
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${googleApiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'models/text-embedding-004',
+          content: {
+            parts: [{ text: truncated }]
+          },
+          taskType: 'RETRIEVAL_DOCUMENT',
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error(`[Embedding] API error ${response.status}:`, errText);
+      return null;
+    }
+
+    const data = await response.json();
+    const values = data?.embedding?.values;
+    if (!values || !Array.isArray(values)) {
+      console.error('[Embedding] Unexpected response format:', JSON.stringify(data).substring(0, 200));
+      return null;
+    }
+
+    console.log(`[Embedding] Generated ${values.length}-dim embedding for ${truncated.length} chars`);
+    return values;
+  } catch (error) {
+    console.error('[Embedding] Error:', error);
+    return null;
+  }
+}
+
+async function generateQueryEmbedding(text: string, googleApiKey: string | null): Promise<number[] | null> {
+  if (!googleApiKey) return null;
+
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${googleApiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: 'models/text-embedding-004',
+          content: {
+            parts: [{ text: text.substring(0, 2000) }]
+          },
+          taskType: 'RETRIEVAL_QUERY',
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      console.error(`[Embedding] Query embedding error: ${response.status}`);
+      return null;
+    }
+
+    const data = await response.json();
+    return data?.embedding?.values || null;
+  } catch (error) {
+    console.error('[Embedding] Query embedding error:', error);
+    return null;
+  }
+}
+
+// ============================================================
+// DOCUMENT CHUNKING
+// ============================================================
+
+interface Chunk {
+  title: string;
+  content: string;
+}
+
+/**
+ * Split large text into semantic chunks.
+ * - Splits on paragraph/section boundaries
+ * - Each chunk ~1500-2500 chars with ~200 char overlap
+ * - Preserves table structures (doesn't split mid-table)
+ */
+function chunkDocument(title: string, content: string, maxChunkSize: number = 2000): Chunk[] {
+  // Small documents don't need chunking
+  if (content.length <= maxChunkSize * 1.5) {
+    return [{ title, content }];
+  }
+
+  const chunks: Chunk[] = [];
+  
+  // Split into paragraphs/sections
+  const sections = content.split(/\n{2,}/);
+  
+  let currentChunk = '';
+  let chunkIndex = 0;
+  const overlap = 200;
+
+  for (let i = 0; i < sections.length; i++) {
+    const section = sections[i].trim();
+    if (!section) continue;
+
+    // If adding this section would exceed limit, finalize current chunk
+    if (currentChunk.length > 0 && currentChunk.length + section.length + 2 > maxChunkSize) {
+      chunkIndex++;
+      chunks.push({
+        title: chunks.length === 0 ? title : `${title} — часть ${chunkIndex}`,
+        content: currentChunk.trim(),
+      });
+      
+      // Start new chunk with overlap from end of previous
+      const overlapText = currentChunk.slice(-overlap);
+      currentChunk = overlapText + '\n\n' + section;
+    } else {
+      currentChunk += (currentChunk ? '\n\n' : '') + section;
+    }
+  }
+
+  // Don't forget the last chunk
+  if (currentChunk.trim()) {
+    chunkIndex++;
+    chunks.push({
+      title: chunks.length === 0 ? title : `${title} — часть ${chunkIndex}`,
+      content: currentChunk.trim(),
+    });
+  }
+
+  // If chunking resulted in only 1 chunk, just return as-is
+  if (chunks.length <= 1) {
+    return [{ title, content }];
+  }
+
+  console.log(`[Chunking] Split "${title}" into ${chunks.length} chunks (${content.length} total chars)`);
+  return chunks;
+}
+
+// ============================================================
+// URL SCRAPING
+// ============================================================
+
 async function scrapeUrl(url: string): Promise<{ title: string; content: string }> {
   console.log(`[Scrape] Fetching URL: ${url}`);
   
@@ -70,11 +197,9 @@ async function scrapeUrl(url: string): Promise<{ title: string; content: string 
     const html = await response.text();
     console.log(`[Scrape] Received ${html.length} bytes of HTML`);
 
-    // Extract title
     const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
     const title = titleMatch ? titleMatch[1].trim() : url;
 
-    // Remove scripts, styles, and comments
     let content = html
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
@@ -84,7 +209,6 @@ async function scrapeUrl(url: string): Promise<{ title: string; content: string 
       .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '')
       .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '');
 
-    // Extract text from main content areas
     const mainContentMatch = content.match(/<main[^>]*>([\s\S]*?)<\/main>/i) ||
                              content.match(/<article[^>]*>([\s\S]*?)<\/article>/i) ||
                              content.match(/<div[^>]*class="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
@@ -93,10 +217,7 @@ async function scrapeUrl(url: string): Promise<{ title: string; content: string 
       content = mainContentMatch[1];
     }
 
-    // Remove all HTML tags
     content = content.replace(/<[^>]+>/g, ' ');
-    
-    // Clean up whitespace and special characters
     content = content
       .replace(/&nbsp;/g, ' ')
       .replace(/&amp;/g, '&')
@@ -116,11 +237,13 @@ async function scrapeUrl(url: string): Promise<{ title: string; content: string 
   }
 }
 
-// Extract text from PDF using AI
+// ============================================================
+// PDF EXTRACTION via Gemini Vision (for server-side processing)
+// ============================================================
+
 async function extractPdfText(base64Content: string, apiKey: string): Promise<{ title: string; content: string }> {
   console.log(`[PDF] Extracting text from PDF (${base64Content.length} base64 chars)...`);
   
-  // Use Gemini's vision capabilities to read PDF
   const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
     method: 'POST',
     headers: {
@@ -135,7 +258,12 @@ async function extractPdfText(base64Content: string, apiKey: string): Promise<{ 
           content: [
             {
               type: 'text',
-              text: 'Извлеки весь текст из этого PDF документа. Верни структурированный текст с сохранением заголовков и параграфов. В начале укажи заголовок документа если он есть.'
+              text: `Извлеки весь текст из этого PDF документа. КРИТИЧЕСКИ ВАЖНО для таблиц:
+- Сохрани структуру таблиц в формате markdown (| столбец1 | столбец2 |)
+- Каждая строка таблицы на отдельной строке
+- Сохрани заголовки столбцов
+- Сохрани ВСЕ числовые данные и единицы измерения
+- Для обычного текста сохрани заголовки и абзацы`
             },
             {
               type: 'image_url',
@@ -158,7 +286,6 @@ async function extractPdfText(base64Content: string, apiKey: string): Promise<{ 
   const data = await response.json();
   const content = data.choices?.[0]?.message?.content || '';
   
-  // Try to extract title from first line
   const lines = content.split('\n').filter((l: string) => l.trim());
   const title = lines[0]?.substring(0, 100) || 'PDF документ';
   
@@ -166,6 +293,69 @@ async function extractPdfText(base64Content: string, apiKey: string): Promise<{ 
   
   return { title, content };
 }
+
+// ============================================================
+// HELPER: Save entry with chunking + embedding
+// ============================================================
+
+async function saveWithChunksAndEmbeddings(
+  supabase: any,
+  type: string,
+  title: string,
+  content: string,
+  sourceUrl: string | null,
+  googleApiKey: string | null,
+): Promise<{ id: string; type: string; title: string; content: string; source_url?: string; created_at: string }> {
+  
+  const chunks = chunkDocument(title, content);
+  
+  let firstEntry: any = null;
+  
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    
+    // Generate embedding for each chunk
+    const embedding = await generateEmbedding(chunk.content, googleApiKey);
+    
+    const insertData: any = {
+      type,
+      title: chunk.title,
+      content: chunk.content.substring(0, 200000),
+      source_url: sourceUrl,
+    };
+    
+    if (embedding) {
+      insertData.embedding = JSON.stringify(embedding);
+    }
+    
+    const { data, error } = await supabase
+      .from('knowledge_entries')
+      .insert(insertData)
+      .select()
+      .single();
+
+    if (error) {
+      console.error(`[Knowledge] Insert error for chunk ${i}:`, error);
+      throw new Error(`Ошибка сохранения: ${error.message}`);
+    }
+
+    if (i === 0) firstEntry = data;
+    console.log(`[Knowledge] Saved chunk ${i + 1}/${chunks.length}: ${data.id}`);
+  }
+
+  return {
+    id: firstEntry.id,
+    type: firstEntry.type,
+    title: firstEntry.title,
+    content: firstEntry.content.substring(0, 200) + '...',
+    source_url: firstEntry.source_url || undefined,
+    created_at: firstEntry.created_at,
+  };
+}
+
+// ============================================================
+// MAIN HANDLER
+// ============================================================
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -187,14 +377,18 @@ serve(async (req) => {
     }
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    
+    // Get Google API key for embeddings
+    const googleApiKey = await getGoogleApiKey(supabase);
+    if (!googleApiKey) {
+      console.log('[Knowledge] Warning: No Google API key, embeddings will be skipped');
+    }
 
     console.log(`[Knowledge] Action: ${action}`);
 
+    // ==================== FETCH SITEMAP ====================
     if (action === 'fetch_sitemap') {
-      // Fetch and parse sitemap XML
-      if (!url) {
-        throw new Error('URL is required');
-      }
+      if (!url) throw new Error('URL is required');
 
       let sitemapUrl = url.trim();
       if (!sitemapUrl.startsWith('http')) {
@@ -215,12 +409,8 @@ serve(async (req) => {
       }
 
       const xml = await response.text();
-      console.log(`[Sitemap] Received ${xml.length} bytes`);
-
-      // Parse URLs from sitemap XML
       const urls: string[] = [];
       
-      // Check if it's a sitemap index (contains other sitemaps)
       const sitemapIndexMatches = xml.matchAll(/<sitemap>\s*<loc>([^<]+)<\/loc>/gi);
       const subSitemaps: string[] = [];
       for (const match of sitemapIndexMatches) {
@@ -228,9 +418,8 @@ serve(async (req) => {
       }
 
       if (subSitemaps.length > 0) {
-        // It's a sitemap index - fetch each sub-sitemap
         console.log(`[Sitemap] Found sitemap index with ${subSitemaps.length} sub-sitemaps`);
-        for (const subUrl of subSitemaps.slice(0, 10)) { // Limit to 10 sub-sitemaps
+        for (const subUrl of subSitemaps.slice(0, 10)) {
           try {
             const subResponse = await fetch(subUrl, {
               headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SitemapParser/1.0)' },
@@ -247,14 +436,12 @@ serve(async (req) => {
           }
         }
       } else {
-        // Regular sitemap
         const locMatches = xml.matchAll(/<url>\s*<loc>([^<]+)<\/loc>/gi);
         for (const match of locMatches) {
           urls.push(match[1].trim());
         }
       }
 
-      // Also try simple <loc> tags (some sitemaps don't wrap in <url>)
       if (urls.length === 0) {
         const simpleLocs = xml.matchAll(/<loc>([^<]+)<\/loc>/gi);
         for (const match of simpleLocs) {
@@ -265,7 +452,6 @@ serve(async (req) => {
         }
       }
 
-      // Deduplicate
       const uniqueUrls = [...new Set(urls)];
       console.log(`[Sitemap] Found ${uniqueUrls.length} unique URLs`);
 
@@ -275,11 +461,9 @@ serve(async (req) => {
       );
     }
 
+    // ==================== SCRAPE URL ====================
     if (action === 'scrape_url') {
-      // Scrape URL and add to knowledge base
-      if (!url) {
-        throw new Error('URL is required');
-      }
+      if (!url) throw new Error('URL is required');
 
       const { title: extractedTitle, content } = await scrapeUrl(url);
       
@@ -287,93 +471,31 @@ serve(async (req) => {
         throw new Error('Страница содержит слишком мало текста');
       }
 
-      // Generate embedding
-      const embedding = generateEmbedding(content);
-
-      // Insert into database
-      const { data, error } = await supabase
-        .from('knowledge_entries')
-        .insert({
-          type: 'url',
-          title: extractedTitle,
-          content: content.substring(0, 200000), // Limit content size
-          source_url: url,
-          embedding,
-        })
-        .select()
-        .single();
-
-      if (error) {
-        console.error('[Knowledge] Insert error:', error);
-        throw new Error(`Ошибка сохранения: ${error.message}`);
-      }
-
-      console.log(`[Knowledge] Added URL entry: ${data.id}`);
+      const entry = await saveWithChunksAndEmbeddings(supabase, 'url', extractedTitle, content, url, googleApiKey);
 
       return new Response(
-        JSON.stringify({ 
-          success: true, 
-          entry: {
-            id: data.id,
-            type: data.type,
-            title: data.title,
-            content: data.content.substring(0, 200) + '...',
-            source_url: data.source_url,
-            created_at: data.created_at,
-          }
-        }),
+        JSON.stringify({ success: true, entry }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
+    // ==================== ADD TEXT ====================
     if (action === 'add_text') {
-      // Add manual text entry
-      if (!text || !title) {
-        throw new Error('Text and title are required');
-      }
+      if (!text || !title) throw new Error('Text and title are required');
 
-      // Generate embedding
-      const embedding = generateEmbedding(text);
-
-      // Insert into database
-      const { data, error } = await supabase
-        .from('knowledge_entries')
-        .insert({
-          type: entryType || 'text',
-          title,
-          content: text.substring(0, 200000),
-          embedding,
-        })
-        .select()
-        .single();
-
-      if (error) {
-        console.error('[Knowledge] Insert error:', error);
-        throw new Error(`Ошибка сохранения: ${error.message}`);
-      }
-
-      console.log(`[Knowledge] Added text entry: ${data.id}`);
+      const entry = await saveWithChunksAndEmbeddings(
+        supabase, entryType || 'text', title, text, null, googleApiKey
+      );
 
       return new Response(
-        JSON.stringify({ 
-          success: true, 
-          entry: {
-            id: data.id,
-            type: data.type,
-            title: data.title,
-            content: data.content.substring(0, 200) + '...',
-            created_at: data.created_at,
-          }
-        }),
+        JSON.stringify({ success: true, entry }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
+    // ==================== PROCESS PDF (server-side via Gemini Vision) ====================
     if (action === 'process_pdf') {
-      // Process PDF and add to knowledge base
-      if (!pdfBase64) {
-        throw new Error('PDF content is required');
-      }
+      if (!pdfBase64) throw new Error('PDF content is required');
 
       const { title: extractedTitle, content } = await extractPdfText(pdfBase64, LOVABLE_API_KEY);
       
@@ -381,86 +503,51 @@ serve(async (req) => {
         throw new Error('PDF содержит слишком мало текста');
       }
 
-      // Generate embedding
-      const embedding = generateEmbedding(content);
-
-      // Insert into database
-      const { data, error } = await supabase
-        .from('knowledge_entries')
-        .insert({
-          type: 'pdf',
-          title: title || extractedTitle,
-          content: content.substring(0, 200000),
-          embedding,
-        })
-        .select()
-        .single();
-
-      if (error) {
-        console.error('[Knowledge] Insert error:', error);
-        throw new Error(`Ошибка сохранения: ${error.message}`);
-      }
-
-      console.log(`[Knowledge] Added PDF entry: ${data.id}`);
+      const entry = await saveWithChunksAndEmbeddings(
+        supabase, 'pdf', title || extractedTitle, content, null, googleApiKey
+      );
 
       return new Response(
-        JSON.stringify({ 
-          success: true, 
-          entry: {
-            id: data.id,
-            type: data.type,
-            title: data.title,
-            content: data.content.substring(0, 200) + '...',
-            created_at: data.created_at,
-          }
-        }),
+        JSON.stringify({ success: true, entry }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
 
+    // ==================== REFRESH URL ====================
     if (action === 'refresh_url') {
-      // Re-scrape URL and update entry
-      if (!entryId) {
-        throw new Error('Entry ID is required');
-      }
+      if (!entryId) throw new Error('Entry ID is required');
 
-      // Get current entry
-      const { data: entry, error: fetchError } = await supabase
+      const { data: existingEntry, error: fetchError } = await supabase
         .from('knowledge_entries')
         .select('*')
         .eq('id', entryId)
         .single();
 
-      if (fetchError || !entry) {
-        throw new Error('Запись не найдена');
-      }
+      if (fetchError || !existingEntry) throw new Error('Запись не найдена');
+      if (!existingEntry.source_url) throw new Error('У записи нет URL для обновления');
 
-      if (!entry.source_url) {
-        throw new Error('У записи нет URL для обновления');
-      }
-
-      const { title: extractedTitle, content } = await scrapeUrl(entry.source_url);
+      const { title: extractedTitle, content } = await scrapeUrl(existingEntry.source_url);
       
       // Generate new embedding
-      const embedding = generateEmbedding(content);
+      const embedding = await generateEmbedding(content, googleApiKey);
 
-      // Update entry
+      const updateData: any = {
+        title: extractedTitle,
+        content: content.substring(0, 200000),
+        updated_at: new Date().toISOString(),
+      };
+      if (embedding) {
+        updateData.embedding = JSON.stringify(embedding);
+      }
+
       const { data, error } = await supabase
         .from('knowledge_entries')
-        .update({
-          title: extractedTitle,
-          content: content.substring(0, 200000),
-          embedding,
-          updated_at: new Date().toISOString(),
-        })
+        .update(updateData)
         .eq('id', entryId)
         .select()
         .single();
 
-      if (error) {
-        console.error('[Knowledge] Update error:', error);
-        throw new Error(`Ошибка обновления: ${error.message}`);
-      }
+      if (error) throw new Error(`Ошибка обновления: ${error.message}`);
 
       console.log(`[Knowledge] Refreshed URL entry: ${data.id}`);
 
@@ -480,21 +567,16 @@ serve(async (req) => {
       );
     }
 
+    // ==================== DELETE ====================
     if (action === 'delete') {
-      // Delete entry
-      if (!entryId) {
-        throw new Error('Entry ID is required');
-      }
+      if (!entryId) throw new Error('Entry ID is required');
 
       const { error } = await supabase
         .from('knowledge_entries')
         .delete()
         .eq('id', entryId);
 
-      if (error) {
-        console.error('[Knowledge] Delete error:', error);
-        throw new Error(`Ошибка удаления: ${error.message}`);
-      }
+      if (error) throw new Error(`Ошибка удаления: ${error.message}`);
 
       console.log(`[Knowledge] Deleted entry: ${entryId}`);
 
@@ -504,20 +586,16 @@ serve(async (req) => {
       );
     }
 
+    // ==================== LIST ====================
     if (action === 'list') {
-      // List all entries
       const { data, error } = await supabase
         .from('knowledge_entries')
         .select('id, type, title, content, source_url, created_at, updated_at')
         .order('created_at', { ascending: false });
 
-      if (error) {
-        console.error('[Knowledge] List error:', error);
-        throw new Error(`Ошибка загрузки: ${error.message}`);
-      }
+      if (error) throw new Error(`Ошибка загрузки: ${error.message}`);
 
-      // Truncate content for list view
-      const entries = (data || []).map(e => ({
+      const entries = (data || []).map((e: any) => ({
         ...e,
         content: e.content.substring(0, 200) + (e.content.length > 200 ? '...' : ''),
       }));
@@ -530,23 +608,25 @@ serve(async (req) => {
       );
     }
 
+    // ==================== SEARCH (hybrid) ====================
     if (action === 'search') {
-      // Semantic search in knowledge base
       const { query, limit = 5 } = await req.json();
       
-      if (!query) {
-        throw new Error('Query is required');
+      if (!query) throw new Error('Query is required');
+
+      // Generate query embedding for vector search
+      const queryEmbedding = await generateQueryEmbedding(query, googleApiKey);
+
+      // Use hybrid search
+      const rpcParams: any = {
+        search_query: query,
+        match_count: limit,
+      };
+      if (queryEmbedding) {
+        rpcParams.query_embedding = JSON.stringify(queryEmbedding);
       }
 
-      // Generate query embedding
-      const queryEmbedding = generateEmbedding(query);
-
-      // Search using the database function
-      const { data, error } = await supabase.rpc('search_knowledge', {
-        query_embedding: queryEmbedding,
-        match_threshold: 0.5,
-        match_count: limit,
-      });
+      const { data, error } = await supabase.rpc('search_knowledge_hybrid', rpcParams);
 
       if (error) {
         console.error('[Knowledge] Search error:', error);
