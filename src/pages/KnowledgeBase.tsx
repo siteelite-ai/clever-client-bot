@@ -39,7 +39,7 @@ export default function KnowledgeBase() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [viewEntry, setViewEntry] = useState<KnowledgeEntry | null>(null);
   
-  const [isRegenerating, setIsRegenerating] = useState(false);
+  
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load entries on mount
@@ -224,24 +224,6 @@ export default function KnowledgeBase() {
     }
   };
 
-  const handleRegenerateEmbeddings = async () => {
-    setIsRegenerating(true);
-    try {
-      const { data, error } = await supabase.functions.invoke('knowledge-process', {
-        body: { action: 'regenerate_embeddings' }
-      });
-
-      if (error) throw error;
-      if (!data.success) throw new Error(data.error);
-
-      toast.success(`Эмбеддинги обновлены: ${data.processed} из ${data.total}${data.errors ? `, ошибок: ${data.errors}` : ''}`);
-    } catch (error) {
-      console.error('Error regenerating embeddings:', error);
-      toast.error(error instanceof Error ? error.message : 'Ошибка генерации эмбеддингов');
-    } finally {
-      setIsRegenerating(false);
-    }
-  };
 
   const filteredEntries = entries.filter(e => {
     const matchesType = typeFilter === 'all' || e.type === typeFilter;
@@ -281,18 +263,6 @@ export default function KnowledgeBase() {
             </p>
           </div>
           <div className="flex gap-2">
-            <Button
-              variant="outline"
-              onClick={handleRegenerateEmbeddings}
-              disabled={isRegenerating}
-            >
-              {isRegenerating ? (
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-              ) : (
-                <RefreshCw className="w-4 h-4 mr-2" />
-              )}
-              {isRegenerating ? 'Генерация...' : 'Обновить эмбеддинги'}
-            </Button>
             <SitemapImportDialog onImportComplete={loadEntries} />
             <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
               <DialogTrigger asChild>
