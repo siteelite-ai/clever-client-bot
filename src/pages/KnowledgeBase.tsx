@@ -39,7 +39,6 @@ export default function KnowledgeBase() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [viewEntry, setViewEntry] = useState<KnowledgeEntry | null>(null);
   
-  
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load entries on mount
@@ -223,7 +222,6 @@ export default function KnowledgeBase() {
       setRefreshingId(null);
     }
   };
-
 
   const filteredEntries = entries.filter(e => {
     const matchesType = typeFilter === 'all' || e.type === typeFilter;

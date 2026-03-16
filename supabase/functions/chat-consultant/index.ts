@@ -187,61 +187,10 @@ interface KnowledgeResult {
   similarity: number;
 }
 
-// Generate query embedding via Google Gemini text-embedding-004
-async function generateQueryEmbedding(text: string): Promise<number[] | null> {
-  try {
-    const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
-    const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return null;
-
-    const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-    const { data: settings } = await sb
-      .from('app_settings')
-      .select('google_api_key')
-      .limit(1)
-      .single();
-
-    const apiKey = settings?.google_api_key?.split(/[,\n]/)?.[0]?.trim();
-    if (!apiKey) {
-      console.log('[Knowledge] No Google API key for embeddings');
-      return null;
-    }
-
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: 'models/gemini-embedding-001',
-          content: { parts: [{ text: text.substring(0, 2000) }] },
-          taskType: 'RETRIEVAL_QUERY',
-          outputDimensionality: 768,
-        }),
-      }
-    );
-
-    if (!response.ok) {
-      console.error(`[Knowledge] Embedding API error: ${response.status}`);
-      return null;
-    }
-
-    const data = await response.json();
-    const values = data?.embedding?.values;
-    if (values) {
-      console.log(`[Knowledge] Generated query embedding (${values.length} dims)`);
-    }
-    return values || null;
-  } catch (error) {
-    console.error('[Knowledge] Embedding error:', error);
-    return null;
-  }
-}
-
-// Search knowledge base using hybrid search (FTS + Vector with RRF)
+// Search knowledge base for relevant context using full-text search
 async function searchKnowledgeBase(
   query: string, 
-  limit: number = 5
+  limit: number = 3
 ): Promise<KnowledgeResult[]> {
   const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
   const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
@@ -254,46 +203,29 @@ async function searchKnowledgeBase(
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     
-    console.log(`[Knowledge] Hybrid search for: "${query.substring(0, 80)}"`);
+    console.log(`[Knowledge] Searching for: "${query.substring(0, 50)}..."`);
     
-    // Generate query embedding for vector search (parallel with FTS)
-    const queryEmbedding = await generateQueryEmbedding(query);
-    
-    // Use hybrid search function (FTS + Vector with RRF ranking)
-    const rpcParams: Record<string, unknown> = {
+    // Use full-text search function
+    const { data, error } = await supabase.rpc('search_knowledge_fulltext', {
       search_query: query,
       match_count: limit,
-    };
-    if (queryEmbedding) {
-      rpcParams.query_embedding = JSON.stringify(queryEmbedding);
-    }
-
-    const { data, error } = await supabase.rpc('search_knowledge_hybrid', rpcParams);
+    });
 
     if (error) {
-      console.error('[Knowledge] Hybrid search error:', error);
-      // Fallback to FTS-only
-      console.log('[Knowledge] Falling back to FTS-only search');
-      const { data: ftsData, error: ftsError } = await supabase.rpc('search_knowledge_fulltext', {
-        search_query: query,
-        match_count: limit,
-      });
-      if (ftsError || !ftsData) return [];
-      return ftsData.map((row: any) => ({
-        id: row.id, title: row.title, content: row.content,
-        type: row.type, source_url: row.source_url, similarity: row.rank,
-      }));
+      console.error('[Knowledge] Search error:', error);
+      return [];
     }
 
-    console.log(`[Knowledge] Hybrid search found ${data?.length || 0} results`);
+    console.log(`[Knowledge] Found ${data?.length || 0} relevant entries`);
     
-    return (data || []).map((row: { id: string; title: string; content: string; type: string; source_url: string | null; score: number }) => ({
+    // Map to expected interface
+    return (data || []).map((row: { id: string; title: string; content: string; type: string; source_url: string | null; rank: number }) => ({
       id: row.id,
       title: row.title,
       content: row.content,
       type: row.type,
       source_url: row.source_url,
-      similarity: row.score,
+      similarity: row.rank, // Use rank as similarity score
     }));
   } catch (error) {
     console.error('[Knowledge] Search error:', error);
