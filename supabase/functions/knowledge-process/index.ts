@@ -600,6 +600,62 @@ serve(async (req) => {
       );
     }
 
+    if (action === 'regenerate_embeddings') {
+      // One-time: regenerate all embeddings using real Google text-embedding-004
+      console.log('[Knowledge] Starting bulk embedding regeneration...');
+
+      const { data: entries, error: listError } = await supabase
+        .from('knowledge_entries')
+        .select('id, title, content')
+        .order('created_at', { ascending: true });
+
+      if (listError) throw new Error(`Ошибка загрузки записей: ${listError.message}`);
+      if (!entries || entries.length === 0) {
+        return new Response(
+          JSON.stringify({ success: true, message: 'Нет записей для обработки', processed: 0 }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      console.log(`[Knowledge] Regenerating embeddings for ${entries.length} entries...`);
+      let processed = 0;
+      let errors = 0;
+
+      for (const entry of entries) {
+        try {
+          const embedding = await generateEmbedding(entry.content, googleApiKeys);
+          
+          const { error: updateError } = await supabase
+            .from('knowledge_entries')
+            .update({ embedding })
+            .eq('id', entry.id);
+
+          if (updateError) {
+            console.error(`[Knowledge] Update error for ${entry.id}:`, updateError);
+            errors++;
+          } else {
+            processed++;
+            console.log(`[Knowledge] ✓ ${processed}/${entries.length}: "${entry.title.substring(0, 50)}"`);
+          }
+
+          // Small delay to avoid rate limiting
+          if (processed % 5 === 0) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+        } catch (e) {
+          console.error(`[Knowledge] Embedding error for ${entry.id}:`, e);
+          errors++;
+        }
+      }
+
+      console.log(`[Knowledge] Regeneration complete: ${processed} success, ${errors} errors`);
+
+      return new Response(
+        JSON.stringify({ success: true, processed, errors, total: entries.length }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     throw new Error(`Unknown action: ${action}`);
 
   } catch (error) {
