@@ -647,12 +647,12 @@ serve(async (req) => {
         }
       }
 
-      const nextOffset = offset + batch_size;
-      const done = entries.length < batch_size;
+      const nextOffset = batchOffset + batchSize;
+      const done = entries.length < batchSize;
       console.log(`[Knowledge] Batch complete: ${processed} success, ${errors} errors. Done: ${done}`);
 
       return new Response(
-        JSON.stringify({ success: true, processed, errors, batch_size, offset, next_offset: done ? null : nextOffset, done }),
+        JSON.stringify({ success: true, processed, errors, batch_size: batchSize, offset: batchOffset, next_offset: done ? null : nextOffset, done }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
