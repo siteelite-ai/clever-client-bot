@@ -185,6 +185,7 @@ interface KnowledgeResult {
   type: string;
   source_url: string | null;
   similarity: number;
+  chunk_index?: number;
 }
 
 // Generate query embedding using Google's gemini-embedding-001
@@ -195,7 +196,7 @@ async function generateQueryEmbedding(query: string, settings: CachedSettings): 
   }
 
   const keys = settings.google_api_key
-    .split(/[,\n]/)
+    .split(/[\n,]/)
     .map(k => k.trim())
     .filter(k => k.length > 0);
 
@@ -237,15 +238,15 @@ async function generateQueryEmbedding(query: string, settings: CachedSettings): 
   return null;
 }
 
-// Search knowledge base using hybrid search (FTS + vector)
+// Search knowledge base using chunk-level hybrid search (FTS + vector)
 async function searchKnowledgeBase(
-  query: string, 
+  query: string,
   limit: number = 5,
   settings?: CachedSettings
 ): Promise<KnowledgeResult[]> {
   const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
   const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-  
+
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
     console.log('[Knowledge] Supabase not configured, skipping knowledge search');
     return [];
@@ -253,25 +254,22 @@ async function searchKnowledgeBase(
 
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-    
-    console.log(`[Knowledge] Hybrid search for: "${query.substring(0, 50)}..."`);
-    
-    // Generate query embedding for vector search (parallel-safe, non-blocking)
+    console.log(`[Knowledge] Chunk hybrid search for: "${query.substring(0, 50)}..."`);
+
     let queryEmbedding: number[] | null = null;
     if (settings) {
       queryEmbedding = await generateQueryEmbedding(query, settings);
     }
 
-    // Use hybrid search (FTS + vector via RRF)
-    const { data, error } = await supabase.rpc('search_knowledge_hybrid', {
+    const { data, error } = await supabase.rpc('search_knowledge_chunks_hybrid', {
       search_query: query,
       query_embedding: queryEmbedding ? `[${queryEmbedding.join(',')}]` : null,
       match_count: limit,
+      max_chunks_per_entry: 2,
     });
 
     if (error) {
-      console.error('[Knowledge] Hybrid search error:', error);
-      // Fallback to FTS-only
+      console.error('[Knowledge] Chunk hybrid search error:', error);
       const { data: ftsData, error: ftsError } = await supabase.rpc('search_knowledge_fulltext', {
         search_query: query,
         match_count: limit,
@@ -282,20 +280,24 @@ async function searchKnowledgeBase(
       }
       console.log(`[Knowledge] FTS fallback found ${ftsData?.length || 0} entries`);
       return (ftsData || []).map((row: any) => ({
-        id: row.id, title: row.title, content: row.content,
-        type: row.type, source_url: row.source_url, similarity: row.rank,
+        id: row.id,
+        title: row.title,
+        content: row.content,
+        type: row.type,
+        source_url: row.source_url,
+        similarity: row.rank,
       }));
     }
 
-    console.log(`[Knowledge] Hybrid search found ${data?.length || 0} entries (vector: ${queryEmbedding ? 'yes' : 'no'})`);
-    
+    console.log(`[Knowledge] Chunk hybrid search found ${data?.length || 0} chunks (vector: ${queryEmbedding ? 'yes' : 'no'})`);
     return (data || []).map((row: any) => ({
-      id: row.id,
+      id: row.entry_id,
       title: row.title,
       content: row.content,
       type: row.type,
       source_url: row.source_url,
       similarity: row.score,
+      chunk_index: row.chunk_index,
     }));
   } catch (error) {
     console.error('[Knowledge] Search error:', error);
