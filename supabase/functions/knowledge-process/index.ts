@@ -506,21 +506,19 @@ serve(async (req) => {
     }
 
     if (action === 'add_text') {
-      // Add manual text entry
       if (!text || !title) {
         throw new Error('Text and title are required');
       }
 
-      // Generate embedding
-      const embedding = await generateEmbedding(text, googleApiKeys);
+      const normalizedText = normalizeKnowledgeText(text).substring(0, MAX_KNOWLEDGE_CONTENT);
+      const embedding = await generateEmbedding(normalizedText, googleApiKeys);
 
-      // Insert into database
       const { data, error } = await supabase
         .from('knowledge_entries')
         .insert({
           type: entryType || 'text',
           title,
-          content: text.substring(0, 200000),
+          content: normalizedText,
           embedding,
         })
         .select()
@@ -531,7 +529,8 @@ serve(async (req) => {
         throw new Error(`Ошибка сохранения: ${error.message}`);
       }
 
-      console.log(`[Knowledge] Added text entry: ${data.id}`);
+      const chunkCount = await rebuildKnowledgeChunks(supabase, data.id, data.title, normalizedText, googleApiKeys);
+      console.log(`[Knowledge] Added text entry: ${data.id}, chunks: ${chunkCount}`);
 
       return new Response(
         JSON.stringify({ 
@@ -542,6 +541,7 @@ serve(async (req) => {
             title: data.title,
             content: data.content.substring(0, 200) + '...',
             created_at: data.created_at,
+            chunk_count: chunkCount,
           }
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
