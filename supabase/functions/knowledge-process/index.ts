@@ -612,7 +612,7 @@ serve(async (req) => {
         .from('knowledge_entries')
         .select('id, title, content')
         .order('created_at', { ascending: true })
-        .range(offset, offset + batch_size - 1);
+        .range(batchOffset, batchOffset + batchSize - 1);
 
       if (listError) throw new Error(`Ошибка загрузки записей: ${listError.message}`);
       if (!entries || entries.length === 0) {
