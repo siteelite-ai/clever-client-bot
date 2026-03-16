@@ -481,7 +481,7 @@ serve(async (req) => {
       const { title: extractedTitle, content } = await scrapeUrl(entry.source_url);
       
       // Generate new embedding
-      const embedding = generateEmbedding(content);
+      const embedding = await generateEmbedding(content, googleApiKeys);
 
       // Update entry
       const { data, error } = await supabase
