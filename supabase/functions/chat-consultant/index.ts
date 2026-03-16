@@ -1867,7 +1867,7 @@ serve(async (req) => {
 
     // ШАГ 2: Поиск в базе знаний (параллельно с другими запросами)
     // Ищем для ВСЕХ запросов — статьи могут быть полезны даже когда товаров нет в каталоге
-    const knowledgePromise = searchKnowledgeBase(userMessage, 3);
+    const knowledgePromise = searchKnowledgeBase(userMessage, 5, appSettings);
     // Загружаем контакты из ОБОИХ записей: структурированные + скрапнутые с сайта
     const contactsPromise = (async () => {
       const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
