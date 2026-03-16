@@ -1899,14 +1899,14 @@ serve(async (req) => {
       knowledgeContext = `
 📚 ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ (используй для ответа!):
 
-${knowledgeResults.map((r, i) => {
-        // Send FULL content — no truncation, LLM can handle it
-        return `--- ${r.title} ---
+${knowledgeResults.map((r) => {
+        const chunkLabel = typeof r.chunk_index === 'number' ? ` [фрагмент ${r.chunk_index + 1}]` : '';
+        return `--- ${r.title}${chunkLabel} ---
 ${r.content}
 ${r.source_url ? `Источник: ${r.source_url}` : ''}`;
       }).join('\n\n')}
 
-ИНСТРУКЦИЯ: Используй информацию выше для ответа клиенту. Если информация релевантна вопросу — цитируй её, ссылайся на конкретные пункты.`;
+ИНСТРУКЦИЯ: Используй информацию выше для ответа клиенту. Если информация релевантна вопросу — цитируй её, ссылайся на конкретные пункты и точные значения.`;
       
       console.log(`[Chat] Added ${knowledgeResults.length} knowledge entries to context`);
     }
