@@ -455,27 +455,25 @@ serve(async (req) => {
     }
 
     if (action === 'scrape_url') {
-      // Scrape URL and add to knowledge base
       if (!url) {
         throw new Error('URL is required');
       }
 
       const { title: extractedTitle, content } = await scrapeUrl(url);
+      const normalizedContent = normalizeKnowledgeText(content).substring(0, MAX_KNOWLEDGE_CONTENT);
       
-      if (content.length < 50) {
+      if (normalizedContent.length < 50) {
         throw new Error('Страница содержит слишком мало текста');
       }
 
-      // Generate embedding
-      const embedding = await generateEmbedding(content, googleApiKeys);
+      const embedding = await generateEmbedding(normalizedContent, googleApiKeys);
 
-      // Insert into database
       const { data, error } = await supabase
         .from('knowledge_entries')
         .insert({
           type: 'url',
           title: extractedTitle,
-          content: content.substring(0, 200000), // Limit content size
+          content: normalizedContent,
           source_url: url,
           embedding,
         })
@@ -487,7 +485,8 @@ serve(async (req) => {
         throw new Error(`Ошибка сохранения: ${error.message}`);
       }
 
-      console.log(`[Knowledge] Added URL entry: ${data.id}`);
+      const chunkCount = await rebuildKnowledgeChunks(supabase, data.id, data.title, normalizedContent, googleApiKeys);
+      console.log(`[Knowledge] Added URL entry: ${data.id}, chunks: ${chunkCount}`);
 
       return new Response(
         JSON.stringify({ 
@@ -499,6 +498,7 @@ serve(async (req) => {
             content: data.content.substring(0, 200) + '...',
             source_url: data.source_url,
             created_at: data.created_at,
+            chunk_count: chunkCount,
           }
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
