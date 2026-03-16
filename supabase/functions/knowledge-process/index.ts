@@ -6,7 +6,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
-// Generate real embeddings using Google's text-embedding-004 model
+// Generate real embeddings using Google's gemini-embedding-001 model
 // Uses Google API keys from app_settings (with multi-key fallback)
 async function generateEmbedding(text: string, googleApiKeys: string[]): Promise<number[]> {
   console.log(`[Embedding] Generating real embedding for text (${text.length} chars)...`);
