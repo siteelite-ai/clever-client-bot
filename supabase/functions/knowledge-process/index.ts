@@ -639,7 +639,7 @@ serve(async (req) => {
             errors++;
           } else {
             processed++;
-            console.log(`[Knowledge] ✓ ${offset + processed}/${offset + entries.length}: "${entry.title.substring(0, 50)}"`);
+            console.log(`[Knowledge] ✓ ${batchOffset + processed}/${batchOffset + entries.length}: "${entry.title.substring(0, 50)}"`);
           }
         } catch (e) {
           console.error(`[Knowledge] Embedding error for ${entry.id}:`, e);
