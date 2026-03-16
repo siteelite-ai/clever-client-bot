@@ -572,7 +572,7 @@ serve(async (req) => {
 
     if (action === 'search') {
       // Semantic search in knowledge base
-      const { query, limit = 5 } = await req.json();
+      const { query, limit = 5 } = requestBody;
       
       if (!query) {
         throw new Error('Query is required');
