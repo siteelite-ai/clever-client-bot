@@ -187,10 +187,61 @@ interface KnowledgeResult {
   similarity: number;
 }
 
-// Search knowledge base for relevant context using full-text search
+// Generate query embedding using Google's gemini-embedding-001
+async function generateQueryEmbedding(query: string, settings: CachedSettings): Promise<number[] | null> {
+  if (!settings.google_api_key) {
+    console.log('[Knowledge] No Google API key, skipping vector search');
+    return null;
+  }
+
+  const keys = settings.google_api_key
+    .split(/[,\n]/)
+    .map(k => k.trim())
+    .filter(k => k.length > 0);
+
+  if (keys.length === 0) return null;
+
+  for (let i = 0; i < keys.length; i++) {
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${keys[i]}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'models/gemini-embedding-001',
+            content: { parts: [{ text: query.substring(0, 2000) }] },
+            outputDimensionality: 768,
+          }),
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const embedding = data.embedding?.values;
+        if (embedding?.length > 0) {
+          console.log(`[Knowledge] Generated query embedding (${embedding.length} dims)`);
+          return embedding;
+        }
+      }
+
+      if ((response.status === 429 || response.status >= 500) && i < keys.length - 1) continue;
+      console.error(`[Knowledge] Embedding API error: ${response.status}`);
+      return null;
+    } catch (e) {
+      if (i < keys.length - 1) continue;
+      console.error('[Knowledge] Embedding error:', e);
+      return null;
+    }
+  }
+  return null;
+}
+
+// Search knowledge base using hybrid search (FTS + vector)
 async function searchKnowledgeBase(
   query: string, 
-  limit: number = 3
+  limit: number = 5,
+  settings?: CachedSettings
 ): Promise<KnowledgeResult[]> {
   const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
   const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
@@ -203,29 +254,48 @@ async function searchKnowledgeBase(
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     
-    console.log(`[Knowledge] Searching for: "${query.substring(0, 50)}..."`);
+    console.log(`[Knowledge] Hybrid search for: "${query.substring(0, 50)}..."`);
     
-    // Use full-text search function
-    const { data, error } = await supabase.rpc('search_knowledge_fulltext', {
+    // Generate query embedding for vector search (parallel-safe, non-blocking)
+    let queryEmbedding: number[] | null = null;
+    if (settings) {
+      queryEmbedding = await generateQueryEmbedding(query, settings);
+    }
+
+    // Use hybrid search (FTS + vector via RRF)
+    const { data, error } = await supabase.rpc('search_knowledge_hybrid', {
       search_query: query,
+      query_embedding: queryEmbedding ? `[${queryEmbedding.join(',')}]` : null,
       match_count: limit,
     });
 
     if (error) {
-      console.error('[Knowledge] Search error:', error);
-      return [];
+      console.error('[Knowledge] Hybrid search error:', error);
+      // Fallback to FTS-only
+      const { data: ftsData, error: ftsError } = await supabase.rpc('search_knowledge_fulltext', {
+        search_query: query,
+        match_count: limit,
+      });
+      if (ftsError) {
+        console.error('[Knowledge] FTS fallback error:', ftsError);
+        return [];
+      }
+      console.log(`[Knowledge] FTS fallback found ${ftsData?.length || 0} entries`);
+      return (ftsData || []).map((row: any) => ({
+        id: row.id, title: row.title, content: row.content,
+        type: row.type, source_url: row.source_url, similarity: row.rank,
+      }));
     }
 
-    console.log(`[Knowledge] Found ${data?.length || 0} relevant entries`);
+    console.log(`[Knowledge] Hybrid search found ${data?.length || 0} entries (vector: ${queryEmbedding ? 'yes' : 'no'})`);
     
-    // Map to expected interface
-    return (data || []).map((row: { id: string; title: string; content: string; type: string; source_url: string | null; rank: number }) => ({
+    return (data || []).map((row: any) => ({
       id: row.id,
       title: row.title,
       content: row.content,
       type: row.type,
       source_url: row.source_url,
-      similarity: row.rank, // Use rank as similarity score
+      similarity: row.score,
     }));
   } catch (error) {
     console.error('[Knowledge] Search error:', error);
@@ -1797,7 +1867,7 @@ serve(async (req) => {
 
     // ШАГ 2: Поиск в базе знаний (параллельно с другими запросами)
     // Ищем для ВСЕХ запросов — статьи могут быть полезны даже когда товаров нет в каталоге
-    const knowledgePromise = searchKnowledgeBase(userMessage, 3);
+    const knowledgePromise = searchKnowledgeBase(userMessage, 5, appSettings);
     // Загружаем контакты из ОБОИХ записей: структурированные + скрапнутые с сайта
     const contactsPromise = (async () => {
       const SUPABASE_URL = Deno.env.get('SUPABASE_URL');

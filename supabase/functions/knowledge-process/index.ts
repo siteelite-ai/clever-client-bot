@@ -6,48 +6,84 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
-// Simple deterministic embedding using semantic hashing
-// This is a fast, reliable fallback that doesn't require external API calls
-function generateEmbedding(text: string): number[] {
-  console.log(`[Embedding] Generating embedding for text (${text.length} chars)...`);
+// Generate real embeddings using Google's gemini-embedding-001 model
+// Uses Google API keys from app_settings (with multi-key fallback)
+async function generateEmbedding(text: string, googleApiKeys: string[]): Promise<number[]> {
+  console.log(`[Embedding] Generating real embedding for text (${text.length} chars)...`);
   
-  const embedding: number[] = [];
-  const normalized = text.toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  // Truncate text to ~8000 chars to stay within token limits
+  const truncated = text.substring(0, 8000);
   
-  // Extract key terms using a simple TF approach
-  const words = normalized.split(' ').filter(w => w.length > 2);
-  const termFreq = new Map<string, number>();
-  
-  for (const word of words) {
-    termFreq.set(word, (termFreq.get(word) || 0) + 1);
-  }
-  
-  // Generate embedding based on term frequencies and position
-  for (let i = 0; i < 1536; i++) {
-    let value = 0;
+  for (let i = 0; i < googleApiKeys.length; i++) {
+    const apiKey = googleApiKeys[i];
+    const keyLabel = googleApiKeys.length > 1 ? `key ${i + 1}/${googleApiKeys.length}` : 'key';
     
-    // Use multiple hash functions for better distribution
-    const wordIndex = i % words.length;
-    const word = words[wordIndex] || '';
-    
-    // Character-based hashing
-    for (let j = 0; j < word.length; j++) {
-      const charCode = word.charCodeAt(j);
-      value += Math.sin(charCode * (i + 1) * 0.01) * (termFreq.get(word) || 1);
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'models/gemini-embedding-001',
+            content: { parts: [{ text: truncated }] },
+            outputDimensionality: 768,
+          }),
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const embedding = data.embedding?.values;
+        if (!embedding || embedding.length === 0) {
+          throw new Error('Empty embedding returned');
+        }
+        console.log(`[Embedding] Generated ${embedding.length}-dim embedding with ${keyLabel}`);
+        return embedding;
+      }
+
+      const isRetryable = response.status === 429 || response.status === 500 || response.status === 503;
+      if (isRetryable && i < googleApiKeys.length - 1) {
+        console.log(`[Embedding] ${response.status} with ${keyLabel}, trying next key...`);
+        continue;
+      }
+
+      const errorText = await response.text();
+      throw new Error(`Embedding API error ${response.status}: ${errorText}`);
+    } catch (error) {
+      if (i < googleApiKeys.length - 1 && error instanceof TypeError) {
+        console.log(`[Embedding] Network error with ${keyLabel}, trying next key...`);
+        continue;
+      }
+      throw error;
     }
-    
-    // Position-based component
-    value += Math.cos(i * 0.01) * (normalized.length / 10000);
-    
-    // Normalize to [-1, 1]
-    embedding.push(Math.tanh(value * 0.1));
   }
   
-  console.log(`[Embedding] Generated embedding with ${embedding.length} dimensions`);
-  return embedding;
+  throw new Error('All Google API keys exhausted for embedding generation');
+}
+
+// Helper to get Google API keys from app_settings
+async function getGoogleApiKeys(supabase: any): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('app_settings')
+    .select('google_api_key')
+    .limit(1)
+    .single();
+
+  if (error || !data?.google_api_key) {
+    throw new Error('Google API key не настроен в Настройках. Нужен для генерации эмбеддингов.');
+  }
+
+  const keys = data.google_api_key
+    .split(/[,\n]/)
+    .map((k: string) => k.trim())
+    .filter((k: string) => k.length > 0);
+
+  if (keys.length === 0) {
+    throw new Error('Google API key пустой. Добавьте ключ в Настройках.');
+  }
+
+  return keys;
 }
 
 // Extract text content from URL
@@ -173,7 +209,8 @@ serve(async (req) => {
   }
 
   try {
-    const { action, url, text, title, pdfBase64, entryId, entryType } = await req.json();
+    const requestBody = await req.json();
+    const { action, url, text, title, pdfBase64, entryId, entryType, offset, batch_size } = requestBody;
     
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
@@ -187,8 +224,11 @@ serve(async (req) => {
     }
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    
+    // Load Google API keys for embedding generation
+    const googleApiKeys = await getGoogleApiKeys(supabase);
 
-    console.log(`[Knowledge] Action: ${action}`);
+    console.log(`[Knowledge] Action: ${action}, Google keys: ${googleApiKeys.length}`);
 
     if (action === 'fetch_sitemap') {
       // Fetch and parse sitemap XML
@@ -288,7 +328,7 @@ serve(async (req) => {
       }
 
       // Generate embedding
-      const embedding = generateEmbedding(content);
+      const embedding = await generateEmbedding(content, googleApiKeys);
 
       // Insert into database
       const { data, error } = await supabase
@@ -333,7 +373,7 @@ serve(async (req) => {
       }
 
       // Generate embedding
-      const embedding = generateEmbedding(text);
+      const embedding = await generateEmbedding(text, googleApiKeys);
 
       // Insert into database
       const { data, error } = await supabase
@@ -382,7 +422,7 @@ serve(async (req) => {
       }
 
       // Generate embedding
-      const embedding = generateEmbedding(content);
+      const embedding = await generateEmbedding(content, googleApiKeys);
 
       // Insert into database
       const { data, error } = await supabase
@@ -442,7 +482,7 @@ serve(async (req) => {
       const { title: extractedTitle, content } = await scrapeUrl(entry.source_url);
       
       // Generate new embedding
-      const embedding = generateEmbedding(content);
+      const embedding = await generateEmbedding(content, googleApiKeys);
 
       // Update entry
       const { data, error } = await supabase
@@ -532,14 +572,14 @@ serve(async (req) => {
 
     if (action === 'search') {
       // Semantic search in knowledge base
-      const { query, limit = 5 } = await req.json();
+      const { query, limit = 5 } = requestBody;
       
       if (!query) {
         throw new Error('Query is required');
       }
 
       // Generate query embedding
-      const queryEmbedding = generateEmbedding(query);
+      const queryEmbedding = await generateEmbedding(query, googleApiKeys);
 
       // Search using the database function
       const { data, error } = await supabase.rpc('search_knowledge', {
@@ -557,6 +597,62 @@ serve(async (req) => {
 
       return new Response(
         JSON.stringify({ success: true, results: data || [] }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (action === 'regenerate_embeddings') {
+      // Regenerate embeddings using Google gemini-embedding-001
+      // Supports offset/limit for batching to avoid edge function timeouts
+      const batchOffset = offset || 0;
+      const batchSize = batch_size || 20;
+      console.log(`[Knowledge] Regenerating embeddings batch: offset=${batchOffset}, batch_size=${batchSize}`);
+
+      const { data: entries, error: listError } = await supabase
+        .from('knowledge_entries')
+        .select('id, title, content')
+        .order('created_at', { ascending: true })
+        .range(batchOffset, batchOffset + batchSize - 1);
+
+      if (listError) throw new Error(`Ошибка загрузки записей: ${listError.message}`);
+      if (!entries || entries.length === 0) {
+        return new Response(
+          JSON.stringify({ success: true, message: 'Все записи обработаны', processed: 0, done: true }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      let processed = 0;
+      let errors = 0;
+
+      for (const entry of entries) {
+        try {
+          const embedding = await generateEmbedding(entry.content, googleApiKeys);
+          
+          const { error: updateError } = await supabase
+            .from('knowledge_entries')
+            .update({ embedding })
+            .eq('id', entry.id);
+
+          if (updateError) {
+            console.error(`[Knowledge] Update error for ${entry.id}:`, updateError);
+            errors++;
+          } else {
+            processed++;
+            console.log(`[Knowledge] ✓ ${batchOffset + processed}/${batchOffset + entries.length}: "${entry.title.substring(0, 50)}"`);
+          }
+        } catch (e) {
+          console.error(`[Knowledge] Embedding error for ${entry.id}:`, e);
+          errors++;
+        }
+      }
+
+      const nextOffset = batchOffset + batchSize;
+      const done = entries.length < batchSize;
+      console.log(`[Knowledge] Batch complete: ${processed} success, ${errors} errors. Done: ${done}`);
+
+      return new Response(
+        JSON.stringify({ success: true, processed, errors, batch_size: batchSize, offset: batchOffset, next_offset: done ? null : nextOffset, done }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
