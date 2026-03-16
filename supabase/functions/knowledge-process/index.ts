@@ -209,7 +209,8 @@ serve(async (req) => {
   }
 
   try {
-    const { action, url, text, title, pdfBase64, entryId, entryType } = await req.json();
+    const requestBody = await req.json();
+    const { action, url, text, title, pdfBase64, entryId, entryType, offset, batch_size } = requestBody;
     
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
