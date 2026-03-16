@@ -601,7 +601,7 @@ serve(async (req) => {
     }
 
     if (action === 'regenerate_embeddings') {
-      // One-time: regenerate all embeddings using real Google text-embedding-004
+      // One-time: regenerate all embeddings using real Google gemini-embedding-001
       console.log('[Knowledge] Starting bulk embedding regeneration...');
 
       const { data: entries, error: listError } = await supabase

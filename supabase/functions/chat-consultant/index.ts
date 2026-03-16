@@ -187,7 +187,7 @@ interface KnowledgeResult {
   similarity: number;
 }
 
-// Generate query embedding using Google's text-embedding-004
+// Generate query embedding using Google's gemini-embedding-001
 async function generateQueryEmbedding(query: string, settings: CachedSettings): Promise<number[] | null> {
   if (!settings.google_api_key) {
     console.log('[Knowledge] No Google API key, skipping vector search');
@@ -204,12 +204,12 @@ async function generateQueryEmbedding(query: string, settings: CachedSettings): 
   for (let i = 0; i < keys.length; i++) {
     try {
       const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${keys[i]}`,
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${keys[i]}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            model: 'models/text-embedding-004',
+            model: 'models/gemini-embedding-001',
             content: { parts: [{ text: query.substring(0, 2000) }] },
             outputDimensionality: 768,
           }),
