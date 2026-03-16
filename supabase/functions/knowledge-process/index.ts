@@ -549,27 +549,25 @@ serve(async (req) => {
     }
 
     if (action === 'process_pdf') {
-      // Process PDF and add to knowledge base
       if (!pdfBase64) {
         throw new Error('PDF content is required');
       }
 
-      const { title: extractedTitle, content } = await extractPdfText(pdfBase64, LOVABLE_API_KEY);
+      const { title: extractedTitle, content } = await extractPdfText(pdfBase64, googleApiKeys);
+      const normalizedContent = normalizeKnowledgeText(content).substring(0, MAX_KNOWLEDGE_CONTENT);
       
-      if (content.length < 50) {
+      if (normalizedContent.length < 50) {
         throw new Error('PDF содержит слишком мало текста');
       }
 
-      // Generate embedding
-      const embedding = await generateEmbedding(content, googleApiKeys);
+      const embedding = await generateEmbedding(normalizedContent, googleApiKeys);
 
-      // Insert into database
       const { data, error } = await supabase
         .from('knowledge_entries')
         .insert({
           type: 'pdf',
           title: title || extractedTitle,
-          content: content.substring(0, 200000),
+          content: normalizedContent,
           embedding,
         })
         .select()
@@ -580,7 +578,8 @@ serve(async (req) => {
         throw new Error(`Ошибка сохранения: ${error.message}`);
       }
 
-      console.log(`[Knowledge] Added PDF entry: ${data.id}`);
+      const chunkCount = await rebuildKnowledgeChunks(supabase, data.id, data.title, normalizedContent, googleApiKeys);
+      console.log(`[Knowledge] Added PDF entry: ${data.id}, chunks: ${chunkCount}`);
 
       return new Response(
         JSON.stringify({ 
@@ -591,6 +590,7 @@ serve(async (req) => {
             title: data.title,
             content: data.content.substring(0, 200) + '...',
             created_at: data.created_at,
+            chunk_count: chunkCount,
           }
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
