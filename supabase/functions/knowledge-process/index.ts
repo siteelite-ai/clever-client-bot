@@ -6,48 +6,84 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
-// Simple deterministic embedding using semantic hashing
-// This is a fast, reliable fallback that doesn't require external API calls
-function generateEmbedding(text: string): number[] {
-  console.log(`[Embedding] Generating embedding for text (${text.length} chars)...`);
+// Generate real embeddings using Google's text-embedding-004 model
+// Uses Google API keys from app_settings (with multi-key fallback)
+async function generateEmbedding(text: string, googleApiKeys: string[]): Promise<number[]> {
+  console.log(`[Embedding] Generating real embedding for text (${text.length} chars)...`);
   
-  const embedding: number[] = [];
-  const normalized = text.toLowerCase()
-    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  // Truncate text to ~8000 chars to stay within token limits
+  const truncated = text.substring(0, 8000);
   
-  // Extract key terms using a simple TF approach
-  const words = normalized.split(' ').filter(w => w.length > 2);
-  const termFreq = new Map<string, number>();
-  
-  for (const word of words) {
-    termFreq.set(word, (termFreq.get(word) || 0) + 1);
-  }
-  
-  // Generate embedding based on term frequencies and position
-  for (let i = 0; i < 1536; i++) {
-    let value = 0;
+  for (let i = 0; i < googleApiKeys.length; i++) {
+    const apiKey = googleApiKeys[i];
+    const keyLabel = googleApiKeys.length > 1 ? `key ${i + 1}/${googleApiKeys.length}` : 'key';
     
-    // Use multiple hash functions for better distribution
-    const wordIndex = i % words.length;
-    const word = words[wordIndex] || '';
-    
-    // Character-based hashing
-    for (let j = 0; j < word.length; j++) {
-      const charCode = word.charCodeAt(j);
-      value += Math.sin(charCode * (i + 1) * 0.01) * (termFreq.get(word) || 1);
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'models/text-embedding-004',
+            content: { parts: [{ text: truncated }] },
+            outputDimensionality: 768,
+          }),
+        }
+      );
+
+      if (response.ok) {
+        const data = await response.json();
+        const embedding = data.embedding?.values;
+        if (!embedding || embedding.length === 0) {
+          throw new Error('Empty embedding returned');
+        }
+        console.log(`[Embedding] Generated ${embedding.length}-dim embedding with ${keyLabel}`);
+        return embedding;
+      }
+
+      const isRetryable = response.status === 429 || response.status === 500 || response.status === 503;
+      if (isRetryable && i < googleApiKeys.length - 1) {
+        console.log(`[Embedding] ${response.status} with ${keyLabel}, trying next key...`);
+        continue;
+      }
+
+      const errorText = await response.text();
+      throw new Error(`Embedding API error ${response.status}: ${errorText}`);
+    } catch (error) {
+      if (i < googleApiKeys.length - 1 && error instanceof TypeError) {
+        console.log(`[Embedding] Network error with ${keyLabel}, trying next key...`);
+        continue;
+      }
+      throw error;
     }
-    
-    // Position-based component
-    value += Math.cos(i * 0.01) * (normalized.length / 10000);
-    
-    // Normalize to [-1, 1]
-    embedding.push(Math.tanh(value * 0.1));
   }
   
-  console.log(`[Embedding] Generated embedding with ${embedding.length} dimensions`);
-  return embedding;
+  throw new Error('All Google API keys exhausted for embedding generation');
+}
+
+// Helper to get Google API keys from app_settings
+async function getGoogleApiKeys(supabase: any): Promise<string[]> {
+  const { data, error } = await supabase
+    .from('app_settings')
+    .select('google_api_key')
+    .limit(1)
+    .single();
+
+  if (error || !data?.google_api_key) {
+    throw new Error('Google API key не настроен в Настройках. Нужен для генерации эмбеддингов.');
+  }
+
+  const keys = data.google_api_key
+    .split(/[,\n]/)
+    .map((k: string) => k.trim())
+    .filter((k: string) => k.length > 0);
+
+  if (keys.length === 0) {
+    throw new Error('Google API key пустой. Добавьте ключ в Настройках.');
+  }
+
+  return keys;
 }
 
 // Extract text content from URL
