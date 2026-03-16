@@ -601,23 +601,25 @@ serve(async (req) => {
     }
 
     if (action === 'regenerate_embeddings') {
-      // One-time: regenerate all embeddings using real Google gemini-embedding-001
-      console.log('[Knowledge] Starting bulk embedding regeneration...');
+      // Regenerate embeddings using Google gemini-embedding-001
+      // Supports offset/limit for batching to avoid edge function timeouts
+      const { offset = 0, batch_size = 20 } = await req.json();
+      console.log(`[Knowledge] Regenerating embeddings batch: offset=${offset}, batch_size=${batch_size}`);
 
       const { data: entries, error: listError } = await supabase
         .from('knowledge_entries')
         .select('id, title, content')
-        .order('created_at', { ascending: true });
+        .order('created_at', { ascending: true })
+        .range(offset, offset + batch_size - 1);
 
       if (listError) throw new Error(`Ошибка загрузки записей: ${listError.message}`);
       if (!entries || entries.length === 0) {
         return new Response(
-          JSON.stringify({ success: true, message: 'Нет записей для обработки', processed: 0 }),
+          JSON.stringify({ success: true, message: 'Все записи обработаны', processed: 0, done: true }),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
 
-      console.log(`[Knowledge] Regenerating embeddings for ${entries.length} entries...`);
       let processed = 0;
       let errors = 0;
 
@@ -635,12 +637,7 @@ serve(async (req) => {
             errors++;
           } else {
             processed++;
-            console.log(`[Knowledge] ✓ ${processed}/${entries.length}: "${entry.title.substring(0, 50)}"`);
-          }
-
-          // Small delay to avoid rate limiting
-          if (processed % 5 === 0) {
-            await new Promise(resolve => setTimeout(resolve, 1000));
+            console.log(`[Knowledge] ✓ ${offset + processed}/${offset + entries.length}: "${entry.title.substring(0, 50)}"`);
           }
         } catch (e) {
           console.error(`[Knowledge] Embedding error for ${entry.id}:`, e);
@@ -648,10 +645,12 @@ serve(async (req) => {
         }
       }
 
-      console.log(`[Knowledge] Regeneration complete: ${processed} success, ${errors} errors`);
+      const nextOffset = offset + batch_size;
+      const done = entries.length < batch_size;
+      console.log(`[Knowledge] Batch complete: ${processed} success, ${errors} errors. Done: ${done}`);
 
       return new Response(
-        JSON.stringify({ success: true, processed, errors, total: entries.length }),
+        JSON.stringify({ success: true, processed, errors, batch_size, offset, next_offset: done ? null : nextOffset, done }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
