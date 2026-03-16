@@ -578,7 +578,7 @@ serve(async (req) => {
       }
 
       // Generate query embedding
-      const queryEmbedding = generateEmbedding(query);
+      const queryEmbedding = await generateEmbedding(query, googleApiKeys);
 
       // Search using the database function
       const { data, error } = await supabase.rpc('search_knowledge', {
