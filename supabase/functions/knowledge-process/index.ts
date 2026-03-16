@@ -372,7 +372,7 @@ serve(async (req) => {
       }
 
       // Generate embedding
-      const embedding = generateEmbedding(text);
+      const embedding = await generateEmbedding(text, googleApiKeys);
 
       // Insert into database
       const { data, error } = await supabase
