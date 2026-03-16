@@ -185,7 +185,6 @@ interface KnowledgeResult {
   type: string;
   source_url: string | null;
   similarity: number;
-  chunk_index?: number;
 }
 
 // Generate query embedding using Google's gemini-embedding-001
@@ -196,7 +195,7 @@ async function generateQueryEmbedding(query: string, settings: CachedSettings): 
   }
 
   const keys = settings.google_api_key
-    .split(/[\n,]/)
+    .split(/[,\n]/)
     .map(k => k.trim())
     .filter(k => k.length > 0);
 
@@ -238,15 +237,15 @@ async function generateQueryEmbedding(query: string, settings: CachedSettings): 
   return null;
 }
 
-// Search knowledge base using chunk-level hybrid search (FTS + vector)
+// Search knowledge base using hybrid search (FTS + vector)
 async function searchKnowledgeBase(
-  query: string,
+  query: string, 
   limit: number = 5,
   settings?: CachedSettings
 ): Promise<KnowledgeResult[]> {
   const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
   const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-
+  
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
     console.log('[Knowledge] Supabase not configured, skipping knowledge search');
     return [];
@@ -254,22 +253,25 @@ async function searchKnowledgeBase(
 
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-    console.log(`[Knowledge] Chunk hybrid search for: "${query.substring(0, 50)}..."`);
-
+    
+    console.log(`[Knowledge] Hybrid search for: "${query.substring(0, 50)}..."`);
+    
+    // Generate query embedding for vector search (parallel-safe, non-blocking)
     let queryEmbedding: number[] | null = null;
     if (settings) {
       queryEmbedding = await generateQueryEmbedding(query, settings);
     }
 
-    const { data, error } = await supabase.rpc('search_knowledge_chunks_hybrid', {
+    // Use hybrid search (FTS + vector via RRF)
+    const { data, error } = await supabase.rpc('search_knowledge_hybrid', {
       search_query: query,
       query_embedding: queryEmbedding ? `[${queryEmbedding.join(',')}]` : null,
       match_count: limit,
-      max_chunks_per_entry: 2,
     });
 
     if (error) {
-      console.error('[Knowledge] Chunk hybrid search error:', error);
+      console.error('[Knowledge] Hybrid search error:', error);
+      // Fallback to FTS-only
       const { data: ftsData, error: ftsError } = await supabase.rpc('search_knowledge_fulltext', {
         search_query: query,
         match_count: limit,
@@ -280,24 +282,20 @@ async function searchKnowledgeBase(
       }
       console.log(`[Knowledge] FTS fallback found ${ftsData?.length || 0} entries`);
       return (ftsData || []).map((row: any) => ({
-        id: row.id,
-        title: row.title,
-        content: row.content,
-        type: row.type,
-        source_url: row.source_url,
-        similarity: row.rank,
+        id: row.id, title: row.title, content: row.content,
+        type: row.type, source_url: row.source_url, similarity: row.rank,
       }));
     }
 
-    console.log(`[Knowledge] Chunk hybrid search found ${data?.length || 0} chunks (vector: ${queryEmbedding ? 'yes' : 'no'})`);
+    console.log(`[Knowledge] Hybrid search found ${data?.length || 0} entries (vector: ${queryEmbedding ? 'yes' : 'no'})`);
+    
     return (data || []).map((row: any) => ({
-      id: row.entry_id,
+      id: row.id,
       title: row.title,
       content: row.content,
       type: row.type,
       source_url: row.source_url,
       similarity: row.score,
-      chunk_index: row.chunk_index,
     }));
   } catch (error) {
     console.error('[Knowledge] Search error:', error);
@@ -1899,14 +1897,14 @@ serve(async (req) => {
       knowledgeContext = `
 📚 ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ (используй для ответа!):
 
-${knowledgeResults.map((r) => {
-        const chunkLabel = typeof r.chunk_index === 'number' ? ` [фрагмент ${r.chunk_index + 1}]` : '';
-        return `--- ${r.title}${chunkLabel} ---
+${knowledgeResults.map((r, i) => {
+        // Send FULL content — no truncation, LLM can handle it
+        return `--- ${r.title} ---
 ${r.content}
 ${r.source_url ? `Источник: ${r.source_url}` : ''}`;
       }).join('\n\n')}
 
-ИНСТРУКЦИЯ: Используй информацию выше для ответа клиенту. Если информация релевантна вопросу — цитируй её, ссылайся на конкретные пункты и точные значения.`;
+ИНСТРУКЦИЯ: Используй информацию выше для ответа клиенту. Если информация релевантна вопросу — цитируй её, ссылайся на конкретные пункты.`;
       
       console.log(`[Chat] Added ${knowledgeResults.length} knowledge entries to context`);
     }
@@ -2003,10 +2001,6 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
     
     console.log(`[Chat] hasAssistantGreeting: ${hasAssistantGreeting}`);
     
-    const shouldAnswerFromKnowledge = knowledgeResults.length > 0 && !isGreeting && (
-      extractedIntent.intent === 'info' || extractedIntent.intent === 'general'
-    );
-
     let productInstructions = '';
     if (brandsContext) {
       // Запрос о брендах — показываем список брендов
@@ -2030,20 +2024,42 @@ ${productContext}
 - ВАЖНО: если в названии товара есть экранированные скобки \\( и \\) — СОХРАНЯЙ их! Не убирай обратные слэши! Пример: [Розетка \\(белый\\)](url) — это ПРАВИЛЬНО. [Розетка (белый)](url) — это НЕПРАВИЛЬНО, сломает ссылку!`;
     } else if (isGreeting) {
       productInstructions = ''; // Для приветствий ничего не пишем о товарах
-    } else if (shouldAnswerFromKnowledge) {
-      productInstructions = `
-💡 ВОПРОС ТРЕБУЕТ ОТВЕТА ИЗ БАЗЫ ЗНАНИЙ
+    } else if (extractedIntent.intent === 'info') {
+      // ИНТЕНТ: INFO — вопрос о компании, оферте, условиях, юридических данных
+      // Всегда используем базу знаний для этого интента
+      if (knowledgeResults.length > 0) {
+        productInstructions = `
+💡 ВОПРОС О КОМПАНИИ / УСЛОВИЯХ / ДОКУМЕНТАХ
 
 Клиент написал: "${extractedIntent.originalQuery}"
 
 В БАЗЕ ЗНАНИЙ НАЙДЕНА РЕЛЕВАНТНАЯ ИНФОРМАЦИЯ (см. раздел "ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ" выше).
 
 ТВОЙ ОТВЕТ:
-1. Ответь прямо по данным из Базы Знаний
-2. Используй точные значения, нормы, таблицы и пункты, если они есть
-3. Если найдено несколько фрагментов — отдай приоритет самому точному и прикладному
-4. НЕ переключай тему на товары, если вопрос не про каталог
-5. Если данных недостаточно — честно скажи, чего именно не хватает`;
+1. Ответь на вопрос клиента, ИСПОЛЬЗУЯ информацию из Базы Знаний
+2. Цитируй конкретные пункты, если они есть (например, "Согласно п. 11.16 договора оферты...")
+3. Если вопрос о юридических данных (БИН, ИИН, названия юрлиц) — ОБЯЗАТЕЛЬНО предоставь их из Базы Знаний
+4. Если вопрос об обязанностях, правах, условиях — перечисли ключевые пункты кратко и понятно
+5. Если информации в Базе Знаний недостаточно — честно скажи и предложи связаться с менеджером
+
+СТРОГО ЗАПРЕЩЕНО:
+- НЕ говори "я не могу предоставить такую информацию" если она ЕСТЬ в Базе Знаний!
+- НЕ отказывайся отвечать на вопросы об оферте, БИН, юрлицах — это публичная информация!
+- НЕ переключай тему на товары, если клиент спрашивает о документах/условиях`;
+      } else {
+        // intent=info, но в БЗ ничего не нашлось
+        productInstructions = `
+💡 ВОПРОС О КОМПАНИИ / УСЛОВИЯХ
+
+Клиент написал: "${extractedIntent.originalQuery}"
+
+К сожалению, в Базе Знаний не найдено релевантной информации по этому вопросу.
+
+ТВОЙ ОТВЕТ:
+1. Честно скажи, что у тебя нет точной информации по этому вопросу
+2. Предложи связаться с менеджером для уточнения
+3. НЕ выдумывай данные!`;
+      }
     } else if (extractedIntent.intent === 'general') {
       // ИНТЕНТ: GENERAL — приветствия, шутки, нерелевантное, продолжение диалога
       const hasProductContext = historyForContext.some(m => 
