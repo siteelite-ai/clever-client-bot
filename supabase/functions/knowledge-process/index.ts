@@ -604,8 +604,9 @@ serve(async (req) => {
     if (action === 'regenerate_embeddings') {
       // Regenerate embeddings using Google gemini-embedding-001
       // Supports offset/limit for batching to avoid edge function timeouts
-      const { offset = 0, batch_size = 20 } = await req.json();
-      console.log(`[Knowledge] Regenerating embeddings batch: offset=${offset}, batch_size=${batch_size}`);
+      const batchOffset = offset || 0;
+      const batchSize = batch_size || 20;
+      console.log(`[Knowledge] Regenerating embeddings batch: offset=${batchOffset}, batch_size=${batchSize}`);
 
       const { data: entries, error: listError } = await supabase
         .from('knowledge_entries')
