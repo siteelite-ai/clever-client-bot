@@ -6,18 +6,21 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
+const KNOWLEDGE_CHUNK_SIZE = 2000;
+const KNOWLEDGE_CHUNK_OVERLAP = 200;
+const MAX_KNOWLEDGE_CONTENT = 200000;
+const PDF_EXTRACTION_MODEL = 'gemini-2.5-flash';
+
 // Generate real embeddings using Google's gemini-embedding-001 model
 // Uses Google API keys from app_settings (with multi-key fallback)
 async function generateEmbedding(text: string, googleApiKeys: string[]): Promise<number[]> {
-  console.log(`[Embedding] Generating real embedding for text (${text.length} chars)...`);
-  
-  // Truncate text to ~8000 chars to stay within token limits
-  const truncated = text.substring(0, 8000);
-  
+  const normalized = normalizeKnowledgeText(text).substring(0, 8000);
+  console.log(`[Embedding] Generating real embedding for text (${normalized.length} chars)...`);
+
   for (let i = 0; i < googleApiKeys.length; i++) {
     const apiKey = googleApiKeys[i];
     const keyLabel = googleApiKeys.length > 1 ? `key ${i + 1}/${googleApiKeys.length}` : 'key';
-    
+
     try {
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`,
@@ -26,7 +29,7 @@ async function generateEmbedding(text: string, googleApiKeys: string[]): Promise
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             model: 'models/gemini-embedding-001',
-            content: { parts: [{ text: truncated }] },
+            content: { parts: [{ text: normalized }] },
             outputDimensionality: 768,
           }),
         }
@@ -58,7 +61,7 @@ async function generateEmbedding(text: string, googleApiKeys: string[]): Promise
       throw error;
     }
   }
-  
+
   throw new Error('All Google API keys exhausted for embedding generation');
 }
 
@@ -86,10 +89,129 @@ async function getGoogleApiKeys(supabase: any): Promise<string[]> {
   return keys;
 }
 
+function normalizeKnowledgeText(text: string): string {
+  return text
+    .replace(/\u0000/g, ' ')
+    .replace(/\r/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
+function buildTitleFromText(text: string, fallback: string): string {
+  const candidate = text
+    .replace(/^#+\s*/, '')
+    .replace(/[|*_`>]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!candidate) return fallback;
+  return candidate.substring(0, 160);
+}
+
+function splitIntoChunks(text: string, size: number = KNOWLEDGE_CHUNK_SIZE, overlap: number = KNOWLEDGE_CHUNK_OVERLAP): string[] {
+  const normalized = normalizeKnowledgeText(text);
+  if (!normalized) return [];
+  if (normalized.length <= size) return [normalized];
+
+  const chunks: string[] = [];
+  let start = 0;
+
+  while (start < normalized.length) {
+    let end = Math.min(start + size, normalized.length);
+
+    if (end < normalized.length) {
+      const slice = normalized.slice(start, end);
+      const paragraphBoundary = slice.lastIndexOf('\n\n');
+      const sentenceBoundary = Math.max(slice.lastIndexOf('. '), slice.lastIndexOf('! '), slice.lastIndexOf('? '));
+      const softBoundary = Math.max(paragraphBoundary, sentenceBoundary);
+
+      if (softBoundary > Math.floor(size * 0.6)) {
+        end = start + softBoundary + 1;
+      }
+    }
+
+    const chunk = normalized.slice(start, end).trim();
+    if (chunk) {
+      chunks.push(chunk);
+    }
+
+    if (end >= normalized.length) break;
+    start = Math.max(end - overlap, start + 1);
+  }
+
+  return chunks;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  concurrency: number,
+  mapper: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (true) {
+      const currentIndex = nextIndex++;
+      if (currentIndex >= items.length) break;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
+async function rebuildKnowledgeChunks(
+  supabase: any,
+  entryId: string,
+  title: string,
+  content: string,
+  googleApiKeys: string[]
+): Promise<number> {
+  const normalizedContent = normalizeKnowledgeText(content).substring(0, MAX_KNOWLEDGE_CONTENT);
+  const chunks = splitIntoChunks(normalizedContent);
+
+  const { error: deleteError } = await supabase
+    .from('knowledge_chunks')
+    .delete()
+    .eq('knowledge_entry_id', entryId);
+
+  if (deleteError) {
+    throw new Error(`Ошибка очистки чанков: ${deleteError.message}`);
+  }
+
+  if (chunks.length === 0) {
+    console.log(`[Chunks] Entry ${entryId}: no chunks created`);
+    return 0;
+  }
+
+  const rows = await mapWithConcurrency(chunks, 3, async (chunk, index) => ({
+    knowledge_entry_id: entryId,
+    chunk_index: index,
+    title,
+    content: chunk,
+    embedding: await generateEmbedding(`${title}\n\n${chunk}`, googleApiKeys),
+  }));
+
+  const { error: insertError } = await supabase
+    .from('knowledge_chunks')
+    .insert(rows);
+
+  if (insertError) {
+    throw new Error(`Ошибка сохранения чанков: ${insertError.message}`);
+  }
+
+  console.log(`[Chunks] Entry ${entryId}: saved ${rows.length} chunks`);
+  return rows.length;
+}
+
 // Extract text content from URL
 async function scrapeUrl(url: string): Promise<{ title: string; content: string }> {
   console.log(`[Scrape] Fetching URL: ${url}`);
-  
+
   try {
     const response = await fetch(url, {
       headers: {
@@ -106,11 +228,9 @@ async function scrapeUrl(url: string): Promise<{ title: string; content: string 
     const html = await response.text();
     console.log(`[Scrape] Received ${html.length} bytes of HTML`);
 
-    // Extract title
     const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
     const title = titleMatch ? titleMatch[1].trim() : url;
 
-    // Remove scripts, styles, and comments
     let content = html
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
       .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
@@ -120,31 +240,26 @@ async function scrapeUrl(url: string): Promise<{ title: string; content: string 
       .replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '')
       .replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '');
 
-    // Extract text from main content areas
     const mainContentMatch = content.match(/<main[^>]*>([\s\S]*?)<\/main>/i) ||
-                             content.match(/<article[^>]*>([\s\S]*?)<\/article>/i) ||
-                             content.match(/<div[^>]*class="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
-    
+      content.match(/<article[^>]*>([\s\S]*?)<\/article>/i) ||
+      content.match(/<div[^>]*class="[^"]*content[^"]*"[^>]*>([\s\S]*?)<\/div>/i);
+
     if (mainContentMatch) {
       content = mainContentMatch[1];
     }
 
-    // Remove all HTML tags
     content = content.replace(/<[^>]+>/g, ' ');
-    
-    // Clean up whitespace and special characters
-    content = content
-      .replace(/&nbsp;/g, ' ')
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#?\w+;/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
+    content = normalizeKnowledgeText(
+      content
+        .replace(/&nbsp;/g, ' ')
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#?\w+;/g, ' ')
+    );
 
     console.log(`[Scrape] Extracted ${content.length} chars of text, title: "${title}"`);
-    
     return { title, content };
   } catch (error) {
     console.error(`[Scrape] Error fetching ${url}:`, error);
@@ -152,55 +267,83 @@ async function scrapeUrl(url: string): Promise<{ title: string; content: string 
   }
 }
 
-// Extract text from PDF using AI
-async function extractPdfText(base64Content: string, apiKey: string): Promise<{ title: string; content: string }> {
-  console.log(`[PDF] Extracting text from PDF (${base64Content.length} base64 chars)...`);
-  
-  // Use Gemini's vision capabilities to read PDF
-  const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'google/gemini-3-flash-preview',
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'text',
-              text: 'Извлеки весь текст из этого PDF документа. Верни структурированный текст с сохранением заголовков и параграфов. В начале укажи заголовок документа если он есть.'
-            },
-            {
-              type: 'image_url',
-              image_url: {
-                url: `data:application/pdf;base64,${base64Content}`
-              }
-            }
-          ]
-        }
-      ],
-    }),
-  });
+// Extract text from PDF using Google Gemini directly (no Lovable Gateway)
+async function extractPdfText(base64Content: string, googleApiKeys: string[]): Promise<{ title: string; content: string }> {
+  console.log(`[PDF] Extracting text from PDF (${base64Content.length} base64 chars) via Google Gemini...`);
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error(`[PDF] API error: ${response.status}`, errorText);
-    throw new Error(`Ошибка обработки PDF: ${response.status}`);
+  const prompt = [
+    'Извлеки весь текст из PDF-документа.',
+    'Сохрани структуру: заголовки, подзаголовки, списки, таблицы и числовые значения.',
+    'Если в документе есть таблицы, перепиши их в plain text или Markdown-таблицу, не теряя строки и столбцы.',
+    'Не пиши пояснений от себя. Верни только извлечённый текст документа.'
+  ].join(' ');
+
+  for (let i = 0; i < googleApiKeys.length; i++) {
+    const apiKey = googleApiKeys[i];
+    const keyLabel = googleApiKeys.length > 1 ? `key ${i + 1}/${googleApiKeys.length}` : 'key';
+
+    try {
+      const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${PDF_EXTRACTION_MODEL}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{
+              parts: [
+                { text: prompt },
+                {
+                  inline_data: {
+                    mime_type: 'application/pdf',
+                    data: base64Content,
+                  }
+                }
+              ]
+            }],
+            generationConfig: {
+              temperature: 0.1,
+            },
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        const isRetryable = response.status === 429 || response.status === 500 || response.status === 503;
+        if (isRetryable && i < googleApiKeys.length - 1) {
+          console.log(`[PDF] ${response.status} with ${keyLabel}, trying next key...`);
+          continue;
+        }
+        throw new Error(`Ошибка обработки PDF (${response.status}): ${errorText}`);
+      }
+
+      const data = await response.json();
+      const content = normalizeKnowledgeText(
+        (data.candidates || [])
+          .flatMap((candidate: any) => candidate.content?.parts || [])
+          .map((part: any) => part.text || '')
+          .join('\n\n')
+      );
+
+      if (content.length < 50) {
+        throw new Error('Google Gemini вернул слишком мало текста из PDF');
+      }
+
+      const firstNonEmptyLine = content.split('\n').find((line: string) => line.trim().length > 0) || '';
+      const title = buildTitleFromText(firstNonEmptyLine, 'PDF документ');
+
+      console.log(`[PDF] Extracted ${content.length} chars via Google Gemini, title: "${title}"`);
+      return { title, content };
+    } catch (error) {
+      if (i < googleApiKeys.length - 1 && error instanceof TypeError) {
+        console.log(`[PDF] Network error with ${keyLabel}, trying next key...`);
+        continue;
+      }
+      throw error;
+    }
   }
 
-  const data = await response.json();
-  const content = data.choices?.[0]?.message?.content || '';
-  
-  // Try to extract title from first line
-  const lines = content.split('\n').filter((l: string) => l.trim());
-  const title = lines[0]?.substring(0, 100) || 'PDF документ';
-  
-  console.log(`[PDF] Extracted ${content.length} chars, title: "${title}"`);
-  
-  return { title, content };
+  throw new Error('Не удалось обработать PDF ни одним из Google API ключей');
 }
 
 serve(async (req) => {
