@@ -2517,8 +2517,10 @@ ${productInstructions}`;
             }
           }
           
-          // Strip marker from chunks as they pass through
+          // Strip marker and thinking tokens from chunks
           text = text.replace(/\[CONTACT_MANAGER\]/g, '');
+          text = text.replace(/<think>[\s\S]*?<\/think>/g, '');
+          text = text.replace(/ТИХОЕ РАЗМЫШЛЕНИЕ[\s\S]*?(?=data:|$)/g, '');
           controller.enqueue(encoder.encode(text));
         }
       });
