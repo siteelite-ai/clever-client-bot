@@ -237,7 +237,7 @@ async function generateQueryEmbedding(query: string, settings: CachedSettings): 
   return null;
 }
 
-// Search knowledge base using chunk-level hybrid search (FTS + vector)
+// Search knowledge base using hybrid search (FTS + vector)
 async function searchKnowledgeBase(
   query: string, 
   limit: number = 5,
@@ -254,24 +254,23 @@ async function searchKnowledgeBase(
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     
-    console.log(`[Knowledge] Chunk hybrid search for: "${query.substring(0, 50)}..."`);
+    console.log(`[Knowledge] Hybrid search for: "${query.substring(0, 50)}..."`);
     
-    // Generate query embedding for vector search
+    // Generate query embedding for vector search (parallel-safe, non-blocking)
     let queryEmbedding: number[] | null = null;
     if (settings) {
       queryEmbedding = await generateQueryEmbedding(query, settings);
     }
 
-    // Use chunk-level hybrid search (FTS + vector via RRF)
-    const { data, error } = await supabase.rpc('search_knowledge_chunks_hybrid', {
+    // Use hybrid search (FTS + vector via RRF)
+    const { data, error } = await supabase.rpc('search_knowledge_hybrid', {
       search_query: query,
       query_embedding: queryEmbedding ? `[${queryEmbedding.join(',')}]` : null,
       match_count: limit,
-      max_chunks_per_entry: 2,
     });
 
     if (error) {
-      console.error('[Knowledge] Chunk hybrid search error:', error);
+      console.error('[Knowledge] Hybrid search error:', error);
       // Fallback to FTS-only
       const { data: ftsData, error: ftsError } = await supabase.rpc('search_knowledge_fulltext', {
         search_query: query,
@@ -288,10 +287,10 @@ async function searchKnowledgeBase(
       }));
     }
 
-    console.log(`[Knowledge] Chunk hybrid search found ${data?.length || 0} chunks (vector: ${queryEmbedding ? 'yes' : 'no'})`);
+    console.log(`[Knowledge] Hybrid search found ${data?.length || 0} entries (vector: ${queryEmbedding ? 'yes' : 'no'})`);
     
     return (data || []).map((row: any) => ({
-      id: row.entry_id,
+      id: row.id,
       title: row.title,
       content: row.content,
       type: row.type,
@@ -2042,11 +2041,11 @@ ${productContext}
 3. Если вопрос о юридических данных (БИН, ИИН, названия юрлиц) — ОБЯЗАТЕЛЬНО предоставь их из Базы Знаний
 4. Если вопрос об обязанностях, правах, условиях — перечисли ключевые пункты кратко и понятно
 5. Если информации в Базе Знаний недостаточно — честно скажи и предложи связаться с менеджером
-6. Если вопрос связан с ТОВАРАМИ (нормы освещения, сечения кабеля, мощность и т.п.) — ПОСЛЕ ответа предложи подобрать подходящий товар!
 
 СТРОГО ЗАПРЕЩЕНО:
 - НЕ говори "я не могу предоставить такую информацию" если она ЕСТЬ в Базе Знаний!
-- НЕ отказывайся отвечать на вопросы об оферте, БИН, юрлицах — это публичная информация!`;
+- НЕ отказывайся отвечать на вопросы об оферте, БИН, юрлицах — это публичная информация!
+- НЕ переключай тему на товары, если клиент спрашивает о документах/условиях`;
       } else {
         // intent=info, но в БЗ ничего не нашлось
         productInstructions = `
@@ -2262,8 +2261,7 @@ ${!hasRelevantArticles ? `ТВОЙ ОТВЕТ ДОЛЖЕН БЫТЬ ТАКИМ:
     const toneOfVoice = appSettings.system_prompt || '';
 
     const systemPrompt = `# Роль
-Ты — ПРОДАЮЩИЙ консультант интернет-магазина 220volt.kz (электроинструменты и оборудование, Казахстан).
-Твоя главная цель — ПОМОЧЬ КЛИЕНТУ КУПИТЬ подходящий товар. Каждый ответ должен приближать клиента к покупке.
+Ты — консультант интернет-магазина 220volt.kz (электроинструменты и оборудование, Казахстан).
 ${toneOfVoice ? `\nТон общения: ${toneOfVoice}` : ''}
 
 # Принципы
@@ -2272,17 +2270,6 @@ ${toneOfVoice ? `\nТон общения: ${toneOfVoice}` : ''}
 3. **Источники данных**: товары — только из раздела «НАЙДЕННЫЕ ТОВАРЫ»; информация о компании — только из «БАЗА ЗНАНИЙ»; контакты филиалов — только из «ДАННЫЕ ФИЛИАЛОВ» ниже.
 4. **Честность**: если данных нет — скажи об этом. Предложи связаться с менеджером (маркер [CONTACT_MANAGER] в конце сообщения).
 5. **Без приветствий и представлений**: НИКОГДА не здоровайся («Здравствуйте», «Привет», «Добрый день») и не представляйся («Я AI-консультант», «Я консультант магазина»). Приветствие уже автоматически показано клиенту в интерфейсе чата. Начинай СРАЗУ с сути ответа.
-
-# 🔥 ПРОДАЮЩИЙ ПОДХОД (КРИТИЧЕСКИ ВАЖНО!)
-После ЛЮБОГО информационного/экспертного ответа — ОБЯЗАТЕЛЬНО свяжи его с товарами магазина и предложи помощь в подборе!
-
-Примеры:
-- Клиент: "Какая норма освещения для кабинета?" → Ответь про 500 люкс, ЗАТЕМ: "Хотите, подберу подходящие светильники для вашего кабинета? Подскажите площадь помещения 😊"
-- Клиент: "Какое сечение кабеля нужно для плиты?" → Ответь про 4-6 мм², ЗАТЕМ: "Могу подобрать подходящий кабель! Какая мощность у вашей плиты?"
-- Клиент: "Что лучше — перфоратор или ударная дрель?" → Объясни разницу, ЗАТЕМ: "Расскажите, для каких работ вам нужен инструмент — подберу оптимальный вариант!"
-
-ПРАВИЛО: Информация без предложения товара = упущенная продажа! Ты НЕ энциклопедия, ты КОНСУЛЬТАНТ МАГАЗИНА.
-Исключение: вопросы о юридических документах, оферте, БИН, возврате — там продавать неуместно, отвечай строго по делу.
 
 # ${greetingContext}
 
