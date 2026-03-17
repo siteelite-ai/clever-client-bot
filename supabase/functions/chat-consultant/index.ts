@@ -237,7 +237,7 @@ async function generateQueryEmbedding(query: string, settings: CachedSettings): 
   return null;
 }
 
-// Search knowledge base using hybrid search (FTS + vector)
+// Search knowledge base using chunk-level hybrid search (FTS + vector)
 async function searchKnowledgeBase(
   query: string, 
   limit: number = 5,
@@ -254,23 +254,24 @@ async function searchKnowledgeBase(
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     
-    console.log(`[Knowledge] Hybrid search for: "${query.substring(0, 50)}..."`);
+    console.log(`[Knowledge] Chunk hybrid search for: "${query.substring(0, 50)}..."`);
     
-    // Generate query embedding for vector search (parallel-safe, non-blocking)
+    // Generate query embedding for vector search
     let queryEmbedding: number[] | null = null;
     if (settings) {
       queryEmbedding = await generateQueryEmbedding(query, settings);
     }
 
-    // Use hybrid search (FTS + vector via RRF)
-    const { data, error } = await supabase.rpc('search_knowledge_hybrid', {
+    // Use chunk-level hybrid search (FTS + vector via RRF)
+    const { data, error } = await supabase.rpc('search_knowledge_chunks_hybrid', {
       search_query: query,
       query_embedding: queryEmbedding ? `[${queryEmbedding.join(',')}]` : null,
       match_count: limit,
+      max_chunks_per_entry: 2,
     });
 
     if (error) {
-      console.error('[Knowledge] Hybrid search error:', error);
+      console.error('[Knowledge] Chunk hybrid search error:', error);
       // Fallback to FTS-only
       const { data: ftsData, error: ftsError } = await supabase.rpc('search_knowledge_fulltext', {
         search_query: query,
@@ -287,10 +288,10 @@ async function searchKnowledgeBase(
       }));
     }
 
-    console.log(`[Knowledge] Hybrid search found ${data?.length || 0} entries (vector: ${queryEmbedding ? 'yes' : 'no'})`);
+    console.log(`[Knowledge] Chunk hybrid search found ${data?.length || 0} chunks (vector: ${queryEmbedding ? 'yes' : 'no'})`);
     
     return (data || []).map((row: any) => ({
-      id: row.id,
+      id: row.entry_id,
       title: row.title,
       content: row.content,
       type: row.type,
