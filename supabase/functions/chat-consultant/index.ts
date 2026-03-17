@@ -1493,7 +1493,7 @@ function formatProductsForAI(products: Product[]): string {
       `   - Цена: ${p.price.toLocaleString('ru-KZ')} ₸${p.old_price && p.old_price > p.price ? ` ~~${p.old_price.toLocaleString('ru-KZ')} ₸~~` : ''}`,
       brand ? `   - Бренд: ${brand}` : '',
       p.article ? `   - Артикул: ${p.article}` : '',
-      `   - В наличии: ${p.amount > 0 ? 'Да' : 'Под заказ'}`,
+      `   - В наличии: ${p.amount > 0 ? `Да (${p.amount} шт.)` : 'Под заказ'}`,
       p.category ? `   - Категория: [${p.category.pagetitle}](https://220volt.kz/catalog/${p.category.id})` : '',
     ];
     
@@ -2270,6 +2270,7 @@ ${toneOfVoice ? `\nТон общения: ${toneOfVoice}` : ''}
 3. **Источники данных**: товары — только из раздела «НАЙДЕННЫЕ ТОВАРЫ»; информация о компании — только из «БАЗА ЗНАНИЙ»; контакты филиалов — только из «ДАННЫЕ ФИЛИАЛОВ» ниже.
 4. **Честность**: если данных нет — скажи об этом. Предложи связаться с менеджером (маркер [CONTACT_MANAGER] в конце сообщения).
 5. **Без приветствий и представлений**: НИКОГДА не здоровайся («Здравствуйте», «Привет», «Добрый день») и не представляйся («Я AI-консультант», «Я консультант магазина»). Приветствие уже автоматически показано клиенту в интерфейсе чата. Начинай СРАЗУ с сути ответа.
+6. **Остатки и склады**: В данных о товарах указано ОБЩЕЕ количество на всех складах (поле «В наличии: Да (X шт.)»). Показывай клиенту точное количество. Если клиент спрашивает о наличии на КОНКРЕТНОМ складе или в конкретном филиале — объясни, что у тебя есть только общий остаток по всей сети, и предложи уточнить наличие в нужном филиале у менеджера [CONTACT_MANAGER].
 
 # ${greetingContext}
 
@@ -2516,8 +2517,10 @@ ${productInstructions}`;
             }
           }
           
-          // Strip marker from chunks as they pass through
+          // Strip marker and thinking tokens from chunks
           text = text.replace(/\[CONTACT_MANAGER\]/g, '');
+          text = text.replace(/<think>[\s\S]*?<\/think>/g, '');
+          text = text.replace(/ТИХОЕ РАЗМЫШЛЕНИЕ[\s\S]*?(?=data:|$)/g, '');
           controller.enqueue(encoder.encode(text));
         }
       });
@@ -2574,8 +2577,10 @@ ${productInstructions}`;
           }
         } catch {}
         
-        // Strip marker from output
+        // Strip marker and thinking tokens from output
         text = text.replace(/\[CONTACT_MANAGER\]/g, '');
+        text = text.replace(/<think>[\s\S]*?<\/think>/g, '');
+        text = text.replace(/ТИХОЕ РАЗМЫШЛЕНИЕ[\s\S]*?(?=data:|$)/g, '');
         controller.enqueue(encoder.encode(text));
       }
     });

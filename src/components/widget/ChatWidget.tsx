@@ -151,7 +151,11 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
     const updateAssistant = (chunk: string) => {
       assistantContent += chunk;
-      const displayContent = assistantContent.replace(/\[CONTACT_MANAGER\]/g, '');
+      // Filter thinking tokens from Gemini 2.5 Flash and contact markers
+      let displayContent = assistantContent.replace(/\[CONTACT_MANAGER\]/g, '');
+      displayContent = displayContent.replace(/<think>[\s\S]*?<\/think>/g, '');
+      displayContent = displayContent.replace(/ТИХОЕ РАЗМЫШЛЕНИЕ[\s\S]*?(?:КОНЕЦ РАЗМЫШЛЕНИ[ЯЙ]|$)/gs, '');
+      displayContent = displayContent.trim();
       setMessages(prev => {
         const last = prev[prev.length - 1];
         if (last?.role === 'assistant' && last.id.startsWith('stream-')) {
