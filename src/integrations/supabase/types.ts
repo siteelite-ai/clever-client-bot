@@ -80,6 +80,50 @@ export type Database = {
         }
         Relationships: []
       }
+      knowledge_chunks: {
+        Row: {
+          chunk_index: number
+          content: string
+          created_at: string
+          embedding: string | null
+          id: string
+          knowledge_entry_id: string
+          search_vector: unknown
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          chunk_index: number
+          content: string
+          created_at?: string
+          embedding?: string | null
+          id?: string
+          knowledge_entry_id: string
+          search_vector?: unknown
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          chunk_index?: number
+          content?: string
+          created_at?: string
+          embedding?: string | null
+          id?: string
+          knowledge_entry_id?: string
+          search_vector?: unknown
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "knowledge_chunks_knowledge_entry_id_fkey"
+            columns: ["knowledge_entry_id"]
+            isOneToOne: false
+            referencedRelation: "knowledge_entries"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       knowledge_entries: {
         Row: {
           content: string
@@ -180,6 +224,24 @@ export type Database = {
           content: string
           id: string
           similarity: number
+          source_url: string
+          title: string
+          type: string
+        }[]
+      }
+      search_knowledge_chunks_hybrid: {
+        Args: {
+          match_count?: number
+          max_chunks_per_entry?: number
+          query_embedding?: string
+          search_query: string
+        }
+        Returns: {
+          chunk_id: string
+          chunk_index: number
+          content: string
+          entry_id: string
+          score: number
           source_url: string
           title: string
           type: string
