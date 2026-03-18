@@ -416,6 +416,10 @@ interface Product {
     caption: string;
     value: string;
   }>;
+  warehouses?: Array<{
+    city: string;
+    amount: number;
+  }>;
 }
 
 interface SearchCandidate {
