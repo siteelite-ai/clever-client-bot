@@ -303,6 +303,98 @@ async function searchKnowledgeBase(
   }
 }
 
+/**
+ * ARTICLE DETECTION — detects product SKU/article codes in user messages.
+ * 
+ * Pattern: 5+ chars with letters + digits + dashes/dots (e.g. CKK11-012-012-1-K01, MVA25-1-016-C, SQ0206-0071)
+ * Also triggered by keywords: "артикул", "арт.", "код товара", "SKU"
+ * 
+ * Exclusions: IP ratings (IP20, IP44, IP65, IP67, IP68), voltage specs, etc.
+ */
+function detectArticles(message: string): string[] {
+  const exclusions = new Set([
+    'ip20', 'ip21', 'ip23', 'ip40', 'ip41', 'ip44', 'ip54', 'ip55', 'ip65', 'ip66', 'ip67', 'ip68',
+    'din', 'led', 'usb', 'type', 'wifi', 'hdmi',
+  ]);
+  
+  // Pattern: alphanumeric string with at least one letter AND one digit, containing dashes or dots, 5+ chars total
+  // Examples: CKK11-012-012-1-K01, MVA25-1-016-C, SQ0206-0071, ВА47-29
+  const articlePattern = /\b([A-ZА-ЯЁa-zа-яё0-9][A-ZА-ЯЁa-zа-яё0-9.\-]{3,}[A-ZА-ЯЁa-zа-яё0-9])\b/g;
+  
+  const results: string[] = [];
+  let match;
+  
+  // Check for keyword triggers that boost confidence
+  const hasKeyword = /артикул|арт\.|код\s*товар|sku/i.test(message);
+  
+  while ((match = articlePattern.exec(message)) !== null) {
+    const candidate = match[1];
+    const lower = candidate.toLowerCase();
+    
+    // Skip exclusions
+    if (exclusions.has(lower)) continue;
+    
+    // Must contain at least one letter AND one digit
+    const hasLetter = /[a-zA-ZА-ЯЁа-яё]/.test(candidate);
+    const hasDigit = /\d/.test(candidate);
+    if (!hasLetter || !hasDigit) continue;
+    
+    // Must contain at least one dash or dot (SKU separator) OR be preceded by a keyword
+    const hasSeparator = /[-.]/.test(candidate);
+    if (!hasSeparator && !hasKeyword) continue;
+    
+    // Must be 5+ characters
+    if (candidate.length < 5) continue;
+    
+    // Skip pure numbers with dots (prices like 5000.00)
+    if (/^\d+\.\d+$/.test(candidate)) continue;
+    
+    results.push(candidate);
+  }
+  
+  if (results.length > 0) {
+    console.log(`[ArticleDetect] Found ${results.length} article(s): ${results.join(', ')} (keyword=${hasKeyword})`);
+  }
+  
+  return results;
+}
+
+/**
+ * Search products by article parameter (exact match via API)
+ */
+async function searchByArticle(article: string, apiToken: string): Promise<Product[]> {
+  try {
+    const params = new URLSearchParams();
+    params.append('article', article);
+    params.append('per_page', '5');
+    
+    console.log(`[ArticleSearch] Searching by article: ${article}`);
+    
+    const response = await fetch(`${VOLT220_API_URL}?${params}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      console.error(`[ArticleSearch] API error: ${response.status}`);
+      return [];
+    }
+
+    const rawData = await response.json();
+    const data = rawData.data || rawData;
+    const results = data.results || [];
+    
+    console.log(`[ArticleSearch] Found ${results.length} product(s) for article "${article}"`);
+    return results;
+  } catch (error) {
+    console.error(`[ArticleSearch] Error:`, error);
+    return [];
+  }
+}
+
 interface Product {
   id: number;
   pagetitle: string;
