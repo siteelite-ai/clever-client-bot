@@ -2040,7 +2040,12 @@ ${r.source_url ? `Источник: ${r.source_url}` : ''}`;
       
       console.log(`[Chat] Added ${knowledgeResults.length} knowledge entries to context`);
     }
-    if (extractedIntent.intent === 'brands' && extractedIntent.candidates.length > 0) {
+    if (articleShortCircuit && foundProducts.length > 0) {
+      // Article-first: products already found, format context
+      const formattedProducts = formatProductsForAI(foundProducts);
+      console.log(`[Chat] Article-first formatted products for AI:\n${formattedProducts}`);
+      productContext = `\n\n**Товар найден по артикулу (${detectedArticles.join(', ')}):**\n\n${formattedProducts}`;
+    } else if (!articleShortCircuit && extractedIntent.intent === 'brands' && extractedIntent.candidates.length > 0) {
       // Проверяем: если кандидаты содержат конкретный бренд — это запрос ТОВАРОВ бренда, а не "какие бренды есть"
       const hasSpecificBrand = extractedIntent.candidates.some(c => c.brand && c.brand.trim().length > 0);
       
@@ -2073,7 +2078,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           }
         }
       }
-    } else if (extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
+    } else if (!articleShortCircuit && extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
       // Обычный каталожный запрос
       const searchLimit = extractedIntent.usage_context ? 25 : 15;
       foundProducts = await searchProductsMulti(extractedIntent.candidates, searchLimit, appSettings.volt220_api_token || undefined);
