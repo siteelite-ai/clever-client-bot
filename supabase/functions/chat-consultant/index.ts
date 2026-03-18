@@ -1595,7 +1595,16 @@ function formatProductsForAI(products: Product[]): string {
       `   - Цена: ${p.price.toLocaleString('ru-KZ')} ₸${p.old_price && p.old_price > p.price ? ` ~~${p.old_price.toLocaleString('ru-KZ')} ₸~~` : ''}`,
       brand ? `   - Бренд: ${brand}` : '',
       p.article ? `   - Артикул: ${p.article}` : '',
-      `   - В наличии: ${p.amount > 0 ? `Да (${p.amount} шт.)` : 'Под заказ'}`,
+      (() => {
+        // Warehouses breakdown by city
+        const available = (p.warehouses || []).filter(w => w.amount > 0);
+        if (available.length > 0) {
+          const shown = available.slice(0, 5).map(w => `${w.city}: ${w.amount} шт.`).join(', ');
+          const extra = available.length > 5 ? ` и ещё в ${available.length - 5} городах` : '';
+          return `   - В наличии: Да (${p.amount} шт.)\n   - Остатки по городам: ${shown}${extra}`;
+        }
+        return `   - В наличии: ${p.amount > 0 ? `Да (${p.amount} шт.)` : 'Под заказ'}`;
+      })(),
       p.category ? `   - Категория: [${p.category.pagetitle}](https://220volt.kz/catalog/${p.category.id})` : '',
     ];
     
