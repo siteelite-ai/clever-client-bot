@@ -1948,14 +1948,54 @@ serve(async (req) => {
     // Геолокация по IP (параллельно с остальными запросами)
     const detectedCityPromise = detectCityByIP(clientIp);
 
-    // ШАГ 1: AI определяет интент и генерирует поисковые кандидаты (никакого хардкода)
-    const extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, aiConfig.model);
-    console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}`);
-
     let productContext = '';
     let foundProducts: Product[] = [];
     let brandsContext = '';
     let knowledgeContext = '';
+    let articleShortCircuit = false;
+
+    // === ARTICLE FIRST: Detect SKU/article codes BEFORE LLM 1 ===
+    const detectedArticles = detectArticles(userMessage);
+    
+    if (detectedArticles.length > 0 && appSettings.volt220_api_token) {
+      console.log(`[Chat] Article-first: detected ${detectedArticles.length} article(s), searching directly...`);
+      
+      const articleSearchPromises = detectedArticles.map(art => 
+        searchByArticle(art, appSettings.volt220_api_token!)
+      );
+      const articleResults = await Promise.all(articleSearchPromises);
+      
+      // Merge all article results
+      const articleProducts = new Map<number, Product>();
+      for (const products of articleResults) {
+        for (const product of products) {
+          articleProducts.set(product.id, product);
+        }
+      }
+      
+      if (articleProducts.size > 0) {
+        foundProducts = Array.from(articleProducts.values());
+        articleShortCircuit = true;
+        console.log(`[Chat] Article-first SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
+      } else {
+        console.log(`[Chat] Article-first: no results for article(s), falling back to normal pipeline`);
+      }
+    }
+
+    // ШАГ 1: AI определяет интент и генерирует поисковые кандидаты (если не short-circuit)
+    let extractedIntent: ExtractedIntent;
+    
+    if (articleShortCircuit) {
+      // Skip LLM 1 — we already have products from article search
+      extractedIntent = {
+        intent: 'catalog',
+        candidates: detectedArticles.map(a => ({ query: a, brand: null, category: null, min_price: null, max_price: null })),
+        originalQuery: userMessage,
+      };
+    } else {
+      extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, aiConfig.model);
+    }
+    console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}, ArticleShortCircuit: ${articleShortCircuit}`);
 
     // ШАГ 2: Поиск в базе знаний (параллельно с другими запросами)
     // Ищем для ВСЕХ запросов — статьи могут быть полезны даже когда товаров нет в каталоге
