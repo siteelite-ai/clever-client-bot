@@ -38,14 +38,17 @@ serve(async (req) => {
   }
 
   try {
-    const { query, page = 1, perPage = 12, category, minPrice, maxPrice, brand } = await req.json();
+    const { query, page = 1, perPage = 12, category, minPrice, maxPrice, brand, article } = await req.json();
     
     const apiToken = await getApiToken();
 
     // Формируем параметры запроса согласно документации
     const params = new URLSearchParams();
     
-    if (query) params.append('query', query);
+    // article - точный поиск по артикулу товара (приоритет над query)
+    if (article) params.append('article', article);
+    else if (query) params.append('query', query);
+    
     params.append('page', page.toString());
     params.append('per_page', perPage.toString());
     

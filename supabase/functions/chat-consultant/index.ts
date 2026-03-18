@@ -303,6 +303,98 @@ async function searchKnowledgeBase(
   }
 }
 
+/**
+ * ARTICLE DETECTION — detects product SKU/article codes in user messages.
+ * 
+ * Pattern: 5+ chars with letters + digits + dashes/dots (e.g. CKK11-012-012-1-K01, MVA25-1-016-C, SQ0206-0071)
+ * Also triggered by keywords: "артикул", "арт.", "код товара", "SKU"
+ * 
+ * Exclusions: IP ratings (IP20, IP44, IP65, IP67, IP68), voltage specs, etc.
+ */
+function detectArticles(message: string): string[] {
+  const exclusions = new Set([
+    'ip20', 'ip21', 'ip23', 'ip40', 'ip41', 'ip44', 'ip54', 'ip55', 'ip65', 'ip66', 'ip67', 'ip68',
+    'din', 'led', 'usb', 'type', 'wifi', 'hdmi',
+  ]);
+  
+  // Pattern: alphanumeric string with at least one letter AND one digit, containing dashes or dots, 5+ chars total
+  // Examples: CKK11-012-012-1-K01, MVA25-1-016-C, SQ0206-0071, ВА47-29
+  const articlePattern = /\b([A-ZА-ЯЁa-zа-яё0-9][A-ZА-ЯЁa-zа-яё0-9.\-]{3,}[A-ZА-ЯЁa-zа-яё0-9])\b/g;
+  
+  const results: string[] = [];
+  let match;
+  
+  // Check for keyword triggers that boost confidence
+  const hasKeyword = /артикул|арт\.|код\s*товар|sku/i.test(message);
+  
+  while ((match = articlePattern.exec(message)) !== null) {
+    const candidate = match[1];
+    const lower = candidate.toLowerCase();
+    
+    // Skip exclusions
+    if (exclusions.has(lower)) continue;
+    
+    // Must contain at least one letter AND one digit
+    const hasLetter = /[a-zA-ZА-ЯЁа-яё]/.test(candidate);
+    const hasDigit = /\d/.test(candidate);
+    if (!hasLetter || !hasDigit) continue;
+    
+    // Must contain at least one dash or dot (SKU separator) OR be preceded by a keyword
+    const hasSeparator = /[-.]/.test(candidate);
+    if (!hasSeparator && !hasKeyword) continue;
+    
+    // Must be 5+ characters
+    if (candidate.length < 5) continue;
+    
+    // Skip pure numbers with dots (prices like 5000.00)
+    if (/^\d+\.\d+$/.test(candidate)) continue;
+    
+    results.push(candidate);
+  }
+  
+  if (results.length > 0) {
+    console.log(`[ArticleDetect] Found ${results.length} article(s): ${results.join(', ')} (keyword=${hasKeyword})`);
+  }
+  
+  return results;
+}
+
+/**
+ * Search products by article parameter (exact match via API)
+ */
+async function searchByArticle(article: string, apiToken: string): Promise<Product[]> {
+  try {
+    const params = new URLSearchParams();
+    params.append('article', article);
+    params.append('per_page', '5');
+    
+    console.log(`[ArticleSearch] Searching by article: ${article}`);
+    
+    const response = await fetch(`${VOLT220_API_URL}?${params}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      console.error(`[ArticleSearch] API error: ${response.status}`);
+      return [];
+    }
+
+    const rawData = await response.json();
+    const data = rawData.data || rawData;
+    const results = data.results || [];
+    
+    console.log(`[ArticleSearch] Found ${results.length} product(s) for article "${article}"`);
+    return results;
+  } catch (error) {
+    console.error(`[ArticleSearch] Error:`, error);
+    return [];
+  }
+}
+
 interface Product {
   id: number;
   pagetitle: string;
@@ -466,6 +558,12 @@ ${historyContext}
 - "brands" — спрашивает какие бренды представлены
 - "info" — вопросы о компании, доставке, оплате, оферте, договоре, юридических данных (БИН, ИИН), обязанностях покупателя/продавца, возврате, гарантии, правах покупателя
 - "general" — приветствия, шутки, нерелевантное (candidates=[])
+
+🔑 АРТИКУЛЫ / SKU:
+Если пользователь указывает АРТИКУЛ товара (строка вида CKK11-012-012-1-K01, MVA25-1-016-C, SQ0206-0071 или упоминает слово "артикул", "арт."):
+- intent = "catalog"
+- Первый кандидат: query = артикул КАК ЕСТЬ (без изменений, без синонимов!)
+- НЕ генерируй дополнительных синонимов или вариаций для артикулов
 
 🚨 Если запрос о ДОКУМЕНТАХ КОМПАНИИ (оферта, БИН, обязанности, условия) — это ВСЕГДА intent="info", НЕ "general"!
 🚨 Если запрос НЕ про электроинструмент/оборудование И НЕ про компанию — это intent="general".
@@ -1856,14 +1954,54 @@ serve(async (req) => {
     // Геолокация по IP (параллельно с остальными запросами)
     const detectedCityPromise = detectCityByIP(clientIp);
 
-    // ШАГ 1: AI определяет интент и генерирует поисковые кандидаты (никакого хардкода)
-    const extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, aiConfig.model);
-    console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}`);
-
     let productContext = '';
     let foundProducts: Product[] = [];
     let brandsContext = '';
     let knowledgeContext = '';
+    let articleShortCircuit = false;
+
+    // === ARTICLE FIRST: Detect SKU/article codes BEFORE LLM 1 ===
+    const detectedArticles = detectArticles(userMessage);
+    
+    if (detectedArticles.length > 0 && appSettings.volt220_api_token) {
+      console.log(`[Chat] Article-first: detected ${detectedArticles.length} article(s), searching directly...`);
+      
+      const articleSearchPromises = detectedArticles.map(art => 
+        searchByArticle(art, appSettings.volt220_api_token!)
+      );
+      const articleResults = await Promise.all(articleSearchPromises);
+      
+      // Merge all article results
+      const articleProducts = new Map<number, Product>();
+      for (const products of articleResults) {
+        for (const product of products) {
+          articleProducts.set(product.id, product);
+        }
+      }
+      
+      if (articleProducts.size > 0) {
+        foundProducts = Array.from(articleProducts.values());
+        articleShortCircuit = true;
+        console.log(`[Chat] Article-first SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
+      } else {
+        console.log(`[Chat] Article-first: no results for article(s), falling back to normal pipeline`);
+      }
+    }
+
+    // ШАГ 1: AI определяет интент и генерирует поисковые кандидаты (если не short-circuit)
+    let extractedIntent: ExtractedIntent;
+    
+    if (articleShortCircuit) {
+      // Skip LLM 1 — we already have products from article search
+      extractedIntent = {
+        intent: 'catalog',
+        candidates: detectedArticles.map(a => ({ query: a, brand: null, category: null, min_price: null, max_price: null })),
+        originalQuery: userMessage,
+      };
+    } else {
+      extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, aiConfig.model);
+    }
+    console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}, ArticleShortCircuit: ${articleShortCircuit}`);
 
     // ШАГ 2: Поиск в базе знаний (параллельно с другими запросами)
     // Ищем для ВСЕХ запросов — статьи могут быть полезны даже когда товаров нет в каталоге
@@ -1908,7 +2046,12 @@ ${r.source_url ? `Источник: ${r.source_url}` : ''}`;
       
       console.log(`[Chat] Added ${knowledgeResults.length} knowledge entries to context`);
     }
-    if (extractedIntent.intent === 'brands' && extractedIntent.candidates.length > 0) {
+    if (articleShortCircuit && foundProducts.length > 0) {
+      // Article-first: products already found, format context
+      const formattedProducts = formatProductsForAI(foundProducts);
+      console.log(`[Chat] Article-first formatted products for AI:\n${formattedProducts}`);
+      productContext = `\n\n**Товар найден по артикулу (${detectedArticles.join(', ')}):**\n\n${formattedProducts}`;
+    } else if (!articleShortCircuit && extractedIntent.intent === 'brands' && extractedIntent.candidates.length > 0) {
       // Проверяем: если кандидаты содержат конкретный бренд — это запрос ТОВАРОВ бренда, а не "какие бренды есть"
       const hasSpecificBrand = extractedIntent.candidates.some(c => c.brand && c.brand.trim().length > 0);
       
@@ -1941,7 +2084,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           }
         }
       }
-    } else if (extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
+    } else if (!articleShortCircuit && extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
       // Обычный каталожный запрос
       const searchLimit = extractedIntent.usage_context ? 25 : 15;
       foundProducts = await searchProductsMulti(extractedIntent.candidates, searchLimit, appSettings.volt220_api_token || undefined);
@@ -2011,6 +2154,17 @@ ${brandsContext}
 1. Перечисли найденные бренды списком
 2. Спроси, какой бренд интересует клиента — ты подберёшь лучшие модели
 3. Предложи ссылку на каталог: https://220volt.kz/catalog/`;
+    } else if (articleShortCircuit && productContext) {
+      // Article-first: товар найден по артикулу — показываем сразу без уточнений
+      productInstructions = `
+🎯 ТОВАР НАЙДЕН ПО АРТИКУЛУ (покажи сразу, БЕЗ уточняющих вопросов!):
+${productContext}
+
+⚠️ СТРОГОЕ ПРАВИЛО:
+- Клиент указал артикул — он ЗНАЕТ что ему нужно. НЕ задавай уточняющих вопросов!
+- Покажи товар сразу: название, цена, наличие, ссылка
+- Ссылки копируй как есть в формате [Название](URL) — НЕ МЕНЯЙ URL!
+- ВАЖНО: если в названии товара есть экранированные скобки \\( и \\) — СОХРАНЯЙ их!`;
     } else if (productContext) {
       productInstructions = `
 НАЙДЕННЫЕ ТОВАРЫ (КОПИРУЙ ССЫЛКИ ТОЧНО КАК ДАНО — НЕ МОДИФИЦИРУЙ!):
