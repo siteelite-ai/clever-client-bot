@@ -318,7 +318,6 @@ function detectArticles(message: string): string[] {
   ]);
   
   // Pattern: alphanumeric string with at least one letter AND one digit, containing dashes or dots, 5+ chars total
-  // Examples: CKK11-012-012-1-K01, MVA25-1-016-C, SQ0206-0071, ВА47-29
   const articlePattern = /\b([A-ZА-ЯЁa-zа-яё0-9][A-ZА-ЯЁa-zа-яё0-9.\-]{3,}[A-ZА-ЯЁa-zа-яё0-9])\b/g;
   
   const results: string[] = [];
@@ -352,8 +351,25 @@ function detectArticles(message: string): string[] {
     results.push(candidate);
   }
   
+  // === PURE NUMERIC ARTICLE DETECTION ===
+  // Detect 4-8 digit numbers as articles when contextual triggers are present
+  const hasArticleContext = hasKeyword || /есть в наличии|в наличии|в стоке|остат|наличи|сколько стоит|какая цена/i.test(message);
+  // Also detect when the message is MOSTLY a number (e.g. "16093 есть в наличии?")
+  const startsWithNumber = /^\s*(\d{4,8})\b/.test(message);
+  
+  if (hasArticleContext || startsWithNumber) {
+    const numericPattern = /\b(\d{4,8})\b/g;
+    let numMatch;
+    while ((numMatch = numericPattern.exec(message)) !== null) {
+      const num = numMatch[1];
+      // Skip years, round prices, common non-article numbers
+      if (/^(2024|2025|2026|2027|1000|2000|3000|5000|10000|50000|100000)$/.test(num)) continue;
+      if (!results.includes(num)) results.push(num);
+    }
+  }
+  
   if (results.length > 0) {
-    console.log(`[ArticleDetect] Found ${results.length} article(s): ${results.join(', ')} (keyword=${hasKeyword})`);
+    console.log(`[ArticleDetect] Found ${results.length} article(s): ${results.join(', ')} (keyword=${hasKeyword}, numericContext=${hasArticleContext || startsWithNumber})`);
   }
   
   return results;
