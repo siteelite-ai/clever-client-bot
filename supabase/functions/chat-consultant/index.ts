@@ -1900,13 +1900,22 @@ function extractRelevantExcerpt(content: string, query: string, maxLen: number =
   // Build the final excerpt from multiple windows
   const parts: string[] = [];
   for (const w of selectedWindows) {
-    // Snap to nearest paragraph boundary
+    // Snap to nearest table header or paragraph boundary
     let snapStart = w.start;
     if (snapStart > 0) {
-      const lookBack = content.substring(Math.max(0, snapStart - 200), snapStart);
-      const sectionMatch = lookBack.lastIndexOf('\n\n');
-      if (sectionMatch >= 0) {
-        snapStart = Math.max(0, snapStart - 200) + sectionMatch + 2;
+      const lookBack = content.substring(Math.max(0, snapStart - 300), snapStart);
+      // Prefer snapping to a markdown table header row (|---)
+      const tableHeaderMatch = lookBack.lastIndexOf('|---');
+      if (tableHeaderMatch >= 0) {
+        // Go back to the line before |--- (the header row with column names)
+        const beforeTable = lookBack.substring(0, tableHeaderMatch);
+        const headerLineStart = beforeTable.lastIndexOf('\n');
+        snapStart = Math.max(0, snapStart - 300) + (headerLineStart >= 0 ? headerLineStart + 1 : tableHeaderMatch);
+      } else {
+        const sectionMatch = lookBack.lastIndexOf('\n\n');
+        if (sectionMatch >= 0) {
+          snapStart = Math.max(0, snapStart - 300) + sectionMatch + 2;
+        }
       }
     }
 
