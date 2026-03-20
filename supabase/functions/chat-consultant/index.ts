@@ -1243,6 +1243,36 @@ async function searchProductsMulti(
     }
   }
   
+  // === ARTICLE FALLBACK: If query is purely numeric (4-8 digits) and returned 0 results, try as article ===
+  if (productMap.size === 0) {
+    const numericQueries = cleanedCandidates
+      .filter(c => c.query && /^\d{4,8}$/.test(c.query.trim()))
+      .map(c => c.query!.trim());
+    
+    // Also check for candidates with explicit article field
+    const articleCandidates = cleanedCandidates
+      .filter(c => (c as any).article)
+      .map(c => (c as any).article as string);
+    
+    const allArticles = [...new Set([...numericQueries, ...articleCandidates])];
+    
+    if (allArticles.length > 0) {
+      console.log(`[Search] 0 results, trying article fallback for: ${allArticles.join(', ')}`);
+      const articlePromises = allArticles.map(article => searchByArticle(article, apiToken));
+      const articleResults = await Promise.all(articlePromises);
+      for (const products of articleResults) {
+        for (const product of products) {
+          if (!productMap.has(product.id)) {
+            productMap.set(product.id, product);
+          }
+        }
+      }
+      if (productMap.size > 0) {
+        console.log(`[Search] Article fallback found ${productMap.size} products`);
+      }
+    }
+  }
+  
   const uniqueProducts = Array.from(productMap.values());
   console.log(`[Search] Total unique products: ${uniqueProducts.length}`);
   
