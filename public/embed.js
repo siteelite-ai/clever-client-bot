@@ -30,8 +30,20 @@
   let isOpen = false;
   let isLoading = false;
 
+  // Clean up any previous widget instance before initializing again
+  var existingContainer = document.getElementById('volt-widget-container');
+  if (existingContainer) {
+    existingContainer.remove();
+  }
+
+  var existingStyles = document.getElementById('volt-widget-styles');
+  if (existingStyles) {
+    existingStyles.remove();
+  }
+
   // Inject styles
   const styles = document.createElement('style');
+  styles.id = 'volt-widget-styles';
   styles.textContent = `
     #volt-widget-container * {
       box-sizing: border-box;
