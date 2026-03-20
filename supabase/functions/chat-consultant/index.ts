@@ -1209,17 +1209,12 @@ async function searchProductsMulti(
   const uniqueProducts = Array.from(productMap.values());
   console.log(`[Search] Total unique products: ${uniqueProducts.length}`);
   
-  // Filter out products with zero price
-  const pricedProducts = uniqueProducts.filter(p => p.price > 0);
-  const workingList = pricedProducts.length > 0 ? pricedProducts : uniqueProducts;
-  console.log(`[Search] After price>0 filter: ${pricedProducts.length} (using ${workingList === pricedProducts ? 'filtered' : 'original'})`);
-  
   // Sort: priority to products with query in title, then availability, then price
   const queryWords = candidates
     .map(c => c.query?.toLowerCase())
     .filter(Boolean) as string[];
   
-  workingList.sort((a, b) => {
+  uniqueProducts.sort((a, b) => {
     const aInTitle = queryWords.some(q => a.pagetitle.toLowerCase().includes(q));
     const bInTitle = queryWords.some(q => b.pagetitle.toLowerCase().includes(q));
     if (aInTitle && !bInTitle) return -1;
@@ -1229,7 +1224,7 @@ async function searchProductsMulti(
     return a.price - b.price;
   });
   
-  return workingList.slice(0, limit);
+  return uniqueProducts.slice(0, limit);
 }
 
 /**
@@ -1606,9 +1601,9 @@ function formatProductsForAI(products: Product[]): string {
         if (available.length > 0) {
           const shown = available.slice(0, 5).map(w => `${w.city}: ${w.amount} шт.`).join(', ');
           const extra = available.length > 5 ? ` и ещё в ${available.length - 5} городах` : '';
-          return `   - Остатки по городам: ${shown}${extra}`;
+          return `   - В наличии: Да (${p.amount} шт.)\n   - Остатки по городам: ${shown}${extra}`;
         }
-        return p.amount > 0 ? `   - В наличии: ${p.amount} шт.` : `   - Под заказ`;
+        return `   - В наличии: ${p.amount > 0 ? `Да (${p.amount} шт.)` : 'Под заказ'}`;
       })(),
       p.category ? `   - Категория: [${p.category.pagetitle}](https://220volt.kz/catalog/${p.category.id})` : '',
     ];
