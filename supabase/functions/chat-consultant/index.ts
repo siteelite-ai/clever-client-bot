@@ -1606,9 +1606,9 @@ function formatProductsForAI(products: Product[]): string {
         if (available.length > 0) {
           const shown = available.slice(0, 5).map(w => `${w.city}: ${w.amount} шт.`).join(', ');
           const extra = available.length > 5 ? ` и ещё в ${available.length - 5} городах` : '';
-          return `   - В наличии: Да (${p.amount} шт.)\n   - Остатки по городам: ${shown}${extra}`;
+          return `   - Остатки по городам: ${shown}${extra}`;
         }
-        return `   - В наличии: ${p.amount > 0 ? `Да (${p.amount} шт.)` : 'Под заказ'}`;
+        return p.amount > 0 ? `   - В наличии: ${p.amount} шт.` : `   - Под заказ`;
       })(),
       p.category ? `   - Категория: [${p.category.pagetitle}](https://220volt.kz/catalog/${p.category.id})` : '',
     ];
