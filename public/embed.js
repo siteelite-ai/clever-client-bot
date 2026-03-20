@@ -1,3 +1,15 @@
+// Cache-busting: если скрипт загружен без _v=, перезагружаем с timestamp
+(function() {
+  var s = document.querySelector('script[src*="embed.js"]');
+  if (s && !s.src.includes('_v=')) {
+    var n = document.createElement('script');
+    n.src = s.src + (s.src.includes('?') ? '&' : '?') + '_v=' + Math.floor(Date.now() / 300000);
+    s.parentNode.removeChild(s);
+    document.body.appendChild(n);
+    return;
+  }
+})();
+
 (function() {
   'use strict';
 
