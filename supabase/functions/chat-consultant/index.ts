@@ -1046,7 +1046,9 @@ async function searchProductsByCandidate(
   try {
     const params = new URLSearchParams();
     
-    if (candidate.query) {
+    if (candidate.article) {
+      params.append('article', candidate.article);
+    } else if (candidate.query) {
       params.append('query', candidate.query);
     }
     params.append('per_page', limit.toString());
