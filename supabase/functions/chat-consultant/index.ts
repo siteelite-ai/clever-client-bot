@@ -440,6 +440,7 @@ interface Product {
 
 interface SearchCandidate {
   query: string | null;
+  article?: string | null; // Exact article/SKU search
   brand: string | null;
   category: string | null;
   min_price: number | null;
