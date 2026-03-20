@@ -1900,13 +1900,22 @@ function extractRelevantExcerpt(content: string, query: string, maxLen: number =
   // Build the final excerpt from multiple windows
   const parts: string[] = [];
   for (const w of selectedWindows) {
-    // Snap to nearest paragraph boundary
+    // Snap to nearest table header or paragraph boundary
     let snapStart = w.start;
     if (snapStart > 0) {
-      const lookBack = content.substring(Math.max(0, snapStart - 200), snapStart);
-      const sectionMatch = lookBack.lastIndexOf('\n\n');
-      if (sectionMatch >= 0) {
-        snapStart = Math.max(0, snapStart - 200) + sectionMatch + 2;
+      const lookBack = content.substring(Math.max(0, snapStart - 300), snapStart);
+      // Prefer snapping to a markdown table header row (|---)
+      const tableHeaderMatch = lookBack.lastIndexOf('|---');
+      if (tableHeaderMatch >= 0) {
+        // Go back to the line before |--- (the header row with column names)
+        const beforeTable = lookBack.substring(0, tableHeaderMatch);
+        const headerLineStart = beforeTable.lastIndexOf('\n');
+        snapStart = Math.max(0, snapStart - 300) + (headerLineStart >= 0 ? headerLineStart + 1 : tableHeaderMatch);
+      } else {
+        const sectionMatch = lookBack.lastIndexOf('\n\n');
+        if (sectionMatch >= 0) {
+          snapStart = Math.max(0, snapStart - 300) + sectionMatch + 2;
+        }
       }
     }
 
@@ -2062,19 +2071,28 @@ serve(async (req) => {
     console.log(`[Chat] Contacts loaded: ${contactsInfo.length} chars`);
     
     if (knowledgeResults.length > 0) {
+      const KB_TOTAL_BUDGET = 15000; // max chars for all KB entries combined
+      let kbUsed = 0;
+      const kbParts: string[] = [];
+      
+      for (const r of knowledgeResults) {
+        if (kbUsed >= KB_TOTAL_BUDGET) break;
+        const perEntryBudget = r.content.length > 100000 ? 6000 : 4000;
+        const remaining = KB_TOTAL_BUDGET - kbUsed;
+        const budget = Math.min(perEntryBudget, remaining);
+        const excerpt = extractRelevantExcerpt(r.content, userMessage, budget);
+        kbParts.push(`--- ${r.title} ---\n${excerpt}${r.source_url ? `\nИсточник: ${r.source_url}` : ''}`);
+        kbUsed += excerpt.length;
+      }
+      
       knowledgeContext = `
 📚 ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ (используй для ответа!):
 
-${knowledgeResults.map((r, i) => {
-        // Send FULL content — no truncation, LLM can handle it
-        return `--- ${r.title} ---
-${r.content}
-${r.source_url ? `Источник: ${r.source_url}` : ''}`;
-      }).join('\n\n')}
+${kbParts.join('\n\n')}
 
 ИНСТРУКЦИЯ: Используй информацию выше для ответа клиенту. Если информация релевантна вопросу — цитируй её, ссылайся на конкретные пункты.`;
       
-      console.log(`[Chat] Added ${knowledgeResults.length} knowledge entries to context`);
+      console.log(`[Chat] Added ${knowledgeResults.length} knowledge entries to context (${kbUsed} chars, budget ${KB_TOTAL_BUDGET})`);
     }
     if (articleShortCircuit && foundProducts.length > 0) {
       // Article-first: products already found, format context
@@ -2544,16 +2562,38 @@ ${contactsInfo || 'Данные о контактах не загружены.'}
 # Эскалация менеджеру
 Когда нужен менеджер — добавь маркер [CONTACT_MANAGER] в конец сообщения (он скрыт от клиента, заменяется карточкой контактов). Перед маркером предложи WhatsApp и email из данных выше.
 
-${knowledgeContext}
+${(() => {
+      const shouldIncludeKnowledge = 
+        extractedIntent.intent === 'info' || 
+        extractedIntent.intent === 'general' ||
+        foundProducts.length === 0;
+      return shouldIncludeKnowledge ? knowledgeContext : '';
+    })()}
 
 ${productInstructions}`;
 
-    console.log(`[Chat] System prompt length: ${systemPrompt.length}, productInstructions included: ${productInstructions.length > 0}`);
+    // Diagnostic logs: breakdown by component
+    const knowledgeLen = knowledgeContext.length;
+    const productInsLen = productInstructions.length;
+    const contactsLen = contactsInfo.length;
+    const historyLen = messages.reduce((sum: number, m: any) => sum + (m.content?.length || 0), 0);
+    console.log(`[Chat] Context breakdown: system_prompt=${systemPrompt.length}, knowledge=${knowledgeLen}, products=${productInsLen}, contacts=${contactsLen}, history=${historyLen}`);
+    console.log(`[Chat] Total estimated tokens: ~${Math.round((systemPrompt.length + historyLen) / 4)}`);
 
     // ШАГ 4: Финальный ответ от AI
+    // Trim history: last 8 messages, truncate long assistant responses
+    const trimmedMessages = messages.slice(-8).map((m: any) => {
+      if (m.role === 'assistant' && m.content && m.content.length > 500) {
+        return { ...m, content: m.content.substring(0, 500) + '...' };
+      }
+      return m;
+    });
+    const trimmedHistoryLen = trimmedMessages.reduce((sum: number, m: any) => sum + (m.content?.length || 0), 0);
+    console.log(`[Chat] History trimmed: ${messages.length} → ${trimmedMessages.length} msgs, ${historyLen} → ${trimmedHistoryLen} chars`);
+
     const messagesForAI = [
       { role: 'system', content: systemPrompt },
-      ...messages,
+      ...trimmedMessages,
     ];
     
     // Call AI with automatic key rotation on errors
