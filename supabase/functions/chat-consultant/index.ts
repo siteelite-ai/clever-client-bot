@@ -2071,19 +2071,28 @@ serve(async (req) => {
     console.log(`[Chat] Contacts loaded: ${contactsInfo.length} chars`);
     
     if (knowledgeResults.length > 0) {
+      const KB_TOTAL_BUDGET = 15000; // max chars for all KB entries combined
+      let kbUsed = 0;
+      const kbParts: string[] = [];
+      
+      for (const r of knowledgeResults) {
+        if (kbUsed >= KB_TOTAL_BUDGET) break;
+        const perEntryBudget = r.content.length > 100000 ? 6000 : 4000;
+        const remaining = KB_TOTAL_BUDGET - kbUsed;
+        const budget = Math.min(perEntryBudget, remaining);
+        const excerpt = extractRelevantExcerpt(r.content, userMessage, budget);
+        kbParts.push(`--- ${r.title} ---\n${excerpt}${r.source_url ? `\nИсточник: ${r.source_url}` : ''}`);
+        kbUsed += excerpt.length;
+      }
+      
       knowledgeContext = `
 📚 ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ (используй для ответа!):
 
-${knowledgeResults.map((r, i) => {
-        // Send FULL content — no truncation, LLM can handle it
-        return `--- ${r.title} ---
-${r.content}
-${r.source_url ? `Источник: ${r.source_url}` : ''}`;
-      }).join('\n\n')}
+${kbParts.join('\n\n')}
 
 ИНСТРУКЦИЯ: Используй информацию выше для ответа клиенту. Если информация релевантна вопросу — цитируй её, ссылайся на конкретные пункты.`;
       
-      console.log(`[Chat] Added ${knowledgeResults.length} knowledge entries to context`);
+      console.log(`[Chat] Added ${knowledgeResults.length} knowledge entries to context (${kbUsed} chars, budget ${KB_TOTAL_BUDGET})`);
     }
     if (articleShortCircuit && foundProducts.length > 0) {
       // Article-first: products already found, format context
