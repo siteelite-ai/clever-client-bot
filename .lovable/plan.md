@@ -1,36 +1,44 @@
 
 
-## Проблема
+# План реализации: Оптимизация контекста LLM 2
 
-Cache-busting IIFE (строки 1-11) удаляет `<script>` и подгружает новый, но `return` выходит только из этой IIFE. Основной код виджета (строка 13+) продолжает выполняться. Когда новый скрипт загрузится — виджет инициализируется повторно. Два контейнера, конфликтующие обработчики → клик не работает.
+## Файл: `supabase/functions/chat-consultant/index.ts`
 
-## Решение
+### Изменение 1: Snap к таблицам в `extractRelevantExcerpt` (строки 1903-1911)
 
-**Файл: `public/embed.js`** — одно изменение:
+Заменить блок snap-to-boundary на улучшенный, который сначала ищет `|---` (заголовок Markdown-таблицы), и только если не находит — fallback на `\n\n`.
 
-Обернуть весь файл в единую IIFE, где cache-busting `return` прервёт выполнение всего кода, включая виджет:
+### Изменение 2: Активировать `extractRelevantExcerpt` в сборке контекста (строки 2064-2078)
 
-```javascript
-(function() {
-  // Cache-busting
-  var s = document.querySelector('script[src*="embed.js"]');
-  if (s && !s.src.includes('_v=')) {
-    var n = document.createElement('script');
-    n.src = s.src + (s.src.includes('?') ? '&' : '?') + '_v=' + Math.floor(Date.now() / 300000);
-    s.parentNode.removeChild(s);
-    document.body.appendChild(n);
-    return; // ← теперь прерывает ВСЁ
-  }
+Заменить вставку полного `r.content` на:
+- Динамический бюджет: 6000 символов для записей >100K, 4000 для остальных
+- Общий лимит `KB_TOTAL_BUDGET = 15000` символов на весь `knowledgeContext`
+- Вызов `extractRelevantExcerpt(r.content, userMessage, budget)` для каждой записи
 
-  // === Весь остальной код виджета (без своей обёртки IIFE) ===
-  'use strict';
-  const CONFIG = { ... };
-  // ...
-})();
+### Изменение 3: Условное включение БЗ по интенту (строка 2547)
+
+Перед строкой 2547 добавить логику:
 ```
+const shouldIncludeKnowledge = 
+  extractedIntent.intent === 'info' || 
+  extractedIntent.intent === 'general' ||
+  foundProducts.length === 0;
+```
+На строке 2547 заменить `${knowledgeContext}` на `${shouldIncludeKnowledge ? knowledgeContext : ''}`.
 
-По сути: убираем две отдельные IIFE, делаем одну общую. `return` внутри неё останавливает всё.
+### Изменение 4: Обрезка истории (строка 2556)
 
-## Файлы
-1. `public/embed.js` — объединить две IIFE в одну
+Заменить `...messages` на trimmed-версию: последние 8 сообщений, assistant-ответы >500 символов обрезаются до 500 + `...`.
+
+### Изменение 5: Диагностические логи (после строки 2551)
+
+Добавить разбивку по компонентам: knowledge, products, contacts, history — отдельно.
+
+---
+
+## Ожидаемый результат
+
+- System prompt: 256K → 20-50K символов
+- Время ответа: 10-20 сек → 2-5 сек
+- Стоимость: ~$0.025 → ~$0.004 за запрос
 
