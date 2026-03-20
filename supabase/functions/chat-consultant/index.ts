@@ -318,7 +318,6 @@ function detectArticles(message: string): string[] {
   ]);
   
   // Pattern: alphanumeric string with at least one letter AND one digit, containing dashes or dots, 5+ chars total
-  // Examples: CKK11-012-012-1-K01, MVA25-1-016-C, SQ0206-0071, ВА47-29
   const articlePattern = /\b([A-ZА-ЯЁa-zа-яё0-9][A-ZА-ЯЁa-zа-яё0-9.\-]{3,}[A-ZА-ЯЁa-zа-яё0-9])\b/g;
   
   const results: string[] = [];
@@ -352,8 +351,25 @@ function detectArticles(message: string): string[] {
     results.push(candidate);
   }
   
+  // === PURE NUMERIC ARTICLE DETECTION ===
+  // Detect 4-8 digit numbers as articles when contextual triggers are present
+  const hasArticleContext = hasKeyword || /есть в наличии|в наличии|в стоке|остат|наличи|сколько стоит|какая цена/i.test(message);
+  // Also detect when the message is MOSTLY a number (e.g. "16093 есть в наличии?")
+  const startsWithNumber = /^\s*(\d{4,8})\b/.test(message);
+  
+  if (hasArticleContext || startsWithNumber) {
+    const numericPattern = /\b(\d{4,8})\b/g;
+    let numMatch;
+    while ((numMatch = numericPattern.exec(message)) !== null) {
+      const num = numMatch[1];
+      // Skip years, round prices, common non-article numbers
+      if (/^(2024|2025|2026|2027|1000|2000|3000|5000|10000|50000|100000)$/.test(num)) continue;
+      if (!results.includes(num)) results.push(num);
+    }
+  }
+  
   if (results.length > 0) {
-    console.log(`[ArticleDetect] Found ${results.length} article(s): ${results.join(', ')} (keyword=${hasKeyword})`);
+    console.log(`[ArticleDetect] Found ${results.length} article(s): ${results.join(', ')} (keyword=${hasKeyword}, numericContext=${hasArticleContext || startsWithNumber})`);
   }
   
   return results;
@@ -424,6 +440,7 @@ interface Product {
 
 interface SearchCandidate {
   query: string | null;
+  article?: string | null; // Exact article/SKU search
   brand: string | null;
   category: string | null;
   min_price: number | null;
@@ -493,12 +510,21 @@ ${historyContext}
 - Обсуждали отвёртку за 347₸ → Клиент: "есть дешевле?" → intent="catalog", max_price=346, candidates=[{"query":"отвертка"},{"query":"отвертки"}]
 - Обсуждали дрель за 15000₸ → Клиент: "покажи подороже" → intent="catalog", min_price=15001, candidates=[{"query":"дрель"},{"query":"дрели"}]
 
+🔢 ЧИСЛОВЫЕ АРТИКУЛЫ (КРИТИЧЕСКИ ВАЖНО!):
+Если пользователь указывает числовой код из 4-8 цифр (например "16093", "5421", "12345678") и спрашивает о наличии, цене или информации о товаре — генерируй кандидата с полем "article" ВМЕСТО "query"!
+Примеры:
+- "16093 есть в наличии?" → intent="catalog", candidates=[{"article":"16093"}]
+- "сколько стоит 5421?" → intent="catalog", candidates=[{"article":"5421"}]
+- "артикул 12345" → intent="catalog", candidates=[{"article":"12345"}]
+Поле "article" ищет по точному совпадению артикула и всегда находит товар, если он существует.
+
 📖 ДОКУМЕНТАЦИЯ API КАТАЛОГА (220volt.kz/api/products):
 Ты ДОЛЖЕН формировать корректные запросы к API. Вот доступные параметры:
 
 | Параметр | Описание | Пример |
 |----------|----------|--------|
 | query | Текстовый поиск по названию и описанию товара. КОРОТКИЕ запросы (1-2 слова) работают лучше. НЕ передавай общие слова вроде "товары", "продукция", "изделия" — они бесполезны | "дрель", "УШМ", "кабель 3x2.5" |
+| article | Точный поиск по артикулу/SKU товара. Используй для числовых кодов 4-8 цифр | "16093", "09-0201" |
 | options[brend__brend][] | Фильтр по бренду. Значение = точное название бренда ЛАТИНИЦЕЙ с заглавной буквы | "Philips", "Bosch", "Makita" |
 | category | Фильтр по категории (pagetitle родительского ресурса) | "Светильники", "Перфораторы" |
 | min_price | Минимальная цена в тенге | 5000 |
@@ -1020,7 +1046,9 @@ async function searchProductsByCandidate(
   try {
     const params = new URLSearchParams();
     
-    if (candidate.query) {
+    if (candidate.article) {
+      params.append('article', candidate.article);
+    } else if (candidate.query) {
       params.append('query', candidate.query);
     }
     params.append('per_page', limit.toString());
@@ -1214,6 +1242,36 @@ async function searchProductsMulti(
             productMap.set(product.id, product);
           }
         }
+      }
+    }
+  }
+  
+  // === ARTICLE FALLBACK: If query is purely numeric (4-8 digits) and returned 0 results, try as article ===
+  if (productMap.size === 0) {
+    const numericQueries = cleanedCandidates
+      .filter(c => c.query && /^\d{4,8}$/.test(c.query.trim()))
+      .map(c => c.query!.trim());
+    
+    // Also check for candidates with explicit article field
+    const articleCandidates = cleanedCandidates
+      .filter(c => (c as any).article)
+      .map(c => (c as any).article as string);
+    
+    const allArticles = [...new Set([...numericQueries, ...articleCandidates])];
+    
+    if (allArticles.length > 0) {
+      console.log(`[Search] 0 results, trying article fallback for: ${allArticles.join(', ')}`);
+      const articlePromises = allArticles.map(article => searchByArticle(article, apiToken));
+      const articleResults = await Promise.all(articlePromises);
+      for (const products of articleResults) {
+        for (const product of products) {
+          if (!productMap.has(product.id)) {
+            productMap.set(product.id, product);
+          }
+        }
+      }
+      if (productMap.size > 0) {
+        console.log(`[Search] Article fallback found ${productMap.size} products`);
       }
     }
   }
