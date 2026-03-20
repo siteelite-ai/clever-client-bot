@@ -1,44 +1,73 @@
 
 
-# План реализации: Оптимизация контекста LLM 2
+# Диагностика бага: артикул 16093 не найден
 
-## Файл: `supabase/functions/chat-consultant/index.ts`
+## Корневая причина
 
-### Изменение 1: Snap к таблицам в `extractRelevantExcerpt` (строки 1903-1911)
+**`detectArticles()` (строка 314)** — функция, которая определяет артикулы в сообщении пользователя, **не распознаёт чисто цифровые артикулы**.
 
-Заменить блок snap-to-boundary на улучшенный, который сначала ищет `|---` (заголовок Markdown-таблицы), и только если не находит — fallback на `\n\n`.
-
-### Изменение 2: Активировать `extractRelevantExcerpt` в сборке контекста (строки 2064-2078)
-
-Заменить вставку полного `r.content` на:
-- Динамический бюджет: 6000 символов для записей >100K, 4000 для остальных
-- Общий лимит `KB_TOTAL_BUDGET = 15000` символов на весь `knowledgeContext`
-- Вызов `extractRelevantExcerpt(r.content, userMessage, budget)` для каждой записи
-
-### Изменение 3: Условное включение БЗ по интенту (строка 2547)
-
-Перед строкой 2547 добавить логику:
+Условие на строке 338-340:
 ```
-const shouldIncludeKnowledge = 
-  extractedIntent.intent === 'info' || 
-  extractedIntent.intent === 'general' ||
-  foundProducts.length === 0;
+const hasLetter = /[a-zA-ZА-ЯЁа-яё]/.test(candidate);
+const hasDigit = /\d/.test(candidate);
+if (!hasLetter || !hasDigit) continue;  // ← "16093" отброшен здесь
 ```
-На строке 2547 заменить `${knowledgeContext}` на `${shouldIncludeKnowledge ? knowledgeContext : ''}`.
 
-### Изменение 4: Обрезка истории (строка 2556)
+"16093" содержит только цифры, без букв → `hasLetter = false` → артикул отброшен → Article-first не срабатывает → запрос уходит в LLM 1 → LLM 1 генерирует `query: "16093"` (не `article`) → API ищет по полнотекстовому поиску → 0 результатов.
 
-Заменить `...messages` на trimmed-версию: последние 8 сообщений, assistant-ответы >500 символов обрезаются до 500 + `...`.
+**Доказательство из логов:**
+- `[AI Candidates] Extracted: {"candidates":[{"query":"16093"}],"intent":"catalog"}` — LLM 1 не знает про параметр `article`
+- `[Search] API params: query=16093&per_page=30` — поиск по `query`, не по `article`
+- `[Search] Found 0 products for "16093"` — 0 результатов
 
-### Изменение 5: Диагностические логи (после строки 2551)
+**Контрольная проверка:** прямой вызов API с `article=16093` возвращает товар «Коврик диэлектрический 500×500», 2585₸, 461 шт. на складах.
 
-Добавить разбивку по компонентам: knowledge, products, contacts, history — отдельно.
+## Второй баг: не выводится название товара
+
+Поскольку товар вообще не найден, бот не получил данных для отображения. Это следствие первого бага, а не отдельная проблема.
+
+## План исправления
+
+### Изменение 1: Расширить `detectArticles` для чисто цифровых артикулов (строки 314-360)
+
+Добавить отдельную ветку: если в сообщении есть ключевое слово-триггер (`артикул`, `арт.`, `код товар`, `sku`) или конструкция типа "ЧИСЛО есть в наличии", то чисто цифровые строки из 4-8 цифр тоже считаются артикулами.
+
+```
+// After existing pattern matching, add pure-numeric detection:
+// Pattern: 4-8 digit number when keyword present OR contextual phrase
+const numericPattern = /\b(\d{4,8})\b/g;
+const hasArticleContext = hasKeyword || /есть в наличии|в наличии|в стоке|остат/i.test(message);
+
+if (hasArticleContext) {
+  while ((match = numericPattern.exec(message)) !== null) {
+    const num = match[1];
+    // Skip prices (too round), years, common numbers
+    if (/^(2024|2025|2026|1000|5000|10000|50000)$/.test(num)) continue;
+    if (!results.includes(num)) results.push(num);
+  }
+}
+```
+
+### Изменение 2: LLM 1 — научить использовать параметр `article` (промпт ~строка 484)
+
+Добавить в prompt LLM 1 правило: если пользователь указывает числовой код (4-8 цифр) и спрашивает о наличии/цене, генерировать кандидата с полем `article` вместо `query`. Это страховка на случай, если `detectArticles` пропустит.
+
+### Изменение 3: Fallback в `searchProductsMulti` — пробовать `article` для коротких числовых запросов
+
+Если `query` — чисто цифровая строка из 4-8 цифр и `query`-поиск вернул 0 результатов, автоматически повторить запрос с параметром `article` вместо `query`.
 
 ---
 
+## Технические детали
+
+**Файл:** `supabase/functions/chat-consultant/index.ts`
+
+- **Изменение 1** (строки ~325-355): Расширение `detectArticles` — добавить numeric branch с контекстным триггером
+- **Изменение 2** (строки ~484-550): Обновить prompt LLM 1 — добавить правило про числовые артикулы
+- **Изменение 3** (строки ~1050-1100): В `searchProductsMulti` добавить article-fallback для числовых запросов с 0 результатов
+
 ## Ожидаемый результат
 
-- System prompt: 256K → 20-50K символов
-- Время ответа: 10-20 сек → 2-5 сек
-- Стоимость: ~$0.025 → ~$0.004 за запрос
+- Запрос "16093 есть в наличии?" → `detectArticles` распознает "16093" → Article-first → API `article=16093` → «Коврик диэлектрический 500×500, 2585₸, в наличии»
+- Даже без ключевых слов: если LLM 1 сгенерировал числовой query и 0 результатов → fallback на `article` → товар найден
 
