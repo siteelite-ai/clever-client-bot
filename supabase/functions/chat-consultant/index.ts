@@ -2562,16 +2562,38 @@ ${contactsInfo || 'Данные о контактах не загружены.'}
 # Эскалация менеджеру
 Когда нужен менеджер — добавь маркер [CONTACT_MANAGER] в конец сообщения (он скрыт от клиента, заменяется карточкой контактов). Перед маркером предложи WhatsApp и email из данных выше.
 
-${knowledgeContext}
+${(() => {
+      const shouldIncludeKnowledge = 
+        extractedIntent.intent === 'info' || 
+        extractedIntent.intent === 'general' ||
+        foundProducts.length === 0;
+      return shouldIncludeKnowledge ? knowledgeContext : '';
+    })()}
 
 ${productInstructions}`;
 
-    console.log(`[Chat] System prompt length: ${systemPrompt.length}, productInstructions included: ${productInstructions.length > 0}`);
+    // Diagnostic logs: breakdown by component
+    const knowledgeLen = knowledgeContext.length;
+    const productInsLen = productInstructions.length;
+    const contactsLen = contactsInfo.length;
+    const historyLen = messages.reduce((sum: number, m: any) => sum + (m.content?.length || 0), 0);
+    console.log(`[Chat] Context breakdown: system_prompt=${systemPrompt.length}, knowledge=${knowledgeLen}, products=${productInsLen}, contacts=${contactsLen}, history=${historyLen}`);
+    console.log(`[Chat] Total estimated tokens: ~${Math.round((systemPrompt.length + historyLen) / 4)}`);
 
     // ШАГ 4: Финальный ответ от AI
+    // Trim history: last 8 messages, truncate long assistant responses
+    const trimmedMessages = messages.slice(-8).map((m: any) => {
+      if (m.role === 'assistant' && m.content && m.content.length > 500) {
+        return { ...m, content: m.content.substring(0, 500) + '...' };
+      }
+      return m;
+    });
+    const trimmedHistoryLen = trimmedMessages.reduce((sum: number, m: any) => sum + (m.content?.length || 0), 0);
+    console.log(`[Chat] History trimmed: ${messages.length} → ${trimmedMessages.length} msgs, ${historyLen} → ${trimmedHistoryLen} chars`);
+
     const messagesForAI = [
       { role: 'system', content: systemPrompt },
-      ...messages,
+      ...trimmedMessages,
     ];
     
     // Call AI with automatic key rotation on errors
