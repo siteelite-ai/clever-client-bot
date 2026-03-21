@@ -358,7 +358,7 @@ function detectArticles(message: string): string[] {
   const startsWithNumber = /^\s*(\d{4,8})\b/.test(message);
   
   if (hasArticleContext || startsWithNumber) {
-    const numericPattern = /\b(\d{4,8})\b/g;
+    const numericPattern = /\b(\d{4,12})\b/g;
     let numMatch;
     while ((numMatch = numericPattern.exec(message)) !== null) {
       const num = numMatch[1];
