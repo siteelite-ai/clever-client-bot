@@ -338,9 +338,12 @@ function detectArticles(message: string): string[] {
     const hasDigit = /\d/.test(candidate);
     if (!hasLetter || !hasDigit) continue;
     
-    // Must contain at least one dash or dot (SKU separator) OR be preceded by a keyword
+    // Must contain at least one dash or dot (SKU separator) OR be preceded by a keyword/context
     const hasSeparator = /[-.]/.test(candidate);
-    if (!hasSeparator && !hasKeyword) continue;
+    const hasContext = /есть в наличии|в наличии|в стоке|остат|наличи|сколько стоит|какая цена/i.test(message);
+    // Also accept codes like "Ем000029228" (letter prefix + many digits) as site identifiers
+    const isSiteIdPattern = /^[A-ZА-ЯЁa-zа-яё]{1,3}\d{6,}$/i.test(candidate);
+    if (!hasSeparator && !hasKeyword && !hasContext && !isSiteIdPattern) continue;
     
     // Must be 5+ characters
     if (candidate.length < 5) continue;
@@ -351,6 +354,18 @@ function detectArticles(message: string): string[] {
     results.push(candidate);
   }
   
+  // === SITE IDENTIFIER PATTERN (e.g. "Ем000029228") ===
+  // Cyrillic/Latin letter prefix (1-3 chars) + 6+ digits — \b doesn't work with Cyrillic
+  const siteIdPattern = /(?:^|[\s,;:(]|(?<=\?))([A-ZА-ЯЁa-zа-яё]{1,3}\d{6,})(?=[\s,;:)?.!]|$)/g;
+  let siteMatch;
+  while ((siteMatch = siteIdPattern.exec(message)) !== null) {
+    const code = siteMatch[1];
+    if (!results.includes(code)) {
+      results.push(code);
+      console.log(`[ArticleDetect] Site ID pattern matched: ${code}`);
+    }
+  }
+
   // === PURE NUMERIC ARTICLE DETECTION ===
   // Detect 4-8 digit numbers as articles when contextual triggers are present
   const hasArticleContext = hasKeyword || /есть в наличии|в наличии|в стоке|остат|наличи|сколько стоит|какая цена/i.test(message);
@@ -364,6 +379,9 @@ function detectArticles(message: string): string[] {
       const num = numMatch[1];
       // Skip years, round prices, common non-article numbers
       if (/^(2024|2025|2026|2027|1000|2000|3000|5000|10000|50000|100000)$/.test(num)) continue;
+      // Skip if already captured as part of a site ID (e.g. "000029228" from "Ем000029228")
+      const alreadyCaptured = results.some(r => r.endsWith(num) && r !== num);
+      if (alreadyCaptured) continue;
       if (!results.includes(num)) results.push(num);
     }
   }
