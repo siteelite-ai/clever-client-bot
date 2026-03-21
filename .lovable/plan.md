@@ -1,73 +1,59 @@
 
 
-# Диагностика бага: артикул 16093 не найден
+# План: Поиск по идентификатору сайта (fallback после артикула)
 
-## Корневая причина
+## Текущая логика (уже работает)
 
-**`detectArticles()` (строка 314)** — функция, которая определяет артикулы в сообщении пользователя, **не распознаёт чисто цифровые артикулы**.
+1. `detectArticles` → найден код → `searchByArticle()` → найден товар → short-circuit
+2. Если `searchByArticle` = 0 → обычный pipeline (LLM 1 → searchProductsMulti)
+3. В `searchProductsMulti` есть Article Fallback (строки 1249-1277): если числовой query дал 0 результатов → повторно `searchByArticle`
 
-Условие на строке 338-340:
-```
-const hasLetter = /[a-zA-ZА-ЯЁа-яё]/.test(candidate);
-const hasDigit = /\d/.test(candidate);
-if (!hasLetter || !hasDigit) continue;  // ← "16093" отброшен здесь
-```
+## Новая логика (приоритет артикула сохраняется)
 
-"16093" содержит только цифры, без букв → `hasLetter = false` → артикул отброшен → Article-first не срабатывает → запрос уходит в LLM 1 → LLM 1 генерирует `query: "16093"` (не `article`) → API ищет по полнотекстовому поиску → 0 результатов.
-
-**Доказательство из логов:**
-- `[AI Candidates] Extracted: {"candidates":[{"query":"16093"}],"intent":"catalog"}` — LLM 1 не знает про параметр `article`
-- `[Search] API params: query=16093&per_page=30` — поиск по `query`, не по `article`
-- `[Search] Found 0 products for "16093"` — 0 результатов
-
-**Контрольная проверка:** прямой вызов API с `article=16093` возвращает товар «Коврик диэлектрический 500×500», 2585₸, 461 шт. на складах.
-
-## Второй баг: не выводится название товара
-
-Поскольку товар вообще не найден, бот не получил данных для отображения. Это следствие первого бага, а не отдельная проблема.
-
-## План исправления
-
-### Изменение 1: Расширить `detectArticles` для чисто цифровых артикулов (строки 314-360)
-
-Добавить отдельную ветку: если в сообщении есть ключевое слово-триггер (`артикул`, `арт.`, `код товар`, `sku`) или конструкция типа "ЧИСЛО есть в наличии", то чисто цифровые строки из 4-8 цифр тоже считаются артикулами.
-
-```
-// After existing pattern matching, add pure-numeric detection:
-// Pattern: 4-8 digit number when keyword present OR contextual phrase
-const numericPattern = /\b(\d{4,8})\b/g;
-const hasArticleContext = hasKeyword || /есть в наличии|в наличии|в стоке|остат/i.test(message);
-
-if (hasArticleContext) {
-  while ((match = numericPattern.exec(message)) !== null) {
-    const num = match[1];
-    // Skip prices (too round), years, common numbers
-    if (/^(2024|2025|2026|1000|5000|10000|50000)$/.test(num)) continue;
-    if (!results.includes(num)) results.push(num);
-  }
-}
+```text
+Пользователь: "000004341 есть?"
+     │
+     ▼
+detectArticles → "000004341"
+     │
+     ▼
+1) searchByArticle("000004341") ← ПЕРВЫЙ (приоритет)
+     │
+     ├─ Найден → short-circuit, готово
+     │
+     └─ 0 результатов
+         │
+         ▼
+    2) searchBySiteId("000004341") ← ВТОРОЙ (fallback)
+         │
+         ├─ Найден → short-circuit, готово
+         │
+         └─ 0 → обычный pipeline (LLM 1)
 ```
 
-### Изменение 2: LLM 1 — научить использовать параметр `article` (промпт ~строка 484)
+Артикул всегда проверяется первым. Site ID — только если артикул не нашел.
 
-Добавить в prompt LLM 1 правило: если пользователь указывает числовой код (4-8 цифр) и спрашивает о наличии/цене, генерировать кандидата с полем `article` вместо `query`. Это страховка на случай, если `detectArticles` пропустит.
+## Изменения в `supabase/functions/chat-consultant/index.ts`
 
-### Изменение 3: Fallback в `searchProductsMulti` — пробовать `article` для коротких числовых запросов
+### Изменение 1: Новая функция `searchBySiteId` (после `searchByArticle`, ~строка 412)
 
-Если `query` — чисто цифровая строка из 4-8 цифр и `query`-поиск вернул 0 результатов, автоматически повторить запрос с параметром `article` вместо `query`.
+Аналог `searchByArticle`, но использует параметр `options[identifikator_sayta__sayt_identifikatory][]`.
 
----
+### Изменение 2: Article-first блок (строки 2079-2085)
 
-## Технические детали
+Сейчас если `articleProducts.size === 0` — сразу fallback на LLM 1. Добавить промежуточный шаг: попробовать `searchBySiteId` для тех же кодов. Если найдено — short-circuit.
 
-**Файл:** `supabase/functions/chat-consultant/index.ts`
+### Изменение 3: Article Fallback в `searchProductsMulti` (строки 1262-1276)
 
-- **Изменение 1** (строки ~325-355): Расширение `detectArticles` — добавить numeric branch с контекстным триггером
-- **Изменение 2** (строки ~484-550): Обновить prompt LLM 1 — добавить правило про числовые артикулы
-- **Изменение 3** (строки ~1050-1100): В `searchProductsMulti` добавить article-fallback для числовых запросов с 0 результатов
+После неуспешного `searchByArticle` fallback — добавить `searchBySiteId` fallback для тех же кодов.
 
-## Ожидаемый результат
+### Изменение 4: Расширить `detectArticles` — паттерн с ведущими нулями
 
-- Запрос "16093 есть в наличии?" → `detectArticles` распознает "16093" → Article-first → API `article=16093` → «Коврик диэлектрический 500×500, 2585₸, в наличии»
-- Даже без ключевых слов: если LLM 1 сгенерировал числовой query и 0 результатов → fallback на `article` → товар найден
+Коды типа `000004341` (9 цифр с нулями) не проходят текущий фильтр 4-8 цифр. Расширить до **4-12 цифр** для строк, начинающихся с `0`.
+
+## Безопасность
+
+- Все аддитивно — существующая логика `searchByArticle` не меняется
+- Артикул всегда первый, site ID только при 0 результатов от артикула
+- Дополнительная задержка ~200мс только при промахе артикула
 
