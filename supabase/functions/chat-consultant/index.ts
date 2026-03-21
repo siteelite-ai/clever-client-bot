@@ -338,9 +338,12 @@ function detectArticles(message: string): string[] {
     const hasDigit = /\d/.test(candidate);
     if (!hasLetter || !hasDigit) continue;
     
-    // Must contain at least one dash or dot (SKU separator) OR be preceded by a keyword
+    // Must contain at least one dash or dot (SKU separator) OR be preceded by a keyword/context
     const hasSeparator = /[-.]/.test(candidate);
-    if (!hasSeparator && !hasKeyword) continue;
+    const hasContext = /есть в наличии|в наличии|в стоке|остат|наличи|сколько стоит|какая цена/i.test(message);
+    // Also accept codes like "Ем000029228" (letter prefix + many digits) as site identifiers
+    const isSiteIdPattern = /^[A-ZА-ЯЁa-zа-яё]{1,3}\d{6,}$/i.test(candidate);
+    if (!hasSeparator && !hasKeyword && !hasContext && !isSiteIdPattern) continue;
     
     // Must be 5+ characters
     if (candidate.length < 5) continue;
