@@ -1285,7 +1285,7 @@ async function searchProductsMulti(
   // === ARTICLE FALLBACK: If query is purely numeric (4-8 digits) and returned 0 results, try as article ===
   if (productMap.size === 0) {
     const numericQueries = cleanedCandidates
-      .filter(c => c.query && /^\d{4,8}$/.test(c.query.trim()))
+      .filter(c => c.query && /^\d{4,12}$/.test(c.query.trim()))
       .map(c => c.query!.trim());
     
     // Also check for candidates with explicit article field
