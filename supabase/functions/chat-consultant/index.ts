@@ -355,7 +355,7 @@ function detectArticles(message: string): string[] {
   // Detect 4-8 digit numbers as articles when contextual triggers are present
   const hasArticleContext = hasKeyword || /есть в наличии|в наличии|в стоке|остат|наличи|сколько стоит|какая цена/i.test(message);
   // Also detect when the message is MOSTLY a number (e.g. "16093 есть в наличии?")
-  const startsWithNumber = /^\s*(\d{4,8})\b/.test(message);
+  const startsWithNumber = /^\s*(\d{4,12})\b/.test(message);
   
   if (hasArticleContext || startsWithNumber) {
     const numericPattern = /\b(\d{4,12})\b/g;
