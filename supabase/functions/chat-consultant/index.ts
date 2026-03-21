@@ -2117,7 +2117,26 @@ serve(async (req) => {
         articleShortCircuit = true;
         console.log(`[Chat] Article-first SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
       } else {
-        console.log(`[Chat] Article-first: no results for article(s), falling back to normal pipeline`);
+        // Fallback: try searching by site identifier
+        console.log(`[Chat] Article-first: no article results, trying site ID fallback...`);
+        const siteIdPromises = detectedArticles.map(art => 
+          searchBySiteId(art, appSettings.volt220_api_token!)
+        );
+        const siteIdResults = await Promise.all(siteIdPromises);
+        
+        for (const products of siteIdResults) {
+          for (const product of products) {
+            articleProducts.set(product.id, product);
+          }
+        }
+        
+        if (articleProducts.size > 0) {
+          foundProducts = Array.from(articleProducts.values());
+          articleShortCircuit = true;
+          console.log(`[Chat] SiteId-fallback SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
+        } else {
+          console.log(`[Chat] Article-first + SiteId: no results, falling back to normal pipeline`);
+        }
       }
     }
 
