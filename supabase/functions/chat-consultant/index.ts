@@ -1308,6 +1308,21 @@ async function searchProductsMulti(
       }
       if (productMap.size > 0) {
         console.log(`[Search] Article fallback found ${productMap.size} products`);
+      } else {
+        // Site ID fallback: try options[identifikator_sayta__sayt_identifikatory][]
+        console.log(`[Search] Article fallback returned 0, trying site ID fallback for: ${allArticles.join(', ')}`);
+        const siteIdPromises = allArticles.map(id => searchBySiteId(id, apiToken));
+        const siteIdResults = await Promise.all(siteIdPromises);
+        for (const products of siteIdResults) {
+          for (const product of products) {
+            if (!productMap.has(product.id)) {
+              productMap.set(product.id, product);
+            }
+          }
+        }
+        if (productMap.size > 0) {
+          console.log(`[Search] SiteId fallback found ${productMap.size} products`);
+        }
       }
     }
   }
