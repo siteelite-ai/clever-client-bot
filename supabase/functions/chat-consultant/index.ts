@@ -355,10 +355,10 @@ function detectArticles(message: string): string[] {
   // Detect 4-8 digit numbers as articles when contextual triggers are present
   const hasArticleContext = hasKeyword || /есть в наличии|в наличии|в стоке|остат|наличи|сколько стоит|какая цена/i.test(message);
   // Also detect when the message is MOSTLY a number (e.g. "16093 есть в наличии?")
-  const startsWithNumber = /^\s*(\d{4,8})\b/.test(message);
+  const startsWithNumber = /^\s*(\d{4,12})\b/.test(message);
   
   if (hasArticleContext || startsWithNumber) {
-    const numericPattern = /\b(\d{4,8})\b/g;
+    const numericPattern = /\b(\d{4,12})\b/g;
     let numMatch;
     while ((numMatch = numericPattern.exec(message)) !== null) {
       const num = numMatch[1];
@@ -407,6 +407,42 @@ async function searchByArticle(article: string, apiToken: string): Promise<Produ
     return results;
   } catch (error) {
     console.error(`[ArticleSearch] Error:`, error);
+    return [];
+  }
+}
+
+/**
+ * Search products by site identifier (options[identifikator_sayta__sayt_identifikatory][])
+ */
+async function searchBySiteId(siteId: string, apiToken: string): Promise<Product[]> {
+  try {
+    const params = new URLSearchParams();
+    params.append('options[identifikator_sayta__sayt_identifikatory][]', siteId);
+    params.append('per_page', '5');
+    
+    console.log(`[SiteIdSearch] Searching by site identifier: ${siteId}`);
+    
+    const response = await fetch(`${VOLT220_API_URL}?${params}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      console.error(`[SiteIdSearch] API error: ${response.status}`);
+      return [];
+    }
+
+    const rawData = await response.json();
+    const data = rawData.data || rawData;
+    const results = data.results || [];
+    
+    console.log(`[SiteIdSearch] Found ${results.length} product(s) for site ID "${siteId}"`);
+    return results;
+  } catch (error) {
+    console.error(`[SiteIdSearch] Error:`, error);
     return [];
   }
 }
@@ -1249,7 +1285,7 @@ async function searchProductsMulti(
   // === ARTICLE FALLBACK: If query is purely numeric (4-8 digits) and returned 0 results, try as article ===
   if (productMap.size === 0) {
     const numericQueries = cleanedCandidates
-      .filter(c => c.query && /^\d{4,8}$/.test(c.query.trim()))
+      .filter(c => c.query && /^\d{4,12}$/.test(c.query.trim()))
       .map(c => c.query!.trim());
     
     // Also check for candidates with explicit article field
@@ -1272,6 +1308,21 @@ async function searchProductsMulti(
       }
       if (productMap.size > 0) {
         console.log(`[Search] Article fallback found ${productMap.size} products`);
+      } else {
+        // Site ID fallback: try options[identifikator_sayta__sayt_identifikatory][]
+        console.log(`[Search] Article fallback returned 0, trying site ID fallback for: ${allArticles.join(', ')}`);
+        const siteIdPromises = allArticles.map(id => searchBySiteId(id, apiToken));
+        const siteIdResults = await Promise.all(siteIdPromises);
+        for (const products of siteIdResults) {
+          for (const product of products) {
+            if (!productMap.has(product.id)) {
+              productMap.set(product.id, product);
+            }
+          }
+        }
+        if (productMap.size > 0) {
+          console.log(`[Search] SiteId fallback found ${productMap.size} products`);
+        }
       }
     }
   }
@@ -2081,7 +2132,26 @@ serve(async (req) => {
         articleShortCircuit = true;
         console.log(`[Chat] Article-first SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
       } else {
-        console.log(`[Chat] Article-first: no results for article(s), falling back to normal pipeline`);
+        // Fallback: try searching by site identifier
+        console.log(`[Chat] Article-first: no article results, trying site ID fallback...`);
+        const siteIdPromises = detectedArticles.map(art => 
+          searchBySiteId(art, appSettings.volt220_api_token!)
+        );
+        const siteIdResults = await Promise.all(siteIdPromises);
+        
+        for (const products of siteIdResults) {
+          for (const product of products) {
+            articleProducts.set(product.id, product);
+          }
+        }
+        
+        if (articleProducts.size > 0) {
+          foundProducts = Array.from(articleProducts.values());
+          articleShortCircuit = true;
+          console.log(`[Chat] SiteId-fallback SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
+        } else {
+          console.log(`[Chat] Article-first + SiteId: no results, falling back to normal pipeline`);
+        }
       }
     }
 
