@@ -411,6 +411,42 @@ async function searchByArticle(article: string, apiToken: string): Promise<Produ
   }
 }
 
+/**
+ * Search products by site identifier (options[identifikator_sayta__sayt_identifikatory][])
+ */
+async function searchBySiteId(siteId: string, apiToken: string): Promise<Product[]> {
+  try {
+    const params = new URLSearchParams();
+    params.append('options[identifikator_sayta__sayt_identifikatory][]', siteId);
+    params.append('per_page', '5');
+    
+    console.log(`[SiteIdSearch] Searching by site identifier: ${siteId}`);
+    
+    const response = await fetch(`${VOLT220_API_URL}?${params}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      console.error(`[SiteIdSearch] API error: ${response.status}`);
+      return [];
+    }
+
+    const rawData = await response.json();
+    const data = rawData.data || rawData;
+    const results = data.results || [];
+    
+    console.log(`[SiteIdSearch] Found ${results.length} product(s) for site ID "${siteId}"`);
+    return results;
+  } catch (error) {
+    console.error(`[SiteIdSearch] Error:`, error);
+    return [];
+  }
+}
+
 interface Product {
   id: number;
   pagetitle: string;
