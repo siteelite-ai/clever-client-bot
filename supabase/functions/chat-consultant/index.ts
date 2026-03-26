@@ -1,4 +1,4 @@
-// chat-consultant v2.8 — Direct Name Search + reduced API calls
+// chat-consultant v3.0 — Title-first scoring + latency optimization
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
@@ -306,11 +306,6 @@ async function searchKnowledgeBase(
 
 /**
  * ARTICLE DETECTION — detects product SKU/article codes in user messages.
- * 
- * Pattern: 5+ chars with letters + digits + dashes/dots (e.g. CKK11-012-012-1-K01, MVA25-1-016-C, SQ0206-0071)
- * Also triggered by keywords: "артикул", "арт.", "код товара", "SKU"
- * 
- * Exclusions: IP ratings (IP20, IP44, IP65, IP67, IP68), voltage specs, etc.
  */
 function detectArticles(message: string): string[] {
   const exclusions = new Set([
@@ -318,45 +313,36 @@ function detectArticles(message: string): string[] {
     'din', 'led', 'usb', 'type', 'wifi', 'hdmi',
   ]);
   
-  // Pattern: alphanumeric string with at least one letter AND one digit, containing dashes or dots, 5+ chars total
   const articlePattern = /\b([A-ZА-ЯЁa-zа-яё0-9][A-ZА-ЯЁa-zа-яё0-9.\-]{3,}[A-ZА-ЯЁa-zа-яё0-9])\b/g;
   
   const results: string[] = [];
   let match;
   
-  // Check for keyword triggers that boost confidence
   const hasKeyword = /артикул|арт\.|код\s*товар|sku/i.test(message);
   
   while ((match = articlePattern.exec(message)) !== null) {
     const candidate = match[1];
     const lower = candidate.toLowerCase();
     
-    // Skip exclusions
     if (exclusions.has(lower)) continue;
     
-    // Must contain at least one letter AND one digit
-    const hasLetter = /[a-zA-ZА-ЯЁа-яё]/.test(candidate);
+    const hasLetter = /[a-zA-ZА-ЯЁa-zа-яё]/.test(candidate);
     const hasDigit = /\d/.test(candidate);
     if (!hasLetter || !hasDigit) continue;
     
-    // Must contain at least one dash or dot (SKU separator) OR be preceded by a keyword/context
     const hasSeparator = /[-.]/.test(candidate);
     const hasContext = /есть в наличии|в наличии|в стоке|остат|наличи|сколько стоит|какая цена/i.test(message);
-    // Also accept codes like "Ем000029228" (letter prefix + many digits) as site identifiers
     const isSiteIdPattern = /^[A-ZА-ЯЁa-zа-яё]{1,3}\d{6,}$/i.test(candidate);
     if (!hasSeparator && !hasKeyword && !hasContext && !isSiteIdPattern) continue;
     
-    // Must be 5+ characters
     if (candidate.length < 5) continue;
     
-    // Skip pure numbers with dots (prices like 5000.00)
     if (/^\d+\.\d+$/.test(candidate)) continue;
     
     results.push(candidate);
   }
   
-  // === SITE IDENTIFIER PATTERN (e.g. "Ем000029228") ===
-  // Cyrillic/Latin letter prefix (1-3 chars) + 6+ digits — \b doesn't work with Cyrillic
+  // === SITE IDENTIFIER PATTERN ===
   const siteIdPattern = /(?:^|[\s,;:(]|(?<=\?))([A-ZА-ЯЁa-zа-яё]{1,3}\d{6,})(?=[\s,;:)?.!]|$)/g;
   let siteMatch;
   while ((siteMatch = siteIdPattern.exec(message)) !== null) {
@@ -368,9 +354,7 @@ function detectArticles(message: string): string[] {
   }
 
   // === PURE NUMERIC ARTICLE DETECTION ===
-  // Detect 4-8 digit numbers as articles when contextual triggers are present
   const hasArticleContext = hasKeyword || /есть в наличии|в наличии|в стоке|остат|наличи|сколько стоит|какая цена/i.test(message);
-  // Also detect when the message is MOSTLY a number (e.g. "16093 есть в наличии?")
   const startsWithNumber = /^\s*(\d{4,12})\b/.test(message);
   
   if (hasArticleContext || startsWithNumber) {
@@ -378,9 +362,7 @@ function detectArticles(message: string): string[] {
     let numMatch;
     while ((numMatch = numericPattern.exec(message)) !== null) {
       const num = numMatch[1];
-      // Skip years, round prices, common non-article numbers
       if (/^(2024|2025|2026|2027|1000|2000|3000|5000|10000|50000|100000)$/.test(num)) continue;
-      // Skip if already captured as part of a site ID (e.g. "000029228" from "Ем000029228")
       const alreadyCaptured = results.some(r => r.endsWith(num) && r !== num);
       if (alreadyCaptured) continue;
       if (!results.includes(num)) results.push(num);
@@ -431,7 +413,7 @@ async function searchByArticle(article: string, apiToken: string): Promise<Produ
 }
 
 /**
- * Search products by site identifier (options[identifikator_sayta__sayt_identifikatory][])
+ * Search products by site identifier
  */
 async function searchBySiteId(siteId: string, apiToken: string): Promise<Product[]> {
   try {
@@ -495,24 +477,181 @@ interface Product {
 
 interface SearchCandidate {
   query: string | null;
-  article?: string | null; // Exact article/SKU search
+  article?: string | null;
   brand: string | null;
   category: string | null;
   min_price: number | null;
   max_price: number | null;
-  option_filters?: Record<string, string>; // API option key → value for filtering by characteristics
+  option_filters?: Record<string, string>;
 }
 
 // NO hardcoded option keys! We discover them dynamically from API results.
-// See discoverOptionKeys() and two-pass search in searchProductsMulti().
 
 interface ExtractedIntent {
   intent: 'catalog' | 'brands' | 'info' | 'general';
   candidates: SearchCandidate[];
   originalQuery: string;
-  usage_context?: string; // Abstract usage context like "для улицы", "в ванную" — passed to final LLM for inline filtering
-  english_queries?: string[]; // English translations of search terms generated by intent extractor (eliminates separate translation call)
+  usage_context?: string;
+  english_queries?: string[];
 }
+
+// ============================================================
+// TITLE SCORING — compute how well a product matches a query
+// ============================================================
+
+/**
+ * Extract meaningful tokens from text for scoring.
+ * Splits on spaces/punctuation, lowercases, removes short words.
+ */
+function extractTokens(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, ' ')
+    .split(/\s+/)
+    .filter(t => t.length >= 2);
+}
+
+/**
+ * Extract technical specs from text: numbers with units (18Вт, 6500К, 230В, 7Вт, 4000К)
+ * and model codes (T8, G9, G13, E27, MR16, A60)
+ */
+function extractSpecs(text: string): string[] {
+  const specs: string[] = [];
+  // Numbers with units: 18Вт, 6500К, 230В, 12В, 2.5мм
+  const unitPattern = /(\d+(?:[.,]\d+)?)\s*(вт|вт\b|w|к|k|в|v|мм|mm|а|a|м|m|квт|kw)/gi;
+  let m;
+  while ((m = unitPattern.exec(text)) !== null) {
+    specs.push((m[1] + m[2]).toLowerCase().replace(',', '.'));
+  }
+  // Model codes: T8, G9, G13, E27, E14, MR16, A60, GU10, GU5.3
+  const codePattern = /\b([TGEAM][URN]?\d{1,3}(?:\.\d)?)\b/gi;
+  while ((m = codePattern.exec(text)) !== null) {
+    specs.push(m[1].toUpperCase());
+  }
+  return specs;
+}
+
+/**
+ * Score a product against a user query.
+ * Returns 0-100. Higher = better match.
+ * 
+ * Components:
+ * - Token overlap (words from query found in product title): 0-50
+ * - Spec match (technical specs like 18Вт, 6500К, T8): 0-30
+ * - Brand match: 0-20
+ */
+function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: string[], queryBrand?: string): number {
+  const titleTokens = extractTokens(product.pagetitle);
+  const titleText = product.pagetitle.toLowerCase();
+  
+  // 1. Token overlap score (0-50)
+  let matchedTokens = 0;
+  for (const qt of queryTokens) {
+    // Check direct inclusion in title text (handles partial morphology)
+    if (titleText.includes(qt) || titleTokens.some(tt => tt.includes(qt) || qt.includes(tt))) {
+      matchedTokens++;
+    }
+  }
+  const tokenScore = queryTokens.length > 0 
+    ? Math.min(50, (matchedTokens / queryTokens.length) * 50) 
+    : 0;
+  
+  // 2. Spec match score (0-30)
+  let matchedSpecs = 0;
+  const titleSpecs = extractSpecs(product.pagetitle);
+  // Also check options for spec values
+  const optionValues = (product.options || []).map(o => o.value.toLowerCase()).join(' ');
+  for (const qs of querySpecs) {
+    if (titleSpecs.some(ts => ts === qs) || titleText.includes(qs.toLowerCase()) || optionValues.includes(qs.toLowerCase())) {
+      matchedSpecs++;
+    }
+  }
+  const specScore = querySpecs.length > 0 
+    ? Math.min(30, (matchedSpecs / querySpecs.length) * 30) 
+    : 0;
+  
+  // 3. Brand match (0-20)
+  let brandScore = 0;
+  if (queryBrand) {
+    const qb = queryBrand.toLowerCase();
+    const productBrand = (product.vendor || '').toLowerCase();
+    const brandOption = product.options?.find(o => o.key === 'brend__brend');
+    const optBrand = brandOption ? brandOption.value.split('//')[0].trim().toLowerCase() : '';
+    if (productBrand.includes(qb) || optBrand.includes(qb) || qb.includes(productBrand) || qb.includes(optBrand)) {
+      brandScore = 20;
+    }
+  }
+  
+  return Math.round(tokenScore + specScore + brandScore);
+}
+
+/**
+ * Rerank products by title-score relevance to query.
+ * Returns products sorted by score descending.
+ */
+function rerankProducts(products: Product[], userQuery: string): Product[] {
+  const queryTokens = extractTokens(userQuery);
+  const querySpecs = extractSpecs(userQuery);
+  
+  const scored = products.map(p => ({
+    product: p,
+    score: scoreProductMatch(p, queryTokens, querySpecs),
+  }));
+  
+  scored.sort((a, b) => b.score - a.score);
+  
+  if (scored.length > 0) {
+    console.log(`[Rerank] Top scores: ${scored.slice(0, 5).map(s => `${s.score}:"${s.product.pagetitle.substring(0, 40)}"`).join(', ')}`);
+  }
+  
+  return scored.map(s => s.product);
+}
+
+/**
+ * Check if direct search results contain a good match for the user's query.
+ * Returns true if at least one product scores >= threshold.
+ */
+function hasGoodMatch(products: Product[], userQuery: string, threshold: number = 35): boolean {
+  const queryTokens = extractTokens(userQuery);
+  const querySpecs = extractSpecs(userQuery);
+  
+  for (const p of products) {
+    const score = scoreProductMatch(p, queryTokens, querySpecs);
+    if (score >= threshold) {
+      console.log(`[TitleScore] Good match (${score}≥${threshold}): "${p.pagetitle.substring(0, 60)}"`);
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Clean user message for direct name search.
+ * Removes question words, punctuation, and conversational fluff.
+ */
+function cleanQueryForDirectSearch(message: string): string {
+  return message
+    .replace(/\b(есть|в наличии|наличии|сколько стоит|цена|купить|заказать|хочу|нужен|нужна|нужно|подскажите|покажите|найдите|ищу|покажи|найди|подбери|посоветуйте|пожалуйста|можно|мне|какой|какая|какие|подойдет|подойдут)\b/gi, '')
+    .replace(/[?!.,;:]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Generate a shortened version of the query for broader matching.
+ * Keeps brand, model codes, and key product nouns. Drops specs.
+ */
+function shortenQuery(cleanedQuery: string): string {
+  // Remove numeric specs (18Вт, 6500К, 230В) but keep model codes (T8, G9)
+  const shortened = cleanedQuery
+    .replace(/\d+(?:[.,]\d+)?\s*(?:вт|w|к|k|в|v|мм|mm|а|a|м|m|квт|kw)\b/gi, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  
+  // If too short after stripping, return original
+  return shortened.length >= 4 ? shortened : cleanedQuery;
+}
+
 
 // Генерация поисковых кандидатов через AI с учётом контекста разговора
 async function generateSearchCandidates(
@@ -630,6 +769,12 @@ ${historyContext}
 2. ОСТАЛЬНЫЕ кандидаты = ОСНОВНОЙ ТОВАР + характеристика ("розетка влагозащищенная", "розетка IP44")
 3. НИКОГДА не ставь характеристику/место БЕЗ основного товара! "баня", "улица", "влагозащита" сами по себе — НЕ кандидаты!
 4. option_filters применяются ко ВСЕМ кандидатам для фильтрации результатов
+
+📛 ПРИОРИТЕТ ПОЛНОГО НАЗВАНИЯ:
+Если пользователь ввёл ПОЛНОЕ или ПОЧТИ ПОЛНОЕ название товара (например "Лампа светодиодная ECO T8 линейная 18Вт 230В 6500К G13 ИЭК"):
+1. ПЕРВЫЙ кандидат = максимально близкое к исходному вводу пользователя (сохраняй модельные коды, числовые характеристики!)
+2. ВТОРОЙ кандидат = укороченная версия без числовых спецификаций
+3. НЕ ДРОБИ оригинальное название на слишком общие слова
 
 🔄 СИНОНИМЫ ТОВАРОВ — ОБЯЗАТЕЛЬНАЯ ГЕНЕРАЦИЯ ВАРИАНТОВ:
 В каталоге один и тот же товар может называться по-разному. Ты ОБЯЗАН генерировать кандидатов с РАЗНЫМИ названиями одного товара!
@@ -774,8 +919,6 @@ ${historyContext}
       console.log(`[AI Candidates] Extracted:`, JSON.stringify(parsed, null, 2));
       
       const candidates = (parsed.candidates || []).map((c: any) => {
-        // Store option_filters as-is (human-readable keys like "страна", "цоколь")
-        // They will be resolved to actual API keys dynamically via two-pass search
         let humanFilters: Record<string, string> | undefined;
         if (c.option_filters && typeof c.option_filters === 'object') {
           humanFilters = {};
@@ -806,7 +949,6 @@ ${historyContext}
         console.log(`[AI Candidates] Usage context detected: "${usageContext}"`);
       }
       
-      // English translations — stored for fallback use only (NOT added to candidates)
       const englishQueries = parsed.english_queries || [];
       if (englishQueries.length > 0) {
         console.log(`[AI Candidates] English queries available for fallback: ${englishQueries.join(', ')}`);
@@ -831,26 +973,7 @@ ${historyContext}
 }
 
 /**
- * SYSTEMIC BROAD CANDIDATE GENERATION
- * 
- * Problem: AI sometimes includes characteristics (E14, 5м, 800Вт) in the query,
- * but the API only searches by product name/description, not by option values.
- * This means "лампа свеча E14" → 0 results, while "лампа свеча" → 142 results.
- * 
- * Solution: Programmatically generate "broad" candidates by stripping queries
- * down to just the core product noun(s). This runs AFTER AI extraction,
- * so it works for ANY query without needing to enumerate characteristics.
- */
-/**
-/**
  * SYSTEMIC BROAD CANDIDATE GENERATION v3
- * 
- * Two-layer safety net (NO hardcoded option keys!):
- * 1. Strip AI-generated queries to core nouns
- * 2. Extract meaningful product terms directly from the user's ORIGINAL message
- * 
- * option_filters are kept as human-readable keys — they'll be resolved
- * dynamically in searchProductsMulti via two-pass search.
  */
 function generateBroadCandidates(candidates: SearchCandidate[], originalMessage: string): SearchCandidate[] {
   const existingQueries = new Set(
@@ -893,14 +1016,12 @@ function generateBroadCandidates(candidates: SearchCandidate[], originalMessage:
     'пожалуйста', 'можно', 'будет', 'если', 'еще', 'уже', 'тоже', 'только', 'очень', 'самый',
     'цоколь', 'цоколем', 'мощность', 'мощностью', 'длина', 'длиной', 'ампер', 'метр', 'метров', 'ватт',
     'производства', 'производство', 'происхождения',
-    // Context/location words — they belong in usage_context, NOT as search candidates
     'улица', 'улицы', 'улицу', 'улиц', 'баня', 'бани', 'баню', 'бань', 'ванная', 'ванной', 'ванну', 'ванную',
     'гараж', 'гаража', 'гаражу', 'детская', 'детской', 'детскую', 'кухня', 'кухни', 'кухню',
     'производство', 'подвал', 'подвала', 'двор', 'двора', 'сад', 'сада',
     'подойдут', 'подойдет', 'подходит', 'подходят', 'посоветуй', 'посоветуйте', 'порекомендуй',
   ]);
   
-  // Normalize: "лампу-свечу" → "лампу свечу", remove punctuation
   const normalized = originalMessage.toLowerCase()
     .replace(/[-–—]/g, ' ')
     .replace(/[?!.,;:()«»""]/g, ' ')
@@ -922,14 +1043,12 @@ function generateBroadCandidates(candidates: SearchCandidate[], originalMessage:
     }
   }
   
-  // Extract meaningful words (≥3 chars, not stop words, not numbers/specs)
+  // Extract meaningful words
   const specPattern = /^[a-zA-Z]?\d+[а-яa-z]*$/;
-  // Also filter out adjective forms of countries/characteristics — they belong in option_filters
   const adjectivePattern = /^(белорус|росси|кита|казахстан|туре|неме|итальян|польск|японск|накладн|встраив|подвесн|потолочн|настенн)/i;
   const msgWords = normalized.split(' ')
     .filter(w => w.length >= 3 && !stopWords.has(w) && !specPattern.test(w) && !adjectivePattern.test(w));
   
-  // Lemmatize
   const lemmatize = (word: string): string => {
     return word
       .replace(/(ку|чку|цу)$/, (m) => m === 'ку' ? 'ка' : m === 'чку' ? 'чка' : 'ца')
@@ -968,12 +1087,6 @@ function generateBroadCandidates(candidates: SearchCandidate[], originalMessage:
 
 /**
  * DYNAMIC OPTION KEY DISCOVERY
- * 
- * Given products with options and human-readable filter requirements,
- * discover the actual API option keys by fuzzy-matching captions.
- * 
- * Example: human filter {"страна": "Беларусь"} + product option {key: "strana_proishoghdeniya__...", caption: "Страна происхождения//..."} 
- * → resolved: {"strana_proishoghdeniya__...": "БЕЛАРУСЬ"}
  */
 function discoverOptionKeys(
   products: Product[], 
@@ -981,7 +1094,6 @@ function discoverOptionKeys(
 ): Record<string, string> {
   if (!humanFilters || Object.keys(humanFilters).length === 0) return {};
   
-  // Collect all unique option keys with their captions and values
   const optionIndex: Map<string, { key: string; caption: string; values: Set<string> }> = new Map();
   
   for (const product of products) {
@@ -1004,138 +1116,134 @@ function discoverOptionKeys(
     let bestMatch: { apiKey: string; matchedValue: string; score: number } | null = null;
     
     for (const [apiKey, info] of optionIndex.entries()) {
-      // Clean the caption: "Страна происхождения//Өндірілген мемлекеті" → "страна происхождения"
       const cleanCaption = (info.caption.split('//')[0] || '').toLowerCase().trim().replace(/[_\s]+/g, '');
       
-      // Score: how well does the human key match the caption?
       let score = 0;
       if (cleanCaption === normalizedKey) {
-        score = 100; // exact match
+        score = 100;
       } else if (cleanCaption.includes(normalizedKey) || normalizedKey.includes(cleanCaption)) {
-        score = 80; // substring match
+        score = 80;
       } else {
-        // Check if key words overlap (e.g. "страна" matches "странапроисхождения")
         const keyWords = normalizedKey.split(/[^а-яёa-z0-9]/i).filter(w => w.length >= 3);
         for (const kw of keyWords) {
           if (cleanCaption.includes(kw)) score += 30;
         }
-        // Also check API key itself (transliterated): "strana" ≈ "страна"
         const apiKeyLower = apiKey.toLowerCase();
         for (const kw of keyWords) {
-          // Simple transliteration check: first 4 chars
-          if (apiKeyLower.includes(kw.substring(0, 4).replace(/а/g, 'a').replace(/с/g, 's').replace(/т/g, 't').replace(/р/g, 'r').replace(/н/g, 'n'))) {
-            score += 20;
+          const translitPrefix = kw.substring(0, 4);
+          if (apiKeyLower.includes(translitPrefix)) score += 15;
+        }
+      }
+      
+      if (score < 20) continue;
+      
+      // Find closest matching value
+      let matchedValue = '';
+      let valueScore = 0;
+      
+      for (const val of info.values) {
+        const cleanVal = val.split('//')[0].trim().toLowerCase();
+        
+        if (cleanVal === normalizedValue) {
+          matchedValue = val.split('//')[0].trim();
+          valueScore = 100;
+          break;
+        }
+        
+        if (cleanVal.includes(normalizedValue) || normalizedValue.includes(cleanVal)) {
+          if (valueScore < 80) {
+            matchedValue = val.split('//')[0].trim();
+            valueScore = 80;
+          }
+        }
+        
+        // Numeric match: "32" matches "32 А" or "32А"
+        if (/^\d+$/.test(normalizedValue)) {
+          const numInVal = cleanVal.replace(/[^\d.,]/g, '');
+          if (numInVal === normalizedValue) {
+            if (valueScore < 70) {
+              matchedValue = val.split('//')[0].trim();
+              valueScore = 70;
+            }
           }
         }
       }
       
-      if (score <= 0) continue;
-      
-      // Now find the best matching value
-      for (const rawVal of info.values) {
-        const cleanVal = (rawVal.split('//')[0] || '').trim();
-        const lowerVal = cleanVal.toLowerCase();
-        
-        let valScore = 0;
-        if (lowerVal === normalizedValue) {
-          valScore = 100;
-        } else if (lowerVal.includes(normalizedValue) || normalizedValue.includes(lowerVal)) {
-          valScore = 80;
-        } else if (lowerVal.toUpperCase() === humanValue.toUpperCase()) {
-          valScore = 90;
-        }
-        
-        const totalScore = score + valScore;
-        if (totalScore > (bestMatch?.score || 0) && valScore > 0) {
-          bestMatch = { apiKey, matchedValue: cleanVal, score: totalScore };
-        }
-      }
-      
-      // If we matched the KEY but couldn't match the VALUE, still use the key with original value
-      if (score >= 80 && !bestMatch) {
-        bestMatch = { apiKey, matchedValue: humanValue.toUpperCase(), score };
+      const totalScore = score + valueScore;
+      if (matchedValue && (!bestMatch || totalScore > bestMatch.score)) {
+        bestMatch = { apiKey, matchedValue, score: totalScore };
       }
     }
     
     if (bestMatch) {
       resolved[bestMatch.apiKey] = bestMatch.matchedValue;
-      console.log(`[Discovery] "${humanKey}=${humanValue}" → API key "${bestMatch.apiKey}"="${bestMatch.matchedValue}" (score=${bestMatch.score})`);
+      console.log(`[OptionKeys] Resolved: "${humanKey}=${humanValue}" → "${bestMatch.apiKey}=${bestMatch.matchedValue}" (score: ${bestMatch.score})`);
     } else {
-      console.log(`[Discovery] "${humanKey}=${humanValue}" → no matching API key found among ${optionIndex.size} options`);
+      console.log(`[OptionKeys] Could not resolve: "${humanKey}=${humanValue}"`);
     }
   }
   
   return resolved;
 }
 
-// Простой fallback если AI недоступен — передаём запрос как есть
+// Fallback query parser
 function fallbackParseQuery(message: string): ExtractedIntent {
-  const lowerMessage = message.toLowerCase();
+  const catalogPatterns = /кабель|провод|автомат|выключател|розетк|щит|лампа|светильник|дрель|перфоратор|шуруповерт|болгарка|ушм|стабилизатор|генератор|насос|удлинитель|рубильник|трансформатор|инструмент|электро/i;
+  const infoPatterns = /доставк|оплат|гарант|возврат|контакт|адрес|телефон|филиал|магазин|оферт|бин|обязанност|условия|документ/i;
+  const brandPatterns = /бренд|марк|производител|каки[еx]\s+(бренд|марк|фирм)/i;
   
-  const infoKeywords = ['доставка', 'оплата', 'гарантия', 'возврат', 'адрес', 'телефон', 'контакт', 'режим работы', 'филиал', 'самовывоз', 'пункт выдачи', 'где находи'];
-  const greetingWords = ['привет', 'здравствуй', 'добрый', 'хай', 'hello', 'hi', 'салем'];
+  let intent: 'catalog' | 'brands' | 'info' | 'general' = 'general';
+  if (catalogPatterns.test(message)) intent = 'catalog';
+  else if (infoPatterns.test(message)) intent = 'info';
+  else if (brandPatterns.test(message)) intent = 'brands';
   
-  if (greetingWords.some(g => lowerMessage.startsWith(g)) && message.length < 30) {
-    return { intent: 'general', candidates: [], originalQuery: message };
-  }
+  const query = message
+    .replace(/[?!.,;:]+/g, '')
+    .replace(/\b(покажи|найди|есть|нужен|хочу|подбери|купить|сколько стоит)\b/gi, '')
+    .trim()
+    .substring(0, 50);
   
-  if (infoKeywords.some(k => lowerMessage.includes(k))) {
-    return { intent: 'info', candidates: [], originalQuery: message };
-  }
-  
-  const cleanQuery = message.replace(/[?!.,]+/g, ' ').replace(/\s+/g, ' ').trim();
   return {
-    intent: 'catalog',
-    candidates: cleanQuery.length > 1 ? [{ query: cleanQuery, brand: null, category: null, min_price: null, max_price: null }] : [],
-    originalQuery: message
+    intent,
+    candidates: query ? [{ query, brand: null, category: null, min_price: null, max_price: null }] : [],
+    originalQuery: message,
   };
 }
 
-
-// Поиск товаров по одному кандидату — параметры уже сформированы AI
-// resolvedApiFilters are ACTUAL API keys (discovered dynamically), not human-readable
+/**
+ * Search products by a single candidate via API
+ */
 async function searchProductsByCandidate(
-  candidate: SearchCandidate, 
+  candidate: SearchCandidate,
   apiToken: string,
-  limit: number = 20,
-  resolvedApiFilters?: Record<string, string>
+  perPage: number = 30,
+  resolvedFilters?: Record<string, string>
 ): Promise<Product[]> {
   try {
     const params = new URLSearchParams();
     
-    if (candidate.article) {
-      params.append('article', candidate.article);
+    if ((candidate as any).article) {
+      params.append('article', (candidate as any).article);
     } else if (candidate.query) {
       params.append('query', candidate.query);
     }
-    params.append('per_page', limit.toString());
     
-    if (candidate.brand) {
-      params.append('options[brend__brend][]', candidate.brand);
-    }
+    params.append('per_page', perPage.toString());
     
-    if (candidate.category) {
-      params.append('category', candidate.category);
-    }
+    if (candidate.brand) params.append('options[brend__brend][]', candidate.brand);
+    if (candidate.category) params.append('category', candidate.category);
+    if (candidate.min_price) params.append('min_price', candidate.min_price.toString());
+    if (candidate.max_price) params.append('max_price', candidate.max_price.toString());
     
-    if (candidate.min_price) {
-      params.append('min_price', candidate.min_price.toString());
-    }
-    
-    if (candidate.max_price) {
-      params.append('max_price', candidate.max_price.toString());
-    }
-    
-    // Pass RESOLVED (actual API) option filters — these come from dynamic discovery
-    if (resolvedApiFilters) {
-      for (const [optionKey, optionValue] of Object.entries(resolvedApiFilters)) {
-        params.append(`options[${optionKey}][]`, optionValue);
-        console.log(`[Search] API option filter: ${optionKey}=${optionValue}`);
+    // Apply resolved option filters from pass 2
+    if (resolvedFilters) {
+      for (const [key, value] of Object.entries(resolvedFilters)) {
+        params.append(`options[${key}][]`, value);
       }
     }
     
-    console.log(`[Search] API params: ${params.toString()}`);
-
+    console.log(`[Search] API call: ${params.toString().substring(0, 150)}`);
+    
     const response = await fetch(`${VOLT220_API_URL}?${params}`, {
       method: 'GET',
       headers: {
@@ -1143,65 +1251,56 @@ async function searchProductsByCandidate(
         'Content-Type': 'application/json',
       },
     });
-
+    
     if (!response.ok) {
-      console.error(`[Search] API error: ${response.status}`);
+      const errorText = await response.text();
+      console.error(`[Search] API error ${response.status}:`, errorText);
       return [];
     }
-
+    
     const rawData = await response.json();
     const data = rawData.data || rawData;
+    const results = data.results || [];
     
-    console.log(`[Search] Found ${data.results?.length || 0} products for "${candidate.query}"`);
-    
-    return data.results || [];
+    console.log(`[Search] query="${candidate.query || (candidate as any).article || ''}" → ${results.length} results`);
+    return results;
   } catch (error) {
-    console.error(`[Search] Error for "${candidate.query}":`, error);
+    console.error(`[Search] Error:`, error);
     return [];
   }
 }
 
 /**
- * TWO-PASS SEARCH with dynamic option key discovery
- * 
- * Pass 1: Broad search WITHOUT option filters → get products with their options
- * Pass 2: Discover actual API keys from product options, then re-search WITH filters
- * 
- * This means we NEVER need to hardcode any option key mappings!
+ * Multi-candidate search with two-pass option key discovery
  */
 async function searchProductsMulti(
   candidates: SearchCandidate[],
   limit: number = 10,
-  apiTokenOverride?: string
+  apiToken?: string,
+  perPage: number = 30
 ): Promise<Product[]> {
-  const apiToken = apiTokenOverride || Deno.env.get('VOLT220_API_TOKEN');
-  
   if (!apiToken) {
-    console.error('[Search] VOLT220_API_TOKEN is not configured');
+    console.error('[Search] No API token configured');
     return [];
   }
-
-  if (candidates.length === 0) {
-    console.log('[Search] No candidates to search');
-    return [];
-  }
-
-  // per_page for each API call — cast a wide net, then deduplicate & slice at the end
-  const perPage = Math.max(limit, 30);
-
-  // Убираем category из всех кандидатов
-  const cleanedCandidates = candidates.map(c => ({ ...c, category: null }));
   
-  // Check if any candidates have human-readable option_filters that need resolution
-  const humanFilters = cleanedCandidates.find(c => c.option_filters)?.option_filters || {};
+  // Remove candidates without query AND without brand (useless)
+  const cleanedCandidates = candidates.filter(c => c.query || c.brand || (c as any).article);
+  if (cleanedCandidates.length === 0) return [];
+  
+  // Check if any candidate has human-readable option_filters
+  const humanFilters: Record<string, string> = {};
+  for (const c of cleanedCandidates) {
+    if (c.option_filters) {
+      for (const [k, v] of Object.entries(c.option_filters)) {
+        if (!humanFilters[k]) humanFilters[k] = v;
+      }
+    }
+  }
   const hasHumanFilters = Object.keys(humanFilters).length > 0;
-  
-  console.log(`[Search] Searching ${cleanedCandidates.length} candidates (perPage=${perPage}, finalLimit=${limit}), humanFilters: ${JSON.stringify(humanFilters)}`);
 
   // === PASS 1: Broad search WITHOUT option filters ===
-  // This gets us products whose `options` we can inspect to discover real API keys
   const pass1Candidates = cleanedCandidates.map(c => ({ ...c, option_filters: undefined }));
-  // Deduplicate pass1 candidates by query+brand
   const seen1 = new Set<string>();
   const uniquePass1 = pass1Candidates.filter(c => {
     const key = `${c.query || ''}|${c.brand || ''}`;
@@ -1210,10 +1309,10 @@ async function searchProductsMulti(
     return true;
   });
   
-  // === OPTIMIZATION: Limit parallel API calls to max 3 to reduce latency ===
+  // === OPTIMIZATION: Limit parallel API calls to max 3 ===
   const cappedPass1 = uniquePass1.slice(0, 3);
   if (uniquePass1.length > 3) {
-    console.log(`[Search] Capped candidates from ${uniquePass1.length} to 3`);
+    console.log(`[Search] Capped Pass 1 candidates from ${uniquePass1.length} to 3`);
   }
   
   const pass1Promises = cappedPass1.map(candidate => 
@@ -1221,7 +1320,6 @@ async function searchProductsMulti(
   );
   const pass1Results = await Promise.all(pass1Promises);
   
-  // Collect all products from pass 1
   const productMap = new Map<number, Product>();
   for (const products of pass1Results) {
     for (const product of products) {
@@ -1234,18 +1332,17 @@ async function searchProductsMulti(
   console.log(`[Search] Pass 1 (broad): ${productMap.size} unique products`);
   
   // === PASS 2: If we have human filters, discover API keys and re-search ===
+  // OPTIMIZATION: Cap Pass 2 to max 3 candidates too
   if (hasHumanFilters && productMap.size > 0) {
     const resolvedFilters = discoverOptionKeys(Array.from(productMap.values()), humanFilters);
     
     if (Object.keys(resolvedFilters).length > 0) {
       console.log(`[Search] Pass 2: Discovered ${Object.keys(resolvedFilters).length} API filters, re-searching...`);
       
-      // Store resolved filters on candidates for describeAppliedFilters
       for (const c of cleanedCandidates) {
         c.option_filters = resolvedFilters;
       }
       
-      // Re-search with actual API filters — only unique query+brand combos
       const seen2 = new Set<string>();
       const pass2Candidates = cleanedCandidates.filter(c => {
         if (!c.query && !c.brand) return false;
@@ -1253,14 +1350,13 @@ async function searchProductsMulti(
         if (seen2.has(key)) return false;
         seen2.add(key);
         return true;
-      });
+      }).slice(0, 3); // CAP Pass 2 to 3
       
       const pass2Promises = pass2Candidates.map(candidate => 
         searchProductsByCandidate(candidate, apiToken, perPage, resolvedFilters)
       );
       const pass2Results = await Promise.all(pass2Promises);
       
-      // Replace results with filtered ones (pass 2 is more precise)
       const filteredMap = new Map<number, Product>();
       for (const products of pass2Results) {
         for (const product of products) {
@@ -1289,7 +1385,7 @@ async function searchProductsMulti(
     const queryOnlyCandidates = cleanedCandidates.filter(c => c.query && (c.brand || c.min_price || c.max_price));
     if (queryOnlyCandidates.length > 0) {
       console.log(`[Search] 0 results with filters, trying fallback with query only...`);
-      const fallbackPromises = queryOnlyCandidates.map(c => 
+      const fallbackPromises = queryOnlyCandidates.slice(0, 3).map(c => 
         searchProductsByCandidate({ query: c.query, brand: null, category: null, min_price: null, max_price: null }, apiToken, perPage)
       );
       const fallbackResults = await Promise.all(fallbackPromises);
@@ -1303,13 +1399,12 @@ async function searchProductsMulti(
     }
   }
   
-  // === ARTICLE FALLBACK: If query is purely numeric (4-8 digits) and returned 0 results, try as article ===
+  // === ARTICLE FALLBACK ===
   if (productMap.size === 0) {
     const numericQueries = cleanedCandidates
       .filter(c => c.query && /^\d{4,12}$/.test(c.query.trim()))
       .map(c => c.query!.trim());
     
-    // Also check for candidates with explicit article field
     const articleCandidates = cleanedCandidates
       .filter(c => (c as any).article)
       .map(c => (c as any).article as string);
@@ -1330,7 +1425,6 @@ async function searchProductsMulti(
       if (productMap.size > 0) {
         console.log(`[Search] Article fallback found ${productMap.size} products`);
       } else {
-        // Site ID fallback: try options[identifikator_sayta__sayt_identifikatory][]
         console.log(`[Search] Article fallback returned 0, trying site ID fallback for: ${allArticles.join(', ')}`);
         const siteIdPromises = allArticles.map(id => searchBySiteId(id, apiToken));
         const siteIdResults = await Promise.all(siteIdPromises);
@@ -1374,352 +1468,56 @@ async function searchProductsMulti(
   return workingList.slice(0, limit);
 }
 
-/**
- * TRANSLATION FALLBACK: Translate Russian search terms to English
- * 
- * Some products in the catalog use English names (e.g. "corn" for кукуруза-type lamps).
- * When Russian search yields 0 results, we translate and retry.
- * Uses AI for accurate contextual translation.
- */
-async function translateSearchTerms(
-  queries: string[],
-  aiUrl: string,
-  apiKeys: string[],
-  aiModel: string
-): Promise<string[]> {
-  if (queries.length === 0) return [];
-  
-  const uniqueQueries = [...new Set(queries.filter(q => q && q.trim().length > 0))];
-  if (uniqueQueries.length === 0) return [];
-  
-  // Skip if queries are already in English
-  const hasRussian = uniqueQueries.some(q => /[а-яёА-ЯЁ]/.test(q));
-  if (!hasRussian) {
-    console.log(`[Translate] Queries already in English, skipping`);
-    return [];
-  }
-  
-  console.log(`[Translate] Translating ${uniqueQueries.length} queries to English: ${uniqueQueries.join(', ')}`);
-  
-  try {
-    const response = await callAIWithKeyFallback(aiUrl, apiKeys, {
-      model: aiModel,
-      messages: [
-        { 
-          role: 'system', 
-          content: `Ты переводчик терминов для поиска товаров в каталоге электроинструментов и оборудования. 
-Переведи каждый поисковый запрос на английский язык. 
-Учитывай контекст электротоваров: "кукуруза" → "corn" (тип лампы), "свеча" → "candle" (тип лампы), "груша" → "pear" (тип лампы).
-Возвращай ТОЛЬКО переводы, по одному на строку, в том же порядке что и входные запросы.
-Если слово уже на английском — верни его как есть.
-Если у термина есть несколько возможных переводов — верни самый вероятный для контекста электротоваров.`
-        },
-        { role: 'user', content: uniqueQueries.join('\n') }
-      ],
-    }, 'Translate');
-    
-    if (!response.ok) {
-      console.error(`[Translate] AI error: ${response.status}`);
-      return [];
-    }
-    
-    const data = await response.json();
-    const translatedText = data.choices?.[0]?.message?.content || '';
-    const translated = translatedText
-      .split('\n')
-      .map((line: string) => line.trim().toLowerCase())
-      .filter((line: string) => line.length > 0 && /[a-z]/.test(line));
-    
-    console.log(`[Translate] Results: ${translated.join(', ')}`);
-    return translated;
-  } catch (error) {
-    console.error(`[Translate] Error:`, error);
-    return [];
-  }
-}
-
-/**
- * Search with English translation fallback.
- * 
- * Instead of only triggering when ALL results are 0, we check which individual
- * query terms returned 0 results. If any "zero-result" terms exist, we translate
- * them to English and merge additional results.
- */
-async function searchWithTranslationFallback(
-  candidates: SearchCandidate[],
-  limit: number,
-  apiToken: string | undefined,
-  aiUrl: string,
-  apiKeys: string[],
-  aiModel: string
-): Promise<Product[]> {
-  // First: normal search
-  const results = await searchProductsMulti(candidates, limit, apiToken);
-  
-  // === OPTIMIZATION: Skip translation if we already have enough products ===
-  // Translation is only useful when the main search found NOTHING or very little.
-  // If we have ≥3 products, translation won't add meaningful value — it just wastes 4-6 seconds.
-  if (results.length >= 3) {
-    console.log(`[Translate] Skipping — already found ${results.length} products`);
-    return results;
-  }
-  
-  // Extract unique query terms to check which ones found nothing
-  const queries = candidates
-    .map(c => c.query)
-    .filter((q): q is string => q !== null && q !== undefined && q.trim().length > 0);
-  
-  if (queries.length === 0) return results;
-  
-  // Find terms that individually returned 0 results by testing each unique word
-  const allWords = new Set<string>();
-  for (const q of queries) {
-    for (const word of q.toLowerCase().split(/\s+/)) {
-      const cleaned = word.replace(/[^а-яёa-z0-9]/gi, '');
-      if (cleaned.length > 2) allWords.add(cleaned);
-    }
-  }
-  
-  // Check which words appear in ANY result title/content
-  const resultTitles = results.map(p => p.pagetitle.toLowerCase()).join(' ');
-  const resultContent = results.map(p => (p.content || '').toLowerCase()).join(' ');
-  const allResultText = resultTitles + ' ' + resultContent;
-  
-  // Words that didn't match anything in results — these are candidates for translation
-  const zeroMatchWords = [...allWords].filter(word => {
-    const stem = word.replace(/(а|у|ы|и|е|о|ё|я|ь|ъ|ой|ий|ый|ая|ое|ые)$/i, '');
-    return !allResultText.includes(word) && (stem.length < 3 || !allResultText.includes(stem));
-  });
-  
-  if (zeroMatchWords.length === 0) {
-    return results; // All terms matched something
-  }
-  
-  // Skip common Russian words that are NOT product names — these waste translation time
-  const skipWords = new Set([
-    'лампа', 'лампы', 'ламп', 'светильник', 'кабель', 'провод', 'розетк', 'выключател', 'автомат', 'щит',
-    // Pronouns, verbs, prepositions — NEVER translate these
-    'какую', 'какой', 'какая', 'какие', 'каком', 'каких', 'какого',
-    'купить', 'покупк', 'нужен', 'нужна', 'нужно', 'подбер', 'подобр', 'покажи', 'найди',
-    'улиц', 'улице', 'улицы', 'ванну', 'ванной', 'гараж', 'дачи', 'дачу', 'кухни', 'кухню',
-    'дома', 'домой', 'квартир', 'офис', 'склад', 'цеха', 'цехе',
-    'хочу', 'можно', 'лучше', 'подходит', 'стоит', 'посоветуй',
-  ]);
-  const wordsToTranslate = zeroMatchWords.filter(w => !skipWords.has(w));
-  
-  if (wordsToTranslate.length === 0) {
-    return results;
-  }
-  
-  console.log(`[Translate] Zero-match words found: ${wordsToTranslate.join(', ')} — translating to English`);
-  
-  const translatedQueries = await translateSearchTerms(wordsToTranslate, aiUrl, apiKeys, aiModel);
-  if (translatedQueries.length === 0) return results;
-  
-  const translatedCandidates: SearchCandidate[] = translatedQueries.map(q => ({
-    query: q,
-    brand: candidates[0]?.brand || null,
-    category: null,
-    min_price: candidates[0]?.min_price || null,
-    max_price: candidates[0]?.max_price || null,
-    option_filters: candidates[0]?.option_filters,
-  }));
-  
-  const commonProductWords = [...allWords].filter(w => !wordsToTranslate.includes(w));
-  if (commonProductWords.length > 0 && translatedQueries.length > 0) {
-    for (const translated of translatedQueries) {
-      for (const productWord of commonProductWords.slice(0, 2)) {
-        translatedCandidates.push({
-          query: `${productWord} ${translated}`,
-          brand: candidates[0]?.brand || null,
-          category: null,
-          min_price: candidates[0]?.min_price || null,
-          max_price: candidates[0]?.max_price || null,
-        });
-      }
-    }
-  }
-  
-  console.log(`[Search] Retrying with English translations: ${translatedCandidates.map(c => c.query).join(', ')}`);
-  const translatedResults = await searchProductsMulti(translatedCandidates, limit, apiToken);
-  
-  if (translatedResults.length > 0) {
-    console.log(`[Search] Translation fallback found ${translatedResults.length} products!`);
-    const mergedMap = new Map<number, Product>();
-    for (const p of translatedResults) mergedMap.set(p.id, p);
-    for (const p of results) { if (!mergedMap.has(p.id)) mergedMap.set(p.id, p); }
-    return Array.from(mergedMap.values()).slice(0, limit);
-  }
-  
-  return results;
-}
-
-// Возвращает URL как есть (тестовый домен для тестирования)
+// Возвращает URL как есть
 function toProductionUrl(url: string): string {
   return url;
 }
 
-// Prefixes to exclude from product characteristics (service/internal fields)
-// Using prefix matching to handle bilingual key suffixes (e.g. novinka__ghaңa)
+// Prefixes to exclude from product characteristics
 const EXCLUDED_OPTION_PREFIXES = [
-  'kodnomenklatury',          // internal ID
-  'identifikator_sayta',      // site identifier  
-  'edinica_izmereniya',       // unit of measurement
-  'garantiynyy_srok',         // warranty (shown separately if needed)
-  'brend__brend',             // already shown separately as brand
-  'fayl',                     // internal file path
-  'kod_tn_ved',               // customs code
-  'poiskovyy_zapros',         // internal search terms
-  'novinka',                  // internal flag
-  'obyem',                    // internal volume
-  'obem',                     // internal volume (alt spelling)
-  'ogranichennyy_prosmotr',   // internal flag
-  'populyarnyy',              // internal flag
-  'prodaetsya_to',            // "sold only in group packaging" flag
-  'tovar_internet_magazina',  // internal flag
-  'soputstvuyuschiy',         // related product ID
-  'opisaniefayla',            // file description
-  'naimenovanie_na_kazahskom', // Kazakh name (redundant)
+  'kodnomenklatury',
+  'identifikator_sayta',
+  'edinica_izmereniya',
+  'garantiynyy_srok',
+  'brend__brend',
+  'fayl',
+  'kod_tn_ved',
+  'poiskovyy_zapros',
+  'novinka',
+  'obyem',
+  'obem',
+  'ogranichennyy_prosmotr',
+  'populyarnyy',
+  'prodaetsya_to',
+  'tovar_internet_magazina',
+  'soputstvuyuschiy',
+  'opisaniefayla',
+  'naimenovanie_na_kazahskom',
 ];
 
 function isExcludedOption(key: string): boolean {
   return EXCLUDED_OPTION_PREFIXES.some(prefix => key.startsWith(prefix));
 }
 
-// Clean bilingual option values: "Нет//Жоқ" → "Нет", "ПВХ пластикат//ПВХ пластикат" → "ПВХ пластикат"
 function cleanOptionValue(value: string): string {
   if (!value) return value;
   const parts = value.split('//');
   return parts[0].trim();
 }
 
-// Clean bilingual caption: "Бронированный//Сауытты" → "Бронированный"
 function cleanOptionCaption(caption: string): string {
   if (!caption) return caption;
   const parts = caption.split('//');
   return parts[0].trim();
 }
 
-/**
- * AI POST-FILTERING BY USAGE CONTEXT (Dynamic Intent Mapping)
- * 
- * When user specifies an abstract usage context ("для улицы", "в ванную"),
- * we can't pre-guess which specific option values match. Instead:
- * 1. Broad search returns products with ALL their options
- * 2. We extract ALL unique option key→values from results
- * 3. AI analyzes which products match the usage context based on real data
- */
-async function aiFilterProductsByIntent(
-  products: Product[],
-  usageContext: string,
-  originalQuery: string,
-  aiUrl: string,
-  apiKeys: string[],
-  aiModel: string
-): Promise<{ filtered: Product[]; reasoning: string }> {
-  if (products.length === 0 || !usageContext) return { filtered: products, reasoning: '' };
-  
-  console.log(`[AI Filter] Filtering ${products.length} products by usage context: "${usageContext}"`);
-  
-  // Build compact product list with ONLY relevant options (max 8 per product)
-  const productList = products.map((p) => {
-    const opts = (p.options || [])
-      .filter(o => !isExcludedOption(o.key))
-      .map(o => `${cleanOptionCaption(o.caption)}=${cleanOptionValue(o.value)}`)
-      .slice(0, 8);
-    return `ID=${p.id}: "${p.pagetitle}" | ${opts.join('; ')}`;
-  }).join('\n');
-  
-  console.log(`[AI Filter] Sending ${products.length} products for filtering`);
-  
-  const filterPrompt = `Ты эксперт по электротоварам. Выбери товары подходящие для контекста: ${usageContext}
-
-ТОВАРЫ:
-${productList}
-
-Выбери ТОЛЬКО подходящие (минимум 2 если есть). Если невозможно определить — верни все.`;
-
-  try {
-    const response = await callAIWithKeyFallback(aiUrl, apiKeys, {
-      model: aiModel,
-      messages: [
-        { role: 'system', content: filterPrompt },
-        { role: 'user', content: `Выбери подходящие товары для контекста: ${usageContext}` }
-      ],
-      tools: [
-        {
-          type: 'function',
-          function: {
-            name: 'filter_products',
-            description: 'Возвращает список ID товаров, подходящих для указанного контекста использования',
-            parameters: {
-              type: 'object',
-              properties: {
-                suitable_product_ids: {
-                  type: 'array',
-                  items: { type: 'number' },
-                  description: 'Массив ID товаров, подходящих для контекста использования'
-                },
-                reasoning: {
-                  type: 'string',
-                  description: 'Краткое объяснение, по каким характеристикам были отобраны товары (1-2 предложения на русском)'
-                }
-              },
-              required: ['suitable_product_ids', 'reasoning'],
-              additionalProperties: false
-            }
-          }
-        }
-      ],
-      tool_choice: { type: 'function', function: { name: 'filter_products' } },
-    }, 'AI Filter');
-
-    if (!response.ok) {
-      console.error(`[AI Filter] API error: ${response.status}`);
-      return { filtered: products, reasoning: '' };
-    }
-
-    const data = await response.json();
-    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
-    
-    if (toolCall?.function?.arguments) {
-      const parsed = JSON.parse(toolCall.function.arguments);
-      const suitableIds = new Set<number>(parsed.suitable_product_ids || []);
-      const reasoning = parsed.reasoning || '';
-      
-      console.log(`[AI Filter] AI selected ${suitableIds.size}/${products.length} products. Reasoning: ${reasoning}`);
-      
-      if (suitableIds.size === 0) {
-        console.log(`[AI Filter] AI returned 0 — safety fallback to all`);
-        return { filtered: products, reasoning: '' };
-      }
-      
-      const filtered = products.filter(p => suitableIds.has(p.id));
-      
-      if (filtered.length === 0) {
-        console.log(`[AI Filter] No ID matches — safety fallback to all`);
-        return { filtered: products, reasoning: '' };
-      }
-      
-      console.log(`[AI Filter] Result: ${filtered.length} products match usage context`);
-      return { filtered, reasoning };
-    }
-    
-    return { filtered: products, reasoning: '' };
-  } catch (error) {
-    console.error(`[AI Filter] Error:`, error);
-    return { filtered: products, reasoning: '' };
-  }
-}
-
-// Форматирование товаров для AI с кликабельными ссылками и характеристиками
+// Форматирование товаров для AI
 function formatProductsForAI(products: Product[]): string {
   if (products.length === 0) {
     return 'Товары не найдены в каталоге.';
   }
 
   return products.map((p, i) => {
-    // Приоритет: brend__brend (бренд) > vendor (производитель/завод)
     let brand = '';
     if (p.options) {
       const brandOption = p.options.find(o => o.key === 'brend__brend');
@@ -1731,8 +1529,6 @@ function formatProductsForAI(products: Product[]): string {
       brand = p.vendor || '';
     }
     
-    // Формируем название как ссылку в markdown (заменяем тестовый домен на продакшн)
-    // Экранируем скобки в названии товара, чтобы не ломать markdown-ссылку
     const productUrl = toProductionUrl(p.url).replace(/\(/g, '%28').replace(/\)/g, '%29');
     const safeName = p.pagetitle.replace(/\(/g, '\\(').replace(/\)/g, '\\)');
     const nameWithLink = `[${safeName}](${productUrl})`;
@@ -1743,7 +1539,6 @@ function formatProductsForAI(products: Product[]): string {
       brand ? `   - Бренд: ${brand}` : '',
       p.article ? `   - Артикул: ${p.article}` : '',
       (() => {
-        // Warehouses breakdown by city
         const available = (p.warehouses || []).filter(w => w.amount > 0);
         if (available.length > 0) {
           const shown = available.slice(0, 5).map(w => `${w.city}: ${w.amount} шт.`).join(', ');
@@ -1755,12 +1550,11 @@ function formatProductsForAI(products: Product[]): string {
       p.category ? `   - Категория: [${p.category.pagetitle}](https://220volt.kz/catalog/${p.category.id})` : '',
     ];
     
-    // Add product characteristics from options (excluding service fields)
     if (p.options && p.options.length > 0) {
       const specs = p.options
         .filter(o => !isExcludedOption(o.key))
         .map(o => `${cleanOptionCaption(o.caption)}: ${cleanOptionValue(o.value)}`)
-        .slice(0, 15); // max 15 characteristics per product (increased from 10)
+        .slice(0, 15);
       
       if (specs.length > 0) {
         parts.push(`   - Характеристики: ${specs.join('; ')}`);
@@ -1771,7 +1565,6 @@ function formatProductsForAI(products: Product[]): string {
   }).join('\n\n');
 }
 
-// Describe which option filters were applied to help AI explain results to user
 function describeAppliedFilters(candidates: SearchCandidate[]): string {
   const filters: string[] = [];
   const seen = new Set<string>();
@@ -1779,7 +1572,6 @@ function describeAppliedFilters(candidates: SearchCandidate[]): string {
   for (const candidate of candidates) {
     if (!candidate.option_filters) continue;
     for (const [key, value] of Object.entries(candidate.option_filters)) {
-      // Clean the key for display: remove transliterated suffixes
       const displayKey = cleanOptionCaption(key.replace(/__.*/, '').replace(/_/g, ' '));
       const desc = `${displayKey}=${cleanOptionValue(value)}`;
       if (!seen.has(desc)) {
@@ -1792,12 +1584,10 @@ function describeAppliedFilters(candidates: SearchCandidate[]): string {
   return filters.join(', ');
 }
 
-// Извлекаем уникальные бренды из товаров
 function extractBrandsFromProducts(products: Product[]): string[] {
   const brands = new Set<string>();
   
   for (const product of products) {
-    // Приоритет: brend__brend (настоящий бренд) > vendor (завод-производитель)
     let found = false;
     if (product.options) {
       const brandOption = product.options.find(o => o.key === 'brend__brend');
@@ -1809,7 +1599,6 @@ function extractBrandsFromProducts(products: Product[]): string[] {
         }
       }
     }
-    // Только если нет brend__brend — используем vendor
     if (!found && product.vendor && product.vendor.trim()) {
       brands.add(product.vendor.trim());
     }
@@ -1818,15 +1607,12 @@ function extractBrandsFromProducts(products: Product[]): string[] {
   return Array.from(brands).sort();
 }
 
-// Format contacts from knowledge base text into clean display format with clickable links
-// IMPORTANT: Show only GENERAL company contacts (main phones, WhatsApp, email), NOT all branch details
 function formatContactsForDisplay(contactsText: string): string | null {
   if (!contactsText || contactsText.trim().length === 0) return null;
   
   const lines: string[] = [];
-  const seen = new Set<string>(); // deduplicate
+  const seen = new Set<string>();
   
-  // Extract unique phones — make them clickable tel: links
   const phoneRegex = /(?:\+7|8)[\s\(\)\-]*\d{3}[\s\(\)\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/g;
   const phoneMatches = contactsText.match(phoneRegex);
   if (phoneMatches) {
@@ -1837,11 +1623,10 @@ function formatContactsForDisplay(contactsText: string): string | null {
         const formatted = raw.trim();
         lines.push(`📞 [${formatted}](tel:${telNumber})`);
       }
-      if (lines.filter(l => l.startsWith('📞')).length >= 2) break; // max 2 phones
+      if (lines.filter(l => l.startsWith('📞')).length >= 2) break;
     }
   }
   
-  // Extract WhatsApp — deduplicated
   const waMatch = contactsText.match(/https?:\/\/wa\.me\/\d+/i) 
     || contactsText.match(/WhatsApp[^:]*:\s*([\+\d\s]+)/i);
   if (waMatch) {
@@ -1854,7 +1639,6 @@ function formatContactsForDisplay(contactsText: string): string | null {
     }
   }
   
-  // Extract unique email — max 1
   const emailMatch = contactsText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
   if (emailMatch) {
     lines.push(`📧 [${emailMatch[0]}](mailto:${emailMatch[0]})`);
@@ -1865,10 +1649,10 @@ function formatContactsForDisplay(contactsText: string): string | null {
   return `**Наши контакты:**\n${lines.join('\n')}`;
 }
 
-// Simple in-memory rate limiter (per IP, resets on cold start)
+// Simple in-memory rate limiter
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
-const RATE_LIMIT_MAX = 20; // max requests per window
-const RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const RATE_LIMIT_MAX = 20;
+const RATE_LIMIT_WINDOW_MS = 60_000;
 
 function checkRateLimit(ip: string): boolean {
   const now = Date.now();
@@ -1881,39 +1665,25 @@ function checkRateLimit(ip: string): boolean {
   return entry.count <= RATE_LIMIT_MAX;
 }
 
-// === SECURITY: Input sanitization ===
 function sanitizeUserInput(input: string): string {
   if (!input || typeof input !== 'string') return '';
   
   let sanitized = input;
-  
-  // Remove HTML tags (script, iframe, img with onerror, svg with onload, etc.)
   sanitized = sanitized.replace(/<\/?[a-z][^>]*>/gi, '');
-  
-  // Remove event handlers (onerror=, onload=, onclick=, etc.)
   sanitized = sanitized.replace(/\bon\w+\s*=/gi, '');
-  
-  // Remove javascript: protocol
   sanitized = sanitized.replace(/javascript\s*:/gi, '');
-  
-  // Remove data: protocol (can be used for XSS)
   sanitized = sanitized.replace(/data\s*:\s*text\/html/gi, '');
-  
-  // Limit message length (prevent abuse)
   sanitized = sanitized.substring(0, 2000);
-  
-  // Trim whitespace
   sanitized = sanitized.trim();
   
   return sanitized;
 }
 
-// IP-based city detection with VPN/proxy awareness
 interface GeoResult {
   city: string | null;
   isVPN: boolean;
-  country: string | null;      // e.g. "Россия", "Казахстан"
-  countryCode: string | null;  // e.g. "RU", "KZ"
+  country: string | null;
+  countryCode: string | null;
 }
 
 async function detectCityByIP(ip: string): Promise<GeoResult> {
@@ -1930,26 +1700,23 @@ async function detectCityByIP(ip: string): Promise<GeoResult> {
     
     const isVPN = !!(data.proxy || data.hosting);
     
-    // Если VPN/прокси обнаружен — не доверяем геолокации
     if (isVPN) {
-      console.log(`[GeoIP] VPN/proxy detected for IP ${ip} (proxy=${data.proxy}, hosting=${data.hosting}), city=${data.city}`);
+      console.log(`[GeoIP] VPN/proxy detected for IP ${ip}`);
       return { city: null, isVPN: true, country: data.country || null, countryCode: data.countryCode || null };
     }
     
-    // Россия — реальный пользователь, но из другой страны
     if (data.countryCode === 'RU') {
       console.log(`[GeoIP] Russian user detected: ${data.city}, ${data.country}`);
       return { city: data.city || null, isVPN: false, country: data.country, countryCode: 'RU' };
     }
     
-    // Другие страны (не KZ, не RU) — скорее всего VPN
     if (data.countryCode && data.countryCode !== 'KZ') {
-      console.log(`[GeoIP] Non-KZ/RU country detected: ${data.country} (${data.countryCode}), city=${data.city} — treating as VPN`);
+      console.log(`[GeoIP] Non-KZ/RU country detected: ${data.country}`);
       return { city: null, isVPN: true, country: data.country || null, countryCode: data.countryCode || null };
     }
     
     if (data.status === 'success' && data.city) {
-      console.log(`[GeoIP] Detected city: ${data.city}, region: ${data.regionName}, country: ${data.country}`);
+      console.log(`[GeoIP] Detected city: ${data.city}`);
       return { city: data.city, isVPN: false, country: data.country, countryCode: 'KZ' };
     }
     return empty;
@@ -1960,13 +1727,9 @@ async function detectCityByIP(ip: string): Promise<GeoResult> {
 }
 
 
-// Smart excerpt extraction: find the MOST RELEVANT sections of a long document
-// For long documents, extracts MULTIPLE non-overlapping windows to cover different sections
 function extractRelevantExcerpt(content: string, query: string, maxLen: number = 2000): string {
-  // If content is short enough, return as-is
   if (content.length <= maxLen) return content;
 
-  // Extract meaningful keywords from the query (>2 chars, no stop words)
   const stopWords = new Set(['как', 'что', 'где', 'когда', 'почему', 'какой', 'какая', 'какие', 'это', 'для', 'при', 'или', 'так', 'вот', 'можно', 'есть', 'ваш', 'мне', 'вам', 'нас', 'вас', 'они', 'она', 'оно', 'его', 'неё', 'них', 'будет', 'быть', 'если', 'уже', 'ещё', 'еще', 'тоже', 'также', 'только', 'очень', 'просто', 'нужно', 'надо']);
   const words = query.toLowerCase()
     .split(/[^а-яёa-z0-9]+/)
@@ -1974,12 +1737,10 @@ function extractRelevantExcerpt(content: string, query: string, maxLen: number =
 
   if (words.length === 0) return content.substring(0, maxLen);
 
-  // Score each window position by keyword density
   const lowerContent = content.toLowerCase();
-  const windowSize = 1500; // each window
+  const windowSize = 1500;
   const step = 200;
   
-  // Collect all scored windows
   const scoredWindows: { start: number; score: number }[] = [];
 
   for (let start = 0; start < content.length - step; start += step) {
@@ -2002,20 +1763,16 @@ function extractRelevantExcerpt(content: string, query: string, maxLen: number =
 
   if (scoredWindows.length === 0) return content.substring(0, maxLen);
 
-  // Sort by score descending
   scoredWindows.sort((a, b) => b.score - a.score);
 
-  // For long documents (>10K), take up to 3 non-overlapping windows
-  // For shorter ones, take 1 window
   const numWindows = content.length > 10000 ? 3 : 1;
-  const totalBudget = maxLen; // total chars budget
+  const totalBudget = maxLen;
   const perWindowBudget = Math.floor(totalBudget / numWindows);
 
   const selectedWindows: { start: number; score: number }[] = [];
   
   for (const w of scoredWindows) {
     if (selectedWindows.length >= numWindows) break;
-    // Check non-overlap with already selected windows
     const overlaps = selectedWindows.some(sel => 
       Math.abs(sel.start - w.start) < perWindowBudget
     );
@@ -2024,20 +1781,15 @@ function extractRelevantExcerpt(content: string, query: string, maxLen: number =
     }
   }
 
-  // Sort selected windows by position in document (for coherent reading order)
   selectedWindows.sort((a, b) => a.start - b.start);
 
-  // Build the final excerpt from multiple windows
   const parts: string[] = [];
   for (const w of selectedWindows) {
-    // Snap to nearest table header or paragraph boundary
     let snapStart = w.start;
     if (snapStart > 0) {
       const lookBack = content.substring(Math.max(0, snapStart - 300), snapStart);
-      // Prefer snapping to a markdown table header row (|---)
       const tableHeaderMatch = lookBack.lastIndexOf('|---');
       if (tableHeaderMatch >= 0) {
-        // Go back to the line before |--- (the header row with column names)
         const beforeTable = lookBack.substring(0, tableHeaderMatch);
         const headerLineStart = beforeTable.lastIndexOf('\n');
         snapStart = Math.max(0, snapStart - 300) + (headerLineStart >= 0 ? headerLineStart + 1 : tableHeaderMatch);
@@ -2063,7 +1815,6 @@ serve(async (req) => {
     return new Response('ok', { headers: corsHeaders });
   }
 
-  // Rate limiting by IP
   const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
     || req.headers.get('cf-connecting-ip')
     || 'unknown';
@@ -2077,18 +1828,15 @@ serve(async (req) => {
 
   try {
     const body = await req.json();
-    const useStreaming = body.stream !== false; // Default to streaming, but allow non-streaming
+    const useStreaming = body.stream !== false;
     
-    // Support both formats: { messages } and { message, history, sessionId }
     let messages: Array<{ role: string; content: string }>;
     let conversationId: string;
     
     if (body.messages) {
-      // Format from admin panel / internal calls
       messages = body.messages;
       conversationId = body.conversationId || Date.now().toString();
     } else if (body.message) {
-      // Format from embed widget
       const history = body.history || [];
       messages = [...history, { role: 'user', content: body.message }];
       conversationId = body.sessionId || Date.now().toString();
@@ -2096,19 +1844,16 @@ serve(async (req) => {
       throw new Error('Invalid request format: missing messages or message');
     }
     
-    // Load settings from DB (API keys, model selection)
     const appSettings = await getAppSettings();
     const aiConfig = getAIConfig(appSettings);
     
-    console.log(`[Chat] AI Provider: ${aiConfig.url.includes('openrouter') ? 'OpenRouter' : 'Lovable AI'}, Model: ${aiConfig.model}`);
+    console.log(`[Chat] AI Provider: ${aiConfig.url.includes('openrouter') ? 'OpenRouter' : 'Google AI'}, Model: ${aiConfig.model}`);
 
     const lastMessage = messages[messages.length - 1];
     const rawUserMessage = lastMessage?.content || '';
     
-    // === SECURITY: Sanitize user input ===
     const userMessage = sanitizeUserInput(rawUserMessage);
     
-    // Sanitize all history messages from user
     messages = messages.map(m => ({
       ...m,
       content: m.role === 'user' ? sanitizeUserInput(m.content) : m.content
@@ -2117,7 +1862,6 @@ serve(async (req) => {
     console.log(`[Chat] Processing: "${userMessage.substring(0, 100)}"`);
     console.log(`[Chat] Conversation ID: ${conversationId}`);
 
-    // Подготавливаем историю для контекста (без текущего сообщения)
     const historyForContext = messages.slice(0, -1);
 
     // Геолокация по IP (параллельно с остальными запросами)
@@ -2140,7 +1884,6 @@ serve(async (req) => {
       );
       const articleResults = await Promise.all(articleSearchPromises);
       
-      // Merge all article results
       const articleProducts = new Map<number, Product>();
       for (const products of articleResults) {
         for (const product of products) {
@@ -2153,7 +1896,6 @@ serve(async (req) => {
         articleShortCircuit = true;
         console.log(`[Chat] Article-first SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
       } else {
-        // Fallback: try searching by site identifier
         console.log(`[Chat] Article-first: no article results, trying site ID fallback...`);
         const siteIdPromises = detectedArticles.map(art => 
           searchBySiteId(art, appSettings.volt220_api_token!)
@@ -2176,34 +1918,60 @@ serve(async (req) => {
      }
     }
 
-    // === DIRECT NAME SEARCH: try user's message as query BEFORE LLM 1 ===
-    // This catches cases like "Лампа LED CORN капсула 7Вт 230В 4000К керамика G9 ИЭК есть в наличии?"
-    // One API call (~200ms) vs LLM 1 (~2-3s) + multi-search (~5-7s)
+    // === TITLE-FIRST SHORT-CIRCUIT: Try user's message as query BEFORE LLM 1 ===
+    // Two parallel queries: full cleaned name + shortened version
+    // With title-scoring to verify relevance
     if (!articleShortCircuit && appSettings.volt220_api_token) {
-      // Clean the message: remove question words and punctuation, keep product name
-      const cleanedQuery = userMessage
-        .replace(/\b(есть|в наличии|наличии|сколько стоит|цена|купить|заказать|хочу|нужен|нужна|нужно|подскажите|покажите|найдите|ищу)\b/gi, '')
-        .replace(/[?!.,;:]+/g, '')
-        .trim();
+      const cleanedQuery = cleanQueryForDirectSearch(userMessage);
       
-      if (cleanedQuery.length >= 8) {
-        console.log(`[Chat] Direct name search: "${cleanedQuery.substring(0, 80)}"`);
+      if (cleanedQuery.length >= 6) {
+        console.log(`[Chat] Title-first search: "${cleanedQuery.substring(0, 80)}"`);
+        const startTime = Date.now();
+        
         try {
-          const directResults = await searchProductsByCandidate(
-            { query: cleanedQuery, brand: null, category: null, min_price: null, max_price: null },
-            appSettings.volt220_api_token,
-            10
-          );
+          // Run 2 parallel queries: full name + shortened
+          const shortened = shortenQuery(cleanedQuery);
+          const queries = [cleanedQuery];
+          if (shortened !== cleanedQuery && shortened.length >= 4) {
+            queries.push(shortened);
+          }
           
-          if (directResults.length > 0) {
-            foundProducts = directResults;
-            articleShortCircuit = true;
-            console.log(`[Chat] Direct name search SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
+          const directPromises = queries.map(q =>
+            searchProductsByCandidate(
+              { query: q, brand: null, category: null, min_price: null, max_price: null },
+              appSettings.volt220_api_token!,
+              15
+            )
+          );
+          const directResults = await Promise.all(directPromises);
+          
+          // Merge results
+          const allDirect = new Map<number, Product>();
+          for (const results of directResults) {
+            for (const p of results) {
+              if (!allDirect.has(p.id)) allDirect.set(p.id, p);
+            }
+          }
+          
+          const directProducts = Array.from(allDirect.values());
+          const elapsed = Date.now() - startTime;
+          console.log(`[Chat] Title-first: ${directProducts.length} products in ${elapsed}ms`);
+          
+          if (directProducts.length > 0) {
+            // Score and check if we have a good match
+            if (hasGoodMatch(directProducts, cleanedQuery, 30)) {
+              // Rerank by relevance and take top results
+              foundProducts = rerankProducts(directProducts, cleanedQuery).slice(0, 10);
+              articleShortCircuit = true;
+              console.log(`[Chat] Title-first SUCCESS: ${foundProducts.length} good matches, skipping LLM 1 (${elapsed}ms)`);
+            } else {
+              console.log(`[Chat] Title-first: ${directProducts.length} results but low title-score, proceeding to LLM 1`);
+            }
           } else {
-            console.log(`[Chat] Direct name search: 0 results, proceeding to LLM 1`);
+            console.log(`[Chat] Title-first: 0 results, proceeding to LLM 1`);
           }
         } catch (e) {
-          console.log(`[Chat] Direct name search error:`, e);
+          console.log(`[Chat] Title-first error:`, e);
         }
       }
     }
@@ -2212,28 +1980,26 @@ serve(async (req) => {
     let extractedIntent: ExtractedIntent;
     
     if (articleShortCircuit) {
-      // Skip LLM 1 — we already have products from article search
       extractedIntent = {
         intent: 'catalog',
-        candidates: detectedArticles.map(a => ({ query: a, brand: null, category: null, min_price: null, max_price: null })),
+        candidates: detectedArticles.length > 0 
+          ? detectedArticles.map(a => ({ query: a, brand: null, category: null, min_price: null, max_price: null }))
+          : [{ query: cleanQueryForDirectSearch(userMessage), brand: null, category: null, min_price: null, max_price: null }],
         originalQuery: userMessage,
       };
     } else {
       extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, aiConfig.model);
     }
-    console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}, ArticleShortCircuit: ${articleShortCircuit}`);
+    console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}, ShortCircuit: ${articleShortCircuit}`);
 
     // ШАГ 2: Поиск в базе знаний (параллельно с другими запросами)
-    // Ищем для ВСЕХ запросов — статьи могут быть полезны даже когда товаров нет в каталоге
     const knowledgePromise = searchKnowledgeBase(userMessage, 5, appSettings);
-    // Загружаем контакты из ОБОИХ записей: структурированные + скрапнутые с сайта
     const contactsPromise = (async () => {
       const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
       const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
       if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return '';
       try {
         const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-        // Ищем все записи с контактами (структурированные + с сайта)
         const { data } = await sb.from('knowledge_entries')
           .select('title, content')
           .or('title.ilike.%контакт%,title.ilike.%филиал%')
@@ -2252,7 +2018,7 @@ serve(async (req) => {
     console.log(`[Chat] Contacts loaded: ${contactsInfo.length} chars`);
     
     if (knowledgeResults.length > 0) {
-      const KB_TOTAL_BUDGET = 15000; // max chars for all KB entries combined
+      const KB_TOTAL_BUDGET = 15000;
       let kbUsed = 0;
       const kbParts: string[] = [];
       
@@ -2276,16 +2042,19 @@ ${kbParts.join('\n\n')}
       console.log(`[Chat] Added ${knowledgeResults.length} knowledge entries to context (${kbUsed} chars, budget ${KB_TOTAL_BUDGET})`);
     }
     if (articleShortCircuit && foundProducts.length > 0) {
-      // Article-first: products already found, format context
       const formattedProducts = formatProductsForAI(foundProducts);
-      console.log(`[Chat] Article-first formatted products for AI:\n${formattedProducts}`);
-      productContext = `\n\n**Товар найден по артикулу (${detectedArticles.join(', ')}):**\n\n${formattedProducts}`;
+      console.log(`[Chat] Short-circuit formatted products for AI:\n${formattedProducts}`);
+      
+      // Check if it was article/site-id or title-first
+      if (detectedArticles.length > 0) {
+        productContext = `\n\n**Товар найден по артикулу (${detectedArticles.join(', ')}):**\n\n${formattedProducts}`;
+      } else {
+        productContext = `\n\n**Товар найден по названию:**\n\n${formattedProducts}`;
+      }
     } else if (!articleShortCircuit && extractedIntent.intent === 'brands' && extractedIntent.candidates.length > 0) {
-      // Проверяем: если кандидаты содержат конкретный бренд — это запрос ТОВАРОВ бренда, а не "какие бренды есть"
       const hasSpecificBrand = extractedIntent.candidates.some(c => c.brand && c.brand.trim().length > 0);
       
       if (hasSpecificBrand) {
-        // Пользователь спрашивает "а Philips есть?" — это каталожный запрос, а не запрос списка брендов!
         console.log(`[Chat] "brands" intent with specific brand → treating as catalog search`);
         foundProducts = await searchProductsMulti(extractedIntent.candidates, 8, appSettings.volt220_api_token || undefined);
         
@@ -2296,7 +2065,6 @@ ${kbParts.join('\n\n')}
           productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**\n\n${formattedProducts}`;
         }
       } else {
-        // Общий вопрос "какие бренды есть?" — ищем товары и извлекаем бренды
         foundProducts = await searchProductsMulti(extractedIntent.candidates, 50, appSettings.volt220_api_token || undefined);
         
         if (foundProducts.length > 0) {
@@ -2314,35 +2082,43 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
         }
       }
     } else if (!articleShortCircuit && extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
-      // Обычный каталожный запрос
       const searchLimit = extractedIntent.usage_context ? 25 : 15;
       foundProducts = await searchProductsMulti(extractedIntent.candidates, searchLimit, appSettings.volt220_api_token || undefined);
       
-      // === ENGLISH FALLBACK: если мало результатов и есть английские переводы ===
+      // === ENGLISH FALLBACK: Only if <3 results AND have english_queries ===
       if (foundProducts.length < 3 && extractedIntent.english_queries && extractedIntent.english_queries.length > 0) {
-        console.log(`[Chat] Only ${foundProducts.length} products found, trying English fallback: ${extractedIntent.english_queries.join(', ')}`);
-        const englishCandidates: SearchCandidate[] = extractedIntent.english_queries.map(eq => ({
-          query: eq.trim().toLowerCase(),
-          brand: extractedIntent.candidates[0]?.brand || null,
-          category: null,
-          min_price: extractedIntent.candidates[0]?.min_price || null,
-          max_price: extractedIntent.candidates[0]?.max_price || null,
-          option_filters: extractedIntent.candidates[0]?.option_filters,
-        }));
-        const englishResults = await searchProductsMulti(englishCandidates, searchLimit, appSettings.volt220_api_token || undefined);
-        if (englishResults.length > 0) {
-          console.log(`[Chat] English fallback found ${englishResults.length} additional products`);
-          // Merge: English results first (they matched translation), then existing
-          const mergedMap = new Map<number, Product>();
-          for (const p of englishResults) mergedMap.set(p.id, p);
-          for (const p of foundProducts) { if (!mergedMap.has(p.id)) mergedMap.set(p.id, p); }
-          foundProducts = Array.from(mergedMap.values()).slice(0, searchLimit);
+        // Skip English fallback if queries already contain English/brand terms
+        const hasEnglishInOriginal = extractedIntent.candidates.some(c => c.query && /[a-zA-Z]{3,}/.test(c.query));
+        
+        if (!hasEnglishInOriginal) {
+          console.log(`[Chat] Only ${foundProducts.length} products found, trying English fallback: ${extractedIntent.english_queries.join(', ')}`);
+          const englishCandidates: SearchCandidate[] = extractedIntent.english_queries.slice(0, 2).map(eq => ({
+            query: eq.trim().toLowerCase(),
+            brand: extractedIntent.candidates[0]?.brand || null,
+            category: null,
+            min_price: extractedIntent.candidates[0]?.min_price || null,
+            max_price: extractedIntent.candidates[0]?.max_price || null,
+            option_filters: extractedIntent.candidates[0]?.option_filters,
+          }));
+          const englishResults = await searchProductsMulti(englishCandidates, searchLimit, appSettings.volt220_api_token || undefined);
+          if (englishResults.length > 0) {
+            console.log(`[Chat] English fallback found ${englishResults.length} additional products`);
+            const mergedMap = new Map<number, Product>();
+            for (const p of englishResults) mergedMap.set(p.id, p);
+            for (const p of foundProducts) { if (!mergedMap.has(p.id)) mergedMap.set(p.id, p); }
+            foundProducts = Array.from(mergedMap.values()).slice(0, searchLimit);
+          }
+        } else {
+          console.log(`[Chat] Skipping English fallback — queries already contain English terms`);
         }
       }
       
+      // === RERANK before presenting results ===
       if (foundProducts.length > 0) {
+        foundProducts = rerankProducts(foundProducts, userMessage);
+        
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
-        const formattedProducts = formatProductsForAI(foundProducts);
+        const formattedProducts = formatProductsForAI(foundProducts.slice(0, 10));
         console.log(`[Chat] Formatted products for AI:\n${formattedProducts}`);
         
         const appliedFilters = describeAppliedFilters(extractedIntent.candidates);
@@ -2363,9 +2139,8 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
     
     console.log(`[Chat] userMessage: "${userMessage}", greetingMatch: ${greetingMatch}, isGreeting: ${isGreeting}`);
     
-    // Проверяем, было ли уже приветствие в истории (виджет добавляет его первым сообщением)
     const hasAssistantGreeting = messages.some((m, i) => 
-      i < messages.length - 1 && // Не текущее сообщение
+      i < messages.length - 1 &&
       m.role === 'assistant' && 
       m.content &&
       /здравствуйте|привет|добр(ый|ое|ая)|рад.*видеть/i.test(m.content)
@@ -2375,7 +2150,6 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
     
     let productInstructions = '';
     if (brandsContext) {
-      // Запрос о брендах — показываем список брендов
       productInstructions = `
 ${brandsContext}
 
@@ -2383,8 +2157,8 @@ ${brandsContext}
 1. Перечисли найденные бренды списком
 2. Спроси, какой бренд интересует клиента — ты подберёшь лучшие модели
 3. Предложи ссылку на каталог: https://220volt.kz/catalog/`;
-    } else if (articleShortCircuit && productContext) {
-      // Article-first: товар найден по артикулу — показываем сразу + cross-sell
+    } else if (articleShortCircuit && productContext && detectedArticles.length > 0) {
+      // Article-first: товар найден по артикулу
       productInstructions = `
 🎯 ТОВАР НАЙДЕН ПО АРТИКУЛУ (покажи сразу, БЕЗ уточняющих вопросов о самом товаре!):
 ${productContext}
@@ -2405,6 +2179,20 @@ ${productContext}
    - Светильник → «К нему подойдут лампы с цоколем E27. Показать варианты?»
    НЕ ВЫДУМЫВАЙ cross-sell если не знаешь категорию! В этом случае просто спроси: «Что ещё подобрать для вашего проекта?»
 3. Тон: профессиональный, как опытный консультант. БЕЗ восклицательных знаков, без «отличный выбор!», без давления.`;
+    } else if (articleShortCircuit && productContext) {
+      // Title-first: товар найден по названию
+      productInstructions = `
+🎯 ТОВАР НАЙДЕН ПО НАЗВАНИЮ (покажи сразу!):
+${productContext}
+
+⚠️ СТРОГОЕ ПРАВИЛО:
+- Покажи найденные товары: название, цена, наличие, ссылка
+- Ссылки копируй как есть в формате [Название](URL) — НЕ МЕНЯЙ URL!
+- ВАЖНО: если в названии товара есть экранированные скобки \\( и \\) — СОХРАНЯЙ их!
+
+📈 ПОСЛЕ ИНФОРМАЦИИ О ТОВАРЕ — ДОБАВЬ КОНТЕКСТНЫЙ CROSS-SELL:
+- Предложи 1 ЛОГИЧЕСКИ СВЯЗАННЫЙ аксессуар
+- Тон: профессиональный, без давления`;
     } else if (productContext) {
       productInstructions = `
 НАЙДЕННЫЕ ТОВАРЫ (КОПИРУЙ ССЫЛКИ ТОЧНО КАК ДАНО — НЕ МОДИФИЦИРУЙ!):
@@ -2428,10 +2216,8 @@ ${productContext}
 - Если не знаешь категорию товара — вместо cross-sell спроси: «Что ещё подобрать для вашего проекта?»
 - Тон: профессиональный, без восклицательных знаков, без давления`;
     } else if (isGreeting) {
-      productInstructions = ''; // Для приветствий ничего не пишем о товарах
+      productInstructions = '';
     } else if (extractedIntent.intent === 'info') {
-      // ИНТЕНТ: INFO — вопрос о компании, оферте, условиях, юридических данных
-      // Всегда используем базу знаний для этого интента
       if (knowledgeResults.length > 0) {
         productInstructions = `
 💡 ВОПРОС О КОМПАНИИ / УСЛОВИЯХ / ДОКУМЕНТАХ
@@ -2445,257 +2231,61 @@ ${productContext}
 2. Цитируй конкретные пункты, если они есть (например, "Согласно п. 11.16 договора оферты...")
 3. Если вопрос о юридических данных (БИН, ИИН, названия юрлиц) — ОБЯЗАТЕЛЬНО предоставь их из Базы Знаний
 4. Если вопрос об обязанностях, правах, условиях — перечисли ключевые пункты кратко и понятно
-5. Если информации в Базе Знаний недостаточно — честно скажи и предложи связаться с менеджером
-
-СТРОГО ЗАПРЕЩЕНО:
-- НЕ говори "я не могу предоставить такую информацию" если она ЕСТЬ в Базе Знаний!
-- НЕ отказывайся отвечать на вопросы об оферте, БИН, юрлицах — это публичная информация!
-- НЕ переключай тему на товары, если клиент спрашивает о документах/условиях`;
+5. Если точного ответа нет в Базе Знаний — честно скажи и предложи контакт менеджера`;
       } else {
-        // intent=info, но в БЗ ничего не нашлось
         productInstructions = `
-💡 ВОПРОС О КОМПАНИИ / УСЛОВИЯХ
+💡 ВОПРОС О КОМПАНИИ
 
 Клиент написал: "${extractedIntent.originalQuery}"
 
-К сожалению, в Базе Знаний не найдено релевантной информации по этому вопросу.
+В Базе Знаний нет информации по этому вопросу. Предложи связаться с менеджером.`;
+      }
+    } else if (extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
+      productInstructions = `
+Клиент ищет товар: "${extractedIntent.originalQuery}"
+К сожалению, в каталоге ничего не найдено по данному запросу.
 
 ТВОЙ ОТВЕТ:
-1. Честно скажи, что у тебя нет точной информации по этому вопросу
-2. Предложи связаться с менеджером для уточнения
-3. НЕ выдумывай данные!`;
-      }
-    } else if (extractedIntent.intent === 'general') {
-      // ИНТЕНТ: GENERAL — приветствия, шутки, нерелевантное, продолжение диалога
-      const hasProductContext = historyForContext.some(m => 
-        m.role === 'assistant' && (
-          /₸|цена|бренд|в наличии/i.test(m.content) ||
-          /\[.*\]\(https?:\/\/.*\)/i.test(m.content)
-        )
-      );
-      
-      if (hasProductContext) {
-        productInstructions = `
-💡 ПРОДОЛЖЕНИЕ ДИАЛОГА О ТОВАРАХ
-
-Клиент написал: "${extractedIntent.originalQuery}"
-
-ВАЖНО: Ранее в диалоге вы обсуждали товары! Клиент скорее всего продолжает тот же разговор.
-
-ТВОЙ ОТВЕТ:
-1. Свяжи текущее сообщение с ПРЕДЫДУЩЕЙ темой разговора
-2. Уточни потребность в контексте ранее обсуждавшихся товаров
-3. НЕ переключайся на другую тему, пока клиент явно не попросит
-
-ЗАПРЕЩЕНО:
-- НЕ теряй контекст разговора!
-- НЕ переключайся на другие инструменты без причины`;
-      } else {
-        productInstructions = `
-💡 НЕРЕЛЕВАНТНЫЙ ЗАПРОС ИЛИ ВОПРОС ОБ УСЛУГАХ
-
-Клиент написал: "${extractedIntent.originalQuery}"
-
-Это НЕ запрос товара из каталога. Отвечай дружелюбно и с юмором!
-
-ТВОЙ ОТВЕТ:
-1. Вежливо и с улыбкой объясни, что ты — консультант магазина электроинструментов
-2. ЕСЛИ УМЕСТНО — сделай креативную ассоциацию с товарами магазина
-3. Спроси, чем можешь помочь по части инструментов
-
-ВАЖНО:
-- НЕ говори "товар не найден в каталоге"
-- Будь остроумным и дружелюбным`;
-      }
-    } else if (extractedIntent.candidates.length > 0) {
-      // Был поиск в каталоге, но товары не найдены
-      // Определяем, искали ли конкретный бренд
-      const searchedBrands = extractedIntent.candidates
-        .map(c => c.brand)
-        .filter((b): b is string => b !== null && b !== undefined);
-      const uniqueBrands = [...new Set(searchedBrands)];
-      
-      if (uniqueBrands.length > 0) {
-        // Искали конкретный бренд — его НЕТ в каталоге
-        // FALLBACK: ищем без бренда чтобы показать альтернативы!
-        console.log(`[Chat] Brand ${uniqueBrands.join(', ')} not found. Doing fallback search without brand...`);
-        
-        // Убираем бренд И из параметра brand, И из текста query
-        const brandPattern = new RegExp(`\\b(${uniqueBrands.join('|')})\\b`, 'gi');
-        const candidatesWithoutBrand = extractedIntent.candidates.map(c => ({
-          ...c,
-          brand: null,
-          query: (c.query || '').replace(brandPattern, '').replace(/\s+/g, ' ').trim()
-        })).filter(c => (c.query || '').length > 1);
-        
-        console.log(`[Chat] Fallback candidates:`, candidatesWithoutBrand.map(c => c.query));
-        
-        const fallbackProducts = await searchWithTranslationFallback(candidatesWithoutBrand, 6, appSettings.volt220_api_token || undefined, aiConfig.url, aiConfig.apiKeys, aiConfig.model);
-        
-        if (fallbackProducts.length > 0) {
-          // Нашли альтернативы! Показываем их
-          const availableBrands = extractBrandsFromProducts(fallbackProducts);
-          const formattedAlternatives = formatProductsForAI(fallbackProducts);
-          
-          console.log(`[Chat] Fallback found ${fallbackProducts.length} alternatives from brands: ${availableBrands.join(', ')}`);
-          
-          productInstructions = `
-🚨 БРЕНД НЕ НАЙДЕН, НО ЕСТЬ АЛЬТЕРНАТИВЫ!
-
-Клиент спросил о бренде: ${uniqueBrands.join(', ')}
-Товаров этого бренда НЕТ В КАТАЛОГЕ.
-
-✅ НО НАШЛИСЬ АНАЛОГИ ОТ ДРУГИХ ПРОИЗВОДИТЕЛЕЙ:
-${formattedAlternatives}
-
-Доступные бренды в этой категории: ${availableBrands.join(', ')}
-
-ТВОЙ ОТВЕТ ДОЛЖЕН БЫТЬ ТАКИМ:
-1. ЧЕСТНО скажи: "К сожалению, товаров бренда ${uniqueBrands.join('/')} сейчас нет в нашем каталоге."
-2. СРАЗУ предложи альтернативы: "Но у нас есть отличные аналоги от ${availableBrands.slice(0, 3).join(', ')}!" 
-3. Покажи 2-3 товара из списка выше с ценами и ссылками
-4. Спроси, какой вариант интересует
-
-⚠️ СТРОГОЕ ПРАВИЛО: 
-- Ссылки уже готовы! Копируй их как есть в формате [Название](URL)
-- НЕ МЕНЯЙ URL! НЕ ПРИДУМЫВАЙ URL!`;
-        } else {
-          // Даже fallback не нашёл ничего
-          const hasArticlesForBrand = knowledgeResults.length > 0;
-          const brandArticlesHint = hasArticlesForBrand
-            ? `\n\n✅ ОДНАКО, В БАЗЕ ЗНАНИЙ НАЙДЕНЫ СТАТЬИ ПО ЭТОЙ ТЕМЕ!
-Смотри раздел "ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ" выше.
-УПОМЯНИ статью: "Хотя товара сейчас нет в наличии, у нас есть полезная информация по этой теме — подробнее здесь: [ссылка из source_url]"
-Предложи связаться с менеджером для уточнения наличия.`
-            : '';
-          
-          productInstructions = `
-🚨 КРИТИЧЕСКИ ВАЖНО — БРЕНД НЕ НАЙДЕН И НЕТ АЛЬТЕРНАТИВ!
-
-Клиент спросил о бренде: ${uniqueBrands.join(', ')}
-Мы выполнили поиск в каталоге — ТОВАРОВ ЭТОГО БРЕНДА И ПОХОЖИХ КАТЕГОРИЙ НЕТ!
-${brandArticlesHint}
-
-${!hasArticlesForBrand ? `ТВОЙ ОТВЕТ ДОЛЖЕН БЫТЬ ТАКИМ:
-1. ЧЕСТНО скажи: "К сожалению, товаров бренда ${uniqueBrands.join('/')} сейчас нет в нашем каталоге."
-2. Предложи: "Расскажите подробнее, какой инструмент вам нужен — попробую подобрать из доступных."
-3. Или предложи посмотреть каталог: https://220volt.kz/catalog/` : ''}
-
-СТРОГО ЗАПРЕЩЕНО:
-- НЕ ДЕЛАЙ ВИД что бренд есть!
-- НЕ ПРИДУМЫВАЙ товары!`;
-        }
-      } else {
-        // Общий запрос без бренда — товары не найдены
-        // Определяем категорию из кандидатов
-        const searchedCategories = extractedIntent.candidates
-          .map(c => c.category || c.query)
-          .filter(Boolean);
-        const uniqueCategories = [...new Set(searchedCategories)];
-        const categoryText = uniqueCategories.length > 0 ? uniqueCategories.join(', ') : extractedIntent.originalQuery;
-        
-        // Проверяем, есть ли статьи в базе знаний по этой теме
-        const hasRelevantArticles = knowledgeResults.length > 0;
-        const articlesHint = hasRelevantArticles 
-          ? `\n\n✅ ОДНАКО, В БАЗЕ ЗНАНИЙ НАЙДЕНЫ СТАТЬИ ПО ЭТОЙ ТЕМЕ!
-Смотри раздел "ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ" выше. 
-
-ТВОЙ ОТВЕТ ДОЛЖЕН ВКЛЮЧАТЬ:
-1. ЧЕСТНО скажи что товара сейчас нет в наличии в каталоге
-2. НО УПОМЯНИ статью/информацию из Базы Знаний: "Однако у нас есть полезная информация по этой теме — вы можете почитать подробнее здесь: [ссылка из source_url]"
-3. Предложи связаться с менеджером для уточнения наличия и заказа`
-          : '';
-        
-        productInstructions = `
-🚨 КРИТИЧЕСКИ ВАЖНО — ТОВАР/КАТЕГОРИЯ НЕ НАЙДЕНА В КАТАЛОГЕ!
-
-Клиент искал: "${categoryText}"
-Мы выполнили поиск в каталоге — ТАКИХ ТОВАРОВ НЕТ В НАЛИЧИИ!
-${articlesHint}
-
-${!hasRelevantArticles ? `ТВОЙ ОТВЕТ ДОЛЖЕН БЫТЬ ТАКИМ:
-1. ЧЕСТНО скажи: "К сожалению, ${categoryText} сейчас нет в нашем каталоге."
-2. Предложи альтернативу: "Могу подобрать другой инструмент. Расскажите, какую задачу вы хотите решить?"
-3. Или предложи посмотреть каталог: https://220volt.kz/catalog/` : ''}
-
-СТРОГО ЗАПРЕЩЕНО:
-- НЕ ДЕЛАЙ ВИД что товар есть!
-- НЕ ПРОСИ уточнить бюджет или тип патрона для товара, которого НЕТ!
-- НЕ ПРИДУМЫВАЙ товары, названия, цены или URL!
-- НЕ ГОВОРИ "у нас есть аналоги" — если товара нет, аналогов тоже нет!
-- НЕ СОЗДАВАЙ ссылки на несуществующие разделы типа https://220volt.kz/catalog/perforatory/`;
-      }
+1. Скажи, что конкретно этот товар не найден
+2. Предложи АЛЬТЕРНАТИВЫ (если знаешь что это за товар, предложи похожие)
+3. Предложи уточнить: категорию, бренд, характеристики
+4. Покажи ссылку на каталог: https://220volt.kz/catalog/`;
     }
-    
-    // --- Контекстные блоки для промпта ---
-    
-    // Приветствие: уже здоровались или нет
-    const greetingContext = hasAssistantGreeting 
-      ? 'ПРИВЕТСТВИЕ: Ты уже поздоровался ранее. Начинай сразу с сути.'
-      : isGreeting 
-        ? 'ПРИВЕТСТВИЕ: Клиент здоровается впервые. Ответь коротким приветствием и сразу переходи к ответу на вопрос (если он есть в том же сообщении).'
-        : '';
 
-    // Геолокация — проверяем, упоминалась ли уже в диалоге (чтобы не повторять "Я вижу, что вы из...")
-    const geoAlreadyMentioned = historyForContext.some(m => 
-      m.role === 'assistant' && /я вижу.*что вы из|ваш город|ближайший.*филиал/i.test(m.content)
-    );
-    
+    // Geo context for system prompt
     let geoContext = '';
-    if (detectedCity && userCountryCode === 'KZ') {
-      if (geoAlreadyMentioned) {
-        // Город уже озвучен ранее — просто передаём как факт, БЕЗ инструкции объявлять
-        geoContext = `ГЕОЛОКАЦИЯ (уже сообщено клиенту): Город клиента — ${detectedCity} (Казахстан). Ты УЖЕ говорил клиенту его город ранее в диалоге. НЕ повторяй "Я вижу, что вы из...". Просто используй город для подбора ближайшего филиала, если нужно.`;
-      } else {
-        // Первое упоминание — можно объявить
-        geoContext = `ГЕОЛОКАЦИЯ: Город клиента определён автоматически — ${detectedCity} (Казахстан). Когда клиент спрашивает про филиалы/адреса — скажи: "Я вижу, что вы из ${detectedCity}! Ближайший к вам филиал: [данные филиала этого города]." Затем добавь: "Также мы представлены и в других городах Казахстана — подсказать?" НЕ спрашивай город — ты его уже знаешь.`;
-      }
-    } else if (userCountryCode === 'RU') {
-      if (geoAlreadyMentioned) {
-        geoContext = `ГЕОЛОКАЦИЯ (уже сообщено клиенту): Клиент из России. Ты УЖЕ сообщил ему об этом. НЕ повторяй. Если он назвал город — используй его.`;
-      } else {
-        geoContext = `ГЕОЛОКАЦИЯ: Клиент из России${detectedCity ? ` (город: ${detectedCity})` : ''}. Когда речь о филиалах — скажи: "Я вижу, что вы из России${detectedCity ? ` (${detectedCity})` : ''}! Наши магазины расположены в Казахстане. Подскажите, какой город в Казахстане вас интересует?" Предложи помощь с доставкой.`;
-      }
+    if (detectedCity && !isVPN) {
+      geoContext = `\n\n📍 ГЕОЛОКАЦИЯ КЛИЕНТА: город ${detectedCity}${userCountryCode === 'RU' ? `, ${userCountry}` : ''}. При ответах о наличии/доставке учитывай это.`;
     } else if (isVPN) {
-      geoContext = `ГЕОЛОКАЦИЯ: Город не удалось определить (возможно VPN). Если клиент спрашивает про филиалы — уточни город.`;
-    } else {
-      geoContext = `ГЕОЛОКАЦИЯ: Город не определён. Если клиент спрашивает про филиалы — уточни город.`;
+      geoContext = '\n\n📍 ГЕОЛОКАЦИЯ: не определена (VPN/прокси). Если клиент спрашивает о наличии — уточни город.';
     }
+
+    const customPrompt = appSettings.system_prompt || '';
     
-    // Custom tone of voice from settings
-    const toneOfVoice = appSettings.system_prompt || '';
+    const systemPrompt = `Ты — профессиональный консультант интернет-магазина электротоваров 220volt.kz.
+${customPrompt}
 
-    const systemPrompt = `# Роль
-Ты — консультант интернет-магазина 220volt.kz (электроинструменты и оборудование, Казахстан).
-${toneOfVoice ? `\nТон общения: ${toneOfVoice}` : ''}
+🚫 АБСОЛЮТНЫЙ ЗАПРЕТ ПРИВЕТСТВИЙ:
+Ты НИКОГДА не здороваешься, не представляешься, не пишешь "Здравствуйте", "Привет", "Добрый день" или любые другие формы приветствия.
+ИСКЛЮЧЕНИЕ: если клиент ВПЕРВЫЕ пишет приветствие ("Привет", "Здравствуйте") И в истории диалога НЕТ твоего приветствия — можешь поздороваться ОДИН РАЗ.
+${hasAssistantGreeting ? '⚠️ Ты УЖЕ поздоровался в этом диалоге — НИКАКИХ повторных приветствий!' : ''}
 
-# Принципы
-1. **Краткость**: 2-4 предложения, если вопрос не требует развёрнутого ответа.
-2. **Контекст диалога**: читай предыдущие сообщения. Если клиент уже назвал город — просто покажи данные без "Я вижу, что вы из...".
-3. **Источники данных**: товары — только из раздела «НАЙДЕННЫЕ ТОВАРЫ»; информация о компании — только из «БАЗА ЗНАНИЙ»; контакты филиалов — только из «ДАННЫЕ ФИЛИАЛОВ» ниже.
-4. **Честность**: если данных нет — скажи об этом. Предложи связаться с менеджером (маркер [CONTACT_MANAGER] в конце сообщения).
-5. **Без приветствий и представлений**: НИКОГДА не здоровайся («Здравствуйте», «Привет», «Добрый день») и не представляйся («Я AI-консультант», «Я консультант магазина»). Приветствие уже автоматически показано клиенту в интерфейсе чата. Начинай СРАЗУ с сути ответа.
-6. **Остатки и склады**: В данных о товарах указаны остатки по городам (поле «Остатки по городам»). Если клиент спрашивает о наличии — показывай данные по конкретным городам. Если клиент упоминает конкретный город — дай точное количество для этого города. Если город определён по геолокации — начни с него. Города с нулевым остатком не упоминай, если клиент не спросил именно про них. Если в данных нет разбивки по городам — покажи общий остаток. Если клиент спрашивает про город, которого нет в данных — предложи уточнить у менеджера [CONTACT_MANAGER].
+Язык ответа: отвечай на том языке, на котором написал клиент (русский, казахский и т.д.). По умолчанию — русский.
 
-# ${greetingContext}
+# Ключевые правила
+- Будь кратким и конкретным
+- Используй markdown для форматирования: **жирный** для важного, списки для перечислений
+- Ссылки на товары — в формате markdown: [Название](URL)
+- НЕ ВЫДУМЫВАЙ товары, цены, характеристики — используй ТОЛЬКО данные из контекста
+- Если не знаешь ответ — скажи честно и предложи связаться с менеджером
 
-# ${geoContext}
-
-# Формат ответа: товары
-Если товары найдены — покажи топ-3 СТРОГО в таком формате:
-
-**[Название товара](ссылка_на_товар)** — *цена* ₸, бренд
-
-⚠️ НАЗВАНИЕ ТОВАРА ВСЕГДА ДОЛЖНО БЫТЬ КЛИКАБЕЛЬНОЙ ССЫЛКОЙ! Копируй ссылку ТОЧНО из данных о товаре. Формат: [текст](url). НЕ пиши название без ссылки! Если ссылки нет в данных — используй артикул для поиска на сайте.
-
-# Уточняющие вопросы на основе характеристик товаров
-ПОСЛЕ первой выдачи товаров ты ОБЯЗАН проанализировать характеристики (options) всех найденных товаров и выявить 1-2 КЛЮЧЕВЫХ параметра, по которым товары РАЗЛИЧАЮТСЯ между собой.
-
-Алгоритм:
-1. Собери все значения каждой характеристики по всем найденным товарам
-2. Найди характеристики, где есть 2+ РАЗНЫХ значения (например: тип монтажа: «внутренний» у одних, «наружный» у других)
-3. Выбери 1-2 САМЫХ ВАЖНЫХ для выбора (приоритет: тип монтажа, степень защиты IP, мощность, количество модулей, материал, напряжение)
-4. Сформулируй КОНКРЕТНЫЙ уточняющий вопрос с вариантами из реальных данных
+# Уточняющие вопросы (Smart Consultant)
+Когда клиент ищет категорию товаров (не конкретный артикул):
+1. Посмотри на найденные товары — есть ли ЗНАЧИМЫЕ различия (тип монтажа, мощность, назначение)?
+2. Если да — задай ОДИН конкретный уточняющий вопрос с вариантами
+3. Формулируй ПОНЯТНЫМ языком
+4. НЕ задавай вопрос если клиент УЖЕ указал параметр
+5. НЕ задавай вопрос если товаров мало (1-2) и они однотипные
 
 Пример: Клиент спросил "щитки". Среди найденных товаров есть щитки для внутренней и наружной установки.
 → "Подскажите, вам нужен щиток для **внутренней** (встраиваемый в стену) или **наружной** (накладной) установки? Также — на сколько модулей (автоматов)?"
@@ -2753,7 +2343,7 @@ ${(() => {
 
 ${productInstructions}`;
 
-    // Diagnostic logs: breakdown by component
+    // Diagnostic logs
     const knowledgeLen = knowledgeContext.length;
     const productInsLen = productInstructions.length;
     const contactsLen = contactsInfo.length;
@@ -2762,7 +2352,6 @@ ${productInstructions}`;
     console.log(`[Chat] Total estimated tokens: ~${Math.round((systemPrompt.length + historyLen) / 4)}`);
 
     // ШАГ 4: Финальный ответ от AI
-    // Trim history: last 8 messages, truncate long assistant responses
     const trimmedMessages = messages.slice(-8).map((m: any) => {
       if (m.role === 'assistant' && m.content && m.content.length > 500) {
         return { ...m, content: m.content.substring(0, 500) + '...' };
@@ -2777,7 +2366,6 @@ ${productInstructions}`;
       ...trimmedMessages,
     ];
     
-    // Call AI with automatic key rotation on errors
     const response = await callAIWithKeyFallback(aiConfig.url, aiConfig.apiKeys, {
       model: aiConfig.model,
       messages: messagesForAI,
@@ -2808,10 +2396,8 @@ ${productInstructions}`;
       );
     }
 
-    // Format contacts for display as a separate message
     const formattedContacts = formatContactsForDisplay(contactsInfo);
 
-    // Helper: log token usage to ai_usage_logs (fire-and-forget)
     const logTokenUsage = async (inputTokens: number, outputTokens: number, model: string) => {
       try {
         const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
@@ -2819,7 +2405,6 @@ ${productInstructions}`;
         if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return;
         
         const totalTokens = inputTokens + outputTokens;
-        // Gemini 2.5 Flash pricing: input $0.30/1M, output $2.50/1M
         const inputCost = (inputTokens / 1_000_000) * 0.30;
         const outputCost = (outputTokens / 1_000_000) * 2.50;
         const estimatedCost = inputCost + outputCost;
@@ -2839,20 +2424,18 @@ ${productInstructions}`;
       }
     };
 
-    // NON-STREAMING MODE: collect full response and return as JSON
+    // NON-STREAMING MODE
     if (!useStreaming) {
       try {
         const aiData = await response.json();
         let content = aiData.choices?.[0]?.message?.content || '';
         console.log(`[Chat] Non-streaming response length: ${content.length}`);
         
-        // Log token usage from API response
         const usage = aiData.usage;
         if (usage) {
           logTokenUsage(usage.prompt_tokens || 0, usage.completion_tokens || 0, aiConfig.model);
         }
         
-        // Check if AI included escalation marker
         const shouldShowContacts = content.includes('[CONTACT_MANAGER]');
         content = content.replace(/\s*\[CONTACT_MANAGER\]\s*/g, '').trim();
         
@@ -2874,8 +2457,7 @@ ${productInstructions}`;
       }
     }
 
-    // STREAMING MODE: forward SSE stream
-    // Если это повторное приветствие, фильтруем начальные приветствия из ответа
+    // STREAMING MODE
     if (hasAssistantGreeting && isGreeting) {
       const reader = response.body?.getReader();
       if (!reader) {
@@ -2895,18 +2477,15 @@ ${productInstructions}`;
         async pull(controller) {
           const { done, value } = await reader.read();
           if (done) {
-            // Flush buffered chunks, stripping [CONTACT_MANAGER] marker
             for (const chunk of bufferedChunks) {
               let text = decoder.decode(chunk);
               text = text.replace(/\[CONTACT_MANAGER\]/g, '');
               controller.enqueue(encoder.encode(text));
             }
-            // Only send contacts if marker was found
             if (fullContent.includes('[CONTACT_MANAGER]') && formattedContacts) {
               const contactsEvent = `data: ${JSON.stringify({ contacts: formattedContacts })}\n\n`;
               controller.enqueue(encoder.encode(contactsEvent));
             }
-            // Log estimated token usage for streaming (rough: 1 token ≈ 3 chars for Russian)
             const estInputTokens = Math.ceil(systemPrompt.length / 3);
             const estOutputTokens = Math.ceil(fullContent.length / 3);
             logTokenUsage(estInputTokens, estOutputTokens, aiConfig.model);
@@ -2916,7 +2495,6 @@ ${productInstructions}`;
           
           let text = decoder.decode(value, { stream: true });
           
-          // Track full content for marker detection
           try {
             const contentMatch = text.match(/"content":"([^"]*)"/g);
             if (contentMatch) {
@@ -2926,14 +2504,13 @@ ${productInstructions}`;
             }
           } catch {}
           
-          // Удаляем приветствие только из первого data-чанка с content
           if (!greetingRemoved && text.includes('content')) {
             const before = text;
             const greetings = ['Здравствуйте', 'Привет', 'Добрый день', 'Добрый вечер', 'Доброе утро', 'Hello', 'Hi', 'Хай'];
             
             for (const greeting of greetings) {
               const pattern = new RegExp(
-                `"content":"${greeting}[!.,]?\\s*(?:👋|🛠️|😊)?\\s*`,
+                `"content":"${greeting}[!.,]?\s*(?:👋|🛠️|😊)?\s*`,
                 'gi'
               );
               text = text.replace(pattern, '"content":"');
@@ -2944,7 +2521,6 @@ ${productInstructions}`;
             }
           }
           
-          // Strip marker and thinking tokens from chunks
           text = text.replace(/\[CONTACT_MANAGER\]/g, '');
           text = text.replace(/<think>[\s\S]*?<\/think>/g, '');
           text = text.replace(/ТИХОЕ РАЗМЫШЛЕНИЕ[\s\S]*?(?=data:|$)/g, '');
@@ -2960,7 +2536,7 @@ ${productInstructions}`;
       });
     }
 
-    // For streaming: wrap original stream to append contacts event at the end
+    // Standard streaming
     const originalStream = response.body;
     if (!originalStream) {
       return new Response(
@@ -2979,12 +2555,10 @@ ${productInstructions}`;
       async pull(controller) {
         const { done, value } = await reader2.read();
         if (done) {
-          // Only send contacts if marker was found in the response
           if (fullContent2.includes('[CONTACT_MANAGER]') && formattedContacts) {
             const contactsEvent = `data: ${JSON.stringify({ contacts: formattedContacts })}\n\n`;
             controller.enqueue(encoder.encode(contactsEvent));
           }
-          // Log estimated token usage
           const estInputTokens = Math.ceil(systemPrompt.length / 3);
           const estOutputTokens = Math.ceil(fullContent2.length / 3);
           logTokenUsage(estInputTokens, estOutputTokens, aiConfig.model);
@@ -2994,7 +2568,6 @@ ${productInstructions}`;
         
         let text = decoder2.decode(value, { stream: true });
         
-        // Track full content for marker detection
         try {
           const contentMatch = text.match(/"content":"([^"]*)"/g);
           if (contentMatch) {
@@ -3004,7 +2577,6 @@ ${productInstructions}`;
           }
         } catch {}
         
-        // Strip marker and thinking tokens from output
         text = text.replace(/\[CONTACT_MANAGER\]/g, '');
         text = text.replace(/<think>[\s\S]*?<\/think>/g, '');
         text = text.replace(/ТИХОЕ РАЗМЫШЛЕНИЕ[\s\S]*?(?=data:|$)/g, '');
