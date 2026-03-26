@@ -1209,10 +1209,10 @@ async function searchProductsMulti(
     return true;
   });
   
-  // === OPTIMIZATION: Limit parallel API calls to max 6 to avoid overload ===
-  const cappedPass1 = uniquePass1.slice(0, 6);
-  if (uniquePass1.length > 6) {
-    console.log(`[Search] Capped candidates from ${uniquePass1.length} to 6`);
+  // === OPTIMIZATION: Limit parallel API calls to max 3 to reduce latency ===
+  const cappedPass1 = uniquePass1.slice(0, 3);
+  if (uniquePass1.length > 3) {
+    console.log(`[Search] Capped candidates from ${uniquePass1.length} to 3`);
   }
   
   const pass1Promises = cappedPass1.map(candidate => 
