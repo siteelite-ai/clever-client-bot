@@ -2172,6 +2172,38 @@ serve(async (req) => {
         } else {
           console.log(`[Chat] Article-first + SiteId: no results, falling back to normal pipeline`);
         }
+     }
+    }
+
+    // === DIRECT NAME SEARCH: try user's message as query BEFORE LLM 1 ===
+    // This catches cases like "Лампа LED CORN капсула 7Вт 230В 4000К керамика G9 ИЭК есть в наличии?"
+    // One API call (~200ms) vs LLM 1 (~2-3s) + multi-search (~5-7s)
+    if (!articleShortCircuit && appSettings.volt220_api_token) {
+      // Clean the message: remove question words and punctuation, keep product name
+      const cleanedQuery = userMessage
+        .replace(/\b(есть|в наличии|наличии|сколько стоит|цена|купить|заказать|хочу|нужен|нужна|нужно|подскажите|покажите|найдите|ищу)\b/gi, '')
+        .replace(/[?!.,;:]+/g, '')
+        .trim();
+      
+      if (cleanedQuery.length >= 8) {
+        console.log(`[Chat] Direct name search: "${cleanedQuery.substring(0, 80)}"`);
+        try {
+          const directResults = await searchProductsByCandidate(
+            { query: cleanedQuery, brand: null, category: null, min_price: null, max_price: null },
+            appSettings.volt220_api_token,
+            10
+          );
+          
+          if (directResults.length > 0) {
+            foundProducts = directResults;
+            articleShortCircuit = true;
+            console.log(`[Chat] Direct name search SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
+          } else {
+            console.log(`[Chat] Direct name search: 0 results, proceeding to LLM 1`);
+          }
+        } catch (e) {
+          console.log(`[Chat] Direct name search error:`, e);
+        }
       }
     }
 
