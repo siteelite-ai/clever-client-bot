@@ -2087,29 +2087,22 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
       
       // === ENGLISH FALLBACK: Only if <3 results AND have english_queries ===
       if (foundProducts.length < 3 && extractedIntent.english_queries && extractedIntent.english_queries.length > 0) {
-        // Skip English fallback if queries already contain English/brand terms
-        const hasEnglishInOriginal = extractedIntent.candidates.some(c => c.query && /[a-zA-Z]{3,}/.test(c.query));
-        
-        if (!hasEnglishInOriginal) {
-          console.log(`[Chat] Only ${foundProducts.length} products found, trying English fallback: ${extractedIntent.english_queries.join(', ')}`);
-          const englishCandidates: SearchCandidate[] = extractedIntent.english_queries.slice(0, 2).map(eq => ({
-            query: eq.trim().toLowerCase(),
-            brand: extractedIntent.candidates[0]?.brand || null,
-            category: null,
-            min_price: extractedIntent.candidates[0]?.min_price || null,
-            max_price: extractedIntent.candidates[0]?.max_price || null,
-            option_filters: extractedIntent.candidates[0]?.option_filters,
-          }));
-          const englishResults = await searchProductsMulti(englishCandidates, searchLimit, appSettings.volt220_api_token || undefined);
-          if (englishResults.length > 0) {
-            console.log(`[Chat] English fallback found ${englishResults.length} additional products`);
-            const mergedMap = new Map<number, Product>();
-            for (const p of englishResults) mergedMap.set(p.id, p);
-            for (const p of foundProducts) { if (!mergedMap.has(p.id)) mergedMap.set(p.id, p); }
-            foundProducts = Array.from(mergedMap.values()).slice(0, searchLimit);
-          }
-        } else {
-          console.log(`[Chat] Skipping English fallback — queries already contain English terms`);
+        console.log(`[Chat] Only ${foundProducts.length} products found, trying English fallback: ${extractedIntent.english_queries.join(', ')}`);
+        const englishCandidates: SearchCandidate[] = extractedIntent.english_queries.slice(0, 2).map(eq => ({
+          query: eq.trim().toLowerCase(),
+          brand: extractedIntent.candidates[0]?.brand || null,
+          category: null,
+          min_price: extractedIntent.candidates[0]?.min_price || null,
+          max_price: extractedIntent.candidates[0]?.max_price || null,
+          option_filters: extractedIntent.candidates[0]?.option_filters,
+        }));
+        const englishResults = await searchProductsMulti(englishCandidates, searchLimit, appSettings.volt220_api_token || undefined);
+        if (englishResults.length > 0) {
+          console.log(`[Chat] English fallback found ${englishResults.length} additional products`);
+          const mergedMap = new Map<number, Product>();
+          for (const p of englishResults) mergedMap.set(p.id, p);
+          for (const p of foundProducts) { if (!mergedMap.has(p.id)) mergedMap.set(p.id, p); }
+          foundProducts = Array.from(mergedMap.values()).slice(0, searchLimit);
         }
       }
       
