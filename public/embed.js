@@ -18,6 +18,9 @@
     logo: 'https://clever-client-bot.lovable.app/logo-220volt-widget.svg'
   };
 
+  // Initial greeting message
+  const initialGreeting = 'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?';
+
   // Generate unique session ID — persist across page navigations
   const STORAGE_KEY = 'volt_widget_state';
   let sessionId;
@@ -38,9 +41,6 @@
   if (!sessionId) {
     sessionId = 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
   }
-  
-  // Initial greeting message
-  const initialGreeting = 'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?';
   if (!conversationHistory) {
     conversationHistory = [{ role: 'assistant', content: initialGreeting }];
   }
