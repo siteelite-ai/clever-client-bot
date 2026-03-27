@@ -1,4 +1,4 @@
-// chat-consultant v3.0 — Title-first scoring + latency optimization
+// chat-consultant v4.0 — Micro-LLM intent classifier + latency optimization
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
@@ -1244,13 +1244,19 @@ async function searchProductsByCandidate(
     
     console.log(`[Search] API call: ${params.toString().substring(0, 150)}`);
     
+    // AbortController timeout 10s to prevent API hangs
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    
     const response = await fetch(`${VOLT220_API_URL}?${params}`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${apiToken}`,
         'Content-Type': 'application/json',
       },
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
     
     if (!response.ok) {
       const errorText = await response.text();
@@ -1265,7 +1271,11 @@ async function searchProductsByCandidate(
     console.log(`[Search] query="${candidate.query || (candidate as any).article || ''}" → ${results.length} results`);
     return results;
   } catch (error) {
-    console.error(`[Search] Error:`, error);
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      console.error(`[Search] API timeout (10s) for query="${candidate.query || ''}"`);
+    } else {
+      console.error(`[Search] Error:`, error);
+    }
     return [];
   }
 }
@@ -1918,39 +1928,35 @@ serve(async (req) => {
      }
     }
 
-    // === TITLE-FIRST SHORT-CIRCUIT: Like article-first but for product names ===
-    // Simple logic: clean query → check if it looks like a product name → search → show results
+    // === TITLE-FIRST SHORT-CIRCUIT via Micro-LLM classifier ===
+    // AI determines if message contains a product name and extracts it cleanly
     if (!articleShortCircuit && appSettings.volt220_api_token) {
-      const cleanedQuery = cleanQueryForDirectSearch(userMessage);
-      const queryTokens = extractTokens(cleanedQuery);
-      const querySpecs = extractSpecs(cleanedQuery);
-      
-      // Only trigger for queries that look like product names (>= 3 tokens OR has specs)
-      // This prevents generic queries like "лампа" from short-circuiting
-      if (queryTokens.length >= 3 || querySpecs.length >= 1) {
-        console.log(`[Chat] Title-first search: "${cleanedQuery.substring(0, 80)}" (tokens=${queryTokens.length}, specs=${querySpecs.length})`);
-        const startTime = Date.now();
+      const classifyStart = Date.now();
+      try {
+        const classification = await classifyProductName(userMessage);
+        const classifyElapsed = Date.now() - classifyStart;
+        console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}"`);
         
-        try {
+        if (classification?.has_product_name && classification.product_name) {
+          const searchStart = Date.now();
           const directResults = await searchProductsByCandidate(
-            { query: cleanedQuery, brand: null, category: null, min_price: null, max_price: null },
+            { query: classification.product_name, brand: null, category: null, min_price: null, max_price: null },
             appSettings.volt220_api_token!,
             15
           );
-          
-          const elapsed = Date.now() - startTime;
-          console.log(`[Chat] Title-first: ${directResults.length} products in ${elapsed}ms`);
+          const searchElapsed = Date.now() - searchStart;
+          console.log(`[Chat] Title-first search: ${directResults.length} products in ${searchElapsed}ms for "${classification.product_name}"`);
           
           if (directResults.length > 0) {
             foundProducts = directResults.slice(0, 10);
             articleShortCircuit = true;
-            console.log(`[Chat] Title-first SUCCESS: ${foundProducts.length} products, skipping LLM 1 (${elapsed}ms)`);
+            console.log(`[Chat] Title-first SUCCESS: ${foundProducts.length} products, skipping LLM 1 (total ${classifyElapsed + searchElapsed}ms)`);
           } else {
-            console.log(`[Chat] Title-first: 0 results, proceeding to LLM 1`);
+            console.log(`[Chat] Title-first: 0 results for "${classification.product_name}", proceeding to LLM 1`);
           }
-        } catch (e) {
-          console.log(`[Chat] Title-first error:`, e);
         }
+      } catch (e) {
+        console.log(`[Chat] Micro-LLM classify error (fallback to LLM 1):`, e);
       }
     }
 
@@ -2064,7 +2070,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
       foundProducts = await searchProductsMulti(extractedIntent.candidates, searchLimit, appSettings.volt220_api_token || undefined);
       
       // === ENGLISH FALLBACK: Only if <3 results AND have english_queries ===
-      if (foundProducts.length < 3 && extractedIntent.english_queries && extractedIntent.english_queries.length > 0) {
+      if (foundProducts.length === 0 && extractedIntent.english_queries && extractedIntent.english_queries.length > 0) {
         console.log(`[Chat] Only ${foundProducts.length} products found, trying English fallback: ${extractedIntent.english_queries.join(', ')}`);
         const englishCandidates: SearchCandidate[] = extractedIntent.english_queries.slice(0, 2).map(eq => ({
           query: eq.trim().toLowerCase(),
