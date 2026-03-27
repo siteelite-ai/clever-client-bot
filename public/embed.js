@@ -767,7 +767,8 @@
         message: message,
         sessionId: sessionId,
         history: conversationHistory.slice(-10),
-        stream: false
+        stream: false,
+        dialogSlots: dialogSlots
       }),
       signal: controller.signal
     });
