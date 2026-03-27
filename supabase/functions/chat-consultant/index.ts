@@ -2367,8 +2367,22 @@ ${productContext}
    - Светильник → «К нему подойдут лампы с цоколем E27. Показать варианты?»
    НЕ ВЫДУМЫВАЙ cross-sell если не знаешь категорию! В этом случае просто спроси: «Что ещё подобрать для вашего проекта?»
 3. Тон: профессиональный, как опытный консультант. БЕЗ восклицательных знаков, без «отличный выбор!», без давления.`;
+    } else if (priceIntentClarify) {
+      // Price intent with too many products — ask user to narrow down
+      productInstructions = `
+🔍 ЦЕНОВОЙ ЗАПРОС — НУЖНО УТОЧНЕНИЕ
+
+Клиент ищет самый ${priceIntentClarify.category ? `дорогой/дешёвый товар в категории "${priceIntentClarify.category}"` : 'дорогой/дешёвый товар'}.
+В этой категории найдено **${priceIntentClarify.total} товаров** — это слишком много, чтобы точно определить крайнюю цену.
+
+ТВОЙ ОТВЕТ:
+1. Скажи клиенту, что в категории "${priceIntentClarify.category}" найдено ${priceIntentClarify.total} товаров
+2. Попроси УТОЧНИТЬ тип или подкатегорию, чтобы сузить поиск. Предложи 3-4 варианта подкатегорий, если знаешь (например, для фонарей: налобный, аккумуляторный, LED и т.д.)
+3. Объясни, что после уточнения ты сможешь точно найти самый дорогой/дешёвый вариант
+4. Тон: профессиональный, дружелюбный, без давления`;
     } else if (articleShortCircuit && productContext) {
-      // Title-first: товар найден по названию
+      // Title-first or price-intent answer: товар найден
+      const isPriceSort = foundProducts.length > 0 && !detectedArticles.length;
       productInstructions = `
 🎯 ТОВАР НАЙДЕН ПО НАЗВАНИЮ (покажи сразу!):
 ${productContext}
