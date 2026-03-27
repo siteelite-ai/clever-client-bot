@@ -2419,22 +2419,33 @@ serve(async (req) => {
         const classifyElapsed = Date.now() - classifyStart;
         console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}"`);
         
-        // === PENDING PRICE INTENT DETECTION ===
-        // If classifier didn't detect price_intent, check if there's a pending one from history
+        // === DIALOG SLOTS: try slot-based resolution FIRST ===
         let effectivePriceIntent = classification?.price_intent;
         let effectiveCategory = classification?.product_category || classification?.product_name || '';
         
-        if (!effectivePriceIntent) {
-          const pending = detectPendingPriceIntent(recentHistoryForClassifier);
-          if (pending) {
-            effectivePriceIntent = pending.priceIntent;
-            // Combine pending category with current user message as subcategory
-            if (pending.category && userMessage.length < 50) {
-              effectiveCategory = `${userMessage} ${pending.category}`.trim();
-            } else {
-              effectiveCategory = userMessage;
+        const slotResolution = resolveSlotRefinement(dialogSlots, userMessage, classification);
+        
+        if (slotResolution) {
+          // Slot resolved! Use slot's price intent and combined query
+          effectivePriceIntent = slotResolution.priceIntent;
+          effectiveCategory = slotResolution.query;
+          dialogSlots = slotResolution.updatedSlots;
+          slotsUpdated = true;
+          console.log(`[Chat] Slot-resolved: intent=${effectivePriceIntent}, query="${effectiveCategory}"`);
+        } else if (!effectivePriceIntent) {
+          // Fallback: legacy detectPendingPriceIntent for clients without slots
+          const hasSlots = Object.keys(body.dialogSlots || {}).length > 0;
+          if (!hasSlots) {
+            const pending = detectPendingPriceIntent(recentHistoryForClassifier);
+            if (pending) {
+              effectivePriceIntent = pending.priceIntent;
+              if (pending.category && userMessage.length < 50) {
+                effectiveCategory = `${userMessage} ${pending.category}`.trim();
+              } else {
+                effectiveCategory = userMessage;
+              }
+              console.log(`[Chat] Legacy restored pending price intent: ${effectivePriceIntent}, combined category="${effectiveCategory}"`);
             }
-            console.log(`[Chat] Restored pending price intent: ${effectivePriceIntent}, combined category="${effectiveCategory}"`);
           }
         }
         
@@ -2444,7 +2455,6 @@ serve(async (req) => {
           if (priceQuery) {
             console.log(`[Chat] Price intent detected: ${effectivePriceIntent} for "${priceQuery}"`);
             
-            // Generate synonym queries for broader search
             const synonymQueries = generatePriceSynonyms(priceQuery);
             const priceResult = await handlePriceIntent(synonymQueries, effectivePriceIntent, appSettings.volt220_api_token!);
             
@@ -2452,15 +2462,38 @@ serve(async (req) => {
               foundProducts = priceResult.products;
               articleShortCircuit = true;
               console.log(`[Chat] PriceIntent SUCCESS: ${foundProducts.length} products sorted by ${effectivePriceIntent} (total ${priceResult.total})`);
+              
+              // Mark slot as done
+              if (slotResolution) {
+                dialogSlots[slotResolution.slotKey] = { ...dialogSlots[slotResolution.slotKey], status: 'done' };
+                slotsUpdated = true;
+              }
             } else if (priceResult.action === 'clarify') {
               priceIntentClarify = { total: priceResult.total!, category: priceResult.category! };
-              articleShortCircuit = true; // skip LLM 1, we'll generate clarify response
-              foundProducts = []; // no products to show yet
+              articleShortCircuit = true;
+              foundProducts = [];
               console.log(`[Chat] PriceIntent CLARIFY: ${priceResult.total} products in "${priceResult.category}", asking user to narrow down`);
+              
+              // Create a new pending slot for this clarification
+              if (!slotResolution) {
+                const slotKey = `slot_${Date.now()}`;
+                dialogSlots[slotKey] = {
+                  intent: 'price_extreme',
+                  price_dir: effectivePriceIntent,
+                  base_category: priceResult.category!,
+                  status: 'pending',
+                  created_turn: messages.length,
+                  turns_since_touched: 0,
+                };
+                slotsUpdated = true;
+                console.log(`[Chat] Created new price slot: "${slotKey}" for "${priceResult.category}" (${effectivePriceIntent})`);
+              }
             } else {
               console.log(`[Chat] PriceIntent: no results for "${priceQuery}" (tried ${synonymQueries.length} variants), falling through`);
             }
           }
+        } else if (effectivePriceIntent && !effectiveCategory) {
+          console.log(`[Chat] Price intent detected but no category, skipping`);
         }
         
         // === TITLE-FIRST (only if price intent didn't handle it) ===
