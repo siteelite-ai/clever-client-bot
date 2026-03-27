@@ -170,6 +170,8 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [dialogSlots, setDialogSlots] = useState<DialogSlots>({});
+  const conversationIdRef = useRef(crypto.randomUUID());
 
   const handleSend = useCallback(async () => {
     if (!input.trim() || isLoading) return;
