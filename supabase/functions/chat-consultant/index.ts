@@ -606,7 +606,7 @@ product_category — краткое слово-категория товара (
 }
 
 // ============================================================
-// HANDLE PRICE INTENT — probe API, decide: answer or clarify
+// HANDLE PRICE INTENT — multi-candidate search, probe, decide
 // ============================================================
 
 interface PriceIntentResult {
@@ -616,16 +616,116 @@ interface PriceIntentResult {
   category?: string;
 }
 
+/**
+ * Generate synonym queries for a product category for broader price-intent search.
+ * E.g. "кемпинговый фонарь" → ["кемпинговый фонарь", "фонарь кемпинговый", "фонарь", "прожектор кемпинговый"]
+ */
+function generatePriceSynonyms(query: string): string[] {
+  const synonyms = new Set<string>();
+  synonyms.add(query);
+  
+  const words = query.toLowerCase().split(/\s+/).filter(w => w.length >= 2);
+  
+  // Add reversed word order: "кемпинговый фонарь" → "фонарь кемпинговый"
+  if (words.length >= 2) {
+    synonyms.add(words.reverse().join(' '));
+  }
+  
+  // Add each individual word (if meaningful, ≥3 chars)
+  for (const w of words) {
+    if (w.length >= 3) synonyms.add(w);
+  }
+  
+  // Common product synonym mappings for electrical store
+  const synonymMap: Record<string, string[]> = {
+    'фонарь': ['фонарь', 'фонарик', 'прожектор', 'светильник переносной'],
+    'фонарик': ['фонарь', 'фонарик', 'прожектор'],
+    'автомат': ['автомат', 'автоматический выключатель', 'выключатель автоматический'],
+    'кабель': ['кабель', 'провод'],
+    'розетка': ['розетка', 'розетки'],
+    'лампа': ['лампа', 'лампочка', 'светодиодная лампа'],
+    'щиток': ['щиток', 'бокс', 'щит', 'корпус модульный'],
+    'удлинитель': ['удлинитель', 'колодка', 'сетевой фильтр'],
+    'болгарка': ['УШМ', 'болгарка', 'угловая шлифмашина'],
+    'дрель': ['дрель', 'дрели'],
+    'перфоратор': ['перфоратор', 'бурильный молоток'],
+    'стабилизатор': ['стабилизатор', 'стабилизатор напряжения'],
+    'рубильник': ['рубильник', 'выключатель-разъединитель', 'выключатель нагрузки'],
+    'светильник': ['светильник', 'светильники', 'люстра'],
+    'генератор': ['генератор', 'электростанция'],
+  };
+  
+  for (const w of words) {
+    const syns = synonymMap[w];
+    if (syns) {
+      for (const s of syns) {
+        synonyms.add(s);
+        // Also add with adjective if original had one: "кемпинговый" + "прожектор"
+        const adjectives = words.filter(ww => ww !== w && ww.length >= 3);
+        for (const adj of adjectives) {
+          synonyms.add(`${adj} ${s}`);
+          synonyms.add(`${s} ${adj}`);
+        }
+      }
+    }
+  }
+  
+  const result = Array.from(synonyms).slice(0, 8); // Cap at 8 variants
+  console.log(`[PriceSynonyms] "${query}" → ${result.length} variants: ${result.join(', ')}`);
+  return result;
+}
+
+/**
+ * Detect pending price intent from conversation history.
+ * Scans bot messages for clarification patterns like "В категории X найдено Y товаров".
+ * Returns the price intent if found, or null.
+ */
+function detectPendingPriceIntent(
+  history: Array<{ role: string; content: string }>
+): { priceIntent: 'most_expensive' | 'cheapest'; category: string } | null {
+  // Scan last 6 messages for bot's price clarification message
+  const recent = history.slice(-6);
+  
+  for (let i = recent.length - 1; i >= 0; i--) {
+    const msg = recent[i];
+    if (msg.role !== 'assistant') continue;
+    
+    const content = typeof msg.content === 'string' ? msg.content : '';
+    
+    // Match patterns like "В категории фонари найдено 55 товаров" or "самый дорогой/дешёвый"
+    const clarifyMatch = content.match(/категории\s+[«"]?(.+?)[»"]?\s+найден[оа]?\s+(\d+)\s+товар/i);
+    const priceMatch = content.match(/сам(?:ый|ое|ую|ая)\s+(дорог|дешёв|бюджетн)/i);
+    
+    if (clarifyMatch || priceMatch) {
+      // Determine price intent from the assistant's message context
+      const isDorogo = /дорог|дороже|дорогостоящ/i.test(content);
+      const isDeshevo = /дешёв|дешевл|бюджетн|недорог/i.test(content);
+      
+      const priceIntent: 'most_expensive' | 'cheapest' = isDorogo ? 'most_expensive' : isDeshevo ? 'cheapest' : 'most_expensive';
+      const category = clarifyMatch ? clarifyMatch[1].trim() : '';
+      
+      if (category || priceMatch) {
+        console.log(`[PendingPrice] Detected pending price intent from history: ${priceIntent}, category="${category}"`);
+        return { priceIntent, category };
+      }
+    }
+  }
+  
+  return null;
+}
+
 async function handlePriceIntent(
-  query: string,
+  queries: string[],
   priceIntent: 'most_expensive' | 'cheapest',
   apiToken: string
 ): Promise<PriceIntentResult> {
-  // Step 1: Probe request to get total count
-  const probeStart = Date.now();
+  const overallStart = Date.now();
+  
+  // Step 1: Probe with first query to get total count
+  const primaryQuery = queries[0];
   try {
     const probeParams = new URLSearchParams();
-    probeParams.append('query', query);
+    probeParams.append('query', primaryQuery);
     probeParams.append('per_page', '1');
     
     const controller = new AbortController();
@@ -649,24 +749,65 @@ async function handlePriceIntent(
     const probeRaw = await probeResponse.json();
     const probeData = probeRaw.data || probeRaw;
     const total = probeData.pagination?.total || 0;
-    const probeElapsed = Date.now() - probeStart;
-    console.log(`[PriceIntent] Probe: query="${query}", total=${total}, ${probeElapsed}ms`);
+    const probeElapsed = Date.now() - overallStart;
+    console.log(`[PriceIntent] Probe: query="${primaryQuery}", total=${total}, ${probeElapsed}ms`);
     
     if (total === 0) {
-      return { action: 'not_found' };
+      // Try other queries before giving up
+      for (const altQuery of queries.slice(1, 4)) {
+        const altParams = new URLSearchParams();
+        altParams.append('query', altQuery);
+        altParams.append('per_page', '1');
+        const altCtrl = new AbortController();
+        const altTimeout = setTimeout(() => altCtrl.abort(), 8000);
+        try {
+          const altResp = await fetch(`${VOLT220_API_URL}?${altParams}`, {
+            method: 'GET',
+            headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+            signal: altCtrl.signal,
+          });
+          clearTimeout(altTimeout);
+          if (altResp.ok) {
+            const altRaw = await altResp.json();
+            const altTotal = (altRaw.data || altRaw).pagination?.total || 0;
+            if (altTotal > 0 && altTotal <= 50) {
+              console.log(`[PriceIntent] Alt query "${altQuery}" found ${altTotal} products`);
+              // Use this query instead
+              queries = [altQuery, ...queries.filter(q => q !== altQuery)];
+              break;
+            } else if (altTotal > 50) {
+              return { action: 'clarify', total: altTotal, category: primaryQuery };
+            }
+          }
+        } catch { clearTimeout(altTimeout); }
+      }
     }
     
     // Step 2: Decision — fetch all or ask to clarify
-    if (total <= 50) {
-      // Fetch all products in one request
+    if (total > 0 && total <= 50) {
+      // Multi-candidate fetch: search up to 4 query variants in parallel, merge & dedup
       const fetchStart = Date.now();
-      const allProducts = await searchProductsByCandidate(
-        { query, brand: null, category: null, min_price: null, max_price: null },
-        apiToken,
-        50
-      );
+      const searchQueries = queries.slice(0, 4);
+      const candidates: SearchCandidate[] = searchQueries.map(q => ({
+        query: q, brand: null, category: null, min_price: null, max_price: null
+      }));
+      
+      const fetchPromises = candidates.map(c => searchProductsByCandidate(c, apiToken, 50));
+      const fetchResults = await Promise.all(fetchPromises);
+      
+      // Merge and deduplicate
+      const productMap = new Map<number, Product>();
+      for (const products of fetchResults) {
+        for (const product of products) {
+          if (!productMap.has(product.id)) {
+            productMap.set(product.id, product);
+          }
+        }
+      }
+      
+      const allProducts = Array.from(productMap.values());
       const fetchElapsed = Date.now() - fetchStart;
-      console.log(`[PriceIntent] Fetched all ${allProducts.length} of ${total} products in ${fetchElapsed}ms`);
+      console.log(`[PriceIntent] Multi-fetch: ${allProducts.length} unique products from ${searchQueries.length} queries in ${fetchElapsed}ms`);
       
       // Filter zero-price and sort by price intent
       const priced = allProducts.filter(p => p.price > 0);
@@ -677,11 +818,16 @@ async function handlePriceIntent(
         return a.price - b.price;
       });
       
-      return { action: 'answer', products: list.slice(0, 10), total };
-    } else {
-      // Too many products — ask user to clarify
+      const totalElapsed = Date.now() - overallStart;
+      console.log(`[PriceIntent] Answer ready: ${list.length} products sorted by ${priceIntent}, total time ${totalElapsed}ms`);
+      
+      return { action: 'answer', products: list.slice(0, 10), total: list.length };
+    } else if (total > 50) {
       console.log(`[PriceIntent] Too many products (${total}), requesting clarification`);
-      return { action: 'clarify', total, category: query };
+      return { action: 'clarify', total, category: primaryQuery };
+    } else {
+      // total === 0 and no alt queries found anything
+      return { action: 'not_found' };
     }
   } catch (error) {
     console.error(`[PriceIntent] Error:`, error);
