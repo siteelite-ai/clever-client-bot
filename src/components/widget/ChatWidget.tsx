@@ -112,6 +112,11 @@ async function streamChat({
             onContacts(parsed.contacts);
             continue;
           }
+          // Check for slot_update event
+          if (parsed.slot_update && onSlotUpdate) {
+            onSlotUpdate(parsed.slot_update);
+            continue;
+          }
           const content = parsed.choices?.[0]?.delta?.content as string | undefined;
           if (content) onDelta(content);
         } catch {
@@ -134,6 +139,10 @@ async function streamChat({
           const parsed = JSON.parse(jsonStr);
           if (parsed.contacts && onContacts) {
             onContacts(parsed.contacts);
+            continue;
+          }
+          if (parsed.slot_update && onSlotUpdate) {
+            onSlotUpdate(parsed.slot_update);
             continue;
           }
           const content = parsed.choices?.[0]?.delta?.content as string | undefined;
