@@ -2280,24 +2280,46 @@ serve(async (req) => {
         const classifyElapsed = Date.now() - classifyStart;
         console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}"`);
         
+        // === PENDING PRICE INTENT DETECTION ===
+        // If classifier didn't detect price_intent, check if there's a pending one from history
+        let effectivePriceIntent = classification?.price_intent;
+        let effectiveCategory = classification?.product_category || classification?.product_name || '';
+        
+        if (!effectivePriceIntent) {
+          const pending = detectPendingPriceIntent(recentHistoryForClassifier);
+          if (pending) {
+            effectivePriceIntent = pending.priceIntent;
+            // Combine pending category with current user message as subcategory
+            if (pending.category && userMessage.length < 50) {
+              effectiveCategory = `${userMessage} ${pending.category}`.trim();
+            } else {
+              effectiveCategory = userMessage;
+            }
+            console.log(`[Chat] Restored pending price intent: ${effectivePriceIntent}, combined category="${effectiveCategory}"`);
+          }
+        }
+        
         // === PRICE INTENT HANDLING ===
-        if (classification?.price_intent && appSettings.volt220_api_token) {
-          const priceQuery = classification.product_name || classification.product_category || '';
+        if (effectivePriceIntent && appSettings.volt220_api_token) {
+          const priceQuery = effectiveCategory || classification?.product_name || '';
           if (priceQuery) {
-            console.log(`[Chat] Price intent detected: ${classification.price_intent} for "${priceQuery}"`);
-            const priceResult = await handlePriceIntent(priceQuery, classification.price_intent, appSettings.volt220_api_token!);
+            console.log(`[Chat] Price intent detected: ${effectivePriceIntent} for "${priceQuery}"`);
+            
+            // Generate synonym queries for broader search
+            const synonymQueries = generatePriceSynonyms(priceQuery);
+            const priceResult = await handlePriceIntent(synonymQueries, effectivePriceIntent, appSettings.volt220_api_token!);
             
             if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
               foundProducts = priceResult.products;
               articleShortCircuit = true;
-              console.log(`[Chat] PriceIntent SUCCESS: ${foundProducts.length} products sorted by ${classification.price_intent} (total ${priceResult.total})`);
+              console.log(`[Chat] PriceIntent SUCCESS: ${foundProducts.length} products sorted by ${effectivePriceIntent} (total ${priceResult.total})`);
             } else if (priceResult.action === 'clarify') {
               priceIntentClarify = { total: priceResult.total!, category: priceResult.category! };
               articleShortCircuit = true; // skip LLM 1, we'll generate clarify response
               foundProducts = []; // no products to show yet
               console.log(`[Chat] PriceIntent CLARIFY: ${priceResult.total} products in "${priceResult.category}", asking user to narrow down`);
             } else {
-              console.log(`[Chat] PriceIntent: no results for "${priceQuery}", falling through`);
+              console.log(`[Chat] PriceIntent: no results for "${priceQuery}" (tried ${synonymQueries.length} variants), falling through`);
             }
           }
         }
