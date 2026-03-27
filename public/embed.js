@@ -18,17 +18,46 @@
     logo: 'https://clever-client-bot.lovable.app/logo-220volt-widget.svg'
   };
 
-  // Generate unique session ID
-  const sessionId = 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
-  
-  // Initial greeting message - add to history so AI doesn't greet again
+  // Initial greeting message
   const initialGreeting = 'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?';
-  let conversationHistory = [
-    { role: 'assistant', content: initialGreeting }
-  ];
+
+  // Generate unique session ID — persist across page navigations
+  const STORAGE_KEY = 'volt_widget_state';
+  let sessionId;
+  let conversationHistory;
+  let dialogSlots = {};
+  
+  // Try to restore from sessionStorage
+  try {
+    const saved = sessionStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      sessionId = parsed.sessionId || ('session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now());
+      conversationHistory = parsed.history || [{ role: 'assistant', content: initialGreeting }];
+      dialogSlots = parsed.dialogSlots || {};
+    }
+  } catch(e) {}
+  
+  if (!sessionId) {
+    sessionId = 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+  }
+  if (!conversationHistory) {
+    conversationHistory = [{ role: 'assistant', content: initialGreeting }];
+  }
   
   let isOpen = false;
   let isLoading = false;
+  
+  // Save state to sessionStorage
+  function saveState() {
+    try {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+        sessionId: sessionId,
+        history: conversationHistory.slice(-20),
+        dialogSlots: dialogSlots
+      }));
+    } catch(e) {}
+  }
 
   // Clean up any previous widget instance before initializing again
   var existingContainer = document.getElementById('volt-widget-container');
@@ -583,6 +612,16 @@
     var controller = new AbortController();
     var timer = setTimeout(function() { controller.abort(); }, 90000);
 
+    // Clean slots: only send pending, max 3
+    var activeSlots = {};
+    var slotCount = 0;
+    for (var sk in dialogSlots) {
+      if (dialogSlots[sk].status === 'pending' && slotCount < 3) {
+        activeSlots[sk] = dialogSlots[sk];
+        slotCount++;
+      }
+    }
+
     var response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -594,7 +633,8 @@
         message: message,
         sessionId: sessionId,
         history: conversationHistory.slice(-10),
-        stream: true
+        stream: true,
+        dialogSlots: activeSlots
       }),
       signal: controller.signal
     });
@@ -653,6 +693,12 @@
             contacts = obj.contacts;
             continue;
           }
+          // Handle slot_update event
+          if (obj.slot_update) {
+            dialogSlots = obj.slot_update;
+            saveState();
+            continue;
+          }
           var delta = obj.choices && obj.choices[0] && obj.choices[0].delta && obj.choices[0].delta.content;
           if (delta) {
             if (!firstTokenReceived) {
@@ -690,6 +736,7 @@
         try {
           var o2 = JSON.parse(js2);
           if (o2.contacts) { contacts = o2.contacts; continue; }
+          if (o2.slot_update) { dialogSlots = o2.slot_update; saveState(); continue; }
           var d2 = o2.choices && o2.choices[0] && o2.choices[0].delta && o2.choices[0].delta.content;
           if (d2) {
             fullContent += d2;
@@ -720,7 +767,8 @@
         message: message,
         sessionId: sessionId,
         history: conversationHistory.slice(-10),
-        stream: false
+        stream: false,
+        dialogSlots: dialogSlots
       }),
       signal: controller.signal
     });
@@ -736,6 +784,7 @@
     try { data = JSON.parse(text); } catch(e) { throw new Error(label + ' invalid JSON'); }
     if (data.error) throw new Error(label + ': ' + data.error);
     if (!data.content) throw new Error(label + ': empty content');
+    if (data.slot_update) { dialogSlots = data.slot_update; saveState(); }
     return { content: data.content, contacts: data.contacts || null };
   }
 
@@ -750,6 +799,7 @@
 
     addMessage(message, 'user');
     conversationHistory.push({ role: 'user', content: message });
+    saveState();
 
     showTyping();
 
@@ -816,6 +866,7 @@
       assistantMsg.innerHTML = formatMessage(result.content);
       assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
       conversationHistory.push({ role: 'assistant', content: result.content });
+      saveState();
 
       if (result.contacts) {
         addMessage(result.contacts, 'assistant');

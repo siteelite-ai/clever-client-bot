@@ -676,14 +676,12 @@ function generatePriceSynonyms(query: string): string[] {
 }
 
 /**
- * Detect pending price intent from conversation history.
- * Scans bot messages for clarification patterns like "В категории X найдено Y товаров".
- * Returns the price intent if found, or null.
+ * DEPRECATED: detectPendingPriceIntent is replaced by dialog slots.
+ * Kept as ultimate fallback when no slots are provided (e.g. old embed.js).
  */
 function detectPendingPriceIntent(
   history: Array<{ role: string; content: string }>
 ): { priceIntent: 'most_expensive' | 'cheapest'; category: string } | null {
-  // Scan last 6 messages for bot's price clarification message
   const recent = history.slice(-6);
   
   for (let i = recent.length - 1; i >= 0; i--) {
@@ -692,12 +690,10 @@ function detectPendingPriceIntent(
     
     const content = typeof msg.content === 'string' ? msg.content : '';
     
-    // Match patterns like "В категории фонари найдено 55 товаров" or "самый дорогой/дешёвый"
-    const clarifyMatch = content.match(/категории\s+[«"]?(.+?)[»"]?\s+найден[оа]?\s+(\d+)\s+товар/i);
+    const clarifyMatch = content.match(/категории\s+[«"]?(.+?)[»"]?\s+(?:найден[оа]?|представлен[оа]?|есть)\s+(\d+)\s+товар/i);
     const priceMatch = content.match(/сам(?:ый|ое|ую|ая)\s+(дорог|дешёв|бюджетн)/i);
     
     if (clarifyMatch || priceMatch) {
-      // Determine price intent from the assistant's message context
       const isDorogo = /дорог|дороже|дорогостоящ/i.test(content);
       const isDeshevo = /дешёв|дешевл|бюджетн|недорог/i.test(content);
       
@@ -712,6 +708,141 @@ function detectPendingPriceIntent(
   }
   
   return null;
+}
+
+// ============================================================
+// DIALOG SLOTS — structured intent memory across turns
+// ============================================================
+
+interface DialogSlot {
+  intent: 'price_extreme' | 'product_search';
+  price_dir?: 'most_expensive' | 'cheapest';
+  base_category: string;
+  refinement?: string;
+  status: 'pending' | 'done';
+  created_turn: number;
+  turns_since_touched: number;
+}
+
+type DialogSlots = Record<string, DialogSlot>;
+
+const MAX_SLOTS = 3;
+const SLOT_FIELD_MAX_LEN = 200;
+const SLOT_TIMEOUT_TURNS = 4;
+
+function validateAndSanitizeSlots(raw: unknown): DialogSlots {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  
+  const slots: DialogSlots = {};
+  let count = 0;
+  
+  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+    if (count >= MAX_SLOTS) break;
+    if (!val || typeof val !== 'object') continue;
+    
+    const s = val as Record<string, unknown>;
+    
+    // Validate intent
+    if (s.intent !== 'price_extreme' && s.intent !== 'product_search') continue;
+    // Validate status
+    if (s.status !== 'pending' && s.status !== 'done') continue;
+    // Validate base_category
+    if (typeof s.base_category !== 'string' || s.base_category.length === 0) continue;
+    
+    // Sanitize string fields
+    const sanitize = (v: unknown): string => {
+      if (typeof v !== 'string') return '';
+      return v.replace(/<[^>]*>/g, '').replace(/['"`;\\]/g, '').substring(0, SLOT_FIELD_MAX_LEN).trim();
+    };
+    
+    slots[key.substring(0, 20)] = {
+      intent: s.intent as 'price_extreme' | 'product_search',
+      price_dir: (s.price_dir === 'most_expensive' || s.price_dir === 'cheapest') ? s.price_dir : undefined,
+      base_category: sanitize(s.base_category),
+      refinement: s.refinement ? sanitize(s.refinement) : undefined,
+      status: s.status as 'pending' | 'done',
+      created_turn: typeof s.created_turn === 'number' ? s.created_turn : 0,
+      turns_since_touched: typeof s.turns_since_touched === 'number' ? s.turns_since_touched : 0,
+    };
+    count++;
+  }
+  
+  return slots;
+}
+
+/**
+ * Resolve dialog slots against current user message.
+ * Returns: { resolved slot key, combined query, price intent } or null.
+ */
+function resolveSlotRefinement(
+  slots: DialogSlots,
+  userMessage: string,
+  classificationResult: ClassificationResult | null
+): { slotKey: string; query: string; priceIntent: 'most_expensive' | 'cheapest'; updatedSlots: DialogSlots } | null {
+  // Find pending price_extreme slot
+  let pendingKey: string | null = null;
+  let pendingSlot: DialogSlot | null = null;
+  
+  for (const [key, slot] of Object.entries(slots)) {
+    if (slot.status === 'pending' && slot.intent === 'price_extreme' && slot.price_dir) {
+      pendingKey = key;
+      pendingSlot = slot;
+      break;
+    }
+  }
+  
+  if (!pendingKey || !pendingSlot) return null;
+  
+  // Check if user message is a refinement (short, no explicit new price intent)
+  const isShort = userMessage.length < 80;
+  const hasNewPriceIntent = classificationResult?.price_intent != null;
+  
+  // If classifier found a new price_intent with a different category, it's a new request
+  if (hasNewPriceIntent && classificationResult?.product_category && 
+      classificationResult.product_category !== pendingSlot.base_category) {
+    return null;
+  }
+  
+  // If message is short and no new price intent → treat as refinement
+  if (isShort && !hasNewPriceIntent) {
+    const refinement = userMessage.trim();
+    const combinedQuery = `${refinement} ${pendingSlot.base_category}`.trim();
+    
+    const updatedSlots = { ...slots };
+    updatedSlots[pendingKey] = {
+      ...pendingSlot,
+      refinement,
+      turns_since_touched: 0,
+    };
+    
+    console.log(`[Slots] Resolved refinement: "${refinement}" + base "${pendingSlot.base_category}" → "${combinedQuery}", dir=${pendingSlot.price_dir}`);
+    
+    return {
+      slotKey: pendingKey,
+      query: combinedQuery,
+      priceIntent: pendingSlot.price_dir!,
+      updatedSlots,
+    };
+  }
+  
+  return null;
+}
+
+/**
+ * Age all pending slots by 1 turn. Auto-close expired ones.
+ */
+function ageSlots(slots: DialogSlots): DialogSlots {
+  const updated: DialogSlots = {};
+  for (const [key, slot] of Object.entries(slots)) {
+    if (slot.status === 'done') continue; // drop done slots
+    const aged = { ...slot, turns_since_touched: slot.turns_since_touched + 1 };
+    if (aged.turns_since_touched >= SLOT_TIMEOUT_TURNS) {
+      console.log(`[Slots] Auto-closing slot "${key}" after ${SLOT_TIMEOUT_TURNS} turns without interaction`);
+      continue; // drop expired slot
+    }
+    updated[key] = aged;
+  }
+  return updated;
 }
 
 async function handlePriceIntent(
@@ -2194,6 +2325,14 @@ serve(async (req) => {
       throw new Error('Invalid request format: missing messages or message');
     }
     
+    // === DIALOG SLOTS: read and validate ===
+    let dialogSlots: DialogSlots = validateAndSanitizeSlots(body.dialogSlots);
+    let slotsUpdated = false;
+    console.log(`[Chat] Dialog slots received: ${Object.keys(dialogSlots).length} slot(s)`);
+    
+    // Age all pending slots by 1 turn
+    dialogSlots = ageSlots(dialogSlots);
+    
     const appSettings = await getAppSettings();
     const aiConfig = getAIConfig(appSettings);
     
@@ -2280,22 +2419,33 @@ serve(async (req) => {
         const classifyElapsed = Date.now() - classifyStart;
         console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}"`);
         
-        // === PENDING PRICE INTENT DETECTION ===
-        // If classifier didn't detect price_intent, check if there's a pending one from history
+        // === DIALOG SLOTS: try slot-based resolution FIRST ===
         let effectivePriceIntent = classification?.price_intent;
         let effectiveCategory = classification?.product_category || classification?.product_name || '';
         
-        if (!effectivePriceIntent) {
-          const pending = detectPendingPriceIntent(recentHistoryForClassifier);
-          if (pending) {
-            effectivePriceIntent = pending.priceIntent;
-            // Combine pending category with current user message as subcategory
-            if (pending.category && userMessage.length < 50) {
-              effectiveCategory = `${userMessage} ${pending.category}`.trim();
-            } else {
-              effectiveCategory = userMessage;
+        const slotResolution = resolveSlotRefinement(dialogSlots, userMessage, classification);
+        
+        if (slotResolution) {
+          // Slot resolved! Use slot's price intent and combined query
+          effectivePriceIntent = slotResolution.priceIntent;
+          effectiveCategory = slotResolution.query;
+          dialogSlots = slotResolution.updatedSlots;
+          slotsUpdated = true;
+          console.log(`[Chat] Slot-resolved: intent=${effectivePriceIntent}, query="${effectiveCategory}"`);
+        } else if (!effectivePriceIntent) {
+          // Fallback: legacy detectPendingPriceIntent for clients without slots
+          const hasSlots = Object.keys(body.dialogSlots || {}).length > 0;
+          if (!hasSlots) {
+            const pending = detectPendingPriceIntent(recentHistoryForClassifier);
+            if (pending) {
+              effectivePriceIntent = pending.priceIntent;
+              if (pending.category && userMessage.length < 50) {
+                effectiveCategory = `${userMessage} ${pending.category}`.trim();
+              } else {
+                effectiveCategory = userMessage;
+              }
+              console.log(`[Chat] Legacy restored pending price intent: ${effectivePriceIntent}, combined category="${effectiveCategory}"`);
             }
-            console.log(`[Chat] Restored pending price intent: ${effectivePriceIntent}, combined category="${effectiveCategory}"`);
           }
         }
         
@@ -2305,7 +2455,6 @@ serve(async (req) => {
           if (priceQuery) {
             console.log(`[Chat] Price intent detected: ${effectivePriceIntent} for "${priceQuery}"`);
             
-            // Generate synonym queries for broader search
             const synonymQueries = generatePriceSynonyms(priceQuery);
             const priceResult = await handlePriceIntent(synonymQueries, effectivePriceIntent, appSettings.volt220_api_token!);
             
@@ -2313,15 +2462,38 @@ serve(async (req) => {
               foundProducts = priceResult.products;
               articleShortCircuit = true;
               console.log(`[Chat] PriceIntent SUCCESS: ${foundProducts.length} products sorted by ${effectivePriceIntent} (total ${priceResult.total})`);
+              
+              // Mark slot as done
+              if (slotResolution) {
+                dialogSlots[slotResolution.slotKey] = { ...dialogSlots[slotResolution.slotKey], status: 'done' };
+                slotsUpdated = true;
+              }
             } else if (priceResult.action === 'clarify') {
               priceIntentClarify = { total: priceResult.total!, category: priceResult.category! };
-              articleShortCircuit = true; // skip LLM 1, we'll generate clarify response
-              foundProducts = []; // no products to show yet
+              articleShortCircuit = true;
+              foundProducts = [];
               console.log(`[Chat] PriceIntent CLARIFY: ${priceResult.total} products in "${priceResult.category}", asking user to narrow down`);
+              
+              // Create a new pending slot for this clarification
+              if (!slotResolution) {
+                const slotKey = `slot_${Date.now()}`;
+                dialogSlots[slotKey] = {
+                  intent: 'price_extreme',
+                  price_dir: effectivePriceIntent,
+                  base_category: priceResult.category!,
+                  status: 'pending',
+                  created_turn: messages.length,
+                  turns_since_touched: 0,
+                };
+                slotsUpdated = true;
+                console.log(`[Chat] Created new price slot: "${slotKey}" for "${priceResult.category}" (${effectivePriceIntent})`);
+              }
             } else {
               console.log(`[Chat] PriceIntent: no results for "${priceQuery}" (tried ${synonymQueries.length} variants), falling through`);
             }
           }
+        } else if (effectivePriceIntent && !effectiveCategory) {
+          console.log(`[Chat] Price intent detected but no category, skipping`);
         }
         
         // === TITLE-FIRST (only if price intent didn't handle it) ===
@@ -2818,9 +2990,12 @@ ${productInstructions}`;
         const shouldShowContacts = content.includes('[CONTACT_MANAGER]');
         content = content.replace(/\s*\[CONTACT_MANAGER\]\s*/g, '').trim();
         
-        const responseBody: { content: string; contacts?: string | null } = { content };
+        const responseBody: { content: string; contacts?: string | null; slot_update?: DialogSlots } = { content };
         if (shouldShowContacts && formattedContacts) {
           responseBody.contacts = formattedContacts;
+        }
+        if (slotsUpdated) {
+          responseBody.slot_update = dialogSlots;
         }
         
         return new Response(
@@ -2864,6 +3039,10 @@ ${productInstructions}`;
             if (fullContent.includes('[CONTACT_MANAGER]') && formattedContacts) {
               const contactsEvent = `data: ${JSON.stringify({ contacts: formattedContacts })}\n\n`;
               controller.enqueue(encoder.encode(contactsEvent));
+            }
+            if (slotsUpdated) {
+              const slotEvent = `data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`;
+              controller.enqueue(encoder.encode(slotEvent));
             }
             const estInputTokens = Math.ceil(systemPrompt.length / 3);
             const estOutputTokens = Math.ceil(fullContent.length / 3);
@@ -2937,6 +3116,10 @@ ${productInstructions}`;
           if (fullContent2.includes('[CONTACT_MANAGER]') && formattedContacts) {
             const contactsEvent = `data: ${JSON.stringify({ contacts: formattedContacts })}\n\n`;
             controller.enqueue(encoder.encode(contactsEvent));
+          }
+          if (slotsUpdated) {
+            const slotEvent = `data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`;
+            controller.enqueue(encoder.encode(slotEvent));
           }
           const estInputTokens = Math.ceil(systemPrompt.length / 3);
           const estOutputTokens = Math.ceil(fullContent2.length / 3);
