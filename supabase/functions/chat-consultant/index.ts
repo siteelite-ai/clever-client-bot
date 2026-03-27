@@ -2115,15 +2115,40 @@ serve(async (req) => {
     }
 
     // === TITLE-FIRST SHORT-CIRCUIT via Micro-LLM classifier ===
-    // AI determines if message contains a product name and extracts it cleanly
+    // AI determines if message contains a product name and/or price intent
+    let priceIntentClarify: { total: number; category: string } | null = null;
+    
     if (!articleShortCircuit && appSettings.volt220_api_token) {
       const classifyStart = Date.now();
       try {
         const classification = await classifyProductName(userMessage);
         const classifyElapsed = Date.now() - classifyStart;
-        console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}"`);
+        console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}"`);
         
-        if (classification?.has_product_name && classification.product_name) {
+        // === PRICE INTENT HANDLING ===
+        if (classification?.price_intent && appSettings.volt220_api_token) {
+          const priceQuery = classification.product_name || classification.product_category || '';
+          if (priceQuery) {
+            console.log(`[Chat] Price intent detected: ${classification.price_intent} for "${priceQuery}"`);
+            const priceResult = await handlePriceIntent(priceQuery, classification.price_intent, appSettings.volt220_api_token!);
+            
+            if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
+              foundProducts = priceResult.products;
+              articleShortCircuit = true;
+              console.log(`[Chat] PriceIntent SUCCESS: ${foundProducts.length} products sorted by ${classification.price_intent} (total ${priceResult.total})`);
+            } else if (priceResult.action === 'clarify') {
+              priceIntentClarify = { total: priceResult.total!, category: priceResult.category! };
+              articleShortCircuit = true; // skip LLM 1, we'll generate clarify response
+              foundProducts = []; // no products to show yet
+              console.log(`[Chat] PriceIntent CLARIFY: ${priceResult.total} products in "${priceResult.category}", asking user to narrow down`);
+            } else {
+              console.log(`[Chat] PriceIntent: no results for "${priceQuery}", falling through`);
+            }
+          }
+        }
+        
+        // === TITLE-FIRST (only if price intent didn't handle it) ===
+        if (!articleShortCircuit && classification?.has_product_name && classification.product_name) {
           const searchStart = Date.now();
           const directResults = await searchProductsByCandidate(
             { query: classification.product_name, brand: null, category: null, min_price: null, max_price: null },
