@@ -690,7 +690,8 @@ function detectPendingPriceIntent(
     
     const content = typeof msg.content === 'string' ? msg.content : '';
     
-    const clarifyMatch = content.match(/категории\s+[«"]?(.+?)[»"]?\s+(?:найден[оа]?|представлен[оа]?|есть)\s+(\d+)\s+товар/i);
+    // Strict regex: only capture text inside quotes «...» or "..."
+    const clarifyMatch = content.match(/категории\s+[«"]([^»"]+)[»"]\s+(?:найден[оа]?|представлен[оа]?|есть|у нас)\s+(\d+)\s+товар/i);
     const priceMatch = content.match(/сам(?:ый|ое|ую|ая)\s+(дорог|дешёв|бюджетн)/i);
     
     if (clarifyMatch || priceMatch) {
@@ -795,7 +796,8 @@ function resolveSlotRefinement(
   
   // Check if user message is a refinement (short, no explicit new price intent)
   const isShort = userMessage.length < 80;
-  const hasNewPriceIntent = classificationResult?.price_intent != null;
+  const hasNewPriceIntent = classificationResult?.price_intent != null 
+    && classificationResult.price_intent !== 'none';
   
   // If classifier found a new price_intent with a different category, it's a new request
   if (hasNewPriceIntent && classificationResult?.product_category && 
@@ -2420,7 +2422,11 @@ serve(async (req) => {
         console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}"`);
         
         // === DIALOG SLOTS: try slot-based resolution FIRST ===
-        let effectivePriceIntent = classification?.price_intent;
+        // Filter out "none" — classifier returns string "none", not null
+        let effectivePriceIntent: string | undefined = 
+          (classification?.price_intent && classification.price_intent !== 'none') 
+            ? classification.price_intent 
+            : undefined;
         let effectiveCategory = classification?.product_category || classification?.product_name || '';
         
         const slotResolution = resolveSlotRefinement(dialogSlots, userMessage, classification);
