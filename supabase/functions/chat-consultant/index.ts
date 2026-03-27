@@ -2325,6 +2325,14 @@ serve(async (req) => {
       throw new Error('Invalid request format: missing messages or message');
     }
     
+    // === DIALOG SLOTS: read and validate ===
+    let dialogSlots: DialogSlots = validateAndSanitizeSlots(body.dialogSlots);
+    let slotsUpdated = false;
+    console.log(`[Chat] Dialog slots received: ${Object.keys(dialogSlots).length} slot(s)`);
+    
+    // Age all pending slots by 1 turn
+    dialogSlots = ageSlots(dialogSlots);
+    
     const appSettings = await getAppSettings();
     const aiConfig = getAIConfig(appSettings);
     
