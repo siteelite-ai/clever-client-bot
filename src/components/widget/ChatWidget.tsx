@@ -13,20 +13,49 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 type Msg = { role: 'user' | 'assistant'; content: string };
 
+// Dialog slot types for persistent intent memory
+interface DialogSlot {
+  intent: 'price_extreme' | 'product_search';
+  price_dir?: 'most_expensive' | 'cheapest';
+  base_category: string;
+  refinement?: string;
+  status: 'pending' | 'done';
+  created_turn: number;
+  turns_since_touched: number;
+}
+
+type DialogSlots = Record<string, DialogSlot>;
+
 async function streamChat({
   messages,
   onDelta,
   onDone,
   onError,
   onContacts,
+  onSlotUpdate,
+  conversationId,
+  dialogSlots,
 }: {
   messages: Msg[];
   onDelta: (deltaText: string) => void;
   onDone: () => void;
   onError: (error: string) => void;
   onContacts?: (contacts: string) => void;
+  onSlotUpdate?: (slots: DialogSlots) => void;
+  conversationId: string;
+  dialogSlots: DialogSlots;
 }) {
   try {
+    // Clean: only send pending slots, max 3
+    const activeSlots: DialogSlots = {};
+    let count = 0;
+    for (const [key, slot] of Object.entries(dialogSlots)) {
+      if (slot.status === 'pending' && count < 3) {
+        activeSlots[key] = slot;
+        count++;
+      }
+    }
+
     const resp = await fetch(`${SUPABASE_URL}/functions/v1/chat-consultant`, {
       method: 'POST',
       headers: {
@@ -35,7 +64,8 @@ async function streamChat({
       },
       body: JSON.stringify({ 
         messages: messages.map(m => ({ role: m.role, content: m.content })),
-        conversationId: Date.now().toString()
+        conversationId,
+        dialogSlots: activeSlots,
       }),
     });
 
