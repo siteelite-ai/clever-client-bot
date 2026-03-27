@@ -1918,55 +1918,33 @@ serve(async (req) => {
      }
     }
 
-    // === TITLE-FIRST SHORT-CIRCUIT: Try user's message as query BEFORE LLM 1 ===
-    // Two parallel queries: full cleaned name + shortened version
-    // With title-scoring to verify relevance
+    // === TITLE-FIRST SHORT-CIRCUIT: Like article-first but for product names ===
+    // Simple logic: clean query → check if it looks like a product name → search → show results
     if (!articleShortCircuit && appSettings.volt220_api_token) {
       const cleanedQuery = cleanQueryForDirectSearch(userMessage);
+      const queryTokens = extractTokens(cleanedQuery);
+      const querySpecs = extractSpecs(cleanedQuery);
       
-      if (cleanedQuery.length >= 6) {
-        console.log(`[Chat] Title-first search: "${cleanedQuery.substring(0, 80)}"`);
+      // Only trigger for queries that look like product names (>= 3 tokens OR has specs)
+      // This prevents generic queries like "лампа" from short-circuiting
+      if (queryTokens.length >= 3 || querySpecs.length >= 1) {
+        console.log(`[Chat] Title-first search: "${cleanedQuery.substring(0, 80)}" (tokens=${queryTokens.length}, specs=${querySpecs.length})`);
         const startTime = Date.now();
         
         try {
-          // Run 2 parallel queries: full name + shortened
-          const shortened = shortenQuery(cleanedQuery);
-          const queries = [cleanedQuery];
-          if (shortened !== cleanedQuery && shortened.length >= 4) {
-            queries.push(shortened);
-          }
-          
-          const directPromises = queries.map(q =>
-            searchProductsByCandidate(
-              { query: q, brand: null, category: null, min_price: null, max_price: null },
-              appSettings.volt220_api_token!,
-              15
-            )
+          const directResults = await searchProductsByCandidate(
+            { query: cleanedQuery, brand: null, category: null, min_price: null, max_price: null },
+            appSettings.volt220_api_token!,
+            15
           );
-          const directResults = await Promise.all(directPromises);
           
-          // Merge results
-          const allDirect = new Map<number, Product>();
-          for (const results of directResults) {
-            for (const p of results) {
-              if (!allDirect.has(p.id)) allDirect.set(p.id, p);
-            }
-          }
-          
-          const directProducts = Array.from(allDirect.values());
           const elapsed = Date.now() - startTime;
-          console.log(`[Chat] Title-first: ${directProducts.length} products in ${elapsed}ms`);
+          console.log(`[Chat] Title-first: ${directResults.length} products in ${elapsed}ms`);
           
-          if (directProducts.length > 0) {
-            // Score and check if we have a good match
-            if (hasGoodMatch(directProducts, cleanedQuery, 30)) {
-              // Rerank by relevance and take top results
-              foundProducts = rerankProducts(directProducts, cleanedQuery).slice(0, 10);
-              articleShortCircuit = true;
-              console.log(`[Chat] Title-first SUCCESS: ${foundProducts.length} good matches, skipping LLM 1 (${elapsed}ms)`);
-            } else {
-              console.log(`[Chat] Title-first: ${directProducts.length} results but low title-score, proceeding to LLM 1`);
-            }
+          if (directResults.length > 0) {
+            foundProducts = directResults.slice(0, 10);
+            articleShortCircuit = true;
+            console.log(`[Chat] Title-first SUCCESS: ${foundProducts.length} products, skipping LLM 1 (${elapsed}ms)`);
           } else {
             console.log(`[Chat] Title-first: 0 results, proceeding to LLM 1`);
           }
