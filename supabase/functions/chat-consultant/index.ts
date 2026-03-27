@@ -504,7 +504,14 @@ interface ExtractedIntent {
  * Uses Lovable AI Gateway with gemini-2.5-flash-lite for speed (~0.5-1.5s).
  * Returns extracted product name or null. Timeout: 3 seconds.
  */
-async function classifyProductName(message: string): Promise<{ has_product_name: boolean; product_name?: string } | null> {
+interface ClassificationResult {
+  has_product_name: boolean;
+  product_name?: string;
+  price_intent?: 'most_expensive' | 'cheapest';
+  product_category?: string;
+}
+
+async function classifyProductName(message: string): Promise<ClassificationResult | null> {
   const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
   if (!LOVABLE_API_KEY) {
     console.log('[Classify] LOVABLE_API_KEY not configured, skipping');
@@ -528,28 +535,33 @@ async function classifyProductName(message: string): Promise<{ has_product_name:
             role: 'system',
             content: `Ты классификатор сообщений интернет-магазина электротоваров 220volt.kz.
 
-Определи, содержит ли сообщение пользователя КОНКРЕТНОЕ название товара (модель, тип + марка, тип + характеристики).
+Задача 1: Определи, содержит ли сообщение КОНКРЕТНОЕ название товара (модель, тип + марка, тип + характеристики).
 
 Примеры названий товаров:
-- "кабель КГ 4*2,5" → да, название: "кабель КГ 4*2,5"
-- "лампа ECO T8 18Вт 6500К G13" → да, название: "лампа ECO T8 18Вт 6500К G13"
-- "автомат ABB 32А" → да, название: "автомат ABB 32А"
-- "корм для собак Royal Canin" → да, название: "корм для собак Royal Canin"
-- "Найди мне кабель КГ 4*2,5 есть в наличии" → да, название: "кабель КГ 4*2,5"
+- "кабель КГ 4*2,5" → has_product_name=true, product_name="кабель КГ 4*2,5"
+- "автомат ABB 32А" → has_product_name=true, product_name="автомат ABB 32А"
+- "Найди мне кабель КГ 4*2,5 есть в наличии" → has_product_name=true, product_name="кабель КГ 4*2,5"
 
 НЕ являются названиями:
-- "какие розетки у вас есть?" → нет (общий вопрос)
-- "лампа" → нет (слишком общий запрос, одно слово)
-- "кабель" → нет (одно слово без конкретики)
-- "что посоветуете для ванной?" → нет (вопрос)
-- "доставка в Алматы" → нет (не товар)
+- "какие розетки у вас есть?" → has_product_name=false
+- "лампа" → has_product_name=false (одно слово)
+- "самый дорогой фонарь" → has_product_name=false, но product_category="фонарь"
 
-Ответь СТРОГО в JSON формате: {"has_product_name": true/false, "product_name": "извлечённое название"}`
+Задача 2: Определи ценовой интент — если пользователь ищет САМЫЙ дорогой или САМЫЙ дешёвый/бюджетный товар.
+- "самый дорогой фонарь" → price_intent="most_expensive", product_category="фонарь"
+- "какой самый дешёвый кабель?" → price_intent="cheapest", product_category="кабель"
+- "самый бюджетный автомат ABB" → price_intent="cheapest", has_product_name=true, product_name="автомат ABB"
+- "покажи розетки" → без price_intent (обычный запрос)
+- "сколько стоит лампа ECO T8?" → без price_intent (вопрос о цене конкретного товара)
+
+product_category — краткое слово-категория товара (фонарь, кабель, автомат, розетка, лампа и т.д.). Указывай только при price_intent.
+
+Ответь СТРОГО в JSON: {"has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "..."}`
           },
           { role: 'user', content: message }
         ],
         temperature: 0,
-        max_tokens: 100,
+        max_tokens: 150,
       }),
       signal: controller.signal,
     });
@@ -571,6 +583,8 @@ async function classifyProductName(message: string): Promise<{ has_product_name:
     return {
       has_product_name: !!parsed.has_product_name,
       product_name: parsed.product_name || undefined,
+      price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
+      product_category: parsed.product_category || undefined,
     };
   } catch (e) {
     clearTimeout(timeoutId);
@@ -580,6 +594,90 @@ async function classifyProductName(message: string): Promise<{ has_product_name:
       console.error('[Classify] Error:', e);
     }
     return null;
+  }
+}
+
+// ============================================================
+// HANDLE PRICE INTENT — probe API, decide: answer or clarify
+// ============================================================
+
+interface PriceIntentResult {
+  action: 'answer' | 'clarify' | 'not_found';
+  products?: Product[];
+  total?: number;
+  category?: string;
+}
+
+async function handlePriceIntent(
+  query: string,
+  priceIntent: 'most_expensive' | 'cheapest',
+  apiToken: string
+): Promise<PriceIntentResult> {
+  // Step 1: Probe request to get total count
+  const probeStart = Date.now();
+  try {
+    const probeParams = new URLSearchParams();
+    probeParams.append('query', query);
+    probeParams.append('per_page', '1');
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    
+    const probeResponse = await fetch(`${VOLT220_API_URL}?${probeParams}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    
+    if (!probeResponse.ok) {
+      console.error(`[PriceIntent] Probe API error: ${probeResponse.status}`);
+      return { action: 'not_found' };
+    }
+    
+    const probeRaw = await probeResponse.json();
+    const probeData = probeRaw.data || probeRaw;
+    const total = probeData.pagination?.total || 0;
+    const probeElapsed = Date.now() - probeStart;
+    console.log(`[PriceIntent] Probe: query="${query}", total=${total}, ${probeElapsed}ms`);
+    
+    if (total === 0) {
+      return { action: 'not_found' };
+    }
+    
+    // Step 2: Decision — fetch all or ask to clarify
+    if (total <= 50) {
+      // Fetch all products in one request
+      const fetchStart = Date.now();
+      const allProducts = await searchProductsByCandidate(
+        { query, brand: null, category: null, min_price: null, max_price: null },
+        apiToken,
+        50
+      );
+      const fetchElapsed = Date.now() - fetchStart;
+      console.log(`[PriceIntent] Fetched all ${allProducts.length} of ${total} products in ${fetchElapsed}ms`);
+      
+      // Filter zero-price and sort by price intent
+      const priced = allProducts.filter(p => p.price > 0);
+      const list = priced.length > 0 ? priced : allProducts;
+      
+      list.sort((a, b) => {
+        if (priceIntent === 'most_expensive') return b.price - a.price;
+        return a.price - b.price;
+      });
+      
+      return { action: 'answer', products: list.slice(0, 10), total };
+    } else {
+      // Too many products — ask user to clarify
+      console.log(`[PriceIntent] Too many products (${total}), requesting clarification`);
+      return { action: 'clarify', total, category: query };
+    }
+  } catch (error) {
+    console.error(`[PriceIntent] Error:`, error);
+    return { action: 'not_found' };
   }
 }
 
@@ -2017,15 +2115,40 @@ serve(async (req) => {
     }
 
     // === TITLE-FIRST SHORT-CIRCUIT via Micro-LLM classifier ===
-    // AI determines if message contains a product name and extracts it cleanly
+    // AI determines if message contains a product name and/or price intent
+    let priceIntentClarify: { total: number; category: string } | null = null;
+    
     if (!articleShortCircuit && appSettings.volt220_api_token) {
       const classifyStart = Date.now();
       try {
         const classification = await classifyProductName(userMessage);
         const classifyElapsed = Date.now() - classifyStart;
-        console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}"`);
+        console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}"`);
         
-        if (classification?.has_product_name && classification.product_name) {
+        // === PRICE INTENT HANDLING ===
+        if (classification?.price_intent && appSettings.volt220_api_token) {
+          const priceQuery = classification.product_name || classification.product_category || '';
+          if (priceQuery) {
+            console.log(`[Chat] Price intent detected: ${classification.price_intent} for "${priceQuery}"`);
+            const priceResult = await handlePriceIntent(priceQuery, classification.price_intent, appSettings.volt220_api_token!);
+            
+            if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
+              foundProducts = priceResult.products;
+              articleShortCircuit = true;
+              console.log(`[Chat] PriceIntent SUCCESS: ${foundProducts.length} products sorted by ${classification.price_intent} (total ${priceResult.total})`);
+            } else if (priceResult.action === 'clarify') {
+              priceIntentClarify = { total: priceResult.total!, category: priceResult.category! };
+              articleShortCircuit = true; // skip LLM 1, we'll generate clarify response
+              foundProducts = []; // no products to show yet
+              console.log(`[Chat] PriceIntent CLARIFY: ${priceResult.total} products in "${priceResult.category}", asking user to narrow down`);
+            } else {
+              console.log(`[Chat] PriceIntent: no results for "${priceQuery}", falling through`);
+            }
+          }
+        }
+        
+        // === TITLE-FIRST (only if price intent didn't handle it) ===
+        if (!articleShortCircuit && classification?.has_product_name && classification.product_name) {
           const searchStart = Date.now();
           const directResults = await searchProductsByCandidate(
             { query: classification.product_name, brand: null, category: null, min_price: null, max_price: null },
@@ -2244,8 +2367,22 @@ ${productContext}
    - Светильник → «К нему подойдут лампы с цоколем E27. Показать варианты?»
    НЕ ВЫДУМЫВАЙ cross-sell если не знаешь категорию! В этом случае просто спроси: «Что ещё подобрать для вашего проекта?»
 3. Тон: профессиональный, как опытный консультант. БЕЗ восклицательных знаков, без «отличный выбор!», без давления.`;
+    } else if (priceIntentClarify) {
+      // Price intent with too many products — ask user to narrow down
+      productInstructions = `
+🔍 ЦЕНОВОЙ ЗАПРОС — НУЖНО УТОЧНЕНИЕ
+
+Клиент ищет самый ${priceIntentClarify.category ? `дорогой/дешёвый товар в категории "${priceIntentClarify.category}"` : 'дорогой/дешёвый товар'}.
+В этой категории найдено **${priceIntentClarify.total} товаров** — это слишком много, чтобы точно определить крайнюю цену.
+
+ТВОЙ ОТВЕТ:
+1. Скажи клиенту, что в категории "${priceIntentClarify.category}" найдено ${priceIntentClarify.total} товаров
+2. Попроси УТОЧНИТЬ тип или подкатегорию, чтобы сузить поиск. Предложи 3-4 варианта подкатегорий, если знаешь (например, для фонарей: налобный, аккумуляторный, LED и т.д.)
+3. Объясни, что после уточнения ты сможешь точно найти самый дорогой/дешёвый вариант
+4. Тон: профессиональный, дружелюбный, без давления`;
     } else if (articleShortCircuit && productContext) {
-      // Title-first: товар найден по названию
+      // Title-first or price-intent answer: товар найден
+      const isPriceSort = foundProducts.length > 0 && !detectedArticles.length;
       productInstructions = `
 🎯 ТОВАР НАЙДЕН ПО НАЗВАНИЮ (покажи сразу!):
 ${productContext}
