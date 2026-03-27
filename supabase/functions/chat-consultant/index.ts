@@ -3040,6 +3040,10 @@ ${productInstructions}`;
               const contactsEvent = `data: ${JSON.stringify({ contacts: formattedContacts })}\n\n`;
               controller.enqueue(encoder.encode(contactsEvent));
             }
+            if (slotsUpdated) {
+              const slotEvent = `data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`;
+              controller.enqueue(encoder.encode(slotEvent));
+            }
             const estInputTokens = Math.ceil(systemPrompt.length / 3);
             const estOutputTokens = Math.ceil(fullContent.length / 3);
             logTokenUsage(estInputTokens, estOutputTokens, aiConfig.model);
@@ -3112,6 +3116,10 @@ ${productInstructions}`;
           if (fullContent2.includes('[CONTACT_MANAGER]') && formattedContacts) {
             const contactsEvent = `data: ${JSON.stringify({ contacts: formattedContacts })}\n\n`;
             controller.enqueue(encoder.encode(contactsEvent));
+          }
+          if (slotsUpdated) {
+            const slotEvent = `data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`;
+            controller.enqueue(encoder.encode(slotEvent));
           }
           const estInputTokens = Math.ceil(systemPrompt.length / 3);
           const estOutputTokens = Math.ceil(fullContent2.length / 3);
