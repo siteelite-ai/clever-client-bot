@@ -511,7 +511,7 @@ interface ClassificationResult {
   product_category?: string;
 }
 
-async function classifyProductName(message: string): Promise<ClassificationResult | null> {
+async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>): Promise<ClassificationResult | null> {
   const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
   if (!LOVABLE_API_KEY) {
     console.log('[Classify] LOVABLE_API_KEY not configured, skipping');
@@ -534,6 +534,13 @@ async function classifyProductName(message: string): Promise<ClassificationResul
           {
             role: 'system',
             content: `Ты классификатор сообщений интернет-магазина электротоваров 220volt.kz.
+
+Тебе может быть предоставлена недавняя история диалога (последние сообщения). Если текущее сообщение пользователя — это ОТВЕТ на уточняющий вопрос бота, ты ОБЯЗАН учитывать ИСХОДНЫЙ запрос из истории для определения price_intent и product_category.
+
+Пример с историей:
+- assistant: "В категории фонари 55 товаров. Уточните тип: кемпинговый, налобный, аккумуляторный?"
+- user: "кемпинговый"
+→ price_intent="most_expensive", product_category="кемпинговый фонарь", has_product_name=false
 
 Задача 1: Определи, содержит ли сообщение КОНКРЕТНОЕ название товара (модель, тип + марка, тип + характеристики).
 
@@ -558,6 +565,7 @@ product_category — краткое слово-категория товара (
 
 Ответь СТРОГО в JSON: {"has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "..."}`
           },
+          ...(recentHistory || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
           { role: 'user', content: message }
         ],
         temperature: 0,
@@ -2121,7 +2129,8 @@ serve(async (req) => {
     if (!articleShortCircuit && appSettings.volt220_api_token) {
       const classifyStart = Date.now();
       try {
-        const classification = await classifyProductName(userMessage);
+        const recentHistoryForClassifier = historyForContext.slice(-4).map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }));
+        const classification = await classifyProductName(userMessage, recentHistoryForClassifier);
         const classifyElapsed = Date.now() - classifyStart;
         console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}"`);
         
