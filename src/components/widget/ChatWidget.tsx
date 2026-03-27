@@ -224,9 +224,13 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
     await streamChat({
       messages: apiMessages,
+      conversationId: conversationIdRef.current,
+      dialogSlots,
       onDelta: updateAssistant,
+      onSlotUpdate: (updatedSlots) => {
+        setDialogSlots(updatedSlots);
+      },
       onContacts: (contacts) => {
-        // Add contacts as a separate second message
         setMessages(prev => [...prev, {
           id: `contacts-${Date.now()}`,
           role: 'assistant' as const,
@@ -245,7 +249,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         setIsLoading(false);
       }
     });
-  }, [input, isLoading, messages]);
+  }, [input, isLoading, messages, dialogSlots]);
 
   const ProductCard = ({ product }: { product: Product }) => (
     <a
