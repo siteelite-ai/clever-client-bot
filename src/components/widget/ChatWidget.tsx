@@ -222,12 +222,14 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     }));
     apiMessages.push({ role: 'user', content: input });
 
+    console.log('[Widget] Sending dialogSlots:', JSON.stringify(dialogSlots));
     await streamChat({
       messages: apiMessages,
       conversationId: conversationIdRef.current,
       dialogSlots,
       onDelta: updateAssistant,
       onSlotUpdate: (updatedSlots) => {
+        console.log('[Widget] Received slot_update:', JSON.stringify(updatedSlots));
         setDialogSlots(updatedSlots);
       },
       onContacts: (contacts) => {
