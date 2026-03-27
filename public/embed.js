@@ -18,17 +18,46 @@
     logo: 'https://clever-client-bot.lovable.app/logo-220volt-widget.svg'
   };
 
-  // Generate unique session ID
-  const sessionId = 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+  // Generate unique session ID — persist across page navigations
+  const STORAGE_KEY = 'volt_widget_state';
+  let sessionId;
+  let conversationHistory;
+  let dialogSlots = {};
   
-  // Initial greeting message - add to history so AI doesn't greet again
+  // Try to restore from sessionStorage
+  try {
+    const saved = sessionStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      sessionId = parsed.sessionId || ('session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now());
+      conversationHistory = parsed.history || [{ role: 'assistant', content: initialGreeting }];
+      dialogSlots = parsed.dialogSlots || {};
+    }
+  } catch(e) {}
+  
+  if (!sessionId) {
+    sessionId = 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+  }
+  
+  // Initial greeting message
   const initialGreeting = 'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?';
-  let conversationHistory = [
-    { role: 'assistant', content: initialGreeting }
-  ];
+  if (!conversationHistory) {
+    conversationHistory = [{ role: 'assistant', content: initialGreeting }];
+  }
   
   let isOpen = false;
   let isLoading = false;
+  
+  // Save state to sessionStorage
+  function saveState() {
+    try {
+      sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
+        sessionId: sessionId,
+        history: conversationHistory.slice(-20),
+        dialogSlots: dialogSlots
+      }));
+    } catch(e) {}
+  }
 
   // Clean up any previous widget instance before initializing again
   var existingContainer = document.getElementById('volt-widget-container');
