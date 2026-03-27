@@ -736,6 +736,7 @@
         try {
           var o2 = JSON.parse(js2);
           if (o2.contacts) { contacts = o2.contacts; continue; }
+          if (o2.slot_update) { dialogSlots = o2.slot_update; saveState(); continue; }
           var d2 = o2.choices && o2.choices[0] && o2.choices[0].delta && o2.choices[0].delta.content;
           if (d2) {
             fullContent += d2;
