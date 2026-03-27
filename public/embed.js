@@ -784,6 +784,7 @@
     try { data = JSON.parse(text); } catch(e) { throw new Error(label + ' invalid JSON'); }
     if (data.error) throw new Error(label + ': ' + data.error);
     if (!data.content) throw new Error(label + ': empty content');
+    if (data.slot_update) { dialogSlots = data.slot_update; saveState(); }
     return { content: data.content, contacts: data.contacts || null };
   }
 
