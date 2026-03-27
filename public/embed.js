@@ -612,6 +612,16 @@
     var controller = new AbortController();
     var timer = setTimeout(function() { controller.abort(); }, 90000);
 
+    // Clean slots: only send pending, max 3
+    var activeSlots = {};
+    var slotCount = 0;
+    for (var sk in dialogSlots) {
+      if (dialogSlots[sk].status === 'pending' && slotCount < 3) {
+        activeSlots[sk] = dialogSlots[sk];
+        slotCount++;
+      }
+    }
+
     var response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -623,7 +633,8 @@
         message: message,
         sessionId: sessionId,
         history: conversationHistory.slice(-10),
-        stream: true
+        stream: true,
+        dialogSlots: activeSlots
       }),
       signal: controller.signal
     });
@@ -680,6 +691,12 @@
           // Check for contacts event
           if (obj.contacts) {
             contacts = obj.contacts;
+            continue;
+          }
+          // Handle slot_update event
+          if (obj.slot_update) {
+            dialogSlots = obj.slot_update;
+            saveState();
             continue;
           }
           var delta = obj.choices && obj.choices[0] && obj.choices[0].delta && obj.choices[0].delta.content;
