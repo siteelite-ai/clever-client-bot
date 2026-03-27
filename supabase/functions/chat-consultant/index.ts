@@ -496,6 +496,94 @@ interface ExtractedIntent {
 }
 
 // ============================================================
+// MICRO-LLM INTENT CLASSIFIER — determines if message contains a product name
+// ============================================================
+
+/**
+ * Lightweight LLM call to classify if user message contains a specific product name.
+ * Uses Lovable AI Gateway with gemini-2.5-flash-lite for speed (~0.5-1.5s).
+ * Returns extracted product name or null. Timeout: 3 seconds.
+ */
+async function classifyProductName(message: string): Promise<{ has_product_name: boolean; product_name?: string } | null> {
+  const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
+  if (!LOVABLE_API_KEY) {
+    console.log('[Classify] LOVABLE_API_KEY not configured, skipping');
+    return null;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 3000);
+
+  try {
+    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash-lite',
+        messages: [
+          {
+            role: 'system',
+            content: `Ты классификатор сообщений интернет-магазина электротоваров 220volt.kz.
+
+Определи, содержит ли сообщение пользователя КОНКРЕТНОЕ название товара (модель, тип + марка, тип + характеристики).
+
+Примеры названий товаров:
+- "кабель КГ 4*2,5" → да, название: "кабель КГ 4*2,5"
+- "лампа ECO T8 18Вт 6500К G13" → да, название: "лампа ECO T8 18Вт 6500К G13"
+- "автомат ABB 32А" → да, название: "автомат ABB 32А"
+- "корм для собак Royal Canin" → да, название: "корм для собак Royal Canin"
+- "Найди мне кабель КГ 4*2,5 есть в наличии" → да, название: "кабель КГ 4*2,5"
+
+НЕ являются названиями:
+- "какие розетки у вас есть?" → нет (общий вопрос)
+- "лампа" → нет (слишком общий запрос, одно слово)
+- "кабель" → нет (одно слово без конкретики)
+- "что посоветуете для ванной?" → нет (вопрос)
+- "доставка в Алматы" → нет (не товар)
+
+Ответь СТРОГО в JSON формате: {"has_product_name": true/false, "product_name": "извлечённое название"}`
+          },
+          { role: 'user', content: message }
+        ],
+        temperature: 0,
+        max_tokens: 100,
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      console.error(`[Classify] API error: ${response.status}`);
+      return null;
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) return null;
+
+    // Parse JSON from response (handle markdown code blocks)
+    const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+    const parsed = JSON.parse(jsonStr);
+    return {
+      has_product_name: !!parsed.has_product_name,
+      product_name: parsed.product_name || undefined,
+    };
+  } catch (e) {
+    clearTimeout(timeoutId);
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      console.log('[Classify] Timeout (3s), skipping classification');
+    } else {
+      console.error('[Classify] Error:', e);
+    }
+    return null;
+  }
+}
+
+// ============================================================
 // TITLE SCORING — compute how well a product matches a query
 // ============================================================
 
