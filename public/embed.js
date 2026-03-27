@@ -799,6 +799,7 @@
 
     addMessage(message, 'user');
     conversationHistory.push({ role: 'user', content: message });
+    saveState();
 
     showTyping();
 
@@ -865,6 +866,7 @@
       assistantMsg.innerHTML = formatMessage(result.content);
       assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
       conversationHistory.push({ role: 'assistant', content: result.content });
+      saveState();
 
       if (result.contacts) {
         addMessage(result.contacts, 'assistant');
