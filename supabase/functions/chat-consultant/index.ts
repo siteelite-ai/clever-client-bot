@@ -2990,9 +2990,12 @@ ${productInstructions}`;
         const shouldShowContacts = content.includes('[CONTACT_MANAGER]');
         content = content.replace(/\s*\[CONTACT_MANAGER\]\s*/g, '').trim();
         
-        const responseBody: { content: string; contacts?: string | null } = { content };
+        const responseBody: { content: string; contacts?: string | null; slot_update?: DialogSlots } = { content };
         if (shouldShowContacts && formattedContacts) {
           responseBody.contacts = formattedContacts;
+        }
+        if (slotsUpdated) {
+          responseBody.slot_update = dialogSlots;
         }
         
         return new Response(
