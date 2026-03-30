@@ -1,142 +1,133 @@
 
 
-# Консилиум: аудит двух провальных сценариев
+# Консилиум: верификация плана исправления слотов
 
-## Роли: Edge Functions Stability (#4), Chat Conversion (#5), RAG Quality (#2)
+## Привлечённые роли
 
----
-
-## Что показали логи — точный root cause
-
-### Провал 1: «для отдыха на природе» → выдал не самый дорогой (скриншоты 1-3)
-
-Логи показывают: **слоты НЕ приходят на сервер**.
-
-```
-[Chat] Dialog slots received: 0 slot(s)
-```
-
-Это означает, что вся архитектура Dialog Slots **не работает**. Клиент (embed.js на 220volt.kz) отправляет пустой объект. Причина: тестирование идёт через preview-виджет в `ChatWidget.tsx`, а не через `embed.js`. Или embed.js ещё не обновлён на продакшене.
-
-Без слотов система падает на legacy `detectPendingPriceIntent`, который:
-
-1. Парсит regex по тексту бота: `категории\s+[«"]?(.+?)[»"]?\s+найдено`
-2. Из строки бота `В категории "фонари" у нас представлено 67 товаров` извлекает категорию как `фонари" у нас` или `фонарь» на нашем сайте` — **мусор**
-3. Затем конкатенирует: `"для отдыха на природе" + "фонарь» на нашем сайте"` → ерунда
-4. `generatePriceSynonyms` на этой ерунде выдаёт бессмысленные варианты
-
-Вот прямое подтверждение из лога:
-```
-[PendingPrice] Detected pending price intent from history: most_expensive, category="фонарь» на нашем сайте"
-[Chat] Legacy restored pending price intent: most_expensive, combined category="а для охоты это подоудет? фонарь» на нашем сайте"
-[PriceSynonyms] "а для охоты это подоудет? фонарь» на нашем сайте" → 8 variants: ...мусор...
-```
-
-### Провал 2: после хождений кругами → «а для кэмпинга?» → забыл про «самый дорогой» (скриншоты 4-7)
-
-Логи показывают:
-```
-[Chat] Micro-LLM classify: 919ms → price_intent=none, category="фонарь"
-[Chat] Dialog slots received: 0 slot(s)
-```
-
-Классификатор на сообщение «а для кэмпинга?» правильно не нашёл `price_intent` (его нет в тексте). Слотов нет (0 slot(s)). Legacy-эвристика тоже не сработала (видимо, исходное сообщение бота с «самый дорогой» уже вышло за окно 6 сообщений после многих ходов).
-
-Результат: система обработала «а для кэмпинга?» как **обычный каталожный запрос** без ценового интента → нашла фонари, но не отсортировала по цене.
+- **Edge Functions Stability Auditor (#4)** — надёжность серверной передачи
+- **Integration & Deployment Auditor (#10)** — корректность SSE-протокола клиент-сервер
+- **System Architect** (надроль) — целостность архитектуры
 
 ---
 
-## Вердикт консилиума
+## Текущий план: оценка
 
-### 1) Edge Functions Stability Auditor (#4)
-**Не одобряет.**
+План из `.lovable/plan.md` описывает 3 бага. Проверяю каждый по коду:
 
-Главная проблема: Dialog Slots не доходят до сервера. `0 slot(s)` в каждом запросе. Весь код слотов на сервере мёртвый — он не получает данных. Система работает только на legacy-эвристике, которая:
-- Извлекает мусор из текста бота (regex ломается на `"фонари" у нас представлено`)
-- Конкатенирует мусор с сообщением пользователя
-- Ищет по бессмысленным запросам
+### Баг 1: «Слоты не передаются с клиента» — ПОДТВЕРЖДЁН, но root cause другой
 
-### 2) Chat Conversion Auditor (#5)
-**Не одобряет.**
+**Фактическая причина**: слоты не ПОЛУЧАЮТСЯ клиентом, а не не отправляются.
 
-Даже если слоты заработают, есть проблема в `resolveSlotRefinement`:
-- Строка 798: `hasNewPriceIntent = classificationResult?.price_intent != null` — это **всегда true**, потому что классификатор возвращает `price_intent: "none"` (строка, не null). Значит `!hasNewPriceIntent` = false, и условие на строке 807 (`isShort && !hasNewPriceIntent`) **никогда не сработает**.
-- Слоты не смогут резолвить уточнения, даже когда начнут приходить.
+Код сервера (строки 3049-3051, 3126-3128): `slot_update` отправляется **после** того, как upstream reader вернул `done=true`. Но upstream LLM уже отправил `data: [DONE]\n\n` в своих chunks, и сервер проксирует их как есть (строка 3091: `controller.enqueue(encoder.encode(text))`).
 
-### 3) RAG Quality Auditor (#2)
-**Не одобряет.**
-
-Legacy regex `категории\s+[«"]?(.+?)[»"]?` жадно захватывает текст до первого совпадения «найдено/представлено». Но бот формулирует ответы свободно, и regex извлекает `фонарь» на нашем сайте` вместо `фонарь`. Это коренная причина мусорных запросов.
-
----
-
-## Три конкретных бага для исправления
-
-### Баг 1: Слоты не передаются с клиента (КРИТИЧЕСКИЙ)
-**Файл**: `src/components/widget/ChatWidget.tsx`
-
-Слоты создаются в state, но парсер SSE-потока не обрабатывает событие `slot_update` корректно, либо `onSlotUpdate` не вызывается. Нужно:
-- Проверить парсер SSE в ChatWidget (строки ~90-130) — ищет ли он `parsed.slot_update`
-- Убедиться, что `dialogSlots` state реально обновляется при получении `slot_update`
-- Добавить лог `console.log('[Widget] Slots sent:', dialogSlots)` для отладки
-
-### Баг 2: `price_intent: "none"` ≠ null (КРИТИЧЕСКИЙ)
-**Файл**: `supabase/functions/chat-consultant/index.ts`, строка 798
-
-```typescript
-// СЕЙЧАС (сломано):
-const hasNewPriceIntent = classificationResult?.price_intent != null;
-// "none" != null → true → слот НИКОГДА не резолвится как refinement
-
-// НУЖНО:
-const hasNewPriceIntent = classificationResult?.price_intent != null 
-  && classificationResult.price_intent !== 'none';
+Хронология:
+```text
+1. LLM отправляет chunks с контентом       → сервер проксирует → клиент читает
+2. LLM отправляет "data: [DONE]\n\n"       → сервер проксирует → клиент видит [DONE], ставит done=true, ВЫХОДИТ
+3. reader.read() возвращает done=true       → сервер отправляет slot_update → КЛИЕНТ УЖЕ НЕ ЧИТАЕТ
 ```
 
-### Баг 3: Legacy regex извлекает мусор (СРЕДНИЙ)
-**Файл**: `supabase/functions/chat-consultant/index.ts`, строка 693
+В `embed.js` строки 684-686: `[DONE]` → `done = true; break;` → выход из цикла. Final flush (строки 725-747) обрабатывает только то, что уже в `textBuffer`, но `slot_update` ещё не прочитан из reader.
 
-Regex `категории\s+[«"]?(.+?)[»"]?\s+(?:найден|представлен)` захватывает слишком много текста. Нужно:
-- Ограничить захват: только слово/фраза в кавычках, без лишнего текста
-- Или: вообще удалить legacy fallback, раз слоты будут работать
+В `ChatWidget.tsx` строки 103-106: та же проблема.
+
+### Баг 2: `price_intent: "none" ≠ null` — УЖЕ ИСПРАВЛЕН
+
+Строка 799-800 содержит `&& classificationResult.price_intent !== 'none'`. Этот баг уже был починен в предыдущей итерации.
+
+### Баг 3: Legacy regex — СРЕДНИЙ, но не основной
+
+Regex по-прежнему работает как fallback, но без слотов это единственный механизм. Исправление слотов сделает его второстепенным.
 
 ---
 
-## План исправления
+## Вердикты ролей
 
-### Шаг 1. Починить передачу слотов в ChatWidget
-- Убедиться что SSE-парсер вызывает `onSlotUpdate`
-- Убедиться что `dialogSlots` state обновляется и передаётся в следующий вызов `streamChat`
+### Edge Functions Stability Auditor (#4): НЕ ОДОБРЯЕТ текущий план
 
-### Шаг 2. Исправить проверку `hasNewPriceIntent`
-- `price_intent: "none"` не должен считаться новым ценовым интентом
-- Одна строка: добавить `&& classificationResult.price_intent !== 'none'`
+План предлагает «починить SSE-парсер в ChatWidget» и «добавить логи», но **не решает корневую проблему**: сервер отправляет `slot_update` после `[DONE]`, а клиент уже не читает.
 
-### Шаг 3. Улучшить legacy regex (страховка)
-- Сделать regex строже: захватывать только содержимое внутри кавычек `[«"](.+?)[»"]`
-- Санитизировать извлечённую категорию (убирать шум типа «на нашем сайте»)
+**Правильное решение** — одно из двух:
+- **Вариант A (сервер)**: перехватить `[DONE]` из upstream, отправить `slot_update` ДО `[DONE]`, затем отправить `[DONE]` вручную
+- **Вариант B (клиент)**: после `[DONE]` продолжить читать reader до `chunk.done === true` (drain loop)
 
-### Шаг 4. Добавить диагностические логи
-- На клиенте: что отправляется в `dialogSlots`
-- На сервере: что пришло, что резолвилось
+Вариант B проще — 5 строк в двух файлах, не требует редеплоя edge function.
+
+### Integration & Deployment Auditor (#10): ОДОБРЯЕТ Вариант B
+
+Вариант B — минимальное изменение, не ломает SSE-протокол, обратно совместим. Клиент просто продолжает дочитывать stream после `[DONE]`.
+
+### System Architect (надроль): ОДОБРЯЕТ с рекомендацией
+
+Архитектура слотов корректна. Проблема чисто транспортная — `slot_update` приходит после `[DONE]`. После drain-fix:
+- Клиент получит `slot_update` → обновит `dialogSlots` state
+- Следующий запрос отправит слоты на сервер → `resolveSlotRefinement` заработает
+- Баг 2 уже исправлен → refinement будет резолвиться
+
+Рекомендация: **реализовать оба варианта** для надёжности:
+1. Вариант B на клиенте (drain loop) — сейчас
+2. Вариант A на сервере (slot_update до [DONE]) — для будущих клиентов
+
+---
+
+## Скорректированный план
+
+### Шаг 1. Drain loop в ChatWidget.tsx (строки 103-127)
+
+После `streamDone = true; break;` — НЕ выходить из `while(!streamDone)`, а добавить drain-loop:
+
+```javascript
+// После основного while(!streamDone) цикла:
+// Drain remaining data from reader (slot_update comes after [DONE])
+while (true) {
+  const { done: readerDone, value: extraValue } = await reader.read();
+  if (readerDone) break;
+  textBuffer += decoder.decode(extraValue, { stream: true });
+}
+```
+
+Затем final flush (строки 130-152) обработает `slot_update` из `textBuffer`.
+
+### Шаг 2. Drain loop в embed.js (строки 684-722)
+
+Аналогично — после `done = true; break;`:
+
+```javascript
+// Drain remaining stream data after [DONE]
+while (true) {
+  var extra = await reader.read();
+  if (extra.done) break;
+  textBuffer += decoder.decode(extra.value, { stream: true });
+}
+```
+
+Final flush (строки 725-747) уже обрабатывает `slot_update`.
+
+### Шаг 3 (рекомендация). Сервер: slot_update до [DONE]
+
+В `index.ts` (оба streaming пути): перехватить `[DONE]` из upstream текста, вырезать его, отправить `slot_update`, затем отправить `data: [DONE]\n\n` вручную. Это гарантирует работу с любым клиентом.
 
 ### Файлы для изменения
-1. `src/components/widget/ChatWidget.tsx` — парсер SSE + передача слотов
-2. `supabase/functions/chat-consultant/index.ts` — баг `!= null`, legacy regex
-3. `public/embed.js` — проверить что слоты тоже корректно отправляются (по логам уже реализовано)
+1. `src/components/widget/ChatWidget.tsx` — drain loop (3-5 строк)
+2. `public/embed.js` — drain loop (3-5 строк)
+3. `supabase/functions/chat-consultant/index.ts` — slot_update до [DONE] (опционально, для надёжности)
 
 ### Что НЕ трогаем
+- Логика слотов на сервере — работает корректно
+- `resolveSlotRefinement` — баг с `"none"` уже исправлен
 - RAG/эмбеддинги/knowledge base — не затронуты
-- Основной поисковый pipeline — не затронут
-- `handlePriceIntent` и `generatePriceSynonyms` — работают корректно, если получают правильный query
+- Legacy regex — оставляем как fallback
 
 ---
 
 ## Ожидаемый результат
 
-| Сценарий | Сейчас | После |
-|---|---|---|
-| «самый дорогой фонарь» → «для отдыха на природе» | Мусорный query, неправильный товар | Слот: base=фонарь, refinement=для отдыха на природе → корректный поиск |
-| Много ходов → «а для кэмпинга?» | price_intent теряется (0 слотов, regex за окном) | Слот pending живёт до done/timeout, refinement=кемпинговый |
-| hasNewPriceIntent с price_intent="none" | Блокирует резолвинг слота | Пропускает → слот резолвится |
+После drain-fix клиент получит `slot_update`, обновит state, и при следующем запросе отправит слоты на сервер. Лог будет:
+
+```text
+[Widget] Received slot_update: {"slot_1":{"intent":"price_extreme","price_dir":"most_expensive","base_category":"фонарь","status":"pending",...}}
+[Widget] Sending dialogSlots: {"slot_1":{...}}   ← следующий запрос
+[Chat] Dialog slots received: 1 slot(s)           ← сервер видит слот
+[Chat] Slot-resolved: intent=most_expensive, query="кемпинговый фонарь"
+```
 
