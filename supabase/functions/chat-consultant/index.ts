@@ -807,7 +807,14 @@ function resolveSlotRefinement(
   
   // If message is short and no new price intent → treat as refinement
   if (isShort && !hasNewPriceIntent) {
-    const refinement = userMessage.trim();
+    const rawRefinement = userMessage.trim();
+    // Strip conversational filler words that poison product search queries
+    const fillerPattern = /^(ну\s+|а\s+|ладно\s*[,.]?\s*|хорошо\s*[,.]?\s*|давай\s*[,.]?\s*|окей\s*[,.]?\s*|ок\s*[,.]?\s*|лучше\s+|тогда\s+|пожалуй\s*[,.]?\s*|наверное\s*[,.]?\s*|может\s+быть\s*[,.]?\s*|пусть\s+будет\s+|а\s+что\s+лучше\s+для\s+|а\s+что\s+насчет\s+|что\s+лучше\s+для\s+|а\s+для\s+|для\s+)/gi;
+    let cleanedRefinement = rawRefinement.replace(fillerPattern, '').trim();
+    // Also strip trailing question marks and punctuation
+    cleanedRefinement = cleanedRefinement.replace(/[?!.,]+$/, '').trim();
+    // If cleaning removed everything, use the raw refinement
+    const refinement = cleanedRefinement || rawRefinement;
     const combinedQuery = `${refinement} ${pendingSlot.base_category}`.trim();
     
     const updatedSlots = { ...slots };
