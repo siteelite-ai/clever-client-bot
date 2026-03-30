@@ -2725,6 +2725,57 @@ serve(async (req) => {
             console.log(`[Chat] Title-first: 0 results for "${classification.product_name}", proceeding to LLM 1`);
           }
         }
+        
+        // === REPLACEMENT/ALTERNATIVE INTENT ===
+        if (classification?.is_replacement && appSettings.volt220_api_token) {
+          console.log(`[Chat] Replacement intent detected!`);
+          
+          let originalProduct: Product | null = null;
+          let replacementCandidates: SearchCandidate[] = [];
+          
+          if (articleShortCircuit && foundProducts.length > 0) {
+            // Original product found — extract traits for alternative search
+            originalProduct = foundProducts[0];
+            replacementCandidates = extractSearchableTraits(originalProduct);
+            console.log(`[Chat] Replacement: original found "${originalProduct.pagetitle}", ${replacementCandidates.length} search candidates`);
+          } else if (classification.product_name) {
+            // Product not found in catalog — extract traits from name
+            replacementCandidates = extractTraitsFromName(classification.product_name);
+            console.log(`[Chat] Replacement: original NOT found, extracted ${replacementCandidates.length} candidates from name "${classification.product_name}"`);
+          }
+          
+          if (replacementCandidates.length > 0) {
+            const altProducts = await searchProductsMulti(replacementCandidates, 15, appSettings.volt220_api_token);
+            
+            // Filter out the original product
+            const originalId = originalProduct?.id;
+            const alternatives = originalId 
+              ? altProducts.filter(p => p.id !== originalId)
+              : altProducts;
+            
+            if (alternatives.length > 0) {
+              // Rerank alternatives by similarity to the original
+              const reranked = originalProduct 
+                ? rerankReplacements(alternatives, originalProduct)
+                : alternatives;
+              
+              foundProducts = reranked.slice(0, 8);
+              articleShortCircuit = true;
+              
+              // Store original product info for the prompt
+              (extractedIntent as any)._replacementOriginal = originalProduct;
+              (extractedIntent as any)._replacementOriginalName = classification.product_name;
+              (extractedIntent as any)._isReplacement = true;
+              
+              console.log(`[Chat] Replacement SUCCESS: ${foundProducts.length} alternatives found`);
+            } else {
+              console.log(`[Chat] Replacement: no alternatives found`);
+              (extractedIntent as any)._isReplacement = true;
+              (extractedIntent as any)._replacementOriginalName = classification.product_name;
+              (extractedIntent as any)._replacementNoResults = true;
+            }
+          }
+        }
       } catch (e) {
         console.log(`[Chat] Micro-LLM classify error (fallback to LLM 1):`, e);
       }
