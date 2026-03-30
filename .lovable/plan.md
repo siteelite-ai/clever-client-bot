@@ -1,133 +1,102 @@
 
 
-# Консилиум: верификация плана исправления слотов
+# Консилиум: почему бот выдал НЕ самый дорогой кемпинговый фонарь
 
-## Привлечённые роли
-
-- **Edge Functions Stability Auditor (#4)** — надёжность серверной передачи
-- **Integration & Deployment Auditor (#10)** — корректность SSE-протокола клиент-сервер
-- **System Architect** (надроль) — целостность архитектуры
+## Роли: Edge Functions Stability (#4), Sales Logic (#2), RAG Quality (#1)
 
 ---
 
-## Текущий план: оценка
+## Что показали логи — точная хронология
 
-План из `.lovable/plan.md` описывает 3 бага. Проверяю каждый по коду:
-
-### Баг 1: «Слоты не передаются с клиента» — ПОДТВЕРЖДЁН, но root cause другой
-
-**Фактическая причина**: слоты не ПОЛУЧАЮТСЯ клиентом, а не не отправляются.
-
-Код сервера (строки 3049-3051, 3126-3128): `slot_update` отправляется **после** того, как upstream reader вернул `done=true`. Но upstream LLM уже отправил `data: [DONE]\n\n` в своих chunks, и сервер проксирует их как есть (строка 3091: `controller.enqueue(encoder.encode(text))`).
-
-Хронология:
 ```text
-1. LLM отправляет chunks с контентом       → сервер проксирует → клиент читает
-2. LLM отправляет "data: [DONE]\n\n"       → сервер проксирует → клиент видит [DONE], ставит done=true, ВЫХОДИТ
-3. reader.read() возвращает done=true       → сервер отправляет slot_update → КЛИЕНТ УЖЕ НЕ ЧИТАЕТ
+08:14:56 [Micro-LLM] classify → price_intent=none, category="кемпинговый"
+08:14:56 [Slots] Resolved: "кемпинговый" + base "фонарь" → "кемпинговый фонарь", dir=most_expensive
+08:14:56 [PriceSynonyms] "кемпинговый фонарь" → 8 variants
+08:14:56 [Chat] Price intent detected: most_expensive for "кемпинговый фонарь"
+08:15:06 [PriceIntent] Error: AbortError: The signal has been aborted     ← !!!! ТАЙМАУТ 10 сек
+08:15:06 [Chat] PriceIntent: no results for "кемпинговый фонарь" (tried 8 variants), falling through
+08:15:08 [AI Candidates] intent=catalog (НЕ price!) → обычный поиск без сортировки
+08:15:18 [Chat] Formatted 10 products → отправлено LLM без указания сортировать по цене
+08:15:18 [Search] API timeout (10s) for query="фонарь для кемпинга"    ← ещё один таймаут
 ```
 
-В `embed.js` строки 684-686: `[DONE]` → `done = true; break;` → выход из цикла. Final flush (строки 725-747) обрабатывает только то, что уже в `textBuffer`, но `slot_update` ещё не прочитан из reader.
+**Слоты сработали идеально.** Классификация правильная. Синонимы сгенерированы. Но:
 
-В `ChatWidget.tsx` строки 103-106: та же проблема.
+### Root cause: API 220volt.kz отвечает слишком медленно
 
-### Баг 2: `price_intent: "none" ≠ null` — УЖЕ ИСПРАВЛЕН
+`handlePriceIntent` делает probe-запрос с таймаутом 10 секунд. API не ответил за 10 секунд → `AbortError` → функция возвращает `{ action: 'not_found' }`.
 
-Строка 799-800 содержит `&& classificationResult.price_intent !== 'none'`. Этот баг уже был починен в предыдущей итерации.
-
-### Баг 3: Legacy regex — СРЕДНИЙ, но не основной
-
-Regex по-прежнему работает как fallback, но без слотов это единственный механизм. Исправление слотов сделает его второстепенным.
+После этого система **падает в fallback** — обычный AI Candidates pipeline, который:
+1. Не знает про `most_expensive` (интент потерян при fallthrough)
+2. Ищет просто «фонарь для кемпинга» как каталожный запрос
+3. LLM получает 10 товаров без инструкции «выбрать самый дорогой»
+4. LLM сам пытается угадать «самый дорогой» из того, что видит, но видит только 10 из 67 товаров
 
 ---
 
 ## Вердикты ролей
 
-### Edge Functions Stability Auditor (#4): НЕ ОДОБРЯЕТ текущий план
+### Edge Functions Stability Auditor (#4): НЕ ОДОБРЯЕТ
 
-План предлагает «починить SSE-парсер в ChatWidget» и «добавить логи», но **не решает корневую проблему**: сервер отправляет `slot_update` после `[DONE]`, а клиент уже не читает.
+Проблема архитектурная: при таймауте API ценовой интент **полностью теряется**. Fallback-pipeline не получает информацию о том, что пользователь хотел «самый дорогой». Это не баг слотов — это баг обработки ошибок.
 
-**Правильное решение** — одно из двух:
-- **Вариант A (сервер)**: перехватить `[DONE]` из upstream, отправить `slot_update` ДО `[DONE]`, затем отправить `[DONE]` вручную
-- **Вариант B (клиент)**: после `[DONE]` продолжить читать reader до `chunk.done === true` (drain loop)
+Два конкретных дефекта:
+1. **Таймаут 10 сек слишком короткий** для 220volt.kz API (который иногда отвечает 12-15 сек)
+2. **При fallthrough ценовой интент выбрасывается** — AI Candidates pipeline не получает `price_intent` и обрабатывает запрос как обычный каталожный
 
-Вариант B проще — 5 строк в двух файлах, не требует редеплоя edge function.
+### Sales Logic Auditor (#2): НЕ ОДОБРЯЕТ
 
-### Integration & Deployment Auditor (#10): ОДОБРЯЕТ Вариант B
+Бот показал 10 товаров и «угадал» самый дорогой из них (2 559 ₸). Но в каталоге 67 фонарей — бот не видел остальные 57. Реальный самый дорогой кемпинговый фонарь мог стоить значительно дороже. Пользователь получил неточную информацию.
 
-Вариант B — минимальное изменение, не ломает SSE-протокол, обратно совместим. Клиент просто продолжает дочитывать stream после `[DONE]`.
+### RAG Quality Auditor (#1): НЕЙТРАЛЕН
 
-### System Architect (надроль): ОДОБРЯЕТ с рекомендацией
-
-Архитектура слотов корректна. Проблема чисто транспортная — `slot_update` приходит после `[DONE]`. После drain-fix:
-- Клиент получит `slot_update` → обновит `dialogSlots` state
-- Следующий запрос отправит слоты на сервер → `resolveSlotRefinement` заработает
-- Баг 2 уже исправлен → refinement будет резолвиться
-
-Рекомендация: **реализовать оба варианта** для надёжности:
-1. Вариант B на клиенте (drain loop) — сейчас
-2. Вариант A на сервере (slot_update до [DONE]) — для будущих клиентов
+Поиск работает корректно — 10 релевантных фонарей найдены. Проблема не в поиске, а в сортировке и потере интента.
 
 ---
 
-## Скорректированный план
+## План исправления (системный, не заплатка)
 
-### Шаг 1. Drain loop в ChatWidget.tsx (строки 103-127)
+### Исправление 1: Увеличить таймаут + retry для price intent
 
-После `streamDone = true; break;` — НЕ выходить из `while(!streamDone)`, а добавить drain-loop:
+Сейчас probe-запрос имеет таймаут 10 сек. Нужно:
+- Увеличить до 15 сек для probe
+- При таймауте — **одна повторная попытка** с упрощённым запросом (только первый вариант, без мульти-кандидатов)
 
-```javascript
-// После основного while(!streamDone) цикла:
-// Drain remaining data from reader (slot_update comes after [DONE])
-while (true) {
-  const { done: readerDone, value: extraValue } = await reader.read();
-  if (readerDone) break;
-  textBuffer += decoder.decode(extraValue, { stream: true });
-}
-```
+### Исправление 2: Передать price_intent в fallback pipeline (КРИТИЧЕСКОЕ)
 
-Затем final flush (строки 130-152) обработает `slot_update` из `textBuffer`.
+Когда `handlePriceIntent` возвращает `not_found` из-за таймаута, система должна:
+- **Сохранить** `effectivePriceIntent` и `priceQuery` в контексте
+- Передать их в AI Candidates pipeline
+- AI Candidates должен добавить в системный промт для LLM: «Пользователь ищет САМЫЙ ДОРОГОЙ товар. Отсортируй результаты по убыванию цены и покажи самый дорогой первым»
 
-### Шаг 2. Drain loop в embed.js (строки 684-722)
+Конкретно: в коде после строки `[Chat] PriceIntent: no results...falling through` — не обнулять `effectivePriceIntent`, а пробрасывать его дальше. В формировании промта для основного LLM — если `effectivePriceIntent !== null`, добавить инструкцию сортировки.
 
-Аналогично — после `done = true; break;`:
+### Исправление 3: Fallback-сортировка на сервере
 
-```javascript
-// Drain remaining stream data after [DONE]
-while (true) {
-  var extra = await reader.read();
-  if (extra.done) break;
-  textBuffer += decoder.decode(extra.value, { stream: true });
-}
-```
-
-Final flush (строки 725-747) уже обрабатывает `slot_update`.
-
-### Шаг 3 (рекомендация). Сервер: slot_update до [DONE]
-
-В `index.ts` (оба streaming пути): перехватить `[DONE]` из upstream текста, вырезать его, отправить `slot_update`, затем отправить `data: [DONE]\n\n` вручную. Это гарантирует работу с любым клиентом.
+Даже если основной pipeline нашёл 10 товаров без price-сортировки — перед отправкой в LLM **отсортировать** их по цене (desc для most_expensive, asc для cheapest), если `effectivePriceIntent` активен.
 
 ### Файлы для изменения
-1. `src/components/widget/ChatWidget.tsx` — drain loop (3-5 строк)
-2. `public/embed.js` — drain loop (3-5 строк)
-3. `supabase/functions/chat-consultant/index.ts` — slot_update до [DONE] (опционально, для надёжности)
+
+1. **`supabase/functions/chat-consultant/index.ts`**:
+   - Увеличить таймаут probe с 10→15 сек
+   - При fallthrough: сохранить `effectivePriceIntent` вместо обнуления
+   - В AI Candidates pipeline: если `effectivePriceIntent` активен, добавить инструкцию сортировки в промт LLM
+   - Перед `formatProductsForAI`: если есть `effectivePriceIntent`, отсортировать массив по цене
 
 ### Что НЕ трогаем
-- Логика слотов на сервере — работает корректно
-- `resolveSlotRefinement` — баг с `"none"` уже исправлен
-- RAG/эмбеддинги/knowledge base — не затронуты
-- Legacy regex — оставляем как fallback
+- Слоты — работают корректно
+- Микро-LLM классификатор — работает корректно
+- `generatePriceSynonyms` — работает корректно
+- RAG/эмбеддинги — не затронуты
+- embed.js / ChatWidget.tsx — не затронуты
 
 ---
 
 ## Ожидаемый результат
 
-После drain-fix клиент получит `slot_update`, обновит state, и при следующем запросе отправит слоты на сервер. Лог будет:
-
-```text
-[Widget] Received slot_update: {"slot_1":{"intent":"price_extreme","price_dir":"most_expensive","base_category":"фонарь","status":"pending",...}}
-[Widget] Sending dialogSlots: {"slot_1":{...}}   ← следующий запрос
-[Chat] Dialog slots received: 1 slot(s)           ← сервер видит слот
-[Chat] Slot-resolved: intent=most_expensive, query="кемпинговый фонарь"
-```
+| Сценарий | Сейчас | После |
+|---|---|---|
+| API отвечает за 10 сек | Работает | Работает |
+| API отвечает за 12 сек (таймаут) | `not_found` → fallback без price intent → неправильный товар | Retry → ответ получен → правильная сортировка |
+| API не отвечает совсем | `not_found` → fallback → случайный товар | Fallback С price intent → LLM сортирует по цене из имеющихся → лучший результат |
 
