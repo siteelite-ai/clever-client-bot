@@ -1,11 +1,15 @@
 import { useState, useEffect } from 'react';
-import { Save, X, Pencil, Eye, Loader2 } from 'lucide-react';
+import { Save, X, Pencil, Eye, Loader2, Calendar as CalendarIcon } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Calendar } from '@/components/ui/calendar';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
+import { cn } from '@/lib/utils';
+import { format } from 'date-fns';
 
 interface KnowledgeEntry {
   id: string;
@@ -15,6 +19,8 @@ interface KnowledgeEntry {
   source_url?: string;
   created_at: string;
   updated_at: string;
+  valid_from?: string | null;
+  valid_until?: string | null;
 }
 
 interface EntryViewDialogProps {
@@ -31,6 +37,8 @@ export function EntryViewDialog({ entry, open, onOpenChange, onSaved }: EntryVie
   const [editTitle, setEditTitle] = useState('');
   const [editContent, setEditContent] = useState('');
   const [fullContent, setFullContent] = useState('');
+  const [editValidFrom, setEditValidFrom] = useState<Date | undefined>();
+  const [editValidUntil, setEditValidUntil] = useState<Date | undefined>();
 
   useEffect(() => {
     if (entry && open) {
@@ -38,17 +46,21 @@ export function EntryViewDialog({ entry, open, onOpenChange, onSaved }: EntryVie
       setEditContent(entry.content);
       setFullContent('');
       setIsEditing(false);
+      setEditValidFrom(entry.valid_from ? new Date(entry.valid_from) : undefined);
+      setEditValidUntil(entry.valid_until ? new Date(entry.valid_until) : undefined);
       // Load full content from DB
       setIsLoadingFull(true);
       supabase
         .from('knowledge_entries')
-        .select('content')
+        .select('content, valid_from, valid_until')
         .eq('id', entry.id)
         .single()
         .then(({ data, error }) => {
           if (!error && data) {
             setFullContent(data.content);
             setEditContent(data.content);
+            if (data.valid_from) setEditValidFrom(new Date(data.valid_from));
+            if (data.valid_until) setEditValidUntil(new Date(data.valid_until));
           }
           setIsLoadingFull(false);
         });
@@ -60,12 +72,17 @@ export function EntryViewDialog({ entry, open, onOpenChange, onSaved }: EntryVie
 
     setIsSaving(true);
     try {
+      const updateData: any = {
+        title: editTitle.trim(),
+        content: editContent.trim(),
+      };
+      // Allow clearing dates by setting to null
+      updateData.valid_from = editValidFrom ? editValidFrom.toISOString() : null;
+      updateData.valid_until = editValidUntil ? editValidUntil.toISOString() : null;
+
       const { error } = await supabase
         .from('knowledge_entries')
-        .update({
-          title: editTitle.trim(),
-          content: editContent.trim(),
-        })
+        .update(updateData)
         .eq('id', entry.id);
 
       if (error) throw error;
@@ -85,11 +102,14 @@ export function EntryViewDialog({ entry, open, onOpenChange, onSaved }: EntryVie
     if (entry) {
       setEditTitle(entry.title);
       setEditContent(fullContent || entry.content);
+      setEditValidFrom(entry.valid_from ? new Date(entry.valid_from) : undefined);
+      setEditValidUntil(entry.valid_until ? new Date(entry.valid_until) : undefined);
     }
     setIsEditing(false);
   };
 
   const displayContent = fullContent || entry?.content || '';
+  const isExpired = entry?.valid_until ? new Date(entry.valid_until) < new Date() : false;
 
   if (!entry) return null;
 
@@ -131,10 +151,20 @@ export function EntryViewDialog({ entry, open, onOpenChange, onSaved }: EntryVie
               )}
             </div>
           </div>
-          <div className="flex items-center gap-2 mt-1">
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
             <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
               {entry.type.toUpperCase()}
             </span>
+            {isExpired && (
+              <span className="text-xs px-2 py-0.5 rounded-full bg-destructive/10 text-destructive">
+                Просрочено
+              </span>
+            )}
+            {entry.valid_from && entry.valid_until && !isEditing && (
+              <span className="text-xs text-muted-foreground">
+                {format(new Date(entry.valid_from), 'dd.MM.yyyy')} — {format(new Date(entry.valid_until), 'dd.MM.yyyy')}
+              </span>
+            )}
             {entry.source_url && (
               <a
                 href={entry.source_url}
@@ -147,6 +177,46 @@ export function EntryViewDialog({ entry, open, onOpenChange, onSaved }: EntryVie
             )}
           </div>
         </DialogHeader>
+
+        {/* Date pickers in edit mode */}
+        {isEditing && (
+          <div className="flex gap-4 mt-2 flex-shrink-0">
+            <div className="flex-1">
+              <label className="text-xs text-muted-foreground mb-1 block">Действует с</label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" size="sm" className={cn("w-full justify-start text-left font-normal", !editValidFrom && "text-muted-foreground")}>
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {editValidFrom ? format(editValidFrom, 'dd.MM.yyyy') : 'Не указано'}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar mode="single" selected={editValidFrom} onSelect={setEditValidFrom} className="p-3 pointer-events-auto" />
+                </PopoverContent>
+              </Popover>
+              {editValidFrom && (
+                <Button variant="ghost" size="sm" className="text-xs mt-1 h-6 px-2" onClick={() => setEditValidFrom(undefined)}>Очистить</Button>
+              )}
+            </div>
+            <div className="flex-1">
+              <label className="text-xs text-muted-foreground mb-1 block">Действует до</label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button variant="outline" size="sm" className={cn("w-full justify-start text-left font-normal", !editValidUntil && "text-muted-foreground")}>
+                    <CalendarIcon className="mr-2 h-4 w-4" />
+                    {editValidUntil ? format(editValidUntil, 'dd.MM.yyyy') : 'Не указано'}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start">
+                  <Calendar mode="single" selected={editValidUntil} onSelect={setEditValidUntil} className="p-3 pointer-events-auto" />
+                </PopoverContent>
+              </Popover>
+              {editValidUntil && (
+                <Button variant="ghost" size="sm" className="text-xs mt-1 h-6 px-2" onClick={() => setEditValidUntil(undefined)}>Очистить</Button>
+              )}
+            </div>
+          </div>
+        )}
 
         <div className="flex-1 overflow-y-auto mt-4 min-h-0">
           {isLoadingFull ? (
