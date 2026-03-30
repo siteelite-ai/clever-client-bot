@@ -807,37 +807,12 @@ function resolveSlotRefinement(
   
   // If message is short and no new price intent → treat as refinement
   if (isShort && !hasNewPriceIntent) {
-    const rawRefinement = userMessage.trim();
-    // Strip conversational filler words that poison product search queries
-    // Order matters: longer patterns first, then shorter ones
-    const fillerPatterns = [
-      /^а\s+что\s+(лучше\s+)?(подойд[её]т\s+)?для\s+/gi,
-      /^что\s+(лучше\s+)?(подойд[её]т\s+)?для\s+/gi,
-      /^а\s+что\s+насчет\s+/gi,
-      /^может\s+быть\s*[,.]?\s*/gi,
-      /^пусть\s+будет\s+/gi,
-      /^(ну|а|ладно|хорошо|давай|давайте|окей|ок|тогда|пожалуй|наверное)\s*[,.]?\s*/gi,
-    ];
-    let cleanedRefinement = rawRefinement;
-    for (const pattern of fillerPatterns) {
-      cleanedRefinement = cleanedRefinement.replace(pattern, '').trim();
-    }
-    // Also strip trailing question marks and punctuation
-    cleanedRefinement = cleanedRefinement.replace(/[?!.,]+$/, '').trim();
-    // If cleaning removed everything, use the raw refinement
-    const refinement = cleanedRefinement || rawRefinement;
-    // Build combined query: if refinement looks like a use-case ("для охоты", "отдыха на природе")
-    // use "base_category для X" format for better search results
-    const forPattern = /^для\s+/i;
-    const useCasePattern = /(?:охот|рыбалк|кемпинг|поход|природ|туризм|работ|дом|сад|строител|ремонт|гараж|мастерск)/i;
-    let combinedQuery: string;
-    if (forPattern.test(refinement)) {
-      combinedQuery = `${pendingSlot.base_category} ${refinement}`.trim();
-    } else if (useCasePattern.test(refinement) && !refinement.includes(pendingSlot.base_category)) {
-      combinedQuery = `${refinement} ${pendingSlot.base_category}`.trim();
-    } else {
-      combinedQuery = `${refinement} ${pendingSlot.base_category}`.trim();
-    }
+    // Use LLM classifier's extracted category/product_name as the clean refinement
+    // This lets the LLM strip conversational filler ("давай", "ладно", etc.) naturally
+    const refinement = classificationResult?.product_category 
+      || classificationResult?.product_name 
+      || userMessage.trim();
+    const combinedQuery = `${refinement} ${pendingSlot.base_category}`.trim();
     
     const updatedSlots = { ...slots };
     updatedSlots[pendingKey] = {
