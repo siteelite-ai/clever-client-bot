@@ -2691,7 +2691,7 @@ serve(async (req) => {
         const recentHistoryForClassifier = historyForContext.slice(-4).map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }));
         const classification = await classifyProductName(userMessage, recentHistoryForClassifier);
         const classifyElapsed = Date.now() - classifyStart;
-        console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}"`);
+        console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}", is_replacement=${classification?.is_replacement || false}`);
         
         // === DIALOG SLOTS: try slot-based resolution FIRST ===
         // Filter out "none" — classifier returns string "none", not null
