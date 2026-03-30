@@ -512,29 +512,38 @@ interface ClassificationResult {
   is_replacement?: boolean;
 }
 
-async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>): Promise<ClassificationResult | null> {
-  const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
-  if (!LOVABLE_API_KEY) {
-    console.log('[Classify] LOVABLE_API_KEY not configured, skipping');
-    return null;
+async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>, settings?: CachedSettings | null): Promise<ClassificationResult | null> {
+  // Determine API keys: prefer Google keys from settings, fallback to LOVABLE_API_KEY
+  let url: string;
+  let apiKeys: string[];
+
+  if (settings?.google_api_key) {
+    const parsed = settings.google_api_key.split(/[,\n]/).map(k => k.trim()).filter(k => k.length > 0);
+    if (parsed.length > 0) {
+      url = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
+      apiKeys = parsed;
+      console.log(`[Classify] Using Google API keys (${parsed.length} key(s))`);
+    } else {
+      const lovableKey = Deno.env.get('LOVABLE_API_KEY');
+      if (!lovableKey) { console.log('[Classify] No API keys configured, skipping'); return null; }
+      url = 'https://ai.gateway.lovable.dev/v1/chat/completions';
+      apiKeys = [lovableKey];
+      console.log('[Classify] Fallback to LOVABLE_API_KEY');
+    }
+  } else {
+    const lovableKey = Deno.env.get('LOVABLE_API_KEY');
+    if (!lovableKey) { console.log('[Classify] No API keys configured, skipping'); return null; }
+    url = 'https://ai.gateway.lovable.dev/v1/chat/completions';
+    apiKeys = [lovableKey];
+    console.log('[Classify] Fallback to LOVABLE_API_KEY (no google_api_key in settings)');
   }
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 3000);
-
-  try {
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: 'google/gemini-2.5-flash-lite',
-        messages: [
-          {
-            role: 'system',
-            content: `Ты классификатор сообщений интернет-магазина электротоваров 220volt.kz.
+  const classifyBody = {
+    model: 'gemini-2.5-flash-lite',
+    messages: [
+      {
+        role: 'system',
+        content: `Ты классификатор сообщений интернет-магазина электротоваров 220volt.kz.
 
 Тебе может быть предоставлена недавняя история диалога (последние сообщения). Если текущее сообщение пользователя — это ОТВЕТ на уточняющий вопрос бота, ты ОБЯЗАН учитывать ИСХОДНЫЙ запрос из истории для определения price_intent и product_category.
 
@@ -590,17 +599,22 @@ is_replacement=true если пользователь хочет найти по
 - "какие розетки у вас есть?" → is_replacement=false
 
 Ответь СТРОГО в JSON: {"has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "...", "is_replacement": bool}`
-          },
-          ...(recentHistory || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-          { role: 'user', content: message }
-        ],
-        temperature: 0,
-        max_tokens: 150,
-      }),
-      signal: controller.signal,
-    });
+      },
+      ...(recentHistory || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+      { role: 'user', content: message }
+    ],
+    temperature: 0,
+    max_tokens: 150,
+  };
 
-    clearTimeout(timeoutId);
+  try {
+    // Use callAIWithKeyFallback wrapped in a 3s timeout
+    const classifyPromise = callAIWithKeyFallback(url, apiKeys, classifyBody, 'Classify');
+    const timeoutPromise = new Promise<Response>((_, reject) => 
+      setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 3000)
+    );
+
+    const response = await Promise.race([classifyPromise, timeoutPromise]);
 
     if (!response.ok) {
       console.error(`[Classify] API error: ${response.status}`);
@@ -622,7 +636,6 @@ is_replacement=true если пользователь хочет найти по
       is_replacement: !!parsed.is_replacement,
     };
   } catch (e) {
-    clearTimeout(timeoutId);
     if (e instanceof DOMException && e.name === 'AbortError') {
       console.log('[Classify] Timeout (3s), skipping classification');
     } else {
@@ -2690,7 +2703,7 @@ serve(async (req) => {
       const classifyStart = Date.now();
       try {
         const recentHistoryForClassifier = historyForContext.slice(-4).map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }));
-        const classification = await classifyProductName(userMessage, recentHistoryForClassifier);
+        const classification = await classifyProductName(userMessage, recentHistoryForClassifier, appSettings);
         const classifyElapsed = Date.now() - classifyStart;
         console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}", is_replacement=${classification?.is_replacement || false}`);
         
