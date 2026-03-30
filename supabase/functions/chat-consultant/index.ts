@@ -809,13 +809,35 @@ function resolveSlotRefinement(
   if (isShort && !hasNewPriceIntent) {
     const rawRefinement = userMessage.trim();
     // Strip conversational filler words that poison product search queries
-    const fillerPattern = /^(ну\s+|а\s+|ладно\s*[,.]?\s*|хорошо\s*[,.]?\s*|давай\s*[,.]?\s*|окей\s*[,.]?\s*|ок\s*[,.]?\s*|лучше\s+|тогда\s+|пожалуй\s*[,.]?\s*|наверное\s*[,.]?\s*|может\s+быть\s*[,.]?\s*|пусть\s+будет\s+|а\s+что\s+лучше\s+для\s+|а\s+что\s+насчет\s+|что\s+лучше\s+для\s+|а\s+для\s+|для\s+)/gi;
-    let cleanedRefinement = rawRefinement.replace(fillerPattern, '').trim();
+    // Order matters: longer patterns first, then shorter ones
+    const fillerPatterns = [
+      /^а\s+что\s+(лучше\s+)?(подойд[её]т\s+)?для\s+/gi,
+      /^что\s+(лучше\s+)?(подойд[её]т\s+)?для\s+/gi,
+      /^а\s+что\s+насчет\s+/gi,
+      /^может\s+быть\s*[,.]?\s*/gi,
+      /^пусть\s+будет\s+/gi,
+      /^(ну|а|ладно|хорошо|давай|давайте|окей|ок|тогда|пожалуй|наверное)\s*[,.]?\s*/gi,
+    ];
+    let cleanedRefinement = rawRefinement;
+    for (const pattern of fillerPatterns) {
+      cleanedRefinement = cleanedRefinement.replace(pattern, '').trim();
+    }
     // Also strip trailing question marks and punctuation
     cleanedRefinement = cleanedRefinement.replace(/[?!.,]+$/, '').trim();
     // If cleaning removed everything, use the raw refinement
     const refinement = cleanedRefinement || rawRefinement;
-    const combinedQuery = `${refinement} ${pendingSlot.base_category}`.trim();
+    // Build combined query: if refinement looks like a use-case ("для охоты", "отдыха на природе")
+    // use "base_category для X" format for better search results
+    const forPattern = /^для\s+/i;
+    const useCasePattern = /(?:охот|рыбалк|кемпинг|поход|природ|туризм|работ|дом|сад|строител|ремонт|гараж|мастерск)/i;
+    let combinedQuery: string;
+    if (forPattern.test(refinement)) {
+      combinedQuery = `${pendingSlot.base_category} ${refinement}`.trim();
+    } else if (useCasePattern.test(refinement) && !refinement.includes(pendingSlot.base_category)) {
+      combinedQuery = `${refinement} ${pendingSlot.base_category}`.trim();
+    } else {
+      combinedQuery = `${refinement} ${pendingSlot.base_category}`.trim();
+    }
     
     const updatedSlots = { ...slots };
     updatedSlots[pendingKey] = {
