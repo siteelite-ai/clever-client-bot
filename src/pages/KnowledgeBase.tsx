@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Plus, Link, FileText, Upload, Trash2, RefreshCw, Search, ExternalLink, Loader2, Eye } from 'lucide-react';
+import { Plus, Link, FileText, Upload, Trash2, RefreshCw, Search, ExternalLink, Loader2, Eye, Calendar as CalendarIcon, Clock } from 'lucide-react';
 import { SitemapImportDialog } from '@/components/knowledge/SitemapImportDialog';
 import { ContactsCard } from '@/components/knowledge/ContactsCard';
 import { EntryViewDialog } from '@/components/knowledge/EntryViewDialog';
@@ -9,6 +9,8 @@ import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import { extractTextFromPdf } from '@/lib/pdf-extract';
 import { supabase } from '@/integrations/supabase/client';
@@ -21,6 +23,8 @@ interface KnowledgeEntry {
   source_url?: string;
   created_at: string;
   updated_at: string;
+  valid_from?: string | null;
+  valid_until?: string | null;
 }
 
 export default function KnowledgeBase() {
@@ -28,6 +32,7 @@ export default function KnowledgeBase() {
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<'all' | 'url' | 'text' | 'pdf'>('all');
+  const [showExpired, setShowExpired] = useState(false);
   const [isAddDialogOpen, setIsAddDialogOpen] = useState(false);
   
   // Form states
@@ -223,11 +228,17 @@ export default function KnowledgeBase() {
     }
   };
 
+  const isExpired = (entry: KnowledgeEntry) => {
+    if (!entry.valid_until) return false;
+    return new Date(entry.valid_until) < new Date();
+  };
+
   const filteredEntries = entries.filter(e => {
     const matchesType = typeFilter === 'all' || e.type === typeFilter;
     const matchesSearch = e.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       e.content.toLowerCase().includes(searchQuery.toLowerCase());
-    return matchesType && matchesSearch;
+    const matchesExpiry = showExpired || !isExpired(e);
+    return matchesType && matchesSearch && matchesExpiry;
   });
 
   const getIcon = (type: KnowledgeEntry['type']) => {
@@ -414,9 +425,15 @@ export default function KnowledgeBase() {
               </Button>
             ))}
           </div>
+          <div className="flex items-center gap-2">
+            <Switch id="show-expired" checked={showExpired} onCheckedChange={setShowExpired} />
+            <Label htmlFor="show-expired" className="text-sm text-muted-foreground cursor-pointer">
+              Показать просроченные
+            </Label>
+          </div>
         </div>
 
-        {/* Loading state */}
+
         {isLoading && (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -447,6 +464,11 @@ export default function KnowledgeBase() {
                         <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground">
                           {entry.type.toUpperCase()}
                         </span>
+                        {isExpired(entry) && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-destructive/10 text-destructive">
+                            Просрочено
+                          </span>
+                        )}
                       </div>
                       <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
                         {entry.content}

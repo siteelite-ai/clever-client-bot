@@ -86,6 +86,23 @@ async function getGoogleApiKeys(supabase: any): Promise<string[]> {
   return keys;
 }
 
+// Extract validity dates from content (e.g. "с 01.05.2021 по 30.06.2023")
+function extractValidityDates(content: string): { valid_from: string | null; valid_until: string | null } {
+  // Pattern: с DD.MM.YYYY по DD.MM.YYYY (various separators)
+  const datePattern = /(?:с|от|начало|действует\s+с)\s*(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})\s*(?:г\.?\s*)?(?:по|до|—|–|-|конец)\s*(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})/i;
+  const match = content.match(datePattern);
+  
+  if (match) {
+    const [, d1, m1, y1, d2, m2, y2] = match;
+    const from = `${y1}-${m1.padStart(2, '0')}-${d1.padStart(2, '0')}T00:00:00Z`;
+    const until = `${y2}-${m2.padStart(2, '0')}-${d2.padStart(2, '0')}T23:59:59Z`;
+    console.log(`[Dates] Extracted validity: ${from} → ${until}`);
+    return { valid_from: from, valid_until: until };
+  }
+  
+  return { valid_from: null, valid_until: null };
+}
+
 // Extract text content from URL
 async function scrapeUrl(url: string): Promise<{ title: string; content: string }> {
   console.log(`[Scrape] Fetching URL: ${url}`);
@@ -327,19 +344,26 @@ serve(async (req) => {
         throw new Error('Страница содержит слишком мало текста');
       }
 
+      // Extract validity dates from content
+      const { valid_from, valid_until } = extractValidityDates(content);
+
       // Generate embedding
       const embedding = await generateEmbedding(content, googleApiKeys);
 
       // Insert into database
+      const insertData: any = {
+        type: 'url',
+        title: extractedTitle,
+        content: content.substring(0, 200000),
+        source_url: url,
+        embedding,
+      };
+      if (valid_from) insertData.valid_from = valid_from;
+      if (valid_until) insertData.valid_until = valid_until;
+
       const { data, error } = await supabase
         .from('knowledge_entries')
-        .insert({
-          type: 'url',
-          title: extractedTitle,
-          content: content.substring(0, 200000), // Limit content size
-          source_url: url,
-          embedding,
-        })
+        .insert(insertData)
         .select()
         .single();
 
@@ -548,7 +572,7 @@ serve(async (req) => {
       // List all entries
       const { data, error } = await supabase
         .from('knowledge_entries')
-        .select('id, type, title, content, source_url, created_at, updated_at')
+        .select('id, type, title, content, source_url, created_at, updated_at, valid_from, valid_until')
         .order('created_at', { ascending: false });
 
       if (error) {
