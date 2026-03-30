@@ -1282,9 +1282,78 @@ function rerankProducts(products: Product[], userQuery: string): Product[] {
 }
 
 /**
- * Check if direct search results contain a good match for the user's query.
- * Returns true if at least one product scores >= threshold.
+ * Rerank replacement/alternative products by similarity to the original product.
+ * Scores based on matching category, specs, and characteristics.
  */
+function rerankReplacements(alternatives: Product[], original: Product): Product[] {
+  const origSpecs = extractSpecs(original.pagetitle);
+  const origTokens = extractTokens(original.pagetitle);
+  const origCategory = original.category?.pagetitle?.toLowerCase() || '';
+  
+  // Collect original product option values for comparison
+  const origOptions = new Map<string, string>();
+  if (original.options) {
+    for (const opt of original.options) {
+      origOptions.set(opt.key, opt.value.split('//')[0].trim().toLowerCase());
+    }
+  }
+  
+  const scored = alternatives.map(alt => {
+    let score = 0;
+    
+    // Category match (0-30)
+    const altCategory = alt.category?.pagetitle?.toLowerCase() || '';
+    if (altCategory && origCategory && altCategory === origCategory) score += 30;
+    else if (altCategory && origCategory && (altCategory.includes(origCategory) || origCategory.includes(altCategory))) score += 20;
+    
+    // Spec match (0-30)
+    const altSpecs = extractSpecs(alt.pagetitle);
+    if (origSpecs.length > 0) {
+      let matched = 0;
+      for (const os of origSpecs) {
+        if (altSpecs.includes(os)) matched++;
+      }
+      score += Math.round((matched / origSpecs.length) * 30);
+    }
+    
+    // Token overlap (0-20)
+    const altTokens = extractTokens(alt.pagetitle);
+    if (origTokens.length > 0) {
+      let matched = 0;
+      for (const ot of origTokens) {
+        if (altTokens.some(at => at.includes(ot) || ot.includes(at))) matched++;
+      }
+      score += Math.round((matched / origTokens.length) * 20);
+    }
+    
+    // Option match (0-20)
+    if (alt.options && origOptions.size > 0) {
+      let optMatched = 0;
+      let optTotal = 0;
+      for (const opt of alt.options) {
+        const origVal = origOptions.get(opt.key);
+        if (origVal) {
+          optTotal++;
+          const altVal = opt.value.split('//')[0].trim().toLowerCase();
+          if (altVal === origVal) optMatched++;
+        }
+      }
+      if (optTotal > 0) score += Math.round((optMatched / optTotal) * 20);
+    }
+    
+    return { product: alt, score };
+  });
+  
+  scored.sort((a, b) => b.score - a.score);
+  
+  if (scored.length > 0) {
+    console.log(`[ReplacementRerank] Top: ${scored.slice(0, 5).map(s => `${s.score}:"${s.product.pagetitle.substring(0, 40)}"`).join(', ')}`);
+  }
+  
+  return scored.map(s => s.product);
+}
+
+
 function hasGoodMatch(products: Product[], userQuery: string, threshold: number = 35): boolean {
   const queryTokens = extractTokens(userQuery);
   const querySpecs = extractSpecs(userQuery);
