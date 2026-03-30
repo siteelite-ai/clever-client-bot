@@ -1,91 +1,37 @@
-# Архитектура ценового поиска и слотовой памяти (v4.4)
 
-## 1. Обзор системы
-Система представляет собой RAG-архитектуру (Retrieval-Augmented Generation) для управления знаниями компании, интегрированную с Supabase. Основные компоненты:
-- Векторное хранилище (pgvector) для семантического поиска.
-- Edge Functions для обработки контента и взаимодействия с LLM.
-- React-интерфейс для управления базой знаний.
 
-## 2. Структура данных
-- `knowledge_entries`: Основная таблица с контентом, метаданными и эмбеддингами.
-- `knowledge_chunks`: Разбиение длинных документов на фрагменты для точного поиска.
+# План: Переключение classifyProductName() на Google API ключи
 
-## 3. Поиск
-- Гибридный поиск (векторный + полнотекстовый).
-- Ранжирование результатов через `pgvector` (cosine distance).
+## Что меняется
 
-## 4. Обработка контента
-- Автоматический скрапинг URL.
-- Генерация эмбеддингов через OpenAI `text-embedding-3-small`.
+Функция `classifyProductName()` (строки 515-633) сейчас использует `LOVABLE_API_KEY` + Lovable Gateway. Нужно переключить на Google API ключи из `app_settings` с тем же fallback-механизмом (`callAIWithKeyFallback`), что используется для основного LLM.
 
-## 5. Слотовая память
-- Извлечение параметров из запросов пользователей для заполнения контекстных слотов (например, "город", "услуга", "дата").
+## Изменения в `supabase/functions/chat-consultant/index.ts`
 
----
+### 1. Сигнатура функции
+Добавить параметр `settings: CachedSettings`, чтобы получить доступ к `google_api_key`.
 
-## 6. Темпоральная фильтрация контента (v1.0)
+### 2. Парсинг ключей
+Заменить `LOVABLE_API_KEY` на парсинг `settings.google_api_key` (split по запятой/newline) — точно как в `getAIConfig()` (строки 88-91).
 
-### Проблема
-Бот выдавал просроченные акции как действующие — в `knowledge_entries` не было понятия «срок действия».
+### 3. Вызов API
+Заменить прямой `fetch` на `callAIWithKeyFallback()` с:
+- URL: `https://generativelanguage.googleapis.com/v1beta/openai/chat/completions`
+- Ключи: распарсенный массив из `settings.google_api_key`
+- Модель: `gemini-2.5-flash-lite` (оставить как есть — это самая быстрая/дешёвая)
+- Label: `'Classify'`
 
-### Решение — двухуровневая защита
+### 4. Таймаут
+`callAIWithKeyFallback` не поддерживает `AbortController`. Обернуть вызов в `Promise.race` с 3-секундным таймаутом.
 
-**Уровень 1 — Метаданные в БД:**
-- `valid_from` (timestamptz, nullable) — начало действия
-- `valid_until` (timestamptz, nullable) — конец действия
-- Если оба `null` — контент бессрочный (статьи, справочники, контакты)
+### 5. Место вызова (строка ~2693)
+Передать `appSettings` в `classifyProductName(userMessage, recentHistory, appSettings)`.
 
-**Уровень 2 — Фильтрация при поиске (SQL RPC):**
-Во всех 3 функциях поиска (`search_knowledge_hybrid`, `search_knowledge_fulltext`, `search_knowledge_chunks_hybrid`) добавлен фильтр:
-```sql
-WHERE (ke.valid_until IS NULL OR ke.valid_until > now())
-```
-Просроченные записи не попадают в результаты RAG → бот их никогда не увидит.
+### 6. Fallback
+Если `google_api_key` не настроен — попробовать `LOVABLE_API_KEY` как запасной вариант (чтобы не сломать работу если Google ключи ещё не добавлены).
 
-**Авто-извлечение дат при импорте URL:**
-В `knowledge-process/index.ts` функция `extractValidityDates()` парсит regex `с DD.MM.YYYY по DD.MM.YYYY` из скраченного контента и автоматически заполняет `valid_from` / `valid_until`.
+## Результат
+- Классификатор использует те же ключи и тот же fallback, что и основной LLM
+- Убирается зависимость от Lovable Gateway (~50-100ms экономия на прокси)
+- `LOVABLE_API_KEY` остаётся как fallback, но не основной путь
 
-**UI:**
-- Toggle «Показать просроченные» в `KnowledgeBase.tsx` (по умолчанию OFF)
-- Бейдж «Просрочено» на карточках просроченных записей
-- Date-pickers для `valid_from` / `valid_until` в `EntryViewDialog.tsx` (режим редактирования)
-
-### Бэкфилл
-8 существующих акций проставлены с корректными датами. Из них 7 просрочены, 1 активна (скидка пенсионерам до 31.12.2030).
-
-### Файлы
-| Файл | Роль |
-|---|---|
-| SQL миграция | Добавление колонок + обновление 3 RPC-функций |
-| `supabase/functions/knowledge-process/index.ts` | `extractValidityDates()`, передача дат при `scrape_url` |
-| `src/pages/KnowledgeBase.tsx` | Toggle «просроченные», бейдж, фильтрация |
-| `src/components/knowledge/EntryViewDialog.tsx` | Отображение/редактирование дат действия |
-
----
-
-## 7. Поиск аналогов / замены товаров (v1.0)
-
-### Проблема
-Бот не мог подобрать аналоги/замены для указанного товара — пайплайн находил исходный товар и останавливался.
-
-### Решение — LLM-детекция replacement-интента + двухэтапный поиск
-
-**Детекция интента (Micro-LLM):**
-- В классификатор добавлено поле `is_replacement: boolean`
-- LLM семантически определяет, хочет ли пользователь замену/аналог (без хардкода маркерных слов)
-- Примеры: "предложи замену", "что-то похожее", "такой же, но подешевле", "если нет в наличии, что посоветуете?"
-
-**Двухэтапный поиск:**
-1. Шаг 1: Найти исходный товар (существующий article/title поиск)
-2. Шаг 2: `extractSearchableTraits()` — извлечь характеристики (мощность, категория, тип, защита)
-3. Шаг 3: `searchProductsMulti()` по этим характеристикам
-4. Шаг 4: Исключить исходный товар, rerank по близости характеристик (`rerankReplacements()`)
-
-**Fallback:** Если исходный товар не найден — `extractTraitsFromName()` извлекает характеристики из названия.
-
-**Промпт для LLM:** Специальный блок `productInstructions` — сравни аналоги с оригиналом, покажи отличия.
-
-### Файлы
-| Файл | Роль |
-|---|---|
-| `supabase/functions/chat-consultant/index.ts` | `ClassificationResult.is_replacement`, `extractSearchableTraits()`, `extractTraitsFromName()`, `rerankReplacements()`, новая ветка пайплайна, новый `productInstructions` блок |
