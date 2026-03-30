@@ -135,6 +135,8 @@ export type Database = {
           title: string
           type: string
           updated_at: string
+          valid_from: string | null
+          valid_until: string | null
         }
         Insert: {
           content: string
@@ -146,6 +148,8 @@ export type Database = {
           title: string
           type: string
           updated_at?: string
+          valid_from?: string | null
+          valid_until?: string | null
         }
         Update: {
           content?: string
@@ -157,6 +161,8 @@ export type Database = {
           title?: string
           type?: string
           updated_at?: string
+          valid_from?: string | null
+          valid_until?: string | null
         }
         Relationships: []
       }
