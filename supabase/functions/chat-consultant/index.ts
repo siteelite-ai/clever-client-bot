@@ -2464,6 +2464,8 @@ serve(async (req) => {
     // === TITLE-FIRST SHORT-CIRCUIT via Micro-LLM classifier ===
     // AI determines if message contains a product name and/or price intent
     let priceIntentClarify: { total: number; category: string } | null = null;
+    let effectivePriceIntent: string | undefined = undefined;
+    let effectiveCategory = '';
     
     if (!articleShortCircuit && appSettings.volt220_api_token) {
       const classifyStart = Date.now();
@@ -2475,11 +2477,11 @@ serve(async (req) => {
         
         // === DIALOG SLOTS: try slot-based resolution FIRST ===
         // Filter out "none" — classifier returns string "none", not null
-        let effectivePriceIntent: string | undefined = 
+        effectivePriceIntent = 
           (classification?.price_intent && classification.price_intent !== 'none') 
             ? classification.price_intent 
             : undefined;
-        let effectiveCategory = classification?.product_category || classification?.product_name || '';
+        effectiveCategory = classification?.product_category || classification?.product_name || '';
         
         const slotResolution = resolveSlotRefinement(dialogSlots, userMessage, classification);
         
