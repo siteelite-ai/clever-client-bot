@@ -542,6 +542,13 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 - user: "кемпинговый"
 → price_intent="most_expensive", product_category="кемпинговый фонарь", has_product_name=false
 
+- assistant: "Какой тип фонаря вас интересует?"
+- user: "давай кемпинговый"
+→ product_category="кемпинговый", has_product_name=false (слово "давай" — разговорное, не часть товара)
+
+- user: "а что лучше для охоты?"
+→ product_category="для охоты", has_product_name=false
+
 Задача 1: Определи, содержит ли сообщение КОНКРЕТНОЕ название товара (модель, тип + марка, тип + характеристики).
 
 Примеры названий товаров:
@@ -561,7 +568,13 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 - "покажи розетки" → без price_intent (обычный запрос)
 - "сколько стоит лампа ECO T8?" → без price_intent (вопрос о цене конкретного товара)
 
-product_category — краткое слово-категория товара (фонарь, кабель, автомат, розетка, лампа и т.д.). Указывай только при price_intent.
+Задача 3: product_category — извлеки ЧИСТОЕ слово-категорию или тип товара из сообщения, ВСЕГДА когда в сообщении упомянут тип/категория товара. Убери разговорные слова (давай, ладно, хорошо, ну, а, тогда и т.д.) — оставь только суть. Если пользователь указывает назначение (для охоты, для кемпинга), включи это.
+Примеры:
+- "давай кемпинговый" → product_category="кемпинговый"
+- "а что насчет налобного?" → product_category="налобный"
+- "для отдыха на природе" → product_category="для отдыха на природе"
+- "ладно, тогда ручной" → product_category="ручной"
+- "а что лучше для охоты?" → product_category="для охоты"
 
 Ответь СТРОГО в JSON: {"has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "..."}`
           },
