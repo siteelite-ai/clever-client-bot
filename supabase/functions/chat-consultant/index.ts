@@ -509,6 +509,7 @@ interface ClassificationResult {
   product_name?: string;
   price_intent?: 'most_expensive' | 'cheapest';
   product_category?: string;
+  is_replacement?: boolean;
 }
 
 async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>): Promise<ClassificationResult | null> {
@@ -576,7 +577,19 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 - "ладно, тогда ручной" → product_category="ручной"
 - "а что лучше для охоты?" → product_category="для охоты"
 
-Ответь СТРОГО в JSON: {"has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "..."}`
+Задача 4: Определи, ищет ли пользователь ЗАМЕНУ, АНАЛОГ или АЛЬТЕРНАТИВУ конкретного товара.
+is_replacement=true если пользователь хочет найти похожий/альтернативный/заменяющий товар.
+Примеры:
+- "предложи замену для ДКУ-LED-03-100W" → is_replacement=true, has_product_name=true, product_name="ДКУ-LED-03-100W"
+- "есть что-то похожее?" → is_replacement=true (в контексте ранее найденного товара)
+- "а если этого нет в наличии, что посоветуете?" → is_replacement=true
+- "такой же, но другого бренда" → is_replacement=true
+- "что-то типа такого, но подешевле" → is_replacement=true
+- "а что-нибудь подобное есть?" → is_replacement=true
+- "покажи автомат ABB 32А" → is_replacement=false (обычный запрос)
+- "какие розетки у вас есть?" → is_replacement=false
+
+Ответь СТРОГО в JSON: {"has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "...", "is_replacement": bool}`
           },
           ...(recentHistory || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
           { role: 'user', content: message }
@@ -606,6 +619,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       product_name: parsed.product_name || undefined,
       price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
       product_category: parsed.product_category || undefined,
+      is_replacement: !!parsed.is_replacement,
     };
   } catch (e) {
     clearTimeout(timeoutId);
@@ -619,8 +633,143 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 }
 
 // ============================================================
-// HANDLE PRICE INTENT — multi-candidate search, probe, decide
+// REPLACEMENT/ALTERNATIVE — extract searchable traits from a product
 // ============================================================
+
+/**
+ * Extract key searchable traits from a found product to search for alternatives.
+ * Returns search candidates based on product characteristics.
+ */
+function extractSearchableTraits(product: Product): SearchCandidate[] {
+  const candidates: SearchCandidate[] = [];
+  const traits: Record<string, string> = {};
+  
+  // Extract key characteristics from product options
+  const importantKeys = [
+    'moshchnost', 'мощность', 'power', 'watt',
+    'напряжение', 'voltage', 'napr',
+    'защита', 'ip', 'stepen_zashchity',
+    'цоколь', 'tsokol', 'cap',
+    'тип', 'tip', 'type',
+    'сечение', 'sechenie',
+    'количество', 'kolichestvo',
+    'длина', 'dlina', 'length',
+  ];
+  
+  if (product.options) {
+    for (const opt of product.options) {
+      const keyLower = opt.key.toLowerCase();
+      const captionLower = opt.caption.toLowerCase();
+      
+      for (const ik of importantKeys) {
+        if (keyLower.includes(ik) || captionLower.includes(ik)) {
+          const cleanCaption = opt.caption.split('//')[0].trim();
+          const cleanValue = opt.value.split('//')[0].trim();
+          traits[cleanCaption] = cleanValue;
+          break;
+        }
+      }
+    }
+  }
+  
+  // Build search queries from product info
+  const title = product.pagetitle;
+  const category = product.category?.pagetitle || '';
+  
+  // 1. Category + key specs (e.g. "светильник 100Вт")
+  if (category) {
+    const specParts: string[] = [];
+    for (const [k, v] of Object.entries(traits)) {
+      if (/мощность|power|watt/i.test(k)) specParts.push(v);
+    }
+    const catQuery = specParts.length > 0 ? `${category} ${specParts.join(' ')}` : category;
+    candidates.push({
+      query: catQuery, brand: null, category: null,
+      min_price: null, max_price: null,
+    });
+  }
+  
+  // 2. Extract product type keywords from title (first 2-3 meaningful words)
+  const titleWords = title
+    .replace(/[()\\[\]]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 3 && !/^\d+$/.test(w))
+    .slice(0, 3);
+  if (titleWords.length >= 2) {
+    candidates.push({
+      query: titleWords.slice(0, 2).join(' '), brand: null, category: null,
+      min_price: null, max_price: null,
+    });
+  }
+  
+  // 3. Full category name if available
+  if (category && !candidates.some(c => c.query === category)) {
+    candidates.push({
+      query: category, brand: null, category: null,
+      min_price: null, max_price: null,
+    });
+  }
+  
+  // 4. Add option_filters for key traits
+  const optionFilters: Record<string, string> = {};
+  for (const [k, v] of Object.entries(traits)) {
+    if (/мощность|power|watt/i.test(k)) optionFilters['мощность'] = v;
+    else if (/напряжение|voltage/i.test(k)) optionFilters['напряжение'] = v;
+    else if (/защита|ip/i.test(k)) optionFilters['защита'] = v;
+    else if (/цоколь|cap/i.test(k)) optionFilters['цоколь'] = v;
+  }
+  if (Object.keys(optionFilters).length > 0) {
+    for (const c of candidates) {
+      c.option_filters = { ...optionFilters };
+    }
+  }
+  
+  console.log(`[ReplacementTraits] Product "${title}" → ${candidates.length} candidates, traits: ${JSON.stringify(traits)}`);
+  return candidates;
+}
+
+/**
+ * Extract traits from product name string when product is not found in catalog.
+ * Uses heuristics to pull power, type, voltage from the name.
+ */
+function extractTraitsFromName(productName: string): SearchCandidate[] {
+  const candidates: SearchCandidate[] = [];
+  
+  // Extract specs from name
+  const powerMatch = productName.match(/(\d+)\s*[Ww]|(\d+)\s*Вт/i);
+  const voltMatch = productName.match(/(\d+)\s*[Vv]|(\d+)\s*В\b/i);
+  
+  // Extract type keywords (first word before specs)
+  const typeWords = productName
+    .replace(/\d+\s*[WwVvАа]?\s*(Вт|W|В|V|мм|mm|А|A)/gi, '')
+    .replace(/[()\\[\]\-]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 3 && !/^\d+$/.test(w));
+  
+  if (typeWords.length >= 1) {
+    const baseQuery = typeWords.slice(0, 3).join(' ');
+    const power = powerMatch ? (powerMatch[1] || powerMatch[2]) + 'Вт' : '';
+    const query = power ? `${baseQuery} ${power}` : baseQuery;
+    
+    candidates.push({
+      query, brand: null, category: null,
+      min_price: null, max_price: null,
+    });
+    
+    // Also add without power for broader search
+    if (power) {
+      candidates.push({
+        query: baseQuery, brand: null, category: null,
+        min_price: null, max_price: null,
+      });
+    }
+  }
+  
+  console.log(`[ReplacementTraitsName] "${productName}" → ${candidates.length} candidates`);
+  return candidates;
+}
+
+
 
 interface PriceIntentResult {
   action: 'answer' | 'clarify' | 'not_found';
@@ -1133,9 +1282,78 @@ function rerankProducts(products: Product[], userQuery: string): Product[] {
 }
 
 /**
- * Check if direct search results contain a good match for the user's query.
- * Returns true if at least one product scores >= threshold.
+ * Rerank replacement/alternative products by similarity to the original product.
+ * Scores based on matching category, specs, and characteristics.
  */
+function rerankReplacements(alternatives: Product[], original: Product): Product[] {
+  const origSpecs = extractSpecs(original.pagetitle);
+  const origTokens = extractTokens(original.pagetitle);
+  const origCategory = original.category?.pagetitle?.toLowerCase() || '';
+  
+  // Collect original product option values for comparison
+  const origOptions = new Map<string, string>();
+  if (original.options) {
+    for (const opt of original.options) {
+      origOptions.set(opt.key, opt.value.split('//')[0].trim().toLowerCase());
+    }
+  }
+  
+  const scored = alternatives.map(alt => {
+    let score = 0;
+    
+    // Category match (0-30)
+    const altCategory = alt.category?.pagetitle?.toLowerCase() || '';
+    if (altCategory && origCategory && altCategory === origCategory) score += 30;
+    else if (altCategory && origCategory && (altCategory.includes(origCategory) || origCategory.includes(altCategory))) score += 20;
+    
+    // Spec match (0-30)
+    const altSpecs = extractSpecs(alt.pagetitle);
+    if (origSpecs.length > 0) {
+      let matched = 0;
+      for (const os of origSpecs) {
+        if (altSpecs.includes(os)) matched++;
+      }
+      score += Math.round((matched / origSpecs.length) * 30);
+    }
+    
+    // Token overlap (0-20)
+    const altTokens = extractTokens(alt.pagetitle);
+    if (origTokens.length > 0) {
+      let matched = 0;
+      for (const ot of origTokens) {
+        if (altTokens.some(at => at.includes(ot) || ot.includes(at))) matched++;
+      }
+      score += Math.round((matched / origTokens.length) * 20);
+    }
+    
+    // Option match (0-20)
+    if (alt.options && origOptions.size > 0) {
+      let optMatched = 0;
+      let optTotal = 0;
+      for (const opt of alt.options) {
+        const origVal = origOptions.get(opt.key);
+        if (origVal) {
+          optTotal++;
+          const altVal = opt.value.split('//')[0].trim().toLowerCase();
+          if (altVal === origVal) optMatched++;
+        }
+      }
+      if (optTotal > 0) score += Math.round((optMatched / optTotal) * 20);
+    }
+    
+    return { product: alt, score };
+  });
+  
+  scored.sort((a, b) => b.score - a.score);
+  
+  if (scored.length > 0) {
+    console.log(`[ReplacementRerank] Top: ${scored.slice(0, 5).map(s => `${s.score}:"${s.product.pagetitle.substring(0, 40)}"`).join(', ')}`);
+  }
+  
+  return scored.map(s => s.product);
+}
+
+
 function hasGoodMatch(products: Product[], userQuery: string, threshold: number = 35): boolean {
   const queryTokens = extractTokens(userQuery);
   const querySpecs = extractSpecs(userQuery);
@@ -2415,6 +2633,7 @@ serve(async (req) => {
     let brandsContext = '';
     let knowledgeContext = '';
     let articleShortCircuit = false;
+    let replacementMeta: { isReplacement: boolean; original: Product | null; originalName?: string; noResults: boolean } | null = null;
 
     // === ARTICLE FIRST: Detect SKU/article codes BEFORE LLM 1 ===
     const detectedArticles = detectArticles(userMessage);
@@ -2473,7 +2692,7 @@ serve(async (req) => {
         const recentHistoryForClassifier = historyForContext.slice(-4).map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }));
         const classification = await classifyProductName(userMessage, recentHistoryForClassifier);
         const classifyElapsed = Date.now() - classifyStart;
-        console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}"`);
+        console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}", is_replacement=${classification?.is_replacement || false}`);
         
         // === DIALOG SLOTS: try slot-based resolution FIRST ===
         // Filter out "none" — classifier returns string "none", not null
@@ -2574,6 +2793,63 @@ serve(async (req) => {
             console.log(`[Chat] Title-first SUCCESS: ${foundProducts.length} products, skipping LLM 1 (total ${classifyElapsed + searchElapsed}ms)`);
           } else {
             console.log(`[Chat] Title-first: 0 results for "${classification.product_name}", proceeding to LLM 1`);
+          }
+        }
+        
+        // === REPLACEMENT/ALTERNATIVE INTENT ===
+        if (classification?.is_replacement && appSettings.volt220_api_token) {
+          console.log(`[Chat] Replacement intent detected!`);
+          
+          let originalProduct: Product | null = null;
+          let replacementCandidates: SearchCandidate[] = [];
+          
+          if (articleShortCircuit && foundProducts.length > 0) {
+            // Original product found — extract traits for alternative search
+            originalProduct = foundProducts[0];
+            replacementCandidates = extractSearchableTraits(originalProduct);
+            console.log(`[Chat] Replacement: original found "${originalProduct.pagetitle}", ${replacementCandidates.length} search candidates`);
+          } else if (classification.product_name) {
+            // Product not found in catalog — extract traits from name
+            replacementCandidates = extractTraitsFromName(classification.product_name);
+            console.log(`[Chat] Replacement: original NOT found, extracted ${replacementCandidates.length} candidates from name "${classification.product_name}"`);
+          }
+          
+          if (replacementCandidates.length > 0) {
+            const altProducts = await searchProductsMulti(replacementCandidates, 15, appSettings.volt220_api_token);
+            
+            // Filter out the original product
+            const originalId = originalProduct?.id;
+            const alternatives = originalId 
+              ? altProducts.filter(p => p.id !== originalId)
+              : altProducts;
+            
+            if (alternatives.length > 0) {
+              // Rerank alternatives by similarity to the original
+              const reranked = originalProduct 
+                ? rerankReplacements(alternatives, originalProduct)
+                : alternatives;
+              
+              foundProducts = reranked.slice(0, 8);
+              articleShortCircuit = true;
+              
+              // Store replacement metadata in closure variables (extractedIntent not yet declared)
+              replacementMeta = {
+                isReplacement: true,
+                original: originalProduct,
+                originalName: classification.product_name,
+                noResults: false,
+              };
+              
+              console.log(`[Chat] Replacement SUCCESS: ${foundProducts.length} alternatives found`);
+            } else {
+              console.log(`[Chat] Replacement: no alternatives found`);
+              replacementMeta = {
+                isReplacement: true,
+                original: null,
+                originalName: classification.product_name,
+                noResults: true,
+              };
+            }
           }
         }
       } catch (e) {
@@ -2761,7 +3037,47 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
     console.log(`[Chat] hasAssistantGreeting: ${hasAssistantGreeting}`);
     
     let productInstructions = '';
-    if (brandsContext) {
+    const isReplacementIntent = !!replacementMeta?.isReplacement;
+    const replacementOriginal = replacementMeta?.original || undefined;
+    const replacementOriginalName = replacementMeta?.originalName || undefined;
+    const replacementNoResults = !!replacementMeta?.noResults;
+    
+    if (isReplacementIntent && !replacementNoResults && productContext) {
+      // Replacement intent with alternatives found
+      const origInfo = replacementOriginal 
+        ? `**${replacementOriginal.pagetitle}** (${replacementOriginal.vendor || 'без бренда'}, ${replacementOriginal.price} тг)`
+        : `**${replacementOriginalName || 'указанный товар'}**`;
+      
+      productInstructions = `
+🔄 ПОИСК АНАЛОГА / ЗАМЕНЫ
+
+Клиент ищет замену или аналог для: ${origInfo}
+
+НАЙДЕННЫЕ АНАЛОГИ:
+${productContext}
+
+ТВОЙ ОТВЕТ:
+1. Кратко: "Вот ближайшие аналоги для [товар]:"
+2. Покажи 3-5 товаров, СРАВНИВАЯ их с оригиналом по ключевым характеристикам (мощность, тип, защита, цена)
+3. Укажи отличия: что лучше, что хуже, что совпадает
+4. Ссылки копируй как есть в формате [Название](URL) — НЕ МЕНЯЙ URL!
+5. ВАЖНО: если в названии товара есть экранированные скобки \\( и \\) — СОХРАНЯЙ их!
+6. Тон: профессиональный, как опытный консультант. Помоги клиенту выбрать лучшую замену.
+7. В конце спроси: "Какой вариант вам больше подходит? Могу уточнить детали по любому из них."`;
+    } else if (isReplacementIntent && replacementNoResults) {
+      // Replacement intent but no alternatives found
+      productInstructions = `
+🔄 ПОИСК АНАЛОГА — НЕ НАЙДЕНО
+
+Клиент ищет замену/аналог для: **${replacementOriginalName || 'товар'}**
+К сожалению, в каталоге не удалось найти подходящие аналоги.
+
+ТВОЙ ОТВЕТ:
+1. Скажи, что точных аналогов в каталоге не нашлось
+2. Предложи: уточнить характеристики нужного товара, чтобы расширить поиск
+3. Предложи связаться с менеджером — он может подобрать вручную
+4. Покажи ссылку на каталог: https://220volt.kz/catalog/`;
+    } else if (brandsContext) {
       productInstructions = `
 ${brandsContext}
 
