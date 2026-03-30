@@ -879,7 +879,7 @@ async function handlePriceIntent(
     probeParams.append('per_page', '1');
     
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     
     const probeResponse = await fetch(`${VOLT220_API_URL}?${probeParams}`, {
       method: 'GET',
@@ -981,6 +981,41 @@ async function handlePriceIntent(
     }
   } catch (error) {
     console.error(`[PriceIntent] Error:`, error);
+    
+    // Retry once with simplified query on timeout
+    if (error instanceof DOMException && error.name === 'AbortError' && queries.length > 0) {
+      console.log(`[PriceIntent] Timeout on multi-query, retrying with simplified query: "${queries[0]}"`);
+      try {
+        const retryParams = new URLSearchParams();
+        retryParams.append('query', queries[0]);
+        retryParams.append('per_page', '50');
+        
+        const retryCtrl = new AbortController();
+        const retryTimeout = setTimeout(() => retryCtrl.abort(), 15000);
+        
+        const retryResp = await fetch(`${VOLT220_API_URL}?${retryParams}`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+          signal: retryCtrl.signal,
+        });
+        clearTimeout(retryTimeout);
+        
+        if (retryResp.ok) {
+          const retryRaw = await retryResp.json();
+          const retryData = retryRaw.data || retryRaw;
+          const retryProducts: Product[] = (retryData.results || []).filter((p: Product) => p.price > 0);
+          
+          if (retryProducts.length > 0) {
+            retryProducts.sort((a, b) => priceIntent === 'most_expensive' ? b.price - a.price : a.price - b.price);
+            console.log(`[PriceIntent] Retry SUCCESS: ${retryProducts.length} products sorted by ${priceIntent}`);
+            return { action: 'answer', products: retryProducts.slice(0, 10), total: retryProducts.length };
+          }
+        }
+      } catch (retryErr) {
+        console.error(`[PriceIntent] Retry also failed:`, retryErr);
+      }
+    }
+    
     return { action: 'not_found' };
   }
 }
@@ -2512,7 +2547,8 @@ serve(async (req) => {
                 console.log(`[Chat] Created new price slot: "${slotKey}" for "${priceResult.category}" (${effectivePriceIntent})`);
               }
             } else {
-              console.log(`[Chat] PriceIntent: no results for "${priceQuery}" (tried ${synonymQueries.length} variants), falling through`);
+              console.log(`[Chat] PriceIntent: no results for "${priceQuery}" (tried ${synonymQueries.length} variants), falling through WITH price intent preserved`);
+              // CRITICAL: Do NOT reset effectivePriceIntent here — it will be used by fallback pipeline
             }
           }
         } else if (effectivePriceIntent && !effectiveCategory) {
@@ -2675,7 +2711,16 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
       
       // === RERANK before presenting results ===
       if (foundProducts.length > 0) {
-        foundProducts = rerankProducts(foundProducts, userMessage);
+        // === SERVER-SIDE PRICE SORT: if effectivePriceIntent is active, sort by price before reranking ===
+        if (effectivePriceIntent && !articleShortCircuit) {
+          foundProducts.sort((a, b) => {
+            if (effectivePriceIntent === 'most_expensive') return b.price - a.price;
+            return a.price - b.price;
+          });
+          console.log(`[Chat] Fallback price-sort applied: ${effectivePriceIntent}, top price=${foundProducts[0]?.price}`);
+        } else {
+          foundProducts = rerankProducts(foundProducts, userMessage);
+        }
         
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
         const formattedProducts = formatProductsForAI(foundProducts.slice(0, 10));
@@ -2688,7 +2733,12 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           ? `\n🎯 КОНТЕКСТ ИСПОЛЬЗОВАНИЯ: "${extractedIntent.usage_context}"\nСреди товаров ниже ВЫБЕРИ ТОЛЬКО подходящие для этого контекста на основе их характеристик (степень защиты, тип монтажа и т.д.). Объясни клиенту ПОЧЕМУ выбранные товары подходят для его задачи. Если не можешь определить — покажи все.\n` 
           : '';
         
-        productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**${filterNote}${contextNote}\n${formattedProducts}`;
+        // === PRICE INTENT INSTRUCTION for LLM fallback ===
+        const priceIntentNote = (effectivePriceIntent && !articleShortCircuit)
+          ? `\n💰 ЦЕНОВОЙ ИНТЕНТ: Пользователь ищет САМЫЙ ${effectivePriceIntent === 'most_expensive' ? 'ДОРОГОЙ' : 'ДЕШЁВЫЙ'} товар. Товары ниже уже отсортированы по ${effectivePriceIntent === 'most_expensive' ? 'убыванию' : 'возрастанию'} цены. Покажи ПЕРВЫЙ товар как основной результат — он ${effectivePriceIntent === 'most_expensive' ? 'самый дорогой' : 'самый дешёвый'} из найденных.\n`
+          : '';
+        
+        productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**${filterNote}${contextNote}${priceIntentNote}\n${formattedProducts}`;
       }
     }
 
