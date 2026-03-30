@@ -362,7 +362,29 @@
       background: #242424;
       border-top: 1px solid rgba(255, 255, 255, 0.1);
       display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    
+    #volt-widget-input-row {
+      display: flex;
       gap: 8px;
+    }
+    
+    #volt-widget-char-counter {
+      font-size: 11px;
+      text-align: right;
+      padding-right: 52px;
+      color: #888;
+      display: none;
+    }
+    
+    #volt-widget-char-counter.warning {
+      color: #F5A623;
+    }
+    
+    #volt-widget-char-counter.danger {
+      color: #ef4444;
     }
     
     #volt-widget-input {
@@ -464,17 +486,21 @@
       </div>
       
       <div id="volt-widget-input-area">
-        <input 
-          type="text" 
-          id="volt-widget-input" 
-          placeholder="Напишите сообщение..."
-          autocomplete="off"
-        >
-        <button id="volt-widget-send" aria-label="Отправить">
-          <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-            <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
-          </svg>
-        </button>
+        <div id="volt-widget-input-row">
+          <input 
+            type="text" 
+            id="volt-widget-input" 
+            placeholder="Напишите сообщение..."
+            autocomplete="off"
+            maxlength="2000"
+          >
+          <button id="volt-widget-send" aria-label="Отправить">
+            <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+              <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/>
+            </svg>
+          </button>
+        </div>
+        <div id="volt-widget-char-counter"></div>
       </div>
     </div>
   `;
@@ -886,6 +912,21 @@
     sendBtn.disabled = false;
     try { input.focus(); } catch(e) {}
   }
+
+  // Character counter
+  var charCounter = document.getElementById('volt-widget-char-counter');
+  input.addEventListener('input', function() {
+    var len = input.value.length;
+    if (len > 1800) {
+      charCounter.textContent = len + '/2000';
+      charCounter.style.display = 'block';
+      charCounter.className = len >= 2000 ? 'danger' : 'warning';
+      sendBtn.disabled = len >= 2000 || !input.value.trim();
+    } else {
+      charCounter.style.display = 'none';
+      sendBtn.disabled = !input.value.trim();
+    }
+  });
 
   // Event listeners
   sendBtn.addEventListener('click', sendMessage);
