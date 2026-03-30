@@ -913,6 +913,21 @@
     try { input.focus(); } catch(e) {}
   }
 
+  // Character counter
+  var charCounter = document.getElementById('volt-widget-char-counter');
+  input.addEventListener('input', function() {
+    var len = input.value.length;
+    if (len > 1800) {
+      charCounter.textContent = len + '/2000';
+      charCounter.style.display = 'block';
+      charCounter.className = len >= 2000 ? 'danger' : 'warning';
+      sendBtn.disabled = len >= 2000 || !input.value.trim();
+    } else {
+      charCounter.style.display = 'none';
+      sendBtn.disabled = !input.value.trim();
+    }
+  });
+
   // Event listeners
   sendBtn.addEventListener('click', sendMessage);
   input.addEventListener('keypress', function(e) {
