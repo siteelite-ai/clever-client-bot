@@ -2477,11 +2477,11 @@ serve(async (req) => {
         
         // === DIALOG SLOTS: try slot-based resolution FIRST ===
         // Filter out "none" — classifier returns string "none", not null
-        let effectivePriceIntent: string | undefined = 
+        effectivePriceIntent = 
           (classification?.price_intent && classification.price_intent !== 'none') 
             ? classification.price_intent 
             : undefined;
-        let effectiveCategory = classification?.product_category || classification?.product_name || '';
+        effectiveCategory = classification?.product_category || classification?.product_name || '';
         
         const slotResolution = resolveSlotRefinement(dialogSlots, userMessage, classification);
         
