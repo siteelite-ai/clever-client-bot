@@ -2633,6 +2633,7 @@ serve(async (req) => {
     let brandsContext = '';
     let knowledgeContext = '';
     let articleShortCircuit = false;
+    let replacementMeta: { isReplacement: boolean; original: Product | null; originalName?: string; noResults: boolean } | null = null;
 
     // === ARTICLE FIRST: Detect SKU/article codes BEFORE LLM 1 ===
     const detectedArticles = detectArticles(userMessage);
