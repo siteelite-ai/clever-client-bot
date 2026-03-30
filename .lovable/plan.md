@@ -1,4 +1,4 @@
-# Архитектура ценового поиска и слотовой памяти (v4.3)
+# Архитектура ценового поиска и слотовой памяти (v4.4)
 
 ## 1. Обзор системы
 Система представляет собой RAG-архитектуру (Retrieval-Augmented Generation) для управления знаниями компании, интегрированную с Supabase. Основные компоненты:
@@ -60,3 +60,32 @@ WHERE (ke.valid_until IS NULL OR ke.valid_until > now())
 | `supabase/functions/knowledge-process/index.ts` | `extractValidityDates()`, передача дат при `scrape_url` |
 | `src/pages/KnowledgeBase.tsx` | Toggle «просроченные», бейдж, фильтрация |
 | `src/components/knowledge/EntryViewDialog.tsx` | Отображение/редактирование дат действия |
+
+---
+
+## 7. Поиск аналогов / замены товаров (v1.0)
+
+### Проблема
+Бот не мог подобрать аналоги/замены для указанного товара — пайплайн находил исходный товар и останавливался.
+
+### Решение — LLM-детекция replacement-интента + двухэтапный поиск
+
+**Детекция интента (Micro-LLM):**
+- В классификатор добавлено поле `is_replacement: boolean`
+- LLM семантически определяет, хочет ли пользователь замену/аналог (без хардкода маркерных слов)
+- Примеры: "предложи замену", "что-то похожее", "такой же, но подешевле", "если нет в наличии, что посоветуете?"
+
+**Двухэтапный поиск:**
+1. Шаг 1: Найти исходный товар (существующий article/title поиск)
+2. Шаг 2: `extractSearchableTraits()` — извлечь характеристики (мощность, категория, тип, защита)
+3. Шаг 3: `searchProductsMulti()` по этим характеристикам
+4. Шаг 4: Исключить исходный товар, rerank по близости характеристик (`rerankReplacements()`)
+
+**Fallback:** Если исходный товар не найден — `extractTraitsFromName()` извлекает характеристики из названия.
+
+**Промпт для LLM:** Специальный блок `productInstructions` — сравни аналоги с оригиналом, покажи отличия.
+
+### Файлы
+| Файл | Роль |
+|---|---|
+| `supabase/functions/chat-consultant/index.ts` | `ClassificationResult.is_replacement`, `extractSearchableTraits()`, `extractTraitsFromName()`, `rerankReplacements()`, новая ветка пайплайна, новый `productInstructions` блок |
