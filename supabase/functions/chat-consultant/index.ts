@@ -3088,6 +3088,22 @@ ${productInstructions}`;
           text = text.replace(/\[CONTACT_MANAGER\]/g, '');
           text = text.replace(/<think>[\s\S]*?<\/think>/g, '');
           text = text.replace(/ТИХОЕ РАЗМЫШЛЕНИЕ[\s\S]*?(?=data:|$)/g, '');
+          
+          // Intercept [DONE] — send slot_update before it
+          if (text.includes('[DONE]')) {
+            const beforeDone = text.replace(/data: \[DONE\]\n?\n?/g, '');
+            if (beforeDone.trim()) {
+              controller.enqueue(encoder.encode(beforeDone));
+            }
+            // Send slot_update before [DONE]
+            if (slotsUpdated) {
+              const slotEvent = `data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`;
+              controller.enqueue(encoder.encode(slotEvent));
+            }
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            return;
+          }
+          
           controller.enqueue(encoder.encode(text));
         }
       });
@@ -3148,6 +3164,21 @@ ${productInstructions}`;
         text = text.replace(/\[CONTACT_MANAGER\]/g, '');
         text = text.replace(/<think>[\s\S]*?<\/think>/g, '');
         text = text.replace(/ТИХОЕ РАЗМЫШЛЕНИЕ[\s\S]*?(?=data:|$)/g, '');
+        
+        // Intercept [DONE] — send slot_update before it
+        if (text.includes('[DONE]')) {
+          const beforeDone = text.replace(/data: \[DONE\]\n?\n?/g, '');
+          if (beforeDone.trim()) {
+            controller.enqueue(encoder.encode(beforeDone));
+          }
+          if (slotsUpdated) {
+            const slotEvent = `data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`;
+            controller.enqueue(encoder.encode(slotEvent));
+          }
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          return;
+        }
+        
         controller.enqueue(encoder.encode(text));
       }
     });
