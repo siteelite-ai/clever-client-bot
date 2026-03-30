@@ -3037,10 +3037,10 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
     console.log(`[Chat] hasAssistantGreeting: ${hasAssistantGreeting}`);
     
     let productInstructions = '';
-    const isReplacementIntent = !!(extractedIntent as any)._isReplacement;
-    const replacementOriginal = (extractedIntent as any)._replacementOriginal as Product | undefined;
-    const replacementOriginalName = (extractedIntent as any)._replacementOriginalName as string | undefined;
-    const replacementNoResults = !!(extractedIntent as any)._replacementNoResults;
+    const isReplacementIntent = !!replacementMeta?.isReplacement;
+    const replacementOriginal = replacementMeta?.original || undefined;
+    const replacementOriginalName = replacementMeta?.originalName || undefined;
+    const replacementNoResults = !!replacementMeta?.noResults;
     
     if (isReplacementIntent && !replacementNoResults && productContext) {
       // Replacement intent with alternatives found
