@@ -633,8 +633,143 @@ is_replacement=true если пользователь хочет найти по
 }
 
 // ============================================================
-// HANDLE PRICE INTENT — multi-candidate search, probe, decide
+// REPLACEMENT/ALTERNATIVE — extract searchable traits from a product
 // ============================================================
+
+/**
+ * Extract key searchable traits from a found product to search for alternatives.
+ * Returns search candidates based on product characteristics.
+ */
+function extractSearchableTraits(product: Product): SearchCandidate[] {
+  const candidates: SearchCandidate[] = [];
+  const traits: Record<string, string> = {};
+  
+  // Extract key characteristics from product options
+  const importantKeys = [
+    'moshchnost', 'мощность', 'power', 'watt',
+    'напряжение', 'voltage', 'napr',
+    'защита', 'ip', 'stepen_zashchity',
+    'цоколь', 'tsokol', 'cap',
+    'тип', 'tip', 'type',
+    'сечение', 'sechenie',
+    'количество', 'kolichestvo',
+    'длина', 'dlina', 'length',
+  ];
+  
+  if (product.options) {
+    for (const opt of product.options) {
+      const keyLower = opt.key.toLowerCase();
+      const captionLower = opt.caption.toLowerCase();
+      
+      for (const ik of importantKeys) {
+        if (keyLower.includes(ik) || captionLower.includes(ik)) {
+          const cleanCaption = opt.caption.split('//')[0].trim();
+          const cleanValue = opt.value.split('//')[0].trim();
+          traits[cleanCaption] = cleanValue;
+          break;
+        }
+      }
+    }
+  }
+  
+  // Build search queries from product info
+  const title = product.pagetitle;
+  const category = product.category?.pagetitle || '';
+  
+  // 1. Category + key specs (e.g. "светильник 100Вт")
+  if (category) {
+    const specParts: string[] = [];
+    for (const [k, v] of Object.entries(traits)) {
+      if (/мощность|power|watt/i.test(k)) specParts.push(v);
+    }
+    const catQuery = specParts.length > 0 ? `${category} ${specParts.join(' ')}` : category;
+    candidates.push({
+      query: catQuery, brand: null, category: null,
+      min_price: null, max_price: null,
+    });
+  }
+  
+  // 2. Extract product type keywords from title (first 2-3 meaningful words)
+  const titleWords = title
+    .replace(/[()\\[\]]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 3 && !/^\d+$/.test(w))
+    .slice(0, 3);
+  if (titleWords.length >= 2) {
+    candidates.push({
+      query: titleWords.slice(0, 2).join(' '), brand: null, category: null,
+      min_price: null, max_price: null,
+    });
+  }
+  
+  // 3. Full category name if available
+  if (category && !candidates.some(c => c.query === category)) {
+    candidates.push({
+      query: category, brand: null, category: null,
+      min_price: null, max_price: null,
+    });
+  }
+  
+  // 4. Add option_filters for key traits
+  const optionFilters: Record<string, string> = {};
+  for (const [k, v] of Object.entries(traits)) {
+    if (/мощность|power|watt/i.test(k)) optionFilters['мощность'] = v;
+    else if (/напряжение|voltage/i.test(k)) optionFilters['напряжение'] = v;
+    else if (/защита|ip/i.test(k)) optionFilters['защита'] = v;
+    else if (/цоколь|cap/i.test(k)) optionFilters['цоколь'] = v;
+  }
+  if (Object.keys(optionFilters).length > 0) {
+    for (const c of candidates) {
+      c.option_filters = { ...optionFilters };
+    }
+  }
+  
+  console.log(`[ReplacementTraits] Product "${title}" → ${candidates.length} candidates, traits: ${JSON.stringify(traits)}`);
+  return candidates;
+}
+
+/**
+ * Extract traits from product name string when product is not found in catalog.
+ * Uses heuristics to pull power, type, voltage from the name.
+ */
+function extractTraitsFromName(productName: string): SearchCandidate[] {
+  const candidates: SearchCandidate[] = [];
+  
+  // Extract specs from name
+  const powerMatch = productName.match(/(\d+)\s*[Ww]|(\d+)\s*Вт/i);
+  const voltMatch = productName.match(/(\d+)\s*[Vv]|(\d+)\s*В\b/i);
+  
+  // Extract type keywords (first word before specs)
+  const typeWords = productName
+    .replace(/\d+\s*[WwVvАа]?\s*(Вт|W|В|V|мм|mm|А|A)/gi, '')
+    .replace(/[()\\[\]\-]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 3 && !/^\d+$/.test(w));
+  
+  if (typeWords.length >= 1) {
+    const baseQuery = typeWords.slice(0, 3).join(' ');
+    const power = powerMatch ? (powerMatch[1] || powerMatch[2]) + 'Вт' : '';
+    const query = power ? `${baseQuery} ${power}` : baseQuery;
+    
+    candidates.push({
+      query, brand: null, category: null,
+      min_price: null, max_price: null,
+    });
+    
+    // Also add without power for broader search
+    if (power) {
+      candidates.push({
+        query: baseQuery, brand: null, category: null,
+        min_price: null, max_price: null,
+      });
+    }
+  }
+  
+  console.log(`[ReplacementTraitsName] "${productName}" → ${candidates.length} candidates`);
+  return candidates;
+}
+
+
 
 interface PriceIntentResult {
   action: 'answer' | 'clarify' | 'not_found';
