@@ -386,19 +386,21 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
           {/* Input */}
           <div className="p-4 border-t border-sidebar-border">
+          <div className="flex flex-col gap-1">
             <div className="flex gap-2">
               <input
                 type="text"
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => setInput(e.target.value.slice(0, 2000))}
                 onKeyDown={(e) => e.key === 'Enter' && handleSend()}
                 placeholder="Напишите сообщение..."
+                maxLength={2000}
                 className="flex-1 bg-sidebar-accent rounded-xl px-4 py-3 text-sm text-widget-text placeholder:text-widget-text/40 focus:outline-none focus:ring-2 focus:ring-primary/30"
                 disabled={isLoading}
               />
               <button
                 onClick={handleSend}
-                disabled={!input.trim() || isLoading}
+                disabled={!input.trim() || isLoading || input.length > 2000}
                 className="w-12 h-12 rounded-xl bg-primary text-primary-foreground flex items-center justify-center transition-all hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {isLoading ? (
@@ -408,6 +410,12 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
                 )}
               </button>
             </div>
+            {input.length > 1800 && (
+              <span className={cn("text-xs text-right pr-14", input.length >= 2000 ? "text-destructive" : "text-widget-text/50")}>
+                {input.length}/2000
+              </span>
+            )}
+          </div>
           </div>
         </div>
       )}

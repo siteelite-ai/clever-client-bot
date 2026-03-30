@@ -362,7 +362,29 @@
       background: #242424;
       border-top: 1px solid rgba(255, 255, 255, 0.1);
       display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    
+    #volt-widget-input-row {
+      display: flex;
       gap: 8px;
+    }
+    
+    #volt-widget-char-counter {
+      font-size: 11px;
+      text-align: right;
+      padding-right: 52px;
+      color: #888;
+      display: none;
+    }
+    
+    #volt-widget-char-counter.warning {
+      color: #F5A623;
+    }
+    
+    #volt-widget-char-counter.danger {
+      color: #ef4444;
     }
     
     #volt-widget-input {
