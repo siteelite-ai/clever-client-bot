@@ -2464,6 +2464,8 @@ serve(async (req) => {
     // === TITLE-FIRST SHORT-CIRCUIT via Micro-LLM classifier ===
     // AI determines if message contains a product name and/or price intent
     let priceIntentClarify: { total: number; category: string } | null = null;
+    let effectivePriceIntent: string | undefined = undefined;
+    let effectiveCategory = '';
     
     if (!articleShortCircuit && appSettings.volt220_api_token) {
       const classifyStart = Date.now();
