@@ -102,6 +102,12 @@ async function streamChat({
         const jsonStr = line.slice(6).trim();
         if (jsonStr === '[DONE]') {
           streamDone = true;
+          // Drain remaining data from reader (slot_update may come after [DONE])
+          while (true) {
+            const { done: readerDone, value: extraValue } = await reader.read();
+            if (readerDone) break;
+            textBuffer += decoder.decode(extraValue, { stream: true });
+          }
           break;
         }
 

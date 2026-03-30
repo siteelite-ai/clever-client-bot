@@ -683,6 +683,12 @@
         var jsonStr = line.slice(6).trim();
         if (jsonStr === '[DONE]') {
           done = true;
+          // Drain remaining data from reader (slot_update may come after [DONE])
+          while (true) {
+            var extra = await reader.read();
+            if (extra.done) break;
+            textBuffer += decoder.decode(extra.value, { stream: true });
+          }
           break;
         }
 
