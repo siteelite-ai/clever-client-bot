@@ -3030,7 +3030,47 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
     console.log(`[Chat] hasAssistantGreeting: ${hasAssistantGreeting}`);
     
     let productInstructions = '';
-    if (brandsContext) {
+    const isReplacementIntent = !!(extractedIntent as any)._isReplacement;
+    const replacementOriginal = (extractedIntent as any)._replacementOriginal as Product | undefined;
+    const replacementOriginalName = (extractedIntent as any)._replacementOriginalName as string | undefined;
+    const replacementNoResults = !!(extractedIntent as any)._replacementNoResults;
+    
+    if (isReplacementIntent && !replacementNoResults && productContext) {
+      // Replacement intent with alternatives found
+      const origInfo = replacementOriginal 
+        ? `**${replacementOriginal.pagetitle}** (${replacementOriginal.vendor || 'без бренда'}, ${replacementOriginal.price} тг)`
+        : `**${replacementOriginalName || 'указанный товар'}**`;
+      
+      productInstructions = `
+🔄 ПОИСК АНАЛОГА / ЗАМЕНЫ
+
+Клиент ищет замену или аналог для: ${origInfo}
+
+НАЙДЕННЫЕ АНАЛОГИ:
+${productContext}
+
+ТВОЙ ОТВЕТ:
+1. Кратко: "Вот ближайшие аналоги для [товар]:"
+2. Покажи 3-5 товаров, СРАВНИВАЯ их с оригиналом по ключевым характеристикам (мощность, тип, защита, цена)
+3. Укажи отличия: что лучше, что хуже, что совпадает
+4. Ссылки копируй как есть в формате [Название](URL) — НЕ МЕНЯЙ URL!
+5. ВАЖНО: если в названии товара есть экранированные скобки \\( и \\) — СОХРАНЯЙ их!
+6. Тон: профессиональный, как опытный консультант. Помоги клиенту выбрать лучшую замену.
+7. В конце спроси: "Какой вариант вам больше подходит? Могу уточнить детали по любому из них."`;
+    } else if (isReplacementIntent && replacementNoResults) {
+      // Replacement intent but no alternatives found
+      productInstructions = `
+🔄 ПОИСК АНАЛОГА — НЕ НАЙДЕНО
+
+Клиент ищет замену/аналог для: **${replacementOriginalName || 'товар'}**
+К сожалению, в каталоге не удалось найти подходящие аналоги.
+
+ТВОЙ ОТВЕТ:
+1. Скажи, что точных аналогов в каталоге не нашлось
+2. Предложи: уточнить характеристики нужного товара, чтобы расширить поиск
+3. Предложи связаться с менеджером — он может подобрать вручную
+4. Покажи ссылку на каталог: https://220volt.kz/catalog/`;
+    } else if (brandsContext) {
       productInstructions = `
 ${brandsContext}
 
