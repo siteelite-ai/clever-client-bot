@@ -509,6 +509,7 @@ interface ClassificationResult {
   product_name?: string;
   price_intent?: 'most_expensive' | 'cheapest';
   product_category?: string;
+  is_replacement?: boolean;
 }
 
 async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>): Promise<ClassificationResult | null> {
@@ -576,7 +577,19 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 - "ладно, тогда ручной" → product_category="ручной"
 - "а что лучше для охоты?" → product_category="для охоты"
 
-Ответь СТРОГО в JSON: {"has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "..."}`
+Задача 4: Определи, ищет ли пользователь ЗАМЕНУ, АНАЛОГ или АЛЬТЕРНАТИВУ конкретного товара.
+is_replacement=true если пользователь хочет найти похожий/альтернативный/заменяющий товар.
+Примеры:
+- "предложи замену для ДКУ-LED-03-100W" → is_replacement=true, has_product_name=true, product_name="ДКУ-LED-03-100W"
+- "есть что-то похожее?" → is_replacement=true (в контексте ранее найденного товара)
+- "а если этого нет в наличии, что посоветуете?" → is_replacement=true
+- "такой же, но другого бренда" → is_replacement=true
+- "что-то типа такого, но подешевле" → is_replacement=true
+- "а что-нибудь подобное есть?" → is_replacement=true
+- "покажи автомат ABB 32А" → is_replacement=false (обычный запрос)
+- "какие розетки у вас есть?" → is_replacement=false
+
+Ответь СТРОГО в JSON: {"has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "...", "is_replacement": bool}`
           },
           ...(recentHistory || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
           { role: 'user', content: message }
@@ -606,6 +619,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       product_name: parsed.product_name || undefined,
       price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
       product_category: parsed.product_category || undefined,
+      is_replacement: !!parsed.is_replacement,
     };
   } catch (e) {
     clearTimeout(timeoutId);
