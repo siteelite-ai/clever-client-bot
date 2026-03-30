@@ -2831,17 +2831,23 @@ serve(async (req) => {
               foundProducts = reranked.slice(0, 8);
               articleShortCircuit = true;
               
-              // Store original product info for the prompt
-              (extractedIntent as any)._replacementOriginal = originalProduct;
-              (extractedIntent as any)._replacementOriginalName = classification.product_name;
-              (extractedIntent as any)._isReplacement = true;
+              // Store replacement metadata in closure variables (extractedIntent not yet declared)
+              replacementMeta = {
+                isReplacement: true,
+                original: originalProduct,
+                originalName: classification.product_name,
+                noResults: false,
+              };
               
               console.log(`[Chat] Replacement SUCCESS: ${foundProducts.length} alternatives found`);
             } else {
               console.log(`[Chat] Replacement: no alternatives found`);
-              (extractedIntent as any)._isReplacement = true;
-              (extractedIntent as any)._replacementOriginalName = classification.product_name;
-              (extractedIntent as any)._replacementNoResults = true;
+              replacementMeta = {
+                isReplacement: true,
+                original: null,
+                originalName: classification.product_name,
+                noResults: true,
+              };
             }
           }
         }
