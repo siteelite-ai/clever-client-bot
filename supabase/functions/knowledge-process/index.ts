@@ -433,6 +433,51 @@ serve(async (req) => {
       );
     }
 
+    if (action === 'update_text') {
+      // Update content of an existing knowledge entry and regenerate embedding
+      if (!entryId || !text) {
+        throw new Error('entryId and text are required for update_text');
+      }
+
+      console.log(`[Knowledge] Updating text for entry ${entryId} (${text.length} chars)`);
+
+      // Generate new embedding
+      const embedding = await generateEmbedding(text, googleApiKeys);
+
+      // Update content + embedding
+      const { data, error } = await supabase
+        .from('knowledge_entries')
+        .update({
+          content: text.substring(0, 200000),
+          embedding,
+          ...(title ? { title } : {}),
+        })
+        .eq('id', entryId)
+        .select()
+        .single();
+
+      if (error) {
+        console.error('[Knowledge] Update error:', error);
+        throw new Error(`Ошибка обновления: ${error.message}`);
+      }
+
+      console.log(`[Knowledge] Updated entry: ${data.id}`);
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          entry: {
+            id: data.id,
+            type: data.type,
+            title: data.title,
+            content: data.content.substring(0, 200) + '...',
+            updated_at: data.updated_at,
+          }
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     if (action === 'process_pdf') {
       // Process PDF and add to knowledge base
       if (!pdfBase64) {
