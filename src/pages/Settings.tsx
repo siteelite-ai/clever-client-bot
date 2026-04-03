@@ -48,6 +48,10 @@ const CURATED_MODELS: CuratedModel[] = [
   { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'Google', free: true, description: '1500 запросов/день бесплатно, быстрая', aiProvider: 'google' },
   { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google', free: true, description: 'Новейшая, баланс скорости и качества', aiProvider: 'google' },
   { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google', free: true, description: 'Топовая модель, 50 запросов/день бесплатно', aiProvider: 'google' },
+  // HuggingFace Inference API
+  { id: 'Qwen/Qwen2.5-72B-Instruct', name: 'Qwen 2.5 72B', provider: 'Alibaba', free: true, description: 'Отличный русский, 32K контекст, бесплатно', aiProvider: 'huggingface' },
+  { id: 'mistralai/Mistral-Small-24B-Instruct-2501', name: 'Mistral Small 24B', provider: 'Mistral', free: true, description: 'Быстрая и лёгкая, хороший русский', aiProvider: 'huggingface' },
+  { id: 'meta-llama/Llama-3.3-70B-Instruct', name: 'Llama 3.3 70B', provider: 'Meta', free: true, description: 'Уровень GPT-4, универсальная', aiProvider: 'huggingface' },
 ];
 
 type ModelFilter = 'all' | 'free' | 'paid';
