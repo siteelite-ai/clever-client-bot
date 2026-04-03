@@ -100,6 +100,19 @@ function getAIConfig(settings: CachedSettings): { url: string; apiKeys: string[]
     };
   }
 
+  if (settings.ai_provider === 'huggingface') {
+    const hfKey = Deno.env.get('HUGGINGFACE_API_KEY');
+    if (!hfKey) {
+      throw new Error('HuggingFace API токен не настроен. Добавьте HUGGINGFACE_API_KEY в секреты Supabase.');
+    }
+    console.log('[AIConfig] HuggingFace Inference API');
+    return {
+      url: 'https://router.huggingface.co/v1/chat/completions',
+      apiKeys: [hfKey],
+      model: settings.ai_model || 'Qwen/Qwen2.5-72B-Instruct',
+    };
+  }
+
   // Default: OpenRouter (single key)
   if (!settings.openrouter_api_key) {
     throw new Error('OpenRouter API key не настроен. Добавьте ключ в Настройках.');

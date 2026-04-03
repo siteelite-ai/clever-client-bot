@@ -20,7 +20,7 @@ interface AppSettings {
   updated_at: string;
 }
 
-type AIProvider = 'openrouter' | 'google';
+type AIProvider = 'openrouter' | 'google' | 'huggingface';
 
 interface CuratedModel {
   id: string;
@@ -48,6 +48,10 @@ const CURATED_MODELS: CuratedModel[] = [
   { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'Google', free: true, description: '1500 запросов/день бесплатно, быстрая', aiProvider: 'google' },
   { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google', free: true, description: 'Новейшая, баланс скорости и качества', aiProvider: 'google' },
   { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google', free: true, description: 'Топовая модель, 50 запросов/день бесплатно', aiProvider: 'google' },
+  // HuggingFace Inference API
+  { id: 'Qwen/Qwen2.5-72B-Instruct', name: 'Qwen 2.5 72B', provider: 'Alibaba', free: true, description: 'Отличный русский, 32K контекст, бесплатно', aiProvider: 'huggingface' },
+  { id: 'mistralai/Mistral-Small-24B-Instruct-2501', name: 'Mistral Small 24B', provider: 'Mistral', free: true, description: 'Быстрая и лёгкая, хороший русский', aiProvider: 'huggingface' },
+  { id: 'meta-llama/Llama-3.3-70B-Instruct', name: 'Llama 3.3 70B', provider: 'Meta', free: true, description: 'Уровень GPT-4, универсальная', aiProvider: 'huggingface' },
 ];
 
 type ModelFilter = 'all' | 'free' | 'paid';
@@ -205,7 +209,8 @@ export default function Settings() {
             <Tabs value={aiProvider} onValueChange={(v) => handleProviderChange(v as AIProvider)}>
               <TabsList className="w-full">
                 <TabsTrigger value="openrouter" className="flex-1">OpenRouter</TabsTrigger>
-                <TabsTrigger value="google" className="flex-1">Google AI Studio</TabsTrigger>
+                <TabsTrigger value="google" className="flex-1">Google AI</TabsTrigger>
+                <TabsTrigger value="huggingface" className="flex-1">HuggingFace</TabsTrigger>
               </TabsList>
 
               <TabsContent value="openrouter" className="space-y-4 mt-4">
@@ -286,6 +291,16 @@ export default function Settings() {
                     ⚠️ Без ключа Google AI Studio AI-консультант будет использовать встроенный Lovable AI (Gemini) как fallback.
                   </p>
                 )}
+              </TabsContent>
+
+              <TabsContent value="huggingface" className="space-y-4 mt-4">
+                <div className="p-3 bg-muted/50 rounded-lg space-y-2">
+                  <p className="text-sm font-medium">✅ Токен настроен</p>
+                  <p className="text-xs text-muted-foreground">
+                    HuggingFace токен хранится в секретах Supabase (HUGGINGFACE_API_KEY). 
+                    Все модели ниже бесплатны через Inference API.
+                  </p>
+                </div>
               </TabsContent>
             </Tabs>
 
