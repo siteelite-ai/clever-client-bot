@@ -20,7 +20,7 @@ interface AppSettings {
   updated_at: string;
 }
 
-type AIProvider = 'openrouter' | 'google';
+type AIProvider = 'openrouter' | 'google' | 'huggingface';
 
 interface CuratedModel {
   id: string;
