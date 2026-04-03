@@ -291,6 +291,14 @@ export default function Settings() {
                     ⚠️ Без ключа Google AI Studio AI-консультант будет использовать встроенный Lovable AI (Gemini) как fallback.
                   </p>
                 )}
+              <TabsContent value="huggingface" className="space-y-4 mt-4">
+                <div className="p-3 bg-muted/50 rounded-lg space-y-2">
+                  <p className="text-sm font-medium">✅ Токен настроен</p>
+                  <p className="text-xs text-muted-foreground">
+                    HuggingFace токен хранится в секретах Supabase (HUGGINGFACE_API_KEY). 
+                    Все модели ниже бесплатны через Inference API.
+                  </p>
+                </div>
               </TabsContent>
             </Tabs>
 
