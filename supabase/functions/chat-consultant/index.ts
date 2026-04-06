@@ -582,8 +582,8 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       } else if (settings?.openrouter_api_key) {
         url = 'https://openrouter.ai/api/v1/chat/completions';
         apiKeys = [settings.openrouter_api_key];
-        model = 'google/gemini-2.5-flash-lite:free';
-        console.log('[Classify] Auto: Using OpenRouter (google/gemini-2.5-flash-lite:free)');
+        model = 'google/gemini-2.5-flash-lite';
+        console.log('[Classify] Auto: Using OpenRouter (google/gemini-2.5-flash-lite)');
       } else {
         const lovableKey = Deno.env.get('LOVABLE_API_KEY');
         if (!lovableKey) { console.log('[Classify] No API keys configured, skipping'); return null; }
@@ -595,7 +595,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
     } else if (settings?.openrouter_api_key) {
       url = 'https://openrouter.ai/api/v1/chat/completions';
       apiKeys = [settings.openrouter_api_key];
-      model = 'google/gemini-2.5-flash-lite:free';
+      model = 'google/gemini-2.5-flash-lite';
       console.log('[Classify] Auto: Using OpenRouter (no google keys)');
     } else {
       const lovableKey = Deno.env.get('LOVABLE_API_KEY');
@@ -676,42 +676,79 @@ is_replacement=true если пользователь хочет найти по
     max_tokens: 150,
   };
 
-  try {
-    // Use callAIWithKeyFallback wrapped in a 3s timeout
-    const classifyPromise = callAIWithKeyFallback(url, apiKeys, classifyBody, 'Classify');
-    const timeoutPromise = new Promise<Response>((_, reject) => 
-      setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 3000)
-    );
+  // Build cascade of providers to try
+  interface ProviderAttempt { url: string; apiKeys: string[]; model: string; label: string; }
+  const attempts: ProviderAttempt[] = [{ url, apiKeys, model, label: `primary(${classifierProvider})` }];
 
-    const response = await Promise.race([classifyPromise, timeoutPromise]);
-
-    if (!response.ok) {
-      console.error(`[Classify] API error: ${response.status}`);
-      return null;
+  // Add fallback providers for resilience
+  if (classifierProvider === 'openrouter' || classifierProvider === 'auto') {
+    // Add Google direct as fallback if keys available and not already primary
+    if (classifierProvider !== 'google' && settings?.google_api_key) {
+      const gKeys = settings.google_api_key.split(/[,\n]/).map(k => k.trim()).filter(k => k.length > 0);
+      if (gKeys.length > 0 && !(url.includes('googleapis.com'))) {
+        attempts.push({ url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKeys: gKeys, model: 'gemini-2.5-flash-lite', label: 'fallback(google)' });
+      }
     }
-
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) return null;
-
-    // Parse JSON from response (handle markdown code blocks)
-    const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-    const parsed = JSON.parse(jsonStr);
-    return {
-      has_product_name: !!parsed.has_product_name,
-      product_name: parsed.product_name || undefined,
-      price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
-      product_category: parsed.product_category || undefined,
-      is_replacement: !!parsed.is_replacement,
-    };
-  } catch (e) {
-    if (e instanceof DOMException && e.name === 'AbortError') {
-      console.log('[Classify] Timeout (3s), skipping classification');
-    } else {
-      console.error('[Classify] Error:', e);
+    // Add OpenRouter as fallback if key available and not already primary
+    if (classifierProvider !== 'openrouter' && settings?.openrouter_api_key && !(url.includes('openrouter.ai'))) {
+      attempts.push({ url: 'https://openrouter.ai/api/v1/chat/completions', apiKeys: [settings.openrouter_api_key], model: 'google/gemini-2.5-flash-lite', label: 'fallback(openrouter)' });
     }
-    return null;
+    // Add Lovable Gateway as last resort
+    const lovableKey = Deno.env.get('LOVABLE_API_KEY');
+    if (lovableKey && !(url.includes('gateway.lovable.dev'))) {
+      attempts.push({ url: 'https://ai.gateway.lovable.dev/v1/chat/completions', apiKeys: [lovableKey], model: 'google/gemini-2.5-flash-lite', label: 'fallback(gateway)' });
+    }
+  } else if (classifierProvider === 'google') {
+    // Google explicit — add OpenRouter and Gateway as fallbacks
+    if (settings?.openrouter_api_key) {
+      attempts.push({ url: 'https://openrouter.ai/api/v1/chat/completions', apiKeys: [settings.openrouter_api_key], model: 'google/gemini-2.5-flash-lite', label: 'fallback(openrouter)' });
+    }
+    const lovableKey = Deno.env.get('LOVABLE_API_KEY');
+    if (lovableKey) {
+      attempts.push({ url: 'https://ai.gateway.lovable.dev/v1/chat/completions', apiKeys: [lovableKey], model: 'google/gemini-2.5-flash-lite', label: 'fallback(gateway)' });
+    }
   }
+
+  for (const attempt of attempts) {
+    try {
+      const body = { ...classifyBody, model: attempt.model };
+      const classifyPromise = callAIWithKeyFallback(attempt.url, attempt.apiKeys, body, 'Classify');
+      const timeoutPromise = new Promise<Response>((_, reject) => 
+        setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 3000)
+      );
+
+      const response = await Promise.race([classifyPromise, timeoutPromise]);
+
+      if (!response.ok) {
+        console.error(`[Classify] ${attempt.label} error: ${response.status}, trying next...`);
+        continue;
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content;
+      if (!content) { console.log(`[Classify] ${attempt.label} empty response, trying next...`); continue; }
+
+      const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+      const parsed = JSON.parse(jsonStr);
+      console.log(`[Classify] SUCCESS via ${attempt.label}`);
+      return {
+        has_product_name: !!parsed.has_product_name,
+        product_name: parsed.product_name || undefined,
+        price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
+        product_category: parsed.product_category || undefined,
+        is_replacement: !!parsed.is_replacement,
+      };
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        console.log(`[Classify] ${attempt.label} timeout (3s), trying next...`);
+      } else {
+        console.error(`[Classify] ${attempt.label} error:`, e, ', trying next...');
+      }
+    }
+  }
+
+  console.log('[Classify] All providers failed, returning null');
+  return null;
 }
 
 // ============================================================
@@ -2938,7 +2975,28 @@ serve(async (req) => {
       }
     }
 
-    // ШАГ 1: AI определяет интент и генерирует поисковые кандидаты (если не short-circuit)
+    // === REGEX SAFETY NET: detect cable cross-sections if classifier failed ===
+    if (!articleShortCircuit && appSettings.volt220_api_token) {
+      const cableCrossSectionRegex = /(\d+)\s*[*хxХXх×]\s*(\d+[.,]\d+|\d+)/gi;
+      const cableMatch = userMessage.match(cableCrossSectionRegex);
+      if (cableMatch) {
+        console.log(`[Chat] Regex safety net: detected cable cross-section "${cableMatch[0]}" in message`);
+        const searchStart = Date.now();
+        const regexResults = await searchProductsByCandidate(
+          { query: userMessage, brand: null, category: null, min_price: null, max_price: null },
+          appSettings.volt220_api_token!,
+          15
+        );
+        const searchElapsed = Date.now() - searchStart;
+        console.log(`[Chat] Regex safety net search: ${regexResults.length} products in ${searchElapsed}ms`);
+        if (regexResults.length > 0) {
+          foundProducts = regexResults.slice(0, 10);
+          articleShortCircuit = true;
+          console.log(`[Chat] Regex safety net SUCCESS: ${foundProducts.length} products`);
+        }
+      }
+    }
+
     let extractedIntent: ExtractedIntent;
     
     if (articleShortCircuit) {
@@ -3204,18 +3262,32 @@ ${productContext}
     } else if (articleShortCircuit && productContext) {
       // Title-first or price-intent answer: товар найден
       const isPriceSort = foundProducts.length > 0 && !detectedArticles.length;
-      productInstructions = `
-🎯 ТОВАР НАЙДЕН ПО НАЗВАНИЮ (покажи сразу!):
+      const productCount = foundProducts.length;
+      const fewProducts = productCount <= 7;
+      
+      if (fewProducts) {
+        productInstructions = `
+🎯 ТОВАР НАЙДЕН ПО НАЗВАНИЮ — ПОКАЖИ ВСЕ ${productCount} ПОЗИЦИЙ:
 ${productContext}
 
-⚠️ СТРОГОЕ ПРАВИЛО:
-- Покажи найденные товары: название, цена, наличие, ссылка
+🚫 АБСОЛЮТНЫЙ ЗАПРЕТ: ЗАПРЕЩЕНО задавать уточняющие вопросы! Товаров мало (${productCount}) — покажи ВСЕ найденные позиции.
+- Покажи каждый товар: название, цена, наличие, ссылка
 - Ссылки копируй как есть в формате [Название](URL) — НЕ МЕНЯЙ URL!
 - ВАЖНО: если в названии товара есть экранированные скобки \\( и \\) — СОХРАНЯЙ их!
 
 📈 ПОСЛЕ ИНФОРМАЦИИ О ТОВАРЕ — ДОБАВЬ КОНТЕКСТНЫЙ CROSS-SELL:
 - Предложи 1 ЛОГИЧЕСКИ СВЯЗАННЫЙ аксессуар
 - Тон: профессиональный, без давления`;
+      } else {
+        productInstructions = `
+🎯 НАЙДЕНО ${productCount} ТОВАРОВ ПО НАЗВАНИЮ:
+${productContext}
+
+⚠️ Товаров больше 7 — ты МОЖЕШЬ задать 1 уточняющий вопрос для сужения выборки (тип, характеристика, бренд), ИЛИ показать первые 5-7 наиболее релевантных.
+- Ссылки копируй как есть в формате [Название](URL) — НЕ МЕНЯЙ URL!
+- ВАЖНО: если в названии товара есть экранированные скобки \\( и \\) — СОХРАНЯЙ их!
+- Тон: профессиональный, без давления`;
+      }
     } else if (productContext) {
       productInstructions = `
 НАЙДЕННЫЕ ТОВАРЫ (КОПИРУЙ ССЫЛКИ ТОЧНО КАК ДАНО — НЕ МОДИФИЦИРУЙ!):

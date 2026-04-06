@@ -37,12 +37,14 @@ interface CuratedModel {
 }
 
 const CLASSIFIER_MODELS: { id: string; name: string; provider: string; description: string; forProvider: ClassifierProvider | 'auto' }[] = [
+  // Google Direct (свой API ключ)
   { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', provider: 'Google', description: 'Ультра-быстрая, идеальна для классификации', forProvider: 'google' },
   { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'Google', description: 'Быстрая, хороший баланс', forProvider: 'google' },
-  { id: 'google/gemini-2.5-flash-lite:free', name: 'Gemini 2.5 Flash Lite', provider: 'Google via OR', description: 'Бесплатная через OpenRouter · 50 req/день', forProvider: 'openrouter' },
-  { id: 'google/gemma-3-27b-it:free', name: 'Gemma 3 27B', provider: 'Google via OR', description: 'Бесплатная, лёгкая · 50 req/день', forProvider: 'openrouter' },
-  { id: 'qwen/qwen3-next-80b-a3b-instruct:free', name: 'Qwen3 Next 80B', provider: 'Alibaba via OR', description: 'Бесплатная MoE · 50 req/день', forProvider: 'openrouter' },
-  { id: 'openai/gpt-oss-20b:free', name: 'GPT-OSS 20B', provider: 'OpenAI via OR', description: 'Лёгкая и быстрая · 50 req/день', forProvider: 'openrouter' },
+  // OpenRouter Paid Gemini (без дневных лимитов)
+  { id: 'google/gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', provider: 'Google via OR', description: '$0.10/$0.40 за 1M токенов · без лимитов', forProvider: 'openrouter' },
+  { id: 'google/gemini-2.0-flash-lite', name: 'Gemini 2.0 Flash Lite', provider: 'Google via OR', description: '$0.05/$0.10 за 1M токенов · без лимитов', forProvider: 'openrouter' },
+  { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google via OR', description: '$0.30/$2.50 за 1M токенов · без лимитов', forProvider: 'openrouter' },
+  { id: 'google/gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'Google via OR', description: '$0.10/$0.40 за 1M токенов · без лимитов', forProvider: 'openrouter' },
 ];
 
 const CURATED_MODELS: CuratedModel[] = [
