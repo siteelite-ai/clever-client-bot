@@ -34,6 +34,8 @@ async function getAppSettings(): Promise<CachedSettings> {
       ai_provider: 'openrouter',
       ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
       system_prompt: null,
+      classifier_provider: 'auto',
+      classifier_model: 'gemini-2.5-flash-lite',
     };
   }
 
@@ -41,7 +43,7 @@ async function getAppSettings(): Promise<CachedSettings> {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const { data, error } = await supabase
       .from('app_settings')
-      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model, system_prompt')
+      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model, system_prompt, classifier_provider, classifier_model')
       .limit(1)
       .single();
 
