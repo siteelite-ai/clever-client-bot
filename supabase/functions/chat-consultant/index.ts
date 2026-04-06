@@ -920,6 +920,112 @@ function generatePriceSynonyms(query: string): string[] {
   return result;
 }
 
+// ============================================================
+// CATEGORY SYNONYMS — generate search variants via micro-LLM
+// ============================================================
+
+async function generateCategorySynonyms(
+  category: string,
+  settings: CachedSettings | null
+): Promise<string[]> {
+  const fallbackVariants = generatePriceSynonyms(category);
+  
+  try {
+    // Determine provider/key for micro-LLM (same logic as classifyProductName)
+    const classifierProvider = settings?.classifier_provider || 'auto';
+    const classifierModel = settings?.classifier_model || 'gemini-2.5-flash-lite';
+    
+    let url: string;
+    let apiKeys: string[];
+    let model: string = classifierModel;
+
+    if (classifierProvider === 'openrouter' || classifierProvider === 'auto') {
+      if (settings?.openrouter_api_key) {
+        url = 'https://openrouter.ai/api/v1/chat/completions';
+        apiKeys = [settings.openrouter_api_key];
+        if (!model.includes('/')) model = `google/${model}`;
+      } else {
+        console.log('[CategorySynonyms] No OpenRouter key, using fallback');
+        return fallbackVariants;
+      }
+    } else {
+      console.log('[CategorySynonyms] Unsupported provider, using fallback');
+      return fallbackVariants;
+    }
+
+    const body = {
+      model,
+      messages: [
+        {
+          role: 'system',
+          content: `Ты генератор поисковых вариантов для каталога электротоваров.
+Тебе дают категорию товара. Сгенерируй 3-5 вариантов написания для поиска в каталоге.
+Учитывай:
+- Сокращения числительных: двухместная→2-местная, трёхфазный→3-фазный, двойная→2-я
+- Синонимы: розетка двойная = розетка двухместная = розетка 2-местная
+- Перестановки слов: "розетка накладная" = "накладная розетка"
+- Технические обозначения: если есть
+
+Ответь СТРОГО JSON-массивом строк, без пояснений.
+Пример: ["2-местная розетка", "розетка двойная", "розетка 2 поста"]`
+        },
+        { role: 'user', content: category }
+      ],
+      temperature: 0,
+      max_tokens: 150,
+    };
+
+    const fetchPromise = callAIWithKeyFallback(url, apiKeys, body, 'CategorySynonyms');
+    const timeoutPromise = new Promise<Response>((_, reject) =>
+      setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 4000)
+    );
+
+    const response = await Promise.race([fetchPromise, timeoutPromise]);
+    if (!response.ok) {
+      console.log(`[CategorySynonyms] API error ${response.status}, using fallback`);
+      return fallbackVariants;
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+    if (!content) {
+      console.log('[CategorySynonyms] Empty response, using fallback');
+      return fallbackVariants;
+    }
+
+    const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+    const parsed = JSON.parse(jsonStr);
+
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      console.log('[CategorySynonyms] Invalid JSON array, using fallback');
+      return fallbackVariants;
+    }
+
+    // Combine: original category + LLM variants + fallback variants (deduplicated)
+    const allVariants = new Set<string>();
+    allVariants.add(category);
+    for (const v of parsed) {
+      if (typeof v === 'string' && v.trim().length >= 2) {
+        allVariants.add(v.trim());
+      }
+    }
+    for (const v of fallbackVariants) {
+      allVariants.add(v);
+    }
+
+    const result = Array.from(allVariants).slice(0, 8);
+    console.log(`[CategorySynonyms] "${category}" → ${result.length} variants: ${result.join(', ')}`);
+    return result;
+  } catch (e) {
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      console.log(`[CategorySynonyms] Timeout (4s), using fallback`);
+    } else {
+      console.error('[CategorySynonyms] Error:', e, ', using fallback');
+    }
+    return fallbackVariants;
+  }
+}
+
 /**
  * DEPRECATED: detectPendingPriceIntent is replaced by dialog slots.
  * Kept as ultimate fallback when no slots are provided (e.g. old embed.js).
@@ -2875,6 +2981,29 @@ serve(async (req) => {
             console.log(`[Chat] Title-first SUCCESS: ${foundProducts.length} products, skipping LLM 1 (total ${classifyElapsed + searchElapsed}ms)`);
           } else {
             console.log(`[Chat] Title-first: 0 results for "${classification.product_name}", proceeding to LLM 1`);
+          }
+        }
+        
+        // === CATEGORY-FIRST (category without specific product name) ===
+        if (!articleShortCircuit && effectiveCategory && !classification?.has_product_name && !classification?.is_replacement && !effectivePriceIntent && appSettings.volt220_api_token) {
+          console.log(`[Chat] Category-first: searching by category "${effectiveCategory}"`);
+          const categoryStart = Date.now();
+          
+          const categoryVariants = await generateCategorySynonyms(effectiveCategory, appSettings);
+          const categoryCandidates: SearchCandidate[] = categoryVariants.map(q => ({
+            query: q, brand: null, category: null, min_price: null, max_price: null
+          }));
+          
+          const categoryResults = await searchProductsMulti(categoryCandidates, 15, appSettings.volt220_api_token);
+          const categoryElapsed = Date.now() - categoryStart;
+          console.log(`[Chat] Category-first: ${categoryResults.length} products in ${categoryElapsed}ms (${categoryVariants.length} variants for "${effectiveCategory}")`);
+          
+          if (categoryResults.length > 0) {
+            foundProducts = categoryResults.slice(0, 15);
+            articleShortCircuit = true;
+            console.log(`[Chat] Category-first SUCCESS: ${foundProducts.length} products, skipping LLM 1`);
+          } else {
+            console.log(`[Chat] Category-first: 0 results for "${effectiveCategory}", proceeding to LLM 1`);
           }
         }
         
