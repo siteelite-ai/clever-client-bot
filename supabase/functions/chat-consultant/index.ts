@@ -17,6 +17,8 @@ interface CachedSettings {
   ai_provider: string;
   ai_model: string;
   system_prompt: string | null;
+  classifier_provider: string;
+  classifier_model: string;
 }
 
 async function getAppSettings(): Promise<CachedSettings> {
