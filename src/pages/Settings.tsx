@@ -90,7 +90,7 @@ export default function Settings() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [apiToken, setApiToken] = useState('');
   const [openrouterKey, setOpenrouterKey] = useState('');
-  const [googleApiKey, setGoogleApiKey] = useState('');
+  const [googleApiKey, setGoogleApiKey] = useState(''); // kept for save compatibility
   const [aiProvider, setAiProvider] = useState<AIProvider>('openrouter');
   const [selectedModel, setSelectedModel] = useState('qwen/qwen3.6-plus:free');
   const [modelFilter, setModelFilter] = useState<ModelFilter>('all');
