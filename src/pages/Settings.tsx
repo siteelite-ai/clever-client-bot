@@ -167,6 +167,8 @@ export default function Settings() {
           google_api_key: googleApiKey || null,
           ai_provider: aiProvider,
           ai_model: selectedModel,
+          classifier_provider: classifierProvider,
+          classifier_model: classifierModel,
         } as any)
         .eq('id', settings.id);
 
