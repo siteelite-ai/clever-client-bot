@@ -75,7 +75,7 @@ export default function Settings() {
   const [openrouterKey, setOpenrouterKey] = useState('');
   const [googleApiKey, setGoogleApiKey] = useState(''); // kept for save compatibility
   const [aiProvider, setAiProvider] = useState<AIProvider>('openrouter');
-  const [selectedModel, setSelectedModel] = useState('qwen/qwen3.6-plus:free');
+  const [selectedModel, setSelectedModel] = useState('google/gemini-2.5-flash');
   const [modelFilter, setModelFilter] = useState<ModelFilter>('all');
   const [showApiToken, setShowApiToken] = useState(false);
   const [showOpenrouterKey, setShowOpenrouterKey] = useState(false);
