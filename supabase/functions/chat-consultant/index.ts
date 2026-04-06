@@ -2984,6 +2984,29 @@ serve(async (req) => {
           }
         }
         
+        // === CATEGORY-FIRST (category without specific product name) ===
+        if (!articleShortCircuit && effectiveCategory && !classification?.has_product_name && !classification?.is_replacement && !effectivePriceIntent && appSettings.volt220_api_token) {
+          console.log(`[Chat] Category-first: searching by category "${effectiveCategory}"`);
+          const categoryStart = Date.now();
+          
+          const categoryVariants = await generateCategorySynonyms(effectiveCategory, appSettings);
+          const categoryCandidates: SearchCandidate[] = categoryVariants.map(q => ({
+            query: q, brand: null, category: null, min_price: null, max_price: null
+          }));
+          
+          const categoryResults = await searchProductsMulti(categoryCandidates, 15, appSettings.volt220_api_token);
+          const categoryElapsed = Date.now() - categoryStart;
+          console.log(`[Chat] Category-first: ${categoryResults.length} products in ${categoryElapsed}ms (${categoryVariants.length} variants for "${effectiveCategory}")`);
+          
+          if (categoryResults.length > 0) {
+            foundProducts = categoryResults.slice(0, 15);
+            articleShortCircuit = true;
+            console.log(`[Chat] Category-first SUCCESS: ${foundProducts.length} products, skipping LLM 1`);
+          } else {
+            console.log(`[Chat] Category-first: 0 results for "${effectiveCategory}", proceeding to LLM 1`);
+          }
+        }
+        
         // === REPLACEMENT/ALTERNATIVE INTENT ===
         if (classification?.is_replacement && appSettings.volt220_api_token) {
           console.log(`[Chat] Replacement intent detected!`);
