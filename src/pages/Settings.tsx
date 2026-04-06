@@ -143,6 +143,8 @@ export default function Settings() {
         setGoogleApiKey(d.google_api_key || '');
         setAiProvider((d.ai_provider as AIProvider) || 'openrouter');
         setSelectedModel(d.ai_model || 'qwen/qwen3.6-plus:free');
+        setClassifierProvider((d.classifier_provider as ClassifierProvider) || 'auto');
+        setClassifierModel(d.classifier_model || 'gemini-2.5-flash-lite');
       }
     } catch (error) {
       console.error('Error fetching settings:', error);
