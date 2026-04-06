@@ -714,7 +714,7 @@ is_replacement=true если пользователь хочет найти по
       const body = { ...classifyBody, model: attempt.model };
       const classifyPromise = callAIWithKeyFallback(attempt.url, attempt.apiKeys, body, 'Classify');
       const timeoutPromise = new Promise<Response>((_, reject) => 
-        setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 5000)
+        setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 8000)
       );
 
       const response = await Promise.race([classifyPromise, timeoutPromise]);
@@ -733,16 +733,14 @@ is_replacement=true если пользователь хочет найти по
       console.log(`[Classify] SUCCESS via ${attempt.label}`);
       return {
         has_product_name: !!parsed.has_product_name,
-        product_name: parsed.product_name 
-          ? parsed.product_name.replace(/\b(сечением|сечение|с\s+сечением)\b/gi, '').replace(/\s+/g, ' ').trim() 
-          : undefined,
+        product_name: parsed.product_name || undefined,
         price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
         product_category: parsed.product_category || undefined,
         is_replacement: !!parsed.is_replacement,
       };
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
-        console.log(`[Classify] ${attempt.label} timeout (5s), trying next...`);
+        console.log(`[Classify] ${attempt.label} timeout (8s), trying next...`);
       } else {
         console.error(`[Classify] ${attempt.label} error:`, e, ', trying next...');
       }
@@ -2977,34 +2975,7 @@ serve(async (req) => {
       }
     }
 
-    // === REGEX SAFETY NET: detect cable cross-sections if classifier failed ===
-    if (!articleShortCircuit && appSettings.volt220_api_token) {
-      const cableCrossSectionRegex = /(\d+)\s*[*хxХXх×]\s*(\d+[.,]\d+|\d+)/gi;
-      const cableMatch = userMessage.match(cableCrossSectionRegex);
-      if (cableMatch) {
-        // Extract clean query: remove conversational noise, keep product-relevant words
-        const noiseWords = /\b(какие|какой|какая|какое|есть|ли|на\s+сайте|у\s+вас|покажи|найди|подскажи|нужен|нужна|нужно|хочу|ищу|мне|пожалуйста|сечением|сечение|с\s+сечением)\b/gi;
-        const cleanQuery = userMessage
-          .replace(noiseWords, ' ')
-          .replace(/\?+/g, '')
-          .replace(/\s+/g, ' ')
-          .trim();
-        console.log(`[Chat] Regex safety net: detected cable cross-section "${cableMatch[0]}", clean query="${cleanQuery}"`);
-        const searchStart = Date.now();
-        const regexResults = await searchProductsByCandidate(
-          { query: cleanQuery, brand: null, category: null, min_price: null, max_price: null },
-          appSettings.volt220_api_token!,
-          15
-        );
-        const searchElapsed = Date.now() - searchStart;
-        console.log(`[Chat] Regex safety net search: ${regexResults.length} products in ${searchElapsed}ms`);
-        if (regexResults.length > 0) {
-          foundProducts = regexResults.slice(0, 10);
-          articleShortCircuit = true;
-          console.log(`[Chat] Regex safety net SUCCESS: ${foundProducts.length} products`);
-        }
-      }
-    }
+
 
     let extractedIntent: ExtractedIntent;
     
