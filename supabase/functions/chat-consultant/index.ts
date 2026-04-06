@@ -56,6 +56,8 @@ async function getAppSettings(): Promise<CachedSettings> {
         ai_provider: 'openrouter',
         ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
         system_prompt: null,
+        classifier_provider: 'auto',
+        classifier_model: 'gemini-2.5-flash-lite',
       };
     }
 
@@ -67,6 +69,8 @@ async function getAppSettings(): Promise<CachedSettings> {
       ai_provider: data.ai_provider || 'openrouter',
       ai_model: data.ai_model || 'meta-llama/llama-3.3-70b-instruct:free',
       system_prompt: data.system_prompt || null,
+      classifier_provider: data.classifier_provider || 'auto',
+      classifier_model: data.classifier_model || 'gemini-2.5-flash-lite',
     };
   } catch (e) {
     console.error('[Settings] Failed to load settings:', e);
@@ -77,6 +81,8 @@ async function getAppSettings(): Promise<CachedSettings> {
         ai_provider: 'openrouter',
         ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
         system_prompt: null,
+        classifier_provider: 'auto',
+        classifier_model: 'gemini-2.5-flash-lite',
       };
   }
 }
