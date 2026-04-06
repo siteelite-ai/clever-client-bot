@@ -608,7 +608,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
   }
 
   const classifyBody = {
-    model: 'gemini-2.5-flash-lite',
+    model: model,
     messages: [
       {
         role: 'system',
