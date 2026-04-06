@@ -3116,30 +3116,10 @@ serve(async (req) => {
           console.log(`[Chat] Category-first: searching by category "${effectiveCategory}", modifiers: [${modifiers.join(', ')}]`);
           const categoryStart = Date.now();
           
-          const categoryVariants = await generateCategorySynonyms(effectiveCategory, appSettings);
-          
-          // Build candidates: modifier+category combos FIRST (most specific), then base variants as fallback
-          const orderedQueries: string[] = [];
-          if (modifiers.length > 0) {
-            const modifierStr = modifiers.join(' ');
-            // Most specific queries first — these are what the user actually asked for
-            for (const variant of categoryVariants) {
-              orderedQueries.push(`${variant} ${modifierStr}`);
-              orderedQueries.push(`${modifierStr} ${variant}`);
-            }
-            orderedQueries.push(`${effectiveCategory} ${modifierStr}`);
-          }
-          // Base variants as fallback (without modifiers)
-          for (const variant of categoryVariants) {
-            if (!orderedQueries.includes(variant)) orderedQueries.push(variant);
-          }
-          const allQueries = new Set<string>(orderedQueries);
-          
-          // No longer need manual optionFilters — resolveFiltersWithLLM handles it in Pass 2
-          
-          const categoryCandidates: SearchCandidate[] = [...allQueries].map(q => ({
-            query: q, brand: null, category: null, min_price: null, max_price: null,
-          }));
+          // Single broad query — resolveFiltersWithLLM handles all modifier filtering in Pass 2
+          const categoryCandidates: SearchCandidate[] = [{
+            query: effectiveCategory, brand: null, category: null, min_price: null, max_price: null,
+          }];
           
           const categoryResults = await searchProductsMulti(categoryCandidates, 15, appSettings.volt220_api_token, 30, modifiers, appSettings);
           const categoryElapsed = Date.now() - categoryStart;
