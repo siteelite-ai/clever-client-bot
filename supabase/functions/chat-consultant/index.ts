@@ -533,6 +533,7 @@ interface ClassificationResult {
   price_intent?: 'most_expensive' | 'cheapest';
   product_category?: string;
   is_replacement?: boolean;
+  search_modifiers?: string[];
 }
 
 async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>, settings?: CachedSettings | null): Promise<ClassificationResult | null> {
