@@ -2975,7 +2975,28 @@ serve(async (req) => {
       }
     }
 
-    // ШАГ 1: AI определяет интент и генерирует поисковые кандидаты (если не short-circuit)
+    // === REGEX SAFETY NET: detect cable cross-sections if classifier failed ===
+    if (!articleShortCircuit && appSettings.volt220_api_token) {
+      const cableCrossSectionRegex = /(\d+)\s*[*хxХXх×]\s*(\d+[.,]\d+|\d+)/gi;
+      const cableMatch = userMessage.match(cableCrossSectionRegex);
+      if (cableMatch) {
+        console.log(`[Chat] Regex safety net: detected cable cross-section "${cableMatch[0]}" in message`);
+        const searchStart = Date.now();
+        const regexResults = await searchProductsByCandidate(
+          { query: userMessage, brand: null, category: null, min_price: null, max_price: null },
+          appSettings.volt220_api_token!,
+          15
+        );
+        const searchElapsed = Date.now() - searchStart;
+        console.log(`[Chat] Regex safety net search: ${regexResults.length} products in ${searchElapsed}ms`);
+        if (regexResults.length > 0) {
+          foundProducts = regexResults.slice(0, 10);
+          articleShortCircuit = true;
+          console.log(`[Chat] Regex safety net SUCCESS: ${foundProducts.length} products`);
+        }
+      }
+    }
+
     let extractedIntent: ExtractedIntent;
     
     if (articleShortCircuit) {
