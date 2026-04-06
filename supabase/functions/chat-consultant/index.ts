@@ -2981,10 +2981,17 @@ serve(async (req) => {
       const cableCrossSectionRegex = /(\d+)\s*[*хxХXх×]\s*(\d+[.,]\d+|\d+)/gi;
       const cableMatch = userMessage.match(cableCrossSectionRegex);
       if (cableMatch) {
-        console.log(`[Chat] Regex safety net: detected cable cross-section "${cableMatch[0]}" in message`);
+        // Extract clean query: remove conversational noise, keep product-relevant words
+        const noiseWords = /\b(какие|какой|какая|какое|есть|ли|на\s+сайте|у\s+вас|покажи|найди|подскажи|нужен|нужна|нужно|хочу|ищу|мне|пожалуйста|сечением|сечение|с\s+сечением)\b/gi;
+        const cleanQuery = userMessage
+          .replace(noiseWords, ' ')
+          .replace(/\?+/g, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        console.log(`[Chat] Regex safety net: detected cable cross-section "${cableMatch[0]}", clean query="${cleanQuery}"`);
         const searchStart = Date.now();
         const regexResults = await searchProductsByCandidate(
-          { query: userMessage, brand: null, category: null, min_price: null, max_price: null },
+          { query: cleanQuery, brand: null, category: null, min_price: null, max_price: null },
           appSettings.volt220_api_token!,
           15
         );
