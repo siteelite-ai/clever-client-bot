@@ -46,29 +46,12 @@ const CLASSIFIER_MODELS: { id: string; name: string; provider: string; descripti
 ];
 
 const CURATED_MODELS: CuratedModel[] = [
-  // OpenRouter Free — 50 req/day (1000/day если купить $10 кредитов), 20 req/min
-  { id: 'qwen/qwen3.6-plus:free', name: 'Qwen 3.6 Plus', provider: 'Alibaba', free: true, description: '1M контекст, уровень Gemini Pro · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'openai/gpt-oss-120b:free', name: 'GPT-OSS 120B', provider: 'OpenAI', free: true, description: 'MoE 117B, рассуждения и агенты · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'nvidia/nemotron-3-super-120b-a12b:free', name: 'Nemotron 3 Super 120B', provider: 'NVIDIA', free: true, description: 'MoE 120B, контекст 262K · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'stepfun/step-3.5-flash:free', name: 'Step 3.5 Flash', provider: 'StepFun', free: true, description: 'Reasoning 196B, контекст 256K · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'qwen/qwen3-next-80b-a3b-instruct:free', name: 'Qwen3 Next 80B', provider: 'Alibaba', free: true, description: 'MoE 80B, контекст 262K · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'arcee-ai/trinity-large-preview:free', name: 'Trinity Large 400B', provider: 'Arcee', free: true, description: 'MoE 400B, контекст 131K · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'minimax/minimax-m2.5:free', name: 'MiniMax M2.5', provider: 'MiniMax', free: true, description: 'SWE-Bench 80%, контекст 196K · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'z-ai/glm-4.5-air:free', name: 'GLM 4.5 Air', provider: 'Z.ai', free: true, description: 'Быстрая, контекст 131K · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'openai/gpt-oss-20b:free', name: 'GPT-OSS 20B', provider: 'OpenAI', free: true, description: 'Лёгкая и быстрая MoE · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'google/gemma-3-27b-it:free', name: 'Gemma 3 27B', provider: 'Google', free: true, description: 'От Google, контекст 131K · 50 req/день', aiProvider: 'openrouter' },
-  // OpenRouter Paid — без дневных лимитов
-  { id: 'google/gemini-3-flash-preview', name: 'Gemini 3 Flash', provider: 'Google', free: false, description: 'Near-Pro reasoning · без лимитов', aiProvider: 'openrouter' },
+  // Gemini — платные через OpenRouter
   { id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', provider: 'Google', free: false, description: 'Лучшая Gemini Pro · без лимитов', aiProvider: 'openrouter' },
-  { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google', free: false, description: 'Баланс скорости и качества · без лимитов', aiProvider: 'openrouter' },
+  { id: 'google/gemini-3-flash-preview', name: 'Gemini 3 Flash', provider: 'Google', free: false, description: 'Near-Pro reasoning · без лимитов', aiProvider: 'openrouter' },
   { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google', free: false, description: 'Топовая модель Gemini · без лимитов', aiProvider: 'openrouter' },
-  { id: 'anthropic/claude-sonnet-4.6', name: 'Claude Sonnet 4.6', provider: 'Anthropic', free: false, description: 'Frontier coding · без лимитов', aiProvider: 'openrouter' },
-  { id: 'deepseek/deepseek-v3.2', name: 'DeepSeek V3.2', provider: 'DeepSeek', free: false, description: 'Уровень GPT-5, дешёвая · без лимитов', aiProvider: 'openrouter' },
-  // HuggingFace Inference API — ~100 req/день
-  // HuggingFace Inference API — ~100 req/день
-  { id: 'Qwen/Qwen2.5-72B-Instruct', name: 'Qwen 2.5 72B', provider: 'Alibaba', free: true, description: 'Отличный русский, 32K · ~100 req/день', aiProvider: 'huggingface' },
-  { id: 'mistralai/Mistral-Small-24B-Instruct-2501', name: 'Mistral Small 24B', provider: 'Mistral', free: true, description: 'Быстрая, русский · ~100 req/день', aiProvider: 'huggingface' },
-  { id: 'meta-llama/Llama-3.3-70B-Instruct', name: 'Llama 3.3 70B', provider: 'Meta', free: true, description: 'Уровень GPT-4 · ~100 req/день', aiProvider: 'huggingface' },
+  { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google', free: false, description: 'Баланс скорости и качества · без лимитов', aiProvider: 'openrouter' },
+  { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash', provider: 'Google', free: false, description: '$0.10/$0.40 за 1M · стабильная', aiProvider: 'openrouter' },
 ];
 
 type ModelFilter = 'all' | 'free' | 'paid';
