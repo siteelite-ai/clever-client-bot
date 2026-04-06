@@ -2074,6 +2074,21 @@ function discoverOptionKeys(
       }
     }
     
+    // Value-first fallback: if caption matching failed, search by VALUE across all options
+    if (!bestMatch) {
+      for (const [apiKey, info] of optionIndex.entries()) {
+        for (const val of info.values) {
+          const cleanVal = (val.split('//')[0] || '').trim().toLowerCase();
+          if (cleanVal === normalizedValue || cleanVal.includes(normalizedValue) || normalizedValue.includes(cleanVal)) {
+            bestMatch = { apiKey, matchedValue: val.split('//')[0].trim(), score: 50 };
+            console.log(`[OptionKeys] Value-first fallback: "${humanValue}" found in values of "${info.caption}" (key: ${apiKey})`);
+            break;
+          }
+        }
+        if (bestMatch) break;
+      }
+    }
+    
     if (bestMatch) {
       resolved[bestMatch.apiKey] = bestMatch.matchedValue;
       console.log(`[OptionKeys] Resolved: "${humanKey}=${humanValue}" → "${bestMatch.apiKey}=${bestMatch.matchedValue}" (score: ${bestMatch.score})`);
@@ -2219,9 +2234,10 @@ async function searchProductsMulti(
   });
   
   // === OPTIMIZATION: Limit parallel API calls to max 3 ===
-  const cappedPass1 = uniquePass1.slice(0, 3);
-  if (uniquePass1.length > 3) {
-    console.log(`[Search] Capped Pass 1 candidates from ${uniquePass1.length} to 3`);
+  const pass1Cap = 6;
+  const cappedPass1 = uniquePass1.slice(0, pass1Cap);
+  if (uniquePass1.length > pass1Cap) {
+    console.log(`[Search] Capped Pass 1 candidates from ${uniquePass1.length} to ${pass1Cap}`);
   }
   
   const pass1Promises = cappedPass1.map(candidate => 
@@ -2959,18 +2975,22 @@ serve(async (req) => {
           
           const categoryVariants = await generateCategorySynonyms(effectiveCategory, appSettings);
           
-          // Build candidates: base variants + variants combined with modifiers
-          const allQueries = new Set<string>(categoryVariants);
+          // Build candidates: modifier+category combos FIRST (most specific), then base variants as fallback
+          const orderedQueries: string[] = [];
           if (modifiers.length > 0) {
             const modifierStr = modifiers.join(' ');
-            // Add combined queries: "розетка Гармония", "2-местная розетка черная"
+            // Most specific queries first — these are what the user actually asked for
             for (const variant of categoryVariants) {
-              allQueries.add(`${variant} ${modifierStr}`);
-              allQueries.add(`${modifierStr} ${variant}`);
+              orderedQueries.push(`${variant} ${modifierStr}`);
+              orderedQueries.push(`${modifierStr} ${variant}`);
             }
-            // Also try just category + modifiers without synonyms
-            allQueries.add(`${effectiveCategory} ${modifierStr}`);
+            orderedQueries.push(`${effectiveCategory} ${modifierStr}`);
           }
+          // Base variants as fallback (without modifiers)
+          for (const variant of categoryVariants) {
+            if (!orderedQueries.includes(variant)) orderedQueries.push(variant);
+          }
+          const allQueries = new Set<string>(orderedQueries);
           
           // Build option_filters from modifiers for Pass 2 filtering
           const optionFilters: Record<string, string> = {};
