@@ -96,7 +96,7 @@ export default function Settings() {
   const [modelFilter, setModelFilter] = useState<ModelFilter>('all');
   const [showApiToken, setShowApiToken] = useState(false);
   const [showOpenrouterKey, setShowOpenrouterKey] = useState(false);
-  const [showGoogleKey, setShowGoogleKey] = useState(false);
+  
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [pingResults, setPingResults] = useState<Record<string, 'loading' | 'ok' | 'error'>>({});
