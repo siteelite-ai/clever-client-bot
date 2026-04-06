@@ -17,6 +17,8 @@ interface AppSettings {
   google_api_key: string | null;
   ai_provider: string;
   ai_model: string;
+  classifier_provider: string;
+  classifier_model: string;
   updated_at: string;
 }
 
