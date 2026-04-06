@@ -2399,10 +2399,10 @@ async function searchProductsMulti(
   
   console.log(`[Search] Pass 1 (broad): ${productMap.size} unique products`);
   
-  // === PASS 2: If we have human filters, discover API keys and re-search ===
+  // === PASS 2: If we have modifiers, use LLM to resolve filters from product schema ===
   // OPTIMIZATION: Cap Pass 2 to max 3 candidates too
-  if (hasHumanFilters && productMap.size > 0) {
-    const resolvedFilters = discoverOptionKeys(Array.from(productMap.values()), humanFilters);
+  if (modifiers && modifiers.length > 0 && productMap.size > 0 && settings) {
+    const resolvedFilters = await resolveFiltersWithLLM(Array.from(productMap.values()), modifiers, settings);
     
     if (Object.keys(resolvedFilters).length > 0) {
       console.log(`[Search] Pass 2: Discovered ${Object.keys(resolvedFilters).length} API filters, re-searching...`);
