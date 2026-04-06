@@ -54,7 +54,7 @@ const CURATED_MODELS: CuratedModel[] = [
   { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash', provider: 'Google', free: false, description: '$0.10/$0.40 за 1M · стабильная', aiProvider: 'openrouter' },
 ];
 
-type ModelFilter = 'all' | 'free' | 'paid';
+type ModelFilter = 'all' | 'paid';
 
 const CUSTOM_MODELS_KEY = 'custom_openrouter_models';
 
