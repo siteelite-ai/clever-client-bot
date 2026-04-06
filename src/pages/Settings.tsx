@@ -647,18 +647,11 @@ export default function Settings() {
               <Label>Провайдер классификатора</Label>
               <RadioGroup value={classifierProvider} onValueChange={(v) => {
                 setClassifierProvider(v as ClassifierProvider);
-                // Auto-select appropriate model for provider
-                if (v === 'google') setClassifierModel('gemini-2.5-flash-lite');
-                else if (v === 'openrouter') setClassifierModel('google/gemini-2.5-flash-lite:free');
-                // auto keeps current
+                if (v === 'openrouter') setClassifierModel('google/gemini-2.5-flash-lite');
               }} className="flex gap-4">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <RadioGroupItem value="auto" />
                   <span className="text-sm">Auto</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <RadioGroupItem value="google" />
-                  <span className="text-sm">Google AI</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <RadioGroupItem value="openrouter" />
@@ -667,7 +660,7 @@ export default function Settings() {
               </RadioGroup>
               {classifierProvider === 'auto' && (
                 <p className="text-xs text-muted-foreground">
-                  Автоматический выбор: Google ключи → OpenRouter → Lovable Gateway
+                  Автоматический выбор: OpenRouter → Lovable Gateway
                 </p>
               )}
             </div>
