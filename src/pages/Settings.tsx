@@ -367,59 +367,38 @@ export default function Settings() {
               <h3 className="text-lg font-semibold">AI настройки</h3>
             </div>
 
-            {/* Provider Tabs */}
-            <Tabs value={aiProvider} onValueChange={(v) => handleProviderChange(v as AIProvider)}>
-              <TabsList className="w-full">
-                <TabsTrigger value="openrouter" className="flex-1">OpenRouter</TabsTrigger>
-                <TabsTrigger value="huggingface" className="flex-1">HuggingFace</TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="openrouter" className="space-y-4 mt-4">
-                <div className="space-y-2">
-                  <Label htmlFor="openrouterKey">API ключ OpenRouter</Label>
-                  <div className="relative">
-                    <Input
-                      id="openrouterKey"
-                      type={showOpenrouterKey ? 'text' : 'password'}
-                      placeholder="sk-or-v1-..."
-                      value={openrouterKey}
-                      onChange={(e) => setOpenrouterKey(e.target.value)}
-                      className="input-focus pr-10"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowOpenrouterKey(!showOpenrouterKey)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      {showOpenrouterKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Получите ключ на{' '}
-                    <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
-                      openrouter.ai/keys
-                    </a>
-                  </p>
-                </div>
-
-                {!openrouterKey && (
-                  <p className="text-xs text-amber-500">
-                    ⚠️ Без ключа OpenRouter AI-консультант будет использовать встроенный Lovable AI (Gemini) как fallback.
-                  </p>
-                )}
-              </TabsContent>
-
-
-              <TabsContent value="huggingface" className="space-y-4 mt-4">
-                <div className="p-3 bg-muted/50 rounded-lg space-y-2">
-                  <p className="text-sm font-medium">✅ Токен настроен</p>
-                  <p className="text-xs text-muted-foreground">
-                    HuggingFace токен хранится в секретах Supabase (HUGGINGFACE_API_KEY). 
-                    Все модели ниже бесплатны через Inference API.
-                  </p>
-                </div>
-              </TabsContent>
-            </Tabs>
+            {/* OpenRouter API Key */}
+            <div className="space-y-2">
+              <Label htmlFor="openrouterKey">API ключ OpenRouter</Label>
+              <div className="relative">
+                <Input
+                  id="openrouterKey"
+                  type={showOpenrouterKey ? 'text' : 'password'}
+                  placeholder="sk-or-v1-..."
+                  value={openrouterKey}
+                  onChange={(e) => setOpenrouterKey(e.target.value)}
+                  className="input-focus pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowOpenrouterKey(!showOpenrouterKey)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {showOpenrouterKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Получите ключ на{' '}
+                <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                  openrouter.ai/keys
+                </a>
+              </p>
+              {!openrouterKey && (
+                <p className="text-xs text-destructive">
+                  ⚠️ Без ключа OpenRouter AI-консультант и эмбеддинги не будут работать.
+                </p>
+              )}
+            </div>
 
             {/* Model Filter + Ping All */}
             <div className="space-y-3">
