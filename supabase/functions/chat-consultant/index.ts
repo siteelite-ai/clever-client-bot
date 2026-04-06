@@ -17,6 +17,8 @@ interface CachedSettings {
   ai_provider: string;
   ai_model: string;
   system_prompt: string | null;
+  classifier_provider: string;
+  classifier_model: string;
 }
 
 async function getAppSettings(): Promise<CachedSettings> {
@@ -32,6 +34,8 @@ async function getAppSettings(): Promise<CachedSettings> {
       ai_provider: 'openrouter',
       ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
       system_prompt: null,
+      classifier_provider: 'auto',
+      classifier_model: 'gemini-2.5-flash-lite',
     };
   }
 
@@ -39,7 +43,7 @@ async function getAppSettings(): Promise<CachedSettings> {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const { data, error } = await supabase
       .from('app_settings')
-      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model, system_prompt')
+      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model, system_prompt, classifier_provider, classifier_model')
       .limit(1)
       .single();
 
@@ -52,6 +56,8 @@ async function getAppSettings(): Promise<CachedSettings> {
         ai_provider: 'openrouter',
         ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
         system_prompt: null,
+        classifier_provider: 'auto',
+        classifier_model: 'gemini-2.5-flash-lite',
       };
     }
 
@@ -63,6 +69,8 @@ async function getAppSettings(): Promise<CachedSettings> {
       ai_provider: data.ai_provider || 'openrouter',
       ai_model: data.ai_model || 'meta-llama/llama-3.3-70b-instruct:free',
       system_prompt: data.system_prompt || null,
+      classifier_provider: data.classifier_provider || 'auto',
+      classifier_model: data.classifier_model || 'gemini-2.5-flash-lite',
     };
   } catch (e) {
     console.error('[Settings] Failed to load settings:', e);
@@ -73,6 +81,8 @@ async function getAppSettings(): Promise<CachedSettings> {
         ai_provider: 'openrouter',
         ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
         system_prompt: null,
+        classifier_provider: 'auto',
+        classifier_model: 'gemini-2.5-flash-lite',
       };
   }
 }
@@ -526,33 +536,79 @@ interface ClassificationResult {
 }
 
 async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>, settings?: CachedSettings | null): Promise<ClassificationResult | null> {
-  // Determine API keys: prefer Google keys from settings, fallback to LOVABLE_API_KEY
+  const classifierProvider = settings?.classifier_provider || 'auto';
+  const classifierModel = settings?.classifier_model || 'gemini-2.5-flash-lite';
+  
   let url: string;
   let apiKeys: string[];
+  let model: string = classifierModel;
 
-  if (settings?.google_api_key) {
-    const parsed = settings.google_api_key.split(/[,\n]/).map(k => k.trim()).filter(k => k.length > 0);
-    if (parsed.length > 0) {
-      url = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
-      apiKeys = parsed;
-      console.log(`[Classify] Using Google API keys (${parsed.length} key(s))`);
+  if (classifierProvider === 'openrouter') {
+    // Explicit OpenRouter mode
+    if (settings?.openrouter_api_key) {
+      url = 'https://openrouter.ai/api/v1/chat/completions';
+      apiKeys = [settings.openrouter_api_key];
+      // For OpenRouter, use the model as-is (e.g. google/gemini-2.5-flash-lite:free)
+      console.log(`[Classify] Using OpenRouter with model ${model}`);
+    } else {
+      console.log('[Classify] OpenRouter selected but no key, skipping');
+      return null;
+    }
+  } else if (classifierProvider === 'google') {
+    // Explicit Google mode
+    if (settings?.google_api_key) {
+      const parsed = settings.google_api_key.split(/[,\n]/).map(k => k.trim()).filter(k => k.length > 0);
+      if (parsed.length > 0) {
+        url = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
+        apiKeys = parsed;
+        console.log(`[Classify] Using Google API keys (${parsed.length} key(s)) with model ${model}`);
+      } else {
+        console.log('[Classify] Google selected but no valid keys, skipping');
+        return null;
+      }
+    } else {
+      console.log('[Classify] Google selected but no key configured, skipping');
+      return null;
+    }
+  } else {
+    // Auto mode: Google → OpenRouter → Lovable Gateway
+    if (settings?.google_api_key) {
+      const parsed = settings.google_api_key.split(/[,\n]/).map(k => k.trim()).filter(k => k.length > 0);
+      if (parsed.length > 0) {
+        url = 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions';
+        apiKeys = parsed;
+        model = 'gemini-2.5-flash-lite';
+        console.log(`[Classify] Auto: Using Google API keys (${parsed.length} key(s))`);
+      } else if (settings?.openrouter_api_key) {
+        url = 'https://openrouter.ai/api/v1/chat/completions';
+        apiKeys = [settings.openrouter_api_key];
+        model = 'google/gemini-2.5-flash-lite:free';
+        console.log('[Classify] Auto: Using OpenRouter (google/gemini-2.5-flash-lite:free)');
+      } else {
+        const lovableKey = Deno.env.get('LOVABLE_API_KEY');
+        if (!lovableKey) { console.log('[Classify] No API keys configured, skipping'); return null; }
+        url = 'https://ai.gateway.lovable.dev/v1/chat/completions';
+        apiKeys = [lovableKey];
+        model = 'gemini-2.5-flash-lite';
+        console.log('[Classify] Auto: Fallback to LOVABLE_API_KEY');
+      }
+    } else if (settings?.openrouter_api_key) {
+      url = 'https://openrouter.ai/api/v1/chat/completions';
+      apiKeys = [settings.openrouter_api_key];
+      model = 'google/gemini-2.5-flash-lite:free';
+      console.log('[Classify] Auto: Using OpenRouter (no google keys)');
     } else {
       const lovableKey = Deno.env.get('LOVABLE_API_KEY');
       if (!lovableKey) { console.log('[Classify] No API keys configured, skipping'); return null; }
       url = 'https://ai.gateway.lovable.dev/v1/chat/completions';
       apiKeys = [lovableKey];
-      console.log('[Classify] Fallback to LOVABLE_API_KEY');
+      model = 'gemini-2.5-flash-lite';
+      console.log('[Classify] Auto: Fallback to LOVABLE_API_KEY (no keys at all)');
     }
-  } else {
-    const lovableKey = Deno.env.get('LOVABLE_API_KEY');
-    if (!lovableKey) { console.log('[Classify] No API keys configured, skipping'); return null; }
-    url = 'https://ai.gateway.lovable.dev/v1/chat/completions';
-    apiKeys = [lovableKey];
-    console.log('[Classify] Fallback to LOVABLE_API_KEY (no google_api_key in settings)');
   }
 
   const classifyBody = {
-    model: 'gemini-2.5-flash-lite',
+    model: model,
     messages: [
       {
         role: 'system',

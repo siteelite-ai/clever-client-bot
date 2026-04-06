@@ -17,10 +17,14 @@ interface AppSettings {
   google_api_key: string | null;
   ai_provider: string;
   ai_model: string;
+  classifier_provider: string;
+  classifier_model: string;
   updated_at: string;
 }
 
 type AIProvider = 'openrouter' | 'google' | 'huggingface';
+
+type ClassifierProvider = 'auto' | 'google' | 'openrouter';
 
 interface CuratedModel {
   id: string;
@@ -31,6 +35,15 @@ interface CuratedModel {
   aiProvider: AIProvider;
   custom?: boolean;
 }
+
+const CLASSIFIER_MODELS: { id: string; name: string; provider: string; description: string; forProvider: ClassifierProvider | 'auto' }[] = [
+  { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', provider: 'Google', description: 'Ультра-быстрая, идеальна для классификации', forProvider: 'google' },
+  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'Google', description: 'Быстрая, хороший баланс', forProvider: 'google' },
+  { id: 'google/gemini-2.5-flash-lite:free', name: 'Gemini 2.5 Flash Lite', provider: 'Google via OR', description: 'Бесплатная через OpenRouter · 50 req/день', forProvider: 'openrouter' },
+  { id: 'google/gemma-3-27b-it:free', name: 'Gemma 3 27B', provider: 'Google via OR', description: 'Бесплатная, лёгкая · 50 req/день', forProvider: 'openrouter' },
+  { id: 'qwen/qwen3-next-80b-a3b-instruct:free', name: 'Qwen3 Next 80B', provider: 'Alibaba via OR', description: 'Бесплатная MoE · 50 req/день', forProvider: 'openrouter' },
+  { id: 'openai/gpt-oss-20b:free', name: 'GPT-OSS 20B', provider: 'OpenAI via OR', description: 'Лёгкая и быстрая · 50 req/день', forProvider: 'openrouter' },
+];
 
 const CURATED_MODELS: CuratedModel[] = [
   // OpenRouter Free — 50 req/day (1000/day если купить $10 кредитов), 20 req/min
@@ -95,6 +108,8 @@ export default function Settings() {
   const [newModelId, setNewModelId] = useState('');
   const [newModelName, setNewModelName] = useState('');
   const [pingAllLoading, setPingAllLoading] = useState(false);
+  const [classifierProvider, setClassifierProvider] = useState<ClassifierProvider>('auto');
+  const [classifierModel, setClassifierModel] = useState('gemini-2.5-flash-lite');
 
   useEffect(() => {
     fetchSettings();
@@ -128,6 +143,8 @@ export default function Settings() {
         setGoogleApiKey(d.google_api_key || '');
         setAiProvider((d.ai_provider as AIProvider) || 'openrouter');
         setSelectedModel(d.ai_model || 'qwen/qwen3.6-plus:free');
+        setClassifierProvider((d.classifier_provider as ClassifierProvider) || 'auto');
+        setClassifierModel(d.classifier_model || 'gemini-2.5-flash-lite');
       }
     } catch (error) {
       console.error('Error fetching settings:', error);
@@ -150,6 +167,8 @@ export default function Settings() {
           google_api_key: googleApiKey || null,
           ai_provider: aiProvider,
           ai_model: selectedModel,
+          classifier_provider: classifierProvider,
+          classifier_model: classifierModel,
         } as any)
         .eq('id', settings.id);
 
@@ -591,6 +610,75 @@ export default function Settings() {
                 </p>
               </div>
             )}
+          </div>
+
+          {/* Classifier Settings */}
+          <div className="admin-card space-y-4">
+            <div className="flex items-center gap-2">
+              <Zap className="w-5 h-5 text-primary" />
+              <h3 className="text-lg font-semibold">Модель классификатора (Микро-LLM)</h3>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Быстрая модель для определения типа запроса (название товара, цена, категория). 
+              Должна быть лёгкой и дешёвой. Работает независимо от основной модели.
+            </p>
+
+            <div className="space-y-2">
+              <Label>Провайдер классификатора</Label>
+              <RadioGroup value={classifierProvider} onValueChange={(v) => {
+                setClassifierProvider(v as ClassifierProvider);
+                // Auto-select appropriate model for provider
+                if (v === 'google') setClassifierModel('gemini-2.5-flash-lite');
+                else if (v === 'openrouter') setClassifierModel('google/gemini-2.5-flash-lite:free');
+                // auto keeps current
+              }} className="flex gap-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <RadioGroupItem value="auto" />
+                  <span className="text-sm">Auto</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <RadioGroupItem value="google" />
+                  <span className="text-sm">Google AI</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <RadioGroupItem value="openrouter" />
+                  <span className="text-sm">OpenRouter</span>
+                </label>
+              </RadioGroup>
+              {classifierProvider === 'auto' && (
+                <p className="text-xs text-muted-foreground">
+                  Автоматический выбор: Google ключи → OpenRouter → Lovable Gateway
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label>Модель классификатора</Label>
+              <RadioGroup value={classifierModel} onValueChange={setClassifierModel} className="space-y-1.5">
+                {CLASSIFIER_MODELS
+                  .filter(m => classifierProvider === 'auto' || m.forProvider === classifierProvider)
+                  .map(m => (
+                    <label
+                      key={m.id}
+                      className={`flex items-start gap-3 p-2.5 rounded-lg border cursor-pointer transition-all ${
+                        classifierModel === m.id
+                          ? 'border-primary bg-primary/5'
+                          : 'border-border hover:border-primary/30'
+                      }`}
+                    >
+                      <RadioGroupItem value={m.id} className="mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-sm">{m.name}</span>
+                          <span className="text-xs text-muted-foreground">{m.provider}</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">{m.description}</p>
+                        <p className="text-[10px] text-muted-foreground/60 font-mono">{m.id}</p>
+                      </div>
+                    </label>
+                  ))}
+              </RadioGroup>
+            </div>
           </div>
 
           {/* Save */}

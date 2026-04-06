@@ -51,6 +51,8 @@ export type Database = {
         Row: {
           ai_model: string
           ai_provider: string
+          classifier_model: string
+          classifier_provider: string
           google_api_key: string | null
           id: string
           openrouter_api_key: string | null
@@ -61,6 +63,8 @@ export type Database = {
         Insert: {
           ai_model?: string
           ai_provider?: string
+          classifier_model?: string
+          classifier_provider?: string
           google_api_key?: string | null
           id?: string
           openrouter_api_key?: string | null
@@ -71,6 +75,8 @@ export type Database = {
         Update: {
           ai_model?: string
           ai_provider?: string
+          classifier_model?: string
+          classifier_provider?: string
           google_api_key?: string | null
           id?: string
           openrouter_api_key?: string | null
