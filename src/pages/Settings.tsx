@@ -22,7 +22,7 @@ interface AppSettings {
   updated_at: string;
 }
 
-type AIProvider = 'openrouter' | 'huggingface';
+type AIProvider = 'openrouter';
 
 type ClassifierProvider = 'auto' | 'openrouter';
 
