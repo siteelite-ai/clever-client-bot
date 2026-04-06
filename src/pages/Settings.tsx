@@ -33,21 +33,24 @@ interface CuratedModel {
 }
 
 const CURATED_MODELS: CuratedModel[] = [
-  // OpenRouter Free — verified available
-  { id: 'qwen/qwen3.6-plus:free', name: 'Qwen 3.6 Plus', provider: 'Alibaba', free: true, description: 'Новейшая MoE, 1M контекст, замена Gemini Pro', aiProvider: 'openrouter' },
+  // OpenRouter Free — сильные модели уровня Gemini Pro
+  { id: 'qwen/qwen3.6-plus:free', name: 'Qwen 3.6 Plus', provider: 'Alibaba', free: true, description: 'Топ-1 бесплатная, 1M контекст, уровень Gemini Pro', aiProvider: 'openrouter' },
   { id: 'openai/gpt-oss-120b:free', name: 'GPT-OSS 120B', provider: 'OpenAI', free: true, description: 'MoE 117B, отличные рассуждения и агенты', aiProvider: 'openrouter' },
   { id: 'nvidia/nemotron-3-super-120b-a12b:free', name: 'Nemotron 3 Super 120B', provider: 'NVIDIA', free: true, description: 'MoE 120B, контекст 262K, мощная', aiProvider: 'openrouter' },
-  { id: 'nousresearch/hermes-3-llama-3.1-405b:free', name: 'Hermes 3 405B', provider: 'Nous/Meta', free: true, description: 'Крупнейшая бесплатная, 405B параметров', aiProvider: 'openrouter' },
-  { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B', provider: 'Meta', free: true, description: 'Уровень GPT-4, стабильная и универсальная', aiProvider: 'openrouter' },
-  { id: 'qwen/qwen3-coder:free', name: 'Qwen3 Coder 480B', provider: 'Alibaba', free: true, description: 'MoE для кода, контекст 262K', aiProvider: 'openrouter' },
-  { id: 'minimax/minimax-m2.5:free', name: 'MiniMax M2.5', provider: 'MiniMax', free: true, description: 'Быстрая, контекст 196K', aiProvider: 'openrouter' },
+  { id: 'stepfun/step-3.5-flash:free', name: 'Step 3.5 Flash', provider: 'StepFun', free: true, description: 'Reasoning модель 196B, контекст 256K', aiProvider: 'openrouter' },
+  { id: 'qwen/qwen3-next-80b-a3b-instruct:free', name: 'Qwen3 Next 80B', provider: 'Alibaba', free: true, description: 'MoE 80B, контекст 262K, новейшая', aiProvider: 'openrouter' },
+  { id: 'arcee-ai/trinity-large-preview:free', name: 'Trinity Large 400B', provider: 'Arcee', free: true, description: 'MoE 400B, контекст 131K, frontier', aiProvider: 'openrouter' },
+  { id: 'minimax/minimax-m2.5:free', name: 'MiniMax M2.5', provider: 'MiniMax', free: true, description: 'SWE-Bench 80%, контекст 196K', aiProvider: 'openrouter' },
+  { id: 'z-ai/glm-4.5-air:free', name: 'GLM 4.5 Air', provider: 'Z.ai', free: true, description: 'Быстрая, контекст 131K', aiProvider: 'openrouter' },
   { id: 'openai/gpt-oss-20b:free', name: 'GPT-OSS 20B', provider: 'OpenAI', free: true, description: 'Лёгкая и быстрая MoE модель', aiProvider: 'openrouter' },
-  // OpenRouter Paid
+  { id: 'google/gemma-3-27b-it:free', name: 'Gemma 3 27B', provider: 'Google', free: true, description: 'От Google, контекст 131K', aiProvider: 'openrouter' },
+  // OpenRouter Paid — Gemini и топ-модели
+  { id: 'google/gemini-3-flash-preview', name: 'Gemini 3 Flash', provider: 'Google', free: false, description: 'Новейшая, near-Pro reasoning', aiProvider: 'openrouter' },
+  { id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', provider: 'Google', free: false, description: 'Лучшая Gemini Pro, frontier', aiProvider: 'openrouter' },
   { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google', free: false, description: 'Баланс скорости и качества', aiProvider: 'openrouter' },
-  { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google', free: false, description: 'Лучшее качество в линейке Gemini', aiProvider: 'openrouter' },
-  { id: 'anthropic/claude-sonnet-4', name: 'Claude Sonnet 4', provider: 'Anthropic', free: false, description: 'Отличное понимание контекста', aiProvider: 'openrouter' },
-  { id: 'openai/gpt-4o-mini', name: 'GPT-4o Mini', provider: 'OpenAI', free: false, description: 'Недорогая и быстрая модель OpenAI', aiProvider: 'openrouter' },
-  { id: 'deepseek/deepseek-chat-v3-0324', name: 'DeepSeek V3', provider: 'DeepSeek', free: false, description: 'Полная версия без лимитов', aiProvider: 'openrouter' },
+  { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google', free: false, description: 'Топовая модель Gemini', aiProvider: 'openrouter' },
+  { id: 'anthropic/claude-sonnet-4.6', name: 'Claude Sonnet 4.6', provider: 'Anthropic', free: false, description: 'Frontier coding и агенты', aiProvider: 'openrouter' },
+  { id: 'deepseek/deepseek-v3.2', name: 'DeepSeek V3.2', provider: 'DeepSeek', free: false, description: 'Уровень GPT-5, очень дешёвая', aiProvider: 'openrouter' },
   // Google AI Studio
   { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'Google', free: true, description: '1500 запросов/день бесплатно, быстрая', aiProvider: 'google' },
   { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google', free: true, description: 'Новейшая, баланс скорости и качества', aiProvider: 'google' },
