@@ -710,6 +710,7 @@ is_replacement=true если пользователь хочет найти по
         price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
         product_category: parsed.product_category || undefined,
         is_replacement: !!parsed.is_replacement,
+        search_modifiers: Array.isArray(parsed.search_modifiers) ? parsed.search_modifiers.filter((m: unknown) => typeof m === 'string' && m.trim().length > 0) : [],
       };
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
