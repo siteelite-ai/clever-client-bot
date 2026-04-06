@@ -714,7 +714,7 @@ is_replacement=true если пользователь хочет найти по
       const body = { ...classifyBody, model: attempt.model };
       const classifyPromise = callAIWithKeyFallback(attempt.url, attempt.apiKeys, body, 'Classify');
       const timeoutPromise = new Promise<Response>((_, reject) => 
-        setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 3000)
+        setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 5000)
       );
 
       const response = await Promise.race([classifyPromise, timeoutPromise]);
@@ -733,14 +733,16 @@ is_replacement=true если пользователь хочет найти по
       console.log(`[Classify] SUCCESS via ${attempt.label}`);
       return {
         has_product_name: !!parsed.has_product_name,
-        product_name: parsed.product_name || undefined,
+        product_name: parsed.product_name 
+          ? parsed.product_name.replace(/\b(сечением|сечение|с\s+сечением)\b/gi, '').replace(/\s+/g, ' ').trim() 
+          : undefined,
         price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
         product_category: parsed.product_category || undefined,
         is_replacement: !!parsed.is_replacement,
       };
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
-        console.log(`[Classify] ${attempt.label} timeout (3s), trying next...`);
+        console.log(`[Classify] ${attempt.label} timeout (5s), trying next...`);
       } else {
         console.error(`[Classify] ${attempt.label} error:`, e, ', trying next...');
       }
@@ -2980,10 +2982,17 @@ serve(async (req) => {
       const cableCrossSectionRegex = /(\d+)\s*[*хxХXх×]\s*(\d+[.,]\d+|\d+)/gi;
       const cableMatch = userMessage.match(cableCrossSectionRegex);
       if (cableMatch) {
-        console.log(`[Chat] Regex safety net: detected cable cross-section "${cableMatch[0]}" in message`);
+        // Extract clean query: remove conversational noise, keep product-relevant words
+        const noiseWords = /\b(какие|какой|какая|какое|есть|ли|на\s+сайте|у\s+вас|покажи|найди|подскажи|нужен|нужна|нужно|хочу|ищу|мне|пожалуйста|сечением|сечение|с\s+сечением)\b/gi;
+        const cleanQuery = userMessage
+          .replace(noiseWords, ' ')
+          .replace(/\?+/g, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        console.log(`[Chat] Regex safety net: detected cable cross-section "${cableMatch[0]}", clean query="${cleanQuery}"`);
         const searchStart = Date.now();
         const regexResults = await searchProductsByCandidate(
-          { query: userMessage, brand: null, category: null, min_price: null, max_price: null },
+          { query: cleanQuery, brand: null, category: null, min_price: null, max_price: null },
           appSettings.volt220_api_token!,
           15
         );
