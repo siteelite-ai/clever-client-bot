@@ -2975,34 +2975,7 @@ serve(async (req) => {
       }
     }
 
-    // === REGEX SAFETY NET: detect cable cross-sections if classifier failed ===
-    if (!articleShortCircuit && appSettings.volt220_api_token) {
-      const cableCrossSectionRegex = /(\d+)\s*[*хxХXх×]\s*(\d+[.,]\d+|\d+)/gi;
-      const cableMatch = userMessage.match(cableCrossSectionRegex);
-      if (cableMatch) {
-        // Extract clean query: remove conversational noise, keep product-relevant words
-        const noiseWords = /\b(какие|какой|какая|какое|есть|ли|на\s+сайте|у\s+вас|покажи|найди|подскажи|нужен|нужна|нужно|хочу|ищу|мне|пожалуйста|сечением|сечение|с\s+сечением)\b/gi;
-        const cleanQuery = userMessage
-          .replace(noiseWords, ' ')
-          .replace(/\?+/g, '')
-          .replace(/\s+/g, ' ')
-          .trim();
-        console.log(`[Chat] Regex safety net: detected cable cross-section "${cableMatch[0]}", clean query="${cleanQuery}"`);
-        const searchStart = Date.now();
-        const regexResults = await searchProductsByCandidate(
-          { query: cleanQuery, brand: null, category: null, min_price: null, max_price: null },
-          appSettings.volt220_api_token!,
-          15
-        );
-        const searchElapsed = Date.now() - searchStart;
-        console.log(`[Chat] Regex safety net search: ${regexResults.length} products in ${searchElapsed}ms`);
-        if (regexResults.length > 0) {
-          foundProducts = regexResults.slice(0, 10);
-          articleShortCircuit = true;
-          console.log(`[Chat] Regex safety net SUCCESS: ${foundProducts.length} products`);
-        }
-      }
-    }
+
 
     let extractedIntent: ExtractedIntent;
     
