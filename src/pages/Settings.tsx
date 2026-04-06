@@ -108,6 +108,8 @@ export default function Settings() {
   const [newModelId, setNewModelId] = useState('');
   const [newModelName, setNewModelName] = useState('');
   const [pingAllLoading, setPingAllLoading] = useState(false);
+  const [classifierProvider, setClassifierProvider] = useState<ClassifierProvider>('auto');
+  const [classifierModel, setClassifierModel] = useState('gemini-2.5-flash-lite');
 
   useEffect(() => {
     fetchSettings();
