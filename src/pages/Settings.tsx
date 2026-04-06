@@ -741,6 +741,26 @@ export default function Settings() {
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-sm">{m.name}</span>
                           <span className="text-xs text-muted-foreground">{m.provider}</span>
+                          {/* Ping status indicator */}
+                          {pingResults[`clf:${m.id}`] === 'ok' && (
+                            <Wifi className="w-3.5 h-3.5 text-green-500" />
+                          )}
+                          {pingResults[`clf:${m.id}`] === 'error' && (
+                            <WifiOff className="w-3.5 h-3.5 text-destructive" />
+                          )}
+                          {pingResults[`clf:${m.id}`] === 'loading' && (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+                          )}
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-5 w-5 ml-auto"
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); pingClassifierModel(m.id, m.forProvider); }}
+                            disabled={pingResults[`clf:${m.id}`] === 'loading'}
+                          >
+                            <RefreshCw className="w-3 h-3" />
+                          </Button>
                         </div>
                         <p className="text-xs text-muted-foreground">{m.description}</p>
                         <p className="text-[10px] text-muted-foreground/60 font-mono">{m.id}</p>
