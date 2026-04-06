@@ -3135,19 +3135,13 @@ serve(async (req) => {
           }
           const allQueries = new Set<string>(orderedQueries);
           
-          // Build option_filters from modifiers for Pass 2 filtering
-          const optionFilters: Record<string, string> = {};
-          for (const mod of modifiers) {
-            // Use modifier as both key and value — discoverOptionKeys will fuzzy-match
-            optionFilters[mod.toLowerCase()] = mod;
-          }
+          // No longer need manual optionFilters — resolveFiltersWithLLM handles it in Pass 2
           
           const categoryCandidates: SearchCandidate[] = [...allQueries].map(q => ({
             query: q, brand: null, category: null, min_price: null, max_price: null,
-            ...(Object.keys(optionFilters).length > 0 ? { option_filters: optionFilters } : {})
           }));
           
-          const categoryResults = await searchProductsMulti(categoryCandidates, 15, appSettings.volt220_api_token);
+          const categoryResults = await searchProductsMulti(categoryCandidates, 15, appSettings.volt220_api_token, 30, modifiers, appSettings);
           const categoryElapsed = Date.now() - categoryStart;
           console.log(`[Chat] Category-first: ${categoryResults.length} products in ${categoryElapsed}ms (${allQueries.size} queries for "${effectiveCategory}")`);
           
