@@ -2330,10 +2330,8 @@ function formatProductsForAI(products: Product[]): string {
     ];
     
     if (p.options && p.options.length > 0) {
-      const uselessValues = ['нет', 'не требуется', 'не предусмотрено', '-', '—', ''];
       const specs = p.options
         .filter(o => !isExcludedOption(o.key))
-        .filter(o => !uselessValues.includes(String(o.value).trim().toLowerCase()))
         .map(o => `${cleanOptionCaption(o.caption)}: ${cleanOptionValue(o.value)}`);
       
       if (specs.length > 0) {
