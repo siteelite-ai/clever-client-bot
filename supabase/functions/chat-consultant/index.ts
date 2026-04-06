@@ -714,7 +714,7 @@ is_replacement=true если пользователь хочет найти по
       const body = { ...classifyBody, model: attempt.model };
       const classifyPromise = callAIWithKeyFallback(attempt.url, attempt.apiKeys, body, 'Classify');
       const timeoutPromise = new Promise<Response>((_, reject) => 
-        setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 5000)
+        setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 8000)
       );
 
       const response = await Promise.race([classifyPromise, timeoutPromise]);
