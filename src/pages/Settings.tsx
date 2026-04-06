@@ -38,6 +38,8 @@ const CURATED_MODELS: CuratedModel[] = [
   { id: 'deepseek/deepseek-r1-0528:free', name: 'DeepSeek R1', provider: 'DeepSeek', free: true, description: 'Сильные рассуждения, аналитика', aiProvider: 'openrouter' },
   { id: 'qwen/qwen3-coder-480b-a35b:free', name: 'Qwen3 Coder 480B', provider: 'Alibaba', free: true, description: 'MoE для кода, контекст 262K', aiProvider: 'openrouter' },
   { id: 'openai/gpt-oss-20b:free', name: 'GPT-OSS 20B', provider: 'OpenAI', free: true, description: 'Лёгкая и быстрая MoE модель', aiProvider: 'openrouter' },
+  { id: 'qwen/qwen-2.5-72b-instruct:free', name: 'Qwen 2.5 72B', provider: 'Alibaba', free: true, description: 'Отличный русский, уровень GPT-4', aiProvider: 'openrouter' },
+  { id: 'qwen/qwen3-235b-a22b:free', name: 'Qwen3 235B', provider: 'Alibaba', free: true, description: 'Новейшая MoE 235B, мощные рассуждения', aiProvider: 'openrouter' },
   // OpenRouter Paid
   { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google', free: false, description: 'Баланс скорости и качества', aiProvider: 'openrouter' },
   { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google', free: false, description: 'Лучшее качество в линейке Gemini', aiProvider: 'openrouter' },
