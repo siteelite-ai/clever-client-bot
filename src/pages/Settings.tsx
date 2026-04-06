@@ -22,9 +22,9 @@ interface AppSettings {
   updated_at: string;
 }
 
-type AIProvider = 'openrouter' | 'google' | 'huggingface';
+type AIProvider = 'openrouter' | 'huggingface';
 
-type ClassifierProvider = 'auto' | 'google' | 'openrouter';
+type ClassifierProvider = 'auto' | 'openrouter';
 
 interface CuratedModel {
   id: string;
