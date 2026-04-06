@@ -612,6 +612,75 @@ export default function Settings() {
             )}
           </div>
 
+          {/* Classifier Settings */}
+          <div className="admin-card space-y-4">
+            <div className="flex items-center gap-2">
+              <Zap className="w-5 h-5 text-primary" />
+              <h3 className="text-lg font-semibold">Модель классификатора (Микро-LLM)</h3>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Быстрая модель для определения типа запроса (название товара, цена, категория). 
+              Должна быть лёгкой и дешёвой. Работает независимо от основной модели.
+            </p>
+
+            <div className="space-y-2">
+              <Label>Провайдер классификатора</Label>
+              <RadioGroup value={classifierProvider} onValueChange={(v) => {
+                setClassifierProvider(v as ClassifierProvider);
+                // Auto-select appropriate model for provider
+                if (v === 'google') setClassifierModel('gemini-2.5-flash-lite');
+                else if (v === 'openrouter') setClassifierModel('google/gemini-2.5-flash-lite:free');
+                // auto keeps current
+              }} className="flex gap-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <RadioGroupItem value="auto" />
+                  <span className="text-sm">Auto</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <RadioGroupItem value="google" />
+                  <span className="text-sm">Google AI</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <RadioGroupItem value="openrouter" />
+                  <span className="text-sm">OpenRouter</span>
+                </label>
+              </RadioGroup>
+              {classifierProvider === 'auto' && (
+                <p className="text-xs text-muted-foreground">
+                  Автоматический выбор: Google ключи → OpenRouter → Lovable Gateway
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <Label>Модель классификатора</Label>
+              <RadioGroup value={classifierModel} onValueChange={setClassifierModel} className="space-y-1.5">
+                {CLASSIFIER_MODELS
+                  .filter(m => classifierProvider === 'auto' || m.forProvider === classifierProvider)
+                  .map(m => (
+                    <label
+                      key={m.id}
+                      className={`flex items-start gap-3 p-2.5 rounded-lg border cursor-pointer transition-all ${
+                        classifierModel === m.id
+                          ? 'border-primary bg-primary/5'
+                          : 'border-border hover:border-primary/30'
+                      }`}
+                    >
+                      <RadioGroupItem value={m.id} className="mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium text-sm">{m.name}</span>
+                          <span className="text-xs text-muted-foreground">{m.provider}</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground">{m.description}</p>
+                        <p className="text-[10px] text-muted-foreground/60 font-mono">{m.id}</p>
+                      </div>
+                    </label>
+                  ))}
+              </RadioGroup>
+            </div>
+          </div>
+
           {/* Save */}
           <Button onClick={handleSave} disabled={saving} className="w-full">
             {saving ? (
