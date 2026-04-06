@@ -716,7 +716,6 @@ is_replacement=true если пользователь хочет найти по
       const timeoutPromise = new Promise<Response>((_, reject) => 
         setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 5000)
       );
-      );
 
       const response = await Promise.race([classifyPromise, timeoutPromise]);
 
