@@ -2342,7 +2342,9 @@ async function searchProductsMulti(
   candidates: SearchCandidate[],
   limit: number = 10,
   apiToken?: string,
-  perPage: number = 30
+  perPage: number = 30,
+  modifiers?: string[],
+  settings?: CachedSettings | null
 ): Promise<Product[]> {
   if (!apiToken) {
     console.error('[Search] No API token configured');
