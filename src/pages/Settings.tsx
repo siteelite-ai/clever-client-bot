@@ -417,7 +417,6 @@ export default function Settings() {
             <Tabs value={aiProvider} onValueChange={(v) => handleProviderChange(v as AIProvider)}>
               <TabsList className="w-full">
                 <TabsTrigger value="openrouter" className="flex-1">OpenRouter</TabsTrigger>
-                <TabsTrigger value="google" className="flex-1">Google AI</TabsTrigger>
                 <TabsTrigger value="huggingface" className="flex-1">HuggingFace</TabsTrigger>
               </TabsList>
 
