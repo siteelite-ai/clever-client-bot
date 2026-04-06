@@ -299,12 +299,7 @@ export default function Settings() {
   };
 
   const allModels = [...CURATED_MODELS, ...customModels];
-  const providerModels = allModels.filter(m => m.aiProvider === aiProvider);
-  const filteredModels = providerModels.filter(m => {
-    if (modelFilter === 'free') return m.free;
-    if (modelFilter === 'paid') return !m.free;
-    return true;
-  });
+  const filteredModels = allModels.filter(m => m.aiProvider === 'openrouter');
 
   const currentModel = allModels.find(m => m.id === selectedModel);
 
