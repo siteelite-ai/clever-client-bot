@@ -751,16 +751,14 @@ export default function Settings() {
                           {pingResults[`clf:${m.id}`] === 'loading' && (
                             <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
                           )}
-                          <Button
+                          <button
                             type="button"
-                            variant="ghost"
-                            size="icon"
-                            className="h-5 w-5 ml-auto"
                             onClick={(e) => { e.preventDefault(); e.stopPropagation(); pingClassifierModel(m.id, m.forProvider); }}
-                            disabled={pingResults[`clf:${m.id}`] === 'loading'}
+                            className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground ml-auto"
+                            title="Проверить доступность"
                           >
-                            <RefreshCw className="w-3 h-3" />
-                          </Button>
+                            <Wifi className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                         <p className="text-xs text-muted-foreground">{m.description}</p>
                         <p className="text-[10px] text-muted-foreground/60 font-mono">{m.id}</p>
