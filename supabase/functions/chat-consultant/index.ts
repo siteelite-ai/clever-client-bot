@@ -2959,18 +2959,22 @@ serve(async (req) => {
           
           const categoryVariants = await generateCategorySynonyms(effectiveCategory, appSettings);
           
-          // Build candidates: base variants + variants combined with modifiers
-          const allQueries = new Set<string>(categoryVariants);
+          // Build candidates: modifier+category combos FIRST (most specific), then base variants as fallback
+          const orderedQueries: string[] = [];
           if (modifiers.length > 0) {
             const modifierStr = modifiers.join(' ');
-            // Add combined queries: "розетка Гармония", "2-местная розетка черная"
+            // Most specific queries first — these are what the user actually asked for
             for (const variant of categoryVariants) {
-              allQueries.add(`${variant} ${modifierStr}`);
-              allQueries.add(`${modifierStr} ${variant}`);
+              orderedQueries.push(`${variant} ${modifierStr}`);
+              orderedQueries.push(`${modifierStr} ${variant}`);
             }
-            // Also try just category + modifiers without synonyms
-            allQueries.add(`${effectiveCategory} ${modifierStr}`);
+            orderedQueries.push(`${effectiveCategory} ${modifierStr}`);
           }
+          // Base variants as fallback (without modifiers)
+          for (const variant of categoryVariants) {
+            if (!orderedQueries.includes(variant)) orderedQueries.push(variant);
+          }
+          const allQueries = new Set<string>(orderedQueries);
           
           // Build option_filters from modifiers for Pass 2 filtering
           const optionFilters: Record<string, string> = {};
