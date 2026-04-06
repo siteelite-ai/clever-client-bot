@@ -248,6 +248,74 @@ export default function Settings() {
     toast.success('Проверка моделей завершена');
   };
 
+  // Ping a classifier model (Google direct or OpenRouter)
+  const pingClassifierModel = async (modelId: string, provider: string) => {
+    setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'loading' }));
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+
+      if (provider === 'google' || (!modelId.includes('/') && googleApiKey)) {
+        // Google AI direct ping
+        if (!googleApiKey) {
+          toast.error('Введите Google API ключ для тестирования');
+          setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'error' }));
+          return;
+        }
+        const resp = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${googleApiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: 'Hi' }] }],
+              generationConfig: { maxOutputTokens: 5 },
+            }),
+            signal: controller.signal,
+          }
+        );
+        clearTimeout(timeout);
+        if (resp.ok) {
+          setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'ok' }));
+        } else {
+          console.warn(`Ping clf ${modelId}: ${resp.status}`);
+          setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'error' }));
+        }
+      } else {
+        // OpenRouter ping
+        if (!openrouterKey) {
+          toast.error('Введите API ключ OpenRouter для тестирования');
+          setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'error' }));
+          return;
+        }
+        const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${openrouterKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: modelId,
+            messages: [{ role: 'user', content: 'Hi' }],
+            max_tokens: 5,
+          }),
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        if (resp.ok && (await resp.json()).choices?.[0]) {
+          setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'ok' }));
+        } else {
+          console.warn(`Ping clf ${modelId}: ${resp.status}`);
+          setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'error' }));
+        }
+      }
+    } catch (e) {
+      console.error(`Ping clf ${modelId}:`, e);
+      setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'error' }));
+    }
+  };
+
   // Add custom model
   const handleAddCustomModel = () => {
     if (!newModelId.trim()) return;
@@ -673,6 +741,26 @@ export default function Settings() {
                         <div className="flex items-center gap-2">
                           <span className="font-medium text-sm">{m.name}</span>
                           <span className="text-xs text-muted-foreground">{m.provider}</span>
+                          {/* Ping status indicator */}
+                          {pingResults[`clf:${m.id}`] === 'ok' && (
+                            <Wifi className="w-3.5 h-3.5 text-green-500" />
+                          )}
+                          {pingResults[`clf:${m.id}`] === 'error' && (
+                            <WifiOff className="w-3.5 h-3.5 text-destructive" />
+                          )}
+                          {pingResults[`clf:${m.id}`] === 'loading' && (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+                          )}
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="icon"
+                            className="h-5 w-5 ml-auto"
+                            onClick={(e) => { e.preventDefault(); e.stopPropagation(); pingClassifierModel(m.id, m.forProvider); }}
+                            disabled={pingResults[`clf:${m.id}`] === 'loading'}
+                          >
+                            <RefreshCw className="w-3 h-3" />
+                          </Button>
                         </div>
                         <p className="text-xs text-muted-foreground">{m.description}</p>
                         <p className="text-[10px] text-muted-foreground/60 font-mono">{m.id}</p>
