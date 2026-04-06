@@ -741,7 +741,7 @@ is_replacement=true если пользователь хочет найти по
       };
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
-        console.log(`[Classify] ${attempt.label} timeout (3s), trying next...`);
+        console.log(`[Classify] ${attempt.label} timeout (5s), trying next...`);
       } else {
         console.error(`[Classify] ${attempt.label} error:`, e, ', trying next...');
       }
