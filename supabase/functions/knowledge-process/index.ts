@@ -6,67 +6,29 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version',
 };
 
-// Generate embeddings - tries Google API keys first, falls back to OpenRouter
+// Generate embeddings via OpenRouter (Gemini embedding models)
 async function generateEmbedding(text: string, supabase: any): Promise<number[]> {
   console.log(`[Embedding] Generating embedding for text (${text.length} chars)...`);
   const truncated = text.substring(0, 8000);
 
-  // Try Google API keys from app_settings first
   const { data: settings } = await supabase
     .from('app_settings')
-    .select('google_api_key, openrouter_api_key')
+    .select('openrouter_api_key')
     .limit(1)
     .single();
 
-  const googleKeys = (settings?.google_api_key || '')
-    .split(/[,\n]/)
-    .map((k: string) => k.trim())
-    .filter((k: string) => k.length > 0);
-
-  // Try Google API keys
-  for (let i = 0; i < googleKeys.length; i++) {
-    const apiKey = googleKeys[i];
-    const keyLabel = googleKeys.length > 1 ? `key ${i + 1}/${googleKeys.length}` : 'key';
-    try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: 'models/gemini-embedding-001',
-            content: { parts: [{ text: truncated }] },
-            outputDimensionality: 768,
-          }),
-        }
-      );
-      if (response.ok) {
-        const data = await response.json();
-        const embedding = data.embedding?.values;
-        if (embedding && embedding.length > 0) {
-          console.log(`[Embedding] Generated ${embedding.length}-dim embedding with Google ${keyLabel}`);
-          return embedding;
-        }
-      }
-      const isRetryable = response.status === 429 || response.status === 500 || response.status === 503;
-      if (isRetryable && i < googleKeys.length - 1) {
-        console.log(`[Embedding] ${response.status} with Google ${keyLabel}, trying next key...`);
-        continue;
-      }
-      if (!isRetryable || i === googleKeys.length - 1) {
-        const errorText = await response.text();
-        console.warn(`[Embedding] Google ${keyLabel} error ${response.status}: ${errorText}`);
-      }
-    } catch (error) {
-      console.warn(`[Embedding] Google ${keyLabel} network error:`, error);
-      if (i < googleKeys.length - 1) continue;
-    }
+  if (!settings?.openrouter_api_key) {
+    throw new Error('OpenRouter API ключ не настроен. Добавьте его в Настройках.');
   }
 
-  // Fallback: OpenRouter embedding API
-  if (settings?.openrouter_api_key) {
-    console.log('[Embedding] Falling back to OpenRouter embeddings...');
+  const embeddingModels = [
+    'google/gemini-embedding-001',
+    'google/text-embedding-004',
+  ];
+
+  for (const model of embeddingModels) {
     try {
+      console.log(`[Embedding] Trying OpenRouter model: ${model}`);
       const response = await fetch('https://openrouter.ai/api/v1/embeddings', {
         method: 'POST',
         headers: {
@@ -74,7 +36,7 @@ async function generateEmbedding(text: string, supabase: any): Promise<number[]>
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'google/gemini-embedding-001',
+          model,
           input: truncated,
           dimensions: 768,
         }),
@@ -83,48 +45,18 @@ async function generateEmbedding(text: string, supabase: any): Promise<number[]>
         const data = await response.json();
         const embedding = data.data?.[0]?.embedding;
         if (embedding && embedding.length > 0) {
-          console.log(`[Embedding] Generated ${embedding.length}-dim embedding via OpenRouter`);
+          console.log(`[Embedding] Generated ${embedding.length}-dim embedding via OpenRouter (${model})`);
           return embedding;
         }
       }
       const errorText = await response.text();
-      console.error(`[Embedding] OpenRouter error ${response.status}: ${errorText}`);
+      console.warn(`[Embedding] OpenRouter ${model} error ${response.status}: ${errorText}`);
     } catch (error) {
-      console.error('[Embedding] OpenRouter network error:', error);
+      console.warn(`[Embedding] OpenRouter ${model} network error:`, error);
     }
   }
 
-  // Last resort: Lovable Gateway
-  const lovableKey = Deno.env.get('LOVABLE_API_KEY');
-  if (lovableKey) {
-    console.log('[Embedding] Falling back to Lovable Gateway...');
-    try {
-      const response = await fetch('https://ai.gateway.lovable.dev/v1/embeddings', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${lovableKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: 'gemini-embedding-001',
-          input: truncated,
-          dimensions: 768,
-        }),
-      });
-      if (response.ok) {
-        const data = await response.json();
-        const embedding = data.data?.[0]?.embedding;
-        if (embedding && embedding.length > 0) {
-          console.log(`[Embedding] Generated ${embedding.length}-dim embedding via Lovable Gateway`);
-          return embedding;
-        }
-      }
-    } catch (error) {
-      console.error('[Embedding] Lovable Gateway error:', error);
-    }
-  }
-
-  throw new Error('Не удалось сгенерировать эмбеддинг. Настройте Google API ключ или OpenRouter API ключ в Настройках.');
+  throw new Error('Не удалось сгенерировать эмбеддинг через OpenRouter. Проверьте API ключ и баланс.');
 }
 
 // Extract validity dates from content (e.g. "с 01.05.2021 по 30.06.2023")

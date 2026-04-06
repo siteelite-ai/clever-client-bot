@@ -22,7 +22,7 @@ interface AppSettings {
   updated_at: string;
 }
 
-type AIProvider = 'openrouter' | 'huggingface';
+type AIProvider = 'openrouter';
 
 type ClassifierProvider = 'auto' | 'openrouter';
 
@@ -46,32 +46,15 @@ const CLASSIFIER_MODELS: { id: string; name: string; provider: string; descripti
 ];
 
 const CURATED_MODELS: CuratedModel[] = [
-  // OpenRouter Free — 50 req/day (1000/day если купить $10 кредитов), 20 req/min
-  { id: 'qwen/qwen3.6-plus:free', name: 'Qwen 3.6 Plus', provider: 'Alibaba', free: true, description: '1M контекст, уровень Gemini Pro · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'openai/gpt-oss-120b:free', name: 'GPT-OSS 120B', provider: 'OpenAI', free: true, description: 'MoE 117B, рассуждения и агенты · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'nvidia/nemotron-3-super-120b-a12b:free', name: 'Nemotron 3 Super 120B', provider: 'NVIDIA', free: true, description: 'MoE 120B, контекст 262K · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'stepfun/step-3.5-flash:free', name: 'Step 3.5 Flash', provider: 'StepFun', free: true, description: 'Reasoning 196B, контекст 256K · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'qwen/qwen3-next-80b-a3b-instruct:free', name: 'Qwen3 Next 80B', provider: 'Alibaba', free: true, description: 'MoE 80B, контекст 262K · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'arcee-ai/trinity-large-preview:free', name: 'Trinity Large 400B', provider: 'Arcee', free: true, description: 'MoE 400B, контекст 131K · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'minimax/minimax-m2.5:free', name: 'MiniMax M2.5', provider: 'MiniMax', free: true, description: 'SWE-Bench 80%, контекст 196K · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'z-ai/glm-4.5-air:free', name: 'GLM 4.5 Air', provider: 'Z.ai', free: true, description: 'Быстрая, контекст 131K · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'openai/gpt-oss-20b:free', name: 'GPT-OSS 20B', provider: 'OpenAI', free: true, description: 'Лёгкая и быстрая MoE · 50 req/день', aiProvider: 'openrouter' },
-  { id: 'google/gemma-3-27b-it:free', name: 'Gemma 3 27B', provider: 'Google', free: true, description: 'От Google, контекст 131K · 50 req/день', aiProvider: 'openrouter' },
-  // OpenRouter Paid — без дневных лимитов
-  { id: 'google/gemini-3-flash-preview', name: 'Gemini 3 Flash', provider: 'Google', free: false, description: 'Near-Pro reasoning · без лимитов', aiProvider: 'openrouter' },
+  // Gemini — платные через OpenRouter
   { id: 'google/gemini-3.1-pro-preview', name: 'Gemini 3.1 Pro', provider: 'Google', free: false, description: 'Лучшая Gemini Pro · без лимитов', aiProvider: 'openrouter' },
-  { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google', free: false, description: 'Баланс скорости и качества · без лимитов', aiProvider: 'openrouter' },
+  { id: 'google/gemini-3-flash-preview', name: 'Gemini 3 Flash', provider: 'Google', free: false, description: 'Near-Pro reasoning · без лимитов', aiProvider: 'openrouter' },
   { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google', free: false, description: 'Топовая модель Gemini · без лимитов', aiProvider: 'openrouter' },
-  { id: 'anthropic/claude-sonnet-4.6', name: 'Claude Sonnet 4.6', provider: 'Anthropic', free: false, description: 'Frontier coding · без лимитов', aiProvider: 'openrouter' },
-  { id: 'deepseek/deepseek-v3.2', name: 'DeepSeek V3.2', provider: 'DeepSeek', free: false, description: 'Уровень GPT-5, дешёвая · без лимитов', aiProvider: 'openrouter' },
-  // HuggingFace Inference API — ~100 req/день
-  // HuggingFace Inference API — ~100 req/день
-  { id: 'Qwen/Qwen2.5-72B-Instruct', name: 'Qwen 2.5 72B', provider: 'Alibaba', free: true, description: 'Отличный русский, 32K · ~100 req/день', aiProvider: 'huggingface' },
-  { id: 'mistralai/Mistral-Small-24B-Instruct-2501', name: 'Mistral Small 24B', provider: 'Mistral', free: true, description: 'Быстрая, русский · ~100 req/день', aiProvider: 'huggingface' },
-  { id: 'meta-llama/Llama-3.3-70B-Instruct', name: 'Llama 3.3 70B', provider: 'Meta', free: true, description: 'Уровень GPT-4 · ~100 req/день', aiProvider: 'huggingface' },
+  { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google', free: false, description: 'Баланс скорости и качества · без лимитов', aiProvider: 'openrouter' },
+  { id: 'google/gemini-2.0-flash-001', name: 'Gemini 2.0 Flash', provider: 'Google', free: false, description: '$0.10/$0.40 за 1M · стабильная', aiProvider: 'openrouter' },
 ];
 
-type ModelFilter = 'all' | 'free' | 'paid';
+type ModelFilter = 'all' | 'paid';
 
 const CUSTOM_MODELS_KEY = 'custom_openrouter_models';
 
@@ -92,7 +75,7 @@ export default function Settings() {
   const [openrouterKey, setOpenrouterKey] = useState('');
   const [googleApiKey, setGoogleApiKey] = useState(''); // kept for save compatibility
   const [aiProvider, setAiProvider] = useState<AIProvider>('openrouter');
-  const [selectedModel, setSelectedModel] = useState('qwen/qwen3.6-plus:free');
+  const [selectedModel, setSelectedModel] = useState('google/gemini-2.5-flash');
   const [modelFilter, setModelFilter] = useState<ModelFilter>('all');
   const [showApiToken, setShowApiToken] = useState(false);
   const [showOpenrouterKey, setShowOpenrouterKey] = useState(false);
@@ -316,12 +299,7 @@ export default function Settings() {
   };
 
   const allModels = [...CURATED_MODELS, ...customModels];
-  const providerModels = allModels.filter(m => m.aiProvider === aiProvider);
-  const filteredModels = providerModels.filter(m => {
-    if (modelFilter === 'free') return m.free;
-    if (modelFilter === 'paid') return !m.free;
-    return true;
-  });
+  const filteredModels = allModels.filter(m => m.aiProvider === 'openrouter');
 
   const currentModel = allModels.find(m => m.id === selectedModel);
 
@@ -384,59 +362,38 @@ export default function Settings() {
               <h3 className="text-lg font-semibold">AI настройки</h3>
             </div>
 
-            {/* Provider Tabs */}
-            <Tabs value={aiProvider} onValueChange={(v) => handleProviderChange(v as AIProvider)}>
-              <TabsList className="w-full">
-                <TabsTrigger value="openrouter" className="flex-1">OpenRouter</TabsTrigger>
-                <TabsTrigger value="huggingface" className="flex-1">HuggingFace</TabsTrigger>
-              </TabsList>
-
-              <TabsContent value="openrouter" className="space-y-4 mt-4">
-                <div className="space-y-2">
-                  <Label htmlFor="openrouterKey">API ключ OpenRouter</Label>
-                  <div className="relative">
-                    <Input
-                      id="openrouterKey"
-                      type={showOpenrouterKey ? 'text' : 'password'}
-                      placeholder="sk-or-v1-..."
-                      value={openrouterKey}
-                      onChange={(e) => setOpenrouterKey(e.target.value)}
-                      className="input-focus pr-10"
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowOpenrouterKey(!showOpenrouterKey)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      {showOpenrouterKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    Получите ключ на{' '}
-                    <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
-                      openrouter.ai/keys
-                    </a>
-                  </p>
-                </div>
-
-                {!openrouterKey && (
-                  <p className="text-xs text-amber-500">
-                    ⚠️ Без ключа OpenRouter AI-консультант будет использовать встроенный Lovable AI (Gemini) как fallback.
-                  </p>
-                )}
-              </TabsContent>
-
-
-              <TabsContent value="huggingface" className="space-y-4 mt-4">
-                <div className="p-3 bg-muted/50 rounded-lg space-y-2">
-                  <p className="text-sm font-medium">✅ Токен настроен</p>
-                  <p className="text-xs text-muted-foreground">
-                    HuggingFace токен хранится в секретах Supabase (HUGGINGFACE_API_KEY). 
-                    Все модели ниже бесплатны через Inference API.
-                  </p>
-                </div>
-              </TabsContent>
-            </Tabs>
+            {/* OpenRouter API Key */}
+            <div className="space-y-2">
+              <Label htmlFor="openrouterKey">API ключ OpenRouter</Label>
+              <div className="relative">
+                <Input
+                  id="openrouterKey"
+                  type={showOpenrouterKey ? 'text' : 'password'}
+                  placeholder="sk-or-v1-..."
+                  value={openrouterKey}
+                  onChange={(e) => setOpenrouterKey(e.target.value)}
+                  className="input-focus pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowOpenrouterKey(!showOpenrouterKey)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {showOpenrouterKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Получите ключ на{' '}
+                <a href="https://openrouter.ai/keys" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                  openrouter.ai/keys
+                </a>
+              </p>
+              {!openrouterKey && (
+                <p className="text-xs text-destructive">
+                  ⚠️ Без ключа OpenRouter AI-консультант и эмбеддинги не будут работать.
+                </p>
+              )}
+            </div>
 
             {/* Model Filter + Ping All */}
             <div className="space-y-3">
@@ -459,23 +416,6 @@ export default function Settings() {
                   </Button>
                 )}
               </div>
-              {aiProvider === 'openrouter' && (
-                <div className="flex gap-2">
-                  {(['all', 'free', 'paid'] as const).map(filter => (
-                    <button
-                      key={filter}
-                      onClick={() => setModelFilter(filter)}
-                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                        modelFilter === filter
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                      }`}
-                    >
-                      {filter === 'all' ? 'Все' : filter === 'free' ? '🆓 Бесплатные' : '💎 Платные'}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
 
             {/* Model Selection */}
