@@ -22,9 +22,9 @@ interface AppSettings {
   updated_at: string;
 }
 
-type AIProvider = 'openrouter' | 'google' | 'huggingface';
+type AIProvider = 'openrouter' | 'huggingface';
 
-type ClassifierProvider = 'auto' | 'google' | 'openrouter';
+type ClassifierProvider = 'auto' | 'openrouter';
 
 interface CuratedModel {
   id: string;
@@ -37,9 +37,6 @@ interface CuratedModel {
 }
 
 const CLASSIFIER_MODELS: { id: string; name: string; provider: string; description: string; forProvider: ClassifierProvider | 'auto' }[] = [
-  // Google Direct (свой API ключ)
-  { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', provider: 'Google', description: 'Ультра-быстрая, идеальна для классификации', forProvider: 'google' },
-  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'Google', description: 'Быстрая, хороший баланс', forProvider: 'google' },
   // OpenRouter Paid Gemini (актуальные ID)
   { id: 'google/gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', provider: 'Google via OR', description: '$0.10/$0.40 за 1M токенов · без лимитов', forProvider: 'openrouter' },
   { id: 'google/gemini-2.0-flash-lite-001', name: 'Gemini 2.0 Flash Lite', provider: 'Google via OR', description: '$0.075/$0.30 за 1M токенов · без лимитов', forProvider: 'openrouter' },
@@ -67,10 +64,7 @@ const CURATED_MODELS: CuratedModel[] = [
   { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google', free: false, description: 'Топовая модель Gemini · без лимитов', aiProvider: 'openrouter' },
   { id: 'anthropic/claude-sonnet-4.6', name: 'Claude Sonnet 4.6', provider: 'Anthropic', free: false, description: 'Frontier coding · без лимитов', aiProvider: 'openrouter' },
   { id: 'deepseek/deepseek-v3.2', name: 'DeepSeek V3.2', provider: 'DeepSeek', free: false, description: 'Уровень GPT-5, дешёвая · без лимитов', aiProvider: 'openrouter' },
-  // Google AI Studio — прямой API
-  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'Google', free: true, description: '1500 req/день бесплатно, быстрая', aiProvider: 'google' },
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google', free: true, description: 'Баланс скорости · 500 req/день', aiProvider: 'google' },
-  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google', free: true, description: 'Топовая модель · 50 req/день', aiProvider: 'google' },
+  // HuggingFace Inference API — ~100 req/день
   // HuggingFace Inference API — ~100 req/день
   { id: 'Qwen/Qwen2.5-72B-Instruct', name: 'Qwen 2.5 72B', provider: 'Alibaba', free: true, description: 'Отличный русский, 32K · ~100 req/день', aiProvider: 'huggingface' },
   { id: 'mistralai/Mistral-Small-24B-Instruct-2501', name: 'Mistral Small 24B', provider: 'Mistral', free: true, description: 'Быстрая, русский · ~100 req/день', aiProvider: 'huggingface' },
@@ -96,13 +90,13 @@ export default function Settings() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [apiToken, setApiToken] = useState('');
   const [openrouterKey, setOpenrouterKey] = useState('');
-  const [googleApiKey, setGoogleApiKey] = useState('');
+  const [googleApiKey, setGoogleApiKey] = useState(''); // kept for save compatibility
   const [aiProvider, setAiProvider] = useState<AIProvider>('openrouter');
   const [selectedModel, setSelectedModel] = useState('qwen/qwen3.6-plus:free');
   const [modelFilter, setModelFilter] = useState<ModelFilter>('all');
   const [showApiToken, setShowApiToken] = useState(false);
   const [showOpenrouterKey, setShowOpenrouterKey] = useState(false);
-  const [showGoogleKey, setShowGoogleKey] = useState(false);
+  
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [pingResults, setPingResults] = useState<Record<string, 'loading' | 'ok' | 'error'>>({});
@@ -250,66 +244,37 @@ export default function Settings() {
   };
 
   // Ping a classifier model (Google direct or OpenRouter)
-  const pingClassifierModel = async (modelId: string, provider: string) => {
+  const pingClassifierModel = async (modelId: string, _provider: string) => {
     setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'loading' }));
 
     try {
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), 15000);
 
-      if (provider === 'google' || (!modelId.includes('/') && googleApiKey)) {
-        // Google AI direct ping
-        if (!googleApiKey) {
-          toast.error('Введите Google API ключ для тестирования');
-          setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'error' }));
-          return;
-        }
-        const resp = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent?key=${googleApiKey}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: 'Hi' }] }],
-              generationConfig: { maxOutputTokens: 5 },
-            }),
-            signal: controller.signal,
-          }
-        );
-        clearTimeout(timeout);
-        if (resp.ok) {
-          setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'ok' }));
-        } else {
-          console.warn(`Ping clf ${modelId}: ${resp.status}`);
-          setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'error' }));
-        }
+      if (!openrouterKey) {
+        toast.error('Введите API ключ OpenRouter для тестирования');
+        setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'error' }));
+        return;
+      }
+      const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openrouterKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [{ role: 'user', content: 'Hi' }],
+          max_tokens: 5,
+        }),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (resp.ok && (await resp.json()).choices?.[0]) {
+        setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'ok' }));
       } else {
-        // OpenRouter ping
-        if (!openrouterKey) {
-          toast.error('Введите API ключ OpenRouter для тестирования');
-          setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'error' }));
-          return;
-        }
-        const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${openrouterKey}`,
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: modelId,
-            messages: [{ role: 'user', content: 'Hi' }],
-            max_tokens: 5,
-          }),
-          signal: controller.signal,
-        });
-        clearTimeout(timeout);
-        if (resp.ok && (await resp.json()).choices?.[0]) {
-          setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'ok' }));
-        } else {
-          console.warn(`Ping clf ${modelId}: ${resp.status}`);
-          setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'error' }));
-        }
+        console.warn(`Ping clf ${modelId}: ${resp.status}`);
+        setPingResults(prev => ({ ...prev, [`clf:${modelId}`]: 'error' }));
       }
     } catch (e) {
       console.error(`Ping clf ${modelId}:`, e);
@@ -423,7 +388,6 @@ export default function Settings() {
             <Tabs value={aiProvider} onValueChange={(v) => handleProviderChange(v as AIProvider)}>
               <TabsList className="w-full">
                 <TabsTrigger value="openrouter" className="flex-1">OpenRouter</TabsTrigger>
-                <TabsTrigger value="google" className="flex-1">Google AI</TabsTrigger>
                 <TabsTrigger value="huggingface" className="flex-1">HuggingFace</TabsTrigger>
               </TabsList>
 
@@ -462,50 +426,6 @@ export default function Settings() {
                 )}
               </TabsContent>
 
-              <TabsContent value="google" className="space-y-4 mt-4">
-                <div className="space-y-2">
-                  <Label htmlFor="googleApiKey">API ключи Google AI Studio</Label>
-                  <div className="relative">
-                    <textarea
-                      id="googleApiKey"
-                      placeholder={"AIzaSy...ключ1\nAIzaSy...ключ2\nAIzaSy...ключ3"}
-                      value={showGoogleKey ? googleApiKey : googleApiKey.split(/[,\n]/).filter(k => k.trim()).map(() => '••••••••••••').join('\n')}
-                      onChange={(e) => setGoogleApiKey(e.target.value)}
-                      onFocus={() => setShowGoogleKey(true)}
-                      className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 min-h-[80px] resize-y pr-10"
-                      rows={3}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowGoogleKey(!showGoogleKey)}
-                      className="absolute right-3 top-3 text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      {showGoogleKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                  {(() => {
-                    const keyCount = googleApiKey.split(/[,\n]/).filter(k => k.trim().length > 0).length;
-                    return keyCount > 0 ? (
-                      <p className="text-xs text-muted-foreground">
-                        🔑 {keyCount} {keyCount === 1 ? 'ключ' : keyCount < 5 ? 'ключа' : 'ключей'} — при ошибке автоматически переключится на следующий
-                      </p>
-                    ) : null;
-                  })()}
-                  <p className="text-xs text-muted-foreground">
-                    По одному ключу на строку. Получите на{' '}
-                    <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
-                      aistudio.google.com/apikey
-                    </a>
-                    {' '}— бесплатно до 1500 запросов/день на ключ
-                  </p>
-                </div>
-
-                {!googleApiKey && (
-                  <p className="text-xs text-amber-500">
-                    ⚠️ Без ключа Google AI Studio AI-консультант будет использовать встроенный Lovable AI (Gemini) как fallback.
-                  </p>
-                )}
-              </TabsContent>
 
               <TabsContent value="huggingface" className="space-y-4 mt-4">
                 <div className="p-3 bg-muted/50 rounded-lg space-y-2">
@@ -698,18 +618,11 @@ export default function Settings() {
               <Label>Провайдер классификатора</Label>
               <RadioGroup value={classifierProvider} onValueChange={(v) => {
                 setClassifierProvider(v as ClassifierProvider);
-                // Auto-select appropriate model for provider
-                if (v === 'google') setClassifierModel('gemini-2.5-flash-lite');
-                else if (v === 'openrouter') setClassifierModel('google/gemini-2.5-flash-lite:free');
-                // auto keeps current
+                if (v === 'openrouter') setClassifierModel('google/gemini-2.5-flash-lite');
               }} className="flex gap-4">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <RadioGroupItem value="auto" />
                   <span className="text-sm">Auto</span>
-                </label>
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <RadioGroupItem value="google" />
-                  <span className="text-sm">Google AI</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <RadioGroupItem value="openrouter" />
@@ -718,7 +631,7 @@ export default function Settings() {
               </RadioGroup>
               {classifierProvider === 'auto' && (
                 <p className="text-xs text-muted-foreground">
-                  Автоматический выбор: Google ключи → OpenRouter → Lovable Gateway
+                  Автоматический выбор: OpenRouter → Lovable Gateway
                 </p>
               )}
             </div>
