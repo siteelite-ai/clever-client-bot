@@ -676,42 +676,79 @@ is_replacement=true если пользователь хочет найти по
     max_tokens: 150,
   };
 
-  try {
-    // Use callAIWithKeyFallback wrapped in a 3s timeout
-    const classifyPromise = callAIWithKeyFallback(url, apiKeys, classifyBody, 'Classify');
-    const timeoutPromise = new Promise<Response>((_, reject) => 
-      setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 3000)
-    );
+  // Build cascade of providers to try
+  interface ProviderAttempt { url: string; apiKeys: string[]; model: string; label: string; }
+  const attempts: ProviderAttempt[] = [{ url, apiKeys, model, label: `primary(${classifierProvider})` }];
 
-    const response = await Promise.race([classifyPromise, timeoutPromise]);
-
-    if (!response.ok) {
-      console.error(`[Classify] API error: ${response.status}`);
-      return null;
+  // Add fallback providers for resilience
+  if (classifierProvider === 'openrouter' || classifierProvider === 'auto') {
+    // Add Google direct as fallback if keys available and not already primary
+    if (classifierProvider !== 'google' && settings?.google_api_key) {
+      const gKeys = settings.google_api_key.split(/[,\n]/).map(k => k.trim()).filter(k => k.length > 0);
+      if (gKeys.length > 0 && !(url.includes('googleapis.com'))) {
+        attempts.push({ url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKeys: gKeys, model: 'gemini-2.5-flash-lite', label: 'fallback(google)' });
+      }
     }
-
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) return null;
-
-    // Parse JSON from response (handle markdown code blocks)
-    const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-    const parsed = JSON.parse(jsonStr);
-    return {
-      has_product_name: !!parsed.has_product_name,
-      product_name: parsed.product_name || undefined,
-      price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
-      product_category: parsed.product_category || undefined,
-      is_replacement: !!parsed.is_replacement,
-    };
-  } catch (e) {
-    if (e instanceof DOMException && e.name === 'AbortError') {
-      console.log('[Classify] Timeout (3s), skipping classification');
-    } else {
-      console.error('[Classify] Error:', e);
+    // Add OpenRouter as fallback if key available and not already primary
+    if (classifierProvider !== 'openrouter' && settings?.openrouter_api_key && !(url.includes('openrouter.ai'))) {
+      attempts.push({ url: 'https://openrouter.ai/api/v1/chat/completions', apiKeys: [settings.openrouter_api_key], model: 'google/gemini-2.5-flash-lite', label: 'fallback(openrouter)' });
     }
-    return null;
+    // Add Lovable Gateway as last resort
+    const lovableKey = Deno.env.get('LOVABLE_API_KEY');
+    if (lovableKey && !(url.includes('gateway.lovable.dev'))) {
+      attempts.push({ url: 'https://ai.gateway.lovable.dev/v1/chat/completions', apiKeys: [lovableKey], model: 'google/gemini-2.5-flash-lite', label: 'fallback(gateway)' });
+    }
+  } else if (classifierProvider === 'google') {
+    // Google explicit — add OpenRouter and Gateway as fallbacks
+    if (settings?.openrouter_api_key) {
+      attempts.push({ url: 'https://openrouter.ai/api/v1/chat/completions', apiKeys: [settings.openrouter_api_key], model: 'google/gemini-2.5-flash-lite', label: 'fallback(openrouter)' });
+    }
+    const lovableKey = Deno.env.get('LOVABLE_API_KEY');
+    if (lovableKey) {
+      attempts.push({ url: 'https://ai.gateway.lovable.dev/v1/chat/completions', apiKeys: [lovableKey], model: 'google/gemini-2.5-flash-lite', label: 'fallback(gateway)' });
+    }
   }
+
+  for (const attempt of attempts) {
+    try {
+      const body = { ...classifyBody, model: attempt.model };
+      const classifyPromise = callAIWithKeyFallback(attempt.url, attempt.apiKeys, body, 'Classify');
+      const timeoutPromise = new Promise<Response>((_, reject) => 
+        setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 3000)
+      );
+
+      const response = await Promise.race([classifyPromise, timeoutPromise]);
+
+      if (!response.ok) {
+        console.error(`[Classify] ${attempt.label} error: ${response.status}, trying next...`);
+        continue;
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content;
+      if (!content) { console.log(`[Classify] ${attempt.label} empty response, trying next...`); continue; }
+
+      const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+      const parsed = JSON.parse(jsonStr);
+      console.log(`[Classify] SUCCESS via ${attempt.label}`);
+      return {
+        has_product_name: !!parsed.has_product_name,
+        product_name: parsed.product_name || undefined,
+        price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
+        product_category: parsed.product_category || undefined,
+        is_replacement: !!parsed.is_replacement,
+      };
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        console.log(`[Classify] ${attempt.label} timeout (3s), trying next...`);
+      } else {
+        console.error(`[Classify] ${attempt.label} error:`, e, ', trying next...');
+      }
+    }
+  }
+
+  console.log('[Classify] All providers failed, returning null');
+  return null;
 }
 
 // ============================================================
