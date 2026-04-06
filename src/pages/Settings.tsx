@@ -421,23 +421,6 @@ export default function Settings() {
                   </Button>
                 )}
               </div>
-              {aiProvider === 'openrouter' && (
-                <div className="flex gap-2">
-                  {(['all', 'free', 'paid'] as const).map(filter => (
-                    <button
-                      key={filter}
-                      onClick={() => setModelFilter(filter)}
-                      className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-                        modelFilter === filter
-                          ? 'bg-primary text-primary-foreground'
-                          : 'bg-muted text-muted-foreground hover:bg-muted/80'
-                      }`}
-                    >
-                      {filter === 'all' ? 'Все' : filter === 'free' ? '🆓 Бесплатные' : '💎 Платные'}
-                    </button>
-                  ))}
-                </div>
-              )}
             </div>
 
             {/* Model Selection */}
