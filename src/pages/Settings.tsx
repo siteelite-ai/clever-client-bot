@@ -35,7 +35,7 @@ const CURATED_MODELS: CuratedModel[] = [
   // OpenRouter Free
   { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B', provider: 'Meta', free: true, description: 'Уровень GPT-4, стабильная и универсальная', aiProvider: 'openrouter' },
   { id: 'openai/gpt-oss-120b:free', name: 'GPT-OSS 120B', provider: 'OpenAI', free: true, description: 'MoE 117B, отличные рассуждения и агенты', aiProvider: 'openrouter' },
-  { id: 'deepseek/deepseek-r1-0528:free', name: 'DeepSeek R1', provider: 'DeepSeek', free: true, description: 'Сильные рассуждения, аналитика', aiProvider: 'openrouter' },
+  { id: 'deepseek/deepseek-r1:free', name: 'DeepSeek R1', provider: 'DeepSeek', free: true, description: 'Сильные рассуждения, аналитика', aiProvider: 'openrouter' },
   { id: 'qwen/qwen3-coder-480b-a35b:free', name: 'Qwen3 Coder 480B', provider: 'Alibaba', free: true, description: 'MoE для кода, контекст 262K', aiProvider: 'openrouter' },
   { id: 'openai/gpt-oss-20b:free', name: 'GPT-OSS 20B', provider: 'OpenAI', free: true, description: 'Лёгкая и быстрая MoE модель', aiProvider: 'openrouter' },
   { id: 'qwen/qwen-2.5-72b-instruct:free', name: 'Qwen 2.5 72B', provider: 'Alibaba', free: true, description: 'Отличный русский, уровень GPT-4', aiProvider: 'openrouter' },
