@@ -37,9 +37,6 @@ interface CuratedModel {
 }
 
 const CLASSIFIER_MODELS: { id: string; name: string; provider: string; description: string; forProvider: ClassifierProvider | 'auto' }[] = [
-  // Google Direct (свой API ключ)
-  { id: 'gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', provider: 'Google', description: 'Ультра-быстрая, идеальна для классификации', forProvider: 'google' },
-  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'Google', description: 'Быстрая, хороший баланс', forProvider: 'google' },
   // OpenRouter Paid Gemini (актуальные ID)
   { id: 'google/gemini-2.5-flash-lite', name: 'Gemini 2.5 Flash Lite', provider: 'Google via OR', description: '$0.10/$0.40 за 1M токенов · без лимитов', forProvider: 'openrouter' },
   { id: 'google/gemini-2.0-flash-lite-001', name: 'Gemini 2.0 Flash Lite', provider: 'Google via OR', description: '$0.075/$0.30 за 1M токенов · без лимитов', forProvider: 'openrouter' },
