@@ -533,6 +533,7 @@ interface ClassificationResult {
   price_intent?: 'most_expensive' | 'cheapest';
   product_category?: string;
   is_replacement?: boolean;
+  search_modifiers?: string[];
 }
 
 async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>, settings?: CachedSettings | null): Promise<ClassificationResult | null> {
@@ -631,7 +632,16 @@ is_replacement=true если пользователь хочет найти по
 - "покажи автомат ABB 32А" → is_replacement=false (обычный запрос)
 - "какие розетки у вас есть?" → is_replacement=false
 
-Ответь СТРОГО в JSON: {"has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "...", "is_replacement": bool}`
+Задача 5: search_modifiers — извлеки ВСЕ дополнительные характеристики, которые пользователь упоминает ПОМИМО категории товара. Это может быть: цвет, серия/коллекция, бренд, материал, тип монтажа, степень защиты (IP), или любое другое уточнение. Если таких нет — верни пустой массив.
+Примеры:
+- "черная двухместная розетка" → product_category="двухместная розетка", search_modifiers=["черная"]
+- "розетки из коллекции Гармония" → product_category="розетка", search_modifiers=["Гармония"]
+- "накладная розетка IP44 белая" → product_category="розетка", search_modifiers=["накладная", "IP44", "белая"]
+- "кабель для улицы" → product_category="кабель", search_modifiers=["для улицы"]
+- "светодиодная лампа E27 теплая" → product_category="лампа", search_modifiers=["светодиодная", "E27", "теплая"]
+- "покажи розетки" → product_category="розетка", search_modifiers=[]
+
+Ответь СТРОГО в JSON: {"has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "...", "is_replacement": bool, "search_modifiers": ["...", "..."]}`
       },
       ...(recentHistory || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
       { role: 'user', content: message }
@@ -701,6 +711,7 @@ is_replacement=true если пользователь хочет найти по
         price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
         product_category: parsed.product_category || undefined,
         is_replacement: !!parsed.is_replacement,
+        search_modifiers: Array.isArray(parsed.search_modifiers) ? parsed.search_modifiers.filter((m: unknown) => typeof m === 'string' && m.trim().length > 0) : [],
       };
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
@@ -2986,17 +2997,40 @@ serve(async (req) => {
         
         // === CATEGORY-FIRST (category without specific product name) ===
         if (!articleShortCircuit && effectiveCategory && !classification?.has_product_name && !classification?.is_replacement && !effectivePriceIntent && appSettings.volt220_api_token) {
-          console.log(`[Chat] Category-first: searching by category "${effectiveCategory}"`);
+          const modifiers = classification?.search_modifiers || [];
+          console.log(`[Chat] Category-first: searching by category "${effectiveCategory}", modifiers: [${modifiers.join(', ')}]`);
           const categoryStart = Date.now();
           
           const categoryVariants = await generateCategorySynonyms(effectiveCategory, appSettings);
-          const categoryCandidates: SearchCandidate[] = categoryVariants.map(q => ({
-            query: q, brand: null, category: null, min_price: null, max_price: null
+          
+          // Build candidates: base variants + variants combined with modifiers
+          const allQueries = new Set<string>(categoryVariants);
+          if (modifiers.length > 0) {
+            const modifierStr = modifiers.join(' ');
+            // Add combined queries: "розетка Гармония", "2-местная розетка черная"
+            for (const variant of categoryVariants) {
+              allQueries.add(`${variant} ${modifierStr}`);
+              allQueries.add(`${modifierStr} ${variant}`);
+            }
+            // Also try just category + modifiers without synonyms
+            allQueries.add(`${effectiveCategory} ${modifierStr}`);
+          }
+          
+          // Build option_filters from modifiers for Pass 2 filtering
+          const optionFilters: Record<string, string> = {};
+          for (const mod of modifiers) {
+            // Use modifier as both key and value — discoverOptionKeys will fuzzy-match
+            optionFilters[mod.toLowerCase()] = mod;
+          }
+          
+          const categoryCandidates: SearchCandidate[] = [...allQueries].map(q => ({
+            query: q, brand: null, category: null, min_price: null, max_price: null,
+            ...(Object.keys(optionFilters).length > 0 ? { option_filters: optionFilters } : {})
           }));
           
           const categoryResults = await searchProductsMulti(categoryCandidates, 15, appSettings.volt220_api_token);
           const categoryElapsed = Date.now() - categoryStart;
-          console.log(`[Chat] Category-first: ${categoryResults.length} products in ${categoryElapsed}ms (${categoryVariants.length} variants for "${effectiveCategory}")`);
+          console.log(`[Chat] Category-first: ${categoryResults.length} products in ${categoryElapsed}ms (${allQueries.size} queries for "${effectiveCategory}")`);
           
           if (categoryResults.length > 0) {
             foundProducts = categoryResults.slice(0, 15);
