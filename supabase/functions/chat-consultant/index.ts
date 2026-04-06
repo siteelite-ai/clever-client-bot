@@ -2100,6 +2100,147 @@ function discoverOptionKeys(
   return resolved;
 }
 
+/**
+ * LLM-driven filter resolution: uses micro-LLM to match modifiers to real option schema
+ */
+async function resolveFiltersWithLLM(
+  products: Product[],
+  modifiers: string[],
+  settings: CachedSettings
+): Promise<Record<string, string>> {
+  if (!modifiers || modifiers.length === 0) return {};
+
+  // Build option schema from products
+  const optionIndex: Map<string, { caption: string; values: Set<string> }> = new Map();
+  for (const product of products) {
+    if (!product.options) continue;
+    for (const opt of product.options) {
+      if (isExcludedOption(opt.key)) continue;
+      if (!optionIndex.has(opt.key)) {
+        optionIndex.set(opt.key, { caption: opt.caption, values: new Set() });
+      }
+      optionIndex.get(opt.key)!.values.add(opt.value);
+    }
+  }
+
+  if (optionIndex.size === 0) {
+    console.log('[FilterLLM] No options found in products, skipping');
+    return {};
+  }
+
+  // Format schema for prompt
+  const schemaLines: string[] = [];
+  for (const [apiKey, info] of optionIndex.entries()) {
+    const caption = info.caption.split('//')[0].trim();
+    const vals = [...info.values].map(v => v.split('//')[0].trim()).join(', ');
+    schemaLines.push(`${apiKey} (${caption}): ${vals}`);
+  }
+  const schemaText = schemaLines.join('\n');
+
+  const systemPrompt = `Ты резолвер фильтров товаров интернет-магазина электротоваров.
+
+ЗАДАЧА: Для каждого модификатора из запроса пользователя определи, какой характеристике товара он соответствует, и подбери точное значение из доступных.
+
+СХЕМА ХАРАКТЕРИСТИК КАТЕГОРИИ:
+${schemaText}
+
+МОДИФИКАТОРЫ ПОЛЬЗОВАТЕЛЯ:
+${JSON.stringify(modifiers)}
+
+ПРАВИЛА РЕЗОЛВА:
+1. Каждый модификатор соотноси с характеристикой по СМЫСЛУ, а не по совпадению символов. Учитывай единицы измерения, физический смысл и контекст категории товара.
+2. Значение выбирай СТРОГО из списка доступных значений характеристики. Возвращай значение В ТОЧНОСТИ как оно указано в схеме — без изменения регистра, пробелов или формата.
+3. Если модификатор не соответствует ни одной характеристике или подходящего значения нет в списке — не включай его в результат.
+4. Если модификатор может подойти к нескольким характеристикам, выбирай ту, которая семантически ближе к запросу пользователя в контексте данной категории товаров.
+
+Ответь СТРОГО в JSON: {"filters": {"api_key": "exact_value", ...}}
+Если ни один модификатор не удалось сопоставить — верни {"filters": {}}`;
+
+  // Determine provider (same cascade as classifier)
+  const classifierProvider = settings.classifier_provider || 'auto';
+  const classifierModel = settings.classifier_model || 'gemini-2.5-flash-lite';
+  let url: string;
+  let apiKeys: string[];
+  let model: string = classifierModel;
+
+  if (classifierProvider === 'openrouter') {
+    if (settings.openrouter_api_key) {
+      url = 'https://openrouter.ai/api/v1/chat/completions';
+      apiKeys = [settings.openrouter_api_key];
+    } else {
+      console.log('[FilterLLM] OpenRouter selected but no key');
+      return {};
+    }
+  } else {
+    if (settings.openrouter_api_key) {
+      url = 'https://openrouter.ai/api/v1/chat/completions';
+      apiKeys = [settings.openrouter_api_key];
+      if (!model.includes('/')) model = 'google/gemini-2.5-flash-lite';
+    } else {
+      const lovableKey = Deno.env.get('LOVABLE_API_KEY');
+      if (!lovableKey) { console.log('[FilterLLM] No API keys'); return {}; }
+      url = 'https://ai.gateway.lovable.dev/v1/chat/completions';
+      apiKeys = [lovableKey];
+      model = 'gemini-2.5-flash-lite';
+    }
+  }
+
+  const reqBody = {
+    model,
+    messages: [{ role: 'user', content: systemPrompt }],
+    temperature: 0,
+    max_tokens: 200,
+    response_format: { type: 'json_object' },
+  };
+
+  try {
+    console.log(`[FilterLLM] Resolving ${modifiers.length} modifier(s) against ${optionIndex.size} option(s)`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKeys[0]}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(reqBody),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      console.error(`[FilterLLM] API error: ${response.status}`);
+      return {};
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || '';
+    console.log(`[FilterLLM] Raw response: ${content}`);
+
+    const parsed = JSON.parse(content);
+    const filters = parsed.filters || parsed;
+
+    if (typeof filters !== 'object' || Array.isArray(filters)) {
+      console.log('[FilterLLM] Invalid response format');
+      return {};
+    }
+
+    // Validate that returned keys exist in schema
+    const validated: Record<string, string> = {};
+    for (const [key, value] of Object.entries(filters)) {
+      if (optionIndex.has(key) && typeof value === 'string') {
+        validated[key] = value;
+        console.log(`[FilterLLM] Resolved: "${key}" = "${value}"`);
+      } else {
+        console.log(`[FilterLLM] Rejected unknown key: "${key}"`);
+      }
+    }
+
+    return validated;
+  } catch (error) {
+    console.error(`[FilterLLM] Error:`, error);
+    return {};
+  }
+}
+
 // Fallback query parser
 function fallbackParseQuery(message: string): ExtractedIntent {
   const catalogPatterns = /кабель|провод|автомат|выключател|розетк|щит|лампа|светильник|дрель|перфоратор|шуруповерт|болгарка|ушм|стабилизатор|генератор|насос|удлинитель|рубильник|трансформатор|инструмент|электро/i;
@@ -2201,7 +2342,9 @@ async function searchProductsMulti(
   candidates: SearchCandidate[],
   limit: number = 10,
   apiToken?: string,
-  perPage: number = 30
+  perPage: number = 30,
+  modifiers?: string[],
+  settings?: CachedSettings | null
 ): Promise<Product[]> {
   if (!apiToken) {
     console.error('[Search] No API token configured');
@@ -2256,10 +2399,10 @@ async function searchProductsMulti(
   
   console.log(`[Search] Pass 1 (broad): ${productMap.size} unique products`);
   
-  // === PASS 2: If we have human filters, discover API keys and re-search ===
+  // === PASS 2: If we have modifiers, use LLM to resolve filters from product schema ===
   // OPTIMIZATION: Cap Pass 2 to max 3 candidates too
-  if (hasHumanFilters && productMap.size > 0) {
-    const resolvedFilters = discoverOptionKeys(Array.from(productMap.values()), humanFilters);
+  if (modifiers && modifiers.length > 0 && productMap.size > 0 && settings) {
+    const resolvedFilters = await resolveFiltersWithLLM(Array.from(productMap.values()), modifiers, settings);
     
     if (Object.keys(resolvedFilters).length > 0) {
       console.log(`[Search] Pass 2: Discovered ${Object.keys(resolvedFilters).length} API filters, re-searching...`);
@@ -2992,19 +3135,13 @@ serve(async (req) => {
           }
           const allQueries = new Set<string>(orderedQueries);
           
-          // Build option_filters from modifiers for Pass 2 filtering
-          const optionFilters: Record<string, string> = {};
-          for (const mod of modifiers) {
-            // Use modifier as both key and value — discoverOptionKeys will fuzzy-match
-            optionFilters[mod.toLowerCase()] = mod;
-          }
+          // No longer need manual optionFilters — resolveFiltersWithLLM handles it in Pass 2
           
           const categoryCandidates: SearchCandidate[] = [...allQueries].map(q => ({
             query: q, brand: null, category: null, min_price: null, max_price: null,
-            ...(Object.keys(optionFilters).length > 0 ? { option_filters: optionFilters } : {})
           }));
           
-          const categoryResults = await searchProductsMulti(categoryCandidates, 15, appSettings.volt220_api_token);
+          const categoryResults = await searchProductsMulti(categoryCandidates, 15, appSettings.volt220_api_token, 30, modifiers, appSettings);
           const categoryElapsed = Date.now() - categoryStart;
           console.log(`[Chat] Category-first: ${categoryResults.length} products in ${categoryElapsed}ms (${allQueries.size} queries for "${effectiveCategory}")`);
           
