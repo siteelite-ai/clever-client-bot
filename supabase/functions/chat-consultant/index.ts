@@ -2997,17 +2997,40 @@ serve(async (req) => {
         
         // === CATEGORY-FIRST (category without specific product name) ===
         if (!articleShortCircuit && effectiveCategory && !classification?.has_product_name && !classification?.is_replacement && !effectivePriceIntent && appSettings.volt220_api_token) {
-          console.log(`[Chat] Category-first: searching by category "${effectiveCategory}"`);
+          const modifiers = classification?.search_modifiers || [];
+          console.log(`[Chat] Category-first: searching by category "${effectiveCategory}", modifiers: [${modifiers.join(', ')}]`);
           const categoryStart = Date.now();
           
           const categoryVariants = await generateCategorySynonyms(effectiveCategory, appSettings);
-          const categoryCandidates: SearchCandidate[] = categoryVariants.map(q => ({
-            query: q, brand: null, category: null, min_price: null, max_price: null
+          
+          // Build candidates: base variants + variants combined with modifiers
+          const allQueries = new Set<string>(categoryVariants);
+          if (modifiers.length > 0) {
+            const modifierStr = modifiers.join(' ');
+            // Add combined queries: "розетка Гармония", "2-местная розетка черная"
+            for (const variant of categoryVariants) {
+              allQueries.add(`${variant} ${modifierStr}`);
+              allQueries.add(`${modifierStr} ${variant}`);
+            }
+            // Also try just category + modifiers without synonyms
+            allQueries.add(`${effectiveCategory} ${modifierStr}`);
+          }
+          
+          // Build option_filters from modifiers for Pass 2 filtering
+          const optionFilters: Record<string, string> = {};
+          for (const mod of modifiers) {
+            // Use modifier as both key and value — discoverOptionKeys will fuzzy-match
+            optionFilters[mod.toLowerCase()] = mod;
+          }
+          
+          const categoryCandidates: SearchCandidate[] = [...allQueries].map(q => ({
+            query: q, brand: null, category: null, min_price: null, max_price: null,
+            ...(Object.keys(optionFilters).length > 0 ? { option_filters: optionFilters } : {})
           }));
           
           const categoryResults = await searchProductsMulti(categoryCandidates, 15, appSettings.volt220_api_token);
           const categoryElapsed = Date.now() - categoryStart;
-          console.log(`[Chat] Category-first: ${categoryResults.length} products in ${categoryElapsed}ms (${categoryVariants.length} variants for "${effectiveCategory}")`);
+          console.log(`[Chat] Category-first: ${categoryResults.length} products in ${categoryElapsed}ms (${allQueries.size} queries for "${effectiveCategory}")`);
           
           if (categoryResults.length > 0) {
             foundProducts = categoryResults.slice(0, 15);
