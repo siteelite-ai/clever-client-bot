@@ -582,8 +582,8 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       } else if (settings?.openrouter_api_key) {
         url = 'https://openrouter.ai/api/v1/chat/completions';
         apiKeys = [settings.openrouter_api_key];
-        model = 'google/gemini-2.5-flash-lite:free';
-        console.log('[Classify] Auto: Using OpenRouter (google/gemini-2.5-flash-lite:free)');
+        model = 'google/gemini-2.5-flash-lite';
+        console.log('[Classify] Auto: Using OpenRouter (google/gemini-2.5-flash-lite)');
       } else {
         const lovableKey = Deno.env.get('LOVABLE_API_KEY');
         if (!lovableKey) { console.log('[Classify] No API keys configured, skipping'); return null; }
