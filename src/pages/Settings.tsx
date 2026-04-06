@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Save, Key, Zap, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { Save, Key, Zap, Eye, EyeOff, Loader2, Wifi, WifiOff, Plus, X, RefreshCw } from 'lucide-react';
 import { AdminLayout } from '@/components/layout/AdminLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -29,17 +29,19 @@ interface CuratedModel {
   free: boolean;
   description: string;
   aiProvider: AIProvider;
+  custom?: boolean;
 }
 
 const CURATED_MODELS: CuratedModel[] = [
-  // OpenRouter Free
-  { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B', provider: 'Meta', free: true, description: 'Уровень GPT-4, стабильная и универсальная', aiProvider: 'openrouter' },
+  // OpenRouter Free — verified available
+  { id: 'qwen/qwen3.6-plus:free', name: 'Qwen 3.6 Plus', provider: 'Alibaba', free: true, description: 'Новейшая MoE, 1M контекст, замена Gemini Pro', aiProvider: 'openrouter' },
   { id: 'openai/gpt-oss-120b:free', name: 'GPT-OSS 120B', provider: 'OpenAI', free: true, description: 'MoE 117B, отличные рассуждения и агенты', aiProvider: 'openrouter' },
-  { id: 'deepseek/deepseek-r1:free', name: 'DeepSeek R1', provider: 'DeepSeek', free: true, description: 'Сильные рассуждения, аналитика', aiProvider: 'openrouter' },
-  { id: 'qwen/qwen3-coder-480b-a35b:free', name: 'Qwen3 Coder 480B', provider: 'Alibaba', free: true, description: 'MoE для кода, контекст 262K', aiProvider: 'openrouter' },
+  { id: 'nvidia/nemotron-3-super-120b-a12b:free', name: 'Nemotron 3 Super 120B', provider: 'NVIDIA', free: true, description: 'MoE 120B, контекст 262K, мощная', aiProvider: 'openrouter' },
+  { id: 'nousresearch/hermes-3-llama-3.1-405b:free', name: 'Hermes 3 405B', provider: 'Nous/Meta', free: true, description: 'Крупнейшая бесплатная, 405B параметров', aiProvider: 'openrouter' },
+  { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Llama 3.3 70B', provider: 'Meta', free: true, description: 'Уровень GPT-4, стабильная и универсальная', aiProvider: 'openrouter' },
+  { id: 'qwen/qwen3-coder:free', name: 'Qwen3 Coder 480B', provider: 'Alibaba', free: true, description: 'MoE для кода, контекст 262K', aiProvider: 'openrouter' },
+  { id: 'minimax/minimax-m2.5:free', name: 'MiniMax M2.5', provider: 'MiniMax', free: true, description: 'Быстрая, контекст 196K', aiProvider: 'openrouter' },
   { id: 'openai/gpt-oss-20b:free', name: 'GPT-OSS 20B', provider: 'OpenAI', free: true, description: 'Лёгкая и быстрая MoE модель', aiProvider: 'openrouter' },
-  { id: 'qwen/qwen-2.5-72b-instruct:free', name: 'Qwen 2.5 72B', provider: 'Alibaba', free: true, description: 'Отличный русский, уровень GPT-4', aiProvider: 'openrouter' },
-  { id: 'qwen/qwen3-235b-a22b:free', name: 'Qwen3 235B', provider: 'Alibaba', free: true, description: 'Новейшая MoE 235B, мощные рассуждения', aiProvider: 'openrouter' },
   // OpenRouter Paid
   { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google', free: false, description: 'Баланс скорости и качества', aiProvider: 'openrouter' },
   { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google', free: false, description: 'Лучшее качество в линейке Gemini', aiProvider: 'openrouter' },
@@ -58,30 +60,49 @@ const CURATED_MODELS: CuratedModel[] = [
 
 type ModelFilter = 'all' | 'free' | 'paid';
 
+const CUSTOM_MODELS_KEY = 'custom_openrouter_models';
+
+function loadCustomModels(): CuratedModel[] {
+  try {
+    const raw = localStorage.getItem(CUSTOM_MODELS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function saveCustomModels(models: CuratedModel[]) {
+  localStorage.setItem(CUSTOM_MODELS_KEY, JSON.stringify(models));
+}
+
 export default function Settings() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [apiToken, setApiToken] = useState('');
   const [openrouterKey, setOpenrouterKey] = useState('');
   const [googleApiKey, setGoogleApiKey] = useState('');
   const [aiProvider, setAiProvider] = useState<AIProvider>('openrouter');
-  const [selectedModel, setSelectedModel] = useState('meta-llama/llama-3.3-70b-instruct:free');
+  const [selectedModel, setSelectedModel] = useState('qwen/qwen3.6-plus:free');
   const [modelFilter, setModelFilter] = useState<ModelFilter>('all');
   const [showApiToken, setShowApiToken] = useState(false);
   const [showOpenrouterKey, setShowOpenrouterKey] = useState(false);
   const [showGoogleKey, setShowGoogleKey] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [pingResults, setPingResults] = useState<Record<string, 'loading' | 'ok' | 'error'>>({});
+  const [customModels, setCustomModels] = useState<CuratedModel[]>(loadCustomModels);
+  const [showAddModel, setShowAddModel] = useState(false);
+  const [newModelId, setNewModelId] = useState('');
+  const [newModelName, setNewModelName] = useState('');
+  const [pingAllLoading, setPingAllLoading] = useState(false);
 
   useEffect(() => {
     fetchSettings();
   }, []);
 
-  // When provider changes, select a sensible default model for that provider
   const handleProviderChange = (provider: AIProvider) => {
     setAiProvider(provider);
-    const currentModelProvider = CURATED_MODELS.find(m => m.id === selectedModel)?.aiProvider;
+    const allModels = [...CURATED_MODELS, ...customModels];
+    const currentModelProvider = allModels.find(m => m.id === selectedModel)?.aiProvider;
     if (currentModelProvider !== provider) {
-      const defaultModel = CURATED_MODELS.find(m => m.aiProvider === provider);
+      const defaultModel = allModels.find(m => m.aiProvider === provider);
       if (defaultModel) setSelectedModel(defaultModel.id);
     }
   };
@@ -103,7 +124,7 @@ export default function Settings() {
         setOpenrouterKey(d.openrouter_api_key || '');
         setGoogleApiKey(d.google_api_key || '');
         setAiProvider((d.ai_provider as AIProvider) || 'openrouter');
-        setSelectedModel(d.ai_model || 'meta-llama/llama-3.3-70b-instruct:free');
+        setSelectedModel(d.ai_model || 'qwen/qwen3.6-plus:free');
       }
     } catch (error) {
       console.error('Error fetching settings:', error);
@@ -139,14 +160,112 @@ export default function Settings() {
     }
   };
 
-  const providerModels = CURATED_MODELS.filter(m => m.aiProvider === aiProvider);
+  // Ping a single model via OpenRouter
+  const pingModel = async (modelId: string) => {
+    if (!openrouterKey) {
+      toast.error('Введите API ключ OpenRouter для тестирования');
+      return;
+    }
+
+    setPingResults(prev => ({ ...prev, [modelId]: 'loading' }));
+
+    try {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15000);
+
+      const resp = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${openrouterKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: modelId,
+          messages: [{ role: 'user', content: 'Hi' }],
+          max_tokens: 5,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeout);
+
+      if (resp.ok) {
+        const data = await resp.json();
+        if (data.choices?.[0]) {
+          setPingResults(prev => ({ ...prev, [modelId]: 'ok' }));
+          return;
+        }
+      }
+
+      const errText = await resp.text();
+      console.warn(`Ping ${modelId}: ${resp.status}`, errText);
+      setPingResults(prev => ({ ...prev, [modelId]: 'error' }));
+    } catch (e) {
+      console.error(`Ping ${modelId}:`, e);
+      setPingResults(prev => ({ ...prev, [modelId]: 'error' }));
+    }
+  };
+
+  // Ping all OpenRouter models
+  const pingAllModels = async () => {
+    if (!openrouterKey) {
+      toast.error('Введите API ключ OpenRouter для тестирования');
+      return;
+    }
+    setPingAllLoading(true);
+    const allModels = [...CURATED_MODELS, ...customModels].filter(m => m.aiProvider === 'openrouter');
+    
+    for (const model of allModels) {
+      await pingModel(model.id);
+      // Small delay to avoid rate limiting
+      await new Promise(r => setTimeout(r, 500));
+    }
+    setPingAllLoading(false);
+    toast.success('Проверка моделей завершена');
+  };
+
+  // Add custom model
+  const handleAddCustomModel = () => {
+    if (!newModelId.trim()) return;
+    const model: CuratedModel = {
+      id: newModelId.trim(),
+      name: newModelName.trim() || newModelId.trim().split('/').pop()?.replace(':free', '') || newModelId.trim(),
+      provider: newModelId.trim().split('/')[0] || 'Custom',
+      free: newModelId.includes(':free'),
+      description: 'Пользовательская модель',
+      aiProvider: 'openrouter',
+      custom: true,
+    };
+    const updated = [...customModels, model];
+    setCustomModels(updated);
+    saveCustomModels(updated);
+    setNewModelId('');
+    setNewModelName('');
+    setShowAddModel(false);
+    toast.success(`Модель ${model.name} добавлена`);
+  };
+
+  // Remove custom model
+  const handleRemoveCustomModel = (modelId: string) => {
+    const updated = customModels.filter(m => m.id !== modelId);
+    setCustomModels(updated);
+    saveCustomModels(updated);
+    if (selectedModel === modelId) {
+      const fallback = CURATED_MODELS.find(m => m.aiProvider === 'openrouter');
+      if (fallback) setSelectedModel(fallback.id);
+    }
+    toast.success('Модель удалена');
+  };
+
+  const allModels = [...CURATED_MODELS, ...customModels];
+  const providerModels = allModels.filter(m => m.aiProvider === aiProvider);
   const filteredModels = providerModels.filter(m => {
     if (modelFilter === 'free') return m.free;
     if (modelFilter === 'paid') return !m.free;
     return true;
   });
 
-  const currentModel = CURATED_MODELS.find(m => m.id === selectedModel);
+  const currentModel = allModels.find(m => m.id === selectedModel);
 
   if (loading) {
     return (
@@ -306,9 +425,27 @@ export default function Settings() {
               </TabsContent>
             </Tabs>
 
-            {/* Model Filter */}
+            {/* Model Filter + Ping All */}
             <div className="space-y-3">
-              <Label>Модель AI</Label>
+              <div className="flex items-center justify-between">
+                <Label>Модель AI</Label>
+                {aiProvider === 'openrouter' && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={pingAllModels}
+                    disabled={pingAllLoading || !openrouterKey}
+                    className="text-xs"
+                  >
+                    {pingAllLoading ? (
+                      <Loader2 className="w-3 h-3 mr-1.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="w-3 h-3 mr-1.5" />
+                    )}
+                    Проверить все
+                  </Button>
+                )}
+              </div>
               {aiProvider === 'openrouter' && (
                 <div className="flex gap-2">
                   {(['all', 'free', 'paid'] as const).map(filter => (
@@ -341,18 +478,106 @@ export default function Settings() {
                 >
                   <RadioGroupItem value={model.id} className="mt-0.5" />
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-medium text-sm">{model.name}</span>
                       <Badge variant={model.free ? 'secondary' : 'outline'} className="text-[10px] px-1.5 py-0">
                         {model.free ? 'Free' : 'Paid'}
                       </Badge>
                       <span className="text-xs text-muted-foreground">{model.provider}</span>
+                      {model.custom && (
+                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-primary/30">
+                          Custom
+                        </Badge>
+                      )}
+                      {/* Ping status indicator */}
+                      {pingResults[model.id] === 'ok' && (
+                        <Wifi className="w-3.5 h-3.5 text-green-500" />
+                      )}
+                      {pingResults[model.id] === 'error' && (
+                        <WifiOff className="w-3.5 h-3.5 text-destructive" />
+                      )}
+                      {pingResults[model.id] === 'loading' && (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+                      )}
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5">{model.description}</p>
+                    <p className="text-[10px] text-muted-foreground/60 font-mono mt-0.5">{model.id}</p>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {aiProvider === 'openrouter' && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); pingModel(model.id); }}
+                        className="p-1 rounded hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
+                        title="Проверить доступность"
+                      >
+                        <Wifi className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                    {model.custom && (
+                      <button
+                        type="button"
+                        onClick={(e) => { e.preventDefault(); e.stopPropagation(); handleRemoveCustomModel(model.id); }}
+                        className="p-1 rounded hover:bg-destructive/10 transition-colors text-muted-foreground hover:text-destructive"
+                        title="Удалить модель"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </label>
               ))}
             </RadioGroup>
+
+            {/* Add custom model */}
+            {aiProvider === 'openrouter' && (
+              <div className="space-y-3">
+                {!showAddModel ? (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowAddModel(true)}
+                    className="text-muted-foreground"
+                  >
+                    <Plus className="w-4 h-4 mr-1.5" />
+                    Добавить свою модель
+                  </Button>
+                ) : (
+                  <div className="p-3 rounded-lg border border-dashed border-primary/30 space-y-3">
+                    <p className="text-sm font-medium">Добавить модель OpenRouter</p>
+                    <div className="space-y-2">
+                      <Input
+                        placeholder="ID модели, например: mistralai/mistral-large:free"
+                        value={newModelId}
+                        onChange={(e) => setNewModelId(e.target.value)}
+                        className="input-focus text-sm font-mono"
+                      />
+                      <Input
+                        placeholder="Название (необязательно)"
+                        value={newModelName}
+                        onChange={(e) => setNewModelName(e.target.value)}
+                        className="input-focus text-sm"
+                      />
+                    </div>
+                    <div className="flex gap-2">
+                      <Button size="sm" onClick={handleAddCustomModel} disabled={!newModelId.trim()}>
+                        <Plus className="w-3.5 h-3.5 mr-1" />
+                        Добавить
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => { setShowAddModel(false); setNewModelId(''); setNewModelName(''); }}>
+                        Отмена
+                      </Button>
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      ID моделей можно найти на{' '}
+                      <a href="https://openrouter.ai/models" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                        openrouter.ai/models
+                      </a>
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
 
             {currentModel && (
               <div className="p-3 bg-muted/50 rounded-lg">
