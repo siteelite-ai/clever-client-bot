@@ -631,7 +631,16 @@ is_replacement=true если пользователь хочет найти по
 - "покажи автомат ABB 32А" → is_replacement=false (обычный запрос)
 - "какие розетки у вас есть?" → is_replacement=false
 
-Ответь СТРОГО в JSON: {"has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "...", "is_replacement": bool}`
+Задача 5: search_modifiers — извлеки ВСЕ дополнительные характеристики, которые пользователь упоминает ПОМИМО категории товара. Это может быть: цвет, серия/коллекция, бренд, материал, тип монтажа, степень защиты (IP), или любое другое уточнение. Если таких нет — верни пустой массив.
+Примеры:
+- "черная двухместная розетка" → product_category="двухместная розетка", search_modifiers=["черная"]
+- "розетки из коллекции Гармония" → product_category="розетка", search_modifiers=["Гармония"]
+- "накладная розетка IP44 белая" → product_category="розетка", search_modifiers=["накладная", "IP44", "белая"]
+- "кабель для улицы" → product_category="кабель", search_modifiers=["для улицы"]
+- "светодиодная лампа E27 теплая" → product_category="лампа", search_modifiers=["светодиодная", "E27", "теплая"]
+- "покажи розетки" → product_category="розетка", search_modifiers=[]
+
+Ответь СТРОГО в JSON: {"has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "...", "is_replacement": bool, "search_modifiers": ["...", "..."]}`
       },
       ...(recentHistory || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
       { role: 'user', content: message }
