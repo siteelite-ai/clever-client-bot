@@ -64,10 +64,7 @@ const CURATED_MODELS: CuratedModel[] = [
   { id: 'google/gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google', free: false, description: 'Топовая модель Gemini · без лимитов', aiProvider: 'openrouter' },
   { id: 'anthropic/claude-sonnet-4.6', name: 'Claude Sonnet 4.6', provider: 'Anthropic', free: false, description: 'Frontier coding · без лимитов', aiProvider: 'openrouter' },
   { id: 'deepseek/deepseek-v3.2', name: 'DeepSeek V3.2', provider: 'DeepSeek', free: false, description: 'Уровень GPT-5, дешёвая · без лимитов', aiProvider: 'openrouter' },
-  // Google AI Studio — прямой API
-  { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash', provider: 'Google', free: true, description: '1500 req/день бесплатно, быстрая', aiProvider: 'google' },
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google', free: true, description: 'Баланс скорости · 500 req/день', aiProvider: 'google' },
-  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google', free: true, description: 'Топовая модель · 50 req/день', aiProvider: 'google' },
+  // HuggingFace Inference API — ~100 req/день
   // HuggingFace Inference API — ~100 req/день
   { id: 'Qwen/Qwen2.5-72B-Instruct', name: 'Qwen 2.5 72B', provider: 'Alibaba', free: true, description: 'Отличный русский, 32K · ~100 req/день', aiProvider: 'huggingface' },
   { id: 'mistralai/Mistral-Small-24B-Instruct-2501', name: 'Mistral Small 24B', provider: 'Mistral', free: true, description: 'Быстрая, русский · ~100 req/день', aiProvider: 'huggingface' },
