@@ -2074,6 +2074,21 @@ function discoverOptionKeys(
       }
     }
     
+    // Value-first fallback: if caption matching failed, search by VALUE across all options
+    if (!bestMatch) {
+      for (const [apiKey, info] of optionIndex.entries()) {
+        for (const val of info.values) {
+          const cleanVal = (val.split('//')[0] || '').trim().toLowerCase();
+          if (cleanVal === normalizedValue || cleanVal.includes(normalizedValue) || normalizedValue.includes(cleanVal)) {
+            bestMatch = { apiKey, matchedValue: val.split('//')[0].trim(), score: 50 };
+            console.log(`[OptionKeys] Value-first fallback: "${humanValue}" found in values of "${info.caption}" (key: ${apiKey})`);
+            break;
+          }
+        }
+        if (bestMatch) break;
+      }
+    }
+    
     if (bestMatch) {
       resolved[bestMatch.apiKey] = bestMatch.matchedValue;
       console.log(`[OptionKeys] Resolved: "${humanKey}=${humanValue}" → "${bestMatch.apiKey}=${bestMatch.matchedValue}" (score: ${bestMatch.score})`);
