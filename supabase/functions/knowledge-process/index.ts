@@ -386,7 +386,7 @@ serve(async (req) => {
       const { valid_from, valid_until } = extractValidityDates(content);
 
       // Generate embedding
-      const embedding = await generateEmbedding(content, googleApiKeys);
+      const embedding = await generateEmbedding(content, supabase);
 
       // Insert into database
       const insertData: any = {
@@ -435,7 +435,7 @@ serve(async (req) => {
       }
 
       // Generate embedding
-      const embedding = await generateEmbedding(text, googleApiKeys);
+      const embedding = await generateEmbedding(text, supabase);
 
       // Insert into database
       const { data, error } = await supabase
@@ -480,7 +480,7 @@ serve(async (req) => {
       console.log(`[Knowledge] Updating text for entry ${entryId} (${text.length} chars)`);
 
       // Generate new embedding
-      const embedding = await generateEmbedding(text, googleApiKeys);
+      const embedding = await generateEmbedding(text, supabase);
 
       // Update content + embedding
       const { data, error } = await supabase
@@ -529,7 +529,7 @@ serve(async (req) => {
       }
 
       // Generate embedding
-      const embedding = await generateEmbedding(content, googleApiKeys);
+      const embedding = await generateEmbedding(content, supabase);
 
       // Insert into database
       const { data, error } = await supabase
@@ -589,7 +589,7 @@ serve(async (req) => {
       const { title: extractedTitle, content } = await scrapeUrl(entry.source_url);
       
       // Generate new embedding
-      const embedding = await generateEmbedding(content, googleApiKeys);
+      const embedding = await generateEmbedding(content, supabase);
 
       // Update entry
       const { data, error } = await supabase
@@ -686,7 +686,7 @@ serve(async (req) => {
       }
 
       // Generate query embedding
-      const queryEmbedding = await generateEmbedding(query, googleApiKeys);
+      const queryEmbedding = await generateEmbedding(query, supabase);
 
       // Search using the database function
       const { data, error } = await supabase.rpc('search_knowledge', {
@@ -734,7 +734,7 @@ serve(async (req) => {
 
       for (const entry of entries) {
         try {
-          const embedding = await generateEmbedding(entry.content, googleApiKeys);
+          const embedding = await generateEmbedding(entry.content, supabase);
           
           const { error: updateError } = await supabase
             .from('knowledge_entries')
