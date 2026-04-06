@@ -455,50 +455,6 @@ export default function Settings() {
                 )}
               </TabsContent>
 
-              <TabsContent value="google" className="space-y-4 mt-4">
-                <div className="space-y-2">
-                  <Label htmlFor="googleApiKey">API ключи Google AI Studio</Label>
-                  <div className="relative">
-                    <textarea
-                      id="googleApiKey"
-                      placeholder={"AIzaSy...ключ1\nAIzaSy...ключ2\nAIzaSy...ключ3"}
-                      value={showGoogleKey ? googleApiKey : googleApiKey.split(/[,\n]/).filter(k => k.trim()).map(() => '••••••••••••').join('\n')}
-                      onChange={(e) => setGoogleApiKey(e.target.value)}
-                      onFocus={() => setShowGoogleKey(true)}
-                      className="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 min-h-[80px] resize-y pr-10"
-                      rows={3}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setShowGoogleKey(!showGoogleKey)}
-                      className="absolute right-3 top-3 text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                      {showGoogleKey ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                  {(() => {
-                    const keyCount = googleApiKey.split(/[,\n]/).filter(k => k.trim().length > 0).length;
-                    return keyCount > 0 ? (
-                      <p className="text-xs text-muted-foreground">
-                        🔑 {keyCount} {keyCount === 1 ? 'ключ' : keyCount < 5 ? 'ключа' : 'ключей'} — при ошибке автоматически переключится на следующий
-                      </p>
-                    ) : null;
-                  })()}
-                  <p className="text-xs text-muted-foreground">
-                    По одному ключу на строку. Получите на{' '}
-                    <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
-                      aistudio.google.com/apikey
-                    </a>
-                    {' '}— бесплатно до 1500 запросов/день на ключ
-                  </p>
-                </div>
-
-                {!googleApiKey && (
-                  <p className="text-xs text-amber-500">
-                    ⚠️ Без ключа Google AI Studio AI-консультант будет использовать встроенный Lovable AI (Gemini) как fallback.
-                  </p>
-                )}
-              </TabsContent>
 
               <TabsContent value="huggingface" className="space-y-4 mt-4">
                 <div className="p-3 bg-muted/50 rounded-lg space-y-2">
