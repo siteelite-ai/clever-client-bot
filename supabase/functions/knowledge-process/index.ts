@@ -283,10 +283,7 @@ serve(async (req) => {
 
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     
-    // Load Google API keys for embedding generation
-    const googleApiKeys = await getGoogleApiKeys(supabase);
-
-    console.log(`[Knowledge] Action: ${action}, Google keys: ${googleApiKeys.length}`);
+    console.log(`[Knowledge] Action: ${action}`);
 
     if (action === 'fetch_sitemap') {
       // Fetch and parse sitemap XML
