@@ -3123,7 +3123,7 @@ serve(async (req) => {
           
           const categoryResults = await searchProductsMulti(categoryCandidates, 15, appSettings.volt220_api_token, 30, modifiers, appSettings);
           const categoryElapsed = Date.now() - categoryStart;
-          console.log(`[Chat] Category-first: ${categoryResults.length} products in ${categoryElapsed}ms (${allQueries.size} queries for "${effectiveCategory}")`);
+          console.log(`[Chat] Category-first: ${categoryResults.length} products in ${categoryElapsed}ms (1 query for "${effectiveCategory}")`);
           
           if (categoryResults.length > 0) {
             foundProducts = categoryResults.slice(0, 15);
