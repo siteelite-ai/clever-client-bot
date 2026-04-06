@@ -733,9 +733,7 @@ is_replacement=true если пользователь хочет найти по
       console.log(`[Classify] SUCCESS via ${attempt.label}`);
       return {
         has_product_name: !!parsed.has_product_name,
-        product_name: parsed.product_name 
-          ? parsed.product_name.replace(/\b(сечением|сечение|с\s+сечением)\b/gi, '').replace(/\s+/g, ' ').trim() 
-          : undefined,
+        product_name: parsed.product_name || undefined,
         price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
         product_category: parsed.product_category || undefined,
         is_replacement: !!parsed.is_replacement,
