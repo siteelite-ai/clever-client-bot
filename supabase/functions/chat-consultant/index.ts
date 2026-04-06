@@ -2219,9 +2219,10 @@ async function searchProductsMulti(
   });
   
   // === OPTIMIZATION: Limit parallel API calls to max 3 ===
-  const cappedPass1 = uniquePass1.slice(0, 3);
-  if (uniquePass1.length > 3) {
-    console.log(`[Search] Capped Pass 1 candidates from ${uniquePass1.length} to 3`);
+  const pass1Cap = 6;
+  const cappedPass1 = uniquePass1.slice(0, pass1Cap);
+  if (uniquePass1.length > pass1Cap) {
+    console.log(`[Search] Capped Pass 1 candidates from ${uniquePass1.length} to ${pass1Cap}`);
   }
   
   const pass1Promises = cappedPass1.map(candidate => 
