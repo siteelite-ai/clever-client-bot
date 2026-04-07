@@ -3117,14 +3117,38 @@ serve(async (req) => {
           console.log(`[Chat] Category-first: searching by category "${effectiveCategory}", modifiers: [${modifiers.join(', ')}]`);
           const categoryStart = Date.now();
           
-          // Single broad query — resolveFiltersWithLLM handles all modifier filtering in Pass 2
-          const categoryCandidates: SearchCandidate[] = [{
-            query: effectiveCategory, brand: null, category: null, min_price: null, max_price: null,
-          }];
+          // Step 1: Recon — find exact category.pagetitle from catalog
+          let exactCategoryName: string | null = null;
+          try {
+            const reconCandidate: SearchCandidate = { query: effectiveCategory, brand: null, category: null, min_price: null, max_price: null };
+            const reconResults = await searchProductsByCandidate(reconCandidate, appSettings.volt220_api_token, 1);
+            if (reconResults.length > 0 && reconResults[0].category?.pagetitle) {
+              exactCategoryName = reconResults[0].category.pagetitle;
+              console.log(`[Chat] Category recon: "${effectiveCategory}" → exact category "${exactCategoryName}"`);
+            } else {
+              console.log(`[Chat] Category recon: no results for "${effectiveCategory}", falling back to query search`);
+            }
+          } catch (e) {
+            console.log(`[Chat] Category recon failed:`, e);
+          }
           
-          const categoryResults = await searchProductsMulti(categoryCandidates, 15, appSettings.volt220_api_token, 30, modifiers, appSettings);
+          // Step 2: Main search using exact category parameter (or fallback to query)
+          let categoryCandidates: SearchCandidate[];
+          if (exactCategoryName) {
+            // Use API category parameter — returns ONLY products from this category
+            categoryCandidates = [{
+              query: null, brand: null, category: exactCategoryName, min_price: null, max_price: null,
+            }];
+          } else {
+            // Fallback: use query if recon failed
+            categoryCandidates = [{
+              query: effectiveCategory, brand: null, category: null, min_price: null, max_price: null,
+            }];
+          }
+          
+          const categoryResults = await searchProductsMulti(categoryCandidates, 15, appSettings.volt220_api_token, 50, modifiers, appSettings);
           const categoryElapsed = Date.now() - categoryStart;
-          console.log(`[Chat] Category-first: ${categoryResults.length} products in ${categoryElapsed}ms (1 query for "${effectiveCategory}")`);
+          console.log(`[Chat] Category-first: ${categoryResults.length} products in ${categoryElapsed}ms (category=${exactCategoryName || 'null'}, query=${exactCategoryName ? 'null' : effectiveCategory})`);
           
           if (categoryResults.length > 0) {
             foundProducts = categoryResults.slice(0, 15);
