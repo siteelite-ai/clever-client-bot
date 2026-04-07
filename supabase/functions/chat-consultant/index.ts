@@ -1041,6 +1041,7 @@ interface DialogSlot {
   status: 'pending' | 'done';
   created_turn: number;
   turns_since_touched: number;
+  cached_products?: string; // JSON-stringified array of compact product objects for follow-up filtering
 }
 
 type DialogSlots = Record<string, DialogSlot>;
