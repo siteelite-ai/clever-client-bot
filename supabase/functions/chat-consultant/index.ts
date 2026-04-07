@@ -2529,7 +2529,7 @@ async function searchProductsMulti(
   // === LOCAL CHARACTERISTIC FILTERING (primary mechanism) ===
   if (modifiers && modifiers.length > 0 && productMap.size > 0 && settings) {
     const allProducts = Array.from(productMap.values());
-    const resolvedFilters = await resolveFiltersWithLLM(allProducts, modifiers, settings);
+    const { resolved: resolvedFilters } = await resolveFiltersWithLLM(allProducts, modifiers, settings);
     
     if (Object.keys(resolvedFilters).length > 0) {
       console.log(`[Search] Resolved filters: ${JSON.stringify(resolvedFilters)}`);
