@@ -1,112 +1,59 @@
 
 
-# План: Прямой фильтр по категории + поэтапная фильтрация характеристик
+# План: Не сбрасывать цветовой фильтр при 0 совпадений — передать в LLM
 
 ## Проблема
 
-Разведка (recon) ненадежна — запрос `query="розетка" per_page=1` вернул товар из категории "Светильники" (видимо, в описании упоминается слово "розетка"). Дальше `category="Светильники"` → 0 результатов → полный провал ветки.
+Логи показывают: quick filter `"черный"` дал 0 из 50 розеток. Код сбросил цветовой фильтр и оставил все 50. LLM отфильтровал только по `кол-во_разъемов=2` → 10 товаров без учёта цвета.
 
-## Решение
-
-Убрать recon. Вместо этого:
-
-1. **Сразу генерировать множественное число** из `effectiveCategory` и отправлять как API-параметр `category`
-2. **Известные фильтры (цвет) — сразу в API-запрос** через `options[]`
-3. **Неизвестные модификаторы — резолвить через характеристики** полученных товаров
-
-### Пайплайн
-
-```text
-"черная двухместная розетка"
-  ↓
-classify → category="розетка", modifiers=["черная","двухместная"]
-  ↓
-Шаг 1: Генерация множественного числа: "розетка" → "Розетки"
-  (простая таблица окончаний: а→и, ь→и, к→ки, ор→оры, ль→ли, etc.)
-  ↓
-Шаг 2: API запрос category="Розетки", per_page=50
-  → ТОЛЬКО розетки (30+ штук), без рамок и трубок
-  ↓
-Шаг 3: Быстрые фильтры — "черная" → ищем option с caption содержащим "цвет"
-  → находим key="tsvet__tsvet", фильтруем локально: оставляем только чёрные
-  ↓
-Шаг 4: Оставшиеся модификаторы ("двухместная") → resolveFiltersWithLLM
-  по схеме характеристик УЖЕ отфильтрованных товаров
-  → key="kolichestvo_razemov", value="2"
-  ↓
-Шаг 5: Локальный AND-фильтр: цвет=чёрный И кол-во_разъемов=2
-  → только чёрные двухместные розетки
-```
+Возможные причины нуля:
+- В каталоге цвет может быть записан как "чёрный матовый", "антрацит", "чёрный/хром" — `includes("черный")` не ловит "чёрный" (буква ё)
+- Или действительно нет чёрных в первых 50
 
 ## Изменения
 
 **Файл**: `supabase/functions/chat-consultant/index.ts`
 
-### 1. Функция `toPluralCategory(word)` (~15 строк)
+### 1. matchQuickFilter: учесть ё/е и частичные совпадения (~5 строк, строка 2342-2343)
 
-Простое преобразование единственного числа во множественное с заглавной буквы:
-- розетка → Розетки, рамка → Рамки, лампа → Лампы
-- удлинитель → Удлинители, выключатель → Выключатели
-- кабель → Кабели, провод → Провода
-- Если слово уже во множественном (оканчивается на -ы, -и) — оставить как есть
-
-### 2. Функция `extractQuickFilters(modifiers)` (~10 строк)
-
-Разделяет модификаторы на "быстрые" (которые сразу понятны) и "остальные":
-- Цветовые слова (черная, белая, красная, синяя, кремовая...) → `{key: "цвет", value: "чёрный"}`
-- Остальные модификаторы → передаются в `resolveFiltersWithLLM`
-
-### 3. Category-first ветка (строки 3114-3160): замена recon на прямой запрос
-
-Убрать recon-шаг. Вместо этого:
+Нормализовать `ё` → `е` при сравнении. Также проверять вариации: "чёрный", "черный", "черн":
 
 ```typescript
-// Шаг 1: множественное число
-const pluralCategory = toPluralCategory(effectiveCategory);
-
-// Шаг 2: API запрос по категории
-const categoryCandidate = { query: null, category: pluralCategory, ... };
-const rawProducts = await searchProductsByCandidate(categoryCandidate, token, 50);
-
-// Если 0 — попробовать с оригинальным словом как query (fallback)
-if (rawProducts.length === 0) {
-  rawProducts = await searchProductsByCandidate({ query: effectiveCategory, ... }, token, 50);
-}
-
-// Шаг 3: быстрые фильтры (цвет)
-const { quickFilters, remainingModifiers } = extractQuickFilters(modifiers);
-let filtered = rawProducts;
-for (const qf of quickFilters) {
-  filtered = filtered.filter(p => matchOption(p, qf));
-}
-
-// Шаг 4: оставшиеся модификаторы через resolveFiltersWithLLM
-if (remainingModifiers.length > 0 && filtered.length > 0) {
-  const resolved = await resolveFiltersWithLLM(filtered, remainingModifiers, settings);
-  // Шаг 5: AND-фильтрация
-  filtered = filtered.filter(p => matchesAllFilters(p, resolved));
-}
-
-foundProducts = filtered;
+const normalize = (s: string) => s.toLowerCase().replace(/ё/g, 'е');
+const optNorm = normalize(optValue);
+const filterNorm = normalize(filter.value);
+return optNorm.includes(filterNorm) || filterNorm.includes(optNorm);
 ```
 
-### 4. Fallback на оригинальное название
+### 2. Не сбрасывать quick filter — передавать нерезолвенные цвета в LLM (строки 3229-3233)
 
-Если `category="Розетки"` вернул 0 (неизвестная категория в каталоге), попробовать `query="розетка"` как текстовый поиск + локальная фильтрация по `product.category.pagetitle`.
+Если quick filter дал 0, не сбрасывать — вместо этого добавить цветовой модификатор обратно в `remainingModifiers` для LLM:
+
+```typescript
+if (filtered.length === 0) {
+  // Color not found by quick match — let LLM try (maybe "антрацит" = чёрный)
+  remainingModifiers.push(...quickFilters.map(qf => qf.value));
+  filtered = rawProducts;
+}
+```
+
+Так LLM увидит все характеристики и сможет сопоставить "черный" с реальным значением цвета в каталоге.
+
+### 3. COLOR_WORDS: нормализация ё (строка 2301-2307)
+
+Добавить `'чёрн': 'черный'` в словарь, чтобы "чёрная" тоже матчилась.
 
 ## Что НЕ трогаем
 
-- `resolveFiltersWithLLM` — используется для сложных модификаторов
-- Title-first, article-first, price-intent, replacement — без изменений
-- Классификатор — работает, выдаёт правильную category и modifiers
-- Scoring логику — заменяем на простой AND-фильтр
+- Основной pipeline категория → характеристики — работает правильно
+- resolveFiltersWithLLM, title-first, article-first — без изменений
+- toPluralCategory — работает
 
 ## Ожидаемый результат
 
-- `category="Розетки"` → API вернёт только розетки
-- Быстрый фильтр по цвету → только чёрные розетки
-- LLM-резолв "двухместная" → `кол-во_разъемов=2`
-- AND-фильтр → только чёрные двухместные розетки
+- Quick filter: `"черный"` → нормализация ё/е → найдёт "чёрный матовый" если есть
+- Если всё равно 0 → цвет передаётся в LLM → LLM сопоставит с реальными значениями
+- Если чёрных розеток реально нет — бот так и скажет, но с правильным AND-фильтром (цвет+количество)
 
-## Объём: ~50 строк новых + замена ~40 строк в category-first ветке
+## Объём: ~10 строк изменений
 
