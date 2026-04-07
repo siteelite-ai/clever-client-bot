@@ -2125,7 +2125,7 @@ async function resolveFiltersWithLLM(
 
   if (optionIndex.size === 0) {
     console.log('[FilterLLM] No options found in products, skipping');
-    return {};
+    return { resolved: {}, unresolved: [...modifiers] };
   }
 
   // Format schema for prompt — structured format to prevent LLM from mixing key with caption
