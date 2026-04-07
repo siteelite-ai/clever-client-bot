@@ -1092,15 +1092,71 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
 }
 
 /**
+ * Filter cached products by user's follow-up answer (string containment check).
+ */
+function filterCachedProducts(products: any[], userAnswer: string): any[] {
+  const norm = (s: string) => s.replace(/ё/g, 'е').toLowerCase().trim();
+  const answer = norm(userAnswer);
+  // Generate stemmed prefix (first 5+ chars) for fuzzy matching
+  const answerWords = answer.split(/\s+/).filter(w => w.length >= 3);
+  
+  return products.filter(p => {
+    const title = norm(p.pagetitle || '');
+    const parentName = norm(p.parent_name || '');
+    // Check title and parent_name
+    if (answerWords.some(w => title.includes(w) || parentName.includes(w))) return true;
+    // Check options values
+    if (p.options && typeof p.options === 'object') {
+      for (const vals of Object.values(p.options)) {
+        if (Array.isArray(vals)) {
+          for (const v of vals) {
+            if (typeof v === 'string' && answerWords.some(w => norm(v).includes(w))) return true;
+          }
+        }
+      }
+    }
+    return false;
+  });
+}
+
+/**
  * Resolve dialog slots against current user message.
  * Returns: { resolved slot key, combined query, price intent } or null.
+ * For product_search slots: returns cached products directly.
  */
 function resolveSlotRefinement(
   slots: DialogSlots,
   userMessage: string,
   classificationResult: ClassificationResult | null
-): { slotKey: string; query: string; priceIntent: 'most_expensive' | 'cheapest'; updatedSlots: DialogSlots } | null {
-  // Find pending price_extreme slot
+): { slotKey: string; query: string; priceIntent: 'most_expensive' | 'cheapest'; updatedSlots: DialogSlots } 
+ | { slotKey: string; cachedProducts: Product[]; updatedSlots: DialogSlots }
+ | null {
+  // First: check for pending product_search slot
+  for (const [key, slot] of Object.entries(slots)) {
+    if (slot.status === 'pending' && slot.intent === 'product_search' && slot.cached_products) {
+      const isShort = userMessage.length < 100;
+      // Check if this looks like a refinement answer (short, no explicit new category search)
+      const hasNewCategory = classificationResult?.product_category 
+        && classificationResult.product_category !== slot.base_category;
+      
+      if (isShort && !hasNewCategory) {
+        try {
+          const cached = JSON.parse(slot.cached_products);
+          const filtered = filterCachedProducts(cached, userMessage);
+          console.log(`[Slots] product_search resolved: "${userMessage}" filtered ${cached.length} → ${filtered.length} products`);
+          
+          const updatedSlots = { ...slots };
+          updatedSlots[key] = { ...slot, refinement: userMessage.trim(), status: 'done', turns_since_touched: 0 };
+          
+          return { slotKey: key, cachedProducts: filtered as Product[], updatedSlots };
+        } catch (e) {
+          console.error(`[Slots] Failed to parse cached products: ${e}`);
+        }
+      }
+    }
+  }
+
+  // Then: check for pending price_extreme slot
   let pendingKey: string | null = null;
   let pendingSlot: DialogSlot | null = null;
   
