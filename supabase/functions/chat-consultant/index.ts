@@ -2400,52 +2400,52 @@ async function searchProductsMulti(
   
   console.log(`[Search] Pass 1 (broad): ${productMap.size} unique products`);
   
-  // === PASS 2: If we have modifiers, use LLM to resolve filters from product schema ===
-  // OPTIMIZATION: Cap Pass 2 to max 3 candidates too
+  // === LOCAL CHARACTERISTIC FILTERING (primary mechanism) ===
   if (modifiers && modifiers.length > 0 && productMap.size > 0 && settings) {
-    const resolvedFilters = await resolveFiltersWithLLM(Array.from(productMap.values()), modifiers, settings);
+    const allProducts = Array.from(productMap.values());
+    const resolvedFilters = await resolveFiltersWithLLM(allProducts, modifiers, settings);
     
     if (Object.keys(resolvedFilters).length > 0) {
-      console.log(`[Search] Pass 2: Discovered ${Object.keys(resolvedFilters).length} API filters, re-searching...`);
+      console.log(`[Search] Resolved filters: ${JSON.stringify(resolvedFilters)}`);
       
-      for (const c of cleanedCandidates) {
-        c.option_filters = resolvedFilters;
-      }
-      
-      const seen2 = new Set<string>();
-      const pass2Candidates = cleanedCandidates.filter(c => {
-        if (!c.query && !c.brand) return false;
-        const key = `${c.query || ''}|${c.brand || ''}`;
-        if (seen2.has(key)) return false;
-        seen2.add(key);
-        return true;
-      }).slice(0, 3); // CAP Pass 2 to 3
-      
-      const pass2Promises = pass2Candidates.map(candidate => 
-        searchProductsByCandidate(candidate, apiToken, perPage, resolvedFilters)
-      );
-      const pass2Results = await Promise.all(pass2Promises);
-      
-      const filteredMap = new Map<number, Product>();
-      for (const products of pass2Results) {
-        for (const product of products) {
-          if (!filteredMap.has(product.id)) {
-            filteredMap.set(product.id, product);
+      // Score each product by how many resolved filters match its options
+      const scored: { product: Product; matchCount: number }[] = allProducts.map(product => {
+        if (!product.options) return { product, matchCount: 0 };
+        let matchCount = 0;
+        for (const [key, value] of Object.entries(resolvedFilters)) {
+          const opt = product.options.find(o => o.key === key);
+          if (opt) {
+            const pv = opt.value.toString().toLowerCase().trim();
+            const fv = value.toString().toLowerCase().trim();
+            if (pv === fv || pv.includes(fv) || fv.includes(pv)) {
+              matchCount++;
+            }
           }
         }
-      }
+        return { product, matchCount };
+      });
       
-      if (filteredMap.size > 0) {
-        console.log(`[Search] Pass 2 (filtered): ${filteredMap.size} products (replaced pass 1 results)`);
+      const totalFilters = Object.keys(resolvedFilters).length;
+      // Products matching ALL filters
+      const fullMatch = scored.filter(s => s.matchCount === totalFilters);
+      // Products matching at least one filter
+      const partialMatch = scored.filter(s => s.matchCount > 0 && s.matchCount < totalFilters);
+      
+      if (fullMatch.length > 0) {
         productMap.clear();
-        for (const [id, product] of filteredMap) {
-          productMap.set(id, product);
-        }
+        fullMatch.forEach(s => productMap.set(s.product.id, s.product));
+        console.log(`[Search] Characteristic filter: ${fullMatch.length} products match ALL ${totalFilters} filters`);
+      } else if (partialMatch.length > 0) {
+        // Sort by match count descending, take best partial matches
+        partialMatch.sort((a, b) => b.matchCount - a.matchCount);
+        productMap.clear();
+        partialMatch.forEach(s => productMap.set(s.product.id, s.product));
+        console.log(`[Search] Characteristic filter: ${partialMatch.length} products with partial match (best: ${partialMatch[0].matchCount}/${totalFilters})`);
       } else {
-        console.log(`[Search] Pass 2 returned 0 results, keeping pass 1 results (AI will post-filter by characteristics)`);
+        console.log(`[Search] Characteristic filter: 0 matches among ${allProducts.length} products, keeping Pass 1`);
       }
     } else {
-      console.log(`[Search] Could not discover API keys for filters, AI will post-filter by characteristics`);
+      console.log(`[Search] Could not resolve any filters from modifiers`);
     }
   }
   
