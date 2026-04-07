@@ -2128,14 +2128,18 @@ async function resolveFiltersWithLLM(
     return {};
   }
 
-  // Format schema for prompt
+  // Format schema for prompt — structured format to prevent LLM from mixing key with caption
   const schemaLines: string[] = [];
+  const schemaDebug: string[] = [];
   for (const [apiKey, info] of optionIndex.entries()) {
     const caption = info.caption.split('//')[0].trim();
-    const vals = [...info.values].map(v => v.split('//')[0].trim()).join(', ');
-    schemaLines.push(`${apiKey} (${caption}): ${vals}`);
+    const allVals = [...info.values].map(v => v.split('//')[0].trim());
+    const vals = allVals.join(', ');
+    schemaLines.push(`KEY="${apiKey}" | ${caption} | values: ${vals}`);
+    schemaDebug.push(`  ${apiKey} (${caption}): ${allVals.slice(0, 5).join(', ')}${allVals.length > 5 ? ` ... +${allVals.length - 5}` : ''}`);
   }
   const schemaText = schemaLines.join('\n');
+  console.log(`[FilterLLM] Schema (${optionIndex.size} keys):\n${schemaDebug.join('\n')}`);
 
   const systemPrompt = `Ты резолвер фильтров товаров интернет-магазина электротоваров.
 
