@@ -1,142 +1,124 @@
 
 
-# План: Хранить настройки фильтра вместо кэша товаров
+# План: Резолвить уточнения через фильтры, а не через query
 
 ## Проблема
 
-Сейчас слот `product_search` хранит **20 товаров** в `cached_products`. Это неправильно:
-- В категории может быть 100+ товаров, а мы кэшируем только 20
-- Электрических розеток может не оказаться в этих 20, хотя они есть в каталоге
-- JSON с options раздувается до >15KB и обрезается → парсинг падает
+При уточняющем ответе пользователя ("электрическая", "накладная", "с заземлением") система просто дописывает слово в текстовый `query`. Но это слово — характеристика товара, которую API может фильтровать через `options[key][]=value`. Текстовый `query` ищет по совпадению слов в названии/описании, а характеристики хранятся в отдельных полях — поэтому `query="электрическая"` может ничего не найти, хотя фильтр `options[tip][]=электрическая` найдёт.
 
-## Правильный подход
+## Решение
 
-Слот хранит **накопленные настройки фильтра**, а не товары. При каждом уточнении — новый запрос к API с полным набором фильтров.
+При резолве product_search слота — не просто дописывать текст, а:
+1. Загрузить товары категории (schema products)
+2. Прогнать новый модификатор через `resolveFiltersWithLLM`
+3. Объединить новые фильтры с существующими из слота
+4. Отправить API-запрос только с `options`, без query (или с минимальным query для нерезолвленных)
 
-```text
-Шаг 1: "черная двухместная розетка"
-  → category="розетки", resolved={razem:"2"}, query="черная"
-  → API: category=розетки + options[razem]=2 + query=черная → 15 товаров
-  → >7 → слот: {category:"розетки", filters:{razem:"2"}, query:"черная"}
-  → бот: "Какой тип? Электрическая, компьютерная?"
-
-Шаг 2: "электрическая"
-  → слот найден → добавляем query: "черная электрическая"
-  → API: category=розетки + options[razem]=2 + query="черная электрическая"
-  → 5 товаров → выводим
-
-Шаг 3 (если бы >7): "накладные"
-  → query: "черная электрическая накладные"
-  → API с теми же фильтрами + расширенным query
-```
-
-## Изменения
+## Конкретные изменения
 
 **Файл:** `supabase/functions/chat-consultant/index.ts`
 
-### 1. Интерфейс DialogSlot — заменить cached_products на фильтры
+### 1. Главный pipeline (строки 3189-3219): после получения searchParams — резолвить модификатор
 
-```typescript
-interface DialogSlot {
-  intent: 'price_extreme' | 'product_search';
-  // ... existing price fields ...
-  base_category: string;
-  // NEW: accumulated filter state
-  resolved_filters?: string;   // JSON: {"razem":"2"}
-  unresolved_query?: string;   // "черная"
-  plural_category?: string;    // "розетки" (for API param)
-  // REMOVE: cached_products
-}
-```
-
-### 2. Создание слота (category-first, ~строка 3454)
-
-Вместо кэширования товаров — сохраняем фильтры:
-
-```typescript
-if (foundProducts.length > 7) {
-  dialogSlots[`ps_${Date.now()}`] = {
-    intent: 'product_search',
-    base_category: effectiveCategory,
-    plural_category: pluralCategory,
-    resolved_filters: JSON.stringify(resolvedFilters),
-    unresolved_query: queryText || '',
-    status: 'pending',
-    created_turn: messages.length,
-    turns_since_touched: 0,
-  };
-}
-```
-
-### 3. resolveSlotRefinement — перезапрос API вместо локальной фильтрации
-
-Вместо `filterCachedProducts`:
-- Берём существующие фильтры из слота
-- Добавляем уточнение пользователя к `unresolved_query`
-- Возвращаем **параметры для нового API-запроса**, а не готовые товары
-
-```typescript
-// product_search: return search params, not cached products
-return {
-  slotKey: key,
-  searchParams: {
-    category: slot.plural_category,
-    resolvedFilters: JSON.parse(slot.resolved_filters || '{}'),
-    query: `${slot.unresolved_query} ${userMessage}`.trim(),
-  },
-  updatedSlots,
-};
-```
-
-### 4. Обработка в основном pipeline (~строка 3206)
-
-Вместо `cachedProducts` — выполняем API-запрос с накопленными фильтрами:
-
+Сейчас:
 ```typescript
 if (slotResolution && 'searchParams' in slotResolution) {
   const sp = slotResolution.searchParams;
   foundProducts = await searchProductsByCandidate(
-    { query: sp.query, brand: null, category: sp.category, min_price: null, max_price: null },
-    appSettings.volt220_api_token, 50,
-    Object.keys(sp.resolvedFilters).length > 0 ? sp.resolvedFilters : undefined
+    { query: sp.query || null, ... }, // ← "черная электрическая" как текст
+    ...sp.resolvedFilters...
   );
-  foundProducts = foundProducts.slice(0, 15);
-  articleShortCircuit = true;
-  // If still >7, update slot with new query for next round
+}
+```
+
+Станет:
+```typescript
+if (slotResolution && 'searchParams' in slotResolution) {
+  const sp = slotResolution.searchParams;
+  
+  // Step 1: Fetch schema products for the category
+  const schemaProducts = await searchProductsByCandidate(
+    { query: null, brand: null, category: sp.category, min_price: null, max_price: null },
+    appSettings.volt220_api_token!, 50
+  );
+  
+  // Step 2: Resolve the NEW modifier (user's answer) against schema
+  const newModifier = sp.refinementText; // "электрическая"
+  const { resolved: newFilters, unresolved: stillUnresolved } = 
+    await resolveFiltersWithLLM(schemaProducts, [newModifier], appSettings);
+  
+  // Step 3: Merge with existing filters from slot
+  const mergedFilters = { ...sp.resolvedFilters, ...newFilters };
+  // Update unresolved query: keep old unresolved + new unresolved (if any)
+  const mergedQuery = [sp.existingUnresolved, ...stillUnresolved]
+    .filter(Boolean).join(' ').trim() || null;
+  
+  // Step 4: API call with structured filters
+  foundProducts = await searchProductsByCandidate(
+    { query: mergedQuery, brand: null, category: sp.category, min_price: null, max_price: null },
+    appSettings.volt220_api_token!, 50,
+    Object.keys(mergedFilters).length > 0 ? mergedFilters : undefined
+  );
+  
+  // If still >7, save MERGED filters (not query) in new slot
   if (foundProducts.length > 7) {
-    const newSlotKey = `ps_${Date.now()}`;
     dialogSlots[newSlotKey] = {
-      intent: 'product_search',
-      base_category: slotResolution.updatedSlots[slotResolution.slotKey].base_category,
-      plural_category: sp.category,
-      resolved_filters: JSON.stringify(sp.resolvedFilters),
-      unresolved_query: sp.query,
-      status: 'pending',
+      resolved_filters: JSON.stringify(mergedFilters),
+      unresolved_query: mergedQuery || '',
       ...
     };
   }
 }
 ```
 
-### 5. Удалить ненужный код
+### 2. resolveSlotRefinement (строки 1120-1137): передавать refinementText отдельно
 
-- Удалить `filterCachedProducts` (больше не нужна)
-- Удалить `cached_products` из `validateAndSanitizeSlots`
-- Удалить обрезку `substring(0, 15000)` — фильтры занимают <200 байт
+Сейчас: склеивает `unresolved_query + userMessage` в одну строку query.
 
-## Преимущества
+Станет: возвращает `refinementText` (ответ пользователя) отдельно от `existingUnresolved` (старый нерезолвленный текст), чтобы pipeline мог резолвить новый модификатор отдельно.
 
-- Фильтры занимают ~100 байт вместо 15-20KB — нет проблем с обрезкой
-- Поиск идёт по **всему каталогу** (2000+ товаров), а не по 20 закэшированным
-- Каждое уточнение добавляет фильтр — контекст накапливается
-- Используется уже работающая инфраструктура API-фильтрации
+```typescript
+return { 
+  slotKey: key, 
+  searchParams: {
+    category: slot.plural_category,
+    resolvedFilters: existingFilters,
+    refinementText: userMessage.trim(),      // NEW: отдельно
+    existingUnresolved: slot.unresolved_query || '', // NEW: старый query
+    baseCategory: slot.base_category,
+  },
+  updatedSlots,
+};
+```
+
+## Ожидаемый результат
+
+```
+Шаг 1: "розетки Гармония"
+  → category=розетки, modifiers=[Гармония]
+  → resolveFiltersWithLLM: kollektsiya="Гармония" ✓
+  → API: options[kollektsiya][]=Гармония → 20 розеток
+  → >7 → slot: {filters: {kollektsiya:"Гармония"}, unresolved:""}
+
+Шаг 2: "электрическая"
+  → slot found → refinementText="электрическая"
+  → fetch 50 розеток для схемы
+  → resolveFiltersWithLLM(["электрическая"]): tip="электрическая" ✓
+  → mergedFilters: {kollektsiya:"Гармония", tip:"электрическая"}
+  → API: options[kollektsiya][]=Гармония + options[tip][]=электрическая → 8
+  → >7 → slot: {filters: {kollektsiya:"Гармония", tip:"электрическая"}}
+
+Шаг 3: "накладные"
+  → resolveFiltersWithLLM(["накладные"]): montazh="накладной" ✓
+  → mergedFilters: {kollektsiya, tip, montazh}
+  → API: 3 фильтра → 3 розетки → выводим
+```
 
 ## Объём
-~50 строк изменений в одном файле. Замена логики, не добавление.
+~25 строк изменений в 2 местах одного файла.
 
 ## Что НЕ трогаем
-- `resolveFiltersWithLLM` — без изменений
-- `searchProductsByCandidate` — уже принимает `resolvedFilters`
-- Price_extreme слоты — без изменений
-- Виджет — без изменений (слоты стали легче)
+- `resolveFiltersWithLLM` — без изменений, уже работает
+- Category-first первый проход — без изменений
+- Price slots — без изменений
 
