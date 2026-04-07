@@ -2107,8 +2107,8 @@ async function resolveFiltersWithLLM(
   products: Product[],
   modifiers: string[],
   settings: CachedSettings
-): Promise<Record<string, string>> {
-  if (!modifiers || modifiers.length === 0) return {};
+): Promise<{ resolved: Record<string, string>; unresolved: string[] }> {
+  if (!modifiers || modifiers.length === 0) return { resolved: {}, unresolved: [] };
 
   // Build option schema from products
   const optionIndex: Map<string, { caption: string; values: Set<string> }> = new Map();
@@ -2125,7 +2125,7 @@ async function resolveFiltersWithLLM(
 
   if (optionIndex.size === 0) {
     console.log('[FilterLLM] No options found in products, skipping');
-    return {};
+    return { resolved: {}, unresolved: [...modifiers] };
   }
 
   // Format schema for prompt — structured format to prevent LLM from mixing key with caption
@@ -2184,7 +2184,7 @@ ${JSON.stringify(modifiers)}
       if (!model.includes('/')) model = 'google/gemini-2.5-flash-lite';
     } else {
       const lovableKey = Deno.env.get('LOVABLE_API_KEY');
-      if (!lovableKey) { console.log('[FilterLLM] No API keys'); return {}; }
+      if (!lovableKey) { console.log('[FilterLLM] No API keys'); return { resolved: {}, unresolved: [...modifiers] }; }
       url = 'https://ai.gateway.lovable.dev/v1/chat/completions';
       apiKeys = [lovableKey];
       model = 'gemini-2.5-flash-lite';
@@ -2214,7 +2214,7 @@ ${JSON.stringify(modifiers)}
 
     if (!response.ok) {
       console.error(`[FilterLLM] API error: ${response.status}`);
-      return {};
+      return { resolved: {}, unresolved: [...modifiers] };
     }
 
     const data = await response.json();
@@ -2226,11 +2226,14 @@ ${JSON.stringify(modifiers)}
 
     if (typeof filters !== 'object' || Array.isArray(filters)) {
       console.log('[FilterLLM] Invalid response format');
-      return {};
+      return { resolved: {}, unresolved: [...modifiers] };
     }
 
-    // Validate that returned keys exist in schema
+    // Validate that returned keys AND values exist in schema
     const validated: Record<string, string> = {};
+    const matchedModifiers = new Set<string>();
+    const norm = (s: string) => s.replace(/ё/g, 'е').toLowerCase().trim();
+
     for (const [rawKey, value] of Object.entries(filters)) {
       if (typeof value !== 'string') continue;
       // Try exact match first, then strip caption suffix like " (Цвет)"
@@ -2242,17 +2245,45 @@ ${JSON.stringify(modifiers)}
         }
       }
       if (optionIndex.has(resolvedKey)) {
-        validated[resolvedKey] = value;
-        console.log(`[FilterLLM] Resolved: "${resolvedKey}" = "${value}"`);
+        // KEY exists — now validate VALUE against known values in schema
+        const knownValues = optionIndex.get(resolvedKey)!.values;
+        const matchedValue = [...knownValues].find(v => norm(v) === norm(value));
+        
+        if (matchedValue) {
+          validated[resolvedKey] = matchedValue; // use exact value from schema
+          console.log(`[FilterLLM] Resolved (validated): "${resolvedKey}" = "${matchedValue}"`);
+          // Track which modifier this resolved from
+          const caption = optionIndex.get(resolvedKey)!.caption.toLowerCase();
+          for (const mod of modifiers) {
+            if (norm(mod) === norm(value) || caption.includes(norm(mod))) {
+              matchedModifiers.add(mod);
+            }
+          }
+        } else {
+          console.log(`[FilterLLM] Key "${resolvedKey}" valid, but value "${value}" NOT in schema values [${[...knownValues].slice(0, 5).join(', ')}...] → unresolved`);
+          // Find which modifier this came from
+          for (const mod of modifiers) {
+            if (norm(mod) === norm(value) || norm(value).includes(norm(mod)) || norm(mod).includes(norm(value))) {
+              matchedModifiers.add(mod); // mark as "attempted" so we put the original modifier into unresolved
+            }
+          }
+        }
       } else {
         console.log(`[FilterLLM] Rejected unknown key: "${rawKey}"`);
       }
     }
 
-    return validated;
+    // Unresolved = modifiers that were NOT successfully validated
+    const unresolvedMods = modifiers.filter(m => !matchedModifiers.has(m));
+    // Also add modifiers whose values weren't found in schema
+    const attemptedButFailed = modifiers.filter(m => matchedModifiers.has(m) && !Object.values(validated).some(v => norm(v) === norm(m)));
+    const unresolved = [...new Set([...unresolvedMods, ...attemptedButFailed])];
+
+    console.log(`[FilterLLM] Result: resolved=${JSON.stringify(validated)}, unresolved=[${unresolved.join(', ')}]`);
+    return { resolved: validated, unresolved };
   } catch (error) {
     console.error(`[FilterLLM] Error:`, error);
-    return {};
+    return { resolved: {}, unresolved: [...modifiers] };
   }
 }
 
@@ -2498,7 +2529,7 @@ async function searchProductsMulti(
   // === LOCAL CHARACTERISTIC FILTERING (primary mechanism) ===
   if (modifiers && modifiers.length > 0 && productMap.size > 0 && settings) {
     const allProducts = Array.from(productMap.values());
-    const resolvedFilters = await resolveFiltersWithLLM(allProducts, modifiers, settings);
+    const { resolved: resolvedFilters } = await resolveFiltersWithLLM(allProducts, modifiers, settings);
     
     if (Object.keys(resolvedFilters).length > 0) {
       console.log(`[Search] Resolved filters: ${JSON.stringify(resolvedFilters)}`);
@@ -3259,18 +3290,19 @@ serve(async (req) => {
 
             // Resolve filters using exact bucket schema
             console.log(`[Chat] Category-first: resolving modifiers [${modifiers.join(', ')}] against ${exactBucket.length} products (exact bucket)`);
-            const resolvedFilters = await resolveFiltersWithLLM(exactBucket, modifiers, appSettings);
+            const { resolved: resolvedFilters, unresolved: unresolvedMods } = await resolveFiltersWithLLM(exactBucket, modifiers, appSettings);
             
             let resultMode = 'no_filters';
-            if (Object.keys(resolvedFilters).length > 0) {
-              console.log(`[Chat] Category-first resolved filters: ${JSON.stringify(resolvedFilters)}`);
+            if (Object.keys(resolvedFilters).length > 0 || unresolvedMods.length > 0) {
+              console.log(`[Chat] Category-first resolved filters: ${JSON.stringify(resolvedFilters)}, unresolved: [${unresolvedMods.join(', ')}]`);
 
-              // STAGE 2: Server-side filtered API call — searches ALL products, not just first 50
-              console.log(`[Chat] Category-first STAGE 2: server-side filter via API options`);
+              // STAGE 2: Hybrid API call — resolved → options, unresolved → query text
+              const queryText = unresolvedMods.length > 0 ? unresolvedMods.join(' ') : null;
+              console.log(`[Chat] Category-first STAGE 2: server options=${JSON.stringify(resolvedFilters)}, query="${queryText}"`);
               let serverFiltered = await searchProductsByCandidate(
-                { query: null, brand: null, category: pluralCategory, min_price: null, max_price: null },
+                { query: queryText, brand: null, category: pluralCategory, min_price: null, max_price: null },
                 appSettings.volt220_api_token, 50,
-                resolvedFilters
+                Object.keys(resolvedFilters).length > 0 ? resolvedFilters : undefined
               );
               console.log(`[Chat] Category-first server-filtered: ${serverFiltered.length} products`);
 
