@@ -2291,7 +2291,14 @@ ${JSON.stringify(modifiers)}
       if (optionIndex.has(resolvedKey)) {
         // KEY exists — now validate VALUE against known values in schema
         const knownValues = optionIndex.get(resolvedKey)!.values;
-        const matchedValue = [...knownValues].find(v => norm(v) === norm(value));
+       const matchedValue = [...knownValues].find(v => {
+         const nv = norm(v);
+         const nval = norm(value);
+         if (nv === nval) return true;
+         // Bilingual values: "накладной//бетіне орнатылған" — match Russian part before "//"
+         const ruPart = nv.split('//')[0].trim();
+         return ruPart === nval;
+       });
         
         if (matchedValue) {
           validated[resolvedKey] = matchedValue; // use exact value from schema
