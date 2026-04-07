@@ -3233,7 +3233,10 @@ serve(async (req) => {
           }
           
           if (rawProducts.length > 0 && modifiers.length > 0) {
-            // Step 2: Category bucketization — separate exact vs sibling categories
+            // STAGE 1: Use raw products ONLY for schema extraction → resolveFiltersWithLLM
+            console.log(`[Chat] Category-first STAGE 1: ${rawProducts.length} products for schema extraction`);
+            
+            // Category bucketization for cleaner schema
             const categoryDistribution: Record<string, number> = {};
             for (const p of rawProducts) {
               const catTitle = (p as any).category?.pagetitle || p.parent_name || 'unknown';
@@ -3241,122 +3244,104 @@ serve(async (req) => {
             }
             console.log(`[Chat] Category-buckets: ${JSON.stringify(categoryDistribution)}`);
 
-            // Find the exact bucket: category title that best matches the plural form
             const normalizedPlural = pluralCategory.toLowerCase();
             let exactBucket: Product[] = [];
-            let siblingBucket: Product[] = [];
             for (const p of rawProducts) {
               const catTitle = ((p as any).category?.pagetitle || p.parent_name || '').toLowerCase();
-              if (catTitle === normalizedPlural || catTitle.startsWith(normalizedPlural) || normalizedPlural.startsWith(catTitle)) {
+              if (catTitle === normalizedPlural) {
                 exactBucket.push(p);
-              } else {
-                siblingBucket.push(p);
               }
             }
-            // If bucketization didn't work well, use all products as exact
             if (exactBucket.length === 0) {
               exactBucket = rawProducts;
-              siblingBucket = [];
             }
-            console.log(`[Chat] Category-buckets: exact=${exactBucket.length}, sibling=${siblingBucket.length}`);
+            console.log(`[Chat] Category-buckets: exact=${exactBucket.length} (strict match "${normalizedPlural}")`);
 
-            // Step 3: Resolve filters against EXACT bucket first (cleaner schema)
-            const primaryProducts = exactBucket.length > 0 ? exactBucket : rawProducts;
-            console.log(`[Chat] Category-first: resolving ALL modifiers [${modifiers.join(', ')}] against ${primaryProducts.length} products (exact bucket)`);
-            const resolvedFilters = await resolveFiltersWithLLM(primaryProducts, modifiers, appSettings);
+            // Resolve filters using exact bucket schema
+            console.log(`[Chat] Category-first: resolving modifiers [${modifiers.join(', ')}] against ${exactBucket.length} products (exact bucket)`);
+            const resolvedFilters = await resolveFiltersWithLLM(exactBucket, modifiers, appSettings);
             
-            const normalize = (s: string) => s.toLowerCase().replace(/ё/g, 'е').trim();
-
-            const applyAndFilter = (products: Product[], filters: Record<string, string>): { matched: Product[]; rejectStats: Record<string, number> } => {
-              const rejectStats: Record<string, number> = {};
-              const matched = products.filter(product => {
-                if (!product.options) { rejectStats['no_options'] = (rejectStats['no_options'] || 0) + 1; return false; }
-                for (const [key, value] of Object.entries(filters)) {
-                  const opt = product.options.find(o => o.key === key);
-                  if (!opt) { rejectStats[`missing_${key}`] = (rejectStats[`missing_${key}`] || 0) + 1; return false; }
-                  const pv = normalize(opt.value.toString());
-                  const fv = normalize(value.toString());
-                  if (!(pv === fv || pv.includes(fv) || fv.includes(pv))) {
-                    rejectStats[`mismatch_${key}`] = (rejectStats[`mismatch_${key}`] || 0) + 1;
-                    return false;
-                  }
-                }
-                return true;
-              });
-              return { matched, rejectStats };
-            };
-
             let resultMode = 'no_filters';
             if (Object.keys(resolvedFilters).length > 0) {
-              console.log(`[Chat] Category-first resolved: ${JSON.stringify(resolvedFilters)}`);
+              console.log(`[Chat] Category-first resolved filters: ${JSON.stringify(resolvedFilters)}`);
 
-              // Try exact bucket first
-              const exactResult = applyAndFilter(exactBucket, resolvedFilters);
-              console.log(`[Chat] AND-filter exact bucket: ${exactBucket.length} → ${exactResult.matched.length}`);
-              if (Object.keys(exactResult.rejectStats).length > 0) {
-                console.log(`[Chat] AND-filter reject stats (exact): ${JSON.stringify(exactResult.rejectStats)}`);
-              }
+              // STAGE 2: Server-side filtered API call — searches ALL products, not just first 50
+              console.log(`[Chat] Category-first STAGE 2: server-side filter via API options`);
+              let serverFiltered = await searchProductsByCandidate(
+                { query: null, brand: null, category: pluralCategory, min_price: null, max_price: null },
+                appSettings.volt220_api_token, 50,
+                resolvedFilters
+              );
+              console.log(`[Chat] Category-first server-filtered: ${serverFiltered.length} products`);
 
-              if (exactResult.matched.length > 0) {
-                foundProducts = exactResult.matched.slice(0, 15);
+              if (serverFiltered.length > 0) {
+                foundProducts = serverFiltered.slice(0, 15);
                 articleShortCircuit = true;
-                resultMode = 'exact_match';
-              } else if (siblingBucket.length > 0) {
-                // Try sibling bucket as fallback
-                const siblingResult = applyAndFilter(siblingBucket, resolvedFilters);
-                console.log(`[Chat] AND-filter sibling bucket: ${siblingBucket.length} → ${siblingResult.matched.length}`);
-                if (siblingResult.matched.length > 0) {
-                  foundProducts = siblingResult.matched.slice(0, 15);
-                  articleShortCircuit = true;
-                  resultMode = 'sibling_match';
-                }
-              }
-
-              if (foundProducts.length === 0) {
-                // NO silent fallback — don't return raw category list as if nothing happened
-                // Instead: try relaxed filter (drop one filter at a time)
-                let bestRelaxed: Product[] = [];
+                resultMode = 'server_exact_match';
+              } else {
+                // Cascading fallback: drop one filter at a time, re-query server
                 const filterKeys = Object.keys(resolvedFilters);
                 if (filterKeys.length > 1) {
+                  let bestRelaxed: Product[] = [];
+                  let droppedKey = '';
                   for (const dropKey of filterKeys) {
                     const partial = { ...resolvedFilters };
                     delete partial[dropKey];
-                    const partialResult = applyAndFilter(rawProducts, partial);
-                    if (partialResult.matched.length > bestRelaxed.length) {
-                      bestRelaxed = partialResult.matched;
-                      console.log(`[Chat] Relaxed filter (dropped ${dropKey}): ${partialResult.matched.length} products`);
+                    const partialResult = await searchProductsByCandidate(
+                      { query: null, brand: null, category: pluralCategory, min_price: null, max_price: null },
+                      appSettings.volt220_api_token, 50,
+                      partial
+                    );
+                    console.log(`[Chat] Relaxed server filter (dropped ${dropKey}): ${partialResult.length} products`);
+                    if (partialResult.length > bestRelaxed.length) {
+                      bestRelaxed = partialResult;
+                      droppedKey = dropKey;
                     }
                   }
+                  if (bestRelaxed.length > 0) {
+                    foundProducts = bestRelaxed.slice(0, 15);
+                    articleShortCircuit = true;
+                    resultMode = `relaxed_server_match (dropped ${droppedKey})`;
+                  }
                 }
-                if (bestRelaxed.length > 0) {
-                  foundProducts = bestRelaxed.slice(0, 15);
-                  articleShortCircuit = true;
-                  resultMode = 'relaxed_match';
-                } else {
-                  // Return empty — let LLM generate "not found" response
-                  foundProducts = [];
-                  articleShortCircuit = false;
-                  resultMode = 'no_match';
+
+                if (foundProducts.length === 0) {
+                  // Final fallback: try modifiers as query text + category (fulltext search)
+                  const modifierQuery = modifiers.join(' ');
+                  console.log(`[Chat] Category-first final fallback: query="${modifierQuery}" + category="${pluralCategory}"`);
+                  const textFallback = await searchProductsByCandidate(
+                    { query: modifierQuery, brand: null, category: pluralCategory, min_price: null, max_price: null },
+                    appSettings.volt220_api_token, 50
+                  );
+                  if (textFallback.length > 0) {
+                    foundProducts = textFallback.slice(0, 15);
+                    articleShortCircuit = true;
+                    resultMode = 'text_fallback';
+                  } else {
+                    foundProducts = [];
+                    articleShortCircuit = false;
+                    resultMode = 'no_match';
+                  }
                 }
               }
             } else {
               // No filters resolved — return category list
-              foundProducts = primaryProducts.slice(0, 15);
+              foundProducts = exactBucket.slice(0, 15);
               articleShortCircuit = true;
               resultMode = 'no_filters';
             }
+            
+            const categoryElapsed = Date.now() - categoryStart;
+            console.log(`[Chat] Category-first DECISION: mode=${resultMode}, count=${foundProducts.length}, elapsed=${categoryElapsed}ms`);
           } else if (rawProducts.length > 0) {
             foundProducts = rawProducts.slice(0, 15);
             articleShortCircuit = true;
+            const categoryElapsed = Date.now() - categoryStart;
+            console.log(`[Chat] Category-first DECISION: mode=no_modifiers, count=${foundProducts.length}, elapsed=${categoryElapsed}ms`);
+          } else {
+            const categoryElapsed = Date.now() - categoryStart;
+            console.log(`[Chat] Category-first: 0 results for "${effectiveCategory}", elapsed=${categoryElapsed}ms, proceeding to LLM 1`);
           }
-          
-          const categoryElapsed = Date.now() - categoryStart;
-          const resultMode2 = foundProducts.length > 0 ? 'found' : 'empty';
-          console.log(`[Chat] Category-first DECISION: mode=${resultMode2}, count=${foundProducts.length}, elapsed=${categoryElapsed}ms`);
-          if (foundProducts.length === 0) {
-            console.log(`[Chat] Category-first: 0 results for "${effectiveCategory}", proceeding to LLM 1`);
-          }
-        }
         
         // === REPLACEMENT/ALTERNATIVE INTENT ===
         if (classification?.is_replacement && appSettings.volt220_api_token) {
