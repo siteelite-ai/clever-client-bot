@@ -3477,7 +3477,7 @@ serve(async (req) => {
                 turns_since_touched: 0,
               };
               slotsUpdated = true;
-              console.log(`[Chat] Created product_search slot "${slotKey}": filters=${JSON.stringify(resolvedFilters || {})}, query="${queryText || ''}"`);
+              console.log(`[Chat] Created product_search slot "${slotKey}": filters=${JSON.stringify(resolvedFilters || {})}, query="${unresolvedMods?.length > 0 ? unresolvedMods.join(' ') : ''}"`);
             }
           } else if (rawProducts.length > 0) {
             foundProducts = rawProducts.slice(0, 15);
