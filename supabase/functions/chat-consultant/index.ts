@@ -3342,6 +3342,7 @@ serve(async (req) => {
             const categoryElapsed = Date.now() - categoryStart;
             console.log(`[Chat] Category-first: 0 results for "${effectiveCategory}", elapsed=${categoryElapsed}ms, proceeding to LLM 1`);
           }
+        }
         
         // === REPLACEMENT/ALTERNATIVE INTENT ===
         if (classification?.is_replacement && appSettings.volt220_api_token) {
