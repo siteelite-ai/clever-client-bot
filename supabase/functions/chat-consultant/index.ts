@@ -1086,7 +1086,9 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
       status: s.status as 'pending' | 'done',
       created_turn: typeof s.created_turn === 'number' ? s.created_turn : 0,
       turns_since_touched: typeof s.turns_since_touched === 'number' ? s.turns_since_touched : 0,
-      cached_products: typeof s.cached_products === 'string' ? s.cached_products.substring(0, 15000) : undefined,
+      resolved_filters: typeof s.resolved_filters === 'string' ? s.resolved_filters.substring(0, 2000) : undefined,
+      unresolved_query: typeof s.unresolved_query === 'string' ? sanitize(s.unresolved_query) : undefined,
+      plural_category: typeof s.plural_category === 'string' ? sanitize(s.plural_category) : undefined,
     };
     count++;
   }
