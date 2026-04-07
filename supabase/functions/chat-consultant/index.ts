@@ -1108,7 +1108,7 @@ function resolveSlotRefinement(
   userMessage: string,
   classificationResult: ClassificationResult | null
 ): { slotKey: string; query: string; priceIntent: 'most_expensive' | 'cheapest'; updatedSlots: DialogSlots } 
- | { slotKey: string; searchParams: { category: string; resolvedFilters: Record<string, string>; refinementText: string; existingUnresolved: string; baseCategory: string }; updatedSlots: DialogSlots }
+ | { slotKey: string; searchParams: { category: string; resolvedFilters: Record<string, string>; refinementText: string; refinementModifiers: string[]; existingUnresolved: string; baseCategory: string }; updatedSlots: DialogSlots }
  | null {
   // First: check for pending product_search slot with filter state
   for (const [key, slot] of Object.entries(slots)) {
@@ -1130,6 +1130,9 @@ function resolveSlotRefinement(
             category: slot.plural_category,
             resolvedFilters: existingFilters,
             refinementText: userMessage.trim(),
+            refinementModifiers: classificationResult?.search_modifiers?.length 
+              ? classificationResult.search_modifiers 
+              : [userMessage.trim()],
             existingUnresolved: slot.unresolved_query || '',
             baseCategory: slot.base_category,
           },
@@ -2288,7 +2291,14 @@ ${JSON.stringify(modifiers)}
       if (optionIndex.has(resolvedKey)) {
         // KEY exists — now validate VALUE against known values in schema
         const knownValues = optionIndex.get(resolvedKey)!.values;
-        const matchedValue = [...knownValues].find(v => norm(v) === norm(value));
+       const matchedValue = [...knownValues].find(v => {
+         const nv = norm(v);
+         const nval = norm(value);
+         if (nv === nval) return true;
+         // Bilingual values: "накладной//бетіне орнатылған" — match Russian part before "//"
+         const ruPart = nv.split('//')[0].trim();
+         return ruPart === nval;
+       });
         
         if (matchedValue) {
           validated[resolvedKey] = matchedValue; // use exact value from schema
@@ -3199,8 +3209,10 @@ serve(async (req) => {
           console.log(`[Chat] Fetched ${schemaProducts.length} schema products for category="${sp.category}"`);
           
           // Step 2: Resolve the NEW modifier (user's answer) against option schema
+          const modifiersToResolve = sp.refinementModifiers || [sp.refinementText];
+          console.log(`[Chat] Resolving modifiers: ${JSON.stringify(modifiersToResolve)} (from classifier: ${sp.refinementModifiers ? 'yes' : 'no, fallback'})`);
           const { resolved: newFilters, unresolved: stillUnresolved } = 
-            await resolveFiltersWithLLM(schemaProducts, [sp.refinementText], appSettings);
+            await resolveFiltersWithLLM(schemaProducts, modifiersToResolve, appSettings);
           console.log(`[Chat] FilterLLM refinement: resolved=${JSON.stringify(newFilters)}, unresolved=${JSON.stringify(stillUnresolved)}`);
           
           // Step 3: Merge with existing filters from slot
@@ -3466,13 +3478,13 @@ serve(async (req) => {
                 base_category: effectiveCategory || pluralCategory,
                 plural_category: pluralCategory,
                 resolved_filters: JSON.stringify(resolvedFilters || {}),
-                unresolved_query: queryText || '',
+                unresolved_query: unresolvedMods?.length > 0 ? unresolvedMods.join(' ') : '',
                 status: 'pending',
                 created_turn: messages.length,
                 turns_since_touched: 0,
               };
               slotsUpdated = true;
-              console.log(`[Chat] Created product_search slot "${slotKey}": filters=${JSON.stringify(resolvedFilters || {})}, query="${queryText || ''}"`);
+              console.log(`[Chat] Created product_search slot "${slotKey}": filters=${JSON.stringify(resolvedFilters || {})}, query="${unresolvedMods?.length > 0 ? unresolvedMods.join(' ') : ''}"`);
             }
           } else if (rawProducts.length > 0) {
             foundProducts = rawProducts.slice(0, 15);
