@@ -1083,6 +1083,7 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
       status: s.status as 'pending' | 'done',
       created_turn: typeof s.created_turn === 'number' ? s.created_turn : 0,
       turns_since_touched: typeof s.turns_since_touched === 'number' ? s.turns_since_touched : 0,
+      cached_products: typeof s.cached_products === 'string' ? s.cached_products.substring(0, 15000) : undefined,
     };
     count++;
   }
