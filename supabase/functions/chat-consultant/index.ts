@@ -3439,28 +3439,21 @@ serve(async (req) => {
             console.log(`[Chat] Category-first DECISION: mode=${resultMode}, count=${foundProducts.length}, elapsed=${categoryElapsed}ms`);
             
             // Create product_search slot when >7 results (bot will ask clarifying question)
+            // Store filter settings, not products — enables full-catalog re-query on refinement
             if (foundProducts.length > 7) {
-              const compactProducts = foundProducts.slice(0, 20).map(p => ({
-                id: p.id,
-                pagetitle: p.pagetitle,
-                price: p.price,
-                url: p.url,
-                image: p.image,
-                amount: (p as any).amount,
-                parent_name: p.parent_name,
-                options: (p as any).options,
-              }));
               const slotKey = `ps_${Date.now()}`;
               dialogSlots[slotKey] = {
                 intent: 'product_search',
                 base_category: effectiveCategory || pluralCategory,
+                plural_category: pluralCategory,
+                resolved_filters: JSON.stringify(resolvedFilters || {}),
+                unresolved_query: queryText || '',
                 status: 'pending',
                 created_turn: messages.length,
                 turns_since_touched: 0,
-                cached_products: JSON.stringify(compactProducts),
               };
               slotsUpdated = true;
-              console.log(`[Chat] Created product_search slot "${slotKey}": ${compactProducts.length} products cached for follow-up`);
+              console.log(`[Chat] Created product_search slot "${slotKey}": filters=${JSON.stringify(resolvedFilters || {})}, query="${queryText || ''}"`);
             }
           } else if (rawProducts.length > 0) {
             foundProducts = rawProducts.slice(0, 15);
