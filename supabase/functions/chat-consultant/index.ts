@@ -3290,18 +3290,19 @@ serve(async (req) => {
 
             // Resolve filters using exact bucket schema
             console.log(`[Chat] Category-first: resolving modifiers [${modifiers.join(', ')}] against ${exactBucket.length} products (exact bucket)`);
-            const resolvedFilters = await resolveFiltersWithLLM(exactBucket, modifiers, appSettings);
+            const { resolved: resolvedFilters, unresolved: unresolvedMods } = await resolveFiltersWithLLM(exactBucket, modifiers, appSettings);
             
             let resultMode = 'no_filters';
-            if (Object.keys(resolvedFilters).length > 0) {
-              console.log(`[Chat] Category-first resolved filters: ${JSON.stringify(resolvedFilters)}`);
+            if (Object.keys(resolvedFilters).length > 0 || unresolvedMods.length > 0) {
+              console.log(`[Chat] Category-first resolved filters: ${JSON.stringify(resolvedFilters)}, unresolved: [${unresolvedMods.join(', ')}]`);
 
-              // STAGE 2: Server-side filtered API call — searches ALL products, not just first 50
-              console.log(`[Chat] Category-first STAGE 2: server-side filter via API options`);
+              // STAGE 2: Hybrid API call — resolved → options, unresolved → query text
+              const queryText = unresolvedMods.length > 0 ? unresolvedMods.join(' ') : null;
+              console.log(`[Chat] Category-first STAGE 2: server options=${JSON.stringify(resolvedFilters)}, query="${queryText}"`);
               let serverFiltered = await searchProductsByCandidate(
-                { query: null, brand: null, category: pluralCategory, min_price: null, max_price: null },
+                { query: queryText, brand: null, category: pluralCategory, min_price: null, max_price: null },
                 appSettings.volt220_api_token, 50,
-                resolvedFilters
+                Object.keys(resolvedFilters).length > 0 ? resolvedFilters : undefined
               );
               console.log(`[Chat] Category-first server-filtered: ${serverFiltered.length} products`);
 
