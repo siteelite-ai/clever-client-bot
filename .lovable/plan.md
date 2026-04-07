@@ -1,86 +1,65 @@
 
 
-# План: Валидация значений + гибридный query/options
+# План: Расширить dialogSlots для product_search (кэш + follow-up фильтрация)
 
-## Суть проблемы
+## Проблема
 
-Текущий pipeline делает правильные шаги, но ломается на одном месте: LLM резолвит значение (например `cvet = "черный"`), которого **нет в первых 50 товарах** (там только белый, кремовый). API требует **точное** совпадение значения в `options[cvet][]=...`. Значение не совпадает → 0 результатов.
+DialogSlots работают только для `price_extreme`. Когда category-first находит >7 товаров и бот задаёт уточняющий вопрос ("электрическая, компьютерная или телефонная?"), при ответе пользователя pipeline стартует заново, теряя контекст и результаты.
 
-Твоя логика абсолютно верная:
-1. Нашли розетки ✓
-2. Смотрим какие цвета есть → если "черный" есть в списке значений → используем как точный фильтр. Если нет → отправляем "черная" как текстовый поиск (query), API сам найдет
-3. Смотрим разъемы → "2" есть в списке → точный фильтр
-4. Если результатов >7 → уточняем
+## Решение
 
-## Что конкретно менять
+Использовать уже существующую инфраструктуру dialogSlots для `product_search` интента:
 
-**Файл:** `supabase/functions/chat-consultant/index.ts`
+### 1. Создание слота при уточняющем вопросе
 
-### Изменение 1: resolveFiltersWithLLM возвращает два набора (строки 2232-2252)
+Когда category-first находит >7 товаров, перед отправкой уточняющего вопроса — создать слот:
 
-Сейчас функция возвращает `Record<string, string>` — все фильтры в одну кучу. Нужно разделить:
-
-- **validated** (значение ЕСТЬ в schema) → пойдут в `options[key][]=value`
-- **unresolved** (ключ найден, но значения нет в выборке) → пойдут в текстовый `query`
-
-```typescript
-// После проверки ключа — проверить значение
-if (optionIndex.has(resolvedKey)) {
-  const knownValues = optionIndex.get(resolvedKey)!.values;
-  const norm = (s: string) => s.replace(/ё/g, 'е').toLowerCase().trim();
-  const match = [...knownValues].find(v => norm(v) === norm(value));
-  
-  if (match) {
-    validated[resolvedKey] = match; // точное значение из schema
-  } else {
-    unresolved.push(originalModifier); // вернём модификатор для query
-  }
+```
+{
+  intent: 'product_search',
+  base_category: 'розетка',
+  refinement: null,
+  status: 'pending',
+  cached_products: [...найденные товары (до 20)...]
 }
 ```
 
-Возврат: `{ resolved: Record<string,string>, unresolved: string[] }`
+### 2. Расширить resolveSlotRefinement
 
-### Изменение 2: Гибридный API-запрос в category-first (строки 3268-3275)
+Сейчас функция обрабатывает только `price_extreme`. Добавить обработку `product_search`:
+- Найти pending слот с `intent === 'product_search'`
+- Извлечь уточнение пользователя ("электрическая")
+- Отфильтровать cached_products по уточнению (по названию, характеристикам)
+- Вернуть отфильтрованный список без нового API-запроса
 
-```typescript
-const { resolved, unresolved } = await resolveFiltersWithLLM(...);
+### 3. Фильтрация кэшированных товаров
 
-// resolved → серверные options (точные)
-// unresolved → текстовый query (API сам найдёт)
-const queryText = unresolved.length > 0 ? unresolved.join(' ') : null;
-
-const serverFiltered = await searchProductsByCandidate(
-  { query: queryText, category: pluralCategory, ... },
-  token, 50,
-  resolved
-);
-```
-
-### Изменение 3: Обновить все вызовы resolveFiltersWithLLM
-
-Функция вызывается в нескольких местах — везде обновить деструктуризацию.
-
-## Ожидаемый результат
-
-Запрос "черная двухместная розетка":
+Простая функция: проверяет ответ пользователя по `pagetitle` и `options` каждого товара. Без LLM — строковое вхождение.
 
 ```text
-1. category="розетки" → 50 товаров для схемы
-2. FilterLLM:
-   - cvet = "черный" → в schema есть только "белый", "кремовый" → UNRESOLVED → query
-   - kolichestvo_razyemov = "2" → "2" ЕСТЬ в schema → RESOLVED → options
-3. API: query="черная" + category="розетки" + options[kolichestvo_razyemov][]=2
-   → сервер ищет по ВСЕМ 2336: текст "черная" + разъемов=2
-4. Результат: чёрные двухместные розетки
-5. Если >7 → бот уточняет
+cached: 20 розеток Гармония (электрические + компьютерные + телефонные)
+ответ: "электрическая"
+→ filter: p.pagetitle или p.options содержит "электрич"
+→ результат: 10 электрических розеток Гармония
 ```
 
-## Объём
-~20 строк изменений в `resolveFiltersWithLLM` + ~5 строк в category-first блоке.
+### 4. Ограничение размера
+
+dialogSlots передаются через SSE и sessionStorage. Кэшировать только ключевые поля каждого товара (id, pagetitle, price, url, image, amount) — без полного options. Максимум 20 товаров.
+
+## Файлы
+
+**supabase/functions/chat-consultant/index.ts**:
+- Интерфейс DialogSlot: добавить `cached_products?: string` (JSON-строка)
+- `resolveSlotRefinement`: добавить ветку для `product_search`
+- Category-first блок: создавать слот при >7 результатах
+- Новая функция `filterCachedProducts(products, userAnswer)`
 
 ## Что НЕ трогаем
-- Промпт FilterLLM — работает правильно
-- Classify — работает
-- Другие ветки — без изменений
-- Каскадный fallback — сохраняется
+- Виджет (ChatWidget.tsx, embed.js) — dialogSlots уже синхронизируются
+- Price_extreme логику — без изменений
+- Pipeline classify/filter — без изменений
+
+## Объём
+~40-50 строк изменений в одном файле.
 
