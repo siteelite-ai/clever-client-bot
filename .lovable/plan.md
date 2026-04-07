@@ -1,65 +1,64 @@
 
 
-# План: Расширить dialogSlots для product_search (кэш + follow-up фильтрация)
+# План: Пересоздание слота после follow-up фильтрации
 
 ## Проблема
 
-DialogSlots работают только для `price_extreme`. Когда category-first находит >7 товаров и бот задаёт уточняющий вопрос ("электрическая, компьютерная или телефонная?"), при ответе пользователя pipeline стартует заново, теряя контекст и результаты.
+Слот `product_search` правильно создается при первом поиске (>7 товаров) и правильно фильтруется при первом уточнении ("электрическая"). Но после фильтрации слот помечается как `done` и удаляется. Новый слот **не создается**, потому что код создания слотов находится только внутри ветки category-first (строка 3434), а при slot-resolution эта ветка пропускается (`articleShortCircuit = true`).
+
+```text
+Шаг 1: "розетки Гармония" → 20 товаров → slot created (pending)
+Шаг 2: "электрическая" → slot resolved → 10 товаров → slot = done → УДАЛЁН
+        ↑ Новый слот НЕ создан, потому что category-first не выполнялся
+Шаг 3: "накладные" → нет pending слота → pipeline с нуля → контекст потерян
+```
 
 ## Решение
 
-Использовать уже существующую инфраструктуру dialogSlots для `product_search` интента:
+После slot-resolution, если отфильтрованных товаров снова >7, создать **новый** pending слот с отфильтрованными товарами. Это одно добавление ~10 строк.
 
-### 1. Создание слота при уточняющем вопросе
+## Конкретное изменение
 
-Когда category-first находит >7 товаров, перед отправкой уточняющего вопроса — создать слот:
+**Файл:** `supabase/functions/chat-consultant/index.ts`, строки 3206-3212
 
-```
-{
-  intent: 'product_search',
-  base_category: 'розетка',
-  refinement: null,
-  status: 'pending',
-  cached_products: [...найденные товары (до 20)...]
+После строки 3212 (`console.log(...product_search slot resolved...)`), добавить:
+
+```typescript
+// If still >7, create a new slot for the next refinement round
+if (foundProducts.length > 7) {
+  const compactProducts = foundProducts.slice(0, 20).map(p => ({
+    id: p.id, pagetitle: p.pagetitle, price: p.price,
+    url: p.url, image: p.image, amount: (p as any).amount,
+    parent_name: p.parent_name, options: (p as any).options,
+  }));
+  const newSlotKey = `ps_${Date.now()}`;
+  dialogSlots[newSlotKey] = {
+    intent: 'product_search',
+    base_category: slotResolution.updatedSlots[slotResolution.slotKey]?.base_category 
+      || effectiveCategory,
+    status: 'pending',
+    created_turn: messages.length,
+    turns_since_touched: 0,
+    cached_products: JSON.stringify(compactProducts),
+  };
+  console.log(`[Chat] Re-created product_search slot "${newSlotKey}": ${compactProducts.length} products for next refinement`);
 }
 ```
 
-### 2. Расширить resolveSlotRefinement
-
-Сейчас функция обрабатывает только `price_extreme`. Добавить обработку `product_search`:
-- Найти pending слот с `intent === 'product_search'`
-- Извлечь уточнение пользователя ("электрическая")
-- Отфильтровать cached_products по уточнению (по названию, характеристикам)
-- Вернуть отфильтрованный список без нового API-запроса
-
-### 3. Фильтрация кэшированных товаров
-
-Простая функция: проверяет ответ пользователя по `pagetitle` и `options` каждого товара. Без LLM — строковое вхождение.
+## Ожидаемый результат
 
 ```text
-cached: 20 розеток Гармония (электрические + компьютерные + телефонные)
-ответ: "электрическая"
-→ filter: p.pagetitle или p.options содержит "электрич"
-→ результат: 10 электрических розеток Гармония
+Шаг 1: "розетки Гармония" → 20 → slot_1 (pending, 20 cached)
+Шаг 2: "электрическая" → slot_1 resolved → 10 → slot_1 = done → slot_2 (pending, 10 cached)
+Шаг 3: "накладные" → slot_2 resolved → фильтр по "накладн" → 3 накладных электрических розетки Гармония
 ```
 
-### 4. Ограничение размера
-
-dialogSlots передаются через SSE и sessionStorage. Кэшировать только ключевые поля каждого товара (id, pagetitle, price, url, image, amount) — без полного options. Максимум 20 товаров.
-
-## Файлы
-
-**supabase/functions/chat-consultant/index.ts**:
-- Интерфейс DialogSlot: добавить `cached_products?: string` (JSON-строка)
-- `resolveSlotRefinement`: добавить ветку для `product_search`
-- Category-first блок: создавать слот при >7 результатах
-- Новая функция `filterCachedProducts(products, userAnswer)`
+## Объём
+~12 строк в одном месте одного файла.
 
 ## Что НЕ трогаем
-- Виджет (ChatWidget.tsx, embed.js) — dialogSlots уже синхронизируются
-- Price_extreme логику — без изменений
-- Pipeline classify/filter — без изменений
-
-## Объём
-~40-50 строк изменений в одном файле.
+- resolveSlotRefinement — работает правильно
+- filterCachedProducts — работает правильно
+- Category-first ветка — без изменений
+- Виджет — без изменений
 
