@@ -1,66 +1,261 @@
 
+# Консилиум: аудит логов + план системного логирования category-first
 
-# План: Fuzzy-валидация ключей от FilterLLM
+## Что уже точно видно по текущим логам
 
-## Проблема (из логов)
+Запрос `"ужна черная двухместная розетка. предложи варианты"` был обработан не “мимо”, а по pipeline:
 
-LLM вернул: `"cvet__tүsі (Цвет)": "чёрный"`
-Реальный ключ в optionIndex: `"cvet__tүsі"`
+```text
+1. Classify:
+   category="розетка"
+   modifiers=[черная, двухместная]
 
-LLM добавил caption в скобках к ключу. `optionIndex.has("cvet__tүsі (Цвет)")` → false → ключ отклонён → цвет потерян → AND-фильтр нашёл только по полюсам → 1 нерелевантный товар.
+2. Category-first:
+   plural="розетки"
+   API category="розетки" → 50 products
 
-Pipeline сам по себе работает правильно — classify, plural, API, resolveFilters — всё отработало. Баг только в валидации ключей на строке 2230.
+3. FilterLLM:
+   resolved:
+   - cvet__tүsі = "чёрный"
+   - kolichestvo_polyusov... = "2"
 
-## Решение
+4. AND-filter:
+   50 → 0 products
 
-В блоке валидации (строки 2228-2236) добавить нормализацию ключа — если точного совпадения нет, попробовать:
-1. Убрать всё после ` (` — то есть `key.split(' (')[0].trim()`
-2. Если после очистки ключ найден в optionIndex — принять его
-
-**Файл**: `supabase/functions/chat-consultant/index.ts`, строки 2228-2236
-
-**Было** (~8 строк):
-```typescript
-const validated: Record<string, string> = {};
-for (const [key, value] of Object.entries(filters)) {
-  if (optionIndex.has(key) && typeof value === 'string') {
-    validated[key] = value;
-  } else {
-    console.log(`[FilterLLM] Rejected unknown key: "${key}"`);
-  }
-}
+5. Дальше произошёл сбой логики:
+   code не сохранил 0 exact matches,
+   а молча оставил исходные 50 товаров,
+   взял первые 15 и пометил это как SUCCESS
 ```
 
-**Станет** (~12 строк):
-```typescript
-const validated: Record<string, string> = {};
-for (const [rawKey, value] of Object.entries(filters)) {
-  if (typeof value !== 'string') continue;
-  // Try exact match first, then strip caption suffix like " (Цвет)"
-  let resolvedKey = rawKey;
-  if (!optionIndex.has(resolvedKey)) {
-    const stripped = resolvedKey.split(' (')[0].trim();
-    if (optionIndex.has(stripped)) {
-      resolvedKey = stripped;
-    }
-  }
-  if (optionIndex.has(resolvedKey)) {
-    validated[resolvedKey] = value;
-    console.log(`[FilterLLM] Resolved: "${resolvedKey}" = "${value}"`);
-  } else {
-    console.log(`[FilterLLM] Rejected unknown key: "${rawKey}"`);
-  }
-}
+То есть проблема не в том, что система “не увидела категорию”. Категорию и модификаторы она увидела. Проблема в двух местах ниже по конвейеру.
+
+## Вердикт консилиума по ролям из AUDIT_PROMPT.md
+
+### 1) RAG Quality Auditor
+RAG тут ни при чём. Ошибка в товарном pipeline, не в knowledge search.
+
+### 2) Sales Logic Auditor
+Пользователь просит точный товар, а система после `0 exact matches` подсовывает просто список розеток/силовых розеток. Это снижает доверие: бот выглядит так, будто “не понял запрос”.
+
+### 4) Edge Functions Stability Auditor
+Функция не падает и укладывается по времени, но логика завершения ветки некорректна:
+- exact-match дал 0
+- это состояние потерялось
+- в ответ ушёл fallback без явной пометки
+
+### 9) Analytics & Monitoring Auditor
+Логов недостаточно для нормальной диагностики:
+- нет breakdown по категориям внутри найденных 50 товаров
+- нет причин отсева товаров в AND-фильтре
+- нет отдельного лога “exact=0, fallback=raw”
+- нет сырого JSON классификатора
+
+### 10) Integration & Deployment Auditor
+Архитектурно это не повод для словарных костылей. Нужны:
+1. прозрачная трассировка pipeline,
+2. исправление поведения при `0 exact matches`,
+3. очистка category set перед резолвом фильтров.
+
+## Корневые причины
+
+### Причина A. Смешанная выборка категории
+`category="розетки"` вернул не только обычные `Розетки`, но и `Розетки силовые`.
+
+Из-за этого в общей схеме характеристик появились несовместимые поля:
+- у обычных розеток: `Количество разъемов`
+- у силовых: `Количество полюсов`
+
+LLM честно выбрал существующее поле, но выбрал не тот физический смысл для слова “двухместная”.
+
+### Причина B. Неправильная семантика “двухместная”
+Для обычной бытовой розетки “двухместная” почти всегда значит:
+- `Количество разъемов = 2`
+
+А не:
+- `Количество полюсов = 2`
+
+Сейчас резолверу мешает загрязнённая схема из смешанных подкатегорий.
+
+### Причина C. Самая критичная ошибка — silent fallback
+После `AND-filter: 50 → 0` код не фиксирует “точных совпадений нет”, а возвращает исходный список категории.
+
+Именно поэтому у тебя ощущение, что “он ничего не увидел”: увидел, но потом сам же потерял результат.
+
+## План исправления
+
+### Шаг 1. Ввести полноценное трассировочное логирование по request-id
+Для каждого запроса логировать единый `traceId` и этапы:
+
+```text
+[classify]
+[category-search]
+[category-buckets]
+[filter-schema]
+[filter-llm]
+[and-filter]
+[result-decision]
+[final-context]
 ```
 
-## Объём
+Это даст непрерывную цепочку, а не разрозненные строки.
 
-~4 строки добавить в один файл. Редеплой edge function.
+### Шаг 2. Логировать сырой и нормализованный результат классификатора
+Добавить в логи:
+- raw JSON от micro-LLM
+- нормализованный `effectiveCategory`
+- полный список `search_modifiers`
+- почему выбран именно category-first
 
-## Что НЕ трогаем
+Чтобы сразу видеть: не потерялись ли модификаторы до фильтрации.
 
-- Промпт FilterLLM — работает правильно, нашёл и цвет, и полюса
-- Pipeline category-first — полностью корректный
-- AND-фильтр — работает
-- Classify, plural — работают
+### Шаг 3. Логировать состав найденной category-выборки
+После API-поиска по категории вывести:
+- количество товаров
+- распределение по `product.category.pagetitle`
+- top 10 category titles
+- сколько товаров в exact bucket (`Розетки`)
+- сколько в sibling bucket (`Розетки силовые` и т.д.)
 
+Это покажет, где начинается загрязнение выборки.
+
+### Шаг 4. Разделить category set на buckets ДО FilterLLM
+Нужно не резолвить фильтры по всем 50 товарам сразу, а делать так:
+
+```text
+1. exact category bucket
+2. sibling category bucket
+3. сначала FilterLLM + AND только по exact bucket
+4. sibling bucket использовать только как явный fallback
+```
+
+Для запроса `розетка` первичным должен быть bucket `Розетки`, а не смешанный массив с силовыми розетками.
+
+### Шаг 5. Логировать схему фильтров и выбор FilterLLM
+Нужно писать:
+- какие option keys попали в schema
+- caption каждого key
+- по 3-5 sample values
+- raw response LLM
+- validated filters
+
+Тогда будет видно, почему “двухместная” ушла в `полюса`, а не в `разъемы`.
+
+### Шаг 6. Добавить детальный AND-filter logging
+Не просто `50 → 0`, а:
+- сколько товаров отвалилось по цвету
+- сколько по количеству разъемов / полюсов
+- по первым N товарам — конкретную причину reject
+
+Пример желаемого формата:
+
+```text
+[and-filter] reject product=123
+- category=Розетки силовые
+- color: "красный" != "чёрный"
+- poles: "4" != "2"
+```
+
+И отдельный агрегат:
+
+```text
+[and-filter-summary]
+color mismatches: 41
+missing key: 6
+poles mismatches: 18
+socket-count mismatches: 7
+```
+
+### Шаг 7. Убрать silent fallback при 0 exact matches
+Если есть resolved filters и exact AND-filter дал 0, поведение должно быть явным:
+
+```text
+exact matches = 0
+=> НЕ подменять результат сырым category list
+=> либо:
+   A) сообщить "точных совпадений нет"
+   B) отдельно предложить близкие альтернативы
+```
+
+Но exact=0 и fallback-list должны быть разными режимами, с отдельными логами.
+
+### Шаг 8. Логировать финальное решение, а не только SUCCESS
+Нужен явный лог финального decision:
+
+```text
+[result-decision]
+mode=exact_match | no_exact_match | fallback_alternatives
+exact_count=0
+returned_count=0 or 3
+reason="no products matched all resolved filters"
+```
+
+Сейчас лог `Category-first SUCCESS: 15 products` маскирует реальную картину.
+
+## Что именно получится после исправления
+
+Для такого запроса лог станет читаться так:
+
+```text
+1. classify → category=розетка, modifiers=[черная, двухместная]
+2. category-search → 50
+3. category-buckets:
+   - Розетки: 19
+   - Розетки силовые: 31
+4. exact bucket selected: 19
+5. FilterLLM on exact bucket:
+   - color → Цвет=чёрный
+   - two-seat → Количество разъемов=2
+6. AND-filter on exact bucket:
+   19 → 0
+7. result-decision:
+   exact_count=0
+   fallback_mode=alternatives_only
+```
+
+И тогда будет понятно:
+- где именно сломалась логика,
+- действительно ли нет чёрных двухместных розеток,
+- или проблема была в плохом сопоставлении.
+
+## Технически что менять
+
+**Файл:** `supabase/functions/chat-consultant/index.ts`
+
+### Блоки на изменение
+1. `resolveFiltersWithLLM(...)`
+   - структурные логи schema/options/raw response/validated filters
+
+2. `category-first` ветка
+   - bucketization по category title
+   - primary filtering по exact bucket
+   - детальные logs по AND-filter
+   - явный decision log
+   - запрет silent fallback
+
+3. helper для structured debug logs
+   - единый `traceId`
+   - компактный JSON-формат
+
+## Что не делаем
+
+- не добавляем словари “двухместная = количество разъемов”
+- не лепим regex-костыли под цвет/двухместность
+- не лечим симптом через новые fuzzy-сопоставления
+
+## Итоговый системный вывод
+
+Сейчас основная проблема не в том, что LLM “не видит запрос”.
+Основная проблема в том, что:
+
+```text
+category search смешивает подкатегории
+→ FilterLLM получает загрязнённую схему
+→ exact AND-filter даёт 0
+→ код теряет это состояние
+→ в ответ уходит fallback, выглядящий как будто бот не понял запрос
+```
+
+Значит правильный следующий шаг — не очередной точечный фикс, а связка из двух вещей:
+1. полное трассировочное логирование,
+2. исправление decision logic после `0 exact matches`.
