@@ -1,80 +1,67 @@
 
 
-# План: Локальная фильтрация по характеристикам как ОСНОВНОЙ механизм
+# План: Использовать API-параметр `category` вместо `query` для category-first
 
-## Суть проблемы
+## Проблема
 
-Сейчас система полагается на Pass 2 API (повторный запрос с `options[key][]=value`). Но API часто не принимает фильтры или LLM выбирает не тот ключ — и результат 0. Тогда возвращается нефильтрованный Pass 1.
+Сейчас category-first передаёт название категории через `query=розетка`. API ищет по тексту во ВСЕХ полях (название, описание, контент) — поэтому возвращает рамки, накладки, блоки, в названии или описании которых упоминается "розетка".
 
-Пользователь говорит: **фильтрация по характеристикам должна быть основной**, а не резервной. У нас уже есть товары из Pass 1 с полными `product.options` — нужно просто сравнить resolved фильтры с реальными характеристиками каждого товара локально.
+API уже имеет специальный параметр `category` — "Фильтр по категории товара (pagetitle родительского ресурса)". Если передать `category=Розетки`, API вернёт ТОЛЬКО товары из категории "Розетки". Никаких рамок, никаких накладок.
 
-## Новый поток (category-first)
+## Проблема единственного/множественного числа
 
-```text
-classify → category="розетка", modifiers=["черная","двухместная"]
-  → Pass 1: запрос "розетка" в API → 30 товаров с полными options
-  → resolveFiltersWithLLM: собирает схему из options, LLM маппит модификаторы
-  → ОСНОВНОЙ ОТБОР: сравнить resolved filters с product.options каждого товара
-  → Отдать только товары, где ВСЕ фильтры совпали
-  → Pass 2 API — УБИРАЕМ полностью для category-first
-```
+Классификатор возвращает `effectiveCategory = "розетка"` (единственное число), а категория в каталоге — `"Розетки"` (множественное, с заглавной). Нужно:
+1. Попробовать несколько вариантов написания категории (единственное, множественное)
+2. Или: сначала сделать `query`-запрос с 1 товаром, прочитать `product.category.pagetitle`, затем использовать его как точное значение `category`
 
-## Конкретные изменения
+## Изменения
 
 **Файл**: `supabase/functions/chat-consultant/index.ts`
 
-### 1. Заменить Pass 2 API на локальную фильтрацию (строки 2403-2449)
+### 1. Category-first ветка (строки 3121-3125): двухшаговый поиск
 
-Вместо повторного запроса в API с `option_filters` — фильтруем Pass 1 результаты локально:
+Шаг 1 — "разведка": запросить 1 товар через `query=розетка`, прочитать его `category.pagetitle` (например, "Розетки").
 
-```
-if (modifiers && modifiers.length > 0 && productMap.size > 0 && settings) {
-  const resolvedFilters = await resolveFiltersWithLLM(products, modifiers, settings);
-  
-  if (Object.keys(resolvedFilters).length > 0) {
-    // ОСНОВНОЙ ОТБОР: сравниваем resolved filters с product.options
-    const matched = products.filter(product => {
-      if (!product.options) return false;
-      return Object.entries(resolvedFilters).every(([key, value]) => {
-        const productValue = product.options[key];
-        if (!productValue) return false;
-        // Сравнение без учёта регистра и пробелов
-        return productValue.toString().toLowerCase().trim() 
-            === value.toString().toLowerCase().trim();
-      });
-    });
-    
-    if (matched.length > 0) {
-      productMap.clear();
-      matched.forEach(p => productMap.set(p.id, p));
-      console.log(`[Search] Characteristic filter: ${matched.length} products match`);
-    } else {
-      console.log(`[Search] Characteristic filter: 0 exact matches, keeping Pass 1`);
-    }
-  }
-}
+Шаг 2 — основной запрос: использовать полученный `category.pagetitle` как значение параметра `category` в API. Это даст ТОЛЬКО товары из категории "Розетки", per_page=50.
+
+```text
+// Шаг 1: разведка — узнаём точное название категории
+query="розетка", per_page=1 → product.category.pagetitle = "Розетки"
+
+// Шаг 2: точный запрос по категории
+category="Розетки", per_page=50 → только розетки, без рамок и накладок
 ```
 
-### 2. Проверить, что product.options приходит из API
+### 2. searchProductsByCandidate (строки 2280-2290): уже поддерживает `category`
 
-Нужно убедиться, что API возвращает `options` в ответе и мы их сохраняем в объекте Product. Если `options` — это то же поле, из которого `resolveFiltersWithLLM` строит схему, то данные уже есть.
+Код уже передаёт `candidate.category` в API: `params.append('category', candidate.category)`. Нужно просто передать правильное значение в кандидате.
 
-### 3. Сортировка по количеству совпадений
+### 3. Локальная фильтрация (строки 2403-2450): без изменений
 
-Если не все фильтры совпали у всех товаров, сортировать по числу подтверждённых совпадений (больше совпадений = выше в списке).
+После получения товаров из правильной категории — `resolveFiltersWithLLM` строит схему характеристик ТОЛЬКО по розеткам → LLM видит цвет, количество разъёмов → фильтрует точно.
+
+## Итоговый pipeline
+
+```text
+"черная двухместная розетка"
+  ↓
+classify → category="розетка", modifiers=["черная","двухместная"]
+  ↓
+Разведка: query="розетка", per_page=1 → узнаём category.pagetitle = "Розетки"
+  ↓
+Основной: category="Розетки", per_page=50 → ТОЛЬКО розетки (30+ штук)
+  ↓
+resolveFiltersWithLLM: схема ТОЛЬКО по розеткам
+  → цвет=чёрный, кол-во_разъемов=2
+  ↓
+Локальный фильтр: product.options vs resolved → только чёрные двухместные розетки
+```
 
 ## Что НЕ трогаем
 
-- `resolveFiltersWithLLM` — промпт только что обновлён, работает
-- Title-first, article-first, price-intent, replacement — все ветки остаются
-- Pass 1 single query — работает
-- Классификатор — работает (отдельно исправим контекст диалога)
+- `resolveFiltersWithLLM` — работает
+- Локальную фильтрацию — уже реализована
+- Title-first, article-first, price-intent, replacement — без изменений
 
-## Ожидаемый результат
-
-- «черная двухместная розетка»: Pass 1 → 30 розеток → LLM резолвит `цвет=черный` + `кол-во_разъемов=2` → локально фильтруем product.options → только черные двухместные
-- Не зависим от того, примет ли API конкретный ключ фильтра — фильтруем сами
-- Все остальные ветки поиска продолжают работать без изменений
-
-## Объём: ~30 строк замены в `searchProductsMulti`
+## Объём: ~20 строк в category-first ветке
 
