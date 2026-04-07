@@ -3202,8 +3202,10 @@ serve(async (req) => {
           console.log(`[Chat] Fetched ${schemaProducts.length} schema products for category="${sp.category}"`);
           
           // Step 2: Resolve the NEW modifier (user's answer) against option schema
+          const modifiersToResolve = sp.refinementModifiers || [sp.refinementText];
+          console.log(`[Chat] Resolving modifiers: ${JSON.stringify(modifiersToResolve)} (from classifier: ${sp.refinementModifiers ? 'yes' : 'no, fallback'})`);
           const { resolved: newFilters, unresolved: stillUnresolved } = 
-            await resolveFiltersWithLLM(schemaProducts, [sp.refinementText], appSettings);
+            await resolveFiltersWithLLM(schemaProducts, modifiersToResolve, appSettings);
           console.log(`[Chat] FilterLLM refinement: resolved=${JSON.stringify(newFilters)}, unresolved=${JSON.stringify(stillUnresolved)}`);
           
           // Step 3: Merge with existing filters from slot
