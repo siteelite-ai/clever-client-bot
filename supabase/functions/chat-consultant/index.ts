@@ -2184,7 +2184,7 @@ ${JSON.stringify(modifiers)}
       if (!model.includes('/')) model = 'google/gemini-2.5-flash-lite';
     } else {
       const lovableKey = Deno.env.get('LOVABLE_API_KEY');
-      if (!lovableKey) { console.log('[FilterLLM] No API keys'); return {}; }
+      if (!lovableKey) { console.log('[FilterLLM] No API keys'); return { resolved: {}, unresolved: [...modifiers] }; }
       url = 'https://ai.gateway.lovable.dev/v1/chat/completions';
       apiKeys = [lovableKey];
       model = 'gemini-2.5-flash-lite';
