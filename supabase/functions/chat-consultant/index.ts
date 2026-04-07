@@ -1041,7 +1041,10 @@ interface DialogSlot {
   status: 'pending' | 'done';
   created_turn: number;
   turns_since_touched: number;
-  cached_products?: string; // JSON-stringified array of compact product objects for follow-up filtering
+  // product_search filter state (replaces cached_products)
+  resolved_filters?: string;   // JSON: {"razem":"2"}
+  unresolved_query?: string;   // accumulated text query: "черная"
+  plural_category?: string;    // "розетки" (API category param)
 }
 
 type DialogSlots = Record<string, DialogSlot>;
@@ -1083,7 +1086,9 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
       status: s.status as 'pending' | 'done',
       created_turn: typeof s.created_turn === 'number' ? s.created_turn : 0,
       turns_since_touched: typeof s.turns_since_touched === 'number' ? s.turns_since_touched : 0,
-      cached_products: typeof s.cached_products === 'string' ? s.cached_products.substring(0, 15000) : undefined,
+      resolved_filters: typeof s.resolved_filters === 'string' ? s.resolved_filters.substring(0, 2000) : undefined,
+      unresolved_query: typeof s.unresolved_query === 'string' ? sanitize(s.unresolved_query) : undefined,
+      plural_category: typeof s.plural_category === 'string' ? sanitize(s.plural_category) : undefined,
     };
     count++;
   }
@@ -1091,67 +1096,45 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
   return slots;
 }
 
-/**
- * Filter cached products by user's follow-up answer (string containment check).
- */
-function filterCachedProducts(products: any[], userAnswer: string): any[] {
-  const norm = (s: string) => s.replace(/ё/g, 'е').toLowerCase().trim();
-  const answer = norm(userAnswer);
-  // Generate stemmed prefix (first 5+ chars) for fuzzy matching
-  const answerWords = answer.split(/\s+/).filter(w => w.length >= 3);
-  
-  return products.filter(p => {
-    const title = norm(p.pagetitle || '');
-    const parentName = norm(p.parent_name || '');
-    // Check title and parent_name
-    if (answerWords.some(w => title.includes(w) || parentName.includes(w))) return true;
-    // Check options values
-    if (p.options && typeof p.options === 'object') {
-      for (const vals of Object.values(p.options)) {
-        if (Array.isArray(vals)) {
-          for (const v of vals) {
-            if (typeof v === 'string' && answerWords.some(w => norm(v).includes(w))) return true;
-          }
-        }
-      }
-    }
-    return false;
-  });
-}
+// filterCachedProducts removed — now we re-query API with accumulated filters instead
 
 /**
  * Resolve dialog slots against current user message.
  * Returns: { resolved slot key, combined query, price intent } or null.
- * For product_search slots: returns cached products directly.
+ * For product_search slots: returns searchParams for API re-query with accumulated filters.
  */
 function resolveSlotRefinement(
   slots: DialogSlots,
   userMessage: string,
   classificationResult: ClassificationResult | null
 ): { slotKey: string; query: string; priceIntent: 'most_expensive' | 'cheapest'; updatedSlots: DialogSlots } 
- | { slotKey: string; cachedProducts: Product[]; updatedSlots: DialogSlots }
+ | { slotKey: string; searchParams: { category: string; resolvedFilters: Record<string, string>; query: string; baseCategory: string }; updatedSlots: DialogSlots }
  | null {
-  // First: check for pending product_search slot
+  // First: check for pending product_search slot with filter state
   for (const [key, slot] of Object.entries(slots)) {
-    if (slot.status === 'pending' && slot.intent === 'product_search' && slot.cached_products) {
+    if (slot.status === 'pending' && slot.intent === 'product_search' && slot.plural_category) {
       const isShort = userMessage.length < 100;
-      // Check if this looks like a refinement answer (short, no explicit new category search)
       const hasNewCategory = classificationResult?.product_category 
         && classificationResult.product_category !== slot.base_category;
       
       if (isShort && !hasNewCategory) {
-        try {
-          const cached = JSON.parse(slot.cached_products);
-          const filtered = filterCachedProducts(cached, userMessage);
-          console.log(`[Slots] product_search resolved: "${userMessage}" filtered ${cached.length} → ${filtered.length} products`);
-          
-          const updatedSlots = { ...slots };
-          updatedSlots[key] = { ...slot, refinement: userMessage.trim(), status: 'done', turns_since_touched: 0 };
-          
-          return { slotKey: key, cachedProducts: filtered as Product[], updatedSlots };
-        } catch (e) {
-          console.error(`[Slots] Failed to parse cached products: ${e}`);
-        }
+        const existingFilters = slot.resolved_filters ? JSON.parse(slot.resolved_filters) : {};
+        const newQuery = `${slot.unresolved_query || ''} ${userMessage}`.trim();
+        console.log(`[Slots] product_search slot resolved: appending "${userMessage}" to query → "${newQuery}", filters=${JSON.stringify(existingFilters)}`);
+        
+        const updatedSlots = { ...slots };
+        updatedSlots[key] = { ...slot, refinement: userMessage.trim(), status: 'done', turns_since_touched: 0 };
+        
+        return { 
+          slotKey: key, 
+          searchParams: {
+            category: slot.plural_category,
+            resolvedFilters: existingFilters,
+            query: newQuery,
+            baseCategory: slot.base_category,
+          },
+          updatedSlots,
+        };
       }
     }
   }
@@ -3203,31 +3186,36 @@ serve(async (req) => {
         
         const slotResolution = resolveSlotRefinement(dialogSlots, userMessage, classification);
         
-        if (slotResolution && 'cachedProducts' in slotResolution) {
-          // product_search slot resolved — use cached & filtered products directly
-          foundProducts = slotResolution.cachedProducts;
+        if (slotResolution && 'searchParams' in slotResolution) {
+          // product_search slot resolved — re-query API with accumulated filters
+          const sp = slotResolution.searchParams;
+          console.log(`[Chat] product_search slot: re-querying API category="${sp.category}", query="${sp.query}", filters=${JSON.stringify(sp.resolvedFilters)}`);
+          
+          foundProducts = await searchProductsByCandidate(
+            { query: sp.query || null, brand: null, category: sp.category, min_price: null, max_price: null },
+            appSettings.volt220_api_token!, 50,
+            Object.keys(sp.resolvedFilters).length > 0 ? sp.resolvedFilters : undefined
+          );
+          foundProducts = foundProducts.slice(0, 15);
           articleShortCircuit = true;
           dialogSlots = slotResolution.updatedSlots;
           slotsUpdated = true;
-          console.log(`[Chat] product_search slot resolved: ${foundProducts.length} products after filtering`);
+          console.log(`[Chat] product_search slot resolved via API: ${foundProducts.length} products`);
           
-          // If still >7 results after filtering, re-create a pending slot for the next refinement round
+          // If still >7, create new slot with accumulated filters for next refinement
           if (foundProducts.length > 7) {
-            const compactProducts = foundProducts.slice(0, 20).map(p => ({
-              id: p.id, pagetitle: p.pagetitle, price: p.price,
-              url: p.url, image: p.image, amount: (p as any).amount,
-              parent_name: p.parent_name, options: (p as any).options,
-            }));
             const newSlotKey = `ps_${Date.now()}`;
             dialogSlots[newSlotKey] = {
               intent: 'product_search',
-              base_category: slotResolution.updatedSlots[slotResolution.slotKey]?.base_category || effectiveCategory,
+              base_category: sp.baseCategory || effectiveCategory,
+              plural_category: sp.category,
+              resolved_filters: JSON.stringify(sp.resolvedFilters),
+              unresolved_query: sp.query,
               status: 'pending',
               created_turn: messages.length,
               turns_since_touched: 0,
-              cached_products: JSON.stringify(compactProducts),
             };
-            console.log(`[Chat] Re-created product_search slot "${newSlotKey}": ${compactProducts.length} products for next refinement`);
+            console.log(`[Chat] Re-created product_search slot "${newSlotKey}": query="${sp.query}", filters=${JSON.stringify(sp.resolvedFilters)}`);
           }
         } else if (slotResolution && 'priceIntent' in slotResolution) {
           // Price slot resolved! Use slot's price intent and combined query
@@ -3451,28 +3439,21 @@ serve(async (req) => {
             console.log(`[Chat] Category-first DECISION: mode=${resultMode}, count=${foundProducts.length}, elapsed=${categoryElapsed}ms`);
             
             // Create product_search slot when >7 results (bot will ask clarifying question)
+            // Store filter settings, not products — enables full-catalog re-query on refinement
             if (foundProducts.length > 7) {
-              const compactProducts = foundProducts.slice(0, 20).map(p => ({
-                id: p.id,
-                pagetitle: p.pagetitle,
-                price: p.price,
-                url: p.url,
-                image: p.image,
-                amount: (p as any).amount,
-                parent_name: p.parent_name,
-                options: (p as any).options,
-              }));
               const slotKey = `ps_${Date.now()}`;
               dialogSlots[slotKey] = {
                 intent: 'product_search',
                 base_category: effectiveCategory || pluralCategory,
+                plural_category: pluralCategory,
+                resolved_filters: JSON.stringify(resolvedFilters || {}),
+                unresolved_query: queryText || '',
                 status: 'pending',
                 created_turn: messages.length,
                 turns_since_touched: 0,
-                cached_products: JSON.stringify(compactProducts),
               };
               slotsUpdated = true;
-              console.log(`[Chat] Created product_search slot "${slotKey}": ${compactProducts.length} products cached for follow-up`);
+              console.log(`[Chat] Created product_search slot "${slotKey}": filters=${JSON.stringify(resolvedFilters || {})}, query="${queryText || ''}"`);
             }
           } else if (rawProducts.length > 0) {
             foundProducts = rawProducts.slice(0, 15);
