@@ -2339,8 +2339,10 @@ function matchQuickFilter(product: Product, filter: { type: 'color'; value: stri
       return caption.includes('цвет') || key.includes('tsvet') || key.includes('cvet') || key.includes('color');
     });
     if (!colorOpt) return false;
-    const optValue = colorOpt.value.toString().toLowerCase();
-    return optValue.includes(filter.value) || filter.value.includes(optValue);
+    const normalize = (s: string) => s.toLowerCase().replace(/ё/g, 'е');
+    const optNorm = normalize(colorOpt.value.toString());
+    const filterNorm = normalize(filter.value);
+    return optNorm.includes(filterNorm) || filterNorm.includes(optNorm);
   }
   return false;
 }
