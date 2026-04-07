@@ -1108,7 +1108,7 @@ function resolveSlotRefinement(
   userMessage: string,
   classificationResult: ClassificationResult | null
 ): { slotKey: string; query: string; priceIntent: 'most_expensive' | 'cheapest'; updatedSlots: DialogSlots } 
- | { slotKey: string; searchParams: { category: string; resolvedFilters: Record<string, string>; refinementText: string; existingUnresolved: string; baseCategory: string }; updatedSlots: DialogSlots }
+ | { slotKey: string; searchParams: { category: string; resolvedFilters: Record<string, string>; refinementText: string; refinementModifiers: string[]; existingUnresolved: string; baseCategory: string }; updatedSlots: DialogSlots }
  | null {
   // First: check for pending product_search slot with filter state
   for (const [key, slot] of Object.entries(slots)) {
