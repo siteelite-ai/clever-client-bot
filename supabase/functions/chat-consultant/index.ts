@@ -1041,7 +1041,10 @@ interface DialogSlot {
   status: 'pending' | 'done';
   created_turn: number;
   turns_since_touched: number;
-  cached_products?: string; // JSON-stringified array of compact product objects for follow-up filtering
+  // product_search filter state (replaces cached_products)
+  resolved_filters?: string;   // JSON: {"razem":"2"}
+  unresolved_query?: string;   // accumulated text query: "черная"
+  plural_category?: string;    // "розетки" (API category param)
 }
 
 type DialogSlots = Record<string, DialogSlot>;
