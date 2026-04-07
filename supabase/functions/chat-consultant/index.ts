@@ -3471,7 +3471,7 @@ serve(async (req) => {
                 base_category: effectiveCategory || pluralCategory,
                 plural_category: pluralCategory,
                 resolved_filters: JSON.stringify(resolvedFilters || {}),
-                unresolved_query: queryText || '',
+                unresolved_query: unresolvedMods?.length > 0 ? unresolvedMods.join(' ') : '',
                 status: 'pending',
                 created_turn: messages.length,
                 turns_since_touched: 0,
