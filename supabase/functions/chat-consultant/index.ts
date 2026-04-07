@@ -2299,7 +2299,7 @@ function toPluralCategory(word: string): string {
  * without LLM (e.g., color words). Returns quick filters + remaining modifiers.
  */
 const COLOR_WORDS: Record<string, string> = {
-  'черн': 'черный', 'бел': 'белый', 'красн': 'красный', 'син': 'синий',
+  'черн': 'черный', 'чёрн': 'черный', 'бел': 'белый', 'красн': 'красный', 'син': 'синий',
   'зелен': 'зеленый', 'желт': 'желтый', 'серебр': 'серебристый', 'серебрян': 'серебряный',
   'серый': 'серый', 'сер': 'серый', 'золот': 'золотой', 'бежев': 'бежевый',
   'кремов': 'кремовый', 'коричнев': 'коричневый', 'розов': 'розовый',
@@ -2339,8 +2339,10 @@ function matchQuickFilter(product: Product, filter: { type: 'color'; value: stri
       return caption.includes('цвет') || key.includes('tsvet') || key.includes('cvet') || key.includes('color');
     });
     if (!colorOpt) return false;
-    const optValue = colorOpt.value.toString().toLowerCase();
-    return optValue.includes(filter.value) || filter.value.includes(optValue);
+    const normalize = (s: string) => s.toLowerCase().replace(/ё/g, 'е');
+    const optNorm = normalize(colorOpt.value.toString());
+    const filterNorm = normalize(filter.value);
+    return optNorm.includes(filterNorm) || filterNorm.includes(optNorm);
   }
   return false;
 }
@@ -3226,9 +3228,10 @@ serve(async (req) => {
               const beforeCount = filtered.length;
               filtered = filtered.filter(p => quickFilters.every(qf => matchQuickFilter(p, qf)));
               console.log(`[Chat] Category-first quick filters (${quickFilters.map(q => q.value).join(',')}): ${beforeCount} → ${filtered.length} products`);
-              // If quick filter zeroed out, keep all for LLM stage
+              // If quick filter zeroed out, pass color modifiers to LLM instead of dropping
               if (filtered.length === 0) {
-                console.log(`[Chat] Category-first: quick filter returned 0, keeping all ${rawProducts.length} for LLM`);
+                console.log(`[Chat] Category-first: quick filter returned 0, passing color to LLM for resolution`);
+                remainingModifiers.push(...quickFilters.map(qf => qf.value));
                 filtered = rawProducts;
               }
             }
