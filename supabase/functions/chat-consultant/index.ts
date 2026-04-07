@@ -3219,45 +3219,28 @@ serve(async (req) => {
           }
           
           if (rawProducts.length > 0 && modifiers.length > 0) {
-            // Step 2: Extract quick filters (color) and remaining modifiers
-            const { quickFilters, remainingModifiers } = extractQuickFilters(modifiers);
+            // Step 2: Pass ALL modifiers (including color) to LLM against FULL product set
+            console.log(`[Chat] Category-first: resolving ALL modifiers [${modifiers.join(', ')}] against ${rawProducts.length} products`);
+            const resolvedFilters = await resolveFiltersWithLLM(rawProducts, modifiers, appSettings);
+            
             let filtered = rawProducts;
-            
-            // Step 3: Apply quick filters (AND logic)
-            if (quickFilters.length > 0) {
-              const beforeCount = filtered.length;
-              filtered = filtered.filter(p => quickFilters.every(qf => matchQuickFilter(p, qf)));
-              console.log(`[Chat] Category-first quick filters (${quickFilters.map(q => q.value).join(',')}): ${beforeCount} → ${filtered.length} products`);
-              // If quick filter zeroed out, pass color modifiers to LLM instead of dropping
-              if (filtered.length === 0) {
-                console.log(`[Chat] Category-first: quick filter returned 0, passing color to LLM for resolution`);
-                remainingModifiers.push(...quickFilters.map(qf => qf.value));
-                filtered = rawProducts;
-              }
-            }
-            
-            // Step 4: Resolve remaining modifiers via LLM against characteristics
-            if (remainingModifiers.length > 0 && filtered.length > 0) {
-              console.log(`[Chat] Category-first: resolving remaining modifiers [${remainingModifiers.join(', ')}] against ${filtered.length} products`);
-              const resolvedFilters = await resolveFiltersWithLLM(filtered, remainingModifiers, appSettings);
-              
-              if (Object.keys(resolvedFilters).length > 0) {
-                console.log(`[Chat] Category-first resolved: ${JSON.stringify(resolvedFilters)}`);
-                // Step 5: AND-filter by resolved characteristics
-                const andFiltered = filtered.filter(product => {
-                  if (!product.options) return false;
-                  for (const [key, value] of Object.entries(resolvedFilters)) {
-                    const opt = product.options.find(o => o.key === key);
-                    if (!opt) return false;
-                    const pv = opt.value.toString().toLowerCase().trim();
-                    const fv = value.toString().toLowerCase().trim();
-                    if (!(pv === fv || pv.includes(fv) || fv.includes(pv))) return false;
-                  }
-                  return true;
-                });
-                console.log(`[Chat] Category-first AND-filter: ${filtered.length} → ${andFiltered.length} products`);
-                if (andFiltered.length > 0) filtered = andFiltered;
-              }
+            if (Object.keys(resolvedFilters).length > 0) {
+              console.log(`[Chat] Category-first resolved: ${JSON.stringify(resolvedFilters)}`);
+              // Step 3: Single AND-filter by all resolved characteristics
+              const normalize = (s: string) => s.toLowerCase().replace(/ё/g, 'е').trim();
+              const andFiltered = rawProducts.filter(product => {
+                if (!product.options) return false;
+                for (const [key, value] of Object.entries(resolvedFilters)) {
+                  const opt = product.options.find(o => o.key === key);
+                  if (!opt) return false;
+                  const pv = normalize(opt.value.toString());
+                  const fv = normalize(value.toString());
+                  if (!(pv === fv || pv.includes(fv) || fv.includes(pv))) return false;
+                }
+                return true;
+              });
+              console.log(`[Chat] Category-first AND-filter: ${rawProducts.length} → ${andFiltered.length} products`);
+              if (andFiltered.length > 0) filtered = andFiltered;
             }
             
             foundProducts = filtered.slice(0, 15);
