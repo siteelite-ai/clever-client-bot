@@ -1108,7 +1108,7 @@ function resolveSlotRefinement(
   userMessage: string,
   classificationResult: ClassificationResult | null
 ): { slotKey: string; query: string; priceIntent: 'most_expensive' | 'cheapest'; updatedSlots: DialogSlots } 
- | { slotKey: string; searchParams: { category: string; resolvedFilters: Record<string, string>; query: string; baseCategory: string }; updatedSlots: DialogSlots }
+ | { slotKey: string; searchParams: { category: string; resolvedFilters: Record<string, string>; refinementText: string; existingUnresolved: string; baseCategory: string }; updatedSlots: DialogSlots }
  | null {
   // First: check for pending product_search slot with filter state
   for (const [key, slot] of Object.entries(slots)) {
@@ -1119,8 +1119,7 @@ function resolveSlotRefinement(
       
       if (isShort && !hasNewCategory) {
         const existingFilters = slot.resolved_filters ? JSON.parse(slot.resolved_filters) : {};
-        const newQuery = `${slot.unresolved_query || ''} ${userMessage}`.trim();
-        console.log(`[Slots] product_search slot resolved: appending "${userMessage}" to query → "${newQuery}", filters=${JSON.stringify(existingFilters)}`);
+        console.log(`[Slots] product_search slot resolved: refinementText="${userMessage}", existingUnresolved="${slot.unresolved_query || ''}", filters=${JSON.stringify(existingFilters)}`);
         
         const updatedSlots = { ...slots };
         updatedSlots[key] = { ...slot, refinement: userMessage.trim(), status: 'done', turns_since_touched: 0 };
@@ -1130,7 +1129,8 @@ function resolveSlotRefinement(
           searchParams: {
             category: slot.plural_category,
             resolvedFilters: existingFilters,
-            query: newQuery,
+            refinementText: userMessage.trim(),
+            existingUnresolved: slot.unresolved_query || '',
             baseCategory: slot.base_category,
           },
           updatedSlots,
