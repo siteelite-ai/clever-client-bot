@@ -2128,14 +2128,18 @@ async function resolveFiltersWithLLM(
     return {};
   }
 
-  // Format schema for prompt
+  // Format schema for prompt — structured format to prevent LLM from mixing key with caption
   const schemaLines: string[] = [];
+  const schemaDebug: string[] = [];
   for (const [apiKey, info] of optionIndex.entries()) {
     const caption = info.caption.split('//')[0].trim();
-    const vals = [...info.values].map(v => v.split('//')[0].trim()).join(', ');
-    schemaLines.push(`${apiKey} (${caption}): ${vals}`);
+    const allVals = [...info.values].map(v => v.split('//')[0].trim());
+    const vals = allVals.join(', ');
+    schemaLines.push(`KEY="${apiKey}" | ${caption} | values: ${vals}`);
+    schemaDebug.push(`  ${apiKey} (${caption}): ${allVals.slice(0, 5).join(', ')}${allVals.length > 5 ? ` ... +${allVals.length - 5}` : ''}`);
   }
   const schemaText = schemaLines.join('\n');
+  console.log(`[FilterLLM] Schema (${optionIndex.size} keys):\n${schemaDebug.join('\n')}`);
 
   const systemPrompt = `Ты резолвер фильтров товаров интернет-магазина электротоваров.
 
@@ -2154,7 +2158,8 @@ ${JSON.stringify(modifiers)}
 4. Найдя подходящую характеристику, посмотри на формат её значений — они могут быть записаны цифрами, словами, с единицами измерения, сокращениями. Выбери из списка то значение, которое точно соответствует намерению пользователя. Возвращай значение В ТОЧНОСТИ как в схеме.
 5. Если модификатор не соответствует ни одной характеристике — не включай его в результат. Не угадывай.
 
-Ответь СТРОГО в JSON: {"filters": {"api_key": "exact_value", ...}}
+ВАЖНО: В ответе используй ТОЛЬКО значение из KEY="..." — без описания, без скобок, без лишнего текста.
+Ответь СТРОГО в JSON: {"filters": {"KEY_VALUE": "exact_value", ...}}
 Если ни один модификатор не удалось сопоставить — верни {"filters": {}}`;
 
   // Determine provider (same cascade as classifier)
@@ -3228,41 +3233,127 @@ serve(async (req) => {
           }
           
           if (rawProducts.length > 0 && modifiers.length > 0) {
-            // Step 2: Pass ALL modifiers (including color) to LLM against FULL product set
-            console.log(`[Chat] Category-first: resolving ALL modifiers [${modifiers.join(', ')}] against ${rawProducts.length} products`);
-            const resolvedFilters = await resolveFiltersWithLLM(rawProducts, modifiers, appSettings);
+            // Step 2: Category bucketization — separate exact vs sibling categories
+            const categoryDistribution: Record<string, number> = {};
+            for (const p of rawProducts) {
+              const catTitle = (p as any).category?.pagetitle || p.parent_name || 'unknown';
+              categoryDistribution[catTitle] = (categoryDistribution[catTitle] || 0) + 1;
+            }
+            console.log(`[Chat] Category-buckets: ${JSON.stringify(categoryDistribution)}`);
+
+            // Find the exact bucket: category title that best matches the plural form
+            const normalizedPlural = pluralCategory.toLowerCase();
+            let exactBucket: Product[] = [];
+            let siblingBucket: Product[] = [];
+            for (const p of rawProducts) {
+              const catTitle = ((p as any).category?.pagetitle || p.parent_name || '').toLowerCase();
+              if (catTitle === normalizedPlural || catTitle.startsWith(normalizedPlural) || normalizedPlural.startsWith(catTitle)) {
+                exactBucket.push(p);
+              } else {
+                siblingBucket.push(p);
+              }
+            }
+            // If bucketization didn't work well, use all products as exact
+            if (exactBucket.length === 0) {
+              exactBucket = rawProducts;
+              siblingBucket = [];
+            }
+            console.log(`[Chat] Category-buckets: exact=${exactBucket.length}, sibling=${siblingBucket.length}`);
+
+            // Step 3: Resolve filters against EXACT bucket first (cleaner schema)
+            const primaryProducts = exactBucket.length > 0 ? exactBucket : rawProducts;
+            console.log(`[Chat] Category-first: resolving ALL modifiers [${modifiers.join(', ')}] against ${primaryProducts.length} products (exact bucket)`);
+            const resolvedFilters = await resolveFiltersWithLLM(primaryProducts, modifiers, appSettings);
             
-            let filtered = rawProducts;
-            if (Object.keys(resolvedFilters).length > 0) {
-              console.log(`[Chat] Category-first resolved: ${JSON.stringify(resolvedFilters)}`);
-              // Step 3: Single AND-filter by all resolved characteristics
-              const normalize = (s: string) => s.toLowerCase().replace(/ё/g, 'е').trim();
-              const andFiltered = rawProducts.filter(product => {
-                if (!product.options) return false;
-                for (const [key, value] of Object.entries(resolvedFilters)) {
+            const normalize = (s: string) => s.toLowerCase().replace(/ё/g, 'е').trim();
+
+            const applyAndFilter = (products: Product[], filters: Record<string, string>): { matched: Product[]; rejectStats: Record<string, number> } => {
+              const rejectStats: Record<string, number> = {};
+              const matched = products.filter(product => {
+                if (!product.options) { rejectStats['no_options'] = (rejectStats['no_options'] || 0) + 1; return false; }
+                for (const [key, value] of Object.entries(filters)) {
                   const opt = product.options.find(o => o.key === key);
-                  if (!opt) return false;
+                  if (!opt) { rejectStats[`missing_${key}`] = (rejectStats[`missing_${key}`] || 0) + 1; return false; }
                   const pv = normalize(opt.value.toString());
                   const fv = normalize(value.toString());
-                  if (!(pv === fv || pv.includes(fv) || fv.includes(pv))) return false;
+                  if (!(pv === fv || pv.includes(fv) || fv.includes(pv))) {
+                    rejectStats[`mismatch_${key}`] = (rejectStats[`mismatch_${key}`] || 0) + 1;
+                    return false;
+                  }
                 }
                 return true;
               });
-              console.log(`[Chat] Category-first AND-filter: ${rawProducts.length} → ${andFiltered.length} products`);
-              if (andFiltered.length > 0) filtered = andFiltered;
+              return { matched, rejectStats };
+            };
+
+            let resultMode = 'no_filters';
+            if (Object.keys(resolvedFilters).length > 0) {
+              console.log(`[Chat] Category-first resolved: ${JSON.stringify(resolvedFilters)}`);
+
+              // Try exact bucket first
+              const exactResult = applyAndFilter(exactBucket, resolvedFilters);
+              console.log(`[Chat] AND-filter exact bucket: ${exactBucket.length} → ${exactResult.matched.length}`);
+              if (Object.keys(exactResult.rejectStats).length > 0) {
+                console.log(`[Chat] AND-filter reject stats (exact): ${JSON.stringify(exactResult.rejectStats)}`);
+              }
+
+              if (exactResult.matched.length > 0) {
+                foundProducts = exactResult.matched.slice(0, 15);
+                articleShortCircuit = true;
+                resultMode = 'exact_match';
+              } else if (siblingBucket.length > 0) {
+                // Try sibling bucket as fallback
+                const siblingResult = applyAndFilter(siblingBucket, resolvedFilters);
+                console.log(`[Chat] AND-filter sibling bucket: ${siblingBucket.length} → ${siblingResult.matched.length}`);
+                if (siblingResult.matched.length > 0) {
+                  foundProducts = siblingResult.matched.slice(0, 15);
+                  articleShortCircuit = true;
+                  resultMode = 'sibling_match';
+                }
+              }
+
+              if (foundProducts.length === 0) {
+                // NO silent fallback — don't return raw category list as if nothing happened
+                // Instead: try relaxed filter (drop one filter at a time)
+                let bestRelaxed: Product[] = [];
+                const filterKeys = Object.keys(resolvedFilters);
+                if (filterKeys.length > 1) {
+                  for (const dropKey of filterKeys) {
+                    const partial = { ...resolvedFilters };
+                    delete partial[dropKey];
+                    const partialResult = applyAndFilter(rawProducts, partial);
+                    if (partialResult.matched.length > bestRelaxed.length) {
+                      bestRelaxed = partialResult.matched;
+                      console.log(`[Chat] Relaxed filter (dropped ${dropKey}): ${partialResult.matched.length} products`);
+                    }
+                  }
+                }
+                if (bestRelaxed.length > 0) {
+                  foundProducts = bestRelaxed.slice(0, 15);
+                  articleShortCircuit = true;
+                  resultMode = 'relaxed_match';
+                } else {
+                  // Return empty — let LLM generate "not found" response
+                  foundProducts = [];
+                  articleShortCircuit = false;
+                  resultMode = 'no_match';
+                }
+              }
+            } else {
+              // No filters resolved — return category list
+              foundProducts = primaryProducts.slice(0, 15);
+              articleShortCircuit = true;
+              resultMode = 'no_filters';
             }
-            
-            foundProducts = filtered.slice(0, 15);
-            articleShortCircuit = true;
           } else if (rawProducts.length > 0) {
             foundProducts = rawProducts.slice(0, 15);
             articleShortCircuit = true;
           }
           
           const categoryElapsed = Date.now() - categoryStart;
-          if (foundProducts.length > 0) {
-            console.log(`[Chat] Category-first SUCCESS: ${foundProducts.length} products in ${categoryElapsed}ms`);
-          } else {
+          const resultMode2 = foundProducts.length > 0 ? 'found' : 'empty';
+          console.log(`[Chat] Category-first DECISION: mode=${resultMode2}, count=${foundProducts.length}, elapsed=${categoryElapsed}ms`);
+          if (foundProducts.length === 0) {
             console.log(`[Chat] Category-first: 0 results for "${effectiveCategory}", proceeding to LLM 1`);
           }
         }
