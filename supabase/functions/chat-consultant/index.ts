@@ -1101,36 +1101,40 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
 /**
  * Resolve dialog slots against current user message.
  * Returns: { resolved slot key, combined query, price intent } or null.
- * For product_search slots: returns cached products directly.
+ * For product_search slots: returns searchParams for API re-query with accumulated filters.
  */
 function resolveSlotRefinement(
   slots: DialogSlots,
   userMessage: string,
   classificationResult: ClassificationResult | null
 ): { slotKey: string; query: string; priceIntent: 'most_expensive' | 'cheapest'; updatedSlots: DialogSlots } 
- | { slotKey: string; cachedProducts: Product[]; updatedSlots: DialogSlots }
+ | { slotKey: string; searchParams: { category: string; resolvedFilters: Record<string, string>; query: string; baseCategory: string }; updatedSlots: DialogSlots }
  | null {
-  // First: check for pending product_search slot
+  // First: check for pending product_search slot with filter state
   for (const [key, slot] of Object.entries(slots)) {
-    if (slot.status === 'pending' && slot.intent === 'product_search' && slot.cached_products) {
+    if (slot.status === 'pending' && slot.intent === 'product_search' && slot.plural_category) {
       const isShort = userMessage.length < 100;
-      // Check if this looks like a refinement answer (short, no explicit new category search)
       const hasNewCategory = classificationResult?.product_category 
         && classificationResult.product_category !== slot.base_category;
       
       if (isShort && !hasNewCategory) {
-        try {
-          const cached = JSON.parse(slot.cached_products);
-          const filtered = filterCachedProducts(cached, userMessage);
-          console.log(`[Slots] product_search resolved: "${userMessage}" filtered ${cached.length} → ${filtered.length} products`);
-          
-          const updatedSlots = { ...slots };
-          updatedSlots[key] = { ...slot, refinement: userMessage.trim(), status: 'done', turns_since_touched: 0 };
-          
-          return { slotKey: key, cachedProducts: filtered as Product[], updatedSlots };
-        } catch (e) {
-          console.error(`[Slots] Failed to parse cached products: ${e}`);
-        }
+        const existingFilters = slot.resolved_filters ? JSON.parse(slot.resolved_filters) : {};
+        const newQuery = `${slot.unresolved_query || ''} ${userMessage}`.trim();
+        console.log(`[Slots] product_search slot resolved: appending "${userMessage}" to query → "${newQuery}", filters=${JSON.stringify(existingFilters)}`);
+        
+        const updatedSlots = { ...slots };
+        updatedSlots[key] = { ...slot, refinement: userMessage.trim(), status: 'done', turns_since_touched: 0 };
+        
+        return { 
+          slotKey: key, 
+          searchParams: {
+            category: slot.plural_category,
+            resolvedFilters: existingFilters,
+            query: newQuery,
+            baseCategory: slot.base_category,
+          },
+          updatedSlots,
+        };
       }
     }
   }
