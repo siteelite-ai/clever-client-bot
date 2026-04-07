@@ -3187,14 +3187,33 @@ serve(async (req) => {
         const slotResolution = resolveSlotRefinement(dialogSlots, userMessage, classification);
         
         if (slotResolution && 'searchParams' in slotResolution) {
-          // product_search slot resolved — re-query API with accumulated filters
+          // product_search slot resolved — resolve refinement as structured filters, then re-query API
           const sp = slotResolution.searchParams;
-          console.log(`[Chat] product_search slot: re-querying API category="${sp.category}", query="${sp.query}", filters=${JSON.stringify(sp.resolvedFilters)}`);
+          console.log(`[Chat] product_search slot: refinementText="${sp.refinementText}", existingUnresolved="${sp.existingUnresolved}", existingFilters=${JSON.stringify(sp.resolvedFilters)}`);
           
+          // Step 1: Fetch schema products for the category to build option schema
+          const schemaProducts = await searchProductsByCandidate(
+            { query: null, brand: null, category: sp.category, min_price: null, max_price: null },
+            appSettings.volt220_api_token!, 50
+          );
+          console.log(`[Chat] Fetched ${schemaProducts.length} schema products for category="${sp.category}"`);
+          
+          // Step 2: Resolve the NEW modifier (user's answer) against option schema
+          const { resolved: newFilters, unresolved: stillUnresolved } = 
+            await resolveFiltersWithLLM(schemaProducts, [sp.refinementText], appSettings);
+          console.log(`[Chat] FilterLLM refinement: resolved=${JSON.stringify(newFilters)}, unresolved=${JSON.stringify(stillUnresolved)}`);
+          
+          // Step 3: Merge with existing filters from slot
+          const mergedFilters = { ...sp.resolvedFilters, ...newFilters };
+          const mergedQuery = [sp.existingUnresolved, ...stillUnresolved]
+            .filter(Boolean).join(' ').trim() || null;
+          console.log(`[Chat] Merged filters=${JSON.stringify(mergedFilters)}, mergedQuery="${mergedQuery}"`);
+          
+          // Step 4: API call with structured filters
           foundProducts = await searchProductsByCandidate(
-            { query: sp.query || null, brand: null, category: sp.category, min_price: null, max_price: null },
+            { query: mergedQuery, brand: null, category: sp.category, min_price: null, max_price: null },
             appSettings.volt220_api_token!, 50,
-            Object.keys(sp.resolvedFilters).length > 0 ? sp.resolvedFilters : undefined
+            Object.keys(mergedFilters).length > 0 ? mergedFilters : undefined
           );
           foundProducts = foundProducts.slice(0, 15);
           articleShortCircuit = true;
@@ -3202,20 +3221,20 @@ serve(async (req) => {
           slotsUpdated = true;
           console.log(`[Chat] product_search slot resolved via API: ${foundProducts.length} products`);
           
-          // If still >7, create new slot with accumulated filters for next refinement
+          // If still >7, create new slot with MERGED filters for next refinement
           if (foundProducts.length > 7) {
             const newSlotKey = `ps_${Date.now()}`;
             dialogSlots[newSlotKey] = {
               intent: 'product_search',
               base_category: sp.baseCategory || effectiveCategory,
               plural_category: sp.category,
-              resolved_filters: JSON.stringify(sp.resolvedFilters),
-              unresolved_query: sp.query,
+              resolved_filters: JSON.stringify(mergedFilters),
+              unresolved_query: mergedQuery || '',
               status: 'pending',
               created_turn: messages.length,
               turns_since_touched: 0,
             };
-            console.log(`[Chat] Re-created product_search slot "${newSlotKey}": query="${sp.query}", filters=${JSON.stringify(sp.resolvedFilters)}`);
+            console.log(`[Chat] Re-created product_search slot "${newSlotKey}": mergedQuery="${mergedQuery}", mergedFilters=${JSON.stringify(mergedFilters)}`);
           }
         } else if (slotResolution && 'priceIntent' in slotResolution) {
           // Price slot resolved! Use slot's price intent and combined query
