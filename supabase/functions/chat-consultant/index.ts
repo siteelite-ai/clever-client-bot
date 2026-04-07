@@ -3228,9 +3228,10 @@ serve(async (req) => {
               const beforeCount = filtered.length;
               filtered = filtered.filter(p => quickFilters.every(qf => matchQuickFilter(p, qf)));
               console.log(`[Chat] Category-first quick filters (${quickFilters.map(q => q.value).join(',')}): ${beforeCount} → ${filtered.length} products`);
-              // If quick filter zeroed out, keep all for LLM stage
+              // If quick filter zeroed out, pass color modifiers to LLM instead of dropping
               if (filtered.length === 0) {
-                console.log(`[Chat] Category-first: quick filter returned 0, keeping all ${rawProducts.length} for LLM`);
+                console.log(`[Chat] Category-first: quick filter returned 0, passing color to LLM for resolution`);
+                remainingModifiers.push(...quickFilters.map(qf => qf.value));
                 filtered = rawProducts;
               }
             }
