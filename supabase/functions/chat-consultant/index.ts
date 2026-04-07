@@ -3193,46 +3193,80 @@ serve(async (req) => {
         // === CATEGORY-FIRST (category without specific product name) ===
         if (!articleShortCircuit && effectiveCategory && !classification?.has_product_name && !classification?.is_replacement && !effectivePriceIntent && appSettings.volt220_api_token) {
           const modifiers = classification?.search_modifiers || [];
-          console.log(`[Chat] Category-first: searching by category "${effectiveCategory}", modifiers: [${modifiers.join(', ')}]`);
+          console.log(`[Chat] Category-first: category="${effectiveCategory}", modifiers=[${modifiers.join(', ')}]`);
           const categoryStart = Date.now();
           
-          // Step 1: Recon — find exact category.pagetitle from catalog
-          let exactCategoryName: string | null = null;
-          try {
-            const reconCandidate: SearchCandidate = { query: effectiveCategory, brand: null, category: null, min_price: null, max_price: null };
-            const reconResults = await searchProductsByCandidate(reconCandidate, appSettings.volt220_api_token, 1);
-            if (reconResults.length > 0 && reconResults[0].category?.pagetitle) {
-              exactCategoryName = reconResults[0].category.pagetitle;
-              console.log(`[Chat] Category recon: "${effectiveCategory}" → exact category "${exactCategoryName}"`);
-            } else {
-              console.log(`[Chat] Category recon: no results for "${effectiveCategory}", falling back to query search`);
+          // Step 1: Generate plural form and search by category parameter directly
+          const pluralCategory = toPluralCategory(effectiveCategory);
+          console.log(`[Chat] Category-first: plural="${pluralCategory}"`);
+          
+          let rawProducts = await searchProductsByCandidate(
+            { query: null, brand: null, category: pluralCategory, min_price: null, max_price: null },
+            appSettings.volt220_api_token, 50
+          );
+          console.log(`[Chat] Category-first: category="${pluralCategory}" → ${rawProducts.length} products`);
+          
+          // Fallback: if 0 results with plural, try original word as query
+          if (rawProducts.length === 0) {
+            console.log(`[Chat] Category-first: trying fallback query="${effectiveCategory}"`);
+            rawProducts = await searchProductsByCandidate(
+              { query: effectiveCategory, brand: null, category: null, min_price: null, max_price: null },
+              appSettings.volt220_api_token, 50
+            );
+            console.log(`[Chat] Category-first fallback: ${rawProducts.length} products`);
+          }
+          
+          if (rawProducts.length > 0 && modifiers.length > 0) {
+            // Step 2: Extract quick filters (color) and remaining modifiers
+            const { quickFilters, remainingModifiers } = extractQuickFilters(modifiers);
+            let filtered = rawProducts;
+            
+            // Step 3: Apply quick filters (AND logic)
+            if (quickFilters.length > 0) {
+              const beforeCount = filtered.length;
+              filtered = filtered.filter(p => quickFilters.every(qf => matchQuickFilter(p, qf)));
+              console.log(`[Chat] Category-first quick filters (${quickFilters.map(q => q.value).join(',')}): ${beforeCount} → ${filtered.length} products`);
+              // If quick filter zeroed out, keep all for LLM stage
+              if (filtered.length === 0) {
+                console.log(`[Chat] Category-first: quick filter returned 0, keeping all ${rawProducts.length} for LLM`);
+                filtered = rawProducts;
+              }
             }
-          } catch (e) {
-            console.log(`[Chat] Category recon failed:`, e);
-          }
-          
-          // Step 2: Main search using exact category parameter (or fallback to query)
-          let categoryCandidates: SearchCandidate[];
-          if (exactCategoryName) {
-            // Use API category parameter — returns ONLY products from this category
-            categoryCandidates = [{
-              query: null, brand: null, category: exactCategoryName, min_price: null, max_price: null,
-            }];
-          } else {
-            // Fallback: use query if recon failed
-            categoryCandidates = [{
-              query: effectiveCategory, brand: null, category: null, min_price: null, max_price: null,
-            }];
-          }
-          
-          const categoryResults = await searchProductsMulti(categoryCandidates, 15, appSettings.volt220_api_token, 50, modifiers, appSettings);
-          const categoryElapsed = Date.now() - categoryStart;
-          console.log(`[Chat] Category-first: ${categoryResults.length} products in ${categoryElapsed}ms (category=${exactCategoryName || 'null'}, query=${exactCategoryName ? 'null' : effectiveCategory})`);
-          
-          if (categoryResults.length > 0) {
-            foundProducts = categoryResults.slice(0, 15);
+            
+            // Step 4: Resolve remaining modifiers via LLM against characteristics
+            if (remainingModifiers.length > 0 && filtered.length > 0) {
+              console.log(`[Chat] Category-first: resolving remaining modifiers [${remainingModifiers.join(', ')}] against ${filtered.length} products`);
+              const resolvedFilters = await resolveFiltersWithLLM(filtered, remainingModifiers, appSettings);
+              
+              if (Object.keys(resolvedFilters).length > 0) {
+                console.log(`[Chat] Category-first resolved: ${JSON.stringify(resolvedFilters)}`);
+                // Step 5: AND-filter by resolved characteristics
+                const andFiltered = filtered.filter(product => {
+                  if (!product.options) return false;
+                  for (const [key, value] of Object.entries(resolvedFilters)) {
+                    const opt = product.options.find(o => o.key === key);
+                    if (!opt) return false;
+                    const pv = opt.value.toString().toLowerCase().trim();
+                    const fv = value.toString().toLowerCase().trim();
+                    if (!(pv === fv || pv.includes(fv) || fv.includes(pv))) return false;
+                  }
+                  return true;
+                });
+                console.log(`[Chat] Category-first AND-filter: ${filtered.length} → ${andFiltered.length} products`);
+                if (andFiltered.length > 0) filtered = andFiltered;
+              }
+            }
+            
+            foundProducts = filtered.slice(0, 15);
             articleShortCircuit = true;
-            console.log(`[Chat] Category-first SUCCESS: ${foundProducts.length} products, skipping LLM 1`);
+          } else if (rawProducts.length > 0) {
+            foundProducts = rawProducts.slice(0, 15);
+            articleShortCircuit = true;
+          }
+          
+          const categoryElapsed = Date.now() - categoryStart;
+          if (foundProducts.length > 0) {
+            console.log(`[Chat] Category-first SUCCESS: ${foundProducts.length} products in ${categoryElapsed}ms`);
           } else {
             console.log(`[Chat] Category-first: 0 results for "${effectiveCategory}", proceeding to LLM 1`);
           }
