@@ -2107,8 +2107,8 @@ async function resolveFiltersWithLLM(
   products: Product[],
   modifiers: string[],
   settings: CachedSettings
-): Promise<Record<string, string>> {
-  if (!modifiers || modifiers.length === 0) return {};
+): Promise<{ resolved: Record<string, string>; unresolved: string[] }> {
+  if (!modifiers || modifiers.length === 0) return { resolved: {}, unresolved: [] };
 
   // Build option schema from products
   const optionIndex: Map<string, { caption: string; values: Set<string> }> = new Map();
