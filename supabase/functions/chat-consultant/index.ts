@@ -2226,7 +2226,7 @@ ${JSON.stringify(modifiers)}
 
     if (typeof filters !== 'object' || Array.isArray(filters)) {
       console.log('[FilterLLM] Invalid response format');
-      return {};
+      return { resolved: {}, unresolved: [...modifiers] };
     }
 
     // Validate that returned keys exist in schema
