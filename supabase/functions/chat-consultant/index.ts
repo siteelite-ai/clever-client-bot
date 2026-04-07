@@ -2267,6 +2267,85 @@ function fallbackParseQuery(message: string): ExtractedIntent {
 }
 
 /**
+ * Convert singular Russian category name to plural with capital letter.
+ * розетка → Розетки, выключатель → Выключатели, кабель → Кабели
+ */
+function toPluralCategory(word: string): string {
+  const w = word.toLowerCase().trim();
+  // Already plural
+  if (/[иы]$/.test(w)) return w.charAt(0).toUpperCase() + w.slice(1);
+  // Common endings
+  if (w.endsWith('ка')) return w.slice(0, -2) + 'ки';
+  if (w.endsWith('ка')) return w.slice(0, -2) + 'ки';
+  if (w.endsWith('та')) return w.slice(0, -2) + 'ты';
+  if (w.endsWith('да')) return w.slice(0, -2) + 'ды';
+  if (w.endsWith('на')) return w.slice(0, -2) + 'ны';
+  if (w.endsWith('ла')) return w.slice(0, -2) + 'лы';
+  if (w.endsWith('ра')) return w.slice(0, -2) + 'ры';
+  if (w.endsWith('па')) return w.slice(0, -2) + 'пы';
+  if (w.endsWith('ма')) return w.slice(0, -2) + 'мы';
+  if (w.endsWith('а')) return w.slice(0, -1) + 'ы';
+  if (w.endsWith('ь')) return w.slice(0, -1) + 'и';
+  if (w.endsWith('й')) return w.slice(0, -1) + 'и';
+  if (w.endsWith('ор')) return w + 'ы';
+  if (w.endsWith('ер')) return w + 'ы';
+  // Default: add ы
+  const plural = w + 'ы';
+  return plural.charAt(0).toUpperCase() + plural.slice(1);
+}
+
+/**
+ * Extract "quick" filters from modifiers — ones we can match immediately
+ * without LLM (e.g., color words). Returns quick filters + remaining modifiers.
+ */
+const COLOR_WORDS: Record<string, string> = {
+  'черн': 'черный', 'бел': 'белый', 'красн': 'красный', 'син': 'синий',
+  'зелен': 'зеленый', 'желт': 'желтый', 'серебр': 'серебристый', 'серебрян': 'серебряный',
+  'серый': 'серый', 'сер': 'серый', 'золот': 'золотой', 'бежев': 'бежевый',
+  'кремов': 'кремовый', 'коричнев': 'коричневый', 'розов': 'розовый',
+  'оранжев': 'оранжевый', 'фиолетов': 'фиолетовый',
+};
+
+function extractQuickFilters(modifiers: string[]): { quickFilters: Array<{ type: 'color'; value: string }>; remainingModifiers: string[] } {
+  const quickFilters: Array<{ type: 'color'; value: string }> = [];
+  const remainingModifiers: string[] = [];
+  
+  for (const mod of modifiers) {
+    const modLower = mod.toLowerCase();
+    let matched = false;
+    for (const [stem, colorName] of Object.entries(COLOR_WORDS)) {
+      if (modLower.startsWith(stem) || modLower === colorName) {
+        quickFilters.push({ type: 'color', value: colorName });
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) remainingModifiers.push(mod);
+  }
+  
+  return { quickFilters, remainingModifiers };
+}
+
+/**
+ * Match a product's options against a quick filter (color).
+ */
+function matchQuickFilter(product: Product, filter: { type: 'color'; value: string }): boolean {
+  if (!product.options) return false;
+  if (filter.type === 'color') {
+    // Find option whose caption contains "цвет" or key contains "tsvet" or "cvet" or "color"
+    const colorOpt = product.options.find(o => {
+      const caption = (o.caption || '').toLowerCase();
+      const key = (o.key || '').toLowerCase();
+      return caption.includes('цвет') || key.includes('tsvet') || key.includes('cvet') || key.includes('color');
+    });
+    if (!colorOpt) return false;
+    const optValue = colorOpt.value.toString().toLowerCase();
+    return optValue.includes(filter.value) || filter.value.includes(optValue);
+  }
+  return false;
+}
+
+/**
  * Search products by a single candidate via API
  */
 async function searchProductsByCandidate(
