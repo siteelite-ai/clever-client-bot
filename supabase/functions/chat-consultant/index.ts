@@ -3203,8 +3203,15 @@ serve(async (req) => {
         
         const slotResolution = resolveSlotRefinement(dialogSlots, userMessage, classification);
         
-        if (slotResolution) {
-          // Slot resolved! Use slot's price intent and combined query
+        if (slotResolution && 'cachedProducts' in slotResolution) {
+          // product_search slot resolved — use cached & filtered products directly
+          foundProducts = slotResolution.cachedProducts;
+          articleShortCircuit = true;
+          dialogSlots = slotResolution.updatedSlots;
+          slotsUpdated = true;
+          console.log(`[Chat] product_search slot resolved: ${foundProducts.length} products after filtering`);
+        } else if (slotResolution && 'priceIntent' in slotResolution) {
+          // Price slot resolved! Use slot's price intent and combined query
           effectivePriceIntent = slotResolution.priceIntent;
           effectiveCategory = slotResolution.query;
           dialogSlots = slotResolution.updatedSlots;
