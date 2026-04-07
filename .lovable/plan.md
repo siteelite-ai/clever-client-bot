@@ -1,84 +1,66 @@
 
 
-# Консилиум: Аудит текущего pipeline category-first
+# План: Fuzzy-валидация ключей от FilterLLM
 
-Провожу оценку по 4 релевантным ролям из AUDIT_PROMPT.md.
+## Проблема (из логов)
 
----
+LLM вернул: `"cvet__tүsі (Цвет)": "чёрный"`
+Реальный ключ в optionIndex: `"cvet__tүsі"`
 
-## Роль 1: RAG Quality Auditor — Качество поиска
+LLM добавил caption в скобках к ключу. `optionIndex.has("cvet__tүsі (Цвет)")` → false → ключ отклонён → цвет потерян → AND-фильтр нашёл только по полюсам → 1 нерелевантный товар.
 
-**Вердикт: КРИТИЧЕСКАЯ ПРОБЛЕМА не решена последним фиксом**
+Pipeline сам по себе работает правильно — classify, plural, API, resolveFilters — всё отработало. Баг только в валидации ключей на строке 2230.
 
-Последний фикс (нормализация ё/е + fallback при 0 результатов) решает только один кейс: когда quick filter вернул **ровно 0**. Но в логах со скриншота видно другое:
+## Решение
 
-```
-Category-first quick filters (черный): 50 → 1 products
-```
+В блоке валидации (строки 2228-2236) добавить нормализацию ключа — если точного совпадения нет, попробовать:
+1. Убрать всё после ` (` — то есть `key.split(' (')[0].trim()`
+2. Если после очистки ключ найден в optionIndex — принять его
 
-Quick filter вернул **1 товар**, а не 0. Значит fallback `if (filtered.length === 0)` **не сработает**. Система осталась с одним нерелевантным товаром (силовой соединитель), и LLM пытался резолвить "наружная" и "двухместная" по характеристикам этого одного товара — закономерно получил `{"filters": {}}`.
+**Файл**: `supabase/functions/chat-consultant/index.ts`, строки 2228-2236
 
-**Корневая причина**: порядок операций. Quick filter по цвету стоит ДО resolveFiltersWithLLM. Даже если он найдёт 1-3 товара, это может быть перекошенная выборка, и LLM не увидит полную схему характеристик категории.
-
----
-
-## Роль 4: Edge Functions Stability Auditor — Стабильность
-
-**Вердикт: Архитектура хрупкая, но не костыльная**
-
-- `resolveFiltersWithLLM` — нормальная функция, промпт качественный, валидация ключей есть
-- Нормализация ё/е — правильное техническое решение, не костыль
-- Проблема не в качестве кода, а в **последовательности шагов**
-
----
-
-## Роль 2: Sales Logic Auditor — Продающая логика
-
-**Вердикт: Пользователь получает нерелевантный товар**
-
-Вместо "черная двухместная розетка" пользователь видит силовой соединитель. Это хуже, чем "ничего не найдено" — это подрывает доверие. Система должна либо найти точное совпадение, либо честно сказать "таких нет".
-
----
-
-## Роль 10: Integration Auditor — Архитектурная целостность
-
-**Вердикт: Нужно изменить порядок, а не добавлять fallback-и**
-
-Текущий pipeline:
-```text
-1. category API → 50 товаров
-2. quick filter (цвет) → сужение до 1-N
-3. resolveFiltersWithLLM по СЖАТОМУ набору → часто {} 
-4. AND-фильтр → результат на основе перекошенных данных
+**Было** (~8 строк):
+```typescript
+const validated: Record<string, string> = {};
+for (const [key, value] of Object.entries(filters)) {
+  if (optionIndex.has(key) && typeof value === 'string') {
+    validated[key] = value;
+  } else {
+    console.log(`[FilterLLM] Rejected unknown key: "${key}"`);
+  }
+}
 ```
 
-Правильный pipeline:
-```text
-1. category API → 50 товаров  
-2. resolveFiltersWithLLM по ПОЛНОМУ набору (ВСЕ модификаторы включая цвет)
-3. один AND-фильтр по всем resolved характеристикам
+**Станет** (~12 строк):
+```typescript
+const validated: Record<string, string> = {};
+for (const [rawKey, value] of Object.entries(filters)) {
+  if (typeof value !== 'string') continue;
+  // Try exact match first, then strip caption suffix like " (Цвет)"
+  let resolvedKey = rawKey;
+  if (!optionIndex.has(resolvedKey)) {
+    const stripped = resolvedKey.split(' (')[0].trim();
+    if (optionIndex.has(stripped)) {
+      resolvedKey = stripped;
+    }
+  }
+  if (optionIndex.has(resolvedKey)) {
+    validated[resolvedKey] = value;
+    console.log(`[FilterLLM] Resolved: "${resolvedKey}" = "${value}"`);
+  } else {
+    console.log(`[FilterLLM] Rejected unknown key: "${rawKey}"`);
+  }
+}
 ```
 
----
+## Объём
 
-## Итог консилиума
+~4 строки добавить в один файл. Редеплой edge function.
 
-| Проблема | Статус |
-|----------|--------|
-| Нормализация ё/е | Решена, корректно |
-| Fallback при 0 результатов quick filter | Решен, но не покрывает основной кейс |
-| Quick filter сужает до 1 товара ДО LLM | НЕ РЕШЕНА — это корень бага |
-| LLM работает по перекошенной выборке | НЕ РЕШЕНА — следствие предыдущего |
+## Что НЕ трогаем
 
-**Рекомендация консилиума**: Убрать quick filter как отдельный этап сужения. Вместо этого передавать ВСЕ модификаторы (включая цвет) в `resolveFiltersWithLLM` против полных 50 товаров. `resolveFiltersWithLLM` уже умеет находить характеристику "цвет" по схеме — отдельный quick filter дублирует его функцию, но делает это хуже (строковое сравнение вместо семантического).
-
-### Конкретное изменение
-
-В блоке category-first (строки 3221-3261):
-
-**Было**: extractQuickFilters → filter → resolveFiltersWithLLM(filtered, remainingModifiers)
-
-**Нужно**: resolveFiltersWithLLM(rawProducts, ALL modifiers) → AND-filter
-
-Это ~15 строк замены, не добавление нового кода. Quick filter код можно оставить как утилиту, но не вызывать в category-first pipeline.
+- Промпт FilterLLM — работает правильно, нашёл и цвет, и полюса
+- Pipeline category-first — полностью корректный
+- AND-фильтр — работает
+- Classify, plural — работают
 
