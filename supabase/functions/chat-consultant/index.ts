@@ -1130,6 +1130,9 @@ function resolveSlotRefinement(
             category: slot.plural_category,
             resolvedFilters: existingFilters,
             refinementText: userMessage.trim(),
+            refinementModifiers: classificationResult?.search_modifiers?.length 
+              ? classificationResult.search_modifiers 
+              : [userMessage.trim()],
             existingUnresolved: slot.unresolved_query || '',
             baseCategory: slot.base_category,
           },
