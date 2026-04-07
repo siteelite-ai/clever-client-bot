@@ -2229,8 +2229,11 @@ ${JSON.stringify(modifiers)}
       return { resolved: {}, unresolved: [...modifiers] };
     }
 
-    // Validate that returned keys exist in schema
+    // Validate that returned keys AND values exist in schema
     const validated: Record<string, string> = {};
+    const matchedModifiers = new Set<string>();
+    const norm = (s: string) => s.replace(/ё/g, 'е').toLowerCase().trim();
+
     for (const [rawKey, value] of Object.entries(filters)) {
       if (typeof value !== 'string') continue;
       // Try exact match first, then strip caption suffix like " (Цвет)"
@@ -2242,17 +2245,45 @@ ${JSON.stringify(modifiers)}
         }
       }
       if (optionIndex.has(resolvedKey)) {
-        validated[resolvedKey] = value;
-        console.log(`[FilterLLM] Resolved: "${resolvedKey}" = "${value}"`);
+        // KEY exists — now validate VALUE against known values in schema
+        const knownValues = optionIndex.get(resolvedKey)!.values;
+        const matchedValue = [...knownValues].find(v => norm(v) === norm(value));
+        
+        if (matchedValue) {
+          validated[resolvedKey] = matchedValue; // use exact value from schema
+          console.log(`[FilterLLM] Resolved (validated): "${resolvedKey}" = "${matchedValue}"`);
+          // Track which modifier this resolved from
+          const caption = optionIndex.get(resolvedKey)!.caption.toLowerCase();
+          for (const mod of modifiers) {
+            if (norm(mod) === norm(value) || caption.includes(norm(mod))) {
+              matchedModifiers.add(mod);
+            }
+          }
+        } else {
+          console.log(`[FilterLLM] Key "${resolvedKey}" valid, but value "${value}" NOT in schema values [${[...knownValues].slice(0, 5).join(', ')}...] → unresolved`);
+          // Find which modifier this came from
+          for (const mod of modifiers) {
+            if (norm(mod) === norm(value) || norm(value).includes(norm(mod)) || norm(mod).includes(norm(value))) {
+              matchedModifiers.add(mod); // mark as "attempted" so we put the original modifier into unresolved
+            }
+          }
+        }
       } else {
         console.log(`[FilterLLM] Rejected unknown key: "${rawKey}"`);
       }
     }
 
-    return validated;
+    // Unresolved = modifiers that were NOT successfully validated
+    const unresolvedMods = modifiers.filter(m => !matchedModifiers.has(m));
+    // Also add modifiers whose values weren't found in schema
+    const attemptedButFailed = modifiers.filter(m => matchedModifiers.has(m) && !Object.values(validated).some(v => norm(v) === norm(m)));
+    const unresolved = [...new Set([...unresolvedMods, ...attemptedButFailed])];
+
+    console.log(`[FilterLLM] Result: resolved=${JSON.stringify(validated)}, unresolved=[${unresolved.join(', ')}]`);
+    return { resolved: validated, unresolved };
   } catch (error) {
     console.error(`[FilterLLM] Error:`, error);
-    return {};
+    return { resolved: {}, unresolved: [...modifiers] };
   }
 }
 
