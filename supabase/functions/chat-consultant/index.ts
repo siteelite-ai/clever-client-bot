@@ -2226,12 +2226,21 @@ ${JSON.stringify(modifiers)}
 
     // Validate that returned keys exist in schema
     const validated: Record<string, string> = {};
-    for (const [key, value] of Object.entries(filters)) {
-      if (optionIndex.has(key) && typeof value === 'string') {
-        validated[key] = value;
-        console.log(`[FilterLLM] Resolved: "${key}" = "${value}"`);
+    for (const [rawKey, value] of Object.entries(filters)) {
+      if (typeof value !== 'string') continue;
+      // Try exact match first, then strip caption suffix like " (Цвет)"
+      let resolvedKey = rawKey;
+      if (!optionIndex.has(resolvedKey)) {
+        const stripped = resolvedKey.split(' (')[0].trim();
+        if (optionIndex.has(stripped)) {
+          resolvedKey = stripped;
+        }
+      }
+      if (optionIndex.has(resolvedKey)) {
+        validated[resolvedKey] = value;
+        console.log(`[FilterLLM] Resolved: "${resolvedKey}" = "${value}"`);
       } else {
-        console.log(`[FilterLLM] Rejected unknown key: "${key}"`);
+        console.log(`[FilterLLM] Rejected unknown key: "${rawKey}"`);
       }
     }
 
