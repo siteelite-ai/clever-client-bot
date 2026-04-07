@@ -2214,7 +2214,7 @@ ${JSON.stringify(modifiers)}
 
     if (!response.ok) {
       console.error(`[FilterLLM] API error: ${response.status}`);
-      return {};
+      return { resolved: {}, unresolved: [...modifiers] };
     }
 
     const data = await response.json();
