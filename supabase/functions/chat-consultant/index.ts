@@ -3210,6 +3210,25 @@ serve(async (req) => {
           dialogSlots = slotResolution.updatedSlots;
           slotsUpdated = true;
           console.log(`[Chat] product_search slot resolved: ${foundProducts.length} products after filtering`);
+          
+          // If still >7 results after filtering, re-create a pending slot for the next refinement round
+          if (foundProducts.length > 7) {
+            const compactProducts = foundProducts.slice(0, 20).map(p => ({
+              id: p.id, pagetitle: p.pagetitle, price: p.price,
+              url: p.url, image: p.image, amount: (p as any).amount,
+              parent_name: p.parent_name, options: (p as any).options,
+            }));
+            const newSlotKey = `ps_${Date.now()}`;
+            dialogSlots[newSlotKey] = {
+              intent: 'product_search',
+              base_category: slotResolution.updatedSlots[slotResolution.slotKey]?.base_category || effectiveCategory,
+              status: 'pending',
+              created_turn: messages.length,
+              turns_since_touched: 0,
+              cached_products: JSON.stringify(compactProducts),
+            };
+            console.log(`[Chat] Re-created product_search slot "${newSlotKey}": ${compactProducts.length} products for next refinement`);
+          }
         } else if (slotResolution && 'priceIntent' in slotResolution) {
           // Price slot resolved! Use slot's price intent and combined query
           effectivePriceIntent = slotResolution.priceIntent;
