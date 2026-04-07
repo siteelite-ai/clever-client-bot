@@ -1096,33 +1096,7 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
   return slots;
 }
 
-/**
- * Filter cached products by user's follow-up answer (string containment check).
- */
-function filterCachedProducts(products: any[], userAnswer: string): any[] {
-  const norm = (s: string) => s.replace(/ё/g, 'е').toLowerCase().trim();
-  const answer = norm(userAnswer);
-  // Generate stemmed prefix (first 5+ chars) for fuzzy matching
-  const answerWords = answer.split(/\s+/).filter(w => w.length >= 3);
-  
-  return products.filter(p => {
-    const title = norm(p.pagetitle || '');
-    const parentName = norm(p.parent_name || '');
-    // Check title and parent_name
-    if (answerWords.some(w => title.includes(w) || parentName.includes(w))) return true;
-    // Check options values
-    if (p.options && typeof p.options === 'object') {
-      for (const vals of Object.values(p.options)) {
-        if (Array.isArray(vals)) {
-          for (const v of vals) {
-            if (typeof v === 'string' && answerWords.some(w => norm(v).includes(w))) return true;
-          }
-        }
-      }
-    }
-    return false;
-  });
-}
+// filterCachedProducts removed — now we re-query API with accumulated filters instead
 
 /**
  * Resolve dialog slots against current user message.
