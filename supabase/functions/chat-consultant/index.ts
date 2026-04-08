@@ -2721,22 +2721,11 @@ function toProductionUrl(url: string): string {
 
 // Prefixes to exclude from product characteristics
 const EXCLUDED_OPTION_PREFIXES = [
-  'kodnomenklatury',
-  'identifikator_sayta',
-  'edinica_izmereniya',
-  'garantiynyy_srok',
-  'brend__brend',
-  'fayl',
-  'kod_tn_ved',
   'poiskovyy_zapros',
-  'novinka',
+  'kod_tn_ved',
   'ogranichennyy_prosmotr',
-  'populyarnyy',
   'prodaetsya_to',
   'tovar_internet_magazina',
-  'soputstvuyuschiy',
-  'opisaniefayla',
-  'naimenovanie_na_kazahskom',
 ];
 
 function isExcludedOption(key: string): boolean {
