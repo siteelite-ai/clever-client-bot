@@ -2719,7 +2719,7 @@ function toProductionUrl(url: string): string {
   return url;
 }
 
-// Prefixes to exclude from product characteristics
+// Prefixes to ALWAYS exclude (service/SEO fields)
 const EXCLUDED_OPTION_PREFIXES = [
   'poiskovyy_zapros',
   'kod_tn_ved',
@@ -2728,8 +2728,41 @@ const EXCLUDED_OPTION_PREFIXES = [
   'tovar_internet_magazina',
 ];
 
-function isExcludedOption(key: string): boolean {
-  return EXCLUDED_OPTION_PREFIXES.some(prefix => key.startsWith(prefix));
+// Extended fields — included only when user query is relevant
+const EXTENDED_OPTION_PREFIXES = [
+  'fayl',              // PDF documentation links
+  'opisaniefayla',     // file descriptions
+  'novinka',           // new arrival flag
+  'populyarnyy',      // popularity flag
+  'soputstvuyuschiy',  // related products
+  'garantiynyy',       // warranty
+  'naimenovanie_na_kazahskom', // Kazakh name
+  'kodnomenklatury',   // nomenclature code
+  'identifikator_sayta', // site ID
+  'edinica_izmereniya',  // unit of measurement
+];
+
+// Keywords that trigger extended fields
+const EXTENDED_TRIGGERS = [
+  'документ', 'pdf', 'файл', 'инструкция', 'паспорт', 'сертификат',
+  'новинк', 'новый поступлени', 'новое поступлени',
+  'популярн', 'хит продаж', 'бестселлер',
+  'сопутств', 'похож', 'аналог', 'комплект', 'вместе с',
+  'гарантия', 'гарантийн',
+  'қазақ', 'казахск',
+  'номенклатур', 'код товар',
+  'единиц измерен',
+];
+
+function needsExtendedOptions(userMessage: string): boolean {
+  const lower = userMessage.toLowerCase();
+  return EXTENDED_TRIGGERS.some(trigger => lower.includes(trigger));
+}
+
+function isExcludedOption(key: string, includeExtended: boolean = true): boolean {
+  if (EXCLUDED_OPTION_PREFIXES.some(prefix => key.startsWith(prefix))) return true;
+  if (!includeExtended && EXTENDED_OPTION_PREFIXES.some(prefix => key.startsWith(prefix))) return true;
+  return false;
 }
 
 function cleanOptionValue(value: string): string {
