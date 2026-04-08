@@ -3723,7 +3723,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
         }
         
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
-        const formattedProducts = formatProductsForAI(foundProducts.slice(0, 10));
+        const formattedProducts = formatProductsForAI(foundProducts.slice(0, 10), needsExtendedOptions(userMessage));
         console.log(`[Chat] Formatted products for AI:\n${formattedProducts}`);
         
         const appliedFilters = describeAppliedFilters(extractedIntent.candidates);
