@@ -2778,7 +2778,7 @@ function cleanOptionCaption(caption: string): string {
 }
 
 // Форматирование товаров для AI
-function formatProductsForAI(products: Product[]): string {
+function formatProductsForAI(products: Product[], includeExtended: boolean = true): string {
   if (products.length === 0) {
     return 'Товары не найдены в каталоге.';
   }
