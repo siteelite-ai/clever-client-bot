@@ -3663,7 +3663,7 @@ ${kbParts.join('\n\n')}
         
         if (foundProducts.length > 0) {
           const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
-          const formattedProducts = formatProductsForAI(foundProducts);
+          const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
           console.log(`[Chat] Formatted products for AI:\n${formattedProducts}`);
           productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**\n\n${formattedProducts}`;
         }
