@@ -2730,8 +2730,6 @@ const EXCLUDED_OPTION_PREFIXES = [
   'kod_tn_ved',
   'poiskovyy_zapros',
   'novinka',
-  'obyem',
-  'obem',
   'ogranichennyy_prosmotr',
   'populyarnyy',
   'prodaetsya_to',
