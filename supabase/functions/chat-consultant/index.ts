@@ -3645,7 +3645,7 @@ ${kbParts.join('\n\n')}
       console.log(`[Chat] Added ${knowledgeResults.length} knowledge entries to context (${kbUsed} chars, budget ${KB_TOTAL_BUDGET})`);
     }
     if (articleShortCircuit && foundProducts.length > 0) {
-      const formattedProducts = formatProductsForAI(foundProducts);
+      const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
       console.log(`[Chat] Short-circuit formatted products for AI:\n${formattedProducts}`);
       
       // Check if it was article/site-id or title-first
