@@ -1406,6 +1406,30 @@ function extractSpecs(text: string): string[] {
 }
 
 /**
+ * Domain penalty: detects mismatch between user intent (power vs telecom sockets).
+ * Returns a penalty value (0, 15, or 30) to subtract from the product score.
+ */
+const TELECOM_KEYWORDS = ['rj11', 'rj12', 'rj45', 'rj-11', 'rj-12', 'rj-45', 'телефон', 'компьютер', 'интернет', 'lan', 'data', 'ethernet', 'cat5', 'cat6', 'utp', 'ftp'];
+
+function domainPenalty(product: Product, userQuery: string): number {
+  const queryLower = userQuery.toLowerCase();
+  const titleLower = product.pagetitle.toLowerCase();
+  const categoryLower = (product.category?.pagetitle || '').toLowerCase();
+  const combined = titleLower + ' ' + categoryLower;
+  
+  const isSocketQuery = /розетк/i.test(queryLower);
+  if (!isSocketQuery) return 0;
+  
+  const userWantsTelecom = TELECOM_KEYWORDS.some(kw => queryLower.includes(kw));
+  const productIsTelecom = TELECOM_KEYWORDS.some(kw => combined.includes(kw));
+  
+  if (!userWantsTelecom && productIsTelecom) return 30;
+  if (userWantsTelecom && !productIsTelecom) return 15;
+  
+  return 0;
+}
+
+/**
  * Score a product against a user query.
  * Returns 0-100. Higher = better match.
  * 
@@ -1413,15 +1437,15 @@ function extractSpecs(text: string): string[] {
  * - Token overlap (words from query found in product title): 0-50
  * - Spec match (technical specs like 18Вт, 6500К, T8): 0-30
  * - Brand match: 0-20
+ * - Domain penalty: 0 to -30
  */
-function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: string[], queryBrand?: string): number {
+function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: string[], queryBrand?: string, userQuery?: string): number {
   const titleTokens = extractTokens(product.pagetitle);
   const titleText = product.pagetitle.toLowerCase();
   
   // 1. Token overlap score (0-50)
   let matchedTokens = 0;
   for (const qt of queryTokens) {
-    // Check direct inclusion in title text (handles partial morphology)
     if (titleText.includes(qt) || titleTokens.some(tt => tt.includes(qt) || qt.includes(tt))) {
       matchedTokens++;
     }
@@ -1433,7 +1457,6 @@ function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: 
   // 2. Spec match score (0-30)
   let matchedSpecs = 0;
   const titleSpecs = extractSpecs(product.pagetitle);
-  // Also check options for spec values
   const optionValues = (product.options || []).map(o => o.value.toLowerCase()).join(' ');
   for (const qs of querySpecs) {
     if (titleSpecs.some(ts => ts === qs) || titleText.includes(qs.toLowerCase()) || optionValues.includes(qs.toLowerCase())) {
@@ -1456,7 +1479,10 @@ function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: 
     }
   }
   
-  return Math.round(tokenScore + specScore + brandScore);
+  // 4. Domain penalty
+  const penalty = userQuery ? domainPenalty(product, userQuery) : 0;
+  
+  return Math.max(0, Math.round(tokenScore + specScore + brandScore - penalty));
 }
 
 /**
@@ -1469,7 +1495,7 @@ function rerankProducts(products: Product[], userQuery: string): Product[] {
   
   const scored = products.map(p => ({
     product: p,
-    score: scoreProductMatch(p, queryTokens, querySpecs),
+    score: scoreProductMatch(p, queryTokens, querySpecs, undefined, userQuery),
   }));
   
   scored.sort((a, b) => b.score - a.score);
