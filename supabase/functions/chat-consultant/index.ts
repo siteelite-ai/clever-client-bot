@@ -3938,10 +3938,15 @@ ${productContext}
     } else if (extractedIntent.intent === 'info') {
       if (knowledgeResults.length > 0) {
         // Find the most relevant KB entry by title/content match to user query
-        const queryWords = userMessage.toLowerCase().split(/\s+/).filter(w => w.length > 2);
+        // Strip punctuation from query words for accurate matching
+        const queryWords = userMessage.toLowerCase().replace(/[?!.,;:()«»"']/g, '').split(/\s+/).filter(w => w.length > 2);
         const bestMatch = knowledgeResults.find(r => 
-          queryWords.some(w => r.title.toLowerCase().includes(w) || r.content.toLowerCase().includes(w))
+          queryWords.some(w => r.title.toLowerCase().includes(w))
+        ) || knowledgeResults.find(r =>
+          queryWords.some(w => r.content.toLowerCase().includes(w))
         );
+        
+        console.log(`[Chat] Info intent: queryWords=${JSON.stringify(queryWords)}, bestMatch=${bestMatch?.title || 'NONE'}`);
         
         // Build direct answer quote from best match
         let directAnswerBlock = '';
@@ -3951,17 +3956,18 @@ ${productContext}
             : bestMatch.content;
           directAnswerBlock = `
 
-═══════════════════════════════════════
-🎯 ПРЯМОЙ ОТВЕТ НАЙДЕН В БАЗЕ ЗНАНИЙ!
-Запись: "${bestMatch.title}"
-Содержание: "${fullContent}"
+═══════════════════════════════════════════════════════
+🎯 НАЙДЕН ТОЧНЫЙ ОТВЕТ В БАЗЕ ЗНАНИЙ! ИСПОЛЬЗУЙ ЕГО!
+═══════════════════════════════════════════════════════
+Запись: «${bestMatch.title}»
+Текст записи: «${fullContent}»
 ${bestMatch.source_url ? `Источник: ${bestMatch.source_url}` : ''}
-═══════════════════════════════════════
+═══════════════════════════════════════════════════════
 
-⛔ СТОП! Ответ на вопрос клиента УЖЕ ЕСТЬ выше. 
-Ты ОБЯЗАН использовать ИМЕННО ЭТУ информацию.
-НЕ ПРИДУМЫВАЙ свой ответ. НЕ ГОВОРИ "нет" если в записи написано "есть".
-Просто перескажи содержание записи своими словами.`;
+⛔ СТОП! Прочитай текст записи выше. Это ФАКТ из базы данных компании.
+Твоя задача — ПЕРЕСКАЗАТЬ эту информацию клиенту своими словами.
+ЗАПРЕЩЕНО: говорить "нет" если в записи написано "есть", или наоборот.
+ЗАПРЕЩЕНО: использовать свои общие знания вместо данных из записи.`;
         }
         
         productInstructions = `
