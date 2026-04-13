@@ -1602,12 +1602,17 @@ async function generateSearchCandidates(
   apiKeys: string[],
   conversationHistory: Array<{ role: string; content: string }> = [],
   aiUrl: string = 'https://openrouter.ai/api/v1/chat/completions',
-  aiModel: string = 'meta-llama/llama-3.3-70b-instruct:free'
+  aiModel: string = 'meta-llama/llama-3.3-70b-instruct:free',
+  classificationCategory?: string | null
 ): Promise<ExtractedIntent> {
-  console.log(`[AI Candidates] Extracting search intent from: "${message}"`);
+  console.log(`[AI Candidates] Extracting search intent from: "${message}", classificationCategory: ${classificationCategory || 'none'}`);
   
-  // Формируем контекст из последних сообщений (максимум 6)
-  const recentHistory = conversationHistory.slice(-10);
+  // Если классификатор определил product_category — это самостоятельный новый запрос,
+  // история НЕ должна загрязнять поисковые кандидаты.
+  // История используется ТОЛЬКО для уточняющих коротких ответов (когда category не определена).
+  const isNewProductQuery = !!classificationCategory;
+  
+  const recentHistory = isNewProductQuery ? [] : conversationHistory.slice(-10);
   let historyContext = '';
   if (recentHistory.length > 0) {
     historyContext = `
@@ -1617,9 +1622,13 @@ ${recentHistory.map(m => `${m.role === 'user' ? 'Клиент' : 'Консуль
 `;
   }
   
+  if (isNewProductQuery) {
+    console.log(`[AI Candidates] Context ISOLATED: new product query detected (category="${classificationCategory}"), history pruned`);
+  }
+  
   const extractionPrompt = `Ты — система извлечения поисковых намерений для интернет-магазина электроинструментов 220volt.kz.
 ${historyContext}
-АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщение С УЧЁТОМ КОНТЕКСТА РАЗГОВОРА!
+${recentHistory.length > 0 ? 'АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщение С УЧЁТОМ КОНТЕКСТА РАЗГОВОРА!' : 'АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщение КАК САМОСТОЯТЕЛЬНЫЙ ЗАПРОС!'}
 
 🔄 ОБРАБОТКА УТОЧНЯЮЩИХ ОТВЕТОВ (КРИТИЧЕСКИ ВАЖНО!):
 Если текущее сообщение — это ОТВЕТ на уточняющий вопрос консультанта (например "а для встраиваемой", "наружный", "на 12 модулей", "IP44"):
@@ -3591,7 +3600,7 @@ serve(async (req) => {
         originalQuery: userMessage,
       };
     } else {
-      extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, aiConfig.model);
+      extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, aiConfig.model, classification?.product_category);
     }
     console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}, ShortCircuit: ${articleShortCircuit}`);
 
@@ -4064,6 +4073,7 @@ ${productInstructions}`;
       model: aiConfig.model,
       messages: messagesForAI,
       stream: useStreaming,
+      temperature: 0,
     }, 'Chat');
 
     if (!response.ok) {
