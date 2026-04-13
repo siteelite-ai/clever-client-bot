@@ -3937,29 +3937,45 @@ ${productContext}
       productInstructions = '';
     } else if (extractedIntent.intent === 'info') {
       if (knowledgeResults.length > 0) {
-        // Find the most relevant KB entry by title match to user query
-        const queryWords = userMessage.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+        // Find the most relevant KB entry by title/content match to user query
+        const queryWords = userMessage.toLowerCase().split(/\s+/).filter(w => w.length > 2);
         const bestMatch = knowledgeResults.find(r => 
-          queryWords.some(w => r.title.toLowerCase().includes(w))
+          queryWords.some(w => r.title.toLowerCase().includes(w) || r.content.toLowerCase().includes(w))
         );
-        const bestMatchContent = bestMatch 
-          ? `\n\n🎯 НАИБОЛЕЕ РЕЛЕВАНТНАЯ ЗАПИСЬ ИЗ БАЗЫ ЗНАНИЙ:\n--- ${bestMatch.title} ---\n${bestMatch.content}\n${bestMatch.source_url ? `Источник: ${bestMatch.source_url}` : ''}\n`
-          : '';
+        
+        // Build direct answer quote from best match
+        let directAnswerBlock = '';
+        if (bestMatch) {
+          const fullContent = bestMatch.content.length > 2000 
+            ? bestMatch.content.substring(0, 2000) 
+            : bestMatch.content;
+          directAnswerBlock = `
+
+═══════════════════════════════════════
+🎯 ПРЯМОЙ ОТВЕТ НАЙДЕН В БАЗЕ ЗНАНИЙ!
+Запись: "${bestMatch.title}"
+Содержание: "${fullContent}"
+${bestMatch.source_url ? `Источник: ${bestMatch.source_url}` : ''}
+═══════════════════════════════════════
+
+⛔ СТОП! Ответ на вопрос клиента УЖЕ ЕСТЬ выше. 
+Ты ОБЯЗАН использовать ИМЕННО ЭТУ информацию.
+НЕ ПРИДУМЫВАЙ свой ответ. НЕ ГОВОРИ "нет" если в записи написано "есть".
+Просто перескажи содержание записи своими словами.`;
+        }
         
         productInstructions = `
 💡 ВОПРОС О КОМПАНИИ / УСЛОВИЯХ / ДОКУМЕНТАХ
 
 Клиент написал: "${extractedIntent.originalQuery}"
-${bestMatchContent}
-⚠️ КРИТИЧЕСКИ ВАЖНО: Твой ответ ДОЛЖЕН быть основан ИСКЛЮЧИТЕЛЬНО на информации из Базы Знаний (см. раздел "ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ" выше).
-🚫 ЗАПРЕЩЕНО генерировать ответ из своих общих знаний! Если в Базе Знаний есть информация по теме — используй ТОЛЬКО её, даже если она противоречит твоим "знаниям".
+${directAnswerBlock}
 
-ТВОЙ ОТВЕТ:
-1. Найди в Базе Знаний запись, наиболее релевантную вопросу клиента
-2. Перескажи информацию из этой записи СВОИМИ СЛОВАМИ, но НЕ МЕНЯЯ СМЫСЛ
-3. Цитируй конкретные пункты, если они есть (например, "Согласно п. 11.16 договора оферты...")
-4. Если вопрос о юридических данных (БИН, ИИН, названия юрлиц) — ОБЯЗАТЕЛЬНО предоставь их из Базы Знаний
-5. Если вопрос об обязанностях, правах, условиях — перечисли ключевые пункты кратко и понятно
+⚠️ КРИТИЧЕСКИ ВАЖНО — ПРАВИЛА ОТВЕТА НА ИНФОРМАЦИОННЫЕ ВОПРОСЫ:
+1. Твой ответ ДОЛЖЕН быть основан ИСКЛЮЧИТЕЛЬНО на данных из Базы Знаний
+2. 🚫 КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО отвечать из своих общих знаний или "здравого смысла"!
+3. Если в Базе Знаний написано, что что-то ЕСТЬ — ты говоришь что ЕСТЬ. Не спорь с базой!
+4. Если в Базе Знаний написано, что чего-то НЕТ — ты говоришь что НЕТ
+5. Цитируй конкретные пункты, если они есть
 6. Если точного ответа нет в Базе Знаний — честно скажи и предложи контакт менеджера`;
       } else {
         productInstructions = `
