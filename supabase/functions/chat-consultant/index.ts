@@ -4129,8 +4129,29 @@ ${productInstructions}`;
     const trimmedHistoryLen = trimmedMessages.reduce((sum: number, m: any) => sum + (m.content?.length || 0), 0);
     console.log(`[Chat] History trimmed: ${messages.length} → ${trimmedMessages.length} msgs, ${historyLen} → ${trimmedHistoryLen} chars`);
 
+    // For info queries with KB match, inject the answer as a separate message
+    // so the LLM cannot ignore it (system prompt instructions get lost in long contexts)
+    const infoKbInjection: any[] = [];
+    if (extractedIntent.intent === 'info' && knowledgeResults.length > 0) {
+      const qw = userMessage.toLowerCase().replace(/[?!.,;:()«»"']/g, '').split(/\s+/).filter((w: string) => w.length > 2);
+      const bm = knowledgeResults.find((r: any) => qw.some((w: string) => r.title.toLowerCase().includes(w))) 
+        || knowledgeResults.find((r: any) => qw.some((w: string) => r.content.toLowerCase().includes(w)));
+      if (bm) {
+        console.log(`[Chat] Info KB injection: matched entry "${bm.title}" (${bm.content.length} chars)`);
+        infoKbInjection.push({
+          role: 'user',
+          content: `[СИСТЕМНАЯ СПРАВКА — данные из базы знаний компании]\nНа вопрос "${userMessage}" в базе знаний найдена запись:\n\nЗаголовок: ${bm.title}\nСодержание: ${bm.content}\n\nОтветь клиенту, используя ИМЕННО эту информацию. Не противоречь ей.`
+        });
+        infoKbInjection.push({
+          role: 'assistant', 
+          content: 'Понял, использую информацию из базы знаний для ответа.'
+        });
+      }
+    }
+
     const messagesForAI = [
       { role: 'system', content: systemPrompt },
+      ...infoKbInjection,
       ...trimmedMessages,
     ];
     
