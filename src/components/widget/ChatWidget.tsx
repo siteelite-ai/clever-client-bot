@@ -13,6 +13,29 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 type Msg = { role: 'user' | 'assistant'; content: string };
 
+// Thinking phrases for perceived latency reduction
+const PRODUCT_KEYWORDS = /розетк|кабел|автомат|щит|ламп|выключател|провод|удлинител|счётчик|счетчик|реле|контактор|дрел|шуруповёрт|шуруповерт|перфоратор|болгарк|пил[аеу]|насос|генератор|сварочн|компрессор|лобзик|фрез|гайковёрт|гайковерт|стабилизатор|трансформатор|инструмент|электро|плоскогубц|отвёртк|отвертк|рулетк|уровен|мультиметр|тестер|паяльник|фен|краскопульт|нож|диск|бур|свёрл|сверл|коронк|патрон|аккумулятор|зарядн|бензо|цепн|триммер|газонокосилк|мойк|пистолет/i;
+
+const THINKING_CATALOG = [
+  'Сейчас подберу варианты... 🔍',
+  'Ищу в каталоге... 📦',
+  'Секунду, смотрю наличие... ⏳',
+  'Подбираю подходящие товары... 🛠️',
+  'Сейчас посмотрю, что есть... 🔎',
+];
+
+const THINKING_INFO = [
+  'Сейчас проверю информацию... 📋',
+  'Минутку, уточняю... ⏳',
+  'Секунду, проверю детали... 🔍',
+  'Сейчас найду ответ... 💡',
+];
+
+function pickThinkingPhrase(message: string): string {
+  const pool = PRODUCT_KEYWORDS.test(message) ? THINKING_CATALOG : THINKING_INFO;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 // Dialog slot types for persistent intent memory
 interface DialogSlot {
   intent: 'price_extreme' | 'product_search';
