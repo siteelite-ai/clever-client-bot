@@ -854,6 +854,15 @@
 
     showTyping();
 
+    // Show thinking phrase immediately (0ms perceived latency)
+    var thinkingPhrase = pickThinkingPhrase(message);
+    var thinkingMsg = document.createElement('div');
+    thinkingMsg.className = 'volt-message assistant';
+    thinkingMsg.id = 'volt-thinking-msg';
+    thinkingMsg.innerHTML = formatMessage(thinkingPhrase);
+    messagesContainer.appendChild(thinkingMsg);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
     // For streaming: try direct Supabase first (supports SSE), proxy buffers SSE
     // For non-streaming fallback: try proxy first (works in Russia)
     var streamEndpoints = [
