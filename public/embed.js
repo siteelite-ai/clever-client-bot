@@ -887,8 +887,10 @@
     for (var i = 0; i < streamEndpoints.length; i++) {
       try {
         result = await tryStreamEndpoint(streamEndpoints[i].url, message, streamEndpoints[i].label, assistantMsg, function() {
-          // Called on first token — hide typing, show message
+          // Called on first token — hide typing, remove thinking phrase, show real message
           hideTyping();
+          var thinkingEl = document.getElementById('volt-thinking-msg');
+          if (thinkingEl) thinkingEl.remove();
           if (!msgInserted) {
             messagesContainer.appendChild(assistantMsg);
             assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
