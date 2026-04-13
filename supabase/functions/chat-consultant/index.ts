@@ -3638,7 +3638,16 @@ serve(async (req) => {
           : [{ query: cleanQueryForDirectSearch(userMessage), brand: null, category: null, min_price: null, max_price: null }],
         originalQuery: userMessage,
       };
+    } else if (classification?.intent === 'info' || classification?.intent === 'general') {
+      // Micro-LLM already determined intent — skip expensive Gemini Pro call
+      console.log(`[Chat] Micro-LLM intent="${classification.intent}" — skipping generateSearchCandidates`);
+      extractedIntent = {
+        intent: classification.intent,
+        candidates: [],
+        originalQuery: userMessage,
+      };
     } else {
+      // catalog/brands or no intent — full pipeline
       extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, aiConfig.model, classification?.product_category);
     }
     console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}, ShortCircuit: ${articleShortCircuit}`);
