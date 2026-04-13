@@ -411,7 +411,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
               );
             })}
 
-            {isLoading && messages[messages.length - 1]?.role !== 'assistant' && (
+            {isLoading && messages[messages.length - 1]?.id.startsWith('thinking-') && (
               <div className="flex justify-start">
                 <div className="chat-message-bot rounded-2xl px-4 py-3">
                   <div className="flex gap-1">
