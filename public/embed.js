@@ -919,8 +919,9 @@
     }
 
     hideTyping();
+    var thinkingEl = document.getElementById('volt-thinking-msg');
+    if (thinkingEl) thinkingEl.remove();
 
-    if (result) {
       if (!msgInserted) {
         messagesContainer.appendChild(assistantMsg);
         msgInserted = true;
