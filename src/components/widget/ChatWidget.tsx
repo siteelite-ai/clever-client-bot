@@ -215,9 +215,19 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
-    // Не скроллим автоматически
+
+    // Show thinking phrase immediately (0ms perceived latency)
+    const thinkingId = `thinking-${Date.now()}`;
+    const thinkingPhrase = pickThinkingPhrase(input);
+    setMessages(prev => [...prev, {
+      id: thinkingId,
+      role: 'assistant' as const,
+      content: thinkingPhrase,
+      timestamp: new Date()
+    }]);
 
     let assistantContent = '';
+    let thinkingReplaced = false;
 
     const updateAssistant = (chunk: string) => {
       assistantContent += chunk;
@@ -227,6 +237,15 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       displayContent = displayContent.replace(/ТИХОЕ РАЗМЫШЛЕНИЕ[\s\S]*?(?:КОНЕЦ РАЗМЫШЛЕНИ[ЯЙ]|$)/gs, '');
       displayContent = displayContent.trim();
       setMessages(prev => {
+        if (!thinkingReplaced) {
+          // Replace thinking message with first real content
+          thinkingReplaced = true;
+          return prev.map(m => 
+            m.id === thinkingId
+              ? { ...m, id: `stream-${Date.now()}`, content: displayContent }
+              : m
+          );
+        }
         const last = prev[prev.length - 1];
         if (last?.role === 'assistant' && last.id.startsWith('stream-')) {
           return prev.map((m, i) => 
