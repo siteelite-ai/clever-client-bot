@@ -47,7 +47,26 @@
   
   let isOpen = false;
   let isLoading = false;
-  
+
+  // Thinking phrases for perceived latency reduction
+  const PRODUCT_KEYWORDS = /розетк|кабел|автомат|щит|ламп|выключател|провод|удлинител|счётчик|счетчик|реле|контактор|дрел|шуруповёрт|шуруповерт|перфоратор|болгарк|пил[аеу]|насос|генератор|сварочн|компрессор|лобзик|фрез|гайковёрт|гайковерт|стабилизатор|трансформатор|инструмент|электро|плоскогубц|отвёртк|отвертк|рулетк|уровен|мультиметр|тестер|паяльник|фен|краскопульт|нож|диск|бур|свёрл|сверл|коронк|патрон|аккумулятор|зарядн|бензо|цепн|триммер|газонокосилк|мойк|пистолет/i;
+  const THINKING_CATALOG = [
+    'Сейчас подберу варианты... 🔍',
+    'Ищу в каталоге... 📦',
+    'Секунду, смотрю наличие... ⏳',
+    'Подбираю подходящие товары... 🛠️',
+    'Сейчас посмотрю, что есть... 🔎',
+  ];
+  const THINKING_INFO = [
+    'Сейчас проверю информацию... 📋',
+    'Минутку, уточняю... ⏳',
+    'Секунду, проверю детали... 🔍',
+    'Сейчас найду ответ... 💡',
+  ];
+  function pickThinkingPhrase(msg) {
+    var pool = PRODUCT_KEYWORDS.test(msg) ? THINKING_CATALOG : THINKING_INFO;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
   // Save state to sessionStorage
   function saveState() {
     try {
@@ -835,6 +854,15 @@
 
     showTyping();
 
+    // Show thinking phrase immediately (0ms perceived latency)
+    var thinkingPhrase = pickThinkingPhrase(message);
+    var thinkingMsg = document.createElement('div');
+    thinkingMsg.className = 'volt-message assistant';
+    thinkingMsg.id = 'volt-thinking-msg';
+    thinkingMsg.innerHTML = formatMessage(thinkingPhrase);
+    messagesContainer.appendChild(thinkingMsg);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
     // For streaming: try direct Supabase first (supports SSE), proxy buffers SSE
     // For non-streaming fallback: try proxy first (works in Russia)
     var streamEndpoints = [
@@ -859,8 +887,10 @@
     for (var i = 0; i < streamEndpoints.length; i++) {
       try {
         result = await tryStreamEndpoint(streamEndpoints[i].url, message, streamEndpoints[i].label, assistantMsg, function() {
-          // Called on first token — hide typing, show message
+          // Called on first token — hide typing, remove thinking phrase, show real message
           hideTyping();
+          var thinkingEl = document.getElementById('volt-thinking-msg');
+          if (thinkingEl) thinkingEl.remove();
           if (!msgInserted) {
             messagesContainer.appendChild(assistantMsg);
             assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -889,8 +919,9 @@
     }
 
     hideTyping();
+    var thinkingEl = document.getElementById('volt-thinking-msg');
+    if (thinkingEl) thinkingEl.remove();
 
-    if (result) {
       if (!msgInserted) {
         messagesContainer.appendChild(assistantMsg);
         msgInserted = true;

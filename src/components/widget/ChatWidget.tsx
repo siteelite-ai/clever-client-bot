@@ -13,6 +13,29 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 type Msg = { role: 'user' | 'assistant'; content: string };
 
+// Thinking phrases for perceived latency reduction
+const PRODUCT_KEYWORDS = /розетк|кабел|автомат|щит|ламп|выключател|провод|удлинител|счётчик|счетчик|реле|контактор|дрел|шуруповёрт|шуруповерт|перфоратор|болгарк|пил[аеу]|насос|генератор|сварочн|компрессор|лобзик|фрез|гайковёрт|гайковерт|стабилизатор|трансформатор|инструмент|электро|плоскогубц|отвёртк|отвертк|рулетк|уровен|мультиметр|тестер|паяльник|фен|краскопульт|нож|диск|бур|свёрл|сверл|коронк|патрон|аккумулятор|зарядн|бензо|цепн|триммер|газонокосилк|мойк|пистолет/i;
+
+const THINKING_CATALOG = [
+  'Сейчас подберу варианты... 🔍',
+  'Ищу в каталоге... 📦',
+  'Секунду, смотрю наличие... ⏳',
+  'Подбираю подходящие товары... 🛠️',
+  'Сейчас посмотрю, что есть... 🔎',
+];
+
+const THINKING_INFO = [
+  'Сейчас проверю информацию... 📋',
+  'Минутку, уточняю... ⏳',
+  'Секунду, проверю детали... 🔍',
+  'Сейчас найду ответ... 💡',
+];
+
+function pickThinkingPhrase(message: string): string {
+  const pool = PRODUCT_KEYWORDS.test(message) ? THINKING_CATALOG : THINKING_INFO;
+  return pool[Math.floor(Math.random() * pool.length)];
+}
+
 // Dialog slot types for persistent intent memory
 interface DialogSlot {
   intent: 'price_extreme' | 'product_search';
@@ -192,9 +215,19 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     setMessages(prev => [...prev, userMessage]);
     setInput('');
     setIsLoading(true);
-    // Не скроллим автоматически
+
+    // Show thinking phrase immediately (0ms perceived latency)
+    const thinkingId = `thinking-${Date.now()}`;
+    const thinkingPhrase = pickThinkingPhrase(input);
+    setMessages(prev => [...prev, {
+      id: thinkingId,
+      role: 'assistant' as const,
+      content: thinkingPhrase,
+      timestamp: new Date()
+    }]);
 
     let assistantContent = '';
+    let thinkingReplaced = false;
 
     const updateAssistant = (chunk: string) => {
       assistantContent += chunk;
@@ -204,6 +237,15 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       displayContent = displayContent.replace(/ТИХОЕ РАЗМЫШЛЕНИЕ[\s\S]*?(?:КОНЕЦ РАЗМЫШЛЕНИ[ЯЙ]|$)/gs, '');
       displayContent = displayContent.trim();
       setMessages(prev => {
+        if (!thinkingReplaced) {
+          // Replace thinking message with first real content
+          thinkingReplaced = true;
+          return prev.map(m => 
+            m.id === thinkingId
+              ? { ...m, id: `stream-${Date.now()}`, content: displayContent }
+              : m
+          );
+        }
         const last = prev[prev.length - 1];
         if (last?.role === 'assistant' && last.id.startsWith('stream-')) {
           return prev.map((m, i) => 
@@ -369,7 +411,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
               );
             })}
 
-            {isLoading && messages[messages.length - 1]?.role !== 'assistant' && (
+            {isLoading && messages[messages.length - 1]?.id.startsWith('thinking-') && (
               <div className="flex justify-start">
                 <div className="chat-message-bot rounded-2xl px-4 py-3">
                   <div className="flex gap-1">
