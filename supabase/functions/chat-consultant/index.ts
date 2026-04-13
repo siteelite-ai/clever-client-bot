@@ -583,6 +583,12 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 
 Извлеки из сообщения следующие поля:
 
+0. intent ("catalog"|"brands"|"info"|"general"): Определи НАМЕРЕНИЕ пользователя:
+- "catalog" — ищет конкретные товары, оборудование, материалы для покупки
+- "brands" — спрашивает какие бренды/производители представлены в магазине
+- "info" — вопросы о компании, доставке, оплате, оферте, контактах, прайс-листе, гарантии, возврате, графике работы, адресах
+- "general" — приветствия, благодарности, шутки, вопросы не связанные с магазином
+
 1. has_product_name (boolean): TRUE только если сообщение содержит КОНКРЕТНОЕ идентифицируемое название товара — модель, марку с типом, или тип с техническими характеристиками (сечение, ток, цоколь и т.д.). Одно общее слово-категория без уточнений — FALSE. Указание серии, коллекции, линейки товаров — НЕ конкретное название. "розетки из коллекции Гармония" → has_product_name=false, category="розетка", modifiers=["Гармония"].
 
 2. product_name (string|null): Если has_product_name=true — полное название товара без разговорных оборотов. Иначе null.
@@ -597,7 +603,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 
 КЛЮЧЕВОЙ ПРИНЦИП: category = базовый тип товара для широкого текстового поиска. Все конкретные характеристики (конструкция, подтип, внешние атрибуты) → modifiers. Система фильтрации сама сопоставит модификаторы с реальными характеристиками товаров.
 
-Ответь СТРОГО в JSON: {"has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "...", "is_replacement": bool, "search_modifiers": ["...", "..."]}`
+Ответь СТРОГО в JSON: {"intent": "catalog"|"brands"|"info"|"general", "has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "...", "is_replacement": bool, "search_modifiers": ["...", "..."]}`
       },
       ...(recentHistory || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
       { role: 'user', content: message }
@@ -660,8 +666,14 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 
       const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       const parsed = JSON.parse(jsonStr);
-      console.log(`[Classify] SUCCESS via ${attempt.label}`);
+      const validIntents = ['catalog', 'brands', 'info', 'general'];
+      const rawIntent = typeof parsed.intent === 'string' ? parsed.intent.toLowerCase().trim() : null;
+      const intent = validIntents.includes(rawIntent!) ? rawIntent : undefined;
+      // Safety: if micro-LLM says info/general but product_category is filled, override to catalog
+      const finalIntent = ((intent === 'info' || intent === 'general') && parsed.product_category) ? 'catalog' : intent;
+      console.log(`[Classify] SUCCESS via ${attempt.label}, intent=${finalIntent}`);
       return {
+        intent: finalIntent as string | undefined,
         has_product_name: !!parsed.has_product_name,
         product_name: parsed.product_name || undefined,
         price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
@@ -3240,7 +3252,7 @@ serve(async (req) => {
         const recentHistoryForClassifier = historyForContext.slice(-4).map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }));
         classification = await classifyProductName(userMessage, recentHistoryForClassifier, appSettings);
         const classifyElapsed = Date.now() - classifyStart;
-        console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}", is_replacement=${classification?.is_replacement || false}`);
+        console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → intent=${classification?.intent || 'none'}, has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}", is_replacement=${classification?.is_replacement || false}`);
         
         // === DIALOG SLOTS: try slot-based resolution FIRST ===
         // Filter out "none" — classifier returns string "none", not null
@@ -3626,7 +3638,16 @@ serve(async (req) => {
           : [{ query: cleanQueryForDirectSearch(userMessage), brand: null, category: null, min_price: null, max_price: null }],
         originalQuery: userMessage,
       };
+    } else if (classification?.intent === 'info' || classification?.intent === 'general') {
+      // Micro-LLM already determined intent — skip expensive Gemini Pro call
+      console.log(`[Chat] Micro-LLM intent="${classification.intent}" — skipping generateSearchCandidates`);
+      extractedIntent = {
+        intent: classification.intent,
+        candidates: [],
+        originalQuery: userMessage,
+      };
     } else {
+      // catalog/brands or no intent — full pipeline
       extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, aiConfig.model, classification?.product_category);
     }
     console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}, ShortCircuit: ${articleShortCircuit}`);
