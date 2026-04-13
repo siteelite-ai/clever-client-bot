@@ -3937,19 +3937,52 @@ ${productContext}
       productInstructions = '';
     } else if (extractedIntent.intent === 'info') {
       if (knowledgeResults.length > 0) {
+        // Find the most relevant KB entry by title/content match to user query
+        // Strip punctuation from query words for accurate matching
+        const queryWords = userMessage.toLowerCase().replace(/[?!.,;:()«»"']/g, '').split(/\s+/).filter(w => w.length > 2);
+        const bestMatch = knowledgeResults.find(r => 
+          queryWords.some(w => r.title.toLowerCase().includes(w))
+        ) || knowledgeResults.find(r =>
+          queryWords.some(w => r.content.toLowerCase().includes(w))
+        );
+        
+        console.log(`[Chat] Info intent: queryWords=${JSON.stringify(queryWords)}, bestMatch=${bestMatch?.title || 'NONE'}`);
+        
+        // Build direct answer quote from best match
+        let directAnswerBlock = '';
+        if (bestMatch) {
+          const fullContent = bestMatch.content.length > 2000 
+            ? bestMatch.content.substring(0, 2000) 
+            : bestMatch.content;
+          directAnswerBlock = `
+
+═══════════════════════════════════════════════════════
+🎯 НАЙДЕН ТОЧНЫЙ ОТВЕТ В БАЗЕ ЗНАНИЙ! ИСПОЛЬЗУЙ ЕГО!
+═══════════════════════════════════════════════════════
+Запись: «${bestMatch.title}»
+Текст записи: «${fullContent}»
+${bestMatch.source_url ? `Источник: ${bestMatch.source_url}` : ''}
+═══════════════════════════════════════════════════════
+
+⛔ СТОП! Прочитай текст записи выше. Это ФАКТ из базы данных компании.
+Твоя задача — ПЕРЕСКАЗАТЬ эту информацию клиенту своими словами.
+ЗАПРЕЩЕНО: говорить "нет" если в записи написано "есть", или наоборот.
+ЗАПРЕЩЕНО: использовать свои общие знания вместо данных из записи.`;
+        }
+        
         productInstructions = `
 💡 ВОПРОС О КОМПАНИИ / УСЛОВИЯХ / ДОКУМЕНТАХ
 
 Клиент написал: "${extractedIntent.originalQuery}"
+${directAnswerBlock}
 
-В БАЗЕ ЗНАНИЙ НАЙДЕНА РЕЛЕВАНТНАЯ ИНФОРМАЦИЯ (см. раздел "ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ" выше).
-
-ТВОЙ ОТВЕТ:
-1. Ответь на вопрос клиента, ИСПОЛЬЗУЯ информацию из Базы Знаний
-2. Цитируй конкретные пункты, если они есть (например, "Согласно п. 11.16 договора оферты...")
-3. Если вопрос о юридических данных (БИН, ИИН, названия юрлиц) — ОБЯЗАТЕЛЬНО предоставь их из Базы Знаний
-4. Если вопрос об обязанностях, правах, условиях — перечисли ключевые пункты кратко и понятно
-5. Если точного ответа нет в Базе Знаний — честно скажи и предложи контакт менеджера`;
+⚠️ КРИТИЧЕСКИ ВАЖНО — ПРАВИЛА ОТВЕТА НА ИНФОРМАЦИОННЫЕ ВОПРОСЫ:
+1. Твой ответ ДОЛЖЕН быть основан ИСКЛЮЧИТЕЛЬНО на данных из Базы Знаний
+2. 🚫 КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО отвечать из своих общих знаний или "здравого смысла"!
+3. Если в Базе Знаний написано, что что-то ЕСТЬ — ты говоришь что ЕСТЬ. Не спорь с базой!
+4. Если в Базе Знаний написано, что чего-то НЕТ — ты говоришь что НЕТ
+5. Цитируй конкретные пункты, если они есть
+6. Если точного ответа нет в Базе Знаний — честно скажи и предложи контакт менеджера`;
       } else {
         productInstructions = `
 💡 ВОПРОС О КОМПАНИИ
@@ -4096,8 +4129,29 @@ ${productInstructions}`;
     const trimmedHistoryLen = trimmedMessages.reduce((sum: number, m: any) => sum + (m.content?.length || 0), 0);
     console.log(`[Chat] History trimmed: ${messages.length} → ${trimmedMessages.length} msgs, ${historyLen} → ${trimmedHistoryLen} chars`);
 
+    // For info queries with KB match, inject the answer as a separate message
+    // so the LLM cannot ignore it (system prompt instructions get lost in long contexts)
+    const infoKbInjection: any[] = [];
+    if (extractedIntent.intent === 'info' && knowledgeResults.length > 0) {
+      const qw = userMessage.toLowerCase().replace(/[?!.,;:()«»"']/g, '').split(/\s+/).filter((w: string) => w.length > 2);
+      const bm = knowledgeResults.find((r: any) => qw.some((w: string) => r.title.toLowerCase().includes(w))) 
+        || knowledgeResults.find((r: any) => qw.some((w: string) => r.content.toLowerCase().includes(w)));
+      if (bm) {
+        console.log(`[Chat] Info KB injection: matched entry "${bm.title}" (${bm.content.length} chars)`);
+        infoKbInjection.push({
+          role: 'user',
+          content: `[СИСТЕМНАЯ СПРАВКА — данные из базы знаний компании]\nНа вопрос "${userMessage}" в базе знаний найдена запись:\n\nЗаголовок: ${bm.title}\nСодержание: ${bm.content}\n\nОтветь клиенту, используя ИМЕННО эту информацию. Не противоречь ей.`
+        });
+        infoKbInjection.push({
+          role: 'assistant', 
+          content: 'Понял, использую информацию из базы знаний для ответа.'
+        });
+      }
+    }
+
     const messagesForAI = [
       { role: 'system', content: systemPrompt },
+      ...infoKbInjection,
       ...trimmedMessages,
     ];
     
