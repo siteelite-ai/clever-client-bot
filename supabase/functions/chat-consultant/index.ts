@@ -583,6 +583,12 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 
 Извлеки из сообщения следующие поля:
 
+0. intent ("catalog"|"brands"|"info"|"general"): Определи НАМЕРЕНИЕ пользователя:
+- "catalog" — ищет конкретные товары, оборудование, материалы для покупки
+- "brands" — спрашивает какие бренды/производители представлены в магазине
+- "info" — вопросы о компании, доставке, оплате, оферте, контактах, прайс-листе, гарантии, возврате, графике работы, адресах
+- "general" — приветствия, благодарности, шутки, вопросы не связанные с магазином
+
 1. has_product_name (boolean): TRUE только если сообщение содержит КОНКРЕТНОЕ идентифицируемое название товара — модель, марку с типом, или тип с техническими характеристиками (сечение, ток, цоколь и т.д.). Одно общее слово-категория без уточнений — FALSE. Указание серии, коллекции, линейки товаров — НЕ конкретное название. "розетки из коллекции Гармония" → has_product_name=false, category="розетка", modifiers=["Гармония"].
 
 2. product_name (string|null): Если has_product_name=true — полное название товара без разговорных оборотов. Иначе null.
@@ -597,7 +603,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 
 КЛЮЧЕВОЙ ПРИНЦИП: category = базовый тип товара для широкого текстового поиска. Все конкретные характеристики (конструкция, подтип, внешние атрибуты) → modifiers. Система фильтрации сама сопоставит модификаторы с реальными характеристиками товаров.
 
-Ответь СТРОГО в JSON: {"has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "...", "is_replacement": bool, "search_modifiers": ["...", "..."]}`
+Ответь СТРОГО в JSON: {"intent": "catalog"|"brands"|"info"|"general", "has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "...", "is_replacement": bool, "search_modifiers": ["...", "..."]}`
       },
       ...(recentHistory || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
       { role: 'user', content: message }
