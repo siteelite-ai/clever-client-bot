@@ -666,8 +666,14 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 
       const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       const parsed = JSON.parse(jsonStr);
-      console.log(`[Classify] SUCCESS via ${attempt.label}`);
+      const validIntents = ['catalog', 'brands', 'info', 'general'];
+      const rawIntent = typeof parsed.intent === 'string' ? parsed.intent.toLowerCase().trim() : null;
+      const intent = validIntents.includes(rawIntent!) ? rawIntent : undefined;
+      // Safety: if micro-LLM says info/general but product_category is filled, override to catalog
+      const finalIntent = ((intent === 'info' || intent === 'general') && parsed.product_category) ? 'catalog' : intent;
+      console.log(`[Classify] SUCCESS via ${attempt.label}, intent=${finalIntent}`);
       return {
+        intent: finalIntent as string | undefined,
         has_product_name: !!parsed.has_product_name,
         product_name: parsed.product_name || undefined,
         price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
