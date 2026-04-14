@@ -2325,6 +2325,7 @@ ${JSON.stringify(modifiers)}
     // Validate that returned keys AND values exist in schema
     const validated: Record<string, string> = {};
     const matchedModifiers = new Set<string>();
+    const failedModifiers = new Set<string>();
     const norm = (s: string) => s.replace(/ё/g, 'е').toLowerCase().trim();
 
     for (const [rawKey, value] of Object.entries(filters)) {
