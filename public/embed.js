@@ -852,14 +852,12 @@
     conversationHistory.push({ role: 'user', content: message });
     saveState();
 
-    showTyping();
-
-    // Show thinking phrase immediately (0ms perceived latency)
+    // Show thinking phrase first, then typing animation below
     var thinkingPhrase = pickThinkingPhrase(message);
     var thinkingMsg = document.createElement('div');
     thinkingMsg.className = 'volt-message assistant';
     thinkingMsg.id = 'volt-thinking-msg';
-    thinkingMsg.innerHTML = formatMessage(thinkingPhrase);
+    thinkingMsg.innerHTML = '<span>' + formatMessage(thinkingPhrase) + '</span><div class="volt-typing" style="margin-top:8px;background:transparent;padding:4px 0;"><span></span><span></span><span></span></div>';
     messagesContainer.appendChild(thinkingMsg);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
