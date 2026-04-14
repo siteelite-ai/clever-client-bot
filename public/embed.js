@@ -852,13 +852,33 @@
     conversationHistory.push({ role: 'user', content: message });
     saveState();
 
-    // Show thinking phrase first, then typing animation below
+    // Step 1: Show typing animation (dots only) briefly
     var thinkingPhrase = pickThinkingPhrase(message);
+    var typingIndicator = document.createElement('div');
+    typingIndicator.className = 'volt-message assistant';
+    typingIndicator.id = 'volt-typing-indicator';
+    typingIndicator.innerHTML = '<div class="volt-typing" style="background:transparent;padding:4px 0;"><span></span><span></span><span></span></div>';
+    messagesContainer.appendChild(typingIndicator);
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+    // Step 2: After brief delay, replace typing with thinking phrase (message 1) + new typing below
+    await new Promise(function(r) { setTimeout(r, 800); });
+    var typingEl1 = document.getElementById('volt-typing-indicator');
+    if (typingEl1) typingEl1.remove();
+
+    // Insert thinking phrase as permanent message 1
     var thinkingMsg = document.createElement('div');
     thinkingMsg.className = 'volt-message assistant';
-    thinkingMsg.id = 'volt-thinking-msg';
-    thinkingMsg.innerHTML = '<span>' + formatMessage(thinkingPhrase) + '</span><div class="volt-typing" style="margin-top:8px;background:transparent;padding:4px 0;"><span></span><span></span><span></span></div>';
+    thinkingMsg.id = 'volt-thinking-phrase';
+    thinkingMsg.innerHTML = formatMessage(thinkingPhrase);
     messagesContainer.appendChild(thinkingMsg);
+
+    // Show new typing animation below for the real response
+    var typingIndicator2 = document.createElement('div');
+    typingIndicator2.className = 'volt-message assistant';
+    typingIndicator2.id = 'volt-typing-indicator-2';
+    typingIndicator2.innerHTML = '<div class="volt-typing" style="background:transparent;padding:4px 0;"><span></span><span></span><span></span></div>';
+    messagesContainer.appendChild(typingIndicator2);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
     // For streaming: try direct Supabase first (supports SSE), proxy buffers SSE
@@ -885,9 +905,9 @@
     for (var i = 0; i < streamEndpoints.length; i++) {
       try {
         result = await tryStreamEndpoint(streamEndpoints[i].url, message, streamEndpoints[i].label, assistantMsg, function() {
-          // Called on first token — remove thinking phrase, show real message
-          var thinkingEl = document.getElementById('volt-thinking-msg');
-          if (thinkingEl) thinkingEl.remove();
+          // Called on first token — remove typing indicator, show real message
+          var typingEl2 = document.getElementById('volt-typing-indicator-2');
+          if (typingEl2) typingEl2.remove();
           if (!msgInserted) {
             messagesContainer.appendChild(assistantMsg);
             assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -915,8 +935,8 @@
       }
     }
 
-    var thinkingEl = document.getElementById('volt-thinking-msg');
-    if (thinkingEl) thinkingEl.remove();
+    var typingEl2 = document.getElementById('volt-typing-indicator-2');
+    if (typingEl2) typingEl2.remove();
 
     if (result) {
       if (!msgInserted) {
