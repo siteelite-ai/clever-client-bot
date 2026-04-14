@@ -362,7 +362,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
           {/* Messages */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4 widget-scrollbar h-[400px]">
-            {messages.map((message, index) => {
+            {messages.filter(m => !m.id.startsWith('thinking-')).map((message, index) => {
               return (
               <div
                 key={message.id}
