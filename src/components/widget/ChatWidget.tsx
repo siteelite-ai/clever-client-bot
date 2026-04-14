@@ -227,23 +227,15 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
     const thinkingPhrase = pickThinkingPhrase(input);
 
-    // Step 2: After brief delay, replace typing with thinking phrase (stays as message 1)
-    await new Promise(r => setTimeout(r, 800));
-    const thinkingId = `thinking-${Date.now()}`;
-    setMessages(prev => {
-      const withoutTyping = prev.filter(m => m.id !== typingId);
-      return [...withoutTyping, {
-        id: thinkingId,
-        role: 'assistant' as const,
-        content: thinkingPhrase,
-        timestamp: new Date()
-      }, {
-        id: `typing2-${Date.now()}`,
-        role: 'assistant' as const,
-        content: '__TYPING__',
-        timestamp: new Date()
-      }];
-    });
+    // Prepare messages for API (do this BEFORE the delay so we can fire in parallel)
+    const apiMessages: Msg[] = messages
+      .filter(m => 
+        m.content !== '__TYPING__' && 
+        !m.id.startsWith('thinking-') && 
+        !m.id.startsWith('typing')
+      )
+      .map(m => ({ role: m.role, content: m.content }));
+    apiMessages.push({ role: 'user', content: input });
 
     let assistantContent = '';
     let typing2Removed = false;
@@ -285,18 +277,9 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       });
     };
 
-    // Prepare messages for API
-    const apiMessages: Msg[] = messages
-      .filter(m => 
-        m.content !== '__TYPING__' && 
-        !m.id.startsWith('thinking-') && 
-        !m.id.startsWith('typing')
-      )
-      .map(m => ({ role: m.role, content: m.content }));
-    apiMessages.push({ role: 'user', content: input });
-
+    // Fire API request immediately (in parallel with animation)
     console.log('[Widget] Sending dialogSlots:', JSON.stringify(dialogSlots));
-    await streamChat({
+    const streamPromise = streamChat({
       messages: apiMessages,
       conversationId: conversationIdRef.current,
       dialogSlots,
