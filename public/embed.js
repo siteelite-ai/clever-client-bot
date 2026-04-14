@@ -562,6 +562,11 @@
     return div.innerHTML;
   }
 
+  // Strip repeated greetings from assistant responses
+  function stripGreeting(text) {
+    return text.replace(/^(?:Здравствуйте[.!]?\s*|Добрый\s+(?:день|вечер|утро)[.!,]?\s*|Привет[.!,]?\s*|Приветствую[.!,]?\s*)/i, '').trim();
+  }
+
   // Parse markdown-like formatting (only for assistant messages, input is pre-escaped)
   function formatMessage(text) {
     // First escape ALL HTML to prevent XSS
@@ -757,7 +762,7 @@
               onFirstToken();
             }
             fullContent += delta;
-            msgEl.innerHTML = formatMessage(fullContent);
+            msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
             var now = Date.now();
             if (now - lastScrollTime > 300) {
               lastScrollTime = now;
@@ -791,7 +796,7 @@
           var d2 = o2.choices && o2.choices[0] && o2.choices[0].delta && o2.choices[0].delta.content;
           if (d2) {
             fullContent += d2;
-            msgEl.innerHTML = formatMessage(fullContent);
+            msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
           }
         } catch(e) {}
       }
@@ -943,9 +948,10 @@
         messagesContainer.appendChild(assistantMsg);
         msgInserted = true;
       }
-      assistantMsg.innerHTML = formatMessage(result.content);
+      var cleanContent = stripGreeting(result.content);
+      assistantMsg.innerHTML = formatMessage(cleanContent);
       assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      conversationHistory.push({ role: 'assistant', content: result.content });
+      conversationHistory.push({ role: 'assistant', content: cleanContent });
       saveState();
 
       if (result.contacts) {

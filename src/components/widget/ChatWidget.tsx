@@ -253,6 +253,8 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       let displayContent = assistantContent.replace(/\[CONTACT_MANAGER\]/g, '');
       displayContent = displayContent.replace(/<think>[\s\S]*?<\/think>/g, '');
       displayContent = displayContent.replace(/ТИХОЕ РАЗМЫШЛЕНИЕ[\s\S]*?(?:КОНЕЦ РАЗМЫШЛЕНИ[ЯЙ]|$)/gs, '');
+      // Remove repeated greetings from the response
+      displayContent = displayContent.replace(/^(?:Здравствуйте[.!]?\s*|Добрый\s+(?:день|вечер|утро)[.!,]?\s*|Привет[.!,]?\s*|Приветствую[.!,]?\s*)/i, '');
       displayContent = displayContent.trim();
       setMessages(prev => {
         let updated = prev;
