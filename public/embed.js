@@ -948,9 +948,10 @@
         messagesContainer.appendChild(assistantMsg);
         msgInserted = true;
       }
-      assistantMsg.innerHTML = formatMessage(result.content);
+      var cleanContent = stripGreeting(result.content);
+      assistantMsg.innerHTML = formatMessage(cleanContent);
       assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      conversationHistory.push({ role: 'assistant', content: result.content });
+      conversationHistory.push({ role: 'assistant', content: cleanContent });
       saveState();
 
       if (result.contacts) {
