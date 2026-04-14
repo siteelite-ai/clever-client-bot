@@ -2397,7 +2397,7 @@ ${JSON.stringify(modifiers)}
           // Find which modifier this came from
           for (const mod of modifiers) {
             if (norm(mod) === norm(value) || norm(value).includes(norm(mod)) || norm(mod).includes(norm(value))) {
-              matchedModifiers.add(mod); // mark as "attempted" so we put the original modifier into unresolved
+              failedModifiers.add(mod); // mark as "attempted but failed" — stays unresolved
             }
           }
         }
@@ -2406,21 +2406,8 @@ ${JSON.stringify(modifiers)}
       }
     }
 
-    // Separate modifiers matched by successful validation vs failed validation
-    const validatedValues = new Set(Object.values(validated).map(v => norm(v)));
-    const successfullyResolved = new Set<string>();
-    const attemptedButFailed = new Set<string>();
-    for (const mod of modifiers) {
-      if (!matchedModifiers.has(mod)) continue; // unmatched
-      // Check if this modifier was matched during a SUCCESSFUL validation (value in validated)
-      // We can't easily trace back, so use heuristic: if mod is in matchedModifiers
-      // AND at least one validated filter exists, it's successful
-      // The failed-validation branch also adds to matchedModifiers, but those mods
-      // won't have their value in validated. Check if mod relates to any validated value.
-      successfullyResolved.add(mod);
-    }
-    const unresolvedMods = modifiers.filter(m => !successfullyResolved.has(m));
-    const unresolved = [...new Set(unresolvedMods)];
+    // Unresolved = modifiers NOT matched by successful validation + those that failed validation
+    const unresolved = modifiers.filter(m => !matchedModifiers.has(m) || failedModifiers.has(m));
 
     console.log(`[FilterLLM] Result: resolved=${JSON.stringify(validated)}, unresolved=[${unresolved.join(', ')}]`);
     return { resolved: validated, unresolved };
