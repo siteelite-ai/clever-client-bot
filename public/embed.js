@@ -51,17 +51,17 @@
   // Thinking phrases for perceived latency reduction
   const PRODUCT_KEYWORDS = /розетк|кабел|автомат|щит|ламп|выключател|провод|удлинител|счётчик|счетчик|реле|контактор|дрел|шуруповёрт|шуруповерт|перфоратор|болгарк|пил[аеу]|насос|генератор|сварочн|компрессор|лобзик|фрез|гайковёрт|гайковерт|стабилизатор|трансформатор|инструмент|электро|плоскогубц|отвёртк|отвертк|рулетк|уровен|мультиметр|тестер|паяльник|фен|краскопульт|нож|диск|бур|свёрл|сверл|коронк|патрон|аккумулятор|зарядн|бензо|цепн|триммер|газонокосилк|мойк|пистолет/i;
   const THINKING_CATALOG = [
-    'Сейчас подберу варианты... 🔍',
-    'Ищу в каталоге... 📦',
-    'Секунду, смотрю наличие... ⏳',
-    'Подбираю подходящие товары... 🛠️',
-    'Сейчас посмотрю, что есть... 🔎',
+    'Сейчас подберу варианты',
+    'Ищу в каталоге',
+    'Секунду, смотрю наличие',
+    'Подбираю подходящие товары',
+    'Сейчас посмотрю, что есть',
   ];
   const THINKING_INFO = [
-    'Сейчас проверю информацию... 📋',
-    'Минутку, уточняю... ⏳',
-    'Секунду, проверю детали... 🔍',
-    'Сейчас найду ответ... 💡',
+    'Сейчас проверю информацию',
+    'Минутку, уточняю',
+    'Секунду, проверю детали',
+    'Сейчас найду ответ',
   ];
   function pickThinkingPhrase(msg) {
     var pool = PRODUCT_KEYWORDS.test(msg) ? THINKING_CATALOG : THINKING_INFO;
@@ -852,14 +852,12 @@
     conversationHistory.push({ role: 'user', content: message });
     saveState();
 
-    showTyping();
-
-    // Show thinking phrase immediately (0ms perceived latency)
+    // Show thinking phrase first, then typing animation below
     var thinkingPhrase = pickThinkingPhrase(message);
     var thinkingMsg = document.createElement('div');
     thinkingMsg.className = 'volt-message assistant';
     thinkingMsg.id = 'volt-thinking-msg';
-    thinkingMsg.innerHTML = formatMessage(thinkingPhrase);
+    thinkingMsg.innerHTML = '<span>' + formatMessage(thinkingPhrase) + '</span><div class="volt-typing" style="margin-top:8px;background:transparent;padding:4px 0;"><span></span><span></span><span></span></div>';
     messagesContainer.appendChild(thinkingMsg);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
@@ -887,8 +885,7 @@
     for (var i = 0; i < streamEndpoints.length; i++) {
       try {
         result = await tryStreamEndpoint(streamEndpoints[i].url, message, streamEndpoints[i].label, assistantMsg, function() {
-          // Called on first token — hide typing, remove thinking phrase, show real message
-          hideTyping();
+          // Called on first token — remove thinking phrase, show real message
           var thinkingEl = document.getElementById('volt-thinking-msg');
           if (thinkingEl) thinkingEl.remove();
           if (!msgInserted) {
@@ -918,7 +915,6 @@
       }
     }
 
-    hideTyping();
     var thinkingEl = document.getElementById('volt-thinking-msg');
     if (thinkingEl) thinkingEl.remove();
 

@@ -17,18 +17,18 @@ type Msg = { role: 'user' | 'assistant'; content: string };
 const PRODUCT_KEYWORDS = /розетк|кабел|автомат|щит|ламп|выключател|провод|удлинител|счётчик|счетчик|реле|контактор|дрел|шуруповёрт|шуруповерт|перфоратор|болгарк|пил[аеу]|насос|генератор|сварочн|компрессор|лобзик|фрез|гайковёрт|гайковерт|стабилизатор|трансформатор|инструмент|электро|плоскогубц|отвёртк|отвертк|рулетк|уровен|мультиметр|тестер|паяльник|фен|краскопульт|нож|диск|бур|свёрл|сверл|коронк|патрон|аккумулятор|зарядн|бензо|цепн|триммер|газонокосилк|мойк|пистолет/i;
 
 const THINKING_CATALOG = [
-  'Сейчас подберу варианты... 🔍',
-  'Ищу в каталоге... 📦',
-  'Секунду, смотрю наличие... ⏳',
-  'Подбираю подходящие товары... 🛠️',
-  'Сейчас посмотрю, что есть... 🔎',
+  'Сейчас подберу варианты',
+  'Ищу в каталоге',
+  'Секунду, смотрю наличие',
+  'Подбираю подходящие товары',
+  'Сейчас посмотрю, что есть',
 ];
 
 const THINKING_INFO = [
-  'Сейчас проверю информацию... 📋',
-  'Минутку, уточняю... ⏳',
-  'Секунду, проверю детали... 🔍',
-  'Сейчас найду ответ... 💡',
+  'Сейчас проверю информацию',
+  'Минутку, уточняю',
+  'Секунду, проверю детали',
+  'Сейчас найду ответ',
 ];
 
 function pickThinkingPhrase(message: string): string {
@@ -362,7 +362,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
           {/* Messages */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4 widget-scrollbar h-[400px]">
-            {messages.map((message, index) => {
+            {messages.filter(m => !m.id.startsWith('thinking-')).map((message, index) => {
               return (
               <div
                 key={message.id}
@@ -414,6 +414,9 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
             {isLoading && messages[messages.length - 1]?.id.startsWith('thinking-') && (
               <div className="flex justify-start">
                 <div className="chat-message-bot rounded-2xl px-4 py-3">
+                  <div className="text-sm mb-2 text-widget-text/70">
+                    {messages[messages.length - 1]?.content}
+                  </div>
                   <div className="flex gap-1">
                     <span className="w-2 h-2 rounded-full bg-widget-text/40 animate-typing" style={{ animationDelay: '0s' }} />
                     <span className="w-2 h-2 rounded-full bg-widget-text/40 animate-typing" style={{ animationDelay: '0.2s' }} />
