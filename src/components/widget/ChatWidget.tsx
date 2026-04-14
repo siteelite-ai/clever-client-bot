@@ -313,6 +313,31 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         setIsLoading(false);
       }
     });
+
+    // Step 2: Show thinking phrase after longer typing animation (runs in parallel with API)
+    await new Promise(r => setTimeout(r, 1500));
+    const thinkingId = `thinking-${Date.now()}`;
+    setMessages(prev => {
+      const withoutTyping = prev.filter(m => m.id !== typingId);
+      // Only add thinking phrase + typing2 if stream hasn't already started delivering
+      if (!typing2Removed) {
+        return [...withoutTyping, {
+          id: thinkingId,
+          role: 'assistant' as const,
+          content: thinkingPhrase,
+          timestamp: new Date()
+        }, {
+          id: `typing2-${Date.now()}`,
+          role: 'assistant' as const,
+          content: '__TYPING__',
+          timestamp: new Date()
+        }];
+      }
+      return withoutTyping;
+    });
+
+    // Wait for stream to complete
+    await streamPromise;
   }, [input, isLoading, messages, dialogSlots]);
 
   const ProductCard = ({ product }: { product: Product }) => (
