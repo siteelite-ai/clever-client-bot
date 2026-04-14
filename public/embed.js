@@ -762,7 +762,7 @@
               onFirstToken();
             }
             fullContent += delta;
-            msgEl.innerHTML = formatMessage(fullContent);
+            msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
             var now = Date.now();
             if (now - lastScrollTime > 300) {
               lastScrollTime = now;
@@ -796,7 +796,7 @@
           var d2 = o2.choices && o2.choices[0] && o2.choices[0].delta && o2.choices[0].delta.content;
           if (d2) {
             fullContent += d2;
-            msgEl.innerHTML = formatMessage(fullContent);
+            msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
           }
         } catch(e) {}
       }
