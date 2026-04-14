@@ -388,7 +388,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
           {/* Messages */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4 widget-scrollbar h-[400px]">
-            {messages.filter(m => !m.id.startsWith('thinking-')).map((message, index) => {
+            {messages.filter(m => m.content !== '__TYPING__').map((message, index) => {
               return (
               <div
                 key={message.id}
@@ -424,7 +424,6 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
                     <p className="text-sm whitespace-pre-wrap">{message.content}</p>
                   )}
                   
-                  {/* Product cards */}
                   {message.products && message.products.length > 0 && (
                     <div className="mt-3 space-y-2">
                       {message.products.map((product) => (
@@ -437,12 +436,9 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
               );
             })}
 
-            {isLoading && messages[messages.length - 1]?.id.startsWith('thinking-') && (
+            {messages.some(m => m.content === '__TYPING__') && (
               <div className="flex justify-start">
                 <div className="chat-message-bot rounded-2xl px-4 py-3">
-                  <div className="text-sm mb-2 text-widget-text/70">
-                    {messages[messages.length - 1]?.content}
-                  </div>
                   <div className="flex gap-1">
                     <span className="w-2 h-2 rounded-full bg-widget-text/40 animate-typing" style={{ animationDelay: '0s' }} />
                     <span className="w-2 h-2 rounded-full bg-widget-text/40 animate-typing" style={{ animationDelay: '0.2s' }} />
