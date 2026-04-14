@@ -2325,6 +2325,7 @@ ${JSON.stringify(modifiers)}
     // Validate that returned keys AND values exist in schema
     const validated: Record<string, string> = {};
     const matchedModifiers = new Set<string>();
+    const failedModifiers = new Set<string>();
     const norm = (s: string) => s.replace(/ё/g, 'е').toLowerCase().trim();
 
     for (const [rawKey, value] of Object.entries(filters)) {
@@ -2354,9 +2355,42 @@ ${JSON.stringify(modifiers)}
           console.log(`[FilterLLM] Resolved (validated): "${resolvedKey}" = "${matchedValue}"`);
           // Track which modifier this resolved from
           const caption = optionIndex.get(resolvedKey)!.caption.toLowerCase();
+          const keyLower = resolvedKey.toLowerCase();
+          // Russian numeral roots → digit mapping
+          const numeralMap: Record<string, string> = {
+            'одн': '1', 'одно': '1', 'один': '1',
+            'два': '2', 'двух': '2', 'двуx': '2', 'дву': '2',
+            'три': '3', 'трех': '3', 'трёх': '3',
+            'четыр': '4', 'четырех': '4', 'четырёх': '4',
+            'пят': '5', 'пяти': '5',
+            'шест': '6', 'шести': '6',
+          };
           for (const mod of modifiers) {
-            if (norm(mod) === norm(value) || caption.includes(norm(mod))) {
-              matchedModifiers.add(mod);
+            const nmod = norm(mod);
+            const nval = norm(value);
+            // 1. Direct match (existing)
+            if (nmod === nval) { matchedModifiers.add(mod); continue; }
+            // 2. Caption contains modifier (existing)
+            if (caption.includes(nmod)) { matchedModifiers.add(mod); continue; }
+            // 3. Numeric: value is a number, modifier contains that number or a numeral word for it
+            if (/^\d+$/.test(nval)) {
+              // modifier literally contains the digit (e.g. "2-местная" contains "2")
+              if (nmod.includes(nval)) { matchedModifiers.add(mod); continue; }
+              // modifier starts with a numeral root that maps to this digit
+              const matched = Object.entries(numeralMap).some(([root, digit]) =>
+                digit === nval && nmod.startsWith(root)
+              );
+              if (matched) { matchedModifiers.add(mod); continue; }
+            }
+            // 4. Modifier contains root of caption or key (e.g. "местн" in caption "Кол-во мест")
+            const captionWords = caption.split(/[\s\-\/,()]+/).filter(w => w.length >= 3);
+            const keyWords = keyLower.split(/[\s_\-]+/).filter(w => w.length >= 3);
+            const roots = [...captionWords, ...keyWords].map(w => w.slice(0, Math.min(w.length, 4)));
+            if (roots.some(root => nmod.includes(root))) { matchedModifiers.add(mod); continue; }
+            // 5. Multi-word modifier: any word matches value or caption
+            const modWords = nmod.split(/\s+/);
+            if (modWords.length > 1 && modWords.some(mw => mw === nval || caption.includes(mw))) {
+              matchedModifiers.add(mod); continue;
             }
           }
         } else {
@@ -2364,7 +2398,7 @@ ${JSON.stringify(modifiers)}
           // Find which modifier this came from
           for (const mod of modifiers) {
             if (norm(mod) === norm(value) || norm(value).includes(norm(mod)) || norm(mod).includes(norm(value))) {
-              matchedModifiers.add(mod); // mark as "attempted" so we put the original modifier into unresolved
+              failedModifiers.add(mod); // mark as "attempted but failed" — stays unresolved
             }
           }
         }
@@ -2373,11 +2407,8 @@ ${JSON.stringify(modifiers)}
       }
     }
 
-    // Unresolved = modifiers that were NOT successfully validated
-    const unresolvedMods = modifiers.filter(m => !matchedModifiers.has(m));
-    // Also add modifiers whose values weren't found in schema
-    const attemptedButFailed = modifiers.filter(m => matchedModifiers.has(m) && !Object.values(validated).some(v => norm(v) === norm(m)));
-    const unresolved = [...new Set([...unresolvedMods, ...attemptedButFailed])];
+    // Unresolved = modifiers NOT matched by successful validation + those that failed validation
+    const unresolved = modifiers.filter(m => !matchedModifiers.has(m) || failedModifiers.has(m));
 
     console.log(`[FilterLLM] Result: resolved=${JSON.stringify(validated)}, unresolved=[${unresolved.join(', ')}]`);
     return { resolved: validated, unresolved };
