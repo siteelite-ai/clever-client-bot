@@ -284,10 +284,13 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     };
 
     // Prepare messages for API
-    const apiMessages: Msg[] = messages.map(m => ({
-      role: m.role,
-      content: m.content
-    }));
+    const apiMessages: Msg[] = messages
+      .filter(m => 
+        m.content !== '__TYPING__' && 
+        !m.id.startsWith('thinking-') && 
+        !m.id.startsWith('typing')
+      )
+      .map(m => ({ role: m.role, content: m.content }));
     apiMessages.push({ role: 'user', content: input });
 
     console.log('[Widget] Sending dialogSlots:', JSON.stringify(dialogSlots));
