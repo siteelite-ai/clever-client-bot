@@ -216,45 +216,65 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     setInput('');
     setIsLoading(true);
 
-    // Show thinking phrase immediately (0ms perceived latency)
-    const thinkingId = `thinking-${Date.now()}`;
-    const thinkingPhrase = pickThinkingPhrase(input);
+    // Step 1: Show typing dots animation
+    const typingId = `typing-${Date.now()}`;
     setMessages(prev => [...prev, {
-      id: thinkingId,
+      id: typingId,
       role: 'assistant' as const,
-      content: thinkingPhrase,
+      content: '__TYPING__',
       timestamp: new Date()
     }]);
 
+    const thinkingPhrase = pickThinkingPhrase(input);
+
+    // Step 2: After brief delay, replace typing with thinking phrase (stays as message 1)
+    await new Promise(r => setTimeout(r, 800));
+    const thinkingId = `thinking-${Date.now()}`;
+    setMessages(prev => {
+      const withoutTyping = prev.filter(m => m.id !== typingId);
+      return [...withoutTyping, {
+        id: thinkingId,
+        role: 'assistant' as const,
+        content: thinkingPhrase,
+        timestamp: new Date()
+      }, {
+        id: `typing2-${Date.now()}`,
+        role: 'assistant' as const,
+        content: '__TYPING__',
+        timestamp: new Date()
+      }];
+    });
+
     let assistantContent = '';
-    let thinkingReplaced = false;
+    let typing2Removed = false;
 
     const updateAssistant = (chunk: string) => {
       assistantContent += chunk;
-      // Filter thinking tokens from Gemini 2.5 Flash and contact markers
       let displayContent = assistantContent.replace(/\[CONTACT_MANAGER\]/g, '');
       displayContent = displayContent.replace(/<think>[\s\S]*?<\/think>/g, '');
       displayContent = displayContent.replace(/ТИХОЕ РАЗМЫШЛЕНИЕ[\s\S]*?(?:КОНЕЦ РАЗМЫШЛЕНИ[ЯЙ]|$)/gs, '');
       displayContent = displayContent.trim();
       setMessages(prev => {
-        if (!thinkingReplaced) {
-          // Replace thinking message with first real content
-          thinkingReplaced = true;
-          return prev.map(m => 
-            m.id === thinkingId
-              ? { ...m, id: `stream-${Date.now()}`, content: displayContent }
-              : m
-          );
+        let updated = prev;
+        if (!typing2Removed) {
+          typing2Removed = true;
+          updated = prev.filter(m => !m.id.startsWith('typing2-'));
+          return [...updated, {
+            id: `stream-${Date.now()}`,
+            role: 'assistant' as const,
+            content: displayContent,
+            timestamp: new Date()
+          }];
         }
-        const last = prev[prev.length - 1];
+        const last = updated[updated.length - 1];
         if (last?.role === 'assistant' && last.id.startsWith('stream-')) {
-          return prev.map((m, i) => 
-            i === prev.length - 1 
+          return updated.map((m, i) => 
+            i === updated.length - 1 
               ? { ...m, content: displayContent } 
               : m
           );
         }
-        return [...prev, {
+        return [...updated, {
           id: `stream-${Date.now()}`,
           role: 'assistant' as const,
           content: displayContent,
@@ -288,14 +308,20 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
           timestamp: new Date()
         }]);
       },
-      onDone: () => setIsLoading(false),
+      onDone: () => {
+        setMessages(prev => prev.filter(m => !m.id.startsWith('typing2-')));
+        setIsLoading(false);
+      },
       onError: (error) => {
-        setMessages(prev => [...prev, {
-          id: `error-${Date.now()}`,
-          role: 'assistant',
-          content: `Извините, произошла ошибка: ${error}. Попробуйте повторить вопрос.`,
-          timestamp: new Date()
-        }]);
+        setMessages(prev => {
+          const filtered = prev.filter(m => !m.id.startsWith('typing2-'));
+          return [...filtered, {
+            id: `error-${Date.now()}`,
+            role: 'assistant',
+            content: `Извините, произошла ошибка: ${error}. Попробуйте повторить вопрос.`,
+            timestamp: new Date()
+          }];
+        });
         setIsLoading(false);
       }
     });
