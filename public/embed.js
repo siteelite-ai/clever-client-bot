@@ -562,6 +562,11 @@
     return div.innerHTML;
   }
 
+  // Strip repeated greetings from assistant responses
+  function stripGreeting(text) {
+    return text.replace(/^(?:Здравствуйте[.!]?\s*|Добрый\s+(?:день|вечер|утро)[.!,]?\s*|Привет[.!,]?\s*|Приветствую[.!,]?\s*)/i, '').trim();
+  }
+
   // Parse markdown-like formatting (only for assistant messages, input is pre-escaped)
   function formatMessage(text) {
     // First escape ALL HTML to prevent XSS
