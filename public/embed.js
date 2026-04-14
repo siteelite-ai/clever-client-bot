@@ -935,8 +935,8 @@
       }
     }
 
-    var thinkingEl = document.getElementById('volt-thinking-msg');
-    if (thinkingEl) thinkingEl.remove();
+    var typingEl2 = document.getElementById('volt-typing-indicator-2');
+    if (typingEl2) typingEl2.remove();
 
     if (result) {
       if (!msgInserted) {
