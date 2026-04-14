@@ -913,7 +913,7 @@
     })();
 
     // Step 2: After longer delay, show thinking phrase (runs in parallel with API call)
-    await new Promise(function(r) { setTimeout(r, 1500); });
+    await new Promise(function(r) { setTimeout(r, 3000); });
 
     // Only show thinking phrase if first token hasn't arrived yet
     if (!firstTokenArrived) {
