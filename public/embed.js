@@ -857,7 +857,7 @@
     conversationHistory.push({ role: 'user', content: message });
     saveState();
 
-    // Step 1: Show typing animation (dots only) briefly
+    // Step 1: Show typing animation (dots only)
     var thinkingPhrase = pickThinkingPhrase(message);
     var typingIndicator = document.createElement('div');
     typingIndicator.className = 'volt-message assistant';
@@ -866,28 +866,7 @@
     messagesContainer.appendChild(typingIndicator);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
-    // Step 2: After brief delay, replace typing with thinking phrase (message 1) + new typing below
-    await new Promise(function(r) { setTimeout(r, 800); });
-    var typingEl1 = document.getElementById('volt-typing-indicator');
-    if (typingEl1) typingEl1.remove();
-
-    // Insert thinking phrase as permanent message 1
-    var thinkingMsg = document.createElement('div');
-    thinkingMsg.className = 'volt-message assistant';
-    thinkingMsg.id = 'volt-thinking-phrase';
-    thinkingMsg.innerHTML = formatMessage(thinkingPhrase);
-    messagesContainer.appendChild(thinkingMsg);
-
-    // Show new typing animation below for the real response
-    var typingIndicator2 = document.createElement('div');
-    typingIndicator2.className = 'volt-message assistant';
-    typingIndicator2.id = 'volt-typing-indicator-2';
-    typingIndicator2.innerHTML = '<div class="volt-typing" style="background:transparent;padding:4px 0;"><span></span><span></span><span></span></div>';
-    messagesContainer.appendChild(typingIndicator2);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
-
-    // For streaming: try direct Supabase first (supports SSE), proxy buffers SSE
-    // For non-streaming fallback: try proxy first (works in Russia)
+    // Streaming endpoints
     var streamEndpoints = [
       { url: 'https://yngoixmvmxdfxokuafjp.supabase.co', label: 'direct' },
       { url: CONFIG.supabaseUrl, label: 'proxy' }
@@ -902,29 +881,73 @@
     assistantMsg.className = 'volt-message assistant';
     assistantMsg.innerHTML = '';
     var msgInserted = false;
+    var firstTokenArrived = false;
 
     var result = null;
     var lastError = null;
 
-    // Try streaming first (direct Supabase → proxy)
-    for (var i = 0; i < streamEndpoints.length; i++) {
-      try {
-        result = await tryStreamEndpoint(streamEndpoints[i].url, message, streamEndpoints[i].label, assistantMsg, function() {
-          // Called on first token — remove typing indicator, show real message
-          var typingEl2 = document.getElementById('volt-typing-indicator-2');
-          if (typingEl2) typingEl2.remove();
-          if (!msgInserted) {
-            messagesContainer.appendChild(assistantMsg);
-            assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            msgInserted = true;
-          }
-        });
-        break;
-      } catch (err) {
-        lastError = err;
-        // Remove if inserted but failed mid-stream
-        if (assistantMsg.parentNode && !assistantMsg.innerHTML) assistantMsg.remove();
-        msgInserted = false;
+    // Fire API request immediately (in parallel with animation)
+    var streamPromise = (async function() {
+      for (var i = 0; i < streamEndpoints.length; i++) {
+        try {
+          result = await tryStreamEndpoint(streamEndpoints[i].url, message, streamEndpoints[i].label, assistantMsg, function() {
+            firstTokenArrived = true;
+            // Called on first token — remove typing indicators, show real message
+            var typingEl1 = document.getElementById('volt-typing-indicator');
+            if (typingEl1) typingEl1.remove();
+            var typingEl2 = document.getElementById('volt-typing-indicator-2');
+            if (typingEl2) typingEl2.remove();
+            if (!msgInserted) {
+              messagesContainer.appendChild(assistantMsg);
+              assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              msgInserted = true;
+            }
+          });
+          return;
+        } catch (err) {
+          lastError = err;
+          if (assistantMsg.parentNode && !assistantMsg.innerHTML) assistantMsg.remove();
+          msgInserted = false;
+        }
+      }
+    })();
+
+    // Step 2: After longer delay, show thinking phrase (runs in parallel with API call)
+    await new Promise(function(r) { setTimeout(r, 1500); });
+
+    // Only show thinking phrase if first token hasn't arrived yet
+    if (!firstTokenArrived) {
+      var typingEl1 = document.getElementById('volt-typing-indicator');
+      if (typingEl1) typingEl1.remove();
+
+      // Insert thinking phrase as permanent message
+      var thinkingMsg = document.createElement('div');
+      thinkingMsg.className = 'volt-message assistant';
+      thinkingMsg.id = 'volt-thinking-phrase';
+      thinkingMsg.innerHTML = formatMessage(thinkingPhrase);
+      messagesContainer.appendChild(thinkingMsg);
+
+      // Show new typing animation below for the real response
+      var typingIndicator2 = document.createElement('div');
+      typingIndicator2.className = 'volt-message assistant';
+      typingIndicator2.id = 'volt-typing-indicator-2';
+      typingIndicator2.innerHTML = '<div class="volt-typing" style="background:transparent;padding:4px 0;"><span></span><span></span><span></span></div>';
+      messagesContainer.appendChild(typingIndicator2);
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+
+    // Wait for stream to complete
+    await streamPromise;
+
+    // Fallback to non-streaming if streaming failed
+    if (!result) {
+      for (var k = 0; k < fallbackEndpoints.length; k++) {
+        try {
+          result = await tryNonStreamEndpoint(fallbackEndpoints[k].url, message, fallbackEndpoints[k].label);
+          break;
+        } catch (err) {
+          lastError = err;
+        }
       }
     }
 
