@@ -414,6 +414,9 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
             {isLoading && messages[messages.length - 1]?.id.startsWith('thinking-') && (
               <div className="flex justify-start">
                 <div className="chat-message-bot rounded-2xl px-4 py-3">
+                  <div className="text-sm mb-2 text-widget-text/70">
+                    {messages[messages.length - 1]?.content}
+                  </div>
                   <div className="flex gap-1">
                     <span className="w-2 h-2 rounded-full bg-widget-text/40 animate-typing" style={{ animationDelay: '0s' }} />
                     <span className="w-2 h-2 rounded-full bg-widget-text/40 animate-typing" style={{ animationDelay: '0.2s' }} />

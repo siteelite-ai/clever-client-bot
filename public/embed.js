@@ -915,7 +915,6 @@
       }
     }
 
-    hideTyping();
     var thinkingEl = document.getElementById('volt-thinking-msg');
     if (thinkingEl) thinkingEl.remove();
 
