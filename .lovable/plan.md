@@ -1,53 +1,16 @@
 
 
-# План: Убрать лишнюю логику из `extractModifiersFromProduct`
+# План: Передеплоить и проверить `chat-consultant`
 
-## Суть
+## Проблема
+Логи edge function пусты — ни одного вызова. Функция не задеплоилась после последних изменений.
 
-Две вещи в текущем коде — ошибочны:
-1. Фильтрация `NOISE` (`нет`, `да`) — отбрасывает потенциально важные значения характеристик
-2. Обогащение единицами (`100` → `100Вт`, `67` → `IP67`) — может помешать LLM сопоставить значение со схемой, где записано просто `"100"` или `"67"`
+## Действия
 
-## Файл: `supabase/functions/chat-consultant/index.ts`, строки 707-765
-
-### Изменения
-
-1. **Удалить `NOISE` set** (строка 711) и проверку `if (NOISE.has(...)) continue` (строка 741)
-2. **Удалить `unitRules`** (строки 726-731) и весь блок обогащения (строки 746-753)
-3. **Для голых чисел** — передавать как есть, без `continue` и без форматирования
-4. **Оставить**: trim, split('//')[0], компактификацию `"100 Вт"` → `"100Вт"` (строка 756), лимит 8
-
-### Результат функции после изменений
-
-```typescript
-function extractModifiersFromProduct(product: Product): string[] {
-  const mods: string[] = [];
-  if (!product.options) return mods;
-
-  const importantPatterns = [/* те же 9 паттернов */];
-
-  for (const opt of product.options) {
-    const keyLower = opt.key.toLowerCase();
-    const captionLower = opt.caption.toLowerCase();
-    if (!importantPatterns.some(p => p.test(keyLower) || p.test(captionLower))) continue;
-
-    const cleanValue = opt.value.split('//')[0].trim();
-    if (!cleanValue) continue; // только пустые строки пропускаем
-
-    // Компактим только "число пробел единица" → "числоединица"
-    const finalValue = cleanValue.replace(/^(\d+)\s+(Вт|В|мм|мм²|кг|м|А)$/i, '$1$2');
-    mods.push(finalValue);
-    if (mods.length >= 8) break;
-  }
-
-  console.log(`[ReplacementMods] ...`);
-  return mods;
-}
-```
-
-### Деплой
-После изменения — деплой edge function `chat-consultant`.
+1. **Деплой** edge function `chat-consultant` через `supabase--deploy_edge_functions`
+2. **Проверка** — отправить тестовый запрос через `supabase--curl_edge_functions` с запросом "подбери автоматы 1 полюсные на 16 ампер"
+3. **Анализ логов** — посмотреть, какой путь сработал (category-first, title-first и т.д.), какая категория была определена, какие модификаторы извлечены, и что вернул `resolveFiltersWithLLM`
 
 ## Объём
-Одна функция, ~10 строк удалить, ~0 строк добавить.
+Деплой + тест, без изменений кода.
 
