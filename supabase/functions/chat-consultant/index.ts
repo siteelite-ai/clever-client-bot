@@ -2277,18 +2277,6 @@ function fallbackParseQuery(message: string): ExtractedIntent {
 }
 
 /**
- * Aliases for ambiguous category words that toPluralCategory would map incorrectly.
- */
-const CATEGORY_ALIASES: Record<string, string> = {
-  'автомат': 'Автоматические выключатели',
-  'автоматы': 'Автоматические выключатели',
-  'автоматический выключатель': 'Автоматические выключатели',
-  'узо': 'УЗО',
-  'дифавтомат': 'Дифавтоматы',
-  'дифференциальный автомат': 'Дифавтоматы',
-};
-
-/**
  * Convert singular Russian category name to plural with capital letter.
  * розетка → Розетки, выключатель → Выключатели, кабель → Кабели
  */
@@ -3294,8 +3282,7 @@ serve(async (req) => {
           const categoryStart = Date.now();
           
           // Step 1: Generate plural form and search by category parameter directly
-          const aliasedCategory = CATEGORY_ALIASES[effectiveCategory.toLowerCase()] || null;
-          const pluralCategory = aliasedCategory || toPluralCategory(effectiveCategory);
+          const pluralCategory = toPluralCategory(effectiveCategory);
           console.log(`[Chat] Category-first: plural="${pluralCategory}"`);
           
           let rawProducts = await searchProductsByCandidate(
@@ -3485,8 +3472,7 @@ serve(async (req) => {
           
           if (replCategory) {
             // Run category-first pipeline: plural → schema → resolveFilters → STAGE 2
-            const aliasedRepl = CATEGORY_ALIASES[replCategory.toLowerCase()] || null;
-            const pluralRepl = aliasedRepl || toPluralCategory(replCategory);
+            const pluralRepl = toPluralCategory(replCategory);
             console.log(`[Chat] Replacement category-first: plural="${pluralRepl}"`);
             
             let replRawProducts = await searchProductsByCandidate(
