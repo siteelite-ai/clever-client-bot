@@ -697,140 +697,47 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 }
 
 // ============================================================
-// REPLACEMENT/ALTERNATIVE — extract searchable traits from a product
+// REPLACEMENT/ALTERNATIVE — extract modifiers from product options
 // ============================================================
 
 /**
- * Extract key searchable traits from a found product to search for alternatives.
- * Returns search candidates based on product characteristics.
+ * Extract human-readable modifiers from a product's options for category-first search.
+ * E.g. product with options {moshchnost: "100 Вт", stepen_zashchity: "IP67"} → ["100Вт", "IP67", "LED"]
  */
-function extractSearchableTraits(product: Product): SearchCandidate[] {
-  const candidates: SearchCandidate[] = [];
-  const traits: Record<string, string> = {};
+function extractModifiersFromProduct(product: Product): string[] {
+  const mods: string[] = [];
+  if (!product.options) return mods;
   
-  // Extract key characteristics from product options
-  const importantKeys = [
-    'moshchnost', 'мощность', 'power', 'watt',
-    'напряжение', 'voltage', 'napr',
-    'защита', 'ip', 'stepen_zashchity',
-    'цоколь', 'tsokol', 'cap',
-    'тип', 'tip', 'type',
-    'сечение', 'sechenie',
-    'количество', 'kolichestvo',
-    'длина', 'dlina', 'length',
+  const importantPatterns = [
+    /мощность|moshchnost|power|watt/i,
+    /напряжение|voltage|napr/i,
+    /защит|ip|stepen_zashch/i,
+    /цоколь|tsokol|cap/i,
+    /тип|vid_|type/i,
+    /сечение|sechenie/i,
+    /количество|kolichestvo/i,
+    /длина|dlina|length/i,
+    /материал|material/i,
+    /цвет|color|tsvet/i,
   ];
   
-  if (product.options) {
-    for (const opt of product.options) {
-      const keyLower = opt.key.toLowerCase();
-      const captionLower = opt.caption.toLowerCase();
-      
-      for (const ik of importantKeys) {
-        if (keyLower.includes(ik) || captionLower.includes(ik)) {
-          const cleanCaption = opt.caption.split('//')[0].trim();
-          const cleanValue = opt.value.split('//')[0].trim();
-          traits[cleanCaption] = cleanValue;
-          break;
-        }
-      }
-    }
-  }
-  
-  // Build search queries from product info
-  const title = product.pagetitle;
-  const category = product.category?.pagetitle || '';
-  
-  // 1. Category + key specs (e.g. "светильник 100Вт")
-  if (category) {
-    const specParts: string[] = [];
-    for (const [k, v] of Object.entries(traits)) {
-      if (/мощность|power|watt/i.test(k)) specParts.push(v);
-    }
-    const catQuery = specParts.length > 0 ? `${category} ${specParts.join(' ')}` : category;
-    candidates.push({
-      query: catQuery, brand: null, category: null,
-      min_price: null, max_price: null,
-    });
-  }
-  
-  // 2. Extract product type keywords from title (first 2-3 meaningful words)
-  const titleWords = title
-    .replace(/[()\\[\]]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length >= 3 && !/^\d+$/.test(w))
-    .slice(0, 3);
-  if (titleWords.length >= 2) {
-    candidates.push({
-      query: titleWords.slice(0, 2).join(' '), brand: null, category: null,
-      min_price: null, max_price: null,
-    });
-  }
-  
-  // 3. Full category name if available
-  if (category && !candidates.some(c => c.query === category)) {
-    candidates.push({
-      query: category, brand: null, category: null,
-      min_price: null, max_price: null,
-    });
-  }
-  
-  // 4. Add option_filters for key traits
-  const optionFilters: Record<string, string> = {};
-  for (const [k, v] of Object.entries(traits)) {
-    if (/мощность|power|watt/i.test(k)) optionFilters['мощность'] = v;
-    else if (/напряжение|voltage/i.test(k)) optionFilters['напряжение'] = v;
-    else if (/защита|ip/i.test(k)) optionFilters['защита'] = v;
-    else if (/цоколь|cap/i.test(k)) optionFilters['цоколь'] = v;
-  }
-  if (Object.keys(optionFilters).length > 0) {
-    for (const c of candidates) {
-      c.option_filters = { ...optionFilters };
-    }
-  }
-  
-  console.log(`[ReplacementTraits] Product "${title}" → ${candidates.length} candidates, traits: ${JSON.stringify(traits)}`);
-  return candidates;
-}
-
-/**
- * Extract traits from product name string when product is not found in catalog.
- * Uses heuristics to pull power, type, voltage from the name.
- */
-function extractTraitsFromName(productName: string): SearchCandidate[] {
-  const candidates: SearchCandidate[] = [];
-  
-  // Extract specs from name
-  const powerMatch = productName.match(/(\d+)\s*[Ww]|(\d+)\s*Вт/i);
-  const voltMatch = productName.match(/(\d+)\s*[Vv]|(\d+)\s*В\b/i);
-  
-  // Extract type keywords (first word before specs)
-  const typeWords = productName
-    .replace(/\d+\s*[WwVvАа]?\s*(Вт|W|В|V|мм|mm|А|A)/gi, '')
-    .replace(/[()\\[\]\-]/g, ' ')
-    .split(/\s+/)
-    .filter(w => w.length >= 3 && !/^\d+$/.test(w));
-  
-  if (typeWords.length >= 1) {
-    const baseQuery = typeWords.slice(0, 3).join(' ');
-    const power = powerMatch ? (powerMatch[1] || powerMatch[2]) + 'Вт' : '';
-    const query = power ? `${baseQuery} ${power}` : baseQuery;
+  for (const opt of product.options) {
+    const keyLower = opt.key.toLowerCase();
+    const captionLower = opt.caption.toLowerCase();
     
-    candidates.push({
-      query, brand: null, category: null,
-      min_price: null, max_price: null,
-    });
+    const isImportant = importantPatterns.some(p => p.test(keyLower) || p.test(captionLower));
+    if (!isImportant) continue;
     
-    // Also add without power for broader search
-    if (power) {
-      candidates.push({
-        query: baseQuery, brand: null, category: null,
-        min_price: null, max_price: null,
-      });
-    }
+    const cleanValue = opt.value.split('//')[0].trim();
+    if (!cleanValue || cleanValue === '-' || cleanValue === '0') continue;
+    
+    // Compact format: "100 Вт" → "100Вт", "IP67" stays "IP67"
+    const compact = cleanValue.replace(/\s+/g, '');
+    mods.push(compact);
   }
   
-  console.log(`[ReplacementTraitsName] "${productName}" → ${candidates.length} candidates`);
-  return candidates;
+  console.log(`[ReplacementMods] Product "${product.pagetitle.substring(0, 50)}" → modifiers: [${mods.join(', ')}]`);
+  return mods;
 }
 
 
@@ -1516,78 +1423,6 @@ function rerankProducts(products: Product[], userQuery: string): Product[] {
   
   if (scored.length > 0) {
     console.log(`[Rerank] Top scores: ${scored.slice(0, 5).map(s => `${s.score}:"${s.product.pagetitle.substring(0, 40)}"`).join(', ')}`);
-  }
-  
-  return scored.map(s => s.product);
-}
-
-/**
- * Rerank replacement/alternative products by similarity to the original product.
- * Scores based on matching category, specs, and characteristics.
- */
-function rerankReplacements(alternatives: Product[], original: Product): Product[] {
-  const origSpecs = extractSpecs(original.pagetitle);
-  const origTokens = extractTokens(original.pagetitle);
-  const origCategory = original.category?.pagetitle?.toLowerCase() || '';
-  
-  // Collect original product option values for comparison
-  const origOptions = new Map<string, string>();
-  if (original.options) {
-    for (const opt of original.options) {
-      origOptions.set(opt.key, opt.value.split('//')[0].trim().toLowerCase());
-    }
-  }
-  
-  const scored = alternatives.map(alt => {
-    let score = 0;
-    
-    // Category match (0-30)
-    const altCategory = alt.category?.pagetitle?.toLowerCase() || '';
-    if (altCategory && origCategory && altCategory === origCategory) score += 30;
-    else if (altCategory && origCategory && (altCategory.includes(origCategory) || origCategory.includes(altCategory))) score += 20;
-    
-    // Spec match (0-30)
-    const altSpecs = extractSpecs(alt.pagetitle);
-    if (origSpecs.length > 0) {
-      let matched = 0;
-      for (const os of origSpecs) {
-        if (altSpecs.includes(os)) matched++;
-      }
-      score += Math.round((matched / origSpecs.length) * 30);
-    }
-    
-    // Token overlap (0-20)
-    const altTokens = extractTokens(alt.pagetitle);
-    if (origTokens.length > 0) {
-      let matched = 0;
-      for (const ot of origTokens) {
-        if (altTokens.some(at => at.includes(ot) || ot.includes(at))) matched++;
-      }
-      score += Math.round((matched / origTokens.length) * 20);
-    }
-    
-    // Option match (0-20)
-    if (alt.options && origOptions.size > 0) {
-      let optMatched = 0;
-      let optTotal = 0;
-      for (const opt of alt.options) {
-        const origVal = origOptions.get(opt.key);
-        if (origVal) {
-          optTotal++;
-          const altVal = opt.value.split('//')[0].trim().toLowerCase();
-          if (altVal === origVal) optMatched++;
-        }
-      }
-      if (optTotal > 0) score += Math.round((optMatched / optTotal) * 20);
-    }
-    
-    return { product: alt, score };
-  });
-  
-  scored.sort((a, b) => b.score - a.score);
-  
-  if (scored.length > 0) {
-    console.log(`[ReplacementRerank] Top: ${scored.slice(0, 5).map(s => `${s.score}:"${s.product.pagetitle.substring(0, 40)}"`).join(', ')}`);
   }
   
   return scored.map(s => s.product);
@@ -3598,60 +3433,191 @@ serve(async (req) => {
           }
         }
         
-        // === REPLACEMENT/ALTERNATIVE INTENT ===
+        // === REPLACEMENT/ALTERNATIVE INTENT (category-first pipeline) ===
         if (classification?.is_replacement && appSettings.volt220_api_token) {
           console.log(`[Chat] Replacement intent detected!`);
+          const replacementStart = Date.now();
           
           let originalProduct: Product | null = null;
-          let replacementCandidates: SearchCandidate[] = [];
           
           if (articleShortCircuit && foundProducts.length > 0) {
-            // Original product found — extract traits for alternative search
             originalProduct = foundProducts[0];
-            replacementCandidates = extractSearchableTraits(originalProduct);
-            console.log(`[Chat] Replacement: original found "${originalProduct.pagetitle}", ${replacementCandidates.length} search candidates`);
-          } else if (classification.product_name) {
-            // Product not found in catalog — extract traits from name
-            replacementCandidates = extractTraitsFromName(classification.product_name);
-            console.log(`[Chat] Replacement: original NOT found, extracted ${replacementCandidates.length} candidates from name "${classification.product_name}"`);
+            console.log(`[Chat] Replacement: original found "${originalProduct.pagetitle}"`);
           }
           
-          if (replacementCandidates.length > 0) {
-            const altProducts = await searchProductsMulti(replacementCandidates, 15, appSettings.volt220_api_token);
+          // Determine category and modifiers for category-first search
+          let replCategory = '';
+          let replModifiers: string[] = [];
+          
+          if (originalProduct) {
+            // Case 1: Original product found — extract category & modifiers from its data
+            replCategory = (originalProduct as any).category?.pagetitle || originalProduct.parent_name || '';
+            replModifiers = extractModifiersFromProduct(originalProduct);
+            console.log(`[Chat] Replacement: category="${replCategory}", modifiers=[${replModifiers.join(', ')}]`);
+          } else if (classification.product_name) {
+            // Case 2: Product not in catalog — use classifier's category and extract modifiers from name
+            replCategory = effectiveCategory || classification.search_category || '';
+            // Extract specs from product name as modifiers
+            const nameSpecs = classification.product_name.match(/(\d+\s*(?:Вт|W|В|V|мм|mm|А|A|IP\d+))/gi) || [];
+            replModifiers = nameSpecs.map(s => s.replace(/\s+/g, ''));
+            // Add type words as modifiers
+            const typeWords = classification.product_name
+              .replace(/\d+\s*(?:Вт|W|В|V|мм|mm|А|A)/gi, '')
+              .replace(/[()[\]\-]/g, ' ')
+              .split(/\s+/)
+              .filter(w => w.length >= 3 && !/^\d+$/.test(w))
+              .slice(0, 2);
+            replModifiers.push(...typeWords);
+            console.log(`[Chat] Replacement: product NOT found, category="${replCategory}", modifiers=[${replModifiers.join(', ')}]`);
+          }
+          
+          if (replCategory) {
+            // Run category-first pipeline: plural → schema → resolveFilters → STAGE 2
+            const pluralRepl = toPluralCategory(replCategory);
+            console.log(`[Chat] Replacement category-first: plural="${pluralRepl}"`);
             
-            // Filter out the original product
-            const originalId = originalProduct?.id;
-            const alternatives = originalId 
-              ? altProducts.filter(p => p.id !== originalId)
-              : altProducts;
+            let replRawProducts = await searchProductsByCandidate(
+              { query: null, brand: null, category: pluralRepl, min_price: null, max_price: null },
+              appSettings.volt220_api_token, 50
+            );
+            console.log(`[Chat] Replacement category-first: ${replRawProducts.length} products from category "${pluralRepl}"`);
             
-            if (alternatives.length > 0) {
-              // Rerank alternatives by similarity to the original
-              const reranked = originalProduct 
-                ? rerankReplacements(alternatives, originalProduct)
-                : alternatives;
-              
-              foundProducts = reranked.slice(0, 8);
-              articleShortCircuit = true;
-              
-              // Store replacement metadata in closure variables (extractedIntent not yet declared)
-              replacementMeta = {
-                isReplacement: true,
-                original: originalProduct,
-                originalName: classification.product_name,
-                noResults: false,
-              };
-              
-              console.log(`[Chat] Replacement SUCCESS: ${foundProducts.length} alternatives found`);
-            } else {
-              console.log(`[Chat] Replacement: no alternatives found`);
-              replacementMeta = {
-                isReplacement: true,
-                original: null,
-                originalName: classification.product_name,
-                noResults: true,
-              };
+            // Fallback: try original category as query if 0 results
+            if (replRawProducts.length === 0) {
+              replRawProducts = await searchProductsByCandidate(
+                { query: replCategory, brand: null, category: null, min_price: null, max_price: null },
+                appSettings.volt220_api_token, 50
+              );
+              console.log(`[Chat] Replacement fallback query="${replCategory}": ${replRawProducts.length} products`);
             }
+            
+            if (replRawProducts.length > 0 && replModifiers.length > 0) {
+              // STAGE 1: Schema extraction from raw products
+              const normalizedPluralRepl = pluralRepl.toLowerCase();
+              let replExactBucket: Product[] = [];
+              for (const p of replRawProducts) {
+                const catTitle = ((p as any).category?.pagetitle || p.parent_name || '').toLowerCase();
+                if (catTitle === normalizedPluralRepl) replExactBucket.push(p);
+              }
+              if (replExactBucket.length === 0) replExactBucket = replRawProducts;
+              
+              console.log(`[Chat] Replacement STAGE 1: resolving modifiers [${replModifiers.join(', ')}] against ${replExactBucket.length} products`);
+              const { resolved: replResolvedFilters, unresolved: replUnresolvedMods } = await resolveFiltersWithLLM(replExactBucket, replModifiers, appSettings);
+              console.log(`[Chat] Replacement resolved filters: ${JSON.stringify(replResolvedFilters)}, unresolved: [${replUnresolvedMods.join(', ')}]`);
+              
+              if (Object.keys(replResolvedFilters).length > 0 || replUnresolvedMods.length > 0) {
+                // STAGE 2: Hybrid API call with resolved filters
+                const replQueryText = replUnresolvedMods.length > 0 ? replUnresolvedMods.join(' ') : null;
+                let replFiltered = await searchProductsByCandidate(
+                  { query: replQueryText, brand: null, category: pluralRepl, min_price: null, max_price: null },
+                  appSettings.volt220_api_token, 50,
+                  Object.keys(replResolvedFilters).length > 0 ? replResolvedFilters : undefined
+                );
+                console.log(`[Chat] Replacement STAGE 2: ${replFiltered.length} products`);
+                
+                // Cascading fallback: drop filters one by one if 0 results
+                if (replFiltered.length === 0) {
+                  const replFilterKeys = Object.keys(replResolvedFilters);
+                  if (replFilterKeys.length > 1) {
+                    let bestRelaxed: Product[] = [];
+                    let droppedKey = '';
+                    for (const dropKey of replFilterKeys) {
+                      const partial = { ...replResolvedFilters };
+                      delete partial[dropKey];
+                      const partialResult = await searchProductsByCandidate(
+                        { query: null, brand: null, category: pluralRepl, min_price: null, max_price: null },
+                        appSettings.volt220_api_token, 50,
+                        partial
+                      );
+                      console.log(`[Chat] Replacement relaxed (dropped ${dropKey}): ${partialResult.length} products`);
+                      if (partialResult.length > bestRelaxed.length) {
+                        bestRelaxed = partialResult;
+                        droppedKey = dropKey;
+                      }
+                    }
+                    if (bestRelaxed.length > 0) {
+                      replFiltered = bestRelaxed;
+                      console.log(`[Chat] Replacement relaxed match (dropped ${droppedKey}): ${replFiltered.length} products`);
+                    }
+                  }
+                  
+                  // Final fallback: modifiers as text query
+                  if (replFiltered.length === 0) {
+                    const modQuery = replModifiers.join(' ');
+                    replFiltered = await searchProductsByCandidate(
+                      { query: modQuery, brand: null, category: pluralRepl, min_price: null, max_price: null },
+                      appSettings.volt220_api_token, 50
+                    );
+                    console.log(`[Chat] Replacement text fallback: ${replFiltered.length} products`);
+                  }
+                }
+                
+                // Exclude original product
+                const originalId = originalProduct?.id;
+                if (originalId) {
+                  replFiltered = replFiltered.filter(p => p.id !== originalId);
+                }
+                
+                if (replFiltered.length > 0) {
+                  foundProducts = replFiltered.slice(0, 15);
+                  articleShortCircuit = true;
+                  replacementMeta = {
+                    isReplacement: true,
+                    original: originalProduct,
+                    originalName: classification.product_name,
+                    noResults: false,
+                  };
+                  
+                  // Create slot if >7 results for refinement
+                  if (foundProducts.length > 7) {
+                    const slotKey = `ps_${Date.now()}`;
+                    dialogSlots[slotKey] = {
+                      intent: 'product_search',
+                      base_category: replCategory,
+                      plural_category: pluralRepl,
+                      resolved_filters: JSON.stringify(replResolvedFilters || {}),
+                      unresolved_query: replUnresolvedMods?.length > 0 ? replUnresolvedMods.join(' ') : '',
+                      status: 'pending',
+                      created_turn: messages.length,
+                      turns_since_touched: 0,
+                      isReplacement: true,
+                      originalName: originalProduct?.pagetitle || classification.product_name || '',
+                    };
+                    slotsUpdated = true;
+                    console.log(`[Chat] Replacement: created product_search slot "${slotKey}" for refinement`);
+                  }
+                  
+                  console.log(`[Chat] Replacement SUCCESS: ${foundProducts.length} alternatives found (${Date.now() - replacementStart}ms)`);
+                } else {
+                  replacementMeta = { isReplacement: true, original: originalProduct, originalName: classification.product_name, noResults: true };
+                  console.log(`[Chat] Replacement: 0 alternatives after filtering (${Date.now() - replacementStart}ms)`);
+                }
+              } else {
+                // No modifiers resolved — return category products excluding original
+                let catProducts = replExactBucket;
+                const originalId = originalProduct?.id;
+                if (originalId) catProducts = catProducts.filter(p => p.id !== originalId);
+                foundProducts = catProducts.slice(0, 15);
+                articleShortCircuit = true;
+                replacementMeta = { isReplacement: true, original: originalProduct, originalName: classification.product_name, noResults: foundProducts.length === 0 };
+                console.log(`[Chat] Replacement: no filters resolved, showing ${foundProducts.length} category products (${Date.now() - replacementStart}ms)`);
+              }
+            } else if (replRawProducts.length > 0) {
+              // No modifiers — show category products
+              let catProducts = replRawProducts;
+              const originalId = originalProduct?.id;
+              if (originalId) catProducts = catProducts.filter(p => p.id !== originalId);
+              foundProducts = catProducts.slice(0, 15);
+              articleShortCircuit = true;
+              replacementMeta = { isReplacement: true, original: originalProduct, originalName: classification.product_name, noResults: foundProducts.length === 0 };
+              console.log(`[Chat] Replacement: no modifiers, showing ${foundProducts.length} category products (${Date.now() - replacementStart}ms)`);
+            } else {
+              replacementMeta = { isReplacement: true, original: null, originalName: classification.product_name, noResults: true };
+              console.log(`[Chat] Replacement: 0 products in category "${replCategory}" (${Date.now() - replacementStart}ms)`);
+            }
+          } else {
+            replacementMeta = { isReplacement: true, original: null, originalName: classification.product_name, noResults: true };
+            console.log(`[Chat] Replacement: no category determined`);
           }
         }
       } catch (e) {
