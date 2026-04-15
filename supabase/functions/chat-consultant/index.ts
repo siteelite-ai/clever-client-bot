@@ -3332,9 +3332,21 @@ serve(async (req) => {
             
             for (const [catName, count] of sortedBuckets) {
               if (count < 2) continue;
-              const bucketProducts = rawProducts.filter(p => 
+              let bucketProducts = rawProducts.filter(p => 
                 ((p as any).category?.pagetitle || p.parent_name || 'unknown') === catName
               );
+              // If bucket is too small for representative schema, fetch more from this category
+              if (bucketProducts.length < 10 && appSettings.volt220_api_token) {
+                console.log(`[Chat] Bucket "${catName}" too small (${bucketProducts.length}), fetching more for schema...`);
+                const extraProducts = await searchProductsByCandidate(
+                  { query: null, brand: null, category: catName, min_price: null, max_price: null },
+                  appSettings.volt220_api_token, 50
+                );
+                if (extraProducts.length > bucketProducts.length) {
+                  bucketProducts = extraProducts;
+                  console.log(`[Chat] Bucket "${catName}" expanded to ${bucketProducts.length} products`);
+                }
+              }
               const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, modifiers, appSettings);
               console.log(`[Chat] Bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(br)}, unresolved=[${bu.join(', ')}]`);
               
