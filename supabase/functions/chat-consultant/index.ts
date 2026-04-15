@@ -3282,7 +3282,7 @@ serve(async (req) => {
           const categoryStart = Date.now();
           
           // Step 1: Two parallel searches — by category AND by query (to cover multiple subcategories)
-          const pluralCategory = toPluralCategory(effectiveCategory);
+          let pluralCategory = toPluralCategory(effectiveCategory);
           console.log(`[Chat] Category-first: plural="${pluralCategory}"`);
           
           // Search 1: strict category match
