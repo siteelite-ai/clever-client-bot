@@ -3361,27 +3361,39 @@ serve(async (req) => {
                 }
                 console.log(`[Chat] Fallback buckets: ${JSON.stringify(fbBuckets)}`);
 
-                const dominantCat = Object.entries(fbBuckets).sort((a, b) => b[1] - a[1])[0]?.[0];
-                const dominantProducts = dominantCat
-                  ? fallbackResults.filter(p => ((p as any).category?.pagetitle || p.parent_name) === dominantCat)
-                  : fallbackResults;
+                // Try each category bucket, pick the one where filters resolve best
+                const sortedBuckets = Object.entries(fbBuckets).sort((a, b) => b[1] - a[1]);
+                let bestBucketCat = '';
+                let bestBucketResolved: Record<string, string> = {};
+                let bestBucketUnresolved: string[] = [];
 
-                const { resolved: fbResolved, unresolved: fbUnresolved } =
-                  await resolveFiltersWithLLM(dominantProducts, modifiers, appSettings);
-                console.log(`[Chat] Fallback resolved: ${JSON.stringify(fbResolved)}, unresolved: [${fbUnresolved.join(', ')}]`);
+                for (const [catName] of sortedBuckets) {
+                  if (catName === 'unknown') continue;
+                  const bucketProducts = fallbackResults.filter(p => ((p as any).category?.pagetitle || p.parent_name) === catName);
+                  if (bucketProducts.length < 2) continue;
+                  const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, modifiers, appSettings);
+                  console.log(`[Chat] Fallback bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(br)}, unresolved=[${bu.join(', ')}]`);
+                  if (Object.keys(br).length > Object.keys(bestBucketResolved).length) {
+                    bestBucketCat = catName;
+                    bestBucketResolved = br;
+                    bestBucketUnresolved = bu;
+                  }
+                  if (Object.keys(br).length >= modifiers.length) break; // all resolved, stop
+                }
 
-                if (Object.keys(fbResolved).length > 0) {
-                  const fbQuery = fbUnresolved.length > 0 ? fbUnresolved.join(' ') : null;
+                if (Object.keys(bestBucketResolved).length > 0) {
+                  console.log(`[Chat] Fallback best bucket: "${bestBucketCat}", resolved=${JSON.stringify(bestBucketResolved)}`);
+                  const fbQuery = bestBucketUnresolved.length > 0 ? bestBucketUnresolved.join(' ') : null;
                   const fbFiltered = await searchProductsByCandidate(
-                    { query: fbQuery, brand: null, category: dominantCat, min_price: null, max_price: null },
-                    appSettings.volt220_api_token, 50, fbResolved
+                    { query: fbQuery, brand: null, category: bestBucketCat, min_price: null, max_price: null },
+                    appSettings.volt220_api_token, 50, bestBucketResolved
                   );
-                  console.log(`[Chat] Fallback STAGE 2: category="${dominantCat}", ${fbFiltered.length} products`);
+                  console.log(`[Chat] Fallback STAGE 2: category="${bestBucketCat}", ${fbFiltered.length} products`);
                   if (fbFiltered.length > 0) {
                     foundProducts = fbFiltered.slice(0, 15);
                     articleShortCircuit = true;
                     resultMode = 'fallback_recategorized';
-                    pluralCategory = dominantCat || pluralCategory;
+                    pluralCategory = bestBucketCat;
                   }
                 }
 
