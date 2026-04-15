@@ -3501,108 +3501,76 @@ serve(async (req) => {
           }
           
           if (replCategory) {
-            // Run category-first pipeline: plural → schema → resolveFilters → STAGE 2
-            const pluralRepl = toPluralCategory(replCategory);
+            // Run category-first pipeline with bucket-matching
+            let pluralRepl = toPluralCategory(replCategory);
             console.log(`[Chat] Replacement category-first: plural="${pluralRepl}"`);
             
-            let replRawProducts = await searchProductsByCandidate(
+            // Two parallel searches: by category + by query
+            const replCatPromise = searchProductsByCandidate(
               { query: null, brand: null, category: pluralRepl, min_price: null, max_price: null },
               appSettings.volt220_api_token, 50
             );
-            console.log(`[Chat] Replacement category-first: ${replRawProducts.length} products from category "${pluralRepl}"`);
+            const replQueryPromise = searchProductsByCandidate(
+              { query: replCategory, brand: null, category: null, min_price: null, max_price: null },
+              appSettings.volt220_api_token, 50
+            );
+            const [replCatRes, replQueryRes] = await Promise.all([replCatPromise, replQueryPromise]);
+            console.log(`[Chat] Replacement: category="${pluralRepl}" → ${replCatRes.length}, query="${replCategory}" → ${replQueryRes.length}`);
             
-            // Fallback: try original category as query if 0 results
-            if (replRawProducts.length === 0) {
-              replRawProducts = await searchProductsByCandidate(
-                { query: replCategory, brand: null, category: null, min_price: null, max_price: null },
-                appSettings.volt220_api_token, 50
-              );
-              console.log(`[Chat] Replacement fallback query="${replCategory}": ${replRawProducts.length} products`);
+            // Merge & deduplicate
+            const replSeenIds = new Set<string | number>();
+            let replRawProducts: Product[] = [];
+            for (const p of [...replCatRes, ...replQueryRes]) {
+              if (!replSeenIds.has(p.id)) {
+                replSeenIds.add(p.id);
+                replRawProducts.push(p);
+              }
             }
+            console.log(`[Chat] Replacement: merged ${replRawProducts.length} unique products`);
             
             if (replRawProducts.length > 0 && replModifiers.length > 0) {
-              // STAGE 1: Schema extraction from raw products
-              const normalizedPluralRepl = pluralRepl.toLowerCase();
-              let replExactBucket: Product[] = [];
+              // Bucketize by category
+              const replCatDist: Record<string, number> = {};
               for (const p of replRawProducts) {
-                const catTitle = ((p as any).category?.pagetitle || p.parent_name || '').toLowerCase();
-                if (catTitle === normalizedPluralRepl) replExactBucket.push(p);
+                const catTitle = (p as any).category?.pagetitle || p.parent_name || 'unknown';
+                replCatDist[catTitle] = (replCatDist[catTitle] || 0) + 1;
               }
-              if (replExactBucket.length === 0) replExactBucket = replRawProducts;
+              console.log(`[Chat] Replacement buckets: ${JSON.stringify(replCatDist)}`);
               
-              console.log(`[Chat] Replacement STAGE 1: resolving modifiers [${replModifiers.join(', ')}] against ${replExactBucket.length} products`);
-              const { resolved: replResolvedFilters, unresolved: replUnresolvedMods } = await resolveFiltersWithLLM(replExactBucket, replModifiers, appSettings);
-              console.log(`[Chat] Replacement resolved filters: ${JSON.stringify(replResolvedFilters)}, unresolved: [${replUnresolvedMods.join(', ')}]`);
+              // Try each bucket, pick best by resolved count
+              const replSortedBuckets = Object.entries(replCatDist)
+                .filter(([name]) => name !== 'unknown')
+                .sort((a, b) => b[1] - a[1]);
               
-              // ── FALLBACK: wrong category for replacement (0 resolved, all unresolved) ──
-              if (Object.keys(replResolvedFilters).length === 0 &&
-                  replUnresolvedMods.length === replModifiers.length && replModifiers.length > 0) {
-                console.log(`[Chat] Replacement: 0 resolved → wrong category, retrying WITHOUT category`);
-                const replFbQueries = [
-                  `${pluralRepl} ${replModifiers.join(' ')}`,
-                  `${replCategory} ${replModifiers.join(' ')}`,
-                  replModifiers.join(' '),
-                ];
-                let replFbResults: Product[] = [];
-                for (const rfbQ of replFbQueries) {
-                  replFbResults = await searchProductsByCandidate(
-                    { query: rfbQ, brand: null, category: null, min_price: null, max_price: null },
-                    appSettings.volt220_api_token, 50
-                  );
-                  console.log(`[Chat] Replacement fallback (no category): query="${rfbQ}" → ${replFbResults.length} products`);
-                  if (replFbResults.length > 0) break;
+              let replBestCat = '';
+              let replBestResolved: Record<string, string> = {};
+              let replBestUnresolved: string[] = [...replModifiers];
+              
+              for (const [catName, count] of replSortedBuckets) {
+                if (count < 2) continue;
+                const bucketProducts = replRawProducts.filter(p =>
+                  ((p as any).category?.pagetitle || p.parent_name || 'unknown') === catName
+                );
+                const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, replModifiers, appSettings);
+                console.log(`[Chat] Replacement bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(br)}, unresolved=[${bu.join(', ')}]`);
+                if (Object.keys(br).length > Object.keys(replBestResolved).length) {
+                  replBestCat = catName;
+                  replBestResolved = br;
+                  replBestUnresolved = bu;
                 }
-
-                if (replFbResults.length > 0) {
-                  const replFbBuckets: Record<string, number> = {};
-                  for (const p of replFbResults) {
-                    const ct = (p as any).category?.pagetitle || p.parent_name || 'unknown';
-                    replFbBuckets[ct] = (replFbBuckets[ct] || 0) + 1;
-                  }
-                  console.log(`[Chat] Replacement fallback buckets: ${JSON.stringify(replFbBuckets)}`);
-
-                  const replSortedBuckets = Object.entries(replFbBuckets).sort((a, b) => b[1] - a[1]);
-                  let replBestCat = '';
-                  let replBestResolved: Record<string, string> = {};
-                  let replBestUnresolved: string[] = [];
-
-                  for (const [catName] of replSortedBuckets) {
-                    if (catName === 'unknown') continue;
-                    const bucketProducts = replFbResults.filter(p => ((p as any).category?.pagetitle || p.parent_name) === catName);
-                    if (bucketProducts.length < 2) continue;
-                    const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, replModifiers, appSettings);
-                    console.log(`[Chat] Replacement fallback bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(br)}`);
-                    if (Object.keys(br).length > Object.keys(replBestResolved).length) {
-                      replBestCat = catName;
-                      replBestResolved = br;
-                      replBestUnresolved = bu;
-                    }
-                    if (Object.keys(br).length >= replModifiers.length) break;
-                  }
-
-                  if (Object.keys(replBestResolved).length > 0) {
-                    const replFbQ = replBestUnresolved.length > 0 ? replBestUnresolved.join(' ') : null;
-                    let replFbFiltered = await searchProductsByCandidate(
-                      { query: replFbQ, brand: null, category: replBestCat, min_price: null, max_price: null },
-                      appSettings.volt220_api_token, 50, replBestResolved
-                    );
-                    const origId = originalProduct?.id;
-                    if (origId) replFbFiltered = replFbFiltered.filter(p => p.id !== origId);
-                    console.log(`[Chat] Replacement fallback STAGE 2: category="${replBestCat}", ${replFbFiltered.length} products`);
-                    if (replFbFiltered.length > 0) {
-                      replacementProducts = replFbFiltered.slice(0, maxReplacements);
-                      pluralRepl = replBestCat;
-                    }
-                  }
-
-                  if (replacementProducts.length === 0) {
-                    let replFbFinal = replFbResults;
-                    const origId2 = originalProduct?.id;
-                    if (origId2) replFbFinal = replFbFinal.filter(p => p.id !== origId2);
-                    replacementProducts = replFbFinal.slice(0, maxReplacements);
-                  }
-                }
+                if (Object.keys(br).length >= replModifiers.length) break;
               }
+              
+              if (Object.keys(replBestResolved).length === 0 && replSortedBuckets.length > 0) {
+                replBestCat = replSortedBuckets[0][0];
+              }
+              if (replBestCat) {
+                console.log(`[Chat] Replacement WINNER: "${replBestCat}" (resolved ${Object.keys(replBestResolved).length}/${replModifiers.length})`);
+                pluralRepl = replBestCat;
+              }
+              
+              const replResolvedFilters = replBestResolved;
+              const replUnresolvedMods = replBestUnresolved;
 
               if (replacementProducts.length === 0 && (Object.keys(replResolvedFilters).length > 0 || replUnresolvedMods.length > 0)) {
                 // STAGE 2: Hybrid API call with resolved filters
