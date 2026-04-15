@@ -3569,12 +3569,20 @@ serve(async (req) => {
               if (Object.keys(replResolvedFilters).length === 0 &&
                   replUnresolvedMods.length === replModifiers.length && replModifiers.length > 0) {
                 console.log(`[Chat] Replacement: 0 resolved → wrong category, retrying WITHOUT category`);
-                const replFbQuery = `${replCategory} ${replModifiers.join(' ')}`;
-                const replFbResults = await searchProductsByCandidate(
-                  { query: replFbQuery, brand: null, category: null, min_price: null, max_price: null },
-                  appSettings.volt220_api_token, 50
-                );
-                console.log(`[Chat] Replacement fallback (no category): query="${replFbQuery}" → ${replFbResults.length} products`);
+                const replFbQueries = [
+                  `${pluralRepl} ${replModifiers.join(' ')}`,
+                  `${replCategory} ${replModifiers.join(' ')}`,
+                  replModifiers.join(' '),
+                ];
+                let replFbResults: Product[] = [];
+                for (const rfbQ of replFbQueries) {
+                  replFbResults = await searchProductsByCandidate(
+                    { query: rfbQ, brand: null, category: null, min_price: null, max_price: null },
+                    appSettings.volt220_api_token, 50
+                  );
+                  console.log(`[Chat] Replacement fallback (no category): query="${rfbQ}" → ${replFbResults.length} products`);
+                  if (replFbResults.length > 0) break;
+                }
 
                 if (replFbResults.length > 0) {
                   const replFbBuckets: Record<string, number> = {};
