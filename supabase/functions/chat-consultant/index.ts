@@ -3336,12 +3336,21 @@ serve(async (req) => {
             if (Object.keys(resolvedFilters).length === 0 &&
                 unresolvedMods.length === modifiers.length && modifiers.length > 0) {
               console.log(`[Chat] Category-first: 0 resolved → wrong category, retrying WITHOUT category`);
-              const fallbackQuery = `${effectiveCategory} ${modifiers.join(' ')}`;
-              const fallbackResults = await searchProductsByCandidate(
-                { query: fallbackQuery, brand: null, category: null, min_price: null, max_price: null },
-                appSettings.volt220_api_token, 50
-              );
-              console.log(`[Chat] Category-first fallback (no category): query="${fallbackQuery}" → ${fallbackResults.length} products`);
+              // Try multiple query variants to find correct category
+              const fbQueries = [
+                `${pluralCategory} ${modifiers.join(' ')}`,
+                `${effectiveCategory} ${modifiers.join(' ')}`,
+                modifiers.join(' '),
+              ];
+              let fallbackResults: Product[] = [];
+              for (const fbQ of fbQueries) {
+                fallbackResults = await searchProductsByCandidate(
+                  { query: fbQ, brand: null, category: null, min_price: null, max_price: null },
+                  appSettings.volt220_api_token, 50
+                );
+                console.log(`[Chat] Category-first fallback (no category): query="${fbQ}" → ${fallbackResults.length} products`);
+                if (fallbackResults.length > 0) break;
+              }
 
               if (fallbackResults.length > 0) {
                 const fbBuckets: Record<string, number> = {};
