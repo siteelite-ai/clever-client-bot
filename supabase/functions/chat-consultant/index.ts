@@ -3281,31 +3281,38 @@ serve(async (req) => {
           console.log(`[Chat] Category-first: category="${effectiveCategory}", modifiers=[${modifiers.join(', ')}]`);
           const categoryStart = Date.now();
           
-          // Step 1: Generate plural form and search by category parameter directly
+          // Step 1: Two parallel searches — by category AND by query (to cover multiple subcategories)
           const pluralCategory = toPluralCategory(effectiveCategory);
           console.log(`[Chat] Category-first: plural="${pluralCategory}"`);
           
-          let rawProducts = await searchProductsByCandidate(
+          // Search 1: strict category match
+          const categorySearchPromise = searchProductsByCandidate(
             { query: null, brand: null, category: pluralCategory, min_price: null, max_price: null },
             appSettings.volt220_api_token, 50
           );
-          console.log(`[Chat] Category-first: category="${pluralCategory}" → ${rawProducts.length} products`);
+          // Search 2: broad query match (catches related subcategories)
+          const querySearchPromise = searchProductsByCandidate(
+            { query: effectiveCategory, brand: null, category: null, min_price: null, max_price: null },
+            appSettings.volt220_api_token, 50
+          );
+          const [catResults, queryResults] = await Promise.all([categorySearchPromise, querySearchPromise]);
+          console.log(`[Chat] Category-first: category="${pluralCategory}" → ${catResults.length}, query="${effectiveCategory}" → ${queryResults.length}`);
           
-          // Fallback: if 0 results with plural, try original word as query
-          if (rawProducts.length === 0) {
-            console.log(`[Chat] Category-first: trying fallback query="${effectiveCategory}"`);
-            rawProducts = await searchProductsByCandidate(
-              { query: effectiveCategory, brand: null, category: null, min_price: null, max_price: null },
-              appSettings.volt220_api_token, 50
-            );
-            console.log(`[Chat] Category-first fallback: ${rawProducts.length} products`);
+          // Merge results, deduplicate by id
+          const seenIds = new Set<string | number>();
+          let rawProducts: Product[] = [];
+          for (const p of [...catResults, ...queryResults]) {
+            if (!seenIds.has(p.id)) {
+              seenIds.add(p.id);
+              rawProducts.push(p);
+            }
           }
+          console.log(`[Chat] Category-first: merged ${rawProducts.length} unique products`);
           
           if (rawProducts.length > 0 && modifiers.length > 0) {
-            // STAGE 1: Use raw products ONLY for schema extraction → resolveFiltersWithLLM
+            // Bucketize by category
             console.log(`[Chat] Category-first STAGE 1: ${rawProducts.length} products for schema extraction`);
             
-            // Category bucketization for cleaner schema
             const categoryDistribution: Record<string, number> = {};
             for (const p of rawProducts) {
               const catTitle = (p as any).category?.pagetitle || p.parent_name || 'unknown';
@@ -3313,97 +3320,46 @@ serve(async (req) => {
             }
             console.log(`[Chat] Category-buckets: ${JSON.stringify(categoryDistribution)}`);
 
-            const normalizedPlural = pluralCategory.toLowerCase();
-            let exactBucket: Product[] = [];
-            for (const p of rawProducts) {
-              const catTitle = ((p as any).category?.pagetitle || p.parent_name || '').toLowerCase();
-              if (catTitle === normalizedPlural) {
-                exactBucket.push(p);
-              }
-            }
-            if (exactBucket.length === 0) {
-              exactBucket = rawProducts;
-            }
-            console.log(`[Chat] Category-buckets: exact=${exactBucket.length} (strict match "${normalizedPlural}")`);
-
-            // Resolve filters using exact bucket schema
-            console.log(`[Chat] Category-first: resolving modifiers [${modifiers.join(', ')}] against ${exactBucket.length} products (exact bucket)`);
-            const { resolved: resolvedFilters, unresolved: unresolvedMods } = await resolveFiltersWithLLM(exactBucket, modifiers, appSettings);
+            // Try each bucket with resolveFiltersWithLLM, pick the one that resolves the most modifiers
+            const sortedBuckets = Object.entries(categoryDistribution)
+              .filter(([name]) => name !== 'unknown')
+              .sort((a, b) => b[1] - a[1]);
             
-            let resultMode = 'no_filters';
-
-            // ── FALLBACK: wrong category detected (0 resolved, all unresolved) ──
-            if (Object.keys(resolvedFilters).length === 0 &&
-                unresolvedMods.length === modifiers.length && modifiers.length > 0) {
-              console.log(`[Chat] Category-first: 0 resolved → wrong category, retrying WITHOUT category`);
-              // Try multiple query variants to find correct category
-              const fbQueries = [
-                effectiveCategory,
-                userMessage,
-                `${pluralCategory} ${modifiers.join(' ')}`,
-                modifiers.join(' '),
-              ];
-              let fallbackResults: Product[] = [];
-              for (const fbQ of fbQueries) {
-                fallbackResults = await searchProductsByCandidate(
-                  { query: fbQ, brand: null, category: null, min_price: null, max_price: null },
-                  appSettings.volt220_api_token, 50
-                );
-                console.log(`[Chat] Category-first fallback (no category): query="${fbQ}" → ${fallbackResults.length} products`);
-                if (fallbackResults.length > 0) break;
+            let bestBucketCat = '';
+            let bestResolved: Record<string, string> = {};
+            let bestUnresolved: string[] = [...modifiers];
+            
+            for (const [catName, count] of sortedBuckets) {
+              if (count < 2) continue;
+              const bucketProducts = rawProducts.filter(p => 
+                ((p as any).category?.pagetitle || p.parent_name || 'unknown') === catName
+              );
+              const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, modifiers, appSettings);
+              console.log(`[Chat] Bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(br)}, unresolved=[${bu.join(', ')}]`);
+              
+              if (Object.keys(br).length > Object.keys(bestResolved).length) {
+                bestBucketCat = catName;
+                bestResolved = br;
+                bestUnresolved = bu;
               }
-
-              if (fallbackResults.length > 0) {
-                const fbBuckets: Record<string, number> = {};
-                for (const p of fallbackResults) {
-                  const ct = (p as any).category?.pagetitle || p.parent_name || 'unknown';
-                  fbBuckets[ct] = (fbBuckets[ct] || 0) + 1;
-                }
-                console.log(`[Chat] Fallback buckets: ${JSON.stringify(fbBuckets)}`);
-
-                // Try each category bucket, pick the one where filters resolve best
-                const sortedBuckets = Object.entries(fbBuckets).sort((a, b) => b[1] - a[1]);
-                let bestBucketCat = '';
-                let bestBucketResolved: Record<string, string> = {};
-                let bestBucketUnresolved: string[] = [];
-
-                for (const [catName] of sortedBuckets) {
-                  if (catName === 'unknown') continue;
-                  const bucketProducts = fallbackResults.filter(p => ((p as any).category?.pagetitle || p.parent_name) === catName);
-                  if (bucketProducts.length < 2) continue;
-                  const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, modifiers, appSettings);
-                  console.log(`[Chat] Fallback bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(br)}, unresolved=[${bu.join(', ')}]`);
-                  if (Object.keys(br).length > Object.keys(bestBucketResolved).length) {
-                    bestBucketCat = catName;
-                    bestBucketResolved = br;
-                    bestBucketUnresolved = bu;
-                  }
-                  if (Object.keys(br).length >= modifiers.length) break; // all resolved, stop
-                }
-
-                if (Object.keys(bestBucketResolved).length > 0) {
-                  console.log(`[Chat] Fallback best bucket: "${bestBucketCat}", resolved=${JSON.stringify(bestBucketResolved)}`);
-                  const fbQuery = bestBucketUnresolved.length > 0 ? bestBucketUnresolved.join(' ') : null;
-                  const fbFiltered = await searchProductsByCandidate(
-                    { query: fbQuery, brand: null, category: bestBucketCat, min_price: null, max_price: null },
-                    appSettings.volt220_api_token, 50, bestBucketResolved
-                  );
-                  console.log(`[Chat] Fallback STAGE 2: category="${bestBucketCat}", ${fbFiltered.length} products`);
-                  if (fbFiltered.length > 0) {
-                    foundProducts = fbFiltered.slice(0, 15);
-                    articleShortCircuit = true;
-                    resultMode = 'fallback_recategorized';
-                    pluralCategory = bestBucketCat;
-                  }
-                }
-
-                if (foundProducts.length === 0) {
-                  foundProducts = fallbackResults.slice(0, 15);
-                  articleShortCircuit = true;
-                  resultMode = 'fallback_no_category';
-                }
-              }
+              // All modifiers resolved — no need to check more buckets
+              if (Object.keys(br).length >= modifiers.length) break;
             }
+            
+            // If no bucket resolved anything, fall back to the largest bucket
+            if (Object.keys(bestResolved).length === 0 && sortedBuckets.length > 0) {
+              bestBucketCat = sortedBuckets[0][0];
+              console.log(`[Chat] No bucket resolved modifiers, using largest: "${bestBucketCat}"`);
+            }
+            
+            // Update pluralCategory to the winning bucket
+            if (bestBucketCat) {
+              console.log(`[Chat] Category-first WINNER: "${bestBucketCat}" (resolved ${Object.keys(bestResolved).length}/${modifiers.length})`);
+              pluralCategory = bestBucketCat;
+            }
+            
+            const resolvedFilters = bestResolved;
+            const unresolvedMods = bestUnresolved;
 
             if (foundProducts.length === 0 && (Object.keys(resolvedFilters).length > 0 || unresolvedMods.length > 0)) {
               console.log(`[Chat] Category-first resolved filters: ${JSON.stringify(resolvedFilters)}, unresolved: [${unresolvedMods.join(', ')}]`);
