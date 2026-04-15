@@ -3561,9 +3561,21 @@ serve(async (req) => {
               
               for (const [catName, count] of replSortedBuckets) {
                 if (count < 2) continue;
-                const bucketProducts = replRawProducts.filter(p =>
+                let bucketProducts = replRawProducts.filter(p =>
                   ((p as any).category?.pagetitle || p.parent_name || 'unknown') === catName
                 );
+                // Expand small buckets for better schema
+                if (bucketProducts.length < 10 && appSettings.volt220_api_token) {
+                  console.log(`[Chat] Replacement bucket "${catName}" too small (${bucketProducts.length}), fetching more...`);
+                  const extraProducts = await searchProductsByCandidate(
+                    { query: null, brand: null, category: catName, min_price: null, max_price: null },
+                    appSettings.volt220_api_token, 50
+                  );
+                  if (extraProducts.length > bucketProducts.length) {
+                    bucketProducts = extraProducts;
+                    console.log(`[Chat] Replacement bucket "${catName}" expanded to ${bucketProducts.length}`);
+                  }
+                }
                 const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, replModifiers, appSettings);
                 console.log(`[Chat] Replacement bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(br)}, unresolved=[${bu.join(', ')}]`);
                 if (Object.keys(br).length > Object.keys(replBestResolved).length) {
