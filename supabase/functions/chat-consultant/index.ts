@@ -3338,6 +3338,7 @@ serve(async (req) => {
               console.log(`[Chat] Category-first: 0 resolved → wrong category, retrying WITHOUT category`);
               // Try multiple query variants to find correct category
               const fbQueries = [
+                userMessage,
                 `${pluralCategory} ${modifiers.join(' ')}`,
                 `${effectiveCategory} ${modifiers.join(' ')}`,
                 modifiers.join(' '),
