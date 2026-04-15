@@ -707,7 +707,9 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 function extractModifiersFromProduct(product: Product): string[] {
   const mods: string[] = [];
   if (!product.options) return mods;
-  
+
+  const NOISE = new Set(['нет', 'да', 'не требуется', '-', '0', '']);
+
   const importantPatterns = [
     /мощность|moshchnost|power|watt/i,
     /напряжение|voltage|napr/i,
@@ -716,26 +718,48 @@ function extractModifiersFromProduct(product: Product): string[] {
     /тип|vid_|type/i,
     /сечение|sechenie/i,
     /количество|kolichestvo/i,
-    /длина|dlina|length/i,
     /материал|material/i,
     /цвет|color|tsvet/i,
   ];
-  
+
+  // Unit enrichment rules: caption pattern → prefix/suffix for bare numbers
+  const unitRules: Array<{ pattern: RegExp; format: (v: string) => string }> = [
+    { pattern: /мощность|watt|ватт/i, format: v => `${v}Вт` },
+    { pattern: /напряжение|voltage|вольт/i, format: v => `${v}В` },
+    { pattern: /защит|ip\b/i, format: v => `IP${v}` },
+    { pattern: /сечение/i, format: v => `${v}мм²` },
+  ];
+
   for (const opt of product.options) {
     const keyLower = opt.key.toLowerCase();
     const captionLower = opt.caption.toLowerCase();
-    
+
     const isImportant = importantPatterns.some(p => p.test(keyLower) || p.test(captionLower));
     if (!isImportant) continue;
-    
+
     const cleanValue = opt.value.split('//')[0].trim();
-    if (!cleanValue || cleanValue === '-' || cleanValue === '0') continue;
-    
-    // Compact format: "100 Вт" → "100Вт", "IP67" stays "IP67"
-    const compact = cleanValue.replace(/\s+/g, '');
-    mods.push(compact);
+    if (NOISE.has(cleanValue.toLowerCase())) continue;
+
+    let finalValue = cleanValue;
+
+    // If value is a bare number, enrich with unit from caption
+    if (/^\d+([.,]\d+)?$/.test(cleanValue)) {
+      const rule = unitRules.find(r => r.pattern.test(keyLower) || r.pattern.test(captionLower));
+      if (rule) {
+        finalValue = rule.format(cleanValue);
+      } else {
+        // Skip bare numbers without context (e.g. length "55")
+        continue;
+      }
+    } else {
+      // For "100 Вт" style — compact number+unit only, keep multi-word text as is
+      finalValue = cleanValue.replace(/^(\d+)\s+(Вт|В|мм|мм²|кг|м|А)$/i, '$1$2');
+    }
+
+    mods.push(finalValue);
+    if (mods.length >= 8) break;
   }
-  
+
   console.log(`[ReplacementMods] Product "${product.pagetitle.substring(0, 50)}" → modifiers: [${mods.join(', ')}]`);
   return mods;
 }
