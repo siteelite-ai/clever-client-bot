@@ -3605,27 +3605,37 @@ serve(async (req) => {
                   }
                   console.log(`[Chat] Replacement fallback buckets: ${JSON.stringify(replFbBuckets)}`);
 
-                  const replDomCat = Object.entries(replFbBuckets).sort((a, b) => b[1] - a[1])[0]?.[0];
-                  const replDomProducts = replDomCat
-                    ? replFbResults.filter(p => ((p as any).category?.pagetitle || p.parent_name) === replDomCat)
-                    : replFbResults;
+                  const replSortedBuckets = Object.entries(replFbBuckets).sort((a, b) => b[1] - a[1]);
+                  let replBestCat = '';
+                  let replBestResolved: Record<string, string> = {};
+                  let replBestUnresolved: string[] = [];
 
-                  const { resolved: replFbResolved, unresolved: replFbUnresolved } =
-                    await resolveFiltersWithLLM(replDomProducts, replModifiers, appSettings);
-                  console.log(`[Chat] Replacement fallback resolved: ${JSON.stringify(replFbResolved)}, unresolved: [${replFbUnresolved.join(', ')}]`);
+                  for (const [catName] of replSortedBuckets) {
+                    if (catName === 'unknown') continue;
+                    const bucketProducts = replFbResults.filter(p => ((p as any).category?.pagetitle || p.parent_name) === catName);
+                    if (bucketProducts.length < 2) continue;
+                    const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, replModifiers, appSettings);
+                    console.log(`[Chat] Replacement fallback bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(br)}`);
+                    if (Object.keys(br).length > Object.keys(replBestResolved).length) {
+                      replBestCat = catName;
+                      replBestResolved = br;
+                      replBestUnresolved = bu;
+                    }
+                    if (Object.keys(br).length >= replModifiers.length) break;
+                  }
 
-                  if (Object.keys(replFbResolved).length > 0) {
-                    const replFbQ = replFbUnresolved.length > 0 ? replFbUnresolved.join(' ') : null;
+                  if (Object.keys(replBestResolved).length > 0) {
+                    const replFbQ = replBestUnresolved.length > 0 ? replBestUnresolved.join(' ') : null;
                     let replFbFiltered = await searchProductsByCandidate(
-                      { query: replFbQ, brand: null, category: replDomCat, min_price: null, max_price: null },
-                      appSettings.volt220_api_token, 50, replFbResolved
+                      { query: replFbQ, brand: null, category: replBestCat, min_price: null, max_price: null },
+                      appSettings.volt220_api_token, 50, replBestResolved
                     );
                     const origId = originalProduct?.id;
                     if (origId) replFbFiltered = replFbFiltered.filter(p => p.id !== origId);
-                    console.log(`[Chat] Replacement fallback STAGE 2: category="${replDomCat}", ${replFbFiltered.length} products`);
+                    console.log(`[Chat] Replacement fallback STAGE 2: category="${replBestCat}", ${replFbFiltered.length} products`);
                     if (replFbFiltered.length > 0) {
                       replacementProducts = replFbFiltered.slice(0, maxReplacements);
-                      pluralRepl = replDomCat || pluralRepl;
+                      pluralRepl = replBestCat;
                     }
                   }
 
