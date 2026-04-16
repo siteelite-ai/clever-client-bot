@@ -2368,6 +2368,16 @@ async function searchProductsByCandidate(
   resolvedFilters?: Record<string, string>
 ): Promise<Product[]> {
   try {
+    // Validate params against injection
+    if (candidate.query && !isSafeApiParam(candidate.query)) {
+      console.log(`[Security] Unsafe query param blocked: ${candidate.query.substring(0, 50)}`);
+      return [];
+    }
+    if (candidate.category && !isSafeApiParam(candidate.category)) {
+      console.log(`[Security] Unsafe category param blocked: ${candidate.category.substring(0, 50)}`);
+      return [];
+    }
+    
     const params = new URLSearchParams();
     
     if ((candidate as any).article) {
