@@ -2849,6 +2849,25 @@ function sanitizeUserInput(input: string): string {
   if (!input || typeof input !== 'string') return '';
   
   let sanitized = input;
+  
+  // Decode URL-encoded characters for pattern detection
+  let decoded = sanitized;
+  try { decoded = decodeURIComponent(sanitized); } catch (_) { /* ignore */ }
+  
+  // Detect SQL injection patterns
+  const sqlPatterns = /('(\s|%20)*(OR|AND)(\s|%20)*'|1'='1|UNION\s+SELECT|DROP\s+TABLE|;\s*--|\/\*|\*\/|EXEC\s|xp_|%27.*(%4F%52|OR|AND))/i;
+  if (sqlPatterns.test(decoded) || sqlPatterns.test(sanitized)) {
+    console.log(`[Security] SQL injection pattern detected, input blocked`);
+    return '';
+  }
+  
+  // Detect shell injection patterns
+  const shellPatterns = /(\$\(|`[^`]+`|&&\s*rm|\|\s*rm|;\s*rm)/i;
+  if (shellPatterns.test(decoded) || shellPatterns.test(sanitized)) {
+    console.log(`[Security] Shell injection pattern detected, input blocked`);
+    return '';
+  }
+  
   sanitized = sanitized.replace(/<\/?[a-z][^>]*>/gi, '');
   sanitized = sanitized.replace(/\bon\w+\s*=/gi, '');
   sanitized = sanitized.replace(/javascript\s*:/gi, '');
@@ -2857,6 +2876,11 @@ function sanitizeUserInput(input: string): string {
   sanitized = sanitized.trim();
   
   return sanitized;
+}
+
+function isSafeApiParam(value: string): boolean {
+  // Allow only letters (any script), digits, spaces, hyphens, dots, commas
+  return /^[\p{L}\p{N}\s\-.,()]+$/u.test(value) && value.length <= 200;
 }
 
 interface GeoResult {
@@ -3330,7 +3354,8 @@ serve(async (req) => {
             let bestResolved: Record<string, string> = {};
             let bestUnresolved: string[] = [...modifiers];
             
-            for (const [catName, count] of sortedBuckets) {
+            const MAX_BUCKETS_TO_CHECK = 3;
+            for (const [catName, count] of sortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK)) {
               if (count < 2) continue;
               let bucketProducts = rawProducts.filter(p => 
                 ((p as any).category?.pagetitle || p.parent_name || 'unknown') === catName
@@ -3439,7 +3464,7 @@ serve(async (req) => {
               }
             } else {
               // No filters resolved — return category list
-              foundProducts = exactBucket.slice(0, 15);
+              foundProducts = rawProducts.slice(0, 15);
               articleShortCircuit = true;
               resultMode = 'no_filters';
             }
@@ -3686,7 +3711,7 @@ serve(async (req) => {
                 }
               } else {
                 // No modifiers resolved — return category products excluding original
-                let catProducts = replExactBucket;
+                let catProducts = replRawProducts;
                 const originalId = originalProduct?.id;
                 if (originalId) catProducts = catProducts.filter(p => p.id !== originalId);
                 foundProducts = catProducts.slice(0, 15);
