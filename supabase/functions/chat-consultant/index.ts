@@ -3594,7 +3594,7 @@ serve(async (req) => {
               let replBestResolved: Record<string, string> = {};
               let replBestUnresolved: string[] = [...replModifiers];
               
-              for (const [catName, count] of replSortedBuckets) {
+              for (const [catName, count] of replSortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK)) {
                 if (count < 2) continue;
                 let bucketProducts = replRawProducts.filter(p =>
                   ((p as any).category?.pagetitle || p.parent_name || 'unknown') === catName
