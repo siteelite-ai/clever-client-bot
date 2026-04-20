@@ -583,6 +583,35 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 
 КОНТЕКСТ ДИАЛОГА: Если текущее сообщение — САМОСТОЯТЕЛЬНЫЙ НОВЫЙ ЗАПРОС (содержит категорию товара или название), извлекай ВСЕ поля ТОЛЬКО из текущего сообщения. НЕ переноси category, modifiers, product_name из предыдущих сообщений. Используй историю ТОЛЬКО для коротких ответов-уточнений (1-3 слова: «давай», «телефонную», «да»). Разговорные слова (давай, ладно, хорошо, ну, а, тогда, покажи, найди) не являются частью товара — отбрасывай их.
 
+⚡ ПРИОРИТЕТ №1 — ОПРЕДЕЛЕНИЕ КОНКРЕТНОГО ТОВАРА (проверяй ПЕРВЫМ):
+Если пользователь называет товар так, что его можно найти прямым поиском по названию — это КОНКРЕТНЫЙ ТОВАР, а не категория.
+
+Признаки КОНКРЕТНОГО товара (любой из):
+- содержит БРЕНД/ПРОИЗВОДИТЕЛЯ (REXANT, ABB, Schneider, Legrand, IEK, EKF, TDM, Werkel и т.д.)
+- содержит МОДЕЛЬ или СЕРИЮ (S201, ЭПСН, ВВГнг, ПВС, Этюд, Atlas)
+- содержит АРТИКУЛ (формат типа 12-0292, A9F74116, EKF-001)
+- развёрнутое описание с типом + параметрами + брендом/серией одновременно
+
+Если это КОНКРЕТНЫЙ товар:
+  → has_product_name = true
+  → product_name = ПОЛНОЕ название как поисковый запрос (бренд + серия + ключевые параметры + артикул, без разговорных слов)
+  → product_category = базовый тип (для запасного пути)
+  → search_modifiers = [] (всё уже в product_name)
+
+Примеры КОНКРЕТНЫХ товаров (has_product_name=true):
+- "Паяльник-топор высокомощный, серия ЭПСН, 200Вт, 230В, REXANT, 12-0292" → product_name="Паяльник ЭПСН 200Вт REXANT 12-0292"
+- "Кабель ВВГнг 3х2.5" → product_name="Кабель ВВГнг 3х2.5"
+- "ABB S201 C16" → product_name="ABB S201 C16"
+- "автомат IEK ВА47-29 16А" → product_name="автомат IEK ВА47-29 16А"
+
+Примеры КАТЕГОРИЙ (has_product_name=false):
+- "автоматы на 16 ампер" → category="автомат", modifiers=["16А"]
+- "розетки с заземлением" → category="розетка", modifiers=["с заземлением"]
+- "подбери светильники для ванной" → category="светильник", modifiers=["для ванной"]
+- "розетки из коллекции Гармония" → category="розетка", modifiers=["Гармония"] (серия без бренда+модели = категория)
+
+Ключевое отличие: БРЕНД+ТИП или ТИП+СЕРИЯ+ПАРАМЕТРЫ+АРТИКУЛ → конкретный товар. Тип+характеристики без бренда/модели → категория.
+
 Извлеки из сообщения следующие поля:
 
 0. intent ("catalog"|"brands"|"info"|"general"): Определи НАМЕРЕНИЕ пользователя:
@@ -591,7 +620,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 - "info" — вопросы о компании, доставке, оплате, оферте, контактах, прайс-листе, гарантии, возврате, графике работы, адресах
 - "general" — приветствия, благодарности, шутки, вопросы не связанные с магазином
 
-1. has_product_name (boolean): TRUE только если сообщение содержит КОНКРЕТНОЕ идентифицируемое название товара — модель, марку с типом, или тип с техническими характеристиками (сечение, ток, цоколь и т.д.). Одно общее слово-категория без уточнений — FALSE. Указание серии, коллекции, линейки товаров — НЕ конкретное название. "розетки из коллекции Гармония" → has_product_name=false, category="розетка", modifiers=["Гармония"].
+1. has_product_name (boolean): см. ПРИОРИТЕТ №1 выше.
 
 2. product_name (string|null): Если has_product_name=true — полное название товара без разговорных оборотов. Иначе null.
 
@@ -611,7 +640,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       { role: 'user', content: message }
     ],
     temperature: 0,
-    max_tokens: 150,
+    max_tokens: 300,
   };
 
   // Build cascade of providers to try
@@ -667,7 +696,46 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       if (!content) { console.log(`[Classify] ${attempt.label} empty response, trying next...`); continue; }
 
       const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-      const parsed = JSON.parse(jsonStr);
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(jsonStr);
+      } catch (parseErr) {
+        // Recovery: try to repair truncated JSON (closing braces/quotes)
+        console.warn(`[Classify] ${attempt.label} JSON parse failed, attempting recovery...`);
+        let repaired = jsonStr;
+        // If last char inside an unterminated string, close it
+        const quotes = (repaired.match(/"/g) || []).length;
+        if (quotes % 2 !== 0) repaired += '"';
+        // Close arrays/objects
+        const openBraces = (repaired.match(/\{/g) || []).length - (repaired.match(/\}/g) || []).length;
+        const openBrackets = (repaired.match(/\[/g) || []).length - (repaired.match(/\]/g) || []).length;
+        for (let i = 0; i < openBrackets; i++) repaired += ']';
+        for (let i = 0; i < openBraces; i++) repaired += '}';
+        // Strip trailing commas before closing
+        repaired = repaired.replace(/,(\s*[}\]])/g, '$1');
+        try {
+          parsed = JSON.parse(repaired);
+          console.log(`[Classify] ${attempt.label} JSON recovered successfully`);
+        } catch {
+          // Last resort: regex-extract critical fields
+          const intentMatch = jsonStr.match(/"intent"\s*:\s*"(\w+)"/);
+          const hasNameMatch = jsonStr.match(/"has_product_name"\s*:\s*(true|false)/);
+          const productNameMatch = jsonStr.match(/"product_name"\s*:\s*"([^"]*)"/);
+          const categoryMatch = jsonStr.match(/"product_category"\s*:\s*"([^"]*)"/);
+          if (intentMatch || hasNameMatch) {
+            console.log(`[Classify] ${attempt.label} regex-extracted partial result`);
+            parsed = {
+              intent: intentMatch?.[1],
+              has_product_name: hasNameMatch?.[1] === 'true',
+              product_name: productNameMatch?.[1],
+              product_category: categoryMatch?.[1],
+              search_modifiers: [],
+            };
+          } else {
+            throw parseErr;
+          }
+        }
+      }
       const validIntents = ['catalog', 'brands', 'info', 'general'];
       const rawIntent = typeof parsed.intent === 'string' ? parsed.intent.toLowerCase().trim() : null;
       const intent = validIntents.includes(rawIntent!) ? rawIntent : undefined;
