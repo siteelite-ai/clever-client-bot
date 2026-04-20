@@ -3684,6 +3684,9 @@ serve(async (req) => {
               let replBestCat = '';
               let replBestResolved: Record<string, string> = {};
               let replBestUnresolved: string[] = [...replModifiers];
+              // Accumulator for resolved replacements; bucket-matching only resolves filters,
+              // STAGE 2 below populates this array with actual analog products.
+              let replacementProducts: Product[] = [];
               
               for (const [catName, count] of replSortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK)) {
                 if (count < 2) continue;
@@ -3724,14 +3727,17 @@ serve(async (req) => {
               const replUnresolvedMods = replBestUnresolved;
 
               if (replacementProducts.length === 0 && (Object.keys(replResolvedFilters).length > 0 || replUnresolvedMods.length > 0)) {
-                // STAGE 2: Hybrid API call with resolved filters
+                // STAGE 2: resolveFiltersWithLLM already mapped human modifiers → options[key]=value above
+                console.log(`[Chat] Replacement STAGE 2: resolved options=${JSON.stringify(replResolvedFilters)}, unresolved=[${replUnresolvedMods.join(', ')}]`);
+                // STAGE 3: Hybrid API call — server-side filter by characteristics, not by name tokens
                 const replQueryText = replUnresolvedMods.length > 0 ? replUnresolvedMods.join(' ') : null;
+                console.log(`[Chat] Replacement STAGE 3: API call category="${pluralRepl}", options=${JSON.stringify(replResolvedFilters)}, query="${replQueryText}"`);
                 let replFiltered = await searchProductsByCandidate(
                   { query: replQueryText, brand: null, category: pluralRepl, min_price: null, max_price: null },
                   appSettings.volt220_api_token, 50,
                   Object.keys(replResolvedFilters).length > 0 ? replResolvedFilters : undefined
                 );
-                console.log(`[Chat] Replacement STAGE 2: ${replFiltered.length} products`);
+                console.log(`[Chat] Replacement STAGE 3 result: ${replFiltered.length} products`);
                 
                 // Cascading fallback: drop filters one by one if 0 results
                 if (replFiltered.length === 0) {
