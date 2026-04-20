@@ -1,84 +1,118 @@
 
 
-# Архитектурный аудит: Почему replacement не нашёл замены
+# План: Переключить replacement на characteristics-first вместо product-first
 
-## Корневая причина
+## Корневая проблема
 
-**`ReferenceError: MAX_BUCKETS_TO_CHECK is not defined`** в replacement-блоке (строка 3665).
+Когда пользователь пишет "светильник ДКУ-LED-03-100W (ЭТФ) **предложи самую близкую замену по характеристикам**", интент очевиден: **не показывать сам товар, а найти аналоги по характеристикам**.
 
-Константа объявлена `const MAX_BUCKETS_TO_CHECK = 3` **внутри** блока category-first (строка 3435), внутри `if (rawProducts.length > 0 && modifiers.length > 0)`. JS/TS `const` имеет block-scope — она **невидима** в replacement-блоке (строка 3582+), который является отдельным top-level `if`.
+Сейчас pipeline идёт неправильно:
+1. Micro-LLM видит "ДКУ-LED-03-100W" → `has_product_name=true` → title-first
+2. Title-first находит **сам оригинал** и делает short-circuit
+3. Replacement-блок запускается, но падает (`replacementProducts is not defined`)
+4. Try/catch отдаёт пользователю **только оригинал** с фразой "не могу подобрать аналог"
 
-### Что произошло в тесте "ДКУ-LED-03-100W ... предложи замену"
+Это **архитектурно неправильно**. При интенте "замена" мы НЕ должны искать сам товар title-first — мы должны:
+- Извлечь **характеристики** оригинала
+- Сделать **широкий запрос по категории** с этими характеристиками как фильтрами
+- Вернуть аналоги (а оригинал — опционально, как "вот ваш товар")
 
-```text
-1. Name-first ✅ нашёл товар "Светильник ДКУ-LED-03-100W" за 2.8с
-2. Replacement-блок запустился:
-   - originalProduct = найденный товар ✅
-   - replCategory = "Светильники" ✅
-   - replModifiers = [серый, холодный белый, 100, 220, 67, ...] ✅
-   - 2 параллельных API → 85 уникальных товаров ✅
-   - replCatDist = {"Светильники": 85} ✅
-3. ❌ replSortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK) → ReferenceError
-4. Try/catch верхнего уровня поймал → залогировал как "Micro-LLM classify error" (вводит в заблуждение)
-5. Replacement цепочка ОБОРВАНА — STAGE 2 не запустился
-6. AI получил только 1 товар (оригинал), без замен
+## Что меняем
+
+### Файл 1: `supabase/functions/chat-consultant/index.ts`
+
+#### Фикс A (критичный): Объявить недостающие переменные
+
+1. `let resultMode: string = 'init';` в начале category-first блока (~строка 3493)
+2. `let replacementProducts: Product[] = [];` в начале replacement-блока (~строка 3666)
+
+Без этого ничего не заработает — функция продолжит падать.
+
+#### Фикс B (архитектурный): Переписать промпт Micro-LLM — добавить детекцию интента "замена/аналог"
+
+Добавить в classifier ПРИОРИТЕТ №0 (выше чем name-first):
+
+```
+ПРИОРИТЕТ №0 — ДЕТЕКЦИЯ ИНТЕНТА "ЗАМЕНА/АНАЛОГ":
+Если в запросе есть слова "замена", "аналог", "альтернатива", "похожий", "вместо", 
+"что-то подобное", "близкое по характеристикам":
+  → is_replacement = true
+  → has_product_name = true (нужен для извлечения характеристик оригинала)
+  → product_name = название оригинала
+  → category = категория оригинала (если можно определить)
+  
+При is_replacement=true система должна:
+1. Найти оригинал по названию (только для извлечения характеристик)
+2. НЕ показывать оригинал как основной результат
+3. Сделать широкий запрос по category + характеристики как options[key]=value
+4. Вернуть АНАЛОГИ из каталога
 ```
 
-**Ложное сообщение "Micro-LLM classify error"** — это catch-all на уровне всего AI-pipeline ловит любую ошибку и приписывает её classifier'у. Реальный classifier отработал успешно (видно в логах: `Classify SUCCESS via primary(openrouter)`).
+#### Фикс C (логика): Изменить поведение title-first при `is_replacement=true`
 
-## Почему "Article-first / Category-first / Name-first работают параллельно" — это миф
+В блоке title-first (там, где сейчас `Short-circuit formatted products`) добавить условие:
 
-В текущей архитектуре они работают **последовательно** через if-else if цепочку:
-
-```text
-1. Article detection (regex) → если найден артикул → article search
-2. Если не найден → Micro-LLM classify
-3. has_product_name → title-first (name-first)
-4. else effectiveCategory → category-first
-5. is_replacement → отдельный replacement-блок (после, не вместо)
+```typescript
+if (classify.is_replacement === true) {
+  // НЕ делать short-circuit
+  // Сохранить originalProduct для извлечения характеристик
+  // Передать управление в replacement-pipeline
+  originalProduct = found[0];
+  // НЕ возвращаем сразу, идём дальше в replacement-блок
+} else {
+  // обычный short-circuit как сейчас
+}
 ```
 
-В тесте сработали последовательно: article-first (0 results) → site-id fallback (0) → classify → title-first (1 result, short-circuit) → **replacement-блок поверх найденного товара**. Это правильное поведение, но replacement упал.
+#### Фикс D (логика): Replacement-блок должен использовать 3-этапную схему
 
-## План фиксов (минимальный)
+Текущий replacement-блок уже делает что-то похожее (bucket-matching + resolveFiltersWithLLM), но:
+1. Падает из-за необъявленных переменных
+2. Не отдаёт аналоги пользователю — застревает на STAGE 1
 
-### Фикс №1 (критичный): Поднять `MAX_BUCKETS_TO_CHECK` в module scope
+Нужно гарантировать, что после bucket-matching:
+1. **STAGE 1**: получили `category` оригинала + список `unresolved` характеристик
+2. **STAGE 2**: `resolveFiltersWithLLM` мапит характеристики на реальные `options[key]=value` фильтры из схемы каталога
+3. **STAGE 3**: API-запрос с `category` + всеми резолвленными фильтрами → 5-15 аналогов
+4. Возврат пользователю: **аналоги как основной результат**, оригинал — опционально внизу
 
-Перенести `const MAX_BUCKETS_TO_CHECK = 3;` из строки 3435 (внутри category-first блока) **в начало файла** (рядом с другими константами) или объявить на уровне функции `serve`/handler. Тогда обе ветки (category-first и replacement) увидят её.
+Добавить явный лог `[Chat] Replacement STAGE N` для каждой стадии — чтобы было видно, где обрывается.
 
-### Фикс №2 (диагностика): Уточнить логирование catch-блока
+#### Фикс E: Защитный fallback в replacement
 
-Сейчас catch на верхнем уровне приписывает любую ошибку Micro-LLM. Нужно изменить сообщение на что-то типа `[Chat] Pipeline error (fallback to LLM 1): ${err}` чтобы не путать диагностику в будущем.
+Если STAGE 2 не смог зарезолвить ни одного фильтра — делать запрос только по category (без options) и брать топ-15. Это лучше, чем "извините, не могу подобрать".
 
-### Фикс №3 (защита): Try/catch вокруг replacement-блока
-
-Обернуть replacement-блок (3582-конец) в свой try/catch с логом `[Chat] Replacement pipeline error: ...`. Если replacement упадёт — оригинальный товар всё равно отдастся пользователю с пометкой "не удалось найти замены автоматически".
+### Деплой
+Edge function `chat-consultant`.
 
 ## Что НЕ трогаем
 
-- Логику category-first / name-first / article-first — она работает корректно
-- Bucket-matching алгоритм — он правильный, просто не выполнился из-за ReferenceError
-- Промпт classifier — name-first отработал идеально (`has_product_name=true`, `name="ДКУ-LED-03-100W (ЭТФ)"`)
-- Title-first short-circuit — работает за 2.8с
+- Pipeline для обычных запросов (без `is_replacement`) — name-first/category-first работают как сейчас
+- Bucket-matching алгоритм — корректен, нужно только дать ему работать
+- `resolveFiltersWithLLM` — функция правильная
+- Промпт основной модели (Gemini 2.5 Pro) — не меняем
 
 ## Риски
 
 | Компонент | Риск |
 |-----------|------|
-| Category-first | Нулевой — переменная просто перемещается выше |
-| Name-first | Нулевой — не использует MAX_BUCKETS |
-| Replacement | Улучшается — перестанет падать |
-| Slot-based | Нулевой |
-| Latency | Нулевой |
+| Обычные запросы | Нулевой — поведение меняется только при `is_replacement=true` |
+| Replacement | Положительный — впервые заработает корректно |
+| Latency | +2-3с на STAGE 2 (resolveFiltersWithLLM) — приемлемо для интента "подбор аналога" |
+| Ложное срабатывание `is_replacement` | Низкий — триггерится только на явные слова "замена/аналог/похожий" |
 
-## Ожидаемый результат после фикса
+## Ожидаемый результат
 
-Запрос "ДКУ-LED-03-100W ... предложи замену":
-1. Title-first находит оригинал ✅
-2. Replacement: 85 товаров → 1 бакет "Светильники" → resolveFiltersWithLLM по [серый, холодный белый, 100Вт, 220В, IP67]
-3. STAGE 2: API с category="Светильники" + резолвленные фильтры → 5-15 похожих светильников
-4. AI получает оригинал + замены → корректный ответ "вот такие близкие аналоги"
+**Запрос**: "светильник ДКУ-LED-03-100W (ЭТФ) предложи самую близкую замену по характеристикам"
+
+**Поведение**:
+1. Classifier: `is_replacement=true, has_product_name=true, product_name="ДКУ-LED-03-100W (ЭТФ)"`
+2. Title-first находит оригинал → НЕ short-circuit, сохраняет как `originalProduct`
+3. STAGE 1: извлекает характеристики (серый, 100Вт, IP67, холодный белый, 220В)
+4. STAGE 2: `resolveFiltersWithLLM` → `options[moshchnost]=100`, `options[ip]=67`, `options[temperatura_sveta]=холодный`, ...
+5. STAGE 3: API `category="Светильники"` + резолвленные options → 10 уличных LED-светильников 100Вт IP67
+6. Ответ: **"Вот близкие аналоги: [10 товаров]. Оригинал ДКУ-LED-03-100W: [ссылка]"**
 
 ## Объём
-~5 строк: переместить константу + улучшить лог + try/catch обёртка + деплой.
+~30 строк: 2 декларации + промпт-блок ПРИОРИТЕТ №0 + условие в title-first + логи STAGE + fallback + деплой.
 
