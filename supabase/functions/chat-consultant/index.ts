@@ -696,7 +696,46 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       if (!content) { console.log(`[Classify] ${attempt.label} empty response, trying next...`); continue; }
 
       const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-      const parsed = JSON.parse(jsonStr);
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(jsonStr);
+      } catch (parseErr) {
+        // Recovery: try to repair truncated JSON (closing braces/quotes)
+        console.warn(`[Classify] ${attempt.label} JSON parse failed, attempting recovery...`);
+        let repaired = jsonStr;
+        // If last char inside an unterminated string, close it
+        const quotes = (repaired.match(/"/g) || []).length;
+        if (quotes % 2 !== 0) repaired += '"';
+        // Close arrays/objects
+        const openBraces = (repaired.match(/\{/g) || []).length - (repaired.match(/\}/g) || []).length;
+        const openBrackets = (repaired.match(/\[/g) || []).length - (repaired.match(/\]/g) || []).length;
+        for (let i = 0; i < openBrackets; i++) repaired += ']';
+        for (let i = 0; i < openBraces; i++) repaired += '}';
+        // Strip trailing commas before closing
+        repaired = repaired.replace(/,(\s*[}\]])/g, '$1');
+        try {
+          parsed = JSON.parse(repaired);
+          console.log(`[Classify] ${attempt.label} JSON recovered successfully`);
+        } catch {
+          // Last resort: regex-extract critical fields
+          const intentMatch = jsonStr.match(/"intent"\s*:\s*"(\w+)"/);
+          const hasNameMatch = jsonStr.match(/"has_product_name"\s*:\s*(true|false)/);
+          const productNameMatch = jsonStr.match(/"product_name"\s*:\s*"([^"]*)"/);
+          const categoryMatch = jsonStr.match(/"product_category"\s*:\s*"([^"]*)"/);
+          if (intentMatch || hasNameMatch) {
+            console.log(`[Classify] ${attempt.label} regex-extracted partial result`);
+            parsed = {
+              intent: intentMatch?.[1],
+              has_product_name: hasNameMatch?.[1] === 'true',
+              product_name: productNameMatch?.[1],
+              product_category: categoryMatch?.[1],
+              search_modifiers: [],
+            };
+          } else {
+            throw parseErr;
+          }
+        }
+      }
       const validIntents = ['catalog', 'brands', 'info', 'general'];
       const rawIntent = typeof parsed.intent === 'string' ? parsed.intent.toLowerCase().trim() : null;
       const intent = validIntents.includes(rawIntent!) ? rawIntent : undefined;
