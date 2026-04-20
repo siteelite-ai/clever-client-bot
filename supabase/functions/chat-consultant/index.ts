@@ -10,7 +10,37 @@ const corsHeaders = {
 const VOLT220_API_URL = 'https://220volt.kz/api/products';
 
 // Module-scope constants (visible to all branches: category-first, replacement, etc.)
-const MAX_BUCKETS_TO_CHECK = 3;
+const MAX_BUCKETS_TO_CHECK = 5;
+
+// Prioritize buckets whose name matches classifier.category root.
+// Returns sorted entries: [name, count] with priority-aware ordering.
+function prioritizeBuckets(
+  dist: Record<string, number>,
+  catKeyword: string
+): Array<[string, number]> {
+  const kw = (catKeyword || '').toLowerCase().trim();
+  // Strip common Russian inflection endings (4+ char root)
+  const root = kw.replace(/(ыми|ями|ами|ого|ему|ому|ой|ей|ую|юю|ие|ые|ие|ах|ям|ов|ев|ам|ы|и|а|у|е|о|я)$/, '');
+  const useRoot = root.length >= 4 ? root : kw;
+
+  return Object.entries(dist)
+    .filter(([name]) => name !== 'unknown')
+    .map(([name, count]) => {
+      const lower = name.toLowerCase();
+      let priority = 0;
+      if (kw && lower.includes(kw)) priority = 2;
+      else if (useRoot && lower.includes(useRoot)) priority = 2;
+      else if (kw) {
+        const firstWord = lower.split(/\s+/)[0];
+        if (firstWord && firstWord.length >= 4 && kw.includes(firstWord.slice(0, Math.min(5, firstWord.length)))) {
+          priority = 1;
+        }
+      }
+      return { name, count, priority };
+    })
+    .sort((a, b) => b.priority - a.priority || b.count - a.count)
+    .map((b) => [b.name, b.count] as [string, number]);
+}
 
 // Cached settings from DB
 interface CachedSettings {
@@ -3446,10 +3476,10 @@ serve(async (req) => {
             }
             console.log(`[Chat] Category-buckets: ${JSON.stringify(categoryDistribution)}`);
 
-            // Try each bucket with resolveFiltersWithLLM, pick the one that resolves the most modifiers
-            const sortedBuckets = Object.entries(categoryDistribution)
-              .filter(([name]) => name !== 'unknown')
-              .sort((a, b) => b[1] - a[1]);
+            // Try each bucket with resolveFiltersWithLLM, pick the one that resolves the most modifiers.
+            // Prioritize buckets whose name matches classifier.category (root match) before sorting by size.
+            const sortedBuckets = prioritizeBuckets(categoryDistribution, effectiveCategory);
+            console.log(`[Chat] Sorted buckets (category-first, kw="${effectiveCategory}"): ${JSON.stringify(sortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK))}`);
             
             let bestBucketCat = '';
             let bestResolved: Record<string, string> = {};
@@ -3676,10 +3706,10 @@ serve(async (req) => {
               }
               console.log(`[Chat] Replacement buckets: ${JSON.stringify(replCatDist)}`);
               
-              // Try each bucket, pick best by resolved count
-              const replSortedBuckets = Object.entries(replCatDist)
-                .filter(([name]) => name !== 'unknown')
-                .sort((a, b) => b[1] - a[1]);
+              // Try each bucket, pick best by resolved count.
+              // Prioritize buckets matching classifier.category root.
+              const replSortedBuckets = prioritizeBuckets(replCatDist, replCategory);
+              console.log(`[Chat] Sorted buckets (replacement, kw="${replCategory}"): ${JSON.stringify(replSortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK))}`);
               
               let replBestCat = '';
               let replBestResolved: Record<string, string> = {};
