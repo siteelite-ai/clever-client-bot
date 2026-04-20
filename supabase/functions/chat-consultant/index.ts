@@ -586,7 +586,20 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 
 КОНТЕКСТ ДИАЛОГА: Если текущее сообщение — САМОСТОЯТЕЛЬНЫЙ НОВЫЙ ЗАПРОС (содержит категорию товара или название), извлекай ВСЕ поля ТОЛЬКО из текущего сообщения. НЕ переноси category, modifiers, product_name из предыдущих сообщений. Используй историю ТОЛЬКО для коротких ответов-уточнений (1-3 слова: «давай», «телефонную», «да»). Разговорные слова (давай, ладно, хорошо, ну, а, тогда, покажи, найди) не являются частью товара — отбрасывай их.
 
-⚡ ПРИОРИТЕТ №1 — ОПРЕДЕЛЕНИЕ КОНКРЕТНОГО ТОВАРА (проверяй ПЕРВЫМ):
+⚡ ПРИОРИТЕТ №0 — ДЕТЕКЦИЯ ИНТЕНТА "ЗАМЕНА/АНАЛОГ" (проверяй ДО всего остального):
+Если в запросе есть слова: "замена", "заменить", "аналог", "альтернатива", "похожий", "похожее", "вместо", "что-то подобное", "близкое по характеристикам", "подбери замену", "подбери аналог", "что взять вместо":
+  → is_replacement = true
+  → если в запросе есть конкретный товар (бренд+модель / артикул / серия+параметры) — has_product_name=true и product_name=название (нужно для извлечения характеристик оригинала)
+  → product_category = категория оригинала (например "светильник", "автомат", "розетка")
+  → search_modifiers = характеристики оригинала из запроса (мощность, цвет, IP, и т.д.) если они явно указаны
+ВАЖНО: при is_replacement=true система найдёт оригинал ТОЛЬКО для извлечения характеристик и вернёт пользователю АНАЛОГИ, а не сам оригинал.
+
+Примеры (is_replacement=true):
+- "светильник ДКУ-LED-03-100W (ЭТФ) предложи самую близкую замену по характеристикам" → is_replacement=true, has_product_name=true, product_name="ДКУ-LED-03-100W ЭТФ", product_category="светильник"
+- "что взять вместо ABB S201 C16?" → is_replacement=true, has_product_name=true, product_name="ABB S201 C16", product_category="автомат"
+- "подбери аналог розетке Werkel Atlas серого цвета" → is_replacement=true, has_product_name=true, product_name="Werkel Atlas розетка", product_category="розетка", search_modifiers=["серый"]
+
+⚡ ПРИОРИТЕТ №1 — ОПРЕДЕЛЕНИЕ КОНКРЕТНОГО ТОВАРА (проверяй ПЕРВЫМ если ПРИОРИТЕТ №0 не сработал):
 Если пользователь называет товар так, что его можно найти прямым поиском по названию — это КОНКРЕТНЫЙ ТОВАР, а не категория.
 
 Признаки КОНКРЕТНОГО товара (любой из):
@@ -3361,8 +3374,10 @@ serve(async (req) => {
           console.log(`[Chat] Price intent detected but no category, skipping`);
         }
         
-        // === TITLE-FIRST (only if price intent didn't handle it) ===
-        if (!articleShortCircuit && classification?.has_product_name && classification.product_name) {
+        // === TITLE-FIRST (only if price intent didn't handle it AND not a replacement intent) ===
+        // For is_replacement=true: skip title-first short-circuit so the replacement-block can do
+        // characteristics-first search and return ANALOGS (not the original product) to the user.
+        if (!articleShortCircuit && classification?.has_product_name && classification.product_name && !classification?.is_replacement) {
           const searchStart = Date.now();
           const directResults = await searchProductsByCandidate(
             { query: classification.product_name, brand: null, category: null, min_price: null, max_price: null },
@@ -3379,6 +3394,8 @@ serve(async (req) => {
           } else {
             console.log(`[Chat] Title-first: 0 results for "${classification.product_name}", proceeding to LLM 1`);
           }
+        } else if (classification?.is_replacement && classification?.has_product_name && classification?.product_name) {
+          console.log(`[Chat] Title-first SKIPPED: is_replacement=true, deferring to replacement-pipeline (characteristics-first)`);
         }
         
         // === CATEGORY-FIRST (category without specific product name) ===
@@ -3415,6 +3432,9 @@ serve(async (req) => {
           }
           console.log(`[Chat] Category-first: merged ${rawProducts.length} unique products`);
           
+          // Track which decision branch produced final results (used in DECISION log below)
+          let resultMode: string = 'init';
+
           if (rawProducts.length > 0 && modifiers.length > 0) {
             // Bucketize by category
             console.log(`[Chat] Category-first STAGE 1: ${rawProducts.length} products for schema extraction`);
