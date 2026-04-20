@@ -9,6 +9,9 @@ const corsHeaders = {
 
 const VOLT220_API_URL = 'https://220volt.kz/api/products';
 
+// Module-scope constants (visible to all branches: category-first, replacement, etc.)
+const MAX_BUCKETS_TO_CHECK = 3;
+
 // Cached settings from DB
 interface CachedSettings {
   volt220_api_token: string | null;
@@ -3432,7 +3435,6 @@ serve(async (req) => {
             let bestResolved: Record<string, string> = {};
             let bestUnresolved: string[] = [...modifiers];
             
-            const MAX_BUCKETS_TO_CHECK = 3;
             for (const [catName, count] of sortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK)) {
               if (count < 2) continue;
               let bucketProducts = rawProducts.filter(p => 
@@ -3580,6 +3582,7 @@ serve(async (req) => {
         
         // === REPLACEMENT/ALTERNATIVE INTENT (category-first pipeline) ===
         if (classification?.is_replacement && appSettings.volt220_api_token) {
+         try {
           console.log(`[Chat] Replacement intent detected!`);
           const replacementStart = Date.now();
           
@@ -3814,9 +3817,13 @@ serve(async (req) => {
             replacementMeta = { isReplacement: true, original: null, originalName: classification.product_name, noResults: true };
             console.log(`[Chat] Replacement: no category determined`);
           }
+         } catch (replErr) {
+           console.log(`[Chat] Replacement pipeline error (original product still returned):`, replErr);
+           // replacementMeta may already be set; if not, leave as null so normal flow continues
+         }
         }
       } catch (e) {
-        console.log(`[Chat] Micro-LLM classify error (fallback to LLM 1):`, e);
+        console.log(`[Chat] Pipeline error (post-classify branch, fallback to LLM 1):`, e);
       }
     }
 
