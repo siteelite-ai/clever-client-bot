@@ -640,7 +640,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       { role: 'user', content: message }
     ],
     temperature: 0,
-    max_tokens: 150,
+    max_tokens: 300,
   };
 
   // Build cascade of providers to try
