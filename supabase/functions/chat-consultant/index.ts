@@ -120,51 +120,25 @@ async function getAppSettings(): Promise<CachedSettings> {
   }
 }
 
-// Determine AI endpoint and keys based on settings
-// For Google AI Studio, supports multiple comma-separated keys for automatic fallback
+// AI endpoint — STRICT OpenRouter only.
+// Core rule: "Exclusively use OpenRouter (Gemini models). No direct Google keys."
+// All other provider branches removed to eliminate non-determinism from cascade fallbacks.
 function getAIConfig(settings: CachedSettings): { url: string; apiKeys: string[]; model: string } {
-  if (settings.ai_provider === 'google') {
-    if (!settings.google_api_key) {
-      throw new Error('Google AI Studio API key не настроен. Добавьте ключ в Настройках.');
-    }
-    // Parse comma/newline-separated keys, trim whitespace, filter empty
-    const keys = settings.google_api_key
-      .split(/[,\n]/)
-      .map(k => k.trim())
-      .filter(k => k.length > 0);
-    if (keys.length === 0) {
-      throw new Error('Google AI Studio API key не настроен. Добавьте ключ в Настройках.');
-    }
-    console.log(`[AIConfig] Google AI Studio: ${keys.length} key(s) configured`);
-    return {
-      url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-      apiKeys: keys,
-      model: settings.ai_model || 'gemini-2.0-flash',
-    };
-  }
-
-  if (settings.ai_provider === 'huggingface') {
-    const hfKey = Deno.env.get('HUGGINGFACE_API_KEY');
-    if (!hfKey) {
-      throw new Error('HuggingFace API токен не настроен. Добавьте HUGGINGFACE_API_KEY в секреты Supabase.');
-    }
-    console.log('[AIConfig] HuggingFace Inference API');
-    return {
-      url: 'https://router.huggingface.co/v1/chat/completions',
-      apiKeys: [hfKey],
-      model: settings.ai_model || 'Qwen/Qwen2.5-72B-Instruct',
-    };
-  }
-
-  // Default: OpenRouter (single key)
   if (!settings.openrouter_api_key) {
     throw new Error('OpenRouter API key не настроен. Добавьте ключ в Настройках.');
   }
 
+  // Ensure model is in OpenRouter format (must contain "/", e.g. "google/gemini-2.5-pro")
+  let model = settings.ai_model || 'google/gemini-2.5-pro';
+  if (!model.includes('/')) {
+    model = `google/${model}`;
+  }
+
+  console.log(`[AIConfig] OpenRouter (strict), model=${model}`);
   return {
     url: 'https://openrouter.ai/api/v1/chat/completions',
     apiKeys: [settings.openrouter_api_key],
-    model: settings.ai_model,
+    model,
   };
 }
 
