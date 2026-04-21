@@ -567,6 +567,7 @@ interface ClassificationResult {
   product_category?: string;
   is_replacement?: boolean;
   search_modifiers?: string[];
+  critical_modifiers?: string[];
 }
 
 async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>, settings?: CachedSettings | null): Promise<ClassificationResult | null> {
@@ -678,9 +679,18 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 
 6. search_modifiers (string[]): ВСЕ уточняющие характеристики из запроса, не вошедшие в category: количество мест/постов, тип монтажа (накладной, скрытый), цвет, бренд, серия/коллекция, степень защиты IP, материал, размер, количественные параметры (длина, сечение, ток). Если таких нет — пустой массив.
 
-КЛЮЧЕВОЙ ПРИНЦИП: category = базовый тип товара для широкого текстового поиска. Все конкретные характеристики (конструкция, подтип, внешние атрибуты) → modifiers. Система фильтрации сама сопоставит модификаторы с реальными характеристиками товаров.
+7. critical_modifiers (string[]): ПОДМНОЖЕСТВО search_modifiers, которые пользователь требует КАТЕГОРИЧНО (без них товар не подходит). Определяй по тону запроса:
+- Если пользователь просто перечислил характеристики ("чёрная двухместная розетка", "розетка с заземлением") — ВСЕ модификаторы критичные.
+- Если пользователь использует смягчающие слова ("примерно", "около", "желательно", "можно", "лучше", "хотелось бы") — соответствующие модификаторы НЕ критичные.
+- Если запрос вообще без модификаторов — пустой массив.
+Примеры:
+- "чёрная двухместная розетка" → search_modifiers=["чёрная","двухместная"], critical_modifiers=["чёрная","двухместная"]
+- "лампочка примерно 9 ватт E27" → search_modifiers=["9 ватт","E27"], critical_modifiers=["E27"] (мощность смягчена "примерно")
+- "розетка legrand белая, желательно с заземлением" → search_modifiers=["legrand","белая","с заземлением"], critical_modifiers=["legrand","белая"] (заземление смягчено "желательно")
 
-Ответь СТРОГО в JSON: {"intent": "catalog"|"brands"|"info"|"general", "has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "...", "is_replacement": bool, "search_modifiers": ["...", "..."]}`
+КЛЮЧЕВОЙ ПРИНЦИП: category = базовый тип товара для широкого текстового поиска. Все конкретные характеристики (конструкция, подтип, внешние атрибуты) → modifiers. Система фильтрации сама сопоставит модификаторы с реальными характеристиками товаров. critical_modifiers говорит системе, какие фильтры НЕЛЬЗЯ ослаблять при fallback.
+
+Ответь СТРОГО в JSON: {"intent": "catalog"|"brands"|"info"|"general", "has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "...", "is_replacement": bool, "search_modifiers": ["...", "..."], "critical_modifiers": ["...", "..."]}`
       },
       ...(recentHistory || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
       { role: 'user', content: message }
@@ -788,6 +798,11 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       // Safety: if micro-LLM says info/general but product_category is filled, override to catalog
       const finalIntent = ((intent === 'info' || intent === 'general') && parsed.product_category) ? 'catalog' : intent;
       console.log(`[Classify] SUCCESS via ${attempt.label}, intent=${finalIntent}`);
+      const rawSearchMods = Array.isArray(parsed.search_modifiers) ? parsed.search_modifiers.filter((m: unknown) => typeof m === 'string' && m.trim().length > 0) : [];
+      // Default: if critical_modifiers missing/empty but search_modifiers present, treat ALL as critical (safe behavior)
+      let rawCritical = Array.isArray(parsed.critical_modifiers) ? parsed.critical_modifiers.filter((m: unknown) => typeof m === 'string' && m.trim().length > 0) : [];
+      if (rawCritical.length === 0 && rawSearchMods.length > 0) rawCritical = [...rawSearchMods];
+      console.log(`[Chat] Classifier critical_modifiers: [${rawCritical.join(', ')}] (of search_modifiers: [${rawSearchMods.join(', ')}])`);
       return {
         intent: finalIntent as string | undefined,
         has_product_name: !!parsed.has_product_name,
@@ -795,7 +810,8 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
         price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
         product_category: parsed.product_category || undefined,
         is_replacement: !!parsed.is_replacement,
-        search_modifiers: Array.isArray(parsed.search_modifiers) ? parsed.search_modifiers.filter((m: unknown) => typeof m === 'string' && m.trim().length > 0) : [],
+        search_modifiers: rawSearchMods,
+        critical_modifiers: rawCritical,
       };
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
