@@ -1936,8 +1936,16 @@ ${recentHistory.length > 0 ? 'АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщен
         console.log(`[AI Candidates] English queries available for fallback: ${englishQueries.join(', ')}`);
       }
       
+      // Safety net: для followup'а intent ВСЕГДА должен быть catalog (продолжение поиска товара).
+      // Если LLM по ошибке вернул general/info — форсируем catalog.
+      let finalIntent: 'catalog' | 'brands' | 'info' | 'general' = parsed.intent || 'general';
+      if (isFollowup && finalIntent !== 'catalog') {
+        console.log(`[AI Candidates] Followup safety-net: intent="${finalIntent}" → forced to "catalog"`);
+        finalIntent = 'catalog';
+      }
+      
       return {
-        intent: parsed.intent || 'general',
+        intent: finalIntent,
         candidates: broadened,
         originalQuery: message,
         usage_context: usageContext,
