@@ -2319,6 +2319,16 @@ ${JSON.stringify(modifiers)}
          return ruPart === nval;
        });
         
+        // SEMANTIC NUMERIC VALIDATOR (safety net beyond LLM strict-match):
+        // catch e.g. "100W" → "13-20" hallucination by checking number fits range.
+        const fitsNumerically = matchedValue ? semanticNumericFit(value, matchedValue) : false;
+        if (matchedValue && !fitsNumerically) {
+          console.log(`[FilterLLM] Numeric validator REJECTED: "${resolvedKey}"="${matchedValue}" doesn't fit modifier "${value}"`);
+          for (const mod of modifiers) {
+            if (norm(mod).includes(norm(value)) || norm(value).includes(norm(mod))) failedModifiers.add(mod);
+          }
+          continue;
+        }
         if (matchedValue) {
           // Track which modifier this resolved from
           const caption = optionIndex.get(resolvedKey)!.caption.toLowerCase();
