@@ -2166,34 +2166,16 @@ ${JSON.stringify(modifiers)}
 Ответь СТРОГО в JSON: {"filters": {"KEY_VALUE": "exact_value", ...}}
 Если ни один модификатор не удалось сопоставить — верни {"filters": {}}`;
 
-  // Determine provider (same cascade as classifier)
-  const classifierProvider = settings.classifier_provider || 'auto';
-  const classifierModel = settings.classifier_model || 'gemini-2.5-flash-lite';
-  let url: string;
-  let apiKeys: string[];
-  let model: string = classifierModel;
-
-  if (classifierProvider === 'openrouter') {
-    if (settings.openrouter_api_key) {
-      url = 'https://openrouter.ai/api/v1/chat/completions';
-      apiKeys = [settings.openrouter_api_key];
-    } else {
-      console.log('[FilterLLM] OpenRouter selected but no key');
-      return { resolved: {}, unresolved: [...modifiers] };
-    }
-  } else {
-    if (settings.openrouter_api_key) {
-      url = 'https://openrouter.ai/api/v1/chat/completions';
-      apiKeys = [settings.openrouter_api_key];
-      if (!model.includes('/')) model = 'google/gemini-2.5-flash-lite';
-    } else {
-      const lovableKey = Deno.env.get('LOVABLE_API_KEY');
-      if (!lovableKey) { console.log('[FilterLLM] No API keys'); return { resolved: {}, unresolved: [...modifiers] }; }
-      url = 'https://ai.gateway.lovable.dev/v1/chat/completions';
-      apiKeys = [lovableKey];
-      model = 'gemini-2.5-flash-lite';
-    }
+  // STRICT OpenRouter only — no cascade fallback (deterministic for all users).
+  if (!settings.openrouter_api_key) {
+    console.log('[FilterLLM] OpenRouter key missing — skipping (deterministic empty)');
+    return { resolved: {}, unresolved: [...modifiers] };
   }
+  let model: string = settings.classifier_model || 'google/gemini-2.5-flash-lite';
+  if (!model.includes('/')) model = `google/${model}`;
+  const url = 'https://openrouter.ai/api/v1/chat/completions';
+  const apiKeys = [settings.openrouter_api_key];
+  console.log(`[FilterLLM] OpenRouter (strict), model=${model}`);
 
   const reqBody = {
     model,
