@@ -1,76 +1,94 @@
 
 
-# Срочный фикс: вернуть OpenRouter как ЕДИНСТВЕННЫЙ AI-провайдер
+# Точечный фикс: OpenRouter + Gemini-2.5 reasoning ломает SSE-парсер и резолвер
 
-## Что нашёл при проверке кода
+## Что нашёл в логах
 
-В `supabase/functions/chat-consultant/index.ts` действительно есть **нарушение core-правила** проекта (`mem://index.md`: «Exclusively use OpenRouter (Gemini models). No direct Google keys»):
+Бывший Lovable Gateway / Google direct присылали в SSE только `"content":"..."`. **OpenRouter с моделями Gemini-2.5 (pro и flash-lite)** включает thinking по умолчанию и в каждом чанке стрима добавляет ещё поля: `"reasoning":"..."`, `"reasoning_details":[...]`, `"refusal":null`, `"native_finish_reason":"STOP"`. А в финальном `message` у tool-call'ов `content: null` + полностью забитый `reasoning`.
 
-| Место в коде | Что используется сейчас | Нарушение |
+В коде есть **regex-парсер SSE**, который ловит «любой content» в чанке:
+
+```js
+const contentMatch = text.match(/"content":"([^"]*)"/g); // строки 4641 и 4734
+```
+
+Этот же regex ловит и поля с `content` внутри `reasoning_details`, и пустые `"content":""` рядом с reasoning. Дальше чанк целиком пересылается клиенту через `controller.enqueue(encoder.encode(text))` — то есть юзер получает в стриме reasoning-мусор + пустой content. А `<think>...</think>` стриппер строки 4667/4743 не работает, потому что reasoning приходит в JSON-поле, а не в HTML-тегах.
+
+Параллельно в `resolveFiltersWithLLM` (строка 2180-2210):
+- `max_tokens: 200` — gemini-2.5-flash-lite через OpenRouter **сжирает все 200 токенов на reasoning** и возвращает пустой `content` → `JSON.parse('')` падает → все модификаторы становятся `unresolved` → STAGE 1/2/3 не находят бакеты.
+
+Это объясняет лог: для бакета «Светильники (44 товара)» резолв вернул `{}` и ушёл на «Люстры», где придумал случайный `максимальная_площадь_освещения=10`.
+
+## Что чиним (минимально, без переделки логики)
+
+### Фикс 1. Отключить reasoning у всех LLM-вызовов через OpenRouter
+
+OpenRouter поддерживает параметр `reasoning: { exclude: true }` или `reasoning: { enabled: false }` — модель не будет отдавать reasoning в ответе и не будет тратить на него токены. Добавить в **все 4 точки вызова** в `supabase/functions/chat-consultant/index.ts`:
+
+| Точка | Строка | Изменение в `body` |
 |---|---|---|
-| Classifier (~702-743) | Cascade: Google API → OpenRouter → Lovable AI Gateway | ❌ Google + Gateway |
-| `resolveFiltersWithLLM` (~2200) | Та же cascade-логика | ❌ Google + Gateway |
-| `extract_search_intent` | Cascade-логика | ❌ Google + Gateway |
-| Основная Gemini-стрим (финальный ответ) | Cascade-логика | ❌ Google + Gateway |
+| Classifier (`classifyProductName`) | ~916-919 | `reasoning: { exclude: true }` |
+| Resolver (`resolveFiltersWithLLM`) | ~2180-2186 | `reasoning: { exclude: true }` + поднять `max_tokens` 200 → 500 на всякий случай |
+| Extract intent (`extractSearchIntent`) | ~651-654 | `reasoning: { exclude: true }` |
+| Main stream (Chat) | ~4504-4509 | `reasoning: { exclude: true }` |
 
-Cascade-фоллбэки и были одной из причин «лотереи» из прошлого аудита (Фикс A): при таймауте primary запрос уходил то на Google API напрямую, то на Lovable Gateway, и каждый провайдер возвращал слегка разную разметку → разные ответы юзерам.
+Это вернёт SSE-формат, **идентичный** прежнему Lovable Gateway → весь старый код парсинга снова работает корректно.
 
-**Правильно:** ВСЕ LLM-вызовы идут только через OpenRouter с моделями `google/gemini-2.5-*`. Никаких прямых Google API-ключей, никакого Lovable AI Gateway.
+### Фикс 2. Защитить regex-парсер на случай если OpenRouter всё равно пришлёт reasoning
 
-## Что внедряем
+В обоих местах (строки 4641 и 4734) перед извлечением `"content":"..."` **вырезать** из чанка JSON-поле `"reasoning":"..."` и `"reasoning_details":[...]`. Простыми replace'ами:
 
-### Файл: `supabase/functions/chat-consultant/index.ts`
+```js
+text = text.replace(/"reasoning":\s*"(?:[^"\\]|\\.)*"/g, '"reasoning":""');
+text = text.replace(/"reasoning_details":\s*\[[\s\S]*?\]/g, '"reasoning_details":[]');
+```
 
-**Удалить полностью:**
-- Все ветки cascade-fallback на `https://generativelanguage.googleapis.com/...` (Google API напрямую)
-- Все ветки cascade-fallback на `https://ai.gateway.lovable.dev/...` (Lovable AI Gateway)
-- Чтение и использование секретов `GOOGLE_API_KEY` / `GEMINI_API_KEY` / `LOVABLE_API_KEY` для LLM-вызовов
+Делается ДО извлечения content и ДО enqueue. Это safety net на случай, если у конкретной модели reasoning нельзя выключить.
 
-**Оставить только:**
-- Единый helper `callOpenRouter({model, messages, ...opts})`, который шлёт POST на `https://openrouter.ai/api/v1/chat/completions` с заголовком `Authorization: Bearer ${OPENROUTER_API_KEY}`
-- Все 4 точки вызова LLM (classifier, `resolveFiltersWithLLM`, `extract_search_intent`, основная стрим-модель) идут через этот helper
-- Модели: `google/gemini-2.5-flash-lite` для micro-LLM (classifier/resolver/intent), `google/gemini-2.5-pro` для основного ответа — **в формате OpenRouter** (с префиксом `google/`)
-- Таймаут 12с (как в прошлом плане Фикс A) на classifier; на ошибку OpenRouter — детерминированный фолбэк значений (`critical_modifiers = search_modifiers`, `is_replacement = false`), а НЕ переключение на другого провайдера
-- Стрим основной модели работает по OpenRouter SSE (он API-совместим с OpenAI completions)
+### Фикс 3. Защитить `JSON.parse` в резолвере от пустого content
 
-### Логи для контроля
-- `[LLM] OpenRouter call: model=... purpose=classifier|resolver|intent|main`
-- `[LLM] OpenRouter response: status=... latency=...ms`
-- На ошибке: `[LLM] OpenRouter FAILED, applying deterministic fallback`
+В `resolveFiltersWithLLM` (строка 2210): обернуть `JSON.parse(content)` в try/catch и при ошибке/пустом контенте логировать `[FilterLLM] Empty content (likely reasoning consumed all tokens)` и возвращать `{ resolved: {}, unresolved: [...modifiers] }` — это уже поведение по умолчанию, просто без падения функции.
 
-### Что НЕ трогаем
+### Фикс 4. Логи для верификации
 
-- Pipeline category-first / replacement / name-first / article-first — логика остаётся
-- Все фиксы из предыдущих планов (critical_modifiers, query suppression, bucket-2 fallback, prioritizeBuckets tie-break) — сохраняются
-- Persona, greetings ban, markdown rules
-- Knowledge / RAG / FAQ
+Добавить:
+- `[Chat] Streaming with reasoning: excluded` (один раз перед стримом)  
+- `[FilterLLM] Tokens used: prompt=X completion=Y` если OpenRouter отдаёт `usage` в ответе
+
+## Что НЕ трогаем
+
+- Pipeline replacement / category-first / name-first / article-first
+- Persona, greetings ban, markdown rules, RAG
 - Widget, embed.js, миграции БД
-- Другие edge-функции (`knowledge-process`, `search-products`, `admin-users`) — там LLM-вызовов нет, проверил
+- Модели в `app_settings` (gemini-2.5-pro / flash-lite остаются)
+- Cascade удалили в прошлом фиксе — оставляем «strict OpenRouter»
 
-## Секреты
+## Файлы
 
-- **Нужно:** `OPENROUTER_API_KEY` (наверняка уже есть — он использовался в одной из веток cascade). Проверю на этапе внедрения через `fetch_secrets`; если нет — попрошу добавить ДО кода.
-- **Удалить из использования (но не из секретов):** `GOOGLE_API_KEY`, `GEMINI_API_KEY`, `LOVABLE_API_KEY` — больше не читаются из кода. Сами секреты в Supabase оставим (вдруг где-то ещё пригодятся), но code path к ним обрублен.
+| Файл | Изменения |
+|---|---|
+| `supabase/functions/chat-consultant/index.ts` | +4 строки `reasoning: { exclude: true }` в 4 reqBody; +2 replace для очистки SSE; +try/catch в резолвере; +1 лог. Итого ~15 строк |
 
-## Объём и деплой
-
-- ~80 строк правок в одном файле `chat-consultant/index.ts` (удаление 3 веток cascade × 4 точек вызова + единый helper + переключение моделей на формат OpenRouter)
-- Деплой: только `chat-consultant` edge function
+Деплой: только `chat-consultant` edge function.
 
 ## Риски
 
 | Риск | Митигация |
 |---|---|
-| OpenRouter временно недоступен → весь чат лежит | Детерминированный fallback на статичные значения classifier'а + сообщение юзеру «временные проблемы, попробуйте позже»; никакого переключения на других провайдеров (это и было источником лотереи) |
-| Latency OpenRouter выше Google API | Таймаут 12с покрывает 99% запросов; если регулярно тормозит — отдельный тикет на смену модели |
-| Иной формат ответа модели через OpenRouter | OpenRouter API-совместим с OpenAI completions; формат `choices[0].delta.content` идентичен — изменений в SSE-парсере виджета не нужно |
+| OpenRouter не поддерживает `reasoning: {exclude:true}` для конкретной модели | Фикс 2 (вырезание reasoning из SSE) работает как safety net |
+| Без reasoning gemini-2.5-pro будет отвечать хуже на сложные вопросы | Контекст у нас всегда подаётся жёстко структурированным (формат товаров уже в промпте), reasoning тут не помогает — наоборот мешает. Если вдруг качество упадёт на сложных кейсах — включим обратно `reasoning: {effort: "low"}` |
+| Поднятие `max_tokens` резолвера до 500 даст больше latency | На 1 запрос +50-100мс, незаметно |
 
-## Регрессионный тест-набор
+## Регрессионный тест
 
-1. «нужна черная двухместная розетка» × 5 → одинаковый ответ каждый раз
-2. «светильник ДКУ-LED-03-100W (ЭТФ) предложи замену» × 5 → стабильно
-3. Артикул «ABB-S201-C16» → article-first
-4. «как оформить возврат» → RAG
-5. «привет» → greetings ban
-6. Логи проверить: ВСЕ строки `[LLM] OpenRouter call` присутствуют, НЕТ обращений к `generativelanguage.googleapis.com` или `ai.gateway.lovable.dev`
+| # | Запрос | Ожидание |
+|---|---|---|
+| 1 | «светильник ДКУ-LED-03-100W (ЭТФ) предложи замену» × 3 | 10 товаров аналогов в ответе (как было до OpenRouter) |
+| 2 | «нужна черная двухместная розетка» × 3 | Стабильно товары, без «не нашлось» |
+| 3 | Артикул «ABB-S201-C16» | Article-first, без изменений |
+| 4 | «как оформить возврат» | RAG, без изменений |
+| 5 | «привет» | Greetings ban активен |
+| 6 | Логи: `[FilterLLM] Resolved with criticality: {…}` непустой для основных запросов; нет `Raw response: ` (пустой) |
+
+После деплоя: открыть виджет, повторить запрос #1 5 раз — должны стабильно приходить аналоги.
 
