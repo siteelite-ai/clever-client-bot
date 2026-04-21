@@ -2398,7 +2398,8 @@ ${JSON.stringify(modifiers)}
     const unresolved = modifiers.filter(m => !matchedModifiers.has(m) || failedModifiers.has(m));
 
     const criticalitySummary = Object.entries(validated).map(([k, v]) => `${k}=${v.value}(${v.is_critical ? 'crit' : 'opt'})`).join(', ');
-    console.log(`[FilterLLM] Resolved with criticality: {${criticalitySummary}}, unresolved=[${unresolved.join(', ')}]`);
+    const filterSig = await sha256Hex(JSON.stringify(Object.entries(validated).map(([k, v]) => [k, v.value]).sort()));
+    console.log(`[FilterLLM] Resolved with criticality: {${criticalitySummary}}, unresolved=[${unresolved.join(', ')}] | signature=${filterSig}`);
     return { resolved: validated, unresolved };
   } catch (error) {
     console.error(`[FilterLLM] Error:`, error);
