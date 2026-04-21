@@ -120,51 +120,25 @@ async function getAppSettings(): Promise<CachedSettings> {
   }
 }
 
-// Determine AI endpoint and keys based on settings
-// For Google AI Studio, supports multiple comma-separated keys for automatic fallback
+// AI endpoint — STRICT OpenRouter only.
+// Core rule: "Exclusively use OpenRouter (Gemini models). No direct Google keys."
+// All other provider branches removed to eliminate non-determinism from cascade fallbacks.
 function getAIConfig(settings: CachedSettings): { url: string; apiKeys: string[]; model: string } {
-  if (settings.ai_provider === 'google') {
-    if (!settings.google_api_key) {
-      throw new Error('Google AI Studio API key не настроен. Добавьте ключ в Настройках.');
-    }
-    // Parse comma/newline-separated keys, trim whitespace, filter empty
-    const keys = settings.google_api_key
-      .split(/[,\n]/)
-      .map(k => k.trim())
-      .filter(k => k.length > 0);
-    if (keys.length === 0) {
-      throw new Error('Google AI Studio API key не настроен. Добавьте ключ в Настройках.');
-    }
-    console.log(`[AIConfig] Google AI Studio: ${keys.length} key(s) configured`);
-    return {
-      url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
-      apiKeys: keys,
-      model: settings.ai_model || 'gemini-2.0-flash',
-    };
-  }
-
-  if (settings.ai_provider === 'huggingface') {
-    const hfKey = Deno.env.get('HUGGINGFACE_API_KEY');
-    if (!hfKey) {
-      throw new Error('HuggingFace API токен не настроен. Добавьте HUGGINGFACE_API_KEY в секреты Supabase.');
-    }
-    console.log('[AIConfig] HuggingFace Inference API');
-    return {
-      url: 'https://router.huggingface.co/v1/chat/completions',
-      apiKeys: [hfKey],
-      model: settings.ai_model || 'Qwen/Qwen2.5-72B-Instruct',
-    };
-  }
-
-  // Default: OpenRouter (single key)
   if (!settings.openrouter_api_key) {
     throw new Error('OpenRouter API key не настроен. Добавьте ключ в Настройках.');
   }
 
+  // Ensure model is in OpenRouter format (must contain "/", e.g. "google/gemini-2.5-pro")
+  let model = settings.ai_model || 'google/gemini-2.5-pro';
+  if (!model.includes('/')) {
+    model = `google/${model}`;
+  }
+
+  console.log(`[AIConfig] OpenRouter (strict), model=${model}`);
   return {
     url: 'https://openrouter.ai/api/v1/chat/completions',
     apiKeys: [settings.openrouter_api_key],
-    model: settings.ai_model,
+    model,
   };
 }
 
@@ -571,40 +545,20 @@ interface ClassificationResult {
 }
 
 async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>, settings?: CachedSettings | null): Promise<ClassificationResult | null> {
-  const classifierProvider = settings?.classifier_provider || 'auto';
-  const classifierModel = settings?.classifier_model || 'gemini-2.5-flash-lite';
-  
-  let url: string;
-  let apiKeys: string[];
-  let model: string = classifierModel;
-
-  if (classifierProvider === 'openrouter') {
-    // Explicit OpenRouter mode
-    if (settings?.openrouter_api_key) {
-      url = 'https://openrouter.ai/api/v1/chat/completions';
-      apiKeys = [settings.openrouter_api_key];
-      // For OpenRouter, use the model as-is (e.g. google/gemini-2.5-flash-lite:free)
-      console.log(`[Classify] Using OpenRouter with model ${model}`);
-    } else {
-      console.log('[Classify] OpenRouter selected but no key, skipping');
-      return null;
-    }
-  } else {
-    // Auto mode: OpenRouter → Lovable Gateway
-    if (settings?.openrouter_api_key) {
-      url = 'https://openrouter.ai/api/v1/chat/completions';
-      apiKeys = [settings.openrouter_api_key];
-      if (!model.includes('/')) model = 'google/gemini-2.5-flash-lite';
-      console.log(`[Classify] Auto: Using OpenRouter with model ${model}`);
-    } else {
-      const lovableKey = Deno.env.get('LOVABLE_API_KEY');
-      if (!lovableKey) { console.log('[Classify] No API keys configured, skipping'); return null; }
-      url = 'https://ai.gateway.lovable.dev/v1/chat/completions';
-      apiKeys = [lovableKey];
-      model = 'gemini-2.5-flash-lite';
-      console.log('[Classify] Auto: Fallback to LOVABLE_API_KEY');
-    }
+  // STRICT OpenRouter: no cascade, no Google direct, no Lovable Gateway.
+  // Cascade fallbacks were a primary source of non-determinism (different users got different providers).
+  if (!settings?.openrouter_api_key) {
+    console.log('[Classify] OpenRouter key missing — classification skipped (deterministic null)');
+    return null;
   }
+
+  let model = settings.classifier_model || 'google/gemini-2.5-flash-lite';
+  if (!model.includes('/')) model = `google/${model}`;
+
+  const url = 'https://openrouter.ai/api/v1/chat/completions';
+  const apiKeys = [settings.openrouter_api_key];
+
+  console.log(`[Classify] OpenRouter (strict), model=${model}`);
 
   const classifyBody = {
     model: model,
@@ -699,45 +653,17 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
     max_tokens: 300,
   };
 
-  // Build cascade of providers to try
+  // STRICT OpenRouter: single deterministic attempt, no cascade fallbacks.
+  // Fallbacks to other providers caused different users to get different classifier outputs.
   interface ProviderAttempt { url: string; apiKeys: string[]; model: string; label: string; }
-  const attempts: ProviderAttempt[] = [{ url, apiKeys, model, label: `primary(${classifierProvider})` }];
-
-  // Add fallback providers for resilience
-  if (classifierProvider === 'openrouter' || classifierProvider === 'auto') {
-    // Add Google direct as fallback if keys available and not already primary
-    if (classifierProvider !== 'google' && settings?.google_api_key) {
-      const gKeys = settings.google_api_key.split(/[,\n]/).map(k => k.trim()).filter(k => k.length > 0);
-      if (gKeys.length > 0 && !(url.includes('googleapis.com'))) {
-        attempts.push({ url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKeys: gKeys, model: 'gemini-2.5-flash-lite', label: 'fallback(google)' });
-      }
-    }
-    // Add OpenRouter as fallback if key available and not already primary
-    if (classifierProvider !== 'openrouter' && settings?.openrouter_api_key && !(url.includes('openrouter.ai'))) {
-      attempts.push({ url: 'https://openrouter.ai/api/v1/chat/completions', apiKeys: [settings.openrouter_api_key], model: 'google/gemini-2.5-flash-lite', label: 'fallback(openrouter)' });
-    }
-    // Add Lovable Gateway as last resort
-    const lovableKey = Deno.env.get('LOVABLE_API_KEY');
-    if (lovableKey && !(url.includes('gateway.lovable.dev'))) {
-      attempts.push({ url: 'https://ai.gateway.lovable.dev/v1/chat/completions', apiKeys: [lovableKey], model: 'google/gemini-2.5-flash-lite', label: 'fallback(gateway)' });
-    }
-  } else if (classifierProvider === 'google') {
-    // Google explicit — add OpenRouter and Gateway as fallbacks
-    if (settings?.openrouter_api_key) {
-      attempts.push({ url: 'https://openrouter.ai/api/v1/chat/completions', apiKeys: [settings.openrouter_api_key], model: 'google/gemini-2.5-flash-lite', label: 'fallback(openrouter)' });
-    }
-    const lovableKey = Deno.env.get('LOVABLE_API_KEY');
-    if (lovableKey) {
-      attempts.push({ url: 'https://ai.gateway.lovable.dev/v1/chat/completions', apiKeys: [lovableKey], model: 'google/gemini-2.5-flash-lite', label: 'fallback(gateway)' });
-    }
-  }
+  const attempts: ProviderAttempt[] = [{ url, apiKeys, model, label: 'openrouter(strict)' }];
 
   for (const attempt of attempts) {
     try {
       const body = { ...classifyBody, model: attempt.model };
       const classifyPromise = callAIWithKeyFallback(attempt.url, attempt.apiKeys, body, 'Classify');
       const timeoutPromise = new Promise<Response>((_, reject) => 
-        setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 8000)
+        setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 12000)
       );
 
       const response = await Promise.race([classifyPromise, timeoutPromise]);
@@ -815,7 +741,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       };
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
-        console.log(`[Classify] ${attempt.label} timeout (8s), trying next...`);
+        console.log(`[Classify] ${attempt.label} timeout (12s), no fallback (strict OpenRouter)`);
       } else {
         console.error(`[Classify] ${attempt.label} error:`, e, ', trying next...');
       }
@@ -2240,34 +2166,16 @@ ${JSON.stringify(modifiers)}
 Ответь СТРОГО в JSON: {"filters": {"KEY_VALUE": "exact_value", ...}}
 Если ни один модификатор не удалось сопоставить — верни {"filters": {}}`;
 
-  // Determine provider (same cascade as classifier)
-  const classifierProvider = settings.classifier_provider || 'auto';
-  const classifierModel = settings.classifier_model || 'gemini-2.5-flash-lite';
-  let url: string;
-  let apiKeys: string[];
-  let model: string = classifierModel;
-
-  if (classifierProvider === 'openrouter') {
-    if (settings.openrouter_api_key) {
-      url = 'https://openrouter.ai/api/v1/chat/completions';
-      apiKeys = [settings.openrouter_api_key];
-    } else {
-      console.log('[FilterLLM] OpenRouter selected but no key');
-      return { resolved: {}, unresolved: [...modifiers] };
-    }
-  } else {
-    if (settings.openrouter_api_key) {
-      url = 'https://openrouter.ai/api/v1/chat/completions';
-      apiKeys = [settings.openrouter_api_key];
-      if (!model.includes('/')) model = 'google/gemini-2.5-flash-lite';
-    } else {
-      const lovableKey = Deno.env.get('LOVABLE_API_KEY');
-      if (!lovableKey) { console.log('[FilterLLM] No API keys'); return { resolved: {}, unresolved: [...modifiers] }; }
-      url = 'https://ai.gateway.lovable.dev/v1/chat/completions';
-      apiKeys = [lovableKey];
-      model = 'gemini-2.5-flash-lite';
-    }
+  // STRICT OpenRouter only — no cascade fallback (deterministic for all users).
+  if (!settings.openrouter_api_key) {
+    console.log('[FilterLLM] OpenRouter key missing — skipping (deterministic empty)');
+    return { resolved: {}, unresolved: [...modifiers] };
   }
+  let model: string = settings.classifier_model || 'google/gemini-2.5-flash-lite';
+  if (!model.includes('/')) model = `google/${model}`;
+  const url = 'https://openrouter.ai/api/v1/chat/completions';
+  const apiKeys = [settings.openrouter_api_key];
+  console.log(`[FilterLLM] OpenRouter (strict), model=${model}`);
 
   const reqBody = {
     model,
@@ -3230,7 +3138,7 @@ serve(async (req) => {
     const appSettings = await getAppSettings();
     const aiConfig = getAIConfig(appSettings);
     
-    console.log(`[Chat] AI Provider: ${aiConfig.url.includes('openrouter') ? 'OpenRouter' : 'Google AI'}, Model: ${aiConfig.model}`);
+    console.log(`[Chat] AI Provider: OpenRouter (strict), Model: ${aiConfig.model}`);
 
     const lastMessage = messages[messages.length - 1];
     const rawUserMessage = lastMessage?.content || '';
@@ -4602,10 +4510,9 @@ ${productInstructions}`;
 
     if (!response.ok) {
       if (response.status === 429) {
-        const providerName = aiConfig.url.includes('google') ? 'Google AI Studio' : aiConfig.url.includes('openrouter') ? 'OpenRouter' : 'AI';
-        console.error(`[Chat] Rate limit 429 after all keys exhausted (${providerName})`);
+        console.error(`[Chat] Rate limit 429 after all keys exhausted (OpenRouter)`);
         return new Response(
-          JSON.stringify({ error: `Превышен лимит запросов к ${providerName}. Подождите 1-2 минуты и попробуйте снова, или смените провайдера/модель в настройках.` }),
+          JSON.stringify({ error: `Превышен лимит запросов к OpenRouter. Подождите 1-2 минуты и попробуйте снова.` }),
           { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
