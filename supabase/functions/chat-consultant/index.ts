@@ -1594,10 +1594,20 @@ async function generateSearchCandidates(
 ): Promise<ExtractedIntent> {
   console.log(`[AI Candidates] Extracting search intent from: "${message}", classificationCategory: ${classificationCategory || 'none'}`);
   
-  // Если классификатор определил product_category — это самостоятельный новый запрос,
-  // история НЕ должна загрязнять поисковые кандидаты.
-  // История используется ТОЛЬКО для уточняющих коротких ответов (когда category не определена).
-  const isNewProductQuery = !!classificationCategory;
+  // Two-factor followup detection (фикс slot-памяти):
+  // Уточнение в рамках старого запроса = (a) последняя реплика бота содержала уточняющий вопрос
+  // И (b) категория текущего запроса совпадает с категорией предыдущего товарного хода.
+  // Только тогда оставляем историю — иначе intent-extractor теряет атрибуты («чёрная двухместная»).
+  const lastAssistantMsg = [...conversationHistory].reverse().find(m => m.role === 'assistant')?.content || '';
+  const looksLikeClarificationFollowup = 
+    /\?|уточни|нужно ли|какой|какая|какие|для каких|с\s+каким|какого|какую|сколько/i.test(lastAssistantMsg.slice(-800));
+  
+  const previousCategory = extractCategoryFromHistory(conversationHistory);
+  const sameCategory = !!(previousCategory && classificationCategory && 
+    previousCategory.toLowerCase().trim() === classificationCategory.toLowerCase().trim());
+  
+  const isFollowup = looksLikeClarificationFollowup && sameCategory;
+  const isNewProductQuery = !!classificationCategory && !isFollowup;
   
   const recentHistory = isNewProductQuery ? [] : conversationHistory.slice(-10);
   let historyContext = '';
@@ -1609,8 +1619,10 @@ ${recentHistory.map(m => `${m.role === 'user' ? 'Клиент' : 'Консуль
 `;
   }
   
-  if (isNewProductQuery) {
-    console.log(`[AI Candidates] Context ISOLATED: new product query detected (category="${classificationCategory}"), history pruned`);
+  if (isFollowup) {
+    console.log(`[AI Candidates] Followup detected: lastAssistantQ=${looksLikeClarificationFollowup}, sameCategory=${sameCategory} (prev="${previousCategory}", curr="${classificationCategory}") → history KEPT (${recentHistory.length} msgs)`);
+  } else if (isNewProductQuery) {
+    console.log(`[AI Candidates] Context ISOLATED: new product query detected (category="${classificationCategory}", prevCategory="${previousCategory || 'none'}", lastAssistantQ=${looksLikeClarificationFollowup}), history pruned`);
   }
   
   const extractionPrompt = `Ты — система извлечения поисковых намерений для интернет-магазина электроинструментов 220volt.kz.
