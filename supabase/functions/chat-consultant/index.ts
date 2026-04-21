@@ -2298,8 +2298,9 @@ ${JSON.stringify(modifiers)}
     }
 
     // Validate that returned keys AND values exist in schema
-    const validated: Record<string, string> = {};
+    const validated: Record<string, ResolvedFilter> = {};
     const matchedModifiers = new Set<string>();
+    const sourceModifierForKey: Record<string, string> = {};
     const failedModifiers = new Set<string>();
     const norm = (s: string) => s.replace(/ё/g, 'е').toLowerCase().trim();
 
@@ -2326,8 +2327,6 @@ ${JSON.stringify(modifiers)}
        });
         
         if (matchedValue) {
-          validated[resolvedKey] = matchedValue; // use exact value from schema
-          console.log(`[FilterLLM] Resolved (validated): "${resolvedKey}" = "${matchedValue}"`);
           // Track which modifier this resolved from
           const caption = optionIndex.get(resolvedKey)!.caption.toLowerCase();
           const keyLower = resolvedKey.toLowerCase();
@@ -2343,31 +2342,41 @@ ${JSON.stringify(modifiers)}
           for (const mod of modifiers) {
             const nmod = norm(mod);
             const nval = norm(value);
-            // 1. Direct match (existing)
-            if (nmod === nval) { matchedModifiers.add(mod); continue; }
-            // 2. Caption contains modifier (existing)
-            if (caption.includes(nmod)) { matchedModifiers.add(mod); continue; }
-            // 3. Numeric: value is a number, modifier contains that number or a numeral word for it
-            if (/^\d+$/.test(nval)) {
-              // modifier literally contains the digit (e.g. "2-местная" contains "2")
-              if (nmod.includes(nval)) { matchedModifiers.add(mod); continue; }
-              // modifier starts with a numeral root that maps to this digit
-              const matched = Object.entries(numeralMap).some(([root, digit]) =>
-                digit === nval && nmod.startsWith(root)
-              );
-              if (matched) { matchedModifiers.add(mod); continue; }
+            let matched = false;
+            // 1. Direct match
+            if (nmod === nval) matched = true;
+            // 2. Caption contains modifier
+            else if (caption.includes(nmod)) matched = true;
+            // 3. Numeric
+            else if (/^\d+$/.test(nval)) {
+              if (nmod.includes(nval)) matched = true;
+              else if (Object.entries(numeralMap).some(([root, digit]) => digit === nval && nmod.startsWith(root))) matched = true;
             }
-            // 4. Modifier contains root of caption or key (e.g. "местн" in caption "Кол-во мест")
-            const captionWords = caption.split(/[\s\-\/,()]+/).filter(w => w.length >= 3);
-            const keyWords = keyLower.split(/[\s_\-]+/).filter(w => w.length >= 3);
-            const roots = [...captionWords, ...keyWords].map(w => w.slice(0, Math.min(w.length, 4)));
-            if (roots.some(root => nmod.includes(root))) { matchedModifiers.add(mod); continue; }
-            // 5. Multi-word modifier: any word matches value or caption
-            const modWords = nmod.split(/\s+/);
-            if (modWords.length > 1 && modWords.some(mw => mw === nval || caption.includes(mw))) {
-              matchedModifiers.add(mod); continue;
+            if (!matched) {
+              // 4. Modifier contains root of caption or key
+              const captionWords = caption.split(/[\s\-\/,()]+/).filter(w => w.length >= 3);
+              const keyWords = keyLower.split(/[\s_\-]+/).filter(w => w.length >= 3);
+              const roots = [...captionWords, ...keyWords].map(w => w.slice(0, Math.min(w.length, 4)));
+              if (roots.some(root => nmod.includes(root))) matched = true;
+            }
+            if (!matched) {
+              // 5. Multi-word modifier: any word matches value or caption
+              const modWords = nmod.split(/\s+/);
+              if (modWords.length > 1 && modWords.some(mw => mw === nval || caption.includes(mw))) matched = true;
+            }
+            if (matched) {
+              matchedModifiers.add(mod);
+              // Prefer a critical modifier as source if multiple modifiers match the same key
+              if (!sourceModifierForKey[resolvedKey] || (isCritical(mod) && !isCritical(sourceModifierForKey[resolvedKey]))) {
+                sourceModifierForKey[resolvedKey] = mod;
+              }
             }
           }
+          const sourceMod = sourceModifierForKey[resolvedKey];
+          // is_critical: if any matched modifier was critical, OR no source identified but criticalSet treats it critical by default
+          const critical = sourceMod ? isCritical(sourceMod) : true;
+          validated[resolvedKey] = { value: matchedValue, is_critical: critical, source_modifier: sourceMod };
+          console.log(`[FilterLLM] Resolved (validated): "${resolvedKey}" = "${matchedValue}" [critical=${critical}, src="${sourceMod || 'n/a'}"]`);
         } else {
           console.log(`[FilterLLM] Key "${resolvedKey}" valid, but value "${value}" NOT in schema values [${[...knownValues].slice(0, 5).join(', ')}...] → unresolved`);
           // Find which modifier this came from
@@ -2385,7 +2394,8 @@ ${JSON.stringify(modifiers)}
     // Unresolved = modifiers NOT matched by successful validation + those that failed validation
     const unresolved = modifiers.filter(m => !matchedModifiers.has(m) || failedModifiers.has(m));
 
-    console.log(`[FilterLLM] Result: resolved=${JSON.stringify(validated)}, unresolved=[${unresolved.join(', ')}]`);
+    const criticalitySummary = Object.entries(validated).map(([k, v]) => `${k}=${v.value}(${v.is_critical ? 'crit' : 'opt'})`).join(', ');
+    console.log(`[FilterLLM] Resolved with criticality: {${criticalitySummary}}, unresolved=[${unresolved.join(', ')}]`);
     return { resolved: validated, unresolved };
   } catch (error) {
     console.error(`[FilterLLM] Error:`, error);
