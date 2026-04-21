@@ -605,13 +605,14 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
     return null;
   }
 
-  let model = settings.classifier_model || 'google/gemini-2.5-flash-lite';
-  if (!model.includes('/')) model = `google/${model}`;
+  // FORCED UPGRADE: flash-lite is non-deterministic for matching tasks (per OpenRouter docs).
+  // Hardcoded to flash for classifier — ignores DB setting until determinism proven on flash.
+  const model = 'google/gemini-2.5-flash';
 
   const url = 'https://openrouter.ai/api/v1/chat/completions';
   const apiKeys = [settings.openrouter_api_key];
 
-  console.log(`[Classify] OpenRouter (strict), model=${model}`);
+  console.log(`[Classify] OpenRouter (strict), model=${model} (forced upgrade from flash-lite)`);
 
   const classifyBody = {
     model: model,
@@ -2229,11 +2230,12 @@ ${JSON.stringify(modifiers)}
     console.log('[FilterLLM] OpenRouter key missing — skipping (deterministic empty)');
     return { resolved: {}, unresolved: [...modifiers] };
   }
-  let model: string = settings.classifier_model || 'google/gemini-2.5-flash-lite';
-  if (!model.includes('/')) model = `google/${model}`;
+  // FORCED UPGRADE: flash-lite is non-deterministic for filter resolution (per OpenRouter docs).
+  // Hardcoded to flash — ignores DB setting until determinism proven on flash.
+  const model = 'google/gemini-2.5-flash';
   const url = 'https://openrouter.ai/api/v1/chat/completions';
   const apiKeys = [settings.openrouter_api_key];
-  console.log(`[FilterLLM] OpenRouter (strict), model=${model}`);
+  console.log(`[FilterLLM] OpenRouter (strict), model=${model} (forced upgrade from flash-lite)`);
 
   const reqBody = {
     model,
