@@ -3822,12 +3822,18 @@ serve(async (req) => {
               // Prioritize buckets matching classifier.category root.
               const replSortedBuckets = prioritizeBuckets(replCatDist, replCategory);
               console.log(`[Chat] Sorted buckets (replacement, kw="${replCategory}"): ${JSON.stringify(replSortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK))}`);
+              const replBucketPriority: Record<string, number> = {};
+              for (const [name] of replSortedBuckets) {
+                const lower = name.toLowerCase();
+                const kw = (replCategory || '').toLowerCase().trim();
+                const root = kw.replace(/(ыми|ями|ами|ого|ему|ому|ой|ей|ую|юю|ие|ые|ах|ям|ов|ев|ам|ы|и|а|у|е|о|я)$/, '');
+                const useRoot = root.length >= 4 ? root : kw;
+                replBucketPriority[name] = (kw && lower.includes(kw)) || (useRoot && lower.includes(useRoot)) ? 2 : 0;
+              }
               
               let replBestCat = '';
-              let replBestResolved: Record<string, string> = {};
+              let replBestResolvedRaw: Record<string, ResolvedFilter> = {};
               let replBestUnresolved: string[] = [...replModifiers];
-              // Accumulator for resolved replacements; bucket-matching only resolves filters,
-              // STAGE 2 below populates this array with actual analog products.
               let replacementProducts: Product[] = [];
               
               for (const [catName, count] of replSortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK)) {
@@ -3835,7 +3841,6 @@ serve(async (req) => {
                 let bucketProducts = replRawProducts.filter(p =>
                   ((p as any).category?.pagetitle || p.parent_name || 'unknown') === catName
                 );
-                // Expand small buckets for better schema
                 if (bucketProducts.length < 10 && appSettings.volt220_api_token) {
                   console.log(`[Chat] Replacement bucket "${catName}" too small (${bucketProducts.length}), fetching more...`);
                   const extraProducts = await searchProductsByCandidate(
@@ -3847,32 +3852,34 @@ serve(async (req) => {
                     console.log(`[Chat] Replacement bucket "${catName}" expanded to ${bucketProducts.length}`);
                   }
                 }
-                const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, replModifiers, appSettings);
-                console.log(`[Chat] Replacement bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(br)}, unresolved=[${bu.join(', ')}]`);
-                if (Object.keys(br).length > Object.keys(replBestResolved).length) {
+                const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, replModifiers, appSettings, classification?.critical_modifiers);
+                console.log(`[Chat] Replacement bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(flattenResolvedFilters(br))}, unresolved=[${bu.join(', ')}]`);
+                if (Object.keys(br).length > Object.keys(replBestResolvedRaw).length) {
                   replBestCat = catName;
-                  replBestResolved = br;
+                  replBestResolvedRaw = br;
                   replBestUnresolved = bu;
                 }
                 if (Object.keys(br).length >= replModifiers.length) break;
               }
               
-              if (Object.keys(replBestResolved).length === 0 && replSortedBuckets.length > 0) {
+              if (Object.keys(replBestResolvedRaw).length === 0 && replSortedBuckets.length > 0) {
                 replBestCat = replSortedBuckets[0][0];
               }
               if (replBestCat) {
-                console.log(`[Chat] Replacement WINNER: "${replBestCat}" (resolved ${Object.keys(replBestResolved).length}/${replModifiers.length})`);
+                console.log(`[Chat] Replacement WINNER: "${replBestCat}" (resolved ${Object.keys(replBestResolvedRaw).length}/${replModifiers.length})`);
                 pluralRepl = replBestCat;
               }
               
-              const replResolvedFilters = replBestResolved;
+              const replResolvedFiltersRaw = replBestResolvedRaw;
+              const replResolvedFilters = flattenResolvedFilters(replResolvedFiltersRaw);
               const replUnresolvedMods = replBestUnresolved;
 
               if (replacementProducts.length === 0 && (Object.keys(replResolvedFilters).length > 0 || replUnresolvedMods.length > 0)) {
-                // STAGE 2: resolveFiltersWithLLM already mapped human modifiers → options[key]=value above
                 console.log(`[Chat] Replacement STAGE 2: resolved options=${JSON.stringify(replResolvedFilters)}, unresolved=[${replUnresolvedMods.join(', ')}]`);
-                // STAGE 3: Hybrid API call — server-side filter by characteristics, not by name tokens
-                const replQueryText = replUnresolvedMods.length > 0 ? replUnresolvedMods.join(' ') : null;
+                // STAGE 3: Hybrid API call. Suppress query when LLM resolved ALL modifiers.
+                const replSuppressQuery = replUnresolvedMods.length === 0 && Object.keys(replResolvedFilters).length > 0;
+                const replQueryText = replSuppressQuery ? null : (replUnresolvedMods.length > 0 ? replUnresolvedMods.join(' ') : null);
+                if (replSuppressQuery) console.log(`[Chat] STAGE 2 query suppressed (replacement, LLM resolved all modifiers)`);
                 console.log(`[Chat] Replacement STAGE 3: API call category="${pluralRepl}", options=${JSON.stringify(replResolvedFilters)}, query="${replQueryText}"`);
                 let replFiltered = await searchProductsByCandidate(
                   { query: replQueryText, brand: null, category: pluralRepl, min_price: null, max_price: null },
@@ -3881,13 +3888,54 @@ serve(async (req) => {
                 );
                 console.log(`[Chat] Replacement STAGE 3 result: ${replFiltered.length} products`);
                 
-                // Cascading fallback: drop filters one by one if 0 results
+                // Fallback на bucket-2 (priority=2) ДО relaxed
+                if (replFiltered.length === 0) {
+                  const altBuckets = replSortedBuckets
+                    .filter(([name]) => name !== replBestCat && replBucketPriority[name] === 2)
+                    .slice(0, 2);
+                  for (const [altCat, altCount] of altBuckets) {
+                    if (altCount < 2) continue;
+                    console.log(`[Chat] STAGE 2 fallback to bucket-N: "${altCat}" (replacement, priority=2)`);
+                    let altProducts = replRawProducts.filter(p =>
+                      ((p as any).category?.pagetitle || p.parent_name || 'unknown') === altCat
+                    );
+                    if (altProducts.length < 10 && appSettings.volt220_api_token) {
+                      const extra = await searchProductsByCandidate(
+                        { query: null, brand: null, category: altCat, min_price: null, max_price: null },
+                        appSettings.volt220_api_token, 50
+                      );
+                      if (extra.length > altProducts.length) altProducts = extra;
+                    }
+                    const { resolved: altResolvedRaw, unresolved: altUnresolved } = await resolveFiltersWithLLM(altProducts, replModifiers, appSettings, classification?.critical_modifiers);
+                    const altResolved = flattenResolvedFilters(altResolvedRaw);
+                    if (Object.keys(altResolved).length === 0) continue;
+                    const altSuppress = altUnresolved.length === 0;
+                    const altQ = altSuppress ? null : (altUnresolved.length > 0 ? altUnresolved.join(' ') : null);
+                    const altServer = await searchProductsByCandidate(
+                      { query: altQ, brand: null, category: altCat, min_price: null, max_price: null },
+                      appSettings.volt220_api_token, 50,
+                      altResolved
+                    );
+                    console.log(`[Chat] Replacement alt-bucket "${altCat}" server: ${altServer.length} products`);
+                    if (altServer.length > 0) {
+                      replFiltered = altServer;
+                      pluralRepl = altCat;
+                      break;
+                    }
+                  }
+                }
+
+                // Cascading relaxed fallback — only drop NON-critical filters
                 if (replFiltered.length === 0) {
                   const replFilterKeys = Object.keys(replResolvedFilters);
-                  if (replFilterKeys.length > 1) {
+                  const droppableKeys = replFilterKeys.filter(k => !(replResolvedFiltersRaw[k]?.is_critical));
+                  const blockedCritical = replFilterKeys.filter(k => replResolvedFiltersRaw[k]?.is_critical);
+                  if (droppableKeys.length === 0 && replFilterKeys.length > 0) {
+                    console.log(`[Chat] Relaxed BLOCKED (replacement, critical: ${blockedCritical.join(', ')})`);
+                  } else if (replFilterKeys.length > 1) {
                     let bestRelaxed: Product[] = [];
                     let droppedKey = '';
-                    for (const dropKey of replFilterKeys) {
+                    for (const dropKey of droppableKeys) {
                       const partial = { ...replResolvedFilters };
                       delete partial[dropKey];
                       const partialResult = await searchProductsByCandidate(
@@ -3907,8 +3955,8 @@ serve(async (req) => {
                     }
                   }
                   
-                  // Final fallback: modifiers as text query
-                  if (replFiltered.length === 0) {
+                  // Final fallback: modifiers as text query — only if no critical block
+                  if (replFiltered.length === 0 && (droppableKeys.length > 0 || replFilterKeys.length === 0)) {
                     const modQuery = replModifiers.join(' ');
                     replFiltered = await searchProductsByCandidate(
                       { query: modQuery, brand: null, category: pluralRepl, min_price: null, max_price: null },
