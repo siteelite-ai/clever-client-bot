@@ -2166,6 +2166,16 @@ interface ResolvedFilter {
   source_modifier?: string;
 }
 
+// Backward-compat helper: flatten { key: {value, is_critical, ...} } → { key: value }
+// Tolerates legacy string values too (defensive against any stale callers).
+function flattenResolvedFilters(resolved: Record<string, ResolvedFilter | string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(resolved)) {
+    out[k] = typeof v === 'object' && v !== null ? (v as ResolvedFilter).value : (v as string);
+  }
+  return out;
+}
+
 async function resolveFiltersWithLLM(
   products: Product[],
   modifiers: string[],
