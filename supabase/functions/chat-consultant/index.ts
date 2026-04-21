@@ -3528,9 +3528,18 @@ serve(async (req) => {
             // Prioritize buckets whose name matches classifier.category (root match) before sorting by size.
             const sortedBuckets = prioritizeBuckets(categoryDistribution, effectiveCategory);
             console.log(`[Chat] Sorted buckets (category-first, kw="${effectiveCategory}"): ${JSON.stringify(sortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK))}`);
+            // Compute priority map for fallback (priority=2 = root match with classifier.category)
+            const bucketPriority: Record<string, number> = {};
+            for (const [name] of sortedBuckets) {
+              const lower = name.toLowerCase();
+              const kw = (effectiveCategory || '').toLowerCase().trim();
+              const root = kw.replace(/(ыми|ями|ами|ого|ему|ому|ой|ей|ую|юю|ие|ые|ах|ям|ов|ев|ам|ы|и|а|у|е|о|я)$/, '');
+              const useRoot = root.length >= 4 ? root : kw;
+              bucketPriority[name] = (kw && lower.includes(kw)) || (useRoot && lower.includes(useRoot)) ? 2 : 0;
+            }
             
             let bestBucketCat = '';
-            let bestResolved: Record<string, string> = {};
+            let bestResolvedRaw: Record<string, ResolvedFilter> = {};
             let bestUnresolved: string[] = [...modifiers];
             
             for (const [catName, count] of sortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK)) {
@@ -3538,7 +3547,6 @@ serve(async (req) => {
               let bucketProducts = rawProducts.filter(p => 
                 ((p as any).category?.pagetitle || p.parent_name || 'unknown') === catName
               );
-              // If bucket is too small for representative schema, fetch more from this category
               if (bucketProducts.length < 10 && appSettings.volt220_api_token) {
                 console.log(`[Chat] Bucket "${catName}" too small (${bucketProducts.length}), fetching more for schema...`);
                 const extraProducts = await searchProductsByCandidate(
@@ -3550,38 +3558,41 @@ serve(async (req) => {
                   console.log(`[Chat] Bucket "${catName}" expanded to ${bucketProducts.length} products`);
                 }
               }
-              const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, modifiers, appSettings);
-              console.log(`[Chat] Bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(br)}, unresolved=[${bu.join(', ')}]`);
+              const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, modifiers, appSettings, classification?.critical_modifiers);
+              console.log(`[Chat] Bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(flattenResolvedFilters(br))}, unresolved=[${bu.join(', ')}]`);
               
-              if (Object.keys(br).length > Object.keys(bestResolved).length) {
+              if (Object.keys(br).length > Object.keys(bestResolvedRaw).length) {
                 bestBucketCat = catName;
-                bestResolved = br;
+                bestResolvedRaw = br;
                 bestUnresolved = bu;
               }
-              // All modifiers resolved — no need to check more buckets
               if (Object.keys(br).length >= modifiers.length) break;
             }
             
-            // If no bucket resolved anything, fall back to the largest bucket
-            if (Object.keys(bestResolved).length === 0 && sortedBuckets.length > 0) {
+            if (Object.keys(bestResolvedRaw).length === 0 && sortedBuckets.length > 0) {
               bestBucketCat = sortedBuckets[0][0];
               console.log(`[Chat] No bucket resolved modifiers, using largest: "${bestBucketCat}"`);
             }
             
-            // Update pluralCategory to the winning bucket
             if (bestBucketCat) {
-              console.log(`[Chat] Category-first WINNER: "${bestBucketCat}" (resolved ${Object.keys(bestResolved).length}/${modifiers.length})`);
+              console.log(`[Chat] Category-first WINNER: "${bestBucketCat}" (resolved ${Object.keys(bestResolvedRaw).length}/${modifiers.length})`);
               pluralCategory = bestBucketCat;
             }
             
-            const resolvedFilters = bestResolved;
+            const resolvedFiltersRaw = bestResolvedRaw;
+            const resolvedFilters = flattenResolvedFilters(resolvedFiltersRaw);
             const unresolvedMods = bestUnresolved;
 
             if (foundProducts.length === 0 && (Object.keys(resolvedFilters).length > 0 || unresolvedMods.length > 0)) {
               console.log(`[Chat] Category-first resolved filters: ${JSON.stringify(resolvedFilters)}, unresolved: [${unresolvedMods.join(', ')}]`);
 
               // STAGE 2: Hybrid API call — resolved → options, unresolved → query text
-              const queryText = unresolvedMods.length > 0 ? unresolvedMods.join(' ') : null;
+              // Suppress query when LLM resolved ALL modifiers (no unresolved tokens to search by name)
+              const suppressQuery = unresolvedMods.length === 0 && Object.keys(resolvedFilters).length > 0;
+              const queryText = suppressQuery ? null : (unresolvedMods.length > 0 ? unresolvedMods.join(' ') : null);
+              if (suppressQuery) {
+                console.log(`[Chat] STAGE 2 query suppressed (LLM resolved all modifiers)`);
+              }
               console.log(`[Chat] Category-first STAGE 2: server options=${JSON.stringify(resolvedFilters)}, query="${queryText}"`);
               let serverFiltered = await searchProductsByCandidate(
                 { query: queryText, brand: null, category: pluralCategory, min_price: null, max_price: null },
@@ -3595,53 +3606,108 @@ serve(async (req) => {
                 articleShortCircuit = true;
                 resultMode = 'server_exact_match';
               } else {
-                // Cascading fallback: drop one filter at a time, re-query server
-                const filterKeys = Object.keys(resolvedFilters);
-                if (filterKeys.length > 1) {
-                  let bestRelaxed: Product[] = [];
-                  let droppedKey = '';
-                  for (const dropKey of filterKeys) {
-                    const partial = { ...resolvedFilters };
-                    delete partial[dropKey];
-                    const partialResult = await searchProductsByCandidate(
-                      { query: null, brand: null, category: pluralCategory, min_price: null, max_price: null },
-                      appSettings.volt220_api_token, 50,
-                      partial
+                // FALLBACK на bucket-2 — только bucket'ы с priority=2 (корневой матч)
+                const altBuckets = sortedBuckets
+                  .filter(([name]) => name !== bestBucketCat && bucketPriority[name] === 2)
+                  .slice(0, 2);
+                for (const [altCat, altCount] of altBuckets) {
+                  if (altCount < 2) continue;
+                  console.log(`[Chat] STAGE 2 fallback to bucket-N: "${altCat}" (priority=2)`);
+                  let altProducts = rawProducts.filter(p =>
+                    ((p as any).category?.pagetitle || p.parent_name || 'unknown') === altCat
+                  );
+                  if (altProducts.length < 10 && appSettings.volt220_api_token) {
+                    const extra = await searchProductsByCandidate(
+                      { query: null, brand: null, category: altCat, min_price: null, max_price: null },
+                      appSettings.volt220_api_token, 50
                     );
-                    console.log(`[Chat] Relaxed server filter (dropped ${dropKey}): ${partialResult.length} products`);
-                    if (partialResult.length > bestRelaxed.length) {
-                      bestRelaxed = partialResult;
-                      droppedKey = dropKey;
-                    }
+                    if (extra.length > altProducts.length) altProducts = extra;
                   }
-                  if (bestRelaxed.length > 0) {
-                    foundProducts = bestRelaxed.slice(0, 15);
+                  const { resolved: altResolvedRaw, unresolved: altUnresolved } = await resolveFiltersWithLLM(altProducts, modifiers, appSettings, classification?.critical_modifiers);
+                  const altResolved = flattenResolvedFilters(altResolvedRaw);
+                  if (Object.keys(altResolved).length === 0) {
+                    console.log(`[Chat] Alt bucket "${altCat}" resolved nothing, skip`);
+                    continue;
+                  }
+                  const altSuppressQuery = altUnresolved.length === 0;
+                  const altQuery = altSuppressQuery ? null : (altUnresolved.length > 0 ? altUnresolved.join(' ') : null);
+                  if (altSuppressQuery) console.log(`[Chat] STAGE 2 query suppressed (alt-bucket, LLM resolved all)`);
+                  const altServer = await searchProductsByCandidate(
+                    { query: altQuery, brand: null, category: altCat, min_price: null, max_price: null },
+                    appSettings.volt220_api_token, 50,
+                    altResolved
+                  );
+                  console.log(`[Chat] Alt bucket "${altCat}" server-filtered: ${altServer.length} products`);
+                  if (altServer.length > 0) {
+                    foundProducts = altServer.slice(0, 15);
+                    pluralCategory = altCat;
                     articleShortCircuit = true;
-                    resultMode = `relaxed_server_match (dropped ${droppedKey})`;
+                    resultMode = `server_exact_match (alt-bucket "${altCat}")`;
+                    break;
+                  }
+                }
+
+                // Cascading relaxed fallback: drop one filter at a time, but NEVER drop critical ones
+                if (foundProducts.length === 0) {
+                  const filterKeys = Object.keys(resolvedFilters);
+                  const droppableKeys = filterKeys.filter(k => !(resolvedFiltersRaw[k]?.is_critical));
+                  const blockedCritical = filterKeys.filter(k => resolvedFiltersRaw[k]?.is_critical);
+                  if (droppableKeys.length === 0 && filterKeys.length > 0) {
+                    console.log(`[Chat] Relaxed BLOCKED (critical: ${blockedCritical.join(', ')}) — all resolved filters are critical`);
+                  } else if (filterKeys.length > 1) {
+                    let bestRelaxed: Product[] = [];
+                    let droppedKey = '';
+                    for (const dropKey of droppableKeys) {
+                      const partial = { ...resolvedFilters };
+                      delete partial[dropKey];
+                      const partialResult = await searchProductsByCandidate(
+                        { query: null, brand: null, category: pluralCategory, min_price: null, max_price: null },
+                        appSettings.volt220_api_token, 50,
+                        partial
+                      );
+                      console.log(`[Chat] Relaxed server filter (dropped ${dropKey}): ${partialResult.length} products`);
+                      if (partialResult.length > bestRelaxed.length) {
+                        bestRelaxed = partialResult;
+                        droppedKey = dropKey;
+                      }
+                    }
+                    if (bestRelaxed.length > 0) {
+                      foundProducts = bestRelaxed.slice(0, 15);
+                      articleShortCircuit = true;
+                      resultMode = `relaxed_server_match (dropped ${droppedKey})`;
+                    }
                   }
                 }
 
                 if (foundProducts.length === 0) {
-                  // Final fallback: try modifiers as query text + category (fulltext search)
-                  const modifierQuery = modifiers.join(' ');
-                  console.log(`[Chat] Category-first final fallback: query="${modifierQuery}" + category="${pluralCategory}"`);
-                  const textFallback = await searchProductsByCandidate(
-                    { query: modifierQuery, brand: null, category: pluralCategory, min_price: null, max_price: null },
-                    appSettings.volt220_api_token, 50
-                  );
-                  if (textFallback.length > 0) {
-                    foundProducts = textFallback.slice(0, 15);
-                    articleShortCircuit = true;
-                    resultMode = 'text_fallback';
-                  } else {
+                  // Honest no_match when critical filters block relaxed; otherwise text fallback
+                  const filterKeys = Object.keys(resolvedFilters);
+                  const allCritical = filterKeys.length > 0 && filterKeys.every(k => resolvedFiltersRaw[k]?.is_critical);
+                  if (allCritical) {
+                    console.log(`[Chat] Category-first: honest no_match (all filters critical, no products)`);
                     foundProducts = [];
                     articleShortCircuit = false;
-                    resultMode = 'no_match';
+                    resultMode = 'no_match_critical';
+                  } else {
+                    const modifierQuery = modifiers.join(' ');
+                    console.log(`[Chat] Category-first final fallback: query="${modifierQuery}" + category="${pluralCategory}"`);
+                    const textFallback = await searchProductsByCandidate(
+                      { query: modifierQuery, brand: null, category: pluralCategory, min_price: null, max_price: null },
+                      appSettings.volt220_api_token, 50
+                    );
+                    if (textFallback.length > 0) {
+                      foundProducts = textFallback.slice(0, 15);
+                      articleShortCircuit = true;
+                      resultMode = 'text_fallback';
+                    } else {
+                      foundProducts = [];
+                      articleShortCircuit = false;
+                      resultMode = 'no_match';
+                    }
                   }
                 }
               }
             } else {
-              // No filters resolved — return category list
               foundProducts = rawProducts.slice(0, 15);
               articleShortCircuit = true;
               resultMode = 'no_filters';
@@ -3650,8 +3716,6 @@ serve(async (req) => {
             const categoryElapsed = Date.now() - categoryStart;
             console.log(`[Chat] Category-first DECISION: mode=${resultMode}, count=${foundProducts.length}, elapsed=${categoryElapsed}ms`);
             
-            // Create product_search slot when >7 results (bot will ask clarifying question)
-            // Store filter settings, not products — enables full-catalog re-query on refinement
             if (foundProducts.length > 7) {
               const slotKey = `ps_${Date.now()}`;
               dialogSlots[slotKey] = {
