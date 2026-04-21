@@ -3342,8 +3342,9 @@ serve(async (req) => {
           // Step 2: Resolve the NEW modifier (user's answer) against option schema
           const modifiersToResolve = sp.refinementModifiers || [sp.refinementText];
           console.log(`[Chat] Resolving modifiers: ${JSON.stringify(modifiersToResolve)} (from classifier: ${sp.refinementModifiers ? 'yes' : 'no, fallback'})`);
-          const { resolved: newFilters, unresolved: stillUnresolved } = 
-            await resolveFiltersWithLLM(schemaProducts, modifiersToResolve, appSettings);
+          const { resolved: newFiltersRaw, unresolved: stillUnresolved } = 
+            await resolveFiltersWithLLM(schemaProducts, modifiersToResolve, appSettings, classification?.critical_modifiers);
+          const newFilters = flattenResolvedFilters(newFiltersRaw);
           console.log(`[Chat] FilterLLM refinement: resolved=${JSON.stringify(newFilters)}, unresolved=${JSON.stringify(stillUnresolved)}`);
           
           // Step 3: Merge with existing filters from slot
