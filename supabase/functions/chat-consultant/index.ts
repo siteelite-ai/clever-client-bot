@@ -3138,7 +3138,7 @@ serve(async (req) => {
     const appSettings = await getAppSettings();
     const aiConfig = getAIConfig(appSettings);
     
-    console.log(`[Chat] AI Provider: ${aiConfig.url.includes('openrouter') ? 'OpenRouter' : 'Google AI'}, Model: ${aiConfig.model}`);
+    console.log(`[Chat] AI Provider: OpenRouter (strict), Model: ${aiConfig.model}`);
 
     const lastMessage = messages[messages.length - 1];
     const rawUserMessage = lastMessage?.content || '';
@@ -4510,8 +4510,7 @@ ${productInstructions}`;
 
     if (!response.ok) {
       if (response.status === 429) {
-        const providerName = aiConfig.url.includes('google') ? 'Google AI Studio' : aiConfig.url.includes('openrouter') ? 'OpenRouter' : 'AI';
-        console.error(`[Chat] Rate limit 429 after all keys exhausted (${providerName})`);
+        console.error(`[Chat] Rate limit 429 after all keys exhausted (OpenRouter)`);
         return new Response(
           JSON.stringify({ error: `Превышен лимит запросов к ${providerName}. Подождите 1-2 минуты и попробуйте снова, или смените провайдера/модель в настройках.` }),
           { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
