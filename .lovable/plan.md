@@ -1,94 +1,105 @@
 
 
-# Точечный фикс: OpenRouter + Gemini-2.5 reasoning ломает SSE-парсер и резолвер
+# Диагностика «лотереи» по официальной документации OpenRouter — и точный фикс
 
-## Что нашёл в логах
+## Что выяснилось из документации OpenRouter
 
-Бывший Lovable Gateway / Google direct присылали в SSE только `"content":"..."`. **OpenRouter с моделями Gemini-2.5 (pro и flash-lite)** включает thinking по умолчанию и в каждом чанке стрима добавляет ещё поля: `"reasoning":"..."`, `"reasoning_details":[...]`, `"refusal":null`, `"native_finish_reason":"STOP"`. А в финальном `message` у tool-call'ов `content: null` + полностью забитый `reasoning`.
+Я прочитал три источника: страницу параметров API, страницу модели `google/gemini-2.5-flash-lite` и доку про structured outputs. Три критичных факта, которые меняют диагноз:
 
-В коде есть **regex-парсер SSE**, который ловит «любой content» в чанке:
+### Факт 1. Reasoning у flash-lite УЖЕ выключен по умолчанию
 
-```js
-const contentMatch = text.match(/"content":"([^"]*)"/g); // строки 4641 и 4734
-```
+С официальной страницы модели:
 
-Этот же regex ловит и поля с `content` внутри `reasoning_details`, и пустые `"content":""` рядом с reasoning. Дальше чанк целиком пересылается клиенту через `controller.enqueue(encoder.encode(text))` — то есть юзер получает в стриме reasoning-мусор + пустой content. А `<think>...</think>` стриппер строки 4667/4743 не работает, потому что reasoning приходит в JSON-поле, а не в HTML-тегах.
+> *«By default, "thinking" (i.e. multi-pass reasoning) is **disabled** to prioritize speed»*
 
-Параллельно в `resolveFiltersWithLLM` (строка 2180-2210):
-- `max_tokens: 200` — gemini-2.5-flash-lite через OpenRouter **сжирает все 200 токенов на reasoning** и возвращает пустой `content` → `JSON.parse('')` падает → все модификаторы становятся `unresolved` → STAGE 1/2/3 не находят бакеты.
+Значит наш недавний фикс с `reasoning: { exclude: true }` ничего не дал — thinking и так был выключен. Реальная причина «лотереи» — **не в reasoning**.
 
-Это объясняет лог: для бакета «Светильники (44 товара)» резолв вернул `{}` и ушёл на «Люстры», где придумал случайный `максимальная_площадь_освещения=10`.
+### Факт 2. Дефолты sampling у OpenRouter — недетерминистичные
 
-## Что чиним (минимально, без переделки логики)
-
-### Фикс 1. Отключить reasoning у всех LLM-вызовов через OpenRouter
-
-OpenRouter поддерживает параметр `reasoning: { exclude: true }` или `reasoning: { enabled: false }` — модель не будет отдавать reasoning в ответе и не будет тратить на него токены. Добавить в **все 4 точки вызова** в `supabase/functions/chat-consultant/index.ts`:
-
-| Точка | Строка | Изменение в `body` |
+| Параметр | Default OpenRouter | Что у нас сейчас |
 |---|---|---|
-| Classifier (`classifyProductName`) | ~916-919 | `reasoning: { exclude: true }` |
-| Resolver (`resolveFiltersWithLLM`) | ~2180-2186 | `reasoning: { exclude: true }` + поднять `max_tokens` 200 → 500 на всякий случай |
-| Extract intent (`extractSearchIntent`) | ~651-654 | `reasoning: { exclude: true }` |
-| Main stream (Chat) | ~4504-4509 | `reasoning: { exclude: true }` |
+| `temperature` | **1.0** | 0 ✅ |
+| `top_p` | **1.0** | не передаём ❌ |
+| `top_k` | **0** (= отключено, рассматривает все токены) | не передаём ❌ |
+| `seed` | не задан | не передаём ❌ |
 
-Это вернёт SSE-формат, **идентичный** прежнему Lovable Gateway → весь старый код парсинга снова работает корректно.
+Мы выставляем только `temperature: 0`. Для Gemini этого **недостаточно**: при `top_k=0` (default) модель всё равно сэмплит из всего распределения. Документация явно говорит:
 
-### Фикс 2. Защитить regex-парсер на случай если OpenRouter всё равно пришлёт reasoning
+> *«A value of 1 means the model will always pick the most likely next token, leading to predictable results»*
 
-В обоих местах (строки 4641 и 4734) перед извлечением `"content":"..."` **вырезать** из чанка JSON-поле `"reasoning":"..."` и `"reasoning_details":[...]`. Простыми replace'ами:
+То есть нужно **`top_k: 1`** для greedy decoding.
+
+### Факт 3. `seed` поддерживается, но «Determinism is not guaranteed for some models»
+
+OpenRouter принимает `seed`, но честно предупреждает — для Gemini детерминизм не гарантируется на 100%. Это значит: `seed` помогает, но это не серебряная пуля. Главное — `top_k: 1`.
+
+### Факт 4. OpenRouter балансирует между провайдерами
+
+OpenRouter балансирует запросы Gemini между провайдерами (Google AI Studio / Vertex AI), которые могут давать слегка разные ответы. Решается параметром `provider: { order: ["google-ai-studio"], allow_fallbacks: false }` — фиксирует одного провайдера.
+
+### Факт 5. Есть нативный structured output через `response_format: json_schema`
+
+OpenRouter поддерживает строгий JSON Schema. Сейчас в резолвере мы просим LLM «верни JSON» текстом и парсим regex'ом — отсюда галлюцинации. С `response_format: json_schema, strict: true` модель **физически не может** вернуть значение, которого нет в `enum`. Это убивает галлюцинацию `100W → 13-20` детерминированно.
+
+## Новый план фикса (на основе фактов из доки)
+
+### Шаг 1. Добавить sampling-параметры во все 4 LLM-вызова
+
+В `supabase/functions/chat-consultant/index.ts` (classifier ~918, resolver ~2185, intent ~652, main stream ~4527) добавить в `body`:
 
 ```js
-text = text.replace(/"reasoning":\s*"(?:[^"\\]|\\.)*"/g, '"reasoning":""');
-text = text.replace(/"reasoning_details":\s*\[[\s\S]*?\]/g, '"reasoning_details":[]');
+temperature: 0,
+top_p: 1,         // не сужаем (Gemini рекомендует не комбинировать с top_k)
+top_k: 1,         // ← главное: greedy decoding
+seed: 42,
+provider: { order: ["google-ai-studio"], allow_fallbacks: true }
 ```
 
-Делается ДО извлечения content и ДО enqueue. Это safety net на случай, если у конкретной модели reasoning нельзя выключить.
+Пояснение по `top_p`: для Gemini официальная рекомендация — использовать **либо** `top_k: 1` **либо** `top_p: 0.something`, но не оба нуля. `top_k: 1` уже даёт greedy, `top_p` оставляем 1.0 чтобы не конфликтовать.
 
-### Фикс 3. Защитить `JSON.parse` в резолвере от пустого content
+### Шаг 2. Перевести резолвер на `response_format: json_schema` (главный антигаллюцинационный фикс)
 
-В `resolveFiltersWithLLM` (строка 2210): обернуть `JSON.parse(content)` в try/catch и при ошибке/пустом контенте логировать `[FilterLLM] Empty content (likely reasoning consumed all tokens)` и возвращать `{ resolved: {}, unresolved: [...modifiers] }` — это уже поведение по умолчанию, просто без падения функции.
+В `resolveFiltersWithLLM` для каждого модификатора передавать схему фильтра, у которой каждое значение — **enum из реальных значений API** для этого фильтра в этом бакете. Например для бакета «Светильники» → `мощность: { type: "string", enum: ["13-20", "21-50", "51-100", "101-200", ...] }`.
 
-### Фикс 4. Логи для верификации
+При `strict: true` модель **обязана** выбрать одно из enum — не может выдумать «13-20» для «100W», если 51-100 в списке. Если модель сомневается — возвращает поле как `null`, и оно уходит в `unresolved`. Это прямая замена нашему текущему JSON-парсеру regex'ом.
+
+### Шаг 3. Добавить пост-валидатор как safety net
+
+Даже со strict-схемой логически возможен случай, когда модель выберет `13-20` для `100W` (просто потому что схема не запрещает «неправильный» enum, а только «несуществующий»). Поэтому оставляем семантический числовой валидатор из предыдущего плана (~25 строк): извлечь число из модификатора, извлечь диапазон из value → проверить пересечение → отклонить если не пересекаются.
+
+### Шаг 4. Логи и signature для верификации
 
 Добавить:
-- `[Chat] Streaming with reasoning: excluded` (один раз перед стримом)  
-- `[FilterLLM] Tokens used: prompt=X completion=Y` если OpenRouter отдаёт `usage` в ответе
+- `[FilterLLM] Config: top_k=1 seed=42 provider=google-ai-studio`
+- `[FilterLLM] Schema enums: мощность=[51-100, 101-200], rejected_by_validator=[13-20]`
+- `[Chat] Response signature: filters=sha256(...) reply=sha256(first200chars)`
 
-## Что НЕ трогаем
+Signature позволит за 30 секунд по логам сравнить два разных запроса и понять «детерминизм достигнут» vs «всё ещё расходится».
 
-- Pipeline replacement / category-first / name-first / article-first
-- Persona, greetings ban, markdown rules, RAG
-- Widget, embed.js, миграции БД
-- Модели в `app_settings` (gemini-2.5-pro / flash-lite остаются)
-- Cascade удалили в прошлом фиксе — оставляем «strict OpenRouter»
+## Что НЕ делаем (передумал из прошлого плана)
 
-## Файлы
+- **Не делаем UI с конфигуратором профилей и таблицей `llm_config`** — слишком много кода для проблемы, у которой теперь точная причина и точный фикс. Если после Шагов 1-4 «лотерея» останется — добавим переключатель моделей (flash-lite → flash) точечно через существующую `app_settings`.
+- **Не трогаем `reasoning: {exclude:true}`** — оставляем на месте как safety net для pro/flash, у которых thinking может включиться.
+- **Не меняем pipeline, RAG, persona, widget**.
+
+## Файлы и объём
 
 | Файл | Изменения |
 |---|---|
-| `supabase/functions/chat-consultant/index.ts` | +4 строки `reasoning: { exclude: true }` в 4 reqBody; +2 replace для очистки SSE; +try/catch в резолвере; +1 лог. Итого ~15 строк |
+| `supabase/functions/chat-consultant/index.ts` | +sampling params в 4 reqBody (~20 строк); +`response_format: json_schema` с динамическими enum в resolver (~40 строк); +numeric validator (~25 строк); +signature логи (~10 строк). Итого ~95 строк |
 
-Деплой: только `chat-consultant` edge function.
+Деплой: только `chat-consultant` edge function. Без миграций, без UI.
 
-## Риски
-
-| Риск | Митигация |
-|---|---|
-| OpenRouter не поддерживает `reasoning: {exclude:true}` для конкретной модели | Фикс 2 (вырезание reasoning из SSE) работает как safety net |
-| Без reasoning gemini-2.5-pro будет отвечать хуже на сложные вопросы | Контекст у нас всегда подаётся жёстко структурированным (формат товаров уже в промпте), reasoning тут не помогает — наоборот мешает. Если вдруг качество упадёт на сложных кейсах — включим обратно `reasoning: {effort: "low"}` |
-| Поднятие `max_tokens` резолвера до 500 даст больше latency | На 1 запрос +50-100мс, незаметно |
-
-## Регрессионный тест
+## Регрессионный тест-план
 
 | # | Запрос | Ожидание |
 |---|---|---|
-| 1 | «светильник ДКУ-LED-03-100W (ЭТФ) предложи замену» × 3 | 10 товаров аналогов в ответе (как было до OpenRouter) |
-| 2 | «нужна черная двухместная розетка» × 3 | Стабильно товары, без «не нашлось» |
-| 3 | Артикул «ABB-S201-C16» | Article-first, без изменений |
-| 4 | «как оформить возврат» | RAG, без изменений |
-| 5 | «привет» | Greetings ban активен |
-| 6 | Логи: `[FilterLLM] Resolved with criticality: {…}` непустой для основных запросов; нет `Raw response: ` (пустой) |
+| 1 | «светильник ДКУ-LED-03-100W (ЭТФ) предложи замену» × 5 от разных юзеров | Все 5 signature filters одинаковы; все 5 ответов содержат аналоги |
+| 2 | «лампочка 9W E27» × 3 | Резолвится в `мощность=7-12` (или ближайший enum), не в случайное |
+| 3 | «автомат 16А C» × 3 | Стабильно `16` |
+| 4 | Артикул «ABB-S201-C16» | Article-first, без изменений |
+| 5 | «как оформить возврат» × 3 | RAG, signature reply одинаков |
+| 6 | Логи: `top_k=1` присутствует во всех 4 точках; `Schema enums:` показывает реальный API-список |
 
-После деплоя: открыть виджет, повторить запрос #1 5 раз — должны стабильно приходить аналоги.
+После деплоя: открыть виджет, повторить #1 пять раз с разных вкладок → все ответы должны быть идентичны или почти идентичны (разница только в порядке аналогов).
 
