@@ -663,7 +663,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       const body = { ...classifyBody, model: attempt.model };
       const classifyPromise = callAIWithKeyFallback(attempt.url, attempt.apiKeys, body, 'Classify');
       const timeoutPromise = new Promise<Response>((_, reject) => 
-        setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 8000)
+        setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 12000)
       );
 
       const response = await Promise.race([classifyPromise, timeoutPromise]);
