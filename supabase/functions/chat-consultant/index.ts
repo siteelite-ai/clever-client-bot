@@ -12,6 +12,59 @@ const VOLT220_API_URL = 'https://220volt.kz/api/products';
 // Module-scope constants (visible to all branches: category-first, replacement, etc.)
 const MAX_BUCKETS_TO_CHECK = 5;
 
+// ============================================================================
+// DETERMINISTIC SAMPLING for OpenRouter / Gemini.
+// Per OpenRouter docs: temperature=0 alone is NOT enough for Gemini.
+// top_k=1 forces greedy decoding (always pick most likely token).
+// seed gives extra reproducibility hint (best-effort for Gemini).
+// provider.order locks to a single backend so different users hit the same
+// model implementation (Google AI Studio vs Vertex AI can differ slightly).
+// ============================================================================
+const DETERMINISTIC_SAMPLING = {
+  temperature: 0,
+  top_p: 1,
+  top_k: 1,
+  seed: 42,
+  provider: { order: ['google-ai-studio'], allow_fallbacks: true },
+} as const;
+
+// SHA-256 hex hash for response signatures (used to detect non-determinism in logs).
+async function sha256Hex(input: string): Promise<string> {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 12);
+}
+
+// Numeric semantic validator: ensures e.g. modifier "100W" doesn't get matched
+// to filter range "13-20". Returns true if value semantically fits modifier.
+// If neither side has clear numbers, returns true (let LLM decision stand).
+function semanticNumericFit(modifier: string, value: string): boolean {
+  const modNumMatch = modifier.match(/(\d+(?:[.,]\d+)?)/);
+  if (!modNumMatch) return true;
+  const modNum = parseFloat(modNumMatch[1].replace(',', '.'));
+  if (!isFinite(modNum)) return true;
+
+  // Try range "A-B" or "от A до B"
+  const rangeMatch = value.match(/(\d+(?:[.,]\d+)?)\s*[-–—]\s*(\d+(?:[.,]\d+)?)/);
+  if (rangeMatch) {
+    const a = parseFloat(rangeMatch[1].replace(',', '.'));
+    const b = parseFloat(rangeMatch[2].replace(',', '.'));
+    const lo = Math.min(a, b), hi = Math.max(a, b);
+    // Allow 10% tolerance on both ends (e.g. 100W can match 90-110 range)
+    return modNum >= lo * 0.9 && modNum <= hi * 1.1;
+  }
+  // Single number value
+  const valNumMatch = value.match(/(\d+(?:[.,]\d+)?)/);
+  if (valNumMatch) {
+    const valNum = parseFloat(valNumMatch[1].replace(',', '.'));
+    if (!isFinite(valNum)) return true;
+    // Within 15% — same physical magnitude
+    const ratio = Math.max(modNum, valNum) / Math.max(Math.min(modNum, valNum), 0.001);
+    return ratio <= 1.5;
+  }
+  // No numbers in value — can't validate, accept
+  return true;
+}
+
 // Prioritize buckets whose name matches classifier.category root.
 // Returns sorted entries: [name, count] with priority-aware ordering.
 function prioritizeBuckets(
