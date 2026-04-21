@@ -1583,6 +1583,32 @@ function shortenQuery(cleanedQuery: string): string {
 }
 
 
+/**
+ * Извлекает последнюю упомянутую товарную категорию из conversationHistory.
+ * Эвристика: ищем в последних 8 репликах ключевые товарные корни.
+ * Возвращает корень-маркер (например "розетк") или null.
+ */
+function extractCategoryFromHistory(history: Array<{ role: string; content: string }>): string | null {
+  if (!history || history.length === 0) return null;
+  const productRoots = [
+    'розетк', 'выключател', 'светильник', 'лампа', 'лампочк', 'кабель', 'провод',
+    'автомат', 'щиток', 'щит', 'бокс', 'удлинитель', 'колодк', 'дрель', 'перфоратор',
+    'болгарк', 'ушм', 'отвертк', 'отвёртк', 'стабилизатор', 'счётчик', 'счетчик',
+    'трансформатор', 'рубильник', 'диммер', 'датчик', 'звонок', 'патрон', 'клемм',
+    'гофр', 'короб', 'прожектор', 'фонарь', 'термостат', 'реле', 'узо',
+    'дифавтомат', 'вилка', 'разветвитель', 'таймер'
+  ];
+  for (let i = history.length - 1; i >= Math.max(0, history.length - 8); i--) {
+    const msg = history[i];
+    if (!msg?.content) continue;
+    const lower = msg.content.toLowerCase();
+    for (const root of productRoots) {
+      if (lower.includes(root)) return root;
+    }
+  }
+  return null;
+}
+
 // Генерация поисковых кандидатов через AI с учётом контекста разговора
 async function generateSearchCandidates(
   message: string, 
