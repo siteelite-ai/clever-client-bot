@@ -2243,7 +2243,7 @@ ${JSON.stringify(modifiers)}
       apiKeys = [settings.openrouter_api_key];
     } else {
       console.log('[FilterLLM] OpenRouter selected but no key');
-      return {};
+      return { resolved: {}, unresolved: [...modifiers] };
     }
   } else {
     if (settings.openrouter_api_key) {
