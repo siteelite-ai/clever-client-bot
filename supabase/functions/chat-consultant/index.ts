@@ -2160,12 +2160,22 @@ function discoverOptionKeys(
 /**
  * LLM-driven filter resolution: uses micro-LLM to match modifiers to real option schema
  */
+interface ResolvedFilter {
+  value: string;
+  is_critical: boolean;
+  source_modifier?: string;
+}
+
 async function resolveFiltersWithLLM(
   products: Product[],
   modifiers: string[],
-  settings: CachedSettings
-): Promise<{ resolved: Record<string, string>; unresolved: string[] }> {
+  settings: CachedSettings,
+  criticalModifiers?: string[]
+): Promise<{ resolved: Record<string, ResolvedFilter>; unresolved: string[] }> {
   if (!modifiers || modifiers.length === 0) return { resolved: {}, unresolved: [] };
+  // Default critical = all modifiers (safe behavior)
+  const criticalSet = new Set<string>((criticalModifiers && criticalModifiers.length > 0 ? criticalModifiers : modifiers).map(m => m.toLowerCase().trim()));
+  const isCritical = (mod: string) => criticalSet.has(mod.toLowerCase().trim());
 
   // Build option schema from products
   const optionIndex: Map<string, { caption: string; values: Set<string> }> = new Map();
