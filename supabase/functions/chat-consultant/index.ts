@@ -4657,6 +4657,10 @@ ${productInstructions}`;
           
           let text = decoder.decode(value, { stream: true });
           
+          // Strip OpenRouter reasoning fields BEFORE content extraction & enqueue
+          text = text.replace(/"reasoning":\s*"(?:[^"\\]|\\.)*"/g, '"reasoning":""');
+          text = text.replace(/"reasoning_details":\s*\[[\s\S]*?\]/g, '"reasoning_details":[]');
+          
           try {
             const contentMatch = text.match(/"content":"([^"]*)"/g);
             if (contentMatch) {
@@ -4749,6 +4753,10 @@ ${productInstructions}`;
         }
         
         let text = decoder2.decode(value, { stream: true });
+        
+        // Strip OpenRouter reasoning fields BEFORE content extraction & enqueue
+        text = text.replace(/"reasoning":\s*"(?:[^"\\]|\\.)*"/g, '"reasoning":""');
+        text = text.replace(/"reasoning_details":\s*\[[\s\S]*?\]/g, '"reasoning_details":[]');
         
         try {
           const contentMatch = text.match(/"content":"([^"]*)"/g);
