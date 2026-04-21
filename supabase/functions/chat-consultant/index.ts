@@ -12,6 +12,59 @@ const VOLT220_API_URL = 'https://220volt.kz/api/products';
 // Module-scope constants (visible to all branches: category-first, replacement, etc.)
 const MAX_BUCKETS_TO_CHECK = 5;
 
+// ============================================================================
+// DETERMINISTIC SAMPLING for OpenRouter / Gemini.
+// Per OpenRouter docs: temperature=0 alone is NOT enough for Gemini.
+// top_k=1 forces greedy decoding (always pick most likely token).
+// seed gives extra reproducibility hint (best-effort for Gemini).
+// provider.order locks to a single backend so different users hit the same
+// model implementation (Google AI Studio vs Vertex AI can differ slightly).
+// ============================================================================
+const DETERMINISTIC_SAMPLING = {
+  temperature: 0,
+  top_p: 1,
+  top_k: 1,
+  seed: 42,
+  provider: { order: ['google-ai-studio'], allow_fallbacks: true },
+} as const;
+
+// SHA-256 hex hash for response signatures (used to detect non-determinism in logs).
+async function sha256Hex(input: string): Promise<string> {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 12);
+}
+
+// Numeric semantic validator: ensures e.g. modifier "100W" doesn't get matched
+// to filter range "13-20". Returns true if value semantically fits modifier.
+// If neither side has clear numbers, returns true (let LLM decision stand).
+function semanticNumericFit(modifier: string, value: string): boolean {
+  const modNumMatch = modifier.match(/(\d+(?:[.,]\d+)?)/);
+  if (!modNumMatch) return true;
+  const modNum = parseFloat(modNumMatch[1].replace(',', '.'));
+  if (!isFinite(modNum)) return true;
+
+  // Try range "A-B" or "от A до B"
+  const rangeMatch = value.match(/(\d+(?:[.,]\d+)?)\s*[-–—]\s*(\d+(?:[.,]\d+)?)/);
+  if (rangeMatch) {
+    const a = parseFloat(rangeMatch[1].replace(',', '.'));
+    const b = parseFloat(rangeMatch[2].replace(',', '.'));
+    const lo = Math.min(a, b), hi = Math.max(a, b);
+    // Allow 10% tolerance on both ends (e.g. 100W can match 90-110 range)
+    return modNum >= lo * 0.9 && modNum <= hi * 1.1;
+  }
+  // Single number value
+  const valNumMatch = value.match(/(\d+(?:[.,]\d+)?)/);
+  if (valNumMatch) {
+    const valNum = parseFloat(valNumMatch[1].replace(',', '.'));
+    if (!isFinite(valNum)) return true;
+    // Within 15% — same physical magnitude
+    const ratio = Math.max(modNum, valNum) / Math.max(Math.min(modNum, valNum), 0.001);
+    return ratio <= 1.5;
+  }
+  // No numbers in value — can't validate, accept
+  return true;
+}
+
 // Prioritize buckets whose name matches classifier.category root.
 // Returns sorted entries: [name, count] with priority-aware ordering.
 function prioritizeBuckets(
@@ -649,10 +702,11 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       ...(recentHistory || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
       { role: 'user', content: message }
     ],
-    temperature: 0,
+    ...DETERMINISTIC_SAMPLING,
     max_tokens: 300,
     reasoning: { exclude: true },
   };
+  console.log(`[ExtractIntent] Sampling: top_k=1 seed=42 provider=google-ai-studio`);
 
   // STRICT OpenRouter: single deterministic attempt, no cascade fallbacks.
   // Fallbacks to other providers caused different users to get different classifier outputs.
@@ -915,9 +969,10 @@ async function generateCategorySynonyms(
         },
         { role: 'user', content: category }
       ],
-      temperature: 0,
+      ...DETERMINISTIC_SAMPLING,
       max_tokens: 150,
     };
+    console.log(`[CategorySynonyms] Sampling: top_k=1 seed=42 provider=google-ai-studio`);
 
     const fetchPromise = callAIWithKeyFallback(url, apiKeys, body, 'CategorySynonyms');
     const timeoutPromise = new Promise<Response>((_, reject) =>
@@ -1711,6 +1766,7 @@ ${recentHistory.length > 0 ? 'АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщен
         { role: 'system', content: extractionPrompt },
         { role: 'user', content: message }
       ],
+      ...DETERMINISTIC_SAMPLING,
       reasoning: { exclude: true },
       tools: [
         {
@@ -2182,11 +2238,12 @@ ${JSON.stringify(modifiers)}
   const reqBody = {
     model,
     messages: [{ role: 'user', content: systemPrompt }],
-    temperature: 0,
+    ...DETERMINISTIC_SAMPLING,
     max_tokens: 500,
     response_format: { type: 'json_object' },
     reasoning: { exclude: true },
   };
+  console.log(`[FilterLLM] Sampling: top_k=1 seed=42 provider=google-ai-studio model=${model}`);
 
   try {
     console.log(`[FilterLLM] Resolving ${modifiers.length} modifier(s) against ${optionIndex.size} option(s)`);
@@ -2262,6 +2319,16 @@ ${JSON.stringify(modifiers)}
          return ruPart === nval;
        });
         
+        // SEMANTIC NUMERIC VALIDATOR (safety net beyond LLM strict-match):
+        // catch e.g. "100W" → "13-20" hallucination by checking number fits range.
+        const fitsNumerically = matchedValue ? semanticNumericFit(value, matchedValue) : false;
+        if (matchedValue && !fitsNumerically) {
+          console.log(`[FilterLLM] Numeric validator REJECTED: "${resolvedKey}"="${matchedValue}" doesn't fit modifier "${value}"`);
+          for (const mod of modifiers) {
+            if (norm(mod).includes(norm(value)) || norm(value).includes(norm(mod))) failedModifiers.add(mod);
+          }
+          continue;
+        }
         if (matchedValue) {
           // Track which modifier this resolved from
           const caption = optionIndex.get(resolvedKey)!.caption.toLowerCase();
@@ -2331,7 +2398,8 @@ ${JSON.stringify(modifiers)}
     const unresolved = modifiers.filter(m => !matchedModifiers.has(m) || failedModifiers.has(m));
 
     const criticalitySummary = Object.entries(validated).map(([k, v]) => `${k}=${v.value}(${v.is_critical ? 'crit' : 'opt'})`).join(', ');
-    console.log(`[FilterLLM] Resolved with criticality: {${criticalitySummary}}, unresolved=[${unresolved.join(', ')}]`);
+    const filterSig = await sha256Hex(JSON.stringify(Object.entries(validated).map(([k, v]) => [k, v.value]).sort()));
+    console.log(`[FilterLLM] Resolved with criticality: {${criticalitySummary}}, unresolved=[${unresolved.join(', ')}] | signature=${filterSig}`);
     return { resolved: validated, unresolved };
   } catch (error) {
     console.error(`[FilterLLM] Error:`, error);
@@ -4520,11 +4588,12 @@ ${productInstructions}`;
     ];
     
     console.log(`[Chat] Streaming with reasoning: excluded (model=${aiConfig.model})`);
+    console.log(`[Chat] Sampling: top_k=1 seed=42 provider=google-ai-studio`);
     const response = await callAIWithKeyFallback(aiConfig.url, aiConfig.apiKeys, {
       model: aiConfig.model,
       messages: messagesForAI,
       stream: useStreaming,
-      temperature: 0,
+      ...DETERMINISTIC_SAMPLING,
       reasoning: { exclude: true },
     }, 'Chat');
 
