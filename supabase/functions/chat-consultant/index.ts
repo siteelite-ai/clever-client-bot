@@ -741,7 +741,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       };
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
-        console.log(`[Classify] ${attempt.label} timeout (8s), trying next...`);
+        console.log(`[Classify] ${attempt.label} timeout (12s), no fallback (strict OpenRouter)`);
       } else {
         console.error(`[Classify] ${attempt.label} error:`, e, ', trying next...');
       }
