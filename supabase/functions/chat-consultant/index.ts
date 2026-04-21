@@ -702,10 +702,11 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       ...(recentHistory || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
       { role: 'user', content: message }
     ],
-    temperature: 0,
+    ...DETERMINISTIC_SAMPLING,
     max_tokens: 300,
     reasoning: { exclude: true },
   };
+  console.log(`[ExtractIntent] Sampling: top_k=1 seed=42 provider=google-ai-studio`);
 
   // STRICT OpenRouter: single deterministic attempt, no cascade fallbacks.
   // Fallbacks to other providers caused different users to get different classifier outputs.
@@ -968,9 +969,10 @@ async function generateCategorySynonyms(
         },
         { role: 'user', content: category }
       ],
-      temperature: 0,
+      ...DETERMINISTIC_SAMPLING,
       max_tokens: 150,
     };
+    console.log(`[CategorySynonyms] Sampling: top_k=1 seed=42 provider=google-ai-studio`);
 
     const fetchPromise = callAIWithKeyFallback(url, apiKeys, body, 'CategorySynonyms');
     const timeoutPromise = new Promise<Response>((_, reject) =>
@@ -1764,6 +1766,7 @@ ${recentHistory.length > 0 ? 'АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщен
         { role: 'system', content: extractionPrompt },
         { role: 'user', content: message }
       ],
+      ...DETERMINISTIC_SAMPLING,
       reasoning: { exclude: true },
       tools: [
         {
@@ -2235,11 +2238,12 @@ ${JSON.stringify(modifiers)}
   const reqBody = {
     model,
     messages: [{ role: 'user', content: systemPrompt }],
-    temperature: 0,
+    ...DETERMINISTIC_SAMPLING,
     max_tokens: 500,
     response_format: { type: 'json_object' },
     reasoning: { exclude: true },
   };
+  console.log(`[FilterLLM] Sampling: top_k=1 seed=42 provider=google-ai-studio model=${model}`);
 
   try {
     console.log(`[FilterLLM] Resolving ${modifiers.length} modifier(s) against ${optionIndex.size} option(s)`);
@@ -4577,9 +4581,10 @@ ${productInstructions}`;
       model: aiConfig.model,
       messages: messagesForAI,
       stream: useStreaming,
-      temperature: 0,
+      ...DETERMINISTIC_SAMPLING,
       reasoning: { exclude: true },
     }, 'Chat');
+    console.log(`[Chat] Sampling: top_k=1 seed=42 provider=google-ai-studio`);
 
     if (!response.ok) {
       if (response.status === 429) {
