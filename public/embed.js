@@ -35,6 +35,16 @@
       sessionId = parsed.sessionId || ('session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now());
       conversationHistory = parsed.history || [{ role: 'assistant', content: initialGreeting }];
       dialogSlots = parsed.dialogSlots || {};
+
+      // Инвариант: слоты не могут существовать без пользовательских сообщений.
+      // Если в истории нет ни одной user-реплики — это «новый чат», сбрасываем slots
+      // и пересоздаём sessionId, чтобы сервер не подцеплял зомби-state из прошлой вкладочной сессии.
+      const hasUserMessages = Array.isArray(conversationHistory)
+        && conversationHistory.some(function(m) { return m && m.role === 'user'; });
+      if (!hasUserMessages) {
+        dialogSlots = {};
+        sessionId = 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+      }
     }
   } catch(e) {}
   
