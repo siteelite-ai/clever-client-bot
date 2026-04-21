@@ -4577,6 +4577,7 @@ ${productInstructions}`;
     ];
     
     console.log(`[Chat] Streaming with reasoning: excluded (model=${aiConfig.model})`);
+    console.log(`[Chat] Sampling: top_k=1 seed=42 provider=google-ai-studio`);
     const response = await callAIWithKeyFallback(aiConfig.url, aiConfig.apiKeys, {
       model: aiConfig.model,
       messages: messagesForAI,
@@ -4584,7 +4585,6 @@ ${productInstructions}`;
       ...DETERMINISTIC_SAMPLING,
       reasoning: { exclude: true },
     }, 'Chat');
-    console.log(`[Chat] Sampling: top_k=1 seed=42 provider=google-ai-studio`);
 
     if (!response.ok) {
       if (response.status === 429) {
