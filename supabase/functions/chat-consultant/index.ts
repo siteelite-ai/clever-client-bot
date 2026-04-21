@@ -1583,6 +1583,32 @@ function shortenQuery(cleanedQuery: string): string {
 }
 
 
+/**
+ * Извлекает последнюю упомянутую товарную категорию из conversationHistory.
+ * Эвристика: ищем в последних 8 репликах ключевые товарные корни.
+ * Возвращает корень-маркер (например "розетк") или null.
+ */
+function extractCategoryFromHistory(history: Array<{ role: string; content: string }>): string | null {
+  if (!history || history.length === 0) return null;
+  const productRoots = [
+    'розетк', 'выключател', 'светильник', 'лампа', 'лампочк', 'кабель', 'провод',
+    'автомат', 'щиток', 'щит', 'бокс', 'удлинитель', 'колодк', 'дрель', 'перфоратор',
+    'болгарк', 'ушм', 'отвертк', 'отвёртк', 'стабилизатор', 'счётчик', 'счетчик',
+    'трансформатор', 'рубильник', 'диммер', 'датчик', 'звонок', 'патрон', 'клемм',
+    'гофр', 'короб', 'прожектор', 'фонарь', 'термостат', 'реле', 'узо',
+    'дифавтомат', 'вилка', 'разветвитель', 'таймер'
+  ];
+  for (let i = history.length - 1; i >= Math.max(0, history.length - 8); i--) {
+    const msg = history[i];
+    if (!msg?.content) continue;
+    const lower = msg.content.toLowerCase();
+    for (const root of productRoots) {
+      if (lower.includes(root)) return root;
+    }
+  }
+  return null;
+}
+
 // Генерация поисковых кандидатов через AI с учётом контекста разговора
 async function generateSearchCandidates(
   message: string, 
@@ -1594,10 +1620,23 @@ async function generateSearchCandidates(
 ): Promise<ExtractedIntent> {
   console.log(`[AI Candidates] Extracting search intent from: "${message}", classificationCategory: ${classificationCategory || 'none'}`);
   
-  // Если классификатор определил product_category — это самостоятельный новый запрос,
-  // история НЕ должна загрязнять поисковые кандидаты.
-  // История используется ТОЛЬКО для уточняющих коротких ответов (когда category не определена).
-  const isNewProductQuery = !!classificationCategory;
+  // Two-factor followup detection (фикс slot-памяти):
+  // Уточнение в рамках старого запроса = (a) последняя реплика бота содержала уточняющий вопрос
+  // И (b) категория текущего запроса совпадает с категорией предыдущего товарного хода.
+  // Только тогда оставляем историю — иначе intent-extractor теряет атрибуты («чёрная двухместная»).
+  const lastAssistantMsg = [...conversationHistory].reverse().find(m => m.role === 'assistant')?.content || '';
+  const looksLikeClarificationFollowup = 
+    /\?|уточни|нужно ли|какой|какая|какие|для каких|с\s+каким|какого|какую|сколько/i.test(lastAssistantMsg.slice(-800));
+  
+  const previousCategory = extractCategoryFromHistory(conversationHistory);
+  const prevCatLower = (previousCategory || '').toLowerCase().trim();
+  const currCatLower = (classificationCategory || '').toLowerCase().trim();
+  // Корни типа "розетк" должны матчиться к "розетка"/"розетки" — используем взаимный includes.
+  const sameCategory = !!(prevCatLower && currCatLower && 
+    (currCatLower.includes(prevCatLower) || prevCatLower.includes(currCatLower)));
+  
+  const isFollowup = looksLikeClarificationFollowup && sameCategory;
+  const isNewProductQuery = !!classificationCategory && !isFollowup;
   
   const recentHistory = isNewProductQuery ? [] : conversationHistory.slice(-10);
   let historyContext = '';
@@ -1609,8 +1648,10 @@ ${recentHistory.map(m => `${m.role === 'user' ? 'Клиент' : 'Консуль
 `;
   }
   
-  if (isNewProductQuery) {
-    console.log(`[AI Candidates] Context ISOLATED: new product query detected (category="${classificationCategory}"), history pruned`);
+  if (isFollowup) {
+    console.log(`[AI Candidates] Followup detected: lastAssistantQ=${looksLikeClarificationFollowup}, sameCategory=${sameCategory} (prev="${previousCategory}", curr="${classificationCategory}") → history KEPT (${recentHistory.length} msgs)`);
+  } else if (isNewProductQuery) {
+    console.log(`[AI Candidates] Context ISOLATED: new product query detected (category="${classificationCategory}", prevCategory="${previousCategory || 'none'}", lastAssistantQ=${looksLikeClarificationFollowup}), history pruned`);
   }
   
   const extractionPrompt = `Ты — система извлечения поисковых намерений для интернет-магазина электроинструментов 220volt.kz.
@@ -1895,8 +1936,16 @@ ${recentHistory.length > 0 ? 'АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщен
         console.log(`[AI Candidates] English queries available for fallback: ${englishQueries.join(', ')}`);
       }
       
+      // Safety net: для followup'а intent ВСЕГДА должен быть catalog (продолжение поиска товара).
+      // Если LLM по ошибке вернул general/info — форсируем catalog.
+      let finalIntent: 'catalog' | 'brands' | 'info' | 'general' = parsed.intent || 'general';
+      if (isFollowup && finalIntent !== 'catalog') {
+        console.log(`[AI Candidates] Followup safety-net: intent="${finalIntent}" → forced to "catalog"`);
+        finalIntent = 'catalog';
+      }
+      
       return {
-        intent: parsed.intent || 'general',
+        intent: finalIntent,
         candidates: broadened,
         originalQuery: message,
         usage_context: usageContext,
