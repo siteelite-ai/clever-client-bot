@@ -4597,6 +4597,10 @@ ${productInstructions}`;
       stream: useStreaming,
       ...DETERMINISTIC_SAMPLING,
       reasoning: { exclude: true },
+      // 4096 — safe ceiling: avg response 800-1500 tokens, list of 5-7 products with descriptions ~2500-3000.
+      // Without this, OpenRouter uses provider default (~1024-2048) and gemini-2.5-pro burns part of it on hidden reasoning,
+      // leaving ~200-400 tokens for actual content → response truncates mid-sentence. DO NOT REMOVE.
+      max_tokens: 4096,
     }, 'Chat');
 
     if (!response.ok) {
@@ -4701,6 +4705,7 @@ ${productInstructions}`;
       let greetingRemoved = false;
       let fullContent = '';
       let bufferedChunks: Uint8Array[] = [];
+      let lastFinishReason = '';
       
       const stream = new ReadableStream({
         async pull(controller) {
@@ -4722,6 +4727,7 @@ ${productInstructions}`;
             const estInputTokens = Math.ceil(systemPrompt.length / 3);
             const estOutputTokens = Math.ceil(fullContent.length / 3);
             logTokenUsage(estInputTokens, estOutputTokens, aiConfig.model);
+            console.log(`[Chat] Stream finished (greeting-strip): finish_reason=${lastFinishReason || 'unknown'} contentLen=${fullContent.length}`);
             controller.close();
             return;
           }
@@ -4738,6 +4744,14 @@ ${productInstructions}`;
               for (const m of contentMatch) {
                 fullContent += m.replace(/"content":"/, '').replace(/"$/, '');
               }
+            }
+          } catch {}
+          
+          try {
+            const finishMatches = text.match(/"finish_reason":"([^"]+)"/g);
+            if (finishMatches && finishMatches.length > 0) {
+              const last = finishMatches[finishMatches.length - 1];
+              lastFinishReason = last.replace(/"finish_reason":"/, '').replace(/"$/, '');
             }
           } catch {}
           
@@ -4803,6 +4817,7 @@ ${productInstructions}`;
     const decoder2 = new TextDecoder();
     
     let fullContent2 = '';
+    let lastFinishReason2 = '';
     
     const streamWithContacts = new ReadableStream({
       async pull(controller) {
@@ -4819,6 +4834,7 @@ ${productInstructions}`;
           const estInputTokens = Math.ceil(systemPrompt.length / 3);
           const estOutputTokens = Math.ceil(fullContent2.length / 3);
           logTokenUsage(estInputTokens, estOutputTokens, aiConfig.model);
+          console.log(`[Chat] Stream finished (standard): finish_reason=${lastFinishReason2 || 'unknown'} contentLen=${fullContent2.length}`);
           controller.close();
           return;
         }
@@ -4835,6 +4851,14 @@ ${productInstructions}`;
             for (const m of contentMatch) {
               fullContent2 += m.replace(/"content":"/, '').replace(/"$/, '');
             }
+          }
+        } catch {}
+        
+        try {
+          const finishMatches = text.match(/"finish_reason":"([^"]+)"/g);
+          if (finishMatches && finishMatches.length > 0) {
+            const last = finishMatches[finishMatches.length - 1];
+            lastFinishReason2 = last.replace(/"finish_reason":"/, '').replace(/"$/, '');
           }
         } catch {}
         
