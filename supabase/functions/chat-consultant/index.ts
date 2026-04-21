@@ -651,6 +651,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
     ],
     temperature: 0,
     max_tokens: 300,
+    reasoning: { exclude: true },
   };
 
   // STRICT OpenRouter: single deterministic attempt, no cascade fallbacks.
@@ -1710,6 +1711,7 @@ ${recentHistory.length > 0 ? 'АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщен
         { role: 'system', content: extractionPrompt },
         { role: 'user', content: message }
       ],
+      reasoning: { exclude: true },
       tools: [
         {
           type: 'function',
@@ -2181,8 +2183,9 @@ ${JSON.stringify(modifiers)}
     model,
     messages: [{ role: 'user', content: systemPrompt }],
     temperature: 0,
-    max_tokens: 200,
+    max_tokens: 500,
     response_format: { type: 'json_object' },
+    reasoning: { exclude: true },
   };
 
   try {
@@ -2205,9 +2208,24 @@ ${JSON.stringify(modifiers)}
 
     const data = await response.json();
     const content = data.choices?.[0]?.message?.content || '';
+    const usage = data.usage;
+    if (usage) {
+      console.log(`[FilterLLM] Tokens used: prompt=${usage.prompt_tokens || 0} completion=${usage.completion_tokens || 0}`);
+    }
     console.log(`[FilterLLM] Raw response: ${content}`);
 
-    const parsed = JSON.parse(content);
+    if (!content || !content.trim()) {
+      console.log('[FilterLLM] Empty content (likely reasoning consumed all tokens)');
+      return { resolved: {}, unresolved: [...modifiers] };
+    }
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(content);
+    } catch (e) {
+      console.log(`[FilterLLM] JSON parse failed: ${(e as Error).message}`);
+      return { resolved: {}, unresolved: [...modifiers] };
+    }
     const filters = parsed.filters || parsed;
 
     if (typeof filters !== 'object' || Array.isArray(filters)) {
@@ -4501,11 +4519,13 @@ ${productInstructions}`;
       ...trimmedMessages,
     ];
     
+    console.log(`[Chat] Streaming with reasoning: excluded (model=${aiConfig.model})`);
     const response = await callAIWithKeyFallback(aiConfig.url, aiConfig.apiKeys, {
       model: aiConfig.model,
       messages: messagesForAI,
       stream: useStreaming,
       temperature: 0,
+      reasoning: { exclude: true },
     }, 'Chat');
 
     if (!response.ok) {
