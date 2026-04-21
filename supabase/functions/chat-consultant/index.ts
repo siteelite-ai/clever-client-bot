@@ -4512,7 +4512,7 @@ ${productInstructions}`;
       if (response.status === 429) {
         console.error(`[Chat] Rate limit 429 after all keys exhausted (OpenRouter)`);
         return new Response(
-          JSON.stringify({ error: `Превышен лимит запросов к ${providerName}. Подождите 1-2 минуты и попробуйте снова, или смените провайдера/модель в настройках.` }),
+          JSON.stringify({ error: `Превышен лимит запросов к OpenRouter. Подождите 1-2 минуты и попробуйте снова.` }),
           { status: 429, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
         );
       }
