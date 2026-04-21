@@ -1629,8 +1629,11 @@ async function generateSearchCandidates(
     /\?|уточни|нужно ли|какой|какая|какие|для каких|с\s+каким|какого|какую|сколько/i.test(lastAssistantMsg.slice(-800));
   
   const previousCategory = extractCategoryFromHistory(conversationHistory);
-  const sameCategory = !!(previousCategory && classificationCategory && 
-    previousCategory.toLowerCase().trim() === classificationCategory.toLowerCase().trim());
+  const prevCatLower = (previousCategory || '').toLowerCase().trim();
+  const currCatLower = (classificationCategory || '').toLowerCase().trim();
+  // Корни типа "розетк" должны матчиться к "розетка"/"розетки" — используем взаимный includes.
+  const sameCategory = !!(prevCatLower && currCatLower && 
+    (currCatLower.includes(prevCatLower) || prevCatLower.includes(currCatLower)));
   
   const isFollowup = looksLikeClarificationFollowup && sameCategory;
   const isNewProductQuery = !!classificationCategory && !isFollowup;
