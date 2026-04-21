@@ -653,38 +653,10 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
     max_tokens: 300,
   };
 
-  // Build cascade of providers to try
+  // STRICT OpenRouter: single deterministic attempt, no cascade fallbacks.
+  // Fallbacks to other providers caused different users to get different classifier outputs.
   interface ProviderAttempt { url: string; apiKeys: string[]; model: string; label: string; }
-  const attempts: ProviderAttempt[] = [{ url, apiKeys, model, label: `primary(${classifierProvider})` }];
-
-  // Add fallback providers for resilience
-  if (classifierProvider === 'openrouter' || classifierProvider === 'auto') {
-    // Add Google direct as fallback if keys available and not already primary
-    if (classifierProvider !== 'google' && settings?.google_api_key) {
-      const gKeys = settings.google_api_key.split(/[,\n]/).map(k => k.trim()).filter(k => k.length > 0);
-      if (gKeys.length > 0 && !(url.includes('googleapis.com'))) {
-        attempts.push({ url: 'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions', apiKeys: gKeys, model: 'gemini-2.5-flash-lite', label: 'fallback(google)' });
-      }
-    }
-    // Add OpenRouter as fallback if key available and not already primary
-    if (classifierProvider !== 'openrouter' && settings?.openrouter_api_key && !(url.includes('openrouter.ai'))) {
-      attempts.push({ url: 'https://openrouter.ai/api/v1/chat/completions', apiKeys: [settings.openrouter_api_key], model: 'google/gemini-2.5-flash-lite', label: 'fallback(openrouter)' });
-    }
-    // Add Lovable Gateway as last resort
-    const lovableKey = Deno.env.get('LOVABLE_API_KEY');
-    if (lovableKey && !(url.includes('gateway.lovable.dev'))) {
-      attempts.push({ url: 'https://ai.gateway.lovable.dev/v1/chat/completions', apiKeys: [lovableKey], model: 'google/gemini-2.5-flash-lite', label: 'fallback(gateway)' });
-    }
-  } else if (classifierProvider === 'google') {
-    // Google explicit — add OpenRouter and Gateway as fallbacks
-    if (settings?.openrouter_api_key) {
-      attempts.push({ url: 'https://openrouter.ai/api/v1/chat/completions', apiKeys: [settings.openrouter_api_key], model: 'google/gemini-2.5-flash-lite', label: 'fallback(openrouter)' });
-    }
-    const lovableKey = Deno.env.get('LOVABLE_API_KEY');
-    if (lovableKey) {
-      attempts.push({ url: 'https://ai.gateway.lovable.dev/v1/chat/completions', apiKeys: [lovableKey], model: 'google/gemini-2.5-flash-lite', label: 'fallback(gateway)' });
-    }
-  }
+  const attempts: ProviderAttempt[] = [{ url, apiKeys, model, label: 'openrouter(strict)' }];
 
   for (const attempt of attempts) {
     try {
