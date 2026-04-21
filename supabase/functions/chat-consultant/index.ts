@@ -567,6 +567,7 @@ interface ClassificationResult {
   product_category?: string;
   is_replacement?: boolean;
   search_modifiers?: string[];
+  critical_modifiers?: string[];
 }
 
 async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>, settings?: CachedSettings | null): Promise<ClassificationResult | null> {
@@ -678,9 +679,18 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 
 6. search_modifiers (string[]): ВСЕ уточняющие характеристики из запроса, не вошедшие в category: количество мест/постов, тип монтажа (накладной, скрытый), цвет, бренд, серия/коллекция, степень защиты IP, материал, размер, количественные параметры (длина, сечение, ток). Если таких нет — пустой массив.
 
-КЛЮЧЕВОЙ ПРИНЦИП: category = базовый тип товара для широкого текстового поиска. Все конкретные характеристики (конструкция, подтип, внешние атрибуты) → modifiers. Система фильтрации сама сопоставит модификаторы с реальными характеристиками товаров.
+7. critical_modifiers (string[]): ПОДМНОЖЕСТВО search_modifiers, которые пользователь требует КАТЕГОРИЧНО (без них товар не подходит). Определяй по тону запроса:
+- Если пользователь просто перечислил характеристики ("чёрная двухместная розетка", "розетка с заземлением") — ВСЕ модификаторы критичные.
+- Если пользователь использует смягчающие слова ("примерно", "около", "желательно", "можно", "лучше", "хотелось бы") — соответствующие модификаторы НЕ критичные.
+- Если запрос вообще без модификаторов — пустой массив.
+Примеры:
+- "чёрная двухместная розетка" → search_modifiers=["чёрная","двухместная"], critical_modifiers=["чёрная","двухместная"]
+- "лампочка примерно 9 ватт E27" → search_modifiers=["9 ватт","E27"], critical_modifiers=["E27"] (мощность смягчена "примерно")
+- "розетка legrand белая, желательно с заземлением" → search_modifiers=["legrand","белая","с заземлением"], critical_modifiers=["legrand","белая"] (заземление смягчено "желательно")
 
-Ответь СТРОГО в JSON: {"intent": "catalog"|"brands"|"info"|"general", "has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "...", "is_replacement": bool, "search_modifiers": ["...", "..."]}`
+КЛЮЧЕВОЙ ПРИНЦИП: category = базовый тип товара для широкого текстового поиска. Все конкретные характеристики (конструкция, подтип, внешние атрибуты) → modifiers. Система фильтрации сама сопоставит модификаторы с реальными характеристиками товаров. critical_modifiers говорит системе, какие фильтры НЕЛЬЗЯ ослаблять при fallback.
+
+Ответь СТРОГО в JSON: {"intent": "catalog"|"brands"|"info"|"general", "has_product_name": bool, "product_name": "...", "price_intent": "most_expensive"|"cheapest"|null, "product_category": "...", "is_replacement": bool, "search_modifiers": ["...", "..."], "critical_modifiers": ["...", "..."]}`
       },
       ...(recentHistory || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
       { role: 'user', content: message }
@@ -788,6 +798,11 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       // Safety: if micro-LLM says info/general but product_category is filled, override to catalog
       const finalIntent = ((intent === 'info' || intent === 'general') && parsed.product_category) ? 'catalog' : intent;
       console.log(`[Classify] SUCCESS via ${attempt.label}, intent=${finalIntent}`);
+      const rawSearchMods = Array.isArray(parsed.search_modifiers) ? parsed.search_modifiers.filter((m: unknown) => typeof m === 'string' && m.trim().length > 0) : [];
+      // Default: if critical_modifiers missing/empty but search_modifiers present, treat ALL as critical (safe behavior)
+      let rawCritical = Array.isArray(parsed.critical_modifiers) ? parsed.critical_modifiers.filter((m: unknown) => typeof m === 'string' && m.trim().length > 0) : [];
+      if (rawCritical.length === 0 && rawSearchMods.length > 0) rawCritical = [...rawSearchMods];
+      console.log(`[Chat] Classifier critical_modifiers: [${rawCritical.join(', ')}] (of search_modifiers: [${rawSearchMods.join(', ')}])`);
       return {
         intent: finalIntent as string | undefined,
         has_product_name: !!parsed.has_product_name,
@@ -795,7 +810,8 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
         price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
         product_category: parsed.product_category || undefined,
         is_replacement: !!parsed.is_replacement,
-        search_modifiers: Array.isArray(parsed.search_modifiers) ? parsed.search_modifiers.filter((m: unknown) => typeof m === 'string' && m.trim().length > 0) : [],
+        search_modifiers: rawSearchMods,
+        critical_modifiers: rawCritical,
       };
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
@@ -2144,12 +2160,32 @@ function discoverOptionKeys(
 /**
  * LLM-driven filter resolution: uses micro-LLM to match modifiers to real option schema
  */
+interface ResolvedFilter {
+  value: string;
+  is_critical: boolean;
+  source_modifier?: string;
+}
+
+// Backward-compat helper: flatten { key: {value, is_critical, ...} } → { key: value }
+// Tolerates legacy string values too (defensive against any stale callers).
+function flattenResolvedFilters(resolved: Record<string, ResolvedFilter | string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(resolved)) {
+    out[k] = typeof v === 'object' && v !== null ? (v as ResolvedFilter).value : (v as string);
+  }
+  return out;
+}
+
 async function resolveFiltersWithLLM(
   products: Product[],
   modifiers: string[],
-  settings: CachedSettings
-): Promise<{ resolved: Record<string, string>; unresolved: string[] }> {
+  settings: CachedSettings,
+  criticalModifiers?: string[]
+): Promise<{ resolved: Record<string, ResolvedFilter>; unresolved: string[] }> {
   if (!modifiers || modifiers.length === 0) return { resolved: {}, unresolved: [] };
+  // Default critical = all modifiers (safe behavior)
+  const criticalSet = new Set<string>((criticalModifiers && criticalModifiers.length > 0 ? criticalModifiers : modifiers).map(m => m.toLowerCase().trim()));
+  const isCritical = (mod: string) => criticalSet.has(mod.toLowerCase().trim());
 
   // Build option schema from products
   const optionIndex: Map<string, { caption: string; values: Set<string> }> = new Map();
@@ -2217,7 +2253,7 @@ ${JSON.stringify(modifiers)}
       apiKeys = [settings.openrouter_api_key];
     } else {
       console.log('[FilterLLM] OpenRouter selected but no key');
-      return {};
+      return { resolved: {}, unresolved: [...modifiers] };
     }
   } else {
     if (settings.openrouter_api_key) {
@@ -2272,8 +2308,9 @@ ${JSON.stringify(modifiers)}
     }
 
     // Validate that returned keys AND values exist in schema
-    const validated: Record<string, string> = {};
+    const validated: Record<string, ResolvedFilter> = {};
     const matchedModifiers = new Set<string>();
+    const sourceModifierForKey: Record<string, string> = {};
     const failedModifiers = new Set<string>();
     const norm = (s: string) => s.replace(/ё/g, 'е').toLowerCase().trim();
 
@@ -2300,8 +2337,6 @@ ${JSON.stringify(modifiers)}
        });
         
         if (matchedValue) {
-          validated[resolvedKey] = matchedValue; // use exact value from schema
-          console.log(`[FilterLLM] Resolved (validated): "${resolvedKey}" = "${matchedValue}"`);
           // Track which modifier this resolved from
           const caption = optionIndex.get(resolvedKey)!.caption.toLowerCase();
           const keyLower = resolvedKey.toLowerCase();
@@ -2317,31 +2352,41 @@ ${JSON.stringify(modifiers)}
           for (const mod of modifiers) {
             const nmod = norm(mod);
             const nval = norm(value);
-            // 1. Direct match (existing)
-            if (nmod === nval) { matchedModifiers.add(mod); continue; }
-            // 2. Caption contains modifier (existing)
-            if (caption.includes(nmod)) { matchedModifiers.add(mod); continue; }
-            // 3. Numeric: value is a number, modifier contains that number or a numeral word for it
-            if (/^\d+$/.test(nval)) {
-              // modifier literally contains the digit (e.g. "2-местная" contains "2")
-              if (nmod.includes(nval)) { matchedModifiers.add(mod); continue; }
-              // modifier starts with a numeral root that maps to this digit
-              const matched = Object.entries(numeralMap).some(([root, digit]) =>
-                digit === nval && nmod.startsWith(root)
-              );
-              if (matched) { matchedModifiers.add(mod); continue; }
+            let matched = false;
+            // 1. Direct match
+            if (nmod === nval) matched = true;
+            // 2. Caption contains modifier
+            else if (caption.includes(nmod)) matched = true;
+            // 3. Numeric
+            else if (/^\d+$/.test(nval)) {
+              if (nmod.includes(nval)) matched = true;
+              else if (Object.entries(numeralMap).some(([root, digit]) => digit === nval && nmod.startsWith(root))) matched = true;
             }
-            // 4. Modifier contains root of caption or key (e.g. "местн" in caption "Кол-во мест")
-            const captionWords = caption.split(/[\s\-\/,()]+/).filter(w => w.length >= 3);
-            const keyWords = keyLower.split(/[\s_\-]+/).filter(w => w.length >= 3);
-            const roots = [...captionWords, ...keyWords].map(w => w.slice(0, Math.min(w.length, 4)));
-            if (roots.some(root => nmod.includes(root))) { matchedModifiers.add(mod); continue; }
-            // 5. Multi-word modifier: any word matches value or caption
-            const modWords = nmod.split(/\s+/);
-            if (modWords.length > 1 && modWords.some(mw => mw === nval || caption.includes(mw))) {
-              matchedModifiers.add(mod); continue;
+            if (!matched) {
+              // 4. Modifier contains root of caption or key
+              const captionWords = caption.split(/[\s\-\/,()]+/).filter(w => w.length >= 3);
+              const keyWords = keyLower.split(/[\s_\-]+/).filter(w => w.length >= 3);
+              const roots = [...captionWords, ...keyWords].map(w => w.slice(0, Math.min(w.length, 4)));
+              if (roots.some(root => nmod.includes(root))) matched = true;
+            }
+            if (!matched) {
+              // 5. Multi-word modifier: any word matches value or caption
+              const modWords = nmod.split(/\s+/);
+              if (modWords.length > 1 && modWords.some(mw => mw === nval || caption.includes(mw))) matched = true;
+            }
+            if (matched) {
+              matchedModifiers.add(mod);
+              // Prefer a critical modifier as source if multiple modifiers match the same key
+              if (!sourceModifierForKey[resolvedKey] || (isCritical(mod) && !isCritical(sourceModifierForKey[resolvedKey]))) {
+                sourceModifierForKey[resolvedKey] = mod;
+              }
             }
           }
+          const sourceMod = sourceModifierForKey[resolvedKey];
+          // is_critical: if any matched modifier was critical, OR no source identified but criticalSet treats it critical by default
+          const critical = sourceMod ? isCritical(sourceMod) : true;
+          validated[resolvedKey] = { value: matchedValue, is_critical: critical, source_modifier: sourceMod };
+          console.log(`[FilterLLM] Resolved (validated): "${resolvedKey}" = "${matchedValue}" [critical=${critical}, src="${sourceMod || 'n/a'}"]`);
         } else {
           console.log(`[FilterLLM] Key "${resolvedKey}" valid, but value "${value}" NOT in schema values [${[...knownValues].slice(0, 5).join(', ')}...] → unresolved`);
           // Find which modifier this came from
@@ -2359,7 +2404,8 @@ ${JSON.stringify(modifiers)}
     // Unresolved = modifiers NOT matched by successful validation + those that failed validation
     const unresolved = modifiers.filter(m => !matchedModifiers.has(m) || failedModifiers.has(m));
 
-    console.log(`[FilterLLM] Result: resolved=${JSON.stringify(validated)}, unresolved=[${unresolved.join(', ')}]`);
+    const criticalitySummary = Object.entries(validated).map(([k, v]) => `${k}=${v.value}(${v.is_critical ? 'crit' : 'opt'})`).join(', ');
+    console.log(`[FilterLLM] Resolved with criticality: {${criticalitySummary}}, unresolved=[${unresolved.join(', ')}]`);
     return { resolved: validated, unresolved };
   } catch (error) {
     console.error(`[FilterLLM] Error:`, error);
@@ -2619,7 +2665,8 @@ async function searchProductsMulti(
   // === LOCAL CHARACTERISTIC FILTERING (primary mechanism) ===
   if (modifiers && modifiers.length > 0 && productMap.size > 0 && settings) {
     const allProducts = Array.from(productMap.values());
-    const { resolved: resolvedFilters } = await resolveFiltersWithLLM(allProducts, modifiers, settings);
+    const { resolved: resolvedFiltersRaw } = await resolveFiltersWithLLM(allProducts, modifiers, settings);
+    const resolvedFilters = flattenResolvedFilters(resolvedFiltersRaw);
     
     if (Object.keys(resolvedFilters).length > 0) {
       console.log(`[Search] Resolved filters: ${JSON.stringify(resolvedFilters)}`);
@@ -3295,8 +3342,9 @@ serve(async (req) => {
           // Step 2: Resolve the NEW modifier (user's answer) against option schema
           const modifiersToResolve = sp.refinementModifiers || [sp.refinementText];
           console.log(`[Chat] Resolving modifiers: ${JSON.stringify(modifiersToResolve)} (from classifier: ${sp.refinementModifiers ? 'yes' : 'no, fallback'})`);
-          const { resolved: newFilters, unresolved: stillUnresolved } = 
-            await resolveFiltersWithLLM(schemaProducts, modifiersToResolve, appSettings);
+          const { resolved: newFiltersRaw, unresolved: stillUnresolved } = 
+            await resolveFiltersWithLLM(schemaProducts, modifiersToResolve, appSettings, classification?.critical_modifiers);
+          const newFilters = flattenResolvedFilters(newFiltersRaw);
           console.log(`[Chat] FilterLLM refinement: resolved=${JSON.stringify(newFilters)}, unresolved=${JSON.stringify(stillUnresolved)}`);
           
           // Step 3: Merge with existing filters from slot
@@ -3480,9 +3528,18 @@ serve(async (req) => {
             // Prioritize buckets whose name matches classifier.category (root match) before sorting by size.
             const sortedBuckets = prioritizeBuckets(categoryDistribution, effectiveCategory);
             console.log(`[Chat] Sorted buckets (category-first, kw="${effectiveCategory}"): ${JSON.stringify(sortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK))}`);
+            // Compute priority map for fallback (priority=2 = root match with classifier.category)
+            const bucketPriority: Record<string, number> = {};
+            for (const [name] of sortedBuckets) {
+              const lower = name.toLowerCase();
+              const kw = (effectiveCategory || '').toLowerCase().trim();
+              const root = kw.replace(/(ыми|ями|ами|ого|ему|ому|ой|ей|ую|юю|ие|ые|ах|ям|ов|ев|ам|ы|и|а|у|е|о|я)$/, '');
+              const useRoot = root.length >= 4 ? root : kw;
+              bucketPriority[name] = (kw && lower.includes(kw)) || (useRoot && lower.includes(useRoot)) ? 2 : 0;
+            }
             
             let bestBucketCat = '';
-            let bestResolved: Record<string, string> = {};
+            let bestResolvedRaw: Record<string, ResolvedFilter> = {};
             let bestUnresolved: string[] = [...modifiers];
             
             for (const [catName, count] of sortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK)) {
@@ -3490,7 +3547,6 @@ serve(async (req) => {
               let bucketProducts = rawProducts.filter(p => 
                 ((p as any).category?.pagetitle || p.parent_name || 'unknown') === catName
               );
-              // If bucket is too small for representative schema, fetch more from this category
               if (bucketProducts.length < 10 && appSettings.volt220_api_token) {
                 console.log(`[Chat] Bucket "${catName}" too small (${bucketProducts.length}), fetching more for schema...`);
                 const extraProducts = await searchProductsByCandidate(
@@ -3502,38 +3558,41 @@ serve(async (req) => {
                   console.log(`[Chat] Bucket "${catName}" expanded to ${bucketProducts.length} products`);
                 }
               }
-              const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, modifiers, appSettings);
-              console.log(`[Chat] Bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(br)}, unresolved=[${bu.join(', ')}]`);
+              const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, modifiers, appSettings, classification?.critical_modifiers);
+              console.log(`[Chat] Bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(flattenResolvedFilters(br))}, unresolved=[${bu.join(', ')}]`);
               
-              if (Object.keys(br).length > Object.keys(bestResolved).length) {
+              if (Object.keys(br).length > Object.keys(bestResolvedRaw).length) {
                 bestBucketCat = catName;
-                bestResolved = br;
+                bestResolvedRaw = br;
                 bestUnresolved = bu;
               }
-              // All modifiers resolved — no need to check more buckets
               if (Object.keys(br).length >= modifiers.length) break;
             }
             
-            // If no bucket resolved anything, fall back to the largest bucket
-            if (Object.keys(bestResolved).length === 0 && sortedBuckets.length > 0) {
+            if (Object.keys(bestResolvedRaw).length === 0 && sortedBuckets.length > 0) {
               bestBucketCat = sortedBuckets[0][0];
               console.log(`[Chat] No bucket resolved modifiers, using largest: "${bestBucketCat}"`);
             }
             
-            // Update pluralCategory to the winning bucket
             if (bestBucketCat) {
-              console.log(`[Chat] Category-first WINNER: "${bestBucketCat}" (resolved ${Object.keys(bestResolved).length}/${modifiers.length})`);
+              console.log(`[Chat] Category-first WINNER: "${bestBucketCat}" (resolved ${Object.keys(bestResolvedRaw).length}/${modifiers.length})`);
               pluralCategory = bestBucketCat;
             }
             
-            const resolvedFilters = bestResolved;
+            const resolvedFiltersRaw = bestResolvedRaw;
+            const resolvedFilters = flattenResolvedFilters(resolvedFiltersRaw);
             const unresolvedMods = bestUnresolved;
 
             if (foundProducts.length === 0 && (Object.keys(resolvedFilters).length > 0 || unresolvedMods.length > 0)) {
               console.log(`[Chat] Category-first resolved filters: ${JSON.stringify(resolvedFilters)}, unresolved: [${unresolvedMods.join(', ')}]`);
 
               // STAGE 2: Hybrid API call — resolved → options, unresolved → query text
-              const queryText = unresolvedMods.length > 0 ? unresolvedMods.join(' ') : null;
+              // Suppress query when LLM resolved ALL modifiers (no unresolved tokens to search by name)
+              const suppressQuery = unresolvedMods.length === 0 && Object.keys(resolvedFilters).length > 0;
+              const queryText = suppressQuery ? null : (unresolvedMods.length > 0 ? unresolvedMods.join(' ') : null);
+              if (suppressQuery) {
+                console.log(`[Chat] STAGE 2 query suppressed (LLM resolved all modifiers)`);
+              }
               console.log(`[Chat] Category-first STAGE 2: server options=${JSON.stringify(resolvedFilters)}, query="${queryText}"`);
               let serverFiltered = await searchProductsByCandidate(
                 { query: queryText, brand: null, category: pluralCategory, min_price: null, max_price: null },
@@ -3547,53 +3606,108 @@ serve(async (req) => {
                 articleShortCircuit = true;
                 resultMode = 'server_exact_match';
               } else {
-                // Cascading fallback: drop one filter at a time, re-query server
-                const filterKeys = Object.keys(resolvedFilters);
-                if (filterKeys.length > 1) {
-                  let bestRelaxed: Product[] = [];
-                  let droppedKey = '';
-                  for (const dropKey of filterKeys) {
-                    const partial = { ...resolvedFilters };
-                    delete partial[dropKey];
-                    const partialResult = await searchProductsByCandidate(
-                      { query: null, brand: null, category: pluralCategory, min_price: null, max_price: null },
-                      appSettings.volt220_api_token, 50,
-                      partial
+                // FALLBACK на bucket-2 — только bucket'ы с priority=2 (корневой матч)
+                const altBuckets = sortedBuckets
+                  .filter(([name]) => name !== bestBucketCat && bucketPriority[name] === 2)
+                  .slice(0, 2);
+                for (const [altCat, altCount] of altBuckets) {
+                  if (altCount < 2) continue;
+                  console.log(`[Chat] STAGE 2 fallback to bucket-N: "${altCat}" (priority=2)`);
+                  let altProducts = rawProducts.filter(p =>
+                    ((p as any).category?.pagetitle || p.parent_name || 'unknown') === altCat
+                  );
+                  if (altProducts.length < 10 && appSettings.volt220_api_token) {
+                    const extra = await searchProductsByCandidate(
+                      { query: null, brand: null, category: altCat, min_price: null, max_price: null },
+                      appSettings.volt220_api_token, 50
                     );
-                    console.log(`[Chat] Relaxed server filter (dropped ${dropKey}): ${partialResult.length} products`);
-                    if (partialResult.length > bestRelaxed.length) {
-                      bestRelaxed = partialResult;
-                      droppedKey = dropKey;
-                    }
+                    if (extra.length > altProducts.length) altProducts = extra;
                   }
-                  if (bestRelaxed.length > 0) {
-                    foundProducts = bestRelaxed.slice(0, 15);
+                  const { resolved: altResolvedRaw, unresolved: altUnresolved } = await resolveFiltersWithLLM(altProducts, modifiers, appSettings, classification?.critical_modifiers);
+                  const altResolved = flattenResolvedFilters(altResolvedRaw);
+                  if (Object.keys(altResolved).length === 0) {
+                    console.log(`[Chat] Alt bucket "${altCat}" resolved nothing, skip`);
+                    continue;
+                  }
+                  const altSuppressQuery = altUnresolved.length === 0;
+                  const altQuery = altSuppressQuery ? null : (altUnresolved.length > 0 ? altUnresolved.join(' ') : null);
+                  if (altSuppressQuery) console.log(`[Chat] STAGE 2 query suppressed (alt-bucket, LLM resolved all)`);
+                  const altServer = await searchProductsByCandidate(
+                    { query: altQuery, brand: null, category: altCat, min_price: null, max_price: null },
+                    appSettings.volt220_api_token, 50,
+                    altResolved
+                  );
+                  console.log(`[Chat] Alt bucket "${altCat}" server-filtered: ${altServer.length} products`);
+                  if (altServer.length > 0) {
+                    foundProducts = altServer.slice(0, 15);
+                    pluralCategory = altCat;
                     articleShortCircuit = true;
-                    resultMode = `relaxed_server_match (dropped ${droppedKey})`;
+                    resultMode = `server_exact_match (alt-bucket "${altCat}")`;
+                    break;
+                  }
+                }
+
+                // Cascading relaxed fallback: drop one filter at a time, but NEVER drop critical ones
+                if (foundProducts.length === 0) {
+                  const filterKeys = Object.keys(resolvedFilters);
+                  const droppableKeys = filterKeys.filter(k => !(resolvedFiltersRaw[k]?.is_critical));
+                  const blockedCritical = filterKeys.filter(k => resolvedFiltersRaw[k]?.is_critical);
+                  if (droppableKeys.length === 0 && filterKeys.length > 0) {
+                    console.log(`[Chat] Relaxed BLOCKED (critical: ${blockedCritical.join(', ')}) — all resolved filters are critical`);
+                  } else if (filterKeys.length > 1) {
+                    let bestRelaxed: Product[] = [];
+                    let droppedKey = '';
+                    for (const dropKey of droppableKeys) {
+                      const partial = { ...resolvedFilters };
+                      delete partial[dropKey];
+                      const partialResult = await searchProductsByCandidate(
+                        { query: null, brand: null, category: pluralCategory, min_price: null, max_price: null },
+                        appSettings.volt220_api_token, 50,
+                        partial
+                      );
+                      console.log(`[Chat] Relaxed server filter (dropped ${dropKey}): ${partialResult.length} products`);
+                      if (partialResult.length > bestRelaxed.length) {
+                        bestRelaxed = partialResult;
+                        droppedKey = dropKey;
+                      }
+                    }
+                    if (bestRelaxed.length > 0) {
+                      foundProducts = bestRelaxed.slice(0, 15);
+                      articleShortCircuit = true;
+                      resultMode = `relaxed_server_match (dropped ${droppedKey})`;
+                    }
                   }
                 }
 
                 if (foundProducts.length === 0) {
-                  // Final fallback: try modifiers as query text + category (fulltext search)
-                  const modifierQuery = modifiers.join(' ');
-                  console.log(`[Chat] Category-first final fallback: query="${modifierQuery}" + category="${pluralCategory}"`);
-                  const textFallback = await searchProductsByCandidate(
-                    { query: modifierQuery, brand: null, category: pluralCategory, min_price: null, max_price: null },
-                    appSettings.volt220_api_token, 50
-                  );
-                  if (textFallback.length > 0) {
-                    foundProducts = textFallback.slice(0, 15);
-                    articleShortCircuit = true;
-                    resultMode = 'text_fallback';
-                  } else {
+                  // Honest no_match when critical filters block relaxed; otherwise text fallback
+                  const filterKeys = Object.keys(resolvedFilters);
+                  const allCritical = filterKeys.length > 0 && filterKeys.every(k => resolvedFiltersRaw[k]?.is_critical);
+                  if (allCritical) {
+                    console.log(`[Chat] Category-first: honest no_match (all filters critical, no products)`);
                     foundProducts = [];
                     articleShortCircuit = false;
-                    resultMode = 'no_match';
+                    resultMode = 'no_match_critical';
+                  } else {
+                    const modifierQuery = modifiers.join(' ');
+                    console.log(`[Chat] Category-first final fallback: query="${modifierQuery}" + category="${pluralCategory}"`);
+                    const textFallback = await searchProductsByCandidate(
+                      { query: modifierQuery, brand: null, category: pluralCategory, min_price: null, max_price: null },
+                      appSettings.volt220_api_token, 50
+                    );
+                    if (textFallback.length > 0) {
+                      foundProducts = textFallback.slice(0, 15);
+                      articleShortCircuit = true;
+                      resultMode = 'text_fallback';
+                    } else {
+                      foundProducts = [];
+                      articleShortCircuit = false;
+                      resultMode = 'no_match';
+                    }
                   }
                 }
               }
             } else {
-              // No filters resolved — return category list
               foundProducts = rawProducts.slice(0, 15);
               articleShortCircuit = true;
               resultMode = 'no_filters';
@@ -3602,8 +3716,6 @@ serve(async (req) => {
             const categoryElapsed = Date.now() - categoryStart;
             console.log(`[Chat] Category-first DECISION: mode=${resultMode}, count=${foundProducts.length}, elapsed=${categoryElapsed}ms`);
             
-            // Create product_search slot when >7 results (bot will ask clarifying question)
-            // Store filter settings, not products — enables full-catalog re-query on refinement
             if (foundProducts.length > 7) {
               const slotKey = `ps_${Date.now()}`;
               dialogSlots[slotKey] = {
@@ -3710,12 +3822,18 @@ serve(async (req) => {
               // Prioritize buckets matching classifier.category root.
               const replSortedBuckets = prioritizeBuckets(replCatDist, replCategory);
               console.log(`[Chat] Sorted buckets (replacement, kw="${replCategory}"): ${JSON.stringify(replSortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK))}`);
+              const replBucketPriority: Record<string, number> = {};
+              for (const [name] of replSortedBuckets) {
+                const lower = name.toLowerCase();
+                const kw = (replCategory || '').toLowerCase().trim();
+                const root = kw.replace(/(ыми|ями|ами|ого|ему|ому|ой|ей|ую|юю|ие|ые|ах|ям|ов|ев|ам|ы|и|а|у|е|о|я)$/, '');
+                const useRoot = root.length >= 4 ? root : kw;
+                replBucketPriority[name] = (kw && lower.includes(kw)) || (useRoot && lower.includes(useRoot)) ? 2 : 0;
+              }
               
               let replBestCat = '';
-              let replBestResolved: Record<string, string> = {};
+              let replBestResolvedRaw: Record<string, ResolvedFilter> = {};
               let replBestUnresolved: string[] = [...replModifiers];
-              // Accumulator for resolved replacements; bucket-matching only resolves filters,
-              // STAGE 2 below populates this array with actual analog products.
               let replacementProducts: Product[] = [];
               
               for (const [catName, count] of replSortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK)) {
@@ -3723,7 +3841,6 @@ serve(async (req) => {
                 let bucketProducts = replRawProducts.filter(p =>
                   ((p as any).category?.pagetitle || p.parent_name || 'unknown') === catName
                 );
-                // Expand small buckets for better schema
                 if (bucketProducts.length < 10 && appSettings.volt220_api_token) {
                   console.log(`[Chat] Replacement bucket "${catName}" too small (${bucketProducts.length}), fetching more...`);
                   const extraProducts = await searchProductsByCandidate(
@@ -3735,32 +3852,34 @@ serve(async (req) => {
                     console.log(`[Chat] Replacement bucket "${catName}" expanded to ${bucketProducts.length}`);
                   }
                 }
-                const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, replModifiers, appSettings);
-                console.log(`[Chat] Replacement bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(br)}, unresolved=[${bu.join(', ')}]`);
-                if (Object.keys(br).length > Object.keys(replBestResolved).length) {
+                const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, replModifiers, appSettings, classification?.critical_modifiers);
+                console.log(`[Chat] Replacement bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(flattenResolvedFilters(br))}, unresolved=[${bu.join(', ')}]`);
+                if (Object.keys(br).length > Object.keys(replBestResolvedRaw).length) {
                   replBestCat = catName;
-                  replBestResolved = br;
+                  replBestResolvedRaw = br;
                   replBestUnresolved = bu;
                 }
                 if (Object.keys(br).length >= replModifiers.length) break;
               }
               
-              if (Object.keys(replBestResolved).length === 0 && replSortedBuckets.length > 0) {
+              if (Object.keys(replBestResolvedRaw).length === 0 && replSortedBuckets.length > 0) {
                 replBestCat = replSortedBuckets[0][0];
               }
               if (replBestCat) {
-                console.log(`[Chat] Replacement WINNER: "${replBestCat}" (resolved ${Object.keys(replBestResolved).length}/${replModifiers.length})`);
+                console.log(`[Chat] Replacement WINNER: "${replBestCat}" (resolved ${Object.keys(replBestResolvedRaw).length}/${replModifiers.length})`);
                 pluralRepl = replBestCat;
               }
               
-              const replResolvedFilters = replBestResolved;
+              const replResolvedFiltersRaw = replBestResolvedRaw;
+              const replResolvedFilters = flattenResolvedFilters(replResolvedFiltersRaw);
               const replUnresolvedMods = replBestUnresolved;
 
               if (replacementProducts.length === 0 && (Object.keys(replResolvedFilters).length > 0 || replUnresolvedMods.length > 0)) {
-                // STAGE 2: resolveFiltersWithLLM already mapped human modifiers → options[key]=value above
                 console.log(`[Chat] Replacement STAGE 2: resolved options=${JSON.stringify(replResolvedFilters)}, unresolved=[${replUnresolvedMods.join(', ')}]`);
-                // STAGE 3: Hybrid API call — server-side filter by characteristics, not by name tokens
-                const replQueryText = replUnresolvedMods.length > 0 ? replUnresolvedMods.join(' ') : null;
+                // STAGE 3: Hybrid API call. Suppress query when LLM resolved ALL modifiers.
+                const replSuppressQuery = replUnresolvedMods.length === 0 && Object.keys(replResolvedFilters).length > 0;
+                const replQueryText = replSuppressQuery ? null : (replUnresolvedMods.length > 0 ? replUnresolvedMods.join(' ') : null);
+                if (replSuppressQuery) console.log(`[Chat] STAGE 2 query suppressed (replacement, LLM resolved all modifiers)`);
                 console.log(`[Chat] Replacement STAGE 3: API call category="${pluralRepl}", options=${JSON.stringify(replResolvedFilters)}, query="${replQueryText}"`);
                 let replFiltered = await searchProductsByCandidate(
                   { query: replQueryText, brand: null, category: pluralRepl, min_price: null, max_price: null },
@@ -3769,13 +3888,54 @@ serve(async (req) => {
                 );
                 console.log(`[Chat] Replacement STAGE 3 result: ${replFiltered.length} products`);
                 
-                // Cascading fallback: drop filters one by one if 0 results
+                // Fallback на bucket-2 (priority=2) ДО relaxed
+                if (replFiltered.length === 0) {
+                  const altBuckets = replSortedBuckets
+                    .filter(([name]) => name !== replBestCat && replBucketPriority[name] === 2)
+                    .slice(0, 2);
+                  for (const [altCat, altCount] of altBuckets) {
+                    if (altCount < 2) continue;
+                    console.log(`[Chat] STAGE 2 fallback to bucket-N: "${altCat}" (replacement, priority=2)`);
+                    let altProducts = replRawProducts.filter(p =>
+                      ((p as any).category?.pagetitle || p.parent_name || 'unknown') === altCat
+                    );
+                    if (altProducts.length < 10 && appSettings.volt220_api_token) {
+                      const extra = await searchProductsByCandidate(
+                        { query: null, brand: null, category: altCat, min_price: null, max_price: null },
+                        appSettings.volt220_api_token, 50
+                      );
+                      if (extra.length > altProducts.length) altProducts = extra;
+                    }
+                    const { resolved: altResolvedRaw, unresolved: altUnresolved } = await resolveFiltersWithLLM(altProducts, replModifiers, appSettings, classification?.critical_modifiers);
+                    const altResolved = flattenResolvedFilters(altResolvedRaw);
+                    if (Object.keys(altResolved).length === 0) continue;
+                    const altSuppress = altUnresolved.length === 0;
+                    const altQ = altSuppress ? null : (altUnresolved.length > 0 ? altUnresolved.join(' ') : null);
+                    const altServer = await searchProductsByCandidate(
+                      { query: altQ, brand: null, category: altCat, min_price: null, max_price: null },
+                      appSettings.volt220_api_token, 50,
+                      altResolved
+                    );
+                    console.log(`[Chat] Replacement alt-bucket "${altCat}" server: ${altServer.length} products`);
+                    if (altServer.length > 0) {
+                      replFiltered = altServer;
+                      pluralRepl = altCat;
+                      break;
+                    }
+                  }
+                }
+
+                // Cascading relaxed fallback — only drop NON-critical filters
                 if (replFiltered.length === 0) {
                   const replFilterKeys = Object.keys(replResolvedFilters);
-                  if (replFilterKeys.length > 1) {
+                  const droppableKeys = replFilterKeys.filter(k => !(replResolvedFiltersRaw[k]?.is_critical));
+                  const blockedCritical = replFilterKeys.filter(k => replResolvedFiltersRaw[k]?.is_critical);
+                  if (droppableKeys.length === 0 && replFilterKeys.length > 0) {
+                    console.log(`[Chat] Relaxed BLOCKED (replacement, critical: ${blockedCritical.join(', ')})`);
+                  } else if (replFilterKeys.length > 1) {
                     let bestRelaxed: Product[] = [];
                     let droppedKey = '';
-                    for (const dropKey of replFilterKeys) {
+                    for (const dropKey of droppableKeys) {
                       const partial = { ...replResolvedFilters };
                       delete partial[dropKey];
                       const partialResult = await searchProductsByCandidate(
@@ -3795,8 +3955,8 @@ serve(async (req) => {
                     }
                   }
                   
-                  // Final fallback: modifiers as text query
-                  if (replFiltered.length === 0) {
+                  // Final fallback: modifiers as text query — only if no critical block
+                  if (replFiltered.length === 0 && (droppableKeys.length > 0 || replFilterKeys.length === 0)) {
                     const modQuery = replModifiers.join(' ');
                     replFiltered = await searchProductsByCandidate(
                       { query: modQuery, brand: null, category: pluralRepl, min_price: null, max_price: null },
