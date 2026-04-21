@@ -545,40 +545,20 @@ interface ClassificationResult {
 }
 
 async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>, settings?: CachedSettings | null): Promise<ClassificationResult | null> {
-  const classifierProvider = settings?.classifier_provider || 'auto';
-  const classifierModel = settings?.classifier_model || 'gemini-2.5-flash-lite';
-  
-  let url: string;
-  let apiKeys: string[];
-  let model: string = classifierModel;
-
-  if (classifierProvider === 'openrouter') {
-    // Explicit OpenRouter mode
-    if (settings?.openrouter_api_key) {
-      url = 'https://openrouter.ai/api/v1/chat/completions';
-      apiKeys = [settings.openrouter_api_key];
-      // For OpenRouter, use the model as-is (e.g. google/gemini-2.5-flash-lite:free)
-      console.log(`[Classify] Using OpenRouter with model ${model}`);
-    } else {
-      console.log('[Classify] OpenRouter selected but no key, skipping');
-      return null;
-    }
-  } else {
-    // Auto mode: OpenRouter → Lovable Gateway
-    if (settings?.openrouter_api_key) {
-      url = 'https://openrouter.ai/api/v1/chat/completions';
-      apiKeys = [settings.openrouter_api_key];
-      if (!model.includes('/')) model = 'google/gemini-2.5-flash-lite';
-      console.log(`[Classify] Auto: Using OpenRouter with model ${model}`);
-    } else {
-      const lovableKey = Deno.env.get('LOVABLE_API_KEY');
-      if (!lovableKey) { console.log('[Classify] No API keys configured, skipping'); return null; }
-      url = 'https://ai.gateway.lovable.dev/v1/chat/completions';
-      apiKeys = [lovableKey];
-      model = 'gemini-2.5-flash-lite';
-      console.log('[Classify] Auto: Fallback to LOVABLE_API_KEY');
-    }
+  // STRICT OpenRouter: no cascade, no Google direct, no Lovable Gateway.
+  // Cascade fallbacks were a primary source of non-determinism (different users got different providers).
+  if (!settings?.openrouter_api_key) {
+    console.log('[Classify] OpenRouter key missing — classification skipped (deterministic null)');
+    return null;
   }
+
+  let model = settings.classifier_model || 'google/gemini-2.5-flash-lite';
+  if (!model.includes('/')) model = `google/${model}`;
+
+  const url = 'https://openrouter.ai/api/v1/chat/completions';
+  const apiKeys = [settings.openrouter_api_key];
+
+  console.log(`[Classify] OpenRouter (strict), model=${model}`);
 
   const classifyBody = {
     model: model,
