@@ -95,6 +95,132 @@ function prioritizeBuckets(
     .map((b) => [b.name, b.count] as [string, number]);
 }
 
+// =============================================================================
+// CATEGORY CATALOG CACHE + LLM MATCHER (semantic category-first search path)
+// =============================================================================
+// Module-level cache of flat pagetitle[] from /api/categories. TTL 1h.
+// On miss/error → returns []; matcher then returns [] → fallback to bucket-logic.
+const CHAT_CATEGORIES_TTL_MS = 60 * 60 * 1000;
+let chatCategoriesCache: { value: string[]; ts: number } | null = null;
+
+async function getCategoriesCache(token: string): Promise<string[]> {
+  if (chatCategoriesCache && Date.now() - chatCategoriesCache.ts < CHAT_CATEGORIES_TTL_MS) {
+    return chatCategoriesCache.value;
+  }
+  try {
+    const t0 = Date.now();
+    const acc = new Set<string>();
+    let page = 1;
+    let totalPages = 1;
+    do {
+      const params = new URLSearchParams({ parent: '0', depth: '10', per_page: '200', page: String(page) });
+      const res = await fetch(`https://220volt.kz/api/categories?${params}`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      });
+      if (!res.ok) {
+        console.log(`[CategoriesCache] HTTP ${res.status} on page ${page}, aborting`);
+        break;
+      }
+      const raw = await res.json();
+      const data = raw.data || raw;
+      const walk = (nodes: any[]) => {
+        if (!Array.isArray(nodes)) return;
+        for (const n of nodes) {
+          if (n && typeof n.pagetitle === 'string' && n.pagetitle.trim()) acc.add(n.pagetitle.trim());
+          if (n && Array.isArray(n.children) && n.children.length) walk(n.children);
+        }
+      };
+      walk(data.results || []);
+      totalPages = Math.max(1, Number(data.pagination?.pages) || 1);
+      page++;
+    } while (page <= totalPages && page <= 10);
+
+    const flat = Array.from(acc).sort();
+    chatCategoriesCache = { value: flat, ts: Date.now() };
+    console.log(`[CategoriesCache] MISS → fetched ${flat.length} pagetitles in ${Date.now() - t0}ms (pages=${totalPages})`);
+    return flat;
+  } catch (e) {
+    console.log(`[CategoriesCache] error: ${(e as Error).message} — returning empty list`);
+    return [];
+  }
+}
+
+// Semantic category matcher. Maps query word → exact pagetitle[] from catalog.
+// On any failure → returns []; caller falls back to bucket-logic.
+async function matchCategoriesWithLLM(
+  queryWord: string,
+  catalog: string[],
+  settings: CachedSettings
+): Promise<string[]> {
+  if (!queryWord || !queryWord.trim() || catalog.length === 0) return [];
+  if (!settings.openrouter_api_key) {
+    console.log('[CategoryMatcher] OpenRouter key missing — skipping (deterministic empty)');
+    return [];
+  }
+
+  const systemPrompt = `Ты определяешь, в каких категориях каталога электротоваров пользователь ожидает найти искомый товар.
+
+ЗАПРОС ПОЛЬЗОВАТЕЛЯ: "${queryWord}"
+
+ПОЛНЫЙ СПИСОК КАТЕГОРИЙ КАТАЛОГА (${catalog.length} шт.):
+${JSON.stringify(catalog)}
+
+ПРАВИЛА:
+1. Категория релевантна, если её товары — это сам искомый предмет как самостоятельная позиция (пример: запрос "розетка" → категория "Розетки скрытой установки" релевантна, "Розетки накладные" релевантна).
+2. НЕ включай категории аксессуаров, комплектующих, рамок, монтажных коробок, кабельных вводов, подрозетников, заглушек — даже если в их названии есть слово запроса (пример: запрос "розетка" → "Рамки для розеток" НЕ релевантна).
+3. НЕ включай категории смежных классов товаров (пример: запрос "розетка" → "Колодки клеммные" НЕ релевантна).
+4. Учитывай морфологию русского языка: запрос в единственном числе совпадает с категорией во множественном и наоборот; род и падеж не важны.
+5. Если в каталоге несколько подкатегорий одного семейства (накладные, скрытой установки, влагозащищённые) — включай все.
+6. Если ни одна категория не подходит — верни пустой массив. НЕ угадывай и не подбирай похожее по звучанию.
+7. Возвращай pagetitle ТОЧНО так, как они написаны в списке (символ-в-символ).
+
+Ответь СТРОГО в JSON: {"matches": ["pagetitle1", "pagetitle2", ...]}`;
+
+  const reqBody = {
+    model: 'google/gemini-2.5-flash',
+    messages: [{ role: 'user', content: systemPrompt }],
+    ...DETERMINISTIC_SAMPLING,
+    max_tokens: 800,
+    response_format: { type: 'json_object' },
+    reasoning: { exclude: true },
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const t0 = Date.now();
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${settings.openrouter_api_key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(reqBody),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!response.ok) {
+      console.log(`[CategoryMatcher] HTTP ${response.status} for "${queryWord}"`);
+      return [];
+    }
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || '';
+    if (!content.trim()) {
+      console.log(`[CategoryMatcher] empty content for "${queryWord}"`);
+      return [];
+    }
+    let parsed: any;
+    try { parsed = JSON.parse(content); } catch { return []; }
+    const raw = Array.isArray(parsed?.matches) ? parsed.matches : [];
+    // Validate: each item must exist in catalog (exact-string defence against hallucinations)
+    const catalogSet = new Set(catalog);
+    const validated = raw.filter((s: unknown) => typeof s === 'string' && catalogSet.has(s));
+    console.log(`[CategoryMatcher] "${queryWord}" → ${JSON.stringify(validated)} (raw=${raw.length}, valid=${validated.length}, ${Date.now() - t0}ms)`);
+    return validated;
+  } catch (e) {
+    console.log(`[CategoryMatcher] error for "${queryWord}": ${(e as Error).message}`);
+    return [];
+  }
+}
+
 // Cached settings from DB
 interface CachedSettings {
   volt220_api_token: string | null;
