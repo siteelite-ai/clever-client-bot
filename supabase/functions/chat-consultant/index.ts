@@ -757,12 +757,14 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
   → если в запросе есть конкретный товар (бренд+модель / артикул / серия+параметры) — has_product_name=true и product_name=название (нужно для извлечения характеристик оригинала)
   → product_category = категория оригинала (например "светильник", "автомат", "розетка")
   → search_modifiers = характеристики оригинала из запроса (мощность, цвет, IP, и т.д.) если они явно указаны
+  → ОБЯЗАТЕЛЬНО при is_replacement=true: бренд, серия и модель/артикул из запроса ВСЕГДА выносятся в search_modifiers как ОТДЕЛЬНЫЕ элементы (даже если они уже есть в product_name). Это нужно, чтобы система могла применить их как фильтры, если оригинал не найдётся в каталоге. Бренд из запроса дополнительно дублируется в critical_modifiers.
 ВАЖНО: при is_replacement=true система найдёт оригинал ТОЛЬКО для извлечения характеристик и вернёт пользователю АНАЛОГИ, а не сам оригинал.
 
 Примеры (is_replacement=true):
-- "светильник ДКУ-LED-03-100W (ЭТФ) предложи самую близкую замену по характеристикам" → is_replacement=true, has_product_name=true, product_name="ДКУ-LED-03-100W ЭТФ", product_category="светильник"
-- "что взять вместо ABB S201 C16?" → is_replacement=true, has_product_name=true, product_name="ABB S201 C16", product_category="автомат"
-- "подбери аналог розетке Werkel Atlas серого цвета" → is_replacement=true, has_product_name=true, product_name="Werkel Atlas розетка", product_category="розетка", search_modifiers=["серый"]
+- "светильник ДКУ-LED-03-100W (ЭТФ) предложи самую близкую замену по характеристикам" → is_replacement=true, has_product_name=true, product_name="ДКУ-LED-03-100W ЭТФ", product_category="светильник", search_modifiers=["ДКУ-LED-03-100W","ЭТФ","100Вт"], critical_modifiers=["ЭТФ"]
+- "что взять вместо ABB S201 C16?" → is_replacement=true, has_product_name=true, product_name="ABB S201 C16", product_category="автомат", search_modifiers=["ABB","S201","C16"], critical_modifiers=["ABB"]
+- "подбери аналог розетке Werkel Atlas серого цвета" → is_replacement=true, has_product_name=true, product_name="Werkel Atlas розетка", product_category="розетка", search_modifiers=["Werkel","Atlas","серый"], critical_modifiers=["Werkel"]
+- "чем заменить розетку Legrand X" → is_replacement=true, has_product_name=true, product_name="Legrand X розетка", product_category="розетка", search_modifiers=["Legrand","X"], critical_modifiers=["Legrand"]
 
 ⚡ ПРИОРИТЕТ №1 — ОПРЕДЕЛЕНИЕ КОНКРЕТНОГО ТОВАРА (проверяй ПЕРВЫМ если ПРИОРИТЕТ №0 не сработал):
 Если пользователь называет товар так, что его можно найти прямым поиском по названию — это КОНКРЕТНЫЙ ТОВАР, а не категория.
@@ -4102,21 +4104,13 @@ serve(async (req) => {
             replCategory = (originalProduct as any).category?.pagetitle || originalProduct.parent_name || '';
             replModifiers = extractModifiersFromProduct(originalProduct);
             console.log(`[Chat] Replacement: category="${replCategory}", modifiers=[${replModifiers.join(', ')}]`);
-          } else if (classification.product_name) {
-            // Case 2: Product not in catalog — use classifier's category and extract modifiers from name
+          } else if (classification.product_name || (classification.search_modifiers?.length ?? 0) > 0) {
+            // Case 2: Product not in catalog — trust the classifier.
+            // Modifiers (brand, color, specs) are already extracted semantically by the micro-LLM.
+            // No regex slicing: it loses the brand and adds noise like the category word itself.
             replCategory = effectiveCategory || classification.search_category || '';
-            // Extract specs from product name as modifiers
-            const nameSpecs = classification.product_name.match(/(\d+\s*(?:Вт|W|В|V|мм|mm|А|A|IP\d+))/gi) || [];
-            replModifiers = nameSpecs.map(s => s.replace(/\s+/g, ''));
-            // Add type words as modifiers
-            const typeWords = classification.product_name
-              .replace(/\d+\s*(?:Вт|W|В|V|мм|mm|А|A)/gi, '')
-              .replace(/[()[\]\-]/g, ' ')
-              .split(/\s+/)
-              .filter(w => w.length >= 3 && !/^\d+$/.test(w))
-              .slice(0, 2);
-            replModifiers.push(...typeWords);
-            console.log(`[Chat] Replacement: product NOT found, category="${replCategory}", modifiers=[${replModifiers.join(', ')}]`);
+            replModifiers = [...(classification.search_modifiers || [])];
+            console.log(`[Chat] Replacement: NOT found, category="${replCategory}", modifiers=[${replModifiers.join(', ')}] (from classifier)`);
           }
           
           if (replCategory) {
