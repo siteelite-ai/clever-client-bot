@@ -31,6 +31,64 @@ async function getApiToken(): Promise<string> {
   return envToken;
 }
 
+// Module-level cache for category catalog
+interface CategoriesCache {
+  categories: string[];
+  fetchedAt: number;
+}
+let categoriesCache: CategoriesCache | null = null;
+const CATEGORIES_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+async function fetchAllCategories(apiToken: string): Promise<string[]> {
+  const now = Date.now();
+  if (categoriesCache && (now - categoriesCache.fetchedAt) < CATEGORIES_TTL_MS) {
+    console.log(`[list_categories] cache hit (${categoriesCache.categories.length})`);
+    return categoriesCache.categories;
+  }
+
+  console.log('[list_categories] cache miss, paginating products to collect categories...');
+  const set = new Set<string>();
+  const perPage = 100;
+  const maxPages = 30; // hard cap: up to 3000 products scanned for category names
+
+  for (let page = 1; page <= maxPages; page++) {
+    const params = new URLSearchParams();
+    params.append('page', page.toString());
+    params.append('per_page', perPage.toString());
+
+    const response = await fetch(`${VOLT220_API_URL}?${params}`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${apiToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      console.error(`[list_categories] page ${page} failed: ${response.status}`);
+      break;
+    }
+
+    const raw = await response.json();
+    const data = raw.data || raw;
+    const results = data.results || [];
+    if (results.length === 0) break;
+
+    for (const item of results) {
+      const cat = item?.category?.pagetitle ?? item?.category_pagetitle ?? item?.category;
+      if (typeof cat === 'string' && cat.trim()) set.add(cat.trim());
+    }
+
+    const totalPages = data.pagination?.pages ?? 0;
+    if (page >= totalPages) break;
+  }
+
+  const categories = Array.from(set).sort();
+  categoriesCache = { categories, fetchedAt: now };
+  console.log(`[list_categories] cached ${categories.length} categories`);
+  return categories;
+}
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -38,9 +96,27 @@ serve(async (req) => {
   }
 
   try {
-    const { query, page = 1, perPage = 12, category, minPrice, maxPrice, brand, article } = await req.json();
-    
+    const body = await req.json();
+    const { action } = body;
+
     const apiToken = await getApiToken();
+
+    // ==== action: list_categories ====
+    if (action === 'list_categories') {
+      const force = body?.force === true;
+      if (force) categoriesCache = null;
+      const categories = await fetchAllCategories(apiToken);
+      return new Response(
+        JSON.stringify({
+          categories,
+          count: categories.length,
+          cached_at: categoriesCache?.fetchedAt ?? null,
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    const { query, page = 1, perPage = 12, category, minPrice, maxPrice, brand, article } = body;
 
     // Формируем параметры запроса согласно документации
     const params = new URLSearchParams();
