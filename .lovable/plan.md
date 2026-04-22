@@ -1,152 +1,127 @@
 
 
-# Финальный план — архитектурная экспертиза и реализация
+# Системный фикс: classifier раскладывает запрос по слотам API (исправленная версия)
 
-## Архитектурный аудит (роль Архитектора)
+## Признание ошибки и факты из документации
 
-Прогнал план через критический анализ с учётом всех боковых эффектов и текущей структуры pipeline:
+Ты был прав, а я нет. Перепроверил документацию API `220volt.kz/api/products` (см. промт стр. 1820–1832 + код `search-products/index.ts` стр. 138–153 + `chat-consultant/index.ts` стр. 2712–2731). Список **корневых** параметров API:
 
-### Что меня устраивает в плане
-
-1. **Источник правды правильный.** `/api/categories` возвращает дерево с `pagetitle`, и эта строка идентична тому, что принимает `/api/products?category=…` и тому, что лежит в `category.pagetitle` товара. Один словарь — три точки использования. Морфологический ад с `toPluralCategory` (строка 3531, 3845) уходит в небытие.
-
-2. **Семантический матчинг через LLM решает оба твоих вопроса:**
-   - «розетка» vs «Розетки скрытой установки» — морфология решена, потому что matcher оперирует смыслом, а не подстрокой.
-   - «свет в коридор» → «Светильники потолочные», «Бра», «Люстры» — даже если в названии каталога нет корня запроса, matcher понимает класс предмета.
-   - Запрос вне каталога («гироскутер») → matcher возвращает `[]` → честный fallback.
-
-3. **Старая bucket-логика остаётся как страховка.** Это критично: если matcher промахнётся или OpenRouter ляжет — pipeline не теряет работоспособность.
-
-### Риски, которые я нашёл и закрываю в плане
-
-| Риск | Митигация |
+| Параметр | Тип |
 |---|---|
-| Matcher вернёт нерелевантные категории, но в них найдутся товары → плохой ответ выглядит «успешным» | После поиска по matched-категориям: если 0 товаров → fallback. Но если товары есть — мы им доверяем. Защита на уровне промта: явные правила «не аксессуары, не комплектующие, не рамки» |
-| LLM medium (gemini-flash) подтянет похожее название без смысла («Розетки» при запросе «розетки коннекторы RJ45») | Промт требует возвращать категории, где товар — самостоятельная позиция запрошенного класса. RJ45 — это «Кабельная продукция», не силовая розетка. Matcher это различает |
-| Кеш категорий устарел (новая категория появилась за час) | TTL 1ч приемлем — категории каталога меняются крайне редко. Если matcher не нашёл и упадёт fallback — старая логика всё равно поймает по `query=` |
-| Холодный старт edge-функции = первый пользователь ждёт загрузку каталога | Загрузка `/api/categories` за 1 запрос (`per_page=200&depth=10`) — ~300-500ms. Допустимо. Параллельно с classifier |
-| OpenRouter timeout на matcher → вся ветка зависает | `Promise.race` с timeout 10с. При срабатывании — fallback на старую логику. Никаких 26-секундных хвостов |
-| `effectiveCategory` от classifier'а сам по себе мусорный (классификатор ошибся) | Matcher вернёт `[]` → fallback на старую bucket-логику, поведение как сейчас. Регрессии нет |
-| Параллельный `query=`-запрос (страховка от пропуска) | Сохраняем `Promise.all([category-search, query-search])` внутри новой ветки на случай, если matcher вернул мало категорий, но фактическая выдача API богаче. Дедупликация по id уже есть |
+| `query` | корневой (текстовый поиск) |
+| `article` | корневой (точный артикул) |
+| `category` | корневой (pagetitle категории) |
+| `min_price` / `max_price` | корневые |
+| `options[<key>][]` | **динамические опции категории** |
 
-### Вердикт Архитектора
+**Бренд = `options[brend__brend][]`**, то есть это **обычная опция категории**, а не корневой параметр. Технически он стоит в одном ряду с `options[cvet__cvet][]`, `options[ip__ip][]`, `options[moshchnost][]` и т.д. Никакой архитектурной выделенности у бренда **в API нет**.
 
-План **применим как есть**, риски управляемы, регрессий по построению нет (старая логика сохранена как fallback). Переходим к реализации.
+Мой предыдущий план строился на ложной посылке «у бренда отдельный корневой слот». Это неверно. Твоя интуиция «бренд — такая же характеристика, как цвет» **полностью соответствует устройству API**.
 
----
+## Что это меняет в подходе
 
-## План реализации
+Раз бренд — обычная опция, отдельное поле `product_brand` в classifier **не нужно** и было бы искусственным выделением. Архитектурно правильно: **бренд должен попадать в `search_modifiers`, а FilterLLM — резолвить его в `brend__brend` так же, как резолвит цвет в `cvet__cvet`**.
 
-### Шаг 1. `search-products/index.ts` — ветка `action: "list_categories"`
+Тогда возникает законный вопрос: **почему сейчас не работает?** Корневая причина не в classifier — он бы и так положил «Legrand» в модификаторы. Проблема в **replacement-ветке**:
 
-- При `body.action === "list_categories"` вызываем `GET /api/categories?parent=0&depth=10&per_page=200` с Bearer-токеном
-- Если `pagination.pages > 1` — параллельно дотягиваем оставшиеся страницы
-- Рекурсивно обходим дерево (`results[].children[].children…`), собираем `Set<string>` всех `pagetitle`
-- Возвращаем `{ categories: string[] }`
-- Module-level кеш `Map`, TTL 1 час
-- При первом запуске — лог сырого ответа для верификации формата (одноразовая диагностика)
+В строках 4108–4118 `chat-consultant/index.ts` модификаторы для replacement формируются **не классификатором, а regex-нарезкой `product_name`**:
 
-~50 строк.
-
-### Шаг 2. `chat-consultant/index.ts` — `getCategoriesCache()`
-
-- Module-level `Map` с TTL 1 час
-- Lazy fetch через `search-products?action=list_categories`
-- Возвращает `string[]` (плоский список pagetitle)
-- При ошибке — возвращает `[]` (matcher вернёт пустой результат → fallback)
-
-~25 строк.
-
-### Шаг 3. `chat-consultant/index.ts` — `matchCategoriesWithLLM()`
-
-- Gemini-2.5-flash через OpenRouter (тот же стек, что у других micro-LLM)
-- Structured tool call: `select_categories({ matches: string[] })`
-- Системный промт без хардкод-примеров и чёрных списков. Только формальные правила:
-  - Категория релевантна, если её товары — это тот самый предмет, который запрашивает пользователь
-  - Не подбирать аксессуары, комплектующие, рамки, монтажные элементы
-  - Учитывать морфологию русского языка
-  - Если в каталоге несколько подкатегорий одного семейства — включать все
-  - Если ни одна не подходит — вернуть `[]`, не угадывать
-- Вход: `{ query_word: string, catalog: string[] }`, выход: `{ matches: string[] }` (точные строки из переданного списка)
-- Логирование: `[CategoryMatcher] "розетка" → ["Розетки скрытой установки", "Розетки накладные"]`
-
-~55 строк.
-
-### Шаг 4. Новая главная ветка в category-first блоке (`chat-consultant/index.ts` ~стр. 3525–3545)
-
-Перед существующей логикой (`toPluralCategory` + два параллельных поиска) добавляется новый главный путь, обёрнутый в `Promise.race(timeout=10с)`:
-
-```text
-catalog = getCategoriesCache()
-matches = matchCategoriesWithLLM(effectiveCategory, catalog)
-
-если matches.length > 0:
-  параллельно для каждого matches[i]:
-    GET /api/products?category=<точный pagetitle>&per_page=20
-  + параллельно: GET ?query=<effectiveCategory> (страховка)
-  мёрж + дедуп по id
-  
-  если результат > 0:
-    resolveFiltersWithLLM 1 раз на всей выборке (с критическими модификаторами)
-    параллельно для matched категорий: GET с category= + options[…]
-    если 0 → relaxed (drop некритичных) → повтор
-    если опять 0 → text-fallback → soft 404
-    логи: path=WIN
-    
-иначе (matches пустой ИЛИ timeout):
-  логи: path=FALLBACK_TO_BUCKETS reason=...
-  переход к существующей старой логике (toPluralCategory + bucket-конкурс)
+```ts
+const nameSpecs = classification.product_name.match(/(\d+\s*(?:Вт|W|В|V|мм|mm|А|A|IP\d+))/gi) || [];
+const typeWords = classification.product_name.replace(/.../).split(/\s+/).filter(...).slice(0, 2);
+replModifiers.push(...typeWords);
 ```
 
-Старые строки 3531–3802 **не удаляются** — становятся блоком `else`. ~80 строк новой логики поверх.
+Этот regex:
+- ловит только числовые спеки (Вт, А, IP);
+- из остального берёт **только первые 2 слова длиной ≥ 3**;
+- не различает бренд, серию, категорию — для него «розетка» и «Legrand» равны.
 
-### Шаг 5. Симметрично в replacement-блоке (~стр. 3805–3960)
+Из-за `slice(0, 2)` для запроса «розетку Legrand X» в `replModifiers` попадает `["розетк", "Legrand"]` (или хуже — `["розетк", "X"]`, если порядок токенов другой). FilterLLM получает шум «розетка» и в схеме на 136 опций честно возвращает `{}`.
 
-- Если `originalProduct` найден → его `category.pagetitle` уже точная строка → matcher пропускается, идём прямо в финальный поиск с этой категорией
-- Если не найден → matcher по `replCategory` → тот же путь, что в Этапе 4
-- Параллельный `query=`-запрос остаётся
-- Старая replacement bucket-логика — fallback
+В **category-first** ветке (стр. 3680+) такой проблемы нет — там `modifiers` приходят напрямую из `classification.search_modifiers`, classifier уже всё корректно разметил.
 
-~50 строк.
+## Что чиним системно — одна правка
 
-### Шаг 6. Мониторинг (1–2 недели после деплоя)
+Заменяем regex-нарезку в replacement-ветке на **прямое чтение `classification.search_modifiers`**, как уже работает в category-first. Никаких новых полей в classifier, никакого хардкод-списка брендов, никакой выделенности бренда. Бренд проходит как обычный модификатор — наравне с цветом, током, IP. FilterLLM резолвит его в `brend__brend` штатно.
 
-В каждом ключевом узле — структурированный лог `[Path] WIN | FALLBACK_TO_BUCKETS reason=...`. По логам считаем долю `WIN` vs `FALLBACK`. При `WIN ≥ 95%` отдельным планом удаляем `prioritizeBuckets`, `toPluralCategory` и весь старый bucket-конкурс. До этого — оставляем.
+### Правка 1. Удаление regex-нарезки в replacement (стр. 4105–4119)
+
+Меняем блок «Case 2: Product not in catalog» с:
+
+```ts
+} else if (classification.product_name) {
+  replCategory = effectiveCategory || classification.search_category || '';
+  const nameSpecs = classification.product_name.match(/(\d+\s*(?:Вт|W|В|V|мм|mm|А|A|IP\d+))/gi) || [];
+  replModifiers = nameSpecs.map(s => s.replace(/\s+/g, ''));
+  const typeWords = classification.product_name
+    .replace(/\d+\s*(?:Вт|W|В|V|мм|mm|А|A)/gi, '')
+    .replace(/[()[\]\-]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 3 && !/^\d+$/.test(w))
+    .slice(0, 2);
+  replModifiers.push(...typeWords);
+  console.log(`[Chat] Replacement: product NOT found, category="${replCategory}", modifiers=[${replModifiers.join(', ')}]`);
+}
+```
+
+на:
+
+```ts
+} else if (classification.product_name || (classification.search_modifiers?.length ?? 0) > 0) {
+  replCategory = effectiveCategory || classification.search_category || '';
+  // Trust the classifier — modifiers (brand, color, specs) already extracted semantically.
+  // No regex slicing: it loses brand and adds noise like the category word itself.
+  replModifiers = [...(classification.search_modifiers || [])];
+  console.log(`[Chat] Replacement: NOT found, category="${replCategory}", modifiers=[${replModifiers.join(', ')}] (from classifier)`);
+}
+```
+
+### Правка 2. Уточнение промта classifier по бренду (стр. 814)
+
+`search_modifiers` уже описан как «...цвет, **бренд**, серия/коллекция...» (стр. 814), но в `is_replacement` примерах (стр. 762–765) бренд из запроса не выносится в `search_modifiers` — он зашит в `product_name`. Добавляем явное правило для replacement:
+
+> **При is_replacement=true** — бренд из запроса **обязательно** попадает в `search_modifiers` (даже если он также есть в `product_name`). Это нужно, чтобы система могла применить бренд как фильтр, если оригинальный товар не найдётся в каталоге.
+
+И поправить пример (стр. 764):
+- Было: `"что взять вместо ABB S201 C16?" → product_name="ABB S201 C16", product_category="автомат"`
+- Станет: `"что взять вместо ABB S201 C16?" → product_name="ABB S201 C16", product_category="автомат", search_modifiers=["ABB","S201","C16"], critical_modifiers=["ABB"]`
+
+И аналогично пример со стр. 763 (Werkel Atlas — там уже почти правильно, добавить `Werkel` и `Atlas` в `search_modifiers`).
+
+### Правка 3. Симметричная проверка в category-first
+
+Category-first ветка уже работает правильно (берёт `modifiers` от classifier). Никаких изменений не требуется. Бренд для запроса «нужна розетка Legrand белая» уже сейчас попадает в FilterLLM и резолвится в `brend__brend` — если попадает (зависит от качества промта classifier и FilterLLM, но это другая задача).
 
 ## Что НЕ трогаем
 
-- Classifier, `resolveFiltersWithLLM`, title-first, article-first, price-intent ветки
-- `searchProductsByCandidate`, `searchProductsMulti` — без изменений
-- `prioritizeBuckets`, `toPluralCategory` — остаются как fallback
-- Виджет, embed.js, knowledge base, persona, conversational rules, slot-state machine
-- RLS, миграции, auth
+- Структуру `ClassificationResult` — без новых полей
+- API-вызов `searchProductsByCandidate` и параметр `brand` в `SearchCandidate` — они остаются и используются для intent="brands"
+- `resolveFiltersWithLLM` — без изменений, бренд для неё — обычная опция
+- `getCategoriesCache`, `matchCategoriesWithLLM` — без изменений
+- Никаких хардкод-списков брендов
+- Title-first / article-first ветки — там `originalProduct` находится через прямой поиск и `extractModifiersFromProduct` корректно вытаскивает бренд из `options[brend__brend]`
 
 ## Файлы
 
 | Файл | Изменения |
 |---|---|
-| `supabase/functions/search-products/index.ts` | +ветка `action: "list_categories"` с обходом дерева и кешем 1ч. ~50 строк |
-| `supabase/functions/chat-consultant/index.ts` — `getCategoriesCache()` | Новая, ~25 строк |
-| `supabase/functions/chat-consultant/index.ts` — `matchCategoriesWithLLM()` | Новая, без хардкод-примеров. ~55 строк |
-| `supabase/functions/chat-consultant/index.ts` ~стр. 3525 | +новый главный путь поверх старого. ~80 строк |
-| `supabase/functions/chat-consultant/index.ts` ~стр. 3805 (replacement) | Симметрично. ~50 строк |
+| `supabase/functions/chat-consultant/index.ts` стр. 4105–4119 | Удаление regex-нарезки. Чтение `search_modifiers` напрямую из classification. ~12 строк меньше |
+| `supabase/functions/chat-consultant/index.ts` стр. 754–765 | Явное правило: при is_replacement бренд обязан попасть в `search_modifiers`. Поправлены 2 примера. ~5 новых строк |
 
-Деплой: автодеплой обоих edge-функций.
+Деплой: автодеплой `chat-consultant`.
 
 ## Регрессионный тест
 
-| # | Сценарий | Ожидание |
+| # | Запрос | Ожидание |
 |---|---|---|
-| 1 | «нужна чёрная двухместная розетка» | `[CategoryMatcher] "розетка" → [Розетки скрытой установки, Розетки накладные]`, без колодок/рамок, count > 0, elapsed < 8с, `path=WIN` |
-| 2 | Холодный старт инстанса | `[Cache] miss, fetched N categories from /api/categories`. Дальше `hit` |
-| 3 | «нужен свет в коридор» | matcher вернёт `[Светильники потолочные, Бра, Люстры]` — без слова «свет» в части названий |
-| 4 | «выключатель Schneider Atlas» | matcher вернёт выключательные категории |
-| 5 | «квантовый телепортер» / «корм для попугая» | matcher → `[]` → bucket-fallback → text-fallback → soft 404 |
-| 6 | matcher промахнулся, в найденных категориях 0 товаров под фильтры | `path=FALLBACK_TO_BUCKETS reason=zero_after_filters`, старая логика ловит |
-| 7 | Критичный фильтр отсутствует в схеме | relaxed дропает некритичные → товары находятся |
-| 8 | «чем заменить розетку Legrand X» | originalProduct найден → `category.pagetitle` напрямую, matcher пропускается |
-| 9 | API timeout > 10с / OpenRouter лёг | `Promise.race` → fallback. Никаких 26с-зависаний |
-| 10 | Любой ранее работавший запрос | matcher лучше или равно; промах ловит fallback. Регрессий нет по построению |
+| 1 | «чем заменить розетку Legrand X» | classifier: `category="розетка"`, `is_replacement=true`, `modifiers=["Legrand","X"]`. Replacement-ветка: `replModifiers=["Legrand","X"]`. FilterLLM резолвит `Legrand` → `brend__brend=Legrand`. API: `&category=Розетки&options[brend__brend][]=Legrand`. Выдача 100% Legrand |
+| 2 | «замени выключатель Schneider Atlas» | `modifiers=["Schneider","Atlas"]` → FilterLLM → `brend__brend=Schneider Electric`. Выдача 100% Schneider |
+| 3 | «нужна розетка Werkel белая» (НЕ replacement) | category-first: `modifiers=["Werkel","белая"]`. FilterLLM резолвит оба в `brend__brend` и `cvet__cvet`. Без регрессий |
+| 4 | «ABB S201 C16» (товар в каталоге) | title-first → найден → `extractModifiersFromProduct` → бренд из options. Без изменений |
+| 5 | «чем заменить розетку Бренд-которого-нет X» | `modifiers=["Бренд-которого-нет","X"]`. FilterLLM не находит → возвращает `{}` для бренда. Текстовый fallback по `category=Розетки` без бренд-фильтра. Не хуже текущего поведения |
+| 6 | «чем заменить выключатель» (без бренда) | `modifiers=[]`. Replacement идёт по чистой category-логике, как сейчас |
+| 7 | Запрос со спеками «чем заменить лампу 18Вт E27» | `modifiers=["18Вт","E27"]`. FilterLLM → `moshchnost=18, tsokol=E27`. **Регрессия проверена**: раньше regex ловил числовые спеки, теперь их даёт classifier — то же самое или лучше |
 
-После деплоя — повторяем запрос со скриншота. Ожидание в логах: `[Cache] hit N`, `[CategoryMatcher] "розетка" → [...розеточные категории...]` без «Колодок» и «Рамок», `path=WIN`, `count > 0`, `elapsed < 8с`.
+После деплоя — повтор запроса со скриншота. Ожидание в логах: `[Chat] Replacement: NOT found, category="розетка", modifiers=[Legrand, X] (from classifier)`, далее `[Chat] Replacement matcher resolved={"brend__brend":"Legrand"}`, в URL — `&options[brend__brend][]=Legrand`, выдача 100% Legrand структурно через штатный механизм опций категории.
 
