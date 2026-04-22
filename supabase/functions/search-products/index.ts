@@ -7,6 +7,15 @@ const corsHeaders = {
 };
 
 const VOLT220_API_URL = 'https://220volt.kz/api/products';
+const VOLT220_CATEGORIES_URL = 'https://220volt.kz/api/categories';
+
+// =============================================================================
+// Module-level cache for flattened category list (pagetitle[]).
+// TTL 1h — categories change rarely, fallback bucket-logic catches any drift.
+// =============================================================================
+const CATEGORIES_TTL_MS = 60 * 60 * 1000;
+let categoriesCache: { value: string[]; ts: number } | null = null;
+let categoriesLoggedRawOnce = false;
 
 async function getApiToken(): Promise<string> {
   const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
@@ -31,6 +40,74 @@ async function getApiToken(): Promise<string> {
   return envToken;
 }
 
+// Recursively walk MsCategory tree, collect every `pagetitle` into the set.
+function collectPagetitles(nodes: any[], acc: Set<string>): void {
+  if (!Array.isArray(nodes)) return;
+  for (const node of nodes) {
+    if (node && typeof node.pagetitle === 'string' && node.pagetitle.trim()) {
+      acc.add(node.pagetitle.trim());
+    }
+    if (node && Array.isArray(node.children) && node.children.length > 0) {
+      collectPagetitles(node.children, acc);
+    }
+  }
+}
+
+async function fetchCategoriesPage(token: string, page: number): Promise<{ results: any[]; pagination: any }> {
+  const params = new URLSearchParams({
+    parent: '0',
+    depth: '10',
+    per_page: '200',
+    page: page.toString(),
+  });
+  const res = await fetch(`${VOLT220_CATEGORIES_URL}?${params}`, {
+    method: 'GET',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Categories API ${res.status}: ${errText.slice(0, 200)}`);
+  }
+  const raw = await res.json();
+  if (!categoriesLoggedRawOnce) {
+    categoriesLoggedRawOnce = true;
+    console.log(`[Categories] Raw page ${page} sample: ${JSON.stringify(raw).slice(0, 600)}`);
+  }
+  const data = raw.data || raw;
+  return {
+    results: data.results || [],
+    pagination: data.pagination || { page, per_page: 200, pages: 1, total: 0 },
+  };
+}
+
+async function listCategories(token: string): Promise<string[]> {
+  // Cache hit
+  if (categoriesCache && Date.now() - categoriesCache.ts < CATEGORIES_TTL_MS) {
+    console.log(`[Categories] cache HIT (${categoriesCache.value.length} items, age=${Math.round((Date.now() - categoriesCache.ts) / 1000)}s)`);
+    return categoriesCache.value;
+  }
+
+  console.log('[Categories] cache MISS, fetching from /api/categories');
+  const t0 = Date.now();
+  const acc = new Set<string>();
+
+  const first = await fetchCategoriesPage(token, 1);
+  collectPagetitles(first.results, acc);
+
+  const totalPages = Math.max(1, Number(first.pagination?.pages) || 1);
+  if (totalPages > 1) {
+    const promises: Promise<{ results: any[] }>[] = [];
+    for (let p = 2; p <= totalPages; p++) promises.push(fetchCategoriesPage(token, p));
+    const rest = await Promise.all(promises);
+    for (const r of rest) collectPagetitles(r.results, acc);
+  }
+
+  const flat = Array.from(acc).sort();
+  categoriesCache = { value: flat, ts: Date.now() };
+  console.log(`[Categories] cache STORED ${flat.length} pagetitles in ${Date.now() - t0}ms (pages=${totalPages})`);
+  return flat;
+}
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === 'OPTIONS') {
@@ -38,7 +115,20 @@ serve(async (req) => {
   }
 
   try {
-    const { query, page = 1, perPage = 12, category, minPrice, maxPrice, brand, article } = await req.json();
+    const body = await req.json().catch(() => ({}));
+
+    // ===== Branch: list categories (flat array of pagetitle) =====
+    if (body && body.action === 'list_categories') {
+      const apiToken = await getApiToken();
+      const categories = await listCategories(apiToken);
+      return new Response(
+        JSON.stringify({ categories, count: categories.length }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    // ===== Branch: search products (existing behavior) =====
+    const { query, page = 1, perPage = 12, category, minPrice, maxPrice, brand, article } = body;
     
     const apiToken = await getApiToken();
 
