@@ -3586,8 +3586,22 @@ serve(async (req) => {
             let bestBucketCat = '';
             let bestResolvedRaw: Record<string, ResolvedFilter> = {};
             let bestUnresolved: string[] = [...modifiers];
-            
-            for (const [catName, count] of sortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK)) {
+
+            // Trust the classifier: only consider buckets whose category name matches
+            // the classifier root (priority=2). This prevents irrelevant categories
+            // (e.g. "Колодки" for query "розетка") from winning the resolve loop just
+            // because they happened to match more modifier filters.
+            // Fallback to all buckets only if NO bucket matches the classifier.
+            const allBuckets = sortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK);
+            const relevantBuckets = allBuckets.filter(([name]) => bucketPriority[name] === 2);
+            const bucketsToTry = relevantBuckets.length > 0 ? relevantBuckets : allBuckets;
+            console.log(
+              relevantBuckets.length > 0
+                ? `[Chat] Category-first: ${relevantBuckets.length}/${allBuckets.length} relevant buckets (match classifier="${effectiveCategory}")`
+                : `[Chat] Category-first: NO buckets match classifier="${effectiveCategory}", fallback to all ${allBuckets.length}`
+            );
+
+            for (const [catName, count] of bucketsToTry) {
               if (count < 2) continue;
               let bucketProducts = rawProducts.filter(p => 
                 ((p as any).category?.pagetitle || p.parent_name || 'unknown') === catName
@@ -3880,8 +3894,20 @@ serve(async (req) => {
               let replBestResolvedRaw: Record<string, ResolvedFilter> = {};
               let replBestUnresolved: string[] = [...replModifiers];
               let replacementProducts: Product[] = [];
-              
-              for (const [catName, count] of replSortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK)) {
+
+              // Symmetric to category-first: trust the classifier — only buckets
+              // whose category matches the classifier root (priority=2) compete.
+              // Fallback to all buckets if none match.
+              const replAllBuckets = replSortedBuckets.slice(0, MAX_BUCKETS_TO_CHECK);
+              const replRelevantBuckets = replAllBuckets.filter(([name]) => replBucketPriority[name] === 2);
+              const replBucketsToTry = replRelevantBuckets.length > 0 ? replRelevantBuckets : replAllBuckets;
+              console.log(
+                replRelevantBuckets.length > 0
+                  ? `[Chat] Replacement: ${replRelevantBuckets.length}/${replAllBuckets.length} relevant buckets (match classifier="${replCategory}")`
+                  : `[Chat] Replacement: NO buckets match classifier="${replCategory}", fallback to all ${replAllBuckets.length}`
+              );
+
+              for (const [catName, count] of replBucketsToTry) {
                 if (count < 2) continue;
                 let bucketProducts = replRawProducts.filter(p =>
                   ((p as any).category?.pagetitle || p.parent_name || 'unknown') === catName
