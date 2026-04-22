@@ -86,6 +86,51 @@ export type Database = {
         }
         Relationships: []
       }
+      beta_search_runs: {
+        Row: {
+          admin_id: string | null
+          beta_count: number | null
+          beta_ms: number | null
+          beta_result: Json | null
+          classifier_result: Json | null
+          created_at: string
+          current_count: number | null
+          current_ms: number | null
+          current_result: Json | null
+          id: string
+          query: string
+          verdict: string | null
+        }
+        Insert: {
+          admin_id?: string | null
+          beta_count?: number | null
+          beta_ms?: number | null
+          beta_result?: Json | null
+          classifier_result?: Json | null
+          created_at?: string
+          current_count?: number | null
+          current_ms?: number | null
+          current_result?: Json | null
+          id?: string
+          query: string
+          verdict?: string | null
+        }
+        Update: {
+          admin_id?: string | null
+          beta_count?: number | null
+          beta_ms?: number | null
+          beta_result?: Json | null
+          classifier_result?: Json | null
+          created_at?: string
+          current_count?: number | null
+          current_ms?: number | null
+          current_result?: Json | null
+          id?: string
+          query?: string
+          verdict?: string | null
+        }
+        Relationships: []
+      }
       knowledge_chunks: {
         Row: {
           chunk_index: number
