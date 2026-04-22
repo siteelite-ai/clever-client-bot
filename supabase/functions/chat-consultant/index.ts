@@ -4077,6 +4077,7 @@ serve(async (req) => {
             const categoryElapsed = Date.now() - categoryStart;
             console.log(`[Chat] Category-first: 0 results for "${effectiveCategory}", elapsed=${categoryElapsed}ms, proceeding to LLM 1`);
           }
+          } // end if (!categoryFirstWinResolved) — legacy bucket-logic block
         }
         
         // === REPLACEMENT/ALTERNATIVE INTENT (category-first pipeline) ===
