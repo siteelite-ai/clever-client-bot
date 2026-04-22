@@ -11,8 +11,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Zap,
-  LogOut,
-  FlaskConical
+  LogOut
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
@@ -25,7 +24,6 @@ const menuItems = [
   { icon: Users, label: 'Пользователи', path: '/users', requiredRole: 'admin' as const },
   { icon: Code, label: 'Интеграция', path: '/integration' },
   { icon: Settings, label: 'Настройки', path: '/settings', requiredRole: 'admin' as const },
-  { icon: FlaskConical, label: 'Бета-тест поиска', path: '/dev/beta-search', requiredRole: 'admin' as const },
 ];
 
 export function AdminSidebar() {

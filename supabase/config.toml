@@ -8,6 +8,3 @@ verify_jwt = false
 
 [functions.knowledge-process]
 verify_jwt = false
-
-[functions.chat-consultant-beta-search]
-verify_jwt = false
