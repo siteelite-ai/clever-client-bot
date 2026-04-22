@@ -4509,6 +4509,7 @@ serve(async (req) => {
               replacementMeta = { isReplacement: true, original: null, originalName: classification.product_name, noResults: true };
               console.log(`[Chat] Replacement: 0 products in category "${replCategory}" (${Date.now() - replacementStart}ms)`);
             }
+            } // end if (!replacementWinResolved) — legacy bucket-logic block
           } else {
             replacementMeta = { isReplacement: true, original: null, originalName: classification.product_name, noResults: true };
             console.log(`[Chat] Replacement: no category determined`);
