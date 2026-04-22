@@ -4120,6 +4120,136 @@ serve(async (req) => {
           }
           
           if (replCategory) {
+            // ===== NEW: SEMANTIC CATEGORY-MATCHER PATH (race with 10s timeout) =====
+            // If originalProduct found → its exact category.pagetitle is used directly (matcher skipped).
+            // Otherwise → matcher maps replCategory → exact pagetitle[].
+            // On WIN: short-circuits, sets foundProducts + replacementMeta, skips legacy bucket-logic.
+            let replacementWinResolved = false;
+            try {
+              let replMatches: string[] = [];
+              const originalCatPagetitle = originalProduct ? ((originalProduct as any).category?.pagetitle || '') : '';
+              if (originalCatPagetitle) {
+                replMatches = [originalCatPagetitle];
+                console.log(`[Chat] Replacement: matcher SKIPPED, using original.category.pagetitle="${originalCatPagetitle}"`);
+              } else {
+                const replMatcherDeadline = new Promise<{ matches: string[] }>((_, rej) =>
+                  setTimeout(() => rej(new Error('repl_matcher_timeout_10s')), 10000)
+                );
+                const replMatcherWork = (async () => {
+                  const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
+                  if (catalog.length === 0) return { matches: [] };
+                  const matches = await matchCategoriesWithLLM(replCategory, catalog, appSettings);
+                  return { matches };
+                })();
+                const r = await Promise.race([replMatcherWork, replMatcherDeadline]);
+                replMatches = r.matches;
+              }
+
+              if (replMatches.length > 0) {
+                console.log(`[Chat] Replacement matcher candidates for "${replCategory}": ${JSON.stringify(replMatches)}`);
+                // Parallel: GET ?category=<exact pagetitle> + query-fallback safety net
+                const rCatPromises = replMatches.map(cat =>
+                  searchProductsByCandidate(
+                    { query: null, brand: null, category: cat, min_price: null, max_price: null },
+                    appSettings.volt220_api_token!, 30
+                  )
+                );
+                const rQueryFallback = searchProductsByCandidate(
+                  { query: replCategory, brand: null, category: null, min_price: null, max_price: null },
+                  appSettings.volt220_api_token!, 30
+                );
+                const rAllRes = await Promise.all([...rCatPromises, rQueryFallback]);
+                const rSeen = new Set<string | number>();
+                const rPool: Product[] = [];
+                for (const arr of rAllRes) for (const p of arr) {
+                  if (!rSeen.has(p.id)) { rSeen.add(p.id); rPool.push(p); }
+                }
+                console.log(`[Chat] Replacement matcher merged ${rPool.length} unique`);
+
+                if (rPool.length > 0) {
+                  let rFinal: Product[] = [];
+                  if (replModifiers.length === 0) {
+                    rFinal = rPool;
+                  } else {
+                    const { resolved: rResolvedRaw, unresolved: rUnresolved } = await resolveFiltersWithLLM(
+                      rPool, replModifiers, appSettings, classification?.critical_modifiers
+                    );
+                    const rResolved = flattenResolvedFilters(rResolvedRaw);
+                    console.log(`[Chat] Replacement matcher resolved=${JSON.stringify(rResolved)}, unresolved=[${rUnresolved.join(', ')}]`);
+                    const suppressQ = rUnresolved.length === 0 && Object.keys(rResolved).length > 0;
+                    const qText = suppressQ ? null : (rUnresolved.length > 0 ? rUnresolved.join(' ') : null);
+                    const rFiltRes = await Promise.all(replMatches.map(cat =>
+                      searchProductsByCandidate(
+                        { query: qText, brand: null, category: cat, min_price: null, max_price: null },
+                        appSettings.volt220_api_token!, 30,
+                        Object.keys(rResolved).length > 0 ? rResolved : undefined
+                      )
+                    ));
+                    const rfSeen = new Set<string | number>();
+                    for (const arr of rFiltRes) for (const p of arr) {
+                      if (!rfSeen.has(p.id)) { rfSeen.add(p.id); rFinal.push(p); }
+                    }
+                    // Cascading relaxed
+                    if (rFinal.length === 0 && Object.keys(rResolved).length > 1) {
+                      const droppable = Object.keys(rResolved).filter(k => !(rResolvedRaw[k]?.is_critical));
+                      let bestRelaxed: Product[] = [];
+                      let droppedKey = '';
+                      for (const dropKey of droppable) {
+                        const partial = { ...rResolved };
+                        delete partial[dropKey];
+                        const relaxedRes = await Promise.all(replMatches.map(cat =>
+                          searchProductsByCandidate(
+                            { query: null, brand: null, category: cat, min_price: null, max_price: null },
+                            appSettings.volt220_api_token!, 30, partial
+                          )
+                        ));
+                        const seenR = new Set<string | number>();
+                        const merged: Product[] = [];
+                        for (const arr of relaxedRes) for (const p of arr) {
+                          if (!seenR.has(p.id)) { seenR.add(p.id); merged.push(p); }
+                        }
+                        if (merged.length > bestRelaxed.length) {
+                          bestRelaxed = merged;
+                          droppedKey = dropKey;
+                        }
+                      }
+                      if (bestRelaxed.length > 0) {
+                        rFinal = bestRelaxed;
+                        console.log(`[Chat] Replacement matcher relaxed (dropped ${droppedKey}): ${rFinal.length}`);
+                      }
+                    }
+                  }
+
+                  // Exclude original product
+                  const originalId = originalProduct?.id;
+                  if (originalId) rFinal = rFinal.filter(p => p.id !== originalId);
+
+                  if (rFinal.length > 0) {
+                    foundProducts = rFinal.slice(0, 15);
+                    articleShortCircuit = true;
+                    replacementWinResolved = true;
+                    replacementMeta = {
+                      isReplacement: true,
+                      original: originalProduct,
+                      originalName: classification.product_name,
+                      noResults: false,
+                    };
+                    console.log(`[Chat] [Path] WIN replacement matched_cats=${replMatches.length} count=${foundProducts.length} elapsed=${Date.now() - replacementStart}ms`);
+                  } else {
+                    console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS replacement reason=zero_after_filters matched_cats=${replMatches.length}`);
+                  }
+                } else {
+                  console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS replacement reason=zero_pool matched_cats=${replMatches.length}`);
+                }
+              } else {
+                console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS replacement reason=matcher_empty replCategory="${replCategory}"`);
+              }
+            } catch (rmErr) {
+              console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS replacement reason=${(rmErr as Error).message}`);
+            }
+
+            if (!replacementWinResolved) {
+            // ===== LEGACY bucket-logic for replacement (fallback when matcher fails) =====
             // Run category-first pipeline with bucket-matching
             let pluralRepl = toPluralCategory(replCategory);
             console.log(`[Chat] Replacement category-first: plural="${pluralRepl}"`);
