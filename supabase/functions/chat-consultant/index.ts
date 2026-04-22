@@ -3652,7 +3652,159 @@ serve(async (req) => {
           const modifiers = classification?.search_modifiers || [];
           console.log(`[Chat] Category-first: category="${effectiveCategory}", modifiers=[${modifiers.join(', ')}]`);
           const categoryStart = Date.now();
-          
+
+          // ===== NEW: SEMANTIC CATEGORY-MATCHER PATH (race with 10s timeout) =====
+          // Maps user query → exact pagetitle[] from /api/categories via LLM.
+          // On WIN: short-circuits, sets foundProducts, skips legacy bucket-logic below.
+          // On miss/timeout/empty: falls through to legacy logic (no regression).
+          let categoryFirstWinResolved = false;
+          try {
+            const matcherDeadline = new Promise<{ matches: string[] }>((_, rej) =>
+              setTimeout(() => rej(new Error('matcher_timeout_10s')), 10000)
+            );
+            const matcherWork = (async () => {
+              const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
+              if (catalog.length === 0) return { matches: [] };
+              const matches = await matchCategoriesWithLLM(effectiveCategory, catalog, appSettings);
+              return { matches };
+            })();
+            const { matches } = await Promise.race([matcherWork, matcherDeadline]);
+
+            if (matches.length > 0) {
+              console.log(`[Chat] CategoryMatcher WIN candidates for "${effectiveCategory}": ${JSON.stringify(matches)}`);
+              // Parallel: GET ?category=<exact pagetitle> for each match, plus query-fallback safety net
+              const catPromises = matches.map(cat =>
+                searchProductsByCandidate(
+                  { query: null, brand: null, category: cat, min_price: null, max_price: null },
+                  appSettings.volt220_api_token!, 30
+                )
+              );
+              const queryFallbackPromise = searchProductsByCandidate(
+                { query: effectiveCategory, brand: null, category: null, min_price: null, max_price: null },
+                appSettings.volt220_api_token!, 30
+              );
+              const allRes = await Promise.all([...catPromises, queryFallbackPromise]);
+              const matcherSeenIds = new Set<string | number>();
+              const matcherProducts: Product[] = [];
+              // Prefer exact-category matches first (their results land before query-fallback in iteration order)
+              for (let i = 0; i < allRes.length; i++) {
+                const arr = allRes[i];
+                for (const p of arr) {
+                  if (!matcherSeenIds.has(p.id)) {
+                    matcherSeenIds.add(p.id);
+                    matcherProducts.push(p);
+                  }
+                }
+              }
+              const matchedCategorySet = new Set(matches);
+              const exactCategoryHits = matcherProducts.filter(p =>
+                matchedCategorySet.has((p as any).category?.pagetitle || '')
+              );
+              console.log(`[Chat] CategoryMatcher merged ${matcherProducts.length} unique (${exactCategoryHits.length} in matched categories)`);
+
+              if (matcherProducts.length === 0) {
+                console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS reason=zero_after_category_search effectiveCategory="${effectiveCategory}"`);
+              } else if (modifiers.length === 0) {
+                // No modifiers — return matched-category products directly (or full set if matched is empty)
+                const pool = exactCategoryHits.length > 0 ? exactCategoryHits : matcherProducts;
+                foundProducts = pool.slice(0, 15);
+                articleShortCircuit = true;
+                categoryFirstWinResolved = true;
+                console.log(`[Chat] [Path] WIN mode=no_modifiers matched_cats=${matches.length} count=${foundProducts.length} elapsed=${Date.now() - categoryStart}ms`);
+              } else {
+                // Resolve filters once on the merged pool (rich schema)
+                const { resolved: mResolvedRaw, unresolved: mUnresolved } = await resolveFiltersWithLLM(
+                  matcherProducts, modifiers, appSettings, classification?.critical_modifiers
+                );
+                const mResolved = flattenResolvedFilters(mResolvedRaw);
+                console.log(`[Chat] CategoryMatcher resolved=${JSON.stringify(mResolved)}, unresolved=[${mUnresolved.join(', ')}]`);
+
+                // Parallel exact-category server-filtered search
+                const suppressQuery = mUnresolved.length === 0 && Object.keys(mResolved).length > 0;
+                const queryText = suppressQuery ? null : (mUnresolved.length > 0 ? mUnresolved.join(' ') : null);
+                const filteredPromises = matches.map(cat =>
+                  searchProductsByCandidate(
+                    { query: queryText, brand: null, category: cat, min_price: null, max_price: null },
+                    appSettings.volt220_api_token!, 30,
+                    Object.keys(mResolved).length > 0 ? mResolved : undefined
+                  )
+                );
+                const filteredRes = await Promise.all(filteredPromises);
+                const filtSeen = new Set<string | number>();
+                let filteredProducts: Product[] = [];
+                for (const arr of filteredRes) {
+                  for (const p of arr) {
+                    if (!filtSeen.has(p.id)) { filtSeen.add(p.id); filteredProducts.push(p); }
+                  }
+                }
+                console.log(`[Chat] CategoryMatcher server-filtered: ${filteredProducts.length} products across ${matches.length} categories`);
+
+                // Cascading relaxed: drop one non-critical filter at a time
+                if (filteredProducts.length === 0 && Object.keys(mResolved).length > 1) {
+                  const filterKeys = Object.keys(mResolved);
+                  const droppable = filterKeys.filter(k => !(mResolvedRaw[k]?.is_critical));
+                  let bestRelaxed: Product[] = [];
+                  let droppedKey = '';
+                  for (const dropKey of droppable) {
+                    const partial = { ...mResolved };
+                    delete partial[dropKey];
+                    const relaxedRes = await Promise.all(
+                      matches.map(cat => searchProductsByCandidate(
+                        { query: null, brand: null, category: cat, min_price: null, max_price: null },
+                        appSettings.volt220_api_token!, 30, partial
+                      ))
+                    );
+                    const relaxedSeen = new Set<string | number>();
+                    const relaxedMerged: Product[] = [];
+                    for (const arr of relaxedRes) for (const p of arr) {
+                      if (!relaxedSeen.has(p.id)) { relaxedSeen.add(p.id); relaxedMerged.push(p); }
+                    }
+                    if (relaxedMerged.length > bestRelaxed.length) {
+                      bestRelaxed = relaxedMerged;
+                      droppedKey = dropKey;
+                    }
+                  }
+                  if (bestRelaxed.length > 0) {
+                    filteredProducts = bestRelaxed;
+                    console.log(`[Chat] CategoryMatcher relaxed (dropped ${droppedKey}): ${filteredProducts.length} products`);
+                  }
+                }
+
+                if (filteredProducts.length > 0) {
+                  foundProducts = filteredProducts.slice(0, 15);
+                  articleShortCircuit = true;
+                  categoryFirstWinResolved = true;
+                  console.log(`[Chat] [Path] WIN mode=server_match matched_cats=${matches.length} resolved=${Object.keys(mResolved).length}/${modifiers.length} count=${foundProducts.length} elapsed=${Date.now() - categoryStart}ms`);
+
+                  // Slot for refinement
+                  if (foundProducts.length > 7) {
+                    const slotKey = `ps_${Date.now()}`;
+                    dialogSlots[slotKey] = {
+                      intent: 'product_search',
+                      base_category: effectiveCategory,
+                      plural_category: matches[0],
+                      resolved_filters: JSON.stringify(mResolved || {}),
+                      unresolved_query: mUnresolved?.length > 0 ? mUnresolved.join(' ') : '',
+                      status: 'pending',
+                      created_turn: messages.length,
+                      turns_since_touched: 0,
+                    };
+                    slotsUpdated = true;
+                    console.log(`[Chat] CategoryMatcher created slot "${slotKey}"`);
+                  }
+                } else {
+                  console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS reason=zero_after_filters matched_cats=${matches.length}`);
+                }
+              }
+            } else {
+              console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS reason=matcher_empty effectiveCategory="${effectiveCategory}"`);
+            }
+          } catch (matcherErr) {
+            console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS reason=${(matcherErr as Error).message}`);
+          }
+
+          if (!categoryFirstWinResolved) {
+          // ===== LEGACY bucket-logic (fallback when matcher fails) =====
           // Step 1: Two parallel searches — by category AND by query (to cover multiple subcategories)
           let pluralCategory = toPluralCategory(effectiveCategory);
           console.log(`[Chat] Category-first: plural="${pluralCategory}"`);
