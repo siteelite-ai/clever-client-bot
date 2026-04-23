@@ -3864,16 +3864,24 @@ serve(async (req) => {
                 categoryFirstWinResolved = true;
                 console.log(`[Chat] [Path] WIN mode=no_modifiers matched_cats=${matches.length} count=${foundProducts.length} elapsed=${Date.now() - categoryStart}ms`);
               } else {
-                // Resolve filters once on the merged pool (rich schema)
+                // Load FULL category options schema (all keys + all values across the matched
+                // categories) so the FilterLLM is not constrained to whatever options happen to
+                // appear in the first 30 products. This is the fix for "белая двухгнёздная розетка".
+                const fullSchema = await getUnionCategoryOptionsSchema(matches, appSettings.volt220_api_token!);
+
+                // Resolve filters once on the merged pool, with the full schema as authoritative source
                 const { resolved: mResolvedRaw, unresolved: mUnresolved } = await resolveFiltersWithLLM(
-                  matcherProducts, modifiers, appSettings, classification?.critical_modifiers
+                  matcherProducts, modifiers, appSettings, classification?.critical_modifiers, fullSchema
                 );
                 const mResolved = flattenResolvedFilters(mResolvedRaw);
                 console.log(`[Chat] CategoryMatcher resolved=${JSON.stringify(mResolved)}, unresolved=[${mUnresolved.join(', ')}]`);
 
-                // Parallel exact-category server-filtered search
-                const suppressQuery = mUnresolved.length === 0 && Object.keys(mResolved).length > 0;
-                const queryText = suppressQuery ? null : (mUnresolved.length > 0 ? mUnresolved.join(' ') : null);
+                // Parallel exact-category server-filtered search.
+                // If we have ANY resolved option filter, we trust it and DROP the literal-query fallback
+                // for unresolved modifiers — those are properties truly absent from the category schema,
+                // and forcing them as a `query=` substring would just return noisy/zero results.
+                const hasResolved = Object.keys(mResolved).length > 0;
+                const queryText = hasResolved ? null : (mUnresolved.length > 0 ? mUnresolved.join(' ') : null);
                 const filteredPromises = matches.map(cat =>
                   searchProductsByCandidate(
                     { query: queryText, brand: null, category: cat, min_price: null, max_price: null },
