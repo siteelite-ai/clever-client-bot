@@ -13,6 +13,117 @@ const VOLT220_API_URL = 'https://220volt.kz/api/products';
 const MAX_BUCKETS_TO_CHECK = 5;
 
 // ============================================================================
+// SUPPRESS RESOLVED TOKENS FROM LITERAL QUERY
+// ----------------------------------------------------------------------------
+// Single source of truth used by all 4 search branches (CategoryMatcher,
+// Bucket-N Stage 2, Slot refinement, Replacement / alt-bucket).
+//
+// Goal: when FilterLLM resolved a modifier (e.g. "чёрный" → cvet=чёрный//қара),
+// the same word must NOT also appear in the literal `query=` part of the API
+// call — otherwise API gets a contradictory "options + literal" pair and
+// returns 0.
+//
+// Hard rules (consilium decisions):
+//   1. Suppress ONLY tokens that the Micro-LLM explicitly returned in
+//      `search_modifiers` for THIS turn. Never blindly scrub the whole query
+//      against resolved values (would over-suppress product-name words).
+//   2. `query = null` is allowed only when the caller explicitly opts in
+//      (`allowEmptyQuery: true`). Bucket-N + Matcher → true. Replacement /
+//      alt-bucket → false (those branches are less confident; keep at least
+//      the original literal as a signal).
+//   3. Bilingual filter values like "чёрный//қара" MUST be split on `//`
+//      before stemming, so both halves participate in the comparison.
+//   4. If `modifierTokens` is empty → SKIP entirely. An empty list means
+//      "this turn brought no modifiers" (filters likely came from an old
+//      slot), so suppressing here would mutate text we have no claim to.
+// ============================================================================
+function suppressResolvedFromQuery(
+  query: string | null,
+  resolvedValues: string[],
+  modifierTokens: string[],
+  opts: { allowEmptyQuery: boolean; path: string },
+): string | null {
+  const { allowEmptyQuery, path } = opts;
+
+  // Local stem identical to the one inside resolveFiltersWithLLM (4-char prefix).
+  const normWord = (s: string) => s.replace(/ё/g, 'е').toLowerCase().replace(/[^а-яa-z0-9]/g, '');
+  const stem4 = (s: string) => { const t = normWord(s); return t.length >= 4 ? t.slice(0, 4) : t; };
+
+  if (!query || !query.trim()) {
+    console.log(`[SuppressQuery] path=${path} SKIP reason=empty_query_in`);
+    return query;
+  }
+  if (!modifierTokens || modifierTokens.length === 0) {
+    console.log(`[SuppressQuery] path=${path} SKIP reason=no_modifiers`);
+    return query;
+  }
+  if (!resolvedValues || resolvedValues.length === 0) {
+    console.log(`[SuppressQuery] path=${path} SKIP reason=no_resolved_values`);
+    return query;
+  }
+
+  // Build modifier-stem set (the ONLY tokens we are allowed to drop).
+  const modifierStems = new Set<string>();
+  for (const m of modifierTokens) {
+    for (const w of normWord(m).split(/\s+/).filter(Boolean)) {
+      const s = stem4(w);
+      if (s) modifierStems.add(s);
+    }
+  }
+
+  // Build resolved-value stem set — split bilingual `ru//kz` into halves.
+  const resolvedStems = new Set<string>();
+  for (const v of resolvedValues) {
+    if (!v) continue;
+    const halves = String(v).split('//').map(h => h.trim()).filter(Boolean);
+    for (const half of halves) {
+      for (const w of normWord(half).split(/\s+/).filter(Boolean)) {
+        const s = stem4(w);
+        if (s) resolvedStems.add(s);
+      }
+    }
+  }
+
+  if (modifierStems.size === 0 || resolvedStems.size === 0) {
+    console.log(`[SuppressQuery] path=${path} SKIP reason=empty_stem_sets modStems=${modifierStems.size} resStems=${resolvedStems.size}`);
+    return query;
+  }
+
+  // Tokenize query, drop tokens that are BOTH in modifier set AND in resolved set.
+  const dropped: string[] = [];
+  const kept = query.split(/\s+/).filter(rawTok => {
+    const tok = rawTok.trim();
+    if (!tok) return false;
+    const ts = stem4(tok);
+    if (!ts) return true;
+    if (modifierStems.has(ts) && resolvedStems.has(ts)) {
+      dropped.push(tok);
+      return false;
+    }
+    return true;
+  });
+
+  const after = kept.join(' ').trim();
+  console.log(`[SuppressQuery] path=${path} before="${query}" after="${after}" dropped=[${dropped.join(', ')}] resolvedStems=[${[...resolvedStems].join(', ')}] modStems=[${[...modifierStems].join(', ')}]`);
+
+  if (!after) {
+    if (allowEmptyQuery) {
+      console.log(`[SuppressQuery] path=${path} → null (allowEmptyQuery=true)`);
+      return null;
+    }
+    console.log(`[SuppressQuery] path=${path} SKIP reason=would_empty_but_disallowed → keep original`);
+    return query;
+  }
+  return after;
+}
+
+// Helper: extract resolved string values from a flattened filter map.
+// Use ONLY for suppressResolvedFromQuery (do not feed back to API).
+function extractResolvedValues(filters: Record<string, string>): string[] {
+  return Object.values(filters || {}).filter((v): v is string => typeof v === 'string' && v.length > 0);
+}
+
+// ============================================================================
 // DETERMINISTIC SAMPLING for OpenRouter / Gemini.
 // Per OpenRouter docs: temperature=0 alone is NOT enough for Gemini.
 // top_k=1 forces greedy decoding (always pick most likely token).
