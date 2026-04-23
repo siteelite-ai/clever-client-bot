@@ -13,6 +13,117 @@ const VOLT220_API_URL = 'https://220volt.kz/api/products';
 const MAX_BUCKETS_TO_CHECK = 5;
 
 // ============================================================================
+// SUPPRESS RESOLVED TOKENS FROM LITERAL QUERY
+// ----------------------------------------------------------------------------
+// Single source of truth used by all 4 search branches (CategoryMatcher,
+// Bucket-N Stage 2, Slot refinement, Replacement / alt-bucket).
+//
+// Goal: when FilterLLM resolved a modifier (e.g. "чёрный" → cvet=чёрный//қара),
+// the same word must NOT also appear in the literal `query=` part of the API
+// call — otherwise API gets a contradictory "options + literal" pair and
+// returns 0.
+//
+// Hard rules (consilium decisions):
+//   1. Suppress ONLY tokens that the Micro-LLM explicitly returned in
+//      `search_modifiers` for THIS turn. Never blindly scrub the whole query
+//      against resolved values (would over-suppress product-name words).
+//   2. `query = null` is allowed only when the caller explicitly opts in
+//      (`allowEmptyQuery: true`). Bucket-N + Matcher → true. Replacement /
+//      alt-bucket → false (those branches are less confident; keep at least
+//      the original literal as a signal).
+//   3. Bilingual filter values like "чёрный//қара" MUST be split on `//`
+//      before stemming, so both halves participate in the comparison.
+//   4. If `modifierTokens` is empty → SKIP entirely. An empty list means
+//      "this turn brought no modifiers" (filters likely came from an old
+//      slot), so suppressing here would mutate text we have no claim to.
+// ============================================================================
+function suppressResolvedFromQuery(
+  query: string | null,
+  resolvedValues: string[],
+  modifierTokens: string[],
+  opts: { allowEmptyQuery: boolean; path: string },
+): string | null {
+  const { allowEmptyQuery, path } = opts;
+
+  // Local stem identical to the one inside resolveFiltersWithLLM (4-char prefix).
+  const normWord = (s: string) => s.replace(/ё/g, 'е').toLowerCase().replace(/[^а-яa-z0-9]/g, '');
+  const stem4 = (s: string) => { const t = normWord(s); return t.length >= 4 ? t.slice(0, 4) : t; };
+
+  if (!query || !query.trim()) {
+    console.log(`[SuppressQuery] path=${path} SKIP reason=empty_query_in`);
+    return query;
+  }
+  if (!modifierTokens || modifierTokens.length === 0) {
+    console.log(`[SuppressQuery] path=${path} SKIP reason=no_modifiers`);
+    return query;
+  }
+  if (!resolvedValues || resolvedValues.length === 0) {
+    console.log(`[SuppressQuery] path=${path} SKIP reason=no_resolved_values`);
+    return query;
+  }
+
+  // Build modifier-stem set (the ONLY tokens we are allowed to drop).
+  const modifierStems = new Set<string>();
+  for (const m of modifierTokens) {
+    for (const w of normWord(m).split(/\s+/).filter(Boolean)) {
+      const s = stem4(w);
+      if (s) modifierStems.add(s);
+    }
+  }
+
+  // Build resolved-value stem set — split bilingual `ru//kz` into halves.
+  const resolvedStems = new Set<string>();
+  for (const v of resolvedValues) {
+    if (!v) continue;
+    const halves = String(v).split('//').map(h => h.trim()).filter(Boolean);
+    for (const half of halves) {
+      for (const w of normWord(half).split(/\s+/).filter(Boolean)) {
+        const s = stem4(w);
+        if (s) resolvedStems.add(s);
+      }
+    }
+  }
+
+  if (modifierStems.size === 0 || resolvedStems.size === 0) {
+    console.log(`[SuppressQuery] path=${path} SKIP reason=empty_stem_sets modStems=${modifierStems.size} resStems=${resolvedStems.size}`);
+    return query;
+  }
+
+  // Tokenize query, drop tokens that are BOTH in modifier set AND in resolved set.
+  const dropped: string[] = [];
+  const kept = query.split(/\s+/).filter(rawTok => {
+    const tok = rawTok.trim();
+    if (!tok) return false;
+    const ts = stem4(tok);
+    if (!ts) return true;
+    if (modifierStems.has(ts) && resolvedStems.has(ts)) {
+      dropped.push(tok);
+      return false;
+    }
+    return true;
+  });
+
+  const after = kept.join(' ').trim();
+  console.log(`[SuppressQuery] path=${path} before="${query}" after="${after}" dropped=[${dropped.join(', ')}] resolvedStems=[${[...resolvedStems].join(', ')}] modStems=[${[...modifierStems].join(', ')}]`);
+
+  if (!after) {
+    if (allowEmptyQuery) {
+      console.log(`[SuppressQuery] path=${path} → null (allowEmptyQuery=true)`);
+      return null;
+    }
+    console.log(`[SuppressQuery] path=${path} SKIP reason=would_empty_but_disallowed → keep original`);
+    return query;
+  }
+  return after;
+}
+
+// Helper: extract resolved string values from a flattened filter map.
+// Use ONLY for suppressResolvedFromQuery (do not feed back to API).
+function extractResolvedValues(filters: Record<string, string>): string[] {
+  return Object.values(filters || {}).filter((v): v is string => typeof v === 'string' && v.length > 0);
+}
+
+// ============================================================================
 // DETERMINISTIC SAMPLING for OpenRouter / Gemini.
 // Per OpenRouter docs: temperature=0 alone is NOT enough for Gemini.
 // top_k=1 forces greedy decoding (always pick most likely token).
@@ -3760,14 +3871,17 @@ serve(async (req) => {
               return true;
             });
           
-          // Suppress literal query when ALL refinement modifiers got resolved AND no leftover unresolved exists
-          const suppressSlotQuery = stillUnresolved.length === 0 && cleanExisting.length === 0 && Object.keys(mergedFilters).length > 0;
-          const mergedQuery = suppressSlotQuery
-            ? null
-            : ([...cleanExisting, ...stillUnresolved].filter(Boolean).join(' ').trim() || null);
-          if (suppressSlotQuery) {
-            console.log(`[Chat] Slot STAGE 2 query suppressed (all modifiers resolved → use options only)`);
-          }
+          // Suppress literal query via unified helper (consilium fix).
+          // Build candidate literal from leftover unresolved + cleaned existing,
+          // then drop tokens that 1:1 match a resolved-modifier stem AND a
+          // resolved-value stem. allowEmptyQuery=true (slot ветка имеет options).
+          const slotLiteralRaw = [...cleanExisting, ...stillUnresolved].filter(Boolean).join(' ').trim() || null;
+          const mergedQuery = suppressResolvedFromQuery(
+            slotLiteralRaw,
+            extractResolvedValues(mergedFilters),
+            modifiersToResolve,
+            { allowEmptyQuery: true, path: 'slot' },
+          );
           console.log(`[Chat] Merged filters=${JSON.stringify(mergedFilters)}, mergedQuery="${mergedQuery}"`);
           
           // Step 4: API call with structured filters
@@ -3970,12 +4084,15 @@ serve(async (req) => {
                 const mResolved = flattenResolvedFilters(mResolvedRaw);
                 console.log(`[Chat] CategoryMatcher resolved=${JSON.stringify(mResolved)}, unresolved=[${mUnresolved.join(', ')}]`);
 
-                // Parallel exact-category server-filtered search.
-                // If we have ANY resolved option filter, we trust it and DROP the literal-query fallback
-                // for unresolved modifiers — those are properties truly absent from the category schema,
-                // and forcing them as a `query=` substring would just return noisy/zero results.
-                const hasResolved = Object.keys(mResolved).length > 0;
-                const queryText = hasResolved ? null : (mUnresolved.length > 0 ? mUnresolved.join(' ') : null);
+                // Build literal from FULL modifier list, then drop only tokens
+                // that map to resolved values (unified helper, allowEmpty=true).
+                const matcherLiteral = modifiers.length > 0 ? modifiers.join(' ') : null;
+                const queryText = suppressResolvedFromQuery(
+                  matcherLiteral,
+                  extractResolvedValues(mResolved),
+                  modifiers,
+                  { allowEmptyQuery: true, path: 'matcher' },
+                );
                 const filteredPromises = matches.map(cat =>
                   searchProductsByCandidate(
                     { query: queryText, brand: null, category: cat, min_price: null, max_price: null },
@@ -4195,13 +4312,15 @@ serve(async (req) => {
             if (foundProducts.length === 0 && (Object.keys(resolvedFilters).length > 0 || unresolvedMods.length > 0)) {
               console.log(`[Chat] Category-first resolved filters: ${JSON.stringify(resolvedFilters)}, unresolved: [${unresolvedMods.join(', ')}]`);
 
-              // STAGE 2: Hybrid API call — resolved → options, unresolved → query text
-              // Suppress query when LLM resolved ALL modifiers (no unresolved tokens to search by name)
-              const suppressQuery = unresolvedMods.length === 0 && Object.keys(resolvedFilters).length > 0;
-              const queryText = suppressQuery ? null : (unresolvedMods.length > 0 ? unresolvedMods.join(' ') : null);
-              if (suppressQuery) {
-                console.log(`[Chat] STAGE 2 query suppressed (LLM resolved all modifiers)`);
-              }
+              // STAGE 2: Hybrid API call — resolved → options, unresolved → query text.
+              // Use unified suppressResolvedFromQuery helper (allowEmpty=true for bucket-N).
+              const bucketLiteral = modifiers.length > 0 ? modifiers.join(' ') : null;
+              const queryText = suppressResolvedFromQuery(
+                bucketLiteral,
+                extractResolvedValues(resolvedFilters),
+                modifiers,
+                { allowEmptyQuery: true, path: 'bucket-N' },
+              );
               console.log(`[Chat] Category-first STAGE 2: server options=${JSON.stringify(resolvedFilters)}, query="${queryText}"`);
               let serverFiltered = await searchProductsByCandidate(
                 { query: queryText, brand: null, category: pluralCategory, min_price: null, max_price: null },
@@ -4245,9 +4364,13 @@ serve(async (req) => {
                     console.log(`[Chat] Alt bucket "${altCat}" resolved nothing, skip`);
                     continue;
                   }
-                  const altSuppressQuery = altUnresolved.length === 0;
-                  const altQuery = altSuppressQuery ? null : (altUnresolved.length > 0 ? altUnresolved.join(' ') : null);
-                  if (altSuppressQuery) console.log(`[Chat] STAGE 2 query suppressed (alt-bucket, LLM resolved all)`);
+                  const altLiteral = modifiers.length > 0 ? modifiers.join(' ') : null;
+                  const altQuery = suppressResolvedFromQuery(
+                    altLiteral,
+                    extractResolvedValues(altResolved),
+                    modifiers,
+                    { allowEmptyQuery: true, path: 'alt-bucket' },
+                  );
                   const altServer = await searchProductsByCandidate(
                     { query: altQuery, brand: null, category: altCat, min_price: null, max_price: null },
                     appSettings.volt220_api_token, 50,
@@ -4449,8 +4572,14 @@ serve(async (req) => {
                     );
                     const rResolved = flattenResolvedFilters(rResolvedRaw);
                     console.log(`[Chat] Replacement matcher resolved=${JSON.stringify(rResolved)}, unresolved=[${rUnresolved.join(', ')}]`);
-                    const hasResolvedR = Object.keys(rResolved).length > 0;
-                    const qText = hasResolvedR ? null : (rUnresolved.length > 0 ? rUnresolved.join(' ') : null);
+                    // Replacement branch: allowEmpty=false (keep literal as fallback signal).
+                    const rLiteral = replModifiers.length > 0 ? replModifiers.join(' ') : null;
+                    const qText = suppressResolvedFromQuery(
+                      rLiteral,
+                      extractResolvedValues(rResolved),
+                      replModifiers,
+                      { allowEmptyQuery: false, path: 'replacement-matcher' },
+                    );
                     const rFiltRes = await Promise.all(replMatches.map(cat =>
                       searchProductsByCandidate(
                         { query: qText, brand: null, category: cat, min_price: null, max_price: null },
@@ -4629,10 +4758,14 @@ serve(async (req) => {
 
               if (replacementProducts.length === 0 && (Object.keys(replResolvedFilters).length > 0 || replUnresolvedMods.length > 0)) {
                 console.log(`[Chat] Replacement STAGE 2: resolved options=${JSON.stringify(replResolvedFilters)}, unresolved=[${replUnresolvedMods.join(', ')}]`);
-                // STAGE 3: Hybrid API call. Suppress query when LLM resolved ALL modifiers.
-                const replSuppressQuery = replUnresolvedMods.length === 0 && Object.keys(replResolvedFilters).length > 0;
-                const replQueryText = replSuppressQuery ? null : (replUnresolvedMods.length > 0 ? replUnresolvedMods.join(' ') : null);
-                if (replSuppressQuery) console.log(`[Chat] STAGE 2 query suppressed (replacement, LLM resolved all modifiers)`);
+                // STAGE 3: Hybrid API call. Unified helper, allowEmpty=false (replacement).
+                const replLiteral = replModifiers.length > 0 ? replModifiers.join(' ') : null;
+                const replQueryText = suppressResolvedFromQuery(
+                  replLiteral,
+                  extractResolvedValues(replResolvedFilters),
+                  replModifiers,
+                  { allowEmptyQuery: false, path: 'replacement-stage2' },
+                );
                 console.log(`[Chat] Replacement STAGE 3: API call category="${pluralRepl}", options=${JSON.stringify(replResolvedFilters)}, query="${replQueryText}"`);
                 let replFiltered = await searchProductsByCandidate(
                   { query: replQueryText, brand: null, category: pluralRepl, min_price: null, max_price: null },
@@ -4662,8 +4795,13 @@ serve(async (req) => {
                     const { resolved: altResolvedRaw, unresolved: altUnresolved } = await resolveFiltersWithLLM(altProducts, replModifiers, appSettings, classification?.critical_modifiers);
                     const altResolved = flattenResolvedFilters(altResolvedRaw);
                     if (Object.keys(altResolved).length === 0) continue;
-                    const altSuppress = altUnresolved.length === 0;
-                    const altQ = altSuppress ? null : (altUnresolved.length > 0 ? altUnresolved.join(' ') : null);
+                    const altReplLiteral = replModifiers.length > 0 ? replModifiers.join(' ') : null;
+                    const altQ = suppressResolvedFromQuery(
+                      altReplLiteral,
+                      extractResolvedValues(altResolved),
+                      replModifiers,
+                      { allowEmptyQuery: false, path: 'replacement-alt-bucket' },
+                    );
                     const altServer = await searchProductsByCandidate(
                       { query: altQ, brand: null, category: altCat, min_price: null, max_price: null },
                       appSettings.volt220_api_token, 50,
