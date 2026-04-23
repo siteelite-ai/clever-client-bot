@@ -979,6 +979,116 @@ function extractModifiersFromProduct(product: Product): string[] {
   return mods;
 }
 
+// =============================================================================
+// CATEGORY OPTIONS SCHEMA CACHE
+// =============================================================================
+// For each category pagetitle, fetches a wide product sample (up to 5 pages × 200)
+// and aggregates a complete map of options keys + all observed values.
+// TTL 30m. On error → returns empty Map (caller falls back to per-product schema).
+//
+// Why: filter-resolver LLM previously saw options union from 30-product sample.
+// If e.g. no double sockets were in those 30 → key "kolichestvo_postov" missing
+// → LLM physically cannot match "двухгнёздная". Full schema fixes this.
+const CATEGORY_OPTIONS_TTL_MS = 30 * 60 * 1000;
+const categoryOptionsCache: Map<string, { schema: Map<string, { caption: string; values: Set<string> }>; ts: number; productCount: number }> = new Map();
+
+async function getCategoryOptionsSchema(
+  categoryPagetitle: string,
+  apiToken: string
+): Promise<{ schema: Map<string, { caption: string; values: Set<string> }>; productCount: number; cacheHit: boolean }> {
+  const cached = categoryOptionsCache.get(categoryPagetitle);
+  if (cached && Date.now() - cached.ts < CATEGORY_OPTIONS_TTL_MS) {
+    console.log(`[CategoryOptionsSchema] cache HIT "${categoryPagetitle}" (${cached.schema.size} keys, ${cached.productCount} products, age=${Math.round((Date.now() - cached.ts) / 1000)}s)`);
+    return { schema: cached.schema, productCount: cached.productCount, cacheHit: true };
+  }
+
+  const t0 = Date.now();
+  const schema: Map<string, { caption: string; values: Set<string> }> = new Map();
+  let totalProducts = 0;
+  const MAX_PAGES = 5;
+  const PER_PAGE = 200;
+
+  try {
+    let page = 1;
+    let totalPages = 1;
+    do {
+      const params = new URLSearchParams();
+      params.append('category', categoryPagetitle);
+      params.append('per_page', String(PER_PAGE));
+      params.append('page', String(page));
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 12000);
+      const res = await fetch(`${VOLT220_API_URL}?${params}`, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      if (!res.ok) {
+        console.log(`[CategoryOptionsSchema] HTTP ${res.status} on page ${page} for "${categoryPagetitle}", aborting`);
+        break;
+      }
+      const raw = await res.json();
+      const data = raw.data || raw;
+      const results: any[] = data.results || [];
+      totalProducts += results.length;
+
+      for (const product of results) {
+        if (!product.options || !Array.isArray(product.options)) continue;
+        for (const opt of product.options) {
+          if (!opt || typeof opt.key !== 'string') continue;
+          if (isExcludedOption(opt.key)) continue;
+          if (!schema.has(opt.key)) {
+            schema.set(opt.key, { caption: opt.caption || opt.key, values: new Set() });
+          }
+          if (typeof opt.value === 'string' && opt.value.trim()) {
+            schema.get(opt.key)!.values.add(opt.value);
+          }
+        }
+      }
+
+      totalPages = Math.max(1, Number(data.pagination?.pages) || 1);
+      if (results.length < PER_PAGE) break; // last page
+      page++;
+    } while (page <= totalPages && page <= MAX_PAGES);
+
+    categoryOptionsCache.set(categoryPagetitle, { schema, ts: Date.now(), productCount: totalProducts });
+    const totalValues = Array.from(schema.values()).reduce((s, v) => s + v.values.size, 0);
+    console.log(`[CategoryOptionsSchema] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values (from ${totalProducts} products, ${Date.now() - t0}ms, cached 30m)`);
+    return { schema, productCount: totalProducts, cacheHit: false };
+  } catch (e) {
+    console.log(`[CategoryOptionsSchema] error for "${categoryPagetitle}": ${(e as Error).message} — returning empty schema`);
+    return { schema: new Map(), productCount: 0, cacheHit: false };
+  }
+}
+
+// Union schemas of multiple categories (parallel fetch). Used when CategoryMatcher
+// returns several pagetitles for one logical request (e.g. "розетки скрытой" + "накладные").
+async function getUnionCategoryOptionsSchema(
+  pagetitles: string[],
+  apiToken: string
+): Promise<Map<string, { caption: string; values: Set<string> }>> {
+  if (!pagetitles || pagetitles.length === 0) return new Map();
+  const results = await Promise.all(pagetitles.map(pt => getCategoryOptionsSchema(pt, apiToken)));
+  const union: Map<string, { caption: string; values: Set<string> }> = new Map();
+  let totalProducts = 0;
+  for (const r of results) {
+    totalProducts += r.productCount;
+    for (const [key, info] of r.schema.entries()) {
+      if (!union.has(key)) {
+        union.set(key, { caption: info.caption, values: new Set() });
+      }
+      const target = union.get(key)!;
+      for (const v of info.values) target.values.add(v);
+    }
+  }
+  const totalValues = Array.from(union.values()).reduce((s, v) => s + v.values.size, 0);
+  console.log(`[CategoryOptionsSchema] union ${pagetitles.length} categories → ${union.size} keys, ${totalValues} values (from ${totalProducts} products)`);
+  return union;
+}
+
 
 
 interface PriceIntentResult {
