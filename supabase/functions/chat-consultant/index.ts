@@ -3871,14 +3871,17 @@ serve(async (req) => {
               return true;
             });
           
-          // Suppress literal query when ALL refinement modifiers got resolved AND no leftover unresolved exists
-          const suppressSlotQuery = stillUnresolved.length === 0 && cleanExisting.length === 0 && Object.keys(mergedFilters).length > 0;
-          const mergedQuery = suppressSlotQuery
-            ? null
-            : ([...cleanExisting, ...stillUnresolved].filter(Boolean).join(' ').trim() || null);
-          if (suppressSlotQuery) {
-            console.log(`[Chat] Slot STAGE 2 query suppressed (all modifiers resolved → use options only)`);
-          }
+          // Suppress literal query via unified helper (consilium fix).
+          // Build candidate literal from leftover unresolved + cleaned existing,
+          // then drop tokens that 1:1 match a resolved-modifier stem AND a
+          // resolved-value stem. allowEmptyQuery=true (slot ветка имеет options).
+          const slotLiteralRaw = [...cleanExisting, ...stillUnresolved].filter(Boolean).join(' ').trim() || null;
+          const mergedQuery = suppressResolvedFromQuery(
+            slotLiteralRaw,
+            extractResolvedValues(mergedFilters),
+            modifiersToResolve,
+            { allowEmptyQuery: true, path: 'slot' },
+          );
           console.log(`[Chat] Merged filters=${JSON.stringify(mergedFilters)}, mergedQuery="${mergedQuery}"`);
           
           // Step 4: API call with structured filters
@@ -4081,12 +4084,15 @@ serve(async (req) => {
                 const mResolved = flattenResolvedFilters(mResolvedRaw);
                 console.log(`[Chat] CategoryMatcher resolved=${JSON.stringify(mResolved)}, unresolved=[${mUnresolved.join(', ')}]`);
 
-                // Parallel exact-category server-filtered search.
-                // If we have ANY resolved option filter, we trust it and DROP the literal-query fallback
-                // for unresolved modifiers — those are properties truly absent from the category schema,
-                // and forcing them as a `query=` substring would just return noisy/zero results.
-                const hasResolved = Object.keys(mResolved).length > 0;
-                const queryText = hasResolved ? null : (mUnresolved.length > 0 ? mUnresolved.join(' ') : null);
+                // Build literal from FULL modifier list, then drop only tokens
+                // that map to resolved values (unified helper, allowEmpty=true).
+                const matcherLiteral = modifiers.length > 0 ? modifiers.join(' ') : null;
+                const queryText = suppressResolvedFromQuery(
+                  matcherLiteral,
+                  extractResolvedValues(mResolved),
+                  modifiers,
+                  { allowEmptyQuery: true, path: 'matcher' },
+                );
                 const filteredPromises = matches.map(cat =>
                   searchProductsByCandidate(
                     { query: queryText, brand: null, category: cat, min_price: null, max_price: null },
@@ -4306,13 +4312,15 @@ serve(async (req) => {
             if (foundProducts.length === 0 && (Object.keys(resolvedFilters).length > 0 || unresolvedMods.length > 0)) {
               console.log(`[Chat] Category-first resolved filters: ${JSON.stringify(resolvedFilters)}, unresolved: [${unresolvedMods.join(', ')}]`);
 
-              // STAGE 2: Hybrid API call — resolved → options, unresolved → query text
-              // Suppress query when LLM resolved ALL modifiers (no unresolved tokens to search by name)
-              const suppressQuery = unresolvedMods.length === 0 && Object.keys(resolvedFilters).length > 0;
-              const queryText = suppressQuery ? null : (unresolvedMods.length > 0 ? unresolvedMods.join(' ') : null);
-              if (suppressQuery) {
-                console.log(`[Chat] STAGE 2 query suppressed (LLM resolved all modifiers)`);
-              }
+              // STAGE 2: Hybrid API call — resolved → options, unresolved → query text.
+              // Use unified suppressResolvedFromQuery helper (allowEmpty=true for bucket-N).
+              const bucketLiteral = modifiers.length > 0 ? modifiers.join(' ') : null;
+              const queryText = suppressResolvedFromQuery(
+                bucketLiteral,
+                extractResolvedValues(resolvedFilters),
+                modifiers,
+                { allowEmptyQuery: true, path: 'bucket-N' },
+              );
               console.log(`[Chat] Category-first STAGE 2: server options=${JSON.stringify(resolvedFilters)}, query="${queryText}"`);
               let serverFiltered = await searchProductsByCandidate(
                 { query: queryText, brand: null, category: pluralCategory, min_price: null, max_price: null },
@@ -4356,9 +4364,13 @@ serve(async (req) => {
                     console.log(`[Chat] Alt bucket "${altCat}" resolved nothing, skip`);
                     continue;
                   }
-                  const altSuppressQuery = altUnresolved.length === 0;
-                  const altQuery = altSuppressQuery ? null : (altUnresolved.length > 0 ? altUnresolved.join(' ') : null);
-                  if (altSuppressQuery) console.log(`[Chat] STAGE 2 query suppressed (alt-bucket, LLM resolved all)`);
+                  const altLiteral = modifiers.length > 0 ? modifiers.join(' ') : null;
+                  const altQuery = suppressResolvedFromQuery(
+                    altLiteral,
+                    extractResolvedValues(altResolved),
+                    modifiers,
+                    { allowEmptyQuery: true, path: 'alt-bucket' },
+                  );
                   const altServer = await searchProductsByCandidate(
                     { query: altQuery, brand: null, category: altCat, min_price: null, max_price: null },
                     appSettings.volt220_api_token, 50,
@@ -4560,8 +4572,14 @@ serve(async (req) => {
                     );
                     const rResolved = flattenResolvedFilters(rResolvedRaw);
                     console.log(`[Chat] Replacement matcher resolved=${JSON.stringify(rResolved)}, unresolved=[${rUnresolved.join(', ')}]`);
-                    const hasResolvedR = Object.keys(rResolved).length > 0;
-                    const qText = hasResolvedR ? null : (rUnresolved.length > 0 ? rUnresolved.join(' ') : null);
+                    // Replacement branch: allowEmpty=false (keep literal as fallback signal).
+                    const rLiteral = replModifiers.length > 0 ? replModifiers.join(' ') : null;
+                    const qText = suppressResolvedFromQuery(
+                      rLiteral,
+                      extractResolvedValues(rResolved),
+                      replModifiers,
+                      { allowEmptyQuery: false, path: 'replacement-matcher' },
+                    );
                     const rFiltRes = await Promise.all(replMatches.map(cat =>
                       searchProductsByCandidate(
                         { query: qText, brand: null, category: cat, min_price: null, max_price: null },
@@ -4740,10 +4758,14 @@ serve(async (req) => {
 
               if (replacementProducts.length === 0 && (Object.keys(replResolvedFilters).length > 0 || replUnresolvedMods.length > 0)) {
                 console.log(`[Chat] Replacement STAGE 2: resolved options=${JSON.stringify(replResolvedFilters)}, unresolved=[${replUnresolvedMods.join(', ')}]`);
-                // STAGE 3: Hybrid API call. Suppress query when LLM resolved ALL modifiers.
-                const replSuppressQuery = replUnresolvedMods.length === 0 && Object.keys(replResolvedFilters).length > 0;
-                const replQueryText = replSuppressQuery ? null : (replUnresolvedMods.length > 0 ? replUnresolvedMods.join(' ') : null);
-                if (replSuppressQuery) console.log(`[Chat] STAGE 2 query suppressed (replacement, LLM resolved all modifiers)`);
+                // STAGE 3: Hybrid API call. Unified helper, allowEmpty=false (replacement).
+                const replLiteral = replModifiers.length > 0 ? replModifiers.join(' ') : null;
+                const replQueryText = suppressResolvedFromQuery(
+                  replLiteral,
+                  extractResolvedValues(replResolvedFilters),
+                  replModifiers,
+                  { allowEmptyQuery: false, path: 'replacement-stage2' },
+                );
                 console.log(`[Chat] Replacement STAGE 3: API call category="${pluralRepl}", options=${JSON.stringify(replResolvedFilters)}, query="${replQueryText}"`);
                 let replFiltered = await searchProductsByCandidate(
                   { query: replQueryText, brand: null, category: pluralRepl, min_price: null, max_price: null },
@@ -4773,8 +4795,13 @@ serve(async (req) => {
                     const { resolved: altResolvedRaw, unresolved: altUnresolved } = await resolveFiltersWithLLM(altProducts, replModifiers, appSettings, classification?.critical_modifiers);
                     const altResolved = flattenResolvedFilters(altResolvedRaw);
                     if (Object.keys(altResolved).length === 0) continue;
-                    const altSuppress = altUnresolved.length === 0;
-                    const altQ = altSuppress ? null : (altUnresolved.length > 0 ? altUnresolved.join(' ') : null);
+                    const altReplLiteral = replModifiers.length > 0 ? replModifiers.join(' ') : null;
+                    const altQ = suppressResolvedFromQuery(
+                      altReplLiteral,
+                      extractResolvedValues(altResolved),
+                      replModifiers,
+                      { allowEmptyQuery: false, path: 'replacement-alt-bucket' },
+                    );
                     const altServer = await searchProductsByCandidate(
                       { query: altQ, brand: null, category: altCat, min_price: null, max_price: null },
                       appSettings.volt220_api_token, 50,
