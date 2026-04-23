@@ -3189,6 +3189,28 @@ function checkRateLimit(ip: string): boolean {
   return entry.count <= RATE_LIMIT_MAX;
 }
 
+// Idempotency shield: блокирует дубль-вызовы с тем же messageId в окне 60 сек.
+// Защищает от ретраев браузера, гонок fallback в виджете и двойных кликов.
+const idempotencyMap = new Map<string, number>();
+const IDEMPOTENCY_TTL_MS = 60_000;
+
+function checkIdempotency(messageId: string): boolean {
+  if (!messageId) return true; // нет id — нечего проверять, пропускаем
+  const now = Date.now();
+  // Чистим устаревшие записи (lazy cleanup)
+  if (idempotencyMap.size > 500) {
+    for (const [k, ts] of idempotencyMap) {
+      if (now - ts > IDEMPOTENCY_TTL_MS) idempotencyMap.delete(k);
+    }
+  }
+  const seen = idempotencyMap.get(messageId);
+  if (seen && now - seen < IDEMPOTENCY_TTL_MS) {
+    return false; // дубль
+  }
+  idempotencyMap.set(messageId, now);
+  return true;
+}
+
 function sanitizeUserInput(input: string): string {
   if (!input || typeof input !== 'string') return '';
   
@@ -3377,7 +3399,17 @@ serve(async (req) => {
   try {
     const body = await req.json();
     const useStreaming = body.stream !== false;
-    
+
+    // Idempotency check: блокируем дубль-вызовы с тем же messageId
+    const messageId = typeof body.messageId === 'string' ? body.messageId : '';
+    if (messageId && !checkIdempotency(messageId)) {
+      console.warn(`[Chat] Duplicate blocked: ${messageId}`);
+      return new Response(
+        JSON.stringify({ content: '', duplicate: true }),
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     let messages: Array<{ role: string; content: string }>;
     let conversationId: string;
     
