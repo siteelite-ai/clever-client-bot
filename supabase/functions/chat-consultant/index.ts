@@ -4323,13 +4323,15 @@ serve(async (req) => {
                   if (replModifiers.length === 0) {
                     rFinal = rPool;
                   } else {
+                    // Load full category schema for the replacement target categories
+                    const rFullSchema = await getUnionCategoryOptionsSchema(replMatches, appSettings.volt220_api_token!);
                     const { resolved: rResolvedRaw, unresolved: rUnresolved } = await resolveFiltersWithLLM(
-                      rPool, replModifiers, appSettings, classification?.critical_modifiers
+                      rPool, replModifiers, appSettings, classification?.critical_modifiers, rFullSchema
                     );
                     const rResolved = flattenResolvedFilters(rResolvedRaw);
                     console.log(`[Chat] Replacement matcher resolved=${JSON.stringify(rResolved)}, unresolved=[${rUnresolved.join(', ')}]`);
-                    const suppressQ = rUnresolved.length === 0 && Object.keys(rResolved).length > 0;
-                    const qText = suppressQ ? null : (rUnresolved.length > 0 ? rUnresolved.join(' ') : null);
+                    const hasResolvedR = Object.keys(rResolved).length > 0;
+                    const qText = hasResolvedR ? null : (rUnresolved.length > 0 ? rUnresolved.join(' ') : null);
                     const rFiltRes = await Promise.all(replMatches.map(cat =>
                       searchProductsByCandidate(
                         { query: qText, brand: null, category: cat, min_price: null, max_price: null },
