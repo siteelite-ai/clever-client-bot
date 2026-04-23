@@ -3674,25 +3674,67 @@ serve(async (req) => {
           const sp = slotResolution.searchParams;
           console.log(`[Chat] product_search slot: refinementText="${sp.refinementText}", existingUnresolved="${sp.existingUnresolved}", existingFilters=${JSON.stringify(sp.resolvedFilters)}`);
           
-          // Step 1: Fetch schema products for the category to build option schema
-          const schemaProducts = await searchProductsByCandidate(
+          // Step 1: Fetch FULL category option schema (authoritative — covers all products,
+          // not just a 50-item sample). Falls back to sample-based schema inside resolver if empty.
+          const slotPrebuilt = appSettings.volt220_api_token
+            ? await getCategoryOptionsSchema(sp.category, appSettings.volt220_api_token).catch(() => new Map())
+            : new Map();
+          console.log(`[Chat] Slot prebuilt schema for "${sp.category}": ${slotPrebuilt.size} keys`);
+          // Still fetch a small product sample as fallback (in case prebuilt schema is empty)
+          const schemaProducts = slotPrebuilt.size > 0 ? [] : await searchProductsByCandidate(
             { query: null, brand: null, category: sp.category, min_price: null, max_price: null },
             appSettings.volt220_api_token!, 50
           );
-          console.log(`[Chat] Fetched ${schemaProducts.length} schema products for category="${sp.category}"`);
+          if (slotPrebuilt.size === 0) {
+            console.log(`[Chat] Fetched ${schemaProducts.length} schema products for category="${sp.category}" (fallback)`);
+          }
           
           // Step 2: Resolve the NEW modifier (user's answer) against option schema
           const modifiersToResolve = sp.refinementModifiers || [sp.refinementText];
           console.log(`[Chat] Resolving modifiers: ${JSON.stringify(modifiersToResolve)} (from classifier: ${sp.refinementModifiers ? 'yes' : 'no, fallback'})`);
           const { resolved: newFiltersRaw, unresolved: stillUnresolved } = 
-            await resolveFiltersWithLLM(schemaProducts, modifiersToResolve, appSettings, classification?.critical_modifiers);
+            await resolveFiltersWithLLM(
+              schemaProducts, modifiersToResolve, appSettings, classification?.critical_modifiers,
+              slotPrebuilt.size > 0 ? slotPrebuilt : undefined
+            );
           const newFilters = flattenResolvedFilters(newFiltersRaw);
           console.log(`[Chat] FilterLLM refinement: resolved=${JSON.stringify(newFilters)}, unresolved=${JSON.stringify(stillUnresolved)}`);
           
           // Step 3: Merge with existing filters from slot
           const mergedFilters = { ...sp.resolvedFilters, ...newFilters };
-          const mergedQuery = [sp.existingUnresolved, ...stillUnresolved]
-            .filter(Boolean).join(' ').trim() || null;
+          
+          // Clean existingUnresolved: drop tokens that semantically map to ANY merged filter value
+          // (handles word-form garbage like "накладная" left over after tip_montagha was resolved)
+          const normTok = (s: string) => s.replace(/ё/g, 'е').toLowerCase().replace(/[^а-яa-z0-9\s]/g, '').trim();
+          const stem4 = (s: string) => { const t = s.replace(/[^а-яa-z0-9]/g, ''); return t.length >= 4 ? t.slice(0, 4) : t; };
+          const filterValueStems = new Set<string>();
+          for (const v of Object.values(mergedFilters)) {
+            const ru = normTok(String(v).split('//')[0]);
+            for (const w of ru.split(/\s+/)) if (w.length >= 4) filterValueStems.add(stem4(w));
+          }
+          const cleanExisting = (sp.existingUnresolved || '')
+            .split(/\s+/)
+            .map(t => t.trim())
+            .filter(t => {
+              if (!t) return false;
+              const nt = normTok(t);
+              if (nt.length < 4) return true;
+              const ts = stem4(nt);
+              if (filterValueStems.has(ts)) {
+                console.log(`[Chat] Dropping resolved word "${t}" from existingUnresolved (matches filter stem "${ts}")`);
+                return false;
+              }
+              return true;
+            });
+          
+          // Suppress literal query when ALL refinement modifiers got resolved AND no leftover unresolved exists
+          const suppressSlotQuery = stillUnresolved.length === 0 && cleanExisting.length === 0 && Object.keys(mergedFilters).length > 0;
+          const mergedQuery = suppressSlotQuery
+            ? null
+            : ([...cleanExisting, ...stillUnresolved].filter(Boolean).join(' ').trim() || null);
+          if (suppressSlotQuery) {
+            console.log(`[Chat] Slot STAGE 2 query suppressed (all modifiers resolved → use options only)`);
+          }
           console.log(`[Chat] Merged filters=${JSON.stringify(mergedFilters)}, mergedQuery="${mergedQuery}"`);
           
           // Step 4: API call with structured filters
