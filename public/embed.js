@@ -1012,6 +1012,13 @@
       if (result.contacts) {
         addMessage(result.contacts, 'assistant');
       }
+    } else if (firstTokenArrived && assistantMsg.textContent && assistantMsg.textContent.trim()) {
+      // Стрим оборвался посреди ответа, но в UI уже есть текст — сохраняем его в историю
+      // вместо показа «ошибки соединения». Лучше частичный ответ, чем пустота.
+      var partialContent = stripGreeting(assistantMsg.textContent);
+      conversationHistory.push({ role: 'assistant', content: partialContent });
+      saveState();
+      try { console.warn('[Widget] showing partial stream content (no fallback triggered)'); } catch(e) {}
     } else {
       hideTyping();
       addMessage('Извините, произошла ошибка соединения. Попробуйте позже.', 'assistant');
