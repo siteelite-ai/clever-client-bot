@@ -124,6 +124,21 @@ function extractResolvedValues(filters: Record<string, string>): string[] {
 }
 
 // ============================================================================
+// DISPLAY LIMIT — single source of truth for "how many products go into LLM ctx".
+// We MUST distinguish "totalCollected" (real number we gathered from API across
+// pages/categories) from "displayed" (truncated subset we hand to the LLM).
+// Previous bug: every branch did `.slice(0, 15)` and then reported its length
+// as "found N variants", so the bot always claimed exactly 15.
+// ============================================================================
+const DISPLAY_LIMIT = 15;
+
+function pickDisplayWithTotal<T>(all: T[], limit: number = DISPLAY_LIMIT): { displayed: T[]; total: number } {
+  const total = all?.length || 0;
+  const displayed = (all || []).slice(0, limit);
+  return { displayed, total };
+}
+
+// ============================================================================
 // DETERMINISTIC SAMPLING for OpenRouter / Gemini.
 // Per OpenRouter docs: temperature=0 alone is NOT enough for Gemini.
 // top_k=1 forces greedy decoding (always pick most likely token).
@@ -3738,6 +3753,11 @@ serve(async (req) => {
 
     let productContext = '';
     let foundProducts: Product[] = [];
+    // Real number of products we collected from API BEFORE truncating to DISPLAY_LIMIT.
+    // Used by the LLM prompt so the bot reports the honest catalog volume,
+    // not the truncated 15. Reset to 0 each turn.
+    let totalCollected = 0;
+    let totalCollectedBranch = '';
     let brandsContext = '';
     let knowledgeContext = '';
     let articleShortCircuit = false;
@@ -3890,7 +3910,7 @@ serve(async (req) => {
             appSettings.volt220_api_token!, 50,
             Object.keys(mergedFilters).length > 0 ? mergedFilters : undefined
           );
-          foundProducts = foundProducts.slice(0, 15);
+          { const _r = pickDisplayWithTotal(foundProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'slot'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=slot`); }
           articleShortCircuit = true;
           dialogSlots = slotResolution.updatedSlots;
           slotsUpdated = true;
@@ -4067,7 +4087,7 @@ serve(async (req) => {
               } else if (modifiers.length === 0) {
                 // No modifiers — return matched-category products directly (or full set if matched is empty)
                 const pool = exactCategoryHits.length > 0 ? exactCategoryHits : matcherProducts;
-                foundProducts = pool.slice(0, 15);
+                { const _r = pickDisplayWithTotal(pool); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'matcher_no_modifiers'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=matcher_no_modifiers`); }
                 articleShortCircuit = true;
                 categoryFirstWinResolved = true;
                 console.log(`[Chat] [Path] WIN mode=no_modifiers matched_cats=${matches.length} count=${foundProducts.length} elapsed=${Date.now() - categoryStart}ms`);
@@ -4142,7 +4162,7 @@ serve(async (req) => {
                 }
 
                 if (filteredProducts.length > 0) {
-                  foundProducts = filteredProducts.slice(0, 15);
+                  { const _r = pickDisplayWithTotal(filteredProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'matcher_server'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=matcher_server`); }
                   articleShortCircuit = true;
                   categoryFirstWinResolved = true;
                   console.log(`[Chat] [Path] WIN mode=server_match matched_cats=${matches.length} resolved=${Object.keys(mResolved).length}/${modifiers.length} count=${foundProducts.length} elapsed=${Date.now() - categoryStart}ms`);
@@ -4330,7 +4350,7 @@ serve(async (req) => {
               console.log(`[Chat] Category-first server-filtered: ${serverFiltered.length} products`);
 
               if (serverFiltered.length > 0) {
-                foundProducts = serverFiltered.slice(0, 15);
+                { const _r = pickDisplayWithTotal(serverFiltered); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'bucket-N'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=bucket-N`); }
                 articleShortCircuit = true;
                 resultMode = 'server_exact_match';
               } else {
@@ -4378,7 +4398,7 @@ serve(async (req) => {
                   );
                   console.log(`[Chat] Alt bucket "${altCat}" server-filtered: ${altServer.length} products`);
                   if (altServer.length > 0) {
-                    foundProducts = altServer.slice(0, 15);
+                    { const _r = pickDisplayWithTotal(altServer); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = `alt-bucket:${altCat}`; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=alt-bucket`); }
                     pluralCategory = altCat;
                     articleShortCircuit = true;
                     resultMode = `server_exact_match (alt-bucket "${altCat}")`;
@@ -4411,7 +4431,7 @@ serve(async (req) => {
                       }
                     }
                     if (bestRelaxed.length > 0) {
-                      foundProducts = bestRelaxed.slice(0, 15);
+                      { const _r = pickDisplayWithTotal(bestRelaxed); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'relaxed'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=relaxed`); }
                       articleShortCircuit = true;
                       resultMode = `relaxed_server_match (dropped ${droppedKey})`;
                     }
@@ -4435,7 +4455,7 @@ serve(async (req) => {
                       appSettings.volt220_api_token, 50
                     );
                     if (textFallback.length > 0) {
-                      foundProducts = textFallback.slice(0, 15);
+                      { const _r = pickDisplayWithTotal(textFallback); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'text_fallback'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=text_fallback`); }
                       articleShortCircuit = true;
                       resultMode = 'text_fallback';
                     } else {
@@ -4447,7 +4467,7 @@ serve(async (req) => {
                 }
               }
             } else {
-              foundProducts = rawProducts.slice(0, 15);
+              { const _r = pickDisplayWithTotal(rawProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'category-first_no_filters'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=category-first_no_filters`); }
               articleShortCircuit = true;
               resultMode = 'no_filters';
             }
@@ -4471,7 +4491,7 @@ serve(async (req) => {
               console.log(`[Chat] Created product_search slot "${slotKey}": filters=${JSON.stringify(resolvedFilters || {})}, query="${unresolvedMods?.length > 0 ? unresolvedMods.join(' ') : ''}"`);
             }
           } else if (rawProducts.length > 0) {
-            foundProducts = rawProducts.slice(0, 15);
+            { const _r = pickDisplayWithTotal(rawProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'category-first_no_modifiers'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=category-first_no_modifiers`); }
             articleShortCircuit = true;
             const categoryElapsed = Date.now() - categoryStart;
             console.log(`[Chat] Category-first DECISION: mode=no_modifiers, count=${foundProducts.length}, elapsed=${categoryElapsed}ms`);
@@ -4627,7 +4647,7 @@ serve(async (req) => {
                   if (originalId) rFinal = rFinal.filter(p => p.id !== originalId);
 
                   if (rFinal.length > 0) {
-                    foundProducts = rFinal.slice(0, 15);
+                    { const _r = pickDisplayWithTotal(rFinal); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_matcher'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_matcher`); }
                     articleShortCircuit = true;
                     replacementWinResolved = true;
                     replacementMeta = {
@@ -4864,7 +4884,7 @@ serve(async (req) => {
                 }
                 
                 if (replFiltered.length > 0) {
-                  foundProducts = replFiltered.slice(0, 15);
+                  { const _r = pickDisplayWithTotal(replFiltered); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_filtered'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_filtered`); }
                   articleShortCircuit = true;
                   replacementMeta = {
                     isReplacement: true,
@@ -4902,7 +4922,7 @@ serve(async (req) => {
                 let catProducts = replRawProducts;
                 const originalId = originalProduct?.id;
                 if (originalId) catProducts = catProducts.filter(p => p.id !== originalId);
-                foundProducts = catProducts.slice(0, 15);
+                { const _r = pickDisplayWithTotal(catProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_cat_no_filters'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_cat_no_filters`); }
                 articleShortCircuit = true;
                 replacementMeta = { isReplacement: true, original: originalProduct, originalName: classification.product_name, noResults: foundProducts.length === 0 };
                 console.log(`[Chat] Replacement: no filters resolved, showing ${foundProducts.length} category products (${Date.now() - replacementStart}ms)`);
@@ -4912,7 +4932,7 @@ serve(async (req) => {
               let catProducts = replRawProducts;
               const originalId = originalProduct?.id;
               if (originalId) catProducts = catProducts.filter(p => p.id !== originalId);
-              foundProducts = catProducts.slice(0, 15);
+              { const _r = pickDisplayWithTotal(catProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_cat_no_modifiers'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_cat_no_modifiers`); }
               articleShortCircuit = true;
               replacementMeta = { isReplacement: true, original: originalProduct, originalName: classification.product_name, noResults: foundProducts.length === 0 };
               console.log(`[Chat] Replacement: no modifiers, showing ${foundProducts.length} category products (${Date.now() - replacementStart}ms)`);
@@ -5209,17 +5229,23 @@ ${productContext}
 3. Объясни, что после уточнения ты сможешь точно найти самый дорогой/дешёвый вариант
 4. Тон: профессиональный, дружелюбный, без давления`;
     } else if (articleShortCircuit && productContext) {
-      // Title-first or price-intent answer: товар найден
+      // Title-first or price-intent answer: товар найден.
+      // displayedCount  — сколько карточек реально ушло в LLM-контекст (≤ DISPLAY_LIMIT).
+      // collectedCount  — сколько товаров API вернул ДО обрезки (реальный объём подборки).
+      // fewProducts решается по collectedCount: если в каталоге <=7, показываем все;
+      // если в каталоге много — даже когда displayed=15, говорим честное число "подобрано N".
       const isPriceSort = foundProducts.length > 0 && !detectedArticles.length;
-      const productCount = foundProducts.length;
-      const fewProducts = productCount <= 7;
+      const displayedCount = foundProducts.length;
+      const collectedCount = totalCollected > 0 ? totalCollected : displayedCount;
+      const fewProducts = collectedCount <= 7;
+      console.log(`[Chat] PromptCounts: displayed=${displayedCount} collected=${collectedCount} branch=${totalCollectedBranch} fewProducts=${fewProducts}`);
       
       if (fewProducts) {
         productInstructions = `
-🎯 ТОВАР НАЙДЕН ПО НАЗВАНИЮ — ПОКАЖИ ВСЕ ${productCount} ПОЗИЦИЙ:
+🎯 ТОВАР НАЙДЕН ПО НАЗВАНИЮ — ПОКАЖИ ВСЕ ${displayedCount} ПОЗИЦИЙ:
 ${productContext}
 
-🚫 АБСОЛЮТНЫЙ ЗАПРЕТ: ЗАПРЕЩЕНО задавать уточняющие вопросы! Товаров мало (${productCount}) — покажи ВСЕ найденные позиции.
+🚫 АБСОЛЮТНЫЙ ЗАПРЕТ: ЗАПРЕЩЕНО задавать уточняющие вопросы! Товаров мало (${displayedCount}) — покажи ВСЕ найденные позиции.
 - Покажи каждый товар: название, цена, наличие, ссылка
 - Ссылки копируй как есть в формате [Название](URL) — НЕ МЕНЯЙ URL!
 - ВАЖНО: если в названии товара есть экранированные скобки \\( и \\) — СОХРАНЯЙ их!
@@ -5229,17 +5255,18 @@ ${productContext}
 - Тон: профессиональный, без давления`;
       } else {
         productInstructions = `
-🎯 НАЙДЕНО ${productCount} ТОВАРОВ ПО НАЗВАНИЮ:
+🎯 ПОДОБРАНО ${collectedCount} ТОВАРОВ ПО ЗАПРОСУ (показаны первые ${displayedCount}):
 ${productContext}
 
 📋 ОБЯЗАТЕЛЬНЫЙ ФОРМАТ ОТВЕТА:
 1. Покажи ПЕРВЫЕ 3 наиболее релевантных товара: название, цена, наличие, ссылка
-2. Скажи: "Всего нашлось ${productCount} вариантов."
-3. Предложи сузить выбор: "Если хотите, могу подобрать точнее — подскажите [тип/характеристика/бренд]"
+2. Скажи ОДНОЙ фразой: "Всего подобрано ${collectedCount} вариантов." (используй именно число ${collectedCount}, не округляй и не выдумывай!)
+3. Предложи сузить выбор: "Если хотите, могу подобрать точнее — подскажите [цвет/серию/производителя/цену]"
 - Ссылки копируй как есть в формате [Название](URL) — НЕ МЕНЯЙ URL!
 - ВАЖНО: если в названии товара есть экранированные скобки \\( и \\) — СОХРАНЯЙ их!
 - Тон: профессиональный, без давления
-- 🚫 НЕ задавай уточняющий вопрос БЕЗ показа товаров. Всегда сначала показывай 3 товара!`;
+- 🚫 НЕ задавай уточняющий вопрос БЕЗ показа товаров. Всегда сначала показывай 3 товара!
+- 🚫 НЕ говори "нашлось 15", "нашлось ровно 15" — это лимит показа, а не реальное количество. Реальное число = ${collectedCount}.`;
       }
     } else if (productContext) {
       productInstructions = `
