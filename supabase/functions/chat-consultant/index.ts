@@ -4138,10 +4138,14 @@ serve(async (req) => {
                     );
                     if (extra.length > altProducts.length) altProducts = extra;
                   }
-                  const { resolved: altResolvedRaw, unresolved: altUnresolved } = await resolveFiltersWithLLM(altProducts, modifiers, appSettings, classification?.critical_modifiers);
-                  const altResolved = flattenResolvedFilters(altResolvedRaw);
-                  if (Object.keys(altResolved).length === 0) {
-                    console.log(`[Chat] Alt bucket "${altCat}" resolved nothing, skip`);
+                  const altSchema = appSettings.volt220_api_token
+                    ? await getCategoryOptionsSchema(altCat, appSettings.volt220_api_token).catch(() => new Map())
+                    : new Map();
+                  const { resolved: altResolvedRaw, unresolved: altUnresolved } = await resolveFiltersWithLLM(
+                    altProducts, modifiers, appSettings, classification?.critical_modifiers,
+                    altSchema && altSchema.size > 0 ? altSchema : undefined
+                  );
+                  console.log(`[Chat] Alt bucket "${altCat}" schema=${altSchema?.size || 0} keys`);
                     continue;
                   }
                   const altSuppressQuery = altUnresolved.length === 0;
