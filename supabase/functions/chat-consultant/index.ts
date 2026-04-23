@@ -124,6 +124,21 @@ function extractResolvedValues(filters: Record<string, string>): string[] {
 }
 
 // ============================================================================
+// DISPLAY LIMIT — single source of truth for "how many products go into LLM ctx".
+// We MUST distinguish "totalCollected" (real number we gathered from API across
+// pages/categories) from "displayed" (truncated subset we hand to the LLM).
+// Previous bug: every branch did `.slice(0, 15)` and then reported its length
+// as "found N variants", so the bot always claimed exactly 15.
+// ============================================================================
+const DISPLAY_LIMIT = 15;
+
+function pickDisplayWithTotal<T>(all: T[], limit: number = DISPLAY_LIMIT): { displayed: T[]; total: number } {
+  const total = all?.length || 0;
+  const displayed = (all || []).slice(0, limit);
+  return { displayed, total };
+}
+
+// ============================================================================
 // DETERMINISTIC SAMPLING for OpenRouter / Gemini.
 // Per OpenRouter docs: temperature=0 alone is NOT enough for Gemini.
 // top_k=1 forces greedy decoding (always pick most likely token).
