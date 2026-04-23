@@ -30,7 +30,8 @@
   let sessionId;
   let conversationHistory;
   let dialogSlots = {};
-  
+  // Per-message id для серверной idempotency (защита от дубль-вызовов edge)
+  let currentMessageId = '';
   // Try to restore from sessionStorage
   try {
     const saved = sessionStorage.getItem(STORAGE_KEY);
@@ -879,6 +880,16 @@
     input.value = '';
     sendBtn.disabled = true;
 
+    // Уникальный id для этого user-message — сервер использует его для idempotency.
+    // При любом ретрае/дубле в рамках одного sendMessage — id тот же → второй вызов отбит.
+    try {
+      currentMessageId = (window.crypto && window.crypto.randomUUID)
+        ? window.crypto.randomUUID()
+        : ('msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10));
+    } catch(e) {
+      currentMessageId = 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+    }
+
     addMessage(message, 'user');
     conversationHistory.push({ role: 'user', content: message });
     saveState();
@@ -932,6 +943,10 @@
           return;
         } catch (err) {
           lastError = err;
+          try { console.warn('[Widget] stream ' + streamEndpoints[i].label + ' failed: ' + (err && err.message)); } catch(e) {}
+          // Если успели получить токены — больше не пробуем другие стрим-эндпоинты,
+          // иначе на экране может появиться частичный ответ + новая попытка поверх.
+          if (firstTokenArrived) break;
           if (assistantMsg.parentNode && !assistantMsg.innerHTML) assistantMsg.remove();
           msgInserted = false;
         }
@@ -965,26 +980,17 @@
     // Wait for stream to complete
     await streamPromise;
 
-    // Fallback to non-streaming if streaming failed
-    if (!result) {
+    // Fallback to non-streaming — ТОЛЬКО если стрим вообще ничего не отдал.
+    // Если firstTokenArrived=true → пользователь уже видит ответ (полный или частичный),
+    // повторный вызов edge только сожжёт токены и может перезатереть UI.
+    if (!result && !firstTokenArrived) {
       for (var k = 0; k < fallbackEndpoints.length; k++) {
         try {
           result = await tryNonStreamEndpoint(fallbackEndpoints[k].url, message, fallbackEndpoints[k].label);
           break;
         } catch (err) {
           lastError = err;
-        }
-      }
-    }
-
-    // Fallback to non-streaming if streaming failed (proxy → direct)
-    if (!result) {
-      for (var k = 0; k < fallbackEndpoints.length; k++) {
-        try {
-          result = await tryNonStreamEndpoint(fallbackEndpoints[k].url, message, fallbackEndpoints[k].label);
-          break;
-        } catch (err) {
-          lastError = err;
+          try { console.warn('[Widget] fallback ' + fallbackEndpoints[k].label + ' failed: ' + (err && err.message)); } catch(e) {}
         }
       }
     }
