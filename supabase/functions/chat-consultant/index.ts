@@ -4039,6 +4039,20 @@ serve(async (req) => {
                 : `[Chat] Category-first: NO buckets match classifier="${effectiveCategory}", fallback to all ${allBuckets.length}`
             );
 
+            // Pre-load full category option schemas for all candidate buckets in parallel.
+            // This ensures FilterLLM sees the AUTHORITATIVE list of keys/values for each
+            // category (not just whatever happens to be in the 24-item sample), so modifiers
+            // like "двухместная" can be matched to keys like `kolichestvo_razyemov` even when
+            // the sample doesn't contain a single double socket. Cached 30 min per category.
+            const bucketCatNames = bucketsToTry.filter(([, c]) => c >= 2).map(([n]) => n);
+            const bucketSchemaMap: Map<string, Map<string, { caption: string; values: Set<string> }>> = new Map();
+            if (appSettings.volt220_api_token && bucketCatNames.length > 0) {
+              const schemas = await Promise.all(
+                bucketCatNames.map(n => getCategoryOptionsSchema(n, appSettings.volt220_api_token!).catch(() => new Map()))
+              );
+              bucketCatNames.forEach((n, i) => bucketSchemaMap.set(n, schemas[i]));
+            }
+
             for (const [catName, count] of bucketsToTry) {
               if (count < 2) continue;
               let bucketProducts = rawProducts.filter(p => 
@@ -4055,8 +4069,12 @@ serve(async (req) => {
                   console.log(`[Chat] Bucket "${catName}" expanded to ${bucketProducts.length} products`);
                 }
               }
-              const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(bucketProducts, modifiers, appSettings, classification?.critical_modifiers);
-              console.log(`[Chat] Bucket "${catName}" (${bucketProducts.length}): resolved=${JSON.stringify(flattenResolvedFilters(br))}, unresolved=[${bu.join(', ')}]`);
+              const bucketSchema = bucketSchemaMap.get(catName);
+              const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(
+                bucketProducts, modifiers, appSettings, classification?.critical_modifiers,
+                bucketSchema && bucketSchema.size > 0 ? bucketSchema : undefined
+              );
+              console.log(`[Chat] Bucket "${catName}" (${bucketProducts.length}, schema=${bucketSchema?.size || 0} keys): resolved=${JSON.stringify(flattenResolvedFilters(br))}, unresolved=[${bu.join(', ')}]`);
               
               if (Object.keys(br).length > Object.keys(bestResolvedRaw).length) {
                 bestBucketCat = catName;
@@ -4120,7 +4138,14 @@ serve(async (req) => {
                     );
                     if (extra.length > altProducts.length) altProducts = extra;
                   }
-                  const { resolved: altResolvedRaw, unresolved: altUnresolved } = await resolveFiltersWithLLM(altProducts, modifiers, appSettings, classification?.critical_modifiers);
+                  const altSchema = appSettings.volt220_api_token
+                    ? await getCategoryOptionsSchema(altCat, appSettings.volt220_api_token).catch(() => new Map())
+                    : new Map();
+                  const { resolved: altResolvedRaw, unresolved: altUnresolved } = await resolveFiltersWithLLM(
+                    altProducts, modifiers, appSettings, classification?.critical_modifiers,
+                    altSchema && altSchema.size > 0 ? altSchema : undefined
+                  );
+                  console.log(`[Chat] Alt bucket "${altCat}" schema=${altSchema?.size || 0} keys`);
                   const altResolved = flattenResolvedFilters(altResolvedRaw);
                   if (Object.keys(altResolved).length === 0) {
                     console.log(`[Chat] Alt bucket "${altCat}" resolved nothing, skip`);
