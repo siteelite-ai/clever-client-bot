@@ -2639,9 +2639,17 @@ ${JSON.stringify(modifiers)}
             'пят': '5', 'пяти': '5',
             'шест': '6', 'шести': '6',
           };
+          // Strip bilingual suffix from value for matching: "чёрный//қара" → "чёрный"
+          const nvalRu = norm(value).split('//')[0].trim();
+          // Russian stem helper: take first N letters (4-5) — collapses gender/case forms
+          // (черная/чёрный → черн, накладная/накладной → накла)
+          const stem = (s: string, n = 5) => {
+            const t = s.replace(/[^а-яa-z0-9]/g, '');
+            return t.length >= n ? t.slice(0, n) : t;
+          };
           for (const mod of modifiers) {
             const nmod = norm(mod);
-            const nval = norm(value);
+            const nval = nvalRu;
             let matched = false;
             // 1. Direct match
             if (nmod === nval) matched = true;
@@ -2652,15 +2660,26 @@ ${JSON.stringify(modifiers)}
               if (nmod.includes(nval)) matched = true;
               else if (Object.entries(numeralMap).some(([root, digit]) => digit === nval && nmod.startsWith(root))) matched = true;
             }
+            // 4. Russian stem match (value↔modifier): "черная"↔"чёрный" both stem→"черн"
             if (!matched) {
-              // 4. Modifier contains root of caption or key
+              for (const modWord of nmod.split(/\s+/)) {
+                if (modWord.length < 4) continue;
+                const ms = stem(modWord, 4);
+                const vs = stem(nval, 4);
+                if (ms.length >= 4 && vs.length >= 4 && (ms === vs || ms.startsWith(vs.slice(0, 4)) || vs.startsWith(ms.slice(0, 4)))) {
+                  matched = true; break;
+                }
+              }
+            }
+            if (!matched) {
+              // 5. Modifier contains root of caption or key
               const captionWords = caption.split(/[\s\-\/,()]+/).filter(w => w.length >= 3);
               const keyWords = keyLower.split(/[\s_\-]+/).filter(w => w.length >= 3);
               const roots = [...captionWords, ...keyWords].map(w => w.slice(0, Math.min(w.length, 4)));
               if (roots.some(root => nmod.includes(root))) matched = true;
             }
             if (!matched) {
-              // 5. Multi-word modifier: any word matches value or caption
+              // 6. Multi-word modifier: any word matches value or caption
               const modWords = nmod.split(/\s+/);
               if (modWords.length > 1 && modWords.some(mw => mw === nval || caption.includes(mw))) matched = true;
             }
