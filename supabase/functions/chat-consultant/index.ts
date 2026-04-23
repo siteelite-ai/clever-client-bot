@@ -2452,23 +2452,31 @@ async function resolveFiltersWithLLM(
   products: Product[],
   modifiers: string[],
   settings: CachedSettings,
-  criticalModifiers?: string[]
+  criticalModifiers?: string[],
+  prebuiltSchema?: Map<string, { caption: string; values: Set<string> }>
 ): Promise<{ resolved: Record<string, ResolvedFilter>; unresolved: string[] }> {
   if (!modifiers || modifiers.length === 0) return { resolved: {}, unresolved: [] };
   // Default critical = all modifiers (safe behavior)
   const criticalSet = new Set<string>((criticalModifiers && criticalModifiers.length > 0 ? criticalModifiers : modifiers).map(m => m.toLowerCase().trim()));
   const isCritical = (mod: string) => criticalSet.has(mod.toLowerCase().trim());
 
-  // Build option schema from products
-  const optionIndex: Map<string, { caption: string; values: Set<string> }> = new Map();
-  for (const product of products) {
-    if (!product.options) continue;
-    for (const opt of product.options) {
-      if (isExcludedOption(opt.key)) continue;
-      if (!optionIndex.has(opt.key)) {
-        optionIndex.set(opt.key, { caption: opt.caption, values: new Set() });
+  // Build option schema. Prefer prebuilt full-category schema when provided
+  // (covers all products in category, not just a 30-item sample).
+  let optionIndex: Map<string, { caption: string; values: Set<string> }>;
+  if (prebuiltSchema && prebuiltSchema.size > 0) {
+    optionIndex = prebuiltSchema;
+    console.log(`[FilterLLM] Using prebuilt category schema (${optionIndex.size} keys)`);
+  } else {
+    optionIndex = new Map();
+    for (const product of products) {
+      if (!product.options) continue;
+      for (const opt of product.options) {
+        if (isExcludedOption(opt.key)) continue;
+        if (!optionIndex.has(opt.key)) {
+          optionIndex.set(opt.key, { caption: opt.caption, values: new Set() });
+        }
+        optionIndex.get(opt.key)!.values.add(opt.value);
       }
-      optionIndex.get(opt.key)!.values.add(opt.value);
     }
   }
 
