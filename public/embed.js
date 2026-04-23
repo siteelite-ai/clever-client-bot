@@ -10,6 +10,10 @@
   }
   'use strict';
 
+  // Widget version — для диагностики устаревших встраиваний на чужих сайтах
+  var WIDGET_VERSION = '2026-04-23-idempotency';
+  try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
+
   // Configuration
   const CONFIG = {
     supabaseUrl: 'https://supabase-proxy.bold-dawn-058f.workers.dev',
@@ -692,6 +696,7 @@
       body: JSON.stringify({
         message: message,
         sessionId: sessionId,
+        messageId: currentMessageId,
         history: conversationHistory.slice(-10),
         stream: true,
         dialogSlots: activeSlots
@@ -788,32 +793,42 @@
       }
     }
 
-    // Final flush
-    if (textBuffer.trim()) {
-      var leftover = textBuffer.split('\n');
-      for (var j = 0; j < leftover.length; j++) {
-        var raw = leftover[j];
-        if (!raw) continue;
-        if (raw.endsWith('\r')) raw = raw.slice(0, -1);
-        if (raw.startsWith(':') || raw.trim() === '') continue;
-        if (!raw.startsWith('data: ')) continue;
-        var js2 = raw.slice(6).trim();
-        if (js2 === '[DONE]') continue;
-        try {
-          var o2 = JSON.parse(js2);
-          if (o2.contacts) { contacts = o2.contacts; continue; }
-          if (o2.slot_update) { dialogSlots = o2.slot_update; saveState(); continue; }
-          var d2 = o2.choices && o2.choices[0] && o2.choices[0].delta && o2.choices[0].delta.content;
-          if (d2) {
-            fullContent += d2;
-            msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
-          }
-        } catch(e) {}
+    // Final flush — обёрнут в try/catch: если уже получили хоть один токен,
+    // вернём частичный ответ вместо throw, чтобы не запускать дублирующий fallback.
+    try {
+      if (textBuffer.trim()) {
+        var leftover = textBuffer.split('\n');
+        for (var j = 0; j < leftover.length; j++) {
+          var raw = leftover[j];
+          if (!raw) continue;
+          if (raw.endsWith('\r')) raw = raw.slice(0, -1);
+          if (raw.startsWith(':') || raw.trim() === '') continue;
+          if (!raw.startsWith('data: ')) continue;
+          var js2 = raw.slice(6).trim();
+          if (js2 === '[DONE]') continue;
+          try {
+            var o2 = JSON.parse(js2);
+            if (o2.contacts) { contacts = o2.contacts; continue; }
+            if (o2.slot_update) { dialogSlots = o2.slot_update; saveState(); continue; }
+            var d2 = o2.choices && o2.choices[0] && o2.choices[0].delta && o2.choices[0].delta.content;
+            if (d2) {
+              fullContent += d2;
+              msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
+            }
+          } catch(e) {}
+        }
       }
+    } catch (flushErr) {
+      try { console.warn('[Widget] stream flush error: ' + (flushErr && flushErr.message)); } catch(e) {}
     }
 
-    if (!fullContent) throw new Error(label + ': empty streaming content');
-    return { content: fullContent, contacts: contacts };
+    if (!fullContent) {
+      // Ни одного токена — пробрасываем, чтобы fallback штатно сработал
+      if (!firstTokenReceived) throw new Error(label + ': empty streaming content');
+      // Иначе — возвращаем то что есть (не должно случаться, но защита)
+      return { content: '', contacts: contacts, partial: true };
+    }
+    return { content: fullContent, contacts: contacts, partial: !done };
   }
 
   // Fallback: non-streaming fetch
@@ -832,6 +847,7 @@
       body: JSON.stringify({
         message: message,
         sessionId: sessionId,
+        messageId: currentMessageId,
         history: conversationHistory.slice(-10),
         stream: false,
         dialogSlots: dialogSlots
