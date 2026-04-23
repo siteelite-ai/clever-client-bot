@@ -2639,9 +2639,17 @@ ${JSON.stringify(modifiers)}
             'пят': '5', 'пяти': '5',
             'шест': '6', 'шести': '6',
           };
+          // Strip bilingual suffix from value for matching: "чёрный//қара" → "чёрный"
+          const nvalRu = norm(value).split('//')[0].trim();
+          // Russian stem helper: take first N letters (4-5) — collapses gender/case forms
+          // (черная/чёрный → черн, накладная/накладной → накла)
+          const stem = (s: string, n = 5) => {
+            const t = s.replace(/[^а-яa-z0-9]/g, '');
+            return t.length >= n ? t.slice(0, n) : t;
+          };
           for (const mod of modifiers) {
             const nmod = norm(mod);
-            const nval = norm(value);
+            const nval = nvalRu;
             let matched = false;
             // 1. Direct match
             if (nmod === nval) matched = true;
@@ -2652,15 +2660,26 @@ ${JSON.stringify(modifiers)}
               if (nmod.includes(nval)) matched = true;
               else if (Object.entries(numeralMap).some(([root, digit]) => digit === nval && nmod.startsWith(root))) matched = true;
             }
+            // 4. Russian stem match (value↔modifier): "черная"↔"чёрный" both stem→"черн"
             if (!matched) {
-              // 4. Modifier contains root of caption or key
+              for (const modWord of nmod.split(/\s+/)) {
+                if (modWord.length < 4) continue;
+                const ms = stem(modWord, 4);
+                const vs = stem(nval, 4);
+                if (ms.length >= 4 && vs.length >= 4 && (ms === vs || ms.startsWith(vs.slice(0, 4)) || vs.startsWith(ms.slice(0, 4)))) {
+                  matched = true; break;
+                }
+              }
+            }
+            if (!matched) {
+              // 5. Modifier contains root of caption or key
               const captionWords = caption.split(/[\s\-\/,()]+/).filter(w => w.length >= 3);
               const keyWords = keyLower.split(/[\s_\-]+/).filter(w => w.length >= 3);
               const roots = [...captionWords, ...keyWords].map(w => w.slice(0, Math.min(w.length, 4)));
               if (roots.some(root => nmod.includes(root))) matched = true;
             }
             if (!matched) {
-              // 5. Multi-word modifier: any word matches value or caption
+              // 6. Multi-word modifier: any word matches value or caption
               const modWords = nmod.split(/\s+/);
               if (modWords.length > 1 && modWords.some(mw => mw === nval || caption.includes(mw))) matched = true;
             }
@@ -3655,25 +3674,67 @@ serve(async (req) => {
           const sp = slotResolution.searchParams;
           console.log(`[Chat] product_search slot: refinementText="${sp.refinementText}", existingUnresolved="${sp.existingUnresolved}", existingFilters=${JSON.stringify(sp.resolvedFilters)}`);
           
-          // Step 1: Fetch schema products for the category to build option schema
-          const schemaProducts = await searchProductsByCandidate(
+          // Step 1: Fetch FULL category option schema (authoritative — covers all products,
+          // not just a 50-item sample). Falls back to sample-based schema inside resolver if empty.
+          const slotPrebuilt = appSettings.volt220_api_token
+            ? await getCategoryOptionsSchema(sp.category, appSettings.volt220_api_token).catch(() => new Map())
+            : new Map();
+          console.log(`[Chat] Slot prebuilt schema for "${sp.category}": ${slotPrebuilt.size} keys`);
+          // Still fetch a small product sample as fallback (in case prebuilt schema is empty)
+          const schemaProducts = slotPrebuilt.size > 0 ? [] : await searchProductsByCandidate(
             { query: null, brand: null, category: sp.category, min_price: null, max_price: null },
             appSettings.volt220_api_token!, 50
           );
-          console.log(`[Chat] Fetched ${schemaProducts.length} schema products for category="${sp.category}"`);
+          if (slotPrebuilt.size === 0) {
+            console.log(`[Chat] Fetched ${schemaProducts.length} schema products for category="${sp.category}" (fallback)`);
+          }
           
           // Step 2: Resolve the NEW modifier (user's answer) against option schema
           const modifiersToResolve = sp.refinementModifiers || [sp.refinementText];
           console.log(`[Chat] Resolving modifiers: ${JSON.stringify(modifiersToResolve)} (from classifier: ${sp.refinementModifiers ? 'yes' : 'no, fallback'})`);
           const { resolved: newFiltersRaw, unresolved: stillUnresolved } = 
-            await resolveFiltersWithLLM(schemaProducts, modifiersToResolve, appSettings, classification?.critical_modifiers);
+            await resolveFiltersWithLLM(
+              schemaProducts, modifiersToResolve, appSettings, classification?.critical_modifiers,
+              slotPrebuilt.size > 0 ? slotPrebuilt : undefined
+            );
           const newFilters = flattenResolvedFilters(newFiltersRaw);
           console.log(`[Chat] FilterLLM refinement: resolved=${JSON.stringify(newFilters)}, unresolved=${JSON.stringify(stillUnresolved)}`);
           
           // Step 3: Merge with existing filters from slot
           const mergedFilters = { ...sp.resolvedFilters, ...newFilters };
-          const mergedQuery = [sp.existingUnresolved, ...stillUnresolved]
-            .filter(Boolean).join(' ').trim() || null;
+          
+          // Clean existingUnresolved: drop tokens that semantically map to ANY merged filter value
+          // (handles word-form garbage like "накладная" left over after tip_montagha was resolved)
+          const normTok = (s: string) => s.replace(/ё/g, 'е').toLowerCase().replace(/[^а-яa-z0-9\s]/g, '').trim();
+          const stem4 = (s: string) => { const t = s.replace(/[^а-яa-z0-9]/g, ''); return t.length >= 4 ? t.slice(0, 4) : t; };
+          const filterValueStems = new Set<string>();
+          for (const v of Object.values(mergedFilters)) {
+            const ru = normTok(String(v).split('//')[0]);
+            for (const w of ru.split(/\s+/)) if (w.length >= 4) filterValueStems.add(stem4(w));
+          }
+          const cleanExisting = (sp.existingUnresolved || '')
+            .split(/\s+/)
+            .map(t => t.trim())
+            .filter(t => {
+              if (!t) return false;
+              const nt = normTok(t);
+              if (nt.length < 4) return true;
+              const ts = stem4(nt);
+              if (filterValueStems.has(ts)) {
+                console.log(`[Chat] Dropping resolved word "${t}" from existingUnresolved (matches filter stem "${ts}")`);
+                return false;
+              }
+              return true;
+            });
+          
+          // Suppress literal query when ALL refinement modifiers got resolved AND no leftover unresolved exists
+          const suppressSlotQuery = stillUnresolved.length === 0 && cleanExisting.length === 0 && Object.keys(mergedFilters).length > 0;
+          const mergedQuery = suppressSlotQuery
+            ? null
+            : ([...cleanExisting, ...stillUnresolved].filter(Boolean).join(' ').trim() || null);
+          if (suppressSlotQuery) {
+            console.log(`[Chat] Slot STAGE 2 query suppressed (all modifiers resolved → use options only)`);
+          }
           console.log(`[Chat] Merged filters=${JSON.stringify(mergedFilters)}, mergedQuery="${mergedQuery}"`);
           
           // Step 4: API call with structured filters
