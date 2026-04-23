@@ -10,6 +10,10 @@
   }
   'use strict';
 
+  // Widget version — для диагностики устаревших встраиваний на чужих сайтах
+  var WIDGET_VERSION = '2026-04-23-idempotency';
+  try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
+
   // Configuration
   const CONFIG = {
     supabaseUrl: 'https://supabase-proxy.bold-dawn-058f.workers.dev',
@@ -26,7 +30,8 @@
   let sessionId;
   let conversationHistory;
   let dialogSlots = {};
-  
+  // Per-message id для серверной idempotency (защита от дубль-вызовов edge)
+  let currentMessageId = '';
   // Try to restore from sessionStorage
   try {
     const saved = sessionStorage.getItem(STORAGE_KEY);
@@ -692,6 +697,7 @@
       body: JSON.stringify({
         message: message,
         sessionId: sessionId,
+        messageId: currentMessageId,
         history: conversationHistory.slice(-10),
         stream: true,
         dialogSlots: activeSlots
@@ -788,32 +794,42 @@
       }
     }
 
-    // Final flush
-    if (textBuffer.trim()) {
-      var leftover = textBuffer.split('\n');
-      for (var j = 0; j < leftover.length; j++) {
-        var raw = leftover[j];
-        if (!raw) continue;
-        if (raw.endsWith('\r')) raw = raw.slice(0, -1);
-        if (raw.startsWith(':') || raw.trim() === '') continue;
-        if (!raw.startsWith('data: ')) continue;
-        var js2 = raw.slice(6).trim();
-        if (js2 === '[DONE]') continue;
-        try {
-          var o2 = JSON.parse(js2);
-          if (o2.contacts) { contacts = o2.contacts; continue; }
-          if (o2.slot_update) { dialogSlots = o2.slot_update; saveState(); continue; }
-          var d2 = o2.choices && o2.choices[0] && o2.choices[0].delta && o2.choices[0].delta.content;
-          if (d2) {
-            fullContent += d2;
-            msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
-          }
-        } catch(e) {}
+    // Final flush — обёрнут в try/catch: если уже получили хоть один токен,
+    // вернём частичный ответ вместо throw, чтобы не запускать дублирующий fallback.
+    try {
+      if (textBuffer.trim()) {
+        var leftover = textBuffer.split('\n');
+        for (var j = 0; j < leftover.length; j++) {
+          var raw = leftover[j];
+          if (!raw) continue;
+          if (raw.endsWith('\r')) raw = raw.slice(0, -1);
+          if (raw.startsWith(':') || raw.trim() === '') continue;
+          if (!raw.startsWith('data: ')) continue;
+          var js2 = raw.slice(6).trim();
+          if (js2 === '[DONE]') continue;
+          try {
+            var o2 = JSON.parse(js2);
+            if (o2.contacts) { contacts = o2.contacts; continue; }
+            if (o2.slot_update) { dialogSlots = o2.slot_update; saveState(); continue; }
+            var d2 = o2.choices && o2.choices[0] && o2.choices[0].delta && o2.choices[0].delta.content;
+            if (d2) {
+              fullContent += d2;
+              msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
+            }
+          } catch(e) {}
+        }
       }
+    } catch (flushErr) {
+      try { console.warn('[Widget] stream flush error: ' + (flushErr && flushErr.message)); } catch(e) {}
     }
 
-    if (!fullContent) throw new Error(label + ': empty streaming content');
-    return { content: fullContent, contacts: contacts };
+    if (!fullContent) {
+      // Ни одного токена — пробрасываем, чтобы fallback штатно сработал
+      if (!firstTokenReceived) throw new Error(label + ': empty streaming content');
+      // Иначе — возвращаем то что есть (не должно случаться, но защита)
+      return { content: '', contacts: contacts, partial: true };
+    }
+    return { content: fullContent, contacts: contacts, partial: !done };
   }
 
   // Fallback: non-streaming fetch
@@ -832,6 +848,7 @@
       body: JSON.stringify({
         message: message,
         sessionId: sessionId,
+        messageId: currentMessageId,
         history: conversationHistory.slice(-10),
         stream: false,
         dialogSlots: dialogSlots
@@ -862,6 +879,16 @@
     isLoading = true;
     input.value = '';
     sendBtn.disabled = true;
+
+    // Уникальный id для этого user-message — сервер использует его для idempotency.
+    // При любом ретрае/дубле в рамках одного sendMessage — id тот же → второй вызов отбит.
+    try {
+      currentMessageId = (window.crypto && window.crypto.randomUUID)
+        ? window.crypto.randomUUID()
+        : ('msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10));
+    } catch(e) {
+      currentMessageId = 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
+    }
 
     addMessage(message, 'user');
     conversationHistory.push({ role: 'user', content: message });
@@ -916,6 +943,10 @@
           return;
         } catch (err) {
           lastError = err;
+          try { console.warn('[Widget] stream ' + streamEndpoints[i].label + ' failed: ' + (err && err.message)); } catch(e) {}
+          // Если успели получить токены — больше не пробуем другие стрим-эндпоинты,
+          // иначе на экране может появиться частичный ответ + новая попытка поверх.
+          if (firstTokenArrived) break;
           if (assistantMsg.parentNode && !assistantMsg.innerHTML) assistantMsg.remove();
           msgInserted = false;
         }
@@ -949,26 +980,17 @@
     // Wait for stream to complete
     await streamPromise;
 
-    // Fallback to non-streaming if streaming failed
-    if (!result) {
+    // Fallback to non-streaming — ТОЛЬКО если стрим вообще ничего не отдал.
+    // Если firstTokenArrived=true → пользователь уже видит ответ (полный или частичный),
+    // повторный вызов edge только сожжёт токены и может перезатереть UI.
+    if (!result && !firstTokenArrived) {
       for (var k = 0; k < fallbackEndpoints.length; k++) {
         try {
           result = await tryNonStreamEndpoint(fallbackEndpoints[k].url, message, fallbackEndpoints[k].label);
           break;
         } catch (err) {
           lastError = err;
-        }
-      }
-    }
-
-    // Fallback to non-streaming if streaming failed (proxy → direct)
-    if (!result) {
-      for (var k = 0; k < fallbackEndpoints.length; k++) {
-        try {
-          result = await tryNonStreamEndpoint(fallbackEndpoints[k].url, message, fallbackEndpoints[k].label);
-          break;
-        } catch (err) {
-          lastError = err;
+          try { console.warn('[Widget] fallback ' + fallbackEndpoints[k].label + ' failed: ' + (err && err.message)); } catch(e) {}
         }
       }
     }
@@ -990,6 +1012,13 @@
       if (result.contacts) {
         addMessage(result.contacts, 'assistant');
       }
+    } else if (firstTokenArrived && assistantMsg.textContent && assistantMsg.textContent.trim()) {
+      // Стрим оборвался посреди ответа, но в UI уже есть текст — сохраняем его в историю
+      // вместо показа «ошибки соединения». Лучше частичный ответ, чем пустота.
+      var partialContent = stripGreeting(assistantMsg.textContent);
+      conversationHistory.push({ role: 'assistant', content: partialContent });
+      saveState();
+      try { console.warn('[Widget] showing partial stream content (no fallback triggered)'); } catch(e) {}
     } else {
       hideTyping();
       addMessage('Извините, произошла ошибка соединения. Попробуйте позже.', 'assistant');
