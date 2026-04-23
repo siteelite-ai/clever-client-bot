@@ -1381,35 +1381,68 @@ function resolveSlotRefinement(
 ): { slotKey: string; query: string; priceIntent: 'most_expensive' | 'cheapest'; updatedSlots: DialogSlots } 
  | { slotKey: string; searchParams: { category: string; resolvedFilters: Record<string, string>; refinementText: string; refinementModifiers: string[]; existingUnresolved: string; baseCategory: string }; updatedSlots: DialogSlots }
  | null {
-  // First: check for pending product_search slot with filter state
+  // First: check for pending product_search slot with filter state.
+  // GATE PHILOSOPHY: trust Micro-LLM as primary source of truth. Slot branch is ONLY
+  // for genuine short follow-ups ("а подешевле?", "а белая есть?"). Any signal that
+  // looks like a fresh, fully-formed search must fall through to the main pipeline.
+  const normWord = (s: string) => s.replace(/ё/g, 'е').toLowerCase().replace(/[^а-яa-z0-9]/g, '');
+  const stem4 = (s: string) => { const t = normWord(s); return t.length >= 4 ? t.slice(0, 4) : t; };
+
   for (const [key, slot] of Object.entries(slots)) {
     if (slot.status === 'pending' && slot.intent === 'product_search' && slot.plural_category) {
       const isShort = userMessage.length < 100;
-      const hasNewCategory = classificationResult?.product_category 
-        && classificationResult.product_category !== slot.base_category;
-      
-      if (isShort && !hasNewCategory) {
-        const existingFilters = slot.resolved_filters ? JSON.parse(slot.resolved_filters) : {};
-        console.log(`[Slots] product_search slot resolved: refinementText="${userMessage}", existingUnresolved="${slot.unresolved_query || ''}", filters=${JSON.stringify(existingFilters)}`);
-        
-        const updatedSlots = { ...slots };
-        updatedSlots[key] = { ...slot, refinement: userMessage.trim(), status: 'done', turns_since_touched: 0 };
-        
-        return { 
-          slotKey: key, 
-          searchParams: {
-            category: slot.plural_category,
-            resolvedFilters: existingFilters,
-            refinementText: userMessage.trim(),
-            refinementModifiers: classificationResult?.search_modifiers?.length 
-              ? classificationResult.search_modifiers 
-              : [userMessage.trim()],
-            existingUnresolved: slot.unresolved_query || '',
-            baseCategory: slot.base_category,
-          },
-          updatedSlots,
-        };
+      const hasNewCategory = !!(classificationResult?.product_category 
+        && classificationResult.product_category !== slot.base_category);
+
+      // Build stem set of everything already known to slot (filters + unresolved)
+      const existingFilters = slot.resolved_filters ? JSON.parse(slot.resolved_filters) : {};
+      const knownStems = new Set<string>();
+      for (const v of Object.values(existingFilters)) {
+        const ru = String(v).split('//')[0].toLowerCase().replace(/ё/g, 'е');
+        for (const w of ru.split(/\s+/)) { const s = stem4(w); if (s.length >= 4) knownStems.add(s); }
       }
+      for (const w of (slot.unresolved_query || '').split(/\s+/)) {
+        const s = stem4(w); if (s.length >= 4) knownStems.add(s);
+      }
+
+      // Detect "new modifiers" — modifiers from classifier whose stems are NOT in slot state.
+      // If user introduces brand-new attributes, that's a fresh search, not a follow-up.
+      const classifierMods = classificationResult?.search_modifiers || [];
+      const newMods = classifierMods.filter(m => {
+        const s = stem4(m);
+        return s.length >= 4 && !knownStems.has(s);
+      });
+      const hasNewModifiers = newMods.length > 0;
+
+      // Treat as fresh search if classifier flagged a complete product expression
+      // (has_product_name=true) WITH any new modifier — i.e. user typed full new query.
+      const looksLikeFreshSearch = !!classificationResult?.has_product_name && hasNewModifiers;
+
+      // Bypass slot if any of these hold
+      const shouldBypass = !isShort || hasNewCategory || hasNewModifiers || looksLikeFreshSearch;
+
+      if (shouldBypass) {
+        console.log(`[Slots] BYPASS product_search slot "${key}": isShort=${isShort}, hasNewCategory=${hasNewCategory}, hasNewModifiers=${hasNewModifiers} (newMods=${JSON.stringify(newMods)}), looksLikeFreshSearch=${looksLikeFreshSearch} → routing to main pipeline`);
+        continue;
+      }
+
+      console.log(`[Slots] product_search slot resolved: refinementText="${userMessage}", existingUnresolved="${slot.unresolved_query || ''}", filters=${JSON.stringify(existingFilters)}`);
+
+      const updatedSlots = { ...slots };
+      updatedSlots[key] = { ...slot, refinement: userMessage.trim(), status: 'done', turns_since_touched: 0 };
+
+      return {
+        slotKey: key,
+        searchParams: {
+          category: slot.plural_category,
+          resolvedFilters: existingFilters,
+          refinementText: userMessage.trim(),
+          refinementModifiers: classifierMods.length ? classifierMods : [userMessage.trim()],
+          existingUnresolved: slot.unresolved_query || '',
+          baseCategory: slot.base_category,
+        },
+        updatedSlots,
+      };
     }
   }
 
