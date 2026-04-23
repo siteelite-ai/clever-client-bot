@@ -4146,6 +4146,9 @@ serve(async (req) => {
                     altSchema && altSchema.size > 0 ? altSchema : undefined
                   );
                   console.log(`[Chat] Alt bucket "${altCat}" schema=${altSchema?.size || 0} keys`);
+                  const altResolved = flattenResolvedFilters(altResolvedRaw);
+                  if (Object.keys(altResolved).length === 0) {
+                    console.log(`[Chat] Alt bucket "${altCat}" resolved nothing, skip`);
                     continue;
                   }
                   const altSuppressQuery = altUnresolved.length === 0;
