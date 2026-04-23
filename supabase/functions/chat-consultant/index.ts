@@ -5229,17 +5229,23 @@ ${productContext}
 3. Объясни, что после уточнения ты сможешь точно найти самый дорогой/дешёвый вариант
 4. Тон: профессиональный, дружелюбный, без давления`;
     } else if (articleShortCircuit && productContext) {
-      // Title-first or price-intent answer: товар найден
+      // Title-first or price-intent answer: товар найден.
+      // displayedCount  — сколько карточек реально ушло в LLM-контекст (≤ DISPLAY_LIMIT).
+      // collectedCount  — сколько товаров API вернул ДО обрезки (реальный объём подборки).
+      // fewProducts решается по collectedCount: если в каталоге <=7, показываем все;
+      // если в каталоге много — даже когда displayed=15, говорим честное число "подобрано N".
       const isPriceSort = foundProducts.length > 0 && !detectedArticles.length;
-      const productCount = foundProducts.length;
-      const fewProducts = productCount <= 7;
+      const displayedCount = foundProducts.length;
+      const collectedCount = totalCollected > 0 ? totalCollected : displayedCount;
+      const fewProducts = collectedCount <= 7;
+      console.log(`[Chat] PromptCounts: displayed=${displayedCount} collected=${collectedCount} branch=${totalCollectedBranch} fewProducts=${fewProducts}`);
       
       if (fewProducts) {
         productInstructions = `
-🎯 ТОВАР НАЙДЕН ПО НАЗВАНИЮ — ПОКАЖИ ВСЕ ${productCount} ПОЗИЦИЙ:
+🎯 ТОВАР НАЙДЕН ПО НАЗВАНИЮ — ПОКАЖИ ВСЕ ${displayedCount} ПОЗИЦИЙ:
 ${productContext}
 
-🚫 АБСОЛЮТНЫЙ ЗАПРЕТ: ЗАПРЕЩЕНО задавать уточняющие вопросы! Товаров мало (${productCount}) — покажи ВСЕ найденные позиции.
+🚫 АБСОЛЮТНЫЙ ЗАПРЕТ: ЗАПРЕЩЕНО задавать уточняющие вопросы! Товаров мало (${displayedCount}) — покажи ВСЕ найденные позиции.
 - Покажи каждый товар: название, цена, наличие, ссылка
 - Ссылки копируй как есть в формате [Название](URL) — НЕ МЕНЯЙ URL!
 - ВАЖНО: если в названии товара есть экранированные скобки \\( и \\) — СОХРАНЯЙ их!
@@ -5249,17 +5255,18 @@ ${productContext}
 - Тон: профессиональный, без давления`;
       } else {
         productInstructions = `
-🎯 НАЙДЕНО ${productCount} ТОВАРОВ ПО НАЗВАНИЮ:
+🎯 ПОДОБРАНО ${collectedCount} ТОВАРОВ ПО ЗАПРОСУ (показаны первые ${displayedCount}):
 ${productContext}
 
 📋 ОБЯЗАТЕЛЬНЫЙ ФОРМАТ ОТВЕТА:
 1. Покажи ПЕРВЫЕ 3 наиболее релевантных товара: название, цена, наличие, ссылка
-2. Скажи: "Всего нашлось ${productCount} вариантов."
-3. Предложи сузить выбор: "Если хотите, могу подобрать точнее — подскажите [тип/характеристика/бренд]"
+2. Скажи ОДНОЙ фразой: "Всего подобрано ${collectedCount} вариантов." (используй именно число ${collectedCount}, не округляй и не выдумывай!)
+3. Предложи сузить выбор: "Если хотите, могу подобрать точнее — подскажите [цвет/серию/производителя/цену]"
 - Ссылки копируй как есть в формате [Название](URL) — НЕ МЕНЯЙ URL!
 - ВАЖНО: если в названии товара есть экранированные скобки \\( и \\) — СОХРАНЯЙ их!
 - Тон: профессиональный, без давления
-- 🚫 НЕ задавай уточняющий вопрос БЕЗ показа товаров. Всегда сначала показывай 3 товара!`;
+- 🚫 НЕ задавай уточняющий вопрос БЕЗ показа товаров. Всегда сначала показывай 3 товара!
+- 🚫 НЕ говори "нашлось 15", "нашлось ровно 15" — это лимит показа, а не реальное количество. Реальное число = ${collectedCount}.`;
       }
     } else if (productContext) {
       productInstructions = `
