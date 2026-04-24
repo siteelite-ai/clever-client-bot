@@ -419,7 +419,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
           content: thinkingPhrase,
           timestamp: new Date()
         }, {
-          id: `typing2-${Date.now()}`,
+          id: mid('typing2'),
           role: 'assistant' as const,
           content: '__TYPING__',
           timestamp: new Date()
