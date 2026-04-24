@@ -1768,7 +1768,7 @@ function resolveSlotRefinement(
   // Check if user message is a refinement (short, no explicit new price intent)
   const isShort = userMessage.length < 80;
   const hasNewPriceIntent = classificationResult?.price_intent != null 
-    && classificationResult.price_intent !== 'none';
+    && (classificationResult.price_intent as string) !== 'none';
   
   // If classifier found a new price_intent with a different category, it's a new request
   if (hasNewPriceIntent && classificationResult?.product_category && 
@@ -3983,7 +3983,7 @@ serve(async (req) => {
     // === TITLE-FIRST SHORT-CIRCUIT via Micro-LLM classifier ===
     // AI determines if message contains a product name and/or price intent
     let priceIntentClarify: { total: number; category: string } | null = null;
-    let effectivePriceIntent: string | undefined = undefined;
+    let effectivePriceIntent: 'most_expensive' | 'cheapest' | undefined = undefined;
     let effectiveCategory = '';
     let classification: any = null;
     
@@ -4468,7 +4468,7 @@ serve(async (req) => {
             
             const categoryDistribution: Record<string, number> = {};
             for (const p of rawProducts) {
-              const catTitle = (p as any).category?.pagetitle || p.parent_name || 'unknown';
+              const catTitle = (p as any).category?.pagetitle || (p as any).parent_name || 'unknown';
               categoryDistribution[catTitle] = (categoryDistribution[catTitle] || 0) + 1;
             }
             console.log(`[Chat] Category-buckets: ${JSON.stringify(categoryDistribution)}`);
@@ -4522,7 +4522,7 @@ serve(async (req) => {
             for (const [catName, count] of bucketsToTry) {
               if (count < 2) continue;
               let bucketProducts = rawProducts.filter(p => 
-                ((p as any).category?.pagetitle || p.parent_name || 'unknown') === catName
+                ((p as any).category?.pagetitle || (p as any).parent_name || 'unknown') === catName
               );
               if (bucketProducts.length < 10 && appSettings.volt220_api_token) {
                 console.log(`[Chat] Bucket "${catName}" too small (${bucketProducts.length}), fetching more for schema...`);
@@ -4597,7 +4597,7 @@ serve(async (req) => {
                   if (altCount < 2) continue;
                   console.log(`[Chat] STAGE 2 fallback to bucket-N: "${altCat}" (priority=2)`);
                   let altProducts = rawProducts.filter(p =>
-                    ((p as any).category?.pagetitle || p.parent_name || 'unknown') === altCat
+                    ((p as any).category?.pagetitle || (p as any).parent_name || 'unknown') === altCat
                   );
                   if (altProducts.length < 10 && appSettings.volt220_api_token) {
                     const extra = await searchProductsByCandidate(
@@ -4756,7 +4756,7 @@ serve(async (req) => {
           
           if (originalProduct) {
             // Case 1: Original product found — extract category & modifiers from its data
-            replCategory = (originalProduct as any).category?.pagetitle || originalProduct.parent_name || '';
+            replCategory = (originalProduct as any).category?.pagetitle || (originalProduct as any).parent_name || '';
             replModifiers = extractModifiersFromProduct(originalProduct);
             console.log(`[Chat] Replacement: category="${replCategory}", modifiers=[${replModifiers.join(', ')}]`);
           } else if (classification.product_name || (classification.search_modifiers?.length ?? 0) > 0) {
@@ -4938,7 +4938,7 @@ serve(async (req) => {
               // Bucketize by category
               const replCatDist: Record<string, number> = {};
               for (const p of replRawProducts) {
-                const catTitle = (p as any).category?.pagetitle || p.parent_name || 'unknown';
+                const catTitle = (p as any).category?.pagetitle || (p as any).parent_name || 'unknown';
                 replCatDist[catTitle] = (replCatDist[catTitle] || 0) + 1;
               }
               console.log(`[Chat] Replacement buckets: ${JSON.stringify(replCatDist)}`);
@@ -4976,7 +4976,7 @@ serve(async (req) => {
               for (const [catName, count] of replBucketsToTry) {
                 if (count < 2) continue;
                 let bucketProducts = replRawProducts.filter(p =>
-                  ((p as any).category?.pagetitle || p.parent_name || 'unknown') === catName
+                  ((p as any).category?.pagetitle || (p as any).parent_name || 'unknown') === catName
                 );
                 if (bucketProducts.length < 10 && appSettings.volt220_api_token) {
                   console.log(`[Chat] Replacement bucket "${catName}" too small (${bucketProducts.length}), fetching more...`);
@@ -5038,7 +5038,7 @@ serve(async (req) => {
                     if (altCount < 2) continue;
                     console.log(`[Chat] STAGE 2 fallback to bucket-N: "${altCat}" (replacement, priority=2)`);
                     let altProducts = replRawProducts.filter(p =>
-                      ((p as any).category?.pagetitle || p.parent_name || 'unknown') === altCat
+                      ((p as any).category?.pagetitle || (p as any).parent_name || 'unknown') === altCat
                     );
                     if (altProducts.length < 10 && appSettings.volt220_api_token) {
                       const extra = await searchProductsByCandidate(
