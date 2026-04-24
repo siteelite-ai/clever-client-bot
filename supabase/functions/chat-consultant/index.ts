@@ -361,6 +361,129 @@ ${JSON.stringify(catalog)}
   }
 }
 
+/**
+ * Plan V7 — Category disambiguation classifier.
+ * Decides whether multiple matched buckets represent variants of ONE category (synonyms,
+ * narrow subtypes — answer them with all) OR semantically distinct product groups
+ * (household vs industrial, indoor vs outdoor, automatic vs manual — must ask user).
+ *
+ * Returns:
+ *   { ambiguous: false } — matches are interchangeable, proceed with normal flow
+ *   { ambiguous: true, options: [...] } — ask the user which one they want; options
+ *     are short labels suitable for chip buttons.
+ *
+ * One Flash call, ~200 tokens, ~600ms. Skipped when matches.length < 2.
+ */
+async function classifyCategoryAmbiguity(
+  queryWord: string,
+  matches: string[],
+  settings: CachedSettings,
+  historyContext?: string,
+): Promise<{ ambiguous: false } | { ambiguous: true; options: Array<{ label: string; value: string; pagetitle: string }> }> {
+  if (matches.length < 2) return { ambiguous: false };
+  if (!settings.openrouter_api_key) {
+    console.log('[CategoryAmbiguity] OpenRouter key missing — skipping (deterministic non-ambiguous)');
+    return { ambiguous: false };
+  }
+
+  const historyBlock = (historyContext && historyContext.trim())
+    ? `\nКОНТЕКСТ ДИАЛОГА (последние реплики пользователя):\n${historyContext.trim()}\n`
+    : '';
+
+  const systemPrompt = `Ты решаешь, нужно ли уточнить у пользователя, какую именно категорию товаров он имеет в виду.
+${historyBlock}
+ЗАПРОС ПОЛЬЗОВАТЕЛЯ: "${queryWord}"
+
+КАТЕГОРИИ-КАНДИДАТЫ (matcher уже отобрал релевантные):
+${matches.map((m, i) => `${i + 1}. ${m}`).join('\n')}
+
+ЗАДАЧА: классифицировать кандидаты по двум типам:
+- SYNONYMS — это варианты ОДНОГО и того же типа товара (разные исполнения/монтаж/мощности одной товарной группы). Пользователю не важно различие, можно искать сразу во всех. Пример: "Лампы накаливания" + "Светодиодные лампы" по запросу "лампа".
+- DISTINCT — это РАЗНЫЕ товарные группы для разных задач (бытовое vs промышленное, внутреннее vs уличное, ручное vs автоматическое, низкое vs высокое напряжение). Пользователь должен выбрать. Примеры:
+  • "Розетки" (бытовые) vs "Розетки силовые" (промышленные, трёхфазные)
+  • "Кабель ВВГ" vs "Кабель силовой бронированный"
+  • "Выключатели" vs "Выключатели автоматические"
+  • "Светильники для дома" vs "Прожекторы уличные"
+
+ВАЖНО:
+- Если в запросе или истории УЖЕ есть явный маркер выбора (например "силовые", "промышленные", "уличные", упоминание ампеража 32А/63А, IP44/IP54, трёхфазной сети) — тип SYNONYMS (не нужно переспрашивать, ответ уже виден).
+- Если маркера нет, а кандидаты явно разной природы — тип DISTINCT.
+- Если кандидатов 2+ и они разной природы → DISTINCT.
+- Если все кандидаты — варианты одного — SYNONYMS.
+
+Если DISTINCT, придумай для каждого кандидата КОРОТКУЮ человеческую подпись (label) для кнопки, 2–4 слова, без слова "категория", в женском роде если возможно. Пример: "Бытовые для дома", "Силовые промышленные", "Внутренние", "Уличные", "Автоматические".
+
+Ответь СТРОГО в JSON одной из двух форм:
+{"type":"SYNONYMS"}
+ИЛИ
+{"type":"DISTINCT","options":[{"pagetitle":"...","label":"..."}, ...]}
+
+В DISTINCT pagetitle должны быть СИМВОЛ-В-СИМВОЛ из списка кандидатов.`;
+
+  const reqBody = {
+    model: 'google/gemini-2.5-flash',
+    messages: [{ role: 'user', content: systemPrompt }],
+    ...DETERMINISTIC_SAMPLING,
+    max_tokens: 400,
+    response_format: { type: 'json_object' },
+    reasoning: { exclude: true },
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    const t0 = Date.now();
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${settings.openrouter_api_key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(reqBody),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!response.ok) {
+      console.log(`[CategoryAmbiguity] HTTP ${response.status} for "${queryWord}" — defaulting to non-ambiguous`);
+      return { ambiguous: false };
+    }
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || '';
+    if (!content.trim()) {
+      console.log(`[CategoryAmbiguity] empty content — defaulting to non-ambiguous`);
+      return { ambiguous: false };
+    }
+    let parsed: any;
+    try { parsed = JSON.parse(content); } catch { return { ambiguous: false }; }
+
+    if (parsed?.type === 'SYNONYMS') {
+      console.log(`[CategoryAmbiguity] "${queryWord}" → SYNONYMS (${matches.length} matches treated as one), ${Date.now() - t0}ms`);
+      return { ambiguous: false };
+    }
+    if (parsed?.type === 'DISTINCT' && Array.isArray(parsed.options)) {
+      // Validate: every pagetitle must exist in matches; sanitize labels.
+      const matchSet = new Set(matches);
+      const cleaned: Array<{ label: string; value: string; pagetitle: string }> = [];
+      for (const opt of parsed.options) {
+        if (!opt || typeof opt !== 'object') continue;
+        const pagetitle = typeof opt.pagetitle === 'string' ? opt.pagetitle : '';
+        const label = typeof opt.label === 'string' ? opt.label.trim().slice(0, 60) : '';
+        if (!matchSet.has(pagetitle) || !label) continue;
+        // value = label for slot resolution (user's "answer" is the label)
+        cleaned.push({ label, value: label, pagetitle });
+      }
+      if (cleaned.length >= 2) {
+        console.log(`[CategoryAmbiguity] "${queryWord}" → DISTINCT (${cleaned.length} options): ${cleaned.map(o => o.label).join(' | ')}, ${Date.now() - t0}ms`);
+        return { ambiguous: true, options: cleaned };
+      }
+      console.log(`[CategoryAmbiguity] DISTINCT but only ${cleaned.length} valid options after sanitize → non-ambiguous`);
+      return { ambiguous: false };
+    }
+    console.log(`[CategoryAmbiguity] unexpected response shape → non-ambiguous`);
+    return { ambiguous: false };
+  } catch (e) {
+    console.log(`[CategoryAmbiguity] error: ${(e as Error).message} → non-ambiguous`);
+    return { ambiguous: false };
+  }
+}
+
 // Cached settings from DB
 interface CachedSettings {
   volt220_api_token: string | null;
@@ -1474,7 +1597,7 @@ function detectPendingPriceIntent(
 // ============================================================
 
 interface DialogSlot {
-  intent: 'price_extreme' | 'product_search';
+  intent: 'price_extreme' | 'product_search' | 'category_disambiguation';
   price_dir?: 'most_expensive' | 'cheapest';
   base_category: string;
   refinement?: string;
@@ -1485,6 +1608,11 @@ interface DialogSlot {
   resolved_filters?: string;   // JSON: {"razem":"2"}
   unresolved_query?: string;   // accumulated text query: "черная"
   plural_category?: string;    // "розетки" (API category param)
+  // category_disambiguation state (Plan V7)
+  candidate_options?: string;  // JSON: [{"label":"Бытовые","value":"Бытовые","pagetitle":"Розетки"}, ...]
+  pending_modifiers?: string;  // saved modifiers from original query: "черные двухместные"
+  pending_filters?: string;    // JSON: {"cvet":"чёрный"} — pre-resolved from original query
+  original_query?: string;     // user's original message before disambiguation
 }
 
 type DialogSlots = Record<string, DialogSlot>;
@@ -1506,20 +1634,20 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
     const s = val as Record<string, unknown>;
     
     // Validate intent
-    if (s.intent !== 'price_extreme' && s.intent !== 'product_search') continue;
+    if (s.intent !== 'price_extreme' && s.intent !== 'product_search' && s.intent !== 'category_disambiguation') continue;
     // Validate status
     if (s.status !== 'pending' && s.status !== 'done') continue;
     // Validate base_category
     if (typeof s.base_category !== 'string' || s.base_category.length === 0) continue;
-    
+
     // Sanitize string fields
     const sanitize = (v: unknown): string => {
       if (typeof v !== 'string') return '';
       return v.replace(/<[^>]*>/g, '').replace(/['"`;\\]/g, '').substring(0, SLOT_FIELD_MAX_LEN).trim();
     };
-    
+
     slots[key.substring(0, 20)] = {
-      intent: s.intent as 'price_extreme' | 'product_search',
+      intent: s.intent as 'price_extreme' | 'product_search' | 'category_disambiguation',
       price_dir: (s.price_dir === 'most_expensive' || s.price_dir === 'cheapest') ? s.price_dir : undefined,
       base_category: sanitize(s.base_category),
       refinement: s.refinement ? sanitize(s.refinement) : undefined,
@@ -1529,6 +1657,10 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
       resolved_filters: typeof s.resolved_filters === 'string' ? s.resolved_filters.substring(0, 2000) : undefined,
       unresolved_query: typeof s.unresolved_query === 'string' ? sanitize(s.unresolved_query) : undefined,
       plural_category: typeof s.plural_category === 'string' ? sanitize(s.plural_category) : undefined,
+      candidate_options: typeof s.candidate_options === 'string' ? s.candidate_options.substring(0, 2000) : undefined,
+      pending_modifiers: typeof s.pending_modifiers === 'string' ? sanitize(s.pending_modifiers) : undefined,
+      pending_filters: typeof s.pending_filters === 'string' ? s.pending_filters.substring(0, 2000) : undefined,
+      original_query: typeof s.original_query === 'string' ? sanitize(s.original_query) : undefined,
     };
     count++;
   }
@@ -3781,6 +3913,11 @@ serve(async (req) => {
     let brandsContext = '';
     let knowledgeContext = '';
     let articleShortCircuit = false;
+    // Plan V7 — when set, short-circuits AI streaming entirely and returns a clarification
+    // question with quick_reply chips. Used when CategoryMatcher returns ≥2 semantically distinct
+    // buckets (e.g. household vs industrial sockets). User picks one chip, next turn the
+    // category_disambiguation slot resolves the choice and runs a precise search.
+    let disambiguationResponse: { content: string; quick_replies: Array<{ label: string; value: string }> } | null = null;
     // Plan V5 — model used for the FINAL streaming answer.
     // Defaults to user's configured model (usually Pro). Switched to Flash for short-circuit branches
     // (article/siteId hit, price-intent hit) where the answer is a simple "yes, in stock, X tg".
@@ -4087,6 +4224,13 @@ serve(async (req) => {
           // On WIN: short-circuits, sets foundProducts, skips legacy bucket-logic below.
           // On miss/timeout/empty: falls through to legacy logic (no regression).
           let categoryFirstWinResolved = false;
+          // Plan V4 — last 3 user replies for matcher (Rule 7 household-vs-industrial preference).
+          // Hoisted to outer scope so the V7 ambiguity classifier can reuse the same context.
+          const historyContextForMatcher = (historyForContext || [])
+            .filter((m: any) => m && m.role === 'user')
+            .slice(-3)
+            .map((m: any) => `- ${String(typeof m.content === 'string' ? m.content : JSON.stringify(m.content)).slice(0, 200)}`)
+            .join('\n');
           try {
             const matcherDeadline = new Promise<{ matches: string[] }>((_, rej) =>
               setTimeout(() => rej(new Error('matcher_timeout_10s')), 10000)
@@ -4094,19 +4238,47 @@ serve(async (req) => {
             const matcherWork = (async () => {
               const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
               if (catalog.length === 0) return { matches: [] };
-              // Plan V4: pass last 3 user replies as history context so the matcher can apply
-              // Rule 7 (household-vs-industrial preference) based on prior dialog signals.
-              const historyContextForMatcher = (historyForContext || [])
-                .filter((m: any) => m && m.role === 'user')
-                .slice(-3)
-                .map((m: any) => `- ${String(typeof m.content === 'string' ? m.content : JSON.stringify(m.content)).slice(0, 200)}`)
-                .join('\n');
               const matches = await matchCategoriesWithLLM(effectiveCategory, catalog, appSettings, historyContextForMatcher);
               return { matches };
             })();
             const { matches } = await Promise.race([matcherWork, matcherDeadline]);
 
             if (matches.length > 0) {
+              // Plan V7 — Category disambiguation: if matcher returned ≥2 buckets, ask the
+              // dedicated classifier whether they are SYNONYMS (proceed normally) or DISTINCT
+              // groups (ask the user). Skips classifier when matches.length < 2.
+              if (matches.length >= 2 && !disambiguationResponse) {
+                const ambiguity = await classifyCategoryAmbiguity(
+                  effectiveCategory, matches, appSettings, historyContextForMatcher
+                );
+                if (ambiguity.ambiguous) {
+                  const preMods = (classification?.search_modifiers || []).join(' ').trim();
+                  const slotKey = `cd_${Date.now()}`;
+                  dialogSlots[slotKey] = {
+                    intent: 'category_disambiguation',
+                    base_category: effectiveCategory,
+                    candidate_options: JSON.stringify(ambiguity.options),
+                    pending_modifiers: preMods || undefined,
+                    original_query: userMessage.slice(0, 200),
+                    status: 'pending',
+                    created_turn: messages.length,
+                    turns_since_touched: 0,
+                  };
+                  slotsUpdated = true;
+                  const optionLabels = ambiguity.options.map(o => o.label);
+                  const niceList = optionLabels.length === 2
+                    ? `${optionLabels[0]} или ${optionLabels[1]}`
+                    : optionLabels.slice(0, -1).join(', ') + ` или ${optionLabels[optionLabels.length - 1]}`;
+                  disambiguationResponse = {
+                    content: `Уточните, пожалуйста: вас интересуют ${niceList}?`,
+                    quick_replies: ambiguity.options.map(o => ({ label: o.label, value: o.value })),
+                  };
+                  console.log(`[Chat] CategoryAmbiguity SHORT-CIRCUIT: slot="${slotKey}", options=${JSON.stringify(optionLabels)}, preMods="${preMods}"`);
+                  categoryFirstWinResolved = true;
+                  articleShortCircuit = true;
+                }
+              }
+
               // Plan V4 — Domain Guard: remember which categories matcher selected
               // so rerankProducts can drop products from unrelated categories later.
               for (const m of matches) allowedCategoryTitles.add(m);

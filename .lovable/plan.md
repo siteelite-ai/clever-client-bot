@@ -1,71 +1,131 @@
-# План V5 — реализован (ускорение простого поиска)
+# План V7 — дисамбигуация категорий через уточняющий вопрос
 
-## Что сделано в `supabase/functions/chat-consultant/index.ts`
+## Корневая проблема
 
-### 1. `fetchCatalogWithRetry` — таймаут + ретрай (стр. ~731)
-Новый общий хелпер: `AbortController` с таймаутом 8 сек, при `AbortError` ровно один ретрай. Используется в:
-- `searchByArticle` (стр. ~772)
-- `searchBySiteId` (стр. ~801)
+Когда пользователь говорит «найди чёрные розетки двухместные», система получает от CategoryMatcher **два равновесных бакета** разной природы:
+- «Розетки» (бытовые, 26 товаров)
+- «Розетки силовые» (промышленные, 24 товара)
 
-Логи: `[ArticleSearch] timeout 8000ms (attempt 1), retrying...` / `[SiteIdSearch] ...`. Раньше при подвисшем 220volt API мы ждали до 70+ сек (видно в реальных логах: `22:01:22 → 22:02:34`). Теперь максимум 16 сек, дальше fallback в обычный pipeline.
+Сейчас алгоритм **угадывает** победителя по техническим признакам (где раньше резолвится фильтр «чёрный») — и часто ошибается. Промахнувшись, валится в `no_match_critical`, потом в catalog-fallback с broad-поиском, который притаскивает мусор (в лог-кейсе: кремовая 2-местная и белая 3-местная вместо чёрной двухместной).
 
-### 2. Pre-warm knowledge & contacts (стр. ~3753)
-Промисы `earlyKnowledgePromise` и `earlyContactsPromise` стартуют сразу после `getAppSettings()` — параллельно с `searchByArticle`/`classifyProductName`. Раньше эти запросы ждали окончания всей LLM-цепочки. Старый `knowledgePromise`/`contactsPromise` блок (был на строке ~5034) удалён, ниже только `await Promise.all([earlyKnowledgePromise, earlyContactsPromise, detectedCityPromise])`.
+**Принципиальное решение:** не угадывать. Если бакеты семантически разные — задать **один** уточняющий вопрос, запомнить уже извлечённые модификаторы, после ответа искать сразу с ними.
 
-### 3. `responseModel` для финального стрима (стр. ~3766, ~5570)
-- Новые переменные `responseModel = aiConfig.model` (default) и `responseModelReason = 'default'`.
-- При **article-first SUCCESS** (~3812): `responseModel = 'google/gemini-2.5-flash'`, `reason = 'article-shortcircuit'`.
-- При **siteId-fallback SUCCESS** (~3835): `reason = 'siteid-shortcircuit'`.
-- При **price-intent SUCCESS** (~4014): `reason = 'price-shortcircuit'`.
-- При **price-intent CLARIFY** (~4029): `reason = 'price-clarify'`.
-- В финальном `callAIWithKeyFallback` (~5573) `model: responseModel` вместо `aiConfig.model`.
-- Лог: `[Chat] Response model: google/gemini-2.5-flash (reason: article-shortcircuit)`.
+## Что меняем
 
-Pro (~12 сек на 900 симв.) сменяется Flash (~3 сек) для коротких подтверждающих ответов. Catalog/brands/replacement-ветки не задеты — там `responseModel` остаётся `aiConfig.model`.
+### 1. Детектор «семантически разных бакетов»
+В `matchCategoriesWithLLM` (стр. 286, `supabase/functions/chat-consultant/index.ts`) — после получения списка matches добавить проверку: **если matcher вернул ≥2 кандидата и они семантически различаются** (не «синонимы одной категории»), вернуть специальный результат `{ ambiguous: true, options: [cat1, cat2, ...] }` вместо одного победителя.
 
-### 4. Сжатие knowledge для article-shortcircuit (стр. ~5045)
-В блоке формирования `knowledgeContext`:
-- `KB_TOTAL_BUDGET = articleShortCircuit ? 2000 : 15000`
-- `KB_MAX_ENTRIES = articleShortCircuit ? 1 : knowledgeResults.length`
-- Для article-shortcircuit берём только топ-1 BM25-релевантную запись.
-- Лог: `[Chat] Knowledge truncated for article-shortcircuit: top-1 entry, N chars (budget 2000)`.
+«Семантически разные» определяет тот же matcher одним промптом-классификатором: «эти бакеты — варианты одной категории (синонимы) или принципиально разные (бытовое vs промышленное, внутреннее vs уличное)?». Один вызов Flash, ~200 токенов.
 
-Раньше в article-ответ улетало 15029 chars — почти 5К токенов баласта.
+Принцип, не привязанный к розеткам:
+- Лампы накаливания vs Светодиодные лампы → синонимы по запросу «лампа» → выбираем сами
+- Розетки vs Розетки силовые → разные по применению → спрашиваем
+- Кабель ВВГ vs Кабель силовой → разные → спрашиваем
+- Выключатели vs Выключатели автоматические → разные → спрашиваем
 
-## Ожидаемый эффект
+### 2. Ветка `categoryAmbiguous` в основном маршрутизаторе
+В Category-first (стр. ~4109) — если matcher вернул `ambiguous`:
+- **Не запускаем** `searchProductsByCandidate`, не идём в STAGE 1/STAGE 2, не дёргаем FilterLLM
+- Сохраняем slot с состоянием `awaiting_category_choice`:
+  ```
+  {
+    intent: 'category_disambiguation',
+    base_query: userMessage,
+    candidate_categories: ['Розетки', 'Розетки силовые'],
+    extracted_modifiers: ['чёрные', 'двухместные'],  // от AI Candidates
+    extracted_filters: { color: 'чёрный', count: '2' },
+    status: 'awaiting_user'
+  }
+  ```
+- Возвращаем **короткий ответ** с двумя-тремя UI-кнопками. Streaming пропускаем — отдаём готовый JSON-ответ с массивом `quick_replies`.
 
-| Сценарий | Было | Стало |
-|---|---|---|
-| `LLE-CORN-7-230-40-G9 есть в наличии?` (быстрый API) | ~85 сек (12 сек Pro + 70 сек API) | ~5–8 сек (Flash + меньше токенов) |
-| Артикул при подвисшем API | ~75+ сек | ~10 сек (timeout+retry → fallback) |
-| `самая дорогая бензопила` | Pro ~12 сек на ответ | Flash ~3 сек |
-| `розетка` (catalog) | без изменений | без изменений |
+### 3. UI: чипы под сообщением бота
+В виджете чата (`src/components/`, файл с рендером сообщений) — добавить рендер `quick_replies`, если они пришли в payload ответа. Чипы под текстом, клик = автоотправка выбранного варианта как обычное сообщение пользователя.
 
-## Что НЕ тронуто (защита V4 + базовая архитектура)
+Контракт ответа от edge function:
+```json
+{
+  "content": "Уточните, какие розетки нужны:",
+  "quick_replies": [
+    { "label": "Бытовые (для дома)", "value": "бытовые розетки" },
+    { "label": "Силовые (промышленные)", "value": "силовые розетки" }
+  ]
+}
+```
 
-- Маршрутизация: slot → article-first → Classify → price-intent → title-first → category-first (matcher → bucket fallback) → replacement → AI Candidates.
-- Все промпты V4 (`extractionPrompt`, `matchCategoriesWithLLM` Rule 7).
-- Domain Guard (`allowedCategoryTitles`, `rerankProducts`).
-- Schema fallback в slot refinement.
-- `resolveSlotRefinement`, `processPriceIntent`, `extractBrandsFromProducts`, replacement, cascading relax, broadCandidates, English fallback.
-- JSON-схема `extract_search_intent`, provider lock на `google-ai-studio`.
-- Системный промпт финального ответа, `DETERMINISTIC_SAMPLING`, `max_tokens: 4096`, `reasoning: { exclude: true }`.
-- Кэш `getAppSettings`, GeoIP, контакты-блок (контент остался прежним).
-- `aiConfig.model` — настройка пользователя по-прежнему respected для всех catalog/brands/general ответов.
-- `logTokenUsage` использует `aiConfig.model` для аналитики «настроенной модели» — это намеренно (отдельная задача — учитывать реальную `responseModel`).
+### 4. Обработка ответа пользователя со слотом
+Существующая slot-логика (она уже умеет «продолжать поиск с дополнением»):
+- При следующем сообщении детектор слотов видит `awaiting_category_choice`
+- Берёт ответ пользователя как сигнал выбора категории (matcher по тексту ответа сопоставит «бытовые» → «Розетки»)
+- Подставляет `extracted_modifiers` и `extracted_filters` из слота в новый поиск
+- Идёт сразу в Category-first STAGE 2 с явно выбранной категорией и уже резолвленными фильтрами
+- Очищает slot
 
-## Известные ограничения
+Результат: **один точный поиск** вместо двух с мусором.
 
-Pre-existing TS warnings (21 шт., как в V4) сохраняются — `parent_name`, `slotPrebuilt` тип, `isReplacement`, `price_dir` enum mismatch. На рантайм Deno они не влияют, edge function задеплоен.
+### 5. Защита от over-asking
+- Спрашиваем **только** если matcher вернул `ambiguous` AND нет явного перекоса (топ-2 бакета сравнимы по размеру: разница < 50%)
+- НЕ спрашиваем при follow-up'ах внутри уже выбранной категории (slot machinery уже это знает)
+- НЕ спрашиваем при article/siteId/price-intent (они короткозамкнутые)
+- НЕ спрашиваем повторно в одном диалоге про ту же категорию (дедупликация по `base_query` за последние 5 сообщений)
 
-## Регрессионные сценарии
+## Что НЕ трогаем
 
-| Запрос | Ожидание |
+- V5: article-first, price-shortcircuit, fetchCatalogWithRetry, pre-warm knowledge, dynamic model switch
+- V4: Domain Guard, Schema fallback, Rule 7 «бытовое по умолчанию» (срабатывает ТОЛЬКО когда `ambiguous=false`)
+- Существующая slot-machinery, замены, бренды
+- Системный промпт финального ответа
+- AI Candidates (никаких few-shot и прочих костылей; модель и так увидит, что её запрос на дисамбигуацию обрабатывается отдельной веткой)
+
+## Технический разрез
+
+| Файл / место | Изменение |
 |---|---|
-| `LLE-CORN-7-230-40-G9 есть в наличии?` | total ≤ 10 сек; `[Chat] Response model: google/gemini-2.5-flash (reason: article-shortcircuit)`; `[Chat] Knowledge truncated for article-shortcircuit` |
-| `16093` (числовой артикул) | то же |
-| Несуществующий артикул `XXX-FAKE-999` | timeout 8с (если API подвис) → siteId fallback → нормальный pipeline; `responseModel = aiConfig.model` |
-| `самая дорогая бензопила` | `responseModel = flash, reason = price-shortcircuit` |
-| `есть белые розетки на два гнезда?` | без изменений: catalog ветка, `responseModel = aiConfig.model`, V4 Domain Guard работает |
-| `какие бренды розеток?` | brands-ветка, `responseModel = aiConfig.model` |
-| `розетки промышленные на 32А` | V4 CategoryMatcher Rule 7 — силовые |
+| `index.ts:286` (`matchCategoriesWithLLM`) | Расширить промпт matcher'а: после выбора кандидатов добавить шаг классификации «синонимы или разные». Вернуть `{ matches, ambiguous }` |
+| `index.ts:4104–4113` | Если `ambiguous=true` → не идём в поиск, готовим `quick_replies` ответ, создаём slot, return |
+| Helper-функция `buildDisambiguationResponse(candidates, modifiers)` | Генерирует короткий вопрос + chip-варианты на основе названий бакетов |
+| Slot detector (где обрабатывается dialogSlots) | Добавить тип `category_disambiguation` со своим обработчиком |
+| Endpoint response | Расширить shape: добавить опциональное `quick_replies: Array<{label, value}>` |
+| `src/components/chat/MessageBubble.tsx` (или аналог) | Рендер чипов под сообщением, клик → отправка `value` как нового user-сообщения |
+
+## Ожидаемое поведение
+
+**Сценарий 1: «найди чёрные розетки двухместные»**
+1. Matcher → `{ matches: ['Розетки', 'Розетки силовые'], ambiguous: true }`
+2. AI Candidates → `option_filters: { color: 'чёрный', count: '2' }` (сохранили в slot)
+3. Бот: «Уточните, какие розетки нужны?» + чипы [Бытовые] [Силовые]
+4. Время: ~2 сек
+5. Пользователь жмёт «Бытовые»
+6. Slot активируется → точный поиск в «Розетки» с фильтрами цвет=чёрный + 2 места
+7. Результат (фактический по каталогу): «Чёрных бытовых двухместных нет, ближайшие — белые и кремовые двухместные» — с честной формулировкой
+8. Время: ~6 сек
+9. **Итого: 8 сек точного результата вместо 14 сек мусора**
+
+**Сценарий 2: «розетки» (без уточнений)**
+- Matcher → `ambiguous: true`
+- Бот спрашивает «бытовые или силовые?»
+
+**Сценарий 3: «розетка двойная белая»**
+- Matcher → `ambiguous: true`, но slot.extracted_filters содержит `color: белый`, `count: 2` (специфические бытовые признаки)
+- Можно опционально добавить эвристику «если есть фильтры из схемы только одного бакета — выбираем его автоматически». Это уже не угадывание, а валидное сужение по фактам.
+- Открытый вопрос: добавлять эту эвристику в V7 или оставить «всегда спрашиваем при ambiguous»?
+
+**Сценарий 4: «лампа G9»**
+- Matcher → `{ matches: ['Лампы'], ambiguous: false }` (один кандидат)
+- Поиск идёт как сейчас, без вопросов
+
+**Сценарий 5: article «LLE-CORN-7-230-40-G9»**
+- Article-shortcircuit, дисамбигуация не запускается
+- Поведение V5 без изменений
+
+## Открытые вопросы
+
+1. Эвристика «авто-выбор бакета по уникальным фильтрам схемы» из сценария 3 — добавляем в V7 или нет?
+2. Текст вопроса генерируем шаблоном (`"Уточните, какие {category} нужны?"`) или просим Flash сформулировать живо?
+3. Если пользователь проигнорировал чипы и написал произвольный текст — как обрабатывать? Предложение: пропускать через обычный slot-machinery, который сам поймёт, относится ли текст к выбору категории.
+
+## Не-цели
+
+- Не строим визард с многошаговым опросом — максимум один вопрос на запрос
+- Не меняем промпты AI Candidates / FilterLLM
+- Не добавляем словари «бытовое vs промышленное» — всё определяет matcher через LLM-классификатор
