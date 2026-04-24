@@ -420,9 +420,13 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
   }, [input, isLoading, messages, dialogSlots]);
 
   const handleQuickReply = useCallback((value: string) => {
-    if (isLoading) return;
+    // Re-entrancy guard: ignore clicks while a request is in flight. The ref
+    // catches double-clicks that fire before isLoading flips, the state check
+    // covers the rendered-disabled case.
+    if (isLoading || sendingRef.current || pendingQuickReply !== null) return;
+    setPendingQuickReply(value);
     handleSend(value);
-  }, [isLoading, handleSend]);
+  }, [isLoading, pendingQuickReply, handleSend]);
 
 
   const ProductCard = ({ product }: { product: Product }) => (
