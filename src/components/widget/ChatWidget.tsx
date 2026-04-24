@@ -198,11 +198,20 @@ async function streamChat({
   }
 }
 
+// Generate a unique chat message ID. We keep an optional human-readable
+// prefix (typing-, stream-, etc.) for the existing prefix-based filters, but
+// always append a crypto.randomUUID so two messages created in the same
+// millisecond never collide. This is the single source of truth for ids.
+const mid = (prefix?: string): string => {
+  const uuid = crypto.randomUUID();
+  return prefix ? `${prefix}-${uuid}` : uuid;
+};
+
 export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(isPreview);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
-      id: '1',
+      id: mid('greeting'),
       role: 'assistant',
       content: 'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?',
       timestamp: new Date()
@@ -226,34 +235,38 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     sendingRef.current = true;
 
     const userMessage: ChatMessage = {
-      id: Date.now().toString(),
+      id: mid('user'),
       role: 'user',
       content: text,
       timestamp: new Date()
     };
 
-    // Strip quickReplies ONLY from the most recent assistant message that
-    // displayed chips (the one the user was actually responding to). Older
-    // assistant messages keep their chips untouched — they belong to prior
-    // turns and the user didn't interact with them now.
-    setMessages(prev => {
-      let lastIdx = -1;
-      for (let i = prev.length - 1; i >= 0; i--) {
-        if (prev[i].role === 'assistant' && prev[i].quickReplies && prev[i].quickReplies!.length > 0) {
-          lastIdx = i;
-          break;
-        }
+    // Capture, in this send's closure, the ID of the assistant message whose
+    // chips the user is currently responding to. We then clear chips strictly
+    // by that captured ID — not by index or "last assistant" lookup at
+    // commit time. This eliminates races where two rapid sends each compute
+    // "last with chips" against an already-mutated array, or where a new
+    // assistant message has slipped in between dispatch and commit.
+    let chipsToClearId: string | null = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === 'assistant' && m.quickReplies && m.quickReplies.length > 0) {
+        chipsToClearId = m.id;
+        break;
       }
-      const next = lastIdx === -1
+    }
+
+    setMessages(prev => {
+      const next = chipsToClearId === null
         ? prev
-        : prev.map((m, i) => (i === lastIdx ? { ...m, quickReplies: undefined } : m));
+        : prev.map(m => (m.id === chipsToClearId ? { ...m, quickReplies: undefined } : m));
       return [...next, userMessage];
     });
     if (!overrideText) setInput('');
     setIsLoading(true);
 
     // Step 1: Show typing dots animation
-    const typingId = `typing-${Date.now()}`;
+    const typingId = mid('typing');
     setMessages(prev => [...prev, {
       id: typingId,
       role: 'assistant' as const,
@@ -294,7 +307,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         if (!typing2Removed) {
           typing2Removed = true;
           updated = prev.filter(m => !m.id.startsWith('typing2-'));
-          const id = `stream-${Date.now()}`;
+          const id = mid('stream');
           streamMsgId = id;
           return [...updated, {
             id,
@@ -312,7 +325,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
               : m
           );
         }
-        const id = `stream-${Date.now()}`;
+        const id = mid('stream');
         streamMsgId = id;
         return [...updated, {
           id,
@@ -365,7 +378,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       },
       onContacts: (contacts) => {
         setMessages(prev => [...prev, {
-          id: `contacts-${Date.now()}`,
+          id: mid('contacts'),
           role: 'assistant' as const,
           content: contacts,
           timestamp: new Date()
@@ -381,7 +394,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         setMessages(prev => {
           const filtered = prev.filter(m => !m.id.startsWith('typing2-'));
           return [...filtered, {
-            id: `error-${Date.now()}`,
+            id: mid('error'),
             role: 'assistant',
             content: `Извините, произошла ошибка: ${error}. Попробуйте повторить вопрос.`,
             timestamp: new Date()
@@ -395,7 +408,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
     // Step 2: Show thinking phrase after longer typing animation (runs in parallel with API)
     await new Promise(r => setTimeout(r, 3000));
-    const thinkingId = `thinking-${Date.now()}`;
+    const thinkingId = mid('thinking');
     setMessages(prev => {
       const withoutTyping = prev.filter(m => m.id !== typingId);
       // Only add thinking phrase + typing2 if stream hasn't already started delivering
@@ -406,7 +419,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
           content: thinkingPhrase,
           timestamp: new Date()
         }, {
-          id: `typing2-${Date.now()}`,
+          id: mid('typing2'),
           role: 'assistant' as const,
           content: '__TYPING__',
           timestamp: new Date()
