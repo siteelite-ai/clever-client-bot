@@ -374,6 +374,8 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       onDone: () => {
         setMessages(prev => prev.filter(m => !m.id.startsWith('typing2-')));
         setIsLoading(false);
+        sendingRef.current = false;
+        setPendingQuickReply(null);
       },
       onError: (error) => {
         setMessages(prev => {
@@ -386,6 +388,8 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
           }];
         });
         setIsLoading(false);
+        sendingRef.current = false;
+        setPendingQuickReply(null);
       }
     });
 
