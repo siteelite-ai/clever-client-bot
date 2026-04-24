@@ -4986,7 +4986,10 @@ serve(async (req) => {
       };
     } else {
       // catalog/brands or no intent — full pipeline
-      extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, aiConfig.model, classification?.product_category);
+      // Хардкодим Flash для AI Candidates: задача класса "извлечь структурированные параметры из короткой фразы",
+      // Pro здесь избыточен и медленнее. Финальный ответ пользователю по-прежнему идёт на aiConfig.model.
+      const candidatesModel = 'google/gemini-2.5-flash';
+      extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
     }
     console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}, ShortCircuit: ${articleShortCircuit}`);
 
