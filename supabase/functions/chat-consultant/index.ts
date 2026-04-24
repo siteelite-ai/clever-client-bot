@@ -4010,6 +4010,9 @@ serve(async (req) => {
             if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
               foundProducts = priceResult.products;
               articleShortCircuit = true;
+              // Plan V5: ответ "самая дорогая X — это Y, цена Z" — простой формат, Flash справится.
+              responseModel = 'google/gemini-2.5-flash';
+              responseModelReason = 'price-shortcircuit';
               console.log(`[Chat] PriceIntent SUCCESS: ${foundProducts.length} products sorted by ${effectivePriceIntent} (total ${priceResult.total})`);
               
               // Mark slot as done
@@ -4020,6 +4023,9 @@ serve(async (req) => {
             } else if (priceResult.action === 'clarify') {
               priceIntentClarify = { total: priceResult.total!, category: priceResult.category! };
               articleShortCircuit = true;
+              // Уточняющий вопрос — короткий, Flash хватает.
+              responseModel = 'google/gemini-2.5-flash';
+              responseModelReason = 'price-clarify';
               foundProducts = [];
               console.log(`[Chat] PriceIntent CLARIFY: ${priceResult.total} products in "${priceResult.category}", asking user to narrow down`);
               
