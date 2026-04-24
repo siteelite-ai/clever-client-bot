@@ -4412,6 +4412,9 @@ serve(async (req) => {
                     quick_replies: ambiguity.options.map(o => ({ label: o.label, value: o.value })),
                   };
                   console.log(`[Chat] CategoryAmbiguity SHORT-CIRCUIT: slot="${slotKey}", options=${JSON.stringify(optionLabels)}, preMods="${preMods}"`);
+                  // [QR] Detailed diagnostics for quick_replies emission. Use tag [QR]
+                  // to grep across logs and trace why a particular option was offered.
+                  console.log(`[QR] EMIT slot="${slotKey}" base_category="${effectiveCategory}" original_query="${userMessage.slice(0, 200)}" pending_modifiers="${preMods}" pending_filters=null options=${JSON.stringify(ambiguity.options.map(o => ({ label: o.label, value: o.value, pagetitle: o.pagetitle || null })))}`);
                   categoryFirstWinResolved = true;
                   articleShortCircuit = true;
                 }
