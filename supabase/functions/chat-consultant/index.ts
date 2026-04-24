@@ -1597,7 +1597,7 @@ function detectPendingPriceIntent(
 // ============================================================
 
 interface DialogSlot {
-  intent: 'price_extreme' | 'product_search';
+  intent: 'price_extreme' | 'product_search' | 'category_disambiguation';
   price_dir?: 'most_expensive' | 'cheapest';
   base_category: string;
   refinement?: string;
@@ -1608,6 +1608,11 @@ interface DialogSlot {
   resolved_filters?: string;   // JSON: {"razem":"2"}
   unresolved_query?: string;   // accumulated text query: "черная"
   plural_category?: string;    // "розетки" (API category param)
+  // category_disambiguation state (Plan V7)
+  candidate_options?: string;  // JSON: [{"label":"Бытовые","value":"Бытовые","pagetitle":"Розетки"}, ...]
+  pending_modifiers?: string;  // saved modifiers from original query: "черные двухместные"
+  pending_filters?: string;    // JSON: {"cvet":"чёрный"} — pre-resolved from original query
+  original_query?: string;     // user's original message before disambiguation
 }
 
 type DialogSlots = Record<string, DialogSlot>;
