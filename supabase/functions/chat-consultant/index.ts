@@ -1634,20 +1634,20 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
     const s = val as Record<string, unknown>;
     
     // Validate intent
-    if (s.intent !== 'price_extreme' && s.intent !== 'product_search') continue;
+    if (s.intent !== 'price_extreme' && s.intent !== 'product_search' && s.intent !== 'category_disambiguation') continue;
     // Validate status
     if (s.status !== 'pending' && s.status !== 'done') continue;
     // Validate base_category
     if (typeof s.base_category !== 'string' || s.base_category.length === 0) continue;
-    
+
     // Sanitize string fields
     const sanitize = (v: unknown): string => {
       if (typeof v !== 'string') return '';
       return v.replace(/<[^>]*>/g, '').replace(/['"`;\\]/g, '').substring(0, SLOT_FIELD_MAX_LEN).trim();
     };
-    
+
     slots[key.substring(0, 20)] = {
-      intent: s.intent as 'price_extreme' | 'product_search',
+      intent: s.intent as 'price_extreme' | 'product_search' | 'category_disambiguation',
       price_dir: (s.price_dir === 'most_expensive' || s.price_dir === 'cheapest') ? s.price_dir : undefined,
       base_category: sanitize(s.base_category),
       refinement: s.refinement ? sanitize(s.refinement) : undefined,
@@ -1657,6 +1657,10 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
       resolved_filters: typeof s.resolved_filters === 'string' ? s.resolved_filters.substring(0, 2000) : undefined,
       unresolved_query: typeof s.unresolved_query === 'string' ? sanitize(s.unresolved_query) : undefined,
       plural_category: typeof s.plural_category === 'string' ? sanitize(s.plural_category) : undefined,
+      candidate_options: typeof s.candidate_options === 'string' ? s.candidate_options.substring(0, 2000) : undefined,
+      pending_modifiers: typeof s.pending_modifiers === 'string' ? sanitize(s.pending_modifiers) : undefined,
+      pending_filters: typeof s.pending_filters === 'string' ? s.pending_filters.substring(0, 2000) : undefined,
+      original_query: typeof s.original_query === 'string' ? sanitize(s.original_query) : undefined,
     };
     count++;
   }
