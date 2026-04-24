@@ -325,7 +325,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
               : m
           );
         }
-        const id = `stream-${Date.now()}`;
+        const id = mid('stream');
         streamMsgId = id;
         return [...updated, {
           id,
