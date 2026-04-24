@@ -3913,6 +3913,11 @@ serve(async (req) => {
     let brandsContext = '';
     let knowledgeContext = '';
     let articleShortCircuit = false;
+    // Plan V7 — when set, short-circuits AI streaming entirely and returns a clarification
+    // question with quick_reply chips. Used when CategoryMatcher returns ≥2 semantically distinct
+    // buckets (e.g. household vs industrial sockets). User picks one chip, next turn the
+    // category_disambiguation slot resolves the choice and runs a precise search.
+    let disambiguationResponse: { content: string; quick_replies: Array<{ label: string; value: string }> } | null = null;
     // Plan V5 — model used for the FINAL streaming answer.
     // Defaults to user's configured model (usually Pro). Switched to Flash for short-circuit branches
     // (article/siteId hit, price-intent hit) where the answer is a simple "yes, in stock, X tg".
