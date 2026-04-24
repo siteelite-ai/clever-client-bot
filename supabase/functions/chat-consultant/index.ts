@@ -2024,7 +2024,7 @@ async function generateSearchCandidates(
   aiModel: string = 'meta-llama/llama-3.3-70b-instruct:free',
   classificationCategory?: string | null
 ): Promise<ExtractedIntent> {
-  console.log(`[AI Candidates] Extracting search intent from: "${message}", classificationCategory: ${classificationCategory || 'none'}`);
+  console.log(`[AI Candidates] Extracting search intent from: "${message}", classificationCategory: ${classificationCategory || 'none'}, model=${aiModel}`);
   
   // Two-factor followup detection (фикс slot-памяти):
   // Уточнение в рамках старого запроса = (a) последняя реплика бота содержала уточняющий вопрос
