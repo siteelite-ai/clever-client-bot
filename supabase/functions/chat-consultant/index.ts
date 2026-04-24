@@ -5744,6 +5744,67 @@ ${productInstructions}`;
     console.log(`[Chat] Response model: ${responseModel} (reason: ${responseModelReason})`);
     console.log(`[Chat] Streaming with reasoning: excluded (model=${responseModel})`);
     console.log(`[Chat] Sampling: top_k=1 seed=42 provider=google-ai-studio`);
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Plan V7 — Category Disambiguation SHORT-CIRCUIT
+    // If matcher detected ≥2 semantically distinct buckets, we have a pre-built
+    // clarification message + quick_replies. Skip the LLM entirely and return
+    // it directly. Saves ~2-4s and avoids the LLM "guessing" a category.
+    // ─────────────────────────────────────────────────────────────────────────
+    if (disambiguationResponse) {
+      console.log(`[Chat] Disambiguation SHORT-CIRCUIT: skipping LLM, returning ${disambiguationResponse.quick_replies.length} quick_replies`);
+      const dr = disambiguationResponse;
+
+      if (!useStreaming) {
+        const responseBody: {
+          content: string;
+          quick_replies: Array<{ label: string; value: string }>;
+          slot_update?: DialogSlots;
+        } = {
+          content: dr.content,
+          quick_replies: dr.quick_replies,
+        };
+        if (slotsUpdated) responseBody.slot_update = dialogSlots;
+        return new Response(
+          JSON.stringify(responseBody),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      // Streaming: emit content as a single SSE chunk (OpenAI-style delta),
+      // then the quick_replies + slot_update events, then [DONE].
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          const contentDelta = `data: ${JSON.stringify({
+            choices: [{ delta: { content: dr.content }, index: 0 }],
+          })}\n\n`;
+          controller.enqueue(encoder.encode(contentDelta));
+
+          const qrEvent = `data: ${JSON.stringify({ quick_replies: dr.quick_replies })}\n\n`;
+          controller.enqueue(encoder.encode(qrEvent));
+
+          if (slotsUpdated) {
+            const slotEvent = `data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`;
+            controller.enqueue(encoder.encode(slotEvent));
+          }
+
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      });
+
+      return new Response(stream, {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
+    }
+
+
     const response = await callAIWithKeyFallback(aiConfig.url, aiConfig.apiKeys, {
       model: responseModel,
       messages: messagesForAI,
