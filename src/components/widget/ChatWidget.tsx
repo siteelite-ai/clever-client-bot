@@ -536,17 +536,31 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
                   {message.role === 'assistant' && message.quickReplies && message.quickReplies.length > 0 && (
                     <div className="mt-3 flex flex-wrap gap-2">
-                      {message.quickReplies.map((qr, i) => (
-                        <button
-                          key={`${message.id}-qr-${i}`}
-                          type="button"
-                          onClick={() => handleQuickReply(qr.value)}
-                          disabled={isLoading}
-                          className="px-3 py-1.5 rounded-full text-xs font-medium bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {qr.label}
-                        </button>
-                      ))}
+                      {message.quickReplies.map((qr, i) => {
+                        const isPending = pendingQuickReply === qr.value;
+                        const isBlocked = isLoading || pendingQuickReply !== null;
+                        return (
+                          <button
+                            key={`${message.id}-qr-${i}`}
+                            type="button"
+                            onClick={() => handleQuickReply(qr.value)}
+                            disabled={isBlocked}
+                            aria-busy={isPending}
+                            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors disabled:cursor-not-allowed ${
+                              isPending
+                                ? 'bg-primary text-primary-foreground border-primary opacity-90'
+                                : 'bg-primary/15 text-primary border-primary/30 hover:bg-primary/25 disabled:opacity-50'
+                            }`}
+                          >
+                            {isPending ? (
+                              <span className="inline-flex items-center gap-1.5">
+                                <span className="w-3 h-3 border-2 border-primary-foreground/40 border-t-primary-foreground rounded-full animate-spin" />
+                                {qr.label}
+                              </span>
+                            ) : qr.label}
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
