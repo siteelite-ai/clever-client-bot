@@ -4032,10 +4032,10 @@ serve(async (req) => {
               if (catalog.length === 0) return { matches: [] };
               // Plan V4: pass last 3 user replies as history context so the matcher can apply
               // Rule 7 (household-vs-industrial preference) based on prior dialog signals.
-              const historyContextForMatcher = (conversationHistory || [])
-                .filter(m => m.role === 'user')
+              const historyContextForMatcher = (historyForContext || [])
+                .filter((m: any) => m && m.role === 'user')
                 .slice(-3)
-                .map(m => `- ${String(m.content).slice(0, 200)}`)
+                .map((m: any) => `- ${String(typeof m.content === 'string' ? m.content : JSON.stringify(m.content)).slice(0, 200)}`)
                 .join('\n');
               const matches = await matchCategoriesWithLLM(effectiveCategory, catalog, appSettings, historyContextForMatcher);
               return { matches };
