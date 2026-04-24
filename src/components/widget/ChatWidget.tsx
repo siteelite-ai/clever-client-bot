@@ -148,6 +148,11 @@ async function streamChat({
             onSlotUpdate(parsed.slot_update);
             continue;
           }
+          // Check for quick_replies event (Plan V7 — category disambiguation)
+          if (Array.isArray(parsed.quick_replies) && onQuickReplies) {
+            onQuickReplies(parsed.quick_replies);
+            continue;
+          }
           const content = parsed.choices?.[0]?.delta?.content as string | undefined;
           if (content) onDelta(content);
         } catch {
@@ -174,6 +179,10 @@ async function streamChat({
           }
           if (parsed.slot_update && onSlotUpdate) {
             onSlotUpdate(parsed.slot_update);
+            continue;
+          }
+          if (Array.isArray(parsed.quick_replies) && onQuickReplies) {
+            onQuickReplies(parsed.quick_replies);
             continue;
           }
           const content = parsed.choices?.[0]?.delta?.content as string | undefined;
