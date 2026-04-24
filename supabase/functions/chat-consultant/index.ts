@@ -5103,7 +5103,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           });
           console.log(`[Chat] Fallback price-sort applied: ${effectivePriceIntent}, top price=${foundProducts[0]?.price}`);
         } else {
-          foundProducts = rerankProducts(foundProducts, userMessage);
+          foundProducts = rerankProducts(foundProducts, userMessage, allowedCategoryTitles);
         }
         
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
