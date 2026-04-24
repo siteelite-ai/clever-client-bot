@@ -4247,14 +4247,11 @@ serve(async (req) => {
               // Plan V7 — Category disambiguation: if matcher returned ≥2 buckets, ask the
               // dedicated classifier whether they are SYNONYMS (proceed normally) or DISTINCT
               // groups (ask the user). Skips classifier when matches.length < 2.
-              if (matches.length >= 2) {
+              if (matches.length >= 2 && !disambiguationResponse) {
                 const ambiguity = await classifyCategoryAmbiguity(
                   effectiveCategory, matches, appSettings, historyContextForMatcher
                 );
                 if (ambiguity.ambiguous) {
-                  // Build chip options. Pre-extract modifiers/filters from classification so the
-                  // next turn can search precisely without re-asking. We do NOT call any product
-                  // search APIs in this branch — pure short-circuit.
                   const preMods = (classification?.search_modifiers || []).join(' ').trim();
                   const slotKey = `cd_${Date.now()}`;
                   dialogSlots[slotKey] = {
@@ -4268,24 +4265,20 @@ serve(async (req) => {
                     turns_since_touched: 0,
                   };
                   slotsUpdated = true;
-                  // Compose the question. Use the user's original word verbatim where possible.
                   const optionLabels = ambiguity.options.map(o => o.label);
                   const niceList = optionLabels.length === 2
                     ? `${optionLabels[0]} или ${optionLabels[1]}`
                     : optionLabels.slice(0, -1).join(', ') + ` или ${optionLabels[optionLabels.length - 1]}`;
-                  const content = `Уточните, пожалуйста: вас интересуют ${niceList}?`;
                   disambiguationResponse = {
-                    content,
+                    content: `Уточните, пожалуйста: вас интересуют ${niceList}?`,
                     quick_replies: ambiguity.options.map(o => ({ label: o.label, value: o.value })),
                   };
                   console.log(`[Chat] CategoryAmbiguity SHORT-CIRCUIT: slot="${slotKey}", options=${JSON.stringify(optionLabels)}, preMods="${preMods}"`);
-                  // Mark as resolved so we skip everything below in Category-first and beyond.
                   categoryFirstWinResolved = true;
                   articleShortCircuit = true;
                 }
               }
 
-              if (!disambiguationResponse) {
               // Plan V4 — Domain Guard: remember which categories matcher selected
               // so rerankProducts can drop products from unrelated categories later.
               for (const m of matches) allowedCategoryTitles.add(m);
