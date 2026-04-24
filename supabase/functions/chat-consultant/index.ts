@@ -1006,6 +1006,7 @@ interface ExtractedIntent {
  * Returns extracted product name or null. Timeout: 3 seconds.
  */
 interface ClassificationResult {
+  intent?: string;
   has_product_name: boolean;
   product_name?: string;
   price_intent?: 'most_expensive' | 'cheapest';
@@ -1613,6 +1614,9 @@ interface DialogSlot {
   pending_modifiers?: string;  // saved modifiers from original query: "черные двухместные"
   pending_filters?: string;    // JSON: {"cvet":"чёрный"} — pre-resolved from original query
   original_query?: string;     // user's original message before disambiguation
+  // replacement metadata
+  isReplacement?: boolean;
+  originalName?: string;
 }
 
 type DialogSlots = Record<string, DialogSlot>;
