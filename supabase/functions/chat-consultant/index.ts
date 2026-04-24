@@ -4231,6 +4231,9 @@ serve(async (req) => {
               hasPF ? dis.pendingFilters : undefined
             );
             console.log(`[Chat] Disambiguation search: category="${dis.chosenPagetitle}", query="${disQuery}", filters=${JSON.stringify(dis.pendingFilters)} → ${disProducts.length} products`);
+            // [QR] Trace what context the resolver actually used to fetch products,
+            // so a wrong-bucket pick can be traced back to chosen_value/pagetitle.
+            console.log(`[QR] SEARCH slot="${slotResolution.slotKey}" chosen_label="${dis.chosenLabel}" chosen_value="${dis.chosenValue}" chosen_pagetitle="${dis.chosenPagetitle}" base_category="${dis.baseCategory}" original_query="${dis.originalQuery}" pending_modifiers=${JSON.stringify(dis.pendingModifiers)} pending_filters=${JSON.stringify(dis.pendingFilters)} dis_query="${disQuery}" results=${disProducts.length}`);
 
             if (disProducts.length > 0) {
               const _r = pickDisplayWithTotal(disProducts);
