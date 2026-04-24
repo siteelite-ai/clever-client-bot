@@ -212,10 +212,18 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [dialogSlots, setDialogSlots] = useState<DialogSlots>({});
   const conversationIdRef = useRef(crypto.randomUUID());
+  // Synchronous re-entrancy guard. setIsLoading(true) is async, so two rapid
+  // clicks can both pass the `isLoading` check before React re-renders. A ref
+  // flips immediately and blocks any second call.
+  const sendingRef = useRef(false);
+  // Tracks which quick-reply value is currently in-flight so the chosen chip
+  // can show a pressed state while all others are visibly disabled.
+  const [pendingQuickReply, setPendingQuickReply] = useState<string | null>(null);
 
   const handleSend = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
-    if (!text || isLoading) return;
+    if (!text || isLoading || sendingRef.current) return;
+    sendingRef.current = true;
 
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
