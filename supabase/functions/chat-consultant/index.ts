@@ -286,7 +286,8 @@ async function getCategoriesCache(token: string): Promise<string[]> {
 async function matchCategoriesWithLLM(
   queryWord: string,
   catalog: string[],
-  settings: CachedSettings
+  settings: CachedSettings,
+  historyContext?: string
 ): Promise<string[]> {
   if (!queryWord || !queryWord.trim() || catalog.length === 0) return [];
   if (!settings.openrouter_api_key) {
@@ -294,8 +295,12 @@ async function matchCategoriesWithLLM(
     return [];
   }
 
-  const systemPrompt = `Ты определяешь, в каких категориях каталога электротоваров пользователь ожидает найти искомый товар.
+  const historyBlock = (historyContext && historyContext.trim())
+    ? `\nКОНТЕКСТ ДИАЛОГА (последние реплики пользователя):\n${historyContext.trim()}\n`
+    : '';
 
+  const systemPrompt = `Ты определяешь, в каких категориях каталога электротоваров пользователь ожидает найти искомый товар.
+${historyBlock}
 ЗАПРОС ПОЛЬЗОВАТЕЛЯ: "${queryWord}"
 
 ПОЛНЫЙ СПИСОК КАТЕГОРИЙ КАТАЛОГА (${catalog.length} шт.):
@@ -308,6 +313,7 @@ ${JSON.stringify(catalog)}
 4. Если в каталоге несколько подкатегорий одного семейства, отличающихся способом исполнения, монтажа или защиты — включай все.
 5. Если ни одна категория не подходит — верни пустой массив. Не угадывай и не подбирай похожее по звучанию.
 6. Возвращай pagetitle ТОЧНО так, как они написаны в списке (символ-в-символ).
+7. Если для одного и того же предмета в каталоге одновременно есть категория общего/бытового назначения и категория узко-специализированная (промышленная, силовая, профессиональная, для высоких номиналов или особых стандартов) — выбирай общую/бытовую. Специализированную включай только если в самом запросе пользователя или в контексте диалога есть явный признак специализированного применения: упоминание промышленности, производства, цеха, трёхфазной сети, конкретного высокого номинала тока или напряжения, специальных стандартов защиты или разъёмов, профессионального класса инструмента. Признак должен присутствовать в словах пользователя или истории — не додумывай его.
 
 Ответь СТРОГО в JSON: {"matches": ["pagetitle1", "pagetitle2", ...]}`;
 
@@ -1927,21 +1933,44 @@ function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: 
  * Rerank products by title-score relevance to query.
  * Returns products sorted by score descending.
  */
-function rerankProducts(products: Product[], userQuery: string): Product[] {
+function rerankProducts(
+  products: Product[],
+  userQuery: string,
+  allowedPagetitles?: Set<string>
+): Product[] {
   const queryTokens = extractTokens(userQuery);
   const querySpecs = extractSpecs(userQuery);
-  
-  const scored = products.map(p => ({
+
+  // Domain guard (Plan V4): if the caller knows which categories are relevant for this
+  // query (from CategoryMatcher), drop products from any other category before scoring.
+  // Prevents black gloves / clamps from polluting "чёрные розетки" results just because
+  // their title shares a token. When set is missing or empty — no filter is applied.
+  let pool = products;
+  if (allowedPagetitles && allowedPagetitles.size > 0) {
+    const before = pool.length;
+    const dropped: string[] = [];
+    pool = pool.filter(p => {
+      const cat = (p as any).category?.pagetitle || (p as any).parent_name || '';
+      if (allowedPagetitles.has(cat)) return true;
+      if (dropped.length < 5) dropped.push(`"${p.pagetitle.substring(0, 40)}" [${cat}]`);
+      return false;
+    });
+    if (before !== pool.length) {
+      console.log(`[DomainGuard] dropped ${before - pool.length}/${before} items from non-allowed categories. Sample: ${dropped.join(' | ')}`);
+    }
+  }
+
+  const scored = pool.map(p => ({
     product: p,
     score: scoreProductMatch(p, queryTokens, querySpecs, undefined, userQuery),
   }));
-  
+
   scored.sort((a, b) => b.score - a.score);
-  
+
   if (scored.length > 0) {
     console.log(`[Rerank] Top scores: ${scored.slice(0, 5).map(s => `${s.score}:"${s.product.pagetitle.substring(0, 40)}"`).join(', ')}`);
   }
-  
+
   return scored.map(s => s.product);
 }
 
@@ -2059,150 +2088,62 @@ ${recentHistory.map(m => `${m.role === 'user' ? 'Клиент' : 'Консуль
     console.log(`[AI Candidates] Context ISOLATED: new product query detected (category="${classificationCategory}", prevCategory="${previousCategory || 'none'}", lastAssistantQ=${looksLikeClarificationFollowup}), history pruned`);
   }
   
-  const extractionPrompt = `Ты — система извлечения поисковых намерений для интернет-магазина электроинструментов 220volt.kz.
+  const extractionPrompt = `Ты — система извлечения поисковых намерений для интернет-магазина электротоваров 220volt.kz. Твоя задача — превратить реплику пользователя в структурированный JSON-вызов через схему extract_search_intent.
 ${historyContext}
-${recentHistory.length > 0 ? 'АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщение С УЧЁТОМ КОНТЕКСТА РАЗГОВОРА!' : 'АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщение КАК САМОСТОЯТЕЛЬНЫЙ ЗАПРОС!'}
+${recentHistory.length > 0 ? 'Анализируй текущее сообщение с учётом контекста разговора: уточняющие реплики и ценовые сравнения опираются на ранее обсуждавшийся товар.' : 'Анализируй текущее сообщение как самостоятельный запрос.'}
 
-🔄 ОБРАБОТКА УТОЧНЯЮЩИХ ОТВЕТОВ (КРИТИЧЕСКИ ВАЖНО!):
-Если текущее сообщение — это ОТВЕТ на уточняющий вопрос консультанта (например "а для встраиваемой", "наружный", "на 12 модулей", "IP44"):
-1. ВОССТАНОВИ полный контекст из истории: определи КАКОЙ ТОВАР обсуждался ранее (щиток, розетка, светильник и т.д.)
-2. Сформируй НОВЫЙ полноценный набор кандидатов с ИСХОДНЫМ товаром + УТОЧНЕНИЕ как option_filter
-3. intent ОБЯЗАТЕЛЬНО = "catalog" (это продолжение поиска товара!)
-4. Генерируй СТОЛЬКО ЖЕ синонимов, как при первичном запросе
+ОПРЕДЕЛЕНИЕ INTENT:
+- "catalog" — пользователь ищет товар, оборудование, аксессуар, расходник, артикул, либо уточняет/сравнивает уже обсуждавшийся товар.
+- "brands" — пользователь спрашивает, какие бренды/производители представлены.
+- "info" — вопрос о компании, доставке, оплате, оферте, договоре, юридических данных, обязанностях сторон, возврате, гарантии.
+- "general" — приветствие, шутка, нерелевантное; candidates пустые.
 
-Примеры:
-- Контекст: обсуждали щитки → Клиент: "для встраиваемой" → intent="catalog", candidates=[{"query":"щиток"},{"query":"бокс"},{"query":"щит"},{"query":"корпус модульный"},{"query":"ЩРВ"}], option_filters={"монтаж":"встраиваемый"}
-- Контекст: обсуждали розетки → Клиент: "влагозащищённую" → intent="catalog", candidates=[{"query":"розетка"},{"query":"розетка влагозащищенная"}], option_filters={"защита":"IP44"}
-- Контекст: обсуждали автоматы → Клиент: "на 32 ампера" → intent="catalog", candidates=[{"query":"автомат"},{"query":"автоматический выключатель"}], option_filters={"ток":"32"}
+УТОЧНЯЮЩИЕ ОТВЕТЫ:
+Если текущая реплика — короткое уточнение признака («для встраиваемой», «наружный», «на 12 модулей», «IP44»), восстанови основной товар из истории и сгенерируй полноценный набор кандидатов: основной товар + его синонимы. Уточнение помещай в option_filters. intent при этом всегда "catalog".
 
-⚠️ НЕ генерируй пустые candidates для уточняющих ответов! Это НЕ "general" intent!
+ЦЕНОВЫЕ СРАВНЕНИЯ:
+Если пользователь говорит «дешевле/подешевле/бюджетнее» или «дороже/подороже/премиальнее» — найди в истории цену обсуждаемого товара и поставь max_price = цена − 1 либо min_price = цена + 1 соответственно. Восстанови основной товар как кандидатов. Если цены в истории нет — не выставляй min/max, ищи по названию.
 
-💰 ОБРАБОТКА ЦЕНОВЫХ СРАВНЕНИЙ (КРИТИЧЕСКИ ВАЖНО!):
-Если пользователь просит "дешевле", "подешевле", "бюджетнее", "дороже", "подороже", "премиальнее":
-1. Найди в КОНТЕКСТЕ РАЗГОВОРА ЦЕНУ обсуждаемого товара (число в тенге/₸)
-2. "дешевле" / "подешевле" / "бюджетнее" → установи max_price = цена_товара - 1
-3. "дороже" / "подороже" / "премиальнее" → установи min_price = цена_товара + 1
-4. ОБЯЗАТЕЛЬНО восстанови контекст товара и сгенерируй кандидатов (intent="catalog")!
-5. Если цену не удалось найти в истории — НЕ устанавливай min_price/max_price, просто ищи по названию
+АРТИКУЛЫ:
+Артикул — непрерывный токен длиной от 4 символов из букв (латиница или кириллица), цифр, точек и дефисов, без пробелов внутри. Может быть числовым, буквенным или смешанным. Если пользователь упоминает такой токен в контексте «есть в наличии», «сколько стоит», «артикул», «арт.» — сгенерируй кандидата с полем "article" вместо "query" со значением токена ровно как написано. Не генерируй для него синонимов и не модифицируй значение.
 
-Примеры:
-- Обсуждали отвёртку за 347₸ → Клиент: "есть дешевле?" → intent="catalog", max_price=346, candidates=[{"query":"отвертка"},{"query":"отвертки"}]
-- Обсуждали дрель за 15000₸ → Клиент: "покажи подороже" → intent="catalog", min_price=15001, candidates=[{"query":"дрель"},{"query":"дрели"}]
+ПАРАМЕТРЫ API КАТАЛОГА:
+- query: текстовый поиск по названию и описанию. Включай модельные коды и ключевые числовые характеристики. Не передавай служебные слова («товары», «продукция»).
+- article: точный поиск по артикулу.
+- brand: фильтр по бренду. Передавай бренд в той форме, как написал пользователь (кириллица или латиница). Не транслитерируй и не «исправляй» — нормализацией занимается серверная сторона.
+- category: в этой задаче не используй — категория управляется отдельным шагом.
+- min_price / max_price: в тенге.
 
-🔢 АРТИКУЛЫ:
-Артикул — это непрерывный токен из букв (латиница или кириллица), цифр, точек и дефисов длиной от 4 символов, без пробелов внутри. Артикул может быть чисто числовым ("16093"), чисто буквенным или смешанным ("09-0201", "CKK11-012-012-1-K01", "A9F74116", "ВА47-29"). Если пользователь упоминает такой токен в контексте «есть в наличии», «сколько стоит», «артикул», «арт.» — генерируй кандидата с полем "article" вместо "query":
-- "16093 есть в наличии?" → intent="catalog", candidates=[{"article":"16093"}]
-- "сколько стоит CKK11-012-012-1-K01?" → intent="catalog", candidates=[{"article":"CKK11-012-012-1-K01"}]
-- "артикул ВА47-29" → intent="catalog", candidates=[{"article":"ВА47-29"}]
-Поле "article" ищет по точному совпадению — не генерируй для него синонимов и не модифицируй значение.
+ФИЛЬТРЫ ПО ХАРАКТЕРИСТИКАМ (option_filters):
+Любой описывающий признак товара, упомянутый пользователем, обязан попасть в option_filters. Описывающий признак — это всё, что отвечает на вопросы «какой?», «сколько?», «из чего?», «где работает?» применительно к самому товару:
+- визуальные признаки (цвет, форма, материал, фактура);
+- количественные (число элементов, постов, полюсов, модулей; размер; объём; мощность; длина; сечение; ток; напряжение);
+- функциональные (тип монтажа, степень защиты, наличие/отсутствие функции);
+- происхождение (страна, серия, бренд если не вынесен в brand).
 
+Числительные-прилагательные («одинарный», «двойной», «двухместный», «трёхполюсный», «четырёхмодульный») — это количественная характеристика, а не часть названия товара. Их обязательно вынеси в option_filters, не оставляй в query.
 
-📖 ДОКУМЕНТАЦИЯ API КАТАЛОГА (220volt.kz/api/products):
-Ты ДОЛЖЕН формировать корректные запросы к API. Вот доступные параметры:
+Ключ option_filters — краткое русское название признака без пробелов (через подчёркивание). Значение — то, что сказал пользователь, в нормальной форме. Ключи не обязаны совпадать с API: серверная сторона сопоставит их со схемой категории.
+Если признак стоит в запросе — пользователь хочет именно его. Не отбрасывай его как «украшение» к названию. Если пользователь не назвал признак — не выдумывай.
 
-| Параметр | Описание | Пример |
-|----------|----------|--------|
-| query | Текстовый поиск по названию и описанию товара. Включай модельные коды (T8, A60, MR16) и ключевые характеристики (18Вт, 6500К). НЕ передавай общие слова вроде "товары", "продукция", "изделия" — они бесполезны | "дрель", "УШМ", "кабель 3x2.5", "ECO T8 18Вт 6500К" |
-| article | Точный поиск по артикулу/SKU товара. Используй для числовых кодов 4-8 цифр | "16093", "09-0201" |
-| options[brend__brend][] | Фильтр по бренду. Передавай название бренда в той форме, как его написал пользователь — нормализацией регистра и раскладки занимается серверная сторона. Не подменяй кириллицу на латиницу самостоятельно | "Philips", "Werkel", "ИЭК" |
-| category | Фильтр по категории (pagetitle родительского ресурса) | "Светильники", "Перфораторы" |
-| min_price | Минимальная цена в тенге | 5000 |
-| max_price | Максимальная цена в тенге | 50000 |
+КОНТЕКСТ ИСПОЛЬЗОВАНИЯ (usage_context):
+Если пользователь описывает не сам товар, а место или условия его применения («для улицы», «в баню», «на производство», «в детскую») — заполни usage_context описанием контекста и одновременно выведи в option_filters предполагаемые технические характеристики, которые этому контексту соответствуют (степень защиты, климатическое исполнение и т.п.). Если пользователь сам назвал конкретную характеристику (IP65, IK10) — это не контекст, а признак: ставь только в option_filters, usage_context оставь пустым.
 
-🔧 ФИЛЬТРЫ ПО ХАРАКТЕРИСТИКАМ (option_filters):
-ЛЮБОЙ описывающий признак товара, который пользователь упомянул, ОБЯЗАН попасть в option_filters.
-Описывающий признак — это всё, что отвечает на вопросы «какой?», «сколько?», «из чего?», «где?» применительно к самому товару:
-- визуальные признаки (цвет, форма, материал, фактура)
-- количественные (число элементов, размер, объём, мощность, длина, сечение)
-- функциональные (тип монтажа, степень защиты, наличие/отсутствие функции)
-- происхождение (страна, бренд если не вынесен в brand)
+ИЕРАРХИЯ КАНДИДАТОВ:
+1. Первый кандидат — основной товар: то родовое или каталожное имя, которым этот предмет называют в магазине.
+2. Остальные кандидаты — основной товар плюс характеристика, либо альтернативные имена того же товара (разговорное / техническое / каталожное). Подумай, как этот предмет может быть записан в каталоге электротоваров: по разговорному имени, по техническому термину, по альтернативному названию.
+3. Никогда не делай кандидатом одну характеристику, место или контекст без основного товара.
+4. option_filters применяются ко всем кандидатам.
 
-Правило: если признак стоит в запросе — значит пользователь хочет ИМЕННО ЭТО. Не отбрасывай его, не считай «украшением» к названию товара.
-Ключ option_filters = краткое русское название признака без пробелов (через подчёркивание). Значение = то, что сказал пользователь, в нормальной форме.
+ПОЛНОЕ НАЗВАНИЕ:
+Если пользователь ввёл полное или почти полное название товара с модельными кодами и числовыми характеристиками — первый кандидат сохраняет максимально близкую к исходной формулировку (с кодами и числами); второй кандидат — укороченная версия без числовых спецификаций. Не дроби оригинал на слишком общие слова.
 
-Если пользователь не назвал признак — не выдумывай его и не добавляй в option_filters.
+БРЕНДЫ:
+- Если пользователь спрашивает только о бренде («есть Philips?», «покажи Makita») — используй только фильтр brand, без query.
+- Если пользователь ищет товар конкретного бренда («дрель Bosch») — используй и query, и brand.
+- Если пользователь спрашивает про бренд в контексте уже обсуждавшейся категории («а от Philips есть?») — сгенерируй минимум двух кандидатов: query=<категория из контекста> + brand=<бренд>, и brand=<бренд> без query (бренд может отсутствовать в этой категории, но быть в другой).
 
-Ключи НЕ обязаны совпадать с API — система автоматически найдёт правильные ключи!
-
-⚠️ ПРАВИЛА СОСТАВЛЕНИЯ ЗАПРОСОВ:
-1. Если пользователь спрашивает только о БРЕНДЕ ("есть Philips?", "покажи Makita") — используй ТОЛЬКО фильтр brand, без query.
-2. Если пользователь ищет КАТЕГОРИЮ товаров ("дрели", "розетки") — используй query с техническим названием товара. Параметр category не используй.
-3. Если пользователь ищет ТОВАР КОНКРЕТНОГО БРЕНДА ("дрель Bosch", "розетка Werkel") — используй И query, И brand.
-4. query должен содержать технические термины каталога, не разговорные слова.
-5. brand сохраняй в форме, в которой написал пользователь (кириллица или латиница). Не транслитерируй и не «исправляй» бренд — это сделает серверная сторона.
-6. Параметр category в этой задаче не используй — он управляется отдельным шагом маппинга категорий.
-7. Если пользователь упоминает ХАРАКТЕРИСТИКУ — помести её в option_filters И ТАКЖЕ включи ключевые характеристики (мощность, температуру, модельный код) в query — это повышает точность поиска.
-8. Если пользователь описывает КОНТЕКСТ ИСПОЛЬЗОВАНИЯ (место, условия) — заполни usage_context И ТАКЖЕ выведи предполагаемые технические характеристики в option_filters.
-
-🌍 КОНТЕКСТЫ ИСПОЛЬЗОВАНИЯ (usage_context + option_filters ОДНОВРЕМЕННО!):
-Когда пользователь описывает ГДЕ/КАК будет использоваться товар — заполни ОБА поля:
-- usage_context: описание контекста для финального ответа
-- option_filters: ПРЕДПОЛАГАЕМЫЕ технические характеристики для фильтрации в API
-
-Примеры:
-- "розетка для улицы" → usage_context="наружное использование", option_filters={"защита": "IP44"}, candidates=[{"query":"розетки"},{"query":"розетка влагозащищенная"},{"query":"розетка наружная"}]
-- "розетка для бани" → usage_context="влажное помещение, высокая температура", option_filters={"защита": "IP44"}, candidates=[{"query":"розетки"},{"query":"розетка влагозащищенная"},{"query":"розетка герметичная"}]
-- "розетка в ванную" → usage_context="влажное помещение", option_filters={"защита": "IP44"}, candidates=[{"query":"розетки"},{"query":"розетка влагозащищенная"}]
-- "светильник для детской" → usage_context="детская комната, безопасность", option_filters={"защита": "IP20"}, candidates=[{"query":"светильник"},{"query":"светильник детский"}]
-- "кабель на производство" → usage_context="промышленное использование", candidates=[{"query":"кабель"},{"query":"кабель силовой"},{"query":"кабель промышленный"}]
-- "светильник в гараж" → usage_context="неотапливаемое помещение, пыль", option_filters={"защита": "IP44"}, candidates=[{"query":"светильник"},{"query":"светильник пылевлагозащищенный"},{"query":"светильник IP44"}]
-
-⚠️ КРИТИЧЕСКИ ВАЖНО — ИЕРАРХИЯ КАНДИДАТОВ:
-1. ПЕРВЫЙ кандидат = ОСНОВНОЙ ТОВАР (что конкретно ищем: "розетки", "светильник", "кабель")
-2. ОСТАЛЬНЫЕ кандидаты = ОСНОВНОЙ ТОВАР + характеристика ("розетка влагозащищенная", "розетка IP44")
-3. НИКОГДА не ставь характеристику/место БЕЗ основного товара! "баня", "улица", "влагозащита" сами по себе — НЕ кандидаты!
-4. option_filters применяются ко ВСЕМ кандидатам для фильтрации результатов
-
-📛 ПРИОРИТЕТ ПОЛНОГО НАЗВАНИЯ:
-Если пользователь ввёл ПОЛНОЕ или ПОЧТИ ПОЛНОЕ название товара (например "Лампа светодиодная ECO T8 линейная 18Вт 230В 6500К G13 ИЭК"):
-1. ПЕРВЫЙ кандидат = максимально близкое к исходному вводу пользователя (сохраняй модельные коды, числовые характеристики!)
-2. ВТОРОЙ кандидат = укороченная версия без числовых спецификаций
-3. НЕ ДРОБИ оригинальное название на слишком общие слова
-
-🔄 СИНОНИМЫ ТОВАРОВ — ОБЯЗАТЕЛЬНАЯ ГЕНЕРАЦИЯ ВАРИАНТОВ:
-В каталоге один и тот же товар может называться по-разному. Ты ОБЯЗАН генерировать кандидатов с РАЗНЫМИ названиями одного товара!
-Примеры:
-- "щиток" → кандидаты: {"query":"щиток"}, {"query":"бокс"}, {"query":"щит"}, {"query":"корпус модульный"}
-- "удлинитель" → кандидаты: {"query":"удлинитель"}, {"query":"колодка"}, {"query":"сетевой фильтр"}
-- "лампочка" → кандидаты: {"query":"лампа"}, {"query":"лампочка"}, {"query":"светодиодная лампа"}
-- "лампа T8 18Вт 6500К" → кандидаты: {"query":"ECO T8 18Вт 6500К"}, {"query":"лампа T8 18Вт 6500К"}, {"query":"T8 линейная 18Вт"}, option_filters={"мощность":"18","цветовая_температура":"6500"}
-- "лампа E27 12Вт тёплая" → кандидаты: {"query":"лампа E27 12Вт"}, {"query":"лампа светодиодная E27"}, option_filters={"мощность":"12","цоколь":"E27","цветовая_температура":"3000"}
-- "автомат" → кандидаты: {"query":"автомат"}, {"query":"автоматический выключатель"}, {"query":"выключатель автоматический"}
-- "болгарка" → кандидаты: {"query":"УШМ"}, {"query":"болгарка"}, {"query":"угловая шлифмашина"}
-- "перфоратор" → кандидаты: {"query":"перфоратор"}, {"query":"бурильный молоток"}
-- "стабилизатор" → кандидаты: {"query":"стабилизатор"}, {"query":"стабилизатор напряжения"}, {"query":"регулятор напряжения"}
-- "рубильник" → кандидаты: {"query":"рубильник"}, {"query":"выключатель-разъединитель"}, {"query":"выключатель нагрузки"}
-
-Принцип: подумай, КАК ИМЕННО этот товар может быть записан в КАТАЛОГЕ интернет-магазина электротоваров. Используй:
-1. Разговорное название (как говорит покупатель): "щиток", "болгарка", "автомат"
-2. Техническое/каталожное название: "бокс", "УШМ", "автоматический выключатель"
-3. Альтернативные варианты из каталога: "корпус модульный", "угловая шлифмашина"
-
-- "розетка IP65" → option_filters={"защита": "IP65"}, usage_context=null (пользователь ЗНАЕТ конкретную характеристику)
-
-🔴 ОПРЕДЕЛИ ПРАВИЛЬНЫЙ INTENT:
-- "catalog" — ищет товары/оборудование
-- "brands" — спрашивает какие бренды представлены
-- "info" — вопросы о компании, доставке, оплате, оферте, договоре, юридических данных (БИН, ИИН), обязанностях покупателя/продавца, возврате, гарантии, правах покупателя
-- "general" — приветствия, шутки, нерелевантное (candidates=[])
-
-🔑 АРТИКУЛЫ / SKU:
-Если пользователь указывает АРТИКУЛ товара (строка вида CKK11-012-012-1-K01, MVA25-1-016-C, SQ0206-0071 или упоминает слово "артикул", "арт."):
-- intent = "catalog"
-- Первый кандидат: query = артикул КАК ЕСТЬ (без изменений, без синонимов!)
-- НЕ генерируй дополнительных синонимов или вариаций для артикулов
-
-🚨 Если запрос о ДОКУМЕНТАХ КОМПАНИИ (оферта, БИН, обязанности, условия) — это ВСЕГДА intent="info", НЕ "general"!
-🚨 Если запрос НЕ про электроинструмент/оборудование И НЕ про компанию — это intent="general".
-
-🔑 ВАЖНОЕ ПРАВИЛО ДЛЯ БРЕНДОВ:
-Когда пользователь спрашивает о бренде В КОНТЕКСТЕ конкретной категории (например, ранее обсуждали автоматические выключатели, а теперь спрашивает "а от Philips есть?"):
-- Генерируй МИНИМУМ 2 кандидата:
-  1. query=<категория из контекста> + brand=<бренд> (проверяем, есть ли бренд В ЭТОЙ категории)
-  2. brand=<бренд> БЕЗ query (проверяем, есть ли бренд ВООБЩЕ в каталоге)
-Это критически важно! Бренд может отсутствовать в одной категории, но быть представлен в другой.
-
-ТЕКУЩЕЕ сообщение пользователя: "${message}"`;
+Текущее сообщение пользователя: "${message}"`;
 
   try {
     const response = await callAIWithKeyFallback(aiUrl, apiKeys, {
@@ -3782,6 +3723,9 @@ serve(async (req) => {
 
     let productContext = '';
     let foundProducts: Product[] = [];
+    // Plan V4 — Domain Guard: pagetitles selected by CategoryMatcher for the current query.
+    // Passed into rerankProducts to drop products from unrelated categories.
+    const allowedCategoryTitles: Set<string> = new Set();
     // Real number of products we collected from API BEFORE truncating to DISPLAY_LIMIT.
     // Used by the LLM prompt so the bot reports the honest catalog volume,
     // not the truncated 15. Reset to 0 each turn.
@@ -3885,14 +3829,26 @@ serve(async (req) => {
           // Step 2: Resolve the NEW modifier (user's answer) against option schema
           const modifiersToResolve = sp.refinementModifiers || [sp.refinementText];
           console.log(`[Chat] Resolving modifiers: ${JSON.stringify(modifiersToResolve)} (from classifier: ${sp.refinementModifiers ? 'yes' : 'no, fallback'})`);
-          const { resolved: newFiltersRaw, unresolved: stillUnresolved } = 
-            await resolveFiltersWithLLM(
+
+          // Schema fallback guard (Plan V4): if both prebuilt and sample schema are empty,
+          // we cannot meaningfully resolve filters via LLM — skip the call and reuse prior
+          // resolved_filters from the open slot to avoid blind hallucinated filters.
+          let newFiltersRaw: Record<string, ResolvedFilter> = {};
+          let stillUnresolved: string[] = [...modifiersToResolve];
+          const hasAnySchema = (slotPrebuilt as any).size > 0 || schemaProducts.length > 0;
+          if (!hasAnySchema) {
+            console.log(`[Chat] [FilterLLM-skip] schema empty for "${sp.category}" → reusing prior resolved_filters (${Object.keys(sp.resolvedFilters || {}).length} keys), modifiers go to unresolved`);
+          } else {
+            const r = await resolveFiltersWithLLM(
               schemaProducts, modifiersToResolve, appSettings, classification?.critical_modifiers,
-              slotPrebuilt.size > 0 ? slotPrebuilt : undefined
+              (slotPrebuilt as any).size > 0 ? slotPrebuilt as any : undefined
             );
+            newFiltersRaw = r.resolved;
+            stillUnresolved = r.unresolved;
+          }
           const newFilters = flattenResolvedFilters(newFiltersRaw);
           console.log(`[Chat] FilterLLM refinement: resolved=${JSON.stringify(newFilters)}, unresolved=${JSON.stringify(stillUnresolved)}`);
-          
+
           // Step 3: Merge with existing filters from slot
           const mergedFilters = { ...sp.resolvedFilters, ...newFilters };
           
@@ -4074,13 +4030,23 @@ serve(async (req) => {
             const matcherWork = (async () => {
               const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
               if (catalog.length === 0) return { matches: [] };
-              const matches = await matchCategoriesWithLLM(effectiveCategory, catalog, appSettings);
+              // Plan V4: pass last 3 user replies as history context so the matcher can apply
+              // Rule 7 (household-vs-industrial preference) based on prior dialog signals.
+              const historyContextForMatcher = (historyForContext || [])
+                .filter((m: any) => m && m.role === 'user')
+                .slice(-3)
+                .map((m: any) => `- ${String(typeof m.content === 'string' ? m.content : JSON.stringify(m.content)).slice(0, 200)}`)
+                .join('\n');
+              const matches = await matchCategoriesWithLLM(effectiveCategory, catalog, appSettings, historyContextForMatcher);
               return { matches };
             })();
             const { matches } = await Promise.race([matcherWork, matcherDeadline]);
 
             if (matches.length > 0) {
-              console.log(`[Chat] CategoryMatcher WIN candidates for "${effectiveCategory}": ${JSON.stringify(matches)}`);
+              // Plan V4 — Domain Guard: remember which categories matcher selected
+              // so rerankProducts can drop products from unrelated categories later.
+              for (const m of matches) allowedCategoryTitles.add(m);
+              console.log(`[Chat] CategoryMatcher WIN candidates for "${effectiveCategory}": ${JSON.stringify(matches)} (allowedCategoryTitles set, size=${allowedCategoryTitles.size})`);
               // Parallel: GET ?category=<exact pagetitle> for each match, plus query-fallback safety net
               const catPromises = matches.map(cat =>
                 searchProductsByCandidate(
@@ -5137,7 +5103,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           });
           console.log(`[Chat] Fallback price-sort applied: ${effectivePriceIntent}, top price=${foundProducts[0]?.price}`);
         } else {
-          foundProducts = rerankProducts(foundProducts, userMessage);
+          foundProducts = rerankProducts(foundProducts, userMessage, allowedCategoryTitles);
         }
         
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');

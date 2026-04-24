@@ -1,45 +1,64 @@
-# План реализован
+# План V4 — реализован
 
 ## Что сделано в `supabase/functions/chat-consultant/index.ts`
 
-### 1. CategoryMatcher (стр. 304–310)
-Правило 2 переписано через общий принцип «компонент/деталь/аксессуар vs самостоятельный товар» вместо хардкод-перечисления (рамки, коробки, заглушки).
+### 1. AI Candidates → системный промпт без few-shot шума (промпт)
+`extractionPrompt` (стр. 2062–2147) полностью переписан:
+- Принцип «модификатор → option_filters» сформулирован как одно жёсткое правило для всех типов признаков (визуальные, количественные, функциональные, происхождение).
+- Числительные-прилагательные («одинарный», «двойной», «двухместный», «трёхполюсный», «четырёхмодульный») явно маркированы как количественная характеристика, обязательная к выносу в option_filters.
+- Удалены длинные блоки few-shot-примеров (usage_context, IP44, лампы E27, цены конкретных товаров) — Flash на длинном промпте теряет инструкции.
+- Убран повторяющийся шум 🚨/⚠️ блоков и дублирующийся раздел про артикулы.
+- Сохранены: контракт JSON-схемы, поля article/query/brand/usage_context/option_filters/min_price/max_price, иерархия кандидатов, правила брендов и полного названия.
 
-### 2. AI Candidates → артикулы (стр. 2093–2099)
-Артикул теперь — любой непрерывный токен из букв (лат/кир) + цифр + точек/дефисов длиной ≥4 без пробелов внутри. Не только числовые 4–8 цифр. Примеры включают `CKK11-012-012-1-K01`, `ВА47-29`, `09-0201`, `16093`.
+### 2. CategoryMatcher → бытовое по умолчанию (промпт + сигнатура)
+`matchCategoriesWithLLM` (стр. 286–319):
+- Добавлен **параметр `historyContext?: string`** (опциональный) — последние 3 пользовательские реплики.
+- Добавлено **Правило 7**: если для одного предмета есть бытовая и узко-специализированная (промышленная/силовая/профессиональная) категория — выбирай бытовую. Специализированную включай только при явном маркере в запросе или истории (промышленность, цех, трёхфазная сеть, конкретный высокий номинал, специальные стандарты CEE/IP67+, профессиональный класс).
+- Без хардкод-списков. Принцип, который Flash применяет к любой паре «бытовое vs промышленное».
+- На стороне вызова (стр. ~4035) собирается `historyContextForMatcher` из `historyForContext.filter(role==='user').slice(-3)` и пробрасывается в matcher.
 
-### 3. AI Candidates → бренды (стр. 2108, 2128–2136)
-Убрано требование «бренды ВСЕГДА латиницей». Бренд передаётся в той форме, как написал пользователь (кириллица или латиница). Нормализация регистра/раскладки выполняется на сервере (`extractBrandsFromProducts` + API).
+### 3. Schema fallback в slot refinement (алгоритм)
+В блоке `product_search slot resolved` (стр. ~3803):
+- Если и `slotPrebuilt`, и выборка `schemaProducts` пусты — FilterLLM **не вызывается вслепую**, модификаторы переходят в `unresolved`, а `sp.resolvedFilters` из открытого slot переиспользуются как есть.
+- Лог: `[Chat] [FilterLLM-skip] schema empty for "<category>" → reusing prior resolved_filters (N keys)`.
 
-### 4. FilterLLM → семантический маппинг (стр. 2699–2710)
-Добавлен новый шаг 2: «определи физическое свойство, описываемое модификатором, до поиска характеристики». Числительные-прилагательные («одинарный/двойной/трёхполюсный/четырёхместная») явно маркированы как количественная семантика. Без хардкод-примеров.
+### 4. Domain Guard в rerank (алгоритм)
+`rerankProducts` (стр. 1936–1974):
+- Новый параметр `allowedPagetitles?: Set<string>`.
+- Если множество задано и непустое — товары, чей `category.pagetitle` (или `parent_name`) в нём не присутствует, **полностью отбрасываются** до скоринга.
+- Лог: `[DomainGuard] dropped X/Y items from non-allowed categories. Sample: ...`
+- Новая верхнеуровневая переменная `allowedCategoryTitles: Set<string>` (стр. ~3727), заполняется при WIN CategoryMatcher (стр. ~4048) и пробрасывается в `rerankProducts(foundProducts, userMessage, allowedCategoryTitles)` (стр. 5093).
+- Если множество пусто (Classify не дал effectiveCategory, или CategoryMatcher промахнулся, или price-intent ветка) — фильтр не применяется → старое поведение сохранено.
 
-## Что НЕ тронуто (важно)
+## Что НЕ тронуто (защищено)
 
-Полностью сохранены:
-- Маршрутизация: slot → article-first → Classify → price-intent → title-first → category-first (matcher → bucket fallback) → replacement → AI Candidates fallback
-- `resolveSlotRefinement` со всем merge-механизмом (`resolved_filters` JSON + `unresolved_query` + повторный API-запрос с реальной схемой категории)
-- Цены: `processPriceIntent`, `effectivePriceIntent`, `price_extreme` slot, `min_price`/`max_price`, локальная сортировка перед rerank
-- Brands-ветка: `extractBrandsFromProducts` из option `brend__brend`/vendor, `brandsContext` для общих запросов, прямой поиск с brand-фильтром если бренд указан
-- Replacement: matcher → bucket → исключение оригинала → re-create slot
-- Cascading relax non-critical фильтров, domain guard, telecom penalty, broadCandidates, English fallback, rerank
-- JSON-схема `extract_search_intent` как контракт
-- Provider lock на google-ai-studio + хардкод Flash для AI Candidates
-- Список бренда «латиницей» в primary `Classify`-промпте уже отсутствует — там бренд классифицируется без принудительной транслитерации
+- Маршрутизация: slot → article-first → Classify → price-intent → title-first → category-first (matcher → bucket fallback) → replacement → AI Candidates.
+- `resolveSlotRefinement` со всем merge-механизмом.
+- `processPriceIntent`, `effectivePriceIntent`, `price_extreme` slot, локальная сортировка по цене перед rerank.
+- Brands-ветка (`extractBrandsFromProducts`, `brandsContext`).
+- Replacement: matcher → bucket → исключение оригинала → re-create slot.
+- Cascading relax non-critical, broadCandidates, English fallback.
+- JSON-схема `extract_search_intent` как контракт; provider lock на google-ai-studio + Flash.
+- Article-first детекция (буквы/цифры/точки/дефисы ≥4 симв.).
+- Бренды передаются в исходной форме пользователя (кириллица/латиница).
+- Двухшаговый семантический маппинг в `resolveFiltersWithLLM` («модификатор → физическое свойство → значение схемы»).
 
-## Что проверять по логам после деплоя
+## Регрессионные сценарии
 
-| Сценарий | Ожидание в логах |
+| Запрос | Ожидание в логах |
 |---|---|
-| `чёрная двухместная розетка` | `[CategoryMatcher]` → 2 категории, `[FilterLLM]` резолвит цвет=чёрный + количество_постов=2, `Filters extracted: {...}` непустой |
-| `16093 есть?` | `[ArticleDetect] Found 1 article(s): 16093`, `[ArticleSearch]` |
-| `09-0201-002` | `[ArticleDetect]` ловит токен (≥4 симв., буквы+цифры+дефис) |
-| `CKK11-012-012-1-K01` | `[ArticleDetect]` ловит, `[Chat] Article-first: detected 1 article(s)` |
-| `у вас Werkel есть?` | Classify intent=brands + `hasSpecificBrand=true` → searchProductsMulti с brand=Werkel |
-| `какие бренды розеток?` | Classify intent=brands, brand=null → широкий поиск 50 → `extractBrandsFromProducts` → `brandsContext` |
-| `розетки бош` (бренд кириллицей) | brand=`бош` (как написал), API нормализует |
-| `самая дорогая бензопила` | `[Chat] Price intent detected: most_expensive`, `processPriceIntent` |
-| `а подешевле?` (после товара за 15 000) | AI Candidates: `max_price=14999` + восстановленная категория |
-| `розетки` → 30+ → `белые` | `[Slots] product_search slot resolved`, `[Chat] FilterLLM refinement: resolved={цвет:...}` |
+| `есть чёрные розетки на два гнезда?` | `[CategoryMatcher]` → бытовые «Розетки» (не «Силовые»); `[DomainGuard] dropped N items` (перчатки/клеммники); `[AI Candidates] Filters extracted` непустой |
+| `розетки промышленные на 32А` | `[CategoryMatcher]` → силовые (есть маркеры «промышленные» + «32А») |
+| `розетки` (без контекста) | бытовые |
+| `розетки` после реплики «у нас цех» | `historyContext` содержит «цех» → силовые |
+| Пустая схема категории | `[FilterLLM-skip] schema empty → reusing prior resolved_filters` |
+| `чёрная двухместная розетка` (slot открыт) | FilterLLM работает по-старому, двухшаговый маппинг не сломан |
+| `16093 есть?` | article-first, AI Candidates не вызывается |
+| `какие бренды розеток?` | brands-ветка, `extractBrandsFromProducts` |
+| `самая дорогая бензопила` | `processPriceIntent` |
 
-При регрессии любого сценария — откатывается только соответствующий промпт-блок.
+## Известные ограничения
+
+Pre-existing TS warnings (21 шт.) сохраняются — `parent_name`, `slotPrebuilt` тип, `isReplacement` и др. На рантайм Deno они не влияют, edge function задеплоен и работает. Это карма прошлых правок, не относится к V4.
+
+При регрессии любого сценария — откатывается только соответствующий блок (промпт или функция).
