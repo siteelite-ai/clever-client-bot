@@ -3809,6 +3809,9 @@ serve(async (req) => {
       if (articleProducts.size > 0) {
         foundProducts = Array.from(articleProducts.values());
         articleShortCircuit = true;
+        // Plan V5: для article-hit Pro избыточен — берём Flash.
+        responseModel = 'google/gemini-2.5-flash';
+        responseModelReason = 'article-shortcircuit';
         console.log(`[Chat] Article-first SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
       } else {
         console.log(`[Chat] Article-first: no article results, trying site ID fallback...`);
@@ -3826,6 +3829,9 @@ serve(async (req) => {
         if (articleProducts.size > 0) {
           foundProducts = Array.from(articleProducts.values());
           articleShortCircuit = true;
+          // Plan V5: siteId-hit — тоже точное попадание, Flash хватает.
+          responseModel = 'google/gemini-2.5-flash';
+          responseModelReason = 'siteid-shortcircuit';
           console.log(`[Chat] SiteId-fallback SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
         } else {
           console.log(`[Chat] Article-first + SiteId: no results, falling back to normal pipeline`);
