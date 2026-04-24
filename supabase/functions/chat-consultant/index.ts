@@ -1006,6 +1006,7 @@ interface ExtractedIntent {
  * Returns extracted product name or null. Timeout: 3 seconds.
  */
 interface ClassificationResult {
+  intent?: string;
   has_product_name: boolean;
   product_name?: string;
   price_intent?: 'most_expensive' | 'cheapest';
@@ -1208,9 +1209,9 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       return {
         intent: finalIntent as string | undefined,
         has_product_name: !!parsed.has_product_name,
-        product_name: parsed.product_name || undefined,
+        product_name: (typeof parsed.product_name === 'string' ? parsed.product_name : '') || undefined,
         price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
-        product_category: parsed.product_category || undefined,
+        product_category: (typeof parsed.product_category === 'string' ? parsed.product_category : '') || undefined,
         is_replacement: !!parsed.is_replacement,
         search_modifiers: rawSearchMods,
         critical_modifiers: rawCritical,
@@ -1613,6 +1614,9 @@ interface DialogSlot {
   pending_modifiers?: string;  // saved modifiers from original query: "черные двухместные"
   pending_filters?: string;    // JSON: {"cvet":"чёрный"} — pre-resolved from original query
   original_query?: string;     // user's original message before disambiguation
+  // replacement metadata
+  isReplacement?: boolean;
+  originalName?: string;
 }
 
 type DialogSlots = Record<string, DialogSlot>;
@@ -1764,7 +1768,7 @@ function resolveSlotRefinement(
   // Check if user message is a refinement (short, no explicit new price intent)
   const isShort = userMessage.length < 80;
   const hasNewPriceIntent = classificationResult?.price_intent != null 
-    && classificationResult.price_intent !== 'none';
+    && (classificationResult.price_intent as string) !== 'none';
   
   // If classifier found a new price_intent with a different category, it's a new request
   if (hasNewPriceIntent && classificationResult?.product_category && 
@@ -2309,9 +2313,6 @@ ${recentHistory.length > 0 ? 'Анализируй текущее сообщен
   try {
     const response = await callAIWithKeyFallback(aiUrl, apiKeys, {
       model: aiModel,
-      // Provider lock: запрещаем OpenRouter молча переключать модель (например с Flash на Pro).
-      // Без этого OpenRouter routing мог автоматически апгрейдить модель и игнорировать наш промпт.
-      provider: { order: ['google-ai-studio'], allow_fallbacks: false },
       messages: [
         { role: 'system', content: extractionPrompt },
         { role: 'user', content: message }
@@ -3979,7 +3980,7 @@ serve(async (req) => {
     // === TITLE-FIRST SHORT-CIRCUIT via Micro-LLM classifier ===
     // AI determines if message contains a product name and/or price intent
     let priceIntentClarify: { total: number; category: string } | null = null;
-    let effectivePriceIntent: string | undefined = undefined;
+    let effectivePriceIntent: 'most_expensive' | 'cheapest' | undefined = undefined;
     let effectiveCategory = '';
     let classification: any = null;
     
@@ -4008,9 +4009,10 @@ serve(async (req) => {
           
           // Step 1: Fetch FULL category option schema (authoritative — covers all products,
           // not just a 50-item sample). Falls back to sample-based schema inside resolver if empty.
-          const slotPrebuilt = appSettings.volt220_api_token
-            ? await getCategoryOptionsSchema(sp.category, appSettings.volt220_api_token).catch(() => new Map())
-            : new Map();
+          const slotPrebuiltResult = appSettings.volt220_api_token
+            ? await getCategoryOptionsSchema(sp.category, appSettings.volt220_api_token).catch(() => ({ schema: new Map<string, { caption: string; values: Set<string> }>(), productCount: 0, cacheHit: false }))
+            : { schema: new Map<string, { caption: string; values: Set<string> }>(), productCount: 0, cacheHit: false };
+          const slotPrebuilt = slotPrebuiltResult.schema;
           console.log(`[Chat] Slot prebuilt schema for "${sp.category}": ${slotPrebuilt.size} keys`);
           // Still fetch a small product sample as fallback (in case prebuilt schema is empty)
           const schemaProducts = slotPrebuilt.size > 0 ? [] : await searchProductsByCandidate(
@@ -4464,7 +4466,7 @@ serve(async (req) => {
             
             const categoryDistribution: Record<string, number> = {};
             for (const p of rawProducts) {
-              const catTitle = (p as any).category?.pagetitle || p.parent_name || 'unknown';
+              const catTitle = (p as any).category?.pagetitle || (p as any).parent_name || 'unknown';
               categoryDistribution[catTitle] = (categoryDistribution[catTitle] || 0) + 1;
             }
             console.log(`[Chat] Category-buckets: ${JSON.stringify(categoryDistribution)}`);
@@ -4510,7 +4512,7 @@ serve(async (req) => {
             const bucketSchemaMap: Map<string, Map<string, { caption: string; values: Set<string> }>> = new Map();
             if (appSettings.volt220_api_token && bucketCatNames.length > 0) {
               const schemas = await Promise.all(
-                bucketCatNames.map(n => getCategoryOptionsSchema(n, appSettings.volt220_api_token!).catch(() => new Map()))
+                bucketCatNames.map(n => getCategoryOptionsSchema(n, appSettings.volt220_api_token!).then(r => r.schema).catch(() => new Map<string, { caption: string; values: Set<string> }>()))
               );
               bucketCatNames.forEach((n, i) => bucketSchemaMap.set(n, schemas[i]));
             }
@@ -4518,7 +4520,7 @@ serve(async (req) => {
             for (const [catName, count] of bucketsToTry) {
               if (count < 2) continue;
               let bucketProducts = rawProducts.filter(p => 
-                ((p as any).category?.pagetitle || p.parent_name || 'unknown') === catName
+                ((p as any).category?.pagetitle || (p as any).parent_name || 'unknown') === catName
               );
               if (bucketProducts.length < 10 && appSettings.volt220_api_token) {
                 console.log(`[Chat] Bucket "${catName}" too small (${bucketProducts.length}), fetching more for schema...`);
@@ -4593,7 +4595,7 @@ serve(async (req) => {
                   if (altCount < 2) continue;
                   console.log(`[Chat] STAGE 2 fallback to bucket-N: "${altCat}" (priority=2)`);
                   let altProducts = rawProducts.filter(p =>
-                    ((p as any).category?.pagetitle || p.parent_name || 'unknown') === altCat
+                    ((p as any).category?.pagetitle || (p as any).parent_name || 'unknown') === altCat
                   );
                   if (altProducts.length < 10 && appSettings.volt220_api_token) {
                     const extra = await searchProductsByCandidate(
@@ -4602,9 +4604,9 @@ serve(async (req) => {
                     );
                     if (extra.length > altProducts.length) altProducts = extra;
                   }
-                  const altSchema = appSettings.volt220_api_token
-                    ? await getCategoryOptionsSchema(altCat, appSettings.volt220_api_token).catch(() => new Map())
-                    : new Map();
+                  const altSchema: Map<string, { caption: string; values: Set<string> }> = appSettings.volt220_api_token
+                    ? await getCategoryOptionsSchema(altCat, appSettings.volt220_api_token).then(r => r.schema).catch(() => new Map<string, { caption: string; values: Set<string> }>())
+                    : new Map<string, { caption: string; values: Set<string> }>();
                   const { resolved: altResolvedRaw, unresolved: altUnresolved } = await resolveFiltersWithLLM(
                     altProducts, modifiers, appSettings, classification?.critical_modifiers,
                     altSchema && altSchema.size > 0 ? altSchema : undefined
@@ -4752,7 +4754,7 @@ serve(async (req) => {
           
           if (originalProduct) {
             // Case 1: Original product found — extract category & modifiers from its data
-            replCategory = (originalProduct as any).category?.pagetitle || originalProduct.parent_name || '';
+            replCategory = (originalProduct as any).category?.pagetitle || (originalProduct as any).parent_name || '';
             replModifiers = extractModifiersFromProduct(originalProduct);
             console.log(`[Chat] Replacement: category="${replCategory}", modifiers=[${replModifiers.join(', ')}]`);
           } else if (classification.product_name || (classification.search_modifiers?.length ?? 0) > 0) {
@@ -4934,7 +4936,7 @@ serve(async (req) => {
               // Bucketize by category
               const replCatDist: Record<string, number> = {};
               for (const p of replRawProducts) {
-                const catTitle = (p as any).category?.pagetitle || p.parent_name || 'unknown';
+                const catTitle = (p as any).category?.pagetitle || (p as any).parent_name || 'unknown';
                 replCatDist[catTitle] = (replCatDist[catTitle] || 0) + 1;
               }
               console.log(`[Chat] Replacement buckets: ${JSON.stringify(replCatDist)}`);
@@ -4972,7 +4974,7 @@ serve(async (req) => {
               for (const [catName, count] of replBucketsToTry) {
                 if (count < 2) continue;
                 let bucketProducts = replRawProducts.filter(p =>
-                  ((p as any).category?.pagetitle || p.parent_name || 'unknown') === catName
+                  ((p as any).category?.pagetitle || (p as any).parent_name || 'unknown') === catName
                 );
                 if (bucketProducts.length < 10 && appSettings.volt220_api_token) {
                   console.log(`[Chat] Replacement bucket "${catName}" too small (${bucketProducts.length}), fetching more...`);
@@ -5034,7 +5036,7 @@ serve(async (req) => {
                     if (altCount < 2) continue;
                     console.log(`[Chat] STAGE 2 fallback to bucket-N: "${altCat}" (replacement, priority=2)`);
                     let altProducts = replRawProducts.filter(p =>
-                      ((p as any).category?.pagetitle || p.parent_name || 'unknown') === altCat
+                      ((p as any).category?.pagetitle || (p as any).parent_name || 'unknown') === altCat
                     );
                     if (altProducts.length < 10 && appSettings.volt220_api_token) {
                       const extra = await searchProductsByCandidate(
