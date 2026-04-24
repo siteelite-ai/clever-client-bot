@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { MessageSquare, X, Send, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import type { ChatMessage, Product } from '@/types';
+import type { ChatMessage, Product, QuickReply } from '@/types';
 import ReactMarkdown from 'react-markdown';
 
 interface ChatWidgetProps {
@@ -56,6 +56,7 @@ async function streamChat({
   onError,
   onContacts,
   onSlotUpdate,
+  onQuickReplies,
   conversationId,
   dialogSlots,
 }: {
@@ -65,6 +66,7 @@ async function streamChat({
   onError: (error: string) => void;
   onContacts?: (contacts: string) => void;
   onSlotUpdate?: (slots: DialogSlots) => void;
+  onQuickReplies?: (replies: QuickReply[]) => void;
   conversationId: string;
   dialogSlots: DialogSlots;
 }) {
