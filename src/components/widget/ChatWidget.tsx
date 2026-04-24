@@ -213,18 +213,29 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
   const [dialogSlots, setDialogSlots] = useState<DialogSlots>({});
   const conversationIdRef = useRef(crypto.randomUUID());
 
-  const handleSend = useCallback(async () => {
-    if (!input.trim() || isLoading) return;
+  const handleSend = useCallback(async (overrideText?: string) => {
+    const text = (overrideText ?? input).trim();
+    if (!text || isLoading) return;
 
     const userMessage: ChatMessage = {
       id: Date.now().toString(),
       role: 'user',
-      content: input,
+      content: text,
       timestamp: new Date()
     };
 
-    setMessages(prev => [...prev, userMessage]);
-    setInput('');
+    // Strip quickReplies from any previous assistant message — once the user
+    // chooses (or types something else), old chips are stale and shouldn't
+    // remain clickable.
+    setMessages(prev => [
+      ...prev.map(m =>
+        m.role === 'assistant' && m.quickReplies
+          ? { ...m, quickReplies: undefined }
+          : m
+      ),
+      userMessage,
+    ]);
+    if (!overrideText) setInput('');
     setIsLoading(true);
 
     // Step 1: Show typing dots animation
@@ -236,7 +247,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       timestamp: new Date()
     }]);
 
-    const thinkingPhrase = pickThinkingPhrase(input);
+    const thinkingPhrase = pickThinkingPhrase(text);
 
     // Prepare messages for API (do this BEFORE the delay so we can fire in parallel)
     const apiMessages: Msg[] = messages
@@ -246,10 +257,15 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         !m.id.startsWith('typing')
       )
       .map(m => ({ role: m.role, content: m.content }));
-    apiMessages.push({ role: 'user', content: input });
+    apiMessages.push({ role: 'user', content: text });
 
     let assistantContent = '';
     let typing2Removed = false;
+    let streamMsgId: string | null = null;
+
+    const upsertAssistant = (
+      updater: (prev: ChatMessage[]) => ChatMessage[]
+    ) => setMessages(updater);
 
     const updateAssistant = (chunk: string) => {
       assistantContent += chunk;
@@ -259,13 +275,15 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       // Remove repeated greetings from the response
       displayContent = displayContent.replace(/^(?:Здравствуйте[.!]?\s*|Добрый\s+(?:день|вечер|утро)[.!,]?\s*|Привет[.!,]?\s*|Приветствую[.!,]?\s*)/i, '');
       displayContent = displayContent.trim();
-      setMessages(prev => {
+      upsertAssistant(prev => {
         let updated = prev;
         if (!typing2Removed) {
           typing2Removed = true;
           updated = prev.filter(m => !m.id.startsWith('typing2-'));
+          const id = `stream-${Date.now()}`;
+          streamMsgId = id;
           return [...updated, {
-            id: `stream-${Date.now()}`,
+            id,
             role: 'assistant' as const,
             content: displayContent,
             timestamp: new Date()
@@ -273,14 +291,17 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         }
         const last = updated[updated.length - 1];
         if (last?.role === 'assistant' && last.id.startsWith('stream-')) {
+          streamMsgId = last.id;
           return updated.map((m, i) => 
             i === updated.length - 1 
               ? { ...m, content: displayContent } 
               : m
           );
         }
+        const id = `stream-${Date.now()}`;
+        streamMsgId = id;
         return [...updated, {
-          id: `stream-${Date.now()}`,
+          id,
           role: 'assistant' as const,
           content: displayContent,
           timestamp: new Date()
@@ -298,6 +319,35 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       onSlotUpdate: (updatedSlots) => {
         console.log('[Widget] Received slot_update:', JSON.stringify(updatedSlots));
         setDialogSlots(updatedSlots);
+      },
+      onQuickReplies: (replies) => {
+        console.log('[Widget] Received quick_replies:', JSON.stringify(replies));
+        // If we already have a streaming message, attach chips to it.
+        // Otherwise (disambiguation short-circuit may emit content+quick_replies
+        // back-to-back; the content event creates the message in updateAssistant),
+        // fall back to attaching to the last assistant message.
+        setMessages(prev => {
+          const targetId = streamMsgId;
+          // First try the tracked stream message id
+          if (targetId) {
+            const idx = prev.findIndex(m => m.id === targetId);
+            if (idx !== -1) {
+              return prev.map((m, i) =>
+                i === idx ? { ...m, quickReplies: replies } : m
+              );
+            }
+          }
+          // Fallback: last assistant message that isn't typing
+          for (let i = prev.length - 1; i >= 0; i--) {
+            const m = prev[i];
+            if (m.role === 'assistant' && m.content !== '__TYPING__') {
+              return prev.map((mm, j) =>
+                j === i ? { ...mm, quickReplies: replies } : mm
+              );
+            }
+          }
+          return prev;
+        });
       },
       onContacts: (contacts) => {
         setMessages(prev => [...prev, {
@@ -350,6 +400,12 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     // Wait for stream to complete
     await streamPromise;
   }, [input, isLoading, messages, dialogSlots]);
+
+  const handleQuickReply = useCallback((value: string) => {
+    if (isLoading) return;
+    handleSend(value);
+  }, [isLoading, handleSend]);
+
 
   const ProductCard = ({ product }: { product: Product }) => (
     <a
