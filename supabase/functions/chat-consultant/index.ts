@@ -4224,6 +4224,13 @@ serve(async (req) => {
           // On WIN: short-circuits, sets foundProducts, skips legacy bucket-logic below.
           // On miss/timeout/empty: falls through to legacy logic (no regression).
           let categoryFirstWinResolved = false;
+          // Plan V4 — last 3 user replies for matcher (Rule 7 household-vs-industrial preference).
+          // Hoisted to outer scope so the V7 ambiguity classifier can reuse the same context.
+          const historyContextForMatcher = (historyForContext || [])
+            .filter((m: any) => m && m.role === 'user')
+            .slice(-3)
+            .map((m: any) => `- ${String(typeof m.content === 'string' ? m.content : JSON.stringify(m.content)).slice(0, 200)}`)
+            .join('\n');
           try {
             const matcherDeadline = new Promise<{ matches: string[] }>((_, rej) =>
               setTimeout(() => rej(new Error('matcher_timeout_10s')), 10000)
@@ -4231,13 +4238,6 @@ serve(async (req) => {
             const matcherWork = (async () => {
               const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
               if (catalog.length === 0) return { matches: [] };
-              // Plan V4: pass last 3 user replies as history context so the matcher can apply
-              // Rule 7 (household-vs-industrial preference) based on prior dialog signals.
-              const historyContextForMatcher = (historyForContext || [])
-                .filter((m: any) => m && m.role === 'user')
-                .slice(-3)
-                .map((m: any) => `- ${String(typeof m.content === 'string' ? m.content : JSON.stringify(m.content)).slice(0, 200)}`)
-                .join('\n');
               const matches = await matchCategoriesWithLLM(effectiveCategory, catalog, appSettings, historyContextForMatcher);
               return { matches };
             })();
