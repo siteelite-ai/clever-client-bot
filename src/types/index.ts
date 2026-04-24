@@ -32,12 +32,18 @@ export interface KnowledgeEntry {
 }
 
 // Chat messages
+export interface QuickReply {
+  label: string;
+  value: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   timestamp: Date;
   products?: Product[];
+  quickReplies?: QuickReply[];
 }
 
 // Product from 220volt API
