@@ -2303,6 +2303,17 @@ ${recentHistory.length > 0 ? 'АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщен
     if (toolCall?.function?.arguments) {
       const parsed = JSON.parse(toolCall.function.arguments);
       console.log(`[AI Candidates] Extracted:`, JSON.stringify(parsed, null, 2));
+
+      // Сводный лог по извлечённым фильтрам — чтобы по логам сразу видеть, забрала ли модель цвет/количество мест/etc.
+      const allFilters: Record<string, string> = {};
+      for (const c of (parsed.candidates || [])) {
+        if (c.option_filters && typeof c.option_filters === 'object') {
+          for (const [k, v] of Object.entries(c.option_filters)) {
+            allFilters[k] = String(v);
+          }
+        }
+      }
+      console.log(`[AI Candidates] Filters extracted: ${JSON.stringify(allFilters)} (model=${aiModel})`);
       
       const candidates = (parsed.candidates || []).map((c: any) => {
         let humanFilters: Record<string, string> | undefined;
