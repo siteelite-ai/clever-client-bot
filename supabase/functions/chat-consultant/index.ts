@@ -1685,7 +1685,77 @@ function resolveSlotRefinement(
   classificationResult: ClassificationResult | null
 ): { slotKey: string; query: string; priceIntent: 'most_expensive' | 'cheapest'; updatedSlots: DialogSlots } 
  | { slotKey: string; searchParams: { category: string; resolvedFilters: Record<string, string>; refinementText: string; refinementModifiers: string[]; existingUnresolved: string; baseCategory: string }; updatedSlots: DialogSlots }
+ | { slotKey: string; disambiguation: { chosenLabel: string; chosenValue: string; chosenPagetitle: string; pendingModifiers: string[]; pendingFilters: Record<string, string>; originalQuery: string; baseCategory: string }; updatedSlots: DialogSlots }
  | null {
+  // Plan V7 — category_disambiguation slot resolution.
+  // If user replies with one of the offered options (chip click sends value
+  // exactly; free-text reply may match label/value/pagetitle case-insensitively),
+  // resolve it to the chosen pagetitle and surface the saved modifiers/filters.
+  const normCmp = (s: string) => s.toLowerCase().replace(/ё/g, 'е').replace(/[^а-яa-z0-9]/g, '');
+  const userNorm = normCmp(userMessage);
+  for (const [key, slot] of Object.entries(slots)) {
+    if (slot.status !== 'pending' || slot.intent !== 'category_disambiguation') continue;
+    if (!slot.candidate_options) continue;
+    let options: Array<{ label: string; value: string; pagetitle?: string }> = [];
+    try {
+      const parsed = JSON.parse(slot.candidate_options);
+      if (Array.isArray(parsed)) options = parsed;
+    } catch {
+      console.log(`[Slots] category_disambiguation "${key}": malformed candidate_options, skipping`);
+      continue;
+    }
+    if (options.length === 0) continue;
+
+    // Try exact match on value first (chip click), then label, then pagetitle, then substring.
+    let chosen = options.find(o => normCmp(o.value) === userNorm)
+      || options.find(o => normCmp(o.label) === userNorm)
+      || options.find(o => o.pagetitle && normCmp(o.pagetitle) === userNorm);
+    if (!chosen && userMessage.length < 60) {
+      // Short free-text reply — match by inclusion (e.g. user typed "бытовые" while option is "Бытовые розетки")
+      chosen = options.find(o => normCmp(o.label).includes(userNorm) && userNorm.length >= 4)
+        || options.find(o => normCmp(o.value).includes(userNorm) && userNorm.length >= 4);
+    }
+    if (!chosen) {
+      console.log(`[Slots] category_disambiguation "${key}": user reply "${userMessage.slice(0, 50)}" doesn't match options=${JSON.stringify(options.map(o => o.label))}, falling through`);
+      continue;
+    }
+
+    const pendingModifiers = slot.pending_modifiers
+      ? slot.pending_modifiers.split(/\s+/).map(s => s.trim()).filter(Boolean)
+      : [];
+    let pendingFilters: Record<string, string> = {};
+    if (slot.pending_filters) {
+      try {
+        const pf = JSON.parse(slot.pending_filters);
+        if (pf && typeof pf === 'object' && !Array.isArray(pf)) {
+          for (const [k, v] of Object.entries(pf)) {
+            if (typeof v === 'string') pendingFilters[k] = v;
+          }
+        }
+      } catch {
+        console.log(`[Slots] category_disambiguation "${key}": malformed pending_filters, ignoring`);
+      }
+    }
+
+    const updatedSlots = { ...slots };
+    updatedSlots[key] = { ...slot, status: 'done', turns_since_touched: 0, refinement: chosen.label };
+    console.log(`[Slots] category_disambiguation "${key}" RESOLVED: chosen="${chosen.label}" (pagetitle="${chosen.pagetitle || chosen.value}"), pendingMods=${JSON.stringify(pendingModifiers)}, pendingFilters=${JSON.stringify(pendingFilters)}`);
+
+    return {
+      slotKey: key,
+      disambiguation: {
+        chosenLabel: chosen.label,
+        chosenValue: chosen.value,
+        chosenPagetitle: chosen.pagetitle || chosen.value,
+        pendingModifiers,
+        pendingFilters,
+        originalQuery: slot.original_query || slot.base_category || '',
+        baseCategory: slot.base_category,
+      },
+      updatedSlots,
+    };
+  }
+
   // First: check for pending product_search slot with filter state.
   // GATE PHILOSOPHY: trust Micro-LLM as primary source of truth. Slot branch is ONLY
   // for genuine short follow-ups ("а подешевле?", "а белая есть?"). Any signal that
