@@ -3919,7 +3919,7 @@ serve(async (req) => {
             appSettings.volt220_api_token!, 50,
             Object.keys(mergedFilters).length > 0 ? mergedFilters : undefined
           );
-          { const _r = pickDisplayWithTotal(foundProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'slot'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=slot`); }
+          { const _r = pickDisplayWithTotal(foundProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'slot'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=slot zeroFiltered=${_r.filteredZeroPrice}`); }
           articleShortCircuit = true;
           dialogSlots = slotResolution.updatedSlots;
           slotsUpdated = true;
@@ -4096,7 +4096,7 @@ serve(async (req) => {
               } else if (modifiers.length === 0) {
                 // No modifiers — return matched-category products directly (or full set if matched is empty)
                 const pool = exactCategoryHits.length > 0 ? exactCategoryHits : matcherProducts;
-                { const _r = pickDisplayWithTotal(pool); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'matcher_no_modifiers'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=matcher_no_modifiers`); }
+                { const _r = pickDisplayWithTotal(pool); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'matcher_no_modifiers'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=matcher_no_modifiers zeroFiltered=${_r.filteredZeroPrice}`); }
                 articleShortCircuit = true;
                 categoryFirstWinResolved = true;
                 console.log(`[Chat] [Path] WIN mode=no_modifiers matched_cats=${matches.length} count=${foundProducts.length} elapsed=${Date.now() - categoryStart}ms`);
@@ -4171,7 +4171,7 @@ serve(async (req) => {
                 }
 
                 if (filteredProducts.length > 0) {
-                  { const _r = pickDisplayWithTotal(filteredProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'matcher_server'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=matcher_server`); }
+                  { const _r = pickDisplayWithTotal(filteredProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'matcher_server'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=matcher_server zeroFiltered=${_r.filteredZeroPrice}`); }
                   articleShortCircuit = true;
                   categoryFirstWinResolved = true;
                   console.log(`[Chat] [Path] WIN mode=server_match matched_cats=${matches.length} resolved=${Object.keys(mResolved).length}/${modifiers.length} count=${foundProducts.length} elapsed=${Date.now() - categoryStart}ms`);
@@ -4359,7 +4359,7 @@ serve(async (req) => {
               console.log(`[Chat] Category-first server-filtered: ${serverFiltered.length} products`);
 
               if (serverFiltered.length > 0) {
-                { const _r = pickDisplayWithTotal(serverFiltered); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'bucket-N'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=bucket-N`); }
+                { const _r = pickDisplayWithTotal(serverFiltered); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'bucket-N'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=bucket-N zeroFiltered=${_r.filteredZeroPrice}`); }
                 articleShortCircuit = true;
                 resultMode = 'server_exact_match';
               } else {
@@ -4407,7 +4407,7 @@ serve(async (req) => {
                   );
                   console.log(`[Chat] Alt bucket "${altCat}" server-filtered: ${altServer.length} products`);
                   if (altServer.length > 0) {
-                    { const _r = pickDisplayWithTotal(altServer); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = `alt-bucket:${altCat}`; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=alt-bucket`); }
+                    { const _r = pickDisplayWithTotal(altServer); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = `alt-bucket:${altCat}`; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=alt-bucket zeroFiltered=${_r.filteredZeroPrice}`); }
                     pluralCategory = altCat;
                     articleShortCircuit = true;
                     resultMode = `server_exact_match (alt-bucket "${altCat}")`;
@@ -4440,7 +4440,7 @@ serve(async (req) => {
                       }
                     }
                     if (bestRelaxed.length > 0) {
-                      { const _r = pickDisplayWithTotal(bestRelaxed); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'relaxed'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=relaxed`); }
+                      { const _r = pickDisplayWithTotal(bestRelaxed); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'relaxed'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=relaxed zeroFiltered=${_r.filteredZeroPrice}`); }
                       articleShortCircuit = true;
                       resultMode = `relaxed_server_match (dropped ${droppedKey})`;
                     }
@@ -4464,7 +4464,7 @@ serve(async (req) => {
                       appSettings.volt220_api_token, 50
                     );
                     if (textFallback.length > 0) {
-                      { const _r = pickDisplayWithTotal(textFallback); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'text_fallback'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=text_fallback`); }
+                      { const _r = pickDisplayWithTotal(textFallback); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'text_fallback'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=text_fallback zeroFiltered=${_r.filteredZeroPrice}`); }
                       articleShortCircuit = true;
                       resultMode = 'text_fallback';
                     } else {
@@ -4476,7 +4476,7 @@ serve(async (req) => {
                 }
               }
             } else {
-              { const _r = pickDisplayWithTotal(rawProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'category-first_no_filters'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=category-first_no_filters`); }
+              { const _r = pickDisplayWithTotal(rawProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'category-first_no_filters'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=category-first_no_filters zeroFiltered=${_r.filteredZeroPrice}`); }
               articleShortCircuit = true;
               resultMode = 'no_filters';
             }
@@ -4500,7 +4500,7 @@ serve(async (req) => {
               console.log(`[Chat] Created product_search slot "${slotKey}": filters=${JSON.stringify(resolvedFilters || {})}, query="${unresolvedMods?.length > 0 ? unresolvedMods.join(' ') : ''}"`);
             }
           } else if (rawProducts.length > 0) {
-            { const _r = pickDisplayWithTotal(rawProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'category-first_no_modifiers'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=category-first_no_modifiers`); }
+            { const _r = pickDisplayWithTotal(rawProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'category-first_no_modifiers'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=category-first_no_modifiers zeroFiltered=${_r.filteredZeroPrice}`); }
             articleShortCircuit = true;
             const categoryElapsed = Date.now() - categoryStart;
             console.log(`[Chat] Category-first DECISION: mode=no_modifiers, count=${foundProducts.length}, elapsed=${categoryElapsed}ms`);
@@ -4656,7 +4656,7 @@ serve(async (req) => {
                   if (originalId) rFinal = rFinal.filter(p => p.id !== originalId);
 
                   if (rFinal.length > 0) {
-                    { const _r = pickDisplayWithTotal(rFinal); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_matcher'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_matcher`); }
+                    { const _r = pickDisplayWithTotal(rFinal); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_matcher'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_matcher zeroFiltered=${_r.filteredZeroPrice}`); }
                     articleShortCircuit = true;
                     replacementWinResolved = true;
                     replacementMeta = {
@@ -4893,7 +4893,7 @@ serve(async (req) => {
                 }
                 
                 if (replFiltered.length > 0) {
-                  { const _r = pickDisplayWithTotal(replFiltered); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_filtered'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_filtered`); }
+                  { const _r = pickDisplayWithTotal(replFiltered); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_filtered'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_filtered zeroFiltered=${_r.filteredZeroPrice}`); }
                   articleShortCircuit = true;
                   replacementMeta = {
                     isReplacement: true,
@@ -4931,7 +4931,7 @@ serve(async (req) => {
                 let catProducts = replRawProducts;
                 const originalId = originalProduct?.id;
                 if (originalId) catProducts = catProducts.filter(p => p.id !== originalId);
-                { const _r = pickDisplayWithTotal(catProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_cat_no_filters'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_cat_no_filters`); }
+                { const _r = pickDisplayWithTotal(catProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_cat_no_filters'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_cat_no_filters zeroFiltered=${_r.filteredZeroPrice}`); }
                 articleShortCircuit = true;
                 replacementMeta = { isReplacement: true, original: originalProduct, originalName: classification.product_name, noResults: foundProducts.length === 0 };
                 console.log(`[Chat] Replacement: no filters resolved, showing ${foundProducts.length} category products (${Date.now() - replacementStart}ms)`);
@@ -4941,7 +4941,7 @@ serve(async (req) => {
               let catProducts = replRawProducts;
               const originalId = originalProduct?.id;
               if (originalId) catProducts = catProducts.filter(p => p.id !== originalId);
-              { const _r = pickDisplayWithTotal(catProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_cat_no_modifiers'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_cat_no_modifiers`); }
+              { const _r = pickDisplayWithTotal(catProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_cat_no_modifiers'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_cat_no_modifiers zeroFiltered=${_r.filteredZeroPrice}`); }
               articleShortCircuit = true;
               replacementMeta = { isReplacement: true, original: originalProduct, originalName: classification.product_name, noResults: foundProducts.length === 0 };
               console.log(`[Chat] Replacement: no modifiers, showing ${foundProducts.length} category products (${Date.now() - replacementStart}ms)`);
