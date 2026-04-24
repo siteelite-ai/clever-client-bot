@@ -1933,21 +1933,44 @@ function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: 
  * Rerank products by title-score relevance to query.
  * Returns products sorted by score descending.
  */
-function rerankProducts(products: Product[], userQuery: string): Product[] {
+function rerankProducts(
+  products: Product[],
+  userQuery: string,
+  allowedPagetitles?: Set<string>
+): Product[] {
   const queryTokens = extractTokens(userQuery);
   const querySpecs = extractSpecs(userQuery);
-  
-  const scored = products.map(p => ({
+
+  // Domain guard (Plan V4): if the caller knows which categories are relevant for this
+  // query (from CategoryMatcher), drop products from any other category before scoring.
+  // Prevents black gloves / clamps from polluting "чёрные розетки" results just because
+  // their title shares a token. When set is missing or empty — no filter is applied.
+  let pool = products;
+  if (allowedPagetitles && allowedPagetitles.size > 0) {
+    const before = pool.length;
+    const dropped: string[] = [];
+    pool = pool.filter(p => {
+      const cat = (p as any).category?.pagetitle || (p as any).parent_name || '';
+      if (allowedPagetitles.has(cat)) return true;
+      if (dropped.length < 5) dropped.push(`"${p.pagetitle.substring(0, 40)}" [${cat}]`);
+      return false;
+    });
+    if (before !== pool.length) {
+      console.log(`[DomainGuard] dropped ${before - pool.length}/${before} items from non-allowed categories. Sample: ${dropped.join(' | ')}`);
+    }
+  }
+
+  const scored = pool.map(p => ({
     product: p,
     score: scoreProductMatch(p, queryTokens, querySpecs, undefined, userQuery),
   }));
-  
+
   scored.sort((a, b) => b.score - a.score);
-  
+
   if (scored.length > 0) {
     console.log(`[Rerank] Top scores: ${scored.slice(0, 5).map(s => `${s.score}:"${s.product.pagetitle.substring(0, 40)}"`).join(', ')}`);
   }
-  
+
   return scored.map(s => s.product);
 }
 
