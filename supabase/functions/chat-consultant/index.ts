@@ -2313,9 +2313,6 @@ ${recentHistory.length > 0 ? 'Анализируй текущее сообщен
   try {
     const response = await callAIWithKeyFallback(aiUrl, apiKeys, {
       model: aiModel,
-      // Provider lock: запрещаем OpenRouter молча переключать модель (например с Flash на Pro).
-      // Без этого OpenRouter routing мог автоматически апгрейдить модель и игнорировать наш промпт.
-      provider: { order: ['google-ai-studio'], allow_fallbacks: false },
       messages: [
         { role: 'system', content: extractionPrompt },
         { role: 'user', content: message }
@@ -4012,9 +4009,10 @@ serve(async (req) => {
           
           // Step 1: Fetch FULL category option schema (authoritative — covers all products,
           // not just a 50-item sample). Falls back to sample-based schema inside resolver if empty.
-          const slotPrebuilt = appSettings.volt220_api_token
-            ? await getCategoryOptionsSchema(sp.category, appSettings.volt220_api_token).catch(() => new Map())
-            : new Map();
+          const slotPrebuiltResult = appSettings.volt220_api_token
+            ? await getCategoryOptionsSchema(sp.category, appSettings.volt220_api_token).catch(() => ({ schema: new Map<string, { caption: string; values: Set<string> }>(), productCount: 0, cacheHit: false }))
+            : { schema: new Map<string, { caption: string; values: Set<string> }>(), productCount: 0, cacheHit: false };
+          const slotPrebuilt = slotPrebuiltResult.schema;
           console.log(`[Chat] Slot prebuilt schema for "${sp.category}": ${slotPrebuilt.size} keys`);
           // Still fetch a small product sample as fallback (in case prebuilt schema is empty)
           const schemaProducts = slotPrebuilt.size > 0 ? [] : await searchProductsByCandidate(
@@ -4514,7 +4512,7 @@ serve(async (req) => {
             const bucketSchemaMap: Map<string, Map<string, { caption: string; values: Set<string> }>> = new Map();
             if (appSettings.volt220_api_token && bucketCatNames.length > 0) {
               const schemas = await Promise.all(
-                bucketCatNames.map(n => getCategoryOptionsSchema(n, appSettings.volt220_api_token!).catch(() => new Map()))
+                bucketCatNames.map(n => getCategoryOptionsSchema(n, appSettings.volt220_api_token!).then(r => r.schema).catch(() => new Map<string, { caption: string; values: Set<string> }>()))
               );
               bucketCatNames.forEach((n, i) => bucketSchemaMap.set(n, schemas[i]));
             }
@@ -4606,9 +4604,9 @@ serve(async (req) => {
                     );
                     if (extra.length > altProducts.length) altProducts = extra;
                   }
-                  const altSchema = appSettings.volt220_api_token
-                    ? await getCategoryOptionsSchema(altCat, appSettings.volt220_api_token).catch(() => new Map())
-                    : new Map();
+                  const altSchema: Map<string, { caption: string; values: Set<string> }> = appSettings.volt220_api_token
+                    ? await getCategoryOptionsSchema(altCat, appSettings.volt220_api_token).then(r => r.schema).catch(() => new Map<string, { caption: string; values: Set<string> }>())
+                    : new Map<string, { caption: string; values: Set<string> }>();
                   const { resolved: altResolvedRaw, unresolved: altUnresolved } = await resolveFiltersWithLLM(
                     altProducts, modifiers, appSettings, classification?.critical_modifiers,
                     altSchema && altSchema.size > 0 ? altSchema : undefined
