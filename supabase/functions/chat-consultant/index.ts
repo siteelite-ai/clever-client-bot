@@ -5031,37 +5031,26 @@ serve(async (req) => {
     }
     console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}, ShortCircuit: ${articleShortCircuit}`);
 
-    // ШАГ 2: Поиск в базе знаний (параллельно с другими запросами)
-    const knowledgePromise = searchKnowledgeBase(userMessage, 5, appSettings);
-    const contactsPromise = (async () => {
-      const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
-      const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-      if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return '';
-      try {
-        const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-        const { data } = await sb.from('knowledge_entries')
-          .select('title, content')
-          .or('title.ilike.%контакт%,title.ilike.%филиал%')
-          .limit(5);
-        if (!data || data.length === 0) return '';
-        return data.map(d => `--- ${d.title} ---\n${d.content}`).join('\n\n');
-      } catch { return ''; }
-    })();
-    
-    const [knowledgeResults, contactsInfo, geoResult] = await Promise.all([knowledgePromise, contactsPromise, detectedCityPromise]);
+    // Plan V5: knowledge & contacts были предзапущены в начале handler'а (earlyKnowledgePromise/earlyContactsPromise),
+    // здесь только дожидаемся их вместе с GeoIP. Для article-shortcircuit это экономит сотни мс.
+    const [knowledgeResults, contactsInfo, geoResult] = await Promise.all([earlyKnowledgePromise, earlyContactsPromise, detectedCityPromise]);
     const detectedCity = geoResult.city;
     const isVPN = geoResult.isVPN;
     const userCountryCode = geoResult.countryCode;
     const userCountry = geoResult.country;
     console.log(`[Chat] GeoIP: city=${detectedCity || 'unknown'}, VPN=${isVPN}, country=${userCountry || 'unknown'} (${userCountryCode || '?'})`);
     console.log(`[Chat] Contacts loaded: ${contactsInfo.length} chars`);
-    
+
     if (knowledgeResults.length > 0) {
-      const KB_TOTAL_BUDGET = 15000;
+      // Plan V5: для article-shortcircuit ответ — простой "да, есть, X тг". 15 КБ статей раздувают токены и латентность.
+      // Режем budget до 2 КБ и берём только топ-1 самую релевантную запись.
+      const KB_TOTAL_BUDGET = articleShortCircuit ? 2000 : 15000;
+      const KB_MAX_ENTRIES = articleShortCircuit ? 1 : knowledgeResults.length;
       let kbUsed = 0;
       const kbParts: string[] = [];
-      
-      for (const r of knowledgeResults) {
+
+      for (let i = 0; i < knowledgeResults.length && i < KB_MAX_ENTRIES; i++) {
+        const r = knowledgeResults[i];
         if (kbUsed >= KB_TOTAL_BUDGET) break;
         const perEntryBudget = r.content.length > 100000 ? 6000 : 4000;
         const remaining = KB_TOTAL_BUDGET - kbUsed;
@@ -5070,15 +5059,19 @@ serve(async (req) => {
         kbParts.push(`--- ${r.title} ---\n${excerpt}${r.source_url ? `\nИсточник: ${r.source_url}` : ''}`);
         kbUsed += excerpt.length;
       }
-      
+
       knowledgeContext = `
 📚 ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ (используй для ответа!):
 
 ${kbParts.join('\n\n')}
 
 ИНСТРУКЦИЯ: Используй информацию выше для ответа клиенту. Если информация релевантна вопросу — цитируй её, ссылайся на конкретные пункты.`;
-      
-      console.log(`[Chat] Added ${knowledgeResults.length} knowledge entries to context (${kbUsed} chars, budget ${KB_TOTAL_BUDGET})`);
+
+      if (articleShortCircuit) {
+        console.log(`[Chat] Knowledge truncated for article-shortcircuit: top-1 entry, ${kbUsed} chars (budget ${KB_TOTAL_BUDGET})`);
+      } else {
+        console.log(`[Chat] Added ${kbParts.length} knowledge entries to context (${kbUsed} chars, budget ${KB_TOTAL_BUDGET})`);
+      }
     }
     if (articleShortCircuit && foundProducts.length > 0) {
       const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
