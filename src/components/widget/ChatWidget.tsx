@@ -378,7 +378,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       },
       onContacts: (contacts) => {
         setMessages(prev => [...prev, {
-          id: `contacts-${Date.now()}`,
+          id: mid('contacts'),
           role: 'assistant' as const,
           content: contacts,
           timestamp: new Date()
