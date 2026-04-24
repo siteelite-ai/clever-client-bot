@@ -4030,13 +4030,23 @@ serve(async (req) => {
             const matcherWork = (async () => {
               const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
               if (catalog.length === 0) return { matches: [] };
-              const matches = await matchCategoriesWithLLM(effectiveCategory, catalog, appSettings);
+              // Plan V4: pass last 3 user replies as history context so the matcher can apply
+              // Rule 7 (household-vs-industrial preference) based on prior dialog signals.
+              const historyContextForMatcher = (conversationHistory || [])
+                .filter(m => m.role === 'user')
+                .slice(-3)
+                .map(m => `- ${String(m.content).slice(0, 200)}`)
+                .join('\n');
+              const matches = await matchCategoriesWithLLM(effectiveCategory, catalog, appSettings, historyContextForMatcher);
               return { matches };
             })();
             const { matches } = await Promise.race([matcherWork, matcherDeadline]);
 
             if (matches.length > 0) {
-              console.log(`[Chat] CategoryMatcher WIN candidates for "${effectiveCategory}": ${JSON.stringify(matches)}`);
+              // Plan V4 — Domain Guard: remember which categories matcher selected
+              // so rerankProducts can drop products from unrelated categories later.
+              for (const m of matches) allowedCategoryTitles.add(m);
+              console.log(`[Chat] CategoryMatcher WIN candidates for "${effectiveCategory}": ${JSON.stringify(matches)} (allowedCategoryTitles set, size=${allowedCategoryTitles.size})`);
               // Parallel: GET ?category=<exact pagetitle> for each match, plus query-fallback safety net
               const catPromises = matches.map(cat =>
                 searchProductsByCandidate(
