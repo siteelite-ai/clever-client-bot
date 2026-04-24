@@ -3723,6 +3723,9 @@ serve(async (req) => {
 
     let productContext = '';
     let foundProducts: Product[] = [];
+    // Plan V4 — Domain Guard: pagetitles selected by CategoryMatcher for the current query.
+    // Passed into rerankProducts to drop products from unrelated categories.
+    const allowedCategoryTitles: Set<string> = new Set();
     // Real number of products we collected from API BEFORE truncating to DISPLAY_LIMIT.
     // Used by the LLM prompt so the bot reports the honest catalog volume,
     // not the truncated 15. Reset to 0 each turn.
