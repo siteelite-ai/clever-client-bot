@@ -408,7 +408,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
     // Step 2: Show thinking phrase after longer typing animation (runs in parallel with API)
     await new Promise(r => setTimeout(r, 3000));
-    const thinkingId = `thinking-${Date.now()}`;
+    const thinkingId = mid('thinking');
     setMessages(prev => {
       const withoutTyping = prev.filter(m => m.id !== typingId);
       // Only add thinking phrase + typing2 if stream hasn't already started delivering
