@@ -1208,9 +1208,9 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       return {
         intent: finalIntent as string | undefined,
         has_product_name: !!parsed.has_product_name,
-        product_name: parsed.product_name || undefined,
+        product_name: (typeof parsed.product_name === 'string' ? parsed.product_name : '') || undefined,
         price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
-        product_category: parsed.product_category || undefined,
+        product_category: (typeof parsed.product_category === 'string' ? parsed.product_category : '') || undefined,
         is_replacement: !!parsed.is_replacement,
         search_modifiers: rawSearchMods,
         critical_modifiers: rawCritical,
