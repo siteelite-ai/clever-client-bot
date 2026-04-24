@@ -3750,6 +3750,24 @@ serve(async (req) => {
     // Геолокация по IP (параллельно с остальными запросами)
     const detectedCityPromise = detectCityByIP(clientIp);
 
+    // Plan V5 — Pre-warm knowledge & contacts in parallel with article-search / LLM classifier.
+    // These don't depend on any LLM result; the sooner we kick them off, the less wall-clock waiting later.
+    const earlyKnowledgePromise = searchKnowledgeBase(userMessage, 5, appSettings);
+    const earlyContactsPromise = (async () => {
+      const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
+      const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+      if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return '';
+      try {
+        const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+        const { data } = await sb.from('knowledge_entries')
+          .select('title, content')
+          .or('title.ilike.%контакт%,title.ilike.%филиал%')
+          .limit(5);
+        if (!data || data.length === 0) return '';
+        return data.map(d => `--- ${d.title} ---\n${d.content}`).join('\n\n');
+      } catch { return ''; }
+    })();
+
     let productContext = '';
     let foundProducts: Product[] = [];
     // Plan V4 — Domain Guard: pagetitles selected by CategoryMatcher for the current query.
@@ -3763,6 +3781,11 @@ serve(async (req) => {
     let brandsContext = '';
     let knowledgeContext = '';
     let articleShortCircuit = false;
+    // Plan V5 — model used for the FINAL streaming answer.
+    // Defaults to user's configured model (usually Pro). Switched to Flash for short-circuit branches
+    // (article/siteId hit, price-intent hit) where the answer is a simple "yes, in stock, X tg".
+    let responseModel = aiConfig.model;
+    let responseModelReason = 'default';
     let replacementMeta: { isReplacement: boolean; original: Product | null; originalName?: string; noResults: boolean } | null = null;
 
     // === ARTICLE FIRST: Detect SKU/article codes BEFORE LLM 1 ===
