@@ -1707,16 +1707,29 @@ function resolveSlotRefinement(
     if (options.length === 0) continue;
 
     // Try exact match on value first (chip click), then label, then pagetitle, then substring.
-    let chosen = options.find(o => normCmp(o.value) === userNorm)
-      || options.find(o => normCmp(o.label) === userNorm)
-      || options.find(o => o.pagetitle && normCmp(o.pagetitle) === userNorm);
+    let matchType: 'value' | 'label' | 'pagetitle' | 'fuzzy_label' | 'fuzzy_value' | null = null;
+    let chosen = options.find(o => normCmp(o.value) === userNorm);
+    if (chosen) matchType = 'value';
+    if (!chosen) {
+      chosen = options.find(o => normCmp(o.label) === userNorm);
+      if (chosen) matchType = 'label';
+    }
+    if (!chosen) {
+      chosen = options.find(o => o.pagetitle && normCmp(o.pagetitle) === userNorm);
+      if (chosen) matchType = 'pagetitle';
+    }
     if (!chosen && userMessage.length < 60) {
       // Short free-text reply — match by inclusion (e.g. user typed "бытовые" while option is "Бытовые розетки")
-      chosen = options.find(o => normCmp(o.label).includes(userNorm) && userNorm.length >= 4)
-        || options.find(o => normCmp(o.value).includes(userNorm) && userNorm.length >= 4);
+      chosen = options.find(o => normCmp(o.label).includes(userNorm) && userNorm.length >= 4);
+      if (chosen) matchType = 'fuzzy_label';
+      if (!chosen) {
+        chosen = options.find(o => normCmp(o.value).includes(userNorm) && userNorm.length >= 4);
+        if (chosen) matchType = 'fuzzy_value';
+      }
     }
     if (!chosen) {
       console.log(`[Slots] category_disambiguation "${key}": user reply "${userMessage.slice(0, 50)}" doesn't match options=${JSON.stringify(options.map(o => o.label))}, falling through`);
+      console.log(`[QR] NO_MATCH slot="${key}" user_input="${userMessage.slice(0, 100)}" user_norm="${userNorm}" options=${JSON.stringify(options.map(o => ({ label: o.label, value: o.value })))} pending_modifiers="${slot.pending_modifiers || ''}" pending_filters=${JSON.stringify(slot.pending_filters || null)}`);
       continue;
     }
 
@@ -1740,6 +1753,7 @@ function resolveSlotRefinement(
     const updatedSlots = { ...slots };
     updatedSlots[key] = { ...slot, status: 'done', turns_since_touched: 0, refinement: chosen.label };
     console.log(`[Slots] category_disambiguation "${key}" RESOLVED: chosen="${chosen.label}" (pagetitle="${chosen.pagetitle || chosen.value}"), pendingMods=${JSON.stringify(pendingModifiers)}, pendingFilters=${JSON.stringify(pendingFilters)}`);
+    console.log(`[QR] MATCH slot="${key}" match_type="${matchType}" user_input="${userMessage.slice(0, 100)}" chosen_label="${chosen.label}" chosen_value="${chosen.value}" chosen_pagetitle="${chosen.pagetitle || chosen.value}" base_category="${slot.base_category}" original_query="${slot.original_query || ''}" pending_modifiers=${JSON.stringify(pendingModifiers)} pending_filters=${JSON.stringify(pendingFilters)} all_options=${JSON.stringify(options.map(o => ({ label: o.label, value: o.value })))}`);
 
     return {
       slotKey: key,
@@ -4217,6 +4231,9 @@ serve(async (req) => {
               hasPF ? dis.pendingFilters : undefined
             );
             console.log(`[Chat] Disambiguation search: category="${dis.chosenPagetitle}", query="${disQuery}", filters=${JSON.stringify(dis.pendingFilters)} → ${disProducts.length} products`);
+            // [QR] Trace what context the resolver actually used to fetch products,
+            // so a wrong-bucket pick can be traced back to chosen_value/pagetitle.
+            console.log(`[QR] SEARCH slot="${slotResolution.slotKey}" chosen_label="${dis.chosenLabel}" chosen_value="${dis.chosenValue}" chosen_pagetitle="${dis.chosenPagetitle}" base_category="${dis.baseCategory}" original_query="${dis.originalQuery}" pending_modifiers=${JSON.stringify(dis.pendingModifiers)} pending_filters=${JSON.stringify(dis.pendingFilters)} dis_query="${disQuery}" results=${disProducts.length}`);
 
             if (disProducts.length > 0) {
               const _r = pickDisplayWithTotal(disProducts);
@@ -4412,6 +4429,9 @@ serve(async (req) => {
                     quick_replies: ambiguity.options.map(o => ({ label: o.label, value: o.value })),
                   };
                   console.log(`[Chat] CategoryAmbiguity SHORT-CIRCUIT: slot="${slotKey}", options=${JSON.stringify(optionLabels)}, preMods="${preMods}"`);
+                  // [QR] Detailed diagnostics for quick_replies emission. Use tag [QR]
+                  // to grep across logs and trace why a particular option was offered.
+                  console.log(`[QR] EMIT slot="${slotKey}" base_category="${effectiveCategory}" original_query="${userMessage.slice(0, 200)}" pending_modifiers="${preMods}" pending_filters=null options=${JSON.stringify(ambiguity.options.map(o => ({ label: o.label, value: o.value, pagetitle: o.pagetitle || null })))}`);
                   categoryFirstWinResolved = true;
                   articleShortCircuit = true;
                 }
