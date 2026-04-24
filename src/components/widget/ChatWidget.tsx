@@ -235,34 +235,38 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     sendingRef.current = true;
 
     const userMessage: ChatMessage = {
-      id: Date.now().toString(),
+      id: mid('user'),
       role: 'user',
       content: text,
       timestamp: new Date()
     };
 
-    // Strip quickReplies ONLY from the most recent assistant message that
-    // displayed chips (the one the user was actually responding to). Older
-    // assistant messages keep their chips untouched — they belong to prior
-    // turns and the user didn't interact with them now.
-    setMessages(prev => {
-      let lastIdx = -1;
-      for (let i = prev.length - 1; i >= 0; i--) {
-        if (prev[i].role === 'assistant' && prev[i].quickReplies && prev[i].quickReplies!.length > 0) {
-          lastIdx = i;
-          break;
-        }
+    // Capture, in this send's closure, the ID of the assistant message whose
+    // chips the user is currently responding to. We then clear chips strictly
+    // by that captured ID — not by index or "last assistant" lookup at
+    // commit time. This eliminates races where two rapid sends each compute
+    // "last with chips" against an already-mutated array, or where a new
+    // assistant message has slipped in between dispatch and commit.
+    let chipsToClearId: string | null = null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === 'assistant' && m.quickReplies && m.quickReplies.length > 0) {
+        chipsToClearId = m.id;
+        break;
       }
-      const next = lastIdx === -1
+    }
+
+    setMessages(prev => {
+      const next = chipsToClearId === null
         ? prev
-        : prev.map((m, i) => (i === lastIdx ? { ...m, quickReplies: undefined } : m));
+        : prev.map(m => (m.id === chipsToClearId ? { ...m, quickReplies: undefined } : m));
       return [...next, userMessage];
     });
     if (!overrideText) setInput('');
     setIsLoading(true);
 
     // Step 1: Show typing dots animation
-    const typingId = `typing-${Date.now()}`;
+    const typingId = mid('typing');
     setMessages(prev => [...prev, {
       id: typingId,
       role: 'assistant' as const,
