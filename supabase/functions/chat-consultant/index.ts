@@ -3803,14 +3803,26 @@ serve(async (req) => {
           // Step 2: Resolve the NEW modifier (user's answer) against option schema
           const modifiersToResolve = sp.refinementModifiers || [sp.refinementText];
           console.log(`[Chat] Resolving modifiers: ${JSON.stringify(modifiersToResolve)} (from classifier: ${sp.refinementModifiers ? 'yes' : 'no, fallback'})`);
-          const { resolved: newFiltersRaw, unresolved: stillUnresolved } = 
-            await resolveFiltersWithLLM(
+
+          // Schema fallback guard (Plan V4): if both prebuilt and sample schema are empty,
+          // we cannot meaningfully resolve filters via LLM — skip the call and reuse prior
+          // resolved_filters from the open slot to avoid blind hallucinated filters.
+          let newFiltersRaw: Record<string, ResolvedFilter> = {};
+          let stillUnresolved: string[] = [...modifiersToResolve];
+          const hasAnySchema = (slotPrebuilt as any).size > 0 || schemaProducts.length > 0;
+          if (!hasAnySchema) {
+            console.log(`[Chat] [FilterLLM-skip] schema empty for "${sp.category}" → reusing prior resolved_filters (${Object.keys(sp.resolvedFilters || {}).length} keys), modifiers go to unresolved`);
+          } else {
+            const r = await resolveFiltersWithLLM(
               schemaProducts, modifiersToResolve, appSettings, classification?.critical_modifiers,
-              slotPrebuilt.size > 0 ? slotPrebuilt : undefined
+              (slotPrebuilt as any).size > 0 ? slotPrebuilt as any : undefined
             );
+            newFiltersRaw = r.resolved;
+            stillUnresolved = r.unresolved;
+          }
           const newFilters = flattenResolvedFilters(newFiltersRaw);
           console.log(`[Chat] FilterLLM refinement: resolved=${JSON.stringify(newFilters)}, unresolved=${JSON.stringify(stillUnresolved)}`);
-          
+
           // Step 3: Merge with existing filters from slot
           const mergedFilters = { ...sp.resolvedFilters, ...newFilters };
           
