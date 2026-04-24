@@ -361,6 +361,129 @@ ${JSON.stringify(catalog)}
   }
 }
 
+/**
+ * Plan V7 — Category disambiguation classifier.
+ * Decides whether multiple matched buckets represent variants of ONE category (synonyms,
+ * narrow subtypes — answer them with all) OR semantically distinct product groups
+ * (household vs industrial, indoor vs outdoor, automatic vs manual — must ask user).
+ *
+ * Returns:
+ *   { ambiguous: false } — matches are interchangeable, proceed with normal flow
+ *   { ambiguous: true, options: [...] } — ask the user which one they want; options
+ *     are short labels suitable for chip buttons.
+ *
+ * One Flash call, ~200 tokens, ~600ms. Skipped when matches.length < 2.
+ */
+async function classifyCategoryAmbiguity(
+  queryWord: string,
+  matches: string[],
+  settings: CachedSettings,
+  historyContext?: string,
+): Promise<{ ambiguous: false } | { ambiguous: true; options: Array<{ label: string; value: string; pagetitle: string }> }> {
+  if (matches.length < 2) return { ambiguous: false };
+  if (!settings.openrouter_api_key) {
+    console.log('[CategoryAmbiguity] OpenRouter key missing — skipping (deterministic non-ambiguous)');
+    return { ambiguous: false };
+  }
+
+  const historyBlock = (historyContext && historyContext.trim())
+    ? `\nКОНТЕКСТ ДИАЛОГА (последние реплики пользователя):\n${historyContext.trim()}\n`
+    : '';
+
+  const systemPrompt = `Ты решаешь, нужно ли уточнить у пользователя, какую именно категорию товаров он имеет в виду.
+${historyBlock}
+ЗАПРОС ПОЛЬЗОВАТЕЛЯ: "${queryWord}"
+
+КАТЕГОРИИ-КАНДИДАТЫ (matcher уже отобрал релевантные):
+${matches.map((m, i) => `${i + 1}. ${m}`).join('\n')}
+
+ЗАДАЧА: классифицировать кандидаты по двум типам:
+- SYNONYMS — это варианты ОДНОГО и того же типа товара (разные исполнения/монтаж/мощности одной товарной группы). Пользователю не важно различие, можно искать сразу во всех. Пример: "Лампы накаливания" + "Светодиодные лампы" по запросу "лампа".
+- DISTINCT — это РАЗНЫЕ товарные группы для разных задач (бытовое vs промышленное, внутреннее vs уличное, ручное vs автоматическое, низкое vs высокое напряжение). Пользователь должен выбрать. Примеры:
+  • "Розетки" (бытовые) vs "Розетки силовые" (промышленные, трёхфазные)
+  • "Кабель ВВГ" vs "Кабель силовой бронированный"
+  • "Выключатели" vs "Выключатели автоматические"
+  • "Светильники для дома" vs "Прожекторы уличные"
+
+ВАЖНО:
+- Если в запросе или истории УЖЕ есть явный маркер выбора (например "силовые", "промышленные", "уличные", упоминание ампеража 32А/63А, IP44/IP54, трёхфазной сети) — тип SYNONYMS (не нужно переспрашивать, ответ уже виден).
+- Если маркера нет, а кандидаты явно разной природы — тип DISTINCT.
+- Если кандидатов 2+ и они разной природы → DISTINCT.
+- Если все кандидаты — варианты одного — SYNONYMS.
+
+Если DISTINCT, придумай для каждого кандидата КОРОТКУЮ человеческую подпись (label) для кнопки, 2–4 слова, без слова "категория", в женском роде если возможно. Пример: "Бытовые для дома", "Силовые промышленные", "Внутренние", "Уличные", "Автоматические".
+
+Ответь СТРОГО в JSON одной из двух форм:
+{"type":"SYNONYMS"}
+ИЛИ
+{"type":"DISTINCT","options":[{"pagetitle":"...","label":"..."}, ...]}
+
+В DISTINCT pagetitle должны быть СИМВОЛ-В-СИМВОЛ из списка кандидатов.`;
+
+  const reqBody = {
+    model: 'google/gemini-2.5-flash',
+    messages: [{ role: 'user', content: systemPrompt }],
+    ...DETERMINISTIC_SAMPLING,
+    max_tokens: 400,
+    response_format: { type: 'json_object' },
+    reasoning: { exclude: true },
+  };
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+    const t0 = Date.now();
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${settings.openrouter_api_key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(reqBody),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!response.ok) {
+      console.log(`[CategoryAmbiguity] HTTP ${response.status} for "${queryWord}" — defaulting to non-ambiguous`);
+      return { ambiguous: false };
+    }
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content || '';
+    if (!content.trim()) {
+      console.log(`[CategoryAmbiguity] empty content — defaulting to non-ambiguous`);
+      return { ambiguous: false };
+    }
+    let parsed: any;
+    try { parsed = JSON.parse(content); } catch { return { ambiguous: false }; }
+
+    if (parsed?.type === 'SYNONYMS') {
+      console.log(`[CategoryAmbiguity] "${queryWord}" → SYNONYMS (${matches.length} matches treated as one), ${Date.now() - t0}ms`);
+      return { ambiguous: false };
+    }
+    if (parsed?.type === 'DISTINCT' && Array.isArray(parsed.options)) {
+      // Validate: every pagetitle must exist in matches; sanitize labels.
+      const matchSet = new Set(matches);
+      const cleaned: Array<{ label: string; value: string; pagetitle: string }> = [];
+      for (const opt of parsed.options) {
+        if (!opt || typeof opt !== 'object') continue;
+        const pagetitle = typeof opt.pagetitle === 'string' ? opt.pagetitle : '';
+        const label = typeof opt.label === 'string' ? opt.label.trim().slice(0, 60) : '';
+        if (!matchSet.has(pagetitle) || !label) continue;
+        // value = label for slot resolution (user's "answer" is the label)
+        cleaned.push({ label, value: label, pagetitle });
+      }
+      if (cleaned.length >= 2) {
+        console.log(`[CategoryAmbiguity] "${queryWord}" → DISTINCT (${cleaned.length} options): ${cleaned.map(o => o.label).join(' | ')}, ${Date.now() - t0}ms`);
+        return { ambiguous: true, options: cleaned };
+      }
+      console.log(`[CategoryAmbiguity] DISTINCT but only ${cleaned.length} valid options after sanitize → non-ambiguous`);
+      return { ambiguous: false };
+    }
+    console.log(`[CategoryAmbiguity] unexpected response shape → non-ambiguous`);
+    return { ambiguous: false };
+  } catch (e) {
+    console.log(`[CategoryAmbiguity] error: ${(e as Error).message} → non-ambiguous`);
+    return { ambiguous: false };
+  }
+}
+
 // Cached settings from DB
 interface CachedSettings {
   volt220_api_token: string | null;
