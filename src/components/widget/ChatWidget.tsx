@@ -394,7 +394,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         setMessages(prev => {
           const filtered = prev.filter(m => !m.id.startsWith('typing2-'));
           return [...filtered, {
-            id: `error-${Date.now()}`,
+            id: mid('error'),
             role: 'assistant',
             content: `Извините, произошла ошибка: ${error}. Попробуйте повторить вопрос.`,
             timestamp: new Date()
