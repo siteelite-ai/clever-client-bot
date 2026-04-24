@@ -728,35 +728,70 @@ function detectArticles(message: string): string[] {
 /**
  * Search products by article parameter (exact match via API)
  */
-async function searchByArticle(article: string, apiToken: string): Promise<Product[]> {
-  try {
-    const params = new URLSearchParams();
-    params.append('article', article);
-    params.append('per_page', '5');
-    
-    console.log(`[ArticleSearch] Searching by article: ${article}`);
-    
-    const response = await fetch(`${VOLT220_API_URL}?${params}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${apiToken}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      console.error(`[ArticleSearch] API error: ${response.status}`);
-      return [];
+// Plan V5: timeout-bounded fetch with single retry for catalog API.
+// Protects article/siteId fast paths from hanging on slow upstream (was up to 70s in logs).
+async function fetchCatalogWithRetry(
+  url: string,
+  apiToken: string,
+  tag: string,
+  timeoutMs = 8000
+): Promise<Response | null> {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${apiToken}`,
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (!resp.ok) {
+        console.error(`[${tag}] API error: ${resp.status} (attempt ${attempt})`);
+        if (attempt === 2) return null;
+        continue;
+      }
+      return resp;
+    } catch (err) {
+      clearTimeout(timer);
+      const isAbort = (err as Error)?.name === 'AbortError';
+      if (isAbort) {
+        console.warn(`[${tag}] timeout ${timeoutMs}ms (attempt ${attempt})${attempt === 1 ? ', retrying...' : ', giving up'}`);
+      } else {
+        console.error(`[${tag}] fetch error (attempt ${attempt}):`, err);
+      }
+      if (attempt === 2) return null;
     }
+  }
+  return null;
+}
 
+async function searchByArticle(article: string, apiToken: string): Promise<Product[]> {
+  const params = new URLSearchParams();
+  params.append('article', article);
+  params.append('per_page', '5');
+
+  console.log(`[ArticleSearch] Searching by article: ${article}`);
+
+  const response = await fetchCatalogWithRetry(
+    `${VOLT220_API_URL}?${params}`,
+    apiToken,
+    'ArticleSearch',
+    8000
+  );
+  if (!response) return [];
+
+  try {
     const rawData = await response.json();
     const data = rawData.data || rawData;
     const results = data.results || [];
-    
     console.log(`[ArticleSearch] Found ${results.length} product(s) for article "${article}"`);
     return results;
   } catch (error) {
-    console.error(`[ArticleSearch] Error:`, error);
+    console.error(`[ArticleSearch] Parse error:`, error);
     return [];
   }
 }
@@ -765,34 +800,28 @@ async function searchByArticle(article: string, apiToken: string): Promise<Produ
  * Search products by site identifier
  */
 async function searchBySiteId(siteId: string, apiToken: string): Promise<Product[]> {
+  const params = new URLSearchParams();
+  params.append('options[identifikator_sayta__sayt_identifikatory][]', siteId);
+  params.append('per_page', '5');
+
+  console.log(`[SiteIdSearch] Searching by site identifier: ${siteId}`);
+
+  const response = await fetchCatalogWithRetry(
+    `${VOLT220_API_URL}?${params}`,
+    apiToken,
+    'SiteIdSearch',
+    8000
+  );
+  if (!response) return [];
+
   try {
-    const params = new URLSearchParams();
-    params.append('options[identifikator_sayta__sayt_identifikatory][]', siteId);
-    params.append('per_page', '5');
-    
-    console.log(`[SiteIdSearch] Searching by site identifier: ${siteId}`);
-    
-    const response = await fetch(`${VOLT220_API_URL}?${params}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${apiToken}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      console.error(`[SiteIdSearch] API error: ${response.status}`);
-      return [];
-    }
-
     const rawData = await response.json();
     const data = rawData.data || rawData;
     const results = data.results || [];
-    
     console.log(`[SiteIdSearch] Found ${results.length} product(s) for site ID "${siteId}"`);
     return results;
   } catch (error) {
-    console.error(`[SiteIdSearch] Error:`, error);
+    console.error(`[SiteIdSearch] Parse error:`, error);
     return [];
   }
 }
