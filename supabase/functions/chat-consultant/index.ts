@@ -1685,7 +1685,77 @@ function resolveSlotRefinement(
   classificationResult: ClassificationResult | null
 ): { slotKey: string; query: string; priceIntent: 'most_expensive' | 'cheapest'; updatedSlots: DialogSlots } 
  | { slotKey: string; searchParams: { category: string; resolvedFilters: Record<string, string>; refinementText: string; refinementModifiers: string[]; existingUnresolved: string; baseCategory: string }; updatedSlots: DialogSlots }
+ | { slotKey: string; disambiguation: { chosenLabel: string; chosenValue: string; chosenPagetitle: string; pendingModifiers: string[]; pendingFilters: Record<string, string>; originalQuery: string; baseCategory: string }; updatedSlots: DialogSlots }
  | null {
+  // Plan V7 — category_disambiguation slot resolution.
+  // If user replies with one of the offered options (chip click sends value
+  // exactly; free-text reply may match label/value/pagetitle case-insensitively),
+  // resolve it to the chosen pagetitle and surface the saved modifiers/filters.
+  const normCmp = (s: string) => s.toLowerCase().replace(/ё/g, 'е').replace(/[^а-яa-z0-9]/g, '');
+  const userNorm = normCmp(userMessage);
+  for (const [key, slot] of Object.entries(slots)) {
+    if (slot.status !== 'pending' || slot.intent !== 'category_disambiguation') continue;
+    if (!slot.candidate_options) continue;
+    let options: Array<{ label: string; value: string; pagetitle?: string }> = [];
+    try {
+      const parsed = JSON.parse(slot.candidate_options);
+      if (Array.isArray(parsed)) options = parsed;
+    } catch {
+      console.log(`[Slots] category_disambiguation "${key}": malformed candidate_options, skipping`);
+      continue;
+    }
+    if (options.length === 0) continue;
+
+    // Try exact match on value first (chip click), then label, then pagetitle, then substring.
+    let chosen = options.find(o => normCmp(o.value) === userNorm)
+      || options.find(o => normCmp(o.label) === userNorm)
+      || options.find(o => o.pagetitle && normCmp(o.pagetitle) === userNorm);
+    if (!chosen && userMessage.length < 60) {
+      // Short free-text reply — match by inclusion (e.g. user typed "бытовые" while option is "Бытовые розетки")
+      chosen = options.find(o => normCmp(o.label).includes(userNorm) && userNorm.length >= 4)
+        || options.find(o => normCmp(o.value).includes(userNorm) && userNorm.length >= 4);
+    }
+    if (!chosen) {
+      console.log(`[Slots] category_disambiguation "${key}": user reply "${userMessage.slice(0, 50)}" doesn't match options=${JSON.stringify(options.map(o => o.label))}, falling through`);
+      continue;
+    }
+
+    const pendingModifiers = slot.pending_modifiers
+      ? slot.pending_modifiers.split(/\s+/).map(s => s.trim()).filter(Boolean)
+      : [];
+    let pendingFilters: Record<string, string> = {};
+    if (slot.pending_filters) {
+      try {
+        const pf = JSON.parse(slot.pending_filters);
+        if (pf && typeof pf === 'object' && !Array.isArray(pf)) {
+          for (const [k, v] of Object.entries(pf)) {
+            if (typeof v === 'string') pendingFilters[k] = v;
+          }
+        }
+      } catch {
+        console.log(`[Slots] category_disambiguation "${key}": malformed pending_filters, ignoring`);
+      }
+    }
+
+    const updatedSlots = { ...slots };
+    updatedSlots[key] = { ...slot, status: 'done', turns_since_touched: 0, refinement: chosen.label };
+    console.log(`[Slots] category_disambiguation "${key}" RESOLVED: chosen="${chosen.label}" (pagetitle="${chosen.pagetitle || chosen.value}"), pendingMods=${JSON.stringify(pendingModifiers)}, pendingFilters=${JSON.stringify(pendingFilters)}`);
+
+    return {
+      slotKey: key,
+      disambiguation: {
+        chosenLabel: chosen.label,
+        chosenValue: chosen.value,
+        chosenPagetitle: chosen.pagetitle || chosen.value,
+        pendingModifiers,
+        pendingFilters,
+        originalQuery: slot.original_query || slot.base_category || '',
+        baseCategory: slot.base_category,
+      },
+      updatedSlots,
+    };
+  }
+
   // First: check for pending product_search slot with filter state.
   // GATE PHILOSOPHY: trust Micro-LLM as primary source of truth. Slot branch is ONLY
   // for genuine short follow-ups ("а подешевле?", "а белая есть?"). Any signal that
@@ -4112,6 +4182,72 @@ serve(async (req) => {
               turns_since_touched: 0,
             };
             console.log(`[Chat] Re-created product_search slot "${newSlotKey}": mergedQuery="${mergedQuery}", mergedFilters=${JSON.stringify(mergedFilters)}`);
+          }
+        } else if (slotResolution && 'disambiguation' in slotResolution) {
+          // Plan V7 — category_disambiguation slot resolved.
+          // User picked a category (chip click or matching reply). Run a
+          // direct catalog search using the chosen pagetitle + saved
+          // pending modifiers/filters from the original query. Skips the
+          // matcher/ambiguity classifier entirely.
+          const dis = slotResolution.disambiguation;
+          dialogSlots = slotResolution.updatedSlots;
+          slotsUpdated = true;
+          effectiveCategory = dis.chosenPagetitle;
+          // Treat saved modifiers as the search modifiers for downstream
+          // ranking/snippet logic (so "чёрные двухместные" still influences
+          // bucket selection if more than one bucket comes back).
+          if (classification) {
+            classification.search_modifiers = [
+              ...(classification.search_modifiers || []),
+              ...dis.pendingModifiers,
+            ];
+          }
+          // Compose a literal query out of saved modifiers so the API can
+          // narrow within the chosen category. If we also have pre-resolved
+          // filters from the original turn, pass them through.
+          const disQuery = dis.pendingModifiers.length > 0
+            ? dis.pendingModifiers.join(' ')
+            : (dis.originalQuery || null);
+          const hasPF = Object.keys(dis.pendingFilters).length > 0;
+
+          if (appSettings.volt220_api_token) {
+            const disProducts = await searchProductsByCandidate(
+              { query: disQuery, brand: null, category: dis.chosenPagetitle, min_price: null, max_price: null },
+              appSettings.volt220_api_token, 50,
+              hasPF ? dis.pendingFilters : undefined
+            );
+            console.log(`[Chat] Disambiguation search: category="${dis.chosenPagetitle}", query="${disQuery}", filters=${JSON.stringify(dis.pendingFilters)} → ${disProducts.length} products`);
+
+            if (disProducts.length > 0) {
+              const _r = pickDisplayWithTotal(disProducts);
+              foundProducts = _r.displayed;
+              totalCollected = _r.total;
+              totalCollectedBranch = 'disambiguation';
+              articleShortCircuit = true;
+              console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=disambiguation zeroFiltered=${_r.filteredZeroPrice}`);
+
+              // If still many results, open a product_search slot so the
+              // user can keep refining inside the chosen category.
+              if (foundProducts.length > 7) {
+                const newSlotKey = `ps_${Date.now()}`;
+                dialogSlots[newSlotKey] = {
+                  intent: 'product_search',
+                  base_category: dis.baseCategory || dis.chosenLabel,
+                  plural_category: dis.chosenPagetitle,
+                  resolved_filters: JSON.stringify(dis.pendingFilters),
+                  unresolved_query: disQuery || '',
+                  status: 'pending',
+                  created_turn: messages.length,
+                  turns_since_touched: 0,
+                };
+                console.log(`[Chat] Disambiguation: opened product_search slot "${newSlotKey}" for further refinement`);
+              }
+            } else {
+              // No results in chosen category — fall through to main pipeline
+              // with effectiveCategory set to the chosen pagetitle, so the
+              // matcher/cascade can attempt a broader search.
+              console.log(`[Chat] Disambiguation: 0 products for "${dis.chosenPagetitle}", falling through to main pipeline`);
+            }
           }
         } else if (slotResolution && 'priceIntent' in slotResolution) {
           // Price slot resolved! Use slot's price intent and combined query
