@@ -224,17 +224,23 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       timestamp: new Date()
     };
 
-    // Strip quickReplies from any previous assistant message — once the user
-    // chooses (or types something else), old chips are stale and shouldn't
-    // remain clickable.
-    setMessages(prev => [
-      ...prev.map(m =>
-        m.role === 'assistant' && m.quickReplies
-          ? { ...m, quickReplies: undefined }
-          : m
-      ),
-      userMessage,
-    ]);
+    // Strip quickReplies ONLY from the most recent assistant message that
+    // displayed chips (the one the user was actually responding to). Older
+    // assistant messages keep their chips untouched — they belong to prior
+    // turns and the user didn't interact with them now.
+    setMessages(prev => {
+      let lastIdx = -1;
+      for (let i = prev.length - 1; i >= 0; i--) {
+        if (prev[i].role === 'assistant' && prev[i].quickReplies && prev[i].quickReplies!.length > 0) {
+          lastIdx = i;
+          break;
+        }
+      }
+      const next = lastIdx === -1
+        ? prev
+        : prev.map((m, i) => (i === lastIdx ? { ...m, quickReplies: undefined } : m));
+      return [...next, userMessage];
+    });
     if (!overrideText) setInput('');
     setIsLoading(true);
 
