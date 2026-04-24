@@ -728,35 +728,70 @@ function detectArticles(message: string): string[] {
 /**
  * Search products by article parameter (exact match via API)
  */
-async function searchByArticle(article: string, apiToken: string): Promise<Product[]> {
-  try {
-    const params = new URLSearchParams();
-    params.append('article', article);
-    params.append('per_page', '5');
-    
-    console.log(`[ArticleSearch] Searching by article: ${article}`);
-    
-    const response = await fetch(`${VOLT220_API_URL}?${params}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${apiToken}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      console.error(`[ArticleSearch] API error: ${response.status}`);
-      return [];
+// Plan V5: timeout-bounded fetch with single retry for catalog API.
+// Protects article/siteId fast paths from hanging on slow upstream (was up to 70s in logs).
+async function fetchCatalogWithRetry(
+  url: string,
+  apiToken: string,
+  tag: string,
+  timeoutMs = 8000
+): Promise<Response | null> {
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(url, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${apiToken}`,
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      if (!resp.ok) {
+        console.error(`[${tag}] API error: ${resp.status} (attempt ${attempt})`);
+        if (attempt === 2) return null;
+        continue;
+      }
+      return resp;
+    } catch (err) {
+      clearTimeout(timer);
+      const isAbort = (err as Error)?.name === 'AbortError';
+      if (isAbort) {
+        console.warn(`[${tag}] timeout ${timeoutMs}ms (attempt ${attempt})${attempt === 1 ? ', retrying...' : ', giving up'}`);
+      } else {
+        console.error(`[${tag}] fetch error (attempt ${attempt}):`, err);
+      }
+      if (attempt === 2) return null;
     }
+  }
+  return null;
+}
 
+async function searchByArticle(article: string, apiToken: string): Promise<Product[]> {
+  const params = new URLSearchParams();
+  params.append('article', article);
+  params.append('per_page', '5');
+
+  console.log(`[ArticleSearch] Searching by article: ${article}`);
+
+  const response = await fetchCatalogWithRetry(
+    `${VOLT220_API_URL}?${params}`,
+    apiToken,
+    'ArticleSearch',
+    8000
+  );
+  if (!response) return [];
+
+  try {
     const rawData = await response.json();
     const data = rawData.data || rawData;
     const results = data.results || [];
-    
     console.log(`[ArticleSearch] Found ${results.length} product(s) for article "${article}"`);
     return results;
   } catch (error) {
-    console.error(`[ArticleSearch] Error:`, error);
+    console.error(`[ArticleSearch] Parse error:`, error);
     return [];
   }
 }
@@ -765,34 +800,28 @@ async function searchByArticle(article: string, apiToken: string): Promise<Produ
  * Search products by site identifier
  */
 async function searchBySiteId(siteId: string, apiToken: string): Promise<Product[]> {
+  const params = new URLSearchParams();
+  params.append('options[identifikator_sayta__sayt_identifikatory][]', siteId);
+  params.append('per_page', '5');
+
+  console.log(`[SiteIdSearch] Searching by site identifier: ${siteId}`);
+
+  const response = await fetchCatalogWithRetry(
+    `${VOLT220_API_URL}?${params}`,
+    apiToken,
+    'SiteIdSearch',
+    8000
+  );
+  if (!response) return [];
+
   try {
-    const params = new URLSearchParams();
-    params.append('options[identifikator_sayta__sayt_identifikatory][]', siteId);
-    params.append('per_page', '5');
-    
-    console.log(`[SiteIdSearch] Searching by site identifier: ${siteId}`);
-    
-    const response = await fetch(`${VOLT220_API_URL}?${params}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${apiToken}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    if (!response.ok) {
-      console.error(`[SiteIdSearch] API error: ${response.status}`);
-      return [];
-    }
-
     const rawData = await response.json();
     const data = rawData.data || rawData;
     const results = data.results || [];
-    
     console.log(`[SiteIdSearch] Found ${results.length} product(s) for site ID "${siteId}"`);
     return results;
   } catch (error) {
-    console.error(`[SiteIdSearch] Error:`, error);
+    console.error(`[SiteIdSearch] Parse error:`, error);
     return [];
   }
 }
@@ -3721,6 +3750,24 @@ serve(async (req) => {
     // Геолокация по IP (параллельно с остальными запросами)
     const detectedCityPromise = detectCityByIP(clientIp);
 
+    // Plan V5 — Pre-warm knowledge & contacts in parallel with article-search / LLM classifier.
+    // These don't depend on any LLM result; the sooner we kick them off, the less wall-clock waiting later.
+    const earlyKnowledgePromise = searchKnowledgeBase(userMessage, 5, appSettings);
+    const earlyContactsPromise = (async () => {
+      const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
+      const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+      if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return '';
+      try {
+        const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+        const { data } = await sb.from('knowledge_entries')
+          .select('title, content')
+          .or('title.ilike.%контакт%,title.ilike.%филиал%')
+          .limit(5);
+        if (!data || data.length === 0) return '';
+        return data.map(d => `--- ${d.title} ---\n${d.content}`).join('\n\n');
+      } catch { return ''; }
+    })();
+
     let productContext = '';
     let foundProducts: Product[] = [];
     // Plan V4 — Domain Guard: pagetitles selected by CategoryMatcher for the current query.
@@ -3734,6 +3781,11 @@ serve(async (req) => {
     let brandsContext = '';
     let knowledgeContext = '';
     let articleShortCircuit = false;
+    // Plan V5 — model used for the FINAL streaming answer.
+    // Defaults to user's configured model (usually Pro). Switched to Flash for short-circuit branches
+    // (article/siteId hit, price-intent hit) where the answer is a simple "yes, in stock, X tg".
+    let responseModel = aiConfig.model;
+    let responseModelReason = 'default';
     let replacementMeta: { isReplacement: boolean; original: Product | null; originalName?: string; noResults: boolean } | null = null;
 
     // === ARTICLE FIRST: Detect SKU/article codes BEFORE LLM 1 ===
@@ -3757,6 +3809,9 @@ serve(async (req) => {
       if (articleProducts.size > 0) {
         foundProducts = Array.from(articleProducts.values());
         articleShortCircuit = true;
+        // Plan V5: для article-hit Pro избыточен — берём Flash.
+        responseModel = 'google/gemini-2.5-flash';
+        responseModelReason = 'article-shortcircuit';
         console.log(`[Chat] Article-first SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
       } else {
         console.log(`[Chat] Article-first: no article results, trying site ID fallback...`);
@@ -3774,6 +3829,9 @@ serve(async (req) => {
         if (articleProducts.size > 0) {
           foundProducts = Array.from(articleProducts.values());
           articleShortCircuit = true;
+          // Plan V5: siteId-hit — тоже точное попадание, Flash хватает.
+          responseModel = 'google/gemini-2.5-flash';
+          responseModelReason = 'siteid-shortcircuit';
           console.log(`[Chat] SiteId-fallback SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
         } else {
           console.log(`[Chat] Article-first + SiteId: no results, falling back to normal pipeline`);
@@ -3952,6 +4010,9 @@ serve(async (req) => {
             if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
               foundProducts = priceResult.products;
               articleShortCircuit = true;
+              // Plan V5: ответ "самая дорогая X — это Y, цена Z" — простой формат, Flash справится.
+              responseModel = 'google/gemini-2.5-flash';
+              responseModelReason = 'price-shortcircuit';
               console.log(`[Chat] PriceIntent SUCCESS: ${foundProducts.length} products sorted by ${effectivePriceIntent} (total ${priceResult.total})`);
               
               // Mark slot as done
@@ -3962,6 +4023,9 @@ serve(async (req) => {
             } else if (priceResult.action === 'clarify') {
               priceIntentClarify = { total: priceResult.total!, category: priceResult.category! };
               articleShortCircuit = true;
+              // Уточняющий вопрос — короткий, Flash хватает.
+              responseModel = 'google/gemini-2.5-flash';
+              responseModelReason = 'price-clarify';
               foundProducts = [];
               console.log(`[Chat] PriceIntent CLARIFY: ${priceResult.total} products in "${priceResult.category}", asking user to narrow down`);
               
@@ -4979,37 +5043,26 @@ serve(async (req) => {
     }
     console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}, ShortCircuit: ${articleShortCircuit}`);
 
-    // ШАГ 2: Поиск в базе знаний (параллельно с другими запросами)
-    const knowledgePromise = searchKnowledgeBase(userMessage, 5, appSettings);
-    const contactsPromise = (async () => {
-      const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
-      const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
-      if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return '';
-      try {
-        const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-        const { data } = await sb.from('knowledge_entries')
-          .select('title, content')
-          .or('title.ilike.%контакт%,title.ilike.%филиал%')
-          .limit(5);
-        if (!data || data.length === 0) return '';
-        return data.map(d => `--- ${d.title} ---\n${d.content}`).join('\n\n');
-      } catch { return ''; }
-    })();
-    
-    const [knowledgeResults, contactsInfo, geoResult] = await Promise.all([knowledgePromise, contactsPromise, detectedCityPromise]);
+    // Plan V5: knowledge & contacts были предзапущены в начале handler'а (earlyKnowledgePromise/earlyContactsPromise),
+    // здесь только дожидаемся их вместе с GeoIP. Для article-shortcircuit это экономит сотни мс.
+    const [knowledgeResults, contactsInfo, geoResult] = await Promise.all([earlyKnowledgePromise, earlyContactsPromise, detectedCityPromise]);
     const detectedCity = geoResult.city;
     const isVPN = geoResult.isVPN;
     const userCountryCode = geoResult.countryCode;
     const userCountry = geoResult.country;
     console.log(`[Chat] GeoIP: city=${detectedCity || 'unknown'}, VPN=${isVPN}, country=${userCountry || 'unknown'} (${userCountryCode || '?'})`);
     console.log(`[Chat] Contacts loaded: ${contactsInfo.length} chars`);
-    
+
     if (knowledgeResults.length > 0) {
-      const KB_TOTAL_BUDGET = 15000;
+      // Plan V5: для article-shortcircuit ответ — простой "да, есть, X тг". 15 КБ статей раздувают токены и латентность.
+      // Режем budget до 2 КБ и берём только топ-1 самую релевантную запись.
+      const KB_TOTAL_BUDGET = articleShortCircuit ? 2000 : 15000;
+      const KB_MAX_ENTRIES = articleShortCircuit ? 1 : knowledgeResults.length;
       let kbUsed = 0;
       const kbParts: string[] = [];
-      
-      for (const r of knowledgeResults) {
+
+      for (let i = 0; i < knowledgeResults.length && i < KB_MAX_ENTRIES; i++) {
+        const r = knowledgeResults[i];
         if (kbUsed >= KB_TOTAL_BUDGET) break;
         const perEntryBudget = r.content.length > 100000 ? 6000 : 4000;
         const remaining = KB_TOTAL_BUDGET - kbUsed;
@@ -5018,15 +5071,19 @@ serve(async (req) => {
         kbParts.push(`--- ${r.title} ---\n${excerpt}${r.source_url ? `\nИсточник: ${r.source_url}` : ''}`);
         kbUsed += excerpt.length;
       }
-      
+
       knowledgeContext = `
 📚 ИНФОРМАЦИЯ ИЗ БАЗЫ ЗНАНИЙ (используй для ответа!):
 
 ${kbParts.join('\n\n')}
 
 ИНСТРУКЦИЯ: Используй информацию выше для ответа клиенту. Если информация релевантна вопросу — цитируй её, ссылайся на конкретные пункты.`;
-      
-      console.log(`[Chat] Added ${knowledgeResults.length} knowledge entries to context (${kbUsed} chars, budget ${KB_TOTAL_BUDGET})`);
+
+      if (articleShortCircuit) {
+        console.log(`[Chat] Knowledge truncated for article-shortcircuit: top-1 entry, ${kbUsed} chars (budget ${KB_TOTAL_BUDGET})`);
+      } else {
+        console.log(`[Chat] Added ${kbParts.length} knowledge entries to context (${kbUsed} chars, budget ${KB_TOTAL_BUDGET})`);
+      }
     }
     if (articleShortCircuit && foundProducts.length > 0) {
       const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
@@ -5510,10 +5567,11 @@ ${productInstructions}`;
       ...trimmedMessages,
     ];
     
-    console.log(`[Chat] Streaming with reasoning: excluded (model=${aiConfig.model})`);
+    console.log(`[Chat] Response model: ${responseModel} (reason: ${responseModelReason})`);
+    console.log(`[Chat] Streaming with reasoning: excluded (model=${responseModel})`);
     console.log(`[Chat] Sampling: top_k=1 seed=42 provider=google-ai-studio`);
     const response = await callAIWithKeyFallback(aiConfig.url, aiConfig.apiKeys, {
-      model: aiConfig.model,
+      model: responseModel,
       messages: messagesForAI,
       stream: useStreaming,
       ...DETERMINISTIC_SAMPLING,
