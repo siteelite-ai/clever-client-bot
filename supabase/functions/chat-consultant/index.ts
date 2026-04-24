@@ -132,10 +132,19 @@ function extractResolvedValues(filters: Record<string, string>): string[] {
 // ============================================================================
 const DISPLAY_LIMIT = 15;
 
-function pickDisplayWithTotal<T>(all: T[], limit: number = DISPLAY_LIMIT): { displayed: T[]; total: number } {
-  const total = all?.length || 0;
-  const displayed = (all || []).slice(0, limit);
-  return { displayed, total };
+function pickDisplayWithTotal<T extends { price?: number }>(
+  all: T[],
+  limit: number = DISPLAY_LIMIT
+): { displayed: T[]; total: number; filteredZeroPrice: number } {
+  const input = all || [];
+  // Filter out "под заказ" items (price <= 0). They confuse users — never show them.
+  const priced = input.filter(p => ((p as any)?.price ?? 0) > 0);
+  // Soft fallback: if EVERYTHING is zero-price (rare narrow category), keep original
+  // so we don't return an empty list. Better to show "под заказ" than nothing.
+  const working = priced.length > 0 ? priced : input;
+  const total = working.length;
+  const displayed = working.slice(0, limit);
+  return { displayed, total, filteredZeroPrice: input.length - priced.length };
 }
 
 // ============================================================================
