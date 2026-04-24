@@ -2208,6 +2208,9 @@ ${recentHistory.length > 0 ? 'АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщен
   try {
     const response = await callAIWithKeyFallback(aiUrl, apiKeys, {
       model: aiModel,
+      // Provider lock: запрещаем OpenRouter молча переключать модель (например с Flash на Pro).
+      // Без этого OpenRouter routing мог автоматически апгрейдить модель и игнорировать наш промпт.
+      provider: { order: ['google-ai-studio'], allow_fallbacks: false },
       messages: [
         { role: 'system', content: extractionPrompt },
         { role: 'user', content: message }
@@ -2298,6 +2301,14 @@ ${recentHistory.length > 0 ? 'АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщен
 
     const data = await response.json();
     console.log(`[AI Candidates] Raw response:`, JSON.stringify(data, null, 2));
+
+    // Assert: реально использованная модель должна совпадать с запрошенной.
+    // Если OpenRouter переключил провайдера/модель — громко логируем (provider lock не должен это допускать).
+    if (data?.model && data.model !== aiModel) {
+      console.warn(`[AI Candidates] ⚠️ MODEL MISMATCH! requested=${aiModel}, used=${data.model}`);
+    } else if (data?.model) {
+      console.log(`[AI Candidates] ✓ Model lock OK: ${data.model}`);
+    }
 
     const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
     if (toolCall?.function?.arguments) {
