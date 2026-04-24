@@ -511,6 +511,22 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
                       ))}
                     </div>
                   )}
+
+                  {message.role === 'assistant' && message.quickReplies && message.quickReplies.length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {message.quickReplies.map((qr, i) => (
+                        <button
+                          key={`${message.id}-qr-${i}`}
+                          type="button"
+                          onClick={() => handleQuickReply(qr.value)}
+                          disabled={isLoading}
+                          className="px-3 py-1.5 rounded-full text-xs font-medium bg-primary/15 text-primary border border-primary/30 hover:bg-primary/25 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {qr.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
               );
