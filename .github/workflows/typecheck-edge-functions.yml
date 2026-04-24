@@ -1,0 +1,27 @@
+name: Type-check Edge Functions
+
+on:
+  push:
+    paths:
+      - 'supabase/functions/chat-consultant/**'
+      - '.github/workflows/typecheck-edge-functions.yml'
+  pull_request:
+    paths:
+      - 'supabase/functions/chat-consultant/**'
+      - '.github/workflows/typecheck-edge-functions.yml'
+
+jobs:
+  deno-check:
+    name: deno check chat-consultant
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Deno
+        uses: denoland/setup-deno@v1
+        with:
+          deno-version: v1.x
+
+      - name: Type-check chat-consultant
+        run: deno check supabase/functions/chat-consultant/index.ts
