@@ -2024,7 +2024,7 @@ async function generateSearchCandidates(
   aiModel: string = 'meta-llama/llama-3.3-70b-instruct:free',
   classificationCategory?: string | null
 ): Promise<ExtractedIntent> {
-  console.log(`[AI Candidates] Extracting search intent from: "${message}", classificationCategory: ${classificationCategory || 'none'}`);
+  console.log(`[AI Candidates] Extracting search intent from: "${message}", classificationCategory: ${classificationCategory || 'none'}, model=${aiModel}`);
   
   // Two-factor followup detection (фикс slot-памяти):
   // Уточнение в рамках старого запроса = (a) последняя реплика бота содержала уточняющий вопрос
@@ -2111,19 +2111,17 @@ ${recentHistory.length > 0 ? 'АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщен
 | max_price | Максимальная цена в тенге | 50000 |
 
 🔧 ФИЛЬТРЫ ПО ХАРАКТЕРИСТИКАМ (option_filters):
-Когда пользователь упоминает ЛЮБУЮ техническую характеристику — извлеки её в option_filters!
-Ключ = КРАТКОЕ человекочитаемое название (на русском, без пробелов, через подчёркивание).
-Значение = значение характеристики.
+ЛЮБОЙ описывающий признак товара, который пользователь упомянул, ОБЯЗАН попасть в option_filters.
+Описывающий признак — это всё, что отвечает на вопросы «какой?», «сколько?», «из чего?», «где?» применительно к самому товару:
+- визуальные признаки (цвет, форма, материал, фактура)
+- количественные (число элементов, размер, объём, мощность, длина, сечение)
+- функциональные (тип монтажа, степень защиты, наличие/отсутствие функции)
+- происхождение (страна, бренд если не вынесен в brand)
 
-Примеры:
-- "белорусского производства" → option_filters: {"страна": "Беларусь"}
-- "с цоколем E14" → option_filters: {"цоколь": "E14"}
-- "накладной монтаж" → option_filters: {"монтаж": "накладной"}
-- "степень защиты IP65" → option_filters: {"защита": "IP65"}
-- "напряжение 220В" → option_filters: {"напряжение": "220"}
-- "3 розетки" → option_filters: {"розетки": "3"}
-- "сечение 2.5" → option_filters: {"сечение": "2.5"}
-- "длина 5м" → option_filters: {"длина": "5"}
+Правило: если признак стоит в запросе — значит пользователь хочет ИМЕННО ЭТО. Не отбрасывай его, не считай «украшением» к названию товара.
+Ключ option_filters = краткое русское название признака без пробелов (через подчёркивание). Значение = то, что сказал пользователь, в нормальной форме.
+
+Если пользователь не назвал признак — не выдумывай его и не добавляй в option_filters.
 
 Ключи НЕ обязаны совпадать с API — система автоматически найдёт правильные ключи!
 
@@ -2305,6 +2303,17 @@ ${recentHistory.length > 0 ? 'АНАЛИЗИРУЙ ТЕКУЩЕЕ сообщен
     if (toolCall?.function?.arguments) {
       const parsed = JSON.parse(toolCall.function.arguments);
       console.log(`[AI Candidates] Extracted:`, JSON.stringify(parsed, null, 2));
+
+      // Сводный лог по извлечённым фильтрам — чтобы по логам сразу видеть, забрала ли модель цвет/количество мест/etc.
+      const allFilters: Record<string, string> = {};
+      for (const c of (parsed.candidates || [])) {
+        if (c.option_filters && typeof c.option_filters === 'object') {
+          for (const [k, v] of Object.entries(c.option_filters)) {
+            allFilters[k] = String(v);
+          }
+        }
+      }
+      console.log(`[AI Candidates] Filters extracted: ${JSON.stringify(allFilters)} (model=${aiModel})`);
       
       const candidates = (parsed.candidates || []).map((c: any) => {
         let humanFilters: Record<string, string> | undefined;
@@ -4986,7 +4995,10 @@ serve(async (req) => {
       };
     } else {
       // catalog/brands or no intent — full pipeline
-      extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, aiConfig.model, classification?.product_category);
+      // Хардкодим Flash для AI Candidates: задача класса "извлечь структурированные параметры из короткой фразы",
+      // Pro здесь избыточен и медленнее. Финальный ответ пользователю по-прежнему идёт на aiConfig.model.
+      const candidatesModel = 'google/gemini-2.5-flash';
+      extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
     }
     console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}, ShortCircuit: ${articleShortCircuit}`);
 
