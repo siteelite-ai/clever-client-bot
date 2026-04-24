@@ -198,11 +198,20 @@ async function streamChat({
   }
 }
 
+// Generate a unique chat message ID. We keep an optional human-readable
+// prefix (typing-, stream-, etc.) for the existing prefix-based filters, but
+// always append a crypto.randomUUID so two messages created in the same
+// millisecond never collide. This is the single source of truth for ids.
+const mid = (prefix?: string): string => {
+  const uuid = crypto.randomUUID();
+  return prefix ? `${prefix}-${uuid}` : uuid;
+};
+
 export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(isPreview);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
-      id: '1',
+      id: mid('greeting'),
       role: 'assistant',
       content: 'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?',
       timestamp: new Date()
