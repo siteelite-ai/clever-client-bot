@@ -1287,7 +1287,11 @@ function extractModifiersFromProduct(product: Product): string[] {
 // On error or empty options[]: fallback to legacy product-sampling implementation.
 // TTL 30m, in-memory.
 const CATEGORY_OPTIONS_TTL_MS = 30 * 60 * 1000;
+// Cache version — bump when dedupe logic changes so old entries (with stale dup keys)
+// invalidate immediately on deploy without waiting 30 min TTL.
+const CATEGORY_OPTIONS_CACHE_VERSION = 'v2-fuzzy';
 const categoryOptionsCache: Map<string, { schema: Map<string, { caption: string; values: Set<string> }>; ts: number; productCount: number }> = new Map();
+const cacheKey = (pagetitle: string) => `${CATEGORY_OPTIONS_CACHE_VERSION}:${pagetitle}`;
 
 // =============================================================================
 // OPTION ALIASES — duplicate-key collapse.
@@ -1337,23 +1341,59 @@ function keyPrefix(key: string): string {
 // so it is naturally excluded by prefix-equality).
 const FORCE_MERGE_PREFIXES = new Set<string>(['cvet']);
 
+// Kazakh-suffix family normalization. Real-world dup pattern from 220volt:
+//   cvet__tүs   ↔ cvet__tүsі   (translit suffix differ by trailing і)
+//   garantiynyy ↔ garantiynyi  (Russian translit variants)
+// Strategy: collapse trailing Kazakh case/affix endings AND common translit
+// variants on the part AFTER "__" so that minor spelling drift collapses to
+// one canonical bucket. Idempotent. No external dependencies.
+function normalizeKeyForFuzzyMerge(key: string): string {
+  const idx = key.indexOf('__');
+  if (idx < 0) return key;
+  const prefix = key.slice(0, idx);
+  let suffix = key.slice(idx + 2);
+  // Strip trailing Kazakh-case affixes (longest first to avoid partial collisions).
+  // Covers і / ы / нің / тің / ің / ғі / гі — common nominative/genitive endings
+  // that surface in 220volt option keys.
+  suffix = suffix.replace(/(ң?нің|ң?тің|ң?ің|ғі|гі|і|ы)$/u, '');
+  // Common Russian translit variant: trailing -yy ↔ -yi (garantiynyy / garantiynyi).
+  suffix = suffix.replace(/yy$/, 'y').replace(/yi$/, 'y');
+  return `${prefix}__${suffix}`;
+}
+
 /**
  * Collapse duplicate keys in a schema (in-place). Two keys are considered
  * aliases when they have the SAME key-prefix (substring before first "__")
  * AND the same normalized caption. Force-merge families (cvet) ignore the
  * caption check — any two cvet__* keys are merged together.
  *
+ * Pass 2 (post-caption-merge): collapse residual duplicates within the same
+ * prefix when their suffixes differ only by Kazakh case affixes or yy/yi
+ * translit drift. Catches cvet__tүs ↔ cvet__tүsі that survive the caption
+ * pass because their captions are literally different strings.
+ *
  * Side effects:
  *  - mutates `schema` (deletes alias entries, keeps representative)
- *  - merges values from aliases into the representative's values set
+ *  - merges values from aliases into the representative's values set (null-safe)
  *  - writes representative→[aliases incl self] mapping into optionAliasesRegistry
  *
  * Representative selection: key with the largest values set wins; ties → first
- * alphabetically. This keeps logging/debug stable.
+ * alphabetically. This keeps logging/debug stable across runs.
  */
 function dedupeSchemaInPlace(schema: Map<string, { caption: string; values: Set<string> }>, contextLabel: string): void {
   if (!schema || schema.size < 2) return;
 
+  // Diagnostic: surface known-duplicate families BEFORE dedupe so we can see
+  // exactly what came from the API in logs (helps explain regressions).
+  const KNOWN_DUP_FAMILIES = ['cvet', 'garantiynyy', 'garantiynyi', 'stepeny_zaschity', 'srok_slughby', 'material'];
+  for (const family of KNOWN_DUP_FAMILIES) {
+    const matching = Array.from(schema.keys()).filter(k => k === family || k.startsWith(family + '__'));
+    if (matching.length >= 2) {
+      console.log(`[DedupDebug] ${contextLabel}: BEFORE family="${family}" (${matching.length} keys): ${JSON.stringify(matching)}`);
+    }
+  }
+
+  // ===== PASS 1: prefix + caption (existing behavior) =====
   // Group: prefix → captionNormalized → list of {key, info}
   const groups: Map<string, Map<string, Array<{ key: string; info: { caption: string; values: Set<string> } }>>> = new Map();
   for (const [key, info] of schema.entries()) {
@@ -1379,24 +1419,73 @@ function dedupeSchemaInPlace(schema: Map<string, { caption: string; values: Set<
       const rep = members[0];
       const aliasList: string[] = members.map(m => m.key);
 
-      // Union all values into representative.
+      // Union all values into representative (null-safe — degraded payloads
+      // can leak undefined/empty into Sets).
       for (let i = 1; i < members.length; i++) {
-        for (const v of members[i].info.values) rep.info.values.add(v);
+        for (const v of members[i].info.values) if (v) rep.info.values.add(v);
         schema.delete(members[i].key);
       }
 
       optionAliasesRegistry.set(rep.key, aliasList);
-      console.log(`[OptionAliases] ${contextLabel}: grouped under "${rep.key}" (caption="${rep.info.caption.split('//')[0]}", prefix="${prefix}"): [${aliasList.join(', ')}] — ${rep.info.values.size} values total`);
+      console.log(`[OptionAliases] ${contextLabel}: grouped under "${rep.key}" (caption="${(rep.info.caption ?? '').split('//')[0]}", prefix="${prefix}"): [${aliasList.join(', ')}] — ${rep.info.values.size} values total`);
+    }
+  }
+
+  // ===== PASS 2: Kazakh-suffix / translit fuzzy merge =====
+  // After PASS 1 there may still be residual dups whose captions differ literally
+  // (e.g. cvet__tүs caption="Цвет" vs cvet__tүsі caption="Цвет //Түсі") OR captions
+  // are bilingually-formatted differently. Collapse by fuzzy-normalized key.
+  const fuzzyGroups: Map<string, Array<{ key: string; info: { caption: string; values: Set<string> } }>> = new Map();
+  for (const [key, info] of schema.entries()) {
+    const normKey = normalizeKeyForFuzzyMerge(key);
+    if (normKey === key && !key.includes('__')) continue; // skip prefix-less keys
+    if (!fuzzyGroups.has(normKey)) fuzzyGroups.set(normKey, []);
+    fuzzyGroups.get(normKey)!.push({ key, info });
+  }
+
+  for (const [normKey, members] of fuzzyGroups.entries()) {
+    if (members.length < 2) continue;
+    members.sort((a, b) => {
+      const sizeDiff = b.info.values.size - a.info.values.size;
+      if (sizeDiff !== 0) return sizeDiff;
+      return a.key.localeCompare(b.key);
+    });
+    const rep = members[0];
+    const mergedKeys: string[] = [rep.key];
+    for (let i = 1; i < members.length; i++) {
+      for (const v of members[i].info.values) if (v) rep.info.values.add(v);
+      schema.delete(members[i].key);
+      mergedKeys.push(members[i].key);
+    }
+    // Update aliases registry: union with whatever PASS 1 wrote (don't drop existing aliases).
+    const existing = optionAliasesRegistry.get(rep.key) || [rep.key];
+    const aliasUnion = Array.from(new Set([...existing, ...mergedKeys]));
+    optionAliassRegistrySafeSet(rep.key, aliasUnion);
+    console.log(`[ForceMerge] ${contextLabel}: fuzzy-merged ${mergedKeys.length} keys into "${rep.key}" (norm="${normKey}"): [${mergedKeys.join(', ')}] — ${rep.info.values.size} values total`);
+  }
+
+  // Diagnostic: AFTER pass — what's left for the same families.
+  for (const family of KNOWN_DUP_FAMILIES) {
+    const matching = Array.from(schema.keys()).filter(k => k === family || k.startsWith(family + '__'));
+    if (matching.length >= 2) {
+      console.log(`[DedupDebug] ${contextLabel}: AFTER family="${family}" still has ${matching.length} keys: ${JSON.stringify(matching)}`);
     }
   }
 }
+
+// Safe wrapper — keeps optionAliasesRegistry write contract identical to PASS 1
+// (one place to change if we ever scope the registry per-request).
+function optionAliassRegistrySafeSet(key: string, aliases: string[]) {
+  optionAliasesRegistry.set(key, aliases);
+}
+
 
 
 async function getCategoryOptionsSchema(
   categoryPagetitle: string,
   apiToken: string
 ): Promise<{ schema: Map<string, { caption: string; values: Set<string> }>; productCount: number; cacheHit: boolean }> {
-  const cached = categoryOptionsCache.get(categoryPagetitle);
+  const cached = categoryOptionsCache.get(cacheKey(categoryPagetitle));
   if (cached && Date.now() - cached.ts < CATEGORY_OPTIONS_TTL_MS) {
     console.log(`[CategoryOptionsSchema] cache HIT "${categoryPagetitle}" (${cached.schema.size} keys, ${cached.productCount} products, age=${Math.round((Date.now() - cached.ts) / 1000)}s)`);
     return { schema: cached.schema, productCount: cached.productCount, cacheHit: true };
@@ -1461,7 +1550,10 @@ async function getCategoryOptionsSchema(
     }
 
     dedupeSchemaInPlace(schema, `facets:${categoryPagetitle}`);
-    categoryOptionsCache.set(categoryPagetitle, { schema, ts: Date.now(), productCount: totalProducts });
+    categoryOptionsCache.set(cacheKey(categoryPagetitle), { schema, ts: Date.now(), productCount: totalProducts });
+    const keysWithZero = Array.from(schema.values()).filter(i => i.values.size === 0).length;
+    const totalValuesPostDedupe = Array.from(schema.values()).reduce((s, i) => s + i.values.size, 0);
+    console.log(`[FacetsHealth] cat="${categoryPagetitle}" source=facets-api keys=${schema.size} keys_with_zero_values=${keysWithZero} total_values=${totalValuesPostDedupe} products=${totalProducts}`);
     console.log(`[CategoryOptionsSchema] /categories/options HIT "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values, ${totalProducts} products, ${Date.now() - t0}ms (cached 30m, post-dedupe)`);
     return { schema, productCount: totalProducts, cacheHit: false };
   } catch (e) {
@@ -1536,7 +1628,10 @@ async function getCategoryOptionsSchemaLegacy(
       return { schema, productCount: totalProducts, cacheHit: false };
     }
     dedupeSchemaInPlace(schema, `legacy:${categoryPagetitle}`);
-    categoryOptionsCache.set(categoryPagetitle, { schema, ts: Date.now(), productCount: totalProducts });
+    categoryOptionsCache.set(cacheKey(categoryPagetitle), { schema, ts: Date.now(), productCount: totalProducts });
+    const keysWithZero = Array.from(schema.values()).filter(i => i.values.size === 0).length;
+    const totalValuesPostDedupe = Array.from(schema.values()).reduce((s, i) => s + i.values.size, 0);
+    console.log(`[FacetsHealth] cat="${categoryPagetitle}" source=legacy-sampling keys=${schema.size} keys_with_zero_values=${keysWithZero} total_values=${totalValuesPostDedupe} products=${totalProducts}`);
     console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values (from ${totalProducts} products, ${Date.now() - t0}ms, cached 30m, post-dedupe)`);
     return { schema, productCount: totalProducts, cacheHit: false };
   } catch (e) {
@@ -1562,7 +1657,7 @@ async function getUnionCategoryOptionsSchema(
         union.set(key, { caption: info.caption, values: new Set() });
       }
       const target = union.get(key)!;
-      for (const v of info.values) target.values.add(v);
+      for (const v of info.values) if (v) target.values.add(v);
     }
   }
   // Union may surface NEW duplicates that didn't exist within a single category
@@ -3054,6 +3149,10 @@ async function resolveFiltersWithLLM(
   prebuiltSchema?: Map<string, { caption: string; values: Set<string> }>
 ): Promise<{ resolved: Record<string, ResolvedFilter>; unresolved: string[] }> {
   if (!modifiers || modifiers.length === 0) return { resolved: {}, unresolved: [] };
+  // FilterLLM bulkhead: ANY error inside (schema build, LLM call, validation, dedupe lookups)
+  // must NOT propagate up — caller's pipeline keeps running with empty resolved set.
+  // Logged as [FilterLLMCrash] for visibility.
+  try {
   // Default critical = all modifiers (safe behavior)
   const criticalSet = new Set<string>((criticalModifiers && criticalModifiers.length > 0 ? criticalModifiers : modifiers).map(m => m.toLowerCase().trim()));
   const isCritical = (mod: string) => criticalSet.has(mod.toLowerCase().trim());
@@ -3087,8 +3186,8 @@ async function resolveFiltersWithLLM(
   const schemaLines: string[] = [];
   const schemaDebug: string[] = [];
   for (const [apiKey, info] of optionIndex.entries()) {
-    const caption = info.caption.split('//')[0].trim();
-    const allVals = [...info.values].map(v => v.split('//')[0].trim());
+    const caption = (info?.caption ?? '').split('//')[0].trim();
+    const allVals = [...(info?.values ?? [])].filter(Boolean).map(v => (v ?? '').split('//')[0].trim());
     const vals = allVals.join(', ');
     schemaLines.push(`KEY="${apiKey}" | ${caption} | values: ${vals}`);
     schemaDebug.push(`  ${apiKey} (${caption}): ${allVals.slice(0, 5).join(', ')}${allVals.length > 5 ? ` ... +${allVals.length - 5}` : ''}`);
@@ -3192,14 +3291,16 @@ ${JSON.stringify(modifiers)}
     const matchedModifiers = new Set<string>();
     const sourceModifierForKey: Record<string, string> = {};
     const failedModifiers = new Set<string>();
-    const norm = (s: string) => s.replace(/ё/g, 'е').toLowerCase().trim();
+    // Null-safe: any of (rawKey, value, schema value v) may be undefined/null in degraded payloads.
+    const norm = (s: unknown) => (typeof s === 'string' ? s : '').replace(/ё/g, 'е').toLowerCase().trim();
 
     for (const [rawKey, value] of Object.entries(filters)) {
       if (typeof value !== 'string') continue;
+      if (typeof rawKey !== 'string' || !rawKey) continue;
       // Try exact match first, then strip caption suffix like " (Цвет)"
       let resolvedKey = rawKey;
       if (!optionIndex.has(resolvedKey)) {
-        const stripped = resolvedKey.split(' (')[0].trim();
+        const stripped = (resolvedKey ?? '').split(' (')[0].trim();
         if (optionIndex.has(stripped)) {
           resolvedKey = stripped;
         }
@@ -3208,11 +3309,12 @@ ${JSON.stringify(modifiers)}
         // KEY exists — now validate VALUE against known values in schema
         const knownValues = optionIndex.get(resolvedKey)!.values;
        const matchedValue = [...knownValues].find(v => {
+         if (!v) return false; // guard: undefined/null/empty in degraded schemas
          const nv = norm(v);
          const nval = norm(value);
          if (nv === nval) return true;
          // Bilingual values: "накладной//бетіне орнатылған" — match Russian part before "//"
-         const ruPart = nv.split('//')[0].trim();
+         const ruPart = (nv ?? '').split('//')[0].trim();
          return ruPart === nval;
        });
         
@@ -3319,6 +3421,18 @@ ${JSON.stringify(modifiers)}
     return { resolved: validated, unresolved };
   } catch (error) {
     console.error(`[FilterLLM] Error:`, error);
+    return { resolved: {}, unresolved: [...modifiers] };
+  }
+  } catch (outerErr) {
+    // Bulkhead: outer crash (e.g. undefined.split during schema build, dedup lookup)
+    // — don't propagate, fall through with empty resolved set so caller's pipeline survives.
+    const err = outerErr as Error;
+    console.error(`[FilterLLMCrash]`, JSON.stringify({
+      error: err?.message ?? String(outerErr),
+      stack: (err?.stack ?? '').split('\n').slice(0, 5).join(' | '),
+      modifier_count: modifiers?.length ?? 0,
+      modifiers: (modifiers ?? []).slice(0, 5),
+    }));
     return { resolved: {}, unresolved: [...modifiers] };
   }
 }
