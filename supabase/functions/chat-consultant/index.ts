@@ -1492,17 +1492,54 @@ async function getCategoryOptionsSchema(
   }
 
   const t0 = Date.now();
-  try {
-    const url = `https://220volt.kz/api/categories/options?pagetitle=${encodeURIComponent(categoryPagetitle)}`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 12000);
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
+  const url = `https://220volt.kz/api/categories/options?pagetitle=${encodeURIComponent(categoryPagetitle)}`;
 
+  // Inner: one fetch attempt with its own timeout/abort. Returns raw response or throws.
+  const attemptFetch = async (attemptNo: number, timeoutMs: number): Promise<Response> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+        signal: controller.signal,
+      });
+      return res;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  let res: Response | null = null;
+  let lastError: unknown = null;
+  // Attempt 1: 6s timeout. Attempt 2 (only on abort/network error): 8s after 300ms delay.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const tAttempt = Date.now();
+      res = await attemptFetch(attempt, attempt === 1 ? 6000 : 8000);
+      if (attempt === 2) {
+        console.log(`[CategoryOptionsSchema] retry attempt=2 cat="${categoryPagetitle}" status=${res.status} took=${Date.now() - tAttempt}ms`);
+      }
+      break;
+    } catch (e) {
+      lastError = e;
+      const isAbort = (e as any)?.name === 'AbortError' || /aborted|abort/i.test((e as Error).message);
+      if (attempt === 1 && isAbort) {
+        console.log(`[CategoryOptionsSchema] attempt=1 aborted cat="${categoryPagetitle}" took=${Date.now() - t0}ms → retrying once`);
+        await new Promise(r => setTimeout(r, 300));
+        continue;
+      }
+      // non-abort error or already retried — give up
+      break;
+    }
+  }
+
+  if (!res) {
+    console.log(`[CategoryOptionsSchema] retry_failed cat="${categoryPagetitle}" total_ms=${Date.now() - t0} err="${(lastError as Error)?.message || 'unknown'}" → falling back to legacy sampling`);
+    return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken);
+  }
+
+  try {
     if (!res.ok) {
       console.log(`[CategoryOptionsSchema] /categories/options HTTP ${res.status} for "${categoryPagetitle}" → falling back to legacy sampling`);
       return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken);
@@ -1557,7 +1594,7 @@ async function getCategoryOptionsSchema(
     console.log(`[CategoryOptionsSchema] /categories/options HIT "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values, ${totalProducts} products, ${Date.now() - t0}ms (cached 30m, post-dedupe)`);
     return { schema, productCount: totalProducts, cacheHit: false };
   } catch (e) {
-    console.log(`[CategoryOptionsSchema] /categories/options error for "${categoryPagetitle}": ${(e as Error).message} → falling back to legacy sampling`);
+    console.log(`[CategoryOptionsSchema] /categories/options parse error for "${categoryPagetitle}": ${(e as Error).message} → falling back to legacy sampling`);
     return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken);
   }
 }
