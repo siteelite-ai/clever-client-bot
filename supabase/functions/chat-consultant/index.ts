@@ -4000,17 +4000,17 @@ function extractBrandsFromProducts(products: Product[]): string[] {
   
   for (const product of products) {
     let found = false;
-    if (product.options) {
-      const brandOption = product.options.find(o => o.key === 'brend__brend');
-      if (brandOption && brandOption.value) {
-        const brandName = brandOption.value.split('//')[0].trim();
+    if (Array.isArray(product?.options)) {
+      const brandOption = product.options.find((o: any) => o && o.key === 'brend__brend');
+      if (brandOption) {
+        const brandName = cleanOptionValue(brandOption.value);
         if (brandName) {
           brands.add(brandName);
           found = true;
         }
       }
     }
-    if (!found && product.vendor && product.vendor.trim()) {
+    if (!found && typeof product?.vendor === 'string' && product.vendor.trim()) {
       brands.add(product.vendor.trim());
     }
   }
