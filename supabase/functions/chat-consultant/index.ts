@@ -1289,6 +1289,109 @@ function extractModifiersFromProduct(product: Product): string[] {
 const CATEGORY_OPTIONS_TTL_MS = 30 * 60 * 1000;
 const categoryOptionsCache: Map<string, { schema: Map<string, { caption: string; values: Set<string> }>; ts: number; productCount: number }> = new Map();
 
+// =============================================================================
+// OPTION ALIASES — duplicate-key collapse.
+// Some categories expose the same physical property under multiple distinct
+// API keys (e.g. "Розетки" → cvet__tүs vs "Розетки силовые" → cvet__tүsі).
+// These are different keys for the API: filtering by one will miss products
+// stored under the other. We collapse duplicates BEFORE handing the schema to
+// FilterLLM (LLM sees one key per property), and on the way OUT we expand the
+// chosen key back into all its aliases when building the API request — so the
+// final query becomes options[cvet__tүs][]=Чёрный&options[cvet__tүsі][]=Чёрный.
+//
+// Registry is module-level (built lazily by dedupeSchemaInPlace, read by
+// applyResolvedFiltersToParams). It's idempotent — re-running on the same
+// schema is a no-op.
+// =============================================================================
+const optionAliasesRegistry: Map<string, string[]> = new Map();
+
+function getAliasKeysFor(representativeKey: string): string[] {
+  const aliases = optionAliasesRegistry.get(representativeKey);
+  return aliases && aliases.length > 0 ? aliases : [representativeKey];
+}
+
+// Caption normalization for grouping: "Цвет" / "цвет " / "цвет (корпуса)" → "цвет"
+function normalizeOptionCaption(caption: string): string {
+  if (!caption) return '';
+  return caption
+    .split('//')[0]
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/\([^)]*\)/g, '') // drop "(мм)", "(шт)" etc
+    .replace(/[^a-zа-я0-9]+/gi, ' ')
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+// Key prefix up to first "__" — used as a guard so we never merge two physically
+// different properties that happen to share a translated caption.
+// e.g. cvet__tүs (prefix="cvet") vs cvetovaya_temperatura__... (prefix="cvetovaya_temperatura")
+//      → different prefixes → NOT merged.
+function keyPrefix(key: string): string {
+  const idx = key.indexOf('__');
+  return idx > 0 ? key.slice(0, idx) : key;
+}
+
+// Force-merge family: ALL keys whose prefix is exactly "cvet" (the body color),
+// excluding nothing (cvetovaya_temperatura has prefix "cvetovaya_temperatura",
+// so it is naturally excluded by prefix-equality).
+const FORCE_MERGE_PREFIXES = new Set<string>(['cvet']);
+
+/**
+ * Collapse duplicate keys in a schema (in-place). Two keys are considered
+ * aliases when they have the SAME key-prefix (substring before first "__")
+ * AND the same normalized caption. Force-merge families (cvet) ignore the
+ * caption check — any two cvet__* keys are merged together.
+ *
+ * Side effects:
+ *  - mutates `schema` (deletes alias entries, keeps representative)
+ *  - merges values from aliases into the representative's values set
+ *  - writes representative→[aliases incl self] mapping into optionAliasesRegistry
+ *
+ * Representative selection: key with the largest values set wins; ties → first
+ * alphabetically. This keeps logging/debug stable.
+ */
+function dedupeSchemaInPlace(schema: Map<string, { caption: string; values: Set<string> }>, contextLabel: string): void {
+  if (!schema || schema.size < 2) return;
+
+  // Group: prefix → captionNormalized → list of {key, info}
+  const groups: Map<string, Map<string, Array<{ key: string; info: { caption: string; values: Set<string> } }>>> = new Map();
+  for (const [key, info] of schema.entries()) {
+    const prefix = keyPrefix(key);
+    const captionNorm = FORCE_MERGE_PREFIXES.has(prefix) ? '__force__' : normalizeOptionCaption(info.caption);
+    if (!captionNorm) continue;
+    if (!groups.has(prefix)) groups.set(prefix, new Map());
+    const byCaption = groups.get(prefix)!;
+    if (!byCaption.has(captionNorm)) byCaption.set(captionNorm, []);
+    byCaption.get(captionNorm)!.push({ key, info });
+  }
+
+  for (const [prefix, byCaption] of groups.entries()) {
+    for (const [captionNorm, members] of byCaption.entries()) {
+      if (members.length < 2) continue;
+
+      // Pick representative: most values, then alphabetic.
+      members.sort((a, b) => {
+        const sizeDiff = b.info.values.size - a.info.values.size;
+        if (sizeDiff !== 0) return sizeDiff;
+        return a.key.localeCompare(b.key);
+      });
+      const rep = members[0];
+      const aliasList: string[] = members.map(m => m.key);
+
+      // Union all values into representative.
+      for (let i = 1; i < members.length; i++) {
+        for (const v of members[i].info.values) rep.info.values.add(v);
+        schema.delete(members[i].key);
+      }
+
+      optionAliasesRegistry.set(rep.key, aliasList);
+      console.log(`[OptionAliases] ${contextLabel}: grouped under "${rep.key}" (caption="${rep.info.caption.split('//')[0]}", prefix="${prefix}"): [${aliasList.join(', ')}] — ${rep.info.values.size} values total`);
+    }
+  }
+}
+
+
 async function getCategoryOptionsSchema(
   categoryPagetitle: string,
   apiToken: string
@@ -1350,8 +1453,16 @@ async function getCategoryOptionsSchema(
       totalValues += valuesSet.size;
     }
 
+    // Defensive: if API returned options[] but every entry had zero values,
+    // we got a degraded payload (seen in prod). Don't cache, fall back to legacy.
+    if (totalValues === 0) {
+      console.log(`[CategoryOptionsSchema] /categories/options returned ${optionsArr.length} keys but ZERO values for "${categoryPagetitle}" → falling back to legacy sampling (NOT caching)`);
+      return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken);
+    }
+
+    dedupeSchemaInPlace(schema, `facets:${categoryPagetitle}`);
     categoryOptionsCache.set(categoryPagetitle, { schema, ts: Date.now(), productCount: totalProducts });
-    console.log(`[CategoryOptionsSchema] /categories/options HIT "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values, ${totalProducts} products, ${Date.now() - t0}ms (cached 30m)`);
+    console.log(`[CategoryOptionsSchema] /categories/options HIT "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values, ${totalProducts} products, ${Date.now() - t0}ms (cached 30m, post-dedupe)`);
     return { schema, productCount: totalProducts, cacheHit: false };
   } catch (e) {
     console.log(`[CategoryOptionsSchema] /categories/options error for "${categoryPagetitle}": ${(e as Error).message} → falling back to legacy sampling`);
@@ -1418,9 +1529,15 @@ async function getCategoryOptionsSchemaLegacy(
       page++;
     } while (page <= totalPages && page <= MAX_PAGES);
 
-    categoryOptionsCache.set(categoryPagetitle, { schema, ts: Date.now(), productCount: totalProducts });
     const totalValues = Array.from(schema.values()).reduce((s, v) => s + v.values.size, 0);
-    console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values (from ${totalProducts} products, ${Date.now() - t0}ms, cached 30m)`);
+    // Don't cache obviously broken results — let next call retry the API.
+    if (schema.size === 0 || totalValues === 0) {
+      console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values — NOT caching (degraded result)`);
+      return { schema, productCount: totalProducts, cacheHit: false };
+    }
+    dedupeSchemaInPlace(schema, `legacy:${categoryPagetitle}`);
+    categoryOptionsCache.set(categoryPagetitle, { schema, ts: Date.now(), productCount: totalProducts });
+    console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values (from ${totalProducts} products, ${Date.now() - t0}ms, cached 30m, post-dedupe)`);
     return { schema, productCount: totalProducts, cacheHit: false };
   } catch (e) {
     console.log(`[CategoryOptionsSchemaLegacy] error for "${categoryPagetitle}": ${(e as Error).message} — returning empty schema`);
@@ -1448,8 +1565,11 @@ async function getUnionCategoryOptionsSchema(
       for (const v of info.values) target.values.add(v);
     }
   }
+  // Union may surface NEW duplicates that didn't exist within a single category
+  // (e.g. cvet__tүs from "Розетки" + cvet__tүsі from "Розетки силовые"). Re-dedupe.
+  dedupeSchemaInPlace(union, `union:[${pagetitles.join('|')}]`);
   const totalValues = Array.from(union.values()).reduce((s, v) => s + v.values.size, 0);
-  console.log(`[CategoryOptionsSchema] union ${pagetitles.length} categories → ${union.size} keys, ${totalValues} values (from ${totalProducts} products)`);
+  console.log(`[CategoryOptionsSchema] union ${pagetitles.length} categories → ${union.size} keys, ${totalValues} values (from ${totalProducts} products, post-dedupe)`);
   return union;
 }
 
@@ -3310,13 +3430,22 @@ async function searchProductsByCandidate(
     if (candidate.min_price) params.append('min_price', candidate.min_price.toString());
     if (candidate.max_price) params.append('max_price', candidate.max_price.toString());
     
-    // Apply resolved option filters from pass 2
+    // Apply resolved option filters from pass 2.
+    // For each resolved key we expand into ALL its alias keys (see optionAliasesRegistry):
+    // duplicate API keys for the same physical property (e.g. cvet__tүs / cvet__tүsі)
+    // must all be sent — one alone covers only a fraction of products.
     if (resolvedFilters) {
       for (const [key, value] of Object.entries(resolvedFilters)) {
-        params.append(`options[${key}][]`, value);
+        const aliasKeys = getAliasKeysFor(key);
+        for (const aliasKey of aliasKeys) {
+          params.append(`options[${aliasKey}][]`, value);
+        }
+        if (aliasKeys.length > 1) {
+          console.log(`[Search] Filter "${key}=${value}" applied via ${aliasKeys.length} alias keys: [${aliasKeys.join(', ')}]`);
+        }
       }
     }
-    
+
     console.log(`[Search] API call: ${params.toString().substring(0, 150)}`);
     
     // AbortController timeout 10s to prevent API hangs
