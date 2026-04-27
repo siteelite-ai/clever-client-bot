@@ -3878,22 +3878,23 @@ function needsExtendedOptions(userMessage: string): boolean {
   return EXTENDED_TRIGGERS.some(trigger => lower.includes(trigger));
 }
 
-function isExcludedOption(key: string, includeExtended: boolean = true): boolean {
+function isExcludedOption(key: unknown, includeExtended: boolean = true): boolean {
+  if (typeof key !== 'string' || key.length === 0) return true;
   if (EXCLUDED_OPTION_PREFIXES.some(prefix => key.startsWith(prefix))) return true;
   if (!includeExtended && EXTENDED_OPTION_PREFIXES.some(prefix => key.startsWith(prefix))) return true;
   return false;
 }
 
-function cleanOptionValue(value: string): string {
-  if (!value) return value;
+function cleanOptionValue(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0) return '';
   const parts = value.split('//');
-  return parts[0].trim();
+  return (parts[0] || '').trim();
 }
 
-function cleanOptionCaption(caption: string): string {
-  if (!caption) return caption;
+function cleanOptionCaption(caption: unknown): string {
+  if (typeof caption !== 'string' || caption.length === 0) return '';
   const parts = caption.split('//');
-  return parts[0].trim();
+  return (parts[0] || '').trim();
 }
 
 // Форматирование товаров для AI
