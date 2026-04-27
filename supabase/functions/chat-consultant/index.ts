@@ -4131,6 +4131,11 @@ serve(async (req) => {
     return new Response('ok', { headers: corsHeaders });
   }
 
+  // Per-request correlation id — included in every key log line so we can
+  // grep one user's full pipeline (classify → facets → filter-LLM → rerank)
+  // out of the firehose of concurrent requests.
+  const reqId = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).slice(0, 8);
+
   const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
     || req.headers.get('cf-connecting-ip')
     || 'unknown';
@@ -4193,8 +4198,8 @@ serve(async (req) => {
       content: m.role === 'user' ? sanitizeUserInput(m.content) : m.content
     }));
     
-    console.log(`[Chat] Processing: "${userMessage.substring(0, 100)}"`);
-    console.log(`[Chat] Conversation ID: ${conversationId}`);
+    console.log(`[Chat req=${reqId}] Processing: "${userMessage.substring(0, 100)}"`);
+    console.log(`[Chat req=${reqId}] Conversation ID: ${conversationId}`);
 
     const historyForContext = messages.slice(0, -1);
 
@@ -5724,7 +5729,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           });
           console.log(`[Chat] Fallback price-sort applied: ${effectivePriceIntent}, top price=${foundProducts[0]?.price}`);
         } else {
-          foundProducts = rerankProducts(foundProducts, userMessage, allowedCategoryTitles);
+          foundProducts = rerankProducts(foundProducts, userMessage, allowedCategoryTitles, reqId);
         }
         
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
