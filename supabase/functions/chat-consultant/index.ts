@@ -2324,8 +2324,10 @@ function domainPenalty(product: Product, userQuery: string): number {
  * - Domain penalty: 0 to -30
  */
 function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: string[], queryBrand?: string, userQuery?: string): number {
-  const titleTokens = extractTokens(product.pagetitle);
-  const titleText = product.pagetitle.toLowerCase();
+  // Null-safe: any product field can be undefined/null in payload from 220volt API.
+  const safeTitle = product?.pagetitle ?? '';
+  const titleTokens = extractTokens(safeTitle);
+  const titleText = safeTitle.toLowerCase();
   
   // 1. Token overlap score (0-50)
   let matchedTokens = 0;
@@ -2340,8 +2342,12 @@ function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: 
   
   // 2. Spec match score (0-30)
   let matchedSpecs = 0;
-  const titleSpecs = extractSpecs(product.pagetitle);
-  const optionValues = (product.options || []).map(o => o.value.toLowerCase()).join(' ');
+  const titleSpecs = extractSpecs(safeTitle);
+  // Null-safe: option.value can be missing — coerce to '' before toLowerCase().
+  // This was the source of [Chat] Error: TypeError ... reading 'toLowerCase'.
+  const optionValues = (product?.options || [])
+    .map(o => (o?.value ?? '').toLowerCase())
+    .join(' ');
   for (const qs of querySpecs) {
     if (titleSpecs.some(ts => ts === qs) || titleText.includes(qs.toLowerCase()) || optionValues.includes(qs.toLowerCase())) {
       matchedSpecs++;
@@ -2355,9 +2361,10 @@ function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: 
   let brandScore = 0;
   if (queryBrand) {
     const qb = queryBrand.toLowerCase();
-    const productBrand = (product.vendor || '').toLowerCase();
-    const brandOption = product.options?.find(o => o.key === 'brend__brend');
-    const optBrand = brandOption ? brandOption.value.split('//')[0].trim().toLowerCase() : '';
+    const productBrand = (product?.vendor ?? '').toLowerCase();
+    const brandOption = product?.options?.find(o => o?.key === 'brend__brend');
+    const brandRaw = brandOption?.value ?? '';
+    const optBrand = brandRaw.split('//')[0].trim().toLowerCase();
     if (productBrand.includes(qb) || optBrand.includes(qb) || qb.includes(productBrand) || qb.includes(optBrand)) {
       brandScore = 20;
     }
