@@ -1628,7 +1628,10 @@ async function getCategoryOptionsSchemaLegacy(
       return { schema, productCount: totalProducts, cacheHit: false };
     }
     dedupeSchemaInPlace(schema, `legacy:${categoryPagetitle}`);
-    categoryOptionsCache.set(categoryPagetitle, { schema, ts: Date.now(), productCount: totalProducts });
+    categoryOptionsCache.set(cacheKey(categoryPagetitle), { schema, ts: Date.now(), productCount: totalProducts });
+    const keysWithZero = Array.from(schema.values()).filter(i => i.values.size === 0).length;
+    const totalValuesPostDedupe = Array.from(schema.values()).reduce((s, i) => s + i.values.size, 0);
+    console.log(`[FacetsHealth] cat="${categoryPagetitle}" source=legacy-sampling keys=${schema.size} keys_with_zero_values=${keysWithZero} total_values=${totalValuesPostDedupe} products=${totalProducts}`);
     console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values (from ${totalProducts} products, ${Date.now() - t0}ms, cached 30m, post-dedupe)`);
     return { schema, productCount: totalProducts, cacheHit: false };
   } catch (e) {
