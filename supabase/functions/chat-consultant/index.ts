@@ -1550,7 +1550,10 @@ async function getCategoryOptionsSchema(
     }
 
     dedupeSchemaInPlace(schema, `facets:${categoryPagetitle}`);
-    categoryOptionsCache.set(categoryPagetitle, { schema, ts: Date.now(), productCount: totalProducts });
+    categoryOptionsCache.set(cacheKey(categoryPagetitle), { schema, ts: Date.now(), productCount: totalProducts });
+    const keysWithZero = Array.from(schema.values()).filter(i => i.values.size === 0).length;
+    const totalValuesPostDedupe = Array.from(schema.values()).reduce((s, i) => s + i.values.size, 0);
+    console.log(`[FacetsHealth] cat="${categoryPagetitle}" source=facets-api keys=${schema.size} keys_with_zero_values=${keysWithZero} total_values=${totalValuesPostDedupe} products=${totalProducts}`);
     console.log(`[CategoryOptionsSchema] /categories/options HIT "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values, ${totalProducts} products, ${Date.now() - t0}ms (cached 30m, post-dedupe)`);
     return { schema, productCount: totalProducts, cacheHit: false };
   } catch (e) {
