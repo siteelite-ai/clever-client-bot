@@ -2379,61 +2379,87 @@ function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: 
 /**
  * Rerank products by title-score relevance to query.
  * Returns products sorted by score descending.
+ *
+ * RESILIENCE: wrapped in try/catch — if scoring blows up on a malformed product
+ * (e.g. missing options/value), we log [RankerCrash] with stack and return the
+ * input pool as-is rather than failing the whole chat response. NO silent
+ * fallback — error is always surfaced via console.error.
  */
 function rerankProducts(
   products: Product[],
   userQuery: string,
-  allowedPagetitles?: Set<string>
+  allowedPagetitles?: Set<string>,
+  reqId: string = '?'
 ): Product[] {
-  const queryTokens = extractTokens(userQuery);
-  const querySpecs = extractSpecs(userQuery);
+  try {
+    const queryTokens = extractTokens(userQuery);
+    const querySpecs = extractSpecs(userQuery);
 
-  // Domain guard (Plan V4): if the caller knows which categories are relevant for this
-  // query (from CategoryMatcher), drop products from any other category before scoring.
-  // Prevents black gloves / clamps from polluting "чёрные розетки" results just because
-  // their title shares a token. When set is missing or empty — no filter is applied.
-  let pool = products;
-  if (allowedPagetitles && allowedPagetitles.size > 0) {
-    const before = pool.length;
-    const dropped: string[] = [];
-    pool = pool.filter(p => {
-      const cat = (p as any).category?.pagetitle || (p as any).parent_name || '';
-      if (allowedPagetitles.has(cat)) return true;
-      if (dropped.length < 5) dropped.push(`"${p.pagetitle.substring(0, 40)}" [${cat}]`);
-      return false;
-    });
-    if (before !== pool.length) {
-      console.log(`[DomainGuard] dropped ${before - pool.length}/${before} items from non-allowed categories. Sample: ${dropped.join(' | ')}`);
+    // Domain guard (Plan V4): if the caller knows which categories are relevant for this
+    // query (from CategoryMatcher), drop products from any other category before scoring.
+    // Prevents black gloves / clamps from polluting "чёрные розетки" results just because
+    // their title shares a token. When set is missing or empty — no filter is applied.
+    let pool = products;
+    if (allowedPagetitles && allowedPagetitles.size > 0) {
+      const before = pool.length;
+      const dropped: string[] = [];
+      pool = pool.filter(p => {
+        const cat = (p as any)?.category?.pagetitle || (p as any)?.parent_name || '';
+        if (allowedPagetitles.has(cat)) return true;
+        if (dropped.length < 5) dropped.push(`"${(p?.pagetitle ?? '').substring(0, 40)}" [${cat}]`);
+        return false;
+      });
+      if (before !== pool.length) {
+        console.log(`[DomainGuard req=${reqId}] dropped ${before - pool.length}/${before} items from non-allowed categories. Sample: ${dropped.join(' | ')}`);
+      }
     }
+
+    const scored = pool.map(p => ({
+      product: p,
+      score: scoreProductMatch(p, queryTokens, querySpecs, undefined, userQuery),
+    }));
+
+    scored.sort((a, b) => b.score - a.score);
+
+    if (scored.length > 0) {
+      console.log(`[Rerank req=${reqId}] Top scores: ${scored.slice(0, 5).map(s => `${s.score}:"${(s.product?.pagetitle ?? '').substring(0, 40)}"`).join(', ')}`);
+    }
+
+    return scored.map(s => s.product);
+  } catch (e) {
+    const err = e as Error;
+    console.error(`[RankerCrash req=${reqId}]`, JSON.stringify({
+      error: err?.message ?? String(e),
+      stack: (err?.stack ?? '').split('\n').slice(0, 5).join(' | '),
+      product_count: products?.length ?? 0,
+      query: (userQuery ?? '').substring(0, 80),
+    }));
+    return products || [];
   }
-
-  const scored = pool.map(p => ({
-    product: p,
-    score: scoreProductMatch(p, queryTokens, querySpecs, undefined, userQuery),
-  }));
-
-  scored.sort((a, b) => b.score - a.score);
-
-  if (scored.length > 0) {
-    console.log(`[Rerank] Top scores: ${scored.slice(0, 5).map(s => `${s.score}:"${s.product.pagetitle.substring(0, 40)}"`).join(', ')}`);
-  }
-
-  return scored.map(s => s.product);
 }
 
 
-function hasGoodMatch(products: Product[], userQuery: string, threshold: number = 35): boolean {
-  const queryTokens = extractTokens(userQuery);
-  const querySpecs = extractSpecs(userQuery);
-  
-  for (const p of products) {
-    const score = scoreProductMatch(p, queryTokens, querySpecs);
-    if (score >= threshold) {
-      console.log(`[TitleScore] Good match (${score}≥${threshold}): "${p.pagetitle.substring(0, 60)}"`);
-      return true;
+function hasGoodMatch(products: Product[], userQuery: string, threshold: number = 35, reqId: string = '?'): boolean {
+  try {
+    const queryTokens = extractTokens(userQuery);
+    const querySpecs = extractSpecs(userQuery);
+    
+    for (const p of products) {
+      const score = scoreProductMatch(p, queryTokens, querySpecs);
+      if (score >= threshold) {
+        console.log(`[TitleScore req=${reqId}] Good match (${score}≥${threshold}): "${(p?.pagetitle ?? '').substring(0, 60)}"`);
+        return true;
+      }
     }
+    return false;
+  } catch (e) {
+    const err = e as Error;
+    console.error(`[RankerCrash req=${reqId}] hasGoodMatch failed:`, JSON.stringify({
+      error: err?.message ?? String(e),
+      stack: (err?.stack ?? '').split('\n').slice(0, 3).join(' | '),
+    }));
+    return false;
   }
-  return false;
 }
 
 /**
