@@ -1647,7 +1647,7 @@ async function getUnionCategoryOptionsSchema(
         union.set(key, { caption: info.caption, values: new Set() });
       }
       const target = union.get(key)!;
-      for (const v of info.values) target.values.add(v);
+      for (const v of info.values) if (v) target.values.add(v);
     }
   }
   // Union may surface NEW duplicates that didn't exist within a single category
