@@ -3430,13 +3430,22 @@ async function searchProductsByCandidate(
     if (candidate.min_price) params.append('min_price', candidate.min_price.toString());
     if (candidate.max_price) params.append('max_price', candidate.max_price.toString());
     
-    // Apply resolved option filters from pass 2
+    // Apply resolved option filters from pass 2.
+    // For each resolved key we expand into ALL its alias keys (see optionAliasesRegistry):
+    // duplicate API keys for the same physical property (e.g. cvet__tүs / cvet__tүsі)
+    // must all be sent — one alone covers only a fraction of products.
     if (resolvedFilters) {
       for (const [key, value] of Object.entries(resolvedFilters)) {
-        params.append(`options[${key}][]`, value);
+        const aliasKeys = getAliasKeysFor(key);
+        for (const aliasKey of aliasKeys) {
+          params.append(`options[${aliasKey}][]`, value);
+        }
+        if (aliasKeys.length > 1) {
+          console.log(`[Search] Filter "${key}=${value}" applied via ${aliasKeys.length} alias keys: [${aliasKeys.join(', ')}]`);
+        }
       }
     }
-    
+
     console.log(`[Search] API call: ${params.toString().substring(0, 150)}`);
     
     // AbortController timeout 10s to prevent API hangs
