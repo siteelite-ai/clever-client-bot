@@ -5248,7 +5248,20 @@ serve(async (req) => {
                   // Honest no_match when critical filters block relaxed; otherwise text fallback
                   const filterKeys = Object.keys(resolvedFilters);
                   const allCritical = filterKeys.length > 0 && filterKeys.every(k => resolvedFiltersRaw[k]?.is_critical);
-                  if (allCritical) {
+
+                  // DEGRADED-SCHEMA UX FALLBACK: nothing got resolved AND we have unresolved modifiers AND
+                  // we have rawProducts in the bucket → show category top-N with an honest clarifying ask,
+                  // instead of returning empty (which surfaces as silence in the widget).
+                  const degradedSchema = filterKeys.length === 0 && unresolvedMods.length > 0 && rawProducts.length > 0;
+                  if (degradedSchema) {
+                    const _r = pickDisplayWithTotal(rawProducts);
+                    foundProducts = _r.displayed;
+                    totalCollected = _r.total;
+                    totalCollectedBranch = 'degraded_schema_fallback';
+                    articleShortCircuit = true;
+                    resultMode = 'degraded_schema_fallback';
+                    console.log(`[Path] DEGRADED_UX cat="${pluralCategory}" products_shown=${foundProducts.length} unresolved=[${unresolvedMods.join(', ')}]`);
+                  } else if (allCritical) {
                     console.log(`[Chat] Category-first: honest no_match (all filters critical, no products)`);
                     foundProducts = [];
                     articleShortCircuit = false;
@@ -5264,6 +5277,15 @@ serve(async (req) => {
                       { const _r = pickDisplayWithTotal(textFallback); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'text_fallback'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=text_fallback zeroFiltered=${_r.filteredZeroPrice}`); }
                       articleShortCircuit = true;
                       resultMode = 'text_fallback';
+                    } else if (rawProducts.length > 0) {
+                      // Last-resort: still show category top-N rather than silence
+                      const _r = pickDisplayWithTotal(rawProducts);
+                      foundProducts = _r.displayed;
+                      totalCollected = _r.total;
+                      totalCollectedBranch = 'category_topN_lastresort';
+                      articleShortCircuit = true;
+                      resultMode = 'category_topN_lastresort';
+                      console.log(`[Path] CATEGORY_TOPN_LASTRESORT cat="${pluralCategory}" products_shown=${foundProducts.length}`);
                     } else {
                       foundProducts = [];
                       articleShortCircuit = false;
