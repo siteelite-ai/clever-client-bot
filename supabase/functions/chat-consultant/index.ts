@@ -1460,8 +1460,9 @@ async function getCategoryOptionsSchema(
       return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken);
     }
 
+    dedupeSchemaInPlace(schema, `facets:${categoryPagetitle}`);
     categoryOptionsCache.set(categoryPagetitle, { schema, ts: Date.now(), productCount: totalProducts });
-    console.log(`[CategoryOptionsSchema] /categories/options HIT "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values, ${totalProducts} products, ${Date.now() - t0}ms (cached 30m)`);
+    console.log(`[CategoryOptionsSchema] /categories/options HIT "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values, ${totalProducts} products, ${Date.now() - t0}ms (cached 30m, post-dedupe)`);
     return { schema, productCount: totalProducts, cacheHit: false };
   } catch (e) {
     console.log(`[CategoryOptionsSchema] /categories/options error for "${categoryPagetitle}": ${(e as Error).message} → falling back to legacy sampling`);
