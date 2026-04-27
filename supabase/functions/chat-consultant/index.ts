@@ -1289,8 +1289,24 @@ function extractModifiersFromProduct(product: Product): string[] {
 const CATEGORY_OPTIONS_TTL_MS = 30 * 60 * 1000;
 // Cache version — bump when dedupe logic changes so old entries (with stale dup keys)
 // invalidate immediately on deploy without waiting 30 min TTL.
-const CATEGORY_OPTIONS_CACHE_VERSION = 'v2-fuzzy';
-const categoryOptionsCache: Map<string, { schema: Map<string, { caption: string; values: Set<string> }>; ts: number; productCount: number }> = new Map();
+const CATEGORY_OPTIONS_CACHE_VERSION = 'v3-confidence';
+// Confidence reflects whether downstream resolvers may trust the schema:
+//   'full'    — facets API returned with non-empty values for every kept key.
+//               Resolver runs at full strength (key+value lookup against truth).
+//   'partial' — schema came from legacy product-sampling fallback (≤200 items),
+//               so values are a subset of reality. Resolver MUST NOT guess on
+//               this — pipeline degrades to top-N + ask-user instead of silently
+//               picking a wrong filter from a truncated value list.
+//   'empty'   — neither facets API nor sampling produced anything usable.
+type SchemaConfidence = 'full' | 'partial' | 'empty';
+interface CategorySchemaResult {
+  schema: Map<string, { caption: string; values: Set<string> }>;
+  productCount: number;
+  cacheHit: boolean;
+  confidence: SchemaConfidence;
+  source: 'facets-api' | 'legacy-sampling' | 'cache' | 'none';
+}
+const categoryOptionsCache: Map<string, { schema: Map<string, { caption: string; values: Set<string> }>; ts: number; productCount: number; confidence: SchemaConfidence; source: 'facets-api' | 'legacy-sampling' }> = new Map();
 const cacheKey = (pagetitle: string) => `${CATEGORY_OPTIONS_CACHE_VERSION}:${pagetitle}`;
 
 // =============================================================================
