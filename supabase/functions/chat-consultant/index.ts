@@ -1350,6 +1350,13 @@ async function getCategoryOptionsSchema(
       totalValues += valuesSet.size;
     }
 
+    // Defensive: if API returned options[] but every entry had zero values,
+    // we got a degraded payload (seen in prod). Don't cache, fall back to legacy.
+    if (totalValues === 0) {
+      console.log(`[CategoryOptionsSchema] /categories/options returned ${optionsArr.length} keys but ZERO values for "${categoryPagetitle}" → falling back to legacy sampling (NOT caching)`);
+      return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken);
+    }
+
     categoryOptionsCache.set(categoryPagetitle, { schema, ts: Date.now(), productCount: totalProducts });
     console.log(`[CategoryOptionsSchema] /categories/options HIT "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values, ${totalProducts} products, ${Date.now() - t0}ms (cached 30m)`);
     return { schema, productCount: totalProducts, cacheHit: false };
