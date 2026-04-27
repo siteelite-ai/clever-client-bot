@@ -3903,51 +3903,77 @@ function formatProductsForAI(products: Product[], includeExtended: boolean = tru
     return 'Товары не найдены в каталоге.';
   }
 
-  return products.map((p, i) => {
-    let brand = '';
-    if (p.options) {
-      const brandOption = p.options.find(o => o.key === 'brend__brend');
-      if (brandOption) {
-        brand = brandOption.value.split('//')[0].trim();
-      }
-    }
-    if (!brand) {
-      brand = p.vendor || '';
-    }
-    
-    const productUrl = toProductionUrl(p.url).replace(/\(/g, '%28').replace(/\)/g, '%29');
-    const safeName = p.pagetitle.replace(/\(/g, '\\(').replace(/\)/g, '\\)');
-    const nameWithLink = `[${safeName}](${productUrl})`;
-    
-    const parts = [
-      `${i + 1}. **${nameWithLink}**`,
-      `   - Цена: ${p.price.toLocaleString('ru-KZ')} ₸${p.old_price && p.old_price > p.price ? ` ~~${p.old_price.toLocaleString('ru-KZ')} ₸~~` : ''}`,
-      brand ? `   - Бренд: ${brand}` : '',
-      p.article ? `   - Артикул: ${p.article}` : '',
-      (() => {
-        const available = (p.warehouses || []).filter(w => w.amount > 0);
-        if (available.length > 0) {
-          const shown = available.slice(0, 5).map(w => `${w.city}: ${w.amount} шт.`).join(', ');
-          const extra = available.length > 5 ? ` и ещё в ${available.length - 5} городах` : '';
-          return `   - Остатки по городам: ${shown}${extra}`;
+  const lines: string[] = [];
+  for (let i = 0; i < products.length; i++) {
+    const p = products[i];
+    try {
+      let brand = '';
+      if (Array.isArray(p?.options)) {
+        const brandOption = p.options.find((o: any) => o && o.key === 'brend__brend');
+        if (brandOption) {
+          brand = cleanOptionValue(brandOption.value);
         }
-        return p.amount > 0 ? `   - В наличии: ${p.amount} шт.` : `   - Под заказ`;
-      })(),
-      p.category ? `   - Категория: [${p.category.pagetitle}](https://220volt.kz/catalog/${p.category.id})` : '',
-    ];
-    
-    if (p.options && p.options.length > 0) {
-      const specs = p.options
-        .filter(o => !isExcludedOption(o.key, includeExtended))
-        .map(o => `${cleanOptionCaption(o.caption)}: ${cleanOptionValue(o.value)}`);
-      
-      if (specs.length > 0) {
-        parts.push(`   - Характеристики: ${specs.join('; ')}`);
       }
+      if (!brand) {
+        brand = (typeof p?.vendor === 'string' ? p.vendor : '') || '';
+      }
+
+      const safeUrl = typeof p?.url === 'string' ? p.url : '';
+      const productUrl = toProductionUrl(safeUrl).replace(/\(/g, '%28').replace(/\)/g, '%29');
+      const safeName = (typeof p?.pagetitle === 'string' ? p.pagetitle : 'Товар')
+        .replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+      const nameWithLink = `[${safeName}](${productUrl})`;
+
+      const priceNum = typeof p?.price === 'number' ? p.price : 0;
+      const oldPriceNum = typeof p?.old_price === 'number' ? p.old_price : 0;
+
+      const parts = [
+        `${i + 1}. **${nameWithLink}**`,
+        `   - Цена: ${priceNum.toLocaleString('ru-KZ')} ₸${oldPriceNum > priceNum ? ` ~~${oldPriceNum.toLocaleString('ru-KZ')} ₸~~` : ''}`,
+        brand ? `   - Бренд: ${brand}` : '',
+        p?.article ? `   - Артикул: ${p.article}` : '',
+        (() => {
+          const available = (Array.isArray(p?.warehouses) ? p.warehouses : []).filter((w: any) => w && Number(w.amount) > 0);
+          if (available.length > 0) {
+            const shown = available.slice(0, 5).map((w: any) => `${w.city}: ${w.amount} шт.`).join(', ');
+            const extra = available.length > 5 ? ` и ещё в ${available.length - 5} городах` : '';
+            return `   - Остатки по городам: ${shown}${extra}`;
+          }
+          const amt = Number(p?.amount) || 0;
+          return amt > 0 ? `   - В наличии: ${amt} шт.` : `   - Под заказ`;
+        })(),
+        p?.category?.pagetitle ? `   - Категория: [${p.category.pagetitle}](https://220volt.kz/catalog/${p.category.id})` : '',
+      ];
+
+      if (Array.isArray(p?.options) && p.options.length > 0) {
+        const specs = p.options
+          .filter((o: any) => o && !isExcludedOption(o.key, includeExtended))
+          .map((o: any) => `${cleanOptionCaption(o.caption)}: ${cleanOptionValue(o.value)}`)
+          .filter((s: string) => s && !s.startsWith(': '));
+
+        if (specs.length > 0) {
+          parts.push(`   - Характеристики: ${specs.join('; ')}`);
+        }
+      }
+
+      lines.push(parts.filter(Boolean).join('\n'));
+    } catch (err) {
+      // CRITICAL: never let one bad product crash the whole response (was returning 500 → "Connection Error" in widget)
+      console.error(`[FormatCrash] product_index=${i} id=${p?.id ?? 'unknown'} pagetitle="${p?.pagetitle ?? ''}" err=${(err as Error).message}`);
+      try {
+        // Log a tiny shape diagnostic so we can find the root cause in the upstream API payload
+        const optShape = Array.isArray(p?.options)
+          ? p.options.slice(0, 3).map((o: any) => ({ key: typeof o?.key, value: typeof o?.value, caption: typeof o?.caption }))
+          : 'no_options';
+        console.error(`[FormatCrash] options_shape=${JSON.stringify(optShape)}`);
+      } catch {}
+      const safeName = (typeof p?.pagetitle === 'string' ? p.pagetitle : 'Товар').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+      const safeUrl = typeof p?.url === 'string' ? toProductionUrl(p.url).replace(/\(/g, '%28').replace(/\)/g, '%29') : '#';
+      const priceNum = typeof p?.price === 'number' ? p.price : 0;
+      lines.push(`${i + 1}. **[${safeName}](${safeUrl})** — ${priceNum.toLocaleString('ru-KZ')} ₸`);
     }
-    
-    return parts.filter(Boolean).join('\n');
-  }).join('\n\n');
+  }
+  return lines.join('\n\n');
 }
 
 function describeAppliedFilters(candidates: SearchCandidate[]): string {
