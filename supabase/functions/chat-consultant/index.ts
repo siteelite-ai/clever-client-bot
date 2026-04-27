@@ -3087,8 +3087,8 @@ async function resolveFiltersWithLLM(
   const schemaLines: string[] = [];
   const schemaDebug: string[] = [];
   for (const [apiKey, info] of optionIndex.entries()) {
-    const caption = info.caption.split('//')[0].trim();
-    const allVals = [...info.values].map(v => v.split('//')[0].trim());
+    const caption = (info?.caption ?? '').split('//')[0].trim();
+    const allVals = [...(info?.values ?? [])].filter(Boolean).map(v => (v ?? '').split('//')[0].trim());
     const vals = allVals.join(', ');
     schemaLines.push(`KEY="${apiKey}" | ${caption} | values: ${vals}`);
     schemaDebug.push(`  ${apiKey} (${caption}): ${allVals.slice(0, 5).join(', ')}${allVals.length > 5 ? ` ... +${allVals.length - 5}` : ''}`);
