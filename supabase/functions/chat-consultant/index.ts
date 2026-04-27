@@ -3054,6 +3054,10 @@ async function resolveFiltersWithLLM(
   prebuiltSchema?: Map<string, { caption: string; values: Set<string> }>
 ): Promise<{ resolved: Record<string, ResolvedFilter>; unresolved: string[] }> {
   if (!modifiers || modifiers.length === 0) return { resolved: {}, unresolved: [] };
+  // FilterLLM bulkhead: ANY error inside (schema build, LLM call, validation, dedupe lookups)
+  // must NOT propagate up — caller's pipeline keeps running with empty resolved set.
+  // Logged as [FilterLLMCrash] for visibility.
+  try {
   // Default critical = all modifiers (safe behavior)
   const criticalSet = new Set<string>((criticalModifiers && criticalModifiers.length > 0 ? criticalModifiers : modifiers).map(m => m.toLowerCase().trim()));
   const isCritical = (mod: string) => criticalSet.has(mod.toLowerCase().trim());
