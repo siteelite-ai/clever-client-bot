@@ -4529,9 +4529,10 @@ serve(async (req) => {
           
           // Step 1: Fetch FULL category option schema (authoritative — covers all products,
           // not just a 50-item sample). Falls back to sample-based schema inside resolver if empty.
-          const slotPrebuiltResult = appSettings.volt220_api_token
-            ? await getCategoryOptionsSchema(sp.category, appSettings.volt220_api_token).catch(() => ({ schema: new Map<string, { caption: string; values: Set<string> }>(), productCount: 0, cacheHit: false }))
-            : { schema: new Map<string, { caption: string; values: Set<string> }>(), productCount: 0, cacheHit: false };
+          const emptyResult: CategorySchemaResult = { schema: new Map(), productCount: 0, cacheHit: false, confidence: 'empty', source: 'none' };
+          const slotPrebuiltResult: CategorySchemaResult = appSettings.volt220_api_token
+            ? await getCategoryOptionsSchema(sp.category, appSettings.volt220_api_token).catch(() => emptyResult)
+            : emptyResult;
           const slotPrebuilt = slotPrebuiltResult.schema;
           console.log(`[Chat] Slot prebuilt schema for "${sp.category}": ${slotPrebuilt.size} keys`);
           // Still fetch a small product sample as fallback (in case prebuilt schema is empty)
