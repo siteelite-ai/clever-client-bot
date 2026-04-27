@@ -183,6 +183,32 @@ serve(async (req) => {
       );
     }
 
+    // ===== Branch: category facets (full options schema for a category) =====
+    if (body && body.action === 'category_facets') {
+      const apiToken = await getApiToken();
+      const pagetitle = typeof body.pagetitle === 'string' ? body.pagetitle.trim() : undefined;
+      const categoryId = body.categoryId ?? body.category_id;
+      if (!pagetitle && categoryId == null) {
+        return new Response(
+          JSON.stringify({ error: 'category_facets requires pagetitle or categoryId' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      try {
+        const facets = await fetchCategoryFacets(apiToken, { pagetitle, categoryId });
+        return new Response(
+          JSON.stringify(facets),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } catch (e) {
+        console.error('[Facets] error:', (e as Error).message);
+        return new Response(
+          JSON.stringify({ error: (e as Error).message, category: null, options: [] }),
+          { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+    }
+
     // ===== Branch: search products (existing behavior) =====
     const { query, page = 1, perPage = 12, category, minPrice, maxPrice, brand, article } = body;
     
