@@ -1425,8 +1425,13 @@ async function getCategoryOptionsSchemaLegacy(
       page++;
     } while (page <= totalPages && page <= MAX_PAGES);
 
-    categoryOptionsCache.set(categoryPagetitle, { schema, ts: Date.now(), productCount: totalProducts });
     const totalValues = Array.from(schema.values()).reduce((s, v) => s + v.values.size, 0);
+    // Don't cache obviously broken results — let next call retry the API.
+    if (schema.size === 0 || totalValues === 0) {
+      console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values — NOT caching (degraded result)`);
+      return { schema, productCount: totalProducts, cacheHit: false };
+    }
+    categoryOptionsCache.set(categoryPagetitle, { schema, ts: Date.now(), productCount: totalProducts });
     console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values (from ${totalProducts} products, ${Date.now() - t0}ms, cached 30m)`);
     return { schema, productCount: totalProducts, cacheHit: false };
   } catch (e) {
