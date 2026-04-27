@@ -3328,6 +3328,18 @@ ${JSON.stringify(modifiers)}
     console.error(`[FilterLLM] Error:`, error);
     return { resolved: {}, unresolved: [...modifiers] };
   }
+  } catch (outerErr) {
+    // Bulkhead: outer crash (e.g. undefined.split during schema build, dedup lookup)
+    // — don't propagate, fall through with empty resolved set so caller's pipeline survives.
+    const err = outerErr as Error;
+    console.error(`[FilterLLMCrash]`, JSON.stringify({
+      error: err?.message ?? String(outerErr),
+      stack: (err?.stack ?? '').split('\n').slice(0, 5).join(' | '),
+      modifier_count: modifiers?.length ?? 0,
+      modifiers: (modifiers ?? []).slice(0, 5),
+    }));
+    return { resolved: {}, unresolved: [...modifiers] };
+  }
 }
 
 // Fallback query parser
