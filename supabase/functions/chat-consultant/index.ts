@@ -1287,7 +1287,11 @@ function extractModifiersFromProduct(product: Product): string[] {
 // On error or empty options[]: fallback to legacy product-sampling implementation.
 // TTL 30m, in-memory.
 const CATEGORY_OPTIONS_TTL_MS = 30 * 60 * 1000;
+// Cache version — bump when dedupe logic changes so old entries (with stale dup keys)
+// invalidate immediately on deploy without waiting 30 min TTL.
+const CATEGORY_OPTIONS_CACHE_VERSION = 'v2-fuzzy';
 const categoryOptionsCache: Map<string, { schema: Map<string, { caption: string; values: Set<string> }>; ts: number; productCount: number }> = new Map();
+const cacheKey = (pagetitle: string) => `${CATEGORY_OPTIONS_CACHE_VERSION}:${pagetitle}`;
 
 // =============================================================================
 // OPTION ALIASES — duplicate-key collapse.
