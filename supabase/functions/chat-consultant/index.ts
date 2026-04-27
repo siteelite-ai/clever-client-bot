@@ -1565,8 +1565,11 @@ async function getUnionCategoryOptionsSchema(
       for (const v of info.values) target.values.add(v);
     }
   }
+  // Union may surface NEW duplicates that didn't exist within a single category
+  // (e.g. cvet__tүs from "Розетки" + cvet__tүsі from "Розетки силовые"). Re-dedupe.
+  dedupeSchemaInPlace(union, `union:[${pagetitles.join('|')}]`);
   const totalValues = Array.from(union.values()).reduce((s, v) => s + v.values.size, 0);
-  console.log(`[CategoryOptionsSchema] union ${pagetitles.length} categories → ${union.size} keys, ${totalValues} values (from ${totalProducts} products)`);
+  console.log(`[CategoryOptionsSchema] union ${pagetitles.length} categories → ${union.size} keys, ${totalValues} values (from ${totalProducts} products, post-dedupe)`);
   return union;
 }
 
