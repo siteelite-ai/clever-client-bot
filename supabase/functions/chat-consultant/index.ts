@@ -2324,8 +2324,10 @@ function domainPenalty(product: Product, userQuery: string): number {
  * - Domain penalty: 0 to -30
  */
 function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: string[], queryBrand?: string, userQuery?: string): number {
-  const titleTokens = extractTokens(product.pagetitle);
-  const titleText = product.pagetitle.toLowerCase();
+  // Null-safe: any product field can be undefined/null in payload from 220volt API.
+  const safeTitle = product?.pagetitle ?? '';
+  const titleTokens = extractTokens(safeTitle);
+  const titleText = safeTitle.toLowerCase();
   
   // 1. Token overlap score (0-50)
   let matchedTokens = 0;
@@ -2340,8 +2342,12 @@ function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: 
   
   // 2. Spec match score (0-30)
   let matchedSpecs = 0;
-  const titleSpecs = extractSpecs(product.pagetitle);
-  const optionValues = (product.options || []).map(o => o.value.toLowerCase()).join(' ');
+  const titleSpecs = extractSpecs(safeTitle);
+  // Null-safe: option.value can be missing — coerce to '' before toLowerCase().
+  // This was the source of [Chat] Error: TypeError ... reading 'toLowerCase'.
+  const optionValues = (product?.options || [])
+    .map(o => (o?.value ?? '').toLowerCase())
+    .join(' ');
   for (const qs of querySpecs) {
     if (titleSpecs.some(ts => ts === qs) || titleText.includes(qs.toLowerCase()) || optionValues.includes(qs.toLowerCase())) {
       matchedSpecs++;
@@ -2355,9 +2361,10 @@ function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: 
   let brandScore = 0;
   if (queryBrand) {
     const qb = queryBrand.toLowerCase();
-    const productBrand = (product.vendor || '').toLowerCase();
-    const brandOption = product.options?.find(o => o.key === 'brend__brend');
-    const optBrand = brandOption ? brandOption.value.split('//')[0].trim().toLowerCase() : '';
+    const productBrand = (product?.vendor ?? '').toLowerCase();
+    const brandOption = product?.options?.find(o => o?.key === 'brend__brend');
+    const brandRaw = brandOption?.value ?? '';
+    const optBrand = brandRaw.split('//')[0].trim().toLowerCase();
     if (productBrand.includes(qb) || optBrand.includes(qb) || qb.includes(productBrand) || qb.includes(optBrand)) {
       brandScore = 20;
     }
@@ -2372,61 +2379,87 @@ function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: 
 /**
  * Rerank products by title-score relevance to query.
  * Returns products sorted by score descending.
+ *
+ * RESILIENCE: wrapped in try/catch — if scoring blows up on a malformed product
+ * (e.g. missing options/value), we log [RankerCrash] with stack and return the
+ * input pool as-is rather than failing the whole chat response. NO silent
+ * fallback — error is always surfaced via console.error.
  */
 function rerankProducts(
   products: Product[],
   userQuery: string,
-  allowedPagetitles?: Set<string>
+  allowedPagetitles?: Set<string>,
+  reqId: string = '?'
 ): Product[] {
-  const queryTokens = extractTokens(userQuery);
-  const querySpecs = extractSpecs(userQuery);
+  try {
+    const queryTokens = extractTokens(userQuery);
+    const querySpecs = extractSpecs(userQuery);
 
-  // Domain guard (Plan V4): if the caller knows which categories are relevant for this
-  // query (from CategoryMatcher), drop products from any other category before scoring.
-  // Prevents black gloves / clamps from polluting "чёрные розетки" results just because
-  // their title shares a token. When set is missing or empty — no filter is applied.
-  let pool = products;
-  if (allowedPagetitles && allowedPagetitles.size > 0) {
-    const before = pool.length;
-    const dropped: string[] = [];
-    pool = pool.filter(p => {
-      const cat = (p as any).category?.pagetitle || (p as any).parent_name || '';
-      if (allowedPagetitles.has(cat)) return true;
-      if (dropped.length < 5) dropped.push(`"${p.pagetitle.substring(0, 40)}" [${cat}]`);
-      return false;
-    });
-    if (before !== pool.length) {
-      console.log(`[DomainGuard] dropped ${before - pool.length}/${before} items from non-allowed categories. Sample: ${dropped.join(' | ')}`);
+    // Domain guard (Plan V4): if the caller knows which categories are relevant for this
+    // query (from CategoryMatcher), drop products from any other category before scoring.
+    // Prevents black gloves / clamps from polluting "чёрные розетки" results just because
+    // their title shares a token. When set is missing or empty — no filter is applied.
+    let pool = products;
+    if (allowedPagetitles && allowedPagetitles.size > 0) {
+      const before = pool.length;
+      const dropped: string[] = [];
+      pool = pool.filter(p => {
+        const cat = (p as any)?.category?.pagetitle || (p as any)?.parent_name || '';
+        if (allowedPagetitles.has(cat)) return true;
+        if (dropped.length < 5) dropped.push(`"${(p?.pagetitle ?? '').substring(0, 40)}" [${cat}]`);
+        return false;
+      });
+      if (before !== pool.length) {
+        console.log(`[DomainGuard req=${reqId}] dropped ${before - pool.length}/${before} items from non-allowed categories. Sample: ${dropped.join(' | ')}`);
+      }
     }
+
+    const scored = pool.map(p => ({
+      product: p,
+      score: scoreProductMatch(p, queryTokens, querySpecs, undefined, userQuery),
+    }));
+
+    scored.sort((a, b) => b.score - a.score);
+
+    if (scored.length > 0) {
+      console.log(`[Rerank req=${reqId}] Top scores: ${scored.slice(0, 5).map(s => `${s.score}:"${(s.product?.pagetitle ?? '').substring(0, 40)}"`).join(', ')}`);
+    }
+
+    return scored.map(s => s.product);
+  } catch (e) {
+    const err = e as Error;
+    console.error(`[RankerCrash req=${reqId}]`, JSON.stringify({
+      error: err?.message ?? String(e),
+      stack: (err?.stack ?? '').split('\n').slice(0, 5).join(' | '),
+      product_count: products?.length ?? 0,
+      query: (userQuery ?? '').substring(0, 80),
+    }));
+    return products || [];
   }
-
-  const scored = pool.map(p => ({
-    product: p,
-    score: scoreProductMatch(p, queryTokens, querySpecs, undefined, userQuery),
-  }));
-
-  scored.sort((a, b) => b.score - a.score);
-
-  if (scored.length > 0) {
-    console.log(`[Rerank] Top scores: ${scored.slice(0, 5).map(s => `${s.score}:"${s.product.pagetitle.substring(0, 40)}"`).join(', ')}`);
-  }
-
-  return scored.map(s => s.product);
 }
 
 
-function hasGoodMatch(products: Product[], userQuery: string, threshold: number = 35): boolean {
-  const queryTokens = extractTokens(userQuery);
-  const querySpecs = extractSpecs(userQuery);
-  
-  for (const p of products) {
-    const score = scoreProductMatch(p, queryTokens, querySpecs);
-    if (score >= threshold) {
-      console.log(`[TitleScore] Good match (${score}≥${threshold}): "${p.pagetitle.substring(0, 60)}"`);
-      return true;
+function hasGoodMatch(products: Product[], userQuery: string, threshold: number = 35, reqId: string = '?'): boolean {
+  try {
+    const queryTokens = extractTokens(userQuery);
+    const querySpecs = extractSpecs(userQuery);
+    
+    for (const p of products) {
+      const score = scoreProductMatch(p, queryTokens, querySpecs);
+      if (score >= threshold) {
+        console.log(`[TitleScore req=${reqId}] Good match (${score}≥${threshold}): "${(p?.pagetitle ?? '').substring(0, 60)}"`);
+        return true;
+      }
     }
+    return false;
+  } catch (e) {
+    const err = e as Error;
+    console.error(`[RankerCrash req=${reqId}] hasGoodMatch failed:`, JSON.stringify({
+      error: err?.message ?? String(e),
+      stack: (err?.stack ?? '').split('\n').slice(0, 3).join(' | '),
+    }));
+    return false;
   }
-  return false;
 }
 
 /**
@@ -4098,6 +4131,11 @@ serve(async (req) => {
     return new Response('ok', { headers: corsHeaders });
   }
 
+  // Per-request correlation id — included in every key log line so we can
+  // grep one user's full pipeline (classify → facets → filter-LLM → rerank)
+  // out of the firehose of concurrent requests.
+  const reqId = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).slice(0, 8);
+
   const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
     || req.headers.get('cf-connecting-ip')
     || 'unknown';
@@ -4160,8 +4198,8 @@ serve(async (req) => {
       content: m.role === 'user' ? sanitizeUserInput(m.content) : m.content
     }));
     
-    console.log(`[Chat] Processing: "${userMessage.substring(0, 100)}"`);
-    console.log(`[Chat] Conversation ID: ${conversationId}`);
+    console.log(`[Chat req=${reqId}] Processing: "${userMessage.substring(0, 100)}"`);
+    console.log(`[Chat req=${reqId}] Conversation ID: ${conversationId}`);
 
     const historyForContext = messages.slice(0, -1);
 
@@ -5691,7 +5729,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           });
           console.log(`[Chat] Fallback price-sort applied: ${effectivePriceIntent}, top price=${foundProducts[0]?.price}`);
         } else {
-          foundProducts = rerankProducts(foundProducts, userMessage, allowedCategoryTitles);
+          foundProducts = rerankProducts(foundProducts, userMessage, allowedCategoryTitles, reqId);
         }
         
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
