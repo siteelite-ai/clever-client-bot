@@ -1289,8 +1289,24 @@ function extractModifiersFromProduct(product: Product): string[] {
 const CATEGORY_OPTIONS_TTL_MS = 30 * 60 * 1000;
 // Cache version — bump when dedupe logic changes so old entries (with stale dup keys)
 // invalidate immediately on deploy without waiting 30 min TTL.
-const CATEGORY_OPTIONS_CACHE_VERSION = 'v2-fuzzy';
-const categoryOptionsCache: Map<string, { schema: Map<string, { caption: string; values: Set<string> }>; ts: number; productCount: number }> = new Map();
+const CATEGORY_OPTIONS_CACHE_VERSION = 'v3-confidence';
+// Confidence reflects whether downstream resolvers may trust the schema:
+//   'full'    — facets API returned with non-empty values for every kept key.
+//               Resolver runs at full strength (key+value lookup against truth).
+//   'partial' — schema came from legacy product-sampling fallback (≤200 items),
+//               so values are a subset of reality. Resolver MUST NOT guess on
+//               this — pipeline degrades to top-N + ask-user instead of silently
+//               picking a wrong filter from a truncated value list.
+//   'empty'   — neither facets API nor sampling produced anything usable.
+type SchemaConfidence = 'full' | 'partial' | 'empty';
+interface CategorySchemaResult {
+  schema: Map<string, { caption: string; values: Set<string> }>;
+  productCount: number;
+  cacheHit: boolean;
+  confidence: SchemaConfidence;
+  source: 'facets-api' | 'legacy-sampling' | 'cache' | 'none';
+}
+const categoryOptionsCache: Map<string, { schema: Map<string, { caption: string; values: Set<string> }>; ts: number; productCount: number; confidence: SchemaConfidence; source: 'facets-api' | 'legacy-sampling' }> = new Map();
 const cacheKey = (pagetitle: string) => `${CATEGORY_OPTIONS_CACHE_VERSION}:${pagetitle}`;
 
 // =============================================================================
@@ -1484,11 +1500,11 @@ function optionAliassRegistrySafeSet(key: string, aliases: string[]) {
 async function getCategoryOptionsSchema(
   categoryPagetitle: string,
   apiToken: string
-): Promise<{ schema: Map<string, { caption: string; values: Set<string> }>; productCount: number; cacheHit: boolean }> {
+): Promise<CategorySchemaResult> {
   const cached = categoryOptionsCache.get(cacheKey(categoryPagetitle));
   if (cached && Date.now() - cached.ts < CATEGORY_OPTIONS_TTL_MS) {
-    console.log(`[CategoryOptionsSchema] cache HIT "${categoryPagetitle}" (${cached.schema.size} keys, ${cached.productCount} products, age=${Math.round((Date.now() - cached.ts) / 1000)}s)`);
-    return { schema: cached.schema, productCount: cached.productCount, cacheHit: true };
+    console.log(`[CategoryOptionsSchema] cache HIT "${categoryPagetitle}" (${cached.schema.size} keys, ${cached.productCount} products, conf=${cached.confidence}, src=${cached.source}, age=${Math.round((Date.now() - cached.ts) / 1000)}s)`);
+    return { schema: cached.schema, productCount: cached.productCount, cacheHit: true, confidence: cached.confidence, source: 'cache' };
   }
 
   const t0 = Date.now();
@@ -1535,7 +1551,7 @@ async function getCategoryOptionsSchema(
   }
 
   if (!res) {
-    console.log(`[CategoryOptionsSchema] retry_failed cat="${categoryPagetitle}" total_ms=${Date.now() - t0} err="${(lastError as Error)?.message || 'unknown'}" → falling back to legacy sampling`);
+    console.log(`[CategoryOptionsSchema] retry_failed cat="${categoryPagetitle}" total_ms=${Date.now() - t0} err="${(lastError as Error)?.message || 'unknown'}" → falling back to legacy sampling (will be marked confidence=partial)`);
     return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken);
   }
 
@@ -1587,12 +1603,12 @@ async function getCategoryOptionsSchema(
     }
 
     dedupeSchemaInPlace(schema, `facets:${categoryPagetitle}`);
-    categoryOptionsCache.set(cacheKey(categoryPagetitle), { schema, ts: Date.now(), productCount: totalProducts });
+    categoryOptionsCache.set(cacheKey(categoryPagetitle), { schema, ts: Date.now(), productCount: totalProducts, confidence: 'full', source: 'facets-api' });
     const keysWithZero = Array.from(schema.values()).filter(i => i.values.size === 0).length;
     const totalValuesPostDedupe = Array.from(schema.values()).reduce((s, i) => s + i.values.size, 0);
-    console.log(`[FacetsHealth] cat="${categoryPagetitle}" source=facets-api keys=${schema.size} keys_with_zero_values=${keysWithZero} total_values=${totalValuesPostDedupe} products=${totalProducts}`);
-    console.log(`[CategoryOptionsSchema] /categories/options HIT "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values, ${totalProducts} products, ${Date.now() - t0}ms (cached 30m, post-dedupe)`);
-    return { schema, productCount: totalProducts, cacheHit: false };
+    console.log(`[FacetsHealth] cat="${categoryPagetitle}" source=facets-api confidence=full keys=${schema.size} keys_with_zero_values=${keysWithZero} total_values=${totalValuesPostDedupe} products=${totalProducts}`);
+    console.log(`[CategoryOptionsSchema] /categories/options HIT "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values, ${totalProducts} products, ${Date.now() - t0}ms (cached 30m, post-dedupe, confidence=full)`);
+    return { schema, productCount: totalProducts, cacheHit: false, confidence: 'full', source: 'facets-api' };
   } catch (e) {
     console.log(`[CategoryOptionsSchema] /categories/options parse error for "${categoryPagetitle}": ${(e as Error).message} → falling back to legacy sampling`);
     return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken);
@@ -1605,7 +1621,7 @@ async function getCategoryOptionsSchema(
 async function getCategoryOptionsSchemaLegacy(
   categoryPagetitle: string,
   apiToken: string
-): Promise<{ schema: Map<string, { caption: string; values: Set<string> }>; productCount: number; cacheHit: boolean }> {
+): Promise<CategorySchemaResult> {
   const t0 = Date.now();
   const schema: Map<string, { caption: string; values: Set<string> }> = new Map();
   let totalProducts = 0;
@@ -1661,19 +1677,22 @@ async function getCategoryOptionsSchemaLegacy(
     const totalValues = Array.from(schema.values()).reduce((s, v) => s + v.values.size, 0);
     // Don't cache obviously broken results — let next call retry the API.
     if (schema.size === 0 || totalValues === 0) {
-      console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values — NOT caching (degraded result)`);
-      return { schema, productCount: totalProducts, cacheHit: false };
+      console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values — NOT caching (confidence=empty)`);
+      return { schema, productCount: totalProducts, cacheHit: false, confidence: 'empty', source: 'legacy-sampling' };
     }
     dedupeSchemaInPlace(schema, `legacy:${categoryPagetitle}`);
-    categoryOptionsCache.set(cacheKey(categoryPagetitle), { schema, ts: Date.now(), productCount: totalProducts });
+    // CONFIDENCE=PARTIAL — legacy sampling sees ≤1000 products. For categories with
+    // 2000+ items (Розетки = 2078) values are guaranteed to be a subset of reality.
+    // Resolver layer must NOT trust this for value validation.
+    categoryOptionsCache.set(cacheKey(categoryPagetitle), { schema, ts: Date.now(), productCount: totalProducts, confidence: 'partial', source: 'legacy-sampling' });
     const keysWithZero = Array.from(schema.values()).filter(i => i.values.size === 0).length;
     const totalValuesPostDedupe = Array.from(schema.values()).reduce((s, i) => s + i.values.size, 0);
-    console.log(`[FacetsHealth] cat="${categoryPagetitle}" source=legacy-sampling keys=${schema.size} keys_with_zero_values=${keysWithZero} total_values=${totalValuesPostDedupe} products=${totalProducts}`);
-    console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values (from ${totalProducts} products, ${Date.now() - t0}ms, cached 30m, post-dedupe)`);
-    return { schema, productCount: totalProducts, cacheHit: false };
+    console.log(`[FacetsHealth] cat="${categoryPagetitle}" source=legacy-sampling confidence=partial keys=${schema.size} keys_with_zero_values=${keysWithZero} total_values=${totalValuesPostDedupe} products=${totalProducts}`);
+    console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values (from ${totalProducts} products, ${Date.now() - t0}ms, cached 30m, post-dedupe, confidence=partial)`);
+    return { schema, productCount: totalProducts, cacheHit: false, confidence: 'partial', source: 'legacy-sampling' };
   } catch (e) {
-    console.log(`[CategoryOptionsSchemaLegacy] error for "${categoryPagetitle}": ${(e as Error).message} — returning empty schema`);
-    return { schema: new Map(), productCount: 0, cacheHit: false };
+    console.log(`[CategoryOptionsSchemaLegacy] error for "${categoryPagetitle}": ${(e as Error).message} — returning empty schema (confidence=empty)`);
+    return { schema: new Map(), productCount: 0, cacheHit: false, confidence: 'empty', source: 'legacy-sampling' };
   }
 }
 
@@ -4510,9 +4529,10 @@ serve(async (req) => {
           
           // Step 1: Fetch FULL category option schema (authoritative — covers all products,
           // not just a 50-item sample). Falls back to sample-based schema inside resolver if empty.
-          const slotPrebuiltResult = appSettings.volt220_api_token
-            ? await getCategoryOptionsSchema(sp.category, appSettings.volt220_api_token).catch(() => ({ schema: new Map<string, { caption: string; values: Set<string> }>(), productCount: 0, cacheHit: false }))
-            : { schema: new Map<string, { caption: string; values: Set<string> }>(), productCount: 0, cacheHit: false };
+          const emptyResult: CategorySchemaResult = { schema: new Map(), productCount: 0, cacheHit: false, confidence: 'empty', source: 'none' };
+          const slotPrebuiltResult: CategorySchemaResult = appSettings.volt220_api_token
+            ? await getCategoryOptionsSchema(sp.category, appSettings.volt220_api_token).catch(() => emptyResult)
+            : emptyResult;
           const slotPrebuilt = slotPrebuiltResult.schema;
           console.log(`[Chat] Slot prebuilt schema for "${sp.category}": ${slotPrebuilt.size} keys`);
           // Still fetch a small product sample as fallback (in case prebuilt schema is empty)
