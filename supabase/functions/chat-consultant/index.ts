@@ -3192,14 +3192,16 @@ ${JSON.stringify(modifiers)}
     const matchedModifiers = new Set<string>();
     const sourceModifierForKey: Record<string, string> = {};
     const failedModifiers = new Set<string>();
-    const norm = (s: string) => s.replace(/ё/g, 'е').toLowerCase().trim();
+    // Null-safe: any of (rawKey, value, schema value v) may be undefined/null in degraded payloads.
+    const norm = (s: unknown) => (typeof s === 'string' ? s : '').replace(/ё/g, 'е').toLowerCase().trim();
 
     for (const [rawKey, value] of Object.entries(filters)) {
       if (typeof value !== 'string') continue;
+      if (typeof rawKey !== 'string' || !rawKey) continue;
       // Try exact match first, then strip caption suffix like " (Цвет)"
       let resolvedKey = rawKey;
       if (!optionIndex.has(resolvedKey)) {
-        const stripped = resolvedKey.split(' (')[0].trim();
+        const stripped = (resolvedKey ?? '').split(' (')[0].trim();
         if (optionIndex.has(stripped)) {
           resolvedKey = stripped;
         }
@@ -3208,11 +3210,12 @@ ${JSON.stringify(modifiers)}
         // KEY exists — now validate VALUE against known values in schema
         const knownValues = optionIndex.get(resolvedKey)!.values;
        const matchedValue = [...knownValues].find(v => {
+         if (!v) return false; // guard: undefined/null/empty in degraded schemas
          const nv = norm(v);
          const nval = norm(value);
          if (nv === nval) return true;
          // Bilingual values: "накладной//бетіне орнатылған" — match Russian part before "//"
-         const ruPart = nv.split('//')[0].trim();
+         const ruPart = (nv ?? '').split('//')[0].trim();
          return ruPart === nval;
        });
         
