@@ -1337,23 +1337,59 @@ function keyPrefix(key: string): string {
 // so it is naturally excluded by prefix-equality).
 const FORCE_MERGE_PREFIXES = new Set<string>(['cvet']);
 
+// Kazakh-suffix family normalization. Real-world dup pattern from 220volt:
+//   cvet__tүs   ↔ cvet__tүsі   (translit suffix differ by trailing і)
+//   garantiynyy ↔ garantiynyi  (Russian translit variants)
+// Strategy: collapse trailing Kazakh case/affix endings AND common translit
+// variants on the part AFTER "__" so that minor spelling drift collapses to
+// one canonical bucket. Idempotent. No external dependencies.
+function normalizeKeyForFuzzyMerge(key: string): string {
+  const idx = key.indexOf('__');
+  if (idx < 0) return key;
+  const prefix = key.slice(0, idx);
+  let suffix = key.slice(idx + 2);
+  // Strip trailing Kazakh-case affixes (longest first to avoid partial collisions).
+  // Covers і / ы / нің / тің / ің / ғі / гі — common nominative/genitive endings
+  // that surface in 220volt option keys.
+  suffix = suffix.replace(/(ң?нің|ң?тің|ң?ің|ғі|гі|і|ы)$/u, '');
+  // Common Russian translit variant: trailing -yy ↔ -yi (garantiynyy / garantiynyi).
+  suffix = suffix.replace(/yy$/, 'y').replace(/yi$/, 'y');
+  return `${prefix}__${suffix}`;
+}
+
 /**
  * Collapse duplicate keys in a schema (in-place). Two keys are considered
  * aliases when they have the SAME key-prefix (substring before first "__")
  * AND the same normalized caption. Force-merge families (cvet) ignore the
  * caption check — any two cvet__* keys are merged together.
  *
+ * Pass 2 (post-caption-merge): collapse residual duplicates within the same
+ * prefix when their suffixes differ only by Kazakh case affixes or yy/yi
+ * translit drift. Catches cvet__tүs ↔ cvet__tүsі that survive the caption
+ * pass because their captions are literally different strings.
+ *
  * Side effects:
  *  - mutates `schema` (deletes alias entries, keeps representative)
- *  - merges values from aliases into the representative's values set
+ *  - merges values from aliases into the representative's values set (null-safe)
  *  - writes representative→[aliases incl self] mapping into optionAliasesRegistry
  *
  * Representative selection: key with the largest values set wins; ties → first
- * alphabetically. This keeps logging/debug stable.
+ * alphabetically. This keeps logging/debug stable across runs.
  */
 function dedupeSchemaInPlace(schema: Map<string, { caption: string; values: Set<string> }>, contextLabel: string): void {
   if (!schema || schema.size < 2) return;
 
+  // Diagnostic: surface known-duplicate families BEFORE dedupe so we can see
+  // exactly what came from the API in logs (helps explain regressions).
+  const KNOWN_DUP_FAMILIES = ['cvet', 'garantiynyy', 'garantiynyi', 'stepeny_zaschity', 'srok_slughby', 'material'];
+  for (const family of KNOWN_DUP_FAMILIES) {
+    const matching = Array.from(schema.keys()).filter(k => k === family || k.startsWith(family + '__'));
+    if (matching.length >= 2) {
+      console.log(`[DedupDebug] ${contextLabel}: BEFORE family="${family}" (${matching.length} keys): ${JSON.stringify(matching)}`);
+    }
+  }
+
+  // ===== PASS 1: prefix + caption (existing behavior) =====
   // Group: prefix → captionNormalized → list of {key, info}
   const groups: Map<string, Map<string, Array<{ key: string; info: { caption: string; values: Set<string> } }>>> = new Map();
   for (const [key, info] of schema.entries()) {
@@ -1379,17 +1415,66 @@ function dedupeSchemaInPlace(schema: Map<string, { caption: string; values: Set<
       const rep = members[0];
       const aliasList: string[] = members.map(m => m.key);
 
-      // Union all values into representative.
+      // Union all values into representative (null-safe — degraded payloads
+      // can leak undefined/empty into Sets).
       for (let i = 1; i < members.length; i++) {
-        for (const v of members[i].info.values) rep.info.values.add(v);
+        for (const v of members[i].info.values) if (v) rep.info.values.add(v);
         schema.delete(members[i].key);
       }
 
       optionAliasesRegistry.set(rep.key, aliasList);
-      console.log(`[OptionAliases] ${contextLabel}: grouped under "${rep.key}" (caption="${rep.info.caption.split('//')[0]}", prefix="${prefix}"): [${aliasList.join(', ')}] — ${rep.info.values.size} values total`);
+      console.log(`[OptionAliases] ${contextLabel}: grouped under "${rep.key}" (caption="${(rep.info.caption ?? '').split('//')[0]}", prefix="${prefix}"): [${aliasList.join(', ')}] — ${rep.info.values.size} values total`);
+    }
+  }
+
+  // ===== PASS 2: Kazakh-suffix / translit fuzzy merge =====
+  // After PASS 1 there may still be residual dups whose captions differ literally
+  // (e.g. cvet__tүs caption="Цвет" vs cvet__tүsі caption="Цвет //Түсі") OR captions
+  // are bilingually-formatted differently. Collapse by fuzzy-normalized key.
+  const fuzzyGroups: Map<string, Array<{ key: string; info: { caption: string; values: Set<string> } }>> = new Map();
+  for (const [key, info] of schema.entries()) {
+    const normKey = normalizeKeyForFuzzyMerge(key);
+    if (normKey === key && !key.includes('__')) continue; // skip prefix-less keys
+    if (!fuzzyGroups.has(normKey)) fuzzyGroups.set(normKey, []);
+    fuzzyGroups.get(normKey)!.push({ key, info });
+  }
+
+  for (const [normKey, members] of fuzzyGroups.entries()) {
+    if (members.length < 2) continue;
+    members.sort((a, b) => {
+      const sizeDiff = b.info.values.size - a.info.values.size;
+      if (sizeDiff !== 0) return sizeDiff;
+      return a.key.localeCompare(b.key);
+    });
+    const rep = members[0];
+    const mergedKeys: string[] = [rep.key];
+    for (let i = 1; i < members.length; i++) {
+      for (const v of members[i].info.values) if (v) rep.info.values.add(v);
+      schema.delete(members[i].key);
+      mergedKeys.push(members[i].key);
+    }
+    // Update aliases registry: union with whatever PASS 1 wrote (don't drop existing aliases).
+    const existing = optionAliasesRegistry.get(rep.key) || [rep.key];
+    const aliasUnion = Array.from(new Set([...existing, ...mergedKeys]));
+    optionAliassRegistrySafeSet(rep.key, aliasUnion);
+    console.log(`[ForceMerge] ${contextLabel}: fuzzy-merged ${mergedKeys.length} keys into "${rep.key}" (norm="${normKey}"): [${mergedKeys.join(', ')}] — ${rep.info.values.size} values total`);
+  }
+
+  // Diagnostic: AFTER pass — what's left for the same families.
+  for (const family of KNOWN_DUP_FAMILIES) {
+    const matching = Array.from(schema.keys()).filter(k => k === family || k.startsWith(family + '__'));
+    if (matching.length >= 2) {
+      console.log(`[DedupDebug] ${contextLabel}: AFTER family="${family}" still has ${matching.length} keys: ${JSON.stringify(matching)}`);
     }
   }
 }
+
+// Safe wrapper — keeps optionAliasesRegistry write contract identical to PASS 1
+// (one place to change if we ever scope the registry per-request).
+function optionAliassRegistrySafeSet(key: string, aliases: string[]) {
+  optionAliasesRegistry.set(key, aliases);
+}
+
 
 
 async function getCategoryOptionsSchema(
