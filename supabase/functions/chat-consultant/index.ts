@@ -1621,7 +1621,7 @@ async function getCategoryOptionsSchema(
 async function getCategoryOptionsSchemaLegacy(
   categoryPagetitle: string,
   apiToken: string
-): Promise<{ schema: Map<string, { caption: string; values: Set<string> }>; productCount: number; cacheHit: boolean }> {
+): Promise<CategorySchemaResult> {
   const t0 = Date.now();
   const schema: Map<string, { caption: string; values: Set<string> }> = new Map();
   let totalProducts = 0;
@@ -1677,19 +1677,22 @@ async function getCategoryOptionsSchemaLegacy(
     const totalValues = Array.from(schema.values()).reduce((s, v) => s + v.values.size, 0);
     // Don't cache obviously broken results — let next call retry the API.
     if (schema.size === 0 || totalValues === 0) {
-      console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values — NOT caching (degraded result)`);
-      return { schema, productCount: totalProducts, cacheHit: false };
+      console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values — NOT caching (confidence=empty)`);
+      return { schema, productCount: totalProducts, cacheHit: false, confidence: 'empty', source: 'legacy-sampling' };
     }
     dedupeSchemaInPlace(schema, `legacy:${categoryPagetitle}`);
-    categoryOptionsCache.set(cacheKey(categoryPagetitle), { schema, ts: Date.now(), productCount: totalProducts });
+    // CONFIDENCE=PARTIAL — legacy sampling sees ≤1000 products. For categories with
+    // 2000+ items (Розетки = 2078) values are guaranteed to be a subset of reality.
+    // Resolver layer must NOT trust this for value validation.
+    categoryOptionsCache.set(cacheKey(categoryPagetitle), { schema, ts: Date.now(), productCount: totalProducts, confidence: 'partial', source: 'legacy-sampling' });
     const keysWithZero = Array.from(schema.values()).filter(i => i.values.size === 0).length;
     const totalValuesPostDedupe = Array.from(schema.values()).reduce((s, i) => s + i.values.size, 0);
-    console.log(`[FacetsHealth] cat="${categoryPagetitle}" source=legacy-sampling keys=${schema.size} keys_with_zero_values=${keysWithZero} total_values=${totalValuesPostDedupe} products=${totalProducts}`);
-    console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values (from ${totalProducts} products, ${Date.now() - t0}ms, cached 30m, post-dedupe)`);
-    return { schema, productCount: totalProducts, cacheHit: false };
+    console.log(`[FacetsHealth] cat="${categoryPagetitle}" source=legacy-sampling confidence=partial keys=${schema.size} keys_with_zero_values=${keysWithZero} total_values=${totalValuesPostDedupe} products=${totalProducts}`);
+    console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values (from ${totalProducts} products, ${Date.now() - t0}ms, cached 30m, post-dedupe, confidence=partial)`);
+    return { schema, productCount: totalProducts, cacheHit: false, confidence: 'partial', source: 'legacy-sampling' };
   } catch (e) {
-    console.log(`[CategoryOptionsSchemaLegacy] error for "${categoryPagetitle}": ${(e as Error).message} — returning empty schema`);
-    return { schema: new Map(), productCount: 0, cacheHit: false };
+    console.log(`[CategoryOptionsSchemaLegacy] error for "${categoryPagetitle}": ${(e as Error).message} — returning empty schema (confidence=empty)`);
+    return { schema: new Map(), productCount: 0, cacheHit: false, confidence: 'empty', source: 'legacy-sampling' };
   }
 }
 
