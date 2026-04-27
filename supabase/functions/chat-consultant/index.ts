@@ -1500,11 +1500,11 @@ function optionAliassRegistrySafeSet(key: string, aliases: string[]) {
 async function getCategoryOptionsSchema(
   categoryPagetitle: string,
   apiToken: string
-): Promise<{ schema: Map<string, { caption: string; values: Set<string> }>; productCount: number; cacheHit: boolean }> {
+): Promise<CategorySchemaResult> {
   const cached = categoryOptionsCache.get(cacheKey(categoryPagetitle));
   if (cached && Date.now() - cached.ts < CATEGORY_OPTIONS_TTL_MS) {
-    console.log(`[CategoryOptionsSchema] cache HIT "${categoryPagetitle}" (${cached.schema.size} keys, ${cached.productCount} products, age=${Math.round((Date.now() - cached.ts) / 1000)}s)`);
-    return { schema: cached.schema, productCount: cached.productCount, cacheHit: true };
+    console.log(`[CategoryOptionsSchema] cache HIT "${categoryPagetitle}" (${cached.schema.size} keys, ${cached.productCount} products, conf=${cached.confidence}, src=${cached.source}, age=${Math.round((Date.now() - cached.ts) / 1000)}s)`);
+    return { schema: cached.schema, productCount: cached.productCount, cacheHit: true, confidence: cached.confidence, source: 'cache' };
   }
 
   const t0 = Date.now();
@@ -1551,7 +1551,7 @@ async function getCategoryOptionsSchema(
   }
 
   if (!res) {
-    console.log(`[CategoryOptionsSchema] retry_failed cat="${categoryPagetitle}" total_ms=${Date.now() - t0} err="${(lastError as Error)?.message || 'unknown'}" → falling back to legacy sampling`);
+    console.log(`[CategoryOptionsSchema] retry_failed cat="${categoryPagetitle}" total_ms=${Date.now() - t0} err="${(lastError as Error)?.message || 'unknown'}" → falling back to legacy sampling (will be marked confidence=partial)`);
     return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken);
   }
 
@@ -1603,12 +1603,12 @@ async function getCategoryOptionsSchema(
     }
 
     dedupeSchemaInPlace(schema, `facets:${categoryPagetitle}`);
-    categoryOptionsCache.set(cacheKey(categoryPagetitle), { schema, ts: Date.now(), productCount: totalProducts });
+    categoryOptionsCache.set(cacheKey(categoryPagetitle), { schema, ts: Date.now(), productCount: totalProducts, confidence: 'full', source: 'facets-api' });
     const keysWithZero = Array.from(schema.values()).filter(i => i.values.size === 0).length;
     const totalValuesPostDedupe = Array.from(schema.values()).reduce((s, i) => s + i.values.size, 0);
-    console.log(`[FacetsHealth] cat="${categoryPagetitle}" source=facets-api keys=${schema.size} keys_with_zero_values=${keysWithZero} total_values=${totalValuesPostDedupe} products=${totalProducts}`);
-    console.log(`[CategoryOptionsSchema] /categories/options HIT "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values, ${totalProducts} products, ${Date.now() - t0}ms (cached 30m, post-dedupe)`);
-    return { schema, productCount: totalProducts, cacheHit: false };
+    console.log(`[FacetsHealth] cat="${categoryPagetitle}" source=facets-api confidence=full keys=${schema.size} keys_with_zero_values=${keysWithZero} total_values=${totalValuesPostDedupe} products=${totalProducts}`);
+    console.log(`[CategoryOptionsSchema] /categories/options HIT "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values, ${totalProducts} products, ${Date.now() - t0}ms (cached 30m, post-dedupe, confidence=full)`);
+    return { schema, productCount: totalProducts, cacheHit: false, confidence: 'full', source: 'facets-api' };
   } catch (e) {
     console.log(`[CategoryOptionsSchema] /categories/options parse error for "${categoryPagetitle}": ${(e as Error).message} → falling back to legacy sampling`);
     return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken);
