@@ -1485,7 +1485,7 @@ async function getCategoryOptionsSchema(
   categoryPagetitle: string,
   apiToken: string
 ): Promise<{ schema: Map<string, { caption: string; values: Set<string> }>; productCount: number; cacheHit: boolean }> {
-  const cached = categoryOptionsCache.get(categoryPagetitle);
+  const cached = categoryOptionsCache.get(cacheKey(categoryPagetitle));
   if (cached && Date.now() - cached.ts < CATEGORY_OPTIONS_TTL_MS) {
     console.log(`[CategoryOptionsSchema] cache HIT "${categoryPagetitle}" (${cached.schema.size} keys, ${cached.productCount} products, age=${Math.round((Date.now() - cached.ts) / 1000)}s)`);
     return { schema: cached.schema, productCount: cached.productCount, cacheHit: true };
