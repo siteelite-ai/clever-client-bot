@@ -8,6 +8,62 @@ const corsHeaders = {
 
 const VOLT220_API_URL = 'https://220volt.kz/api/products';
 const VOLT220_CATEGORIES_URL = 'https://220volt.kz/api/categories';
+const VOLT220_CATEGORY_OPTIONS_URL = 'https://220volt.kz/api/categories/options';
+
+// =============================================================================
+// Module-level cache for category facets (full options schema per category).
+// TTL 1h — characteristics for a category change rarely.
+// Key: pagetitle (or `id:<n>` if accessed by numeric id).
+// =============================================================================
+const FACETS_TTL_MS = 60 * 60 * 1000;
+const facetsCache: Map<string, { value: any; ts: number }> = new Map();
+
+async function fetchCategoryFacets(
+  token: string,
+  opts: { pagetitle?: string; categoryId?: number | string }
+): Promise<{ category: any; options: any[]; cacheHit: boolean }> {
+  const cacheKey = opts.categoryId != null ? `id:${opts.categoryId}` : `pt:${opts.pagetitle}`;
+  const cached = facetsCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < FACETS_TTL_MS) {
+    console.log(`[Facets] cache HIT ${cacheKey} (age=${Math.round((Date.now() - cached.ts) / 1000)}s)`);
+    return { ...cached.value, cacheHit: true };
+  }
+
+  const t0 = Date.now();
+  const url = opts.categoryId != null
+    ? `${VOLT220_CATEGORIES_URL}/${encodeURIComponent(String(opts.categoryId))}/options`
+    : `${VOLT220_CATEGORY_OPTIONS_URL}?pagetitle=${encodeURIComponent(opts.pagetitle || '')}`;
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Facets API ${res.status}: ${errText.slice(0, 200)}`);
+    }
+    const raw = await res.json();
+    // API shape: { success, data: { category: {...}, options: [...] } }
+    // Some envelopes nest data twice; handle both.
+    let data = raw.data || raw;
+    if (data && typeof data === 'object' && 'data' in data && !('options' in data)) data = (data as any).data;
+    const value = {
+      category: data?.category || null,
+      options: Array.isArray(data?.options) ? data.options : [],
+    };
+    facetsCache.set(cacheKey, { value, ts: Date.now() });
+    console.log(`[Facets] cache MISS ${cacheKey} → ${value.options.length} option-keys, total_products=${value.category?.total_products ?? '?'}, ${Date.now() - t0}ms`);
+    return { ...value, cacheHit: false };
+  } catch (e) {
+    clearTimeout(timeoutId);
+    throw e;
+  }
+}
 
 // =============================================================================
 // Module-level cache for flattened category list (pagetitle[]).
@@ -125,6 +181,32 @@ serve(async (req) => {
         JSON.stringify({ categories, count: categories.length }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
+    }
+
+    // ===== Branch: category facets (full options schema for a category) =====
+    if (body && body.action === 'category_facets') {
+      const apiToken = await getApiToken();
+      const pagetitle = typeof body.pagetitle === 'string' ? body.pagetitle.trim() : undefined;
+      const categoryId = body.categoryId ?? body.category_id;
+      if (!pagetitle && categoryId == null) {
+        return new Response(
+          JSON.stringify({ error: 'category_facets requires pagetitle or categoryId' }),
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+      try {
+        const facets = await fetchCategoryFacets(apiToken, { pagetitle, categoryId });
+        return new Response(
+          JSON.stringify(facets),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      } catch (e) {
+        console.error('[Facets] error:', (e as Error).message);
+        return new Response(
+          JSON.stringify({ error: (e as Error).message, category: null, options: [] }),
+          { status: 502, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
     }
 
     // ===== Branch: search products (existing behavior) =====
