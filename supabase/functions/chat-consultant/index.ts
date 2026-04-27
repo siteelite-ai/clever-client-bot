@@ -1275,13 +1275,17 @@ function extractModifiersFromProduct(product: Product): string[] {
 // =============================================================================
 // CATEGORY OPTIONS SCHEMA CACHE
 // =============================================================================
-// For each category pagetitle, fetches a wide product sample (up to 5 pages × 200)
-// and aggregates a complete map of options keys + all observed values.
-// TTL 30m. On error → returns empty Map (caller falls back to per-product schema).
+// Source: 220volt /api/categories/options?pagetitle=... (added Apr 2026).
+// Returns the full options schema for ALL products in the category — no sampling.
+// Shape: { category: {total_products, ...}, options: [{key, caption_ru, caption_kz,
+//   values: [{value_ru, value_kz, products_count}, ...]}] }
 //
-// Why: filter-resolver LLM previously saw options union from 30-product sample.
-// If e.g. no double sockets were in those 30 → key "kolichestvo_postov" missing
-// → LLM physically cannot match "двухгнёздная". Full schema fixes this.
+// We map it to the existing internal type Map<key, {caption, values:Set<string>}>
+// where values are stored as `${value_ru}//${value_kz}` so downstream code that
+// already does .split('//')[0] keeps working untouched.
+//
+// On error or empty options[]: fallback to legacy product-sampling implementation.
+// TTL 30m, in-memory.
 const CATEGORY_OPTIONS_TTL_MS = 30 * 60 * 1000;
 const categoryOptionsCache: Map<string, { schema: Map<string, { caption: string; values: Set<string> }>; ts: number; productCount: number }> = new Map();
 
@@ -1295,6 +1299,73 @@ async function getCategoryOptionsSchema(
     return { schema: cached.schema, productCount: cached.productCount, cacheHit: true };
   }
 
+  const t0 = Date.now();
+  try {
+    const url = `https://220volt.kz/api/categories/options?pagetitle=${encodeURIComponent(categoryPagetitle)}`;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      console.log(`[CategoryOptionsSchema] /categories/options HTTP ${res.status} for "${categoryPagetitle}" → falling back to legacy sampling`);
+      return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken);
+    }
+
+    const raw = await res.json();
+    let data = raw.data || raw;
+    if (data && typeof data === 'object' && 'data' in data && !('options' in data)) data = (data as any).data;
+    const optionsArr: any[] = Array.isArray(data?.options) ? data.options : [];
+    const totalProducts: number = Number(data?.category?.total_products) || 0;
+
+    if (optionsArr.length === 0) {
+      console.log(`[CategoryOptionsSchema] /categories/options returned EMPTY options for "${categoryPagetitle}" (total_products=${totalProducts}) → falling back to legacy sampling`);
+      return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken);
+    }
+
+    const schema: Map<string, { caption: string; values: Set<string> }> = new Map();
+    let totalValues = 0;
+    for (const opt of optionsArr) {
+      if (!opt || typeof opt.key !== 'string') continue;
+      if (isExcludedOption(opt.key)) continue;
+      const captionRu = (opt.caption_ru || opt.caption || opt.key).toString().trim();
+      const captionKz = (opt.caption_kz || '').toString().trim();
+      const caption = captionKz ? `${captionRu}//${captionKz}` : captionRu;
+      const valuesSet = new Set<string>();
+      const values: any[] = Array.isArray(opt.values) ? opt.values : [];
+      for (const v of values) {
+        if (!v) continue;
+        const vr = (v.value_ru ?? v.value ?? '').toString().trim();
+        const vk = (v.value_kz ?? '').toString().trim();
+        if (!vr && !vk) continue;
+        const joined = vk ? `${vr}//${vk}` : vr;
+        valuesSet.add(joined);
+      }
+      if (valuesSet.size === 0) continue;
+      schema.set(opt.key, { caption, values: valuesSet });
+      totalValues += valuesSet.size;
+    }
+
+    categoryOptionsCache.set(categoryPagetitle, { schema, ts: Date.now(), productCount: totalProducts });
+    console.log(`[CategoryOptionsSchema] /categories/options HIT "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values, ${totalProducts} products, ${Date.now() - t0}ms (cached 30m)`);
+    return { schema, productCount: totalProducts, cacheHit: false };
+  } catch (e) {
+    console.log(`[CategoryOptionsSchema] /categories/options error for "${categoryPagetitle}": ${(e as Error).message} → falling back to legacy sampling`);
+    return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken);
+  }
+}
+
+// Legacy implementation: samples up to 5×200 products and aggregates options manually.
+// Kept as a safety fallback for the first weeks after switching to /categories/options.
+// If logs show zero invocations for 7 days — delete.
+async function getCategoryOptionsSchemaLegacy(
+  categoryPagetitle: string,
+  apiToken: string
+): Promise<{ schema: Map<string, { caption: string; values: Set<string> }>; productCount: number; cacheHit: boolean }> {
   const t0 = Date.now();
   const schema: Map<string, { caption: string; values: Set<string> }> = new Map();
   let totalProducts = 0;
@@ -1320,7 +1391,7 @@ async function getCategoryOptionsSchema(
       clearTimeout(timeoutId);
 
       if (!res.ok) {
-        console.log(`[CategoryOptionsSchema] HTTP ${res.status} on page ${page} for "${categoryPagetitle}", aborting`);
+        console.log(`[CategoryOptionsSchemaLegacy] HTTP ${res.status} on page ${page} for "${categoryPagetitle}", aborting`);
         break;
       }
       const raw = await res.json();
@@ -1343,16 +1414,16 @@ async function getCategoryOptionsSchema(
       }
 
       totalPages = Math.max(1, Number(data.pagination?.pages) || 1);
-      if (results.length < PER_PAGE) break; // last page
+      if (results.length < PER_PAGE) break;
       page++;
     } while (page <= totalPages && page <= MAX_PAGES);
 
     categoryOptionsCache.set(categoryPagetitle, { schema, ts: Date.now(), productCount: totalProducts });
     const totalValues = Array.from(schema.values()).reduce((s, v) => s + v.values.size, 0);
-    console.log(`[CategoryOptionsSchema] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values (from ${totalProducts} products, ${Date.now() - t0}ms, cached 30m)`);
+    console.log(`[CategoryOptionsSchemaLegacy] "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values (from ${totalProducts} products, ${Date.now() - t0}ms, cached 30m)`);
     return { schema, productCount: totalProducts, cacheHit: false };
   } catch (e) {
-    console.log(`[CategoryOptionsSchema] error for "${categoryPagetitle}": ${(e as Error).message} — returning empty schema`);
+    console.log(`[CategoryOptionsSchemaLegacy] error for "${categoryPagetitle}": ${(e as Error).message} — returning empty schema`);
     return { schema: new Map(), productCount: 0, cacheHit: false };
   }
 }
