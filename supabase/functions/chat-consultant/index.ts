@@ -1492,17 +1492,54 @@ async function getCategoryOptionsSchema(
   }
 
   const t0 = Date.now();
-  try {
-    const url = `https://220volt.kz/api/categories/options?pagetitle=${encodeURIComponent(categoryPagetitle)}`;
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 12000);
-    const res = await fetch(url, {
-      method: 'GET',
-      headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
+  const url = `https://220volt.kz/api/categories/options?pagetitle=${encodeURIComponent(categoryPagetitle)}`;
 
+  // Inner: one fetch attempt with its own timeout/abort. Returns raw response or throws.
+  const attemptFetch = async (attemptNo: number, timeoutMs: number): Promise<Response> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, {
+        method: 'GET',
+        headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+        signal: controller.signal,
+      });
+      return res;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  };
+
+  let res: Response | null = null;
+  let lastError: unknown = null;
+  // Attempt 1: 6s timeout. Attempt 2 (only on abort/network error): 8s after 300ms delay.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const tAttempt = Date.now();
+      res = await attemptFetch(attempt, attempt === 1 ? 6000 : 8000);
+      if (attempt === 2) {
+        console.log(`[CategoryOptionsSchema] retry attempt=2 cat="${categoryPagetitle}" status=${res.status} took=${Date.now() - tAttempt}ms`);
+      }
+      break;
+    } catch (e) {
+      lastError = e;
+      const isAbort = (e as any)?.name === 'AbortError' || /aborted|abort/i.test((e as Error).message);
+      if (attempt === 1 && isAbort) {
+        console.log(`[CategoryOptionsSchema] attempt=1 aborted cat="${categoryPagetitle}" took=${Date.now() - t0}ms → retrying once`);
+        await new Promise(r => setTimeout(r, 300));
+        continue;
+      }
+      // non-abort error or already retried — give up
+      break;
+    }
+  }
+
+  if (!res) {
+    console.log(`[CategoryOptionsSchema] retry_failed cat="${categoryPagetitle}" total_ms=${Date.now() - t0} err="${(lastError as Error)?.message || 'unknown'}" → falling back to legacy sampling`);
+    return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken);
+  }
+
+  try {
     if (!res.ok) {
       console.log(`[CategoryOptionsSchema] /categories/options HTTP ${res.status} for "${categoryPagetitle}" → falling back to legacy sampling`);
       return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken);
@@ -1557,7 +1594,7 @@ async function getCategoryOptionsSchema(
     console.log(`[CategoryOptionsSchema] /categories/options HIT "${categoryPagetitle}": ${schema.size} keys, ${totalValues} values, ${totalProducts} products, ${Date.now() - t0}ms (cached 30m, post-dedupe)`);
     return { schema, productCount: totalProducts, cacheHit: false };
   } catch (e) {
-    console.log(`[CategoryOptionsSchema] /categories/options error for "${categoryPagetitle}": ${(e as Error).message} → falling back to legacy sampling`);
+    console.log(`[CategoryOptionsSchema] /categories/options parse error for "${categoryPagetitle}": ${(e as Error).message} → falling back to legacy sampling`);
     return await getCategoryOptionsSchemaLegacy(categoryPagetitle, apiToken);
   }
 }
@@ -3878,22 +3915,23 @@ function needsExtendedOptions(userMessage: string): boolean {
   return EXTENDED_TRIGGERS.some(trigger => lower.includes(trigger));
 }
 
-function isExcludedOption(key: string, includeExtended: boolean = true): boolean {
+function isExcludedOption(key: unknown, includeExtended: boolean = true): boolean {
+  if (typeof key !== 'string' || key.length === 0) return true;
   if (EXCLUDED_OPTION_PREFIXES.some(prefix => key.startsWith(prefix))) return true;
   if (!includeExtended && EXTENDED_OPTION_PREFIXES.some(prefix => key.startsWith(prefix))) return true;
   return false;
 }
 
-function cleanOptionValue(value: string): string {
-  if (!value) return value;
+function cleanOptionValue(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0) return '';
   const parts = value.split('//');
-  return parts[0].trim();
+  return (parts[0] || '').trim();
 }
 
-function cleanOptionCaption(caption: string): string {
-  if (!caption) return caption;
+function cleanOptionCaption(caption: unknown): string {
+  if (typeof caption !== 'string' || caption.length === 0) return '';
   const parts = caption.split('//');
-  return parts[0].trim();
+  return (parts[0] || '').trim();
 }
 
 // Форматирование товаров для AI
@@ -3902,51 +3940,77 @@ function formatProductsForAI(products: Product[], includeExtended: boolean = tru
     return 'Товары не найдены в каталоге.';
   }
 
-  return products.map((p, i) => {
-    let brand = '';
-    if (p.options) {
-      const brandOption = p.options.find(o => o.key === 'brend__brend');
-      if (brandOption) {
-        brand = brandOption.value.split('//')[0].trim();
-      }
-    }
-    if (!brand) {
-      brand = p.vendor || '';
-    }
-    
-    const productUrl = toProductionUrl(p.url).replace(/\(/g, '%28').replace(/\)/g, '%29');
-    const safeName = p.pagetitle.replace(/\(/g, '\\(').replace(/\)/g, '\\)');
-    const nameWithLink = `[${safeName}](${productUrl})`;
-    
-    const parts = [
-      `${i + 1}. **${nameWithLink}**`,
-      `   - Цена: ${p.price.toLocaleString('ru-KZ')} ₸${p.old_price && p.old_price > p.price ? ` ~~${p.old_price.toLocaleString('ru-KZ')} ₸~~` : ''}`,
-      brand ? `   - Бренд: ${brand}` : '',
-      p.article ? `   - Артикул: ${p.article}` : '',
-      (() => {
-        const available = (p.warehouses || []).filter(w => w.amount > 0);
-        if (available.length > 0) {
-          const shown = available.slice(0, 5).map(w => `${w.city}: ${w.amount} шт.`).join(', ');
-          const extra = available.length > 5 ? ` и ещё в ${available.length - 5} городах` : '';
-          return `   - Остатки по городам: ${shown}${extra}`;
+  const lines: string[] = [];
+  for (let i = 0; i < products.length; i++) {
+    const p = products[i];
+    try {
+      let brand = '';
+      if (Array.isArray(p?.options)) {
+        const brandOption = p.options.find((o: any) => o && o.key === 'brend__brend');
+        if (brandOption) {
+          brand = cleanOptionValue(brandOption.value);
         }
-        return p.amount > 0 ? `   - В наличии: ${p.amount} шт.` : `   - Под заказ`;
-      })(),
-      p.category ? `   - Категория: [${p.category.pagetitle}](https://220volt.kz/catalog/${p.category.id})` : '',
-    ];
-    
-    if (p.options && p.options.length > 0) {
-      const specs = p.options
-        .filter(o => !isExcludedOption(o.key, includeExtended))
-        .map(o => `${cleanOptionCaption(o.caption)}: ${cleanOptionValue(o.value)}`);
-      
-      if (specs.length > 0) {
-        parts.push(`   - Характеристики: ${specs.join('; ')}`);
       }
+      if (!brand) {
+        brand = (typeof p?.vendor === 'string' ? p.vendor : '') || '';
+      }
+
+      const safeUrl = typeof p?.url === 'string' ? p.url : '';
+      const productUrl = toProductionUrl(safeUrl).replace(/\(/g, '%28').replace(/\)/g, '%29');
+      const safeName = (typeof p?.pagetitle === 'string' ? p.pagetitle : 'Товар')
+        .replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+      const nameWithLink = `[${safeName}](${productUrl})`;
+
+      const priceNum = typeof p?.price === 'number' ? p.price : 0;
+      const oldPriceNum = typeof p?.old_price === 'number' ? p.old_price : 0;
+
+      const parts = [
+        `${i + 1}. **${nameWithLink}**`,
+        `   - Цена: ${priceNum.toLocaleString('ru-KZ')} ₸${oldPriceNum > priceNum ? ` ~~${oldPriceNum.toLocaleString('ru-KZ')} ₸~~` : ''}`,
+        brand ? `   - Бренд: ${brand}` : '',
+        p?.article ? `   - Артикул: ${p.article}` : '',
+        (() => {
+          const available = (Array.isArray(p?.warehouses) ? p.warehouses : []).filter((w: any) => w && Number(w.amount) > 0);
+          if (available.length > 0) {
+            const shown = available.slice(0, 5).map((w: any) => `${w.city}: ${w.amount} шт.`).join(', ');
+            const extra = available.length > 5 ? ` и ещё в ${available.length - 5} городах` : '';
+            return `   - Остатки по городам: ${shown}${extra}`;
+          }
+          const amt = Number(p?.amount) || 0;
+          return amt > 0 ? `   - В наличии: ${amt} шт.` : `   - Под заказ`;
+        })(),
+        p?.category?.pagetitle ? `   - Категория: [${p.category.pagetitle}](https://220volt.kz/catalog/${p.category.id})` : '',
+      ];
+
+      if (Array.isArray(p?.options) && p.options.length > 0) {
+        const specs = p.options
+          .filter((o: any) => o && !isExcludedOption(o.key, includeExtended))
+          .map((o: any) => `${cleanOptionCaption(o.caption)}: ${cleanOptionValue(o.value)}`)
+          .filter((s: string) => s && !s.startsWith(': '));
+
+        if (specs.length > 0) {
+          parts.push(`   - Характеристики: ${specs.join('; ')}`);
+        }
+      }
+
+      lines.push(parts.filter(Boolean).join('\n'));
+    } catch (err) {
+      // CRITICAL: never let one bad product crash the whole response (was returning 500 → "Connection Error" in widget)
+      console.error(`[FormatCrash] product_index=${i} id=${p?.id ?? 'unknown'} pagetitle="${p?.pagetitle ?? ''}" err=${(err as Error).message}`);
+      try {
+        // Log a tiny shape diagnostic so we can find the root cause in the upstream API payload
+        const optShape = Array.isArray(p?.options)
+          ? p.options.slice(0, 3).map((o: any) => ({ key: typeof o?.key, value: typeof o?.value, caption: typeof o?.caption }))
+          : 'no_options';
+        console.error(`[FormatCrash] options_shape=${JSON.stringify(optShape)}`);
+      } catch {}
+      const safeName = (typeof p?.pagetitle === 'string' ? p.pagetitle : 'Товар').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+      const safeUrl = typeof p?.url === 'string' ? toProductionUrl(p.url).replace(/\(/g, '%28').replace(/\)/g, '%29') : '#';
+      const priceNum = typeof p?.price === 'number' ? p.price : 0;
+      lines.push(`${i + 1}. **[${safeName}](${safeUrl})** — ${priceNum.toLocaleString('ru-KZ')} ₸`);
     }
-    
-    return parts.filter(Boolean).join('\n');
-  }).join('\n\n');
+  }
+  return lines.join('\n\n');
 }
 
 function describeAppliedFilters(candidates: SearchCandidate[]): string {
@@ -3973,17 +4037,17 @@ function extractBrandsFromProducts(products: Product[]): string[] {
   
   for (const product of products) {
     let found = false;
-    if (product.options) {
-      const brandOption = product.options.find(o => o.key === 'brend__brend');
-      if (brandOption && brandOption.value) {
-        const brandName = brandOption.value.split('//')[0].trim();
+    if (Array.isArray(product?.options)) {
+      const brandOption = product.options.find((o: any) => o && o.key === 'brend__brend');
+      if (brandOption) {
+        const brandName = cleanOptionValue(brandOption.value);
         if (brandName) {
           brands.add(brandName);
           found = true;
         }
       }
     }
-    if (!found && product.vendor && product.vendor.trim()) {
+    if (!found && typeof product?.vendor === 'string' && product.vendor.trim()) {
       brands.add(product.vendor.trim());
     }
   }
@@ -5184,7 +5248,20 @@ serve(async (req) => {
                   // Honest no_match when critical filters block relaxed; otherwise text fallback
                   const filterKeys = Object.keys(resolvedFilters);
                   const allCritical = filterKeys.length > 0 && filterKeys.every(k => resolvedFiltersRaw[k]?.is_critical);
-                  if (allCritical) {
+
+                  // DEGRADED-SCHEMA UX FALLBACK: nothing got resolved AND we have unresolved modifiers AND
+                  // we have rawProducts in the bucket → show category top-N with an honest clarifying ask,
+                  // instead of returning empty (which surfaces as silence in the widget).
+                  const degradedSchema = filterKeys.length === 0 && unresolvedMods.length > 0 && rawProducts.length > 0;
+                  if (degradedSchema) {
+                    const _r = pickDisplayWithTotal(rawProducts);
+                    foundProducts = _r.displayed;
+                    totalCollected = _r.total;
+                    totalCollectedBranch = 'degraded_schema_fallback';
+                    articleShortCircuit = true;
+                    resultMode = 'degraded_schema_fallback';
+                    console.log(`[Path] DEGRADED_UX cat="${pluralCategory}" products_shown=${foundProducts.length} unresolved=[${unresolvedMods.join(', ')}]`);
+                  } else if (allCritical) {
                     console.log(`[Chat] Category-first: honest no_match (all filters critical, no products)`);
                     foundProducts = [];
                     articleShortCircuit = false;
@@ -5200,6 +5277,15 @@ serve(async (req) => {
                       { const _r = pickDisplayWithTotal(textFallback); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'text_fallback'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=text_fallback zeroFiltered=${_r.filteredZeroPrice}`); }
                       articleShortCircuit = true;
                       resultMode = 'text_fallback';
+                    } else if (rawProducts.length > 0) {
+                      // Last-resort: still show category top-N rather than silence
+                      const _r = pickDisplayWithTotal(rawProducts);
+                      foundProducts = _r.displayed;
+                      totalCollected = _r.total;
+                      totalCollectedBranch = 'category_topN_lastresort';
+                      articleShortCircuit = true;
+                      resultMode = 'category_topN_lastresort';
+                      console.log(`[Path] CATEGORY_TOPN_LASTRESORT cat="${pluralCategory}" products_shown=${foundProducts.length}`);
                     } else {
                       foundProducts = [];
                       articleShortCircuit = false;

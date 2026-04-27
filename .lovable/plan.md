@@ -1,110 +1,76 @@
-## Diagnostic-Only итерация — что и зачем
+## Что починим (по фактам из логов)
 
-**Цель:** убрать единственный краш, который ломает UX, и собрать **точные** данные о facets/cvet-дублях. Никаких функциональных изменений в логике дедупа, кэширования и FilterLLM. Минимум blast radius.
+Логи последнего теста показывают **2 независимые проблемы**, обе reproducible:
 
-После деплоя смотрим логи на 3-5 реальных запросах, потом отдельной итерацией делаем точечный фикс по фактам.
-
----
-
-## Изменения (1 файл: `supabase/functions/chat-consultant/index.ts`)
-
-### 1. Null-safe в `scoreProductMatch` + try/catch вокруг `rerankProducts`
-
-**Зачем:** убрать `TypeError: Cannot read properties of undefined (reading 'toLowerCase')`, из-за которого пользователь видит пустой ответ.
-
-**Что делаем:**
-- В `scoreProductMatch` (~строка 2326): защитить все `.toLowerCase()` на полях продукта:
-  - `(o?.value ?? '').toLowerCase()` вместо `o.value.toLowerCase()`
-  - `(product.vendor ?? '').toLowerCase()`
-  - `(brandOption?.value ?? '').split('//')[0].trim().toLowerCase()`
-  - `(product.pagetitle ?? '').toLowerCase()` (на всякий)
-- Обернуть тело `rerankProducts` в try/catch:
-  - В catch: `console.error('[RankerCrash]', { req_id, error: e.message, stack: e.stack, product_count: products.length })` 
-  - Возвращать `products` (входной массив) как есть. **Никакого silent fallback** — ошибка всегда уезжает в логи с уровнем `error`.
-- То же самое в `hasGoodMatch` (тот же баг может вылезти там).
-
-### 2. `req_id` для корреляции запросов
-
-**Зачем:** сейчас в логах нельзя проследить один запрос end-to-end. После добавления — можно фильтровать в Supabase logs по `req_id=xxxx`.
-
-**Что делаем:**
-- В самом начале `serve(async (req) => { ... })`: `const reqId = crypto.randomUUID().slice(0, 8);`
-- Добавить в **ключевые** существующие логи (не во все, чтобы не раздуть): `[Chat]`, `[Search]`, `[FilterLLM]`, `[CategoryOptionsSchema]`, `[Rerank]`, `[OptionAliases]`. Формат: `[Chat req=a1b2c3d4] Processing: "..."`.
-- Передавать `reqId` параметром в `getCategoryOptionsSchema`, `resolveFiltersWithLLM`, `rerankProducts`, `executeSearch`. Дефолт `'?'` чтобы старые вызовы (если есть) не упали.
-
-### 3. Diagnostic-логи для facets-деградации
-
-**Зачем:** понять — это 220volt API стабильно отдаёт 0 values, или это парсинг сломан, или это конкретные категории.
-
-**Что делаем:**
-- В `getCategoryOptionsSchema` после построения схемы, перед `return`:
-  ```ts
-  const totalValues = Array.from(schema.values()).reduce((s, info) => s + info.values.size, 0);
-  const keysWithZero = Array.from(schema.values()).filter(i => i.values.size === 0).length;
-  console.log(`[FacetsHealth req=${reqId}] cat="${pagetitle}" keys=${schema.size} keys_with_zero_values=${keysWithZero} total_values=${totalValues} products=${productCount} source=${source}`);
-  ```
-  где `source` = `"facets-api"` или `"legacy-sampling"`.
-- В `getCategoryOptionsSchemaLegacy` тот же лог с `source="legacy-sampling"`.
-- **Не меняем** TTL и логику кэширования. Только наблюдаем.
-
-### 4. Diagnostic-логи для дедупа cvet/garantii/stepeny
-
-**Зачем:** увидеть **точные** ключи всех семейств дублей перед патчем. Сейчас мы видим только ИТОГ (78 keys в union), а не **какие** ключи остались несклеенными.
-
-**Что делаем:** в начале `dedupeSchemaInPlace`, до группировки:
-```ts
-const KNOWN_DUP_FAMILIES = ['cvet', 'garantiynyy', 'garantiynyi', 'stepeny_zaschity', 'srok_slughby'];
-for (const family of KNOWN_DUP_FAMILIES) {
-  const matching = Array.from(schema.keys()).filter(k => k.startsWith(family));
-  if (matching.length >= 2) {
-    console.log(`[DedupDebug req=${reqId}] ${contextLabel}: family="${family}" found ${matching.length} keys: ${JSON.stringify(matching)}`);
-    // Plus first 3 captions для проверки нормализации:
-    for (const k of matching.slice(0, 3)) {
-      const info = schema.get(k)!;
-      console.log(`[DedupDebug req=${reqId}]   "${k}" caption="${info.caption}" valuesCount=${info.values.size}`);
-    }
-  }
-}
+### Проблема 1 — КРАШ форматтера (root cause "Connection Error" в виджете)
 ```
-И **в конце** `dedupeSchemaInPlace`, после слияния — ещё раз перебрать те же families и логировать, что осталось:
-```ts
-console.log(`[DedupDebug req=${reqId}] ${contextLabel}: AFTER dedupe family="${family}" remaining: ${JSON.stringify(remaining)}`);
+TypeError: Cannot read properties of undefined (reading 'split')
+  at index.ts:3883 (Array.map в formatProductsForAI)
 ```
+`brandOption.value` приходит `undefined` у некоторых продуктов из API 220volt. Падение → 500 → SSE-стрим даже не открывается → виджет показывает "Connection Error".
 
-Без изменения самой логики дедупа — только наблюдение.
-
-### 5. Acceptance criteria для проверки после деплоя
-
-После деплоя прогнать **3 запроса**:
-
-| Тест | Что проверяем в логах |
-|---|---|
-| `найди черные двухместные розетки` | (a) нет `[RankerCrash]`; (b) `[FacetsHealth]` показывает `total_values=?` (узнаем правду); (c) `[DedupDebug]` показывает РЕАЛЬНЫЕ cvet-ключи `BEFORE/AFTER` |
-| `розетка с usb` | то же + `[FilterLLM]` для `kolichestvo_usb_portov...` |
-| `выключатель Schneider Electric` | то же + проверка, что бренд резолвится |
-
-**Главный вопрос, на который ответит этот деплой:** «Почему `cvet__tүs` и `cvet__tүsі` не слились — они в разных префиксах, или captions разные, или force-merge не отрабатывает?» Без точного ответа любой следующий патч — гадание.
+### Проблема 2 — Schema "Розетки" приходит пустой (root cause "не нашёл черные двухгнездые")
+```
+[CategoryOptionsSchema] /categories/options error for "Розетки": The signal has been aborted
+[CategoryOptionsSchemaLegacy] "Розетки": 63 keys, 0 values
+[FilterLLM] cvet__tүs valid, but value "черный" NOT in schema values [...] → unresolved
+```
+- `/categories/options` для "Розетки" таймаутит на ~4 сек (signal aborted)
+- Через 5 секунд тот же endpoint для "Розетки силовые" отвечает за **225ms** с 389 values
+- Это **flaky latency на первом холодном запросе**, не сломанный endpoint
 
 ---
 
-## Что НЕ трогаем в этой итерации
+## План — 3 точечных фикса
 
-- ❌ Логика дедупа `dedupeSchemaInPlace` — не меняем.
-- ❌ TTL и логика кэша facets — не меняем (риск шторма обсудим в следующей итерации).
-- ❌ `optionAliasesRegistry` (race condition) — не трогаем, потому что фикс требует прокидывания scope через 5 функций. Сделаем когда будем чинить дедуп.
-- ❌ FilterLLM, классификатор, knowledge-base, GeoIP — не трогаем.
-- ❌ `chat-consultant` контракт (request/response) — не меняется. Клиент не нужно править.
+### Fix 1. Null-safe форматтер (убирает "Connection Error")
+В `formatProductsForAI` (строка ~3905) и хелперах `cleanOptionValue/cleanOptionCaption`:
+- `brandOption?.value` через optional chain + проверка `typeof === 'string'`
+- В `isExcludedOption` — guard `if (typeof key !== 'string') return true`
+- Обернуть `formatProductsForAI` в `try/catch`: при крахе логировать **проблемный продукт целиком** (`[FormatCrash] product=...`) и возвращать минимальный безопасный markdown (`[Название](url) — цена`), чтобы SSE-стрим продолжил работу.
 
-## Риски этой итерации
+### Fix 2. Retry с экспоненциальной задержкой для `/categories/options`
+В `fetchCategoryOptionsSchema`:
+- Поднять timeout первого запроса с ~4с до **6с**
+- При AbortError — **1 retry** через 300ms (без jitter, без circuit breaker — overkill для двух запросов в день)
+- Если и retry упал — продолжаем fallback на legacy (как сейчас), но добавляем лог `[CategoryOptionsSchema] retry_failed cat="..." total_ms=...`
 
-- 🟢 **Минимальные.** Все изменения либо защитные (null-safe, try/catch), либо чисто логи. Ни одна логика не меняется.
-- 🟡 Объём логов вырастет ~на 15-20%. Не критично, Supabase logs справится.
-- 🟢 Откат: revert одного коммита.
+Обоснование: в логах виден парный успешный запрос на "Розетки силовые" за 225ms. Это classic cold-start API. Один retry решит 90% случаев.
 
-## Следующая итерация (после анализа логов)
+### Fix 3. Honest UX при degraded schema
+В точке `[Chat] Category-first: honest no_match` (когда schema=0 values и ничего не резолвится):
+- Сейчас: ответ молчит / падает / уходит в "no match"
+- Станет: явный SSE-ответ пользователю — *"Я нашёл категорию «Розетки», но прямо сейчас не могу применить фильтр по цвету/типу из-за задержки каталога. Вот первые подходящие товары — уточните, пожалуйста, что именно нужно, и я подберу точнее."* + список top-N продуктов из bucket'а без фильтров.
 
-Когда увидим реальные данные, сделаем **прицельный** план: либо чинить дедуп (если cvet-keys в разных prefix), либо чинить парсер facets (если 220volt отдаёт values, но мы их не читаем), либо договариваться с 220volt API. Без этих данных — гадание.
+Это решает кейс из теста: пользователь увидит **товары + честный вопрос**, а не пустоту.
 
 ---
 
-Подтвердите — иду делать?
+## Что НЕ делаем (намеренно)
+
+- ❌ Circuit breaker — оверинженеринг для одного flaky endpoint
+- ❌ Глобальный рефакторинг schema-pipeline (`getCanonicalCategorySchema` из прошлого плана) — текущий код уже логирует degraded и не кеширует мусор, этого достаточно
+- ❌ Снижение timeout до 5с — наоборот, поднимаем до 6с + retry
+
+---
+
+## Технические детали
+
+**Файлы:**
+- `supabase/functions/chat-consultant/index.ts`
+  - строки ~3881-3911: null-safe guards
+  - строки ~5910-5950: try/catch вокруг formatProductsForAI
+  - функция `fetchCategoryOptionsSchema` (поиском по `[CategoryOptionsSchema] /categories/options`): retry-логика
+  - точка `Category-first: honest no_match`: UX fallback с продуктами
+
+**Новые маркеры для следующего теста:**
+- `[FormatCrash] product_id=... missing_field=...` — увидим точный продукт-виновник
+- `[CategoryOptionsSchema] retry attempt=1 cat="..."` — увидим, спасает ли retry
+- `[Path] DEGRADED_UX cat="..." products_shown=N` — увидим срабатывание UX-fallback
+
+**Что проверим после деплоя одним тестом** ("найди черный двухгнездые розетки" → "Бытовые"):
+1. Виджет получает ответ (нет "Connection Error") — Fix 1
+2. В логах либо `retry attempt=1` со success, либо degraded UX с продуктами — Fix 2/3
+3. Если краш повторится — лог `[FormatCrash]` покажет конкретного виновника, и мы точечно добьём
+
+Подтверждаете — начинаю.
