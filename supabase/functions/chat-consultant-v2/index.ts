@@ -52,6 +52,10 @@ import {
   createKnowledgeDeps,
   type KnowledgeBranchOutput,
 } from "./s-knowledge.ts";
+import {
+  composeKnowledgeAnswer,
+  createRespondDeps,
+} from "./s5-respond.ts";
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 const corsHeaders = {
@@ -60,7 +64,7 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const BUILD_MARKER = "v2-step9-knowledge-fts-2026-04-28";
+const BUILD_MARKER = "v2-step10-s5-respond-knowledge-2026-04-28";
 
 // ─── Контракт V2 запроса (Zod) ───────────────────────────────────────────────
 // Сохраняем backward-compat с виджетом: conversationId/query/messages/dialogSlots.
@@ -312,27 +316,69 @@ serve(async (req) => {
           sseChunk({ slot_update: { slots: decision.next_state.slots } }),
         );
 
-        // ── Step 8/9: ветки → реальный исполнитель;
-        //    Catalog ветки → placeholder до Steps 10–11.
+        // ── Step 8/9/10: ветки → реальный исполнитель;
+        //    Catalog ветки → placeholder до Step 11.
         const tBranch0 = Date.now();
         let branchOut: BranchOutput | null = null;
         let knowledgeOut: KnowledgeBranchOutput | null = null;
+        // Step 10: композер для S_KNOWLEDGE
+        let composedText: string | null = null;
+        let composedUsage: {
+          input_tokens: number;
+          output_tokens: number;
+          total_tokens: number;
+          model: string;
+        } | null = null;
+        let composedGreetingStripped: string | null = null;
+        let composeMs = 0;
 
         if (decision.route === "S_KNOWLEDGE") {
           // Step 9: FTS-only поиск по БЗ + cache `kb:<hash>` (TTL 1ч).
-          // chunks уйдут в meta для последующего LLM-композера (Step 10).
           knowledgeOut = await runKnowledge(decision.effective_message, knowledgeDeps);
+
+          // Step 10: LLM-композер.
+          // Если has_results=false — всё равно вызываем композер: он честно
+          // скажет, что точной справки нет (см. SYSTEM_PROMPT_KNOWLEDGE).
+          // Это лучше, чем шаблонный fallback из knowledgeOut.text.
+          const respondDeps = createRespondDeps(openRouterKey);
+          const tCompose0 = Date.now();
+          try {
+            const composed = await composeKnowledgeAnswer(
+              {
+                query: decision.effective_message,
+                chunks: knowledgeOut.chunks,
+                history: chatReq.history,
+                onDelta: (delta) => {
+                  // Эмитим финальный (уже после Greetings Guard L2) текст
+                  // одним SSE-чанком. См. контракт composeKnowledgeAnswer:
+                  // onDelta вызывается ровно один раз с очищенным текстом.
+                  controller.enqueue(
+                    sseChunk({ choices: [{ delta: { content: delta } }] }),
+                  );
+                },
+              },
+              respondDeps,
+            );
+            composedText = composed.text;
+            composedUsage = composed.usage;
+            composedGreetingStripped = composed.greeting_stripped;
+          } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            console.error(`[v2.s5_respond] failed trace=${traceId}: ${msg}`);
+            // Soft fallback: шлём текст-заглушку из knowledgeOut, чтобы
+            // пользователь хоть что-то получил.
+            composedText = knowledgeOut.text;
+            controller.enqueue(
+              sseChunk({ choices: [{ delta: { content: composedText } }] }),
+            );
+          }
+          composeMs = Date.now() - tCompose0;
         } else {
           branchOut = await runLightBranch(decision, contactsDeps);
         }
         const branchMs = Date.now() - tBranch0;
 
         const isLight = branchOut !== null || knowledgeOut !== null;
-        const text = branchOut
-          ? branchOut.text
-          : knowledgeOut
-          ? knowledgeOut.text
-          : renderPlaceholder(decision);
 
         // Виджет (ChatWidget.tsx ≈ 175-179) рендерит side-channel `contacts`
         // как отдельную карточку. Эмитируем её ТОЛЬКО для S_ESCALATION,
@@ -345,37 +391,52 @@ serve(async (req) => {
           controller.enqueue(sseChunk({ contacts: branchOut.contacts_card }));
         }
 
+        // Для не-knowledge веток текст ещё не отправлен — отправляем сейчас.
+        // Knowledge уже стримился в композере выше.
+        if (knowledgeOut === null) {
+          const text = branchOut ? branchOut.text : renderPlaceholder(decision);
+          controller.enqueue(
+            sseChunk({ choices: [{ delta: { content: text } }] }),
+          );
+        }
+
         console.log(
           `[v2.branch.done] trace=${traceId} route=${decision.route} ` +
-            `light=${isLight} ms=${branchMs} ` +
+            `light=${isLight} ms=${branchMs} compose_ms=${composeMs} ` +
             `contact_manager=${branchOut?.contact_manager_emitted ?? false} ` +
             `kb_chunks=${knowledgeOut?.chunks.length ?? "n/a"} ` +
-            `kb_cache_hit=${knowledgeOut?.cache_hit ?? "n/a"}`,
+            `kb_cache_hit=${knowledgeOut?.cache_hit ?? "n/a"} ` +
+            `greeting_stripped=${composedGreetingStripped ?? "n/a"} ` +
+            `usage_in=${composedUsage?.input_tokens ?? "n/a"} ` +
+            `usage_out=${composedUsage?.output_tokens ?? "n/a"}`,
         );
 
+        // Финальный meta-чанк (без content — content уже улетел выше).
         controller.enqueue(
           sseChunk({
-            choices: [{ delta: { content: text } }],
             meta: {
               pipeline_version: "v2",
               build: BUILD_MARKER,
-              step: 9,
+              step: 10,
               route: decision.route,
               branch_executed: isLight ? "real" : "placeholder",
               intent: decision.intent,
               s2_used_fallback: decision.s2_used_fallback,
               orchestrator_ms: orchestratorMs,
               branch_ms: branchMs,
+              compose_ms: composeMs,
               contact_manager_emitted: branchOut?.contact_manager_emitted ?? false,
-              // Step 9 → Step 10 handoff: топ-N chunks для LLM-композера.
-              // Передаём как side-channel в meta. На Step 10 композер
-              // прочитает knowledge_chunks и сгенерирует финальный ответ
-              // через OpenRouter. Сейчас они едут «в холостую» для трейса.
               knowledge: knowledgeOut
                 ? {
                     has_results: knowledgeOut.has_results,
                     cache_hit: knowledgeOut.cache_hit,
-                    chunks: knowledgeOut.chunks,
+                    chunks_count: knowledgeOut.chunks.length,
+                  }
+                : undefined,
+              compose: composedUsage
+                ? {
+                    usage: composedUsage,
+                    greeting_stripped: composedGreetingStripped,
                   }
                 : undefined,
               trace: decision.trace,
@@ -396,14 +457,14 @@ serve(async (req) => {
             choices: [{
               delta: {
                 content:
-                  `🚧 Ошибка V2-пайплайна (Step 9 orchestrator): \`${msg}\`. ` +
+                  `🚧 Ошибка V2-пайплайна (Step 10 orchestrator): \`${msg}\`. ` +
                   `Переключитесь на V1 в админке для штатной работы.`,
               },
             }],
             meta: {
               pipeline_version: "v2",
               build: BUILD_MARKER,
-              step: 9,
+              step: 10,
               error: msg,
               traceId,
             },
