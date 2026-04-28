@@ -235,3 +235,89 @@ Deno.test('orch: пустое сообщение не падает, проход
   assertEquals(r.route, 'S_PERSONA');
   assertEquals(llm.calls, 1);
 });
+
+// ─── 11. SlotState round-trip (Этап 6A, §3.3 + §5.6.1) ───────────────────────
+// orchestrator НЕ модифицирует soft404_streak — только пробрасывает.
+// Изменение стрика — задача S_CATALOG branch (Этап 6E).
+
+Deno.test('orch: slot_state.soft404_streak отсутствует у клиента → DEFAULT (0)', async () => {
+  const llm: MockLLM = { calls: 0, response: makeIntent() };
+  const r = await runPipeline(
+    makeReq({ message: 'розетка', state: { conversation_id: 'cnv', slots: [] } }),
+    makeDeps(llm),
+  );
+  assertEquals(r.next_state.slot_state?.soft404_streak, 0);
+});
+
+Deno.test('orch: slot_state.soft404_streak=1 пробрасывается без изменений', async () => {
+  const llm: MockLLM = { calls: 0, response: makeIntent() };
+  const r = await runPipeline(
+    makeReq({
+      message: 'розетка',
+      state: { conversation_id: 'cnv', slots: [], slot_state: { soft404_streak: 1 } },
+    }),
+    makeDeps(llm),
+  );
+  assertEquals(r.next_state.slot_state?.soft404_streak, 1);
+});
+
+Deno.test('orch: slot_state.soft404_streak=2 пробрасывается через pure greeting', async () => {
+  const llm: MockLLM = { calls: 0, response: makeIntent() };
+  const r = await runPipeline(
+    makeReq({
+      message: 'Здравствуйте!',
+      state: { conversation_id: 'cnv', slots: [], slot_state: { soft404_streak: 2 } },
+    }),
+    makeDeps(llm),
+  );
+  assertEquals(r.route, 'S_GREETING');
+  assertEquals(r.next_state.slot_state?.soft404_streak, 2);
+  assertEquals(llm.calls, 0);
+});
+
+Deno.test('orch: slot_state пробрасывается через slot match (S2 пропущен)', async () => {
+  const slot = createSlot({
+    type: 'category_disambiguation',
+    options: [{ label: 'бытовые', value: 'бытовые' }],
+    pending_query: 'розетки',
+    pending_modifiers: ['чёрные'],
+    pending_filters: null,
+    now: Date.now(),
+  });
+  const llm: MockLLM = { calls: 0, response: makeIntent() };
+  const r = await runPipeline(
+    makeReq({
+      message: 'бытовые',
+      state: {
+        conversation_id: 'cnv',
+        slots: [slot],
+        slot_state: { soft404_streak: 1 },
+      },
+    }),
+    makeDeps(llm),
+  );
+  assert(r.slot_match);
+  assertEquals(llm.calls, 0, 'S2 пропущен при slot match');
+  assertEquals(r.next_state.slot_state?.soft404_streak, 1);
+});
+
+Deno.test('orch: slot_state пробрасывается через S2 fallback ветку', async () => {
+  const llm: MockLLM = {
+    calls: 0,
+    response: () => {
+      throw new Error('LLM down');
+    },
+  };
+  const r = await runPipeline(
+    makeReq({
+      message: 'розетка',
+      state: { conversation_id: 'cnv', slots: [], slot_state: { soft404_streak: 2 } },
+    }),
+    makeDeps(llm),
+  );
+  // s2-classifier при ошибке возвращает safeFallback (не throw),
+  // s2_used_fallback может быть true или false в зависимости от реализации;
+  // главное — slot_state не теряется ни на одном пути.
+  assertEquals(r.next_state.slot_state?.soft404_streak, 2);
+});
+

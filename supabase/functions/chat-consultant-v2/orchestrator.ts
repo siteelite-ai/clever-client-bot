@@ -33,7 +33,9 @@ import type {
   Intent,
   PipelineTrace,
   Slot,
+  SlotState,
 } from './types.ts';
+import { DEFAULT_SLOT_STATE } from './types.ts';
 import { s0Preprocess } from './s0-preprocess.ts';
 import { s1SlotResolver, type S1Match } from './s1-slot-resolver.ts';
 import { classifyIntent, safeFallbackIntent, type ClassifierDeps } from './s2-intent-classifier.ts';
@@ -142,7 +144,12 @@ export async function runPipeline(
   const incomingState: ConversationState = req.state ?? {
     conversation_id: 'unknown',
     slots: [],
+    slot_state: { ...DEFAULT_SLOT_STATE },
   };
+  // §3.3 + §5.6.1: гарантируем slot_state — даже если клиент не прислал
+  // (backward-compat). Стрик меняется только в S_CATALOG branch (Этап 6E),
+  // orchestrator его НЕ модифицирует — только пробрасывает.
+  const carriedSlotState: SlotState = incomingState.slot_state ?? { ...DEFAULT_SLOT_STATE };
 
   // ── S0 ─────────────────────────────────────────────────────────────────
   const s0 = s0Preprocess(req.message ?? '', req.history);
@@ -168,6 +175,7 @@ export async function runPipeline(
       next_state: {
         ...incomingState,
         slots: incomingState.slots ?? [],
+        slot_state: carriedSlotState,
         last_intent: 'greeting',
       },
       trace,
@@ -198,6 +206,7 @@ export async function runPipeline(
       next_state: {
         ...incomingState,
         slots: nextSlots,
+        slot_state: carriedSlotState,
         last_intent: intent.intent,
       },
       trace,
@@ -230,6 +239,7 @@ export async function runPipeline(
       next_state: {
         ...incomingState,
         slots: s1.remaining_slots,
+        slot_state: carriedSlotState,
         last_intent: intent.intent,
         last_category_hint: intent.category_hint ?? incomingState.last_category_hint,
       },
@@ -249,6 +259,7 @@ export async function runPipeline(
       next_state: {
         ...incomingState,
         slots: s1.remaining_slots,
+        slot_state: carriedSlotState,
         last_intent: intent.intent,
       },
       trace,
