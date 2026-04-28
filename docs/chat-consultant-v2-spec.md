@@ -1721,12 +1721,32 @@ interface GoldenCase {
 | 12 | Формат markdown | 3 | проверка строгого `**[Name](URL)** — *price* ₸, brand` |
 | 13 | Soft 404 / fallback | 2 | категория есть, фильтры дают 0 → альтернативы |
 | 14 | Progressive Feedback | 4 | TC-61: SKU-запрос → `thinking seq=1` с intent=`sku_lookup` приходит в течение 600 ms; TC-62: быстрый ответ <400 ms → ни одного `thinking` event; TC-63: pipeline >3 s → приходит `thinking seq=2` (long-wait); TC-64: thinking-сообщения не попадают в `conversation_history` следующего turn'а |
+| 15 | Category Resolver & Facet Matcher | 6 | TC-69…TC-74 — см. §25.3 |
 
 ### 25.2 Критерии прохождения
 
 - ≥ 95 % кейсов проходят полностью.
-- 0 кейсов категорий 11 и 12 могут провалиться (формат — критичен).
+- 0 кейсов категорий 11, 12 и 15 могут провалиться (формат и матчинг — критичны).
 - p50 latency на golden set ≤ SLO.
+
+### 25.3 Кейсы Category Resolver и Facet Matcher (TC-69 — TC-74)
+
+Покрывают системные инварианты §6.1 [6a.1–6a.4], §9.2a, §9.3, §11.2a и §13.1.
+
+| ID | Запрос | Ожидаемый Resolver | Ожидаемый Matcher | Ожидаемый Composer / Slot | Что проверяется |
+|---|---|---|---|---|---|
+| TC-69 | «найди чёрные двугнёздные розетки» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[{цвет:"чёрный"}, {кол-во гнёзд:"2"}]`, `unresolved=[]`, `soft_matches=[{trait:"двугнёздные",reason:"numeric_equivalent",value:"2"}]` | Composer показывает товары + строка «Точного "двугнёздные" нет, использовал ближайшее: 2». Поиск выполнен один раз, без `query=`. | Полный happy-path: Resolver high-confidence, Matcher с числовым эквивалентом и soft_match. |
+| TC-70 | «графитовые розетки» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[]`, `unresolved=[{trait:"графитовые",nearest_facet_key:"cvet*",available_values:[…]}]` | FSM → `SLOT_AWAITING_CLARIFICATION`; `slot.pending_clarification` заполнен; в ответе **только** уточняющий вопрос со списком доступных цветов; **НИ ОДНОГО** товара. | Запрет поиска при unresolved, контракт §11.2a (pending_clarification). |
+| TC-71 | «двойные розетки белого цвета» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[{цвет:"белый"}, {кол-во гнёзд:"2"}]`, `soft_matches=[{trait:"двойные",value:"2",reason:"numeric_equivalent"}]` | Товары + строка о soft_match по «двойные». | Числовой эквивалент `двойная→2` + точный exact-match цвета. |
+| TC-72 | «розетка с двумя гнёздами и 16А» | `pagetitle="Розетки"`, `confidence ≥ 0.85` | `resolved=[{кол-во гнёзд:"2"}, {номинальный ток:"16"}]`, `unresolved=[]` | Товары без предупреждений. | Два независимых трейта: словесный→числовой и точный числовой. |
+| TC-73 | «двухполюсный автомат на 16» | `pagetitle="Автоматические выключатели"` (или эквивалент), `confidence ≥ 0.85` | `resolved=[{полюсность:"2"}, {номинальный ток:"16"}]` | Товары без предупреждений. | Resolver вне категории «розетки» + морфологический разбор «двухполюсный→2». |
+| TC-74 | property-based: 5 случайных синтетических трейтов на случайной категории; повторный прогон с подменой «ё↔е» и числовое слово↔цифра | — | Идемпотентный `resolved` (тот же набор `(facet_key,value)` на исходных и на нормализованных трейтах) | — | Стабильность Matcher к нормализации; защита от drift схемы. |
+
+Вспомогательные инварианты для всех TC-69…TC-74:
+
+- При `slot.pending_clarification ≠ null` ответ Composer **НЕ должен** содержать карточек товаров (см. §4.5, §11.2a).
+- При `slot.category.confidence < 0.4` Resolver обязан передать управление в Multi-bucket Fallback (§9.4); slot НЕ создаётся (см. И в §4.5).
+- Unresolved-трейт **НИКОГДА** не попадает в `?query=` строку Catalog API (см. §9.3, запрет на «query-pollution»).
 
 ---
 
