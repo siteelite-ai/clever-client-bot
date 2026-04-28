@@ -34,17 +34,13 @@ import {
 import { getOrCompute, TTL } from "./cache.ts";
 import { createCatalogComposerDeps } from "./s-catalog-composer.ts";
 import type { CatalogComposerDeps } from "./s-catalog-composer.ts";
-
-// ─── Tunables ───────────────────────────────────────────────────────────────
-
-const CATEGORIES_TTL_MS = 60 * 60 * 1000; // 1h
-const RESOLVER_LLM_MODEL_DEFAULT = "google/gemini-2.5-flash";
-const RESOLVER_HTTP_TIMEOUT_MS = 15_000;
-
-// Резолвер-пороги по умолчанию (если в app_settings.resolver_thresholds_json
-// пусто/невалидно). Подобраны как сбалансированный baseline; настраиваются
-// в админке без релиза.
-const DEFAULT_RESOLVER_THRESHOLDS = { category_high: 0.7, category_low: 0.4 };
+import {
+  CATALOG_API_BASE_URL_DEFAULT,
+  CATEGORIES_TTL_MS,
+  RESOLVER_HTTP_TIMEOUT_MS,
+  RESOLVER_LLM_MODEL_DEFAULT,
+  RESOLVER_THRESHOLDS_DEFAULT,
+} from "./config.ts";
 
 // ─── Categories live cache (module-level, TTL 1h) ───────────────────────────
 
