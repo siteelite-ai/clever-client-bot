@@ -117,9 +117,13 @@ async function streamChat({
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
       },
-      body: JSON.stringify({ 
-        messages: messages.map(m => ({ role: m.role, content: m.content })),
+      body: JSON.stringify({
+        // V2 контракт (chat-consultant-v2): явный `query` — единственный
+        // источник истины для последнего пользовательского сообщения.
+        // `messages` оставлен как backward-compat для V1.
         conversationId,
+        query,
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
         dialogSlots: activeSlots,
       }),
     });
