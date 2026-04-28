@@ -1,6 +1,8 @@
 // chat-consultant-v2 / catalog/search.ts
 // Stage 2 — Step 11.3: Strict Search Multi-Attempt с post-filter и Soft Fallback (data-layer).
 //
+// Spec sync: §4.8 + §4.8.1 (softFallbackContext.droppedFacetCaption).
+//
 // Контракт (Core Memory + spec §5.6.1 + mem://features/search-pipeline):
 //
 //   Вход:   { category?, query?, optionFilters?, optionAliases?,
