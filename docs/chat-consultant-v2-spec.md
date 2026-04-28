@@ -1024,23 +1024,57 @@ interface Category {
   id: number;                  // integer из API
   pagetitle: string;           // ключ для ?category=...
   title?: string;              // может отсутствовать в листинге дерева
+  confidence: number;          // 0..1, из §9.2a Category Resolver. 1.0 для коротких путей.
 }
 
 interface AppliedFilter {
   key: string;                 // напр. "brend__brend", "cvet"
   values: string[];            // value_ru, ровно как из CategoryOptionsResponse
-  source: 'user' | 'llm';
+  source: 'user' | 'llm' | 'soft_match';  // soft_match — применён §9.3 с confidence 0.6..0.85
+}
+
+// Мягкое совпадение: facet определён, value лексически близкое (морфология/опечатка/числовой эквивалент).
+// Применяется как фильтр; пользователю показывается предупреждение (§11.2a).
+interface SoftMatch {
+  key: string;                 // facet key
+  suggested_value: string;     // значение из schema
+  trait: string;               // исходный пользовательский трейт
+  confidence: number;          // 0.6..0.85
+  reason: 'morphology' | 'typo' | 'numeric_equivalent' | 'bilingual';
+}
+
+// Нерешённый трейт: либо facet не найден в схеме, либо найден, но value принципиально отсутствует.
+// Если присутствует nearest_facet_key+available_values → инициирует pending_clarification.
+// Иначе — просто фиксируется, поиск продолжается без него (с уведомлением в ответе).
+interface UnresolvedTrait {
+  trait: string;
+  nearest_facet_key?: string;       // если facet удалось определить, но value — нет
+  nearest_facet_caption?: string;   // caption_ru для отображения пользователю
+  available_values?: string[];      // топ-10 значений этого facet (для уточнения)
+}
+
+// Активное ожидание уточнения от пользователя. См. §5 (SLOT_AWAITING_CLARIFICATION) и §11.2a.
+// Поиск НЕ выполняется пока поле непустое.
+interface PendingClarification {
+  facet_key: string;
+  facet_caption: string;            // caption_ru
+  available_values: string[];       // показывается пользователю
+  trait: string;                    // исходный неразрешённый трейт
+  asked_at: ISO8601;                // для метрик clarification-loop
 }
 
 interface Slot {
   id: UUID;
   session_id: UUID;
-  category: Category;
-  applied_filters: AppliedFilter[];
+  category: Category;                          // включает confidence (см. выше)
+  applied_filters: AppliedFilter[];            // только resolved + применённые soft_match
+  soft_matches: SoftMatch[];                   // §9.3, для UI-предупреждений и аналитики
+  unresolved_traits: UnresolvedTrait[];        // трейты вне схемы (без pending_clarification)
+  pending_clarification?: PendingClarification; // если задан — слот в SLOT_AWAITING_CLARIFICATION
   price_range?: PriceRange;
   sort?: Sort;
   result_count?: number;
-  state: 'OPEN' | 'REFINING';
+  state: 'OPEN' | 'REFINING' | 'AWAITING_CLARIFICATION';
   created_at: ISO8601;
   last_refined_at: ISO8601;
 }
