@@ -475,7 +475,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
     // Wait for stream to complete
     await streamPromise;
-  }, [input, isLoading, messages, dialogSlots]);
+  }, [input, isLoading, messages, dialogSlots, endpoint]);
 
   const handleQuickReply = useCallback((value: string) => {
     // Re-entrancy guard: ignore clicks while a request is in flight. The ref
