@@ -223,11 +223,14 @@ Turn {
 - ❌ Слот без категории.
 - ❌ Слот с категорией, у которой `confidence < 0.4` (такой слот не создаётся — идёт §9.4 multi-bucket fallback).
 - ❌ Слот с фильтром, ключ которого отсутствует в схеме категории.
-- ❌ `pending_clarification` непустое и одновременно выполнен поиск товаров в этом turn (нарушение §11.2a).
+- ❌ `pending_clarification` непустое и одновременно выполнен поиск товаров в этом turn — **за исключением Soft Fallback (§11.2a): если `resolved.length ≥ 2`, поиск выполняется по resolved-фильтрам и товары показываются**, а уточнение становится non-blocking (доп. строкой в ответе).
 - ❌ Состояние `AWAITING_CLARIFICATION` без заполненного `pending_clarification`.
+- ❌ `pending_clarification` сохранилось при смене темы пользователем (intent=`small_talk` / `info_request` / `sku_lookup` / `product_search` с другой категорией) — должно быть **немедленно очищено** Slot Manager'ом.
+- ❌ В URL Catalog API параметр `?query=` содержит токены, не входящие в `Lexicon.canonical_tokens` (type=`name_modifier`, confidence ≥ 0.9) текущего turn'а. Любое исключение — defect категории `query_pollution`.
 - ❌ Turn без `intent`.
 - ❌ Ответ ассистента, содержащий приветствие (см. §17).
 - ❌ Ответ с товаром в формате, отличном от канонического markdown (см. §17).
+- ❌ Ответ ассистента, содержащий ссылку на товар, чей `id` отсутствует в `event: products` этого turn'а — клиент обязан скрыть такую ссылку (§17.3).
 
 ---
 
