@@ -1309,6 +1309,14 @@ interface CategorySchemaResult {
 }
 const categoryOptionsCache: Map<string, { schema: Map<string, { caption: string; values: Set<string> }>; ts: number; productCount: number; confidence: SchemaConfidence; source: 'facets-api' | 'legacy-sampling' }> = new Map();
 const cacheKey = (pagetitle: string) => `${CATEGORY_OPTIONS_CACHE_VERSION}:${pagetitle}`;
+// Single-flight: dedupes concurrent cold-loads for the same category. Without this,
+// 5 parallel buckets requesting the same /categories/options endpoint would issue
+// 5 HTTP calls and choke upstream (observed: 14s timeouts when 2 cold-loads collide).
+const inflightSchemaRequests: Map<string, Promise<CategorySchemaResult>> = new Map();
+// Stale-while-revalidate window: after TTL (30m) we still serve cached `full` data
+// for up to STALE_GRACE_MS while a background refresh runs. Never serves stale
+// `partial`/`empty` — those must always re-fetch (they were degraded to begin with).
+const STALE_GRACE_MS = 60 * 60 * 1000; // 1h beyond TTL
 
 // =============================================================================
 // OPTION ALIASES — duplicate-key collapse.
