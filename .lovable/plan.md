@@ -22,11 +22,14 @@
 
 ### Что осталось (следующая итерация)
 
-- **§25 Test Cases** — переписать TC-69..TC-103 в формате `state → input → expected pipeline trace` на синтетических моках (без реальных категорий/товаров). Legacy-кейсы с «розетки», «лампы E27», «Schneider» → абстрагировать в `<CatA>`, `<FacetKey1>`, `<BrandX>`.
-- **§22 метрики** — добавить `query_expansion_*` и `category_hallucination_total` (контракты уже описаны в §9.2b/c).
+- **§22 метрики** — добавить `query_expansion_*`, `category_hallucination_total`, `word_boundary_filter_dropped_total`, `category_snapshot_refresh_total`, `sort_param_leak_total`, `envelope_violation_total` (контракты уже описаны в §9.2a/b/c, §25).
 - **§9.4, §9.5 Domain Guard** — убрать конкретные группы (`power_socket`, `telecom`, `lighting_indoor/outdoor`) или пометить как «non-normative illustration per §0.4».
 - **§9B value_aliases** — пример `"schneider electric" → "Schneider"` — API-контракт (допустим per §0.2), но пометить.
 - **Реализация в `index.ts`** — Query Expansion, word-boundary filter, Category Resolver с live snapshot — отдельный PR после approval спеки.
+
+### Что сделано в этой итерации (28.04.2026, поздняя)
+
+9. **§25 Golden Test Suite — полная переработка.** Старые TC-69..TC-103 заменены на 70 синтетических кейсов в формате `state → api_mocks → input → expected_trace → invariants`. Введён §25.0 алфавит плейсхолдеров (`<CatA>`, `<FacetK_nonAscii>`, `<TraitRu>`, `<TokenCanon>` и т.д.). Введён §25.2 envelope-контракт `data.results[]` с инвариантами E1–E6. Категоризация по 16 областям (Category Resolver, Query Expansion, Strict Search, Soft Fallback, Pagination, SSE, Schema Dedup, API quirks, Price-sort, Cross-sell, Similar, Composer BNF, Persona, KB/escalation, fuzz). §25.21 — глобальные инварианты G1–G8.
 
 ### Архитектурные принципы (закреплены)
 

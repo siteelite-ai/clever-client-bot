@@ -2458,135 +2458,283 @@ interface EscalationPayload {
 
 ---
 
-## 25. Golden Test Suite (70 кейсов)
+## 25. Golden Test Suite
 
-Файл: `tests/golden/chat-v2.json`. Прогон при каждом PR через `bun test tests/golden`.
+**Доктрина (§0-compliant).** Все кейсы пишутся в формате `state → input → expected pipeline trace` поверх **синтетических моков** Catalog API. Конкретные категории / фасет-ключи / значения / SKU 220volt в кейсах §25 **запрещены** (D1). Реальные снапшоты живут в `.lovable/fixtures/api-snapshots/` и подключаются как фикстуры в тестовом харнессе, но контрактные ассерты §25 формулируются только в терминах структуры envelope, инвариантов и метрик.
 
-Структура кейса:
+Файл: `tests/golden/chat-v2.json` (+ `.lovable/fixtures/api-snapshots/*.json` для мок-ответов). Прогон при каждом PR через `bun test tests/golden`.
+
+### 25.0 Алфавит синтетических плейсхолдеров
+
+Во всех кейсах §25 используются **только** следующие абстрактные имена:
+
+| Плейсхолдер | Смысл |
+|---|---|
+| `<CatA>`, `<CatB>` | категории (валидные `pagetitle` в моке `/api/categories`) |
+| `<FacetK1>`, `<FacetK2>`, `<FacetK_nonAscii>` | ключи фасетов (последний — содержит non-ASCII символы, моделирует баг §9C) |
+| `<V1>`, `<V2>`, `<V_num>` | значения фасетов (`V_num` — числовое) |
+| `<TraitRu>`, `<TraitEn>` | бытовой/английский trait в реплике пользователя |
+| `<TokenCanon>` | canonical-токен из lexicon |
+| `<SkuX>` | артикул товара |
+| `<BrandX>`, `<BrandY>` | бренды |
+
+Никаких реальных значений из ассортимента 220volt в этих полях быть не может. Тест, нарушающий это, отклоняется на code-review (D4).
+
+### 25.1 Контракт кейса
+
 ```ts
 interface GoldenCase {
-  id: string;
-  description: string;
+  id: string;                             // TC-XX
+  area: 'category_resolver' | 'query_expansion' | 'strict_search'
+       | 'soft_fallback' | 'pagination' | 'sse_buffer'
+       | 'schema_dedup' | 'api_quirks' | 'price_sort'
+       | 'crosssell' | 'similar' | 'composer_format';
   given_state: { slot?: Slot | null; history?: Turn[] };
+  api_mocks: ApiMock[];                   // массив сценариев ответа /api/categories, /api/products
   user_message: string;
-  expected: {
+  expected_trace: {
     intent: Intent;
+    pipeline_steps: PipelineStep[];       // упорядоченный список шагов с предикатами
     slot_after?: Partial<Slot> | null;
-    must_contain_products?: { sku?: string; brand?: string }[];
-    must_not_contain?: string[];          // запреты в тексте
-    control_markers?: ControlMarker[];
-    max_latency_ms?: number;
+    metrics_delta: Record<string, number>; // какие counter/histogram должны измениться
+    composer_assertions: ComposerAssert[]; // BNF-проверки на текст ответа
+    invariants: InvariantId[];            // ссылки на §0/§4/§9 инварианты, которые НЕ должны нарушиться
   };
+}
+
+interface ApiMock {
+  endpoint: '/api/categories' | '/api/products';
+  request_predicate: (q: URLSearchParams) => boolean;
+  response: ApiEnvelope;                  // см. §25.2
 }
 ```
 
-### 25.1 Категории кейсов
+### 25.2 Контракт envelope (универсальный для всех моков)
 
-| # | Категория | Кол-во | Примеры |
+Все моки `api_mocks[].response` обязаны соответствовать live-envelope `/api/products` (см. §9A):
+
+```ts
+interface ApiEnvelope {
+  success: true;
+  data: {
+    results: Product[];                   // массив товаров (НЕ внутри второго data.data)
+    pagination: { page: number; per_page: number; pages: number; total: number };
+  };
+}
+
+interface Product {
+  id: number;
+  pagetitle: string;                      // обязательно НЕ null (контрактное замещение name)
+  alias: string;
+  url: string;                            // полный URL, отдаётся API
+  article: string;
+  price: number;                          // 0 допустим в моке, но §9C.3 обязан отфильтровать
+  vendor?: string;
+  amount: number;
+  options?: Array<{ key: string; caption: string; value: string }>;
+}
+```
+
+Категории — по контракту §9A для `/api/categories` (плоский список с `pagetitle`, без `name`).
+
+**Жёсткие envelope-инварианты (E1–E6), проверяются для каждого кейса автоматически:**
+
+- **E1.** `data.results` — массив (никогда не `null`/не `data.data.results`).
+- **E2.** Каждый `Product.pagetitle` — непустая строка (если в моке `null` — тест **обязан** проверить fallback Composer'а на `pagetitle`).
+- **E3.** `pagination.total ≥ data.results.length` всегда.
+- **E4.** В Composer-выводе **ни одного** товара с `price === 0` (§9C.3, метрика `zero_price_leak === 0`).
+- **E5.** Все ссылки в карточках строго `=== Product.url` (никаких склеек из alias).
+- **E6.** Любой `?query=` к `/api/products` содержит **только** токены из `slot.query_tokens` ∪ `applied_aliases[].canonical_token` (никакой query-pollution резолвленными фасетами, §4.5/§9.3).
+
+### 25.3 Категории кейсов
+
+| # | Категория | Кол-во | Раздел |
 |---|---|---|---|
-| 1 | SKU lookup — валидный | 5 | «арт. 12345», «12345», «артикул XYZ-001» |
-| 2 | SKU lookup — несуществующий | 3 | → CONTACT_MANAGER + soft 404 |
-| 3 | Поиск с одной категорией | 8 | «розетки», «кабель ВВГ», «лампочки E27» |
-| 4 | Поиск с фильтрами | 8 | «белые розетки 16А», «кабель 3х2.5 для дома» |
-| 5 | Уточнение (refine) | 6 | (slot=розетки) «только Schneider», «до 2000 тенге» |
-| 6 | Domain Guard | 5 | «розетки RJ45» → телеком, не силовые; и наоборот |
-| 7 | Замена / аналог | 4 | «аналог арт. 12345», «замена этой розетки» |
-| 8 | KB info | 6 | «доставка Алматы», «гарантия», «как оплатить», «адреса» |
-| 9 | Эскалация | 4 | «менеджер», «оптовая цена», «счёт-фактура», «жалоба» |
-| 10 | Small talk | 3 | «спасибо», «привет», «как дела» |
-| 11 | Запрет приветствий | 3 | проверка, что ответ не начинается с «Здравствуйте» |
-| 12 | Формат markdown | 3 | проверка строгого `**[Name](URL)** — *price* ₸, brand` |
-| 13 | Soft 404 / fallback | 2 | категория есть, фильтры дают 0 → альтернативы |
-| 14 | Progressive Feedback | 4 | TC-61: SKU-запрос → `thinking seq=1` с intent=`sku_lookup` приходит в течение 600 ms; TC-62: быстрый ответ <400 ms → ни одного `thinking` event; TC-63: pipeline >3 s → приходит `thinking seq=2` (long-wait); TC-64: thinking-сообщения не попадают в `conversation_history` следующего turn'а |
-| 15 | Category Resolver & Facet Matcher | 6 | TC-69…TC-74 — см. §25.3 |
-| 16 | Lexicon Resolver, Soft Fallback, пагинация, SSE-буфер, Schema Dedup | 8 | TC-75…TC-82 — см. §25.4 |
-| 17 | API quirks (sort, non-ASCII facet keys, price=0) | 3 | TC-83…TC-85 — см. §25.5 |
+| 1 | SKU lookup (валидный/невалидный) | 8 | §25.4 |
+| 2 | Category Resolver (C1–C4) | 6 | §25.5 |
+| 3 | Query Expansion multi-attempt | 6 | §25.6 |
+| 4 | Strict Search + word-boundary post-filter | 5 | §25.7 |
+| 5 | Soft Fallback / blocking clarification | 4 | §25.8 |
+| 6 | Pagination (next_page) | 2 | §25.9 |
+| 7 | SSE buffer (greeting strip) | 2 | §25.10 |
+| 8 | Facet Schema Dedup | 2 | §25.11 |
+| 9 | API quirks (non-ASCII key, sort ignored, price=0) | 5 | §25.12 |
+| 10 | Price-sort scan / clarify | 4 | §25.13 |
+| 11 | Cross-sell text-only contract | 4 | §25.14 |
+| 12 | Similar-search (anchor / critical / flavor) | 7 | §25.15 |
+| 13 | Composer format (BNF §17.3 / §17.7) | 3 | §25.16 |
+| 14 | Persona Guard / no-greeting | 3 | §25.17 |
+| 15 | KB / escalation | 5 | §25.18 |
+| 16 | Property-based fuzz | 4 | §25.19 |
 
-### 25.2 Критерии прохождения
+### 25.4 SKU lookup (TC-01..TC-08)
+
+| ID | given_state | api_mocks | input | expected_trace (ключевое) | invariants |
+|---|---|---|---|---|---|
+| TC-01 | `slot=null` | `/api/products?article=<SkuX>` → `total=1, results=[{pagetitle, price>0, url, article=<SkuX>}]` | «арт. `<SkuX>`» | `intent=sku_lookup`; pipeline: `intent → catalog.byArticle → composer.card`. Composer выдаёт **одну** карточку по BNF §17.3. `metrics_delta: { sku_lookup_total:+1 }`. | E1–E6, §17.3 |
+| TC-02 | `slot=null` | `/api/products?article=<SkuX>` → `total=0` | «`<SkuX>`» | `intent=sku_lookup`; trace доходит до `escalation.contact_manager` + Soft 404 текст. Никаких карточек. `metrics_delta: { sku_lookup_zero_total:+1, escalation_total:+1 }`. | §11.2a, §18 |
+| TC-03..TC-08 | варианты: артикул в середине фразы; верхний/нижний регистр; артикул с дефисом; два артикула в реплике (берётся первый); реплика «арт.» без значения (intent ≠ sku_lookup) | мок-ответы аналогично | — | проверка извлечения и идемпотентности | §7 Intent Classifier |
+
+### 25.5 Category Resolver (TC-09..TC-14)
+
+Покрывают C1–C4 §9.2a.
+
+| ID | given_state | api_mocks | input | expected_trace | invariants |
+|---|---|---|---|---|---|
+| TC-09 | `slot=null` | `/api/categories` snapshot содержит `<CatA>`, `<CatB>` (TTL свежий) | «покажи `<CatA>`» | Resolver выбирает `pagetitle="<CatA>"` с `confidence ≥ 0.9` **только** потому, что строка присутствует в snapshot. `metrics_delta: { category_resolver_hit_total:+1 }`. | C1, C2 |
+| TC-10 | `slot=null` | snapshot **не содержит** `<CatHallucinated>` | реплика, по которой LLM пытается вернуть `pagetitle="<CatHallucinated>"` | Resolver **отклоняет** результат (C1), `metrics_delta: { category_hallucination_total:+1 }`, fallthrough → Multi-bucket Fallback (§9.4). Никакого `?category=` в API не уходит. | C1, D1 |
+| TC-11 | `slot=null` | snapshot stale (TTL истёк) | любой запрос с категорией | Resolver триггерит refresh `/api/categories`, **блокирующе** ждёт ответа, дальше идёт по C1. `metrics_delta: { category_snapshot_refresh_total:+1 }`. | C3 |
+| TC-12 | `slot=null` | `/api/categories` 5xx | любой запрос с категорией | Resolver **не** угадывает category по транслиту/эвристике. Использует last-good snapshot (≤ 24 ч). `metrics_delta: { category_snapshot_stale_used_total:+1 }`. Если snapshot отсутствует совсем → Soft 404 + escalation. | C2, C4 |
+| TC-13 | `slot.category={pagetitle:"<CatA>", confidence:0.5}` | — | refine-реплика | confidence < 0.7 → перерезолв обязателен; не реюзается. | C2 |
+| TC-14 | property: 50 случайных синтетических `<Cat>` строк, из которых 25 в snapshot и 25 нет | — | — | первые принимаются (C1), вторые отклоняются 100% (`category_hallucination_total === 25`). | C1 (fuzz) |
+
+### 25.6 Query Expansion multi-attempt (TC-15..TC-20)
+
+Покрывают §9.2b: `as_is_ru → lexicon_canonical → en_translation → kk_translation`.
+
+| ID | given_state | api_mocks (порядок попыток) | input | expected_trace | invariants |
+|---|---|---|---|---|---|
+| TC-15 | `slot=null`, lexicon empty | attempt-1 `?query=<TraitRu>` → `total>0` | «`<TraitRu>`» | Останов на attempt-1 (`as_is_ru`). `metrics_delta: { query_expansion_attempts_total:+1, query_expansion_success_strategy{as_is_ru}:+1 }`. | §9.2b L1 |
+| TC-16 | lexicon содержит `{surface:<TraitRu>, canonical_token:<TokenCanon>, confidence:0.95}` | attempt-1 `?query=<TraitRu>` → `total=0`; attempt-2 `?query=<TokenCanon>` → `total>0` | «`<TraitRu>`» | attempt-1 fail → attempt-2 success. `slot.applied_aliases` содержит entry. `metrics_delta: { query_expansion_attempts_total:+2, query_expansion_success_strategy{lexicon_canonical}:+1 }`. | §9.2b L2 |
+| TC-17 | lexicon empty, intent-LLM tool-call вернул `en_translation=<TraitEn>` | attempt-1 fail; attempt-2 `?query=<TraitEn>` → `total>0` | «`<TraitRu>`» | `success_strategy{en_translation}:+1`. **EN-токен** уходит в `?query=` ровно один раз. | §9.2b L3 |
+| TC-18 | все стратегии fail | attempt-1..3 all `total=0` | «`<TraitRu>`» | После исчерпания → Soft 404. `metrics_delta: { query_expansion_exhausted_total:+1 }`. | §9.2b L5 |
+| TC-19 | lexicon entry с `confidence=0.7` (< 0.9 порога) | — | «`<TraitRu>`» | `lexicon_canonical` стратегия **пропускается** (confidence gate). | §9.2b L4 |
+| TC-20 | property: 30 случайных `<TraitRu>` × 3 стратегии | случайные total/0 | — | для каждой реплики trace монотонен (попытки в фиксированном порядке, без повторов). | §9.2b ordering |
+
+### 25.7 Strict Search + word-boundary post-filter (TC-21..TC-25)
+
+Покрывают §9.2c.
+
+| ID | api_mocks | expected_trace | invariants |
+|---|---|---|---|
+| TC-21 | `?query=<TraitEn>` → `total=25`, среди `results[]` 5 товаров содержат `<TraitEn>` как **подстроку** в pagetitle (например `"<TraitEn>er ..."`) и 20 содержат `<TraitEn>` как **отдельное слово** | post-filter `\b<TraitEn>\b` (флаги `iu`) оставляет 20. Composer выводит из 20. `metrics_delta: { word_boundary_filter_dropped_total:+5 }`. | §9.2c PF1 |
+| TC-22 | все 25 товаров — substring matches (нет word-boundary совпадений) | post-filter оставляет 0 → fallthrough в следующую стратегию expansion (§9.2b L5). | §9.2c PF2 |
+| TC-23 | mix: 10 товаров с `price=0`, 10 с word-boundary совпадением и `price>0` | результат: 10 (E4 не нарушен, substring и price=0 отброшены). `zero_price_hidden_total:+10`. | E4, §9C.3 |
+| TC-24 | пагинация: страница 1 даёт 0 word-boundary; страница 2 даёт 5 | loader идёт до 5 страниц макс (`zero_price_max_pages=5`), затем стоп. | §9C.3 cap |
+| TC-25 | property: random insert non-word-char вокруг token | invariant: regex `\b<token>\b` стабилен на ё↔е, цифра↔слово (с предварительной нормализацией). | §9.2c norm |
+
+### 25.8 Soft Fallback / blocking clarification (TC-26..TC-29)
+
+| ID | given_state | api_mocks | expected_trace | invariants |
+|---|---|---|---|---|
+| TC-26 | resolved=1 (один фасет), unresolved=1 | — | resolved < 2 → FSM `SLOT_AWAITING_CLARIFICATION`. **0 карточек**, **1** уточняющий вопрос. `pending_clarification` заполнен. | §11.2a-rev |
+| TC-27 | resolved=3, unresolved=1 | `/api/products?...` с 3 фильтрами → `total>0` | Soft Fallback: товары + **одна** короткая хвост-строка про оставшийся trait. **БЕЗ** перечисления значений, **БЕЗ** «не нашёл». `pending_clarification === null`. `metrics_delta: { soft_fallback_triggered:+1 }`. | §11.2a-rev SF1 |
+| TC-28 | resolved=2, unresolved=0 | `total>0` | без хвост-строки (нечего уточнять). | §11.2a-rev SF2 |
+| TC-29 | пользователь после TC-26 отвечает на clarification | дальнейший Catalog-запрос с обновлённым slot | clarification замкнулся в ≤ 1 шаг. `clarification_zero_result_total === 0`. | §4.5 «без авто-сужения» |
+
+### 25.9 Pagination (TC-30..TC-31)
+
+| ID | given_state | input | expected_trace | invariants |
+|---|---|---|---|---|
+| TC-30 | `slot.result_count=83, page=1, pages=7, applied_filters=[…]` | «покажи ещё» | `intent=next_page`; slot переиспользуется 1-в-1; `?page=2&per_page=12&...` с теми же фильтрами и `query_tokens`. SSE `pagination` event с `{page:2,pages:7,total:83}`. | §7.2 |
+| TC-31 | `page === pages` | «ещё» | бот сообщает «больше нет», без вызова API. `metrics_delta: { pagination_exhausted_total:+1 }`. | §7.2 |
+
+### 25.10 SSE buffer / greeting strip (TC-32..TC-33)
+
+| ID | сценарий стрима | expected_trace | invariants |
+|---|---|---|---|
+| TC-32 | LLM-чанки разрывают приветствие на границе (буфер 30 симв ловит «Здравствуйте, » и вырезает) | первый чанк клиенту = текст ПОСЛЕ приветствия. `sse_greeting_stripped_total:+1`. | §12.2 |
+| TC-33 | приветствия нет → буфер не задерживает дольше 30 симв | первый чанк отправляется без задержки > 30 симв буфера. | §12.2 |
+
+### 25.11 Facet Schema Dedup (TC-34..TC-35)
+
+| ID | api_mocks (`/categories/options`) | expected_trace | invariants |
+|---|---|---|---|
+| TC-34 | два ключа `<FacetK1>`, `<FacetK1_alias>` с пересекающимися values | Schema Dedup сливает в canonical (tie-break: алфавит). LLM-Matcher видит **одну** запись. `applied_filters[].key === canonical`. | §9B |
+| TC-35 | три ключа, все взаимно пересекающиеся | один canonical, value union без дублей. | §9B |
+
+### 25.12 API quirks (TC-36..TC-40)
+
+| ID | сценарий | expected_trace | invariants |
+|---|---|---|---|
+| TC-36 (non-ASCII key recovery) | `?options[<FacetK_nonAscii>][]=<V1>` → `total=0`, при этом `?category=<CatA>` без options даёт ≥ 200 кандидатов с `product.options` где `<FacetK_nonAscii>=<V1>` | recovery-step §9C.2: окно ≤200 кандидатов, локальная фильтрация. `slot.recovered_filters` заполнен. degrade **НЕ** запускается. `facet_recovery_succeeded_total:+1`. | §9C.2 |
+| TC-37 (recovery fail → degrade) | direct=0, recovery=0 совпадений | degrade-step сбрасывает фильтр, повтор отдаёт товары. **Одна** строка в Composer «Не удалось точно отфильтровать по `<FacetK_nonAscii>: <V1>`». `facet_degrade_step_count=1`. | §9C.2 |
+| TC-38 (sort ignored) | edge-функция отправила `?sort=...` | тест **обязан падать**: API игнорирует, локальная сортировка не сработала. `sort_param_leak_total:+1` — defect. | §9C.1 |
+| TC-39 (price=0 hard ban) | `results[]` содержат 50% товаров с `price=0` | Composer **никогда** не выводит `price=0`. `zero_price_leak === 0`. Догрузка до `zero_price_max_pages=5`. | E4, §9C.3 |
+| TC-40 (pagetitle null fallback) | один товар с `name=null`, `pagetitle="..."` | Composer использует `pagetitle`. | E2, §17.3 |
+
+### 25.13 Price-sort scan / clarify (TC-41..TC-44)
+
+| ID | сценарий | expected_trace | invariants |
+|---|---|---|---|
+| TC-41 (full scan) | `slot.sort='price_asc'`, `total ≤ 300` после filters | параллельная загрузка всех страниц, локальный sort, top-3. `price_sort_full_scan_total:+1`. | §9.7 |
+| TC-42 (clarify) | `total > 300`, есть «делящий» фасет в `product.options[]` первых 50 | **0 карточек**. **Один** вопрос со значениями только из реальной воронки 50, в порядке `count` desc, **без** показа `count`. `price_sort_clarification_required_total:+1`. | §9.8 |
+| TC-43 (clarify continued) | пользователь выбрал значение, `total ≤ 300` | full scan, top-3. `funnel_narrowing_rounds=1`. `clarification_zero_result_total === 0`. | §9.7/§9.8 |
+| TC-44 (defect-guard) | бот предложил значение, отсутствующее в реальной воронке | **тест обязан падать**: `clarification_zero_result_total > 0` или `auto_narrowing_attempts_total > 0`. | §4.5 |
+
+### 25.14 Cross-sell text-only (TC-45..TC-48)
+
+| ID | сценарий | expected_trace | invariants |
+|---|---|---|---|
+| TC-45 (happy) | product_search дал 1–3 карточки | за карточками — абзац **1–3 предложения**, без markdown-ссылок, без SKU/брендов/цен/CTA-фраз. `crosssell_text_rendered_total:+1`. Pre-validator §11.5b проходит. | CS1–CS5 |
+| TC-46 (skip on >3 results) | 4+ карточек | абзац отсутствует. `crosssell_skipped_due_to_length_total{4+}:+1`. | CS1 |
+| TC-47 (skip on clarification) | pending_clarification ≠ null | абзац отсутствует. | CS2 |
+| TC-48 (defensive cut) | LLM вписал ссылку или «нажмите здесь» | post-validator вырезает абзац целиком. `crosssell_invariant_violation_total:+1`. | CS5 |
+
+### 25.15 Similar search (TC-49..TC-55)
+
+| ID | сценарий | expected_trace | invariants |
+|---|---|---|---|
+| TC-49 (anchor=last_shown) | history содержит карточку, реплика «подбери аналог» | `intent=similar_search`. `classify_traits` tool-call возвращает `critical[]`, `flavor[]`. Catalog API → ≤ 5 кандидатов → top-3 в формате §17.7 с tail «Совпадает с исходной: …». **Cross-sell абзац отсутствует** (§11.6). `similar_search_total{anchor_source=last_shown}:+1`. | SIM1, SIM7, §17.7 |
+| TC-50 (no anchor) | свежая сессия | бот задаёт **один** вопрос про артикул. 0 товаров. `similar_no_anchor_clarification_total:+1`. | SIM1 |
+| TC-51 (large funnel) | similar даёт > 5 кандидатов | **0 карточек**, один уточняющий вопрос по `flavor[]` из реальной выдачи. `similar_funnel_size_bucket{6+}:+1`. | SIM4 |
+| TC-52 («не хуже») | реплика содержит quality-qualifier | бот **сначала** задаёт уточняющий вопрос («что важнее сохранить»), без хардкода «цена ≥ 70%». | SIM5/§11.6c |
+| TC-53 (zero results) | critical-фильтры дают 0 после `price>0` | честная фраза + предложение ослабить фильтр. `similar_zero_results_total:+1`. | SIM6 |
+| TC-54 (small category fallback) | `critical=[]`, category `total ≤ 20` | показ всех товаров категории + tail «Точные характеристики не указаны». | §11.6b |
+| TC-55 (large category fallback) | `critical=[]`, category `total > 20` | один вопрос «по каким характеристикам подобрать», примеры из `anchor.options[].caption_ru`. | §11.6b |
+
+### 25.16 Composer format BNF (TC-56..TC-58)
+
+| ID | сценарий | expected_trace | invariants |
+|---|---|---|---|
+| TC-56 | карточка product_search | строго соответствует BNF §17.3: `- **[<pagetitle>](<url>)**` + sub-bullets. Регекс-валидатор пропускает. | §17.3 |
+| TC-57 | карточка similar | строго соответствует BNF §17.7. | §17.7 |
+| TC-58 | пустые поля (`vendor`, `amount`) | соответствующие sub-bullets **отсутствуют целиком** (не пустая строка). | §17.3, §17.7 |
+
+### 25.17 Persona Guard / no-greeting (TC-59..TC-61)
+
+| ID | сценарий | expected_trace | invariants |
+|---|---|---|---|
+| TC-59 | первый turn | ответ **НЕ начинается** на «Здравствуйте/Привет/Добрый день/Hi/Hello». L1 (LLM prompt) + L2 (server regex) + L3 (SSE buffer §12.2) — все три уровня проверены. | Core ban |
+| TC-60 | LLM пытается вписать «Здравствуйте, …» | L2 strip. `persona_greeting_stripped_total:+1`. | §12 |
+| TC-61 | стрим разрывает приветствие | см. TC-32. | §12.2 |
+
+### 25.18 KB / escalation (TC-62..TC-66)
+
+| ID | сценарий | expected_trace | invariants |
+|---|---|---|---|
+| TC-62 | KB hit | ответ из KB, без вызова Catalog. | §10 |
+| TC-63 | реплика «менеджер» | `intent=escalation_request`, контактная карточка. `escalation_total:+1`. | §18 |
+| TC-64 | оптовая цена / счёт-фактура / жалоба | escalation_request. | §18 |
+| TC-65 | KB miss + не каталог | Soft 404 + escalation hint. | §10/§18 |
+| TC-66 | small talk («спасибо») | короткий ответ, **без** приветствия и **без** карточек. | Core ban |
+
+### 25.19 Property-based fuzz (TC-67..TC-70)
+
+| ID | сценарий | expected_trace |
+|---|---|---|
+| TC-67 | 100 случайных `<TraitRu>` поверх случайных `<CatA>` | каждый pipeline-trace проходит E1–E6. Никаких 5xx/exceptions. |
+| TC-68 | 50 случайных моков с broken envelope (no `data.results`, `pagination.total<0`, `pagetitle=null`) | edge-функция возвращает **deterministic** error path (Soft 404) без креша. `envelope_violation_total` равен числу broken моков. |
+| TC-69 | random insert ё↔е, цифра↔словесная цифра, регистр в `<TraitRu>` | normalisation идемпотентна; `query_tokens` стабилен. |
+| TC-70 | 10 random reorder query stages в expansion | trace должен быть монотонен относительно зафиксированного порядка `as_is_ru → lexicon_canonical → en_translation → kk_translation`; нарушение порядка — defect. |
+
+### 25.20 Критерии прохождения
 
 - ≥ 95 % кейсов проходят полностью.
-- 0 кейсов категорий 11, 12, 15, 16 могут провалиться (формат, матчинг и системные инварианты — критичны).
-- p50 latency на golden set ≤ SLO.
+- 0 кейсов категорий **2, 4, 9, 11, 13, 14** (Category Resolver, Strict Search, API quirks, Cross-sell, Composer BNF, Persona) могут провалиться — критичны.
+- Все envelope-инварианты E1–E6 — 100 %.
+- Все defect-метрики (`zero_price_leak`, `auto_narrowing_attempts_total`, `clarification_zero_result_total`, `category_hallucination_total` в production-трассах, `sort_param_leak_total`, `crosssell_invariant_violation_total`) — **строго 0** по всему набору.
 
-### 25.3 Кейсы Category Resolver и Facet Matcher (TC-69 — TC-74)
+### 25.21 Вспомогательные глобальные инварианты (для всех TC §25)
 
-Покрывают системные инварианты §6.1 [6a.1–6a.4], §9.2a, §9.3, §11.2a и §13.1.
-
-| ID | Запрос | Ожидаемый Resolver | Ожидаемый Matcher | Ожидаемый Composer / Slot | Что проверяется |
-|---|---|---|---|---|---|
-| TC-69 | «найди чёрные двухгнёздные розетки» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[{cvet__tүs:"чёрный"}, {kolichestvo_razyemov__aғytpalar_sany_:"2"}]`, `unresolved=[]`, `soft_matches=[{trait:"двухгнёздные",reason:"numeric_equivalent",value:"2"}]` | API возвращает `total=0` (дефект `cvet__tүs`) → **recovery-step** §9C.2 даёт ≥1 чёрную двухгнёздную розетку. `slot.recovered_filters=[{key:"cvet__tүs",value:"чёрный"}]`. Composer выводит карточки **в новом буллет-формате §17.3** (ссылка → Цена → Бренд → Наличие). **Никаких** строк про soft_matches «двухгнёздные», `applied_aliases`, `unresolved_traits`. **Все** карточки имеют `price > 0` (`zero_price_leak=0`). | §9C.2 + §17.3 формат + §11.2a-rev — нет лишних объяснений, цена и наличие в каждой карточке. |
-| TC-70 | «графитовые розетки» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[]`, `unresolved=[{trait:"графитовые",nearest_facet_key:"cvet__tүs",available_values:["белый","кремовый","бежевый","чёрный","серый","антрацит","алюминий","сталь",…]}]` | FSM → `SLOT_AWAITING_CLARIFICATION`; `slot.pending_clarification` заполнен; в ответе **только** уточняющий вопрос со списком доступных цветов; **НИ ОДНОГО** товара. | Запрет поиска при unresolved + resolved=0, контракт §11.2a (pending_clarification). Реальные значения цветов из снапшота. |
-| TC-71 | «двойные розетки белого цвета» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[{cvet__tүs:"белый"}, {kolichestvo_razyemov__aғytpalar_sany_:"2"}]`, `soft_matches=[{trait:"двойные",value:"2",reason:"numeric_equivalent"}]` | recovery-step возвращает белые двухгнёздные розетки. Composer выводит карточки в **буллет-формате §17.3** без объясняющих строк (`soft_matches`/`unresolved` не выводятся). `zero_price_leak=0`. | §9C.2 + чистый вывод §11.2a-rev. |
-| TC-72 | «розетка с двумя гнёздами и 16А» | `pagetitle="Розетки"`, `confidence ≥ 0.85` | `resolved=[{kolichestvo_razyemov__aғytpalar_sany_:"2"}, {maks__tok_nagruzki__a__maksimaldy_ghүkteme_toғy__a:"16"}]`, `unresolved=[]` | Один запрос API, `total > 0`, degrade-step не запускается. Товары без предупреждений. `facet_degrade_step_count=0`. | Happy-path на двух «работающих» ключах: degrade не должен срабатывать без необходимости. Числовая нормализация «двумя→2», «16А→16» — по типу `values[]`. |
-| TC-73 | «двухполюсный автомат на 16» | `pagetitle="Автоматические выключатели"`, `confidence ≥ 0.85` | `resolved=[{kolichestvo_polyusov__polyuster_sany:"2"}, {nominalynyy_tok__nominaldy_toқ:"16"}]` | Товары без предупреждений, `facet_degrade_step_count=0`. | Реальные ключи из снапшота. Морфология «двухполюсный→2» — по типу значений facet'а, без таблицы соответствий в спецификации. |
-| TC-74 | property-based: 5 случайных синтетических трейтов на случайной категории; повторный прогон с подменой «ё↔е» и числовое слово↔цифра | — | Идемпотентный `resolved` (тот же набор `(facet_key,value)` на исходных и на нормализованных трейтах) | — | Стабильность Matcher к нормализации; защита от drift схемы. |
-
-Вспомогательные инварианты для всех TC-69…TC-74:
-
-- При `slot.pending_clarification ≠ null` ответ Composer **НЕ должен** содержать карточек товаров (см. §4.5, §11.2a).
-- При `slot.category.confidence < 0.4` Resolver обязан передать управление в Multi-bucket Fallback (§9.4); slot НЕ создаётся (см. И в §4.5).
-- Unresolved-трейт **НИКОГДА** не попадает в `?query=` строку Catalog API (см. §9.3, запрет на «query-pollution» — без исключений).
-- Значение **резолвленного** фасета НИКОГДА не попадает в `?query=` (никакого «query_fallback» — см. §9C.2). Проблемные ключи лечатся degrade-step'ом по факту ответа API.
-
-### 25.4 Кейсы Lexicon, Soft Fallback, пагинация, SSE-буфер, Schema Dedup (TC-75 — TC-82)
-
-Покрывают инварианты Stage 4 редизайна: §9.2b (Lexicon Resolver), §11.2a (Soft Fallback), §7.2 (next_page), §12.2 (SSE-буфер 30 символов), §9B (Facet Schema Dedup), §13.1 (расширенный Slot).
-
-| ID | Запрос / сценарий | Ожидаемое поведение | Что проверяется |
-|---|---|---|---|
-| TC-75 | «лампа кукуруза g4» (после того, как admin одобрил entry `{surface:"кукуруза", type:"name_modifier", canonical_token:"CORN", confidence:0.95, category_hint:"Лампы"}` через ревью по логам) | Lexicon Resolver применяет entry → в Catalog API уходит `?category=Лампы&query=CORN&options[tip_cokolya__cokoly_tүrі][]=G4`. На реальном API даёт ≥ 1 товар. `slot.applied_aliases` содержит запись. `slot.query_tokens=["CORN"]`. Composer показывает товары; в комментарии: «Нашёл по разговорному названию "кукуруза" → CORN». SSE event `lexicon_applied` отправлен. | Гибридная стратегия §9.2b: `canonical_token`→query, реальный `tip_cokolya` для G4. |
-| TC-76 | «капсульная лампочка g4 3.5вт» | Если в lexicon есть `trait_expansion`-entry «капсульная»→«капсула» — Facet Matcher маппит её в `forma_kolby__kolbanyң_pіshіnі="капсула"` (значение есть в схеме). Catalog Search отправляет `options[tip_cokolya...][]=G4&options[moschnosty...][]=3.5&options[forma_kolby...][]=капсула`. API возвращает `total=0` (известный дефект `forma_kolby`). Degrade-step сбрасывает `forma_kolby="капсула"`, повтор отдаёт товары. `slot.degraded_filters=[{key:"forma_kolby...",value:"капсула"}]`. Composer выводит товары + строку «Не удалось точно отфильтровать по «Форма колбы: капсула» — показал результаты без этого условия». | Связка Lexicon trait_expansion + §9C.2 try-and-degrade на сломанном ключе. |
-| TC-77 | «розетки белые» (resolved=`[{цвет:"белый"}]` после Matcher) + unresolved=`[{trait:"антивандальные",nearest_facet_key:"zashchita"}]` | Soft Fallback **НЕ** срабатывает (resolved=1<2): FSM → `SLOT_AWAITING_CLARIFICATION`, **0 товаров**, спросить про защиту. | Граница Soft Fallback при resolved < 2: блокирующее уточнение. |
-| TC-78 | «белые двойные розетки legrand» (resolved=3) + unresolved=`[{trait:"антивандальные",nearest_facet_key:"zashchita"}]` | Soft Fallback **СРАБАТЫВАЕТ** (resolved=3≥2): поиск выполняется с 3 фильтрами, товары показываются, в **самом конце** — одна короткая строка «Если важно уточнить *Защита* — напишите.» **Без** перечисления значений, **без** «не нашёл, показал по остальным». `pending_clarification` **НЕ** заполняется. Метрика `soft_fallback_triggered++`. | Soft Fallback §11.2a-rev: товары + минимально короткая нитка. |
-| TC-79 | (slot открыт, `result_count=83`, `page=1`, `pages=7`) → пользователь: «покажи ещё» / «следующая страница» | Intent Classifier → `next_page`. Slot **переиспользуется** целиком, инкремент `slot.page=2`. Catalog API вызывается с `?page=2&per_page=12&...` и теми же фильтрами и `query_tokens`. SSE `pagination` event с `{page:2,pages:7,total:83}`. Composer не задаёт уточнений. | Pagination FSM (§7.2): идемпотентность фильтров и алиасов, переиспользование slot. |
-| TC-80 | Стрим начинается с «Здра» + «вствуйте, для» + «вашего запроса…» (3 чанка LLM) | Сервер буферизует первые 30 символов перед отправкой. На полном префиксе regex матчит «Здравствуйте, для» → вырезает «Здравствуйте, » → клиенту уходит первый чанк «для вашего запроса…». Метрика `sse_greeting_stripped++`. Клиентский L2 фильтр НЕ срабатывает (нечего вырезать). | §12.2 SSE-буфер 30 символов: устранение race condition разорванного приветствия. |
-| TC-81 | OptionSchema от API содержит дубли: `{key:"Brand"}` и `{key:"brend"}` с пересекающимися значениями | Facet Schema Dedup (§9B) сливает их в один canonical key (предпочтительно тот, что уже встречался в успешных запросах; tie-break — алфавит). Значения объединяются по `value_ru` без дублей. LLM-Matcher получает **одну** запись `brend`. В `applied_filters[].key` пишется canonical. | §9B Schema Dedup: снижение шума и токенов LLM. |
-| TC-82 | Property-based по lexicon_json: для каждого entry с `type:"name_modifier"` прогнать «<surface> <случайная_категория_из_category_hint>» 10 раз | Каждый прогон: (1) `canonical_token` присутствует в `?query=` ровно один раз (без дублей); (2) `confidence ≥ 0.9` соблюдается (entries с меньшей не инжектятся); (3) при отсутствии `category_hint` lexicon применяется только если Category Resolver уже выбрал категорию с `confidence ≥ 0.7`. | Стабильность и безопасность Lexicon Resolver: нет query-pollution, нет ложных срабатываний вне категории. |
-
-Вспомогательные инварианты для всех TC-75…TC-82:
-
-- `?query=` строка Catalog API содержит **только** `canonical_token` из `applied_aliases` (type=`name_modifier`, confidence ≥ `lexicon_query_inject`). Любой другой источник в `?query=` — баг.
-- При срабатывании Soft Fallback (§11.2a) `pending_clarification` всегда `null`; при блокирующем уточнении — всегда заполнено и `applied_filters` ≤ 1.
-- При intent=`next_page` Slot не пересоздаётся; `applied_aliases`, `applied_filters`, `query_tokens` переиспользуются 1-в-1.
-- Инвариант §4.5 «не загрязнять `?query=`» действует **без исключений**. Проблемные фасет-ключи лечатся через §9C.2 try-and-degrade, а не query-инъекцией.
-
-### 25.5 Кейсы API quirks (TC-83 — TC-88)
-
-Покрывают §9C — закрепляют, что Catalog Search корректно работает поверх известных дефектов реального API.
-
-| ID | Сценарий | Ожидаемое поведение | Что проверяется |
-|---|---|---|---|
-| TC-83 | Категория «Лампы», нет фильтров → API возвращает 877 товаров, ~50 % с `price=0`. | Catalog Search фильтрует `price > 0`; недобор — догружает страницы (до `zero_price_max_pages=5`). В Composer попадают **только** `price > 0`. Карточки в **буллет-формате §17.3** (Цена / Бренд / Наличие). Метрика `zero_price_hidden++` на отброшенных, **`zero_price_leak === 0`** строго. | §9C.3 жёсткий запрет `price=0` + §17.3 формат. |
-| TC-84 | Запрос без `options[]`-фильтров (только `?category=Лампы&query=CORN`) → API возвращает `total=0`. | Degrade-step **НЕ запускается** (нечего сбрасывать). Сразу Soft 404 (§11.2a) с открытым перечислением фасетов. `facet_degrade_step_count=0`. | Защита от лишних запросов: degrade имеет смысл только при ≥1 `options[]`. |
-| TC-85 | «дешёвые лампы E27» с `slot.sort='price_asc'`. После Facet Matcher: `?category=Лампы&options[tip_cokolya...][]=E27`. Первая страница API: `pagination.total=180`. | `total ≤ 300` → **полный честный скан** §9.7 шаг 2: параллельно тянутся страницы 2…4 (всего 4 страницы при `per_page=50`), фильтр `price > 0` (см. §9C.3), локальный sort, отдаются топ-3 самых дешёвых. **Никакого** «топ-N из первых 50». Composer выводит карточки в формате §17.3. Метрики: `price_sort_full_scan_total++`, `price_sort_pages_fetched=4`, `price_sort_clarification_required_total` НЕ инкрементируется, `auto_narrowing_attempts_total === 0`. | §9.7/§9C.1 happy-path: воронка влезает в `full_scan_limit=300` → честный полный скан, корректный минимум. |
-| TC-92 | «самая дешёвая отвёртка», `slot.sort='price_asc'`, фильтров из реплики нет. После Category Resolver: `?category=Отвёртки`. Первая страница: `pagination.total=700`. В `product.options[]` встречается `tip_otvyortki` со значениями {крестовая:210, плоская:180, шестигранная:95, комбинированная:215} среди первых 50. | `total > 300` → **clarification-mode** §9.7 шаг 3. **Никакой цены не отдаётся.** Composer задаёт **один** короткий вопрос: «По отвёрткам сейчас 700 позиций. Уточните, пожалуйста, *Тип отвёртки*: *крестовая*, *плоская*, *шестигранная*, *комбинированная*.» Значения **только из выборки 50 товаров**, в порядке убывания `count`, **без показа `count`**. Метрики: `price_sort_clarification_required_total++`, `funnel_narrowing_rounds=1`, `auto_narrowing_attempts_total === 0`. | §9.8 — clarification по «делящему» фасету из реальной воронки; запрет авто-сужения. |
-| TC-93 | Продолжение TC-92: пользователь отвечает «крестовая». Catalog Search применяет `options[tip_otvyortki][]=крестовая`. Новый `total=210`. | `total ≤ 300` → честный полный скан 5 страниц, фильтр `price > 0`, sort, топ-3 в формате §17.3. Метрики: `price_sort_full_scan_total++`, `funnel_narrowing_rounds=1` (из истории слота), `clarification_zero_result_total === 0` (выбранное значение реально дало товары). | §9.7/§9.8 цикл: после уточнения воронка влезла, отдан корректный минимум. |
-| TC-94 | **Defect-guard.** Сценарий, в котором бот предложил пользователю значение, отсутствующее в реальной воронке (например, взял из `/categories/options` без сверки): пользователь выбирает его → итоговый `total=0`. | Тест **обязан падать**: метрика `clarification_zero_result_total > 0` — defect §4.5. Также падает, если в логах turn'а зафиксированы `?min_price=`/`?max_price=` или значение фасета, **не упомянутое** пользователем в реплике (`auto_narrowing_attempts_total > 0`). | Защита инвариантов §4.5 «никакого авто-сужения» и §9.8 «clarification только по реальной воронке». |
-| TC-86 | Свежая сессия с `app_settings.lexicon_json.entries = []`; запрос «лампа кукуруза g4». | Lexicon Resolver возвращает `{expanded_traits:["кукуруза","g4"], canonical_tokens:[], applied_aliases:[]}` — пустой словарь, ничего не делает. Facet Matcher маппит `g4` → `tip_cokolya...="G4"`, `кукуруза` → unresolved (нет такого значения ни в одном facet'е). FSM → `SLOT_AWAITING_CLARIFICATION` или Soft Fallback (если есть ≥2 resolved). Системa **не падает**, ответ корректен. | Инвариант L5 (§9.2b): пустой lexicon — валидное состояние, пайплайн работает на исходных трейтах. |
-| TC-87 | Happy-path для ASCII-ключа: «розетки IEK» → Facet Matcher: `options[brend__brend][]=IEK`. API отдаёт `total=784`. | `facet_degrade_step_count=0`. Все товары IEK. | Подтверждение, что фильтрация по ASCII-ключу работает «из коробки», degrade не срабатывает зря (живой прогон 28.04: 784). |
-| TC-88 | Happy-path для числового ASCII-significant ключа с не-ASCII в самом ключе: «розетки на 2 разъёма» → `options[kolichestvo_razyemov__aғytpalar_sany_][]=2`. API отдаёт `total=802`. | `facet_degrade_step_count=0`. Числовой фильтр работает несмотря на не-ASCII в ключе. | Подтверждение, что числовая нормализация «двухгнёздные/двойные/два → 2» (выводимая из `values[]`) корректно отправляется как строка `=2` без кавычек (живой прогон 28.04: 802). |
-| TC-89 | Не-ASCII ключ: «розетки белого цвета» → `options[cvet__tүs][]=белый`. API возвращает `total=0` несмотря на `products_count=625` в фасете. | Срабатывает **recovery-step**: повтор запроса по `pagetitle="Розетки"` (без `options[]`), окно ≤200 кандидатов, локальная фильтрация по `product.options[]` `cvet__tүs="белый"` → `≥1` белая розетка. `slot.recovered_filters=[{key:"cvet__tүs",value:"белый"}]`, degrade НЕ запускается. Composer выводит белые розетки без предупреждений. `facet_recovery_triggered_total++`, `facet_recovery_succeeded_total{key="cvet__tүs"}++`, `facet_degrade_step_count=0`. | Главный кейс §9C.2 — defect API «не-ASCII ключ → 0» лечится recovery без потери точности фильтра. |
-| TC-90 | Recovery не нашёл совпадений: гипотетическое «розетки цвета X», которого фактически нет ни в одном товаре «Розетки». | Direct → `total=0`. Recovery → 200 кандидатов проверены, ни у одного `cvet__tүs="X"` нет → 0 совпадений. Запускается degrade-step (§9C.2 шаг 4), сбрасывает фильтр цвета, повтор отдаёт розетки без цвета. `slot.degraded_filters=[{key:"cvet__tүs",value:"X",reason:"api_returned_zero_recovery_failed"}]`. Composer выводит **одну** короткую строку «Не удалось точно отфильтровать по «Цвет: X» — показал результаты без этого условия». `facet_recovery_triggered_total++`, `facet_recovery_succeeded_total` НЕ инкрементируется, `facet_degrade_step_count=1`. | Корректный fallback recovery → degrade, когда товара действительно нет. |
-| TC-91 | «лампа кукуруза g4» при пустом lexicon (`entries=[]`). | Lexicon ничего не делает; `g4` → `tip_cokolya...="G4"` (resolved=1), `кукуруза` → unresolved (нет в фасетах). resolved < 2 → блокирующий clarification по §11.2a-rev: **один** короткий вопрос «Уточните, пожалуйста: какой *Тип цоколя*?» **БЕЗ** объясняющей строки про отсутствие «кукуруза» в форме колбы, **БЕЗ** «не нашёл в характеристиках». **Никаких** товаров. Если же resolved≥2 (например пользователь добавил мощность) — Soft Fallback с товарами в формате §17.3 и одной строкой в конце «Если важно уточнить — напишите.» | Чистый вывод §11.2a-rev: никаких объяснений «чего нет в фасете» — ни в clarification, ни в Soft Fallback. |
-| TC-96 | `product_search` с `total=12` (например, «розетки IEK»). | Карточки выводятся в формате §17.3 (топ-7 по §9.6). Cross-sell-абзац (§11.5) **отсутствует** (`results.length > 3`). `crosssell_text_rendered_total` НЕ инкрементируется; `crosssell_skipped_due_to_length_total{8-15}++`. | CS1: cross-sell не выводится при выдаче >3. |
-| TC-97 | Blocking clarification (`pending_clarification` + `applied_filters.length<2`). | В ответе только один уточняющий вопрос (§11.2a). Cross-sell-абзац отсутствует (нет карточек). `crosssell_text_rendered_total` НЕ инкрементируется. | CS1/CS2: cross-sell несовместим с blocking-clarification. |
-| TC-98 | Soft 404 (degrade exhausted, см. TC-90 расширение). | Soft 404 message + категории. Cross-sell-абзац отсутствует. | CS1: cross-sell несовместим с Soft 404. |
-| TC-99 | «лампа E14 candle 4000K Schneider» → 2 карточки. | Карточки в формате §17.3 + после них **cross-sell-абзац** (§11.5): 1–3 предложения про смежные категории (диммеры/патроны/светильники), **без** упоминания SKU, цен, бренда «Schneider», markdown-ссылок. `crosssell_text_rendered_total++`. Пост-валидация §11.5b проходит (`crosssell_invariant_violation_total === 0`). | CS1-CS5 happy path. |
-| TC-100 | LLM в cross-sell-абзаце вписал `[ссылка](https://220volt.kz/...)` или фразу «нажмите здесь». | Пост-валидация §11.5b вырезает абзац целиком. В финальном ответе только карточки. `crosssell_invariant_violation_total++`. | CS5 defensive: пост-валидация отрабатывает. |
-| TC-101 | После показа лампы LED A60 9Вт E27 4000K Schneider пользователь пишет «подбери аналог». | `intent=similar_search`, anchor = последняя карточка. `classify_traits` через tool calling вернул `critical=[{tip_cokolya:"E27"},{moschnosty:"9"}]`, `flavor=[{cvetovaya_temperatura:"4000K"},{brend:"Schneider"}]`. Catalog API → 4 кандидата (не Schneider). Локальная сортировка по совпадению flavor (`cvetovaya_temperatura=4000K` совпадает у 3) → топ-3 рендерятся в формате §17.7 с подпунктом «Совпадает с исходной: цоколь E27, мощность, цветовая температура». Cross-sell-абзац **отсутствует** (similar-flow). `similar_search_total{anchor_source="last_shown"}++`, `similar_funnel_size_bucket{2-5}++`. | SIM1-SIM4, SIM7, SIM9, §17.7 формат. |
-| TC-102 | Свежая сессия, никаких товаров не показано, пользователь пишет «подбери похожее». | Якоря нет (нет `last_shown`, нет SKU в реплике, нет `anchor_product`). Бот задаёт **один** вопрос: «На какой именно товар подобрать аналоги? Пришлите артикул или скажите "на первый из списка".» Никаких товаров не выводится. `similar_no_anchor_clarification_total++`. | SIM1: similar без якоря. |
-| TC-103 | Similar-flow, anchor = простая лампа E27, `critical=[{tip_cokolya:"E27"}]` → 47 кандидатов. | Карточки **не выводятся**. Бот задаёт **один** уточняющий вопрос по `flavor[]` из реальной выдачи (§9.8) — например, «Уточните мощность: *5Вт*, *9Вт*, *15Вт*» (значения с `count≥1` в воронке 47, без `/categories/options`). `similar_funnel_size_bucket{6+}++`, `similar_clarification_total++`, `auto_narrowing_attempts_total === 0`, `clarification_zero_result_total === 0` (после ответа пользователя выдача не пустая). | SIM4: funnel-cap. |
-| TC-104 | После показа лампы пользователь пишет «подбери аналог не хуже этой». | Распознан `quality_qualifier="not_worse"`. **Перед** Catalog API запросом бот задаёт **один** уточняющий вопрос: «Что важнее сохранить: бренд того же уровня, цена не ниже исходной, или конкретные характеристики?» Карточки не выводятся до ответа. `similar_quality_dialog_total++`. После ответа («бренд того же уровня») — Facet Matcher парсит ответ → дополнительный фильтр накладывается, выдача в формате §17.7. **Нигде не применяется** хардкод «цена ≥ 70%». | SIM5/§11.6c: «не хуже» через диалог, не прокси. |
-| TC-105 | Similar-flow, `critical=[{tip_cokolya:"GU10"},{moschnosty:"35"}]` (редкая комбинация) → 0 кандидатов после фильтрации `price > 0`. | Карточки не выводятся. Бот выдаёт честную фразу: «Прямых аналогов с цоколем GU10 и мощностью 35Вт не нашёл. Если важно сохранить мощность — могу подобрать у других брендов.» `similar_zero_results_total++`, `similar_funnel_size_bucket{0}++`. | SIM6/§17.7 fallback на 0. |
-| TC-106 | Similar-flow, anchor = редкий товар категории `Сирена` (8 товаров в категории, `anchor.options=[]` пуст). LLM вернул `critical=[]`. | `category_total=8 ≤ 20` → показываем все 8 как «аналоги по категории» с tail «Точные характеристики не указаны — это все товары в категории; уточните, что важнее сохранить.» `similar_critical_fallback_total{branch="show_all_small_category"}++`. | §11.6b critical fallback (small category). |
-| TC-107 | Similar-flow, anchor = товар из категории `Кабели` (120 товаров), LLM вернул `critical=[]`. | `category_total=120 > 20` → бот задаёт **один** уточняющий вопрос «По каким характеристикам подобрать аналог? Например: сечение, число жил, бренд» (примеры из реальных `anchor.options[].caption_ru`). Карточки не выводятся. `similar_critical_fallback_total{branch="clarify_question"}++`. После ответа («сечение 2.5») → Facet Matcher парсит → `critical=[{sechenie:"2.5"}]` → обычный flow с шага 4. | §11.6b critical fallback (large category). |
-
-Вспомогательные инварианты для всех TC-83…TC-107:
-
-- Edge-функция `search-products` НИКОГДА не отправляет `?sort=` в API (бесполезно). Сортировка только локальная.
-- Никаких whitelist'ов «работающих» фасет-ключей в коде, конфиге или памяти не существует. Решение «работает / не работает фильтр» принимается **по факту** ответа API через try-and-degrade.
-- Degrade-step запускается **только** при `total === 0 ∧ options[].length ≥ 1`. Максимум 2 шага на turn.
-- `lexicon_json.entries` может быть пустым массивом — это валидное состояние; пайплайн обязан проходить его без ошибок (см. TC-86, инвариант L5).
+- **G1.** Edge-функция `search-products` НИКОГДА не отправляет `?sort=` в API (бесполезно по §9C.1). Сортировка только локальная.
+- **G2.** Никаких whitelist'ов «работающих» фасет-ключей в коде / конфиге / памяти.
+- **G3.** Degrade-step запускается **только** при `total === 0 ∧ options[].length ≥ 1`. Максимум 2 шага на turn.
+- **G4.** `lexicon_json.entries=[]` — валидное состояние; пайплайн обязан проходить без ошибок.
+- **G5.** `?query=` Catalog API содержит только токены из `slot.query_tokens` ∪ `applied_aliases[].canonical_token`. Никакая другая инжекция (резолвленные фасеты, fragmented user words) недопустима.
+- **G6.** При `slot.pending_clarification ≠ null` Composer **НЕ** выводит карточек (§4.5, §11.2a).
+- **G7.** Все сравнения категорий идут против live snapshot `/api/categories` (D3, C1).
+- **G8.** Никаких реальных значений 220volt в самом тексте кейса §25 (D1, D4) — только плейсхолдеры из §25.0.
 
 ---
 
