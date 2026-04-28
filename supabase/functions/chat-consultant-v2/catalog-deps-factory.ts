@@ -16,7 +16,9 @@
  *     инфраструктурный параметр, читается из env CATALOG_API_BASE_URL
  *     (default https://220volt.kz/api).
  *   - НЕ кэшируем listCategories через cache.ts (там TTL_FACETS — другое).
- *     Используем module-level singleton с TTL 1 час (как в V1).
+ *     Используем module-level singleton с TTL `CATEGORIES_TTL_MS` (15 мин,
+ *     см. config.ts) — операционный кэш одного инстанса edge-функции, НЕ
+ *     синхронизация с локальной БД (core memory: real-time API only).
  */
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
@@ -34,17 +36,13 @@ import {
 import { getOrCompute, TTL } from "./cache.ts";
 import { createCatalogComposerDeps } from "./s-catalog-composer.ts";
 import type { CatalogComposerDeps } from "./s-catalog-composer.ts";
-
-// ─── Tunables ───────────────────────────────────────────────────────────────
-
-const CATEGORIES_TTL_MS = 60 * 60 * 1000; // 1h
-const RESOLVER_LLM_MODEL_DEFAULT = "google/gemini-2.5-flash";
-const RESOLVER_HTTP_TIMEOUT_MS = 15_000;
-
-// Резолвер-пороги по умолчанию (если в app_settings.resolver_thresholds_json
-// пусто/невалидно). Подобраны как сбалансированный baseline; настраиваются
-// в админке без релиза.
-const DEFAULT_RESOLVER_THRESHOLDS = { category_high: 0.7, category_low: 0.4 };
+import {
+  CATALOG_API_BASE_URL_DEFAULT,
+  CATEGORIES_TTL_MS,
+  RESOLVER_HTTP_TIMEOUT_MS,
+  RESOLVER_LLM_MODEL_DEFAULT,
+  RESOLVER_THRESHOLDS_DEFAULT,
+} from "./config.ts";
 
 // ─── Categories live cache (module-level, TTL 1h) ───────────────────────────
 
@@ -214,7 +212,7 @@ export interface CatalogProductionDeps {
 export function createCatalogProductionDeps(
   cfg: CatalogProductionDepsConfig,
 ): CatalogProductionDeps {
-  const baseUrl = cfg.baseUrl ?? Deno.env.get("CATALOG_API_BASE_URL") ?? "https://220volt.kz/api";
+  const baseUrl = cfg.baseUrl ?? Deno.env.get("CATALOG_API_BASE_URL") ?? CATALOG_API_BASE_URL_DEFAULT;
   const log = cfg.log ?? (() => {});
   const resolverModel = cfg.resolverModel ?? RESOLVER_LLM_MODEL_DEFAULT;
 
@@ -226,7 +224,7 @@ export function createCatalogProductionDeps(
   const resolver: ResolverDeps = {
     listCategories: () => fetchCategoriesLive(baseUrl, cfg.catalogApiToken),
     callLLM: (messages) => resolverCallLLM(messages, cfg.openRouterKey, resolverModel),
-    getThresholds: () => Promise.resolve(cfg.resolverThresholds ?? DEFAULT_RESOLVER_THRESHOLDS),
+    getThresholds: () => Promise.resolve(cfg.resolverThresholds ?? RESOLVER_THRESHOLDS_DEFAULT),
     log: (event, data) => log(`resolver.${event}`, data),
   };
 

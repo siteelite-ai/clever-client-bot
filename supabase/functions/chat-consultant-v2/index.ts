@@ -452,6 +452,9 @@ serve(async (req) => {
                   outcome: assembled.composerOutcome,
                   history: chatReq.history,
                   prevSoft404Streak: prevStreak,
+                  // §5.4.1 + §11.5b: внешний запрет cross-sell — единственный
+                  // источник правды — assembler (см. AssemblerResult.disallowCrosssell).
+                  disallowCrosssell: assembled.disallowCrosssell,
                   onDelta: (delta) => {
                     controller.enqueue(
                       sseChunk({ choices: [{ delta: { content: delta } }] }),
