@@ -16,7 +16,9 @@
  *     инфраструктурный параметр, читается из env CATALOG_API_BASE_URL
  *     (default https://220volt.kz/api).
  *   - НЕ кэшируем listCategories через cache.ts (там TTL_FACETS — другое).
- *     Используем module-level singleton с TTL 1 час (как в V1).
+ *     Используем module-level singleton с TTL `CATEGORIES_TTL_MS` (15 мин,
+ *     см. config.ts) — операционный кэш одного инстанса edge-функции, НЕ
+ *     синхронизация с локальной БД (core memory: real-time API only).
  */
 
 import type { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.57.4";
