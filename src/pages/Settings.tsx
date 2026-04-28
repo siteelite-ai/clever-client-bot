@@ -355,7 +355,94 @@ export default function Settings() {
         </div>
 
         <div className="max-w-2xl space-y-6">
-          {/* API Settings */}
+          {/* Pipeline V1/V2 toggle — manual, no auto-fallback */}
+          <div className="admin-card space-y-4">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2">
+                <GitBranch className="w-5 h-5 text-primary" />
+                <h3 className="text-lg font-semibold">Активная версия пайплайна</h3>
+              </div>
+              <Badge
+                variant={activePipeline === 'v2' ? 'default' : 'secondary'}
+                className="text-xs"
+              >
+                Сейчас: {activePipeline.toUpperCase()}
+              </Badge>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Это две полностью независимые edge-функции. Переключение мгновенное
+              для всех новых сессий виджета. Уже открытые чаты доигрывают на старой
+              версии. Никакого авто-переключения и авто-фоллбэка нет — если V2
+              ведёт себя плохо, переключите обратно на V1 одним кликом.
+            </p>
+
+            <RadioGroup
+              value={activePipeline}
+              onValueChange={(v) => handlePipelineSwitch(v as PipelineVersion)}
+              className="space-y-2"
+            >
+              <label
+                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                  activePipeline === 'v1'
+                    ? 'border-primary bg-primary/5'
+                    : 'border-border hover:border-primary/30'
+                } ${pipelineSaving ? 'opacity-60 pointer-events-none' : ''}`}
+              >
+                <RadioGroupItem value="v1" className="mt-0.5" disabled={pipelineSaving} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium text-sm">V1 — стабильная</span>
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">legacy</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Текущая боевая ветка <code className="font-mono">chat-consultant</code>.
+                    Не меняется. Используйте, пока V2 в разработке.
+                  </p>
+                </div>
+              </label>
+
+              <label
+                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                  activePipeline === 'v2'
+                    ? 'border-primary bg-primary/5'
+                    : 'border-border hover:border-primary/30'
+                } ${pipelineSaving ? 'opacity-60 pointer-events-none' : ''}`}
+              >
+                <RadioGroupItem value="v2" className="mt-0.5" disabled={pipelineSaving} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium text-sm">V2 — по новой спецификации</span>
+                    <Badge variant="default" className="text-[10px] px-1.5 py-0">beta</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Новая ветка <code className="font-mono">chat-consultant-v2</code>:
+                    Category Resolver, Query Expansion, Strict Search Multi-Attempt,
+                    Word-Boundary Filter. Реализуется поэтапно.
+                  </p>
+                </div>
+              </label>
+            </RadioGroup>
+
+            {activePipeline === 'v2' && (
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
+                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                <p className="text-xs text-amber-200">
+                  V2 сейчас в разработке (этап A — каркас). Виджет будет отвечать
+                  заглушкой, пока не подключены этапы B–E. Для боевого использования
+                  переключитесь на V1.
+                </p>
+              </div>
+            )}
+
+            {pipelineSaving && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Применяется…
+              </div>
+            )}
+          </div>
+
           <div className="admin-card space-y-6">
             <div className="flex items-center gap-2">
               <Key className="w-5 h-5 text-primary" />
