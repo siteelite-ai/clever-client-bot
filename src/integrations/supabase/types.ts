@@ -56,6 +56,7 @@ export type Database = {
           classifier_provider: string
           google_api_key: string | null
           id: string
+          lexicon_json: Json
           openrouter_api_key: string | null
           resolver_thresholds_json: Json
           system_prompt: string | null
@@ -70,6 +71,7 @@ export type Database = {
           classifier_provider?: string
           google_api_key?: string | null
           id?: string
+          lexicon_json?: Json
           openrouter_api_key?: string | null
           resolver_thresholds_json?: Json
           system_prompt?: string | null
@@ -84,6 +86,7 @@ export type Database = {
           classifier_provider?: string
           google_api_key?: string | null
           id?: string
+          lexicon_json?: Json
           openrouter_api_key?: string | null
           resolver_thresholds_json?: Json
           system_prompt?: string | null
