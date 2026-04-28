@@ -39,6 +39,14 @@ import {
   createProductionDeps,
   CLASSIFIER_CACHE_TTL_MS,
 } from "./s2-intent-classifier.ts";
+import {
+  runGreeting,
+  runPersona,
+  runContact,
+  runEscalation,
+  createContactsLoaderDeps,
+  type BranchOutput,
+} from "./branches.ts";
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 const corsHeaders = {
@@ -47,7 +55,7 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const BUILD_MARKER = "v2-step7-orchestrator-2026-04-28";
+const BUILD_MARKER = "v2-step8-light-branches-2026-04-28";
 
 // ─── Контракт V2 запроса (Zod) ───────────────────────────────────────────────
 // Сохраняем backward-compat с виджетом: conversationId/query/messages/dialogSlots.
@@ -119,9 +127,45 @@ function mapToChatRequest(req: V2Request, clientMeta: ChatRequest["client_meta"]
 // ─── Placeholder S_*-исполнители ─────────────────────────────────────────────
 // Реальные реализации появятся в Steps 8+. Пока возвращаем диагностический
 // текст, чтобы можно было проверить пайплайн в живом виджете.
+/**
+ * Step 8: реальные исполнители для лёгких веток (S_GREETING / S_PERSONA /
+ * S_CONTACT / S_ESCALATION). S_KNOWLEDGE / S_CATALOG / S_CATALOG_OOD пока
+ * placeholder — реализация в Steps 9–11.
+ *
+ * Возвращает либо BranchOutput (готовый текст + опциональная contacts card),
+ * либо null — тогда вызывающий код использует placeholder-рендер для
+ * нереализованных веток.
+ */
+async function runLightBranch(
+  decision: PipelineDecision,
+  contactsDeps: ReturnType<typeof createContactsLoaderDeps>,
+): Promise<BranchOutput | null> {
+  switch (decision.route) {
+    case "S_GREETING":
+      return runGreeting();
+    case "S_PERSONA":
+      return runPersona();
+    case "S_CONTACT":
+      return await runContact(contactsDeps);
+    case "S_ESCALATION":
+      return await runEscalation(
+        // §5.6: пока есть только один явный сигнал — direct_request (классификатор
+        // вернул intent='escalation'). Прочие триггеры (double_zero_result,
+        // long_session_no_purchase) появятся в Steps 9+ когда будут метрики сессии.
+        { trigger: "direct_request", intent: decision.intent },
+        contactsDeps,
+      );
+    case "S_KNOWLEDGE":
+    case "S_CATALOG":
+    case "S_CATALOG_OOD":
+      return null; // Steps 9–11
+  }
+}
+
+/** Placeholder для ещё не реализованных веток (Steps 9–11). */
 function renderPlaceholder(decision: PipelineDecision): string {
   const r = decision.route;
-  const head = `🚧 **V2 Step 7 — placeholder S_*-route: \`${r}\`**`;
+  const head = `🚧 **V2 placeholder — \`${r}\` ещё не реализован**`;
   const intentLine = `Intent: \`${decision.intent.intent}\`` +
     (decision.intent.category_hint ? ` · hint: «${decision.intent.category_hint}»` : "") +
     (decision.intent.has_sku ? ` · SKU: \`${decision.intent.sku_candidate}\`` : "") +
@@ -130,23 +174,16 @@ function renderPlaceholder(decision: PipelineDecision): string {
     ? `\nСлот сматчен: \`${decision.slot_match.matched_slot.type}\` (${decision.slot_match.matched_slot.id})`
     : "";
   const traceLine = `\n\n_traceId: \`${decision.trace.traceId}\`_`;
-
   switch (r) {
-    case "S_GREETING":
-      // §5.2: silent ack — НЕ здороваемся в ответ.
-      return `${head}\n${intentLine}\n\n_(silent ack — реальная ветка в Step 8)_${traceLine}`;
-    case "S_PERSONA":
-      return `${head}\n${intentLine}\n\n_(short expert reply — Step 8)_${traceLine}`;
-    case "S_CONTACT":
-      return `${head}\n${intentLine}\n\n_(contacts card — Step 8)_${traceLine}`;
     case "S_KNOWLEDGE":
-      return `${head}\n${intentLine}\n\n_(knowledge hybrid search — Step 9)_${traceLine}`;
-    case "S_ESCALATION":
-      return `${head}\n${intentLine}\n\n_([CONTACT_MANAGER] block — Step 8)_${traceLine}`;
+      return `${head}\n${intentLine}\n\n_(hybrid search — Step 9)_${traceLine}`;
     case "S_CATALOG":
       return `${head}\n${intentLine}${slotLine}\n\n_(Catalog API + Composer — Steps 9–11)_${traceLine}`;
     case "S_CATALOG_OOD":
       return `${head}\n${intentLine}\n\n_(Soft 404 — Step 11)_${traceLine}`;
+    default:
+      // S_GREETING/S_PERSONA/S_CONTACT/S_ESCALATION — реализованы, сюда не попадают
+      return `${head}\n${intentLine}${traceLine}`;
   }
 }
 
@@ -237,6 +274,11 @@ serve(async (req) => {
           openRouterKey,
         );
 
+        // Step 8: ContactsLoader для S_CONTACT / S_ESCALATION.
+        const contactsDeps = createContactsLoaderDeps(
+          supabase as unknown as Parameters<typeof createContactsLoaderDeps>[0],
+        );
+
         // ── Запуск orchestrator ─────────────────────────────────────────
         const t0 = Date.now();
         const decision = await runPipeline(chatReq, {
@@ -251,24 +293,51 @@ serve(async (req) => {
             `s2_fallback=${decision.s2_used_fallback} ms=${orchestratorMs}`,
         );
 
-        // ── slot_update event (если состояние слотов поменялось) ─────────
+        // ── slot_update event ───────────────────────────────────────────
         controller.enqueue(
           sseChunk({ slot_update: { slots: decision.next_state.slots } }),
         );
 
-        // ── Текстовый чанк от placeholder-исполнителя ────────────────────
-        const text = renderPlaceholder(decision);
+        // ── Step 8: лёгкие ветки → реальный исполнитель;
+        //    тяжёлые (Knowledge/Catalog) → placeholder до Steps 9–11.
+        const tBranch0 = Date.now();
+        const branchOut = await runLightBranch(decision, contactsDeps);
+        const branchMs = Date.now() - tBranch0;
+
+        const isLight = branchOut !== null;
+        const text = branchOut ? branchOut.text : renderPlaceholder(decision);
+
+        // Виджет (ChatWidget.tsx ≈ 175-179) рендерит side-channel `contacts`
+        // как отдельную карточку. Эмитируем её ТОЛЬКО для S_ESCALATION,
+        // где есть [CONTACT_MANAGER]-маркер. Для S_CONTACT карточка уже
+        // в основном тексте — дубль не нужен.
+        if (
+          branchOut?.contact_manager_emitted &&
+          branchOut?.contacts_card
+        ) {
+          controller.enqueue(sseChunk({ contacts: branchOut.contacts_card }));
+        }
+
+        console.log(
+          `[v2.branch.done] trace=${traceId} route=${decision.route} ` +
+            `light=${isLight} ms=${branchMs} ` +
+            `contact_manager=${branchOut?.contact_manager_emitted ?? false}`,
+        );
+
         controller.enqueue(
           sseChunk({
             choices: [{ delta: { content: text } }],
             meta: {
               pipeline_version: "v2",
               build: BUILD_MARKER,
-              step: 7,
+              step: 8,
               route: decision.route,
+              branch_executed: isLight ? "real" : "placeholder",
               intent: decision.intent,
               s2_used_fallback: decision.s2_used_fallback,
               orchestrator_ms: orchestratorMs,
+              branch_ms: branchMs,
+              contact_manager_emitted: branchOut?.contact_manager_emitted ?? false,
               trace: decision.trace,
               traceId,
               cache_ttl_ms: CLASSIFIER_CACHE_TTL_MS,
@@ -287,14 +356,14 @@ serve(async (req) => {
             choices: [{
               delta: {
                 content:
-                  `🚧 Ошибка V2-пайплайна (Step 7 orchestrator): \`${msg}\`. ` +
+                  `🚧 Ошибка V2-пайплайна (Step 8 orchestrator): \`${msg}\`. ` +
                   `Переключитесь на V1 в админке для штатной работы.`,
               },
             }],
             meta: {
               pipeline_version: "v2",
               build: BUILD_MARKER,
-              step: 7,
+              step: 8,
               error: msg,
               traceId,
             },
