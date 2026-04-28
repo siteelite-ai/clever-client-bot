@@ -34,7 +34,7 @@
 22. [Observability](#22-observability)
 23. [Безопасность](#23-безопасность)
 24. [Конфигурация](#24-конфигурация)
-25. [Golden Test Suite (60 кейсов)](#25-golden-test-suite-60-кейсов)
+25. [Golden Test Suite (64 кейса)](#25-golden-test-suite-60-кейсов)
 26. [Критерии успешности](#26-критерии-успешности)
 27. [Runbook для дежурного](#27-runbook-для-дежурного)
 28. [Открытые вопросы](#28-открытые-вопросы)
@@ -1327,7 +1327,7 @@ interface EscalationPayload {
 
 ---
 
-## 25. Golden Test Suite (60 кейсов)
+## 25. Golden Test Suite (64 кейса)
 
 Файл: `tests/golden/chat-v2.json`. Прогон при каждом PR через `bun test tests/golden`.
 
