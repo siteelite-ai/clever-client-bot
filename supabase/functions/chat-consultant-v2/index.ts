@@ -34,7 +34,25 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const BUILD_MARKER = "v2-stageB-category-resolver-2026-04-28";
+const BUILD_MARKER = "v2-stageB-contract-zod-2026-04-28";
+
+// ---------------------------------------------------------------------------
+// Контракт V2 запроса (Zod). Любой невалидный вход → 400 ДО любой логики.
+// `messages` принимается как backward-compat alias для `history`, но не
+// используется для извлечения query — query всегда явное поле.
+// ---------------------------------------------------------------------------
+const HistoryMsgSchema = z.object({
+  role: z.enum(["user", "assistant", "system"]),
+  content: z.string(),
+});
+const RequestSchema = z.object({
+  conversationId: z.string().min(1).max(200),
+  query: z.string().trim().min(1).max(2000),
+  history: z.array(HistoryMsgSchema).max(100).optional(),
+  messages: z.array(HistoryMsgSchema).max(100).optional(), // backward-compat
+  dialogSlots: z.record(z.string(), z.unknown()).optional(),
+});
+type V2Request = z.infer<typeof RequestSchema>;
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const RESOLVER_MODEL = "google/gemini-2.5-flash-lite";
