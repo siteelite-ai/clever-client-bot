@@ -90,11 +90,31 @@ export interface Product {
   fayl?: string[];                                 // PDF/файлы
 }
 
+// ─── SlotState (катящееся состояние ветки, §3.3 + §5.6.1) ───────────────────
+// Не путать со Slot (вопрос-уточнение). SlotState — счётчики ветки, живут
+// между ходами в ConversationState. Поля data-agnostic.
+//
+// soft404_streak (§5.6.1):
+//   0 → первый ход, или предыдущий ход был успешным (status='ok'/'soft_fallback').
+//   1 → предыдущий ход дал status='empty'.
+//   2 → два «empty» подряд → composer обязан выставить contactManager=true.
+// Сбрасывается в 0 при любом успешном ходе (см. §5.6.1 transition table).
+export interface SlotState {
+  soft404_streak: 0 | 1 | 2;
+}
+
+export const DEFAULT_SLOT_STATE: SlotState = { soft404_streak: 0 };
+
 // ─── ConversationState (передаётся клиентом) ─────────────────────────────────
 // §3.3 ConversationState
 export interface ConversationState {
   conversation_id: string;
   slots: Slot[];                                   // активные слоты, max 3
+  /**
+   * §3.3 + §5.6.1: катящиеся счётчики ветки. Опционально для backward-compat
+   * со старыми клиентами; при отсутствии трактуется как DEFAULT_SLOT_STATE.
+   */
+  slot_state?: SlotState;
   last_intent?: IntentType;
   last_category_hint?: string;
   user_city?: string;
