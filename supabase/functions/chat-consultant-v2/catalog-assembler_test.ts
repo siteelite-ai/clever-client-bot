@@ -281,8 +281,9 @@ Deno.test("G1 price-intent-clarify-001: total=705 → clarify slot, disallowCros
       return { kind: "options", options: sampleOptions, totalProducts: 705, doubleWrap: true };
     }
     if (ctx.path.endsWith("/products")) {
-      // s-price probe — per_page=1, total=705
-      return { kind: "products", results: [], total: 705 };
+      // s-price probe — per_page=1. ApiClient требует ≥1 валидный продукт
+      // в `results`, иначе status='empty' (а не 'ok'). Total=705 в meta.
+      return { kind: "products", results: [product(999, 100, "probe-sample")], total: 705 };
     }
     throw new Error(`unexpected path ${ctx.path}`);
   });
@@ -351,7 +352,8 @@ Deno.test("G2 price-intent-ok-001: total=5 cheapest → show_all ASC, disallowCr
       const perPage = Number(ctx.params.get("per_page")) || 0;
       if (perPage === 1) {
         probeCalls++;
-        return { kind: "products", results: [], total: 5 }; // probe
+        // Probe: 1 валидный продукт + total=5 в meta. status='ok'.
+        return { kind: "products", results: [products[0]], total: 5 };
       }
       fullCalls++;
       return { kind: "products", results: products, total: 5 }; // full fetch
@@ -411,7 +413,8 @@ Deno.test("INV: assembler НИКОГДА не сужает funnel сам (clarif
       };
     }
     if (ctx.path.endsWith("/products")) {
-      return { kind: "products", results: [], total: 750 };
+      // probe: ≥1 валидный продукт + total=750 в meta.
+      return { kind: "products", results: [product(1, 100, "probe")], total: 750 };
     }
     throw new Error(`unexpected ${ctx.path}`);
   });
