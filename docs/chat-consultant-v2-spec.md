@@ -1964,6 +1964,12 @@ interface EscalationPayload {
 | `escalation_rate` | gauge | `escalations / turn_total` |
 | `format_violations` | counter | срабатывания PersonaGuard уровень 1 |
 | `domain_guard_penalty_applied` | counter | сколько раз срабатывала защита |
+| `lexicon_applied_total` | counter | срабатываний Lexicon Resolver (split by `type`) |
+| `lexicon_canonical_token_injected` | counter | сколько раз `canonical_token` ушёл в `?query=` |
+| `lexicon_cache_hit_ratio` | gauge | hit-ratio 60-секундного in-memory кэша лексикона |
+| `soft_fallback_triggered` | counter | поиск с unresolved при resolved≥2 (§11.2a) |
+| `pagination_next_page` | counter | срабатываний intent `next_page` (§7.2) |
+| `sse_greeting_stripped` | counter | сколько раз PersonaGuard L1 вырезал приветствие из 30-символьного буфера |
 
 ### 22.3 Алерты
 
@@ -2016,6 +2022,8 @@ interface EscalationPayload {
 | `volt220_api_token` | text | секрет. |
 | `trace_enabled` | bool | включить запись в `chat_traces`. |
 | `sla_targets` | jsonb | пороги для алертов. |
+| `lexicon_json` | jsonb | словарь алиасов §9.2b. Структура: `{ entries: Array<{ surface: string \| string[], type: 'name_modifier'\|'trait_expansion'\|'category_hint', canonical_token?: string, expanded_trait?: string, category_hint?: string, confidence: number, locale?: 'ru'\|'kk'\|'mixed' }> }`. Hot-reload каждые 60 с (тот же кэш, что у конфига). |
+| `resolver_thresholds_json` | jsonb | пороги Category Resolver и Lexicon. Дефолт: `{ "category_high": 0.7, "category_low": 0.4, "lexicon_query_inject": 0.9, "lexicon_trait_expand": 0.85, "soft_match_min": 0.6 }`. Вынесены из кода для тюнинга без редеплоя (см. ADR 28.13). |
 
 Конфиг читается edge-функцией один раз в 60 секунд (in-memory cache), чтобы изменения не требовали редеплоя.
 
@@ -2176,7 +2184,10 @@ interface GoldenCase {
 | 28.10 | Использовать `Product.warehouses[*].amount` для геолокационных ответов о наличии в городе пользователя? | (a) Да, приоритезировать склад из `client_context.city`; (b) Нет, показывать общий остаток | (a) — повышает релевантность ответа |
 | 28.11 | Зафиксировать `docs/external/220volt-swagger.json` как обязательный артефакт CI? | (a) только snapshot в репо; (b) drift-check в CI (раз в сутки сравнивать с live `/swagger.json`) | (b) — раннее обнаружение breaking changes |
 | 28.12 | Прогрев flat-списка категорий для Category Resolver | (a) лениво при первом запросе; (b) cron раз в час | (a) — TTL 1ч и так покрывает |
-| 28.13 | Confidence-пороги Category Resolver (0.4 / 0.7) | зашить в код / вынести в `app_settings.resolver_thresholds_json` | вынести — позволит тюнить по живой телеметрии без редеплоя |
+| 28.13 | Confidence-пороги Category Resolver и Lexicon | зашить в код / вынести в `app_settings.resolver_thresholds_json` | **вынести все** (см. §24): `category_high=0.7`, `category_low=0.4`, `lexicon_query_inject=0.9`, `lexicon_trait_expand=0.85`, `soft_match_min=0.6`. Один источник правды для тюнинга по телеметрии. |
+| 28.14 | Стратегия канонизации в Lexicon Resolver (§9.2b) | (a) только `canonical_token`→query; (b) только `trait_expansion`→facets; (c) гибрид | **(c) гибрид:** `trait_expansion` запускается перед Facet Matcher (для морфологических/языковых синонимов), `canonical_token` инжектируется в `?query=` (для имён собственных «CORN», «UNO» и т.п. при confidence ≥ 0.9). Два пути не пересекаются: одна запись лексикона имеет один `type`. |
+| 28.15 | Объём seed-словаря lexicon_json на старте | (a) ~30 (только лампы); (b) ~50–100 (свет + электроустановка); (c) 200+ (все домены) | **(b) ~50–100** на старте: лампы (CORN, UNO, шар, свеча, груша, R63, GU10), розетки/выключатели (механизм, рамка, суппорт), светильники (трек, профильный, downlight), кабель (ВВГ→жила/сечение). Расширение по логам `unresolved_traits` через еженедельный ревью. |
+| 28.16 | Кто может редактировать `lexicon_json` | (a) только admin через SQL; (b) admin-UI в /admin; (c) editor-роль | **(b)** — отдельная страница в /admin с валидацией схемы (Zod) и preview-эффектом (показать топ-10 unresolved_traits, которые покрылись бы после применения). |
 
 ---
 
