@@ -3255,9 +3255,27 @@ async function resolveFiltersWithLLM(
   modifiers: string[],
   settings: CachedSettings,
   criticalModifiers?: string[],
-  prebuiltSchema?: Map<string, { caption: string; values: Set<string> }>
+  prebuiltSchema?: Map<string, { caption: string; values: Set<string> }>,
+  schemaConfidence: SchemaConfidence = 'full'
 ): Promise<{ resolved: Record<string, ResolvedFilter>; unresolved: string[] }> {
   if (!modifiers || modifiers.length === 0) return { resolved: {}, unresolved: [] };
+
+  // CONFIDENCE GATE — Layer 1 P0: never resolve filters against degraded schema.
+  //   'empty'   → no usable schema at all. Skip LLM entirely (saves tokens, prevents
+  //              false negatives like {"cvet__tүs":"Черный"} → rejected because
+  //              schema values are []). Caller falls through to category+query path.
+  //   'partial' → schema keys are real but values are a SUBSET of reality (legacy
+  //              sampling saw ≤1000/2000 products). We let LLM run but switch to
+  //              KEY-ONLY mode below: validator accepts any value the LLM proposes
+  //              for a known key, value is taken verbatim from user query (acts as
+  //              a free-text filter on a real attribute, not a guess from a stub list).
+  //   'full'    → trust schema completely (legacy strict path).
+  if (schemaConfidence === 'empty') {
+    console.log(`[FilterLLM] CONFIDENCE GATE: schema confidence=empty for ${modifiers.length} modifier(s) — skipping LLM (caller will degrade to category+query)`);
+    return { resolved: {}, unresolved: [...modifiers] };
+  }
+  const keyOnlyMode = schemaConfidence === 'partial';
+
   // FilterLLM bulkhead: ANY error inside (schema build, LLM call, validation, dedupe lookups)
   // must NOT propagate up — caller's pipeline keeps running with empty resolved set.
   // Logged as [FilterLLMCrash] for visibility.
@@ -3271,7 +3289,7 @@ async function resolveFiltersWithLLM(
   let optionIndex: Map<string, { caption: string; values: Set<string> }>;
   if (prebuiltSchema && prebuiltSchema.size > 0) {
     optionIndex = prebuiltSchema;
-    console.log(`[FilterLLM] Using prebuilt category schema (${optionIndex.size} keys)`);
+    console.log(`[FilterLLM] Using prebuilt category schema (${optionIndex.size} keys, confidence=${schemaConfidence}${keyOnlyMode ? ', mode=key-only' : ''})`);
   } else {
     optionIndex = new Map();
     for (const product of products) {
