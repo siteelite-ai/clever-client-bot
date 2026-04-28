@@ -441,11 +441,28 @@ export const ALLOWED_DOMAINS: Domain[] = ['POWER', 'TELECOM', 'TOOLS', 'LIGHTING
 
 ### 4.8 Soft Fallback
 
-Если 0 результатов:
-1. Снять последний модификатор из критериев
-2. Повторить запрос
-3. Если снова 0 → soft 404 с шаблоном «По запросу X не нашлось. Возможно, вас заинтересует [категория]»
-4. Никогда не молча отбрасывать модификаторы (показывать «искал X, но Y нет»)
+Если 0 результатов после strict-поиска с фасет-фильтрами:
+1. Снять последний применённый фасет-фильтр (`droppedFacetCaption` — человекочитаемое имя фасета).
+2. Повторить запрос без этого фильтра.
+3. Если ≥1 товар → status=`soft_fallback`, в `SearchOutcome.softFallbackContext.droppedFacetCaption` записывается имя снятого фасета.
+4. Если снова 0 → status=`empty`, soft404 state-machine инкрементится (§5.6.1).
+5. Никогда не «молча» отбрасывать модификаторы — композер обязан показать tail-line с упоминанием снятого фасета.
+
+#### 4.8.1 Контракт `softFallbackContext` (инвариант для Soft Fallback)
+
+Поле `SearchOutcome.softFallbackContext`:
+
+| Поле | Тип | Семантика |
+|---|---|---|
+| `droppedFacetCaption` | `string` | Человекочитаемое имя фасета, который был снят (UI-caption из `RawOption.caption`, не raw-key). НЕ пусто, НЕ data-agnostic-нарушение, т.к. caption приходит из живого API. |
+
+Заполнение:
+- Только при `status === 'soft_fallback'`.
+- При других статусах поле = `null`.
+
+Использование композером (§5.4.1, §11.2a-rev): tail-line формируется как
+`Если важно уточнить *<droppedFacetCaption>* — напишите.`
+(маркер курсива `*…*` обязателен, текст-обвязка — фиксированный шаблон).
 
 ---
 
@@ -516,13 +533,21 @@ export const ALLOWED_DOMAINS: Domain[] = ['POWER', 'TELECOM', 'TOOLS', 'LIGHTING
 
 | Текущее | Событие | Новое | Действие композера |
 |---|---|---|---|
-| `0` | catalog-ход вернул 0 товаров | `1` | Soft 404 текст: одна короткая фраза + просьба переформулировать. БЕЗ `[CONTACT_MANAGER]`. |
-| `1` | следующий catalog-ход тоже 0 | `2` | Вывести `[CONTACT_MANAGER]`. |
-| `0\|1\|2` | catalog-ход вернул ≥1 товар | `0` | Сброс. |
+| `0` | catalog-ход: `SearchOutcome.status ∈ {empty, empty_degraded}` | `1` | Soft 404 текст: одна короткая фраза + просьба переформулировать. БЕЗ `[CONTACT_MANAGER]`. |
+| `1` | следующий catalog-ход: `status ∈ {empty, empty_degraded}` | `2` | Вывести `[CONTACT_MANAGER]`. |
+| `2` | следующий catalog-ход: `status ∈ {empty, empty_degraded}` | `2` | clamp; `[CONTACT_MANAGER]` остаётся. |
+| `0\|1\|2` | catalog-ход вернул ≥1 товар (`status ∈ {ok, soft_fallback}` И `products.length > 0`) | `0` | Сброс. |
 | любое | `intent.domain_check === 'out_of_domain'` | без изменения | Сразу `[CONTACT_MANAGER]`, минуя streak. |
 | любое | `intent.intent !== 'catalog'` (knowledge/contact/...) | без изменения | streak не трогаем. |
+| любое | `SearchOutcome.status === 'all_zero_price'` | без изменения | Сразу `[CONTACT_MANAGER]`, минуя streak. Без товаров. |
+| любое | `SearchOutcome.status === 'error'` (HTTP/timeout/network) | без изменения | Сразу `[CONTACT_MANAGER]`, минуя streak. Инфраструктурный сбой ≠ «ничего нет». |
 
-Инвариант: `soft404_streak` обновляется ровно один раз за catalog-ход, ПОСЛЕ финального счёта товаров (после Recovery и Soft Fallback). State-machine покрывается тестами `soft404-streak.test.ts`.
+Инварианты:
+1. `soft404_streak` обновляется ровно один раз за catalog-ход, ПОСЛЕ финального счёта товаров (после Recovery и Soft Fallback).
+2. Флаг `contactManager` композера выставляется в `true` **двумя независимыми путями**:
+   - **через streak**: `nextStreak === 2`
+   - **через scenario** (минуя streak): `status ∈ {all_zero_price, error}` ИЛИ `intent.domain_check === 'out_of_domain'`
+3. State-machine покрывается тестами `soft404-streak.test.ts` и `s-catalog-composer_test.ts`.
 
 Структура карточки контактов из `mem://features/conversational-rules`:
 - WhatsApp (primary)
@@ -546,6 +571,23 @@ export const ALLOWED_DOMAINS: Domain[] = ['POWER', 'TELECOM', 'TOOLS', 'LIGHTING
 - Карточки товаров (§17.3 BNF в Core Memory) инжектятся `formatter.ts` между intro и cross-sell, НЕ генерируются LLM.
 - Cross-sell-секция проходит regex-инварианты §11.5b: запрет цен, SKU, brand-литералов, ссылок, CTA. При нарушении — секция вырезается целиком.
 - Конкретное значение маркера — деталь реализации (не фиксируется в спеке, §0 data-agnostic).
+
+##### Контракт входа композера: `disallowCrosssell`
+
+Композер принимает явный флаг `disallowCrosssell: boolean` (часть `ComposeCatalogInput`).
+Семантика:
+
+| Сценарий | `disallowCrosssell` | Действие композера |
+|---|---|---|
+| Обычная товарная выдача (`scenario === 'normal'`) | `false` | Cross-sell разрешён, валидируется по §11.5b. |
+| Soft Fallback (`scenario === 'soft_fallback'`) | `true` (внутренне форсится композером) | Cross-sell вырезается всегда, добавляется tail-line §4.8.1. |
+| No-results (`scenario ∈ {soft_404, all_zero_price, error}`) | `true` (внутренне форсится композером) | Cross-sell вырезается. Маркер от LLM игнорируется. |
+| Similar-ветка (§11.6) | `true` (выставляется оркестратором) | Cross-sell вырезается. Совместимо с правилом «cross-sell для similar НЕ выводится» (Core Memory). |
+| Любая другая ветка, где cross-sell нежелателен | `true` (выставляется оркестратором) | Cross-sell вырезается. |
+
+Инвариант: оркестратор ОБЯЗАН выставлять `disallowCrosssell=true` для similar-ветки. Композер ОБЯЗАН считать `disallowCrosssell=true` для всех scenario, кроме `normal`. При двойном источнике запрета (флаг от оркестратора + scenario-правило) приоритет — у запрета (логическое OR).
+
+Метрика `crosssell_invariant_violation_total` инкрементируется при любом срабатывании запрета на cross-sell, который при этом был сгенерирован LLM (для отладки промпта и валидации флагов оркестратора).
 
 ---
 
