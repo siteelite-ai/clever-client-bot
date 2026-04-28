@@ -277,6 +277,16 @@ serve(async (req) => {
           throw new Error("openrouter_api_key not configured");
         }
 
+        const classifierDeps = createProductionDeps(
+          supabase as unknown as Parameters<typeof createProductionDeps>[0],
+          openRouterKey,
+        );
+
+        // Step 8: ContactsLoader для S_CONTACT / S_ESCALATION.
+        const contactsDeps = createContactsLoaderDeps(
+          supabase as unknown as Parameters<typeof createContactsLoaderDeps>[0],
+        );
+
         // Step 9: KnowledgeDeps для S_KNOWLEDGE (FTS-only).
         // RPC `search_knowledge_chunks_hybrid` с query_embedding=null.
         const knowledgeDeps = createKnowledgeDeps(
