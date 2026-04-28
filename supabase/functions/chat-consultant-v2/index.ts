@@ -1,18 +1,27 @@
 // chat-consultant-v2 — независимая edge-функция (V2 пайплайн).
 //
 // Stage A — скелет SSE-роутер.
-// Stage B (текущий) — добавлен Category Resolver (§9.2a):
+// Stage B (текущий) — Category Resolver (§9.2a):
 //   • вызывает search-products(action=list_categories) для live-списка
 //   • LLM (OpenRouter, gemini-2.5-flash-lite) выбирает pagetitle
 //   • применяет пороги из app_settings.resolver_thresholds_json
 //   • стримит результат в первый SSE-чанк как meta.category_resolver
-//   • контентом сообщает пользователю, какая категория распознана
-//     (это временный диагностический текст до Stages C–E)
+//
+// Stage B контракт V2 (системный, не наследуется от V1):
+//   POST body = {
+//     conversationId: string,                // required
+//     query:          string,                // required, последнее user-сообщение
+//     history?:       Array<{role,content}>, // опционально, для будущего контекста
+//     dialogSlots?:   Record<string, slot>,  // опционально
+//   }
+//   Любой невалидный вход → HTTP 400 с {error: ...}, НЕ реплика бота.
+//   Trace ID всегда независимый (crypto.randomUUID), conversationId — отдельное поле в логах.
 //
 // V1 (`chat-consultant/`) НЕ ТРОГАЕТСЯ.
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { z } from "https://esm.sh/zod@3.23.8";
 import {
   resolveCategory,
   type ResolverIntent,
