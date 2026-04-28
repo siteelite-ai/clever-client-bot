@@ -1321,13 +1321,14 @@ interface EscalationPayload {
 
 ### 19.1 Слои
 
-| Слой | Намespace | TTL | Хранилище |
-|---|---|---|---|
-| Схема опций категории | `category_options` | 1 час | in-memory (per edge instance) + `chat_cache_v2` |
-| Intent короткой реплики (< 80 символов) | `intent` | 24 часа | `chat_cache_v2` |
-| Probe-результаты (count для пары категория+фильтр) | `probe` | 15 минут | `chat_cache_v2` |
-| Эмбеддинг частого query (точный матч) | `embed_query` | 7 дней | `chat_cache_v2` |
-| Финальные ответы | — | **не кэшируется** | — |
+| Слой | Namespace | TTL | Хранилище | Ключ |
+|---|---|---|---|---|
+| Схема опций категории (`/api/categories/{id}/options`) | `category_options` | 1 час | in-memory (per edge instance) + `chat_cache_v2` | `pt:{pagetitle}` или `id:{n}` |
+| Плоский список pagetitle (`/api/categories`) | `categories_flat` | 1 час | in-memory | singleton |
+| Intent короткой реплики (< 80 символов) | `intent` | 24 часа | `chat_cache_v2` | sha1(message) |
+| Probe-результаты (count для пары категория+фильтр) | `probe` | 15 минут | `chat_cache_v2` | sha1(category+filters) |
+| Эмбеддинг частого query (точный матч) | `embed_query` | 7 дней | `chat_cache_v2` | sha1(query) |
+| Финальные ответы | — | **не кэшируется** | — | — |
 
 ### 19.2 Прогрев
 
@@ -1337,8 +1338,9 @@ interface EscalationPayload {
 ### 19.3 Инвалидация
 
 - При HTTP 5xx от каталога **не сохранять** результат в кэш.
-- При обнаружении деградированного payload (пустые опции при ожидаемых) — повторный fetch, не кэшировать неуспех.
-- Ручная инвалидация — админ-эндпоинт `DELETE /chat_cache_v2 WHERE namespace = ?`.
+- При обнаружении деградированного payload (пустые `options[]` при `total_products > 0`) — повторный fetch, не кэшировать неуспех.
+- При смене схемы (новые ключи опций в категории) — TTL 1 час обеспечивает естественное обновление; ручная инвалидация: админ-эндпоинт `DELETE FROM chat_cache_v2 WHERE namespace = $1`.
+- Кэш `category_options` инвалидируется отдельно от `categories_flat`: изменение структуры одной категории не сбрасывает дерево.
 
 ---
 
