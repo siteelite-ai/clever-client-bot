@@ -1,190 +1,160 @@
-# Cross-sell (текстом) + Similar (по запросу через LLM-расщепление)
+# Итоговый план: архитектурная чистка спеки + Query Expansion
 
-Системно, без статичных карт, без новых таблиц/миграций. Lexicon-«кукуруза» сюда не входит — отдельный разговор.
-
----
-
-## §11.5 Cross-sell — просто текст в конце ответа
-
-### Что это
-1–3 коротких предложения живым стилем продавца после основной выдачи. Это **продолжение разговора**, не интерактив. Никаких ссылок, кнопок, новых intent'ов, состояния.
-
-### Когда выводится
-- `intent ∈ {product_search, refine_search}`;
-- `1 ≤ results.length ≤ 3` (твоё «гибрид: только короткие выдачи»);
-- не активен blocking clarification, не Soft-404, не similar-flow.
-
-При `results.length > 3` или `similar_search` — cross-sell **не выводится** (это не дефект). При прямом запросе пользователя «а что ещё подойдёт / что обычно берут» — отрабатывает обычный `product_search` с контекстом, отдельный intent не нужен.
-
-### Как генерируется
-Часть основного Composer-вывода в одном LLM-вызове (не отдельный запрос → не растёт latency).
-
-В системном промте Composer'а — раздел §11.5 с правилом: «Если выдача короткая (≤3 карточек) и intent=product_search/refine_search — после карточек добавь короткий абзац-предложение из 1–3 фраз в стиле продавца: что обычно докупают / что подходит в комплект к показанным товарам. Только смежные категории».
-
-### Жёсткие рамки в промте
-- Нельзя называть конкретные SKU/названия товаров — только типы/категории («светильники», «диммеры», «патроны»).
-- Нельзя называть цены, бренды, наличие, склады.
-- Нельзя предлагать **ту же** категорию, что в выдаче.
-- Нельзя сочинять характеристики, которых не было в показанных товарах.
-- Длина: 1–3 предложения, один абзац.
-- Нельзя писать «нажмите», «перейдите», «по ссылке» — это не интерактив.
-
-### Пример
-> Под такие лампы E27 часто берут диммеры — если планируете регулировать яркость. Также пригодятся запасные патроны, особенно для люстр, где лампы меняются часто.
-
-### Пост-валидация в Composer (defensive)
-Перед отправкой проверяем cross-sell-абзац:
-- содержит markdown-ссылку `[…](http…)` → вырезаем абзац, инкрементируем `crosssell_invariant_violation_total`;
-- содержит число + `₸` → то же;
-- содержит «нажмите/перейдите/по ссылке» → то же.
-
-### Инварианты
-- **CS1.** Только при `1 ≤ results.length ≤ 3` для `product_search/refine_search`.
-- **CS2.** Только текст. Никаких ссылок, списков, карточек.
-- **CS3.** Не упоминает конкретные SKU, цены, бренды, склады.
-- **CS4.** Не предлагает ту же категорию, что в выдаче.
-- **CS5.** 1–3 предложения, один абзац.
+Архитектор согласен с твоим требованием. Применяю принцип **data-agnostic spec**: спека описывает законы (контракты, инварианты, алгоритмы), а не состояние каталога 220volt. Любая иллюстрация с реальной категорией/товаром/трейтом = whitelist = запрещено.
 
 ---
 
-## §11.6 Similar / Аналоги — по запросу, через LLM-расщепление характеристик
+## Архитектурное правило (новое, в Core памяти)
 
-### Триггер
-Новый intent **`similar_search`** (расширение §7), маркеры: «похожее», «аналог», «замена», «такое же, но», «не хуже», «получше», «вместо этого».
+**Демаркация «пример vs контракт»:**
 
-### Якорь
-Один `Product`, источники в порядке приоритета:
-1. явный артикул/ссылка в текущей реплике;
-2. `slot.anchor_product` (выбран ранее);
-3. `slot.last_shown_products[0]` — только если в последней выдаче была одна карточка ИЛИ пользователь явно сослался («на первый», «на эту»).
+| Тип артефакта в спеке | Зависит от состояния каталога 220volt? | Вердикт |
+|---|---|---|
+| «Если запросить категорию X, вернётся Y товаров» | да | **запрещено** — whitelist |
+| «Карточка-аналог для лампы E27 выглядит так: …» | да | **запрещено** — whitelist |
+| Cross-sell-абзац «к лампам берут диммеры» | да | **запрещено** — domain hallucination |
+| JSON-схема tool-call'а с типами полей | нет | разрешено — контракт типизации |
+| Граничное условие «`options:[]`» | нет | разрешено — контракт обработки |
+| Regex-правило `\b<token>\b` на абстрактном `token` | нет | разрешено — спека парсера |
+| Test case `state→action→assert` на синтетических моках | нет | разрешено — контракт поведения |
 
-**Без якоря** → один уточняющий вопрос: «На какой именно товар подобрать аналоги? Пришлите артикул или скажите "на первый из списка".»
+**Критерий одной строкой:** если артефакт перестанет быть валидным после ребрендинга/смены ассортимента 220volt — он whitelist, его нельзя держать в спеке.
 
-### Алгоритм
+---
 
-1. **Расщепление.** Берём `anchor.category` и `anchor.options[]` из API.
+## Что чищу в спеке (`.lovable/specs/chat-consultant-v2-spec.md`)
 
-2. **LLM-классификация трейтов** (структурированный вызов через tool calling):
-   - tool `classify_traits({ critical: [{key,value}], flavor: [{key,value}] })`;
-   - `tool_choice` принудительный;
-   - параметр `key` — **enum из `anchor.options[].key`** (закрывает галлюцинации на уровне SDK);
-   - `critical[]` — характеристики класса совместимости (для лампы — цоколь; для розетки — ном.ток + тип монтажа);
-   - `flavor[]` — вкусовые (бренд, цвет, цветовая температура).
-   - **Бюджет latency:** +600ms в критическом пути (приемлемо для явного запроса аналога).
+| Раздел | Действие |
+|---|---|
+| §4.5, §9.2/9.3, §9.7 «Сценарий B/C» | Убрать `«Розетки»`, `«Розетки бытовые»`, любые названия категорий/товаров. Оставить структуру алгоритма с плейсхолдерами `<category_pagetitle>`, `<facet_key>`, `<trait_value>`. |
+| §9.2a Category Resolver | Полностью переписать как контракт: `pagetitle ∈ {live /api/categories snapshot, TTL 24h}`. Любой `pagetitle` вне snapshot'а → reject + `category_hallucination_total++`. Никаких translit-эвристик, никаких примеров. |
+| §11.5 Cross-sell | Убрать иллюстративный абзац про «E27 + диммеры». Оставить инварианты CS1–CS5 + контракт «1–3 предложения, без SKU/цен/брендов/ссылок/CTA, не та же категория». Вместо примера — отрицательный контракт (что **нельзя** содержать). |
+| §17.3, §17.7 формат карточки | Заменить готовый markdown с конкретным товаром на BNF-нотацию с плейсхолдерами: `**[product.pagetitle](product.url)**` → `Цена: *<price>* ₸` → `Бренд: <brand?>` → `Наличие: <stock_summary?>`. Условные поля помечены `?`. Для §17.7 (similar) добавлен обязательный подпункт `Совпадает с исходной: <list of critical traits>`. |
+| §25 Test cases | Переписать в формате `state → input → expected pipeline trace`. Никаких реальных запросов «дай лампу»/«двойная розетка». Только синтетика: `mock /api/categories returns [{pagetitle:"CatA"}]`, `user query → trait T1`, `expect: tool_call(catalog_search, query=T1, category="CatA")`, `expect: assert(query_attempts.length≤4)`. |
+| §22 метрики | Добавить новые метрики Query Expansion (см. ниже). Без иллюстративных значений. |
 
-3. **Critical fallback.** Если LLM вернул `critical=[]`:
-   - `category_total > 20` → один уточняющий вопрос «По каким характеристикам подобрать аналог? Например: цоколь, мощность, бренд». Ответ → парсится Facet Matcher'ом → становится `critical[]`.
-   - `category_total ≤ 20` → показываем все с tail-строкой «Точные характеристики не указаны — это все товары в категории; уточните, что важнее сохранить».
+---
 
-4. **Catalog API** запрос с фильтрами по `critical[]` через Strict Search + Recovery-then-Degrade §9C.2 для non-ASCII ключей. Исключаем якорь и `price=0`.
+## Что чищу в `.lovable/plan.md`
 
-5. **Funnel-cap (§9.7 Scan-or-Clarify, симметрично price-sort):**
-   - 0 → честная фраза: «Прямых аналогов с *{critical-trait}* не нашёл. Если важно сохранить *{trait}* — могу подобрать у других брендов.»
-   - 1 → одна карточка + tail «Это единственный аналог по *{critical-traits}*».
-   - 2–5 → локально сортируем по числу совпавших flavor-трейтов с якорем, **рендерим топ-3** (`render_top=3`). Это не self-narrowing — funnel сужен пользователем, ранкинг по совпадениям.
-   - 6+ → один уточняющий вопрос по `flavor[]`-трейту из **реальной выдачи** (§9.8: значения с count≥1 в текущем funnel; никаких догадок).
+Сейчас там нарратив cross-sell/similar с примером «лампа A60 9Вт E27 Schneider — 1 290 ₸» и «Под такие лампы E27 часто берут диммеры…». Удаляю оба. Заменяю на BNF-формат карточки и контракт cross-sell-абзаца (см. ниже).
 
-6. **«Не хуже» → диалог, не прокси-фильтр.** Если в реплике есть «не хуже / премиум / получше» и есть якорь → перед основным выводом задаём один уточняющий вопрос: «Что важнее сохранить: бренд того же уровня, цена не ниже исходной, или конкретные характеристики?» Ответ → дополнительный фильтр через тот же pipeline. Никакого «цена ≥ 70%».
+Также удаляю весь нарратив 5 кейсов (кукуруза/груша/двойная/SKU/Corner) — это R&D-артефакт. Остаётся только итог: реализовать Category Invariant + Query Expansion + Multi-Attempt + Word-Boundary Filter.
 
-7. **Запрет «фантомного качества».** В выводе только фактическое: «Совпадает с исходной: цоколь E27, мощность, цветовая температура». Никаких «лучше/премиум/не хуже».
+---
 
-### Формат вывода (§17.7)
-```markdown
-**Аналоги:**
+## Технические правки спеки (data-agnostic язык)
 
-- **[Лампа LED A60 9Вт E27 4000K Schneider](https://220volt.kz/...)**
-  - Цена: *1 290* ₸
-  - Бренд: Schneider
-  - Наличие: В наличии — *Алматы 12 шт*
-  - Совпадает с исходной: цоколь E27, мощность, цветовая температура
+### §9.2a Category Resolver — контракт
+- **C1.** `pagetitle` категории берётся **только** из живого `GET /api/categories` (кэш 24ч).
+- **C2.** Любой `pagetitle`, отсутствующий в актуальном snapshot'е → reject, метрика `category_hallucination_total++`.
+- **C3.** Запрещено: translit, ручные таблицы, склейка из навигации, эвристики.
+
+### §9.2b Query Expansion Resolver (бывший Lexicon Resolver)
+Контракт:
 ```
-Тот же буллет-формат §17.3 + один доп. подпункт «Совпадает с исходной: …». Максимум 3 карточки.
+QueryAttempt = { tokens: string[], source: enum, confidence: float, rationale: string }
+QueryExpansionOutput = { query_attempts: QueryAttempt[], expanded_traits: string[], applied_aliases: AppliedAlias[] }
 
-### Инварианты
-- **SIM1.** `similar_search` без якоря → один уточняющий вопрос; не угадываем.
-- **SIM2.** Кандидаты только из `anchor.category.id`.
-- **SIM3.** `critical[]` определяется LLM на лету по `anchor.options[]` через structured tool calling. Никаких статичных карт.
-- **SIM4.** `funnel_cap=5`, `render_top=3`. ≥6 → уточняющий вопрос по flavor из реальной выдачи.
-- **SIM5.** «Не хуже» → диалог, не прокси-фильтр.
-- **SIM6.** `price=0` запрещён. Якорь сам не может быть `price=0`.
-- **SIM7.** Запрет «фантомного качества»: только «Совпадает с исходной: …».
-- **SIM8.** `auto_narrowing_attempts_total += 0` (то же правило).
+source ∈ { as_is_ru, lexicon_canonical, en_translation, kk_translation }
+```
+Порядок попыток (жёсткий):
+1. `as_is_ru` — всегда первая, если в реплике есть RU-слова кроме служебных.
+2. `lexicon_canonical` — если в lexicon есть запись с `confidence ≥ 0.9`.
+3. `en_translation` — только для трейтов, помеченных Intent-LLM как «бытовое название товара». Перевод выполняется в том же Intent-вызове через расширенную tool-схему, без отдельного round-trip.
+4. `kk_translation` — отключена по умолчанию (`app_settings.query_expansion.kk_enabled=false`), включается по метрике `query_expansion_rescue_kk_potential_total`.
 
----
+### §9.2c Strict Search Multi-Attempt (новый)
+```
+for attempt in query_attempts:
+  raw     = catalog.search(query=attempt.tokens, category=resolved_pagetitle, options=facets)
+  bounded = wordBoundaryFilter(raw, attempt.tokens)
+  priced  = priceFilter(bounded, price > 0)
+  if priced.total > 0:
+    metric: query_expansion_strategy_used_total{source=attempt.source}++
+    return priced
+metric: query_expansion_all_attempts_failed_total++
+→ recovery-then-degrade (§9C.2) → Soft 404 (§17.6)
+```
 
-## Сосуществование
+### Word-boundary post-filter (часть §9.2c)
+Для каждого `token ∈ attempt.tokens` хотя бы одно из полей `pagetitle | article | content` должно содержать `token` как отдельное слово (`\b<token>\b`, флаги `iu`). Иначе товар отбрасывается, `query_word_boundary_filtered_total{token}++`.
 
-В ответе с `similar_search`: similar-блок, **cross-sell не добавляется** (двойной апселл-шум).
+Исключение: для коротких токенов (<3 символов) и числовых паттернов word-boundary применяется только к `pagetitle`+`article`.
 
-В ответе с `product_search/refine_search` при `≤3` карточек: карточки → cross-sell-абзац.
+### §17.3 / §17.7 формат (BNF)
+```
+Card ::=
+  - **[<product.pagetitle>](<product.url>)**
+    [- Цена: *<formatted_price>* ₸                  ; required, price>0]
+    [- Бренд: <product.brand>                       ; if present]
+    [- Наличие: <stock_summary>                     ; if present]
+    [- Совпадает с исходной: <critical_traits_csv>  ; only in §17.7 similar block]
+```
+Условные подпункты опускаются полностью при отсутствии данных (никаких «—»/«н/д»).
 
-Порядок секций в §11.2a:
-`[1] (опц.) короткий комментарий → [2] основные карточки или similar-карточки → [3] cross-sell-абзац (если применим) → [4] (опц.) soft-fallback-tail / similar-tail`
+### §11.5 Cross-sell — контракт без иллюстрации
+Сохраняются инварианты CS1–CS5. Иллюстративный абзац удалён. Промт Composer'а (отдельный файл, не спека) описывает контракт **отрицательно**: «1–3 предложения о смежных категориях. Запрещено: упоминать SKU, цены (`₸`), бренды, склады, ту же категорию что в выдаче, ссылки, фразы CTA. Не выдумывай рекомендации из pre-trained знаний — опирайся на факт смежности категорий каталога».
 
----
+### §22 новые метрики
+```
+query_expansion_strategy_used_total{source}     counter
+query_expansion_attempts_per_turn               histogram (1..4)
+query_expansion_rescue_total{from,to}           counter
+query_expansion_all_attempts_failed_total       counter
+query_word_boundary_filtered_total{token}       counter
+category_hallucination_total                    counter
+```
 
-## Метрики (§22)
-
-**Cross-sell:**
-- `crosssell_text_rendered_total`
-- `crosssell_skipped_due_to_length_total{bucket}` — `[4-7, 8-15, 16+]` (для будущей калибровки порога)
-- `crosssell_text_length_chars` — гистограмма
-- `crosssell_invariant_violation_total` — обязана быть 0 (сработала пост-валидация: ссылка/цена/«нажмите»)
-
-**Similar:**
-- `similar_search_total{anchor_source}` — `last_shown | sku_in_message | explicit_pick`
-- `similar_no_anchor_clarification_total`
-- `similar_critical_traits_count` — гистограмма
-- `similar_critical_fallback_total{branch}` — `clarify_question | show_all_small_category`
-- `similar_funnel_size_bucket` — `0 | 1 | 2-5 | 6+`
-- `similar_clarification_total` — сработала развилка 6+
-- `similar_zero_results_total`
-- `similar_quality_dialog_total` — пользователь сказал «не хуже» → сработал уточняющий вопрос
-
----
-
-## Файлы
-
-`docs/chat-consultant-v2-spec.md`:
-- §7 (intents) — добавить `similar_search`;
-- §11.2a — зафиксировать порядок секций;
-- новый **§11.5** «Cross-sell (текстом)» с правилами и пост-валидацией;
-- новый **§11.6** «Similar / Аналоги» с алгоритмом, structured tool calling, critical fallback, funnel-cap;
-- §17 → новый **§17.7** (формат similar-карточки с подпунктом «Совпадает с исходной»);
-- §22 — 12 новых метрик.
-
-**Никаких миграций БД.** **Никаких json-карт в `app_settings`.**
-
-`mem://features/conversational-rules` — добавить §11.5/§11.6.
-`mem://index.md` (Core) — короткие правила:
-- «Cross-sell: 1–3 предложения текстом в конце основной выдачи только при `results.length ≤ 3` для product_search/refine_search. Никаких ссылок, цен, SKU, брендов. Не показывается при similar/blocking-clarify/Soft-404. Пост-валидация в Composer.»
-- «Similar: triggered by user; LLM через structured tool calling расщепляет `anchor.options[]` на critical/flavor (enum по ключам якоря), funnel-cap=5 / render_top=3, при 6+ — уточняющий вопрос по flavor из реальной выдачи. «Не хуже» → диалог, не прокси-цена. Запрет «фантомного качества».»
+### CI-чекер (расширение ADR 28.11)
+Ежедневная задача: для каждого `pagetitle` в `categories_cache` дёргать `?category={pt}&per_page=1`, валидировать `data.results.length>0`. Дрейф → алерт + автоматический PR с обновлением кэша. Спека НЕ содержит конкретных pagetitle — чекер берёт их из живого snapshot'а.
 
 ---
 
-## Golden tests
+## Куда уходят «грязные» примеры
 
-- **TC-83** (обновить): cross-sell-абзац показывается **только** при `results.length ≤ 3`.
-- **TC-96**: `product_search` с 12 результатами → cross-sell-абзац **отсутствует**, `crosssell_skipped_due_to_length_total{8-15} += 1`.
-- **TC-97**: blocking clarification → cross-sell отсутствует.
-- **TC-98**: Soft-404 → cross-sell отсутствует.
-- **TC-99**: «лампа E14 candle 4000K Schneider» → 2 карточки + cross-sell-абзац (упоминает категории, не SKU/цены).
-- **TC-100**: LLM в cross-sell случайно вписал ссылку → пост-валидация вырезала абзац, `crosssell_invariant_violation_total += 1`.
-- **TC-101**: «подбери аналог» после показа лампы LED A60 9Вт E27 → `classify_traits` пометил цоколь+мощность critical, цветовую температуру flavor; 3 карточки с подпунктом «Совпадает с исходной: …».
-- **TC-102**: «подбери похожее» без якоря → один уточняющий вопрос; `similar_no_anchor_clarification_total += 1`.
-- **TC-103**: similar дал 12 кандидатов → один уточняющий вопрос по flavor (бренду) из реальной выдачи; никаких карточек до ответа.
-- **TC-104**: «аналог не хуже этой лампы» → перед similar-выдачей уточняющий вопрос «Что важнее: бренд / цена / характеристики?»; `similar_quality_dialog_total += 1`.
-- **TC-105**: similar дал 0 кандидатов → честная фраза с предложением снять одно ограничение, без блока.
-- **TC-106**: `classify_traits` вернул `critical=[]`, `category_total=8` → показываем все 8 с tail «Точные характеристики не указаны…»; `similar_critical_fallback_total{show_all_small_category} += 1`.
-- **TC-107**: `classify_traits` вернул `critical=[]`, `category_total=120` → один уточняющий вопрос «По каким характеристикам подобрать аналог?»; `similar_critical_fallback_total{clarify_question} += 1`.
+Создаю `.lovable/fixtures/` (вне спеки):
+- `api-snapshots/categories-2026-04-28.json` — slim-снапшот живых категорий для разработки.
+- `api-snapshots/probe-cases-2026-04-28.md` — нарратив 5 кейсов прогона (кукуруза/груша/двойная/SKU/Corner) как R&D-документация. **Не часть спеки.** Используется только для регрессионных тестов и онбординга.
+
+Жёсткое правило (в Core памяти): спека = законы, fixtures = состояние. Смешивать запрещено.
 
 ---
 
-## Чего НЕ делаем
+## Изменения в памяти
 
-- Не создаём `crosssell_map_json` / `similar_match_rules_json`.
-- Не делаем cross-sell кликабельным, нет `slot.last_crosssell_offers`, нет `crosssell_followup` intent.
-- Не используем прокси «цена ≥ 70%» для «качества».
-- Не выходим за категорию якоря в similar.
-- Не показываем cross-sell автоматически при выдаче >3 (метрика `crosssell_skipped_due_to_length_total` даст основания пересмотреть порог через 2 недели).
-- Lexicon/«кукурузу» не трогаем — отдельный разговор.
+**`mem://index.md` Core (добавить):**
+- «Spec = data-agnostic. ZERO примеров с реальными категориями/товарами/трейтами 220volt. Иллюстрации = whitelist = запрещены. Контракты (типы, JSON-схемы, BNF, regex-правила, test-state-машины) — разрешены. Грязные примеры → `.lovable/fixtures/` вне спеки.»
+- Заменить строку Search pipeline на: «Category Resolver (live /api/categories only) → Query Expansion (multi-attempt: as_is_ru → lexicon → en_translation → kk_off) → Facet Matcher → Strict Search Multi-Attempt with word-boundary post-filter → Recovery-then-degrade → Soft 404».
+
+**`mem://features/search-pipeline`:** переписать с учётом Query Expansion и word-boundary filter, без примеров запросов.
+
+---
+
+## Файлы, которые меняются
+
+1. `.lovable/specs/chat-consultant-v2-spec.md` — большая чистка + новые §9.2a/b/c, обновлённые §17.3/17.7/§22/§25.
+2. `.lovable/plan.md` — переписать в data-agnostic виде.
+3. `mem://index.md` — Core обновлён.
+4. `mem://features/search-pipeline` — переписан.
+5. `.lovable/fixtures/` (новая папка) — снапшоты + R&D-кейсы вне спеки.
+
+**Реализация в `supabase/functions/chat-consultant/index.ts` — отдельным следующим шагом** после твоего approval спеки. Сейчас правлю только документы.
+
+---
+
+## Что НЕ делаю
+
+- Не удаляю Lexicon — он остаётся как стратегия `lexicon_canonical` внутри Query Expansion.
+- Не включаю KK-перевод по умолчанию (флаг, метрика-триггер).
+- Не добавляю отдельный LLM-call для перевода — расширяю существующий Intent-tool.
+- Не трогаю код функций до твоего approval.
+
+---
+
+## Риски и митигация
+
+- **Риск:** новый разработчик/LLM-агент без примеров плохо читают абстрактный BNF.
+  **Митигация:** `.lovable/fixtures/` с явной пометкой «не часть спеки, только для мокирования». Test-suite §25 даёт executable-контракт.
+- **Риск:** при первой реализации Query Expansion будет соблазн захардкодить «известные хорошие» пары (груша→A60). 
+  **Митигация:** Lexicon — единственное легитимное место для таких пар, c полем `confidence` и аудит-логом `applied_aliases`.
