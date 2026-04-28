@@ -1,947 +1,1303 @@
-# Chat Consultant v2 — Полная спецификация
+# Чат-консультант 220volt — Спецификация системы (v2.0)
 
-**Версия документа:** 1.0
-**Дата:** 2026-04-28
-**Статус:** Draft, ожидает approval перед началом разработки
-**Цель:** Полная переписка движка чат-консультанта 220volt.kz с нуля для устранения накопленного технического долга и системных багов v1.
-
----
-
-## 0. TL;DR
-
-v1 (`chat-consultant`) — монолит, который рос итеративно полгода. Накоплены системные баги: утечка слотов между запросами, грязный query после уточнения категории, избыточная латентность (5-8s на простых запросах), отсутствие явной машины состояний.
-
-v2 (`chat-consultant-v2`) — полная переписка с чистой архитектурой:
-- Детерминированная машина состояний
-- Модульная структура (8 файлов вместо одного монолита)
-- Postgres-кэш probe и intent
-- Жёсткий жизненный цикл слотов (явный consume, не таймауты)
-- Реалистичный SLA: p50 < 3s SKU, < 6s фильтры
-
-Старый движок остаётся в работе. Переключение через флаг `engine_version` в `app_settings`. Откат — одна кнопка в админке.
-
-**Срок:** ~3 недели, 7 этапов, каждый с отдельным approval.
+> **Документ:** Production-grade Technical Specification
+> **Статус:** Утверждено к реализации
+> **Аудитория:** Архитекторы, backend/frontend разработчики, QA, DevOps, дежурные инженеры
+> **Принцип:** Самодостаточный документ. Описывает целевую систему. Не содержит отсылок к предыдущим версиям.
 
 ---
 
-## 1. Анализ v1: что не так (диагноз)
+## Оглавление
 
-### 1.1 Системные баги из логов
+1. [Назначение и границы системы](#1-назначение-и-границы-системы)
+2. [Глоссарий](#2-глоссарий)
+3. [Архитектура](#3-архитектура)
+4. [Доменная модель и инварианты](#4-доменная-модель-и-инварианты)
+5. [State Machine диалога](#5-state-machine-диалога)
+6. [Конвейер обработки реплики (Turn Pipeline)](#6-конвейер-обработки-реплики-turn-pipeline)
+7. [Модуль: Intent Classifier](#7-модуль-intent-classifier)
+8. [Модуль: Slot Manager](#8-модуль-slot-manager)
+9. [Модуль: Catalog Search](#9-модуль-catalog-search)
+10. [Модуль: Knowledge Base RAG](#10-модуль-knowledge-base-rag)
+11. [Модуль: Response Composer](#11-модуль-response-composer)
+12. [Модуль: Persona Guard](#12-модуль-persona-guard)
+13. [Контракты данных (TypeScript)](#13-контракты-данных-typescript)
+14. [Схема БД (DDL)](#14-схема-бд-ddl)
+15. [API контракты (Edge Functions)](#15-api-контракты-edge-functions)
+16. [Sequence-диаграммы ключевых сценариев](#16-sequence-диаграммы-ключевых-сценариев)
+17. [Конверсационные правила](#17-конверсационные-правила)
+18. [Правила эскалации](#18-правила-эскалации)
+19. [Кэширование](#19-кэширование)
+20. [SLA / SLO / SLI](#20-sla--slo--sli)
+21. [Error Matrix и Retry политики](#21-error-matrix-и-retry-политики)
+22. [Observability](#22-observability)
+23. [Безопасность](#23-безопасность)
+24. [Конфигурация](#24-конфигурация)
+25. [Golden Test Suite (60 кейсов)](#25-golden-test-suite-60-кейсов)
+26. [Критерии успешности](#26-критерии-успешности)
+27. [Runbook для дежурного](#27-runbook-для-дежурного)
+28. [Открытые вопросы](#28-открытые-вопросы)
 
-| Баг | Симптом | Корневая причина |
+---
+
+## 1. Назначение и границы системы
+
+### 1.1 Назначение
+
+Чат-консультант — диалоговый агент интернет-магазина 220volt.kz. Помогает посетителю:
+- найти товар по артикулу, названию, характеристикам или сценарию использования;
+- сравнить альтернативы, получить замены отсутствующего товара;
+- получить справочную информацию (доставка, оплата, гарантия, акции);
+- эскалировать запрос живому менеджеру, когда задача выходит за рамки автоматики.
+
+### 1.2 Бизнес-цели
+
+| Цель | Метрика | Целевое значение |
 |---|---|---|
-| Утечка слотов | Слот «розетки» жил 4 хода и попал в запрос «лампочка» | Закрытие по таймауту, а не по явному consume |
-| Грязный query | «чёрные двухгнездовые бытовые» внутри категории «Розетки» → 0 результатов | После выбора опции «бытовые» слово остаётся в поисковой строке |
-| Probe latency | 5.7s на запрос «лампочка» (705 товаров) | Нет кэша частых probe-запросов |
-| Forced upgrade | Классификатор форсится с flash-lite на flash | Историческое решение, увеличивает latency на ~600ms |
-| Pro по умолчанию | Все ответы через `gemini-2.5-pro` | Pro избыточен для коротких ответов с карточками |
-| Vector search off | Knowledge ищет только через FTS | Нет Google API key и нет fallback на OpenRouter embeddings |
+| Снизить нагрузку на менеджеров | % запросов, закрытых ботом | ≥ 70 % |
+| Увеличить конверсию посетитель → корзина | Показ карточек / сессия | ≥ 1.5 |
+| Удержать пользователя в диалоге | Средняя длина сессии | ≥ 4 turn |
+| Корректность товарных рекомендаций | Точность top-3 (выборка) | ≥ 90 % |
 
-### 1.2 Архитектурные проблемы
+### 1.3 В скоупе
 
-- **Монолит**: классификация, поиск, слоты, knowledge, промпт, стрим — всё в одном файле `index.ts`
-- **Скрытое состояние**: слоты хранятся и на клиенте, и на сервере, без явного протокола
-- **Нет contract testing**: любая правка может сломать соседний модуль
-- **Нет regression suite**: каждый rollout — слепой полёт
+- Веб-виджет, встраиваемый через `embed.js` на любой странице сайта.
+- Серверная логика обработки реплик (Edge Function на Supabase).
+- Интеграция с публичным каталогом 220volt через REST API (источник правды).
+- База знаний (статьи, инструкции, акции) в Postgres + pgvector.
+- Логирование использования и стоимости LLM.
 
-### 1.3 Что в v1 работает хорошо (переедет в v2 без изменений)
+### 1.4 Вне скоупа
 
-- API клиент каталога (`getCategoryOptionsSchema`, `searchProductsMulti`)
-- Hybrid knowledge search (FTS + vector через RRF)
-- GeoIP-определение и регион-логика (KZ/RU)
-- Логирование `ai_usage_logs`
-- Markdown-формат карточки товара
-- Domain Guard логика (penalize telecom vs power -30 pts)
-- Option-key alias collapse (`cvet__tүs` ↔ `cvet__tүsі`)
-- Volume formula (`Qty * Vol * 1.2` для кабелей)
+- Локальная синхронизация каталога в БД (запрещено политикой проекта).
+- Оформление заказов внутри чата (передача в корзину сайта только ссылками).
+- Голосовой ввод и видеозвонки.
+- Многоязычность сверх русского/казахского (UI на русском).
 
 ---
 
-## 2. Цели v2 (приоритеты)
+## 2. Глоссарий
 
-### Must have (без этого нет смысла переписывать)
-1. Явная машина состояний с детерминированными переходами
-2. Жёсткий жизненный цикл слотов (consume вместо таймаута)
-3. Очистка query при выборе опций (никаких «бытовых» в поисковой строке)
-4. Postgres-кэш probe (сейчас каждый запрос идёт в API заново)
-5. Регрессионный набор из 50 эталонных запросов
-6. Детальное логирование каждого перехода для трассировки
-
-### Should have (важно, но не критично для MVP)
-7. Параллельная загрузка независимых блоков (geo + knowledge prefetch)
-8. Динамический выбор модели (flash-lite для классификации, flash для ответа, pro только при escalation)
-9. Снижение системного промпта с 13.9KB до ≤6KB
-10. A/B тестирование v1 vs v2 на реальном трафике
-
-### Nice to have (после MVP)
-11. Vector search для knowledge (через OpenRouter embeddings)
-12. Прогрев кэша топ-50 запросов при деплое
-13. Метрики качества (CSAT proxy, click-through по карточкам)
-
-### Non-goals (явно НЕ в v2)
-- Sync каталога в локальную БД (запрещено правилом памяти)
-- Greetings от бота (запрещено правилом памяти)
-- Изменение UI чата
-- Изменение `embed.js`
-- Изменение схемы knowledge_entries
-- Новые AI-провайдеры (только OpenRouter)
-- Прямые ключи Google (запрещено правилом памяти)
+| Термин | Определение |
+|---|---|
+| **Turn** | Один полный цикл: реплика пользователя → ответ ассистента. |
+| **Session** | Серия turns в рамках одного `session_id`, хранится клиентом в `sessionStorage`. |
+| **Intent** | Тип намерения пользователя в текущей реплике (см. §7). |
+| **Slot** | Активное состояние поиска: категория + применённые фильтры + диапазон цен + сортировка. |
+| **Slot Lifecycle** | OPEN → REFINING → CLOSED. CLOSED = слот удалён (новая категория, явный сброс, или >7 результатов после уточнения). |
+| **Probe** | Проверочный API-запрос в каталог для оценки осуществимости фильтра (count, sample). |
+| **Bucket** | Группа товаров одной категории внутри multi-vector поиска. |
+| **Domain Guard** | Защита от выдачи товаров не той физической предметной области (см. §9.5). |
+| **CONTACT_MANAGER** | Управляющий маркер ответа, триггерящий рендер карточки эскалации. |
 
 ---
 
 ## 3. Архитектура
 
-### 3.1 Структура файлов
+### 3.1 Топология
 
 ```
-supabase/functions/
-├── chat-consultant/                # v1 — НЕ ТРОГАЕМ
-└── chat-consultant-v2/
-    ├── index.ts                    # HTTP entry, CORS, auth, error handling
-    ├── state-machine.ts            # FSM: routing между этапами
-    ├── intent-classifier.ts        # Micro-LLM на flash-lite
-    ├── slot-manager.ts             # Создание/матчинг/закрытие слотов
-    ├── catalog/
-    │   ├── api-client.ts           # 220volt API клиент
-    │   ├── search.ts               # Multi-query search + ranking
-    │   ├── price-intent.ts         # cheapest/expensive логика
-    │   ├── sku-detection.ts        # Regex + правила для артикулов
-    │   ├── synonyms.ts             # Генерация синонимов через LLM
-    │   ├── domain-guard.ts         # Telecom vs power penalty
-    │   ├── replacements.ts         # Логика замен
-    │   └── facets.ts               # category_facets с alias collapse
-    ├── knowledge/
-    │   ├── search.ts               # Hybrid FTS + vector
-    │   └── temporal.ts             # valid_from/valid_until фильтр
-    ├── conversation/
-    │   ├── prompt-builder.ts       # Финальная сборка контекста
-    │   ├── greetings-guard.ts      # Перехват и удаление приветствий
-    │   ├── cross-sell.ts           # Логика soputstvuyuschiy/fayl
-    │   └── escalation.ts           # Триггеры [CONTACT_MANAGER]
-    ├── infra/
-    │   ├── cache.ts                # Postgres-кэш (probe, intent, search)
-    │   ├── geo.ts                  # GeoIP + KZ/RU regions
-    │   ├── logger.ts               # Структурированные логи с traceId
-    │   └── usage.ts                # ai_usage_logs writer
-    ├── types.ts                    # Все TypeScript-контракты
-    ├── config.ts                   # Модели, бюджеты, лимиты
-    └── __tests__/
-        ├── golden.json             # 50 эталонных запросов
-        ├── state-machine.test.ts
-        ├── slot-manager.test.ts
-        └── sku-detection.test.ts
+┌─────────────┐      HTTPS/SSE     ┌─────────────────────┐
+│   Browser   │ ◄──────────────── ►│  Edge Function:     │
+│  embed.js   │                    │  chat-consultant    │
+│  React UI   │                    │  (Supabase Deno)    │
+└─────────────┘                    └──────────┬──────────┘
+                                              │
+                ┌─────────────────────────────┼──────────────────────────┐
+                │                             │                          │
+                ▼                             ▼                          ▼
+   ┌────────────────────┐       ┌─────────────────────┐      ┌──────────────────────┐
+   │  OpenRouter API    │       │  Catalog REST API   │      │  Supabase Postgres   │
+   │  (Gemini models):  │       │  220volt.kz         │      │  - knowledge_*       │
+   │  classifier,       │       │  /api/products      │      │  - app_settings      │
+   │  composer,         │       │  /api/categories    │      │  - chat_cache_v2     │
+   │  embeddings        │       │  /api/options       │      │  - ai_usage_logs     │
+   └────────────────────┘       └─────────────────────┘      └──────────────────────┘
 ```
 
-### 3.2 Машина состояний (полная)
+### 3.2 Принципы
+
+1. **Stateless edge.** Edge Function не хранит in-memory состояние между turns; всё необходимое приходит в payload или подгружается из БД/cache.
+2. **Источник правды — каталог.** Никаких локальных копий товаров. Все цены, остатки, опции — реал-тайм из API.
+3. **Детерминированный поток.** Управляющая логика — конечный автомат. LLM используется только для (a) классификации, (b) выбора фильтров из закрытого списка, (c) генерации финальной формулировки.
+4. **LLM не имеет полномочий действия.** LLM не вызывает инструменты сама. Все вызовы каталога инициирует FSM по факту классифицированного intent.
+5. **Кэшируем то, что дорого и стабильно.** Категории, опции, нормализованные intent короткоживущих фраз — да. Финальные ответы — нет.
+6. **Оркестратор виден.** Каждый turn пишет полную трассу в `chat_traces` (если включено) с ID шагов для отладки.
+
+### 3.3 Технологический стек
+
+| Слой | Технология |
+|---|---|
+| UI виджет | React 18, Vite 5, Tailwind v3, TypeScript 5 |
+| Embed loader | Vanilla JS (`public/embed.js`) |
+| Edge Runtime | Deno (Supabase Edge Functions) |
+| БД | PostgreSQL 15 + pgvector |
+| Поиск БЗ | tsvector (BM25-подобный) + cosine similarity |
+| LLM Gateway | OpenRouter (модели: Gemini 2.5 Flash / Flash Lite) |
+| Транспорт | Server-Sent Events (SSE) |
+| CDN/Прокси | Cloudflare Workers (30 s timeout на subrequest) |
+| Хранение состояния клиента | `sessionStorage` ключ `volt_widget_state` |
+
+### 3.4 Сетевые границы
+
+- Браузер ↔ Edge: HTTPS, токен `apikey` (anon Supabase key).
+- Edge ↔ OpenRouter: HTTPS, секрет `OPENROUTER_API_KEY` (из `app_settings`).
+- Edge ↔ Catalog: HTTPS, токен `volt220_api_token` в заголовке.
+- Edge ↔ Postgres: внутренний пул соединений Supabase.
+
+---
+
+## 4. Доменная модель и инварианты
+
+### 4.1 Сущности
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                       INCOMING REQUEST                           │
-└────────────────────────────┬────────────────────────────────────┘
-                             ▼
-┌────────────────────────────────────────────────────────────────┐
-│ S0: PRE-PROCESS                                                 │
-│   - Strip greetings from user message                           │
-│   - Detect language (assume RU)                                 │
-│   - Load conversation history (last 8 msgs)                     │
-│   - Resolve GeoIP (parallel, non-blocking)                      │
-└────────────────────────────┬────────────────────────────────────┘
-                             ▼
-┌────────────────────────────────────────────────────────────────┐
-│ S1: SLOT RESOLVER                                               │
-│   Active slot exists?                                           │
-│   ├─ YES → match user input against options                     │
-│   │        ├─ MATCH → consume slot, route to S3 with cleaned    │
-│   │        │           query (modifiers preserved, option-text  │
-│   │        │           removed)                                  │
-│   │        └─ NO MATCH → mark slot stale, close it, fall to S2  │
-│   └─ NO → S2                                                    │
-└────────────────────────────┬────────────────────────────────────┘
-                             ▼
-┌────────────────────────────────────────────────────────────────┐
-│ S2: INTENT CLASSIFIER (flash-lite, ≤500ms budget)               │
-│   Returns JSON:                                                 │
-│   {                                                             │
-│     intent: 'catalog' | 'knowledge' | 'contact' |              │
-│             'escalation' | 'smalltalk' | 'greeting',           │
-│     has_sku: boolean,                                          │
-│     sku_candidate: string | null,                              │
-│     price_intent: 'cheapest' | 'expensive' | 'range' | null,   │
-│     category_hint: string | null,                              │
-│     search_modifiers: string[],                                │
-│     critical_modifiers: string[],                              │
-│     is_replacement: boolean,                                   │
-│     domain_check: 'in_domain' | 'out_of_domain' | 'ambiguous'  │
-│   }                                                             │
-│   Cached in Postgres for 24h by query_hash.                    │
-└────────────────────────────┬────────────────────────────────────┘
-                             ▼
-┌────────────────────────────────────────────────────────────────┐
-│ S3: ROUTING                                                     │
-│                                                                 │
-│   greeting     → S_GREETING (silent ack, no greeting back)     │
-│   smalltalk    → S_PERSONA (short expert-seller reply)         │
-│   contact      → S_CONTACT (load contacts, format card)        │
-│   knowledge    → S_KNOWLEDGE                                    │
-│   escalation   → S_ESCALATION ([CONTACT_MANAGER] block)        │
-│   catalog      → S_CATALOG                                     │
-└────────────────────────────┬────────────────────────────────────┘
-                             ▼
-┌────────────────────────────────────────────────────────────────┐
-│ S_CATALOG (детальная схема)                                     │
-│                                                                 │
-│   1. Domain check (out_of_domain → soft 404 + suggest alt)     │
-│   2. has_sku?                                                   │
-│      ├─ YES → SKU direct fetch (target <2s)                    │
-│      │        ├─ FOUND → format card, S_OUTPUT                 │
-│      │        └─ NOT FOUND → soft 404 + nearest matches        │
-│      └─ NO → continue                                          │
-│   3. is_replacement?                                            │
-│      └─ YES → extract traits, multi-query, LLM-compare         │
-│   4. price_intent?                                              │
-│      └─ YES → probe with cache                                 │
-│         ├─ total ≤ 7 → fetch all, sort, output                 │
-│         ├─ 7 < total ≤ 50 → fetch top, sort, show top 3       │
-│         └─ total > 50 → CREATE CLARIFY SLOT, ask to narrow     │
-│   5. category_hint + modifiers?                                 │
-│      └─ Multi-bucket search (category-first branch from v1)    │
-│         ├─ resolveFiltersWithLLM per bucket                    │
-│         ├─ if multiple buckets → CREATE DISAMBIG SLOT          │
-│         └─ if one bucket → output                              │
-│   6. Free text search → multi-query, rank, output              │
-└────────────────────────────┬────────────────────────────────────┘
-                             ▼
-┌────────────────────────────────────────────────────────────────┐
-│ S_OUTPUT (Prompt Builder + Streaming)                           │
-│   - Build minimal context: system_prompt + knowledge?          │
-│     + products + contacts? + history (8 msgs trimmed)          │
-│   - Total budget: ≤6000 tokens IN, ≤800 tokens OUT             │
-│   - Stream via OpenRouter Gemini Flash                         │
-│   - Strip <think> blocks, strip greetings on output            │
-│   - Log usage to ai_usage_logs                                 │
-└─────────────────────────────────────────────────────────────────┘
+Session (1) ──< (N) Turn ──< (N) TraceStep
+Session (1) ──── (0..1) Slot
+Slot     (1) ──< (N) AppliedFilter
 ```
 
-### 3.3 Контракты данных (TypeScript)
+### 4.2 Слот (Slot)
 
-```typescript
-// ─── Slot ───────────────────────────────────────────────────
-export type SlotType =
-  | 'category_disambiguation'   // выбор между похожими категориями
-  | 'price_clarify'             // сужение перед сортировкой по цене
-  | 'replacement_offer'         // выбор замены
-  | 'contact_collect';          // сбор контактов для эскалации
+Активный контекст поиска внутри сессии.
 
-export interface SlotOption {
-  label: string;                // что показываем пользователю
-  value: string;                // что подставляем во внутреннюю логику
-  payload?: Record<string, unknown>; // для category_disambiguation: pagetitle, categoryId
+```
+Slot {
+  id: string                       // UUID, генерируется на сервере
+  session_id: string
+  category: { id: string; pagetitle: string; title: string }
+  applied_filters: AppliedFilter[]
+  price_range?: { min?: number; max?: number }
+  sort?: 'price_asc' | 'price_desc' | 'relevance'
+  created_at: ISO8601
+  last_refined_at: ISO8601
+  result_count?: number            // последний известный count
+}
+AppliedFilter {
+  key: string                      // канонический ключ опции (после dedupe)
+  values: string[]                 // OR внутри ключа
+  source: 'user' | 'llm'
+}
+```
+
+### 4.3 Инварианты слота
+
+- **И1.** В сессии существует не более одного активного слота.
+- **И2.** Слот привязан ровно к одной категории (`category.id`).
+- **И3.** При смене категории старый слот закрывается (CLOSED), создаётся новый.
+- **И4.** Каждый `applied_filter.key` встречается в `applied_filters` максимум один раз.
+- **И5.** Каждый `value` принадлежит легальному списку значений категории на момент применения (валидация против `category_options_schema`).
+- **И6.** При `result_count > 7` после уточнения — слот переходит в REFINING с подсказкой; при `result_count ≤ 7` остаётся OPEN.
+- **И7.** Слот живёт максимум 30 минут с `last_refined_at`. По истечении — CLOSED.
+
+### 4.4 Реплика (Turn)
+
+```
+Turn {
+  id: string
+  session_id: string
+  index: number                    // 0-based порядковый номер
+  user_text: string                // макс 2000 символов
+  intent: Intent                   // см. §7
+  slot_snapshot_before?: Slot
+  slot_snapshot_after?: Slot
+  retrieved_products?: Product[]
+  retrieved_kb_chunks?: KbChunk[]
+  assistant_text: string
+  control_markers: ControlMarker[] // напр. CONTACT_MANAGER
+  latency_ms: number
+  cost_usd: number
+  created_at: ISO8601
+}
+```
+
+### 4.5 Запрещённые состояния
+
+- ❌ Слот без категории.
+- ❌ Слот с фильтром, ключ которого отсутствует в схеме категории.
+- ❌ Turn без `intent`.
+- ❌ Ответ ассистента, содержащий приветствие (см. §17).
+- ❌ Ответ с товаром в формате, отличном от канонического markdown (см. §17).
+
+---
+
+## 5. State Machine диалога
+
+### 5.1 Состояния сессии
+
+| Состояние | Описание |
+|---|---|
+| `IDLE` | Сессия открыта, активного слота нет. |
+| `SLOT_OPEN` | Активный слот существует, последний поиск дал ≤ 7 результатов. |
+| `SLOT_REFINING` | Слот существует, требуется уточнение (>7 результатов). |
+| `ESCALATED` | Последний turn содержал `[CONTACT_MANAGER]`. Сессия продолжается, но дальнейшие реплики снова идут через классификатор. |
+| `EXPIRED` | TTL слота истёк, переходит к `IDLE` при следующем turn. |
+
+### 5.2 Таблица переходов
+
+| Из | Событие | В | Действие |
+|---|---|---|---|
+| `IDLE` | intent=`product_search` | `SLOT_OPEN`/`SLOT_REFINING` | создать слот, выполнить поиск |
+| `IDLE` | intent=`sku_lookup` | `SLOT_OPEN` | прямой запрос по артикулу |
+| `IDLE` | intent=`info_request` | `IDLE` | RAG по БЗ |
+| `IDLE` | intent=`small_talk` | `IDLE` | вежливый редирект к сути |
+| `IDLE` | intent=`escalate` | `ESCALATED` | вернуть карточку контактов |
+| `SLOT_OPEN` | intent=`refine_filter` | `SLOT_OPEN`/`SLOT_REFINING` | дополнить слот, повторить поиск |
+| `SLOT_OPEN` | intent=`product_search` (новая категория) | переход в новый `SLOT_OPEN` | закрыть старый слот |
+| `SLOT_OPEN` | intent=`reset_slot` | `IDLE` | удалить слот |
+| `SLOT_OPEN` | intent=`info_request` | `SLOT_OPEN` | RAG, слот сохранить |
+| `SLOT_REFINING` | intent=`refine_filter` | `SLOT_OPEN`/`SLOT_REFINING` | применить, пересчитать |
+| любое | TTL > 30 мин | `EXPIRED` → `IDLE` | удалить слот |
+
+### 5.3 Хранение состояния
+
+- **Клиент:** `sessionStorage.volt_widget_state` хранит `{ session_id, history: Turn[], slot: Slot | null }`. Полный контекст уходит на сервер с каждым запросом.
+- **Сервер:** stateless. Кэш `chat_cache_v2` (см. §19) — ускорение, не источник правды.
+
+---
+
+## 6. Конвейер обработки реплики (Turn Pipeline)
+
+### 6.1 Этапы
+
+```
+[1] Receive Request
+       │
+       ▼
+[2] Validate & Sanitize  ──── reject if violates limits
+       │
+       ▼
+[3] Persona Guard (input)  ── strip greetings, profanity tags
+       │
+       ▼
+[4] Intent Classifier (Micro-LLM)  ── output: Intent + entities
+       │
+       ▼
+[5] FSM Transition Decision  ── select branch
+       │
+       ├──► [6a] Catalog Branch  ── slot manager + search
+       ├──► [6b] KB Branch       ── hybrid retrieval
+       ├──► [6c] Escalation      ── compose contact card
+       └──► [6d] Small Talk      ── short redirect
+       │
+       ▼
+[7] Response Composer (LLM)  ── render with strict markdown
+       │
+       ▼
+[8] Persona Guard (output)  ── enforce no-greeting, format
+       │
+       ▼
+[9] SSE Stream → Client
+       │
+       ▼
+[10] Persist Trace + Usage
+```
+
+### 6.2 Бюджет латентности (p50)
+
+| Этап | Бюджет, мс |
+|---|---|
+| 1 + 2 + 3 | 50 |
+| 4 (Classifier, Flash Lite) | 350 |
+| 5 | 5 |
+| 6a — SKU lookup (1 API call) | 600 |
+| 6a — фильтрованный поиск (probe + search) | 2 500 |
+| 6b — KB hybrid retrieval | 700 |
+| 7 (Composer, Flash) | 1 500 |
+| 8 + 9 (first byte) | 100 |
+| **Итого SKU lookup** | **≤ 2 600** |
+| **Итого фильтрованный поиск** | **≤ 5 800** |
+
+### 6.3 Параллелизация
+
+- Этап **6a** при сложных запросах распараллеливает probes по фильтрам (`Promise.allSettled` с лимитом 5).
+- Этап **6b** запускается параллельно с **6a**, если intent гибридный (`mixed`); результаты объединяются перед композером.
+
+---
+
+## 7. Модуль: Intent Classifier
+
+### 7.1 Назначение
+
+Преобразовать одну реплику + краткий контекст слота в типизированное намерение. **Только текущая реплика** анализируется на предметные сущности; история используется лишь для разрешения местоимений и подтверждений.
+
+### 7.2 Список intents
+
+| Intent | Триггер | Поля entities |
+|---|---|---|
+| `sku_lookup` | Распознан артикул (regex `^\s*[A-ZА-Я0-9\-]{4,}\s*$` или явный «артикул …»). | `sku: string` |
+| `product_search` | Запрос товара по названию/категории/сценарию. | `category_hint?: string`, `query: string`, `traits: string[]` |
+| `refine_filter` | Уточнение к активному слоту (цвет, бренд, мощность, цена). | `filters: {key: string; values: string[]}[]`, `price?: {min?:number;max?:number}`, `sort?` |
+| `info_request` | Вопрос про доставку, оплату, гарантию, адреса, акции, инструкции. | `topic: string` |
+| `is_replacement` | Пользователь просит замену/аналог. | `original_sku_or_name: string`, `traits: string[]` |
+| `escalate` | Прямой запрос менеджера, жалоба, нестандартный кейс. | `reason: string` |
+| `reset_slot` | Явный сброс («начни заново», «другой товар»). | — |
+| `small_talk` | Не относится к делу (приветствие, благодарность, шутка). | — |
+| `unknown` | Классификатор не уверен. Fallback в `info_request`. | — |
+
+### 7.3 Контракт
+
+```ts
+interface ClassifierInput {
+  text: string;                    // raw user message
+  active_slot?: { category_pagetitle: string; applied_filter_keys: string[] };
+  recent_assistant_summary?: string; // ≤ 200 символов
 }
 
-export interface Slot {
-  id: string;                   // slot_<timestamp>_<rand>
-  type: SlotType;
-  created_at: number;           // unix ms
-  expires_at: number;           // hard TTL: created_at + 5*60*1000
-  ttl_turns: number;            // 2 хода без матча → close
-  turns_since_created: number;  // инкрементируется на каждом запросе
+interface ClassifierOutput {
+  intent: Intent;
+  confidence: number;              // 0..1
+  entities: Record<string, unknown>;
+  raw_llm_json?: string;           // для логов
+}
+```
 
-  options: SlotOption[];
-  pending_query: string;        // оригинальный запрос пользователя
-  pending_modifiers: string[];  // модификаторы вне категории
-  pending_filters: Record<string, string[]> | null; // уже выбранные фильтры
+### 7.4 Алгоритм
 
-  consumed: boolean;            // true → удалить из state
-  closed_reason?: 'matched' | 'no_match' | 'ttl_turns' | 'ttl_time' | 'new_intent';
+1. **Pre-rules (детерминированные):**
+   - Если `text` матчит regex артикула → `sku_lookup` без LLM.
+   - Если `text.length < 3` → `small_talk`.
+   - Если `text` содержит явные триггеры эскалации (см. §18) → `escalate` без LLM.
+2. **LLM-классификация:** модель `gemini-2.5-flash-lite`, `temperature=0`, JSON mode, system prompt с примерами на русском и казахском.
+3. **Post-validation:** если intent ∈ {`refine_filter`} но `active_slot` отсутствует → реклассифицировать как `product_search`.
+4. **Кэш:** ключ `sha256(normalized_text + active_slot?.category_pagetitle)`. TTL 24 ч. Хранение: `chat_cache_v2`, namespace `intent`.
+
+### 7.5 Качество
+
+- Точность classifier на golden set ≥ 95 %.
+- При `confidence < 0.6` — путь `unknown` → информационный fallback с подсказкой переформулировать.
+
+---
+
+## 8. Модуль: Slot Manager
+
+### 8.1 Ответственность
+
+- Создание / обновление / закрытие слота.
+- Валидация `applied_filters` против схемы категории.
+- Принятие решения о переходе `OPEN ↔ REFINING`.
+
+### 8.2 Операции
+
+```ts
+interface SlotManager {
+  open(session_id: string, category: Category): Slot;
+  applyFilters(slot: Slot, filters: AppliedFilter[]): Slot;
+  applyPrice(slot: Slot, range: PriceRange): Slot;
+  close(slot: Slot, reason: 'user_reset' | 'category_change' | 'ttl' | 'auto_release'): void;
+  attachResultCount(slot: Slot, count: number): Slot;  // обновляет состояние OPEN/REFINING
+}
+```
+
+### 8.3 Правила слияния фильтров
+
+- Если новый фильтр имеет ключ, уже присутствующий в слоте:
+  - значения **дополняют** (union) текущие, если intent явно «или ещё …»;
+  - **заменяют** значения, если фраза имеет уточняющий характер («только белые»).
+- Цена всегда **заменяет** предыдущую (нет смысла в OR-диапазонах).
+- Несовместимые фильтры (например, `voltazh="220 В"` и `voltazh="380 В"` без союза «или») приводят к запросу уточнения у пользователя — слот не модифицируется.
+
+### 8.4 Auto-release
+
+Слот автоматически закрывается, если:
+- `result_count` после refine = 0 и Soft Fallback вернул альтернативы из другой категории;
+- intent классифицирован как `product_search` с другой категорией;
+- TTL 30 минут истёк.
+
+---
+
+## 9. Модуль: Catalog Search
+
+### 9.1 Источник данных
+
+REST API 220volt.kz. Эндпоинты:
+
+| Эндпоинт | Назначение |
+|---|---|
+| `GET /api/products?query=...&options[k][]=v&...&page=...` | Поиск товаров |
+| `GET /api/products/{sku}` | Карточка по артикулу |
+| `GET /api/categories` | Дерево категорий |
+| `GET /api/categories/options?pagetitle=...` | Полная схема опций категории |
+
+Все вызовы проксируются через edge function `search-products` (для централизованного кэша и rate-limit safety).
+
+### 9.2 Стратегии поиска
+
+| Стратегия | Когда применяется | Шаги |
+|---|---|---|
+| **Direct SKU** | intent = `sku_lookup` | 1 GET по артикулу |
+| **Single-category filtered** | intent = `product_search` или `refine_filter` с известной категорией | (1) загрузить схему опций → (2) `resolveFiltersWithLLM` → (3) поиск с фильтрами |
+| **Multi-bucket** | `product_search` без явной категории | параллельный поиск (по category-hint и по query) → бакетизация по категориям → выбор лучшего бакета |
+| **Replacement** | intent = `is_replacement` | (1) карточка оригинала → (2) выделение трейтов → (3) multi-vector search → (4) LLM-сравнение |
+
+### 9.3 Resolve Filters (LLM)
+
+```ts
+function resolveFiltersWithLLM(input: {
+  user_query: string;
+  category_options_schema: OptionSchema; // dedup + alias-collapsed
+  active_filters: AppliedFilter[];
+}): Promise<{ filters: AppliedFilter[]; price?: PriceRange; sort?: Sort }>;
+```
+
+**Контракт промпта:**
+- Ввод значений строго по схеме `KEY="value"`.
+- Билингвальный матч (русский ↔ казахский).
+- **Запрет** выбирать «ближайшее» значение, если точного совпадения нет — оставить ключ без значения и добавить в `unresolved`.
+
+### 9.4 Multi-bucket ranking
+
+Для multi-bucket стратегии:
+- Запускаются 2 параллельных API-запроса: (a) по category-hint, (b) по полному тексту.
+- Результаты группируются по `category_pagetitle` (bucket).
+- Бакеты с `count < 10` — догружаются дополнительным запросом без фильтров (расширение).
+- Каждый бакет проходит `resolveFiltersWithLLM` независимо.
+- Скоринг бакета: `score = relevance(0..100) - domainGuardPenalty(0..30) + bucketSizeBonus`.
+- Победитель — бакет с максимальным score; пользователю показывается **из одной категории**.
+
+### 9.5 Domain Guard
+
+Защита от смешения предметных областей. Зарегистрированные «заразные» пары:
+
+| Группа | Ключевые слова | Штраф к чужой группе |
+|---|---|---|
+| `power_socket` | розетка силовая, 220, 380, IP44 | -30 |
+| `telecom` | RJ45, телефонная, USB, HDMI, антенная | -30 |
+| `lighting_indoor` | светильник комнатный, бра, торшер | -20 |
+| `lighting_outdoor` | прожектор, уличный, IP65 | -20 |
+
+Реализация: keyword detection в названии бакета + категории; штраф вычитается при ранжировании.
+
+### 9.6 Лимиты выдачи
+
+- ≤ 7 товаров в бакете → показывать **все**.
+- > 7 → показывать **топ-3** + общее количество + предложение уточнить (по конкретным ключам, у которых > 1 значение в выдаче).
+- 0 товаров → **Soft Fallback**: показать ближайшие альтернативы (без скрытого отбрасывания пользовательских модификаторов; если что-то отбрасывается — явно предупредить).
+
+### 9.7 Сортировка
+
+- По умолчанию `relevance` (порядок API).
+- `price_asc` / `price_desc` — локальная сортировка после получения первой страницы; для «самое дорогое» — multi-vector + локальный max.
+- Объёмная формула (для кабелей и т.п.): `Qty * Vol * 1.2` (кабели), `*1.1` (прочее). Формулу пользователю **не показывать**, только результат.
+
+### 9.8 Замены и аналоги
+
+```
+1. Получить карточку оригинала (GET /api/products/{sku}).
+2. Извлечь трейты: category, key options (мощность, напряжение, сечение и т.п.).
+3. searchProductsMulti с трейтами как фильтрами.
+4. LLM-композер сравнивает кандидатов с оригиналом, выделяет 3-5 лучших.
+5. В ответе указать, чем отличается каждая замена от оригинала.
+```
+
+---
+
+## 10. Модуль: Knowledge Base RAG
+
+### 10.1 Корпус
+
+- Таблицы `knowledge_entries` (документ) и `knowledge_chunks` (фрагменты ~500 токенов).
+- Типы: `delivery`, `payment`, `warranty`, `promo`, `instruction`, `address`, `general`.
+- Поля: `valid_from`, `valid_until` для temporal-фильтрации (актуальные акции).
+
+### 10.2 Извлечение
+
+```ts
+function retrieveKb(query: string, now: Date): Promise<KbChunk[]>;
+```
+
+1. Нормализация query (убрать пунктуацию, lowercase).
+2. **Hybrid search:**
+   - Lexical: `tsvector` с `plainto_tsquery('russian', query)`, top 20.
+   - Semantic: cosine similarity на `embedding`, top 20.
+   - Reciprocal Rank Fusion (k=60), результат — top 6.
+3. Temporal filter: убрать chunks с `valid_until < now`.
+4. Если top-1 score > 0.75 — приоритет, **запретить** LLM использовать общие знания.
+
+### 10.3 Инъекция контекста
+
+Контекст подаётся в LLM как сообщение от роли `user` с префиксом `СИСТЕМНАЯ СПРАВКА (использовать как источник правды):` и явным ограничением «не выходи за рамки этого текста».
+
+### 10.4 Эмбеддинги
+
+- Модель: `google/gemini-embedding-001` через OpenRouter.
+- Размерность: 768.
+- Перерасчёт: при `INSERT/UPDATE` записи через триггер, ставящий задачу в `knowledge-process` edge function.
+
+---
+
+## 11. Модуль: Response Composer
+
+### 11.1 Назначение
+
+Собрать финальный текст ответа, соблюдая все правила формата (§17), используя данные из ветки FSM.
+
+### 11.2 Контракт
+
+```ts
+interface ComposerInput {
+  intent: Intent;
+  branch_payload: CatalogPayload | KbPayload | EscalationPayload | SmallTalkPayload;
+  active_slot?: Slot;
+  user_locale: 'ru' | 'kk';        // по умолчанию ru
+  city?: string;                   // из geolocation
+}
+interface ComposerOutput {
+  text_stream: AsyncIterable<string>;  // SSE chunks
+  control_markers: ControlMarker[];
+}
+```
+
+### 11.3 Параметры LLM
+
+- Модель: `google/gemini-2.5-flash`.
+- `temperature=0.3`, `top_p=0.9`.
+- System prompt содержит: персону, формат markdown, запрет приветствий, правила эскалации.
+- `max_output_tokens=1200`.
+
+### 11.4 Стриминг
+
+- SSE-чанки по мере генерации.
+- Drain loop: после `[DONE]` сервер ждёт завершения вспомогательных операций (запись trace, обновление слота) и шлёт финальный `slot_state` event.
+
+---
+
+## 12. Модуль: Persona Guard
+
+### 12.1 На входе (input)
+
+- Удалить ведущие приветствия пользователя при логировании контекста (для intent классификации они не нужны).
+- Проверить длину ≤ 2000 символов; иначе отказ с подсказкой.
+
+### 12.2 На выходе (output)
+
+Двухуровневая защита от приветствий и форматных ошибок:
+
+- **Уровень 1 (server):** регексп-фильтр первой фразы ответа. Если матчит `^(здравствуйте|добрый день|привет|здрасьте|hi|hello)`, чанк отбрасывается, генерация продолжается со следующего.
+- **Уровень 2 (client):** при рендере дополнительная очистка тех же паттернов (на случай прорыва).
+- **Markdown enforcement:** проверка, что каждая товарная строка соответствует `**[Name](URL)** — *price* ₸, brand`. Невалидные строки логируются как `format_violation` (метрика).
+
+### 12.3 Правила тона
+
+- Никаких восклицательных знаков.
+- «Вы» с маленькой буквы, не «Вы».
+- Один смысл = одно предложение, максимум 3-4 предложения комментария к выдаче.
+
+---
+
+## 13. Контракты данных (TypeScript)
+
+### 13.1 Базовые типы
+
+```ts
+type ISO8601 = string;
+type UUID = string;
+
+type Intent =
+  | 'sku_lookup'
+  | 'product_search'
+  | 'refine_filter'
+  | 'info_request'
+  | 'is_replacement'
+  | 'escalate'
+  | 'reset_slot'
+  | 'small_talk'
+  | 'unknown';
+
+type Sort = 'price_asc' | 'price_desc' | 'relevance';
+
+interface PriceRange { min?: number; max?: number; }
+
+interface Category {
+  id: string;
+  pagetitle: string;
+  title: string;
 }
 
-// ─── Intent ─────────────────────────────────────────────────
-export type IntentType =
-  | 'catalog'
-  | 'knowledge'
-  | 'contact'
-  | 'escalation'
-  | 'smalltalk'
-  | 'greeting';
-
-export interface Intent {
-  intent: IntentType;
-  has_sku: boolean;
-  sku_candidate: string | null;
-  price_intent: 'cheapest' | 'expensive' | 'range' | null;
-  price_range?: { min?: number; max?: number };
-  category_hint: string | null;
-  search_modifiers: string[];
-  critical_modifiers: string[];
-  is_replacement: boolean;
-  domain_check: 'in_domain' | 'out_of_domain' | 'ambiguous';
+interface AppliedFilter {
+  key: string;
+  values: string[];
+  source: 'user' | 'llm';
 }
 
-// ─── Product (упрощённая карточка) ──────────────────────────
-export interface Product {
-  id: number;
+interface Slot {
+  id: UUID;
+  session_id: UUID;
+  category: Category;
+  applied_filters: AppliedFilter[];
+  price_range?: PriceRange;
+  sort?: Sort;
+  result_count?: number;
+  state: 'OPEN' | 'REFINING';
+  created_at: ISO8601;
+  last_refined_at: ISO8601;
+}
+
+interface Product {
+  sku: string;
   name: string;
   url: string;
-  price: number;
-  currency: 'KZT';
-  brand: string | null;
-  sku: string | null;
-  category_path: { name: string; url: string }[];
+  price: number;          // ₸
+  brand?: string;
   warehouses: { city: string; qty: number }[];
-  soputstvuyuschiy?: string[];  // SKU сопутствующих
-  fayl?: string[];              // PDF/файлы
+  options: Record<string, string>;
+  files?: string[];
+  related_sku?: string[];
 }
 
-// ─── ConversationState (передаётся клиентом) ────────────────
-export interface ConversationState {
-  conversation_id: string;
-  slots: Slot[];                // активные слоты, max 3
-  last_intent?: IntentType;
-  last_category_hint?: string;
-  user_city?: string;
-  user_country?: string;
+interface KbChunk {
+  id: UUID;
+  entry_id: UUID;
+  title: string;
+  content: string;
+  score: number;
+  valid_from?: ISO8601;
+  valid_until?: ISO8601;
 }
 
-// ─── ChatRequest / ChatResponse ─────────────────────────────
-export interface ChatRequest {
-  message: string;
-  history: { role: 'user' | 'assistant'; content: string }[];
-  state: ConversationState;
-  client_meta: {
-    ip?: string;
-    user_agent?: string;
-    referer?: string;
+type ControlMarker = 'CONTACT_MANAGER' | 'SLOT_RESET' | 'FORMAT_VIOLATION';
+```
+
+### 13.2 Сообщение клиент → сервер
+
+```ts
+interface ChatRequest {
+  session_id: UUID;
+  message: string;                 // ≤ 2000 chars
+  history: Array<{ role: 'user' | 'assistant'; content: string }>; // последние 10
+  slot?: Slot | null;
+  client_context: {
+    city?: string;
+    country?: string;
+    referrer_url?: string;
+    locale?: 'ru' | 'kk';
   };
 }
+```
 
-export interface ChatResponseSSE {
-  // SSE stream events:
-  // event: slot_update     data: { slots: Slot[] }
-  // event: thinking        data: { phrase: string }
-  // event: chunk           data: { delta: string }
-  // event: done            data: { usage: {...}, traceId: string }
-  // event: error           data: { code: string, message: string }
-}
+### 13.3 SSE-events сервер → клиент
+
+```
+event: chunk
+data: {"text":"..."}                 // partial assistant text
+
+event: products
+data: {"items":[...Product]}         // одноразово, перед чанками с описанием
+
+event: kb_used
+data: {"chunks":[{"id":"...","title":"..."}]}
+
+event: control
+data: {"marker":"CONTACT_MANAGER","payload":{...}}
+
+event: slot_state
+data: { ...Slot | "null" }
+
+event: trace
+data: {"trace_id":"..."}             // финальный ID для отладки
+
+event: done
+data: {}
 ```
 
 ---
 
-## 4. Поисковая логика (детально)
+## 14. Схема БД (DDL)
 
-### 4.1 SKU Detection
-
-```typescript
-const SKU_REGEX = /\b([A-Z]{1,4}[-/]?\d{2,}[-/]?[A-Z0-9]*|[А-Я]{1,4}[-/]?\d{2,}[-/]?[А-Я0-9]*|\d{4,}[A-Za-z]?)\b/i;
-
-function detectSKU(message: string): { isSku: boolean; sku: string | null } {
-  const cleaned = message.trim();
-  // 1. Если сообщение состоит почти только из артикула
-  if (cleaned.length < 30 && SKU_REGEX.test(cleaned)) {
-    return { isSku: true, sku: cleaned.match(SKU_REGEX)![0] };
-  }
-  // 2. Если есть явный маркер: "артикул XXX", "код XXX"
-  const marker = cleaned.match(/(?:артикул|код|sku|арт\.?)\s*([A-Z0-9А-Я-/]+)/i);
-  if (marker) return { isSku: true, sku: marker[1] };
-  return { isSku: false, sku: null };
-}
-```
-
-Подтверждается через micro-LLM (`has_sku: true`). Если LLM и regex расходятся — приоритет regex.
-
-### 4.2 Synonyms
-
-- Генерация — **один раз** через `gemini-2.5-flash-lite` с детерминированным сэмплингом (`top_k=1, seed=42`)
-- Кэшируется в Postgres на 24 часа по `query_hash`
-- Максимум 4 варианта (не 8 как в v1)
-- Если кэш есть — без LLM, чистая выборка
-
-```typescript
-async function getSynonyms(query: string): Promise<string[]> {
-  const cached = await cache.get(`syn:${hash(query)}`);
-  if (cached) return cached;
-
-  const variants = await llmCall({
-    model: 'google/gemini-2.5-flash-lite',
-    system: SYNONYMS_PROMPT,
-    user: query,
-    maxTokens: 100,
-    temperature: 0,
-  });
-
-  const result = parseSynonyms(variants).slice(0, 4);
-  await cache.set(`syn:${hash(query)}`, result, 86400);
-  return result;
-}
-```
-
-### 4.3 Ranking (формула)
-
-После multi-query поиска все товары ранжируются единой формулой:
-
-```
-score = 0.5 * relevance_score          // позиция в API-ответе (1.0 для первого)
-      + 0.2 * city_availability_bonus  // 1.0 если есть в городе пользователя
-      + 0.15 * stock_bonus             // 1.0 если total_qty > 10
-      + 0.1 * price_match_bonus        // 1.0 если попадает в price_range
-      + 0.05 * brand_diversity         // штраф за повтор бренда
-```
-
-Domain Guard penalty применяется ПОСЛЕ ranking:
-- `-0.30` если категория содержит TELECOM_KEYWORDS, а запрос про power
-- `-0.30` обратно
-
-### 4.4 Price Intent
-
-Пороги уточнения:
-- `total ≤ 7` → показать все, отсортировать
-- `7 < total ≤ 50` → показать top 3 + "всего N товаров", без слота
-- `total > 50` → создать `price_clarify` слот с топ-5 категорий из API facets
-
-Сортировка: `cheapest` → `ASC by price`, `expensive` → `DESC by price`. Локальная сортировка после fetch (API не гарантирует порядок).
-
-### 4.5 Category-First Branch (из v1)
-
-Без изменений: parallel category + query search → bucketize → resolveFiltersWithLLM per bucket → pick best. Малые buckets (<10) автоматически расширяются дополнительным API-вызовом.
-
-### 4.6 Replacements
-
-Триггер: `is_replacement: true` от классификатора + ключевые фразы («снят с производства», «замена», «аналог»).
-
-Алгоритм:
-1. Извлечь характеристики оригинала (либо из контекста, либо через `getCategoryOptionsSchema` если SKU известен)
-2. Multi-query поиск по характеристикам
-3. LLM-сравнение топ-5 кандидатов с оригиналом (модель: flash, JSON-mode)
-4. Вернуть карточку «Рекомендую X вместо Y, потому что Z»
-
-### 4.7 Domain Guard
-
-Список доменов и keywords хранится в `config.ts`:
-
-```typescript
-export const DOMAIN_KEYWORDS = {
-  POWER: ['розетка', 'выключатель', 'кабель', 'провод', 'лампа', ...],
-  TELECOM: ['rj45', 'utp', 'патч-корд', 'оптоволокно', 'витая пара', ...],
-  AUTO: ['шина', 'покрышка', 'аккумулятор автомобильный', ...],
-  HOUSEHOLD: ['посуда', 'мебель', 'одежда', ...],
-};
-
-export const ALLOWED_DOMAINS: Domain[] = ['POWER', 'TELECOM', 'TOOLS', 'LIGHTING', ...];
-```
-
-Если запрос явно вне `ALLOWED_DOMAINS` → `intent.domain_check = 'out_of_domain'` → `S_CATALOG` сразу возвращает soft 404 без вызова API.
-
-### 4.8 Soft Fallback
-
-Если 0 результатов:
-1. Снять последний модификатор из критериев
-2. Повторить запрос
-3. Если снова 0 → soft 404 с шаблоном «По запросу X не нашлось. Возможно, вас заинтересует [категория]»
-4. Никогда не молча отбрасывать модификаторы (показывать «искал X, но Y нет»)
-
----
-
-## 5. Conversational Rules
-
-### 5.1 Persona (зашитый системный промпт)
-
-Эксперт-продавец сети 220volt.kz с 10-летним опытом. Профессиональный тон, без восклицательных знаков, без эмодзи. Обращение на «вы». Краткость: 2-4 предложения + карточки товаров.
-
-### 5.2 Greetings Guard (двухуровневая защита)
-
-**Уровень 1 — на входе** (от пользователя):
-- Регексп срезает «здравствуйте», «добрый день», «привет» в начале сообщения
-- Если после срезания осталось <3 символов → перехватываем без вызова LLM, отвечаем шаблоном «Что вас интересует?»
-
-**Уровень 2 — на выходе** (от бота):
-- Регексп проверяет первые 100 символов ответа
-- Если содержит приветственные паттерны → вырезаем
-- Логируем как `[GreetingsGuard] stripped: "..."`
-
-### 5.3 Markdown Format (строго)
-
-```
-**[Название товара](https://220volt.kz/url)** — *123 456* ₸, БрендName
-```
-
-- Никакого backslash-escaping в названиях
-- Скобки в URL кодируются как `%28`, `%29`
-- Цена выделена курсивом для визуального акцента
-- Между ценой и брендом — запятая, не «—» (не путать с разделителем после URL)
-- Бренд опционален; если нет — вырезается с ведущей запятой
-
-### 5.4 Cross-sell
-
-Триггер: в ответе API товара есть непустой `soputstvuyuschiy` (массив SKU) или `fayl` (PDF).
-
-Логика:
-- После основной карточки добавить блок «**Может пригодиться:**» с до 3 сопутствующими
-- Если есть PDF — отдельная строка «📎 [Документация](url)»
-- Никогда не выдумывать сопутствующие товары (если поле пустое — ничего не добавлять)
-
-### 5.5 Stock Display
-
-- Сортировка `warehouses` по городу пользователя (из GeoIP)
-- Скрывать склады с `qty == 0`
-- Если все склады с нулём → метка «Под заказ» вместо списка
-- Формат: «Караганда: 75 шт., Астана: 12 шт.»
-- Максимум 3 города в строке (остальное → «и ещё в N городах»)
-
-### 5.6 Escalation Triggers
-
-Бот выводит блок `[CONTACT_MANAGER]` (виджет рендерит контактную карточку) при:
-
-| Триггер | Условие |
-|---|---|
-| Прямой запрос | «менеджер», «оператор», «связаться», «позвонить» |
-| Двойной 0-результат | Подряд 2 запроса с soft 404 в одной сессии |
-| Out of domain | `intent.domain_check === 'out_of_domain'` (после soft 404) |
-| Сложный технический | LLM `escalation_score > 0.7` (отдельный JSON-запрос на flash-lite) |
-| Жалоба | Тональность негативная (детектируется в classifier) |
-| Длинная сессия без покупки | >15 turns без клика по карточке (метрика на клиенте) |
-
-Структура карточки контактов из `mem://features/conversational-rules`:
-- WhatsApp (primary)
-- Email
-- Phone
-- Часы работы
-- Город пользователя → ближайший филиал
-
----
-
-## 6. Кэширование (Postgres вместо Deno KV)
-
-### 6.1 Решение
-
-Deno KV **недоступен** в Supabase Edge Runtime (только в Deno Deploy). Используем Postgres-таблицу `chat_cache_v2`.
-
-### 6.2 Миграция
+### 14.1 Кэш
 
 ```sql
 CREATE TABLE public.chat_cache_v2 (
-  cache_key TEXT PRIMARY KEY,
-  cache_value JSONB NOT NULL,
-  expires_at TIMESTAMPTZ NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  hit_count INT NOT NULL DEFAULT 0
+  cache_key   TEXT PRIMARY KEY,
+  namespace   TEXT NOT NULL,         -- 'intent' | 'category_options' | 'probe' | 'embed_query'
+  payload     JSONB NOT NULL,
+  expires_at  TIMESTAMPTZ NOT NULL,
+  hits        INT NOT NULL DEFAULT 0,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_chat_cache_v2_expires ON public.chat_cache_v2 (expires_at);
+CREATE INDEX idx_chat_cache_v2_namespace ON public.chat_cache_v2 (namespace);
 
--- RLS: только service_role
 ALTER TABLE public.chat_cache_v2 ENABLE ROW LEVEL SECURITY;
--- Политики не нужны — доступ только из edge functions через service_role
 
--- GC: удалять просроченные записи
-CREATE OR REPLACE FUNCTION public.gc_chat_cache_v2()
-RETURNS void
-LANGUAGE sql
-SECURITY DEFINER
-SET search_path = public
-AS $$
-  DELETE FROM public.chat_cache_v2 WHERE expires_at < now();
-$$;
+-- Только service-role пишет/читает; политики для authenticated админа на чтение.
+CREATE POLICY "Admins can read cache"
+  ON public.chat_cache_v2 FOR SELECT TO authenticated
+  USING (public.has_role(auth.uid(), 'admin'));
 ```
 
-GC вызывается лениво: 1% запросов запускают `gc_chat_cache_v2()` параллельно с основным flow.
+Очистка истёкших — крон-функция edge раз в час:
+```sql
+DELETE FROM public.chat_cache_v2 WHERE expires_at < now();
+```
 
-### 6.3 Что кэшируем
+### 14.2 Трейсы (опционально, флаг `trace_enabled`)
 
-| Ключ | TTL | Что хранит |
-|---|---|---|
-| `probe:<hash>` | 1ч | `{ total: number, sample_skus: string[] }` |
-| `intent:<hash>` | 24ч | Полный JSON `Intent` |
-| `syn:<hash>` | 24ч | `string[]` синонимов |
-| `search:<hash>` | 15м | Топ-20 товаров |
-| `facets:<pagetitle>` | 1ч | Схема опций категории |
-| `kb:<hash>` | 1ч | Топ-5 knowledge chunks |
+```sql
+CREATE TABLE public.chat_traces (
+  id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  session_id   UUID NOT NULL,
+  turn_index   INT  NOT NULL,
+  intent       TEXT,
+  steps        JSONB NOT NULL,        -- array of {step, ts, payload}
+  latency_ms   INT,
+  cost_usd     NUMERIC(10,6),
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 
-### 6.4 Что НЕ кэшируем
+CREATE INDEX idx_chat_traces_session ON public.chat_traces (session_id, turn_index);
+CREATE INDEX idx_chat_traces_created ON public.chat_traces (created_at);
 
-- PII пользователя (никогда)
-- GeoIP результаты (привязаны к IP)
-- Финальный LLM-ответ (он зависит от всего контекста)
+ALTER TABLE public.chat_traces ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Admins read traces"
+  ON public.chat_traces FOR SELECT TO authenticated
+  USING (public.has_role(auth.uid(), 'admin'));
+```
 
-### 6.5 Хеш-функция
+Retention: 14 дней (cron DELETE).
 
-`hash = sha256(normalize(query) + locale + version_tag).slice(0, 16)`
+### 14.3 Расширение `app_settings`
 
-`normalize` = lowercase + trim + collapse multiple spaces + remove punctuation
+```sql
+ALTER TABLE public.app_settings
+  ADD COLUMN IF NOT EXISTS pipeline_version TEXT NOT NULL DEFAULT 'v2',  -- 'v1' | 'v2'
+  ADD COLUMN IF NOT EXISTS trace_enabled BOOLEAN NOT NULL DEFAULT false,
+  ADD COLUMN IF NOT EXISTS sla_targets JSONB NOT NULL DEFAULT '{"sku_p50_ms":2600,"filter_p50_ms":5800}'::jsonb;
+```
 
-`version_tag` инкрементируется при изменении схемы кэша (для invalidation).
+### 14.4 Использует существующие таблицы
+
+- `app_settings` — конфигурация (см. выше).
+- `ai_usage_logs` — токены и стоимость.
+- `knowledge_entries`, `knowledge_chunks` — БЗ.
+- `user_roles`, `profiles` — RBAC админки.
 
 ---
 
-## 7. Бюджеты и SLA (реалистичные)
+## 15. API контракты (Edge Functions)
 
-### 7.1 Latency targets
+### 15.1 `POST /functions/v1/chat-consultant`
 
-| Сценарий | p50 | p95 | Notes |
-|---|---|---|---|
-| SKU direct fetch (cache hit) | 800ms | 1.5s | Только API + format |
-| SKU direct fetch (cache miss) | 2.5s | 4s | + classifier + API |
-| Catalog search (cache hit) | 1.2s | 2s | LLM ответ + кэш |
-| Catalog search (cache miss) | 4-6s | 9s | + probe + multi-query |
-| Knowledge query | 2s | 4s | FTS only пока без vector |
-| Greeting/smalltalk | 600ms | 1s | Без LLM, шаблон |
+**Headers:**
+```
+Authorization: Bearer <SUPABASE_ANON_KEY>
+apikey: <SUPABASE_ANON_KEY>
+Content-Type: application/json
+Accept: text/event-stream
+```
 
-### 7.2 Token budgets
+**Body:** `ChatRequest` (§13.2).
 
-| Блок | Budget | Notes |
-|---|---|---|
-| System prompt | 1500 | Сейчас 13.9KB, надо ≤1500 токенов |
-| Knowledge | 1500 | Top-3 chunks |
-| Products | 2500 | До 10 товаров с полными данными |
-| Contacts | 500 | Только если intent=contact |
-| History | 600 | 8 msgs, агрессивный trim |
-| **Total IN** | **≤6000** | |
-| **Total OUT** | **≤800** | |
+**Response:** `text/event-stream` с событиями из §13.3.
 
-### 7.3 Model selection
+**Status codes:**
+- `200` — стриминг начат.
+- `400` — валидация (длина, пустое сообщение).
+- `401` — неверный apikey.
+- `429` — rate limit (20 req/min на IP).
+- `503` — деградация upstream (caталог недоступен > 3 retries).
 
-| Этап | Модель | Reason |
-|---|---|---|
-| Intent classifier | `google/gemini-2.5-flash-lite` | Быстро, дёшево, JSON-mode |
-| Synonyms | `google/gemini-2.5-flash-lite` | Только при cache miss |
-| Replacement comparison | `google/gemini-2.5-flash` | Нужно лучшее понимание |
-| Final response | `google/gemini-2.5-flash` | Streaming, основной ответ |
-| Escalation detection | `google/gemini-2.5-flash-lite` | Простой score 0-1 |
+### 15.2 `POST /functions/v1/search-products`
 
-`gemini-2.5-pro` НЕ используется в v2.
+Используется внутри chat-consultant; внешним клиентам недоступен (CORS закрыт, кроме origin сайта).
 
-### 7.4 Cost estimate
+**Actions:**
+```ts
+type SearchAction =
+  | { action: 'search'; query: string; options?: Record<string,string[]>; page?: number }
+  | { action: 'by_sku'; sku: string }
+  | { action: 'category_facets'; pagetitle?: string; categoryId?: string }
+  | { action: 'categories' };
+```
 
-При средних 5000 in / 600 out на Flash:
-- Cost per request: ~$0.001
-- При 10K запросов/мес: ~$10/мес
-- v1 сейчас: ~$25/мес (из-за pro и forced upgrades)
+**Кэш:**
+- `category_facets` — 1 час (in-memory + chat_cache_v2 namespace `category_options`).
+- Остальные — без кэша (реал-тайм).
+
+### 15.3 `POST /functions/v1/knowledge-process`
+
+Триггерится при изменениях в `knowledge_entries` для пересчёта эмбеддингов.
 
 ---
 
-## 8. Роли бота (User Personas Bot Should Serve)
+## 16. Sequence-диаграммы ключевых сценариев
 
-### 8.1 Роли пользователей
+### 16.1 Поиск по артикулу
 
-| Роль | Поведение | Что бот должен делать |
-|---|---|---|
-| **Точечный покупатель** | Знает SKU/название | SKU direct fetch, карточка, в 1 клик |
-| **Сравниватель** | Знает категорию, выбирает | Multi-bucket, 3 варианта с разницей в цене/характеристиках |
-| **Экономный** | «самое дешёвое X» | Price intent + clarify если >50 |
-| **Профи** | Технические требования (сечение, мощность) | Парсинг параметров → точный фильтр |
-| **Растерянный** | «нужно что-то для дома» | Уточняющие вопросы, не сразу карточки |
-| **Информационный** | «как подключить», «гарантия» | Knowledge branch, не каталог |
-| **Эскалирующий** | Хочет менеджера | `[CONTACT_MANAGER]` без вопросов |
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant W as Widget
+  participant E as chat-consultant
+  participant SP as search-products
+  participant API as Catalog API
+  participant LLM as Composer LLM
 
-### 8.2 Тон в зависимости от роли
-
-- **Профи** → терминологичный, краткий, без объяснений базовых вещей
-- **Растерянный** → вопросы по очереди, без лавины опций
-- **Эскалирующий** → не блокировать, не предлагать «давайте сначала уточним»
-
-Детекция роли — эвристика по первому сообщению сессии (классификатор возвращает `user_persona_hint` опционально).
-
----
-
-## 9. Пользовательские сценарии (User Journeys)
-
-### 9.1 Сценарий A: Точечный SKU
-
-```
-U: "Лампа Б 230-60-2"
-B: [intent=catalog, has_sku=true]
-   → SKU lookup → найдено
-   → Карточка
-   "**[Лампа Б 230-60-2](url)** — *108* ₸, САРАНСКИЙ ССЗ
-    Артикул: Б 230-60-2
-    Караганда: 4800 шт., Астана: 179 шт."
-   Время: 1.5s p50
+  U->>W: "арт. 12345"
+  W->>E: ChatRequest (SSE)
+  E->>E: Sanitize + PersonaGuard
+  E->>E: Pre-rule SKU regex → intent=sku_lookup
+  E->>SP: by_sku(12345)
+  SP->>API: GET /api/products/12345
+  API-->>SP: Product
+  SP-->>E: Product
+  E->>LLM: compose(product)
+  LLM-->>E: stream
+  E-->>W: event: products + chunks
+  E-->>W: event: slot_state (OPEN, ?)
+  E-->>W: event: done
 ```
 
-### 9.2 Сценарий B: Категория с выбором
+### 16.2 Поиск с уточнениями
 
-```
-U: "розетки чёрные двухгнездовые"
-B: [intent=catalog, category_hint='розетки', modifiers=['чёрные','двухгнездовые']]
-   → category_facets("Розетки") → 3 подкатегории
-   → CREATE category_disambiguation slot
-   "Уточните, какие розетки вас интересуют:
-    • Бытовые для дома
-    • Силовые промышленные
-    • Блоки с розетками"
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant E as chat-consultant
+  participant CL as Classifier
+  participant SP as search-products
+  participant FL as FilterLLM
+  participant CO as Composer
 
-U: "бытовые"
-B: [Slot S1 active] → match "бытовые" → consume slot
-   → query cleaned: "чёрные двухгнездовые" (БЕЗ "бытовые")
-   → category="Розетки бытовые" + filters from modifiers
-   → Результаты
-```
-
-### 9.3 Сценарий C: Цена с уточнением
-
-```
-U: "найди самую дешёвую лампочку"
-B: [intent=catalog, price_intent=cheapest, category_hint='лампочка']
-   → probe: 705 товаров
-   → CREATE price_clarify slot
-   "В категории 'Лампочки' 705 товаров. Уточните:
-    • Светодиодные
-    • Накаливания
-    • Энергосберегающие
-    • Галогенные"
-
-U: "светодиодные"
-B: [Slot S2 active] → match → consume
-   → query="светодиодная лампочка" cheapest
-   → probe: 67 → fetch top 10 → sort → output
+  U->>E: "розетки белые до 5000"
+  E->>CL: classify
+  CL-->>E: product_search, traits=[розетка, белый, ≤5000]
+  E->>SP: category_facets(pagetitle=rozetki)
+  SP-->>E: schema (deduped)
+  E->>FL: resolveFilters(query, schema)
+  FL-->>E: {cvet=[Белый], price_max=5000}
+  E->>SP: search(rozetki, options[cvet]=Белый, price≤5000)
+  SP-->>E: items[N]
+  E->>E: SlotManager.open + applyFilters
+  alt N <= 7
+    E->>CO: compose(slot, items, mode=show_all)
+  else N > 7
+    E->>CO: compose(slot, top3, mode=ask_refine)
+  end
+  CO-->>E: stream
+  E-->>U: products + chunks + slot_state
 ```
 
-### 9.4 Сценарий D: Knowledge
+### 16.3 Эскалация менеджеру
 
-```
-U: "какая у вас гарантия на электроинструмент"
-B: [intent=knowledge]
-   → hybrid search → 2 chunks
-   → No catalog search
-   → Прямой ответ из БЗ
-```
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant E as chat-consultant
+  participant CL as Classifier
+  participant CO as Composer
 
-### 9.5 Сценарий E: Out of domain
-
-```
-U: "автомобильные шины"
-B: [intent=catalog, domain_check='out_of_domain']
-   → No API call
-   "К сожалению, мы не торгуем автомобильными шинами.
-    Наш профиль — электротовары.
-    Если ищете аккумуляторы для авто — могу подсказать."
+  U->>E: "хочу поговорить с человеком"
+  E->>CL: classify
+  CL-->>E: escalate
+  E->>CO: compose(escalation_payload)
+  CO-->>E: stream
+  E-->>U: event: control {marker: CONTACT_MANAGER, payload: {...}}
+  E-->>U: chunks
+  E-->>U: done
 ```
 
-### 9.6 Сценарий F: Escalation
+### 16.4 Информационный запрос (KB)
 
-```
-U: "ничего не понимаю, дайте менеджера"
-B: [intent=escalation, trigger='direct_request']
-   → [CONTACT_MANAGER]
-   "Передаю вас менеджеру:
-    📱 WhatsApp: +7 XXX
-    📧 email@220volt.kz
-    📞 +7 XXX
-    Часы: 9:00-18:00 (UTC+5)"
-```
+```mermaid
+sequenceDiagram
+  participant U as User
+  participant E as chat-consultant
+  participant KB as knowledge_chunks
+  participant CO as Composer
 
-### 9.7 Сценарий G: Replacement
-
-```
-U: "Б 230-60-2 уже не выпускается, что вместо?"
-B: [intent=catalog, is_replacement=true]
-   → Lookup original → extract traits (E27, 60W, 230V)
-   → Multi-query по характеристикам
-   → LLM-compare top 5
-   "Рекомендую **[Лампа LED A60 9W E27](url)** — *480* ₸
-    Это современная замена: тот же цоколь E27, 9W LED ≈ 60W накаливания,
-    срок службы в 10 раз больше."
+  U->>E: "доставка в Алматы сколько стоит"
+  E->>E: classify → info_request topic=delivery
+  E->>KB: hybrid search "доставка алматы стоимость"
+  KB-->>E: 6 chunks (top1 score=0.81)
+  E->>CO: compose(kb_chunks, restrict_to_kb=true)
+  CO-->>E: stream
+  E-->>U: chunks + kb_used event
 ```
 
 ---
 
-## 10. План rollout (7 этапов)
+## 17. Конверсационные правила
 
-| # | Этап | Срок | Deliverable | Approval gate |
-|---|---|---|---|---|
-| 1 | Спека + миграция + скелет | 2 дня | spec.md, миграции БД, пустые модули, флаг переключения | Спека утверждена |
-| 2 | State machine + slots + classifier | 3 дня | Работающие S0-S3 без catalog, тесты | 10/10 unit-тестов проходят |
-| 3 | Catalog branch | 4 дня | SKU, price intent, multi-bucket, replacements | 30/50 golden tests |
-| 4 | Knowledge + Contact + Escalation | 2 дня | S_KNOWLEDGE, S_CONTACT, S_ESCALATION | 45/50 golden tests |
-| 5 | Prompt builder + streaming | 1 день | Полный flow end-to-end | 50/50 golden tests |
-| 6 | Параллельный прогон v1 vs v2 | 2 дня | beta_search_runs reports, side-by-side | Качество ≥ v1 |
-| 7 | Rollout | 1 день | Тестовый домен → A/B → прод | User approval |
+### 17.1 Персона
 
-**Итого: 15 рабочих дней (~3 недели)**
+- Эксперт-продавец «220volt». Краткость, точность, доброжелательность без сюсюканья.
+- Никаких «давайте», «с радостью», восклицательных знаков, эмодзи.
 
-Каждый этап завершается:
-- Деплоем в preview
-- Демо тебе
-- Письменным approval перед следующим этапом
+### 17.2 Запрет приветствий
 
----
+Абсолютный. Контролируется PersonaGuard на двух уровнях (§12).
 
-## 11. Эталонный набор тестов (`golden.json`)
+### 17.3 Формат товара
 
-50 запросов, каждый с ожидаемым результатом:
-
-```json
-[
-  {
-    "id": "sku-001",
-    "query": "Б 230-60-2",
-    "expected": {
-      "intent": "catalog",
-      "has_sku": true,
-      "min_results": 1,
-      "max_latency_ms": 2500,
-      "must_contain_in_response": ["Б 230-60-2", "₸"]
-    }
-  },
-  {
-    "id": "category-disambig-001",
-    "query": "розетки чёрные двухгнездовые",
-    "expected": {
-      "intent": "catalog",
-      "creates_slot": "category_disambiguation",
-      "slot_options_min": 2
-    }
-  },
-  {
-    "id": "out-of-domain-001",
-    "query": "автомобильные шины зимние",
-    "expected": {
-      "intent": "catalog",
-      "domain_check": "out_of_domain",
-      "no_api_call": true,
-      "must_contain_in_response": ["не торгуем"]
-    }
-  }
-  // ... 47 ещё
-]
+```
+**[Название товара](https://220volt.kz/...)** — *12 990* ₸, BrandName
 ```
 
-Категории тестов:
-- 10 SKU lookups
-- 10 category searches
-- 10 price intents
-- 5 replacements
-- 5 knowledge queries
-- 5 escalations
-- 5 out-of-domain
+Правила:
+- В названии **никакого экранирования** обратными слэшами.
+- В URL круглые скобки заменяются на `%28` и `%29`.
+- Цена — *курсив*, число с пробелами как разделителями тысяч, валюта `₸` через пробел.
+- Бренд — после запятой, без префикса «бренд:».
+
+Пример блока выдачи (≤7 результатов):
+
+```
+Подходящие модели:
+
+1. **[Розетка белая 16А](https://220volt.kz/p/rozetka-belaya-16a)** — *990* ₸, Schneider
+2. **[Розетка с заземлением 16А](https://220volt.kz/p/...)** — *1 290* ₸, Legrand
+3. **[Влагозащищённая 16А IP44](https://220volt.kz/p/...)** — *1 890* ₸, ABB
+
+Уточните цвет рамки или нужен ли блок из нескольких розеток — подберу точнее.
+```
+
+### 17.4 Cross-sell и PDF
+
+- Если у товара есть `related_sku` (поле API `soputstvuyuschiy`) — предложить контекстно одной строкой: «К этой розетке подходят рамки: [ссылка]».
+- Если есть `files` (PDF паспорта/инструкции) — предложить: «Паспорт изделия: [ссылка]».
+- Никогда не выдумывать поля — только если они присутствуют в ответе API.
+
+### 17.5 Остатки
+
+- `warehouses` сортируются: сначала склад в городе пользователя (из geolocation), затем остальные по убыванию остатка.
+- Склады с `qty=0` скрываются.
+- Если все склады с 0 — пометка «Под заказ» с предложением уточнить срок у менеджера.
+
+### 17.6 Местоположение
+
+- Геолокация определяется один раз за сессию (ip-api.com, fallback skip).
+- Казахстан → информация о ближайшем филиале.
+- Россия → предупреждение «отгрузка из Казахстана, возможны таможенные нюансы — уточните у менеджера».
+- Не повторять упоминание города в каждом ответе; только при первом релевантном упоминании или по прямому запросу.
+
+### 17.7 Длина ответа
+
+- Комментарий к выдаче ≤ 4 предложений.
+- Если пользователь явно просит «расскажи подробнее» — до 8 предложений.
+- Списки товаров не учитываются в лимите предложений.
 
 ---
 
-## 12. Критерии успешности
+## 18. Правила эскалации
 
-### 12.1 Технические (объективные, измеримые)
+### 18.1 Триггеры (все приводят к `[CONTACT_MANAGER]`)
 
-| Метрика | v1 baseline | v2 target |
-|---|---|---|
-| p50 latency SKU | 3.5s | <2.5s |
-| p50 latency search | 6s | <4s |
-| p95 latency search | 12s | <8s |
-| Cost per request | $0.0026 | <$0.0012 |
-| Cache hit rate | 0% | >40% после прогрева |
-| 0-result rate | ~12% | <8% |
-| System prompt size | 13.9KB | <6KB |
-
-### 12.2 Качественные (golden tests)
-
-- 50/50 golden tests проходят на v2 (с теми же или лучшими ответами что v1)
-- 0 случаев утечки слотов между запросами
-- 0 случаев «грязный query → 0 результатов»
-
-### 12.3 Продуктовые (отслеживаются после rollout)
-
-- Click-through rate по карточкам товаров (отслеживать в `embed.js`, новый event)
-- Доля сессий с `[CONTACT_MANAGER]` (должна снизиться или остаться на уровне v1)
-- Доля сессий >5 turns без покупки (proxy для «бот не помог»)
-- Жалобы в чат (ручной мониторинг первые 2 недели)
-
-### 12.4 Критерий полного перехода с v1 на v2
-
-- Все 50 golden tests pass
-- 7 дней A/B без жалоб
-- Метрики не хуже v1 ни по одному параметру
-
----
-
-## 13. Риски и митигация
-
-| Риск | Вероятность | Impact | Митигация |
-|---|---|---|---|
-| Edge cases v1 не перенесены | High | Medium | Golden tests + параллельный прогон |
-| Postgres-кэш медленнее KV | Medium | Low | Замер на этапе 2; fallback на in-memory |
-| LLM-ответы хуже на flash vs pro | Medium | Medium | A/B на этапе 6, можно вернуть pro для отдельных веток |
-| Срок 3 недели → 4-5 недель | High | Low | План разбит на этапы, можно остановиться на любом |
-| Регрессия в SKU-поиске | Low | High | Отдельный suite + canary deploy |
-| Слот закроется когда не надо | Medium | Medium | Логирование каждого consume + метрика «слотов закрыто/протекло» |
-| Domain Guard слишком строгий | Medium | Medium | Whitelist + ручной override через ambiguous |
-
----
-
-## 14. Откат (Rollback Plan)
-
-### 14.1 Быстрый откат
-1. Админка → AI Settings → переключатель `engine_version: v1`
-2. Все новые запросы идут на старый движок
-3. Активные слоты v2 теряются (acceptable, в худшем случае пользователь повторит запрос)
-
-### 14.2 Полный rollback
-1. Установить флаг `v1`
-2. Удалить функцию `chat-consultant-v2` (опционально)
-3. Удалить миграцию `chat_cache_v2` (опционально, не мешает)
-
-### 14.3 Что нельзя откатить
-- Изменения в БД через миграции (только новой миграцией)
-- Удаленные данные `chat_cache_v2` (не критично, перенаполнится)
-
----
-
-## 15. Что НЕ входит в v2 (явный scope)
-
-| Не делаем | Почему |
+| Триггер | Источник |
 |---|---|
-| Sync каталога в локальную БД | Запрещено правилом памяти |
-| Greetings от бота | Запрещено правилом памяти |
-| Изменения в `embed.js` | Out of scope, отдельная задача |
-| Изменения в UI чата | Out of scope |
-| Изменения в knowledge_entries схеме | Не требуется |
-| Новые AI-провайдеры | Только OpenRouter |
-| Прямые ключи Google | Запрещено правилом памяти |
-| Vector search для KB | Перенесено в Phase 2 после MVP |
-| Аналитика конверсий | Phase 2 |
-| Multi-language (kz, en) | Phase 2 |
+| Прямой запрос «менеджер», «оператор», «человек» | Pre-rule classifier |
+| Жалоба, конфликт, юридический вопрос | Classifier intent=`escalate` |
+| Отсутствие товара 0 + Soft Fallback не нашёл альтернатив | Catalog branch |
+| Запрос оптовой цены / счёта-фактуры | Pre-rule (ключевые слова «опт», «счёт», «договор») |
+| 3 turn подряд `unknown` или повтор без прогресса | FSM watchdog |
+| API каталога недоступен > 3 retries | Pipeline fallback |
+
+### 18.2 Карточка контактов
+
+Контракт payload:
+
+```ts
+interface EscalationPayload {
+  reason: string;                  // human-readable
+  channels: {
+    whatsapp?: { number: string; deeplink: string };
+    phone?:    { number: string };
+    email?:    { address: string };
+    schedule?: string;             // "Пн-Сб 9:00-19:00 (Алматы)"
+  };
+  attach_session_summary: boolean; // true — клиент должен скопировать саммари в первое сообщение
+}
+```
+
+Источник контактов: `app_settings.contacts_json` (новое поле, добавляется при необходимости) или константа в edge.
+
+### 18.3 Поведение виджета
+
+- Рендерит карточку с кликабельными ссылками (deeplink в WhatsApp, `tel:`, `mailto:`).
+- Высота карточки ≤ 280 px (см. brand guidelines).
+- Сессия не закрывается; пользователь может продолжить диалог.
 
 ---
 
-## 16. Открытые вопросы (требуют решения до этапа 1)
+## 19. Кэширование
+
+### 19.1 Слои
+
+| Слой | Намespace | TTL | Хранилище |
+|---|---|---|---|
+| Схема опций категории | `category_options` | 1 час | in-memory (per edge instance) + `chat_cache_v2` |
+| Intent короткой реплики (< 80 символов) | `intent` | 24 часа | `chat_cache_v2` |
+| Probe-результаты (count для пары категория+фильтр) | `probe` | 15 минут | `chat_cache_v2` |
+| Эмбеддинг частого query (точный матч) | `embed_query` | 7 дней | `chat_cache_v2` |
+| Финальные ответы | — | **не кэшируется** | — |
+
+### 19.2 Прогрев
+
+- Top-50 категорий по трафику — ленивый прогрев `category_options` при первом обращении (не на старте).
+- Можно перевести в плановый прогрев через cron (раз в сутки), если зафиксирован cold-start > 1.5 s.
+
+### 19.3 Инвалидация
+
+- При HTTP 5xx от каталога **не сохранять** результат в кэш.
+- При обнаружении деградированного payload (пустые опции при ожидаемых) — повторный fetch, не кэшировать неуспех.
+- Ручная инвалидация — админ-эндпоинт `DELETE /chat_cache_v2 WHERE namespace = ?`.
+
+---
+
+## 20. SLA / SLO / SLI
+
+### 20.1 SLO
+
+| Сценарий | Метрика | Цель | Окно |
+|---|---|---|---|
+| SKU lookup | p50 latency | ≤ 2.6 s | 7 дней |
+| SKU lookup | p95 latency | ≤ 4.5 s | 7 дней |
+| Filtered search | p50 latency | ≤ 5.8 s | 7 дней |
+| Filtered search | p95 latency | ≤ 9.0 s | 7 дней |
+| KB info | p50 latency | ≤ 2.5 s | 7 дней |
+| Доступность edge | uptime | ≥ 99.5 % | 30 дней |
+| Точность classifier | accuracy на golden set | ≥ 95 % | per release |
+| Format violations | violations / 1000 turns | ≤ 5 | 7 дней |
+
+### 20.2 SLI (как меряем)
+
+- Latency — `latency_ms` в `chat_traces` (если включено) или агрегат по логам.
+- Uptime — синтетический пинг каждую минуту от внешнего монитора.
+- Accuracy — прогон golden set (§25) при каждом деплое.
+- Format violations — счётчик `format_violation` в логах PersonaGuard.
+
+### 20.3 Error budget
+
+- 0.5 % недоступности за 30 дней = ~3.6 часа. Превышение → freeze новых фич, разбор инцидентов.
+
+---
+
+## 21. Error Matrix и Retry политики
+
+| Источник ошибки | Тип | Поведение |
+|---|---|---|
+| Catalog API 5xx | transient | retry 3 раза с экспонентой 250/500/1000 ms |
+| Catalog API 4xx (кроме 429) | permanent | без retry, fallback в KB или CONTACT_MANAGER |
+| Catalog API 429 | rate-limit | retry-after из заголовка, max 2 раза |
+| Catalog API timeout > 8 s | transient | abort + fallback CONTACT_MANAGER |
+| OpenRouter 5xx | transient | retry 2 раза, затем переключение на резервную модель `gemini-2.5-flash` (если ошибка была на `flash-lite`) |
+| OpenRouter rate limit | rate-limit | wait 1 s + retry 1 раз; затем CONTACT_MANAGER |
+| OpenRouter content_filter | permanent | вежливый отказ + не логировать payload |
+| LLM JSON parse fail | logic | retry 1 раз с явным «верни строго JSON»; затем intent=`unknown` |
+| Postgres unavailable | transient | retry 2 раза, затем работа без кэша/трейсов |
+| Embedding API fail | transient | KB-поиск только лексический, без semantic |
+| `resolveFilters` вернул несовместимые ключи | logic | drop фильтр, продолжить без него, пометить `unresolved` |
+| Domain Guard срезал всех кандидатов до 0 | logic | Soft Fallback с предупреждением «не нашёл точно по запросу, возможно, вас интересует …» |
+
+### 21.1 Глобальный fallback
+
+Если pipeline не может вернуть осмысленный ответ за 10 секунд (hard timeout):
+- стрим закрывается сообщением «Сейчас не могу подобрать. Соединю с менеджером.»;
+- emit `[CONTACT_MANAGER]` с дефолтным payload;
+- инцидент логируется как `pipeline_hard_timeout`.
+
+---
+
+## 22. Observability
+
+### 22.1 Логи
+
+Структурированный JSON, поля:
+```
+{ ts, level, trace_id, session_id, turn_index, intent, step, latency_ms, cost_usd, error?, payload_size? }
+```
+
+Уровни:
+- `INFO` — успешные шаги (классификация, поиск, ответ).
+- `WARN` — деградации (fallback к legacy схеме, retry, format_violation).
+- `ERROR` — неуспешные turns после retry.
+
+### 22.2 Метрики (агрегаты в ai_usage_logs + chat_traces)
+
+| Метрика | Тип | Назначение |
+|---|---|---|
+| `turn_total` | counter | общее число turns |
+| `turn_by_intent` | counter | распределение по intents |
+| `turn_latency_ms` | histogram | по веткам |
+| `llm_tokens_in/out` | counter | стоимость и нагрузка |
+| `cache_hit_ratio` | gauge | по каждому namespace |
+| `slot_lifetime_seconds` | histogram | живучесть слотов |
+| `escalation_rate` | gauge | `escalations / turn_total` |
+| `format_violations` | counter | срабатывания PersonaGuard уровень 1 |
+| `domain_guard_penalty_applied` | counter | сколько раз срабатывала защита |
+
+### 22.3 Алерты
+
+| Условие | Канал |
+|---|---|
+| p95 SKU > 4.5 s в течение 15 мин | Slack/email админа |
+| Error rate > 2 % за 5 мин | Slack |
+| Cache hit ratio `category_options` < 60 % за 1 час | Slack |
+| Catalog 5xx > 10 шт за 5 мин | Slack |
+| Любой `pipeline_hard_timeout` | Slack (немедленно) |
+
+### 22.4 Дашборд
+
+Минимальный набор панелей:
+1. Turns / минуту (split by intent).
+2. p50/p95 latency по веткам.
+3. Стоимость в $/час (LLM).
+4. Cache hit ratio по namespace.
+5. Топ-10 категорий по запросам.
+6. Эскалации / час.
+
+---
+
+## 23. Безопасность
+
+- **Rate limit:** 20 запросов / минуту / IP, окно sliding. Хранится в edge in-memory + `chat_cache_v2` namespace `rl`.
+- **Длина ввода:** 2000 символов жёсткий лимит. UI показывает счётчик красным начиная с 1800.
+- **Sanitization:** на клиенте — `textContent` для пользовательского ввода, markdown-escape для имён в выдаче, sanitize HTML на этапе рендера ответа (whitelist тегов: `strong em a code br ul ol li`).
+- **XSS:** ссылки только `https://220volt.kz/*` или явно белый список доменов. Любая другая ссылка из LLM конвертируется в текст.
+- **Секреты:** хранятся в `app_settings` (RLS — только admin). `OPENROUTER_API_KEY`, `volt220_api_token`. **Запрещено** логировать секреты.
+- **PII:** телефоны/email пользователя, попавшие в реплику, не сохраняются в трейсах (regex-маска при записи).
+- **CORS:** на edge `chat-consultant` — открыт для домена сайта и preview-окружений; `search-products` — только same-project.
+- **RBAC админки:** роли `admin`, `editor`, `viewer`. Регистрация закрыта; admin создаёт пользователей.
+
+---
+
+## 24. Конфигурация
+
+Источник: таблица `app_settings` (одна строка).
+
+| Поле | Тип | Назначение |
+|---|---|---|
+| `pipeline_version` | text | `v2` (текущий). |
+| `ai_provider` | text | `openrouter` (фиксировано). |
+| `ai_model` | text | модель композера, дефолт `google/gemini-2.5-flash`. |
+| `classifier_model` | text | дефолт `google/gemini-2.5-flash-lite`. |
+| `classifier_provider` | text | `openrouter`. |
+| `system_prompt` | text | базовый системный промпт композера. |
+| `openrouter_api_key` | text | секрет. |
+| `volt220_api_token` | text | секрет. |
+| `trace_enabled` | bool | включить запись в `chat_traces`. |
+| `sla_targets` | jsonb | пороги для алертов. |
+
+Конфиг читается edge-функцией один раз в 60 секунд (in-memory cache), чтобы изменения не требовали редеплоя.
+
+---
+
+## 25. Golden Test Suite (60 кейсов)
+
+Файл: `tests/golden/chat-v2.json`. Прогон при каждом PR через `bun test tests/golden`.
+
+Структура кейса:
+```ts
+interface GoldenCase {
+  id: string;
+  description: string;
+  given_state: { slot?: Slot | null; history?: Turn[] };
+  user_message: string;
+  expected: {
+    intent: Intent;
+    slot_after?: Partial<Slot> | null;
+    must_contain_products?: { sku?: string; brand?: string }[];
+    must_not_contain?: string[];          // запреты в тексте
+    control_markers?: ControlMarker[];
+    max_latency_ms?: number;
+  };
+}
+```
+
+### 25.1 Категории кейсов
+
+| # | Категория | Кол-во | Примеры |
+|---|---|---|---|
+| 1 | SKU lookup — валидный | 5 | «арт. 12345», «12345», «артикул XYZ-001» |
+| 2 | SKU lookup — несуществующий | 3 | → CONTACT_MANAGER + soft 404 |
+| 3 | Поиск с одной категорией | 8 | «розетки», «кабель ВВГ», «лампочки E27» |
+| 4 | Поиск с фильтрами | 8 | «белые розетки 16А», «кабель 3х2.5 для дома» |
+| 5 | Уточнение (refine) | 6 | (slot=розетки) «только Schneider», «до 2000 тенге» |
+| 6 | Domain Guard | 5 | «розетки RJ45» → телеком, не силовые; и наоборот |
+| 7 | Замена / аналог | 4 | «аналог арт. 12345», «замена этой розетки» |
+| 8 | KB info | 6 | «доставка Алматы», «гарантия», «как оплатить», «адреса» |
+| 9 | Эскалация | 4 | «менеджер», «оптовая цена», «счёт-фактура», «жалоба» |
+| 10 | Small talk | 3 | «спасибо», «привет», «как дела» |
+| 11 | Запрет приветствий | 3 | проверка, что ответ не начинается с «Здравствуйте» |
+| 12 | Формат markdown | 3 | проверка строгого `**[Name](URL)** — *price* ₸, brand` |
+| 13 | Soft 404 / fallback | 2 | категория есть, фильтры дают 0 → альтернативы |
+
+### 25.2 Критерии прохождения
+
+- ≥ 95 % кейсов проходят полностью.
+- 0 кейсов категорий 11 и 12 могут провалиться (формат — критичен).
+- p50 latency на golden set ≤ SLO.
+
+---
+
+## 26. Критерии успешности
+
+Релиз v2 считается успешным, если в течение 14 дней эксплуатации одновременно выполнены:
+
+1. **Качество диалога:** ≥ 95 % golden set, ≤ 5 format violations / 1000 turns.
+2. **Производительность:** SLO §20.1 выдерживаются.
+3. **Бизнес:** конверсия посетитель→корзина не упала относительно baseline; среднее число показов карточек / сессия ≥ 1.5.
+4. **Эскалации:** доля эскалаций 8-15 % от всех turns (ниже — подозрение на ложно-уверенные ответы; выше — слабая автоматика).
+5. **Стоимость:** средняя стоимость turn ≤ $0.003 (целевая: $0.0015).
+6. **Стабильность:** 0 инцидентов уровня P1 за 14 дней.
+
+---
+
+## 27. Runbook для дежурного
+
+### 27.1 Симптом: бот отвечает приветствием
+
+1. Проверить `chat_traces` последних turns — есть ли `format_violation` в шагах.
+2. Если есть — PersonaGuard L1 не срабатывает. Проверить regex и порядок чанков.
+3. Hotfix: усилить regex, передеплоить edge.
+
+### 27.2 Симптом: высокая латентность фильтрованного поиска
+
+1. Cache hit `category_options` < 60 %? → проверить TTL и возможный сброс.
+2. Catalog API p95 > 2 s? → инцидент upstream, эскалировать в 220volt IT.
+3. Composer LLM > 3 s? → переключить на резервную модель в `app_settings.ai_model`.
+
+### 27.3 Симптом: бот выдаёт товары не той категории
+
+1. Включить `trace_enabled` (если выключен) для воспроизведения.
+2. Проверить bucket scoring и Domain Guard penalty в трассе.
+3. Если penalty не сработал — добавить ключевые слова в `TELECOM_KEYWORDS` или соответствующую группу.
+
+### 27.4 Симптом: 0 товаров на знакомый запрос
+
+1. Проверить health эндпоинт каталога вручную (curl).
+2. Проверить `unresolved_filters` в трассе — возможно, LLM не смог сматчить значение из-за изменений в схеме.
+3. Сбросить кэш `category_options` для категории.
+
+### 27.5 Симптом: всплеск ошибок 503
+
+1. Логи последнего часа: `error.source` распределение.
+2. Если catalog — fallback на KB-only режим (флаг `catalog_disabled=true` в app_settings).
+3. Если openrouter — переключение модели/провайдера.
+
+### 27.6 Откат релиза
+
+- Установить `app_settings.pipeline_version = 'v1'` (если параллельно поддерживается старая ветка).
+- Иначе — redeploy предыдущего коммита edge function через CI.
+
+---
+
+## 28. Открытые вопросы
+
+Решения нужны до старта реализации.
 
 | # | Вопрос | Варианты | Рекомендация |
 |---|---|---|---|
-| Q1 | Где хранить активные слоты — клиент или сервер? | (a) sessionStorage клиента (b) Postgres conversations | (a) — stateless edge function, проще, текущий подход |
-| Q2 | Сохранять ли LLM-ответы в БД? | (a) Нет (b) Да, для последующего анализа | (a) MVP, потом можно добавить |
-| Q3 | Прогрев кэша топ-50 запросов? | (a) Сразу при деплое (b) Лениво (c) Cron | (b) для MVP, (c) если нужно |
-| Q4 | Streaming или non-streaming? | (a) SSE как сейчас (b) Только finished response | (a) UX лучше |
-| Q5 | Сколько слотов max одновременно? | 1, 2, 3 | 2 (price + disambig могут сосуществовать) |
-| Q6 | Логирование каждого turn в БД? | (a) Только usage (b) Полные turns | (a) MVP |
+| 28.1 | Где хранить активный слот? | (a) `sessionStorage` клиента + передача в каждом запросе; (b) Postgres `conversations` | (a) — сохраняет stateless edge |
+| 28.2 | Сохранять ли LLM-ответы в БД? | (a) Нет; (b) Да, для офлайн-анализа | (a) для MVP |
+| 28.3 | Прогрев `category_options` для топ-50 категорий | (a) сразу при деплое; (b) лениво; (c) cron | (b) для MVP |
+| 28.4 | Стриминг | (a) SSE; (b) только готовый ответ | (a) — лучший UX |
+| 28.5 | Максимум одновременных слотов в сессии | 1 / 2 / 3 | **1** (упрощает FSM, см. И1) |
+| 28.6 | Логировать каждый turn в `chat_traces`? | (a) только usage в `ai_usage_logs`; (b) полный trace всегда; (c) trace через флаг | (c) флаг `trace_enabled`, дефолт false |
+| 28.7 | Контакты для эскалации хранить где? | (a) `app_settings.contacts_json`; (b) отдельная таблица | (a) — одна точка правды |
+| 28.8 | Резервная LLM модель | (a) только `flash`; (b) `flash` + `flash-lite` как fallback | (b) |
 
 ---
 
-## 17. Approval Checklist
-
-Перед началом этапа 1 нужно подтвердить:
-
-- [ ] Архитектура (раздел 3) одобрена
-- [ ] Контракты данных (раздел 3.3) одобрены
-- [ ] Поисковая логика (раздел 4) одобрена
-- [ ] Conversational rules (раздел 5) одобрены
-- [ ] Кэширование через Postgres (раздел 6) одобрено
-- [ ] Бюджеты и SLA (раздел 7) одобрены
-- [ ] User journeys (раздел 9) одобрены
-- [ ] План rollout (раздел 10) одобрен
-- [ ] Критерии успешности (раздел 12) одобрены
-- [ ] Открытые вопросы (раздел 16) закрыты
-
----
-
-## 18. Глоссарий
-
-- **Slot** — открытый вопрос к пользователю с фиксированным набором опций
-- **Intent** — намерение пользователя, классифицированное micro-LLM
-- **Probe** — лёгкий API-запрос для оценки количества результатов без полной выгрузки
-- **Multi-bucket** — параллельные поиски по разным критериям с последующим merge
-- **Domain Guard** — защита от поисков вне профиля компании (электротовары)
-- **Soft 404** — вежливый ответ «не нашлось» с предложением альтернатив
-- **Cross-sell** — предложение сопутствующих товаров из поля `soputstvuyuschiy`
-- **Escalation** — передача диалога живому менеджеру через `[CONTACT_MANAGER]`
-- **Golden tests** — эталонный набор регрессионных тестов
-- **Consume slot** — явное закрытие слота после успешного матча
-
----
-
-**Конец документа.**
+**Конец спецификации.**
