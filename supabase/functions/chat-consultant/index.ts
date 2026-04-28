@@ -1,5 +1,5 @@
 // chat-consultant v4.0 — Micro-LLM intent classifier + latency optimization
-// build-marker: layer1-confidence-2026-04-28T08:30Z (force redeploy to surface confidence= telemetry)
+// build-marker: layer1-confidence-gate-2026-04-28T09:00Z (single-flight + SWR + key-only mode + parallel buckets)
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
@@ -1309,6 +1309,14 @@ interface CategorySchemaResult {
 }
 const categoryOptionsCache: Map<string, { schema: Map<string, { caption: string; values: Set<string> }>; ts: number; productCount: number; confidence: SchemaConfidence; source: 'facets-api' | 'legacy-sampling' }> = new Map();
 const cacheKey = (pagetitle: string) => `${CATEGORY_OPTIONS_CACHE_VERSION}:${pagetitle}`;
+// Single-flight: dedupes concurrent cold-loads for the same category. Without this,
+// 5 parallel buckets requesting the same /categories/options endpoint would issue
+// 5 HTTP calls and choke upstream (observed: 14s timeouts when 2 cold-loads collide).
+const inflightSchemaRequests: Map<string, Promise<CategorySchemaResult>> = new Map();
+// Stale-while-revalidate window: after TTL (30m) we still serve cached `full` data
+// for up to STALE_GRACE_MS while a background refresh runs. Never serves stale
+// `partial`/`empty` — those must always re-fetch (they were degraded to begin with).
+const STALE_GRACE_MS = 60 * 60 * 1000; // 1h beyond TTL
 
 // =============================================================================
 // OPTION ALIASES — duplicate-key collapse.
@@ -1502,12 +1510,56 @@ async function getCategoryOptionsSchema(
   categoryPagetitle: string,
   apiToken: string
 ): Promise<CategorySchemaResult> {
-  const cached = categoryOptionsCache.get(cacheKey(categoryPagetitle));
-  if (cached && Date.now() - cached.ts < CATEGORY_OPTIONS_TTL_MS) {
-    console.log(`[CategoryOptionsSchema] cache HIT "${categoryPagetitle}" (${cached.schema.size} keys, ${cached.productCount} products, conf=${cached.confidence}, src=${cached.source}, age=${Math.round((Date.now() - cached.ts) / 1000)}s)`);
+  const key = cacheKey(categoryPagetitle);
+  const cached = categoryOptionsCache.get(key);
+  const now = Date.now();
+
+  // FRESH cache hit
+  if (cached && now - cached.ts < CATEGORY_OPTIONS_TTL_MS) {
+    console.log(`[CategoryOptionsSchema] cache HIT "${categoryPagetitle}" (${cached.schema.size} keys, ${cached.productCount} products, conf=${cached.confidence}, src=${cached.source}, age=${Math.round((now - cached.ts) / 1000)}s)`);
     return { schema: cached.schema, productCount: cached.productCount, cacheHit: true, confidence: cached.confidence, source: 'cache' };
   }
 
+  // STALE-WHILE-REVALIDATE: cache expired but still within grace window AND
+  // confidence='full' (we never serve stale degraded data). Return stale immediately,
+  // kick off background refresh (deduped by inflight map). User pays zero latency.
+  if (cached && cached.confidence === 'full' && now - cached.ts < CATEGORY_OPTIONS_TTL_MS + STALE_GRACE_MS) {
+    const ageMin = Math.round((now - cached.ts) / 60000);
+    console.log(`[CategoryOptionsSchema] cache STALE-SERVE "${categoryPagetitle}" (age=${ageMin}m, refreshing in background)`);
+    // Fire-and-forget refresh (errors swallowed — stale data is still good enough)
+    if (!inflightSchemaRequests.has(key)) {
+      const refreshPromise = _doFetchCategoryOptionsSchema(categoryPagetitle, apiToken)
+        .catch(e => {
+          console.log(`[CategoryOptionsSchema] background refresh failed for "${categoryPagetitle}": ${(e as Error).message}`);
+          return { schema: cached.schema, productCount: cached.productCount, cacheHit: false, confidence: cached.confidence, source: 'cache' as const };
+        })
+        .finally(() => inflightSchemaRequests.delete(key));
+      inflightSchemaRequests.set(key, refreshPromise);
+    }
+    return { schema: cached.schema, productCount: cached.productCount, cacheHit: true, confidence: cached.confidence, source: 'cache' };
+  }
+
+  // SINGLE-FLIGHT: if another request is already fetching this category, await it
+  // instead of issuing a duplicate HTTP call (root cause of upstream timeout cascade).
+  const inflight = inflightSchemaRequests.get(key);
+  if (inflight) {
+    console.log(`[CategoryOptionsSchema] single-flight WAIT "${categoryPagetitle}" (joining inflight request)`);
+    return await inflight;
+  }
+
+  // Cold load: register inflight, fetch, clean up on completion (success or failure).
+  const fetchPromise = _doFetchCategoryOptionsSchema(categoryPagetitle, apiToken)
+    .finally(() => inflightSchemaRequests.delete(key));
+  inflightSchemaRequests.set(key, fetchPromise);
+  return await fetchPromise;
+}
+
+// Actual fetch implementation. Always called under single-flight protection from the
+// public wrapper above — never call directly from feature code.
+async function _doFetchCategoryOptionsSchema(
+  categoryPagetitle: string,
+  apiToken: string
+): Promise<CategorySchemaResult> {
   const t0 = Date.now();
   const url = `https://220volt.kz/api/categories/options?pagetitle=${encodeURIComponent(categoryPagetitle)}`;
 
@@ -3203,9 +3255,27 @@ async function resolveFiltersWithLLM(
   modifiers: string[],
   settings: CachedSettings,
   criticalModifiers?: string[],
-  prebuiltSchema?: Map<string, { caption: string; values: Set<string> }>
+  prebuiltSchema?: Map<string, { caption: string; values: Set<string> }>,
+  schemaConfidence: SchemaConfidence = 'full'
 ): Promise<{ resolved: Record<string, ResolvedFilter>; unresolved: string[] }> {
   if (!modifiers || modifiers.length === 0) return { resolved: {}, unresolved: [] };
+
+  // CONFIDENCE GATE — Layer 1 P0: never resolve filters against degraded schema.
+  //   'empty'   → no usable schema at all. Skip LLM entirely (saves tokens, prevents
+  //              false negatives like {"cvet__tүs":"Черный"} → rejected because
+  //              schema values are []). Caller falls through to category+query path.
+  //   'partial' → schema keys are real but values are a SUBSET of reality (legacy
+  //              sampling saw ≤1000/2000 products). We let LLM run but switch to
+  //              KEY-ONLY mode below: validator accepts any value the LLM proposes
+  //              for a known key, value is taken verbatim from user query (acts as
+  //              a free-text filter on a real attribute, not a guess from a stub list).
+  //   'full'    → trust schema completely (legacy strict path).
+  if (schemaConfidence === 'empty') {
+    console.log(`[FilterLLM] CONFIDENCE GATE: schema confidence=empty for ${modifiers.length} modifier(s) — skipping LLM (caller will degrade to category+query)`);
+    return { resolved: {}, unresolved: [...modifiers] };
+  }
+  const keyOnlyMode = schemaConfidence === 'partial';
+
   // FilterLLM bulkhead: ANY error inside (schema build, LLM call, validation, dedupe lookups)
   // must NOT propagate up — caller's pipeline keeps running with empty resolved set.
   // Logged as [FilterLLMCrash] for visibility.
@@ -3219,7 +3289,7 @@ async function resolveFiltersWithLLM(
   let optionIndex: Map<string, { caption: string; values: Set<string> }>;
   if (prebuiltSchema && prebuiltSchema.size > 0) {
     optionIndex = prebuiltSchema;
-    console.log(`[FilterLLM] Using prebuilt category schema (${optionIndex.size} keys)`);
+    console.log(`[FilterLLM] Using prebuilt category schema (${optionIndex.size} keys, confidence=${schemaConfidence}${keyOnlyMode ? ', mode=key-only' : ''})`);
   } else {
     optionIndex = new Map();
     for (const product of products) {
@@ -3455,6 +3525,22 @@ ${JSON.stringify(modifiers)}
           const critical = sourceMod ? isCritical(sourceMod) : true;
           validated[resolvedKey] = { value: matchedValue, is_critical: critical, source_modifier: sourceMod };
           console.log(`[FilterLLM] Resolved (validated): "${resolvedKey}" = "${matchedValue}" [critical=${critical}, src="${sourceMod || 'n/a'}"]`);
+        } else if (keyOnlyMode) {
+          // KEY-ONLY MODE (confidence=partial): schema key is real, but values are a
+          // SUBSET of reality (legacy sampling). Trust LLM's value as a free-text
+          // filter on a real attribute instead of rejecting. Worst case: API returns
+          // 0 for that combo and caller falls through to query-only path.
+          // Mark as non-critical so caller can relax it if it produces zero hits.
+          let sourceMod: string | undefined;
+          for (const mod of modifiers) {
+            if (norm(mod) === norm(value) || norm(value).includes(norm(mod)) || norm(mod).includes(norm(value))) {
+              sourceMod = mod;
+              matchedModifiers.add(mod);
+              break;
+            }
+          }
+          validated[resolvedKey] = { value, is_critical: false, source_modifier: sourceMod };
+          console.log(`[FilterLLM] Resolved (key-only, partial schema): "${resolvedKey}" = "${value}" [critical=false, src="${sourceMod || 'n/a'}"]`);
         } else {
           console.log(`[FilterLLM] Key "${resolvedKey}" valid, but value "${value}" NOT in schema values [${[...knownValues].slice(0, 5).join(', ')}...] → unresolved`);
           // Find which modifier this came from
@@ -5102,44 +5188,77 @@ serve(async (req) => {
             // category (not just whatever happens to be in the 24-item sample), so modifiers
             // like "двухместная" can be matched to keys like `kolichestvo_razyemov` even when
             // the sample doesn't contain a single double socket. Cached 30 min per category.
+            // Now stores confidence too — passed to resolver to gate trust level (P0 fix).
             const bucketCatNames = bucketsToTry.filter(([, c]) => c >= 2).map(([n]) => n);
-            const bucketSchemaMap: Map<string, Map<string, { caption: string; values: Set<string> }>> = new Map();
+            const bucketSchemaMap: Map<string, { schema: Map<string, { caption: string; values: Set<string> }>; confidence: SchemaConfidence }> = new Map();
             if (appSettings.volt220_api_token && bucketCatNames.length > 0) {
               const schemas = await Promise.all(
-                bucketCatNames.map(n => getCategoryOptionsSchema(n, appSettings.volt220_api_token!).then(r => r.schema).catch(() => new Map<string, { caption: string; values: Set<string> }>()))
+                bucketCatNames.map(n => getCategoryOptionsSchema(n, appSettings.volt220_api_token!)
+                  .then(r => ({ schema: r.schema, confidence: r.confidence }))
+                  .catch(() => ({ schema: new Map<string, { caption: string; values: Set<string> }>(), confidence: 'empty' as SchemaConfidence })))
               );
               bucketCatNames.forEach((n, i) => bucketSchemaMap.set(n, schemas[i]));
             }
 
-            for (const [catName, count] of bucketsToTry) {
-              if (count < 2) continue;
-              let bucketProducts = rawProducts.filter(p => 
+            // PARALLEL bucket resolution with global deadline (P2 fix).
+            // Previously: sequential await per bucket → up to N×LLM_latency (observed 118s
+            // for 5 buckets). Now: all buckets resolve in parallel under a single 20s race.
+            // Whichever buckets complete contribute to bestResolved selection; late ones
+            // are abandoned (their work is wasted but pipeline stays responsive).
+            const BUCKET_RESOLVE_DEADLINE_MS = 20000;
+            const bucketResolveT0 = Date.now();
+            const eligibleBuckets = bucketsToTry.filter(([, c]) => c >= 2);
+
+            const bucketWorkers = eligibleBuckets.map(([catName, _count]) => (async () => {
+              let bucketProducts = rawProducts.filter(p =>
                 ((p as any).category?.pagetitle || (p as any).parent_name || 'unknown') === catName
               );
               if (bucketProducts.length < 10 && appSettings.volt220_api_token) {
-                console.log(`[Chat] Bucket "${catName}" too small (${bucketProducts.length}), fetching more for schema...`);
                 const extraProducts = await searchProductsByCandidate(
                   { query: null, brand: null, category: catName, min_price: null, max_price: null },
                   appSettings.volt220_api_token, 50
-                );
+                ).catch(() => [] as Product[]);
                 if (extraProducts.length > bucketProducts.length) {
                   bucketProducts = extraProducts;
-                  console.log(`[Chat] Bucket "${catName}" expanded to ${bucketProducts.length} products`);
                 }
               }
-              const bucketSchema = bucketSchemaMap.get(catName);
+              const bucketSchemaInfo = bucketSchemaMap.get(catName);
+              const bucketSchema = bucketSchemaInfo?.schema;
+              const bucketConf: SchemaConfidence = bucketSchemaInfo?.confidence || 'empty';
               const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(
                 bucketProducts, modifiers, appSettings, classification?.critical_modifiers,
-                bucketSchema && bucketSchema.size > 0 ? bucketSchema : undefined
+                bucketSchema && bucketSchema.size > 0 ? bucketSchema : undefined,
+                bucketConf
               );
-              console.log(`[Chat] Bucket "${catName}" (${bucketProducts.length}, schema=${bucketSchema?.size || 0} keys): resolved=${JSON.stringify(flattenResolvedFilters(br))}, unresolved=[${bu.join(', ')}]`);
-              
-              if (Object.keys(br).length > Object.keys(bestResolvedRaw).length) {
-                bestBucketCat = catName;
-                bestResolvedRaw = br;
-                bestUnresolved = bu;
-              }
-              if (Object.keys(br).length >= modifiers.length) break;
+              console.log(`[Chat] Bucket "${catName}" (${bucketProducts.length}, schema=${bucketSchema?.size || 0} keys, conf=${bucketConf}): resolved=${JSON.stringify(flattenResolvedFilters(br))}, unresolved=[${bu.join(', ')}]`);
+              return { catName, br, bu };
+            })());
+
+            const deadlinePromise = new Promise<'deadline'>(resolve => setTimeout(() => resolve('deadline'), BUCKET_RESOLVE_DEADLINE_MS));
+            const settled = await Promise.race([
+              Promise.allSettled(bucketWorkers).then(r => ({ kind: 'all' as const, results: r })),
+              deadlinePromise.then(() => ({ kind: 'deadline' as const })),
+            ]);
+
+            if (settled.kind === 'deadline') {
+              console.log(`[Chat] Bucket-resolve DEADLINE hit at ${BUCKET_RESOLVE_DEADLINE_MS}ms — using whatever finished, abandoning rest`);
+            } else {
+              console.log(`[Chat] Bucket-resolve ALL DONE in ${Date.now() - bucketResolveT0}ms (${settled.results.length} buckets)`);
+            }
+            const completedResults = settled.kind === 'all'
+              ? settled.results.filter(r => r.status === 'fulfilled').map(r => (r as PromiseFulfilledResult<{ catName: string; br: Record<string, ResolvedFilter>; bu: string[] }>).value)
+              : [];
+            // Pick winner: bucket that resolved the most modifiers. Tie-breaker = priority order from bucketsToTry.
+            const orderIndex = new Map(eligibleBuckets.map(([n], i) => [n, i] as const));
+            completedResults.sort((a, b) => {
+              const diff = Object.keys(b.br).length - Object.keys(a.br).length;
+              if (diff !== 0) return diff;
+              return (orderIndex.get(a.catName) ?? 999) - (orderIndex.get(b.catName) ?? 999);
+            });
+            if (completedResults.length > 0 && Object.keys(completedResults[0].br).length > 0) {
+              bestBucketCat = completedResults[0].catName;
+              bestResolvedRaw = completedResults[0].br;
+              bestUnresolved = completedResults[0].bu;
             }
             
             if (Object.keys(bestResolvedRaw).length === 0 && sortedBuckets.length > 0) {
@@ -5198,14 +5317,18 @@ serve(async (req) => {
                     );
                     if (extra.length > altProducts.length) altProducts = extra;
                   }
-                  const altSchema: Map<string, { caption: string; values: Set<string> }> = appSettings.volt220_api_token
-                    ? await getCategoryOptionsSchema(altCat, appSettings.volt220_api_token).then(r => r.schema).catch(() => new Map<string, { caption: string; values: Set<string> }>())
-                    : new Map<string, { caption: string; values: Set<string> }>();
+                  const altSchemaInfo: { schema: Map<string, { caption: string; values: Set<string> }>; confidence: SchemaConfidence } = appSettings.volt220_api_token
+                    ? await getCategoryOptionsSchema(altCat, appSettings.volt220_api_token)
+                        .then(r => ({ schema: r.schema, confidence: r.confidence }))
+                        .catch(() => ({ schema: new Map<string, { caption: string; values: Set<string> }>(), confidence: 'empty' as SchemaConfidence }))
+                    : { schema: new Map<string, { caption: string; values: Set<string> }>(), confidence: 'empty' as SchemaConfidence };
+                  const altSchema = altSchemaInfo.schema;
                   const { resolved: altResolvedRaw, unresolved: altUnresolved } = await resolveFiltersWithLLM(
                     altProducts, modifiers, appSettings, classification?.critical_modifiers,
-                    altSchema && altSchema.size > 0 ? altSchema : undefined
+                    altSchema && altSchema.size > 0 ? altSchema : undefined,
+                    altSchemaInfo.confidence
                   );
-                  console.log(`[Chat] Alt bucket "${altCat}" schema=${altSchema?.size || 0} keys`);
+                  console.log(`[Chat] Alt bucket "${altCat}" schema=${altSchema?.size || 0} keys, conf=${altSchemaInfo.confidence}`);
                   const altResolved = flattenResolvedFilters(altResolvedRaw);
                   if (Object.keys(altResolved).length === 0) {
                     console.log(`[Chat] Alt bucket "${altCat}" resolved nothing, skip`);
