@@ -1,18 +1,27 @@
 // chat-consultant-v2 — независимая edge-функция (V2 пайплайн).
 //
 // Stage A — скелет SSE-роутер.
-// Stage B (текущий) — добавлен Category Resolver (§9.2a):
+// Stage B (текущий) — Category Resolver (§9.2a):
 //   • вызывает search-products(action=list_categories) для live-списка
 //   • LLM (OpenRouter, gemini-2.5-flash-lite) выбирает pagetitle
 //   • применяет пороги из app_settings.resolver_thresholds_json
 //   • стримит результат в первый SSE-чанк как meta.category_resolver
-//   • контентом сообщает пользователю, какая категория распознана
-//     (это временный диагностический текст до Stages C–E)
+//
+// Stage B контракт V2 (системный, не наследуется от V1):
+//   POST body = {
+//     conversationId: string,                // required
+//     query:          string,                // required, последнее user-сообщение
+//     history?:       Array<{role,content}>, // опционально, для будущего контекста
+//     dialogSlots?:   Record<string, slot>,  // опционально
+//   }
+//   Любой невалидный вход → HTTP 400 с {error: ...}, НЕ реплика бота.
+//   Trace ID всегда независимый (crypto.randomUUID), conversationId — отдельное поле в логах.
 //
 // V1 (`chat-consultant/`) НЕ ТРОГАЕТСЯ.
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { z } from "https://esm.sh/zod@3.23.8";
 import {
   resolveCategory,
   type ResolverIntent,
@@ -25,7 +34,25 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const BUILD_MARKER = "v2-stageB-category-resolver-2026-04-28";
+const BUILD_MARKER = "v2-stageB-contract-zod-2026-04-28";
+
+// ---------------------------------------------------------------------------
+// Контракт V2 запроса (Zod). Любой невалидный вход → 400 ДО любой логики.
+// `messages` принимается как backward-compat alias для `history`, но не
+// используется для извлечения query — query всегда явное поле.
+// ---------------------------------------------------------------------------
+const HistoryMsgSchema = z.object({
+  role: z.enum(["user", "assistant", "system"]),
+  content: z.string(),
+});
+const RequestSchema = z.object({
+  conversationId: z.string().min(1).max(200),
+  query: z.string().trim().min(1).max(2000),
+  history: z.array(HistoryMsgSchema).max(100).optional(),
+  messages: z.array(HistoryMsgSchema).max(100).optional(), // backward-compat
+  dialogSlots: z.record(z.string(), z.unknown()).optional(),
+});
+type V2Request = z.infer<typeof RequestSchema>;
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 const RESOLVER_MODEL = "google/gemini-2.5-flash-lite";
@@ -149,21 +176,6 @@ function formatResolverDiagnostic(r: ResolverResult): string {
 }
 
 // ---------------------------------------------------------------------------
-// Извлечь последнее пользовательское сообщение из messages.
-// ---------------------------------------------------------------------------
-function extractLastUserMessage(messages: unknown): string {
-  if (!Array.isArray(messages)) return "";
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m && typeof m === "object" && (m as { role?: string }).role === "user") {
-      const c = (m as { content?: unknown }).content;
-      if (typeof c === "string") return c;
-    }
-  }
-  return "";
-}
-
-// ---------------------------------------------------------------------------
 // HTTP handler
 // ---------------------------------------------------------------------------
 serve(async (req) => {
@@ -177,26 +189,63 @@ serve(async (req) => {
     });
   }
 
-  let body: Record<string, unknown> = {};
-  try {
-    body = await req.json();
-  } catch {
-    /* ignore */
-  }
-  const conversationId =
-    typeof body.conversationId === "string" ? body.conversationId : "unknown";
-  const traceId = `${conversationId}-${Date.now().toString(36)}`;
+  // Trace ID — независимый от клиента, всегда есть.
+  const traceId = crypto.randomUUID();
 
-  const userQuery = extractLastUserMessage(body.messages);
-  const dialogSlots =
-    body.dialogSlots && typeof body.dialogSlots === "object"
-      ? (body.dialogSlots as Record<string, unknown>)
-      : {};
+  // Безопасный парс body: сначала text(), потом JSON, чтобы можно было
+  // залогировать сырое тело при ошибке валидации (Stage B диагностика).
+  let rawText = "";
+  let parsed: unknown = null;
+  try {
+    rawText = await req.text();
+    parsed = rawText ? JSON.parse(rawText) : {};
+  } catch (e) {
+    console.error(
+      `[chat-consultant-v2] body parse error trace=${traceId}: ${
+        e instanceof Error ? e.message : e
+      }; ct="${req.headers.get("content-type") ?? ""}"; raw="${rawText.slice(0, 300)}"`,
+    );
+    return new Response(
+      JSON.stringify({ error: "invalid_json", traceId }),
+      {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
+  }
+
+  const validation = RequestSchema.safeParse(parsed);
+  if (!validation.success) {
+    const flat = validation.error.flatten();
+    console.warn(
+      `[chat-consultant-v2] schema validation failed trace=${traceId}: ${
+        JSON.stringify(flat.fieldErrors)
+      }; raw="${rawText.slice(0, 300)}"`,
+    );
+    return new Response(
+      JSON.stringify({
+        error: "invalid_request",
+        details: flat.fieldErrors,
+        traceId,
+      }),
+      {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
+  }
+
+  const reqData: V2Request = validation.data;
+  const conversationId = reqData.conversationId;
+  const userQuery = reqData.query;
+  const dialogSlots = reqData.dialogSlots ?? {};
   const slotCategory =
-    typeof dialogSlots.category === "string" ? dialogSlots.category : null;
+    typeof (dialogSlots as Record<string, unknown>).category === "string"
+      ? ((dialogSlots as Record<string, unknown>).category as string)
+      : null;
 
   console.log(
-    `[chat-consultant-v2] build=${BUILD_MARKER} trace=${traceId} q="${userQuery.slice(0, 80)}" slot.category=${slotCategory ?? "null"}`,
+    `[chat-consultant-v2] build=${BUILD_MARKER} trace=${traceId} conv=${conversationId} q="${userQuery.slice(0, 80)}" slot.category=${slotCategory ?? "null"}`,
   );
 
   // SSE-поток
@@ -204,28 +253,11 @@ serve(async (req) => {
     async start(controller) {
       const log = (event: string, data?: Record<string, unknown>) => {
         console.log(
-          `[v2.${event}] ${JSON.stringify({ traceId, ...(data ?? {}) })}`,
+          `[v2.${event}] ${JSON.stringify({ traceId, conversationId, ...(data ?? {}) })}`,
         );
       };
 
       try {
-        if (!userQuery) {
-          controller.enqueue(
-            sseChunk({
-              choices: [{
-                delta: {
-                  content:
-                    "Пустое сообщение. Опишите, какой товар вас интересует.",
-                },
-              }],
-              meta: { pipeline_version: "v2", build: BUILD_MARKER, stage: "B" },
-            }),
-          );
-          controller.enqueue(sseDone());
-          controller.close();
-          return;
-        }
-
         // ---- Инициализация зависимостей резолвера -----------------------
         const supabase = getAdminClient();
 

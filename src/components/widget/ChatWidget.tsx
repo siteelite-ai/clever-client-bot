@@ -76,6 +76,7 @@ type DialogSlots = Record<string, DialogSlot>;
 
 async function streamChat({
   messages,
+  query,
   onDelta,
   onDone,
   onError,
@@ -87,6 +88,8 @@ async function streamChat({
   endpointUrl,
 }: {
   messages: Msg[];
+  /** Явный текст последнего user-сообщения. V2 контракт требует поле `query`. */
+  query: string;
   onDelta: (deltaText: string) => void;
   onDone: () => void;
   onError: (error: string) => void;
@@ -114,9 +117,13 @@ async function streamChat({
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
       },
-      body: JSON.stringify({ 
-        messages: messages.map(m => ({ role: m.role, content: m.content })),
+      body: JSON.stringify({
+        // V2 контракт (chat-consultant-v2): явный `query` — единственный
+        // источник истины для последнего пользовательского сообщения.
+        // `messages` оставлен как backward-compat для V1.
         conversationId,
+        query,
+        messages: messages.map(m => ({ role: m.role, content: m.content })),
         dialogSlots: activeSlots,
       }),
     });
@@ -236,14 +243,9 @@ const mid = (prefix?: string): string => {
 
 export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(isPreview);
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: mid('greeting'),
-      role: 'assistant',
-      content: 'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?',
-      timestamp: new Date()
-    }
-  ]);
+  // Виджет открывается с пустой лентой. Core-правило «ABSOLUTE BAN on greetings»:
+  // никаких приветствий, бот ведёт себя как эксперт-продавец. Первый ход — пользователя.
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [dialogSlots, setDialogSlots] = useState<DialogSlots>({});
@@ -384,6 +386,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     console.log(`[Widget] Sending via ${endpoint.pipeline} dialogSlots:`, JSON.stringify(dialogSlots));
     const streamPromise = streamChat({
       messages: apiMessages,
+      query: text,
       conversationId: conversationIdRef.current,
       dialogSlots,
       endpointUrl: endpoint.url,
