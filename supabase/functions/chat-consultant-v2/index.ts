@@ -274,6 +274,11 @@ serve(async (req) => {
           openRouterKey,
         );
 
+        // Step 8: ContactsLoader для S_CONTACT / S_ESCALATION.
+        const contactsDeps = createContactsLoaderDeps(
+          supabase as unknown as Parameters<typeof createContactsLoaderDeps>[0],
+        );
+
         // ── Запуск orchestrator ─────────────────────────────────────────
         const t0 = Date.now();
         const decision = await runPipeline(chatReq, {
@@ -288,24 +293,51 @@ serve(async (req) => {
             `s2_fallback=${decision.s2_used_fallback} ms=${orchestratorMs}`,
         );
 
-        // ── slot_update event (если состояние слотов поменялось) ─────────
+        // ── slot_update event ───────────────────────────────────────────
         controller.enqueue(
           sseChunk({ slot_update: { slots: decision.next_state.slots } }),
         );
 
-        // ── Текстовый чанк от placeholder-исполнителя ────────────────────
-        const text = renderPlaceholder(decision);
+        // ── Step 8: лёгкие ветки → реальный исполнитель;
+        //    тяжёлые (Knowledge/Catalog) → placeholder до Steps 9–11.
+        const tBranch0 = Date.now();
+        const branchOut = await runLightBranch(decision, contactsDeps);
+        const branchMs = Date.now() - tBranch0;
+
+        const isLight = branchOut !== null;
+        const text = branchOut ? branchOut.text : renderPlaceholder(decision);
+
+        // Виджет (ChatWidget.tsx ≈ 175-179) рендерит side-channel `contacts`
+        // как отдельную карточку. Эмитируем её ТОЛЬКО для S_ESCALATION,
+        // где есть [CONTACT_MANAGER]-маркер. Для S_CONTACT карточка уже
+        // в основном тексте — дубль не нужен.
+        if (
+          branchOut?.contact_manager_emitted &&
+          branchOut?.contacts_card
+        ) {
+          controller.enqueue(sseChunk({ contacts: branchOut.contacts_card }));
+        }
+
+        console.log(
+          `[v2.branch.done] trace=${traceId} route=${decision.route} ` +
+            `light=${isLight} ms=${branchMs} ` +
+            `contact_manager=${branchOut?.contact_manager_emitted ?? false}`,
+        );
+
         controller.enqueue(
           sseChunk({
             choices: [{ delta: { content: text } }],
             meta: {
               pipeline_version: "v2",
               build: BUILD_MARKER,
-              step: 7,
+              step: 8,
               route: decision.route,
+              branch_executed: isLight ? "real" : "placeholder",
               intent: decision.intent,
               s2_used_fallback: decision.s2_used_fallback,
               orchestrator_ms: orchestratorMs,
+              branch_ms: branchMs,
+              contact_manager_emitted: branchOut?.contact_manager_emitted ?? false,
               trace: decision.trace,
               traceId,
               cache_ttl_ms: CLASSIFIER_CACHE_TTL_MS,
