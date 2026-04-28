@@ -694,6 +694,66 @@ async function composeNoResults(
   };
 }
 
+// ─── §4.4 price-clarify branch (deterministic, no LLM) ──────────────────────
+
+/**
+ * §4.4: probe.total > 50 → создаём вопрос с топ-N значениями фасета.
+ *
+ * Инварианты:
+ *   • БЕЗ LLM (zero latency, zero cost, zero галлюцинаций).
+ *   • Композер НЕ объясняет «что отсутствует»; формулировка нейтральная.
+ *   • НЕ выводит карточки и cross-sell.
+ *   • streak неизменен (см. nextSoft404Streak).
+ *   • Bot NEVER self-narrows funnel: вопрос ОТКРЫТЫЙ, варианты — подсказка.
+ *
+ * Если slot.options пустой (фасеты не пришли — Q3 quirk) — fallback на
+ * нейтральную фразу «уточните параметры», без перечисления вариантов.
+ */
+function composeClarify(
+  input: ComposeCatalogInput,
+  norm: NormalizedOutcome,
+  newStreak: 0 | 1 | 2,
+): ComposeCatalogOutput {
+  const slot = norm.clarifySlot;
+  const totalText = norm.totalFromApi > 0
+    ? `Нашлось ${norm.totalFromApi} вариантов — это много для одного списка.`
+    : `Подходящих вариантов слишком много для одного списка.`;
+
+  const parts: string[] = [totalText];
+
+  if (slot && slot.options.length > 0) {
+    // pending_modifiers[0] = UI-caption фасета (контракт s-price).
+    const facetCaption = slot.pending_modifiers[0]?.trim() || "";
+    const ask = facetCaption
+      ? `Уточните, пожалуйста — *${facetCaption}*:`
+      : `Уточните параметры:`;
+    parts.push(ask);
+    const lines = slot.options.map((opt, i) => `${i + 1}. ${opt.label}`);
+    parts.push(lines.join("\n"));
+  } else {
+    parts.push("Уточните, пожалуйста, ключевые параметры — это поможет подобрать точнее.");
+  }
+
+  const finalText = parts.join("\n\n");
+  if (finalText.length > 0) input.onDelta(finalText);
+
+  return {
+    text: finalText,
+    scenario: "clarify",
+    newSoft404Streak: newStreak,
+    contactManager: false, // §5.6.1: clarify ≠ escalation
+    greeting_stripped: null,
+    crosssell: { presentInLLM: false, rendered: false, violation: null },
+    formatter: { rendered: 0, zeroPriceFiltered: 0, contractFiltered: 0 },
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      model: "deterministic",
+    },
+  };
+}
+
 /**
  * §4.8.1 + §11.2a-rev: ОДНА короткая tail-строка с caption снятого фасета.
  *
