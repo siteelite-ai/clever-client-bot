@@ -786,6 +786,16 @@ interface ComposerInput {
   active_slot?: Slot;
   user_locale: 'ru' | 'kk';        // по умолчанию ru
   city?: string;                   // из geolocation
+  // Сигналы из Catalog Branch (§9.2a, §9.3) — обязательны при intent ∈ {product_search, refine_filter}
+  category_uncertain?: boolean;          // Resolver confidence ∈ [0.4, 0.7)
+  category_hint?: string;                // выбранный pagetitle (для уточняющей фразы)
+  pending_clarification?: {              // если присутствует — поиск НЕ выполнялся
+    facet_caption: string;               // caption_ru факета
+    available_values: string[];          // топ-10 для подсказки
+    trait: string;                       // что хотел пользователь
+  };
+  soft_matches?: SoftMatch[];            // применённые мягкие совпадения
+  unresolved_traits?: UnresolvedTrait[]; // трейты вне схемы (без nearest_facet_key)
 }
 interface ComposerOutput {
   text_stream: AsyncIterable<string>;  // SSE chunks
@@ -793,17 +803,31 @@ interface ComposerOutput {
 }
 ```
 
+### 11.2a Правила обработки сигналов матчинга
+
+Composer обязан соблюдать порядок и обязательность блоков ответа в зависимости от входящих сигналов. Нарушение — defect категории `composer_contract_violation` (§22).
+
+| Сигнал | Обязательное действие | Положение в ответе |
+|---|---|---|
+| `pending_clarification` присутствует | **Поиск не выполнялся.** Composer задаёт вопрос: «Уточните, пожалуйста: какой *{facet_caption}* подходит? Доступно: *{v1}, v2, v3, …*». **Запрещено** показывать товары и любые другие списки. `branch_payload` игнорируется. | Только этот вопрос. |
+| `category_uncertain=true` (без `pending_clarification`) | Перед списком товаров строка: «Ищу в категории *{category_hint}*. Если имели в виду другое — уточните.» | Первая строка ответа. |
+| `soft_matches.length > 0` | Для каждого soft-match строка: «Точного *"{trait}"* нет, показал ближайшее: *{suggested_value}*.» Объединять однотипные. | После строки про категорию (если есть), до списка товаров. |
+| `unresolved_traits.length > 0` (без `pending_clarification`) | Одной строкой перечислить: «Не нашёл в характеристиках: *{trait1}, {trait2}* — показал по остальным критериям.» | После soft-matches, до списка товаров. |
+| Иначе | Сразу список товаров по правилам §17 (canonical markdown). | — |
+
+**Приоритет.** `pending_clarification` блокирует все остальные блоки и сам список товаров — это прямое следствие FSM-перехода в `SLOT_AWAITING_CLARIFICATION` (§5).
+
 ### 11.3 Параметры LLM
 
 - Модель: `google/gemini-2.5-flash`.
 - `temperature=0.3`, `top_p=0.9`.
-- System prompt содержит: персону, формат markdown, запрет приветствий, правила эскалации.
+- System prompt содержит: персону, формат markdown, запрет приветствий, правила эскалации, **обязательные блоки §11.2a**.
 - `max_output_tokens=1200`.
 
 ### 11.4 Стриминг
 
 - SSE-чанки по мере генерации.
-- Drain loop: после `[DONE]` сервер ждёт завершения вспомогательных операций (запись trace, обновление слота) и шлёт финальный `slot_state` event.
+- Drain loop: после `[DONE]` сервер ждёт завершения вспомогательных операций (запись trace, обновление слота) и шлёт финальный `slot_state` event (включая поля `pending_clarification`, `soft_matches`, `unresolved_traits`, `category` с `confidence`).
 
 ---
 
