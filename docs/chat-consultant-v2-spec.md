@@ -2070,11 +2070,12 @@ interface GoldenCase {
 | 13 | Soft 404 / fallback | 2 | категория есть, фильтры дают 0 → альтернативы |
 | 14 | Progressive Feedback | 4 | TC-61: SKU-запрос → `thinking seq=1` с intent=`sku_lookup` приходит в течение 600 ms; TC-62: быстрый ответ <400 ms → ни одного `thinking` event; TC-63: pipeline >3 s → приходит `thinking seq=2` (long-wait); TC-64: thinking-сообщения не попадают в `conversation_history` следующего turn'а |
 | 15 | Category Resolver & Facet Matcher | 6 | TC-69…TC-74 — см. §25.3 |
+| 16 | Lexicon Resolver, Soft Fallback, пагинация, SSE-буфер, Schema Dedup | 8 | TC-75…TC-82 — см. §25.4 |
 
 ### 25.2 Критерии прохождения
 
 - ≥ 95 % кейсов проходят полностью.
-- 0 кейсов категорий 11, 12 и 15 могут провалиться (формат и матчинг — критичны).
+- 0 кейсов категорий 11, 12, 15, 16 могут провалиться (формат, матчинг и системные инварианты — критичны).
 - p50 latency на golden set ≤ SLO.
 
 ### 25.3 Кейсы Category Resolver и Facet Matcher (TC-69 — TC-74)
@@ -2084,7 +2085,7 @@ interface GoldenCase {
 | ID | Запрос | Ожидаемый Resolver | Ожидаемый Matcher | Ожидаемый Composer / Slot | Что проверяется |
 |---|---|---|---|---|---|
 | TC-69 | «найди чёрные двугнёздные розетки» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[{цвет:"чёрный"}, {кол-во гнёзд:"2"}]`, `unresolved=[]`, `soft_matches=[{trait:"двугнёздные",reason:"numeric_equivalent",value:"2"}]` | Composer показывает товары + строка «Точного "двугнёздные" нет, использовал ближайшее: 2». Поиск выполнен один раз, без `query=`. | Полный happy-path: Resolver high-confidence, Matcher с числовым эквивалентом и soft_match. |
-| TC-70 | «графитовые розетки» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[]`, `unresolved=[{trait:"графитовые",nearest_facet_key:"cvet*",available_values:[…]}]` | FSM → `SLOT_AWAITING_CLARIFICATION`; `slot.pending_clarification` заполнен; в ответе **только** уточняющий вопрос со списком доступных цветов; **НИ ОДНОГО** товара. | Запрет поиска при unresolved, контракт §11.2a (pending_clarification). |
+| TC-70 | «графитовые розетки» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[]`, `unresolved=[{trait:"графитовые",nearest_facet_key:"cvet*",available_values:[…]}]` | FSM → `SLOT_AWAITING_CLARIFICATION`; `slot.pending_clarification` заполнен; в ответе **только** уточняющий вопрос со списком доступных цветов; **НИ ОДНОГО** товара. | Запрет поиска при unresolved + resolved=0, контракт §11.2a (pending_clarification). |
 | TC-71 | «двойные розетки белого цвета» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[{цвет:"белый"}, {кол-во гнёзд:"2"}]`, `soft_matches=[{trait:"двойные",value:"2",reason:"numeric_equivalent"}]` | Товары + строка о soft_match по «двойные». | Числовой эквивалент `двойная→2` + точный exact-match цвета. |
 | TC-72 | «розетка с двумя гнёздами и 16А» | `pagetitle="Розетки"`, `confidence ≥ 0.85` | `resolved=[{кол-во гнёзд:"2"}, {номинальный ток:"16"}]`, `unresolved=[]` | Товары без предупреждений. | Два независимых трейта: словесный→числовой и точный числовой. |
 | TC-73 | «двухполюсный автомат на 16» | `pagetitle="Автоматические выключатели"` (или эквивалент), `confidence ≥ 0.85` | `resolved=[{полюсность:"2"}, {номинальный ток:"16"}]` | Товары без предупреждений. | Resolver вне категории «розетки» + морфологический разбор «двухполюсный→2». |
@@ -2095,6 +2096,28 @@ interface GoldenCase {
 - При `slot.pending_clarification ≠ null` ответ Composer **НЕ должен** содержать карточек товаров (см. §4.5, §11.2a).
 - При `slot.category.confidence < 0.4` Resolver обязан передать управление в Multi-bucket Fallback (§9.4); slot НЕ создаётся (см. И в §4.5).
 - Unresolved-трейт **НИКОГДА** не попадает в `?query=` строку Catalog API (см. §9.3, запрет на «query-pollution»).
+
+### 25.4 Кейсы Lexicon, Soft Fallback, пагинация, SSE-буфер, Schema Dedup (TC-75 — TC-82)
+
+Покрывают инварианты Stage 4 редизайна: §9.2b (Lexicon Resolver), §11.2a (Soft Fallback), §7.2 (next_page), §12.2 (SSE-буфер 30 символов), §9B (Facet Schema Dedup), §13.1 (расширенный Slot).
+
+| ID | Запрос / сценарий | Ожидаемое поведение | Что проверяется |
+|---|---|---|---|
+| TC-75 | «лампа кукуруза g4» (свежая сессия) | Lexicon Resolver применяет `{surface:"кукуруза", type:"name_modifier", canonical_token:"CORN", confidence:0.95}` → в Catalog API уходит `?category=Лампы&query=CORN&cokol=G4`. `slot.applied_aliases` содержит запись. `slot.query_tokens=["CORN"]`. Composer показывает товары; в комментарии: «Нашёл по разговорному названию "кукуруза" → CORN». SSE event `lexicon_applied` отправлен. | Гибридная стратегия §9.2b: `canonical_token`→query, `trait_expansion`→facets, разделение путей, аналитика в slot. |
+| TC-76 | «капсульная лампочка g4 3.5вт» | `trait_expansion`: «капсульная» → trait «капсула», который Facet Matcher маппит в `forma=Капсула`. `?query=` пуст (нет `name_modifier`). `resolved=[{forma:"Капсула"},{cokol:"G4"},{moshchnost:"3.5"}]`, `soft_matches[].reason="lexicon_expansion"`. | Ветка `trait_expansion` Lexicon — НЕ трогает `?query=`, работает только до Facet Matcher. |
+| TC-77 | «розетки белые» (resolved=`[{цвет:"белый"}]` после Matcher) + unresolved=`[{trait:"антивандальные",nearest_facet_key:"zashchita"}]` | Soft Fallback **НЕ** срабатывает (resolved=1<2): FSM → `SLOT_AWAITING_CLARIFICATION`, **0 товаров**, спросить про защиту. | Граница Soft Fallback при resolved < 2: блокирующее уточнение. |
+| TC-78 | «белые двойные розетки legrand» (resolved=3) + unresolved=`[{trait:"антивандальные",...}]` | Soft Fallback **СРАБАТЫВАЕТ** (resolved=3≥2): поиск выполняется с 3 фильтрами, товары показываются, в конце ответа inline-строка «Уточните: какая защита нужна? Доступно: IP20, IP44…». `pending_clarification` **НЕ** заполняется. Метрика `soft_fallback_triggered++`. | Soft Fallback §11.2a: товары + non-blocking вопрос при resolved≥2. |
+| TC-79 | (slot открыт, `result_count=83`, `page=1`, `pages=7`) → пользователь: «покажи ещё» / «следующая страница» | Intent Classifier → `next_page`. Slot **переиспользуется** целиком, инкремент `slot.page=2`. Catalog API вызывается с `?page=2&per_page=12&...` и теми же фильтрами и `query_tokens`. SSE `pagination` event с `{page:2,pages:7,total:83}`. Composer не задаёт уточнений. | Pagination FSM (§7.2): идемпотентность фильтров и алиасов, переиспользование slot. |
+| TC-80 | Стрим начинается с «Здра» + «вствуйте, для» + «вашего запроса…» (3 чанка LLM) | Сервер буферизует первые 30 символов перед отправкой. На полном префиксе regex матчит «Здравствуйте, для» → вырезает «Здравствуйте, » → клиенту уходит первый чанк «для вашего запроса…». Метрика `sse_greeting_stripped++`. Клиентский L2 фильтр НЕ срабатывает (нечего вырезать). | §12.2 SSE-буфер 30 символов: устранение race condition разорванного приветствия. |
+| TC-81 | OptionSchema от API содержит дубли: `{key:"Brand"}` и `{key:"brend"}` с пересекающимися значениями | Facet Schema Dedup (§9B) сливает их в один canonical key (предпочтительно тот, что уже встречался в успешных запросах; tie-break — алфавит). Значения объединяются по `value_ru` без дублей. LLM-Matcher получает **одну** запись `brend`. В `applied_filters[].key` пишется canonical. | §9B Schema Dedup: снижение шума и токенов LLM. |
+| TC-82 | Property-based по lexicon_json: для каждого entry с `type:"name_modifier"` прогнать «<surface> <случайная_категория_из_category_hint>» 10 раз | Каждый прогон: (1) `canonical_token` присутствует в `?query=` ровно один раз (без дублей); (2) `confidence ≥ 0.9` соблюдается (entries с меньшей не инжектятся); (3) при отсутствии `category_hint` lexicon применяется только если Category Resolver уже выбрал категорию с `confidence ≥ 0.7`. | Стабильность и безопасность Lexicon Resolver: нет query-pollution, нет ложных срабатываний вне категории. |
+
+Вспомогательные инварианты для всех TC-75…TC-82:
+
+- `?query=` строка Catalog API содержит **только** `canonical_token` из `applied_aliases` (type=`name_modifier`, confidence ≥ `lexicon_query_inject`). Любой другой источник в `?query=` — баг.
+- При срабатывании Soft Fallback (§11.2a) `pending_clarification` всегда `null`; при блокирующем уточнении — всегда заполнено и `applied_filters` ≤ 1.
+- При intent=`next_page` Slot не пересоздаётся; `applied_aliases`, `applied_filters`, `query_tokens` переиспользуются 1-в-1.
+- `lexicon_json` читается из 60-секундного кэша; ручной hot-reload через bump `app_settings.updated_at` (тот же механизм, что у общего конфига).
 
 ---
 
