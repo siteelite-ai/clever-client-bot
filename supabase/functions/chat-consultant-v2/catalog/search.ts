@@ -65,6 +65,19 @@ export interface SearchInput {
   optionFilters?: Record<string, string[]>;
   /** Карта алиасов для каждого canonical_key. */
   optionAliases?: Record<string, string[]>;
+  /**
+   * §4.8.1: Человекочитаемые caption-ы фасетов (canonical_key → caption из RawOption.caption,
+   * полученные Facet Matcher из живого API). Используются ТОЛЬКО для заполнения
+   * `softFallbackContext.droppedFacetCaption` — никакой бизнес-логики на этом не строим.
+   */
+  optionFilterCaptions?: Record<string, string>;
+  /**
+   * §4.8: Порядок применения фасетов (canonical_keys). Soft Fallback снимает фильтры
+   * с конца списка по одному; первый успех фиксирует `droppedFacetCaption`.
+   * Если порядок не задан, fallback: снимаем все фильтры разом, caption берётся
+   * по первому ключу из `optionFilters` (для обратной совместимости).
+   */
+  optionFilterOrder?: string[];
   /** Цена — ТОЛЬКО если её явно назвал пользователь (K1). */
   minPrice?: number;
   maxPrice?: number;
