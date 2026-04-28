@@ -891,14 +891,14 @@ type Sort = 'price_asc' | 'price_desc' | 'relevance';
 interface PriceRange { min?: number; max?: number; }
 
 interface Category {
-  id: string;
-  pagetitle: string;
-  title: string;
+  id: number;                  // integer из API
+  pagetitle: string;           // ключ для ?category=...
+  title?: string;              // может отсутствовать в листинге дерева
 }
 
 interface AppliedFilter {
-  key: string;
-  values: string[];
+  key: string;                 // напр. "brend__brend", "cvet"
+  values: string[];            // value_ru, ровно как из CategoryOptionsResponse
   source: 'user' | 'llm';
 }
 
@@ -916,15 +916,30 @@ interface Slot {
 }
 
 interface Product {
-  sku: string;
+  id: number;                  // integer
+  sku: string;                 // = ProductResource.article
   name: string;
   url: string;
-  price: number;          // ₸
-  brand?: string;
-  warehouses: { city: string; qty: number }[];
-  options: Record<string, string>;
-  files?: string[];
+  price: number;               // ₸
+  old_price?: number | null;   // ₸, для отображения скидки
+  brand?: string | null;
+  category: { id: number; pagetitle: string };
+  warehouses: { city: string; amount: number }[];   // поле API называется amount, не qty
+  options: Array<{ caption_ru: string; value_ru: string; caption_kz?: string; value_kz?: string }>;
+  files?: Array<{ url: string; name?: string; type?: string }>;
   related_sku?: string[];
+}
+
+interface ProductsListResponse {
+  results: Product[];
+  pagination: { page: number; per_page: number; pages: number; total: number };
+}
+
+interface ApiError {
+  status: number;              // HTTP
+  code?: string;               // нормализованное (из error.code или errors.error)
+  message: string;
+  raw?: unknown;               // оригинальный body для логов (без секретов)
 }
 
 interface KbChunk {
@@ -1120,8 +1135,8 @@ sequenceDiagram
   W->>E: ChatRequest (SSE)
   E->>E: Sanitize + PersonaGuard
   E->>E: Pre-rule SKU regex → intent=sku_lookup
-  E->>SP: by_sku(12345)
-  SP->>API: GET /api/products/12345
+  E->>SP: by_sku(article=12345)
+  SP->>API: GET /api/products?article=12345
   API-->>SP: Product
   SP-->>E: Product
   E->>LLM: compose(product)
