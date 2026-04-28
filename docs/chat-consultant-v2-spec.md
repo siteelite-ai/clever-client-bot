@@ -411,25 +411,40 @@ interface SlotManager {
 
 ### 9.1 Источник данных
 
-REST API 220volt.kz. Эндпоинты:
+REST API 220volt.kz (OpenAPI 3.0). Полный контракт зафиксирован в репозитории: `docs/external/220volt-swagger.json` (snapshot эталона). Базовый URL: `https://220volt.kz`.
 
-| Эндпоинт | Назначение |
-|---|---|
-| `GET /api/products?query=...&options[k][]=v&...&page=...` | Поиск товаров |
-| `GET /api/products/{sku}` | Карточка по артикулу |
-| `GET /api/categories` | Дерево категорий |
-| `GET /api/categories/options?pagetitle=...` | Полная схема опций категории |
+Используемые эндпоинты (реальные, проверены curl-аудитом):
 
-Все вызовы проксируются через edge function `search-products` (для централизованного кэша и rate-limit safety).
+| Эндпоинт | Назначение | Ключевой параметр |
+|---|---|---|
+| `GET /api/products?query=...&page=...&per_page=...` | Полнотекстовый поиск товаров | `query` (string) |
+| `GET /api/products?article={sku}` | **Поиск по артикулу** (отдельного `/products/{sku}` НЕТ) | `article` (string) |
+| `GET /api/products?category={pagetitle}&...` | Фильтр по категории | `category` = **pagetitle** (string), не id |
+| `GET /api/products?options[{key}][]={value}&...` | Фасетный фильтр | `options[brend__brend][]=Schneider` |
+| `GET /api/products?min_price=...&max_price=...` | Ценовой фильтр | целые ₸ |
+| `GET /api/categories?parent=0&depth=10&per_page=200&page=N` | Дерево категорий (постранично) | возвращает `pagetitle`, `id` (number) |
+| `GET /api/categories/{id}/options` | Схема опций категории по числовому id | возвращает `{ category, options[] }` |
+| `GET /api/categories/options?pagetitle=...` | То же по pagetitle | альтернативный путь |
+
+**Аутентификация:** `Authorization: Bearer <volt220_api_token>` для всех запросов. Токен хранится в `app_settings.volt220_api_token` (RLS — только service-role/admin). Хотя swagger не описывает security-схему явно, продакшен-инстанс возвращает 401 без токена.
+
+**Ограничения и нюансы:**
+- `per_page` максимум 200 (категории), для `/products` — рекомендуем ≤ 50.
+- Категория фильтруется **только по `pagetitle`** (string-slug). Числовой id передавать в `?category=` нельзя.
+- Все `id` (категорий, товаров) — `integer`, не `string`.
+- Ответы списков обёрнуты: `{ success: true, data: { results: [...], pagination: {...} } }`.
+- Карточные ответы: `{ success: true, data: { ... } }` (для `/categories/{id}/options` встречается двойная вложенность — см. §9A.3).
+
+Все вызовы проксируются через edge function `search-products` (централизованный кэш фасетов и категорий, единая точка обработки auth/ошибок).
 
 ### 9.2 Стратегии поиска
 
 | Стратегия | Когда применяется | Шаги |
 |---|---|---|
-| **Direct SKU** | intent = `sku_lookup` | 1 GET по артикулу |
-| **Single-category filtered** | intent = `product_search` или `refine_filter` с известной категорией | (1) загрузить схему опций → (2) `resolveFiltersWithLLM` → (3) поиск с фильтрами |
-| **Multi-bucket** | `product_search` без явной категории | параллельный поиск (по category-hint и по query) → бакетизация по категориям → выбор лучшего бакета |
-| **Replacement** | intent = `is_replacement` | (1) карточка оригинала → (2) выделение трейтов → (3) multi-vector search → (4) LLM-сравнение |
+| **Direct SKU** | intent = `sku_lookup` | `GET /api/products?article={sku}` → `data.results[0]` (если пусто → soft 404) |
+| **Single-category filtered** | intent = `product_search` или `refine_filter` с известной категорией | (1) `GET /api/categories/{id}/options` (или по pagetitle) → (2) `resolveFiltersWithLLM` → (3) `GET /api/products?category={pagetitle}&options[...]&min_price&max_price` |
+| **Multi-bucket** | `product_search` без явной категории | параллельный поиск (по category-hint pagetitle и по полному query) → бакетизация по `data.results[i].category.pagetitle` → выбор лучшего бакета (см. §9.4) |
+| **Replacement** | intent = `is_replacement` | (1) карточка оригинала: `GET /api/products?article={sku}` → (2) выделение трейтов из `category.pagetitle` + ключевых `options[]` → (3) `searchProductsMulti` → (4) LLM-сравнение |
 
 ### 9.3 Resolve Filters (LLM)
 
@@ -449,10 +464,12 @@ function resolveFiltersWithLLM(input: {
 ### 9.4 Multi-bucket ranking
 
 Для multi-bucket стратегии:
-- Запускаются 2 параллельных API-запроса: (a) по category-hint, (b) по полному тексту.
-- Результаты группируются по `category_pagetitle` (bucket).
+- Запускаются 2 параллельных API-запроса:
+  - (a) `GET /api/products?category={pagetitle_hint}&query={user_query}` — где `pagetitle_hint` берётся из закэшированного списка `listCategories()` по семантическому матчингу.
+  - (b) `GET /api/products?query={user_query}` — без категориального фильтра.
+- Результаты группируются по `result.category.pagetitle` (bucket key — pagetitle, **не id**).
 - Бакеты с `count < 10` — догружаются дополнительным запросом без фильтров (расширение).
-- Каждый бакет проходит `resolveFiltersWithLLM` независимо.
+- Каждый бакет проходит `resolveFiltersWithLLM` независимо (использует facets из `GET /api/categories/{id}/options`, где `id` берётся из `result.category.id`).
 - Скоринг бакета: `score = relevance(0..100) - domainGuardPenalty(0..30) + bucketSizeBonus`.
 - Победитель — бакет с максимальным score; пользователю показывается **из одной категории**.
 
@@ -484,12 +501,133 @@ function resolveFiltersWithLLM(input: {
 ### 9.8 Замены и аналоги
 
 ```
-1. Получить карточку оригинала (GET /api/products/{sku}).
-2. Извлечь трейты: category, key options (мощность, напряжение, сечение и т.п.).
-3. searchProductsMulti с трейтами как фильтрами.
+1. Получить карточку оригинала: GET /api/products?article={sku} → data.results[0].
+2. Извлечь трейты:
+   - category.pagetitle (для повторного поиска в той же категории)
+   - category.id (для подгрузки facets через /api/categories/{id}/options)
+   - ключевые options[] (мощность, напряжение, сечение и т.п.) — берутся как { caption_ru, value_ru }.
+3. searchProductsMulti(category=pagetitle, options[key][]=value, исключая article оригинала).
 4. LLM-композер сравнивает кандидатов с оригиналом, выделяет 3-5 лучших.
 5. В ответе указать, чем отличается каждая замена от оригинала.
 ```
+
+---
+
+## 9A. Контракты Catalog API (220volt)
+
+Раздел фиксирует **точные** структуры запросов/ответов реального API. Эталон — `docs/external/220volt-swagger.json`.
+
+### 9A.1 Базовая обвязка
+
+```
+Base URL:     https://220volt.kz
+Auth header:  Authorization: Bearer <volt220_api_token>
+Content-Type: application/json
+Timeout:      8000 ms (см. §21)
+```
+
+Универсальные обёртки ответов:
+```ts
+interface ApiListEnvelope<T> {
+  success: true;
+  data: { results: T[]; pagination: Pagination };
+}
+interface ApiResourceEnvelope<T> {
+  success: true;
+  data: T;
+}
+interface Pagination {
+  page: number;       // 1-based
+  per_page: number;
+  pages: number;      // total pages
+  total: number;      // total items
+}
+```
+
+Ошибки (две формы — нормализуются на стороне edge):
+```ts
+// 401, 5xx
+interface ApiErrorA { success: false; error: { code: string; message: string } }
+// 404
+interface ApiErrorB { success: false; errors: { error: string } }
+```
+
+### 9A.2 ProductResource
+
+```ts
+interface ProductResource {
+  id: number;
+  article: string;            // SKU; ключ для поиска по артикулу
+  name: string;
+  url: string;                // абсолютный https://220volt.kz/...
+  price: number;              // ₸, целое
+  old_price?: number | null;  // ₸, для «было/стало»; null если без скидки
+  brand?: string | null;
+  category: { id: number; pagetitle: string };  // НЕТ поля title
+  options: Array<{
+    caption_ru: string; caption_kz?: string;
+    value_ru: string;   value_kz?: string;
+  }>;
+  warehouses?: Array<{ city: string; amount: number }>;
+  files?: Array<{ url: string; name?: string; type?: string }>;
+  related_sku?: string[];     // если приходит — кросс-сейл
+}
+```
+
+### 9A.3 CategoryResource и facets
+
+```ts
+interface CategoryResource {
+  id: number;
+  pagetitle: string;
+  title?: string;              // человеко-читаемое (может отсутствовать в листинге дерева)
+  parent?: number | null;
+  children?: CategoryResource[];
+  total_products?: number;
+}
+
+// GET /api/categories/{id}/options ИЛИ /api/categories/options?pagetitle=...
+// ВАЖНО: реальный envelope иногда двойной: body.data.data вместо body.data.
+interface CategoryOptionsResponse {
+  success: true;
+  data: {
+    category: { id: number; pagetitle: string; total_products?: number };
+    options: Array<{
+      key: string;             // напр. "brend__brend", "cvet"
+      caption_ru: string; caption_kz?: string;
+      values: Array<{ value_ru: string; value_kz?: string; count?: number }>;
+    }>;
+  };
+}
+```
+
+Edge `search-products` нормализует двойной envelope (`body.data.data || body.data`) — см. реализацию в `supabase/functions/search-products/index.ts`.
+
+### 9A.4 Поиск товаров — параметры
+
+```
+GET /api/products
+  ?query={string}                   // полнотекст
+  ?article={string}                 // точный поиск по SKU; перекрывает query
+  ?category={pagetitle}             // ТОЛЬКО pagetitle, не id
+  ?options[{key}][]={value}         // повторяемый, AND между разными key, OR внутри одного key
+  ?min_price={int}&max_price={int}
+  ?page={int}                       // 1-based
+  ?per_page={int}                   // ≤ 50 рекомендация
+```
+
+Ответ: `ApiListEnvelope<ProductResource>`. SKU lookup: `data.results.length === 0` → soft 404 (нет такого артикула).
+
+### 9A.5 Дерево категорий
+
+```
+GET /api/categories?parent=0&depth=10&per_page=200&page=N
+```
+Ответ: `ApiListEnvelope<CategoryResource>` с рекурсивным `children`. Edge собирает плоский список `pagetitle[]` (см. `listCategories()`), пагинирует по `pagination.pages`.
+
+### 9A.6 Маппинг внутренних типов
+
+См. §13.1 — внутренний `Product`/`Category` строится строго из `ProductResource`/`CategoryResource` без потерь полей `id`, `article`, `old_price`, `warehouses`, `category.id`.
 
 ---
 
