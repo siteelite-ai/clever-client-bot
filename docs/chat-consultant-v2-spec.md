@@ -18,6 +18,7 @@
 7. [Модуль: Intent Classifier](#7-модуль-intent-classifier)
 8. [Модуль: Slot Manager](#8-модуль-slot-manager)
 9. [Модуль: Catalog Search](#9-модуль-catalog-search)
+9A. [Контракты Catalog API (220volt)](#9a-контракты-catalog-api-220volt)
 10. [Модуль: Knowledge Base RAG](#10-модуль-knowledge-base-rag)
 11. [Модуль: Response Composer](#11-модуль-response-composer)
 11A. [Модуль: Progressive Feedback (Thinking Phrases)](#11a-модуль-progressive-feedback-thinking-phrases)
@@ -1099,18 +1100,37 @@ Accept: text/event-stream
 
 Используется внутри chat-consultant; внешним клиентам недоступен (CORS закрыт, кроме origin сайта).
 
-**Actions:**
+**Actions** (нормализованы под реальный API §9A):
 ```ts
 type SearchAction =
-  | { action: 'search'; query: string; options?: Record<string,string[]>; page?: number }
-  | { action: 'by_sku'; sku: string }
-  | { action: 'category_facets'; pagetitle?: string; categoryId?: string }
-  | { action: 'categories' };
+  | { action: 'search';            // GET /api/products?query=...&category=...&options[k][]=v
+      query?: string;
+      category?: string;            // pagetitle, не id
+      options?: Record<string, string[]>;
+      min_price?: number; max_price?: number;
+      page?: number; per_page?: number;
+      brand?: string;               // shorthand для options[brend__brend][]
+    }
+  | { action: 'by_sku'; article: string }              // GET /api/products?article={article}
+  | { action: 'category_facets';                       // GET /api/categories/{id}/options
+      pagetitle?: string;
+      categoryId?: number | string;
+    }
+  | { action: 'list_categories' };                     // GET /api/categories?parent=0&depth=10 → flat pagetitle[]
 ```
 
+**Унифицированный ответ:**
+- `search` → `ProductsListResponse` (§13.1).
+- `by_sku` → `{ product: Product | null }` (берётся `data.results[0]`).
+- `category_facets` → `{ category, options: [...], cacheHit: boolean }`.
+- `list_categories` → `{ categories: string[]; count: number }`.
+
 **Кэш:**
-- `category_facets` — 1 час (in-memory + chat_cache_v2 namespace `category_options`).
-- Остальные — без кэша (реал-тайм).
+- `category_facets` — 1 час (in-memory + `chat_cache_v2` namespace `category_options`).
+- `list_categories` — 1 час (in-memory namespace `categories_flat`).
+- `search`, `by_sku` — без кэша (реал-тайм).
+
+**Обработка ошибок:** edge нормализует обе формы (`error.code/message` и `errors.error`) в `ApiError` (§13.1) и возвращает HTTP 502 с телом `{ error, results: [], pagination: {...} }`.
 
 ### 15.3 `POST /functions/v1/knowledge-process`
 
@@ -1258,9 +1278,18 @@ sequenceDiagram
 
 ### 17.5 Остатки
 
-- `warehouses` сортируются: сначала склад в городе пользователя (из geolocation), затем остальные по убыванию остатка.
-- Склады с `qty=0` скрываются.
+- Источник: `Product.warehouses[]` с полями `{ city, amount }` (поле API называется `amount`, не `qty`).
+- Сортировка: сначала склад в городе пользователя (из `client_context.city`), затем остальные по убыванию `amount`.
+- Склады с `amount = 0` скрываются.
 - Если все склады с 0 — пометка «Под заказ» с предложением уточнить срок у менеджера.
+- Если `warehouses` отсутствует в ответе API — раздел «Наличие» в карточке не выводится (не выдумывать).
+
+### 17.6 Местоположение
+
+- Город пользователя берётся из `client_context.city` (определяется виджетом по IP/geolocation API).
+- Если город известен и совпадает с одним из `warehouses[i].city` — приоритетно показывается «В наличии в {city}: {amount} шт».
+- Если город известен, но склада в нём нет — «В вашем городе ({city}) нет на складе. Ближайший: {city2} — {amount2} шт».
+- Если город неизвестен — список без приоритезации, по убыванию `amount`.
 
 ### 17.6 Местоположение
 
@@ -1598,6 +1627,8 @@ interface GoldenCase {
 | 28.7 | Контакты для эскалации хранить где? | (a) `app_settings.contacts_json`; (b) отдельная таблица | (a) — одна точка правды |
 | 28.8 | Резервная LLM модель | (a) только `flash`; (b) `flash` + `flash-lite` как fallback | (b) |
 | 28.9 | Источник каталога thinking-фраз (§11A) | (a) хардкод в edge function; (b) `app_settings.thinking_phrases_json` | (b) — маркетинг редактирует без редеплоя |
+| 28.10 | Использовать `Product.warehouses[*].amount` для геолокационных ответов о наличии в городе пользователя? | (a) Да, приоритезировать склад из `client_context.city`; (b) Нет, показывать общий остаток | (a) — повышает релевантность ответа |
+| 28.11 | Зафиксировать `docs/external/220volt-swagger.json` как обязательный артефакт CI? | (a) только snapshot в репо; (b) drift-check в CI (раз в сутки сравнивать с live `/swagger.json`) | (b) — раннее обнаружение breaking changes |
 
 ---
 
