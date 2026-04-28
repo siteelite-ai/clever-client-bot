@@ -93,6 +93,16 @@ export type SearchStatus =
   | "all_zero_price"   // API дал товары, но все price≤0 (HARD BAN)
   | "error";           // HTTP/timeout/network — escalation, не считаем soft 404
 
+export interface SoftFallbackContext {
+  /**
+   * §4.8.1: UI-caption фасета, который был снят (из RawOption.caption через
+   * Facet Matcher). НЕ raw-key. Композер использует это поле для tail-line
+   * `Если важно уточнить *<droppedFacetCaption>* — напишите.`
+   * НЕ может быть пустой строкой (инвариант: caption живой из API).
+   */
+  droppedFacetCaption: string;
+}
+
 export interface SearchOutcome {
   status: SearchStatus;
   products: RawProduct[];        // ВСЕГДА price>0
@@ -109,6 +119,10 @@ export interface SearchOutcome {
     suspectedQuirkKey: string;
     recoveredCount: number;
   };
+  /**
+   * §4.8.1: Заполнено ТОЛЬКО при status === 'soft_fallback'. При других статусах = null.
+   */
+  softFallbackContext: SoftFallbackContext | null;
   errorMessage?: string;
   ms: number;
 }
@@ -117,6 +131,8 @@ export interface SearchAttempt {
   label: "strict" | "soft_fallback";
   ms: number;
   raw: SearchProductsResult;
+  /** Какой фасет был снят на этой попытке soft_fallback (canonical_key). */
+  droppedFacetKey?: string;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
