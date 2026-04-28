@@ -1,0 +1,1002 @@
+{
+    "openapi": "3.0.0",
+    "info": {
+        "title": "220volt.kz",
+        "description": "API документация для сайта 220volt.kz",
+        "version": "1.0.0"
+    },
+    "servers": [
+        {
+            "url": "https://220volt.kz/api"
+        }
+    ],
+    "paths": {
+        "/categories": {
+            "get": {
+                "tags": [
+                    "Categories"
+                ],
+                "summary": "Список категорий",
+                "description": "Возвращает список категорий с поддержкой дерева",
+                "operationId": "b1b247b2b491b0491c3c728dc33f23f0",
+                "parameters": [
+                    {
+                        "name": "page",
+                        "in": "query",
+                        "description": "Номер страницы",
+                        "schema": {
+                            "type": "integer",
+                            "example": 1
+                        }
+                    },
+                    {
+                        "name": "per_page",
+                        "in": "query",
+                        "description": "Количество элементов на странице",
+                        "schema": {
+                            "type": "integer",
+                            "example": 50
+                        }
+                    },
+                    {
+                        "name": "parent",
+                        "in": "query",
+                        "description": "ID родительской категории (0 = корень)",
+                        "schema": {
+                            "type": "integer",
+                            "example": 0
+                        }
+                    },
+                    {
+                        "name": "depth",
+                        "in": "query",
+                        "description": "Глубина вложенности children (0 = только уровень parent)",
+                        "schema": {
+                            "type": "integer",
+                            "example": 1
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Успешный ответ",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "results": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/components/schemas/MsCategoryResource"
+                                            }
+                                        },
+                                        "pagination": {
+                                            "required": [
+                                                "page",
+                                                "per_page",
+                                                "pages",
+                                                "total"
+                                            ],
+                                            "properties": {
+                                                "page": {
+                                                    "type": "integer",
+                                                    "example": 1
+                                                },
+                                                "per_page": {
+                                                    "type": "integer",
+                                                    "example": 50
+                                                },
+                                                "pages": {
+                                                    "type": "integer",
+                                                    "example": 10
+                                                },
+                                                "total": {
+                                                    "type": "integer",
+                                                    "example": 480
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/categories/{id}": {
+            "get": {
+                "tags": [
+                    "Categories"
+                ],
+                "summary": "Категория",
+                "description": "Возвращает категорию с родителем и детьми",
+                "operationId": "486849467f411ec5e4bdf111f50ede87",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "description": "ID категории",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "example": 1
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Успешный ответ",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/MsCategoryResource"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Категория не найдена",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "error": {
+                                            "type": "string",
+                                            "example": "Not found"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/categories/{id}/options": {
+            "get": {
+                "tags": [
+                    "Categories"
+                ],
+                "summary": "Фасеты категории",
+                "description": "Агрегированные характеристики товаров категории (включая вложенные категории)",
+                "operationId": "4f0133865b5a1d3aacc0d199bfaf5699",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "example": 22214
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object"
+                                },
+                                "example": {
+                                    "success": true,
+                                    "data": {
+                                        "category": {
+                                            "id": 22214,
+                                            "pagetitle": "Розетки",
+                                            "total_products": 2353
+                                        },
+                                        "options": [
+                                            {
+                                                "key": "cvet",
+                                                "caption_ru": "Цвет",
+                                                "caption_kz": "Түсі",
+                                                "type": "string",
+                                                "values": [
+                                                    {
+                                                        "value_ru": "чёрный",
+                                                        "value_kz": "қара",
+                                                        "products_count": 198
+                                                    },
+                                                    {
+                                                        "value_ru": "белый",
+                                                        "value_kz": "ақ",
+                                                        "products_count": 412
+                                                    }
+                                                ]
+                                            },
+                                            {
+                                                "key": "kolichestvo_razyemov",
+                                                "caption_ru": "Количество разъёмов",
+                                                "caption_kz": "Ағытпалар саны",
+                                                "type": "number",
+                                                "unit": "шт",
+                                                "min": 1,
+                                                "max": 7,
+                                                "values": [
+                                                    {
+                                                        "value_ru": 1,
+                                                        "value_kz": null,
+                                                        "products_count": 1422
+                                                    }
+                                                ]
+                                            }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object"
+                                },
+                                "example": {
+                                    "error": "Not found"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/categories/options": {
+            "get": {
+                "tags": [
+                    "Categories"
+                ],
+                "summary": "Фасеты категории по pagetitle",
+                "description": "Возвращает агрегированные характеристики товаров категории (включая вложенные категории). Поиск категории выполняется по pagetitle.",
+                "operationId": "1df8491e3afff5f4ed00d3add1ebed07",
+                "parameters": [
+                    {
+                        "name": "pagetitle",
+                        "in": "query",
+                        "description": "Название категории (pagetitle)",
+                        "required": true,
+                        "schema": {
+                            "type": "string",
+                            "example": "Розетки"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "success": {
+                                            "type": "boolean",
+                                            "example": true
+                                        },
+                                        "data": {
+                                            "properties": {
+                                                "category": {
+                                                    "properties": {
+                                                        "id": {
+                                                            "type": "integer",
+                                                            "example": 22214
+                                                        },
+                                                        "pagetitle": {
+                                                            "type": "string",
+                                                            "example": "Розетки"
+                                                        },
+                                                        "total_products": {
+                                                            "type": "integer",
+                                                            "example": 2353
+                                                        }
+                                                    },
+                                                    "type": "object"
+                                                },
+                                                "options": {
+                                                    "type": "array",
+                                                    "items": {
+                                                        "properties": {
+                                                            "key": {
+                                                                "type": "string",
+                                                                "example": "cvet"
+                                                            },
+                                                            "caption_ru": {
+                                                                "type": "string",
+                                                                "example": "Цвет"
+                                                            },
+                                                            "caption_kz": {
+                                                                "type": "string",
+                                                                "example": "Түсі"
+                                                            },
+                                                            "type": {
+                                                                "type": "string",
+                                                                "example": "string"
+                                                            },
+                                                            "unit": {
+                                                                "type": "string",
+                                                                "example": null,
+                                                                "nullable": true
+                                                            },
+                                                            "min": {
+                                                                "type": "number",
+                                                                "example": null,
+                                                                "nullable": true
+                                                            },
+                                                            "max": {
+                                                                "type": "number",
+                                                                "example": null,
+                                                                "nullable": true
+                                                            },
+                                                            "values": {
+                                                                "type": "array",
+                                                                "items": {
+                                                                    "properties": {
+                                                                        "value_ru": {
+                                                                            "type": "string",
+                                                                            "example": "чёрный"
+                                                                        },
+                                                                        "value_kz": {
+                                                                            "type": "string",
+                                                                            "example": "қара"
+                                                                        },
+                                                                        "products_count": {
+                                                                            "type": "integer",
+                                                                            "example": 198
+                                                                        }
+                                                                    },
+                                                                    "type": "object"
+                                                                }
+                                                            }
+                                                        },
+                                                        "type": "object"
+                                                    }
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Not found",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "error": {
+                                            "type": "string",
+                                            "example": "Not found"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    },
+                    "422": {
+                        "description": "Validation error",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "error": {
+                                            "type": "string",
+                                            "example": "pagetitle required"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/products": {
+            "get": {
+                "tags": [
+                    "Products"
+                ],
+                "summary": "Список товаров",
+                "description": "Возвращает постраничный список товаров с фильтрацией и поиском",
+                "operationId": "080f057905dc32d2f11065d606dc4cd6",
+                "parameters": [
+                    {
+                        "name": "page",
+                        "in": "query",
+                        "description": "Номер страницы",
+                        "schema": {
+                            "type": "integer",
+                            "example": 1
+                        }
+                    },
+                    {
+                        "name": "per_page",
+                        "in": "query",
+                        "description": "Количество товаров на странице",
+                        "schema": {
+                            "type": "integer",
+                            "example": 50
+                        }
+                    },
+                    {
+                        "name": "query",
+                        "in": "query",
+                        "description": "Поиск по названию, длинному названию, описанию и контенту товара",
+                        "schema": {
+                            "type": "string",
+                            "example": ""
+                        }
+                    },
+                    {
+                        "name": "pagetitle",
+                        "in": "query",
+                        "description": "Поиск по названию (точное совпадение)",
+                        "schema": {
+                            "type": "string",
+                            "example": ""
+                        }
+                    },
+                    {
+                        "name": "article",
+                        "in": "query",
+                        "description": "Поиск по артикулу (точное совпадение)",
+                        "schema": {
+                            "type": "string",
+                            "example": ""
+                        }
+                    },
+                    {
+                        "name": "category",
+                        "in": "query",
+                        "description": "Фильтр по категории товара (pagetitle родительского ресурса)",
+                        "schema": {
+                            "type": "string",
+                            "example": ""
+                        }
+                    },
+                    {
+                        "name": "min_price",
+                        "in": "query",
+                        "description": "Минимальная цена",
+                        "schema": {
+                            "type": "number",
+                            "format": "float",
+                            "example": 100
+                        }
+                    },
+                    {
+                        "name": "max_price",
+                        "in": "query",
+                        "description": "Максимальная цена",
+                        "schema": {
+                            "type": "number",
+                            "format": "float",
+                            "example": 5000
+                        }
+                    },
+                    {
+                        "name": "options[brend__brend][]",
+                        "in": "query",
+                        "description": "Фильтр по бренду. Таким способом можно фильтровать по любой опции",
+                        "style": "form",
+                        "schema": {
+                            "type": "string",
+                            "example": ""
+                        }
+                    },
+                    {
+                        "name": "options[identifikator_sayta__sayt_identifikatory][]",
+                        "in": "query",
+                        "description": "Фильтр по идентификатору сайта. Таким способом можно фильтровать по любой опции",
+                        "style": "form",
+                        "schema": {
+                            "type": "string",
+                            "example": ""
+                        }
+                    },
+                    {
+                        "name": "options[cvetovaya_temperatura__k__tүs_temperaturasy__k][]",
+                        "in": "query",
+                        "description": "Фильтр по цветовой температуре. Таким способом можно фильтровать по любой опции",
+                        "style": "form",
+                        "schema": {
+                            "type": "string",
+                            "example": ""
+                        }
+                    },
+                    {
+                        "name": "options[][value]",
+                        "in": "query",
+                        "description": "Фильтр по любой опции товара. Пример: options[color][]=red&options[size][]=M",
+                        "style": "form",
+                        "schema": {
+                            "type": "string",
+                            "example": ""
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Успешный ответ",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "results": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/components/schemas/MsProductResource"
+                                            }
+                                        },
+                                        "pagination": {
+                                            "required": [
+                                                "page",
+                                                "per_page",
+                                                "pages",
+                                                "total"
+                                            ],
+                                            "properties": {
+                                                "page": {
+                                                    "type": "integer",
+                                                    "example": 1
+                                                },
+                                                "per_page": {
+                                                    "type": "integer",
+                                                    "example": 50
+                                                },
+                                                "pages": {
+                                                    "type": "integer",
+                                                    "example": 10
+                                                },
+                                                "total": {
+                                                    "type": "integer",
+                                                    "example": 480
+                                                }
+                                            },
+                                            "type": "object"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        },
+        "/products/{id}": {
+            "get": {
+                "tags": [
+                    "Products"
+                ],
+                "summary": "Карточка товара",
+                "description": "Возвращает детальную информацию о товаре",
+                "operationId": "b5099368868dbe7900acd129345eb148",
+                "parameters": [
+                    {
+                        "name": "id",
+                        "in": "path",
+                        "description": "ID товара",
+                        "required": true,
+                        "schema": {
+                            "type": "integer",
+                            "example": 1
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Успешный ответ",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/MsProductResource"
+                                }
+                            }
+                        }
+                    },
+                    "404": {
+                        "description": "Товар не найден",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "properties": {
+                                        "error": {
+                                            "type": "string",
+                                            "example": "Not found"
+                                        }
+                                    },
+                                    "type": "object"
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [
+                    {
+                        "bearerAuth": []
+                    }
+                ]
+            }
+        }
+    },
+    "components": {
+        "schemas": {
+            "MsCategoryResource": {
+                "title": "Категория",
+                "required": [
+                    "id",
+                    "pagetitle",
+                    "alias",
+                    "parent"
+                ],
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "example": 1
+                    },
+                    "pagetitle": {
+                        "type": "string",
+                        "example": "Освещение"
+                    },
+                    "alias": {
+                        "type": "string",
+                        "example": "osveshchenie"
+                    },
+                    "parent": {
+                        "type": "integer",
+                        "example": 0
+                    },
+                    "parent_pagetitle": {
+                        "type": "string",
+                        "example": "Каталог"
+                    },
+                    "level": {
+                        "type": "integer",
+                        "example": 1
+                    },
+                    "url": {
+                        "type": "string",
+                        "example": "https://site.com/catalog/osveshchenie"
+                    },
+                    "children": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/MsCategoryShortResource"
+                        }
+                    }
+                },
+                "type": "object"
+            },
+            "MsCategoryShortResource": {
+                "title": "Категория",
+                "required": [
+                    "id",
+                    "pagetitle",
+                    "alias",
+                    "parent"
+                ],
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "example": 1
+                    },
+                    "pagetitle": {
+                        "type": "string",
+                        "example": "Освещение"
+                    },
+                    "alias": {
+                        "type": "string",
+                        "example": "osveshchenie"
+                    },
+                    "parent": {
+                        "type": "integer",
+                        "example": 0
+                    },
+                    "level": {
+                        "type": "integer",
+                        "example": 1
+                    },
+                    "url": {
+                        "type": "string",
+                        "example": "https://site.com/catalog/osveshchenie"
+                    },
+                    "children": {
+                        "type": "array",
+                        "items": {
+                            "$ref": "#/components/schemas/MsCategoryShortResource"
+                        }
+                    }
+                },
+                "type": "object"
+            },
+            "MsProductResource": {
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "example": 1
+                    },
+                    "pagetitle": {
+                        "type": "string",
+                        "example": "Товар"
+                    },
+                    "parent": {
+                        "type": "integer",
+                        "example": 0
+                    },
+                    "category": {
+                        "properties": {
+                            "id": {
+                                "type": "integer",
+                                "example": 2
+                            },
+                            "pagetitle": {
+                                "type": "string",
+                                "example": "Категория"
+                            }
+                        },
+                        "type": "object"
+                    },
+                    "alias": {
+                        "type": "string",
+                        "example": "product-alias"
+                    },
+                    "url": {
+                        "type": "string",
+                        "example": "url"
+                    },
+                    "article": {
+                        "type": "string",
+                        "example": "ART-001",
+                        "nullable": true
+                    },
+                    "price": {
+                        "type": "number",
+                        "format": "float",
+                        "example": 1999.99
+                    },
+                    "old_price": {
+                        "type": "number",
+                        "format": "float",
+                        "example": 2499.99,
+                        "nullable": true
+                    },
+                    "vendor": {
+                        "type": "string",
+                        "example": "Nike"
+                    },
+                    "image": {
+                        "type": "string",
+                        "example": "https://220volt.kz/images/product.jpg",
+                        "nullable": true
+                    },
+                    "weight": {
+                        "type": "number",
+                        "format": "float",
+                        "example": 1.2,
+                        "nullable": true
+                    },
+                    "size": {
+                        "type": "string",
+                        "example": "XL",
+                        "nullable": true
+                    },
+                    "new": {
+                        "type": "boolean",
+                        "example": true
+                    },
+                    "popular": {
+                        "type": "boolean",
+                        "example": false
+                    },
+                    "favorite": {
+                        "type": "boolean",
+                        "example": false
+                    },
+                    "amount": {
+                        "type": "integer",
+                        "example": 15
+                    },
+                    "content": {
+                        "type": "string",
+                        "example": "Описание товара"
+                    },
+                    "files": {
+                        "description": "Список файлов товара",
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "example": "https://220volt.kz/product_docs/file.pdf"
+                        }
+                    },
+                    "warehouses": {
+                        "description": "Остатки товара по складам",
+                        "type": "array",
+                        "items": {
+                            "required": [
+                                "city",
+                                "amount"
+                            ],
+                            "properties": {
+                                "city": {
+                                    "description": "Название города",
+                                    "type": "string",
+                                    "example": "Караганда"
+                                },
+                                "amount": {
+                                    "description": "Количество товара на складе",
+                                    "type": "integer",
+                                    "example": 60
+                                }
+                            },
+                            "type": "object"
+                        }
+                    },
+                    "options": {
+                        "type": "array",
+                        "items": {
+                            "required": [
+                                "key",
+                                "caption",
+                                "value"
+                            ],
+                            "properties": {
+                                "key": {
+                                    "type": "string",
+                                    "example": "color"
+                                },
+                                "caption_ru": {
+                                    "type": "string",
+                                    "example": "Цвет"
+                                },
+                                "caption_kz": {
+                                    "type": "string",
+                                    "example": "Түсі"
+                                },
+                                "value_ru": {
+                                    "type": "string",
+                                    "example": "Красный"
+                                },
+                                "value_kz": {
+                                    "type": "string",
+                                    "example": "Қызыл"
+                                }
+                            },
+                            "type": "object"
+                        }
+                    }
+                },
+                "type": "object"
+            },
+            "MsProductShortResource": {
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "example": 1
+                    },
+                    "pagetitle": {
+                        "type": "string",
+                        "example": "Товар"
+                    },
+                    "parent": {
+                        "type": "integer",
+                        "example": 0
+                    },
+                    "alias": {
+                        "type": "string",
+                        "example": "product-alias"
+                    },
+                    "url": {
+                        "type": "string",
+                        "example": "url"
+                    },
+                    "article": {
+                        "type": "string",
+                        "example": "ART-001",
+                        "nullable": true
+                    },
+                    "price": {
+                        "type": "number",
+                        "format": "float",
+                        "example": 1999.99
+                    },
+                    "old_price": {
+                        "type": "number",
+                        "format": "float",
+                        "example": 2499.99,
+                        "nullable": true
+                    },
+                    "vendor": {
+                        "type": "string",
+                        "example": "Nike"
+                    },
+                    "image": {
+                        "type": "string",
+                        "example": "https://220volt.kz/images/product.jpg",
+                        "nullable": true
+                    },
+                    "weight": {
+                        "type": "number",
+                        "format": "float",
+                        "example": 1.2,
+                        "nullable": true
+                    },
+                    "size": {
+                        "type": "string",
+                        "example": "XL",
+                        "nullable": true
+                    },
+                    "new": {
+                        "type": "boolean",
+                        "example": true
+                    },
+                    "popular": {
+                        "type": "boolean",
+                        "example": false
+                    },
+                    "favorite": {
+                        "type": "boolean",
+                        "example": false
+                    },
+                    "amount": {
+                        "type": "integer",
+                        "example": 15
+                    }
+                },
+                "type": "object"
+            }
+        },
+        "securitySchemes": {
+            "bearerAuth": {
+                "type": "http",
+                "bearerFormat": "API Token",
+                "scheme": "bearer"
+            }
+        }
+    },
+    "tags": [
+        {
+            "name": "Products",
+            "description": "Товары"
+        },
+        {
+            "name": "Categories",
+            "description": "Категории"
+        }
+    ]
+}
