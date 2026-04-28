@@ -57,6 +57,7 @@ export type Database = {
           google_api_key: string | null
           id: string
           openrouter_api_key: string | null
+          resolver_thresholds_json: Json
           system_prompt: string | null
           updated_at: string
           volt220_api_token: string | null
@@ -70,6 +71,7 @@ export type Database = {
           google_api_key?: string | null
           id?: string
           openrouter_api_key?: string | null
+          resolver_thresholds_json?: Json
           system_prompt?: string | null
           updated_at?: string
           volt220_api_token?: string | null
@@ -83,6 +85,7 @@ export type Database = {
           google_api_key?: string | null
           id?: string
           openrouter_api_key?: string | null
+          resolver_thresholds_json?: Json
           system_prompt?: string | null
           updated_at?: string
           volt220_api_token?: string | null
