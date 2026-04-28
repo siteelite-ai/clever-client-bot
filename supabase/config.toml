@@ -3,6 +3,12 @@ project_id = "yngoixmvmxdfxokuafjp"
 [functions.chat-consultant]
 verify_jwt = false
 
+[functions.chat-consultant-v2]
+verify_jwt = false
+
+[functions.widget-config]
+verify_jwt = false
+
 [functions.search-products]
 verify_jwt = false
 

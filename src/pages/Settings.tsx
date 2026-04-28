@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Save, Key, Zap, Eye, EyeOff, Loader2, Wifi, WifiOff, Plus, X, RefreshCw } from 'lucide-react';
+import { Save, Key, Zap, Eye, EyeOff, Loader2, Wifi, WifiOff, Plus, X, RefreshCw, GitBranch, AlertTriangle } from 'lucide-react';
 import { AdminLayout } from '@/components/layout/AdminLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,6 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
+
+type PipelineVersion = 'v1' | 'v2';
 
 interface AppSettings {
   id: string;
@@ -91,6 +93,11 @@ export default function Settings() {
   const [classifierProvider, setClassifierProvider] = useState<ClassifierProvider>('auto');
   const [classifierModel, setClassifierModel] = useState('gemini-2.5-flash-lite');
 
+  // V1 vs V2 pipeline toggle (manual switch, no auto-fallback).
+  // Saved separately from the big "Save settings" so admins can flip back fast.
+  const [activePipeline, setActivePipeline] = useState<PipelineVersion>('v1');
+  const [pipelineSaving, setPipelineSaving] = useState(false);
+
   useEffect(() => {
     fetchSettings();
   }, []);
@@ -125,6 +132,7 @@ export default function Settings() {
         setSelectedModel(d.ai_model || 'qwen/qwen3.6-plus:free');
         setClassifierProvider((d.classifier_provider as ClassifierProvider) || 'auto');
         setClassifierModel(d.classifier_model || 'gemini-2.5-flash-lite');
+        setActivePipeline((d.active_pipeline === 'v2' ? 'v2' : 'v1') as PipelineVersion);
       }
     } catch (error) {
       console.error('Error fetching settings:', error);
@@ -162,6 +170,31 @@ export default function Settings() {
     }
   };
 
+  // Switch active pipeline (V1 ↔ V2). Saves immediately, independently of the
+  // big "Save settings" button — so admins can flip back to V1 in one click
+  // if V2 misbehaves.
+  const handlePipelineSwitch = async (next: PipelineVersion) => {
+    if (!settings?.id || next === activePipeline) return;
+    setPipelineSaving(true);
+    try {
+      const { error } = await supabase
+        .from('app_settings')
+        .update({ active_pipeline: next } as any)
+        .eq('id', settings.id);
+      if (error) throw error;
+      setActivePipeline(next);
+      toast.success(
+        next === 'v2'
+          ? 'Активирован пайплайн V2 (новая спецификация)'
+          : 'Активирован пайплайн V1 (стабильная версия)',
+      );
+    } catch (e) {
+      console.error('Pipeline switch failed:', e);
+      toast.error('Не удалось переключить пайплайн');
+    } finally {
+      setPipelineSaving(false);
+    }
+  };
   // Ping a single model via OpenRouter
   const pingModel = async (modelId: string) => {
     if (!openrouterKey) {
@@ -322,7 +355,94 @@ export default function Settings() {
         </div>
 
         <div className="max-w-2xl space-y-6">
-          {/* API Settings */}
+          {/* Pipeline V1/V2 toggle — manual, no auto-fallback */}
+          <div className="admin-card space-y-4">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div className="flex items-center gap-2">
+                <GitBranch className="w-5 h-5 text-primary" />
+                <h3 className="text-lg font-semibold">Активная версия пайплайна</h3>
+              </div>
+              <Badge
+                variant={activePipeline === 'v2' ? 'default' : 'secondary'}
+                className="text-xs"
+              >
+                Сейчас: {activePipeline.toUpperCase()}
+              </Badge>
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Это две полностью независимые edge-функции. Переключение мгновенное
+              для всех новых сессий виджета. Уже открытые чаты доигрывают на старой
+              версии. Никакого авто-переключения и авто-фоллбэка нет — если V2
+              ведёт себя плохо, переключите обратно на V1 одним кликом.
+            </p>
+
+            <RadioGroup
+              value={activePipeline}
+              onValueChange={(v) => handlePipelineSwitch(v as PipelineVersion)}
+              className="space-y-2"
+            >
+              <label
+                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                  activePipeline === 'v1'
+                    ? 'border-primary bg-primary/5'
+                    : 'border-border hover:border-primary/30'
+                } ${pipelineSaving ? 'opacity-60 pointer-events-none' : ''}`}
+              >
+                <RadioGroupItem value="v1" className="mt-0.5" disabled={pipelineSaving} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium text-sm">V1 — стабильная</span>
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">legacy</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Текущая боевая ветка <code className="font-mono">chat-consultant</code>.
+                    Не меняется. Используйте, пока V2 в разработке.
+                  </p>
+                </div>
+              </label>
+
+              <label
+                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                  activePipeline === 'v2'
+                    ? 'border-primary bg-primary/5'
+                    : 'border-border hover:border-primary/30'
+                } ${pipelineSaving ? 'opacity-60 pointer-events-none' : ''}`}
+              >
+                <RadioGroupItem value="v2" className="mt-0.5" disabled={pipelineSaving} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium text-sm">V2 — по новой спецификации</span>
+                    <Badge variant="default" className="text-[10px] px-1.5 py-0">beta</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Новая ветка <code className="font-mono">chat-consultant-v2</code>:
+                    Category Resolver, Query Expansion, Strict Search Multi-Attempt,
+                    Word-Boundary Filter. Реализуется поэтапно.
+                  </p>
+                </div>
+              </label>
+            </RadioGroup>
+
+            {activePipeline === 'v2' && (
+              <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
+                <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                <p className="text-xs text-amber-200">
+                  V2 сейчас в разработке (этап A — каркас). Виджет будет отвечать
+                  заглушкой, пока не подключены этапы B–E. Для боевого использования
+                  переключитесь на V1.
+                </p>
+              </div>
+            )}
+
+            {pipelineSaving && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Применяется…
+              </div>
+            )}
+          </div>
+
           <div className="admin-card space-y-6">
             <div className="flex items-center gap-2">
               <Key className="w-5 h-5 text-primary" />

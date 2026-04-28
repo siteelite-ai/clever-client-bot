@@ -11,6 +11,31 @@ interface ChatWidgetProps {
 const SUPABASE_URL = "https://yngoixmvmxdfxokuafjp.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InluZ29peG12bXhkZnhva3VhZmpwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk2MTg0MzQsImV4cCI6MjA4NTE5NDQzNH0.bJTllxYOlRBqmnKqMAH21OkTBvXjqW4AaBLHz2fK2lQ";
 
+// V1 vs V2 routing — endpoint is resolved once at widget mount via widget-config.
+// V1 (chat-consultant) is the legacy frozen pipeline; V2 (chat-consultant-v2)
+// is the new spec implementation. Switching is admin-only, manual, no auto-fallback.
+type PipelineVersion = 'v1' | 'v2';
+const ENDPOINT_BY_PIPELINE: Record<PipelineVersion, string> = {
+  v1: `${SUPABASE_URL}/functions/v1/chat-consultant`,
+  v2: `${SUPABASE_URL}/functions/v1/chat-consultant-v2`,
+};
+
+async function resolvePipelineEndpoint(): Promise<{ pipeline: PipelineVersion; url: string }> {
+  try {
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/widget-config`, {
+      headers: { 'apikey': SUPABASE_ANON_KEY },
+    });
+    if (r.ok) {
+      const j = await r.json();
+      const pipeline: PipelineVersion = j?.active_pipeline === 'v2' ? 'v2' : 'v1';
+      return { pipeline, url: ENDPOINT_BY_PIPELINE[pipeline] };
+    }
+  } catch (e) {
+    console.warn('[Widget] widget-config fetch failed, defaulting to v1', e);
+  }
+  return { pipeline: 'v1', url: ENDPOINT_BY_PIPELINE.v1 };
+}
+
 type Msg = { role: 'user' | 'assistant'; content: string };
 
 // Thinking phrases for perceived latency reduction
@@ -59,6 +84,7 @@ async function streamChat({
   onQuickReplies,
   conversationId,
   dialogSlots,
+  endpointUrl,
 }: {
   messages: Msg[];
   onDelta: (deltaText: string) => void;
@@ -69,6 +95,7 @@ async function streamChat({
   onQuickReplies?: (replies: QuickReply[]) => void;
   conversationId: string;
   dialogSlots: DialogSlots;
+  endpointUrl: string;
 }) {
   try {
     // Clean: only send pending slots, max 3
@@ -81,7 +108,7 @@ async function streamChat({
       }
     }
 
-    const resp = await fetch(`${SUPABASE_URL}/functions/v1/chat-consultant`, {
+    const resp = await fetch(endpointUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -229,6 +256,23 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
   // can show a pressed state while all others are visibly disabled.
   const [pendingQuickReply, setPendingQuickReply] = useState<string | null>(null);
 
+  // Active pipeline endpoint, resolved at mount via widget-config.
+  // Default to v1 so the widget works even if the config call is delayed.
+  const [endpoint, setEndpoint] = useState<{ pipeline: PipelineVersion; url: string }>({
+    pipeline: 'v1',
+    url: ENDPOINT_BY_PIPELINE.v1,
+  });
+  useEffect(() => {
+    let cancelled = false;
+    resolvePipelineEndpoint().then((resolved) => {
+      if (!cancelled) {
+        setEndpoint(resolved);
+        console.log(`[Widget] active pipeline = ${resolved.pipeline}`);
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
+
   const handleSend = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
     if (!text || isLoading || sendingRef.current) return;
@@ -337,11 +381,12 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     };
 
     // Fire API request immediately (in parallel with animation)
-    console.log('[Widget] Sending dialogSlots:', JSON.stringify(dialogSlots));
+    console.log(`[Widget] Sending via ${endpoint.pipeline} dialogSlots:`, JSON.stringify(dialogSlots));
     const streamPromise = streamChat({
       messages: apiMessages,
       conversationId: conversationIdRef.current,
       dialogSlots,
+      endpointUrl: endpoint.url,
       onDelta: updateAssistant,
       onSlotUpdate: (updatedSlots) => {
         console.log('[Widget] Received slot_update:', JSON.stringify(updatedSlots));
@@ -430,7 +475,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
     // Wait for stream to complete
     await streamPromise;
-  }, [input, isLoading, messages, dialogSlots]);
+  }, [input, isLoading, messages, dialogSlots, endpoint]);
 
   const handleQuickReply = useCallback((value: string) => {
     // Re-entrancy guard: ignore clicks while a request is in flight. The ref

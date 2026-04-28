@@ -49,6 +49,7 @@ export type Database = {
       }
       app_settings: {
         Row: {
+          active_pipeline: string
           ai_model: string
           ai_provider: string
           classifier_model: string
@@ -61,6 +62,7 @@ export type Database = {
           volt220_api_token: string | null
         }
         Insert: {
+          active_pipeline?: string
           ai_model?: string
           ai_provider?: string
           classifier_model?: string
@@ -73,6 +75,7 @@ export type Database = {
           volt220_api_token?: string | null
         }
         Update: {
+          active_pipeline?: string
           ai_model?: string
           ai_provider?: string
           classifier_model?: string

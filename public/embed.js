@@ -11,7 +11,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = '2026-04-23-idempotency';
+  var WIDGET_VERSION = '2026-04-28-pipeline-router';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -19,8 +19,38 @@
     supabaseUrl: 'https://supabase-proxy.bold-dawn-058f.workers.dev',
     supabaseKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InluZ29peG12bXhkZnhva3VhZmpwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk2MTg0MzQsImV4cCI6MjA4NTE5NDQzNH0.bJTllxYOlRBqmnKqMAH21OkTBvXjqW4AaBLHz2fK2lQ',
     primaryColor: '#F5A623',
-    logo: 'https://clever-client-bot.lovable.app/logo-220volt-widget.svg'
+    logo: 'https://clever-client-bot.lovable.app/logo-220volt-widget.svg',
+    // Direct origin used both for widget-config (no proxy) and as a streaming target.
+    directOrigin: 'https://yngoixmvmxdfxokuafjp.supabase.co'
   };
+
+  // V1 vs V2 pipeline routing.
+  // - 'v1' → POST /functions/v1/chat-consultant      (legacy, frozen)
+  // - 'v2' → POST /functions/v1/chat-consultant-v2   (new spec impl)
+  // Resolved once at widget init via /functions/v1/widget-config.
+  // Manual admin toggle in /settings; no auto/canary/fallback.
+  var activePipeline = 'v1';
+  function pipelinePath() {
+    return activePipeline === 'v2' ? '/functions/v1/chat-consultant-v2' : '/functions/v1/chat-consultant';
+  }
+  function fetchActivePipeline() {
+    try {
+      return fetch(CONFIG.directOrigin + '/functions/v1/widget-config', {
+        headers: { 'apikey': CONFIG.supabaseKey }
+      }).then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(j) {
+          if (j && j.active_pipeline === 'v2') activePipeline = 'v2';
+          else activePipeline = 'v1';
+          try { console.info('[Widget] active pipeline = ' + activePipeline); } catch(e) {}
+        })
+        .catch(function() { activePipeline = 'v1'; });
+    } catch(e) {
+      activePipeline = 'v1';
+      return Promise.resolve();
+    }
+  }
+  // Fire on load; widget can already accept clicks while this resolves (defaults to v1).
+  fetchActivePipeline();
 
   // Initial greeting message
   const initialGreeting = 'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?';
@@ -673,7 +703,7 @@
   // Try streaming from a single endpoint, updating msgEl progressively
   // onFirstToken is called when the first token arrives (to hide typing indicator)
   async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken) {
-    var url = baseUrl + '/functions/v1/chat-consultant';
+    var url = baseUrl + pipelinePath();
     var controller = new AbortController();
     var timer = setTimeout(function() { controller.abort(); }, 90000);
 
@@ -834,7 +864,7 @@
 
   // Fallback: non-streaming fetch
   async function tryNonStreamEndpoint(baseUrl, message, label) {
-    var url = baseUrl + '/functions/v1/chat-consultant';
+    var url = baseUrl + pipelinePath();
     var controller = new AbortController();
     var timer = setTimeout(function() { controller.abort(); }, 60000);
 
