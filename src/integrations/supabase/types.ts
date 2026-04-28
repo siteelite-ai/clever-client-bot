@@ -137,6 +137,27 @@ export type Database = {
         }
         Relationships: []
       }
+      classifier_cache: {
+        Row: {
+          created_at: string
+          expires_at: string
+          intent: Json
+          query_hash: string
+        }
+        Insert: {
+          created_at?: string
+          expires_at?: string
+          intent: Json
+          query_hash: string
+        }
+        Update: {
+          created_at?: string
+          expires_at?: string
+          intent?: Json
+          query_hash?: string
+        }
+        Relationships: []
+      }
       knowledge_chunks: {
         Row: {
           chunk_index: number
