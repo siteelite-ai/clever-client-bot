@@ -722,8 +722,9 @@ function composeClarify(
   const parts: string[] = [totalText];
 
   if (slot && slot.options.length > 0) {
-    // pending_modifiers[0] = UI-caption фасета (контракт s-price).
-    const facetCaption = slot.pending_modifiers[0]?.trim() || "";
+    // metadata.facetCaption — UI-имя фасета (контракт s-price.buildClarifySlot).
+    const meta = (slot.metadata ?? {}) as { facetCaption?: string };
+    const facetCaption = (meta.facetCaption ?? "").toString().trim();
     const ask = facetCaption
       ? `Уточните, пожалуйста — *${facetCaption}*:`
       : `Уточните параметры:`;
