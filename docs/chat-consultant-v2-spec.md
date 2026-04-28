@@ -1681,7 +1681,7 @@ interface EscalationPayload {
 
 ---
 
-## 25. Golden Test Suite (64 кейса)
+## 25. Golden Test Suite (70 кейсов)
 
 Файл: `tests/golden/chat-v2.json`. Прогон при каждом PR через `bun test tests/golden`.
 
@@ -1721,12 +1721,32 @@ interface GoldenCase {
 | 12 | Формат markdown | 3 | проверка строгого `**[Name](URL)** — *price* ₸, brand` |
 | 13 | Soft 404 / fallback | 2 | категория есть, фильтры дают 0 → альтернативы |
 | 14 | Progressive Feedback | 4 | TC-61: SKU-запрос → `thinking seq=1` с intent=`sku_lookup` приходит в течение 600 ms; TC-62: быстрый ответ <400 ms → ни одного `thinking` event; TC-63: pipeline >3 s → приходит `thinking seq=2` (long-wait); TC-64: thinking-сообщения не попадают в `conversation_history` следующего turn'а |
+| 15 | Category Resolver & Facet Matcher | 6 | TC-69…TC-74 — см. §25.3 |
 
 ### 25.2 Критерии прохождения
 
 - ≥ 95 % кейсов проходят полностью.
-- 0 кейсов категорий 11 и 12 могут провалиться (формат — критичен).
+- 0 кейсов категорий 11, 12 и 15 могут провалиться (формат и матчинг — критичны).
 - p50 latency на golden set ≤ SLO.
+
+### 25.3 Кейсы Category Resolver и Facet Matcher (TC-69 — TC-74)
+
+Покрывают системные инварианты §6.1 [6a.1–6a.4], §9.2a, §9.3, §11.2a и §13.1.
+
+| ID | Запрос | Ожидаемый Resolver | Ожидаемый Matcher | Ожидаемый Composer / Slot | Что проверяется |
+|---|---|---|---|---|---|
+| TC-69 | «найди чёрные двугнёздные розетки» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[{цвет:"чёрный"}, {кол-во гнёзд:"2"}]`, `unresolved=[]`, `soft_matches=[{trait:"двугнёздные",reason:"numeric_equivalent",value:"2"}]` | Composer показывает товары + строка «Точного "двугнёздные" нет, использовал ближайшее: 2». Поиск выполнен один раз, без `query=`. | Полный happy-path: Resolver high-confidence, Matcher с числовым эквивалентом и soft_match. |
+| TC-70 | «графитовые розетки» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[]`, `unresolved=[{trait:"графитовые",nearest_facet_key:"cvet*",available_values:[…]}]` | FSM → `SLOT_AWAITING_CLARIFICATION`; `slot.pending_clarification` заполнен; в ответе **только** уточняющий вопрос со списком доступных цветов; **НИ ОДНОГО** товара. | Запрет поиска при unresolved, контракт §11.2a (pending_clarification). |
+| TC-71 | «двойные розетки белого цвета» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[{цвет:"белый"}, {кол-во гнёзд:"2"}]`, `soft_matches=[{trait:"двойные",value:"2",reason:"numeric_equivalent"}]` | Товары + строка о soft_match по «двойные». | Числовой эквивалент `двойная→2` + точный exact-match цвета. |
+| TC-72 | «розетка с двумя гнёздами и 16А» | `pagetitle="Розетки"`, `confidence ≥ 0.85` | `resolved=[{кол-во гнёзд:"2"}, {номинальный ток:"16"}]`, `unresolved=[]` | Товары без предупреждений. | Два независимых трейта: словесный→числовой и точный числовой. |
+| TC-73 | «двухполюсный автомат на 16» | `pagetitle="Автоматические выключатели"` (или эквивалент), `confidence ≥ 0.85` | `resolved=[{полюсность:"2"}, {номинальный ток:"16"}]` | Товары без предупреждений. | Resolver вне категории «розетки» + морфологический разбор «двухполюсный→2». |
+| TC-74 | property-based: 5 случайных синтетических трейтов на случайной категории; повторный прогон с подменой «ё↔е» и числовое слово↔цифра | — | Идемпотентный `resolved` (тот же набор `(facet_key,value)` на исходных и на нормализованных трейтах) | — | Стабильность Matcher к нормализации; защита от drift схемы. |
+
+Вспомогательные инварианты для всех TC-69…TC-74:
+
+- При `slot.pending_clarification ≠ null` ответ Composer **НЕ должен** содержать карточек товаров (см. §4.5, §11.2a).
+- При `slot.category.confidence < 0.4` Resolver обязан передать управление в Multi-bucket Fallback (§9.4); slot НЕ создаётся (см. И в §4.5).
+- Unresolved-трейт **НИКОГДА** не попадает в `?query=` строку Catalog API (см. §9.3, запрет на «query-pollution»).
 
 ---
 
@@ -1784,6 +1804,22 @@ interface GoldenCase {
 
 ## 28. Открытые вопросы
 
+### 28.1 Закрытые архитектурным решением (Apr 2026, Stage 1–4)
+
+Следующие вопросы окончательно решены редизайном search pipeline (§6.1, §9.2a, §9.3, §11.2a, §13.1) и больше не требуют обсуждения:
+
+| # | Вопрос | Финальное решение | Где зафиксировано |
+|---|---|---|---|
+| C-1 | Identity категории в интенте | **Pre-step Category Resolver** по flat-списку pagetitle с явным `confidence` (0..1). Multi-bucket — fallback при `confidence < 0.4`. | §6.1 [6a.1], §9.2a |
+| C-2 | Matcher характеристик (трейтов) | **LLM в один проход по полной OptionSchema выбранной категории** со строгим JSON-выходом `{resolved, soft_matches, unresolved}`. Embeddings и rules-only отвергнуты. | §9.3 |
+| C-3 | Fallback при unresolved facet | **Спросить уточнение** у пользователя со списком `available_values`. FSM-состояние `SLOT_AWAITING_CLARIFICATION`, поиск приостановлен до ответа. | §5, §11.2a, §13.1 |
+| C-4 | Соотношение Single-category и Multi-bucket | Single-category — основной путь; **Multi-bucket понижен до fallback** (§9.4) — срабатывает при `confidence < 0.4` или 0 resolved-фильтров на основной трейт. | §9.4 |
+| C-5 | Куда деваются неразрешённые трейты | **Никогда** не попадают в `?query=`. Либо `soft_matches` (с предупреждением Composer), либо `unresolved_traits` (с уточнением или открытым перечислением в ответе). Запрет на «query-pollution». | §9.3, §11.2a |
+| C-6 | Обработка опечаток / «ё↔е» / морфологии / RU↔KK / числовых эквивалентов | **Внутри Facet Matcher LLM** на основе схемы значений категории, а не через query string. | §9.3 |
+| C-7 | Источник схемы характеристик | `/api/categories/options?pagetitle=…` (full schema, без сэмплинга), legacy fallback — только при degraded payload. Кэш 1 ч. | §9A, mem://features/search-pipeline |
+
+### 28.2 Остаются открытыми (организационные / эксплуатационные)
+
 Решения нужны до старта реализации.
 
 | # | Вопрос | Варианты | Рекомендация |
@@ -1799,6 +1835,8 @@ interface GoldenCase {
 | 28.9 | Источник каталога thinking-фраз (§11A) | (a) хардкод в edge function; (b) `app_settings.thinking_phrases_json` | (b) — маркетинг редактирует без редеплоя |
 | 28.10 | Использовать `Product.warehouses[*].amount` для геолокационных ответов о наличии в городе пользователя? | (a) Да, приоритезировать склад из `client_context.city`; (b) Нет, показывать общий остаток | (a) — повышает релевантность ответа |
 | 28.11 | Зафиксировать `docs/external/220volt-swagger.json` как обязательный артефакт CI? | (a) только snapshot в репо; (b) drift-check в CI (раз в сутки сравнивать с live `/swagger.json`) | (b) — раннее обнаружение breaking changes |
+| 28.12 | Прогрев flat-списка категорий для Category Resolver | (a) лениво при первом запросе; (b) cron раз в час | (a) — TTL 1ч и так покрывает |
+| 28.13 | Confidence-пороги Category Resolver (0.4 / 0.7) | зашить в код / вынести в `app_settings.resolver_thresholds_json` | вынести — позволит тюнить по живой телеметрии без редеплоя |
 
 ---
 
