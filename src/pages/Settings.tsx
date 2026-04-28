@@ -132,6 +132,7 @@ export default function Settings() {
         setSelectedModel(d.ai_model || 'qwen/qwen3.6-plus:free');
         setClassifierProvider((d.classifier_provider as ClassifierProvider) || 'auto');
         setClassifierModel(d.classifier_model || 'gemini-2.5-flash-lite');
+        setActivePipeline((d.active_pipeline === 'v2' ? 'v2' : 'v1') as PipelineVersion);
       }
     } catch (error) {
       console.error('Error fetching settings:', error);
