@@ -798,6 +798,139 @@ interface UnresolvedTrait {
 
 ---
 
+## 9B. Facet Schema Dedup & Alias Collapse
+
+Раздел упоминается в §9.3 (*«полная схема facets … после dedup и alias-collapse §9B»*) и описывает обязательную нормализацию `OptionSchema`, выполняемую Facet Schema Loader (шаг 6a.2) до её передачи в Facet Matcher (LLM). Цель — сократить токеновое потребление LLM, устранить шум и защититься от дрейфа схемы со стороны 220volt.
+
+### 9B.1 Источник проблемы
+
+Каталог 220volt исторически содержит:
+
+- **Дубликаты ключей** с разным написанием: `brend__brend`, `Brand`, `Бренд` могут описывать один и тот же facet.
+- **Дубликаты значений**: `Schneider`, `schneider`, `Schneider Electric`, `Шнайдер`.
+- **Мусорные SEO-фасеты** с `count: 0` или `values.length > 200` (часто не релевантны для пользовательского выбора).
+- **Двойной envelope** `body.data.data` для `/categories/{id}/options` (см. §9A.3) — handled separately.
+
+Без нормализации Facet Matcher LLM получает схему на 30–50 % раздутую, что (а) повышает стоимость, (б) ухудшает качество матчинга (LLM путается между дубликатами).
+
+### 9B.2 Алгоритм
+
+Применяется к нормализованной `CategoryOptionsResponse.data.options[]` сразу после fetch, до записи в кэш `category_options`.
+
+```
+1. Канонизация ключа facet (key normalization):
+   - lowercase
+   - удалить дублирующие подстроки через `__` ("brend__brend" → "brend")
+   - применить статичный alias-словарь (см. 9B.3): { "brand": "brend", "бренд": "brend", ... }
+   - использовать каноничный key как идентификатор
+
+2. Слияние дубликатов (key merge):
+   - Для каждого канонического key: 
+     - объединить все values[] из всех исходных facets с этим key (set-union по value_ru, case-insensitive)
+     - выбрать caption_ru из первого исходного facet (или из alias_dict.preferred_caption, если задан)
+     - суммировать count[] по совпадающим values
+     - сохранить mapping original_keys[] → canonical_key для логов / алертов о drift'е API
+
+3. Канонизация значений (value normalization):
+   - normalize(v) = lowercase(NFKC(v.trim())).replace(/\s+/g, ' ')
+   - применить value-alias словарь (см. 9B.3) для известных пар ("schneider electric" → "Schneider")
+   - дедуплицировать values[] по нормализованной форме, сохраняя оригинальное value_ru первого вхождения
+
+4. Фильтрация мусорных фасетов (drop rules):
+   - drop, если values.length === 0
+   - drop, если ВСЕ values[].count === 0 (если count предоставлен API)
+   - drop, если values.length > MAX_VALUES_PER_FACET (default 200) — записать WARN в логи и метрику
+     `facet_schema_oversize_total{key}`; не падать, только отбрасывать
+
+5. Сортировка values[] по count DESC (если count есть), иначе по value_ru ASC.
+
+6. Возврат нормализованной OptionSchema. Лог `facet_schema_dedup_stats { 
+     category_pagetitle, 
+     before: { facets, values_total }, 
+     after:  { facets, values_total }, 
+     dropped_facets: string[], 
+     merged_keys: { canonical: string, sources: string[] }[]
+   }`.
+```
+
+### 9B.3 Alias-словари (хранение)
+
+```sql
+-- Расширение app_settings: jsonb-поле facet_aliases_json
+{
+  "key_aliases": {
+    "brand": "brend",
+    "бренд": "brend",
+    "brend__brend": "brend",
+    "color": "cvet",
+    "цвет": "cvet"
+  },
+  "value_aliases": {
+    "brend": {
+      "schneider electric": "Schneider",
+      "шнайдер": "Schneider",
+      "iek company": "IEK"
+    }
+  },
+  "preferred_captions": {
+    "brend": "Бренд",
+    "cvet": "Цвет",
+    "moshhnost": "Мощность, Вт"
+  },
+  "drop_facets": ["seo_keywords", "internal_tag"],
+  "max_values_per_facet": 200
+}
+```
+
+Hot-reload: edge читает `facet_aliases_json` тем же таймером, что и остальные `app_settings` (60 с).
+
+### 9B.4 Контракт нормализованной схемы
+
+Тип, отдаваемый Facet Schema Loader Facet Matcher'у:
+
+```ts
+interface NormalizedOptionSchema {
+  category: { id: number; pagetitle: string; total_products?: number };
+  options: Array<{
+    key: string;                      // canonical
+    caption_ru: string;
+    caption_kz?: string;
+    values: Array<{
+      value_ru: string;               // оригинальное (для inject в options[k][]=v URL)
+      value_kz?: string;
+      count?: number;
+    }>;
+    _source_keys: string[];           // diagnostic: какие исходные keys были слиты
+  }>;
+  _stats: {                            // для логов и метрик, не для LLM
+    facets_before: number;
+    facets_after: number;
+    values_before: number;
+    values_after: number;
+    dropped_facets: string[];
+  };
+}
+```
+
+Поля с префиксом `_` **исключаются** при сериализации схемы для prompt'а LLM (используются только для логов и трассировки).
+
+### 9B.5 Метрики (расширение §22.2)
+
+| Метрика | Тип | Описание |
+|---|---|---|
+| `facet_schema_dedup_compression_ratio{category}` | gauge | `values_after / values_before` — насколько ужалась схема |
+| `facet_schema_dropped_facets_total{key}` | counter | Сколько раз каждый ключ был отброшен (мониторинг drift API) |
+| `facet_schema_oversize_total{key}` | counter | Сколько раз facet был отброшен по `MAX_VALUES_PER_FACET` |
+| `facet_schema_alias_merged_total{canonical}` | counter | Сколько раз alias-merge сработал (мониторинг drift API) |
+
+### 9B.6 Инварианты
+
+- **B1.** Канонический `key` в нормализованной схеме всегда соответствует тому, что 220volt API принимает в `?options[k][]=v` (то есть после alias-collapse мы используем уже каноническую форму ИЛИ мапим обратно при формировании URL — выбирается реализацией; trace должен фиксировать оба значения).
+- **B2.** Никакая запись `value_ru` не теряется без логирования в `_stats.dropped_facets`.
+- **B3.** `count: 0` не передаётся в Facet Matcher (избегаем «фантомных» значений в LLM-prompt).
+
+---
+
 ## 9A. Контракты Catalog API (220volt)
 
 Раздел фиксирует **точные** структуры запросов/ответов реального API. Эталон — `docs/external/220volt-swagger.json`.
