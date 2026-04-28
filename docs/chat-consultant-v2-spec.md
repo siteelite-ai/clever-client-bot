@@ -974,16 +974,28 @@ interface ApiErrorB { success: false; errors: { error: string } }
 
 ### 9A.2 ProductResource
 
+**Источник истины — реальный ответ `/api/products`** (живой аудит 28 апр 2026, см. §9C.0). Поля `name`, `title`, `longtitle` в swagger описаны, но в реальном ответе **всегда `null`** — НЕ использовать. Имя товара = `pagetitle` (на уровне товара, не путать с `category.pagetitle`).
+
 ```ts
 interface ProductResource {
   id: number;
   article: string;            // SKU; ключ для поиска по артикулу
-  name: string;
+  pagetitle: string;          // ИМЯ ТОВАРА (используется для отображения и markdown)
+  alias: string;              // slug для построения URL
   url: string;                // абсолютный https://220volt.kz/...
-  price: number;              // ₸, целое
+  price: number;              // ₸. ВНИМАНИЕ: 0 = «цена по запросу/архив», см. §9C.3
   old_price?: number | null;  // ₸, для «было/стало»; null если без скидки
-  brand?: string | null;
+  vendor?: string | null;     // бренд (в swagger — brand; в реальном ответе — vendor)
+  image?: string | null;      // путь к главному изображению
+  amount?: number;            // суммарный остаток по всем складам
   category: { id: number; pagetitle: string };  // НЕТ поля title
+  parent?: number | null;     // id родительской категории (если есть)
+  popular?: 0 | 1;
+  new?: 0 | 1;
+  favorite?: 0 | 1;
+  weight?: number | string;
+  size?: string | null;
+  content?: string | null;    // HTML-описание
   options: Array<{
     caption_ru: string; caption_kz?: string;
     value_ru: string;   value_kz?: string;
@@ -991,6 +1003,11 @@ interface ProductResource {
   warehouses?: Array<{ city: string; amount: number }>;
   files?: Array<{ url: string; name?: string; type?: string }>;
   related_sku?: string[];     // если приходит — кросс-сейл
+
+  // DEPRECATED — всегда null в реальном ответе, оставлены для совместимости со swagger:
+  name?: null;
+  title?: null;
+  longtitle?: null;
 }
 ```
 
@@ -1008,33 +1025,43 @@ interface CategoryResource {
 
 // GET /api/categories/{id}/options ИЛИ /api/categories/options?pagetitle=...
 // ВАЖНО: реальный envelope иногда двойной: body.data.data вместо body.data.
+// Реальные ключи фасетов имеют суффикс с казахским переводом через "__":
+// "brend__brend", "cvet__tүs", "tip_cokolya__cokoly_tүrі",
+// "moschnosty__vt__Қuat__v" (опечатка moschnost*y*, фиксированная в API).
+// Часть таких ключей ЛОМАЕТ фильтрацию options[<key>][]= — см. §9C.2.
 interface CategoryOptionsResponse {
   success: true;
   data: {
     category: { id: number; pagetitle: string; total_products?: number };
     options: Array<{
-      key: string;             // напр. "brend__brend", "cvet"
+      key: string;             // полный ключ как в API, кейс-сенситивно
       caption_ru: string; caption_kz?: string;
-      values: Array<{ value_ru: string; value_kz?: string; count?: number }>;
+      values: Array<{ value_ru: string | number; value_kz?: string; count?: number }>;
     }>;
   };
 }
 ```
 
-Edge `search-products` нормализует двойной envelope (`body.data.data || body.data`) — см. реализацию в `supabase/functions/search-products/index.ts`.
+Edge `search-products` нормализует двойной envelope (`body.data.data || body.data`) — см. реализацию в `supabase/functions/search-products/index.ts`. Снапшот фасетов топ-категорий (Лампы, Розетки, Автоматические выключатели, Светильники) хранится в `docs/external/220volt-facets-snapshot.json` для воспроизводимости golden-тестов.
 
-### 9A.4 Поиск товаров — параметры
+### 9A.4 Поиск товаров — параметры (что РАБОТАЕТ)
 
 ```
 GET /api/products
-  ?query={string}                   // полнотекст
+  ?query={string}                   // полнотекст по name/longtitle/description/content
   ?article={string}                 // точный поиск по SKU; перекрывает query
   ?category={pagetitle}             // ТОЛЬКО pagetitle, не id
   ?options[{key}][]={value}         // повторяемый, AND между разными key, OR внутри одного key
-  ?min_price={int}&max_price={int}
+                                    //   ⚠ часть ключей с казахскими буквами не работает — §9C.2
+  ?min_price={int}&max_price={int}  // работают, целевая замена для «дешёвые/дорогие»
   ?page={int}                       // 1-based
   ?per_page={int}                   // ≤ 50 рекомендация
 ```
+
+**НЕ работают / отсутствуют в API** (см. §9C):
+- `?sort=price_asc|price_desc` — параметр игнорируется (живой прогон 28 апр 2026 показал идентичный порядок).
+- `options[{key}][value]={v}` — альтернативный синтаксис из swagger возвращает 0.
+- Любая фильтрация по фасету, ключ которого содержит определённые казахские диграфы (см. §9C.2).
 
 Ответ: `ApiListEnvelope<ProductResource>`. SKU lookup: `data.results.length === 0` → soft 404 (нет такого артикула).
 
@@ -1047,9 +1074,71 @@ GET /api/categories?parent=0&depth=10&per_page=200&page=N
 
 ### 9A.6 Маппинг внутренних типов
 
-См. §13.1 — внутренний `Product`/`Category` строится строго из `ProductResource`/`CategoryResource` без потерь полей `id`, `article`, `old_price`, `warehouses`, `category.id`.
+См. §13.1 — внутренний `Product` строится строго из `ProductResource`. Маппинг ключевых полей:
+
+| Внутренний `Product` | `ProductResource` | Примечание |
+|---|---|---|
+| `title` | `pagetitle` | имя для UI/markdown |
+| `sku` | `article` | |
+| `brand` | `vendor` | в swagger опечатка `brand` |
+| `image_url` | `image` | |
+| `total_stock` | `amount` | сумма по складам |
 
 ---
+
+## 9C. Известные ограничения и обходы Catalog API
+
+> Раздел зафиксирован после живого аудита 28 апр 2026. Все факты подтверждены прогонами, см. §9C.0. Эти ограничения **известны и обработаны** в Catalog Search; они не должны выглядеть как баги для пользователя.
+
+### 9C.0 Источник правды
+
+Снапшоты живых ответов: `docs/external/220volt-facets-snapshot.json` (схемы фасетов 4 топ-категорий) и сниппеты `/api/products` в журнале аудита. CI-чекер (см. ADR 28.11) сравнивает live-ответ со снапшотом раз в сутки и алертит при дрейфе.
+
+### 9C.1 Сортировка по цене (`sort=` игнорируется)
+
+API не поддерживает сортировку. Реализуем локально:
+
+- `price_asc`: запрашиваем `per_page=50` (max), фильтруем `price > 0` (см. §9C.3), сортируем локально, отдаём топ-N (≤7). Если после фильтра <N — пагинируемся внутрь, пока не наберём, либо отдаём «есть N товаров с известной ценой».
+- `price_desc`: то же самое, обратный сорт.
+- При желании пользователя «до X тенге» / «от X» — используем `min_price`/`max_price` (работают), это всегда предпочтительнее локального сорта.
+
+Метрика: `local_sort_invocations` (counter), `local_sort_pages_fetched` (histogram).
+
+### 9C.2 Фильтрация по фасетам с казахским суффиксом ключа
+
+Прогоны показали **нестабильное поведение**:
+
+| Ключ фасета | `options[key][]=val` работает? | Пример |
+|---|---|---|
+| `brend__brend` | ✅ | 341 товар по `=Legrand` |
+| `tip_cokolya__cokoly_tүrі` | ✅ (содержит `ү`) | 196 товаров по `=E14` |
+| `kolichestvo_razyemov__aғytpalar_sany_` | ✅ (содержит `ғ`) | 802 товара по `=2` |
+| `cvet__tүs` | ❌ | 0 товаров по `=белый` (хотя в схеме есть) |
+| `forma_kolby__kolbanyң_pіshіnі` | ❌ | 0 товаров по `=капсула` или `=груша` |
+
+Закономерность не сводится к «есть казахская буква» — поведение **per-key**. До исправления на стороне 220volt (ADR 28.17) применяем:
+
+**Поведение Catalog Search:**
+
+1. **Whitelist рабочих ключей** хранится в `app_settings.facet_filter_whitelist_json` (массив `key`). На старте инициализируется по результатам аудита 28.04: `brend__brend`, `tip_cokolya__cokoly_tүrі`, `kolichestvo_razyemov__aғytpalar_sany_`, `kolichestvo_polyusov__polyuster_sany`, `nominalynyy_tok__nominaldy_toқ`, `stepeny_zaschity__Қorғau_dәreghesі`, `napryaghenie__v__kerneu__v`, `moschnosty__vt__Қuat__v`, `garantiya__god__kepіldіk_merzіmі__ghyl`. Расширяется через еженедельный probe (cron в edge).
+2. Если резолвлен фильтр по ключу **в whitelist** — отправляется как `options[]` (как сейчас).
+3. Если фильтр по ключу **не в whitelist** — НЕ отправляется как `options[]`. Вместо этого его `value_ru` добавляется в `?query=` как **fallback-токен** (нарушение инварианта §4.5 «не загрязнять query» — единственный санкционированный случай). Такой фильтр помечается в `slot.applied_filters[].source = 'query_fallback'`. В Composer выводится предупреждение: «Точная фильтрация "{caption}: {value}" недоступна — ищу полнотекстом».
+4. Метрика: `facet_query_fallback_used` (counter, split by `key`), `facet_filter_blocked_total` (counter).
+5. Probe-cron: раз в сутки случайно тестирует один не-whitelisted ключ; при `total > 0` ↑ запись в whitelist (auto-extend) с уведомлением админу.
+
+### 9C.3 Товары с `price = 0`
+
+В категории «Лампы» **50 % товаров имеют `price=0`** (архивные / «цена по запросу» / снятые с продажи). Аналогичная картина в других категориях. Без обработки это даёт «0 ₸» в карточке — UX-катастрофа.
+
+**Поведение Catalog Search:** по умолчанию **отфильтровывает** товары с `price === 0` перед передачей в Composer. Если после фильтрации `results.length === 0` и общий `total > 0` — Composer выдаёт сообщение «Все найденные товары сейчас доступны только по запросу. Уточните у менеджера.» с маркером `CONTACT_MANAGER`.
+
+Конфиг: `app_settings.zero_price_policy` (`'hide' | 'show_with_marker' | 'allow'`, default `'hide'`). Метрика: `zero_price_hidden` (counter).
+
+### 9C.4 Имя товара
+
+Имя берётся из `ProductResource.pagetitle`. Поля `name`, `title`, `longtitle` всегда `null` и НЕ используются. Markdown-формат `**[Name](URL)**` (см. §11, §17, §22.2 `format_violations`) опирается на `pagetitle`.
+
+
 
 ## 10. Модуль: Knowledge Base RAG
 
