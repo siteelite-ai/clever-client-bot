@@ -258,7 +258,6 @@ serve(async (req) => {
       };
 
       try {
-
         // ---- Инициализация зависимостей резолвера -----------------------
         const supabase = getAdminClient();
 
