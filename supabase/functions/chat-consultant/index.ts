@@ -5317,14 +5317,18 @@ serve(async (req) => {
                     );
                     if (extra.length > altProducts.length) altProducts = extra;
                   }
-                  const altSchema: Map<string, { caption: string; values: Set<string> }> = appSettings.volt220_api_token
-                    ? await getCategoryOptionsSchema(altCat, appSettings.volt220_api_token).then(r => r.schema).catch(() => new Map<string, { caption: string; values: Set<string> }>())
-                    : new Map<string, { caption: string; values: Set<string> }>();
+                  const altSchemaInfo: { schema: Map<string, { caption: string; values: Set<string> }>; confidence: SchemaConfidence } = appSettings.volt220_api_token
+                    ? await getCategoryOptionsSchema(altCat, appSettings.volt220_api_token)
+                        .then(r => ({ schema: r.schema, confidence: r.confidence }))
+                        .catch(() => ({ schema: new Map<string, { caption: string; values: Set<string> }>(), confidence: 'empty' as SchemaConfidence }))
+                    : { schema: new Map<string, { caption: string; values: Set<string> }>(), confidence: 'empty' as SchemaConfidence };
+                  const altSchema = altSchemaInfo.schema;
                   const { resolved: altResolvedRaw, unresolved: altUnresolved } = await resolveFiltersWithLLM(
                     altProducts, modifiers, appSettings, classification?.critical_modifiers,
-                    altSchema && altSchema.size > 0 ? altSchema : undefined
+                    altSchema && altSchema.size > 0 ? altSchema : undefined,
+                    altSchemaInfo.confidence
                   );
-                  console.log(`[Chat] Alt bucket "${altCat}" schema=${altSchema?.size || 0} keys`);
+                  console.log(`[Chat] Alt bucket "${altCat}" schema=${altSchema?.size || 0} keys, conf=${altSchemaInfo.confidence}`);
                   const altResolved = flattenResolvedFilters(altResolvedRaw);
                   if (Object.keys(altResolved).length === 0) {
                     console.log(`[Chat] Alt bucket "${altCat}" resolved nothing, skip`);
