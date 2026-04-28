@@ -2119,6 +2119,8 @@ interface EscalationPayload {
 | `sla_targets` | jsonb | пороги для алертов. |
 | `lexicon_json` | jsonb | словарь алиасов §9.2b. Структура: `{ entries: Array<{ surface: string \| string[], type: 'name_modifier'\|'trait_expansion'\|'category_hint', canonical_token?: string, expanded_trait?: string, category_hint?: string, confidence: number, locale?: 'ru'\|'kk'\|'mixed' }> }`. Hot-reload каждые 60 с (тот же кэш, что у конфига). |
 | `resolver_thresholds_json` | jsonb | пороги Category Resolver и Lexicon. Дефолт: `{ "category_high": 0.7, "category_low": 0.4, "lexicon_query_inject": 0.9, "lexicon_trait_expand": 0.85, "soft_match_min": 0.6 }`. Вынесены из кода для тюнинга без редеплоя (см. ADR 28.13). |
+| `facet_filter_whitelist_json` | jsonb | массив `key`-ов фасетов, по которым `options[key][]=` реально работает в Catalog API (§9C.2). Seed из аудита 28.04.2026. Расширяется probe-cron'ом. Любой ключ вне списка → query_fallback (§9C.2 п.3). |
+| `zero_price_policy` | text | `'hide' \| 'show_with_marker' \| 'allow'`. Дефолт `'hide'` (см. §9C.3, ADR 28.18). |
 
 Конфиг читается edge-функцией один раз в 60 секунд (in-memory cache), чтобы изменения не требовали редеплоя.
 
