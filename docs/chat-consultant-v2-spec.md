@@ -1067,7 +1067,9 @@ interface CategoryOptionsResponse {
 }
 ```
 
-Edge `search-products` нормализует двойной envelope (`body.data.data || body.data`) — см. реализацию в `supabase/functions/search-products/index.ts`. Снапшот фасетов топ-категорий (Лампы, Розетки, Автоматические выключатели, Светильники) хранится в `docs/external/220volt-facets-snapshot.json` для воспроизводимости golden-тестов.
+Edge `search-products` обязан нормализовать двойной envelope (`body.data.data`) и обрабатывать «массивный» `body.data` при ошибке (404/422). Снапшот фасетов 5 категорий (Розетки, Автоматические выключатели, Кабель и провод, Лампы, Светильники) с реальными top-30 значениями хранится в `docs/external/220volt-facets-snapshot.json` (источник истины для golden-тестов; обновляется CI-чекером — см. ADR 28.11).
+
+**Расхождение `total_products` vs `pagination.total`** (зафиксировано 28.04.2026): для категории «Розетки» options-эндпоинт отдал `total_products=2078`, а `/products?category=Розетки` — `pagination.total=2353` (Δ ≈ 12%). Вероятная причина — разные фильтры по умолчанию (`price=0` исключается на /products, но учитывается в options). **Composer и Catalog Search опираются ИСКЛЮЧИТЕЛЬНО на `pagination.total` от `/products`.** `total_products` от options используется только как индикатор «категория не пуста» при Schema Resolver и для оценки полноты снапшота.
 
 ### 9A.4 Поиск товаров — параметры (что РАБОТАЕТ)
 
