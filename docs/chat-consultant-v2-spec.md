@@ -327,6 +327,7 @@ Turn {
 | 6a — SKU lookup (1 API call) | 600 |
 | 6a.1 Category Resolver (Flash Lite) | 400 |
 | 6a.2 Facet Schema Loader (cache hit) | 30 |
+| 6a.2.5 Lexicon Resolve (in-memory) | 3 |
 | 6a.3 Facet Matcher (Flash) | 600 |
 | 6a.4 Strict API Search | 1 500 |
 | 6b — KB hybrid retrieval | 700 |
