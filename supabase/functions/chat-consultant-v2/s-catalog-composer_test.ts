@@ -47,7 +47,11 @@ function mockOutcome(
   return {
     status,
     products,
+    totalFromApi: products.length,
+    zeroPriceFiltered: 0,
     postFilterDropped: 0,
+    attempts: [],
+    ms: 0,
   };
 }
 
