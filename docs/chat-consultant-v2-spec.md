@@ -1032,21 +1032,38 @@ interface CategoryResource {
 }
 
 // GET /api/categories/{id}/options ИЛИ /api/categories/options?pagetitle=...
-// ВАЖНО: реальный envelope иногда двойной: body.data.data вместо body.data.
+// ВАЖНО (подтверждено живым прогоном 28.04.2026): envelope ВСЕГДА двойной —
+// body.data.data.{category, options}. Поле body.data.success при ошибке = false,
+// тогда body.data становится массивом []. Edge нормализует:
+//   const inner = body?.data?.data ?? (Array.isArray(body?.data) ? null : body?.data);
+//
 // Реальные ключи фасетов имеют суффикс с казахским переводом через "__":
 // "brend__brend", "cvet__tүs", "tip_cokolya__cokoly_tүrі",
 // "moschnosty__vt__Қuat__v" (опечатка moschnost*y*, фиксированная в API).
 // Часть таких ключей ЛОМАЕТ фильтрацию options[<key>][]= — см. §9C.2.
+//
+// ВАЖНО про поля option:
+//   `type`, `unit`, `min`, `max` от API ВСЕГДА = null (не доверять).
+//   Тип значения выводить эвристически из формы values[].value_ru:
+//     все числа → numeric; "true"/"false"/"да"/"нет" → boolean; иначе → string.
+//   `value_ru` может прийти как number (1, 50) при логически строковом фасете —
+//   при отправке в фильтр сериализовать как `String(value_ru)` без кавычек.
+//   `value_kz` часто = "" (пустая строка), а не null.
 interface CategoryOptionsResponse {
   success: true;
-  data: {
+  data: { success: true; data: {
     category: { id: number; pagetitle: string; total_products?: number };
     options: Array<{
-      key: string;             // полный ключ как в API, кейс-сенситивно
+      key: string;                       // полный ключ как в API, кейс-сенситивно
       caption_ru: string; caption_kz?: string;
-      values: Array<{ value_ru: string | number; value_kz?: string; count?: number }>;
+      type: null; unit: null; min: null; max: null;  // всегда null
+      values: Array<{
+        value_ru: string | number;        // может быть числом!
+        value_kz: string;                 // часто ""
+        products_count: number;
+      }>;
     }>;
-  };
+  }};
 }
 ```
 
