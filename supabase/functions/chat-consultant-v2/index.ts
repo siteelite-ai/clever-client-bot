@@ -580,7 +580,7 @@ serve(async (req) => {
             meta: {
               pipeline_version: "v2",
               build: BUILD_MARKER,
-              step: 10,
+              step: 11,
               route: decision.route,
               branch_executed: isLight ? "real" : "placeholder",
               intent: decision.intent,
@@ -588,7 +588,8 @@ serve(async (req) => {
               orchestrator_ms: orchestratorMs,
               branch_ms: branchMs,
               compose_ms: composeMs,
-              contact_manager_emitted: branchOut?.contact_manager_emitted ?? false,
+              contact_manager_emitted:
+                (branchOut?.contact_manager_emitted ?? false) || catalogContactManager,
               knowledge: knowledgeOut
                 ? {
                     has_results: knowledgeOut.has_results,
@@ -602,10 +603,11 @@ serve(async (req) => {
                     greeting_stripped: composedGreetingStripped,
                   }
                 : undefined,
+              catalog: catalogMeta ?? undefined,
               trace: decision.trace,
               traceId,
               cache_ttl_ms: CLASSIFIER_CACHE_TTL_MS,
-              next_state: decision.next_state,
+              next_state: mutableNextState,
             },
           }),
         );
