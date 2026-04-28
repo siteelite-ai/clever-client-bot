@@ -5188,44 +5188,77 @@ serve(async (req) => {
             // category (not just whatever happens to be in the 24-item sample), so modifiers
             // like "двухместная" can be matched to keys like `kolichestvo_razyemov` even when
             // the sample doesn't contain a single double socket. Cached 30 min per category.
+            // Now stores confidence too — passed to resolver to gate trust level (P0 fix).
             const bucketCatNames = bucketsToTry.filter(([, c]) => c >= 2).map(([n]) => n);
-            const bucketSchemaMap: Map<string, Map<string, { caption: string; values: Set<string> }>> = new Map();
+            const bucketSchemaMap: Map<string, { schema: Map<string, { caption: string; values: Set<string> }>; confidence: SchemaConfidence }> = new Map();
             if (appSettings.volt220_api_token && bucketCatNames.length > 0) {
               const schemas = await Promise.all(
-                bucketCatNames.map(n => getCategoryOptionsSchema(n, appSettings.volt220_api_token!).then(r => r.schema).catch(() => new Map<string, { caption: string; values: Set<string> }>()))
+                bucketCatNames.map(n => getCategoryOptionsSchema(n, appSettings.volt220_api_token!)
+                  .then(r => ({ schema: r.schema, confidence: r.confidence }))
+                  .catch(() => ({ schema: new Map<string, { caption: string; values: Set<string> }>(), confidence: 'empty' as SchemaConfidence })))
               );
               bucketCatNames.forEach((n, i) => bucketSchemaMap.set(n, schemas[i]));
             }
 
-            for (const [catName, count] of bucketsToTry) {
-              if (count < 2) continue;
-              let bucketProducts = rawProducts.filter(p => 
+            // PARALLEL bucket resolution with global deadline (P2 fix).
+            // Previously: sequential await per bucket → up to N×LLM_latency (observed 118s
+            // for 5 buckets). Now: all buckets resolve in parallel under a single 20s race.
+            // Whichever buckets complete contribute to bestResolved selection; late ones
+            // are abandoned (their work is wasted but pipeline stays responsive).
+            const BUCKET_RESOLVE_DEADLINE_MS = 20000;
+            const bucketResolveT0 = Date.now();
+            const eligibleBuckets = bucketsToTry.filter(([, c]) => c >= 2);
+
+            const bucketWorkers = eligibleBuckets.map(([catName, _count]) => (async () => {
+              let bucketProducts = rawProducts.filter(p =>
                 ((p as any).category?.pagetitle || (p as any).parent_name || 'unknown') === catName
               );
               if (bucketProducts.length < 10 && appSettings.volt220_api_token) {
-                console.log(`[Chat] Bucket "${catName}" too small (${bucketProducts.length}), fetching more for schema...`);
                 const extraProducts = await searchProductsByCandidate(
                   { query: null, brand: null, category: catName, min_price: null, max_price: null },
                   appSettings.volt220_api_token, 50
-                );
+                ).catch(() => [] as Product[]);
                 if (extraProducts.length > bucketProducts.length) {
                   bucketProducts = extraProducts;
-                  console.log(`[Chat] Bucket "${catName}" expanded to ${bucketProducts.length} products`);
                 }
               }
-              const bucketSchema = bucketSchemaMap.get(catName);
+              const bucketSchemaInfo = bucketSchemaMap.get(catName);
+              const bucketSchema = bucketSchemaInfo?.schema;
+              const bucketConf: SchemaConfidence = bucketSchemaInfo?.confidence || 'empty';
               const { resolved: br, unresolved: bu } = await resolveFiltersWithLLM(
                 bucketProducts, modifiers, appSettings, classification?.critical_modifiers,
-                bucketSchema && bucketSchema.size > 0 ? bucketSchema : undefined
+                bucketSchema && bucketSchema.size > 0 ? bucketSchema : undefined,
+                bucketConf
               );
-              console.log(`[Chat] Bucket "${catName}" (${bucketProducts.length}, schema=${bucketSchema?.size || 0} keys): resolved=${JSON.stringify(flattenResolvedFilters(br))}, unresolved=[${bu.join(', ')}]`);
-              
-              if (Object.keys(br).length > Object.keys(bestResolvedRaw).length) {
-                bestBucketCat = catName;
-                bestResolvedRaw = br;
-                bestUnresolved = bu;
-              }
-              if (Object.keys(br).length >= modifiers.length) break;
+              console.log(`[Chat] Bucket "${catName}" (${bucketProducts.length}, schema=${bucketSchema?.size || 0} keys, conf=${bucketConf}): resolved=${JSON.stringify(flattenResolvedFilters(br))}, unresolved=[${bu.join(', ')}]`);
+              return { catName, br, bu };
+            })());
+
+            const deadlinePromise = new Promise<'deadline'>(resolve => setTimeout(() => resolve('deadline'), BUCKET_RESOLVE_DEADLINE_MS));
+            const settled = await Promise.race([
+              Promise.allSettled(bucketWorkers).then(r => ({ kind: 'all' as const, results: r })),
+              deadlinePromise.then(() => ({ kind: 'deadline' as const })),
+            ]);
+
+            if (settled.kind === 'deadline') {
+              console.log(`[Chat] Bucket-resolve DEADLINE hit at ${BUCKET_RESOLVE_DEADLINE_MS}ms — using whatever finished, abandoning rest`);
+            } else {
+              console.log(`[Chat] Bucket-resolve ALL DONE in ${Date.now() - bucketResolveT0}ms (${settled.results.length} buckets)`);
+            }
+            const completedResults = settled.kind === 'all'
+              ? settled.results.filter(r => r.status === 'fulfilled').map(r => (r as PromiseFulfilledResult<{ catName: string; br: Record<string, ResolvedFilter>; bu: string[] }>).value)
+              : [];
+            // Pick winner: bucket that resolved the most modifiers. Tie-breaker = priority order from bucketsToTry.
+            const orderIndex = new Map(eligibleBuckets.map(([n], i) => [n, i] as const));
+            completedResults.sort((a, b) => {
+              const diff = Object.keys(b.br).length - Object.keys(a.br).length;
+              if (diff !== 0) return diff;
+              return (orderIndex.get(a.catName) ?? 999) - (orderIndex.get(b.catName) ?? 999);
+            });
+            if (completedResults.length > 0 && Object.keys(completedResults[0].br).length > 0) {
+              bestBucketCat = completedResults[0].catName;
+              bestResolvedRaw = completedResults[0].br;
+              bestUnresolved = completedResults[0].bu;
             }
             
             if (Object.keys(bestResolvedRaw).length === 0 && sortedBuckets.length > 0) {
