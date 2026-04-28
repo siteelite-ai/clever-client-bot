@@ -232,6 +232,7 @@ Turn {
 | `IDLE` | Сессия открыта, активного слота нет. |
 | `SLOT_OPEN` | Активный слот существует, последний поиск дал ≤ 7 результатов. |
 | `SLOT_REFINING` | Слот существует, требуется уточнение (>7 результатов). |
+| `SLOT_AWAITING_CLARIFICATION` | Facet Matcher (§9.3) вернул `unresolved` с известным `nearest_facet_key` и `available_values`. Поиск НЕ выполнен; ассистент задал уточняющий вопрос со списком значений. Ожидается ответ пользователя. |
 | `ESCALATED` | Последний turn содержал `[CONTACT_MANAGER]`. Сессия продолжается, но дальнейшие реплики снова идут через классификатор. |
 | `EXPIRED` | TTL слота истёк, переходит к `IDLE` при следующем turn. |
 
@@ -239,16 +240,19 @@ Turn {
 
 | Из | Событие | В | Действие |
 |---|---|---|---|
-| `IDLE` | intent=`product_search` | `SLOT_OPEN`/`SLOT_REFINING` | создать слот, выполнить поиск |
+| `IDLE` | intent=`product_search` | `SLOT_OPEN`/`SLOT_REFINING`/`SLOT_AWAITING_CLARIFICATION` | создать слот, выполнить §9.2a→§9.3→поиск |
 | `IDLE` | intent=`sku_lookup` | `SLOT_OPEN` | прямой запрос по артикулу |
 | `IDLE` | intent=`info_request` | `IDLE` | RAG по БЗ |
 | `IDLE` | intent=`small_talk` | `IDLE` | вежливый редирект к сути |
 | `IDLE` | intent=`escalate` | `ESCALATED` | вернуть карточку контактов |
-| `SLOT_OPEN` | intent=`refine_filter` | `SLOT_OPEN`/`SLOT_REFINING` | дополнить слот, повторить поиск |
-| `SLOT_OPEN` | intent=`product_search` (новая категория) | переход в новый `SLOT_OPEN` | закрыть старый слот |
+| `SLOT_OPEN` | intent=`refine_filter` | `SLOT_OPEN`/`SLOT_REFINING`/`SLOT_AWAITING_CLARIFICATION` | дополнить слот, повторить §9.3+поиск |
+| `SLOT_OPEN` | intent=`product_search` (новая категория, Resolver conf ≥ 0.7) | переход в новый `SLOT_OPEN` | закрыть старый слот |
 | `SLOT_OPEN` | intent=`reset_slot` | `IDLE` | удалить слот |
 | `SLOT_OPEN` | intent=`info_request` | `SLOT_OPEN` | RAG, слот сохранить |
-| `SLOT_REFINING` | intent=`refine_filter` | `SLOT_OPEN`/`SLOT_REFINING` | применить, пересчитать |
+| `SLOT_REFINING` | intent=`refine_filter` | `SLOT_OPEN`/`SLOT_REFINING`/`SLOT_AWAITING_CLARIFICATION` | применить, пересчитать |
+| `SLOT_AWAITING_CLARIFICATION` | пользователь указал значение из `available_values` | `SLOT_OPEN`/`SLOT_REFINING` | реклассифицировать как `refine_filter`, повторить §9.3 с новым трейтом, очистить `pending_clarification` |
+| `SLOT_AWAITING_CLARIFICATION` | пользователь сменил тему (intent=`product_search` с другой категорией ИЛИ `sku_lookup`) | соответствующее новое состояние | очистить `pending_clarification`, обработать как обычный turn |
+| `SLOT_AWAITING_CLARIFICATION` | пользователь явно отказался уточнять («покажи всё», `intent=refine_filter` с пустым трейтом по этому facet) | `SLOT_OPEN`/`SLOT_REFINING` | очистить `pending_clarification`, выполнить поиск без этого фильтра, записать трейт в `slot.unresolved_traits` |
 | любое | TTL > 30 мин | `EXPIRED` → `IDLE` | удалить слот |
 
 ### 5.3 Хранение состояния
@@ -782,6 +786,16 @@ interface ComposerInput {
   active_slot?: Slot;
   user_locale: 'ru' | 'kk';        // по умолчанию ru
   city?: string;                   // из geolocation
+  // Сигналы из Catalog Branch (§9.2a, §9.3) — обязательны при intent ∈ {product_search, refine_filter}
+  category_uncertain?: boolean;          // Resolver confidence ∈ [0.4, 0.7)
+  category_hint?: string;                // выбранный pagetitle (для уточняющей фразы)
+  pending_clarification?: {              // если присутствует — поиск НЕ выполнялся
+    facet_caption: string;               // caption_ru факета
+    available_values: string[];          // топ-10 для подсказки
+    trait: string;                       // что хотел пользователь
+  };
+  soft_matches?: SoftMatch[];            // применённые мягкие совпадения
+  unresolved_traits?: UnresolvedTrait[]; // трейты вне схемы (без nearest_facet_key)
 }
 interface ComposerOutput {
   text_stream: AsyncIterable<string>;  // SSE chunks
@@ -789,17 +803,31 @@ interface ComposerOutput {
 }
 ```
 
+### 11.2a Правила обработки сигналов матчинга
+
+Composer обязан соблюдать порядок и обязательность блоков ответа в зависимости от входящих сигналов. Нарушение — defect категории `composer_contract_violation` (§22).
+
+| Сигнал | Обязательное действие | Положение в ответе |
+|---|---|---|
+| `pending_clarification` присутствует | **Поиск не выполнялся.** Composer задаёт вопрос: «Уточните, пожалуйста: какой *{facet_caption}* подходит? Доступно: *{v1}, v2, v3, …*». **Запрещено** показывать товары и любые другие списки. `branch_payload` игнорируется. | Только этот вопрос. |
+| `category_uncertain=true` (без `pending_clarification`) | Перед списком товаров строка: «Ищу в категории *{category_hint}*. Если имели в виду другое — уточните.» | Первая строка ответа. |
+| `soft_matches.length > 0` | Для каждого soft-match строка: «Точного *"{trait}"* нет, показал ближайшее: *{suggested_value}*.» Объединять однотипные. | После строки про категорию (если есть), до списка товаров. |
+| `unresolved_traits.length > 0` (без `pending_clarification`) | Одной строкой перечислить: «Не нашёл в характеристиках: *{trait1}, {trait2}* — показал по остальным критериям.» | После soft-matches, до списка товаров. |
+| Иначе | Сразу список товаров по правилам §17 (canonical markdown). | — |
+
+**Приоритет.** `pending_clarification` блокирует все остальные блоки и сам список товаров — это прямое следствие FSM-перехода в `SLOT_AWAITING_CLARIFICATION` (§5).
+
 ### 11.3 Параметры LLM
 
 - Модель: `google/gemini-2.5-flash`.
 - `temperature=0.3`, `top_p=0.9`.
-- System prompt содержит: персону, формат markdown, запрет приветствий, правила эскалации.
+- System prompt содержит: персону, формат markdown, запрет приветствий, правила эскалации, **обязательные блоки §11.2a**.
 - `max_output_tokens=1200`.
 
 ### 11.4 Стриминг
 
 - SSE-чанки по мере генерации.
-- Drain loop: после `[DONE]` сервер ждёт завершения вспомогательных операций (запись trace, обновление слота) и шлёт финальный `slot_state` event.
+- Drain loop: после `[DONE]` сервер ждёт завершения вспомогательных операций (запись trace, обновление слота) и шлёт финальный `slot_state` event (включая поля `pending_clarification`, `soft_matches`, `unresolved_traits`, `category` с `confidence`).
 
 ---
 
