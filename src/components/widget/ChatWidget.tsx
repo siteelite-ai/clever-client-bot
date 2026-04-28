@@ -236,14 +236,9 @@ const mid = (prefix?: string): string => {
 
 export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(isPreview);
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: mid('greeting'),
-      role: 'assistant',
-      content: 'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?',
-      timestamp: new Date()
-    }
-  ]);
+  // Виджет открывается с пустой лентой. Core-правило «ABSOLUTE BAN on greetings»:
+  // никаких приветствий, бот ведёт себя как эксперт-продавец. Первый ход — пользователя.
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [dialogSlots, setDialogSlots] = useState<DialogSlots>({});
