@@ -102,6 +102,23 @@ export interface AssemblerResult {
   trace: AssemblerTrace;
   /** Pagetitle, выбранный resolver-ом (для slot.pending_query / replay). */
   resolvedPagetitle: string | null;
+  /**
+   * §5.4.1 + §11.5b + Core Memory: внешний запрет cross-sell от оркестратора.
+   * Источник правды для оркестратора — здесь, в assembler-результате.
+   *
+   * Текущие правила (детерминированно, без LLM):
+   *   - OOD               → composer не вызывается (флаг иррелевантен, ставим false)
+   *   - S_PRICE clarify   → true  (вопрос-уточнение, не место для cross-sell)
+   *   - S_PRICE show_all/top3 → false (composer сам форсит OR с scenario != normal)
+   *   - S_CATALOG empty/soft_404 → false (composer форсит сам через scenario)
+   *   - S_CATALOG normal/soft_fallback → false (cross-sell допустим в normal;
+   *     soft_fallback композер запретит сам через scenario != normal)
+   *   - similar (Stage 8) → ВСЕГДА true (Core Memory)
+   *
+   * Композер применяет логику OR (запрет ИЛИ scenario != normal), поэтому
+   * установка false здесь безопасна — приоритет всегда у запрета.
+   */
+  disallowCrosssell: boolean;
 }
 
 export interface AssemblerInput {
