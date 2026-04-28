@@ -1,6 +1,8 @@
 // chat-consultant-v2 / catalog/search.ts
 // Stage 2 — Step 11.3: Strict Search Multi-Attempt с post-filter и Soft Fallback (data-layer).
 //
+// Spec sync: §4.8 + §4.8.1 (softFallbackContext.droppedFacetCaption).
+//
 // Контракт (Core Memory + spec §5.6.1 + mem://features/search-pipeline):
 //
 //   Вход:   { category?, query?, optionFilters?, optionAliases?,
@@ -63,6 +65,19 @@ export interface SearchInput {
   optionFilters?: Record<string, string[]>;
   /** Карта алиасов для каждого canonical_key. */
   optionAliases?: Record<string, string[]>;
+  /**
+   * §4.8.1: Человекочитаемые caption-ы фасетов (canonical_key → caption из RawOption.caption,
+   * полученные Facet Matcher из живого API). Используются ТОЛЬКО для заполнения
+   * `softFallbackContext.droppedFacetCaption` — никакой бизнес-логики на этом не строим.
+   */
+  optionFilterCaptions?: Record<string, string>;
+  /**
+   * §4.8: Порядок применения фасетов (canonical_keys). Soft Fallback снимает фильтры
+   * с конца списка по одному; первый успех фиксирует `droppedFacetCaption`.
+   * Если порядок не задан, fallback: снимаем все фильтры разом, caption берётся
+   * по первому ключу из `optionFilters` (для обратной совместимости).
+   */
+  optionFilterOrder?: string[];
   /** Цена — ТОЛЬКО если её явно назвал пользователь (K1). */
   minPrice?: number;
   maxPrice?: number;
@@ -77,6 +92,16 @@ export type SearchStatus =
   | "empty_degraded"   // api-client вернул признак Q3 quirk
   | "all_zero_price"   // API дал товары, но все price≤0 (HARD BAN)
   | "error";           // HTTP/timeout/network — escalation, не считаем soft 404
+
+export interface SoftFallbackContext {
+  /**
+   * §4.8.1: UI-caption фасета, который был снят (из RawOption.caption через
+   * Facet Matcher). НЕ raw-key. Композер использует это поле для tail-line
+   * `Если важно уточнить *<droppedFacetCaption>* — напишите.`
+   * НЕ может быть пустой строкой (инвариант: caption живой из API).
+   */
+  droppedFacetCaption: string;
+}
 
 export interface SearchOutcome {
   status: SearchStatus;
@@ -94,6 +119,10 @@ export interface SearchOutcome {
     suspectedQuirkKey: string;
     recoveredCount: number;
   };
+  /**
+   * §4.8.1: Заполнено ТОЛЬКО при status === 'soft_fallback'. При других статусах = null.
+   */
+  softFallbackContext: SoftFallbackContext | null;
   errorMessage?: string;
   ms: number;
 }
@@ -102,6 +131,8 @@ export interface SearchAttempt {
   label: "strict" | "soft_fallback";
   ms: number;
   raw: SearchProductsResult;
+  /** Какой фасет был снят на этой попытке soft_fallback (canonical_key). */
+  droppedFacetKey?: string;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -187,6 +218,7 @@ export async function search(
       zeroPriceFiltered: 0,
       postFilterDropped: 0,
       attempts,
+      softFallbackContext: null,
       ms: Date.now() - t0,
       errorMessage: strictRaw.errorMessage,
     };
@@ -202,6 +234,7 @@ export async function search(
       zeroPriceFiltered: strictRaw.zeroPriceFiltered,
       postFilterDropped: 0,
       attempts,
+      softFallbackContext: null,
       ms: Date.now() - t0,
     };
   }
@@ -218,6 +251,7 @@ export async function search(
       postFilterDropped: 0,
       attempts,
       degradedHint: strictRaw.degradedHint,
+      softFallbackContext: null,
       ms: Date.now() - t0,
     };
   }
@@ -239,15 +273,18 @@ export async function search(
         perPage,
         totalPages: estimateTotalPages(strictRaw.totalFromApi, perPage),
       },
+      softFallbackContext: null,
       ms: Date.now() - t0,
     };
   }
 
-  // ── ATTEMPT 2: Soft Fallback (без optionFilters) ──────────────────────
+  // ── ATTEMPT 2+: Soft Fallback (прогрессивное снятие фильтров, §4.8) ──
   // Триггер: были фильтры И strict вернул 0 (после API + post-filter).
   // Если фильтров не было — soft fallback бесполезен, сразу 'empty'.
-  const hadFilters = input.optionFilters &&
-    Object.keys(input.optionFilters).length > 0;
+  const filterKeys = input.optionFilters
+    ? Object.keys(input.optionFilters)
+    : [];
+  const hadFilters = filterKeys.length > 0;
 
   if (!hadFilters) {
     return {
@@ -257,88 +294,127 @@ export async function search(
       zeroPriceFiltered: strictRaw.zeroPriceFiltered,
       postFilterDropped: strictPostDropped,
       attempts,
+      softFallbackContext: null,
       ms: Date.now() - t0,
     };
   }
 
-  const softInput: SearchProductsInput = toApiInput(
-    { ...input, optionFilters: undefined, optionAliases: undefined },
-    perPage,
-    page,
-  );
-  const softRaw = await searchProducts(softInput, deps);
-  attempts.push({ label: "soft_fallback", ms: softRaw.ms, raw: softRaw });
+  // §4.8: снимаем фильтры по одному с конца optionFilterOrder. Если порядок
+  // не задан — fallback к старому поведению (снимаем все разом).
+  const removalOrder = computeRemovalOrder(input.optionFilterOrder, filterKeys);
+  const captionsMap = input.optionFilterCaptions ?? {};
 
-  // На soft attempt error/zero/degraded → возвращаем как есть, без рекурсии.
-  if (
-    softRaw.status === "http_error" ||
-    softRaw.status === "timeout" ||
-    softRaw.status === "network_error"
-  ) {
-    return {
-      status: "empty",
-      products: [],
-      totalFromApi: strictRaw.totalFromApi,
-      zeroPriceFiltered: strictRaw.zeroPriceFiltered,
-      postFilterDropped: strictPostDropped,
-      attempts,
-      ms: Date.now() - t0,
-    };
-  }
+  let cumulativeZero = strictRaw.zeroPriceFiltered;
+  let cumulativePostDropped = strictPostDropped;
+  let lastSoftRaw: SearchProductsResult | null = null;
+  let activeFilters = { ...(input.optionFilters as Record<string, string[]>) };
+  let activeAliases = input.optionAliases ? { ...input.optionAliases } : undefined;
 
-  if (softRaw.status === "all_zero_price") {
-    return {
-      status: "all_zero_price",
-      products: [],
-      totalFromApi: softRaw.totalFromApi,
-      zeroPriceFiltered: strictRaw.zeroPriceFiltered + softRaw.zeroPriceFiltered,
-      postFilterDropped: strictPostDropped,
-      attempts,
-      ms: Date.now() - t0,
-    };
-  }
+  for (const keyToDrop of removalOrder) {
+    delete activeFilters[keyToDrop];
+    if (activeAliases) delete activeAliases[keyToDrop];
 
-  if (softRaw.status === "empty_degraded") {
-    // Маловероятно (фильтры выкинули), но обрабатываем.
-    return {
-      status: "empty_degraded",
-      products: [],
-      totalFromApi: 0,
-      zeroPriceFiltered: strictRaw.zeroPriceFiltered + softRaw.zeroPriceFiltered,
-      postFilterDropped: strictPostDropped,
-      attempts,
-      degradedHint: softRaw.degradedHint,
-      ms: Date.now() - t0,
-    };
-  }
-
-  const softFiltered = softRaw.products.filter((p) => matchesWordBoundary(p, queryTokens));
-  const softPostDropped = softRaw.products.length - softFiltered.length;
-
-  if (softFiltered.length > 0) {
-    return {
-      status: "soft_fallback",
-      products: softFiltered,
-      totalFromApi: softRaw.totalFromApi,
-      zeroPriceFiltered: strictRaw.zeroPriceFiltered + softRaw.zeroPriceFiltered,
-      postFilterDropped: strictPostDropped + softPostDropped,
-      attempts,
-      pagination: {
-        page,
-        perPage,
-        totalPages: estimateTotalPages(softRaw.totalFromApi, perPage),
+    const softInput: SearchProductsInput = toApiInput(
+      {
+        ...input,
+        optionFilters: Object.keys(activeFilters).length > 0 ? activeFilters : undefined,
+        optionAliases: activeAliases && Object.keys(activeAliases).length > 0
+          ? activeAliases
+          : undefined,
       },
-      ms: Date.now() - t0,
-    };
+      perPage,
+      page,
+    );
+    const softRaw = await searchProducts(softInput, deps);
+    lastSoftRaw = softRaw;
+    attempts.push({
+      label: "soft_fallback",
+      ms: softRaw.ms,
+      raw: softRaw,
+      droppedFacetKey: keyToDrop,
+    });
+
+    // Hard fails на soft attempt → прерываем итерации, возвращаем 'empty'
+    // (soft fallback не «error» — strict отработал нормально, soft 404 streak).
+    if (
+      softRaw.status === "http_error" ||
+      softRaw.status === "timeout" ||
+      softRaw.status === "network_error"
+    ) {
+      return {
+        status: "empty",
+        products: [],
+        totalFromApi: strictRaw.totalFromApi,
+        zeroPriceFiltered: cumulativeZero,
+        postFilterDropped: cumulativePostDropped,
+        attempts,
+        softFallbackContext: null,
+        ms: Date.now() - t0,
+      };
+    }
+
+    cumulativeZero += softRaw.zeroPriceFiltered;
+
+    if (softRaw.status === "all_zero_price") {
+      return {
+        status: "all_zero_price",
+        products: [],
+        totalFromApi: softRaw.totalFromApi,
+        zeroPriceFiltered: cumulativeZero,
+        postFilterDropped: cumulativePostDropped,
+        attempts,
+        softFallbackContext: null,
+        ms: Date.now() - t0,
+      };
+    }
+
+    if (softRaw.status === "empty_degraded") {
+      return {
+        status: "empty_degraded",
+        products: [],
+        totalFromApi: 0,
+        zeroPriceFiltered: cumulativeZero,
+        postFilterDropped: cumulativePostDropped,
+        attempts,
+        degradedHint: softRaw.degradedHint,
+        softFallbackContext: null,
+        ms: Date.now() - t0,
+      };
+    }
+
+    const softFiltered = softRaw.products.filter((p) => matchesWordBoundary(p, queryTokens));
+    cumulativePostDropped += softRaw.products.length - softFiltered.length;
+
+    if (softFiltered.length > 0) {
+      const caption = resolveDroppedCaption(keyToDrop, captionsMap);
+      return {
+        status: "soft_fallback",
+        products: softFiltered,
+        totalFromApi: softRaw.totalFromApi,
+        zeroPriceFiltered: cumulativeZero,
+        postFilterDropped: cumulativePostDropped,
+        attempts,
+        pagination: {
+          page,
+          perPage,
+          totalPages: estimateTotalPages(softRaw.totalFromApi, perPage),
+        },
+        softFallbackContext: { droppedFacetCaption: caption },
+        ms: Date.now() - t0,
+      };
+    }
+    // продолжаем снимать следующий фильтр
   }
 
+  // Все фильтры сняты, везде пусто → empty.
   return {
     status: "empty",
     products: [],
-    totalFromApi: softRaw.totalFromApi,
-    zeroPriceFiltered: strictRaw.zeroPriceFiltered + softRaw.zeroPriceFiltered,
-    postFilterDropped: strictPostDropped + softPostDropped,
+    totalFromApi: lastSoftRaw?.totalFromApi ?? strictRaw.totalFromApi,
+    zeroPriceFiltered: cumulativeZero,
+    postFilterDropped: cumulativePostDropped,
     attempts,
+    softFallbackContext: null,
     ms: Date.now() - t0,
   };
 }
@@ -366,4 +442,47 @@ function toApiInput(
 function estimateTotalPages(total: number, perPage: number): number {
   if (total <= 0 || perPage <= 0) return 0;
   return Math.ceil(total / perPage);
+}
+
+/**
+ * §4.8: упорядочиваем ключи фильтров для прогрессивного снятия.
+ * Ключ, который должен быть снят первым, идёт первым.
+ *
+ * - Если задан `optionFilterOrder` — берём его в reverse, оставляя только
+ *   ключи, реально присутствующие в `filterKeys`. «Осиротевшие» ключи
+ *   (в filterKeys, но не в order) дописываем в конец.
+ * - Если порядок не задан — fallback к обратному порядку вставки в
+ *   `optionFilters` (для обратной совместимости с вызывающим кодом).
+ */
+export function computeRemovalOrder(
+  optionFilterOrder: string[] | undefined,
+  filterKeys: string[],
+): string[] {
+  const present = new Set(filterKeys);
+  if (optionFilterOrder && optionFilterOrder.length > 0) {
+    const ordered: string[] = [];
+    for (let i = optionFilterOrder.length - 1; i >= 0; i--) {
+      const k = optionFilterOrder[i];
+      if (present.has(k) && !ordered.includes(k)) ordered.push(k);
+    }
+    for (const k of filterKeys) {
+      if (!ordered.includes(k)) ordered.push(k);
+    }
+    return ordered;
+  }
+  return [...filterKeys].reverse();
+}
+
+/**
+ * §4.8.1: resolve UI-caption по canonical_key. Инвариант: caption НЕ должен
+ * быть пустой строкой. Если Facet Matcher не передал caption (баг интеграции),
+ * fallback к самому key — лучше, чем падение, и сразу видно, что что-то не так.
+ */
+export function resolveDroppedCaption(
+  key: string,
+  captions: Record<string, string>,
+): string {
+  const cap = captions[key];
+  if (typeof cap === "string" && cap.trim().length > 0) return cap.trim();
+  return key;
 }

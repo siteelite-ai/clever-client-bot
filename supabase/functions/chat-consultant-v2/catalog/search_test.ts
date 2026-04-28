@@ -12,6 +12,8 @@ import {
   search,
   tokenize,
   matchesWordBoundary,
+  computeRemovalOrder,
+  resolveDroppedCaption,
   type SearchInput,
   type SearchOutcome,
 } from "./search.ts";
@@ -179,11 +181,16 @@ Deno.test("search: soft_fallback — strict 0 с фильтрами, soft без
   const out = await search({
     query: "widget",
     optionFilters: { k: ["v"] },
+    optionFilterCaptions: { k: "Цвет" },
   }, deps(f));
   assertEquals(out.status, "soft_fallback");
   assertEquals(out.products.length, 2);
   assertEquals(out.attempts.length, 2);
   assertEquals(out.attempts[1].label, "soft_fallback");
+  // §4.8.1: softFallbackContext заполнен caption-ом.
+  assertExists(out.softFallbackContext);
+  assertEquals(out.softFallbackContext!.droppedFacetCaption, "Цвет");
+  assertEquals(out.attempts[1].droppedFacetKey, "k");
 });
 
 Deno.test("search: empty — strict 0 с фильтрами, soft тоже 0", async () => {
@@ -194,6 +201,124 @@ Deno.test("search: empty — strict 0 с фильтрами, soft тоже 0", a
   }, deps(f));
   assertEquals(out.status, "empty");
   assertEquals(out.attempts.length, 2);
+  assertEquals(out.softFallbackContext, null);
+});
+
+// ─── §4.8.1: softFallbackContext invariants ─────────────────────────────────
+
+Deno.test("§4.8.1: softFallbackContext === null при status='ok'", async () => {
+  const f = makeFetch(() => jsonResponse({
+    data: { results: [P(1, "Widget X")], total: 1 },
+  }));
+  const out = await search({ query: "widget" }, deps(f));
+  assertEquals(out.status, "ok");
+  assertEquals(out.softFallbackContext, null);
+});
+
+Deno.test("§4.8.1: softFallbackContext === null при status='empty' без фильтров", async () => {
+  const f = makeFetch(() => jsonResponse({ data: { results: [], total: 0 } }));
+  const out = await search({ query: "abc" }, deps(f));
+  assertEquals(out.status, "empty");
+  assertEquals(out.softFallbackContext, null);
+});
+
+Deno.test("§4.8.1: softFallbackContext === null при error/all_zero_price/empty_degraded", async () => {
+  // error
+  const fErr = makeFetch(() => new Response("x", { status: 500 }));
+  const oErr = await search({ query: "abc" }, deps(fErr));
+  assertEquals(oErr.status, "error");
+  assertEquals(oErr.softFallbackContext, null);
+
+  // all_zero_price
+  const fZ = makeFetch(() => jsonResponse({
+    data: { results: [P(1, "X", 0)], total: 1 },
+  }));
+  const oZ = await search({ query: "abc" }, deps(fZ));
+  assertEquals(oZ.status, "all_zero_price");
+  assertEquals(oZ.softFallbackContext, null);
+});
+
+Deno.test("§4.8: прогрессивное снятие — по optionFilterOrder с конца, фиксируется ПЕРВЫЙ успех", async () => {
+  // 2 фильтра: brand, color. Order = [brand, color]. Снимаем сначала color,
+  // если empty — снимаем brand. На втором soft attempt API даёт товар.
+  let callIndex = 0;
+  const seenUrls: string[] = [];
+  const f = makeFetch((url) => {
+    callIndex++;
+    seenUrls.push(url);
+    if (callIndex === 1) {
+      // strict: brand+color
+      return jsonResponse({ data: { results: [], total: 0 } });
+    }
+    if (callIndex === 2) {
+      // soft #1: сняли color, остался brand → ещё пусто
+      return jsonResponse({ data: { results: [], total: 0 } });
+    }
+    // soft #2: сняли brand → есть товары
+    return jsonResponse({ data: { results: [P(1, "Widget X")], total: 1 } });
+  });
+  const out = await search({
+    query: "widget",
+    optionFilters: { brand: ["acme"], color: ["red"] },
+    optionFilterCaptions: { brand: "Бренд", color: "Цвет" },
+    optionFilterOrder: ["brand", "color"],
+  }, deps(f));
+  assertEquals(out.status, "soft_fallback");
+  assertEquals(out.products.length, 1);
+  assertEquals(out.attempts.length, 3);
+  // первый снятый — color (последний в order), второй — brand
+  assertEquals(out.attempts[1].droppedFacetKey, "color");
+  assertEquals(out.attempts[2].droppedFacetKey, "brand");
+  // фиксируется caption ПОСЛЕДНЕГО снятого фильтра, который дал успех
+  assertEquals(out.softFallbackContext!.droppedFacetCaption, "Бренд");
+});
+
+Deno.test("§4.8.1: caption fallback к key, если captions не передан", async () => {
+  let callIndex = 0;
+  const f = makeFetch(() => {
+    callIndex++;
+    if (callIndex === 1) return jsonResponse({ data: { results: [], total: 0 } });
+    return jsonResponse({ data: { results: [P(1, "Widget X")], total: 1 } });
+  });
+  const out = await search({
+    query: "widget",
+    optionFilters: { brand: ["acme"] },
+    // optionFilterCaptions НЕ передан
+  }, deps(f));
+  assertEquals(out.status, "soft_fallback");
+  assertEquals(out.softFallbackContext!.droppedFacetCaption, "brand");
+});
+
+// ─── computeRemovalOrder unit ───────────────────────────────────────────────
+
+Deno.test("computeRemovalOrder: order задан → reverse + дозаполнение осиротевших", () => {
+  const out = computeRemovalOrder(["a", "b", "c"], ["a", "b", "c", "d"]);
+  // c, b, a — из order в обратном порядке; d — осиротевший в конец
+  assertEquals(out, ["c", "b", "a", "d"]);
+});
+
+Deno.test("computeRemovalOrder: order не задан → reverse filterKeys", () => {
+  const out = computeRemovalOrder(undefined, ["a", "b", "c"]);
+  assertEquals(out, ["c", "b", "a"]);
+});
+
+Deno.test("computeRemovalOrder: order содержит ключи, которых нет → они отбрасываются", () => {
+  const out = computeRemovalOrder(["x", "a", "y"], ["a"]);
+  assertEquals(out, ["a"]);
+});
+
+// ─── resolveDroppedCaption unit ─────────────────────────────────────────────
+
+Deno.test("resolveDroppedCaption: возвращает caption из карты", () => {
+  assertEquals(resolveDroppedCaption("brand", { brand: "Бренд" }), "Бренд");
+});
+
+Deno.test("resolveDroppedCaption: пустой caption → fallback к key", () => {
+  assertEquals(resolveDroppedCaption("brand", { brand: "  " }), "brand");
+});
+
+Deno.test("resolveDroppedCaption: caption отсутствует → fallback к key", () => {
+  assertEquals(resolveDroppedCaption("brand", {}), "brand");
 });
 
 // ─── search: статусы from api-client ────────────────────────────────────────

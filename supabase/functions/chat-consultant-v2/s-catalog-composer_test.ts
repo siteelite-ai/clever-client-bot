@@ -43,6 +43,7 @@ function mockProduct(overrides: Partial<RawProduct> = {}): RawProduct {
 function mockOutcome(
   status: SearchOutcome["status"],
   products: RawProduct[] = [],
+  overrides: Partial<SearchOutcome> = {},
 ): SearchOutcome {
   return {
     status,
@@ -51,7 +52,11 @@ function mockOutcome(
     zeroPriceFiltered: 0,
     postFilterDropped: 0,
     attempts: [],
+    softFallbackContext: status === "soft_fallback"
+      ? { droppedFacetCaption: "Цвет" }
+      : null,
     ms: 0,
+    ...overrides,
   };
 }
 
