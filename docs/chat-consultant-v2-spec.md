@@ -361,6 +361,7 @@ Turn {
 | `refine_filter` | Уточнение к активному слоту (цвет, бренд, мощность, цена). | `filters: {key: string; values: string[]}[]`, `price?: {min?:number;max?:number}`, `sort?` |
 | `info_request` | Вопрос про доставку, оплату, гарантию, адреса, акции, инструкции. | `topic: string` |
 | `is_replacement` | Пользователь просит замену/аналог. | `original_sku_or_name: string`, `traits: string[]` |
+| `similar_search` | Явный запрос аналога/похожего к **конкретному товару** (маркеры: «похожее», «аналог», «замена», «такое же, но», «не хуже», «получше», «вместо этого»). Отличие от `is_replacement`: triggered when there is an anchor product in the dialog (last shown card / SKU in message / explicit pick); работает по характеристикам якоря, не по SKU оригинала. | `quality_qualifier?: 'not_worse' \| 'better' \| 'cheaper'`, `anchor_hint?: string` |
 | `escalate` | Прямой запрос менеджера, жалоба, нестандартный кейс. | `reason: string` |
 | `reset_slot` | Явный сброс («начни заново», «другой товар»). | — |
 | `next_page` | «покажи ещё», «дальше», «следующие», «more» — пагинация по текущему слоту. | `delta?: number` (по умолчанию 1, может быть отрицательным для «назад») |
