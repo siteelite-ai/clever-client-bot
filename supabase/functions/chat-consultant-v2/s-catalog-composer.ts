@@ -555,7 +555,12 @@ async function composeNoResults(
     );
   }
 
-  // §5.6.1: CONTACT_MANAGER при streak=2 ИЛИ all_zero_price ИЛИ error.
+  // §5.6.1 (двойной путь): contactManager=true via TWO paths —
+  //   1) streak === 2 (накопленные подряд soft 404)
+  //   2) scenario ∈ {all_zero_price, error, out_of_domain}
+  // out_of_domain обрабатывается ДО search.ts (на уровне intent.domain_check),
+  // в SearchOutcome.status его нет — поэтому здесь учитываем только два scenario.
+  // Если в будущем out_of_domain начнёт доходить до композера — добавить сюда.
   const contactManager =
     newStreak === 2 || scenario === "all_zero_price" || scenario === "error";
 
