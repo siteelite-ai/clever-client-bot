@@ -335,8 +335,13 @@ export interface NormalizedOutcome {
 }
 
 /** Решает сценарий по нормализованному outcome (поддерживает search+price). */
-export function decideScenario(outcome: NormalizedOutcome): CatalogScenario {
-  switch (outcome.status) {
+export function decideScenario(
+  outcome: NormalizedOutcome | SearchOutcome,
+): CatalogScenario {
+  const norm: NormalizedOutcome = "kind" in outcome
+    ? outcome
+    : wrapSearch(outcome);
+  switch (norm.status) {
     case "ok":
       return "normal";
     case "soft_fallback":
@@ -369,18 +374,22 @@ export function decideScenario(outcome: NormalizedOutcome): CatalogScenario {
  */
 export function nextSoft404Streak(
   prev: 0 | 1 | 2,
-  outcome: NormalizedOutcome,
+  outcome: NormalizedOutcome | SearchOutcome,
 ): 0 | 1 | 2 {
+  const norm: NormalizedOutcome = "kind" in outcome
+    ? outcome
+    : wrapSearch(outcome);
+
   // §5.6.1: clarify — новое состояние, streak неизменен.
-  if (outcome.status === "clarify") return prev;
+  if (norm.status === "clarify") return prev;
 
   const isZero =
-    outcome.status === "empty" ||
-    outcome.status === "empty_degraded" ||
-    outcome.status === "all_zero_price";
+    norm.status === "empty" ||
+    norm.status === "empty_degraded" ||
+    norm.status === "all_zero_price";
   if (!isZero) {
     // Любой ненулевой результат (включая soft_fallback с товарами) → reset.
-    if (outcome.products.length > 0) return 0;
+    if (norm.products.length > 0) return 0;
     // error без товаров — НЕ инкрементим (это инфраструктурный сбой, не «ничего нет»).
     return prev;
   }
