@@ -358,7 +358,11 @@ Turn {
 ```ts
 interface ClassifierInput {
   text: string;                    // raw user message
-  active_slot?: { category_pagetitle: string; applied_filter_keys: string[] };
+  active_slot?: {
+    category_pagetitle: string;
+    applied_filter_keys: string[];
+    pending_clarification?: { facet_caption: string; available_values: string[] }; // §13.1
+  };
   recent_assistant_summary?: string; // ≤ 200 символов
 }
 
