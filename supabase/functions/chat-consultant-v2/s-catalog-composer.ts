@@ -44,9 +44,10 @@
  * V1 НЕ тронут.
  */
 
-import type { ChatHistoryMessage } from "./types.ts";
+import type { ChatHistoryMessage, Slot } from "./types.ts";
 import type { RawProduct } from "./catalog/api-client.ts";
 import type { SearchOutcome } from "./catalog/search.ts";
+import type { SPriceOutcome } from "./s-price.ts";
 import {
   formatProductList,
   type FormatterOptions,
@@ -169,13 +170,32 @@ export type CatalogScenario =
   | "soft_fallback" // §4.8: фильтры сняты → cross-sell ЗАПРЕЩЁН, добавим tail line
   | "soft_404" // §5.6.1: 0 товаров → 1 короткая фраза, без cross-sell
   | "all_zero_price" // двойной фильтр выкинул всё → CONTACT_MANAGER без товаров
-  | "error"; // catastrophic → нейтральная фраза + escalation
+  | "error" // catastrophic → нейтральная фраза + escalation
+  | "clarify"; // §4.4 price branch: probe.total > 50 → price_clarify slot, без LLM
+
+/**
+ * Вход композера может быть от двух веток pipeline:
+ *   - S_CATALOG (поиск)  → SearchOutcome
+ *   - S_PRICE   (цена)   → SPriceOutcome
+ *
+ * Различение делается по полю-дискриминатору `kind` (выставляет orchestrator).
+ * Это лучше чем `instanceof`, т.к. оба типа — POJO без классов.
+ */
+export type ComposerOutcome =
+  | { kind: "search"; outcome: SearchOutcome }
+  | { kind: "price"; outcome: SPriceOutcome };
 
 export interface ComposeCatalogInput {
   /** Очищенный запрос пользователя (после S0). */
   query: string;
-  /** Результат поисковой стадии (catalog/search.ts). */
-  outcome: SearchOutcome;
+  /**
+   * Результат поисковой/ценовой стадии. Дискриминированный union:
+   *   - search: catalog/search.ts
+   *   - price:  s-price.ts (содержит clarifySlot, totalCount, branch)
+   * Принимаем также «голый» SearchOutcome для обратной совместимости с тестами
+   * (нормализуем в normalizeOutcome).
+   */
+  outcome: SearchOutcome | ComposerOutcome;
   /** История диалога (до trim). */
   history: ChatHistoryMessage[];
   /** Текущее значение soft404_streak ДО обработки этого хода (§5.6.1). */
