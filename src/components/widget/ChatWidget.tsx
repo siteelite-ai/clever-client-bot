@@ -76,6 +76,7 @@ type DialogSlots = Record<string, DialogSlot>;
 
 async function streamChat({
   messages,
+  query,
   onDelta,
   onDone,
   onError,
@@ -87,6 +88,8 @@ async function streamChat({
   endpointUrl,
 }: {
   messages: Msg[];
+  /** Явный текст последнего user-сообщения. V2 контракт требует поле `query`. */
+  query: string;
   onDelta: (deltaText: string) => void;
   onDone: () => void;
   onError: (error: string) => void;
