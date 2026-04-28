@@ -218,6 +218,7 @@ export async function search(
       zeroPriceFiltered: 0,
       postFilterDropped: 0,
       attempts,
+      softFallbackContext: null,
       ms: Date.now() - t0,
       errorMessage: strictRaw.errorMessage,
     };
@@ -233,6 +234,7 @@ export async function search(
       zeroPriceFiltered: strictRaw.zeroPriceFiltered,
       postFilterDropped: 0,
       attempts,
+      softFallbackContext: null,
       ms: Date.now() - t0,
     };
   }
@@ -249,6 +251,7 @@ export async function search(
       postFilterDropped: 0,
       attempts,
       degradedHint: strictRaw.degradedHint,
+      softFallbackContext: null,
       ms: Date.now() - t0,
     };
   }
@@ -270,15 +273,18 @@ export async function search(
         perPage,
         totalPages: estimateTotalPages(strictRaw.totalFromApi, perPage),
       },
+      softFallbackContext: null,
       ms: Date.now() - t0,
     };
   }
 
-  // ── ATTEMPT 2: Soft Fallback (без optionFilters) ──────────────────────
+  // ── ATTEMPT 2+: Soft Fallback (прогрессивное снятие фильтров, §4.8) ──
   // Триггер: были фильтры И strict вернул 0 (после API + post-filter).
   // Если фильтров не было — soft fallback бесполезен, сразу 'empty'.
-  const hadFilters = input.optionFilters &&
-    Object.keys(input.optionFilters).length > 0;
+  const filterKeys = input.optionFilters
+    ? Object.keys(input.optionFilters)
+    : [];
+  const hadFilters = filterKeys.length > 0;
 
   if (!hadFilters) {
     return {
@@ -288,88 +294,127 @@ export async function search(
       zeroPriceFiltered: strictRaw.zeroPriceFiltered,
       postFilterDropped: strictPostDropped,
       attempts,
+      softFallbackContext: null,
       ms: Date.now() - t0,
     };
   }
 
-  const softInput: SearchProductsInput = toApiInput(
-    { ...input, optionFilters: undefined, optionAliases: undefined },
-    perPage,
-    page,
-  );
-  const softRaw = await searchProducts(softInput, deps);
-  attempts.push({ label: "soft_fallback", ms: softRaw.ms, raw: softRaw });
+  // §4.8: снимаем фильтры по одному с конца optionFilterOrder. Если порядок
+  // не задан — fallback к старому поведению (снимаем все разом).
+  const removalOrder = computeRemovalOrder(input.optionFilterOrder, filterKeys);
+  const captionsMap = input.optionFilterCaptions ?? {};
 
-  // На soft attempt error/zero/degraded → возвращаем как есть, без рекурсии.
-  if (
-    softRaw.status === "http_error" ||
-    softRaw.status === "timeout" ||
-    softRaw.status === "network_error"
-  ) {
-    return {
-      status: "empty",
-      products: [],
-      totalFromApi: strictRaw.totalFromApi,
-      zeroPriceFiltered: strictRaw.zeroPriceFiltered,
-      postFilterDropped: strictPostDropped,
-      attempts,
-      ms: Date.now() - t0,
-    };
-  }
+  let cumulativeZero = strictRaw.zeroPriceFiltered;
+  let cumulativePostDropped = strictPostDropped;
+  let lastSoftRaw: SearchProductsResult | null = null;
+  let activeFilters = { ...(input.optionFilters as Record<string, string[]>) };
+  let activeAliases = input.optionAliases ? { ...input.optionAliases } : undefined;
 
-  if (softRaw.status === "all_zero_price") {
-    return {
-      status: "all_zero_price",
-      products: [],
-      totalFromApi: softRaw.totalFromApi,
-      zeroPriceFiltered: strictRaw.zeroPriceFiltered + softRaw.zeroPriceFiltered,
-      postFilterDropped: strictPostDropped,
-      attempts,
-      ms: Date.now() - t0,
-    };
-  }
+  for (const keyToDrop of removalOrder) {
+    delete activeFilters[keyToDrop];
+    if (activeAliases) delete activeAliases[keyToDrop];
 
-  if (softRaw.status === "empty_degraded") {
-    // Маловероятно (фильтры выкинули), но обрабатываем.
-    return {
-      status: "empty_degraded",
-      products: [],
-      totalFromApi: 0,
-      zeroPriceFiltered: strictRaw.zeroPriceFiltered + softRaw.zeroPriceFiltered,
-      postFilterDropped: strictPostDropped,
-      attempts,
-      degradedHint: softRaw.degradedHint,
-      ms: Date.now() - t0,
-    };
-  }
-
-  const softFiltered = softRaw.products.filter((p) => matchesWordBoundary(p, queryTokens));
-  const softPostDropped = softRaw.products.length - softFiltered.length;
-
-  if (softFiltered.length > 0) {
-    return {
-      status: "soft_fallback",
-      products: softFiltered,
-      totalFromApi: softRaw.totalFromApi,
-      zeroPriceFiltered: strictRaw.zeroPriceFiltered + softRaw.zeroPriceFiltered,
-      postFilterDropped: strictPostDropped + softPostDropped,
-      attempts,
-      pagination: {
-        page,
-        perPage,
-        totalPages: estimateTotalPages(softRaw.totalFromApi, perPage),
+    const softInput: SearchProductsInput = toApiInput(
+      {
+        ...input,
+        optionFilters: Object.keys(activeFilters).length > 0 ? activeFilters : undefined,
+        optionAliases: activeAliases && Object.keys(activeAliases).length > 0
+          ? activeAliases
+          : undefined,
       },
-      ms: Date.now() - t0,
-    };
+      perPage,
+      page,
+    );
+    const softRaw = await searchProducts(softInput, deps);
+    lastSoftRaw = softRaw;
+    attempts.push({
+      label: "soft_fallback",
+      ms: softRaw.ms,
+      raw: softRaw,
+      droppedFacetKey: keyToDrop,
+    });
+
+    // Hard fails на soft attempt → прерываем итерации, возвращаем 'empty'
+    // (soft fallback не «error» — strict отработал нормально, soft 404 streak).
+    if (
+      softRaw.status === "http_error" ||
+      softRaw.status === "timeout" ||
+      softRaw.status === "network_error"
+    ) {
+      return {
+        status: "empty",
+        products: [],
+        totalFromApi: strictRaw.totalFromApi,
+        zeroPriceFiltered: cumulativeZero,
+        postFilterDropped: cumulativePostDropped,
+        attempts,
+        softFallbackContext: null,
+        ms: Date.now() - t0,
+      };
+    }
+
+    cumulativeZero += softRaw.zeroPriceFiltered;
+
+    if (softRaw.status === "all_zero_price") {
+      return {
+        status: "all_zero_price",
+        products: [],
+        totalFromApi: softRaw.totalFromApi,
+        zeroPriceFiltered: cumulativeZero,
+        postFilterDropped: cumulativePostDropped,
+        attempts,
+        softFallbackContext: null,
+        ms: Date.now() - t0,
+      };
+    }
+
+    if (softRaw.status === "empty_degraded") {
+      return {
+        status: "empty_degraded",
+        products: [],
+        totalFromApi: 0,
+        zeroPriceFiltered: cumulativeZero,
+        postFilterDropped: cumulativePostDropped,
+        attempts,
+        degradedHint: softRaw.degradedHint,
+        softFallbackContext: null,
+        ms: Date.now() - t0,
+      };
+    }
+
+    const softFiltered = softRaw.products.filter((p) => matchesWordBoundary(p, queryTokens));
+    cumulativePostDropped += softRaw.products.length - softFiltered.length;
+
+    if (softFiltered.length > 0) {
+      const caption = resolveDroppedCaption(keyToDrop, captionsMap);
+      return {
+        status: "soft_fallback",
+        products: softFiltered,
+        totalFromApi: softRaw.totalFromApi,
+        zeroPriceFiltered: cumulativeZero,
+        postFilterDropped: cumulativePostDropped,
+        attempts,
+        pagination: {
+          page,
+          perPage,
+          totalPages: estimateTotalPages(softRaw.totalFromApi, perPage),
+        },
+        softFallbackContext: { droppedFacetCaption: caption },
+        ms: Date.now() - t0,
+      };
+    }
+    // продолжаем снимать следующий фильтр
   }
 
+  // Все фильтры сняты, везде пусто → empty.
   return {
     status: "empty",
     products: [],
-    totalFromApi: softRaw.totalFromApi,
-    zeroPriceFiltered: strictRaw.zeroPriceFiltered + softRaw.zeroPriceFiltered,
-    postFilterDropped: strictPostDropped + softPostDropped,
+    totalFromApi: lastSoftRaw?.totalFromApi ?? strictRaw.totalFromApi,
+    zeroPriceFiltered: cumulativeZero,
+    postFilterDropped: cumulativePostDropped,
     attempts,
+    softFallbackContext: null,
     ms: Date.now() - t0,
   };
 }
