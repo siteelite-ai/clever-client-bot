@@ -277,7 +277,12 @@ Turn {
        ▼
 [5] FSM Transition Decision  ── select branch
        │
-       ├──► [6a] Catalog Branch  ── slot manager + search
+       ├──► [6a] Catalog Branch
+       │      ├─ [6a.1] Category Resolver   ── LLM(query, slot, listCategories) → {pagetitle, confidence}
+       │      ├─ [6a.2] Facet Schema Loader ── category_facets(pagetitle) → OptionSchema (cache 1ч)
+       │      ├─ [6a.3] Facet Matcher (LLM) ── traits × schema → {resolved, soft_matches, unresolved}
+       │      ├─ [6a.4] Strict API Search   ── GET /api/products?category=…&options[k][]=v…
+       │      └─ [6a.5] Multi-bucket Fallback (см. §9.4) — только если confidence<0.4 ИЛИ resolved=∅
        ├──► [6b] KB Branch       ── hybrid retrieval
        ├──► [6c] Escalation      ── compose contact card
        └──► [6d] Small Talk      ── short redirect
