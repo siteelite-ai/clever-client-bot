@@ -52,6 +52,10 @@ import {
   createKnowledgeDeps,
   type KnowledgeBranchOutput,
 } from "./s-knowledge.ts";
+import {
+  composeKnowledgeAnswer,
+  createRespondDeps,
+} from "./s5-respond.ts";
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 const corsHeaders = {
@@ -60,7 +64,7 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const BUILD_MARKER = "v2-step9-knowledge-fts-2026-04-28";
+const BUILD_MARKER = "v2-step10-s5-respond-knowledge-2026-04-28";
 
 // ─── Контракт V2 запроса (Zod) ───────────────────────────────────────────────
 // Сохраняем backward-compat с виджетом: conversationId/query/messages/dialogSlots.
