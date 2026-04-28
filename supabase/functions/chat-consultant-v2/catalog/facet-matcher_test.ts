@@ -188,18 +188,39 @@ Deno.test('Test 7: API status=empty → no_facets', async () => {
 });
 
 Deno.test('Test 8: API status=timeout → category_unavailable', async () => {
-  const timeout: CategoryOptionsResult = {
-    status: 'timeout', options: [], totalProducts: 0, ms: 1, errorMessage: 'aborted',
+  // fakeFetch, который реально аборится → api-client вернёт status='timeout'.
+  const abortingFetch: typeof fetch = (_url, init) => {
+    return new Promise((_resolve, reject) => {
+      const signal = init?.signal;
+      if (signal?.aborted) {
+        const err = new Error('aborted');
+        err.name = 'AbortError';
+        return reject(err);
+      }
+      signal?.addEventListener('abort', () => {
+        const err = new Error('aborted');
+        err.name = 'AbortError';
+        reject(err);
+      });
+      // никогда не резолвим — ждём abort
+    });
   };
-  const fc = { n: 0 };
+  const apiClient: ApiClientDeps = {
+    baseUrl: 'https://test.local/api',
+    apiToken: 'test-token',
+    fetch: abortingFetch,
+    timeoutMs: { categoryOptions: 50 },  // быстро, чтобы тест не тормозил
+  };
   const cache = makeCacheStub();
-  const r = await matchFacets('cat', ['что-то'], {
-    apiClient: stubApiClient(timeout, fc),
+  const r = await matchFacets('cat_timeout', ['что-то'], {
+    apiClient,
     cacheGetOrCompute: cache.cacheGetOrCompute,
   });
   assertEquals(r.status, 'category_unavailable');
+  // source='live' — кэш miss, compute выполнен (но вернул timeout).
   assertEquals(r.source, 'unavailable');
   assertEquals(r.optionFilters, {});
+  assertEquals(r.unmatchedModifiers, ['что-то']);
 });
 
 Deno.test('Test 9: пустой modifiers[] → no_matches, всё пустое', async () => {
