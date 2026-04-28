@@ -1681,7 +1681,7 @@ interface EscalationPayload {
 
 ---
 
-## 25. Golden Test Suite (64 кейса)
+## 25. Golden Test Suite (70 кейсов)
 
 Файл: `tests/golden/chat-v2.json`. Прогон при каждом PR через `bun test tests/golden`.
 
