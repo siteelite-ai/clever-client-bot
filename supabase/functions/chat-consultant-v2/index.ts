@@ -178,7 +178,8 @@ async function runLightBranch(
       return null;
     case "S_CATALOG":
     case "S_CATALOG_OOD":
-      return null; // Steps 10–11
+    case "S_PRICE":
+      return null; // обрабатывается catalog-flow в start()
   }
 }
 
