@@ -170,6 +170,31 @@ export default function Settings() {
     }
   };
 
+  // Switch active pipeline (V1 ↔ V2). Saves immediately, independently of the
+  // big "Save settings" button — so admins can flip back to V1 in one click
+  // if V2 misbehaves.
+  const handlePipelineSwitch = async (next: PipelineVersion) => {
+    if (!settings?.id || next === activePipeline) return;
+    setPipelineSaving(true);
+    try {
+      const { error } = await supabase
+        .from('app_settings')
+        .update({ active_pipeline: next } as any)
+        .eq('id', settings.id);
+      if (error) throw error;
+      setActivePipeline(next);
+      toast.success(
+        next === 'v2'
+          ? 'Активирован пайплайн V2 (новая спецификация)'
+          : 'Активирован пайплайн V1 (стабильная версия)',
+      );
+    } catch (e) {
+      console.error('Pipeline switch failed:', e);
+      toast.error('Не удалось переключить пайплайн');
+    } finally {
+      setPipelineSaving(false);
+    }
+  };
   // Ping a single model via OpenRouter
   const pingModel = async (modelId: string) => {
     if (!openrouterKey) {
