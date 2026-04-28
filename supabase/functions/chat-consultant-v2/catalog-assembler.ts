@@ -421,7 +421,7 @@ export async function assembleCatalog(
   });
 
   return {
-    composerOutcome: { kind: "search", outcome: searchOutcome as unknown as ComposerOutcome["outcome"] },
+    composerOutcome: { kind: "search", outcome: adaptSSearchToSearchOutcome(searchOutcome) },
     ood: false,
     trace,
     resolvedPagetitle: resolver.pagetitle,
