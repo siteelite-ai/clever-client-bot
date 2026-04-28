@@ -94,7 +94,7 @@ Deno.test("J2: throw если и name, и pagetitle пусты", () => {
   assertThrows(
     () => formatProductCard(P({ name: null, pagetitle: null })),
     FormatterContractError,
-    "name",
+    "pagetitle",
   );
 });
 
