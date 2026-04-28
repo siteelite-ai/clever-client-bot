@@ -84,6 +84,7 @@ async function streamChat({
   onQuickReplies,
   conversationId,
   dialogSlots,
+  endpointUrl,
 }: {
   messages: Msg[];
   onDelta: (deltaText: string) => void;
@@ -94,6 +95,7 @@ async function streamChat({
   onQuickReplies?: (replies: QuickReply[]) => void;
   conversationId: string;
   dialogSlots: DialogSlots;
+  endpointUrl: string;
 }) {
   try {
     // Clean: only send pending slots, max 3
@@ -106,7 +108,7 @@ async function streamChat({
       }
     }
 
-    const resp = await fetch(`${SUPABASE_URL}/functions/v1/chat-consultant`, {
+    const resp = await fetch(endpointUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
