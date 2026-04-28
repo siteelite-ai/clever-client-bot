@@ -277,15 +277,10 @@ serve(async (req) => {
           throw new Error("openrouter_api_key not configured");
         }
 
-        const classifierDeps = createProductionDeps(
-          // createProductionDeps типизирован под минимальный subset SupabaseClient
-          supabase as unknown as Parameters<typeof createProductionDeps>[0],
-          openRouterKey,
-        );
-
-        // Step 8: ContactsLoader для S_CONTACT / S_ESCALATION.
-        const contactsDeps = createContactsLoaderDeps(
-          supabase as unknown as Parameters<typeof createContactsLoaderDeps>[0],
+        // Step 9: KnowledgeDeps для S_KNOWLEDGE (FTS-only).
+        // RPC `search_knowledge_chunks_hybrid` с query_embedding=null.
+        const knowledgeDeps = createKnowledgeDeps(
+          supabase as unknown as Parameters<typeof createKnowledgeDeps>[0],
         );
 
         // ── Запуск orchestrator ─────────────────────────────────────────
@@ -307,14 +302,27 @@ serve(async (req) => {
           sseChunk({ slot_update: { slots: decision.next_state.slots } }),
         );
 
-        // ── Step 8: лёгкие ветки → реальный исполнитель;
-        //    тяжёлые (Knowledge/Catalog) → placeholder до Steps 9–11.
+        // ── Step 8/9: ветки → реальный исполнитель;
+        //    Catalog ветки → placeholder до Steps 10–11.
         const tBranch0 = Date.now();
-        const branchOut = await runLightBranch(decision, contactsDeps);
+        let branchOut: BranchOutput | null = null;
+        let knowledgeOut: KnowledgeBranchOutput | null = null;
+
+        if (decision.route === "S_KNOWLEDGE") {
+          // Step 9: FTS-only поиск по БЗ + cache `kb:<hash>` (TTL 1ч).
+          // chunks уйдут в meta для последующего LLM-композера (Step 10).
+          knowledgeOut = await runKnowledge(decision.effective_message, knowledgeDeps);
+        } else {
+          branchOut = await runLightBranch(decision, contactsDeps);
+        }
         const branchMs = Date.now() - tBranch0;
 
-        const isLight = branchOut !== null;
-        const text = branchOut ? branchOut.text : renderPlaceholder(decision);
+        const isLight = branchOut !== null || knowledgeOut !== null;
+        const text = branchOut
+          ? branchOut.text
+          : knowledgeOut
+          ? knowledgeOut.text
+          : renderPlaceholder(decision);
 
         // Виджет (ChatWidget.tsx ≈ 175-179) рендерит side-channel `contacts`
         // как отдельную карточку. Эмитируем её ТОЛЬКО для S_ESCALATION,
@@ -330,7 +338,9 @@ serve(async (req) => {
         console.log(
           `[v2.branch.done] trace=${traceId} route=${decision.route} ` +
             `light=${isLight} ms=${branchMs} ` +
-            `contact_manager=${branchOut?.contact_manager_emitted ?? false}`,
+            `contact_manager=${branchOut?.contact_manager_emitted ?? false} ` +
+            `kb_chunks=${knowledgeOut?.chunks.length ?? "n/a"} ` +
+            `kb_cache_hit=${knowledgeOut?.cache_hit ?? "n/a"}`,
         );
 
         controller.enqueue(
@@ -339,7 +349,7 @@ serve(async (req) => {
             meta: {
               pipeline_version: "v2",
               build: BUILD_MARKER,
-              step: 8,
+              step: 9,
               route: decision.route,
               branch_executed: isLight ? "real" : "placeholder",
               intent: decision.intent,
@@ -347,6 +357,17 @@ serve(async (req) => {
               orchestrator_ms: orchestratorMs,
               branch_ms: branchMs,
               contact_manager_emitted: branchOut?.contact_manager_emitted ?? false,
+              // Step 9 → Step 10 handoff: топ-N chunks для LLM-композера.
+              // Передаём как side-channel в meta. На Step 10 композер
+              // прочитает knowledge_chunks и сгенерирует финальный ответ
+              // через OpenRouter. Сейчас они едут «в холостую» для трейса.
+              knowledge: knowledgeOut
+                ? {
+                    has_results: knowledgeOut.has_results,
+                    cache_hit: knowledgeOut.cache_hit,
+                    chunks: knowledgeOut.chunks,
+                  }
+                : undefined,
               trace: decision.trace,
               traceId,
               cache_ttl_ms: CLASSIFIER_CACHE_TTL_MS,
