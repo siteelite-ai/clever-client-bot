@@ -780,9 +780,13 @@ interface UnresolvedTrait {
 ### 9.7 Сортировка
 
 - По умолчанию `relevance` (порядок API).
-- `price_asc` / `price_desc` — **передаётся в Catalog API параметром сортировки** (не локальная сортировка одной страницы). Локальная сортировка top-N даёт min/max только среди этой страницы (≤50), а не среди всей категории (тысячи SKU), что для запросов «самое дешёвое / самое дорогое» приводит к неверному ответу.
-  - Если 220volt API поддерживает `?sort=price_asc|price_desc` — используем напрямую.
-  - Если не поддерживает (проверить в `docs/external/220volt-swagger.json`, дефект **B-API-003** при отсутствии) — выполнить **probe-запросы**: `GET /api/products?category=…&page=1&per_page=1&sort=...` (две вариации), либо итеративный обход страниц с локальным min/max до сходимости (с лимитом 5 страниц) и явным предупреждением Composer'а: «Возможно есть варианты дешевле — уточните у менеджера».
+- `price_asc` / `price_desc` — **локальная сортировка** (см. §9C.1). Catalog API параметр `?sort=` **игнорирует** (подтверждено живым прогоном 28 апр 2026, дефект **B-API-003**). Алгоритм:
+  1. `executeSearch` запрашивает `per_page=50` (макс. рекомендуемый), `?category=…` + резолвленные фильтры.
+  2. Локально отбрасывает `price === 0` (см. §9C.3).
+  3. Локально сортирует по цене и отдаёт топ-N (≤ 7, см. §9.6).
+  4. Если оставшихся товаров < N — догружает `page=2,3…` до N или лимита 5 страниц.
+  5. Composer добавляет sticky-warning: «Показываю самые дешёвые/дорогие из первых 50–250 товаров. Полный ассортимент в категории на сайте.»
+- `?min_price=` / `?max_price=` работают и **предпочтительнее** локального сорта, когда пользователь назвал диапазон.
 - Объёмная формула (для кабелей и т.п.): `Qty * Vol * 1.2` (кабели), `*1.1` (прочее). Формулу пользователю **не показывать**, только результат.
 
 ### 9.8 Замены и аналоги
@@ -974,16 +978,28 @@ interface ApiErrorB { success: false; errors: { error: string } }
 
 ### 9A.2 ProductResource
 
+**Источник истины — реальный ответ `/api/products`** (живой аудит 28 апр 2026, см. §9C.0). Поля `name`, `title`, `longtitle` в swagger описаны, но в реальном ответе **всегда `null`** — НЕ использовать. Имя товара = `pagetitle` (на уровне товара, не путать с `category.pagetitle`).
+
 ```ts
 interface ProductResource {
   id: number;
   article: string;            // SKU; ключ для поиска по артикулу
-  name: string;
+  pagetitle: string;          // ИМЯ ТОВАРА (используется для отображения и markdown)
+  alias: string;              // slug для построения URL
   url: string;                // абсолютный https://220volt.kz/...
-  price: number;              // ₸, целое
+  price: number;              // ₸. ВНИМАНИЕ: 0 = «цена по запросу/архив», см. §9C.3
   old_price?: number | null;  // ₸, для «было/стало»; null если без скидки
-  brand?: string | null;
+  vendor?: string | null;     // бренд (в swagger — brand; в реальном ответе — vendor)
+  image?: string | null;      // путь к главному изображению
+  amount?: number;            // суммарный остаток по всем складам
   category: { id: number; pagetitle: string };  // НЕТ поля title
+  parent?: number | null;     // id родительской категории (если есть)
+  popular?: 0 | 1;
+  new?: 0 | 1;
+  favorite?: 0 | 1;
+  weight?: number | string;
+  size?: string | null;
+  content?: string | null;    // HTML-описание
   options: Array<{
     caption_ru: string; caption_kz?: string;
     value_ru: string;   value_kz?: string;
@@ -991,6 +1007,11 @@ interface ProductResource {
   warehouses?: Array<{ city: string; amount: number }>;
   files?: Array<{ url: string; name?: string; type?: string }>;
   related_sku?: string[];     // если приходит — кросс-сейл
+
+  // DEPRECATED — всегда null в реальном ответе, оставлены для совместимости со swagger:
+  name?: null;
+  title?: null;
+  longtitle?: null;
 }
 ```
 
@@ -1008,33 +1029,43 @@ interface CategoryResource {
 
 // GET /api/categories/{id}/options ИЛИ /api/categories/options?pagetitle=...
 // ВАЖНО: реальный envelope иногда двойной: body.data.data вместо body.data.
+// Реальные ключи фасетов имеют суффикс с казахским переводом через "__":
+// "brend__brend", "cvet__tүs", "tip_cokolya__cokoly_tүrі",
+// "moschnosty__vt__Қuat__v" (опечатка moschnost*y*, фиксированная в API).
+// Часть таких ключей ЛОМАЕТ фильтрацию options[<key>][]= — см. §9C.2.
 interface CategoryOptionsResponse {
   success: true;
   data: {
     category: { id: number; pagetitle: string; total_products?: number };
     options: Array<{
-      key: string;             // напр. "brend__brend", "cvet"
+      key: string;             // полный ключ как в API, кейс-сенситивно
       caption_ru: string; caption_kz?: string;
-      values: Array<{ value_ru: string; value_kz?: string; count?: number }>;
+      values: Array<{ value_ru: string | number; value_kz?: string; count?: number }>;
     }>;
   };
 }
 ```
 
-Edge `search-products` нормализует двойной envelope (`body.data.data || body.data`) — см. реализацию в `supabase/functions/search-products/index.ts`.
+Edge `search-products` нормализует двойной envelope (`body.data.data || body.data`) — см. реализацию в `supabase/functions/search-products/index.ts`. Снапшот фасетов топ-категорий (Лампы, Розетки, Автоматические выключатели, Светильники) хранится в `docs/external/220volt-facets-snapshot.json` для воспроизводимости golden-тестов.
 
-### 9A.4 Поиск товаров — параметры
+### 9A.4 Поиск товаров — параметры (что РАБОТАЕТ)
 
 ```
 GET /api/products
-  ?query={string}                   // полнотекст
+  ?query={string}                   // полнотекст по name/longtitle/description/content
   ?article={string}                 // точный поиск по SKU; перекрывает query
   ?category={pagetitle}             // ТОЛЬКО pagetitle, не id
   ?options[{key}][]={value}         // повторяемый, AND между разными key, OR внутри одного key
-  ?min_price={int}&max_price={int}
+                                    //   ⚠ часть ключей с казахскими буквами не работает — §9C.2
+  ?min_price={int}&max_price={int}  // работают, целевая замена для «дешёвые/дорогие»
   ?page={int}                       // 1-based
   ?per_page={int}                   // ≤ 50 рекомендация
 ```
+
+**НЕ работают / отсутствуют в API** (см. §9C):
+- `?sort=price_asc|price_desc` — параметр игнорируется (живой прогон 28 апр 2026 показал идентичный порядок).
+- `options[{key}][value]={v}` — альтернативный синтаксис из swagger возвращает 0.
+- Любая фильтрация по фасету, ключ которого содержит определённые казахские диграфы (см. §9C.2).
 
 Ответ: `ApiListEnvelope<ProductResource>`. SKU lookup: `data.results.length === 0` → soft 404 (нет такого артикула).
 
@@ -1047,9 +1078,71 @@ GET /api/categories?parent=0&depth=10&per_page=200&page=N
 
 ### 9A.6 Маппинг внутренних типов
 
-См. §13.1 — внутренний `Product`/`Category` строится строго из `ProductResource`/`CategoryResource` без потерь полей `id`, `article`, `old_price`, `warehouses`, `category.id`.
+См. §13.1 — внутренний `Product` строится строго из `ProductResource`. Маппинг ключевых полей:
+
+| Внутренний `Product` | `ProductResource` | Примечание |
+|---|---|---|
+| `title` | `pagetitle` | имя для UI/markdown |
+| `sku` | `article` | |
+| `brand` | `vendor` | в swagger опечатка `brand` |
+| `image_url` | `image` | |
+| `total_stock` | `amount` | сумма по складам |
 
 ---
+
+## 9C. Известные ограничения и обходы Catalog API
+
+> Раздел зафиксирован после живого аудита 28 апр 2026. Все факты подтверждены прогонами, см. §9C.0. Эти ограничения **известны и обработаны** в Catalog Search; они не должны выглядеть как баги для пользователя.
+
+### 9C.0 Источник правды
+
+Снапшоты живых ответов: `docs/external/220volt-facets-snapshot.json` (схемы фасетов 4 топ-категорий) и сниппеты `/api/products` в журнале аудита. CI-чекер (см. ADR 28.11) сравнивает live-ответ со снапшотом раз в сутки и алертит при дрейфе.
+
+### 9C.1 Сортировка по цене (`sort=` игнорируется)
+
+API не поддерживает сортировку. Реализуем локально:
+
+- `price_asc`: запрашиваем `per_page=50` (max), фильтруем `price > 0` (см. §9C.3), сортируем локально, отдаём топ-N (≤7). Если после фильтра <N — пагинируемся внутрь, пока не наберём, либо отдаём «есть N товаров с известной ценой».
+- `price_desc`: то же самое, обратный сорт.
+- При желании пользователя «до X тенге» / «от X» — используем `min_price`/`max_price` (работают), это всегда предпочтительнее локального сорта.
+
+Метрика: `local_sort_invocations` (counter), `local_sort_pages_fetched` (histogram).
+
+### 9C.2 Фильтрация по фасетам с казахским суффиксом ключа
+
+Прогоны показали **нестабильное поведение**:
+
+| Ключ фасета | `options[key][]=val` работает? | Пример |
+|---|---|---|
+| `brend__brend` | ✅ | 341 товар по `=Legrand` |
+| `tip_cokolya__cokoly_tүrі` | ✅ (содержит `ү`) | 196 товаров по `=E14` |
+| `kolichestvo_razyemov__aғytpalar_sany_` | ✅ (содержит `ғ`) | 802 товара по `=2` |
+| `cvet__tүs` | ❌ | 0 товаров по `=белый` (хотя в схеме есть) |
+| `forma_kolby__kolbanyң_pіshіnі` | ❌ | 0 товаров по `=капсула` или `=груша` |
+
+Закономерность не сводится к «есть казахская буква» — поведение **per-key**. До исправления на стороне 220volt (ADR 28.17) применяем:
+
+**Поведение Catalog Search:**
+
+1. **Whitelist рабочих ключей** хранится в `app_settings.facet_filter_whitelist_json` (массив `key`). На старте инициализируется по результатам аудита 28.04: `brend__brend`, `tip_cokolya__cokoly_tүrі`, `kolichestvo_razyemov__aғytpalar_sany_`, `kolichestvo_polyusov__polyuster_sany`, `nominalynyy_tok__nominaldy_toқ`, `stepeny_zaschity__Қorғau_dәreghesі`, `napryaghenie__v__kerneu__v`, `moschnosty__vt__Қuat__v`, `garantiya__god__kepіldіk_merzіmі__ghyl`. Расширяется через еженедельный probe (cron в edge).
+2. Если резолвлен фильтр по ключу **в whitelist** — отправляется как `options[]` (как сейчас).
+3. Если фильтр по ключу **не в whitelist** — НЕ отправляется как `options[]`. Вместо этого его `value_ru` добавляется в `?query=` как **fallback-токен** (нарушение инварианта §4.5 «не загрязнять query» — единственный санкционированный случай). Такой фильтр помечается в `slot.applied_filters[].source = 'query_fallback'`. В Composer выводится предупреждение: «Точная фильтрация "{caption}: {value}" недоступна — ищу полнотекстом».
+4. Метрика: `facet_query_fallback_used` (counter, split by `key`), `facet_filter_blocked_total` (counter).
+5. Probe-cron: раз в сутки случайно тестирует один не-whitelisted ключ; при `total > 0` ↑ запись в whitelist (auto-extend) с уведомлением админу.
+
+### 9C.3 Товары с `price = 0`
+
+В категории «Лампы» **50 % товаров имеют `price=0`** (архивные / «цена по запросу» / снятые с продажи). Аналогичная картина в других категориях. Без обработки это даёт «0 ₸» в карточке — UX-катастрофа.
+
+**Поведение Catalog Search:** по умолчанию **отфильтровывает** товары с `price === 0` перед передачей в Composer. Если после фильтрации `results.length === 0` и общий `total > 0` — Composer выдаёт сообщение «Все найденные товары сейчас доступны только по запросу. Уточните у менеджера.» с маркером `CONTACT_MANAGER`.
+
+Конфиг: `app_settings.zero_price_policy` (`'hide' | 'show_with_marker' | 'allow'`, default `'hide'`). Метрика: `zero_price_hidden` (counter).
+
+### 9C.4 Имя товара
+
+Имя берётся из `ProductResource.pagetitle`. Поля `name`, `title`, `longtitle` всегда `null` и НЕ используются. Markdown-формат `**[Name](URL)**` (см. §11, §17, §22.2 `format_violations`) опирается на `pagetitle`.
+
+
 
 ## 10. Модуль: Knowledge Base RAG
 
@@ -1423,11 +1516,13 @@ interface Slot {
 interface Product {
   id: number;                  // integer
   sku: string;                 // = ProductResource.article
-  name: string;
+  title: string;               // = ProductResource.pagetitle (см. §9A.2 / §9C.4)
   url: string;
-  price: number;               // ₸
+  price: number;               // ₸. price=0 фильтруется на уровне Catalog Search (§9C.3)
   old_price?: number | null;   // ₸, для отображения скидки
-  brand?: string | null;
+  brand?: string | null;       // = ProductResource.vendor
+  image_url?: string | null;   // = ProductResource.image
+  total_stock?: number;        // = ProductResource.amount
   category: { id: number; pagetitle: string };
   warehouses: { city: string; amount: number }[];   // поле API называется amount, не qty
   options: Array<{ caption_ru: string; value_ru: string; caption_kz?: string; value_kz?: string }>;
@@ -1970,6 +2065,12 @@ interface EscalationPayload {
 | `soft_fallback_triggered` | counter | поиск с unresolved при resolved≥2 (§11.2a) |
 | `pagination_next_page` | counter | срабатываний intent `next_page` (§7.2) |
 | `sse_greeting_stripped` | counter | сколько раз PersonaGuard L1 вырезал приветствие из 30-символьного буфера |
+| `facet_query_fallback_used` | counter (split by `key`) | срабатываний §9C.2: фасет ушёл в `?query=` вместо `options[]` |
+| `facet_filter_blocked_total` | counter | фильтров отброшено по non-whitelist (всего) |
+| `zero_price_hidden` | counter | товаров отфильтровано по `price=0` (§9C.3) |
+| `local_sort_invocations` | counter | срабатываний локальной сортировки (§9C.1) |
+| `local_sort_pages_fetched` | histogram | сколько страниц подгружено для добора N товаров при локальной сортировке |
+| `whitelist_probe_added` | counter | автодобавлений ключей в `facet_filter_whitelist_json` через probe-cron |
 
 ### 22.3 Алерты
 
@@ -2024,6 +2125,8 @@ interface EscalationPayload {
 | `sla_targets` | jsonb | пороги для алертов. |
 | `lexicon_json` | jsonb | словарь алиасов §9.2b. Структура: `{ entries: Array<{ surface: string \| string[], type: 'name_modifier'\|'trait_expansion'\|'category_hint', canonical_token?: string, expanded_trait?: string, category_hint?: string, confidence: number, locale?: 'ru'\|'kk'\|'mixed' }> }`. Hot-reload каждые 60 с (тот же кэш, что у конфига). |
 | `resolver_thresholds_json` | jsonb | пороги Category Resolver и Lexicon. Дефолт: `{ "category_high": 0.7, "category_low": 0.4, "lexicon_query_inject": 0.9, "lexicon_trait_expand": 0.85, "soft_match_min": 0.6 }`. Вынесены из кода для тюнинга без редеплоя (см. ADR 28.13). |
+| `facet_filter_whitelist_json` | jsonb | массив `key`-ов фасетов, по которым `options[key][]=` реально работает в Catalog API (§9C.2). Seed из аудита 28.04.2026. Расширяется probe-cron'ом. Любой ключ вне списка → query_fallback (§9C.2 п.3). |
+| `zero_price_policy` | text | `'hide' \| 'show_with_marker' \| 'allow'`. Дефолт `'hide'` (см. §9C.3, ADR 28.18). |
 
 Конфиг читается edge-функцией один раз в 60 секунд (in-memory cache), чтобы изменения не требовали редеплоя.
 
@@ -2071,6 +2174,7 @@ interface GoldenCase {
 | 14 | Progressive Feedback | 4 | TC-61: SKU-запрос → `thinking seq=1` с intent=`sku_lookup` приходит в течение 600 ms; TC-62: быстрый ответ <400 ms → ни одного `thinking` event; TC-63: pipeline >3 s → приходит `thinking seq=2` (long-wait); TC-64: thinking-сообщения не попадают в `conversation_history` следующего turn'а |
 | 15 | Category Resolver & Facet Matcher | 6 | TC-69…TC-74 — см. §25.3 |
 | 16 | Lexicon Resolver, Soft Fallback, пагинация, SSE-буфер, Schema Dedup | 8 | TC-75…TC-82 — см. §25.4 |
+| 17 | API quirks (sort, non-ASCII facet keys, price=0) | 3 | TC-83…TC-85 — см. §25.5 |
 
 ### 25.2 Критерии прохождения
 
@@ -2084,11 +2188,12 @@ interface GoldenCase {
 
 | ID | Запрос | Ожидаемый Resolver | Ожидаемый Matcher | Ожидаемый Composer / Slot | Что проверяется |
 |---|---|---|---|---|---|
-| TC-69 | «найди чёрные двугнёздные розетки» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[{цвет:"чёрный"}, {кол-во гнёзд:"2"}]`, `unresolved=[]`, `soft_matches=[{trait:"двугнёздные",reason:"numeric_equivalent",value:"2"}]` | Composer показывает товары + строка «Точного "двугнёздные" нет, использовал ближайшее: 2». Поиск выполнен один раз, без `query=`. | Полный happy-path: Resolver high-confidence, Matcher с числовым эквивалентом и soft_match. |
-| TC-70 | «графитовые розетки» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[]`, `unresolved=[{trait:"графитовые",nearest_facet_key:"cvet*",available_values:[…]}]` | FSM → `SLOT_AWAITING_CLARIFICATION`; `slot.pending_clarification` заполнен; в ответе **только** уточняющий вопрос со списком доступных цветов; **НИ ОДНОГО** товара. | Запрет поиска при unresolved + resolved=0, контракт §11.2a (pending_clarification). |
-| TC-71 | «двойные розетки белого цвета» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[{цвет:"белый"}, {кол-во гнёзд:"2"}]`, `soft_matches=[{trait:"двойные",value:"2",reason:"numeric_equivalent"}]` | Товары + строка о soft_match по «двойные». | Числовой эквивалент `двойная→2` + точный exact-match цвета. |
-| TC-72 | «розетка с двумя гнёздами и 16А» | `pagetitle="Розетки"`, `confidence ≥ 0.85` | `resolved=[{кол-во гнёзд:"2"}, {номинальный ток:"16"}]`, `unresolved=[]` | Товары без предупреждений. | Два независимых трейта: словесный→числовой и точный числовой. |
-| TC-73 | «двухполюсный автомат на 16» | `pagetitle="Автоматические выключатели"` (или эквивалент), `confidence ≥ 0.85` | `resolved=[{полюсность:"2"}, {номинальный ток:"16"}]` | Товары без предупреждений. | Resolver вне категории «розетки» + морфологический разбор «двухполюсный→2». |
+| TC-69 | «найди чёрные двухгнёздные розетки» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[{cvet__tүs:"чёрный"} → §9C.2 query_fallback, {kolichestvo_razyemov__aғytpalar_sany_:"2"}]`, `unresolved=[]`, `soft_matches=[{trait:"двухгнёздные",reason:"numeric_equivalent",value:"2"}]` | Composer показывает товары + строки: (1) «Точная фильтрация Цвет: чёрный недоступна — ищу полнотекстом» (§9C.2); (2) «Точного "двухгнёздные" нет, использовал ближайшее: 2». Запрос к API: `?category=Розетки&query=чёрный&options[kolichestvo_razyemov__aғytpalar_sany_][]=2`. | Полный happy-path: реальные ключи фасетов, query_fallback для проблемного `cvet__tүs`, числовой эквивалент. |
+| TC-70 | «графитовые розетки» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[]`, `unresolved=[{trait:"графитовые",nearest_facet_key:"cvet__tүs",available_values:["белый","кремовый","бежевый","чёрный","серый","антрацит","алюминий","сталь",…]}]` | FSM → `SLOT_AWAITING_CLARIFICATION`; `slot.pending_clarification` заполнен; в ответе **только** уточняющий вопрос со списком доступных цветов; **НИ ОДНОГО** товара. | Запрет поиска при unresolved + resolved=0, контракт §11.2a (pending_clarification). Реальные значения цветов из снапшота. |
+| TC-71 | «двойные розетки белого цвета» | `pagetitle="Розетки"`, `confidence ≥ 0.9` | `resolved=[{cvet__tүs:"белый"} → query_fallback, {kolichestvo_razyemov__aғytpalar_sany_:"2"}]`, `soft_matches=[{trait:"двойные",value:"2",reason:"numeric_equivalent"}]` | Товары + предупреждения о query_fallback и soft_match. | Числовой эквивалент `двойная→2` + query_fallback для `cvet__tүs` (§9C.2). |
+| TC-72 | «розетка с двумя гнёздами и 16А» | `pagetitle="Розетки"`, `confidence ≥ 0.85` | `resolved=[{kolichestvo_razyemov__aғytpalar_sany_:"2"}, {maks__tok_nagruzki__a__maksimaldy_ghүkteme_toғy__a:"16"}]`, `unresolved=[]` | Товары без предупреждений. | Два независимых трейта на whitelisted ключах. |
+| TC-73 | «двухполюсный автомат на 16» | `pagetitle="Автоматические выключатели"`, `confidence ≥ 0.85` | `resolved=[{kolichestvo_polyusov__polyuster_sany:"2"}, {nominalynyy_tok__nominaldy_toқ:"16"}]` | Товары без предупреждений. | Реальные ключи из снапшота: `kolichestvo_polyusov`, `nominalynyy_tok`. Морфология «двухполюсный→2». |
+| TC-74 | property-based: 5 случайных синтетических трейтов на случайной категории; повторный прогон с подменой «ё↔е» и числовое слово↔цифра | — | Идемпотентный `resolved` (тот же набор `(facet_key,value)` на исходных и на нормализованных трейтах) | — | Стабильность Matcher к нормализации; защита от drift схемы. |
 | TC-74 | property-based: 5 случайных синтетических трейтов на случайной категории; повторный прогон с подменой «ё↔е» и числовое слово↔цифра | — | Идемпотентный `resolved` (тот же набор `(facet_key,value)` на исходных и на нормализованных трейтах) | — | Стабильность Matcher к нормализации; защита от drift схемы. |
 
 Вспомогательные инварианты для всех TC-69…TC-74:
@@ -2103,8 +2208,8 @@ interface GoldenCase {
 
 | ID | Запрос / сценарий | Ожидаемое поведение | Что проверяется |
 |---|---|---|---|
-| TC-75 | «лампа кукуруза g4» (свежая сессия) | Lexicon Resolver применяет `{surface:"кукуруза", type:"name_modifier", canonical_token:"CORN", confidence:0.95}` → в Catalog API уходит `?category=Лампы&query=CORN&cokol=G4`. `slot.applied_aliases` содержит запись. `slot.query_tokens=["CORN"]`. Composer показывает товары; в комментарии: «Нашёл по разговорному названию "кукуруза" → CORN». SSE event `lexicon_applied` отправлен. | Гибридная стратегия §9.2b: `canonical_token`→query, `trait_expansion`→facets, разделение путей, аналитика в slot. |
-| TC-76 | «капсульная лампочка g4 3.5вт» | `trait_expansion`: «капсульная» → trait «капсула», который Facet Matcher маппит в `forma=Капсула`. `?query=` пуст (нет `name_modifier`). `resolved=[{forma:"Капсула"},{cokol:"G4"},{moshchnost:"3.5"}]`, `soft_matches[].reason="lexicon_expansion"`. | Ветка `trait_expansion` Lexicon — НЕ трогает `?query=`, работает только до Facet Matcher. |
+| TC-75 | «лампа кукуруза g4» (свежая сессия) | Lexicon Resolver применяет `{surface:"кукуруза", type:"name_modifier", canonical_token:"CORN", confidence:0.95, category_hint:"Лампы"}` → в Catalog API уходит `?category=Лампы&query=CORN&options[tip_cokolya__cokoly_tүrі][]=G4`. На реальном API без `tip_cokolya` это уже даёт 19 товаров (подтверждено 28.04). `slot.applied_aliases` содержит запись. `slot.query_tokens=["CORN"]`. Composer показывает товары; в комментарии: «Нашёл по разговорному названию "кукуруза" → CORN». SSE event `lexicon_applied` отправлен. | Гибридная стратегия §9.2b: `canonical_token`→query, реальный whitelisted `tip_cokolya` для G4. |
+| TC-76 | «капсульная лампочка g4 3.5вт» | `trait_expansion`: «капсульная» → trait «капсула». Facet Matcher пытается замаппить в `forma_kolby__kolbanyң_pіshіnі="капсула"` (значение есть в схеме). Но `forma_kolby` **не в whitelist** (§9C.2) → реджект, value «капсула» уходит в `?query=`. Итог: `?category=Лампы&query=капсула&options[tip_cokolya__cokoly_tүrі][]=G4&options[moschnosty__vt__Қuat__v][]=3.5`. `slot.applied_filters` содержит `tip_cokolya` и `moschnosty` как `source:'llm'`, и `forma_kolby` как `source:'query_fallback'`. Composer добавляет предупреждение «Точная фильтрация Форма колбы: капсула недоступна — ищу полнотекстом». | Ветка `trait_expansion` Lexicon + §9C.2 query_fallback для проблемного facet key. |
 | TC-77 | «розетки белые» (resolved=`[{цвет:"белый"}]` после Matcher) + unresolved=`[{trait:"антивандальные",nearest_facet_key:"zashchita"}]` | Soft Fallback **НЕ** срабатывает (resolved=1<2): FSM → `SLOT_AWAITING_CLARIFICATION`, **0 товаров**, спросить про защиту. | Граница Soft Fallback при resolved < 2: блокирующее уточнение. |
 | TC-78 | «белые двойные розетки legrand» (resolved=3) + unresolved=`[{trait:"антивандальные",...}]` | Soft Fallback **СРАБАТЫВАЕТ** (resolved=3≥2): поиск выполняется с 3 фильтрами, товары показываются, в конце ответа inline-строка «Уточните: какая защита нужна? Доступно: IP20, IP44…». `pending_clarification` **НЕ** заполняется. Метрика `soft_fallback_triggered++`. | Soft Fallback §11.2a: товары + non-blocking вопрос при resolved≥2. |
 | TC-79 | (slot открыт, `result_count=83`, `page=1`, `pages=7`) → пользователь: «покажи ещё» / «следующая страница» | Intent Classifier → `next_page`. Slot **переиспользуется** целиком, инкремент `slot.page=2`. Catalog API вызывается с `?page=2&per_page=12&...` и теми же фильтрами и `query_tokens`. SSE `pagination` event с `{page:2,pages:7,total:83}`. Composer не задаёт уточнений. | Pagination FSM (§7.2): идемпотентность фильтров и алиасов, переиспользование slot. |
@@ -2117,7 +2222,23 @@ interface GoldenCase {
 - `?query=` строка Catalog API содержит **только** `canonical_token` из `applied_aliases` (type=`name_modifier`, confidence ≥ `lexicon_query_inject`). Любой другой источник в `?query=` — баг.
 - При срабатывании Soft Fallback (§11.2a) `pending_clarification` всегда `null`; при блокирующем уточнении — всегда заполнено и `applied_filters` ≤ 1.
 - При intent=`next_page` Slot не пересоздаётся; `applied_aliases`, `applied_filters`, `query_tokens` переиспользуются 1-в-1.
-- `lexicon_json` читается из 60-секундного кэша; ручной hot-reload через bump `app_settings.updated_at` (тот же механизм, что у общего конфига).
+- Инвариант §4.5 «не загрязнять `?query=`» имеет **одно** санкционированное исключение: §9C.2 query_fallback при ключе фасета вне `facet_filter_whitelist_json`.
+
+### 25.5 Кейсы API quirks (TC-83 — TC-85)
+
+Покрывают §9C — закрепляют, что Catalog Search корректно работает поверх известных дефектов реального API.
+
+| ID | Сценарий | Ожидаемое поведение | Что проверяется |
+|---|---|---|---|
+| TC-83 | Категория «Лампы», нет фильтров → API возвращает 877 товаров, из которых ~50 % имеют `price=0`. | Catalog Search фильтрует `price > 0`; если после фильтра <7 — догружает следующую страницу до 7 или лимита 5 страниц. В Composer попадают **только** товары с `price > 0`. Метрика `zero_price_hidden` инкрементируется на отброшенных. | §9C.3 фильтр price=0; полит. `zero_price_policy='hide'`. |
+| TC-84 | «розетки белые» — Facet Matcher резолвит `cvet__tүs="белый"`. | Ключ `cvet__tүs` **не в whitelist** (§9C.2). Catalog Search НЕ отправляет `options[cvet__tүs][]=белый` (известно: даёт 0). Значение «белый» уходит в `?query=`. `slot.applied_filters` содержит запись с `source:'query_fallback'`. Composer добавляет inline-warning «Точная фильтрация Цвет: белый недоступна — ищу полнотекстом». Метрика `facet_query_fallback_used{key="cvet__tүs"}` ++. | §9C.2 — единственное санкционированное query-загрязнение. |
+| TC-85 | «дешёвые лампы E27» с `slot.sort='price_asc'`. | API игнорирует `?sort=`, поэтому Catalog Search: (1) запрашивает `per_page=50`, (2) локально фильтрует `price > 0`, (3) сортирует по возрастанию, (4) если <7 — догружает page=2…5. Composer добавляет sticky-warning «Показываю самые дешёвые из первых 50–250 найденных…». Метрики `local_sort_invocations++`, `local_sort_pages_fetched` фиксирует кол-во страниц. | §9C.1 — локальная сортировка как замена сломанному `?sort=`. |
+
+Вспомогательные инварианты для всех TC-83…TC-85:
+
+- Edge-функция `search-products` НИКОГДА не отправляет `?sort=` в API (бесполезно). Сортировка только локальная.
+- Список рабочих/нерабочих ключей `facet_filter_whitelist_json` — единственный источник правды для `query_fallback` решения. Любой не-whitelisted ключ → fallback, без эвристик.
+- Probe-cron (§9C.2 п.5) безопасен: тестирует не более 1 ключа в сутки, не влияет на пользовательский latency.
 
 ---
 
@@ -2211,6 +2332,9 @@ interface GoldenCase {
 | 28.14 | Стратегия канонизации в Lexicon Resolver (§9.2b) | (a) только `canonical_token`→query; (b) только `trait_expansion`→facets; (c) гибрид | **(c) гибрид:** `trait_expansion` запускается перед Facet Matcher (для морфологических/языковых синонимов), `canonical_token` инжектируется в `?query=` (для имён собственных «CORN», «UNO» и т.п. при confidence ≥ 0.9). Два пути не пересекаются: одна запись лексикона имеет один `type`. |
 | 28.15 | Объём seed-словаря lexicon_json на старте | (a) ~30 (только лампы); (b) ~50–100 (свет + электроустановка); (c) 200+ (все домены) | **(b) ~50–100** на старте: лампы (CORN, UNO, шар, свеча, груша, R63, GU10), розетки/выключатели (механизм, рамка, суппорт), светильники (трек, профильный, downlight), кабель (ВВГ→жила/сечение). Расширение по логам `unresolved_traits` через еженедельный ревью. |
 | 28.16 | Кто может редактировать `lexicon_json` | (a) только admin через SQL; (b) admin-UI в /admin; (c) editor-роль | **(b)** — отдельная страница в /admin с валидацией схемы (Zod) и preview-эффектом (показать топ-10 unresolved_traits, которые покрылись бы после применения). |
+| 28.17 | Дефекты реального Catalog API: `?sort=` игнорируется и `options[<key>][]=` не работает для части ключей с казахскими буквами (`cvet__tүs`, `forma_kolby__…`) | (a) ждать фикса 220volt; (b) обходить локально (см. §9C.1, §9C.2) и эскалировать в 220volt IT параллельно | **(b)**. Локальные обходы реализуются в Catalog Search (отдельный SLA не блокируется). Параллельно открыть тикет в 220volt с прогонами из аудита 28 апр 2026. Pre-deploy probe-чекер сравнивает `?sort=price_asc` vs no-sort; при изменении поведения (sort заработает) — алерт «можно убирать локальный обход». |
+| 28.18 | Политика для товаров с `price=0` (50 % выдачи в категории «Лампы») | (a) скрывать; (b) показывать с маркером «цена по запросу»; (c) показывать всё | **(a) `hide` по умолчанию**, политика в `app_settings.zero_price_policy`. Если после фильтрации `total > 0`, но `results.length === 0` — Composer выдаёт `CONTACT_MANAGER` с сообщением «Все найденные доступны только по запросу». Маркетинг сможет переключить на `'show_with_marker'`. |
+| 28.19 | Whitelist рабочих facet keys (`facet_filter_whitelist_json`) — как пополнять | (a) только вручную через /admin; (b) probe-cron + auto-extend; (c) гибрид | **(c) гибрид:** seed из аудита 28 апр 2026, probe-cron раз в сутки тестирует 1 случайный не-whitelisted ключ, при `total > 0` добавляет с уведомлением админу. Ручное изменение через /admin доступно editor-роли. |
 
 ---
 
