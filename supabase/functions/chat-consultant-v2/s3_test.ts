@@ -71,6 +71,40 @@ Deno.test('s3: catalog (ambiguous) → S_CATALOG (НЕ OOD, обрабатыва
   assertEquals(r.route, 'S_CATALOG');
 });
 
+// ─── §4.4 раннее ветвление: price_intent → S_PRICE ───────────────────────────
+
+Deno.test('s3: catalog + price_intent=cheapest → S_PRICE', () => {
+  const r = routeIntent(makeIntent({ intent: 'catalog', price_intent: 'cheapest' }));
+  assertEquals(r.route, 'S_PRICE');
+  assertEquals(r.reason, 'intent_catalog_price');
+});
+
+Deno.test('s3: catalog + price_intent=expensive → S_PRICE', () => {
+  const r = routeIntent(makeIntent({ intent: 'catalog', price_intent: 'expensive' }));
+  assertEquals(r.route, 'S_PRICE');
+});
+
+Deno.test('s3: catalog + price_intent=range → S_PRICE', () => {
+  const r = routeIntent(makeIntent({ intent: 'catalog', price_intent: 'range' }));
+  assertEquals(r.route, 'S_PRICE');
+});
+
+Deno.test('s3: catalog + price_intent=null → S_CATALOG (обычный поиск)', () => {
+  const r = routeIntent(makeIntent({ intent: 'catalog', price_intent: null }));
+  assertEquals(r.route, 'S_CATALOG');
+  assertEquals(r.reason, 'intent_catalog');
+});
+
+Deno.test('s3: catalog + price_intent + out_of_domain → S_CATALOG_OOD (OOD приоритетнее price)', () => {
+  // OOD высший приоритет: даже с price_intent не вызываем API (метрика wasted_api_calls).
+  const r = routeIntent(makeIntent({
+    intent: 'catalog',
+    price_intent: 'cheapest',
+    domain_check: 'out_of_domain',
+  }));
+  assertEquals(r.route, 'S_CATALOG_OOD');
+});
+
 // ─── Защита от грязных данных ────────────────────────────────────────────────
 
 Deno.test('s3: неизвестный intent → throw (контракт нарушен → шумим)', () => {
