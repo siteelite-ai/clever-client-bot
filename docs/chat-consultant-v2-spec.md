@@ -516,7 +516,167 @@ function resolveCategory(input: {
 - Выход: строго JSON `{pagetitle, confidence, reasoning, alternatives}`. Никакого свободного текста.
 - Запрет: возвращать pagetitle, отсутствующий в переданном списке. При нарушении — реклассификация в multi-bucket с логированием `category_resolver_hallucination`.
 
-### 9.3 Facet Matcher (LLM)
+### 9.2b Lexicon Resolver
+
+Промежуточный детерминированный шаг между Category Resolver (§9.2a) и Facet Matcher (§9.3). Цель — канонизировать бытовые / переводные / сленговые / опечаточные термины пользователя ДО фасетного матчинга, **без LLM-вызова на лету**, in-memory, ≤3 мс.
+
+**Зачем нужен.** Каталог 220volt — реальный e-commerce, в котором бытовые названия товаров живут только в `name`/`артикуле` и не отражены в характеристиках. Канонический пример: «лампа кукуруза» (народный термин) → товар «Лампа LED **CORN** капсула 3,5Вт … G4 ИЭК», у которого:
+
+- слово `CORN` есть только в `name` и в `article`;
+- слова `кукуруза` нет нигде;
+- характеристика «Форма колбы» = `капсула` (не «corn», не «кукуруза»).
+
+Без Lexicon Resolver такие запросы либо ушли бы в multi-bucket fallback (Domain Guard может среагировать на «попкорн»), либо отдали бы пользователю случайные лампы из категории. Lexicon Resolver решает это детерминированным маппингом.
+
+#### Контракт
+
+```ts
+interface LexiconInput {
+  user_traits: string[];               // из Intent Classifier (entities.traits)
+  user_query_raw: string;              // полный текст реплики (для regex-матчинга)
+  resolved_category: { pagetitle: string };  // из §9.2a
+}
+
+interface LexiconOutput {
+  expanded_traits: string[];           // user_traits ∪ ⋃(matched.trait_expansion); дедуплицировано
+  canonical_tokens: string[];          // токены для ?query= (из matched, type='name_modifier', confidence ≥ 0.9)
+  applied_aliases: AppliedAlias[];     // для логов, метрик, soft_matches Composer'а
+}
+
+interface AppliedAlias {
+  user_term: string;                   // что увидели в реплике, например "кукуруза"
+  matched_pattern: string;             // regex из lexicon_json
+  canonical_token?: string;            // например "CORN" (если есть)
+  trait_expansion: string[];           // например ["капсула"]
+  source: 'lexicon';                   // зарезервировано для будущих источников
+  confidence: number;                  // из записи lexicon
+}
+```
+
+#### Источник словаря — `app_settings.lexicon_json`
+
+Структура (full schema):
+
+```json
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "corn-lamp",
+      "match": ["кукуруз\\w*", "\\bcorn\\b"],
+      "canonical_token": "CORN",
+      "trait_expansion": ["капсула"],
+      "domain_categories": ["lampyi"],
+      "type": "name_modifier",
+      "confidence": 1.0,
+      "comment": "лампа кукуруза → CORN (в name) + капсула (в форме колбы)"
+    },
+    {
+      "id": "pear-bulb",
+      "match": ["груш\\w*"],
+      "trait_expansion": ["A60"],
+      "domain_categories": ["lampyi"],
+      "type": "facet_alias",
+      "confidence": 1.0
+    },
+    {
+      "id": "minion-socle",
+      "match": ["миньон\\w*"],
+      "trait_expansion": ["E14"],
+      "domain_categories": ["lampyi"],
+      "type": "facet_alias",
+      "confidence": 1.0
+    }
+  ]
+}
+```
+
+Поля записи:
+
+| Поле | Тип | Описание |
+|---|---|---|
+| `id` | string | Стабильный человекочитаемый идентификатор для логов и аналитики |
+| `match` | `string[]` | Массив RegEx-паттернов, применяются к каждому трейту И к `user_query_raw`. Морфология учитывается через `\\w*` |
+| `canonical_token` | `string \| null` | Токен, реально живущий в `name`/`артикуле` товара. `null` — синоним отображается только в характеристики, в `?query=` не идёт |
+| `trait_expansion` | `string[]` | Дополнительные значения для Facet Matcher (мапятся на значения характеристик категории) |
+| `domain_categories` | `string[]` | Список `pagetitle` категорий, в которых синоним применим. **Пустой массив — универсально (все категории)**. Защита от ложных срабатываний за пределами домена |
+| `type` | `'name_modifier' \| 'facet_alias' \| 'bilingual_pair'` | Тип записи. `name_modifier` — единственный тип, чьи `canonical_token` могут попасть в `?query=` |
+| `confidence` | `number 0..1` | Используется при пороговой проверке `≥ 0.9` для допуска `canonical_token` в `?query=` |
+| `comment` | `string?` | Свободное поле для документирования происхождения записи |
+
+#### Алгоритм
+
+```
+1. Нормализация входа: 
+   - normalize(t) = lowercase(NFKC(t)).replace(/ё/g, 'е').trim()
+   - применить ко всем элементам user_traits и к user_query_raw
+2. Для каждой entry в lexicon.entries:
+   2.1. Если entry.domain_categories непустой И не содержит resolved_category.pagetitle 
+        → пропустить entry (защита от ложных срабатываний).
+   2.2. Для каждого pattern в entry.match:
+        - regex = new RegExp(pattern, 'iu')
+        - matched_in_traits = user_traits.filter(t => regex.test(normalize(t)))
+        - matched_in_query = regex.test(normalize(user_query_raw))
+        - если matched_in_traits.length > 0 ИЛИ matched_in_query → entry активирована
+   2.3. Если активирована:
+        - expanded_traits ∪= entry.trait_expansion
+        - applied_aliases.push({ 
+            user_term: matched_in_traits[0] ?? extracted_match_from_query,
+            matched_pattern: pattern,
+            canonical_token: entry.canonical_token,
+            trait_expansion: entry.trait_expansion,
+            source: 'lexicon',
+            confidence: entry.confidence
+          })
+        - если entry.type === 'name_modifier' И entry.confidence ≥ 0.9 И entry.canonical_token:
+            canonical_tokens.push(entry.canonical_token)
+3. Дедуплицировать expanded_traits и canonical_tokens (case-insensitive для трейтов; точное для tokens).
+4. expanded_traits ∪= user_traits  (исходные трейты сохраняются для Facet Matcher).
+5. Вернуть { expanded_traits, canonical_tokens, applied_aliases }.
+```
+
+#### Использование результата
+
+- **Facet Matcher (§9.3)** получает на вход `expanded_traits` (а не исходные `user_traits`).
+- **Strict API Search (§9.2 Single-category strict)**:
+  ```
+  GET /api/products?category={pagetitle}
+                    &query={canonical_tokens.join(' ')}     // только если canonical_tokens.length > 0
+                    &options[k][]=v...
+                    &min_price=...&max_price=...
+  ```
+  Если `canonical_tokens` пустой — параметр `query` **не передаётся вовсе**.
+- **Composer (§11.2a)** получает `applied_aliases` для прозрачного объяснения пользователю: «Учёл, что *кукуруза* = CORN (форм-фактор)».
+
+#### Bootstrap словаря (MVP)
+
+- **Seed (вручную):** ~50–100 записей по домену 220volt — лампы (corn/кукуруза, A60/груша, G45/шарик, C37/свеча, E14/миньон), автоматы (шестнарик/16А), вентиляция (улитка/центробежный), рамки/розетки (двугнёздная/2). Загружается миграцией в `app_settings.lexicon_json` при первом деплое.
+- **Continuous enrichment (Post-MVP-2):** cron-задача раз в сутки агрегирует `applied_aliases=∅ AND unresolved_traits.length > 0` из `chat_traces` с frequency ≥ 5; пропускает через batch-LLM (один большой prompt, не на лету); кладёт кандидатов в админку для модерации; admin одобряет → запись попадает в `lexicon_json`. Никакого автоматического записи в production-словарь без human-in-the-loop.
+
+#### Защита от ложных срабатываний
+
+1. **Domain gating через `domain_categories`** — основной барьер. «Кукуруза» в категории `kuxnya` (если бы такая была) не активирует corn-entry, потому что `domain_categories=["lampyi"]`.
+2. **Domain Guard (§9.5) после поиска** — второй барьер. Даже если бы entry активировалась ошибочно, итоговая выдача отфильтруется.
+3. **Bootstrap-only seed** — на MVP запретить автоматическое добавление в словарь. Все entries проходят human review.
+4. **Confidence ≥ 0.9** — единственный порог для допуска токена в `?query=`. Если синоним «вероятностный» (например, региональный сленг с риском омонимии) — confidence ставится 0.7–0.85, и `canonical_token` НЕ попадает в `?query=`, влияет только на `trait_expansion`.
+
+#### Метрики (расширение §22.2)
+
+| Метрика | Тип | Описание |
+|---|---|---|
+| `lexicon_aliases_applied_total{entry_id,category}` | counter | Сколько раз сработала каждая запись словаря |
+| `lexicon_canonical_tokens_emitted_total{entry_id}` | counter | Сколько раз `canonical_token` ушёл в `?query=` |
+| `lexicon_resolve_latency_ms` | histogram | Латентность шага 6a.2.5 |
+| `lexicon_size_entries` | gauge | Количество записей в загруженном словаре |
+
+#### Инварианты
+
+- **L1.** `canonical_tokens` ⊆ `{entry.canonical_token | entry.type='name_modifier' ∧ entry.confidence ≥ 0.9}`. Никаких других источников у `canonical_tokens` нет.
+- **L2.** Lexicon Resolver НЕ имеет права обращаться к LLM или внешним API. Только in-memory словарь.
+- **L3.** `expanded_traits ⊇ user_traits` (исходные трейты никогда не теряются).
+- **L4.** Lexicon Resolver пропускается, если `intent ∈ {sku_lookup, info_request, escalate, small_talk, reset_slot}` — для них нет Catalog Branch с фасетным поиском.
+
+
 
 Заменяет прежний «Resolve Filters». Работает **только** после Category Resolver выбрал категорию и Schema Loader загрузил её facets.
 
