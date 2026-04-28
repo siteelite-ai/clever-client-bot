@@ -255,6 +255,14 @@ export interface Slot {
   closed_reason?: 'matched' | 'no_match' | 'ttl_turns' | 'ttl_time' | 'new_intent';
 }
 
+// ─── SlotState (катящееся состояние ветки, §5.6) ────────────
+// Не путать со Slot (вопрос-уточнение). SlotState — счётчики ветки,
+// живут между ходами в ConversationState. Поля data-agnostic.
+export interface SlotState {
+  soft404_streak: 0 | 1 | 2;    // §5.6 state-machine: 0→1→2 → CONTACT_MANAGER
+  // расширяется по мере необходимости (см. §11)
+}
+
 // ─── Intent ─────────────────────────────────────────────────
 export type IntentType =
   | 'catalog'
@@ -296,6 +304,7 @@ export interface Product {
 export interface ConversationState {
   conversation_id: string;
   slots: Slot[];                // активные слоты, max 3
+  slot_state: SlotState;        // катящиеся счётчики ветки (§5.6)
   last_intent?: IntentType;
   last_category_hint?: string;
   user_city?: string;
@@ -499,12 +508,44 @@ export const ALLOWED_DOMAINS: Domain[] = ['POWER', 'TELECOM', 'TOOLS', 'LIGHTING
 | Жалоба | Тональность негативная (детектируется в classifier) |
 | Длинная сессия без покупки | >15 turns без клика по карточке (метрика на клиенте) |
 
+#### 5.6.1 Soft 404 state-machine (контракт)
+
+Поле: `ConversationState.slot_state.soft404_streak ∈ {0, 1, 2}`.
+
+Переходы (детерминированные, без LLM):
+
+| Текущее | Событие | Новое | Действие композера |
+|---|---|---|---|
+| `0` | catalog-ход вернул 0 товаров | `1` | Soft 404 текст: одна короткая фраза + просьба переформулировать. БЕЗ `[CONTACT_MANAGER]`. |
+| `1` | следующий catalog-ход тоже 0 | `2` | Вывести `[CONTACT_MANAGER]`. |
+| `0\|1\|2` | catalog-ход вернул ≥1 товар | `0` | Сброс. |
+| любое | `intent.domain_check === 'out_of_domain'` | без изменения | Сразу `[CONTACT_MANAGER]`, минуя streak. |
+| любое | `intent.intent !== 'catalog'` (knowledge/contact/...) | без изменения | streak не трогаем. |
+
+Инвариант: `soft404_streak` обновляется ровно один раз за catalog-ход, ПОСЛЕ финального счёта товаров (после Recovery и Soft Fallback). State-machine покрывается тестами `soft404-streak.test.ts`.
+
 Структура карточки контактов из `mem://features/conversational-rules`:
 - WhatsApp (primary)
 - Email
 - Phone
 - Часы работы
 - Город пользователя → ближайший филиал
+
+#### 5.4.1 Cross-sell composer-контракт (инвариант разделителя)
+
+Композер S_CATALOG ОБЯЗАН вернуть LLM-стрим в виде двух секций, разделённых детерминированным маркером, согласованным между генератором и парсером:
+
+```
+<intro-section>
+<MARKER>
+<crosssell-section>
+```
+
+Требования:
+- Маркер — фиксированная строка, заданная в коде; в финальный текст пользователю НЕ попадает (вырезается парсером).
+- Карточки товаров (§17.3 BNF в Core Memory) инжектятся `formatter.ts` между intro и cross-sell, НЕ генерируются LLM.
+- Cross-sell-секция проходит regex-инварианты §11.5b: запрет цен, SKU, brand-литералов, ссылок, CTA. При нарушении — секция вырезается целиком.
+- Конкретное значение маркера — деталь реализации (не фиксируется в спеке, §0 data-agnostic).
 
 ---
 
