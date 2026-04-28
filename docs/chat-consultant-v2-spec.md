@@ -2430,6 +2430,43 @@ interface EscalationPayload {
 4. Cache hit ratio по namespace.
 5. Топ-10 категорий по запросам.
 6. Эскалации / час.
+7. **Query Expansion funnel** (stacked bar, split by `strategy`):
+   - Доля попыток: `query_expansion_attempts_total{strategy} / sum`.
+   - Доля успехов: `query_expansion_success_strategy_total{strategy} / sum`.
+   - Per-strategy conversion = `success{s} / attempts{s}`.
+   - Линия `query_expansion_exhausted_total / turns_with_query_expansion` — доля Soft 404 после полного цикла.
+8. **Word-boundary post-filter эффективность**:
+   - `drop_rate = dropped / (dropped + kept)` — доля substring-шума в API-выдаче.
+   - `zero_rate = zeroed / applied` — как часто фильтр спасает от полностью мусорной выдачи (главный KPI полезности).
+   - Histogram `word_boundary_filter_per_attempt`.
+9. **Category Resolver health**:
+   - `category_hallucination_total` — alert при > 0.
+   - `category_snapshot_stale_used_total / category_snapshot_refresh_total`.
+
+### 22.5 Производные доли (формулы для PromQL/SQL)
+
+```
+# Какая стратегия Query Expansion реально вытаскивает кейсы
+share_success(s)  = query_expansion_success_strategy_total{strategy=s}
+                  / sum(query_expansion_success_strategy_total)
+
+# Conversion rate стратегии
+conversion(s)     = query_expansion_success_strategy_total{strategy=s}
+                  / query_expansion_attempts_total{strategy=s}
+
+# Полезность word-boundary фильтра
+wb_useful_rate    = word_boundary_filter_zeroed_total
+                  / word_boundary_filter_applied_total
+wb_noise_rate     = word_boundary_filter_dropped_total
+                  / (word_boundary_filter_dropped_total + word_boundary_filter_kept_total)
+```
+
+Целевые значения (gating релиза, см. §26):
+- `share_success(as_is_ru) ≥ 0.55` — большинство кейсов берутся без переводов.
+- `share_success(en_translation) ≤ 0.20` — иначе lexicon недо-наполнен или категория плохо распознаётся.
+- `query_expansion_exhausted_total / turns ≤ 0.05`.
+- `wb_noise_rate ≤ 0.30` (выше — пересмотр normalization tokens).
+- `category_hallucination_total === 0` — жёсткий defect-gate.
 
 ---
 
