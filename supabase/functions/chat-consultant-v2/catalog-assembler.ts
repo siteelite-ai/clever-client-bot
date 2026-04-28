@@ -387,7 +387,7 @@ export async function assembleCatalog(
       meta: { skipped: "no_pagetitle" },
     });
     return {
-      composerOutcome: { kind: "search", outcome: emptyOutcome as unknown as ComposerOutcome["outcome"] },
+      composerOutcome: { kind: "search", outcome: adaptSSearchToSearchOutcome(emptyOutcome) },
       ood: false,
       trace,
       resolvedPagetitle: null,
