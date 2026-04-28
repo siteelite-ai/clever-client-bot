@@ -175,6 +175,7 @@ export async function runPipeline(
       next_state: {
         ...incomingState,
         slots: incomingState.slots ?? [],
+        slot_state: carriedSlotState,
         last_intent: 'greeting',
       },
       trace,
@@ -205,6 +206,7 @@ export async function runPipeline(
       next_state: {
         ...incomingState,
         slots: nextSlots,
+        slot_state: carriedSlotState,
         last_intent: intent.intent,
       },
       trace,
@@ -237,6 +239,7 @@ export async function runPipeline(
       next_state: {
         ...incomingState,
         slots: s1.remaining_slots,
+        slot_state: carriedSlotState,
         last_intent: intent.intent,
         last_category_hint: intent.category_hint ?? incomingState.last_category_hint,
       },
@@ -256,6 +259,7 @@ export async function runPipeline(
       next_state: {
         ...incomingState,
         slots: s1.remaining_slots,
+        slot_state: carriedSlotState,
         last_intent: intent.intent,
       },
       trace,
