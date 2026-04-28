@@ -12,6 +12,8 @@ import {
   search,
   tokenize,
   matchesWordBoundary,
+  computeRemovalOrder,
+  resolveDroppedCaption,
   type SearchInput,
   type SearchOutcome,
 } from "./search.ts";
