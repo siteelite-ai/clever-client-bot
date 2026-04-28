@@ -56,6 +56,13 @@ import {
   composeKnowledgeAnswer,
   createRespondDeps,
 } from "./s5-respond.ts";
+import { assembleCatalog } from "./catalog-assembler.ts";
+import {
+  createCatalogProductionDeps,
+  loadCatalogAppSettings,
+} from "./catalog-deps-factory.ts";
+import { composeCatalogAnswer } from "./s-catalog-composer.ts";
+import { DEFAULT_SLOT_STATE } from "./types.ts";
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 const corsHeaders = {
@@ -64,7 +71,7 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const BUILD_MARKER = "v2-step10-s5-respond-knowledge-2026-04-28";
+const BUILD_MARKER = "v2-step11-catalog-assembler-2026-04-28";
 
 // ─── Контракт V2 запроса (Zod) ───────────────────────────────────────────────
 // Сохраняем backward-compat с виджетом: conversationId/query/messages/dialogSlots.
