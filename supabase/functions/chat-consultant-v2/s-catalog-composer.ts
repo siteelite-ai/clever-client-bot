@@ -77,24 +77,33 @@ const CROSSSELL_MARKER_RE = /={3,}\s*CROSSSELL\s*={3,}/;
 // ─── §11.5b: regex-инварианты cross-sell ─────────────────────────────────────
 // Запрещены: цены, валюта, SKU, markdown-ссылки, CTA-фразы, «нажмите/перейдите».
 // Любое нарушение → секция вырезается целиком (см. validateCrosssell).
+//
+// Важно: в JS `\b` — НЕ unicode-aware, кириллица не считается word-character
+// без специальных флагов. Поэтому для CTA-фраз с русскими словами используем
+// явные lookaround-границы по `\p{L}\p{N}_` с флагом `u`.
+//
+// Порядок правил имеет значение: SKU-проверка (буквы+цифры) ДОЛЖНА идти ДО
+// price_number (чистые цифры), иначе цифровой хвост SKU будет ошибочно
+// классифицирован как цена. Это закрывает defect §11.5b.
 const CROSSSELL_BAD_PATTERNS: { name: string; re: RegExp }[] = [
   // Markdown-ссылки [text](url) и голые URL.
   { name: "markdown_link", re: /\[[^\]]+\]\([^)]+\)/ },
   { name: "bare_url", re: /https?:\/\/\S+/i },
   // Валюта тенге (символ или код) — признак цены.
   { name: "currency", re: /(?:₸|тенге|kzt)/i },
+  // SKU-подобные токены: 2+ заглавных лат-буквы + цифры (например AC-1234, BSH123).
+  // Идёт ПЕРЕД price_number (см. комментарий выше).
+  // Кириллицу намеренно не трогаем (естественный русский).
+  { name: "sku_like", re: /(?<![A-Za-z0-9])[A-Z]{2,}[\-\.]?\d{2,}(?![A-Za-z0-9])/ },
   // Числа похожие на цену: 4+ цифр подряд (или с разделителем-пробелом).
   // 1990 / 12 990 / 1.999.000.
   { name: "price_number", re: /\b\d{1,3}(?:[ .\u00A0]\d{3})+\b|\b\d{4,}\b/ },
-  // CTA-фразы.
+  // CTA-фразы (unicode-aware границы).
   {
     name: "cta_phrase",
     re:
-      /\b(?:нажмите|перейдите|кликните|закажите|купите|оформите|по\s+ссылке|узнать\s+больше)\b/i,
+      /(?<![\p{L}\p{N}_])(?:нажмите|перейдите|кликните|закажите|купите|оформите|по\s+ссылке|узнать\s+больше)(?![\p{L}\p{N}_])/iu,
   },
-  // SKU-подобные токены: 2+ заглавных лат-буквы + цифры (например AC-1234, BSH123).
-  // Кириллицу намеренно не трогаем (естественный русский).
-  { name: "sku_like", re: /\b[A-Z]{2,}[\-\.]?\d{2,}\b/ },
 ];
 
 // ─── Persona (§5.1) ──────────────────────────────────────────────────────────
@@ -173,6 +182,13 @@ export interface ComposeCatalogInput {
   prevSoft404Streak: 0 | 1 | 2;
   /** Опции форматтера (userCity, baseUrl, …). */
   formatterOptions?: FormatterOptions;
+  /**
+   * §5.4.1: Внешний запрет cross-sell от оркестратора. Спека (§5.4.1, контракт
+   * входа): similar-ветка ВСЕГДА передаёт `true`. Композер дополнительно
+   * форсит запрет для всех scenario, кроме `normal` (логика OR — приоритет
+   * у запрета). Если флаг не передан → false (нет внешнего запрета).
+   */
+  disallowCrosssell?: boolean;
   /** Опциональный AbortSignal. */
   signal?: AbortSignal;
   /** Колбек на каждый delta-токен (для проксирования в SSE). */
@@ -425,11 +441,17 @@ async function composeWithProducts(
   // ── 2. Парсим маркер ──
   const { intro, crosssell: rawCrosssell } = splitByMarker(cleanLLM);
 
-  // ── 3. Валидируем cross-sell (§11.5b). soft_fallback → cross-sell всегда вырезаем. ──
+  // ── 3. Валидируем cross-sell (§11.5b + §5.4.1 disallowCrosssell). ──
+  // Effective disallow: запрет от оркестратора (similar и т.п.) ИЛИ scenario != normal.
+  // Логика OR — приоритет у запрета (Core memory).
+  const externallyDisallowed = input.disallowCrosssell === true;
+  const scenarioDisallowed = scenario !== "normal";
+  const effectiveDisallowed = externallyDisallowed || scenarioDisallowed;
+
   let crosssellRendered: string | null = null;
   let violation: string | null = null;
   const presentInLLM = rawCrosssell !== null;
-  if (presentInLLM && scenario !== "soft_fallback") {
+  if (presentInLLM && !effectiveDisallowed) {
     violation = validateCrosssell(rawCrosssell!);
     if (violation === null) {
       crosssellRendered = rawCrosssell!;
@@ -438,10 +460,15 @@ async function composeWithProducts(
         `[v2.catalog_composer.crosssell_violation] code=${violation}; cut`,
       );
     }
-  } else if (presentInLLM && scenario === "soft_fallback") {
-    violation = "soft_fallback_disallowed";
+  } else if (presentInLLM && effectiveDisallowed) {
+    // Приоритет внешнего запрета над scenario-запретом для логирования.
+    violation = externallyDisallowed
+      ? "disallowed_by_orchestrator"
+      : scenario === "soft_fallback"
+        ? "soft_fallback_disallowed"
+        : "scenario_disallowed";
     console.warn(
-      `[v2.catalog_composer.crosssell_violation] code=soft_fallback_disallowed; cut`,
+      `[v2.catalog_composer.crosssell_violation] code=${violation}; cut`,
     );
   }
 
@@ -453,8 +480,8 @@ async function composeWithProducts(
   if (intro) parts.push(intro);
   if (cards.markdown) parts.push(cards.markdown);
   if (scenario === "soft_fallback") {
-    // §11.2a-rev: ОДНА короткая tail-строка. Без перечисления значений.
-    parts.push(softFallbackTail());
+    // §4.8.1 + §11.2a-rev: ОДНА короткая tail-строка с caption снятого фасета.
+    parts.push(softFallbackTail(input.outcome.softFallbackContext?.droppedFacetCaption));
   }
   if (crosssellRendered) parts.push(crosssellRendered);
 
@@ -528,7 +555,12 @@ async function composeNoResults(
     );
   }
 
-  // §5.6.1: CONTACT_MANAGER при streak=2 ИЛИ all_zero_price ИЛИ error.
+  // §5.6.1 (двойной путь): contactManager=true via TWO paths —
+  //   1) streak === 2 (накопленные подряд soft 404)
+  //   2) scenario ∈ {all_zero_price, error, out_of_domain}
+  // out_of_domain обрабатывается ДО search.ts (на уровне intent.domain_check),
+  // в SearchOutcome.status его нет — поэтому здесь учитываем только два scenario.
+  // Если в будущем out_of_domain начнёт доходить до композера — добавить сюда.
   const contactManager =
     newStreak === 2 || scenario === "all_zero_price" || scenario === "error";
 
@@ -567,10 +599,20 @@ async function composeNoResults(
 }
 
 /**
- * Soft Fallback tail (§11.2a-rev): ОДНА короткая фраза.
- * Не перечисляем значения, не объясняем «что не нашли в фасете».
+ * §4.8.1 + §11.2a-rev: ОДНА короткая tail-строка с caption снятого фасета.
+ *
+ * Спека-инвариант: при `status === 'soft_fallback'` поле
+ * `outcome.softFallbackContext.droppedFacetCaption` НЕ может быть пустой строкой
+ * (см. §4.8.1). Если context отсутствует или caption пустой (защитный fallback
+ * на случай интеграционного бага) — возвращаем нейтральную фразу без курсива.
+ *
+ * Шаблон фиксирован Core Memory + спекой §4.8.1: маркер курсива обязателен.
  */
-function softFallbackTail(): string {
+export function softFallbackTail(droppedFacetCaption?: string): string {
+  const cap = droppedFacetCaption?.trim();
+  if (cap && cap.length > 0) {
+    return `Если важно уточнить *${cap}* — напишите.`;
+  }
   return "Если важно уточнить требования — напишите.";
 }
 

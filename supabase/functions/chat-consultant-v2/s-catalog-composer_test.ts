@@ -337,7 +337,7 @@ Deno.test("compose normal: invalid crosssell is cut, intro+cards remain", async 
   assert(!out.text.includes("нажмите"));
 });
 
-Deno.test("compose soft_fallback: crosssell cut even if valid; tail line added", async () => {
+Deno.test("compose soft_fallback: crosssell cut even if valid; tail line с caption (§4.8.1)", async () => {
   const llm = `Вот ближайшие варианты.\n${CROSSSELL_MARKER}\nДокупают расходники.`;
   const out = await composeCatalogAnswer(
     {
@@ -352,9 +352,81 @@ Deno.test("compose soft_fallback: crosssell cut even if valid; tail line added",
   assertEquals(out.scenario, "soft_fallback");
   assertEquals(out.crosssell.rendered, false);
   assertEquals(out.crosssell.violation, "soft_fallback_disallowed");
-  assertStringIncludes(out.text, "Если важно уточнить");
-  // Cross-sell-абзац НЕ выведен.
+  // §4.8.1: точный шаблон с caption из softFallbackContext.
+  assertStringIncludes(out.text, "Если важно уточнить *Цвет* — напишите.");
   assert(!out.text.includes("Докупают расходники"));
+});
+
+Deno.test("compose soft_fallback: tail fallback к нейтральной фразе если context отсутствует", async () => {
+  const out = await composeCatalogAnswer(
+    {
+      query: "x",
+      outcome: mockOutcome("soft_fallback", [mockProduct()], {
+        softFallbackContext: null,
+      }),
+      history: [],
+      prevSoft404Streak: 0,
+      onDelta: () => {},
+    },
+    mockDeps("Intro."),
+  );
+  assertStringIncludes(out.text, "Если важно уточнить требования");
+});
+
+// ─── §5.4.1: disallowCrosssell от оркестратора ──────────────────────────────
+
+Deno.test("§5.4.1: disallowCrosssell=true (similar) при scenario=normal — cross-sell вырезается", async () => {
+  const llm = `Подобрали варианты.\n${CROSSSELL_MARKER}\nК таким приборам обычно докупают расходники.`;
+  const out = await composeCatalogAnswer(
+    {
+      query: "аналог X",
+      outcome: mockOutcome("ok", [mockProduct()]),
+      history: [],
+      prevSoft404Streak: 0,
+      disallowCrosssell: true,
+      onDelta: () => {},
+    },
+    mockDeps(llm),
+  );
+  assertEquals(out.scenario, "normal");
+  assertEquals(out.crosssell.presentInLLM, true);
+  assertEquals(out.crosssell.rendered, false);
+  assertEquals(out.crosssell.violation, "disallowed_by_orchestrator");
+  assert(!out.text.includes("докупают расходники"));
+});
+
+Deno.test("§5.4.1: disallowCrosssell=false при scenario=normal — cross-sell проходит", async () => {
+  const llm = `Подобрали варианты.\n${CROSSSELL_MARKER}\nК таким приборам обычно докупают расходники.`;
+  const out = await composeCatalogAnswer(
+    {
+      query: "x",
+      outcome: mockOutcome("ok", [mockProduct()]),
+      history: [],
+      prevSoft404Streak: 0,
+      disallowCrosssell: false,
+      onDelta: () => {},
+    },
+    mockDeps(llm),
+  );
+  assertEquals(out.crosssell.rendered, true);
+  assertEquals(out.crosssell.violation, null);
+});
+
+Deno.test("§5.4.1: при OR-конфликте приоритет у оркестратора в violation-коде", async () => {
+  const llm = `Intro.\n${CROSSSELL_MARKER}\nДокупают расходники.`;
+  const out = await composeCatalogAnswer(
+    {
+      query: "x",
+      outcome: mockOutcome("soft_fallback", [mockProduct()]),
+      history: [],
+      prevSoft404Streak: 0,
+      disallowCrosssell: true,
+      onDelta: () => {},
+    },
+    mockDeps(llm),
+  );
+  assertEquals(out.crosssell.rendered, false);
+  assertEquals(out.crosssell.violation, "disallowed_by_orchestrator");
 });
 
 Deno.test("compose empty: scenario=soft_404, streak 0→1, no contact", async () => {
