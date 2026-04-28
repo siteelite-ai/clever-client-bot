@@ -443,3 +443,46 @@ function estimateTotalPages(total: number, perPage: number): number {
   if (total <= 0 || perPage <= 0) return 0;
   return Math.ceil(total / perPage);
 }
+
+/**
+ * §4.8: упорядочиваем ключи фильтров для прогрессивного снятия.
+ * Ключ, который должен быть снят первым, идёт первым.
+ *
+ * - Если задан `optionFilterOrder` — берём его в reverse, оставляя только
+ *   ключи, реально присутствующие в `filterKeys`. «Осиротевшие» ключи
+ *   (в filterKeys, но не в order) дописываем в конец.
+ * - Если порядок не задан — fallback к обратному порядку вставки в
+ *   `optionFilters` (для обратной совместимости с вызывающим кодом).
+ */
+export function computeRemovalOrder(
+  optionFilterOrder: string[] | undefined,
+  filterKeys: string[],
+): string[] {
+  const present = new Set(filterKeys);
+  if (optionFilterOrder && optionFilterOrder.length > 0) {
+    const ordered: string[] = [];
+    for (let i = optionFilterOrder.length - 1; i >= 0; i--) {
+      const k = optionFilterOrder[i];
+      if (present.has(k) && !ordered.includes(k)) ordered.push(k);
+    }
+    for (const k of filterKeys) {
+      if (!ordered.includes(k)) ordered.push(k);
+    }
+    return ordered;
+  }
+  return [...filterKeys].reverse();
+}
+
+/**
+ * §4.8.1: resolve UI-caption по canonical_key. Инвариант: caption НЕ должен
+ * быть пустой строкой. Если Facet Matcher не передал caption (баг интеграции),
+ * fallback к самому key — лучше, чем падение, и сразу видно, что что-то не так.
+ */
+export function resolveDroppedCaption(
+  key: string,
+  captions: Record<string, string>,
+): string {
+  const cap = captions[key];
+  if (typeof cap === "string" && cap.trim().length > 0) return cap.trim();
+  return key;
+}
