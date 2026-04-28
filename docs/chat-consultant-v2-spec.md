@@ -1804,6 +1804,22 @@ interface GoldenCase {
 
 ## 28. Открытые вопросы
 
+### 28.1 Закрытые архитектурным решением (Apr 2026, Stage 1–4)
+
+Следующие вопросы окончательно решены редизайном search pipeline (§6.1, §9.2a, §9.3, §11.2a, §13.1) и больше не требуют обсуждения:
+
+| # | Вопрос | Финальное решение | Где зафиксировано |
+|---|---|---|---|
+| C-1 | Identity категории в интенте | **Pre-step Category Resolver** по flat-списку pagetitle с явным `confidence` (0..1). Multi-bucket — fallback при `confidence < 0.4`. | §6.1 [6a.1], §9.2a |
+| C-2 | Matcher характеристик (трейтов) | **LLM в один проход по полной OptionSchema выбранной категории** со строгим JSON-выходом `{resolved, soft_matches, unresolved}`. Embeddings и rules-only отвергнуты. | §9.3 |
+| C-3 | Fallback при unresolved facet | **Спросить уточнение** у пользователя со списком `available_values`. FSM-состояние `SLOT_AWAITING_CLARIFICATION`, поиск приостановлен до ответа. | §5, §11.2a, §13.1 |
+| C-4 | Соотношение Single-category и Multi-bucket | Single-category — основной путь; **Multi-bucket понижен до fallback** (§9.4) — срабатывает при `confidence < 0.4` или 0 resolved-фильтров на основной трейт. | §9.4 |
+| C-5 | Куда деваются неразрешённые трейты | **Никогда** не попадают в `?query=`. Либо `soft_matches` (с предупреждением Composer), либо `unresolved_traits` (с уточнением или открытым перечислением в ответе). Запрет на «query-pollution». | §9.3, §11.2a |
+| C-6 | Обработка опечаток / «ё↔е» / морфологии / RU↔KK / числовых эквивалентов | **Внутри Facet Matcher LLM** на основе схемы значений категории, а не через query string. | §9.3 |
+| C-7 | Источник схемы характеристик | `/api/categories/options?pagetitle=…` (full schema, без сэмплинга), legacy fallback — только при degraded payload. Кэш 1 ч. | §9A, mem://features/search-pipeline |
+
+### 28.2 Остаются открытыми (организационные / эксплуатационные)
+
 Решения нужны до старта реализации.
 
 | # | Вопрос | Варианты | Рекомендация |
@@ -1819,6 +1835,8 @@ interface GoldenCase {
 | 28.9 | Источник каталога thinking-фраз (§11A) | (a) хардкод в edge function; (b) `app_settings.thinking_phrases_json` | (b) — маркетинг редактирует без редеплоя |
 | 28.10 | Использовать `Product.warehouses[*].amount` для геолокационных ответов о наличии в городе пользователя? | (a) Да, приоритезировать склад из `client_context.city`; (b) Нет, показывать общий остаток | (a) — повышает релевантность ответа |
 | 28.11 | Зафиксировать `docs/external/220volt-swagger.json` как обязательный артефакт CI? | (a) только snapshot в репо; (b) drift-check в CI (раз в сутки сравнивать с live `/swagger.json`) | (b) — раннее обнаружение breaking changes |
+| 28.12 | Прогрев flat-списка категорий для Category Resolver | (a) лениво при первом запросе; (b) cron раз в час | (a) — TTL 1ч и так покрывает |
+| 28.13 | Confidence-пороги Category Resolver (0.4 / 0.7) | зашить в код / вынести в `app_settings.resolver_thresholds_json` | вынести — позволит тюнить по живой телеметрии без редеплоя |
 
 ---
 
