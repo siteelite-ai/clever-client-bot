@@ -1,4 +1,5 @@
 // chat-consultant v4.0 — Micro-LLM intent classifier + latency optimization
+// build-marker: layer1-confidence-2026-04-28T08:30Z (force redeploy to surface confidence= telemetry)
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
 
