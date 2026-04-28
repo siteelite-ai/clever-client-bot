@@ -2366,6 +2366,20 @@ interface EscalationPayload {
 | `lexicon_applied_total` | counter | срабатываний Lexicon Resolver (split by `type`) |
 | `lexicon_canonical_token_injected` | counter | сколько раз `canonical_token` ушёл в `?query=` |
 | `lexicon_cache_hit_ratio` | gauge | hit-ratio 60-секундного in-memory кэша лексикона |
+| `query_expansion_attempts_total` | counter (split by `strategy ∈ {as_is_ru, lexicon_canonical, en_translation, kk_translation}`) | сколько раз каждая стратегия §9.2b была реально вызвана (включая неуспешные попытки). База для долей: `share(strategy) = attempts{strategy} / sum(attempts)` |
+| `query_expansion_success_strategy_total` | counter (split by `strategy ∈ {as_is_ru, lexicon_canonical, en_translation, kk_translation}`) | на какой стратегии пайплайн остановился из-за `total>0` после word-boundary post-filter. Доля каждой стратегии в успехах = `success{strategy} / sum(success)` — главный показатель того, какой шаг реально «вытаскивает» кейсы |
+| `query_expansion_attempts_per_turn` | histogram 1..4 | сколько попыток в среднем требуется на один turn (1 = идеальный, 4 = доехали до kk) |
+| `query_expansion_exhausted_total` | counter | все стратегии fail → Soft 404 (§9.2b L5). Знаменатель для воронки: `exhausted / turns_with_query_expansion` |
+| `query_expansion_strategy_skipped_total` | counter (split by `strategy`, `reason ∈ {confidence_below_gate, no_translation_available, kk_disabled, lexicon_empty}`) | пропуски стратегий с причиной — диагностика, почему `lexicon_canonical` не сработал чаще |
+| `query_expansion_latency_ms` | histogram (split by `strategy`) | вклад каждой стратегии в p50/p95 turn latency |
+| `word_boundary_filter_applied_total` | counter | сколько раз пост-фильтр §9.2c вообще запускался (= число API-ответов с `total>0` до фильтра) |
+| `word_boundary_filter_dropped_total` | counter | суммарно отброшено товаров (substring-noise: «Corner» при поиске «Corn»). База: `drop_rate = dropped / (dropped + kept)` |
+| `word_boundary_filter_kept_total` | counter | оставлено после фильтра. Пара с `_dropped_total` даёт точное соотношение noise vs signal |
+| `word_boundary_filter_zeroed_total` | counter | сколько раз пост-фильтр обнулил выдачу (все совпадения были substring) → fallthrough в следующую стратегию expansion. **Главный показатель полезности фильтра**: ненулевое значение = фильтр реально спас от мусорной выдачи |
+| `word_boundary_filter_per_attempt` | histogram 0..50 | распределение числа отброшенных товаров на одну попытку (диагностика «шумных» токенов) |
+| `category_hallucination_total` | counter | **обязан быть 0**: Resolver попытался вернуть `pagetitle`, отсутствующий в live snapshot `/api/categories` (defect C1, §9.2a) |
+| `category_snapshot_refresh_total` | counter | плановые/триггерные обновления snapshot `/api/categories` (TTL 24 ч, C3) |
+| `category_snapshot_stale_used_total` | counter | использование протухшего snapshot при 5xx live API (C4) — диагностика устойчивости |
 | `soft_fallback_triggered` | counter | поиск с unresolved при resolved≥2 (§11.2a) |
 | `pagination_next_page` | counter | срабатываний intent `next_page` (§7.2) |
 | `sse_greeting_stripped` | counter | сколько раз PersonaGuard L1 вырезал приветствие из 30-символьного буфера |
