@@ -9,6 +9,7 @@
 
 ## Оглавление
 
+0. [Data-Agnostic Spec Doctrine](#0-data-agnostic-spec-doctrine) — **НОРМАТИВНЫЙ ПРИОРИТЕТ**
 1. [Назначение и границы системы](#1-назначение-и-границы-системы)
 2. [Глоссарий](#2-глоссарий)
 3. [Архитектура](#3-архитектура)
@@ -39,6 +40,62 @@
 26. [Критерии успешности](#26-критерии-успешности)
 27. [Runbook для дежурного](#27-runbook-для-дежурного)
 28. [Открытые вопросы](#28-открытые-вопросы)
+
+---
+
+## 0. Data-Agnostic Spec Doctrine
+
+**Статус:** нормативный. **Приоритет:** наивысший. При конфликте с любым другим разделом этого документа — действует §0.
+
+### 0.1 Принцип
+
+Спецификация описывает **законы системы** (контракты, инварианты, алгоритмы, схемы данных, метрики), а не **состояние каталога** 220volt. Любая иллюстрация конкретными значениями, зависящими от реального ассортимента магазина, **запрещена** в нормативной части документа.
+
+### 0.2 Демаркация «контракт vs whitelist»
+
+| Тип артефакта | Зависит от состояния каталога 220volt? | Статус |
+|---|---|---|
+| JSON-схема API / tool-call с типами полей | нет | **разрешено** — контракт типизации |
+| BNF/плейсхолдер-нотация формата вывода | нет | **разрешено** — контракт рендеринга |
+| Граничное условие на структуру (`options:[]`, `total=0`, `price=0`) | нет | **разрешено** — контракт обработки |
+| Regex-правило на абстрактном `<token>` | нет | **разрешено** — спека парсера |
+| Test case в формате `state → input → expected pipeline trace` на синтетических моках | нет | **разрешено** — контракт поведения |
+| «Если запросить категорию `<X>`, вернётся `<N>` товаров» | да | **запрещено** — whitelist |
+| Карточка-аналог с конкретным товаром, ценой, брендом, характеристиками | да | **запрещено** — whitelist |
+| Cross-sell-абзац с конкретными типами товаров («к лампам берут диммеры») | да | **запрещено** — domain hallucination в спеке |
+| Lexicon-entry с `match`/`canonical_token`/`category_hint` для конкретного класса товаров | да | **запрещено** в спеке (живёт только в `app_settings.lexicon_json`) |
+| Перечисление «известных хороших» pagetitle, фасет-ключей, значений | да | **запрещено** |
+
+**Критерий одной строкой:** если артефакт перестанет быть валидным после ребрендинга / смены ассортимента / изменения номенклатуры 220volt — это whitelist, его место не в спеке.
+
+### 0.3 Куда уходят «грязные» примеры
+
+Каталог-зависимые иллюстрации (реальные категории, товары, фасет-ключи, значения, тексты карточек) выносятся в `.lovable/fixtures/`:
+
+- `api-snapshots/` — слепки `/api/categories`, `/api/products?...` для разработки и моков тестов;
+- `probe-cases/` — нарративные R&D-кейсы (проверки поведения API на конкретных запросах).
+
+`.lovable/fixtures/` **не является частью нормативной спеки**. Используется только для:
+- мокирования в test-suite (§25);
+- онбординга разработчиков (понять «как это выглядит в жизни»);
+- ручной отладки / probe-задач при изменениях в API.
+
+Запрет: разработчик/код-генерирующий агент **не имеет права** опираться на конкретные значения из fixtures как на whitelist в production-коде.
+
+### 0.4 Обработка legacy-примеров в существующем тексте
+
+В разделах §1–§28, написанных до введения §0, могут встречаться упоминания конкретных категорий («Лампы», «Розетки»), фасет-ключей (`cvet__tүs`, `tip_cokolya__cokoly_tүrі`, `forma_kolby__kolbanyң_pіshіnі`, `kolichestvo_razyemov__aғytpalar_sany_`), значений («E14», «A60», «CORN», «двойная»), названий товаров и т. п.
+
+**Все такие упоминания следует читать как `<placeholder>`** — иллюстративный пример, **не** whitelist. Нормативное содержание идёт из инвариантов, контрактов и алгоритмов, окружающих эти иллюстрации.
+
+При любом расхождении между «иллюстрацией внутри §1–§28» и «контрактом из §0/§9.2a/§9.2b/§9.2c/§17.3/§17.7/§25»: **выигрывает контракт**.
+
+### 0.5 Инварианты
+
+- **D1.** Имплементация production-кода **не может** содержать hardcoded списки категорий / фасет-ключей / значений, происходящих из примеров спеки.
+- **D2.** Любой такой список, попадающий в код, должен либо (а) приходить из живого API в runtime, либо (б) лежать в `app_settings.*` (где админ может править без редеплоя), либо (в) лежать в `.lovable/fixtures/` и использоваться **только** в тестах.
+- **D3.** Cron-чекер раз в сутки сверяет каждый используемый в `app_settings.lexicon_json.entries[].category_hint` pagetitle с живым `/api/categories`. Дрейф → алерт.
+- **D4.** Code-review критерий: PR, добавляющий в production-код строковую константу с реальной категорией / фасет-ключом / значением 220volt без прохождения через D2 — отклоняется.
 
 ---
 
@@ -519,169 +576,187 @@ function resolveCategory(input: {
 - Выход: строго JSON `{pagetitle, confidence, reasoning, alternatives}`. Никакого свободного текста.
 - Запрет: возвращать pagetitle, отсутствующий в переданном списке. При нарушении — реклассификация в multi-bucket с логированием `category_resolver_hallucination`.
 
-### 9.2b Lexicon Resolver
+**Инварианты Category Resolver (нормативные, см. §0):**
 
-Промежуточный детерминированный шаг между Category Resolver (§9.2a) и Facet Matcher (§9.3). Цель — канонизировать бытовые / переводные / сленговые / опечаточные термины пользователя ДО фасетного матчинга, **без LLM-вызова на лету**, in-memory, ≤3 мс.
+- **C1.** `pagetitle` категории берётся **только** из живого `GET /api/categories` snapshot'а (TTL 24 ч). Любой `pagetitle`, отсутствующий в актуальном snapshot'е, → reject с метрикой `category_hallucination_total++`. Защита от дрейфа имени категории на стороне магазина.
+- **C2.** Запрещены: транслит / алиасы / эвристики маппинга «латиница ↔ кириллица» / ручные таблицы соответствий. Если pagetitle на стороне 220volt не совпадает с тем, что выдаёт LLM-resolver — это рассогласование снапшота, а не повод «угадать».
+- **C3.** Кэш `categories_flat` инвалидируется через `force_refresh=true` в админке и автоматически по cron (раз в сутки). При обнаружении 0 результатов на «известно работающей» категории — фоновая инвалидация и повтор.
+- **C4.** Резолвер не имеет права собирать `pagetitle` из навигации сайта, sitemap, robots — только `/api/categories`. Это единственный contract surface каталога.
 
-**Зачем нужен.** Каталог 220volt — реальный e-commerce, в котором бытовые названия товаров живут только в `name`/`артикуле` и не отражены в характеристиках. Канонический пример: «лампа кукуруза» (народный термин) → товар «Лампа LED **CORN** капсула 3,5Вт … G4 ИЭК», у которого:
+### 9.2b Query Expansion Resolver
 
-- слово `CORN` есть только в `name` и в `article`;
-- слова `кукуруза` нет нигде;
-- характеристика «Форма колбы» = `капсула` (не «corn», не «кукуруза»).
+Промежуточный детерминированный шаг между Category Resolver (§9.2a) и Facet Matcher (§9.3). Цель — построить **упорядоченный набор попыток поискового запроса** (`query_attempts`) для последующего Strict Search Multi-Attempt (§9.2c) и параллельно — расширить трейты для Facet Matcher.
 
-Без Lexicon Resolver такие запросы либо ушли бы в multi-bucket fallback (Domain Guard может среагировать на «попкорн»), либо отдали бы пользователю случайные лампы из категории. Lexicon Resolver решает это детерминированным маппингом.
+Заменяет прежний «Lexicon Resolver»: lexicon остаётся как **одна из стратегий** внутри Query Expansion, но не единственная. Раньше при отсутствии записи в lexicon бытовое название уходило в Multi-bucket; теперь — есть детерминированный fallback через перевод и word-boundary post-filter.
 
 #### Контракт
 
 ```ts
-interface LexiconInput {
-  user_traits: string[];               // из Intent Classifier (entities.traits)
-  user_query_raw: string;              // полный текст реплики (для regex-матчинга)
-  resolved_category: { pagetitle: string };  // из §9.2a
+type QuerySource =
+  | 'as_is_ru'           // оригинальные RU-токены реплики
+  | 'lexicon_canonical'  // canonical_token из app_settings.lexicon_json (confidence ≥ threshold)
+  | 'en_translation'     // EN-перевод трейта, помеченного Intent-LLM как "бытовое название товара"
+  | 'kk_translation';    // KK-перевод (отключён по умолчанию app_settings.query_expansion.kk_enabled=false)
+
+interface QueryAttempt {
+  tokens: string[];      // токены для ?query= (joined пробелом при отправке)
+  source: QuerySource;
+  confidence: number;    // 0..1
+  rationale: string;     // короткий human-readable для трейса
 }
 
-interface LexiconOutput {
-  expanded_traits: string[];           // user_traits ∪ ⋃(matched.trait_expansion); дедуплицировано
-  canonical_tokens: string[];          // токены для ?query= (из matched, type='name_modifier', confidence ≥ 0.9)
-  applied_aliases: AppliedAlias[];     // для логов, метрик, soft_matches Composer'а
-}
-
-interface AppliedAlias {
-  user_term: string;                   // что увидели в реплике, например "кукуруза"
-  matched_pattern: string;             // regex из lexicon_json
-  canonical_token?: string;            // например "CORN" (если есть)
-  trait_expansion: string[];           // например ["капсула"]
-  source: 'lexicon';                   // зарезервировано для будущих источников
-  confidence: number;                  // из записи lexicon
+interface QueryExpansionOutput {
+  query_attempts: QueryAttempt[];   // упорядоченный список, см. §9.2c
+  expanded_traits: string[];        // ∪ trait_expansion из lexicon ∪ user_traits
+  applied_aliases: AppliedAlias[];  // для аналитики и Composer'а
 }
 ```
 
-#### Источник словаря — `app_settings.lexicon_json`
+#### Источники query_attempts (упорядочены приоритетом)
 
-Структура (full schema):
-
-```json
-{
-  "version": 1,
-  "entries": [
-    {
-      "id": "corn-lamp",
-      "match": ["кукуруз\\w*", "\\bcorn\\b"],
-      "canonical_token": "CORN",
-      "trait_expansion": ["капсула"],
-      "domain_categories": ["lampyi"],
-      "type": "name_modifier",
-      "confidence": 1.0,
-      "comment": "лампа кукуруза → CORN (в name) + капсула (в форме колбы)"
-    },
-    {
-      "id": "pear-bulb",
-      "match": ["груш\\w*"],
-      "trait_expansion": ["A60"],
-      "domain_categories": ["lampyi"],
-      "type": "facet_alias",
-      "confidence": 1.0
-    },
-    {
-      "id": "minion-socle",
-      "match": ["миньон\\w*"],
-      "trait_expansion": ["E14"],
-      "domain_categories": ["lampyi"],
-      "type": "facet_alias",
-      "confidence": 1.0
-    }
-  ]
-}
-```
-
-Поля записи:
-
-| Поле | Тип | Описание |
+| Приоритет | Источник | Когда добавляется в `query_attempts` |
 |---|---|---|
-| `id` | string | Стабильный человекочитаемый идентификатор для логов и аналитики |
-| `match` | `string[]` | Массив RegEx-паттернов, применяются к каждому трейту И к `user_query_raw`. Морфология учитывается через `\\w*` |
-| `canonical_token` | `string \| null` | Токен, реально живущий в `name`/`артикуле` товара. `null` — синоним отображается только в характеристики, в `?query=` не идёт |
-| `trait_expansion` | `string[]` | Дополнительные значения для Facet Matcher (мапятся на значения характеристик категории) |
-| `domain_categories` | `string[]` | Список `pagetitle` категорий, в которых синоним применим. **Пустой массив — универсально (все категории)**. Защита от ложных срабатываний за пределами домена |
-| `type` | `'name_modifier' \| 'facet_alias' \| 'bilingual_pair'` | Тип записи. `name_modifier` — единственный тип, чьи `canonical_token` могут попасть в `?query=` |
-| `confidence` | `number 0..1` | Используется при пороговой проверке `≥ 0.9` для допуска `canonical_token` в `?query=` |
-| `comment` | `string?` | Свободное поле для документирования происхождения записи |
+| 1 | `as_is_ru` | Всегда первый, если в реплике есть RU-токены кроме служебных. Базовая попытка. |
+| 2 | `lexicon_canonical` | Если matched lexicon-entry имеет `type='name_modifier'`, `confidence ≥ app_settings.query_expansion.lexicon_inject_threshold` (default 0.9), и `canonical_token` не пуст. |
+| 3 | `en_translation` | Если Intent-LLM пометил один или несколько трейтов как `is_colloquial_product_name=true` (новое поле в Intent tool-схеме, см. §7). EN-перевод выполняется в **том же** Intent-LLM-вызове через расширенную tool-схему (`translations: { ru: …, en: …, kk: … }`) — без дополнительного round-trip. |
+| 4 | `kk_translation` | То же что (3), но язык KK. Включается флагом `app_settings.query_expansion.kk_enabled` (default false). До включения — собирается метрика `query_expansion_rescue_kk_potential_total` для решения о включении на основе данных. |
+
+**Запрет:** статичные таблицы перевода / транслита / синонимов в коде. Все языковые маппинги — либо через LLM-tool-call (Intent-этап), либо через `app_settings.lexicon_json` (админ-ревью), либо через cron-обогащение lexicon на основе реальных провалов с human-in-the-loop.
+
+#### Lexicon как один из источников (§9.2b-lex)
+
+`app_settings.lexicon_json` — единственное легитимное место для каталог-зависимых маппингов «бытовое название → канонический токен в `name`/`article`». Структура entry оставлена прежней (поле `match`, `canonical_token`, `trait_expansion`, `category_hint`, `confidence`, `comment`); **примеры конкретных entries в спецификации запрещены §0**. Bootstrap-only: словарь стартует пустым, наполняется через cron-агрегатор `unresolved_traits` + админ-ревью.
+
+Инвариант L5 сохраняется: при `lexicon.entries = []` Query Expansion возвращает `query_attempts = [{source:'as_is_ru', tokens: <splitRu(user_query_raw)>, confidence: 1, rationale:'baseline'}]` и пайплайн работает корректно.
 
 #### Алгоритм
 
 ```
-1. Нормализация входа: 
-   - normalize(t) = lowercase(NFKC(t)).replace(/ё/g, 'е').trim()
-   - применить ко всем элементам user_traits и к user_query_raw
-2. Для каждой entry в lexicon.entries:
-   2.1. Если entry.domain_categories непустой И не содержит resolved_category.pagetitle 
-        → пропустить entry (защита от ложных срабатываний).
-   2.2. Для каждого pattern в entry.match:
-        - regex = new RegExp(pattern, 'iu')
-        - matched_in_traits = user_traits.filter(t => regex.test(normalize(t)))
-        - matched_in_query = regex.test(normalize(user_query_raw))
-        - если matched_in_traits.length > 0 ИЛИ matched_in_query → entry активирована
-   2.3. Если активирована:
-        - expanded_traits ∪= entry.trait_expansion
-        - applied_aliases.push({ 
-            user_term: matched_in_traits[0] ?? extracted_match_from_query,
-            matched_pattern: pattern,
-            canonical_token: entry.canonical_token,
-            trait_expansion: entry.trait_expansion,
-            source: 'lexicon',
-            confidence: entry.confidence
-          })
-        - если entry.type === 'name_modifier' И entry.confidence ≥ 0.9 И entry.canonical_token:
-            canonical_tokens.push(entry.canonical_token)
-3. Дедуплицировать expanded_traits и canonical_tokens (case-insensitive для трейтов; точное для tokens).
-4. expanded_traits ∪= user_traits  (исходные трейты сохраняются для Facet Matcher).
-5. Вернуть { expanded_traits, canonical_tokens, applied_aliases }.
+1. Нормализация:
+   norm(t) = lowercase(NFKC(t)).replace(/ё/g,'е').trim()
+
+2. attempts = []
+
+3. as_is_ru:
+   ru_tokens = extractRuTokens(user_query_raw)
+   if ru_tokens.length > 0:
+     attempts.push({tokens: ru_tokens, source:'as_is_ru', confidence:1, rationale:'baseline'})
+
+4. lexicon_canonical:
+   for entry in lexicon.entries:
+     if entry.category_hint != null and entry.category_hint != resolved_category.pagetitle:
+       continue
+     if any(regex.test(norm(t)) for regex in entry.match for t in user_traits ∪ [user_query_raw]):
+       expanded_traits ∪= entry.trait_expansion
+       applied_aliases.push(...)
+       if entry.type == 'name_modifier' and entry.confidence ≥ threshold and entry.canonical_token:
+         attempts.push({tokens:[entry.canonical_token], source:'lexicon_canonical',
+                        confidence: entry.confidence, rationale: `entry=${entry.id}`})
+
+5. en_translation, kk_translation:
+   for trait in intent_classifier.entities.traits:
+     if trait.is_colloquial_product_name == true:
+       if trait.translations.en:
+         attempts.push({tokens:[trait.translations.en], source:'en_translation',
+                        confidence: 0.7, rationale: `trait="${trait.value}" en-translation`})
+       if app_settings.query_expansion.kk_enabled and trait.translations.kk:
+         attempts.push({tokens:[trait.translations.kk], source:'kk_translation', ...})
+
+6. Дедупликация: одинаковые `tokens` (после нормализации) — оставляем запись с большим confidence и более ранним приоритетом source.
+
+7. expanded_traits ∪= user_traits   // исходные трейты не теряются никогда
+
+8. return { query_attempts: attempts, expanded_traits, applied_aliases }
 ```
-
-#### Использование результата
-
-- **Facet Matcher (§9.3)** получает на вход `expanded_traits` (а не исходные `user_traits`).
-- **Strict API Search (§9.2 Single-category strict)**:
-  ```
-  GET /api/products?category={pagetitle}
-                    &query={canonical_tokens.join(' ')}     // только если canonical_tokens.length > 0
-                    &options[k][]=v...
-                    &min_price=...&max_price=...
-  ```
-  Если `canonical_tokens` пустой — параметр `query` **не передаётся вовсе**.
-- **Composer (§11.2a)** получает `applied_aliases` для прозрачного объяснения пользователю: «Учёл, что *кукуруза* = CORN (форм-фактор)».
-
-#### Bootstrap словаря (MVP)
-
-- **Стартовое состояние:** `app_settings.lexicon_json = { version: 1, entries: [] }`. **Никаких seed-записей в коде, миграциях или дефолтах.** Lexicon — это онтологический слой бытовых названий, обнаруженных на реальных пользователях; до первого ревью провалов он пуст, и пайплайн обязан работать корректно (см. инвариант L5).
-- **Continuous enrichment (с момента первых логов):** cron-задача раз в сутки агрегирует кейсы `applied_aliases=∅ AND (unresolved_traits.length > 0 OR result_count = 0)` из `chat_traces` с frequency ≥ 5; пропускает через batch-LLM (один большой prompt, не на лету) для генерации **кандидатов** entries; кладёт их в админку для модерации; admin/editor одобряет → запись попадает в `lexicon_json`. Никакой автоматической записи в production-словарь без human-in-the-loop.
-- **Принцип:** словарь растёт строго на основании реальных провалов. «Заранее знать про CORN» — гипотеза; **факт** появляется только после того, как пользователь спросил «лампа кукуруза» и Lexicon Resolver вернул пустой `expanded_traits`.
-
-#### Защита от ложных срабатываний
-
-1. **Domain gating через `domain_categories`** — основной барьер. «Кукуруза» в категории `kuxnya` (если бы такая была) не активирует corn-entry, потому что `domain_categories=["lampyi"]`.
-2. **Domain Guard (§9.5) после поиска** — второй барьер. Даже если бы entry активировалась ошибочно, итоговая выдача отфильтруется.
-3. **Bootstrap-only seed** — на MVP запретить автоматическое добавление в словарь. Все entries проходят human review.
-4. **Confidence ≥ 0.9** — единственный порог для допуска токена в `?query=`. Если синоним «вероятностный» (например, региональный сленг с риском омонимии) — confidence ставится 0.7–0.85, и `canonical_token` НЕ попадает в `?query=`, влияет только на `trait_expansion`.
 
 #### Метрики (расширение §22.2)
 
-| Метрика | Тип | Описание |
+| Метрика | Тип | Назначение |
 |---|---|---|
-| `lexicon_aliases_applied_total{entry_id,category}` | counter | Сколько раз сработала каждая запись словаря |
-| `lexicon_canonical_tokens_emitted_total{entry_id}` | counter | Сколько раз `canonical_token` ушёл в `?query=` |
-| `lexicon_resolve_latency_ms` | histogram | Латентность шага 6a.2.5 |
-| `lexicon_size_entries` | gauge | Количество записей в загруженном словаре |
+| `query_expansion_attempts_per_turn` | histogram (1..4) | Сколько попыток построено на одну реплику |
+| `query_expansion_strategy_used_total{source}` | counter | Какой источник дал первый non-empty результат в §9.2c |
+| `query_expansion_rescue_total{from,to}` | counter | Цепочки спасения (`as_is_ru → en_translation`, `as_is_ru → lexicon_canonical`, …) |
+| `query_expansion_all_attempts_failed_total` | counter | Все попытки дали 0 → переход в Soft 404 (§11.2a) |
+| `query_expansion_rescue_kk_potential_total` | counter | Потенциальные срабатывания KK при выключенной опции (для решения о включении) |
+| `query_word_boundary_filtered_total{token}` | counter | Сколько товаров отбросил word-boundary post-filter (§9.2c) |
+| `category_hallucination_total` | counter | Срабатывания инварианта C1 (LLM вернул pagetitle вне snapshot'а) |
 
-#### Инварианты
+#### Инварианты Query Expansion
 
-- **L1.** `canonical_tokens` ⊆ `{entry.canonical_token | entry.type='name_modifier' ∧ entry.confidence ≥ 0.9}`. Никаких других источников у `canonical_tokens` нет.
-- **L2.** Lexicon Resolver НЕ имеет права обращаться к LLM или внешним API. Только in-memory словарь.
-- **L3.** `expanded_traits ⊇ user_traits` (исходные трейты никогда не теряются).
-- **L4.** Lexicon Resolver пропускается, если `intent ∈ {sku_lookup, info_request, escalate, small_talk, reset_slot}` — для них нет Catalog Branch с фасетным поиском.
-- **L5.** При `lexicon.entries = []` Resolver возвращает `{expanded_traits: user_traits, canonical_tokens: [], applied_aliases: []}` без ошибок. Пайплайн (Facet Matcher → Strict Search → Composer / Clarification) продолжает работать на исходных трейтах. Пустой словарь — валидное и корректное состояние системы.
+- **QE1.** `query_attempts.length ≥ 1` всегда (минимум `as_is_ru` или, при отсутствии RU-токенов, перевод/lexicon).
+- **QE2.** Source `lexicon_canonical` не появляется в `attempts`, если `entry.confidence < lexicon_inject_threshold`.
+- **QE3.** Source `kk_translation` не появляется при `app_settings.query_expansion.kk_enabled = false`.
+- **QE4.** Перевод выполняется внутри Intent-LLM-вызова (extension tool-схемы), **не отдельным round-trip'ом** — латентностный бюджет Query Expansion ≤ 5 мс CPU.
+- **QE5.** При `lexicon.entries = []` пайплайн работает корректно с одним attempt (`as_is_ru`).
+- **QE6.** Никаких статичных таблиц синонимов / перевода / транслита в коде Query Expansion — все маппинги приходят через LLM-tool или `app_settings.lexicon_json`.
 
+### 9.2c Strict Search Multi-Attempt + Word-Boundary Post-Filter
 
+Цикл попыток поиска по упорядоченному `query_attempts` из §9.2b. Останавливается на первом непустом результате после post-filter'ов.
+
+#### Алгоритм
+
+```
+function strictSearchMultiAttempt(input: {
+  category_pagetitle: string;
+  query_attempts: QueryAttempt[];
+  resolved_filters: AppliedFilter[];
+  price?: PriceRange;
+}): SearchResult {
+
+  for attempt of query_attempts:
+    raw = catalog.search({
+      category: category_pagetitle,
+      query: attempt.tokens.join(' '),
+      options: resolved_filters,
+      ...price
+    })
+
+    // post-filter 1: word-boundary
+    bounded = raw.results.filter(p =>
+      attempt.tokens.every(token =>
+        wordBoundaryMatch(token, [p.pagetitle, p.article, p.content])
+      )
+    )
+
+    // post-filter 2: price > 0 (§9C.3)
+    priced = bounded.filter(p => p.price > 0)
+
+    if priced.length > 0:
+      metric: query_expansion_strategy_used_total{source: attempt.source}++
+      return { results: priced, total: priced.length, attempt_used: attempt }
+
+  // все попытки пусты
+  metric: query_expansion_all_attempts_failed_total++
+  return invokeRecoveryThenDegrade(...)  // §9C.2
+}
+```
+
+#### Word-boundary post-filter
+
+Цель: не допускать substring-matching, который реальный API делает по `query=` (короткий токен внутри длинного слова даёт ложноположительные срабатывания).
+
+```
+function wordBoundaryMatch(token: string, fields: string[]): boolean {
+  if (token.length < 3 or /^[\d.,]+$/.test(token)):
+    // короткие/числовые токены — мягче: матч в pagetitle/article любым substring
+    return fields.slice(0, 2).some(f => f.toLowerCase().includes(token.toLowerCase()))
+
+  const re = new RegExp(`\\b${escapeRegex(token)}\\b`, 'iu')
+  return fields.some(f => re.test(f))
+}
+```
+
+#### Инварианты §9.2c
+
+- **MA1.** Цикл по `query_attempts` детерминирован: всегда в порядке `attempts[0]` → `attempts[N-1]`.
+- **MA2.** На каждой попытке применяются оба post-filter'а: word-boundary, затем price>0. Порядок фиксирован (price>0 после, чтобы метрики word-boundary считали реальные попадания).
+- **MA3.** Возвращается **первая** попытка, давшая ≥1 товар после обоих фильтров. Остальные attempts не выполняются (latency-saving).
+- **MA4.** Если все attempts → 0, передаём управление в §9C.2 Recovery-then-Degrade — это легитимный путь, не ошибка.
+- **MA5.** Word-boundary regex использует флаги `iu` (case-insensitive, unicode) для корректной работы с RU/KK.
+- **MA6.** Word-boundary post-filter не применяется к результатам §9C.2 Recovery (там фильтрация уже идёт по `product.options[]` локально).
+
+### 9.3 Facet Matcher
 
 Заменяет прежний «Resolve Filters». Работает **только** после Category Resolver выбрал категорию и Schema Loader загрузил её facets.
 
@@ -1327,15 +1402,14 @@ Cross-sell и similar-tail взаимно исключаются (similar ник
 **Жёсткие рамки промта (§11.5a):**
 - Длина: 1–3 предложения, **один абзац**.
 - Только смежные категории/типы товаров; нельзя предлагать **ту же** категорию, что в выдаче.
-- **Нельзя называть** конкретные SKU/названия товаров — только типы/категории («светильники», «диммеры», «патроны»).
+- **Нельзя называть** конкретные SKU, названия товаров или конкретные подкатегории-наследники из выдачи.
 - **Нельзя называть** цены, бренды, наличие, склады.
-- **Нельзя выдумывать** характеристики, которых не было в показанных товарах (можно сослаться на цоколь/мощность/цвет только если они реально были в `anchor.options[]` карточек выдачи).
+- **Нельзя выдумывать** характеристики, отсутствующие в `anchor.options[]` показанных карточек. Если хочется упомянуть характеристику — она должна реально присутствовать у одной из показанных карточек.
 - Запрещены слова интерактива: «нажмите», «перейдите», «по ссылке», «кликните».
 - Запрещены markdown-ссылки и упоминания валюты (`₸`, `руб`, `KZT`).
+- **Категории смежных типов товаров** упоминаются обобщённо («сопутствующие материалы», «аксессуары для монтажа», «расходники той же группы») либо через **родительскую категорию** из `categories_flat`, в которой лежит `slot.category_pagetitle`. Запрещено опираться на pre-trained знания LLM о смежности товаров — только структура каталога.
 
-**Пример валидного cross-sell-абзаца:**
-
-> Под такие лампы E27 часто берут диммеры — если планируете регулировать яркость. Также пригодятся запасные патроны, особенно для люстр, где лампы меняются часто.
+> **Иллюстративные примеры cross-sell-абзацев в спеке намеренно не приводятся** (см. §0). Готовые формулировки находятся в системном промте Composer'а как часть конфигурации (`app_settings.system_prompt` + `app_settings.crosssell_prompt_section`), правятся без редеплоя и подбираются продакт-командой по аналитике `crosssell_text_length_chars` / `crosssell_invariant_violation_total`.
 
 **Пост-валидация в Composer (§11.5b, defensive).** Перед отправкой ответа проверяется cross-sell-абзац регэкспами:
 
@@ -1403,7 +1477,7 @@ Cross-sell и similar-tail взаимно исключаются (similar ник
    - метрика `similar_quality_dialog_total++`.
    - **Никакого** хардкода «цена ≥ 70%», никаких tier-карт брендов, никакого автозапуска фильтра по бренду.
 
-7. **Запрет «фантомного качества» (SIM7).** В выводе бот пишет **только** фактическое: «Совпадает с исходной: цоколь E27, мощность, цветовая температура» (см. §17.7). Запрещены слова «лучше», «не хуже», «премиум», «качественнее».
+7. **Запрет «фантомного качества» (SIM7).** В выводе бот пишет **только** фактическое: «Совпадает с исходной: <critical_traits_csv>» (см. §17.7 BNF). Запрещены слова «лучше», «не хуже», «премиум», «качественнее». Список трейтов берётся из реального intersection `anchor.options[]` ∩ `candidate.options[]`, а не из pre-trained знаний LLM.
 
 **Инварианты:**
 - **SIM1.** `similar_search` без якоря → один уточняющий вопрос; не угадываем.
@@ -2039,47 +2113,33 @@ sequenceDiagram
 
 Абсолютный. Контролируется PersonaGuard на двух уровнях (§12).
 
-### 17.3 Формат товара (canonical markdown)
+### 17.3 Формат товара (canonical markdown — BNF)
 
-Карточка товара — **многострочный буллет-блок**. Один товар — один пункт списка с подпунктами. Пустые/отсутствующие поля **пропускаются** (никаких «—», «н/д», «уточняется»).
-
-**Шаблон одного пункта:**
+Карточка товара — **многострочный буллет-блок**. Один товар — один пункт списка с подпунктами. Условные подпункты при отсутствии данных **пропускаются полностью** (никаких «—», «н/д», «уточняется»). Спецификация формата приводится в виде BNF/плейсхолдер-нотации (`<placeholder>` = значение из API runtime, `[ … ]` = опциональный блок).
 
 ```
-- **[Название товара](https://220volt.kz/...)**
-  - Цена: *12 990* ₸
-  - Бренд: BrandName
-  - Наличие: В наличии — *Алматы 12 шт*, *Астана 4 шт*
+Card ::=
+- **[<product.pagetitle>](<product.url>)**
+  - Цена: *<format_price(product.price)>* ₸          ; required, product.price > 0 (см. §9C.3)
+  [- Бренд: <product.vendor>]                        ; iff product.vendor is non-empty
+  [- Наличие: <stock_summary(product.warehouses)>]   ; iff stock_summary returns non-empty (§17.5)
+
+format_price(n: integer) ::= группировка тысяч пробелами, целое число, без копеек
+                              (например, n=12990 → "12 990")
 ```
 
 **Правила полей:**
-- **Название** — `ProductResource.pagetitle`. Никакого экранирования обратными слэшами. В URL круглые скобки → `%28`/`%29`.
-- **Цена** — *курсив*, число с пробелами как разделителями тысяч, валюта `₸` через пробел. **Товары с `price === 0` не выводятся вообще** (см. §9C.3) — ни на верхнем уровне, ни в cross-sell, ни в «похожих».
-- **Бренд** — `ProductResource.vendor`. Если `vendor` пуст/null — строка «Бренд» пропускается полностью.
-- **Наличие** — формируется из `Product.warehouses[]` по правилам §17.5. Если `warehouses` отсутствует/пуст или все `amount = 0` — строка «Наличие» пропускается полностью (не выдумывать).
+- **Название** — `ProductResource.pagetitle`. Никакого экранирования обратными слэшами. В URL круглые скобки → `%28`/`%29`. `Product.name` (если null) не используется — берётся `pagetitle`.
+- **Цена** — `*курсив*`, формат `format_price`, валюта `₸` через пробел. **Товары с `product.price === 0` не выводятся вообще** (см. §9C.3) — ни на верхнем уровне, ни в similar, ни в related-блоках. Двойная фильтрация: Catalog Search + Composer pre-render.
+- **Бренд** — `ProductResource.vendor`. Если `vendor === null` или пустая строка — подпункт «Бренд» отсутствует целиком.
+- **Наличие** — формируется из `Product.warehouses[]` по правилам §17.5. Если все `amount === 0` или массив пуст — подпункт «Наличие» отсутствует целиком.
 
-**Пример блока выдачи (≤7 результатов):**
+**Запрет на иллюстративные примеры (§0):** конкретный markdown-блок с реальным товаром / категорией / брендом / ценой 220volt в спеке **не приводится**. Эталонные примеры рендеринга (golden snapshot'ы) лежат в `tests/golden/snapshots/` и обновляются вместе с тестами; посмотреть их можно при разработке, опираться на конкретные значения как на whitelist в production-коде — нельзя (D1).
 
-```
-Подходящие модели:
+**Заголовок над списком карточек** (опционально, генерируется Composer'ом естественным языком в стиле эксперта-продавца, без приветствий §17.2): короткая фраза-связка вида «Подходящие модели:», «Нашёл варианты:», «Вот что есть в категории:». Конкретные формулировки — в системном промте Composer'а.
 
-- **[Розетка белая 16А](https://220volt.kz/p/rozetka-belaya-16a)**
-  - Цена: *990* ₸
-  - Бренд: Schneider
-  - Наличие: В наличии — *Алматы 24 шт*, *Астана 8 шт*
+### 17.4 Сопутствующие материалы (PDF, related_sku)
 
-- **[Розетка с заземлением 16А](https://220volt.kz/p/...)**
-  - Цена: *1 290* ₸
-  - Бренд: Legrand
-  - Наличие: В вашем городе (Алматы) нет на складе. Ближайший: *Астана 6 шт*
-
-- **[Влагозащищённая 16А IP44](https://220volt.kz/p/...)**
-  - Цена: *1 890* ₸
-  - Бренд: ABB
-  - Наличие: В наличии — *Шымкент 3 шт*
-
-Уточните цвет рамки или нужен ли блок из нескольких розеток — подберу точнее.
-```
 
 ### 17.4 Сопутствующие материалы (PDF, related_sku)
 
@@ -2121,21 +2181,29 @@ sequenceDiagram
 
 Используется только в ответе на `similar_search` (см. §11.6). Заголовок блока — **«Аналоги:»** (двоеточие, без других слов).
 
-Карточка аналога — тот же буллет-формат §17.3 + **один обязательный подпункт** в самом низу:
+Карточка аналога = базовая карточка §17.3 + **один обязательный подпункт** в самом низу:
 
 ```
-- **[Название товара](https://220volt.kz/...)**
-  - Цена: *1 290* ₸
-  - Бренд: BrandName
-  - Наличие: В наличии — *Алматы 12 шт*
-  - Совпадает с исходной: цоколь E27, мощность, цветовая температура
+SimilarCard ::=
+<Card>                                                    ; см. §17.3 BNF
+  - Совпадает с исходной: <critical_traits_csv>           ; required
+
+critical_traits_csv ::= человекочитаемый список через запятую
+                         из caption_ru трейтов из intersection
+                         (anchor.options[] ∩ candidate.options[])
+                         ∩ union(critical[], flavor[]) из classify_traits
 ```
 
 Правила:
-- «Совпадает с исходной: …» — список **реально совпавших** трейтов из якоря (intersection `anchor.options[]` ∩ `candidate.options[]` по ключу+значению, ограниченный union(critical, flavor) из `classify_traits`). Никаких выдумок.
-- Запрещены оценочные слова: «лучше», «не хуже», «премиум», «качественнее» (инвариант SIM7). Только фактическое совпадение.
+- «Совпадает с исходной: …» — список **реально совпавших** трейтов (см. формулу выше). Никаких выдумок.
+- Запрещены оценочные слова: «лучше», «не хуже», «премиум», «качественнее» (инвариант SIM7).
 - Максимум 3 карточки (`render_top=3`, см. §11.6).
-- При 1 кандидате — карточка + tail-строка «Это единственный аналог по *{critical-traits}*.»
+- При 1 кандидате — карточка + tail «Это единственный аналог по *<critical-traits>*.»
+- При 0 кандидатов — блок не выводится; короткая фраза «Прямых аналогов с *<critical-trait>* не нашёл. Если важно сохранить *<trait>* — могу подобрать у других брендов.»
+
+**Запрет на иллюстративные примеры (§0):** конкретная карточка-аналог с реальным товаром / характеристиками 220volt в спеке не приводится.
+
+
 - При 0 кандидатов — блок не выводится; вместо него короткая фраза «Прямых аналогов с *{critical-trait}* не нашёл. Если важно сохранить *{trait}* — могу подобрать у других брендов.»
 
 ### 17.8 Длина ответа
