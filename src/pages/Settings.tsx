@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Save, Key, Zap, Eye, EyeOff, Loader2, Wifi, WifiOff, Plus, X, RefreshCw } from 'lucide-react';
+import { Save, Key, Zap, Eye, EyeOff, Loader2, Wifi, WifiOff, Plus, X, RefreshCw, GitBranch, AlertTriangle } from 'lucide-react';
 import { AdminLayout } from '@/components/layout/AdminLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,6 +9,8 @@ import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
+
+type PipelineVersion = 'v1' | 'v2';
 
 interface AppSettings {
   id: string;
