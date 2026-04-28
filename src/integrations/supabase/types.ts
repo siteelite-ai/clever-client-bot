@@ -137,6 +137,30 @@ export type Database = {
         }
         Relationships: []
       }
+      chat_cache_v2: {
+        Row: {
+          cache_key: string
+          cache_value: Json
+          created_at: string
+          expires_at: string
+          hit_count: number
+        }
+        Insert: {
+          cache_key: string
+          cache_value: Json
+          created_at?: string
+          expires_at: string
+          hit_count?: number
+        }
+        Update: {
+          cache_key?: string
+          cache_value?: Json
+          created_at?: string
+          expires_at?: string
+          hit_count?: number
+        }
+        Relationships: []
+      }
       classifier_cache: {
         Row: {
           created_at: string
@@ -291,6 +315,7 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      gc_chat_cache_v2: { Args: never; Returns: undefined }
       has_role: {
         Args: {
           _role: Database["public"]["Enums"]["app_role"]
