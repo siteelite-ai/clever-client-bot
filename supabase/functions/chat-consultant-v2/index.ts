@@ -176,21 +176,6 @@ function formatResolverDiagnostic(r: ResolverResult): string {
 }
 
 // ---------------------------------------------------------------------------
-// Извлечь последнее пользовательское сообщение из messages.
-// ---------------------------------------------------------------------------
-function extractLastUserMessage(messages: unknown): string {
-  if (!Array.isArray(messages)) return "";
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i];
-    if (m && typeof m === "object" && (m as { role?: string }).role === "user") {
-      const c = (m as { content?: unknown }).content;
-      if (typeof c === "string") return c;
-    }
-  }
-  return "";
-}
-
-// ---------------------------------------------------------------------------
 // HTTP handler
 // ---------------------------------------------------------------------------
 serve(async (req) => {
@@ -204,26 +189,63 @@ serve(async (req) => {
     });
   }
 
-  let body: Record<string, unknown> = {};
-  try {
-    body = await req.json();
-  } catch {
-    /* ignore */
-  }
-  const conversationId =
-    typeof body.conversationId === "string" ? body.conversationId : "unknown";
-  const traceId = `${conversationId}-${Date.now().toString(36)}`;
+  // Trace ID — независимый от клиента, всегда есть.
+  const traceId = crypto.randomUUID();
 
-  const userQuery = extractLastUserMessage(body.messages);
-  const dialogSlots =
-    body.dialogSlots && typeof body.dialogSlots === "object"
-      ? (body.dialogSlots as Record<string, unknown>)
-      : {};
+  // Безопасный парс body: сначала text(), потом JSON, чтобы можно было
+  // залогировать сырое тело при ошибке валидации (Stage B диагностика).
+  let rawText = "";
+  let parsed: unknown = null;
+  try {
+    rawText = await req.text();
+    parsed = rawText ? JSON.parse(rawText) : {};
+  } catch (e) {
+    console.error(
+      `[chat-consultant-v2] body parse error trace=${traceId}: ${
+        e instanceof Error ? e.message : e
+      }; ct="${req.headers.get("content-type") ?? ""}"; raw="${rawText.slice(0, 300)}"`,
+    );
+    return new Response(
+      JSON.stringify({ error: "invalid_json", traceId }),
+      {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
+  }
+
+  const validation = RequestSchema.safeParse(parsed);
+  if (!validation.success) {
+    const flat = validation.error.flatten();
+    console.warn(
+      `[chat-consultant-v2] schema validation failed trace=${traceId}: ${
+        JSON.stringify(flat.fieldErrors)
+      }; raw="${rawText.slice(0, 300)}"`,
+    );
+    return new Response(
+      JSON.stringify({
+        error: "invalid_request",
+        details: flat.fieldErrors,
+        traceId,
+      }),
+      {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      },
+    );
+  }
+
+  const reqData: V2Request = validation.data;
+  const conversationId = reqData.conversationId;
+  const userQuery = reqData.query;
+  const dialogSlots = reqData.dialogSlots ?? {};
   const slotCategory =
-    typeof dialogSlots.category === "string" ? dialogSlots.category : null;
+    typeof (dialogSlots as Record<string, unknown>).category === "string"
+      ? ((dialogSlots as Record<string, unknown>).category as string)
+      : null;
 
   console.log(
-    `[chat-consultant-v2] build=${BUILD_MARKER} trace=${traceId} q="${userQuery.slice(0, 80)}" slot.category=${slotCategory ?? "null"}`,
+    `[chat-consultant-v2] build=${BUILD_MARKER} trace=${traceId} conv=${conversationId} q="${userQuery.slice(0, 80)}" slot.category=${slotCategory ?? "null"}`,
   );
 
   // SSE-поток
@@ -231,27 +253,11 @@ serve(async (req) => {
     async start(controller) {
       const log = (event: string, data?: Record<string, unknown>) => {
         console.log(
-          `[v2.${event}] ${JSON.stringify({ traceId, ...(data ?? {}) })}`,
+          `[v2.${event}] ${JSON.stringify({ traceId, conversationId, ...(data ?? {}) })}`,
         );
       };
 
       try {
-        if (!userQuery) {
-          controller.enqueue(
-            sseChunk({
-              choices: [{
-                delta: {
-                  content:
-                    "Пустое сообщение. Опишите, какой товар вас интересует.",
-                },
-              }],
-              meta: { pipeline_version: "v2", build: BUILD_MARKER, stage: "B" },
-            }),
-          );
-          controller.enqueue(sseDone());
-          controller.close();
-          return;
-        }
 
         // ---- Инициализация зависимостей резолвера -----------------------
         const supabase = getAdminClient();
