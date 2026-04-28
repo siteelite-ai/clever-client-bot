@@ -1510,12 +1510,56 @@ async function getCategoryOptionsSchema(
   categoryPagetitle: string,
   apiToken: string
 ): Promise<CategorySchemaResult> {
-  const cached = categoryOptionsCache.get(cacheKey(categoryPagetitle));
-  if (cached && Date.now() - cached.ts < CATEGORY_OPTIONS_TTL_MS) {
-    console.log(`[CategoryOptionsSchema] cache HIT "${categoryPagetitle}" (${cached.schema.size} keys, ${cached.productCount} products, conf=${cached.confidence}, src=${cached.source}, age=${Math.round((Date.now() - cached.ts) / 1000)}s)`);
+  const key = cacheKey(categoryPagetitle);
+  const cached = categoryOptionsCache.get(key);
+  const now = Date.now();
+
+  // FRESH cache hit
+  if (cached && now - cached.ts < CATEGORY_OPTIONS_TTL_MS) {
+    console.log(`[CategoryOptionsSchema] cache HIT "${categoryPagetitle}" (${cached.schema.size} keys, ${cached.productCount} products, conf=${cached.confidence}, src=${cached.source}, age=${Math.round((now - cached.ts) / 1000)}s)`);
     return { schema: cached.schema, productCount: cached.productCount, cacheHit: true, confidence: cached.confidence, source: 'cache' };
   }
 
+  // STALE-WHILE-REVALIDATE: cache expired but still within grace window AND
+  // confidence='full' (we never serve stale degraded data). Return stale immediately,
+  // kick off background refresh (deduped by inflight map). User pays zero latency.
+  if (cached && cached.confidence === 'full' && now - cached.ts < CATEGORY_OPTIONS_TTL_MS + STALE_GRACE_MS) {
+    const ageMin = Math.round((now - cached.ts) / 60000);
+    console.log(`[CategoryOptionsSchema] cache STALE-SERVE "${categoryPagetitle}" (age=${ageMin}m, refreshing in background)`);
+    // Fire-and-forget refresh (errors swallowed — stale data is still good enough)
+    if (!inflightSchemaRequests.has(key)) {
+      const refreshPromise = _doFetchCategoryOptionsSchema(categoryPagetitle, apiToken)
+        .catch(e => {
+          console.log(`[CategoryOptionsSchema] background refresh failed for "${categoryPagetitle}": ${(e as Error).message}`);
+          return { schema: cached.schema, productCount: cached.productCount, cacheHit: false, confidence: cached.confidence, source: 'cache' as const };
+        })
+        .finally(() => inflightSchemaRequests.delete(key));
+      inflightSchemaRequests.set(key, refreshPromise);
+    }
+    return { schema: cached.schema, productCount: cached.productCount, cacheHit: true, confidence: cached.confidence, source: 'cache' };
+  }
+
+  // SINGLE-FLIGHT: if another request is already fetching this category, await it
+  // instead of issuing a duplicate HTTP call (root cause of upstream timeout cascade).
+  const inflight = inflightSchemaRequests.get(key);
+  if (inflight) {
+    console.log(`[CategoryOptionsSchema] single-flight WAIT "${categoryPagetitle}" (joining inflight request)`);
+    return await inflight;
+  }
+
+  // Cold load: register inflight, fetch, clean up on completion (success or failure).
+  const fetchPromise = _doFetchCategoryOptionsSchema(categoryPagetitle, apiToken)
+    .finally(() => inflightSchemaRequests.delete(key));
+  inflightSchemaRequests.set(key, fetchPromise);
+  return await fetchPromise;
+}
+
+// Actual fetch implementation. Always called under single-flight protection from the
+// public wrapper above — never call directly from feature code.
+async function _doFetchCategoryOptionsSchema(
+  categoryPagetitle: string,
+  apiToken: string
+): Promise<CategorySchemaResult> {
   const t0 = Date.now();
   const url = `https://220volt.kz/api/categories/options?pagetitle=${encodeURIComponent(categoryPagetitle)}`;
 
