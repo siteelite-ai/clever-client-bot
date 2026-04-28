@@ -182,6 +182,13 @@ export interface ComposeCatalogInput {
   prevSoft404Streak: 0 | 1 | 2;
   /** Опции форматтера (userCity, baseUrl, …). */
   formatterOptions?: FormatterOptions;
+  /**
+   * §5.4.1: Внешний запрет cross-sell от оркестратора. Спека (§5.4.1, контракт
+   * входа): similar-ветка ВСЕГДА передаёт `true`. Композер дополнительно
+   * форсит запрет для всех scenario, кроме `normal` (логика OR — приоритет
+   * у запрета). Если флаг не передан → false (нет внешнего запрета).
+   */
+  disallowCrosssell?: boolean;
   /** Опциональный AbortSignal. */
   signal?: AbortSignal;
   /** Колбек на каждый delta-токен (для проксирования в SSE). */
