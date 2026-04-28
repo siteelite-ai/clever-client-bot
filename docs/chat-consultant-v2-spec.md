@@ -20,6 +20,7 @@
 9. [Модуль: Catalog Search](#9-модуль-catalog-search)
 10. [Модуль: Knowledge Base RAG](#10-модуль-knowledge-base-rag)
 11. [Модуль: Response Composer](#11-модуль-response-composer)
+11A. [Модуль: Progressive Feedback (Thinking Phrases)](#11a-модуль-progressive-feedback-thinking-phrases)
 12. [Модуль: Persona Guard](#12-модуль-persona-guard)
 13. [Контракты данных (TypeScript)](#13-контракты-данных-typescript)
 14. [Схема БД (DDL)](#14-схема-бд-ddl)
@@ -559,6 +560,149 @@ interface ComposerOutput {
 
 - SSE-чанки по мере генерации.
 - Drain loop: после `[DONE]` сервер ждёт завершения вспомогательных операций (запись trace, обновление слота) и шлёт финальный `slot_state` event.
+
+---
+
+## 11A. Модуль: Progressive Feedback (Thinking Phrases)
+
+### 11A.1 Назначение
+
+Обеспечить мгновенный визуальный и текстовый feedback пользователю на время выполнения turn pipeline, когда финальный ответ ещё не готов. Снижает воспринимаемую латентность и предотвращает ощущение «зависания».
+
+### 11A.2 Принципы
+
+- Любой turn длительностью > **400 ms** должен иметь видимый feedback.
+- Feedback — **контекстный**: фраза зависит от классифицированного интента (доступен после Stage 2 пайплайна — Intent Classifier, см. §6, §7).
+- Feedback **эфемерный**: не сохраняется в истории диалога, не учитывается Persona Guard'ом как «ход бота», не попадает в контекст следующих turn'ов.
+- Каталог фраз — **внешняя конфигурация** (`app_settings.thinking_phrases_json`), редактируется без редеплоя.
+
+### 11A.3 Двухуровневая модель
+
+| Уровень | Что | Когда показывается | Источник | Транспорт |
+|---|---|---|---|---|
+| **L1: Typing indicator** | Анимация «…» (три точки) | Сразу после отправки запроса (t = 0) | Клиент (виджет) | Локально |
+| **L2: Thinking phrase** | Текстовое сообщение | После Stage 2 (классификация интента) | Сервер (edge function) | SSE event `thinking` |
+
+L1 включается клиентом немедленно при отправке. L2 заменяет L1 как только приходит первый `thinking` event. При получении первого `message` чанка L2 заменяется началом финального ответа (или скрывается, если ответ начинается с карточек).
+
+### 11A.4 Каталог фраз по интентам
+
+Контракт конфигурации (`app_settings.thinking_phrases_json`):
+
+```ts
+type ThinkingPhraseConfig = {
+  version: number;                // semver конфига
+  enabled: boolean;               // глобальный kill-switch
+  min_pipeline_ms: number;        // не слать L2, если ответ ожидается быстрее (default: 400)
+  long_wait_threshold_ms: number; // когда показать вторую фразу (default: 3000)
+  phrases: Record<IntentKind, string[]>;
+};
+
+type IntentKind =
+  | 'sku_lookup'
+  | 'filter_search'
+  | 'category_browse'
+  | 'kb_question'
+  | 'escalation'
+  | 'clarification'
+  | 'fallback';
+```
+
+Базовый набор (значения по умолчанию):
+
+| Intent | Фразы (выбор случайный) |
+|---|---|
+| `sku_lookup` | «Проверяю артикул…», «Смотрю наличие по коду…» |
+| `filter_search` | «Подбираю варианты…», «Фильтрую каталог…» |
+| `category_browse` | «Открываю категорию…», «Смотрю ассортимент…» |
+| `kb_question` | «Уточняю информацию…», «Сверяюсь с документацией…» |
+| `escalation` | «Готовлю контакты менеджера…» |
+| `clarification` | «Думаю над уточнением…» |
+| `fallback` | «Секунду…» |
+
+Long-wait фраза (единая, при превышении `long_wait_threshold_ms`): «Ещё секунду, почти готово…».
+
+### 11A.5 SSE-протокол (расширение к §15)
+
+Добавляются два новых event-типа в стрим `/chat`:
+
+```
+event: thinking
+data: {"phrase":"Проверяю артикул...","intent":"sku_lookup","level":"L2","seq":1}
+
+event: thinking
+data: {"phrase":"Ещё секунду, почти готово...","intent":"sku_lookup","level":"L2","seq":2}
+```
+
+Поля:
+
+- `phrase` — готовый к отображению текст.
+- `intent` — для клиентской аналитики и условного рендера.
+- `level` — всегда `"L2"` (зарезервировано на будущее).
+- `seq` — порядковый номер thinking-сообщения в рамках turn (1 или 2).
+
+Порядок событий в одном turn:
+
+```
+[client shows L1 typing immediately on send]
+event: thinking (seq=1)         ← после Stage 2, если pipeline > min_pipeline_ms
+event: thinking (seq=2)         ← опционально, если прошло > long_wait_threshold_ms
+event: message (chunk)          ← начало финального ответа; thinking стирается
+...
+event: message (chunk)
+event: slot_state
+event: done
+```
+
+### 11A.6 Правила тайминга и отмены
+
+| Условие | Поведение |
+|---|---|
+| Pipeline завершился < `min_pipeline_ms` (400 ms) | L2 НЕ отправляется, L1 скрывается при первом `message` |
+| Pipeline идёт > `min_pipeline_ms` после Stage 2 | Отправляется `thinking seq=1` |
+| Прошло > `long_wait_threshold_ms` (3000 ms) | Отправляется `thinking seq=2` (long-wait) |
+| Hard timeout (10 s, см. §6) | Все thinking стираются, отправляется сообщение об эскалации |
+| Ошибка pipeline до Stage 2 | L2 не отправляется (нет интента) |
+| `enabled = false` в конфиге | Сервер не шлёт L2; клиент показывает только L1 |
+
+### 11A.7 Инварианты
+
+- **И8**: На один turn пользователя — максимум **2** thinking-сообщения (seq ∈ {1, 2}).
+- **И9**: Thinking-сообщения **никогда** не записываются в `chat_traces.messages` как ходы бота и не попадают в `conversation_history`, передаваемый в LLM.
+- **И10**: Thinking-фраза не должна содержать: приветствий, имён товаров, цен, ссылок, восклицательных знаков. Валидация — отдельная white-list проверка при загрузке конфига (а не Persona Guard).
+- **И11**: Один и тот же `seq` в рамках одного turn не отправляется повторно.
+- **И12**: Если клиент не получил ни одного `thinking` event, L1 typing indicator скрывается не позже первого `message` чанка либо `done` event.
+
+### 11A.8 Метрики (расширение §22)
+
+| Метрика | Тип | Описание |
+|---|---|---|
+| `thinking_l2_sent_total{intent,seq}` | counter | Сколько L2-сообщений отправлено |
+| `thinking_l2_suppressed_total{reason}` | counter | Подавлено (reason: `fast_pipeline`, `disabled`, `pre_stage2_error`) |
+| `thinking_to_first_message_ms` | histogram | Время от L2 seq=1 до первого `message` чанка |
+| `thinking_long_wait_total{intent}` | counter | Сколько раз сработал long-wait (seq=2) |
+
+### 11A.9 Конфигурация по умолчанию (для §24)
+
+```json
+{
+  "thinking_phrases_json": {
+    "version": 1,
+    "enabled": true,
+    "min_pipeline_ms": 400,
+    "long_wait_threshold_ms": 3000,
+    "phrases": {
+      "sku_lookup": ["Проверяю артикул...", "Смотрю наличие по коду..."],
+      "filter_search": ["Подбираю варианты...", "Фильтрую каталог..."],
+      "category_browse": ["Открываю категорию...", "Смотрю ассортимент..."],
+      "kb_question": ["Уточняю информацию...", "Сверяюсь с документацией..."],
+      "escalation": ["Готовлю контакты менеджера..."],
+      "clarification": ["Думаю над уточнением..."],
+      "fallback": ["Секунду..."]
+    }
+  }
+}
+```
 
 ---
 
@@ -1222,6 +1366,7 @@ interface GoldenCase {
 | 11 | Запрет приветствий | 3 | проверка, что ответ не начинается с «Здравствуйте» |
 | 12 | Формат markdown | 3 | проверка строгого `**[Name](URL)** — *price* ₸, brand` |
 | 13 | Soft 404 / fallback | 2 | категория есть, фильтры дают 0 → альтернативы |
+| 14 | Progressive Feedback | 4 | TC-61: SKU-запрос → `thinking seq=1` с intent=`sku_lookup` приходит в течение 600 ms; TC-62: быстрый ответ <400 ms → ни одного `thinking` event; TC-63: pipeline >3 s → приходит `thinking seq=2` (long-wait); TC-64: thinking-сообщения не попадают в `conversation_history` следующего turn'а |
 
 ### 25.2 Критерии прохождения
 
@@ -1297,6 +1442,7 @@ interface GoldenCase {
 | 28.6 | Логировать каждый turn в `chat_traces`? | (a) только usage в `ai_usage_logs`; (b) полный trace всегда; (c) trace через флаг | (c) флаг `trace_enabled`, дефолт false |
 | 28.7 | Контакты для эскалации хранить где? | (a) `app_settings.contacts_json`; (b) отдельная таблица | (a) — одна точка правды |
 | 28.8 | Резервная LLM модель | (a) только `flash`; (b) `flash` + `flash-lite` как fallback | (b) |
+| 28.9 | Источник каталога thinking-фраз (§11A) | (a) хардкод в edge function; (b) `app_settings.thinking_phrases_json` | (b) — маркетинг редактирует без редеплоя |
 
 ---
 
