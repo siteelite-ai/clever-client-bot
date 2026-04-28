@@ -3525,6 +3525,22 @@ ${JSON.stringify(modifiers)}
           const critical = sourceMod ? isCritical(sourceMod) : true;
           validated[resolvedKey] = { value: matchedValue, is_critical: critical, source_modifier: sourceMod };
           console.log(`[FilterLLM] Resolved (validated): "${resolvedKey}" = "${matchedValue}" [critical=${critical}, src="${sourceMod || 'n/a'}"]`);
+        } else if (keyOnlyMode) {
+          // KEY-ONLY MODE (confidence=partial): schema key is real, but values are a
+          // SUBSET of reality (legacy sampling). Trust LLM's value as a free-text
+          // filter on a real attribute instead of rejecting. Worst case: API returns
+          // 0 for that combo and caller falls through to query-only path.
+          // Mark as non-critical so caller can relax it if it produces zero hits.
+          let sourceMod: string | undefined;
+          for (const mod of modifiers) {
+            if (norm(mod) === norm(value) || norm(value).includes(norm(mod)) || norm(mod).includes(norm(value))) {
+              sourceMod = mod;
+              matchedModifiers.add(mod);
+              break;
+            }
+          }
+          validated[resolvedKey] = { value, is_critical: false, source_modifier: sourceMod };
+          console.log(`[FilterLLM] Resolved (key-only, partial schema): "${resolvedKey}" = "${value}" [critical=false, src="${sourceMod || 'n/a'}"]`);
         } else {
           console.log(`[FilterLLM] Key "${resolvedKey}" valid, but value "${value}" NOT in schema values [${[...knownValues].slice(0, 5).join(', ')}...] → unresolved`);
           // Find which modifier this came from
