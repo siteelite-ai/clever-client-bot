@@ -127,9 +127,45 @@ function mapToChatRequest(req: V2Request, clientMeta: ChatRequest["client_meta"]
 // ─── Placeholder S_*-исполнители ─────────────────────────────────────────────
 // Реальные реализации появятся в Steps 8+. Пока возвращаем диагностический
 // текст, чтобы можно было проверить пайплайн в живом виджете.
+/**
+ * Step 8: реальные исполнители для лёгких веток (S_GREETING / S_PERSONA /
+ * S_CONTACT / S_ESCALATION). S_KNOWLEDGE / S_CATALOG / S_CATALOG_OOD пока
+ * placeholder — реализация в Steps 9–11.
+ *
+ * Возвращает либо BranchOutput (готовый текст + опциональная contacts card),
+ * либо null — тогда вызывающий код использует placeholder-рендер для
+ * нереализованных веток.
+ */
+async function runLightBranch(
+  decision: PipelineDecision,
+  contactsDeps: ReturnType<typeof createContactsLoaderDeps>,
+): Promise<BranchOutput | null> {
+  switch (decision.route) {
+    case "S_GREETING":
+      return runGreeting();
+    case "S_PERSONA":
+      return runPersona();
+    case "S_CONTACT":
+      return await runContact(contactsDeps);
+    case "S_ESCALATION":
+      return await runEscalation(
+        // §5.6: пока есть только один явный сигнал — direct_request (классификатор
+        // вернул intent='escalation'). Прочие триггеры (double_zero_result,
+        // long_session_no_purchase) появятся в Steps 9+ когда будут метрики сессии.
+        { trigger: "direct_request", intent: decision.intent },
+        contactsDeps,
+      );
+    case "S_KNOWLEDGE":
+    case "S_CATALOG":
+    case "S_CATALOG_OOD":
+      return null; // Steps 9–11
+  }
+}
+
+/** Placeholder для ещё не реализованных веток (Steps 9–11). */
 function renderPlaceholder(decision: PipelineDecision): string {
   const r = decision.route;
-  const head = `🚧 **V2 Step 7 — placeholder S_*-route: \`${r}\`**`;
+  const head = `🚧 **V2 placeholder — \`${r}\` ещё не реализован**`;
   const intentLine = `Intent: \`${decision.intent.intent}\`` +
     (decision.intent.category_hint ? ` · hint: «${decision.intent.category_hint}»` : "") +
     (decision.intent.has_sku ? ` · SKU: \`${decision.intent.sku_candidate}\`` : "") +
@@ -138,23 +174,16 @@ function renderPlaceholder(decision: PipelineDecision): string {
     ? `\nСлот сматчен: \`${decision.slot_match.matched_slot.type}\` (${decision.slot_match.matched_slot.id})`
     : "";
   const traceLine = `\n\n_traceId: \`${decision.trace.traceId}\`_`;
-
   switch (r) {
-    case "S_GREETING":
-      // §5.2: silent ack — НЕ здороваемся в ответ.
-      return `${head}\n${intentLine}\n\n_(silent ack — реальная ветка в Step 8)_${traceLine}`;
-    case "S_PERSONA":
-      return `${head}\n${intentLine}\n\n_(short expert reply — Step 8)_${traceLine}`;
-    case "S_CONTACT":
-      return `${head}\n${intentLine}\n\n_(contacts card — Step 8)_${traceLine}`;
     case "S_KNOWLEDGE":
-      return `${head}\n${intentLine}\n\n_(knowledge hybrid search — Step 9)_${traceLine}`;
-    case "S_ESCALATION":
-      return `${head}\n${intentLine}\n\n_([CONTACT_MANAGER] block — Step 8)_${traceLine}`;
+      return `${head}\n${intentLine}\n\n_(hybrid search — Step 9)_${traceLine}`;
     case "S_CATALOG":
       return `${head}\n${intentLine}${slotLine}\n\n_(Catalog API + Composer — Steps 9–11)_${traceLine}`;
     case "S_CATALOG_OOD":
       return `${head}\n${intentLine}\n\n_(Soft 404 — Step 11)_${traceLine}`;
+    default:
+      // S_GREETING/S_PERSONA/S_CONTACT/S_ESCALATION — реализованы, сюда не попадают
+      return `${head}\n${intentLine}${traceLine}`;
   }
 }
 
