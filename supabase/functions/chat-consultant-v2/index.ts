@@ -47,6 +47,11 @@ import {
   createContactsLoaderDeps,
   type BranchOutput,
 } from "./branches.ts";
+import {
+  runKnowledge,
+  createKnowledgeDeps,
+  type KnowledgeBranchOutput,
+} from "./s-knowledge.ts";
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 const corsHeaders = {
@@ -55,7 +60,7 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const BUILD_MARKER = "v2-step8-light-branches-2026-04-28";
+const BUILD_MARKER = "v2-step9-knowledge-fts-2026-04-28";
 
 // ─── Контракт V2 запроса (Zod) ───────────────────────────────────────────────
 // Сохраняем backward-compat с виджетом: conversationId/query/messages/dialogSlots.
@@ -156,9 +161,13 @@ async function runLightBranch(
         contactsDeps,
       );
     case "S_KNOWLEDGE":
+      // S_KNOWLEDGE имеет расширенный output (chunks для Step 10 LLM-композера),
+      // поэтому исполняется отдельной веткой в start()-обработчике, а не здесь.
+      // Возвращаем null, чтобы caller знал: лёгкого исполнения не было.
+      return null;
     case "S_CATALOG":
     case "S_CATALOG_OOD":
-      return null; // Steps 9–11
+      return null; // Steps 10–11
   }
 }
 
