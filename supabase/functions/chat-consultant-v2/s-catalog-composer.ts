@@ -594,10 +594,20 @@ async function composeNoResults(
 }
 
 /**
- * Soft Fallback tail (§11.2a-rev): ОДНА короткая фраза.
- * Не перечисляем значения, не объясняем «что не нашли в фасете».
+ * §4.8.1 + §11.2a-rev: ОДНА короткая tail-строка с caption снятого фасета.
+ *
+ * Спека-инвариант: при `status === 'soft_fallback'` поле
+ * `outcome.softFallbackContext.droppedFacetCaption` НЕ может быть пустой строкой
+ * (см. §4.8.1). Если context отсутствует или caption пустой (защитный fallback
+ * на случай интеграционного бага) — возвращаем нейтральную фразу без курсива.
+ *
+ * Шаблон фиксирован Core Memory + спекой §4.8.1: маркер курсива обязателен.
  */
-function softFallbackTail(): string {
+export function softFallbackTail(droppedFacetCaption?: string): string {
+  const cap = droppedFacetCaption?.trim();
+  if (cap && cap.length > 0) {
+    return `Если важно уточнить *${cap}* — напишите.`;
+  }
   return "Если важно уточнить требования — напишите.";
 }
 
