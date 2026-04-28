@@ -44,9 +44,10 @@
  * V1 НЕ тронут.
  */
 
-import type { ChatHistoryMessage } from "./types.ts";
+import type { ChatHistoryMessage, Slot } from "./types.ts";
 import type { RawProduct } from "./catalog/api-client.ts";
 import type { SearchOutcome } from "./catalog/search.ts";
+import type { SPriceOutcome } from "./s-price.ts";
 import {
   formatProductList,
   type FormatterOptions,
@@ -169,13 +170,32 @@ export type CatalogScenario =
   | "soft_fallback" // §4.8: фильтры сняты → cross-sell ЗАПРЕЩЁН, добавим tail line
   | "soft_404" // §5.6.1: 0 товаров → 1 короткая фраза, без cross-sell
   | "all_zero_price" // двойной фильтр выкинул всё → CONTACT_MANAGER без товаров
-  | "error"; // catastrophic → нейтральная фраза + escalation
+  | "error" // catastrophic → нейтральная фраза + escalation
+  | "clarify"; // §4.4 price branch: probe.total > 50 → price_clarify slot, без LLM
+
+/**
+ * Вход композера может быть от двух веток pipeline:
+ *   - S_CATALOG (поиск)  → SearchOutcome
+ *   - S_PRICE   (цена)   → SPriceOutcome
+ *
+ * Различение делается по полю-дискриминатору `kind` (выставляет orchestrator).
+ * Это лучше чем `instanceof`, т.к. оба типа — POJO без классов.
+ */
+export type ComposerOutcome =
+  | { kind: "search"; outcome: SearchOutcome }
+  | { kind: "price"; outcome: SPriceOutcome };
 
 export interface ComposeCatalogInput {
   /** Очищенный запрос пользователя (после S0). */
   query: string;
-  /** Результат поисковой стадии (catalog/search.ts). */
-  outcome: SearchOutcome;
+  /**
+   * Результат поисковой/ценовой стадии. Дискриминированный union:
+   *   - search: catalog/search.ts
+   *   - price:  s-price.ts (содержит clarifySlot, totalCount, branch)
+   * Принимаем также «голый» SearchOutcome для обратной совместимости с тестами
+   * (нормализуем в normalizeOutcome).
+   */
+  outcome: SearchOutcome | ComposerOutcome;
   /** История диалога (до trim). */
   history: ChatHistoryMessage[];
   /** Текущее значение soft404_streak ДО обработки этого хода (§5.6.1). */
@@ -235,8 +255,16 @@ export async function composeCatalogAnswer(
   input: ComposeCatalogInput,
   deps: CatalogComposerDeps,
 ): Promise<ComposeCatalogOutput> {
-  const scenario = decideScenario(input.outcome);
-  const newStreak = nextSoft404Streak(input.prevSoft404Streak, input.outcome);
+  const norm = normalizeOutcome(input.outcome);
+  const scenario = decideScenario(norm);
+  const newStreak = nextSoft404Streak(input.prevSoft404Streak, norm);
+
+  // ── Branch 0 (S_PRICE): clarify — детерминированный рендер, БЕЗ LLM. ──
+  // §4.4: probe.total > 50 → выводим вопрос с топ-N option-значениями.
+  // §5.6.1: streak НЕ меняется (новое состояние, не empty и не ok).
+  if (scenario === "clarify") {
+    return composeClarify(input, norm, newStreak);
+  }
 
   // ── Branch 1: 0 товаров (soft_404 / all_zero_price / error) ──
   // LLM-вызов всё ещё нужен — для короткой человеческой фразы (§5.6.1).
@@ -246,18 +274,74 @@ export async function composeCatalogAnswer(
     scenario === "all_zero_price" ||
     scenario === "error"
   ) {
-    return await composeNoResults(input, deps, scenario, newStreak);
+    return await composeNoResults(input, deps, scenario, newStreak, norm);
   }
 
   // ── Branch 2: есть товары (normal / soft_fallback) ──
-  return await composeWithProducts(input, deps, scenario, newStreak);
+  return await composeWithProducts(input, deps, scenario, newStreak, norm);
 }
 
 // ─── Внутренние функции ──────────────────────────────────────────────────────
 
-/** Решает сценарий по SearchOutcome.status. */
-export function decideScenario(outcome: SearchOutcome): CatalogScenario {
-  switch (outcome.status) {
+/**
+ * Нормализация: композер внутри работает с единым представлением.
+ *   - SearchOutcome → kind='search'
+ *   - SPriceOutcome → kind='price' (содержит clarifySlot, totalCount)
+ *   - Уже обёрнутый ComposerOutcome → as is.
+ *
+ * Поле `outcome` без `kind` считаем SearchOutcome (обратная совместимость
+ * со старыми тестами).
+ */
+export function normalizeOutcome(
+  outcome: SearchOutcome | ComposerOutcome,
+): NormalizedOutcome {
+  if ("kind" in outcome) {
+    if (outcome.kind === "price") {
+      const o = outcome.outcome;
+      return {
+        kind: "price",
+        status: o.status,
+        products: o.products,
+        totalFromApi: o.totalCount,
+        clarifySlot: o.clarifySlot,
+        softFallbackContext: null,
+      };
+    }
+    return wrapSearch(outcome.outcome);
+  }
+  return wrapSearch(outcome);
+}
+
+function wrapSearch(o: SearchOutcome): NormalizedOutcome {
+  return {
+    kind: "search",
+    status: o.status,
+    products: o.products,
+    totalFromApi: o.totalFromApi,
+    clarifySlot: null,
+    softFallbackContext: o.softFallbackContext,
+  };
+}
+
+/** Внутреннее представление, общее для search/price веток. */
+export interface NormalizedOutcome {
+  kind: "search" | "price";
+  /** Объединённый статус (search-статусы + price-статусы). */
+  status: string;
+  products: RawProduct[];
+  totalFromApi: number;
+  clarifySlot: Slot | null;
+  softFallbackContext: { droppedFacetCaption: string } | null;
+}
+
+/** Решает сценарий по нормализованному outcome (поддерживает search+price). */
+export function decideScenario(
+  outcome: NormalizedOutcome | SearchOutcome,
+): CatalogScenario {
+  const norm: NormalizedOutcome = "kind" in outcome
+    ? outcome
+    : wrapSearch(outcome);
+  switch (norm.status) {
     case "ok":
       return "normal";
     case "soft_fallback":
@@ -269,8 +353,14 @@ export function decideScenario(outcome: SearchOutcome): CatalogScenario {
       return "all_zero_price";
     case "error":
       return "error";
+    case "clarify":
+      // Только S_PRICE: probe.total > 50 → price_clarify slot.
+      return "clarify";
+    case "out_of_domain":
+      // S_PRICE shortcut. Маршрутизатор обычно ловит это раньше (S_CATALOG_OOD),
+      // но если дошло — обрабатываем как all_zero_price (contactManager=true).
+      return "all_zero_price";
     default:
-      // exhaustive — TS поймает добавление нового статуса.
       return "error";
   }
 }
@@ -278,18 +368,28 @@ export function decideScenario(outcome: SearchOutcome): CatalogScenario {
 /**
  * §5.6.1 state-machine. Чистая функция, тестируется отдельно.
  * Инвариант: вызывается ровно один раз за catalog-ход, ПОСЛЕ финального счёта.
+ *
+ * Core memory: «При action='clarify' (price_clarify slot) streak НЕ изменяется
+ * — это новое состояние, не empty и не ok».
  */
 export function nextSoft404Streak(
   prev: 0 | 1 | 2,
-  outcome: SearchOutcome,
+  outcome: NormalizedOutcome | SearchOutcome,
 ): 0 | 1 | 2 {
+  const norm: NormalizedOutcome = "kind" in outcome
+    ? outcome
+    : wrapSearch(outcome);
+
+  // §5.6.1: clarify — новое состояние, streak неизменен.
+  if (norm.status === "clarify") return prev;
+
   const isZero =
-    outcome.status === "empty" ||
-    outcome.status === "empty_degraded" ||
-    outcome.status === "all_zero_price";
+    norm.status === "empty" ||
+    norm.status === "empty_degraded" ||
+    norm.status === "all_zero_price";
   if (!isZero) {
     // Любой ненулевой результат (включая soft_fallback с товарами) → reset.
-    if (outcome.products.length > 0) return 0;
+    if (norm.products.length > 0) return 0;
     // error без товаров — НЕ инкрементим (это инфраструктурный сбой, не «ничего нет»).
     return prev;
   }
@@ -370,11 +470,14 @@ export function validateCrosssell(text: string): string | null {
 // ─── Branch implementations ──────────────────────────────────────────────────
 
 /** Собирает user-message для LLM в normal/soft_fallback (с товарами). */
-function buildUserMessageWithProducts(input: ComposeCatalogInput): string {
-  const { query, outcome } = input;
-  const count = outcome.products.length;
+function buildUserMessageWithProducts(
+  input: ComposeCatalogInput,
+  norm: NormalizedOutcome,
+): string {
+  const { query } = input;
+  const count = norm.products.length;
   const scenarioHint =
-    outcome.status === "soft_fallback"
+    norm.status === "soft_fallback"
       ? "Фильтры были сняты (показаны товары без всех изначальных уточнений). Cross-sell НЕ выводите."
       : "Обычная выдача. Cross-sell уместен.";
   return [
@@ -419,9 +522,10 @@ async function composeWithProducts(
   deps: CatalogComposerDeps,
   scenario: CatalogScenario,
   newStreak: 0 | 1 | 2,
+  norm: NormalizedOutcome,
 ): Promise<ComposeCatalogOutput> {
   const trimmed = trimHistory(input.history);
-  const userMessage = buildUserMessageWithProducts(input);
+  const userMessage = buildUserMessageWithProducts(input, norm);
 
   // Буферизуем стрим — карточки инжектятся между intro и cross-sell.
   let accum = "";
@@ -473,7 +577,7 @@ async function composeWithProducts(
   }
 
   // ── 4. Рендерим карточки (deterministic) ──
-  const cards = formatProductList(input.outcome.products, input.formatterOptions);
+  const cards = formatProductList(norm.products, input.formatterOptions);
 
   // ── 5. Сборка финального текста ──
   const parts: string[] = [];
@@ -481,7 +585,7 @@ async function composeWithProducts(
   if (cards.markdown) parts.push(cards.markdown);
   if (scenario === "soft_fallback") {
     // §4.8.1 + §11.2a-rev: ОДНА короткая tail-строка с caption снятого фасета.
-    parts.push(softFallbackTail(input.outcome.softFallbackContext?.droppedFacetCaption));
+    parts.push(softFallbackTail(norm.softFallbackContext?.droppedFacetCaption));
   }
   if (crosssellRendered) parts.push(crosssellRendered);
 
@@ -527,6 +631,7 @@ async function composeNoResults(
   deps: CatalogComposerDeps,
   scenario: CatalogScenario,
   newStreak: 0 | 1 | 2,
+  _norm: NormalizedOutcome,
 ): Promise<ComposeCatalogOutput> {
   const trimmed = trimHistory(input.history);
   const userMessage = buildUserMessageNoResults(input, scenario);
@@ -594,6 +699,67 @@ async function composeNoResults(
       output_tokens: llm.output_tokens,
       total_tokens: llm.input_tokens + llm.output_tokens,
       model: llm.model,
+    },
+  };
+}
+
+// ─── §4.4 price-clarify branch (deterministic, no LLM) ──────────────────────
+
+/**
+ * §4.4: probe.total > 50 → создаём вопрос с топ-N значениями фасета.
+ *
+ * Инварианты:
+ *   • БЕЗ LLM (zero latency, zero cost, zero галлюцинаций).
+ *   • Композер НЕ объясняет «что отсутствует»; формулировка нейтральная.
+ *   • НЕ выводит карточки и cross-sell.
+ *   • streak неизменен (см. nextSoft404Streak).
+ *   • Bot NEVER self-narrows funnel: вопрос ОТКРЫТЫЙ, варианты — подсказка.
+ *
+ * Если slot.options пустой (фасеты не пришли — Q3 quirk) — fallback на
+ * нейтральную фразу «уточните параметры», без перечисления вариантов.
+ */
+function composeClarify(
+  input: ComposeCatalogInput,
+  norm: NormalizedOutcome,
+  newStreak: 0 | 1 | 2,
+): ComposeCatalogOutput {
+  const slot = norm.clarifySlot;
+  const totalText = norm.totalFromApi > 0
+    ? `Нашлось ${norm.totalFromApi} вариантов — это много для одного списка.`
+    : `Подходящих вариантов слишком много для одного списка.`;
+
+  const parts: string[] = [totalText];
+
+  if (slot && slot.options.length > 0) {
+    // metadata.facetCaption — UI-имя фасета (контракт s-price.buildClarifySlot).
+    const meta = (slot.metadata ?? {}) as { facetCaption?: string };
+    const facetCaption = (meta.facetCaption ?? "").toString().trim();
+    const ask = facetCaption
+      ? `Уточните, пожалуйста — *${facetCaption}*:`
+      : `Уточните параметры:`;
+    parts.push(ask);
+    const lines = slot.options.map((opt, i) => `${i + 1}. ${opt.label}`);
+    parts.push(lines.join("\n"));
+  } else {
+    parts.push("Уточните, пожалуйста, ключевые параметры — это поможет подобрать точнее.");
+  }
+
+  const finalText = parts.join("\n\n");
+  if (finalText.length > 0) input.onDelta(finalText);
+
+  return {
+    text: finalText,
+    scenario: "clarify",
+    newSoft404Streak: newStreak,
+    contactManager: false, // §5.6.1: clarify ≠ escalation
+    greeting_stripped: null,
+    crosssell: { presentInLLM: false, rendered: false, violation: null },
+    formatter: { rendered: 0, zeroPriceFiltered: 0, contractFiltered: 0 },
+    usage: {
+      input_tokens: 0,
+      output_tokens: 0,
+      total_tokens: 0,
+      model: "deterministic",
     },
   };
 }

@@ -561,3 +561,161 @@ Deno.test("compose normal with no_results products → fallback to formatter han
   // Текущая реализация: не reset, остаётся prev.
   assertEquals(out.newSoft404Streak, 1);
 });
+
+// ─── §4.4 price-clarify branch (deterministic, no LLM) ──────────────────────
+
+import type { SPriceOutcome } from "./s-price.ts";
+import type { Slot } from "./types.ts";
+
+function mockClarifySlot(
+  options: Array<{ label: string; value: string; payload?: Record<string, unknown> }>,
+  metadata?: Record<string, unknown>,
+): Slot {
+  return {
+    id: "slot_test",
+    type: "price_clarify",
+    created_at: 0,
+    expires_at: 1,
+    ttl_turns: 2,
+    turns_since_created: 0,
+    options,
+    pending_query: "q",
+    pending_modifiers: [],
+    pending_filters: null,
+    metadata,
+    consumed: false,
+  };
+}
+
+function mockPriceOutcome(over: Partial<SPriceOutcome> = {}): SPriceOutcome {
+  return {
+    status: "clarify",
+    products: [],
+    totalCount: 705,
+    clarifySlot: null,
+    zeroPriceLeak: 0,
+    autoNarrowingAttempts: 0,
+    branch: "clarify",
+    ms: 0,
+    ...over,
+  };
+}
+
+Deno.test("clarify: decideScenario распознаёт price-status='clarify'", () => {
+  const norm = {
+    kind: "price" as const,
+    status: "clarify",
+    products: [],
+    totalFromApi: 705,
+    clarifySlot: null,
+    softFallbackContext: null,
+  };
+  assertEquals(decideScenario(norm), "clarify");
+});
+
+Deno.test("clarify: nextSoft404Streak НЕ меняет streak (§5.6.1)", () => {
+  const norm = {
+    kind: "price" as const,
+    status: "clarify",
+    products: [],
+    totalFromApi: 705,
+    clarifySlot: null,
+    softFallbackContext: null,
+  };
+  assertEquals(nextSoft404Streak(0, norm), 0);
+  assertEquals(nextSoft404Streak(1, norm), 1);
+  assertEquals(nextSoft404Streak(2, norm), 2);
+});
+
+Deno.test("clarify: композер рендерит вопрос + нумерованный список БЕЗ LLM", async () => {
+  const slot = mockClarifySlot(
+    [
+      { label: "Schneider Electric", value: "schneider electric", payload: { facetKey: "vendor", facetValue: "Schneider Electric" } },
+      { label: "ABB", value: "abb", payload: { facetKey: "vendor", facetValue: "ABB" } },
+      { label: "Legrand", value: "legrand", payload: { facetKey: "vendor", facetValue: "Legrand" } },
+    ],
+    { facetKey: "vendor", facetCaption: "Бренд", totalCount: 705 },
+  );
+  const price = mockPriceOutcome({ clarifySlot: slot, totalCount: 705 });
+
+  // Deps: LLM не должен быть вызван → бросаем при попытке.
+  const deps: CatalogComposerDeps = {
+    streamLLM: async () => {
+      throw new Error("LLM must NOT be called for clarify scenario");
+    },
+  };
+
+  let streamed = "";
+  const out = await composeCatalogAnswer(
+    {
+      query: "самый дешёвый автомат",
+      outcome: { kind: "price", outcome: price },
+      history: [],
+      prevSoft404Streak: 0,
+      onDelta: (chunk) => { streamed += chunk; },
+    },
+    deps,
+  );
+
+  assertEquals(out.scenario, "clarify");
+  assertEquals(out.contactManager, false);
+  assertEquals(out.newSoft404Streak, 0); // streak неизменен
+  assertEquals(out.formatter.rendered, 0);
+  assertEquals(out.usage.model, "deterministic");
+  assertEquals(out.usage.input_tokens, 0);
+  assertEquals(out.usage.output_tokens, 0);
+  assertEquals(out.crosssell.rendered, false);
+  assertEquals(out.crosssell.presentInLLM, false);
+
+  assertStringIncludes(out.text, "705");
+  assertStringIncludes(out.text, "Бренд");
+  assertStringIncludes(out.text, "1. Schneider Electric");
+  assertStringIncludes(out.text, "2. ABB");
+  assertStringIncludes(out.text, "3. Legrand");
+  // Стрим равен финальному тексту (один onDelta).
+  assertEquals(streamed, out.text);
+});
+
+Deno.test("clarify: пустой slot.options → нейтральный fallback без перечисления", async () => {
+  const slot = mockClarifySlot([], { totalCount: 100 });
+  const price = mockPriceOutcome({ clarifySlot: slot, totalCount: 100 });
+  const deps: CatalogComposerDeps = {
+    streamLLM: async () => { throw new Error("no LLM"); },
+  };
+  const out = await composeCatalogAnswer(
+    {
+      query: "самый дорогой",
+      outcome: { kind: "price", outcome: price },
+      history: [],
+      prevSoft404Streak: 1,
+      onDelta: () => {},
+    },
+    deps,
+  );
+  assertEquals(out.scenario, "clarify");
+  assertEquals(out.newSoft404Streak, 1); // streak неизменен
+  assertStringIncludes(out.text, "Уточните, пожалуйста, ключевые параметры");
+  // Нет ни одного нумерованного пункта.
+  assert(!/\n1\.\s/.test(out.text), "должен НЕ содержать нумерации");
+});
+
+Deno.test("clarify: facetCaption отсутствует в metadata → дефолтный заголовок", async () => {
+  const slot = mockClarifySlot(
+    [{ label: "16А", value: "16а" }, { label: "25А", value: "25а" }],
+    { totalCount: 80 }, // нет facetCaption
+  );
+  const price = mockPriceOutcome({ clarifySlot: slot, totalCount: 80 });
+  const out = await composeCatalogAnswer(
+    {
+      query: "q",
+      outcome: { kind: "price", outcome: price },
+      history: [],
+      prevSoft404Streak: 0,
+      onDelta: () => {},
+    },
+    { streamLLM: async () => { throw new Error("no LLM"); } },
+  );
+  assertStringIncludes(out.text, "Уточните параметры:");
+  assertStringIncludes(out.text, "1. 16А");
+  assertStringIncludes(out.text, "2. 25А");
+});

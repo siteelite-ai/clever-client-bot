@@ -279,8 +279,15 @@ function buildClarifySlot(
   const id = (deps.newSlotId ?? defaultSlotId)();
 
   const options: SlotOption[] = [];
+  let facetKey = "";
+  let facetCaption = "";
   if (facetPick) {
-    const facetKey = facetPick.option.key;
+    facetKey = facetPick.option.key;
+    facetCaption = (
+      facetPick.option.caption_ru ||
+      facetPick.option.caption ||
+      facetKey
+    ).toString().trim();
     for (const v of facetPick.values) {
       options.push({
         label: v.caption,
@@ -306,6 +313,9 @@ function buildClarifySlot(
     pending_filters: input.optionFilters && Object.keys(input.optionFilters).length > 0
       ? { ...input.optionFilters }
       : null,
+    metadata: facetKey
+      ? { facetKey, facetCaption, totalCount }
+      : { totalCount },
     consumed: false,
   };
 }
