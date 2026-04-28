@@ -1,261 +1,101 @@
+## Аудит «Архитектор + Search/NLP + Backend» против реального Catalog API
 
-# План: Lexicon-модуль + системные правки спецификации v2 (по итогам консилиума)
-
-Консилиум из трёх ролей (Архитектор, Senior Search/NLP-инженер, Продуктовый инженер) изучил всю спецификацию (1843 строки) и реальный товар:
-
-**Лампа LED CORN капсула 3,5Вт 230В 4000К керамика G4 ИЭК**
-URL: https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn-kapsula-3,5vt-230v-4000k-keramika-g4-iek
-Артикул: LLE-**CORN**-4-230-40-G4
-
-Ключевая фактология (подтверждено фетчем сайта):
-- Слово **"CORN"** живёт **только в `name` и в артикуле**, и пишется заглавными внутри русского названия.
-- Слова **"кукуруза"** в каталоге **нет нигде** — это народный синоним.
-- В характеристике "Форма колбы" значение — **"капсула"** (не "corn", не "кукуруза"). У других corn-ламп бывает "цилиндр".
-- Категория "Лампы" — слишком широкая, тысячи SKU.
+Прогнаны живые запросы по `https://220volt.kz/api` с боевым токеном. Сверены TC-69…TC-82 с реальными ответами. **Lexicon-стратегия (CORN/кукуруза) подтверждена живым API: `?query=CORN&category=Лампы` → 19 товаров, `?query=кукуруза` → 0.** Но обнаружено 6 критичных расхождений, которые сломают MVP, если не закрыть до реализации.
 
 ---
 
-## Часть A. Новый модуль: Lexicon Resolver (§9.2b)
+### Что подтвердилось (гипотезы выдержали)
 
-Встраиваем **между** Category Resolver (§9.2a) и Facet Matcher (§9.3). Цель: канонизировать бытовые / переводные / опечаточные термины ДО фасетного матчинга, без LLM-вызова на лету.
-
-### A.1. Хранилище словаря — `app_settings.lexicon_json`
-
-Решение единогласное у всех трёх экспертов: in-memory кэш в Edge-функции, источник — JSON в `app_settings` (hot-reload каждые 60s, без редеплоя).
-
-Структура одной записи (гибрид: и canonical token, и расширение трейтов — закрывает оба варианта использования):
-
-```json
-{
-  "version": 1,
-  "entries": [
-    {
-      "match": ["кукуруз\\w*", "corn"],
-      "canonical_token": "CORN",
-      "trait_expansion": ["капсула"],
-      "domain_categories": ["lampyi"],
-      "confidence": 1.0,
-      "type": "name_modifier",
-      "comment": "лампа кукуруза → CORN (в name) + капсула (в форме колбы)"
-    },
-    {
-      "match": ["груш\\w*"],
-      "canonical_token": null,
-      "trait_expansion": ["A60"],
-      "domain_categories": ["lampyi"],
-      "confidence": 1.0,
-      "type": "facet_alias"
-    },
-    {
-      "match": ["миньон\\w*"],
-      "trait_expansion": ["E14"],
-      "domain_categories": ["lampyi"],
-      "confidence": 1.0,
-      "type": "facet_alias"
-    }
-  ]
-}
-```
-
-Поля:
-- `match` — массив RegEx-паттернов (учёт морфологии: кукуруза/кукурузу/кукурузой).
-- `canonical_token` — токен для инжекта в `?query=` (если он реально живёт в `name`/`артикуле` товара). `null` — не инжектить.
-- `trait_expansion` — добавляется к `user_traits` для Facet Matcher (если синоним мапится на значение характеристики).
-- `domain_categories` — список `pagetitle` категорий, где синоним применим (защита от ложных срабатываний: «кукуруза» в разделе кухонной техники не сработает).
-- `confidence` — 0..1 (используется при пороговых решениях).
-- `type` — `name_modifier` | `facet_alias` | `bilingual_pair`.
-
-### A.2. Контракт модуля (TypeScript)
-
-```typescript
-interface LexiconInput {
-  user_traits: string[];            // из Intent Classifier
-  resolved_category: Category;      // из Category Resolver, с .pagetitle
-}
-
-interface LexiconOutput {
-  expanded_traits: string[];        // user_traits + trait_expansion
-  canonical_tokens: string[];       // токены для ?query= (только high-confidence, type=name_modifier)
-  applied_aliases: AppliedAlias[];  // для логирования и для Composer.soft_matches
-}
-
-interface AppliedAlias {
-  user_term: string;          // "кукуруза"
-  matched_pattern: string;    // "кукуруз\\w*"
-  canonical_token?: string;   // "CORN"
-  trait_expansion: string[];  // ["капсула"]
-  source: "lexicon";          // источник для трассы
-}
-```
-
-### A.3. Алгоритм (детерминированный, ~1-3 ms)
-
-1. Нормализовать каждый трейт: `lowercase` + `ё→е` + Unicode `NFKC`.
-2. Для каждого трейта прогнать по `entries[].match` (regex).
-3. Если совпадение И `entry.domain_categories` содержит текущий `resolved_category.pagetitle` (или массив пуст = универсально):
-   - добавить `trait_expansion` в `expanded_traits`;
-   - если `canonical_token != null` И `type = "name_modifier"` И `confidence ≥ 0.9` — добавить в `canonical_tokens`.
-4. Передать в Facet Matcher именно `expanded_traits` (а не оригинальные `user_traits`).
-5. `canonical_tokens.join(' ')` уходит в `?query=` параметр API строго БЕЗ unresolved-трейтов.
-
-### A.4. Изменение инварианта §4.5
-
-Текущий инвариант: *«unresolved_traits НИКОГДА не инжектятся в ?query=»* — **сохраняется**.
-
-Дополнение: *«В ?query= допускается инжект только `canonical_tokens` из Lexicon Resolver (тип `name_modifier`, confidence ≥ 0.9). Других источников у `?query=` нет»*.
-
-### A.5. Bootstrap словаря
-
-- **Seed (вручную)**: ~50–100 записей по топ-категориям света/электрики (corn/кукуруза, A60/груша, G45/шарик, C37/свеча, E14/миньон, ВЦ/улитка, шестнарик/16А, и т.д.). Архитектор и Продуктовый предлагают это — короткий путь к MVP.
-- **Continuous enrichment (Post-MVP)**: cron-задача раз в сутки агрегирует `unresolved_traits` из `chat_traces` с frequency > 5, пропускает через batch-LLM (single большой prompt, не на лету), записывает кандидатов в админку для модерации.
+- Lexicon Resolver §9.2b и TC-75: `canonical_token=CORN` действительно даёт нужные товары (включая URL пользователя `…/lampa-led-corn-kapsula-3,5vt-230v-4000k-keramika-g4-iek`).
+- SKU lookup через `?article=…`: точный `total=1`, для несуществующего — `total=0`.
+- Pagination через `?page=N&per_page=12`: envelope корректный, `pages=74` для «Лампы».
+- min/max_price работают, фильтр по бренду и цоколю (`tip_cokolya`) работает.
 
 ---
 
-## Часть B. Системные правки спецификации (10 пунктов)
+### Критичные находки (требуют правок до старта реализации)
 
-Найденные при ревью противоречия и пробелы — все правки в `docs/chat-consultant-v2-spec.md`.
+**F-2. Поле имени товара `name` — всегда `null`.**
+Реальный envelope `ProductResource` содержит `pagetitle` (это и есть имя товара), `alias`, `image`, `vendor`, `amount`, `parent`, `popular`, `new`, `favorite`, `weight`, `size`, `content`. Полей `name`, `title`, `longtitle` либо нет, либо они `null`. Маркдаун-формат `**[Name](URL)**` фактически работает на `pagetitle`.
 
-### B.1. Восстановить отсутствующий §9B (Facet Schema Dedup & Alias Collapse)
+**F-3. `?sort=price_asc|price_desc` API игнорирует.** Три прогона (без сортировки, с asc, с desc) дали идентичный порядок цен `[0, 960, 631]`. **Stage 4 ADR (API-side sort) нереализуем** — нужно вернуть локальную сортировку с probe-стратегией: при запросе «дешёвые» делаем расширенную выборку (per_page=50) + локально сортируем, при «дорогие» — `?min_price=<разумный порог>` либо тащим первую страницу + сортируем.
 
-§9.3 ссылается на §9B, которого в документе физически нет. Создать раздел: алгоритм дедупликации фасетов с одинаковыми caption/key (`brend__brend`, `Brand`, `Бренд`) + отбрасывание `count: 0` и `values.length > 200` (защита от мусорных SEO-полей и токенового взрыва).
+**F-4. В категории «Розетки» НЕТ фасета «кол-во гнёзд».** Полная схема (51 ключ) содержит `kolichestvo_razyemov__aғytpalar_sany_` (Количество разъёмов, 7 значений) — это и есть искомое. TC-69 («двугнёздные»), TC-71 («двойные»), TC-72 («с двумя гнёздами») написаны под несуществующий ключ.
 
-### B.2. Persona Guard L1 + SSE — буферизация первого чанка
+**F-6 + F-7. Фильтрация по фасетам с не-ASCII символами в `key` НЕ работает.** Прогоны:
+- `options[forma_kolby__kolbanyң_pіshіnі][]=капсула` → 0 (хотя в схеме есть и ключ, и значение)
+- `options[cvet__tүs][]=белый` → 0
+- `options[tip_cokolya__cokoly_tүrі][]=E14` → **196** (работает! проблема в `ы`/`ң`/`і`, а не в самом подходе)
+Это блокер для всех TC по розеткам и большинства TC по лампам. Гипотеза: API ругается на ключ, содержащий `ң`/`ы`/`і`/`ү`/`ө` (казахские буквы). Решение нужно искать на стороне 220volt или обходить (canonicalize ключа, проба альтернативного написания).
 
-§12.2 предписывает regex-фильтр приветствий по первому чанку, но при SSE первый чанк может быть «Зд» (2 символа). Добавить правило: **буферизовать первые 30 символов потока перед сбросом клиенту** для безопасного срабатывания regex.
-
-### B.3. Soft Fallback при `pending_clarification` (правка §11.2a)
-
-Текущая логика: `pending_clarification → запрет показа товаров`. NLP-инженер показал UX-провал: «дай графитовую розетку 16А» — резолвлены `розетка` и `16А`, но цвет «графитовый» отсутствует → бот блокирует выдачу.
-
-Новое правило: **если `resolved.length ≥ 2` И есть `unresolved` → выполнить strict search по resolved, показать товары + дописать `"Графитовых нет, показал ближайшие чёрные. Доступные цвета: ..."`**. Полная блокировка только при `resolved.length < 2`.
-
-### B.4. Сброс `pending_clarification` при смене темы
-
-Если intent = `small_talk` / `info_request` / `sku_lookup` (новый артикул) → немедленно очистить `pending_clarification` и закрыть текущий слот. Иначе бот залипает после 15 минут молчания.
-
-### B.5. Pagination — добавить интент `next_page` и поле `Slot.page_number`
-
-В §13.1 `Slot` нет `page_number`, в §7 нет интента `show_more / next_page`. Пользователь застрянет на первых 7 товарах из 154. Расширить контракт.
-
-### B.6. Сортировка по цене — не локальная, а через API
-
-§9.7 описывает `price_asc/desc` как локальную сортировку первой страницы — это даёт min/max только среди 50 товаров, а не среди 3000. Передавать параметр сортировки **в API каталога** (проверить swagger). Если API не поддерживает — описать probe-стратегию явным образом.
-
-### B.7. Маппинг `category.id → category.title` для UI
-
-§11.2a требует фразы «Ищу в категории *{category_hint}*». В контракте есть только `pagetitle` (slug). Добавить в кэш дерева категорий маппинг `id → human_title`, использовать в Composer.
-
-### B.8. Двуязычие RU/KK как Tuple в фасетах
-
-Composer на `user_locale='kk'` будет галлюцинировать переводы. Обязать Facet Matcher и `CategoryOptionsResponse` выдавать `caption: {ru, kk}` и `value: {ru, kk}` как обязательную структуру. Composer берёт нужный язык по `user_locale` без LLM-перевода.
-
-### B.9. Валидация ссылок на товары на стороне виджета
-
-LLM Composer может галлюцинировать URL. Виджет ОБЯЗАН перед рендерингом markdown-ссылки `[Название](url)` сверять `productId` с массивом `event: products`. Если нет — скрыть ссылку, показать только название. Дописать в §17.3.
-
-### B.10. Решения по открытым вопросам §28.2
-
-Консенсус трёх экспертов:
-
-| # | Вопрос | Решение |
-|---|---|---|
-| 28.1 | Где хранить активный слот | **sessionStorage** (stateless edge) |
-| 28.2 | Сохранять LLM-ответы | **Нет** (только traces + метрики) |
-| 28.3 | Прогрев `category_options` top-50 | **Lazy cache** (TTL 1h) |
-| 28.4 | Стриминг | **SSE** (требуется для L2 thinking) |
-| 28.5 | Макс. слотов в сессии | **1** (мульти-слот ломает FSM) |
-| 28.6 | Логирование `chat_traces` | **Через тоггл** (debug-only, иначе пул соединений) |
-| 28.7 | Контакты эскалации | **`app_settings` JSON** |
-| 28.8 | Резервная LLM | **Flash + Flash Lite fallback** |
-| 28.9 | Источник thinking-фраз | **`app_settings` JSON** (маркетинг меняет) |
-| 28.10 | `Product.warehouses` для геолокации | **Да**, приоритет ближайшего города |
-| 28.11 | Swagger drift-check в CI | **Да, обязательно** (220volt API нестабилен) |
-| 28.12 | Прогрев категорий | **Lazy** (TTL 1h, ~200ms холодный старт) |
-| 28.13 | Пороги confidence (0.4/0.7) | **В JSON `app_settings`** для hot-reload первые 2 недели |
+**F-8. У 50% товаров «Лампы» `price=0`** (архивные/«цена по запросу»). Спецификация не оговаривает, что с ними делать. Без фильтра в Composer это даст «0 ₸» в карточке — UX-катастрофа.
 
 ---
 
-## Часть C. Golden Tests (расширение §25)
+### Что меняем в спецификации
 
-Добавить новый раздел `TC-75 — TC-82` (Lexicon coverage):
+**§9A.2 ProductResource — переписать поля под реальность:**
+- `pagetitle: string` (имя товара) — добавить.
+- `alias: string`, `vendor?: string`, `image?: string`, `amount?: number` (общий остаток), `parent?: number|null`, `popular?: 0|1`, `new?: 0|1`, `favorite?: 0|1`, `weight?, size?, content?` — добавить.
+- `name`, `title`, `longtitle` — пометить deprecated/«всегда null, не использовать».
+- В §13.1 `Product.name` → переименовать в `Product.title` (внутреннее), маппить из `ProductResource.pagetitle`.
+- В §11 (Markdown) и §17 (Conversational rules) явно: «Name» в формате `**[Name](URL)**` берётся из `pagetitle` товара.
 
-- **TC-75** «лампочки кукурузы 220 вольт» → форма «капсула», `?query=CORN`, в выдаче IEK CORN G4.
-- **TC-76** «обычная лампа груша E27» → форма `A60`, цоколь `E27`.
-- **TC-77** «светодиодные шарики 5 Вт» → форма `G45`, мощность `5`.
-- **TC-78** «миньоны тёплый свет» → цоколь `E14`, цв.температура `2700-3000K`.
-- **TC-79** «свеча на ветру» → форма `CA37`.
-- **TC-80** «автомат шестнарик» → категория `avtomaticheskie-vyiklyuchateli`, ток `16А`.
-- **TC-81 (NEGATIVE)** «есть аппарат варить кукурузу?» → НЕ показать лампы (Domain Guard через Category Resolver: `pagetitle ≠ lampyi` ⇒ lexicon-entry с `domain_categories=['lampyi']` не активируется).
-- **TC-82 (NEGATIVE)** «нужна груша для воды (резиновая)» → НЕ показать лампы A60.
+**§9A.4 — добавить раздел «нерабочие параметры»:**
+- `?sort=` — игнорируется API, не использовать.
+- `options[<key>][]=` с не-ASCII символами в `<key>` — нестабильно, см. §9C.
 
----
+**Новый §9C «Известные ограничения и обходы Catalog API»:**
+1. **Сортировка:** реализовать локально. Для `price_asc`: тащим `per_page=50`, фильтруем `price>0`, сортируем, отдаём топ-N. Для `price_desc`: `per_page=50` + локально. ADR 28.x пересмотреть.
+2. **Фильтрация по non-ASCII facet keys:** до решения с 220volt — **обходное правило**: если фасет содержит `[қңіүөғһ]` в `key`, Catalog Search **не отправляет его** как `options[]`, а добавляет соответствующее значение в `?query=` (как «вспомогательный canonical_token»). Это нарушает инвариант «не загрязнять `?query=`», но это меньшее зло. Эскалировать в 220volt IT для исправления API.
+3. **Товары с `price=0`:** Catalog Search отфильтровывает их **по умолчанию** перед передачей в Composer. Если после фильтра 0 товаров — Soft 404 («нет в наличии, ожидается / уточняйте у менеджера»).
 
-## Что ИЗМЕНЯЕТСЯ в файлах
+**§9.2a Category Resolver — без изменений (работает).**
 
-### `docs/chat-consultant-v2-spec.md` (правки):
+**§9.2b Lexicon Resolver — добавить ещё ОДНУ роль `availability_filter`:**
+для семейств товаров типа «лампа Corn G4», где пользователь намекает форм-фактор — Resolver дополнительно инжектит `?query=CORN G4` (мульти-токен). Подтверждено: на реальном API такой запрос находит 19 товаров.
 
-| Раздел | Изменение |
-|---|---|
-| §2 Глоссарий | + термины `Lexicon`, `Canonical Token`, `Trait Expansion` |
-| §3.1 Топология | + блок «Lexicon Cache (in-memory, hot-reload из app_settings)» |
-| §4.5 Инварианты | переформулировать инвариант про `?query=`: разрешить только `canonical_tokens` из Lexicon |
-| §6 Turn Pipeline | вставить новый шаг 6a.2.5 «Lexicon Resolve» между Category Resolver и Facet Matcher |
-| §7 Intent Classifier | + интент `next_page` |
-| §9.2b (новый) | **Lexicon Resolver**: контракт, алгоритм, примеры |
-| §9.3 Facet Matcher | принимает `expanded_traits` вместо `user_traits` |
-| §9B (создать) | Facet Schema Dedup & Alias Collapse |
-| §9.7 | сортировка по цене — через API, не локально |
-| §11.2a Composer | Soft Fallback при `resolved ≥ 2` |
-| §11A | thinking-фраза для шага Lexicon: `"Уточняю термины..."` |
-| §12.2 Persona Guard | буферизация первых 30 символов SSE |
-| §13.1 Slot | + `page_number: number`, + `applied_aliases: AppliedAlias[]` |
-| §13.1 Category | подтвердить `id, pagetitle, title` (mapping для UI) |
-| §13.1 FacetCaption | сделать структуру `{ru: string, kk: string}` обязательной |
-| §17.3 (Conv. Rules) | валидация ссылок виджетом против `event: products` |
-| §22 Observability | логировать `applied_aliases` и `unresolved_traits` для cron-обогащения lexicon |
-| §24 Конфигурация | + `app_settings.lexicon_json`, `confidence_thresholds_json` |
-| §25 Golden Tests | TC-75 … TC-82 |
-| §28 Открытые вопросы | закрыть §28.2 пп. 1–13 (см. таблицу B.10) |
+**§9.3 Facet Matcher — критичные правки:**
+- Добавить «карту реальных facet keys» в формате `mem://features/facet-keys-map` для популярных категорий (Лампы, Розетки, Автоматические выключатели, Кабель), синхронизированную из живого `/categories/options`.
+- Снять любые упоминания `forma`, `cokol`, `cvet`, `moshchnost` — заменить на реальные `forma_kolby__…`, `tip_cokolya__…`, `cvet__tүs`, `moschnosty__vt__…`.
+- Эвристика «количество разъёмов» (а не «гнёзд») для розеток.
 
-### `mem://features/search-pipeline` (обновить):
+**§13.1 Slot — без структурных изменений, но:**
+- `applied_filters[].key` — добавить **`canonical_key`** (без double-underscore-suffix, для UI/логов) и **`raw_key`** (как в API, со всеми хвостами).
+- Добавить `rejected_filters[]` для случаев F-7 (когда фильтр по ключу с non-ASCII не отправляется как `options[]`, а уходит в query).
 
-Добавить шаг Lexicon Resolver в основной поток. Зафиксировать правило: `?query=` только из canonical_tokens, type=name_modifier, confidence≥0.9.
+**§25 Golden Tests — переписать TC-69…TC-82:**
+- TC-69, TC-71, TC-72: заменить «кол-во гнёзд» → «кол-во разъёмов»; ключ `kolichestvo_razyemov__aғytpalar_sany_`.
+- TC-69, TC-70, TC-71: ключ цвета `cvet__tүs`, значения lowercase.
+- TC-73 автоматы: `kolichestvo_polyusov__polyuster_sany`, `nominalynyy_tok__nominaldy_toқ`.
+- TC-75 (CORN): уточнить, что `?query=` может содержать **мульти-токен** (`CORN G4`).
+- TC-76 (капсула): пересмотреть — фильтрация по `forma_kolby__kolbanyң_pіshіnі` не работает на API. Замена: `?query=капсула` + `?category=Лампы` + `tip_cokolya=G4`.
+- **Новый TC-83**: `price=0` товары не попадают в выдачу.
+- **Новый TC-84**: facet с не-ASCII ключом → реджект в `applied_filters`, добавление в `?query=`.
+- **Новый TC-85**: `?sort=price_asc` — Catalog Search использует локальную сортировку (probe per_page=50 + filter price>0 + sort).
 
-### `mem://features/search-logic` (обновить):
+**§28 Открытые вопросы:**
+- ADR 28.14 (гибридная Lexicon стратегия) — оставить.
+- **Закрыть** ADR Stage 4 «API-side sort» как нереализуемый. Зафиксировать локальную сортировку.
+- Новый ADR 28.17: эскалировать в 220volt IT баг с non-ASCII facet keys и нерабочим sort. Дедлайн принятия решения по обходу — до старта реализации.
+- Новый ADR 28.18: политика по `price=0` — фильтровать на edge или показывать с маркером «цена по запросу»?
 
-Добавить Soft Fallback при `resolved ≥ 2` + Lexicon-расширение трейтов + reset clarification при смене темы.
-
-### `mem://index.md` (обновить):
-
-Core-правило: «Lexicon-резолвинг бытовых/переводных синонимов: in-memory из app_settings, без LLM на лету. ?query= только из canonical_tokens (confidence≥0.9, type=name_modifier).»
-
-### `.lovable/plan.md` (обновить статус этапов):
-
-Финальный этап (4/4) был закрыт. Открывается **Этап 5 (Architectural Hardening)** — текущий план.
+**Память** (`mem://features/search-pipeline`, `mem://features/search-logic`) — синхронизировать с реальными ключами, добавить новый файл `mem://architecture/catalog-api-quirks` с:
+- `pagetitle` = имя товара;
+- sort игнорируется → локальная сортировка;
+- non-ASCII facet keys ломаются → fallback в `?query=`;
+- price=0 → фильтрация в Catalog Search.
 
 ---
 
-## Что НЕ делаем сейчас
+### Итоговый артефакт правок (на исполнение)
 
-- Файлы кода в `supabase/functions/` не трогаем — это всё ещё спека.
-- LLM-резолвер на лету для синонимов — отвергнут единогласно (латентность).
-- Continuous lexicon enrichment через cron + LLM — переносим в **Post-MVP-3**.
-- Подход NLP-инженера с разделением на `strong_tokens` / `weak_traits` как первичной структурой — заменяется более простой моделью «expanded_traits + canonical_tokens» (компромисс по сложности).
+1. Переписать §9A.2 (ProductResource) и §13.1 (`Product`) — поле `pagetitle` как имя.
+2. Добавить §9C «Известные ограничения и обходы» (sort, non-ASCII facet keys, price=0).
+3. Обновить §9.3 — реальные ключи фасетов для Лампы / Розетки / Автоматы / Кабель.
+4. Переписать TC-69…TC-76 на реальные ключи; добавить TC-83, TC-84, TC-85.
+5. Обновить §28: закрыть Stage 4 ADR sort, добавить ADR 28.17 (эскалация в 220volt) и 28.18 (политика price=0).
+6. Создать `mem://architecture/catalog-api-quirks`, обновить `mem://features/search-pipeline` и `mem://features/search-logic`.
+7. (опционально, рекомендую) Зафиксировать дамп `/categories/options` для топ-10 категорий в `docs/external/220volt-facets-snapshot.json` как базу для §9.3 и golden-тестов.
 
----
-
-## Открытые вопросы (требуют твоего решения, прежде чем вносить правки)
-
-1. **Lexicon-стратегия**: какой из трёх вариантов канонизации брать?
-   - **(A)** Архитектор: `canonical_token` → новое поле `name_modifiers`, инжект в `?query=`. **Чище архитектурно**, требует поддержки `?query=` параметра у API каталога.
-   - **(B)** NLP: `strong_tokens` vs `weak_traits` на каждом запросе. **Самое мощное**, требует переработки контрактов всего пайплайна.
-   - **(C)** Продуктовый: мутировать `user_traits` перед Facet Matcher (без `?query=`). **Самое простое**, но не работает когда токен живёт ТОЛЬКО в `name`, а не в характеристиках (наш случай с CORN).
-   - **(D)** Гибрид (рекомендую): `trait_expansion` (как у Продуктового) + `canonical_token` для `?query=` (как у Архитектора). Описано в Части A.1 этого плана.
-2. **Объём seed-словаря на старте**: 30 записей (только лампы) / 50–100 (свет + электроустановка) / 200+ (все домены 220volt)?
-3. **Бюджет на §28.13**: вынести **все** confidence-пороги в JSON или только пороги Lexicon (0.9 / 0.85)?
-
----
-
-## После одобрения
-
-Перехожу в build-режим и вношу все правки одним проходом по `docs/chat-consultant-v2-spec.md` + три файла памяти + `.lovable/plan.md`. Оценка объёма: ~15 секций спеки + 3 файла памяти. Имплементация в `supabase/functions/` НЕ начинается, остаётся отдельным следующим шагом.
+После твоего «ок» — внесу все правки одним заходом.
