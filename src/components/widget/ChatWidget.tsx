@@ -381,11 +381,12 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     };
 
     // Fire API request immediately (in parallel with animation)
-    console.log('[Widget] Sending dialogSlots:', JSON.stringify(dialogSlots));
+    console.log(`[Widget] Sending via ${endpoint.pipeline} dialogSlots:`, JSON.stringify(dialogSlots));
     const streamPromise = streamChat({
       messages: apiMessages,
       conversationId: conversationIdRef.current,
       dialogSlots,
+      endpointUrl: endpoint.url,
       onDelta: updateAssistant,
       onSlotUpdate: (updatedSlots) => {
         console.log('[Widget] Received slot_update:', JSON.stringify(updatedSlots));
