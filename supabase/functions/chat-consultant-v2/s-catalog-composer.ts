@@ -461,11 +461,14 @@ export function validateCrosssell(text: string): string | null {
 // ─── Branch implementations ──────────────────────────────────────────────────
 
 /** Собирает user-message для LLM в normal/soft_fallback (с товарами). */
-function buildUserMessageWithProducts(input: ComposeCatalogInput): string {
-  const { query, outcome } = input;
-  const count = outcome.products.length;
+function buildUserMessageWithProducts(
+  input: ComposeCatalogInput,
+  norm: NormalizedOutcome,
+): string {
+  const { query } = input;
+  const count = norm.products.length;
   const scenarioHint =
-    outcome.status === "soft_fallback"
+    norm.status === "soft_fallback"
       ? "Фильтры были сняты (показаны товары без всех изначальных уточнений). Cross-sell НЕ выводите."
       : "Обычная выдача. Cross-sell уместен.";
   return [
