@@ -39,6 +39,14 @@ import {
   createProductionDeps,
   CLASSIFIER_CACHE_TTL_MS,
 } from "./s2-intent-classifier.ts";
+import {
+  runGreeting,
+  runPersona,
+  runContact,
+  runEscalation,
+  createContactsLoaderDeps,
+  type BranchOutput,
+} from "./branches.ts";
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 const corsHeaders = {
