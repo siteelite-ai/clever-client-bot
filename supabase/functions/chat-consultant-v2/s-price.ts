@@ -432,12 +432,14 @@ export async function priceBranch(
     };
   }
 
-  // Ветка A: total ≤ 7 → fetch all (один page достаточно), sort, return.
+  // Ветка A: total ≤ 7 → fetch ровно `total` товаров, sort, return.
+  // §4.4 + аудит-вердикт 6E v2 NO-GO дефект #4: запрашивать ровно столько,
+  // сколько обещал probe — никаких «с запасом до 10». probe уже отдал total
+  // от API; double-filter price=0 в api-client уже отрабатывает на этом наборе.
+  // Если в выдаче окажутся price=0 — они отфильтруются и мы покажем ≤total
+  // карточек; запрашивать больше бессмысленно (страницы за пределами total нет).
   if (total <= PRICE_THRESHOLD_SHOW_ALL) {
-    // Если probe уже вернул достаточно товаров (perPage=1, но total ≤ 1 …
-    // может и нет — обычно нужен повторный fetch с per_page=total).
-    // Берём с запасом до 10, чтобы покрыть price=0 leak.
-    const fetchLimit = Math.max(total, PRICE_FETCH_TOP_LIMIT);
+    const fetchLimit = total;
     const fullApiInput = toApiInput(input, fetchLimit);
     const full = await searchProducts(fullApiInput, deps.apiClient);
     let totalLeak = probeZeroLeak + full.zeroPriceFiltered;
