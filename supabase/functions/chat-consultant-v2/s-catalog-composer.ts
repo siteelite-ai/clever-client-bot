@@ -513,9 +513,10 @@ async function composeWithProducts(
   deps: CatalogComposerDeps,
   scenario: CatalogScenario,
   newStreak: 0 | 1 | 2,
+  norm: NormalizedOutcome,
 ): Promise<ComposeCatalogOutput> {
   const trimmed = trimHistory(input.history);
-  const userMessage = buildUserMessageWithProducts(input);
+  const userMessage = buildUserMessageWithProducts(input, norm);
 
   // Буферизуем стрим — карточки инжектятся между intro и cross-sell.
   let accum = "";
@@ -567,7 +568,7 @@ async function composeWithProducts(
   }
 
   // ── 4. Рендерим карточки (deterministic) ──
-  const cards = formatProductList(input.outcome.products, input.formatterOptions);
+  const cards = formatProductList(norm.products, input.formatterOptions);
 
   // ── 5. Сборка финального текста ──
   const parts: string[] = [];
@@ -575,7 +576,7 @@ async function composeWithProducts(
   if (cards.markdown) parts.push(cards.markdown);
   if (scenario === "soft_fallback") {
     // §4.8.1 + §11.2a-rev: ОДНА короткая tail-строка с caption снятого фасета.
-    parts.push(softFallbackTail(input.outcome.softFallbackContext?.droppedFacetCaption));
+    parts.push(softFallbackTail(norm.softFallbackContext?.droppedFacetCaption));
   }
   if (crosssellRendered) parts.push(crosssellRendered);
 
@@ -621,6 +622,7 @@ async function composeNoResults(
   deps: CatalogComposerDeps,
   scenario: CatalogScenario,
   newStreak: 0 | 1 | 2,
+  _norm: NormalizedOutcome,
 ): Promise<ComposeCatalogOutput> {
   const trimmed = trimHistory(input.history);
   const userMessage = buildUserMessageNoResults(input, scenario);
