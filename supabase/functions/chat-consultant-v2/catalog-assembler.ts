@@ -39,6 +39,37 @@ import type { SPriceDeps, SPriceOutcome } from "./s-price.ts";
 import { priceBranch } from "./s-price.ts";
 import type { ApiClientDeps, RawOption } from "./catalog/api-client.ts";
 import { getCategoryOptions } from "./catalog/api-client.ts";
+import type { SearchOutcome, SearchStatus } from "./catalog/search.ts";
+
+/**
+ * Адаптер SSearchOutcome → SearchOutcome (тип, который ждёт composer).
+ *
+ * SSearchOutcome — обёртка с multi-attempt expansion (s-search.ts).
+ * SearchOutcome — выход одной попытки strict+soft_fallback (catalog/search.ts).
+ *
+ * Маппинг status:
+ *   ok / soft_fallback / empty / all_zero_price / error  → совпадают.
+ *   out_of_domain (s-search defensive) → empty (composer обработает как soft_404).
+ *
+ * Поля: products / totalFromApi / softFallbackContext / postFilterDropped — 1:1.
+ * zeroPriceFiltered ← zeroPriceLeak. attempts: пустой массив (внутренние
+ * traces s-search не транслируются — composer их не использует).
+ */
+function adaptSSearchToSearchOutcome(s: SSearchOutcome): SearchOutcome {
+  const status: SearchStatus = s.status === "out_of_domain" ? "empty" : (s.status as SearchStatus);
+  return {
+    status,
+    products: s.products,
+    totalFromApi: s.totalFromApi,
+    zeroPriceFiltered: s.zeroPriceLeak,
+    postFilterDropped: s.postFilterDropped,
+    attempts: [],
+    pagination: s.pagination,
+    softFallbackContext: s.softFallbackContext,
+    errorMessage: s.errorMessage,
+    ms: s.ms,
+  };
+}
 
 // ─── Public types ───────────────────────────────────────────────────────────
 
