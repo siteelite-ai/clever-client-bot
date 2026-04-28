@@ -386,6 +386,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     console.log(`[Widget] Sending via ${endpoint.pipeline} dialogSlots:`, JSON.stringify(dialogSlots));
     const streamPromise = streamChat({
       messages: apiMessages,
+      query: text,
       conversationId: conversationIdRef.current,
       dialogSlots,
       endpointUrl: endpoint.url,
