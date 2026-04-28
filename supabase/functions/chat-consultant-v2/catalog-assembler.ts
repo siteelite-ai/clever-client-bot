@@ -228,6 +228,7 @@ export async function assembleCatalog(
       ood: true,
       trace,
       resolvedPagetitle: null,
+      disallowCrosssell: false, // composer не вызывается; флаг иррелевантен
     };
   }
 
@@ -379,6 +380,8 @@ export async function assembleCatalog(
       ood: false,
       trace,
       resolvedPagetitle: resolver.pagetitle,
+      // §4.4 + §11.5b: clarify-вопрос НЕ должен сопровождаться cross-sell.
+      disallowCrosssell: priceOutcome.branch === "clarify",
     };
   }
 
@@ -408,6 +411,8 @@ export async function assembleCatalog(
       ood: false,
       trace,
       resolvedPagetitle: null,
+      // empty → composer сам форсит запрет (scenario != normal); ставим false.
+      disallowCrosssell: false,
     };
   }
 
@@ -442,6 +447,9 @@ export async function assembleCatalog(
     ood: false,
     trace,
     resolvedPagetitle: resolver.pagetitle,
+    // S_CATALOG normal/soft_fallback: запрет не нужен на уровне assembler —
+    // композер сам решит по scenario. similar-ветка (Stage 8) проставит true.
+    disallowCrosssell: false,
   };
 }
 
