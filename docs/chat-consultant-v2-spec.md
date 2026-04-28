@@ -240,16 +240,19 @@ Turn {
 
 | Из | Событие | В | Действие |
 |---|---|---|---|
-| `IDLE` | intent=`product_search` | `SLOT_OPEN`/`SLOT_REFINING` | создать слот, выполнить поиск |
+| `IDLE` | intent=`product_search` | `SLOT_OPEN`/`SLOT_REFINING`/`SLOT_AWAITING_CLARIFICATION` | создать слот, выполнить §9.2a→§9.3→поиск |
 | `IDLE` | intent=`sku_lookup` | `SLOT_OPEN` | прямой запрос по артикулу |
 | `IDLE` | intent=`info_request` | `IDLE` | RAG по БЗ |
 | `IDLE` | intent=`small_talk` | `IDLE` | вежливый редирект к сути |
 | `IDLE` | intent=`escalate` | `ESCALATED` | вернуть карточку контактов |
-| `SLOT_OPEN` | intent=`refine_filter` | `SLOT_OPEN`/`SLOT_REFINING` | дополнить слот, повторить поиск |
-| `SLOT_OPEN` | intent=`product_search` (новая категория) | переход в новый `SLOT_OPEN` | закрыть старый слот |
+| `SLOT_OPEN` | intent=`refine_filter` | `SLOT_OPEN`/`SLOT_REFINING`/`SLOT_AWAITING_CLARIFICATION` | дополнить слот, повторить §9.3+поиск |
+| `SLOT_OPEN` | intent=`product_search` (новая категория, Resolver conf ≥ 0.7) | переход в новый `SLOT_OPEN` | закрыть старый слот |
 | `SLOT_OPEN` | intent=`reset_slot` | `IDLE` | удалить слот |
 | `SLOT_OPEN` | intent=`info_request` | `SLOT_OPEN` | RAG, слот сохранить |
-| `SLOT_REFINING` | intent=`refine_filter` | `SLOT_OPEN`/`SLOT_REFINING` | применить, пересчитать |
+| `SLOT_REFINING` | intent=`refine_filter` | `SLOT_OPEN`/`SLOT_REFINING`/`SLOT_AWAITING_CLARIFICATION` | применить, пересчитать |
+| `SLOT_AWAITING_CLARIFICATION` | пользователь указал значение из `available_values` | `SLOT_OPEN`/`SLOT_REFINING` | реклассифицировать как `refine_filter`, повторить §9.3 с новым трейтом, очистить `pending_clarification` |
+| `SLOT_AWAITING_CLARIFICATION` | пользователь сменил тему (intent=`product_search` с другой категорией ИЛИ `sku_lookup`) | соответствующее новое состояние | очистить `pending_clarification`, обработать как обычный turn |
+| `SLOT_AWAITING_CLARIFICATION` | пользователь явно отказался уточнять («покажи всё», `intent=refine_filter` с пустым трейтом по этому facet) | `SLOT_OPEN`/`SLOT_REFINING` | очистить `pending_clarification`, выполнить поиск без этого фильтра, записать трейт в `slot.unresolved_traits` |
 | любое | TTL > 30 мин | `EXPIRED` → `IDLE` | удалить слот |
 
 ### 5.3 Хранение состояния
