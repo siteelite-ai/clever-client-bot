@@ -703,7 +703,7 @@
   // Try streaming from a single endpoint, updating msgEl progressively
   // onFirstToken is called when the first token arrives (to hide typing indicator)
   async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken) {
-    var url = baseUrl + '/functions/v1/chat-consultant';
+    var url = baseUrl + pipelinePath();
     var controller = new AbortController();
     var timer = setTimeout(function() { controller.abort(); }, 90000);
 
@@ -864,7 +864,7 @@
 
   // Fallback: non-streaming fetch
   async function tryNonStreamEndpoint(baseUrl, message, label) {
-    var url = baseUrl + '/functions/v1/chat-consultant';
+    var url = baseUrl + pipelinePath();
     var controller = new AbortController();
     var timer = setTimeout(function() { controller.abort(); }, 60000);
 
