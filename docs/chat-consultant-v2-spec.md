@@ -2065,6 +2065,12 @@ interface EscalationPayload {
 | `soft_fallback_triggered` | counter | поиск с unresolved при resolved≥2 (§11.2a) |
 | `pagination_next_page` | counter | срабатываний intent `next_page` (§7.2) |
 | `sse_greeting_stripped` | counter | сколько раз PersonaGuard L1 вырезал приветствие из 30-символьного буфера |
+| `facet_query_fallback_used` | counter (split by `key`) | срабатываний §9C.2: фасет ушёл в `?query=` вместо `options[]` |
+| `facet_filter_blocked_total` | counter | фильтров отброшено по non-whitelist (всего) |
+| `zero_price_hidden` | counter | товаров отфильтровано по `price=0` (§9C.3) |
+| `local_sort_invocations` | counter | срабатываний локальной сортировки (§9C.1) |
+| `local_sort_pages_fetched` | histogram | сколько страниц подгружено для добора N товаров при локальной сортировке |
+| `whitelist_probe_added` | counter | автодобавлений ключей в `facet_filter_whitelist_json` через probe-cron |
 
 ### 22.3 Алерты
 
