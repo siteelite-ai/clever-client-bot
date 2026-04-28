@@ -33,7 +33,9 @@ import type {
   Intent,
   PipelineTrace,
   Slot,
+  SlotState,
 } from './types.ts';
+import { DEFAULT_SLOT_STATE } from './types.ts';
 import { s0Preprocess } from './s0-preprocess.ts';
 import { s1SlotResolver, type S1Match } from './s1-slot-resolver.ts';
 import { classifyIntent, safeFallbackIntent, type ClassifierDeps } from './s2-intent-classifier.ts';
@@ -142,7 +144,12 @@ export async function runPipeline(
   const incomingState: ConversationState = req.state ?? {
     conversation_id: 'unknown',
     slots: [],
+    slot_state: { ...DEFAULT_SLOT_STATE },
   };
+  // §3.3 + §5.6.1: гарантируем slot_state — даже если клиент не прислал
+  // (backward-compat). Стрик меняется только в S_CATALOG branch (Этап 6E),
+  // orchestrator его НЕ модифицирует — только пробрасывает.
+  const carriedSlotState: SlotState = incomingState.slot_state ?? { ...DEFAULT_SLOT_STATE };
 
   // ── S0 ─────────────────────────────────────────────────────────────────
   const s0 = s0Preprocess(req.message ?? '', req.history);
