@@ -441,11 +441,17 @@ async function composeWithProducts(
   // ── 2. Парсим маркер ──
   const { intro, crosssell: rawCrosssell } = splitByMarker(cleanLLM);
 
-  // ── 3. Валидируем cross-sell (§11.5b). soft_fallback → cross-sell всегда вырезаем. ──
+  // ── 3. Валидируем cross-sell (§11.5b + §5.4.1 disallowCrosssell). ──
+  // Effective disallow: запрет от оркестратора (similar и т.п.) ИЛИ scenario != normal.
+  // Логика OR — приоритет у запрета (Core memory).
+  const externallyDisallowed = input.disallowCrosssell === true;
+  const scenarioDisallowed = scenario !== "normal";
+  const effectiveDisallowed = externallyDisallowed || scenarioDisallowed;
+
   let crosssellRendered: string | null = null;
   let violation: string | null = null;
   const presentInLLM = rawCrosssell !== null;
-  if (presentInLLM && scenario !== "soft_fallback") {
+  if (presentInLLM && !effectiveDisallowed) {
     violation = validateCrosssell(rawCrosssell!);
     if (violation === null) {
       crosssellRendered = rawCrosssell!;
@@ -454,10 +460,15 @@ async function composeWithProducts(
         `[v2.catalog_composer.crosssell_violation] code=${violation}; cut`,
       );
     }
-  } else if (presentInLLM && scenario === "soft_fallback") {
-    violation = "soft_fallback_disallowed";
+  } else if (presentInLLM && effectiveDisallowed) {
+    // Приоритет внешнего запрета над scenario-запретом для логирования.
+    violation = externallyDisallowed
+      ? "disallowed_by_orchestrator"
+      : scenario === "soft_fallback"
+        ? "soft_fallback_disallowed"
+        : "scenario_disallowed";
     console.warn(
-      `[v2.catalog_composer.crosssell_violation] code=soft_fallback_disallowed; cut`,
+      `[v2.catalog_composer.crosssell_violation] code=${violation}; cut`,
     );
   }
 
@@ -469,8 +480,8 @@ async function composeWithProducts(
   if (intro) parts.push(intro);
   if (cards.markdown) parts.push(cards.markdown);
   if (scenario === "soft_fallback") {
-    // §11.2a-rev: ОДНА короткая tail-строка. Без перечисления значений.
-    parts.push(softFallbackTail());
+    // §4.8.1 + §11.2a-rev: ОДНА короткая tail-строка с caption снятого фасета.
+    parts.push(softFallbackTail(input.outcome.softFallbackContext?.droppedFacetCaption));
   }
   if (crosssellRendered) parts.push(crosssellRendered);
 
