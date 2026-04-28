@@ -780,9 +780,13 @@ interface UnresolvedTrait {
 ### 9.7 Сортировка
 
 - По умолчанию `relevance` (порядок API).
-- `price_asc` / `price_desc` — **передаётся в Catalog API параметром сортировки** (не локальная сортировка одной страницы). Локальная сортировка top-N даёт min/max только среди этой страницы (≤50), а не среди всей категории (тысячи SKU), что для запросов «самое дешёвое / самое дорогое» приводит к неверному ответу.
-  - Если 220volt API поддерживает `?sort=price_asc|price_desc` — используем напрямую.
-  - Если не поддерживает (проверить в `docs/external/220volt-swagger.json`, дефект **B-API-003** при отсутствии) — выполнить **probe-запросы**: `GET /api/products?category=…&page=1&per_page=1&sort=...` (две вариации), либо итеративный обход страниц с локальным min/max до сходимости (с лимитом 5 страниц) и явным предупреждением Composer'а: «Возможно есть варианты дешевле — уточните у менеджера».
+- `price_asc` / `price_desc` — **локальная сортировка** (см. §9C.1). Catalog API параметр `?sort=` **игнорирует** (подтверждено живым прогоном 28 апр 2026, дефект **B-API-003**). Алгоритм:
+  1. `executeSearch` запрашивает `per_page=50` (макс. рекомендуемый), `?category=…` + резолвленные фильтры.
+  2. Локально отбрасывает `price === 0` (см. §9C.3).
+  3. Локально сортирует по цене и отдаёт топ-N (≤ 7, см. §9.6).
+  4. Если оставшихся товаров < N — догружает `page=2,3…` до N или лимита 5 страниц.
+  5. Composer добавляет sticky-warning: «Показываю самые дешёвые/дорогие из первых 50–250 товаров. Полный ассортимент в категории на сайте.»
+- `?min_price=` / `?max_price=` работают и **предпочтительнее** локального сорта, когда пользователь назвал диапазон.
 - Объёмная формула (для кабелей и т.п.): `Qty * Vol * 1.2` (кабели), `*1.1` (прочее). Формулу пользователю **не показывать**, только результат.
 
 ### 9.8 Замены и аналоги
@@ -1512,11 +1516,13 @@ interface Slot {
 interface Product {
   id: number;                  // integer
   sku: string;                 // = ProductResource.article
-  name: string;
+  title: string;               // = ProductResource.pagetitle (см. §9A.2 / §9C.4)
   url: string;
-  price: number;               // ₸
+  price: number;               // ₸. price=0 фильтруется на уровне Catalog Search (§9C.3)
   old_price?: number | null;   // ₸, для отображения скидки
-  brand?: string | null;
+  brand?: string | null;       // = ProductResource.vendor
+  image_url?: string | null;   // = ProductResource.image
+  total_stock?: number;        // = ProductResource.amount
   category: { id: number; pagetitle: string };
   warehouses: { city: string; amount: number }[];   // поле API называется amount, не qty
   options: Array<{ caption_ru: string; value_ru: string; caption_kz?: string; value_kz?: string }>;
