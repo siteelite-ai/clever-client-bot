@@ -255,8 +255,16 @@ export async function composeCatalogAnswer(
   input: ComposeCatalogInput,
   deps: CatalogComposerDeps,
 ): Promise<ComposeCatalogOutput> {
-  const scenario = decideScenario(input.outcome);
-  const newStreak = nextSoft404Streak(input.prevSoft404Streak, input.outcome);
+  const norm = normalizeOutcome(input.outcome);
+  const scenario = decideScenario(norm);
+  const newStreak = nextSoft404Streak(input.prevSoft404Streak, norm);
+
+  // ── Branch 0 (S_PRICE): clarify — детерминированный рендер, БЕЗ LLM. ──
+  // §4.4: probe.total > 50 → выводим вопрос с топ-N option-значениями.
+  // §5.6.1: streak НЕ меняется (новое состояние, не empty и не ok).
+  if (scenario === "clarify") {
+    return composeClarify(input, norm, newStreak);
+  }
 
   // ── Branch 1: 0 товаров (soft_404 / all_zero_price / error) ──
   // LLM-вызов всё ещё нужен — для короткой человеческой фразы (§5.6.1).
@@ -266,17 +274,68 @@ export async function composeCatalogAnswer(
     scenario === "all_zero_price" ||
     scenario === "error"
   ) {
-    return await composeNoResults(input, deps, scenario, newStreak);
+    return await composeNoResults(input, deps, scenario, newStreak, norm);
   }
 
   // ── Branch 2: есть товары (normal / soft_fallback) ──
-  return await composeWithProducts(input, deps, scenario, newStreak);
+  return await composeWithProducts(input, deps, scenario, newStreak, norm);
 }
 
 // ─── Внутренние функции ──────────────────────────────────────────────────────
 
-/** Решает сценарий по SearchOutcome.status. */
-export function decideScenario(outcome: SearchOutcome): CatalogScenario {
+/**
+ * Нормализация: композер внутри работает с единым представлением.
+ *   - SearchOutcome → kind='search'
+ *   - SPriceOutcome → kind='price' (содержит clarifySlot, totalCount)
+ *   - Уже обёрнутый ComposerOutcome → as is.
+ *
+ * Поле `outcome` без `kind` считаем SearchOutcome (обратная совместимость
+ * со старыми тестами).
+ */
+export function normalizeOutcome(
+  outcome: SearchOutcome | ComposerOutcome,
+): NormalizedOutcome {
+  if ("kind" in outcome) {
+    if (outcome.kind === "price") {
+      const o = outcome.outcome;
+      return {
+        kind: "price",
+        status: o.status,
+        products: o.products,
+        totalFromApi: o.totalCount,
+        clarifySlot: o.clarifySlot,
+        softFallbackContext: null,
+      };
+    }
+    return wrapSearch(outcome.outcome);
+  }
+  return wrapSearch(outcome);
+}
+
+function wrapSearch(o: SearchOutcome): NormalizedOutcome {
+  return {
+    kind: "search",
+    status: o.status,
+    products: o.products,
+    totalFromApi: o.totalFromApi,
+    clarifySlot: null,
+    softFallbackContext: o.softFallbackContext,
+  };
+}
+
+/** Внутреннее представление, общее для search/price веток. */
+export interface NormalizedOutcome {
+  kind: "search" | "price";
+  /** Объединённый статус (search-статусы + price-статусы). */
+  status: string;
+  products: RawProduct[];
+  totalFromApi: number;
+  clarifySlot: Slot | null;
+  softFallbackContext: { droppedFacetCaption: string } | null;
+}
+
+/** Решает сценарий по нормализованному outcome (поддерживает search+price). */
+export function decideScenario(outcome: NormalizedOutcome): CatalogScenario {
   switch (outcome.status) {
     case "ok":
       return "normal";
@@ -289,8 +348,14 @@ export function decideScenario(outcome: SearchOutcome): CatalogScenario {
       return "all_zero_price";
     case "error":
       return "error";
+    case "clarify":
+      // Только S_PRICE: probe.total > 50 → price_clarify slot.
+      return "clarify";
+    case "out_of_domain":
+      // S_PRICE shortcut. Маршрутизатор обычно ловит это раньше (S_CATALOG_OOD),
+      // но если дошло — обрабатываем как all_zero_price (contactManager=true).
+      return "all_zero_price";
     default:
-      // exhaustive — TS поймает добавление нового статуса.
       return "error";
   }
 }
@@ -298,11 +363,17 @@ export function decideScenario(outcome: SearchOutcome): CatalogScenario {
 /**
  * §5.6.1 state-machine. Чистая функция, тестируется отдельно.
  * Инвариант: вызывается ровно один раз за catalog-ход, ПОСЛЕ финального счёта.
+ *
+ * Core memory: «При action='clarify' (price_clarify slot) streak НЕ изменяется
+ * — это новое состояние, не empty и не ok».
  */
 export function nextSoft404Streak(
   prev: 0 | 1 | 2,
-  outcome: SearchOutcome,
+  outcome: NormalizedOutcome,
 ): 0 | 1 | 2 {
+  // §5.6.1: clarify — новое состояние, streak неизменен.
+  if (outcome.status === "clarify") return prev;
+
   const isZero =
     outcome.status === "empty" ||
     outcome.status === "empty_degraded" ||
