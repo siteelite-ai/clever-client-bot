@@ -40,6 +40,13 @@ export interface Slot {
   pending_modifiers: string[];                     // модификаторы вне категории
   pending_filters: Record<string, string[]> | null; // уже выбранные фильтры
 
+  /**
+   * Slot-уровневые метаданные, не привязанные к опциям.
+   * Используется price_clarify для facetKey/facetCaption (для рендера вопроса
+   * композером и резолва ответа в s1-slot-resolver).
+   */
+  metadata?: Record<string, unknown>;
+
   consumed: boolean;                               // true → удалить из state
   closed_reason?: SlotClosedReason;
 }
