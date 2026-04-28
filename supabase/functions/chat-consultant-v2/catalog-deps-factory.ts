@@ -210,7 +210,7 @@ export interface CatalogProductionDeps {
 export function createCatalogProductionDeps(
   cfg: CatalogProductionDepsConfig,
 ): CatalogProductionDeps {
-  const baseUrl = cfg.baseUrl ?? Deno.env.get("CATALOG_API_BASE_URL") ?? "https://220volt.kz/api";
+  const baseUrl = cfg.baseUrl ?? Deno.env.get("CATALOG_API_BASE_URL") ?? CATALOG_API_BASE_URL_DEFAULT;
   const log = cfg.log ?? (() => {});
   const resolverModel = cfg.resolverModel ?? RESOLVER_LLM_MODEL_DEFAULT;
 
@@ -222,7 +222,7 @@ export function createCatalogProductionDeps(
   const resolver: ResolverDeps = {
     listCategories: () => fetchCategoriesLive(baseUrl, cfg.catalogApiToken),
     callLLM: (messages) => resolverCallLLM(messages, cfg.openRouterKey, resolverModel),
-    getThresholds: () => Promise.resolve(cfg.resolverThresholds ?? DEFAULT_RESOLVER_THRESHOLDS),
+    getThresholds: () => Promise.resolve(cfg.resolverThresholds ?? RESOLVER_THRESHOLDS_DEFAULT),
     log: (event, data) => log(`resolver.${event}`, data),
   };
 
