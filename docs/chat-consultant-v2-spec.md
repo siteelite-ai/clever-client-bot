@@ -2242,7 +2242,7 @@ interface GoldenCase {
 - При intent=`next_page` Slot не пересоздаётся; `applied_aliases`, `applied_filters`, `query_tokens` переиспользуются 1-в-1.
 - Инвариант §4.5 «не загрязнять `?query=`» действует **без исключений**. Проблемные фасет-ключи лечатся через §9C.2 try-and-degrade, а не query-инъекцией.
 
-### 25.5 Кейсы API quirks (TC-83 — TC-86)
+### 25.5 Кейсы API quirks (TC-83 — TC-88)
 
 Покрывают §9C — закрепляют, что Catalog Search корректно работает поверх известных дефектов реального API.
 
