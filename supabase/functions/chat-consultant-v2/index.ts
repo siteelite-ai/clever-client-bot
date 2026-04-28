@@ -56,6 +56,13 @@ import {
   composeKnowledgeAnswer,
   createRespondDeps,
 } from "./s5-respond.ts";
+import { assembleCatalog } from "./catalog-assembler.ts";
+import {
+  createCatalogProductionDeps,
+  loadCatalogAppSettings,
+} from "./catalog-deps-factory.ts";
+import { composeCatalogAnswer } from "./s-catalog-composer.ts";
+import { DEFAULT_SLOT_STATE } from "./types.ts";
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
 const corsHeaders = {
@@ -64,7 +71,7 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const BUILD_MARKER = "v2-step10-s5-respond-knowledge-2026-04-28";
+const BUILD_MARKER = "v2-step11-catalog-assembler-2026-04-28";
 
 // ─── Контракт V2 запроса (Zod) ───────────────────────────────────────────────
 // Сохраняем backward-compat с виджетом: conversationId/query/messages/dialogSlots.
@@ -171,7 +178,8 @@ async function runLightBranch(
       return null;
     case "S_CATALOG":
     case "S_CATALOG_OOD":
-      return null; // Steps 10–11
+    case "S_PRICE":
+      return null; // обрабатывается catalog-flow в start()
   }
 }
 
@@ -316,8 +324,11 @@ serve(async (req) => {
           sseChunk({ slot_update: { slots: decision.next_state.slots } }),
         );
 
-        // ── Step 8/9/10: ветки → реальный исполнитель;
-        //    Catalog ветки → placeholder до Step 11.
+        // ── Step 11: Catalog assembler состояния (для S_CATALOG / S_PRICE / S_CATALOG_OOD).
+        //    next_state может быть мутирован (clarifySlot, soft404_streak).
+        let mutableNextState = decision.next_state;
+
+        // ── Step 8/9/10/11: ветки → реальный исполнитель ──────────────────
         const tBranch0 = Date.now();
         let branchOut: BranchOutput | null = null;
         let knowledgeOut: KnowledgeBranchOutput | null = null;
@@ -331,6 +342,15 @@ serve(async (req) => {
         } | null = null;
         let composedGreetingStripped: string | null = null;
         let composeMs = 0;
+        // Step 11: catalog meta
+        let catalogMeta: Record<string, unknown> | null = null;
+        let catalogContactManager = false;
+        let catalogTextEmitted = false;
+
+        const isCatalogRoute =
+          decision.route === "S_CATALOG" ||
+          decision.route === "S_PRICE" ||
+          decision.route === "S_CATALOG_OOD";
 
         if (decision.route === "S_KNOWLEDGE") {
           // Step 9: FTS-only поиск по БЗ + cache `kb:<hash>` (TTL 1ч).
@@ -373,27 +393,171 @@ serve(async (req) => {
             );
           }
           composeMs = Date.now() - tCompose0;
+        } else if (isCatalogRoute) {
+          // ── Step 11: Catalog flow — assembler → composer ──
+          // §3.2: prevSoft404Streak пробрасывается из incoming slot_state.
+          // Composer обновит его и вернёт newSoft404Streak — мы запишем
+          // обратно в next_state перед SSE meta.
+          const prevStreak = (mutableNextState.slot_state ?? DEFAULT_SLOT_STATE).soft404_streak;
+
+          // Загружаем catalog-специфичные настройки (volt220 token + thresholds).
+          const catalogSettings = await loadCatalogAppSettings(supabase);
+          const catalogDeps = createCatalogProductionDeps({
+            // deno-lint-ignore no-explicit-any
+            supabase: supabase as any,
+            openRouterKey,
+            catalogApiToken: catalogSettings.volt220_api_token,
+            resolverThresholds: catalogSettings.resolver_thresholds_json,
+            log: (event, data) =>
+              console.log(`[v2.catalog.${event}] trace=${traceId}`, data ?? {}),
+          });
+
+          // 1) Assembler: resolver → expansion → facets → s_search/s_price.
+          const assembled = await assembleCatalog(
+            {
+              route: decision.route,
+              intent: decision.intent,
+              query: decision.effective_message,
+              history: chatReq.history,
+              slotMatch: decision.slot_match,
+              traceId,
+            },
+            catalogDeps,
+          );
+
+          // 2) OOD shortcut → нейтральная фраза + escalation, без LLM/composer.
+          //    §4.7 + §5.6.1: scenario='out_of_domain' эквивалентен
+          //    contactManager=true (двойной путь triggering).
+          if (assembled.ood) {
+            const oodText =
+              "Этот вопрос вне моей компетенции — я помогаю по электротехнике и инструменту с сайта 220volt.kz. " +
+              "Если хотите, передам ваш запрос менеджеру.";
+            controller.enqueue(
+              sseChunk({ choices: [{ delta: { content: oodText } }] }),
+            );
+            catalogTextEmitted = true;
+            catalogContactManager = true;
+            catalogMeta = {
+              scenario: "out_of_domain",
+              ood: true,
+              assembler: assembled.trace,
+            };
+          } else if (assembled.composerOutcome) {
+            // 3) Composer: streaming → SSE.
+            const tCompose0 = Date.now();
+            try {
+              const composed = await composeCatalogAnswer(
+                {
+                  query: decision.effective_message,
+                  outcome: assembled.composerOutcome,
+                  history: chatReq.history,
+                  prevSoft404Streak: prevStreak,
+                  onDelta: (delta) => {
+                    controller.enqueue(
+                      sseChunk({ choices: [{ delta: { content: delta } }] }),
+                    );
+                  },
+                },
+                catalogDeps.composer,
+              );
+              catalogTextEmitted = true;
+              composedText = composed.text;
+              composedUsage = composed.usage;
+              composedGreetingStripped = composed.greeting_stripped;
+              catalogContactManager = composed.contactManager;
+
+              // 4) Применяем результаты к next_state:
+              //    - soft404_streak обновлён composer-ом.
+              //    - clarifySlot (price branch) добавляем в slots, если есть.
+              const updatedSlots = [...(mutableNextState.slots ?? [])];
+              if (
+                assembled.composerOutcome.kind === "price" &&
+                assembled.composerOutcome.outcome.clarifySlot
+              ) {
+                updatedSlots.push(assembled.composerOutcome.outcome.clarifySlot);
+              }
+              mutableNextState = {
+                ...mutableNextState,
+                slots: updatedSlots,
+                slot_state: { soft404_streak: composed.newSoft404Streak },
+              };
+
+              catalogMeta = {
+                scenario: composed.scenario,
+                new_soft404_streak: composed.newSoft404Streak,
+                contact_manager: composed.contactManager,
+                crosssell: composed.crosssell,
+                formatter: composed.formatter,
+                clarify_slot_emitted:
+                  assembled.composerOutcome.kind === "price" &&
+                  !!assembled.composerOutcome.outcome.clarifySlot,
+                assembler: assembled.trace,
+              };
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e);
+              console.error(`[v2.catalog.compose_failed] trace=${traceId}: ${msg}`);
+              const fallbackText =
+                "Не удалось сформировать ответ по каталогу. Попробуйте уточнить запрос или передам менеджеру.";
+              controller.enqueue(
+                sseChunk({ choices: [{ delta: { content: fallbackText } }] }),
+              );
+              catalogTextEmitted = true;
+              catalogContactManager = true;
+              catalogMeta = {
+                scenario: "error",
+                error: msg,
+                assembler: assembled.trace,
+              };
+            }
+            composeMs = Date.now() - tCompose0;
+          }
         } else {
           branchOut = await runLightBranch(decision, contactsDeps);
         }
         const branchMs = Date.now() - tBranch0;
 
-        const isLight = branchOut !== null || knowledgeOut !== null;
+        const isLight =
+          branchOut !== null || knowledgeOut !== null || isCatalogRoute;
 
         // Виджет (ChatWidget.tsx ≈ 175-179) рендерит side-channel `contacts`
-        // как отдельную карточку. Эмитируем её ТОЛЬКО для S_ESCALATION,
-        // где есть [CONTACT_MANAGER]-маркер. Для S_CONTACT карточка уже
-        // в основном тексте — дубль не нужен.
+        // как отдельную карточку. Эмитируем её для S_ESCALATION (есть
+        // [CONTACT_MANAGER]-маркер) и для catalog-веток с contactManager=true
+        // (OOD / soft404_streak=2 / all_zero_price / error).
         if (
           branchOut?.contact_manager_emitted &&
           branchOut?.contacts_card
         ) {
           controller.enqueue(sseChunk({ contacts: branchOut.contacts_card }));
+        } else if (catalogContactManager) {
+          // Загрузим контакты той же фабрикой, что использует runEscalation.
+          try {
+            const escalation = await runEscalation(
+              { trigger: "direct_request", intent: decision.intent },
+              contactsDeps,
+            );
+            if (escalation.contacts_card) {
+              controller.enqueue(sseChunk({ contacts: escalation.contacts_card }));
+            }
+          } catch (e) {
+            console.warn(
+              `[v2.catalog.contacts_load_failed] trace=${traceId}: ${
+                e instanceof Error ? e.message : e
+              }`,
+            );
+          }
         }
 
-        // Для не-knowledge веток текст ещё не отправлен — отправляем сейчас.
-        // Knowledge уже стримился в композере выше.
-        if (knowledgeOut === null) {
+        // slot_update для catalog-веток: state мог измениться (clarify slot,
+        // soft404_streak). Для остальных — отправили в самом начале (см. ниже).
+        if (isCatalogRoute && catalogTextEmitted) {
+          controller.enqueue(
+            sseChunk({ slot_update: { slots: mutableNextState.slots } }),
+          );
+        }
+
+        // Для не-knowledge / не-catalog веток текст ещё не отправлен —
+        // отправляем сейчас. Knowledge и Catalog уже стримились выше.
+        if (knowledgeOut === null && !isCatalogRoute) {
           const text = branchOut ? branchOut.text : renderPlaceholder(decision);
           controller.enqueue(
             sseChunk({ choices: [{ delta: { content: text } }] }),
@@ -417,7 +581,7 @@ serve(async (req) => {
             meta: {
               pipeline_version: "v2",
               build: BUILD_MARKER,
-              step: 10,
+              step: 11,
               route: decision.route,
               branch_executed: isLight ? "real" : "placeholder",
               intent: decision.intent,
@@ -425,7 +589,8 @@ serve(async (req) => {
               orchestrator_ms: orchestratorMs,
               branch_ms: branchMs,
               compose_ms: composeMs,
-              contact_manager_emitted: branchOut?.contact_manager_emitted ?? false,
+              contact_manager_emitted:
+                (branchOut?.contact_manager_emitted ?? false) || catalogContactManager,
               knowledge: knowledgeOut
                 ? {
                     has_results: knowledgeOut.has_results,
@@ -439,10 +604,11 @@ serve(async (req) => {
                     greeting_stripped: composedGreetingStripped,
                   }
                 : undefined,
+              catalog: catalogMeta ?? undefined,
               trace: decision.trace,
               traceId,
               cache_ttl_ms: CLASSIFIER_CACHE_TTL_MS,
-              next_state: decision.next_state,
+              next_state: mutableNextState,
             },
           }),
         );
@@ -457,14 +623,14 @@ serve(async (req) => {
             choices: [{
               delta: {
                 content:
-                  `🚧 Ошибка V2-пайплайна (Step 10 orchestrator): \`${msg}\`. ` +
+                  `🚧 Ошибка V2-пайплайна (Step 11 orchestrator): \`${msg}\`. ` +
                   `Переключитесь на V1 в админке для штатной работы.`,
               },
             }],
             meta: {
               pipeline_version: "v2",
               build: BUILD_MARKER,
-              step: 10,
+              step: 11,
               error: msg,
               traceId,
             },
