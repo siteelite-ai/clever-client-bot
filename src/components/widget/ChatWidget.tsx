@@ -11,6 +11,31 @@ interface ChatWidgetProps {
 const SUPABASE_URL = "https://yngoixmvmxdfxokuafjp.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InluZ29peG12bXhkZnhva3VhZmpwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk2MTg0MzQsImV4cCI6MjA4NTE5NDQzNH0.bJTllxYOlRBqmnKqMAH21OkTBvXjqW4AaBLHz2fK2lQ";
 
+// V1 vs V2 routing — endpoint is resolved once at widget mount via widget-config.
+// V1 (chat-consultant) is the legacy frozen pipeline; V2 (chat-consultant-v2)
+// is the new spec implementation. Switching is admin-only, manual, no auto-fallback.
+type PipelineVersion = 'v1' | 'v2';
+const ENDPOINT_BY_PIPELINE: Record<PipelineVersion, string> = {
+  v1: `${SUPABASE_URL}/functions/v1/chat-consultant`,
+  v2: `${SUPABASE_URL}/functions/v1/chat-consultant-v2`,
+};
+
+async function resolvePipelineEndpoint(): Promise<{ pipeline: PipelineVersion; url: string }> {
+  try {
+    const r = await fetch(`${SUPABASE_URL}/functions/v1/widget-config`, {
+      headers: { 'apikey': SUPABASE_ANON_KEY },
+    });
+    if (r.ok) {
+      const j = await r.json();
+      const pipeline: PipelineVersion = j?.active_pipeline === 'v2' ? 'v2' : 'v1';
+      return { pipeline, url: ENDPOINT_BY_PIPELINE[pipeline] };
+    }
+  } catch (e) {
+    console.warn('[Widget] widget-config fetch failed, defaulting to v1', e);
+  }
+  return { pipeline: 'v1', url: ENDPOINT_BY_PIPELINE.v1 };
+}
+
 type Msg = { role: 'user' | 'assistant'; content: string };
 
 // Thinking phrases for perceived latency reduction
