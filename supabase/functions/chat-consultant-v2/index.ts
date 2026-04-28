@@ -622,14 +622,14 @@ serve(async (req) => {
             choices: [{
               delta: {
                 content:
-                  `🚧 Ошибка V2-пайплайна (Step 10 orchestrator): \`${msg}\`. ` +
+                  `🚧 Ошибка V2-пайплайна (Step 11 orchestrator): \`${msg}\`. ` +
                   `Переключитесь на V1 в админке для штатной работы.`,
               },
             }],
             meta: {
               pipeline_version: "v2",
               build: BUILD_MARKER,
-              step: 10,
+              step: 11,
               error: msg,
               traceId,
             },
