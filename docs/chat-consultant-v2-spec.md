@@ -2315,6 +2315,19 @@ interface EscalationPayload {
 | `funnel_narrowing_rounds` | histogram | сколько раундов clarification потребовалось для сужения воронки |
 | `clarification_zero_result_total` | counter | **обязан быть 0**: сколько раз пользователь выбрал значение из бот-вопроса и получил `total=0` (defect §4.5, §9.8) |
 | `auto_narrowing_attempts_total` | counter | **обязан быть 0**: сколько раз бот применил `min_price`/значение фасета без явного упоминания пользователем (defect §4.5, §9.7) |
+| `crosssell_text_rendered_total` | counter | сколько раз cross-sell-абзац (§11.5) реально показан пользователю |
+| `crosssell_skipped_due_to_length_total` | counter (split by `bucket ∈ {4-7, 8-15, 16+}`) | пропуски cross-sell из-за `results.length > 3` — для будущей калибровки порога |
+| `crosssell_text_length_chars` | histogram | длина cross-sell-абзаца в символах (контроль, что LLM не разогнался) |
+| `crosssell_invariant_violation_total` | counter | **обязан быть 0**: сколько раз пост-валидация §11.5b вырезала абзац (markdown-ссылка / упоминание цены / «нажмите/перейдите») |
+| `crosssell_truncated_total` | counter | сколько раз пост-валидация усекла абзац до 3 предложений (мягкий defect, цель ≤5%) |
+| `similar_search_total` | counter (split by `anchor_source ∈ {last_shown, sku_in_message, explicit_pick}`) | сколько раз отработал similar-flow по типу источника якоря |
+| `similar_no_anchor_clarification_total` | counter | сколько раз similar без якоря → один уточняющий вопрос (SIM1) |
+| `similar_critical_traits_count` | histogram 0..10 | сколько трейтов LLM пометил как `critical` (диагностика качества `classify_traits`) |
+| `similar_critical_fallback_total` | counter (split by `branch ∈ {clarify_question, show_all_small_category}`) | сколько раз сработал critical fallback §11.6b при `critical=[]` |
+| `similar_funnel_size_bucket` | counter (split by `bucket ∈ {0, 1, 2-5, 6+}`) | распределение размеров воронки similar-кандидатов |
+| `similar_clarification_total` | counter | сколько раз similar ушёл в clarification по `flavor` при N≥6 |
+| `similar_zero_results_total` | counter | сколько раз similar дал 0 кандидатов после `critical[]`-фильтрации |
+| `similar_quality_dialog_total` | counter | сколько раз сработал диалог «не хуже» (§11.6c) — пользователь сказал «не хуже/получше» → бот задал уточняющий вопрос |
 
 ### 22.3 Алерты
 
