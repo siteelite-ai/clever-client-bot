@@ -32,7 +32,8 @@ export type Route =
   | 'S_KNOWLEDGE'
   | 'S_ESCALATION'
   | 'S_CATALOG'
-  | 'S_CATALOG_OOD';   // catalog + out_of_domain → soft 404 без API
+  | 'S_CATALOG_OOD'    // catalog + out_of_domain → soft 404 без API
+  | 'S_PRICE';         // catalog + price_intent !== null → §4.4 probe-then-fetch
 
 export interface RouteDecision {
   route: Route;
@@ -47,7 +48,8 @@ export interface RouteDecision {
     | 'intent_knowledge'
     | 'intent_escalation'
     | 'intent_catalog'
-    | 'intent_catalog_out_of_domain';
+    | 'intent_catalog_out_of_domain'
+    | 'intent_catalog_price';
 }
 
 // ─── Главная функция ─────────────────────────────────────────────────────────
@@ -81,8 +83,16 @@ export function routeIntent(intent: Intent): RouteDecision {
       // §3.2 S_CATALOG step 1: domain check ПЕРЕД любым другим действием.
       // Если запрос вне домена — Router сразу направляет в OOD-ветку,
       // чтобы caller не вызывал Catalog API впустую (метрика wasted_api_calls).
+      // OOD имеет высший приоритет: даже с price_intent мы не вызываем API.
       if (intent.domain_check === 'out_of_domain') {
         return { route: 'S_CATALOG_OOD', reason: 'intent_catalog_out_of_domain' };
+      }
+      // §4.4 + Core Memory: раннее ветвление — price_intent уходит в S_PRICE
+      // (probe-then-fetch), а НЕ в S_CATALOG как пост-обработка. Это убирает
+      // дублирование вызовов API и делает roуter единственным детерминированным
+      // диспетчером веток.
+      if (intent.price_intent !== null) {
+        return { route: 'S_PRICE', reason: 'intent_catalog_price' };
       }
       return { route: 'S_CATALOG', reason: 'intent_catalog' };
 
