@@ -309,7 +309,12 @@ function stubApiClientFailing(status: 'http_error' | 'timeout' | 'network_error'
     }
     throw new TypeError('network down');
   };
-  return { baseUrl: 'https://test.local/api', apiToken: 't', fetch: fakeFetch };
+  return {
+    baseUrl: 'https://test.local/api',
+    apiToken: 't',
+    fetch: fakeFetch,
+    timeoutMs: { products: 50, categoryOptions: 50 },
+  };
 }
 
 Deno.test('Bootstrap: transport-failure + bootstrapOptions → match с source=bootstrap', async () => {
