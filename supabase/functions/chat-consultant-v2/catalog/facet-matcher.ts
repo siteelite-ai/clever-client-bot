@@ -204,6 +204,12 @@ export async function matchFacets(
   const t0 = Date.now();
   const ttl = deps.facetsTtlSec ?? 3600;
 
+  console.info(`[v2.catalog.facet_matcher.input] ${JSON.stringify({
+    pagetitle,
+    modifiers,
+    modifiers_count: modifiers.length,
+  })}`);
+
   // ── 1. Загрузка facets через кэш. ──────────────────────────────────────
   let facetsResult: CategoryOptionsResult;
   let source: 'cache' | 'live' | 'unavailable' = 'live';
