@@ -88,8 +88,7 @@ export interface SearchInput {
 export type SearchStatus =
   | "ok"               // ≥1 товар после всех фильтров
   | "soft_fallback"    // 0 со strict, но ≥1 без optionFilters → composer должен tail-line
-  | "empty"            // 0 везде, без quirk-признаков
-  | "empty_degraded"   // api-client вернул признак Q3 quirk
+  | "empty"            // 0 везде
   | "all_zero_price"   // API дал товары, но все price≤0 (HARD BAN)
   | "error";           // HTTP/timeout/network — escalation, не считаем soft 404
 
@@ -241,22 +240,7 @@ export async function search(
     };
   }
 
-  // empty_degraded — Q3 quirk. Мы НЕ делаем здесь soft_fallback, потому что
-  // api-client уже попробовал retry-без-quirk-ключа. Возвращаем как есть, чтобы
-  // composer мог показать корректный Soft 404 (с пометкой degraded для метрик).
-  if (strictRaw.status === "empty_degraded") {
-    return {
-      status: "empty_degraded",
-      products: [],
-      totalFromApi: 0,
-      zeroPriceFiltered: strictRaw.zeroPriceFiltered,
-      postFilterDropped: 0,
-      attempts,
-      degradedHint: strictRaw.degradedHint,
-      softFallbackContext: null,
-      ms: Date.now() - t0,
-    };
-  }
+  // (REMOVED) empty_degraded ветка — api-client больше не возвращает этот status.
 
   // status === 'ok' | 'empty' → применяем word-boundary post-filter.
   const strictFiltered = strictRaw.products.filter((p) => matchesWordBoundary(p, queryTokens));
@@ -371,19 +355,7 @@ export async function search(
       };
     }
 
-    if (softRaw.status === "empty_degraded") {
-      return {
-        status: "empty_degraded",
-        products: [],
-        totalFromApi: 0,
-        zeroPriceFiltered: cumulativeZero,
-        postFilterDropped: cumulativePostDropped,
-        attempts,
-        degradedHint: softRaw.degradedHint,
-        softFallbackContext: null,
-        ms: Date.now() - t0,
-      };
-    }
+    // (REMOVED) empty_degraded больше не возвращается api-client'ом.
 
     const softFiltered = softRaw.products.filter((p) => matchesWordBoundary(p, queryTokens));
     cumulativePostDropped += softRaw.products.length - softFiltered.length;
