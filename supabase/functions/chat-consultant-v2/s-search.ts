@@ -126,6 +126,15 @@ export async function runSearch(
 ): Promise<SSearchOutcome> {
   const t0 = Date.now();
   const log = deps.log ?? (() => {});
+  const explicitModifiers = [
+    ...(input.intent.search_modifiers ?? []),
+    ...(input.intent.critical_modifiers ?? []),
+  ].filter((m) => (m ?? "").trim().length > 0);
+  const hasFacetFilters = Object.keys(input.facetMatch.optionFilters).length > 0;
+  const shouldUseCategoryOnlySearch =
+    !input.intent.has_sku &&
+    explicitModifiers.length === 0 &&
+    !hasFacetFilters;
 
   // ── Defensive: out_of_domain shortcut (§4.7). ─────────────────────────
   if (input.intent.domain_check === "out_of_domain") {
@@ -176,7 +185,7 @@ export async function runSearch(
   for (const attempt of formsToTry) {
     const catalogInput: CatalogSearchInput = {
       category: input.pagetitle,
-      query: attempt.text,
+      query: shouldUseCategoryOnlySearch ? undefined : attempt.text,
       article: input.intent.has_sku && input.intent.sku_candidate
         ? input.intent.sku_candidate
         : undefined,
@@ -204,6 +213,7 @@ export async function runSearch(
 
     log("s_search.attempt", {
       form: attempt.form,
+      category_only: shouldUseCategoryOnlySearch,
       status: outcome.status,
       products: outcome.products.length,
       totalFromApi: outcome.totalFromApi,
