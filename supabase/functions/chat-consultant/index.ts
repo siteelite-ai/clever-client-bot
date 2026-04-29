@@ -4937,27 +4937,10 @@ serve(async (req) => {
           console.log(`[Chat] Price intent detected but no category, skipping`);
         }
         
-        // === TITLE-FIRST (only if price intent didn't handle it AND not a replacement intent) ===
-        // For is_replacement=true: skip title-first short-circuit so the replacement-block can do
-        // characteristics-first search and return ANALOGS (not the original product) to the user.
-        if (!articleShortCircuit && classification?.has_product_name && classification.product_name && !classification?.is_replacement) {
-          const searchStart = Date.now();
-          const directResults = await searchProductsByCandidate(
-            { query: classification.product_name, brand: null, category: null, min_price: null, max_price: null },
-            appSettings.volt220_api_token!,
-            15
-          );
-          const searchElapsed = Date.now() - searchStart;
-          console.log(`[Chat] Title-first search: ${directResults.length} products in ${searchElapsed}ms for "${classification.product_name}"`);
-          
-          if (directResults.length > 0) {
-            foundProducts = directResults.slice(0, 10);
-            articleShortCircuit = true;
-            console.log(`[Chat] Title-first SUCCESS: ${foundProducts.length} products, skipping LLM 1 (total ${classifyElapsed + searchElapsed}ms)`);
-          } else {
-            console.log(`[Chat] Title-first: 0 results for "${classification.product_name}", proceeding to LLM 1`);
-          }
-        } else if (classification?.is_replacement && classification?.has_product_name && classification?.product_name) {
+        // === TITLE-FIRST: handled by FAST-PATH above (right after Micro-LLM classify).
+        // The legacy duplicate block was removed; if the fast-path returned 0,
+        // we don't repeat the identical ?query= call here.
+        if (classification?.is_replacement && classification?.has_product_name && classification?.product_name) {
           console.log(`[Chat] Title-first SKIPPED: is_replacement=true, deferring to replacement-pipeline (characteristics-first)`);
         }
         
