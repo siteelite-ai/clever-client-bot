@@ -628,6 +628,96 @@ export const ALLOWED_DOMAINS: Domain[] = ['POWER', 'TELECOM', 'TOOLS', 'LIGHTING
 `Если важно уточнить *<droppedFacetCaption>* — напишите.`
 (маркер курсива `*…*` обязателен, текст-обвязка — фиксированный шаблон).
 
+### 4.10 Parallel Probe + Self-Bootstrap Facets
+
+**Цель.** Снизить latency (катать probe параллельно с facet-схемой) и устранить
+класс отказов «facet-endpoint недоступен → traits перекладываются в `query` →
+0 результатов».
+
+**Контракт исполнения (после Category Resolver, до Facet Matcher).**
+
+```
+parallel:
+  A. fetchCategoryOptions(category)        // живая facet-схема + counts
+  B. probeProducts({                       // первый hop /products
+       category,
+       min_price?, max_price?,             // если price_intent !== null
+       per_page = N_PROBE                  // const, см. ниже
+     })
+join → { facetSchema?, probe }
+```
+
+**Инварианты.**
+
+| ID | Инвариант |
+|---|---|
+| PB-1 | Probe-запрос выполняется ВСЕГДА, независимо от состояния A. |
+| PB-2 | Probe НЕ применяет ни одного facet-фильтра — только `category` и (опционально) `min_price`/`max_price`. |
+| PB-3 | A и B запускаются строго параллельно (`Promise.all`); join не блокирует probe ожиданием A. |
+| PB-4 | `N_PROBE` — единственный параметр, конфигурируемый в `config.ts`; в спецификации НЕ фиксируется числом (data-agnostic). |
+| PB-5 | Если A.status ∈ {timeout, http_error, network_error, upstream_unavailable}, активируется §4.11 (stale) и §4.10.1 (Self-Bootstrap). |
+
+#### 4.10.1 Self-Bootstrap Facet Schema
+
+При невозможности получить facet-схему из A (даже после §4.11 stale) — facet-схема
+агрегируется из **поля `Product.options[]` ответа probe**.
+
+**Контракт `extractFacetSchemaFromProducts`.**
+
+```
+input:  RawProduct[]                       // probe.results
+output: RawOption[]                        // та же форма, что у /categories/options.options
+```
+
+Алгоритм (pure function):
+
+1. Перебрать все `product.options[]`.
+2. Группировать по `key`. Для каждой группы:
+   - `caption` ← мажоритарный `caption_ru` (или `caption_kz`, если ru пусто).
+   - `values[]` ← уникальные `{ value_ru, value_kz, value: value_ru ?? value_kz, count: <число вхождений> }`.
+3. Сортировать `values[]` по убыванию `count` (top-N — устойчиво для UI/clarify slot).
+4. Сортировать `RawOption[]` по убыванию суммарного `count`.
+
+**Инварианты Self-Bootstrap.**
+
+| ID | Инвариант |
+|---|---|
+| SB-1 | Schema, полученная через bootstrap, помечается флагом `source: 'bootstrap'` (контракт `FacetMatcherDeps.bootstrapOptions`). |
+| SB-2 | Bootstrap-schema ВСЕГДА fallback. Если есть live или stale schema из A — bootstrap НЕ используется. |
+| SB-3 | Bootstrap-schema НЕ участвует в `price_clarify` slot (top-5 facets — §4.4): для slot нужны абсолютные counts по всей категории, у bootstrap counts ограничены `N_PROBE`. При активном bootstrap composer переходит в S-CATALOG ветку без `price_clarify` (§4.4 fallback). |
+| SB-4 | Метрика `facets_bootstrap_used_total` инкрементируется на каждый случай активации SB. |
+
+#### 4.10.2 Sanitization при `category_unavailable`
+
+Если ни live, ни stale, ни bootstrap-schema недоступны (probe тоже пуст или
+вернул transport-failure):
+
+- `unmatchedModifiers` НЕ инжектируются в `query`.
+- В strict-search идёт ТОЛЬКО `category` (+ price из S1, если есть).
+- `softFallbackContext` НЕ заполняется (нечего «снимать» — facets были
+  технически недоступны). Composer показывает товары без tail-line про facet.
+
+Дефект `auto_query_pollution_total` обязан быть 0.
+
+### 4.11 Stale-on-error Cache (facets only)
+
+Цель: снизить шум зависимостей upstream без нарушения core memory
+«Real-time catalog API only» — мы не синхронизируем каталог в БД, мы лишь
+помним ПОСЛЕДНИЙ успешный snapshot facet-схемы конкретной категории.
+
+**Контракт.**
+
+| Слой | Поведение |
+|---|---|
+| HOT TTL | стандартный `TTL.facets` — обычный кэш-aside. |
+| STALE TTL | STALE_TTL > HOT TTL. Просроченный hot-кэш сохраняется в дополнительной строке с TTL=`STALE_TTL`. |
+| Условие отдачи stale | ТОЛЬКО когда compute() вернул transport-failure (timeout/http5xx/network/breaker). Hot miss БЕЗ ошибки upstream → НЕ stale, а live compute. |
+| Метрика | `facets_stale_served_total` инкрементируется на каждую отдачу stale. |
+| TTL значения | Конкретные числа — в `config.ts`. В спеке фиксируется ТОЛЬКО соотношение `STALE_TTL >> HOT_TTL` и порядок «hot first → stale on error → bootstrap → category-only». |
+
+**Применимость.** ТОЛЬКО к `/categories/options`. К `/products` НЕ применяется
+(контракт probe — реал-тайм, иначе нарушается «no sync» core).
+
 ---
 
 ## 5. Conversational Rules
