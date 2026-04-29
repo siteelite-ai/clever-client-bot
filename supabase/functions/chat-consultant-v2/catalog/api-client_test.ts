@@ -125,6 +125,58 @@ Deno.test("searchProducts: timeout (AbortError)", async () => {
   assertEquals(r.status, "timeout");
 });
 
+// ─── F.4.3: единая retry-политика на searchProducts ────────────────────────
+
+Deno.test("searchProducts: F.4.3 retry on timeout, второй ответ ok", async () => {
+  let callIndex = 0;
+  const f = makeFetch((_url, init) => {
+    callIndex++;
+    if (callIndex === 1) {
+      return new Promise<Response>((_resolve, reject) => {
+        const sig = init.signal as AbortSignal | undefined;
+        sig?.addEventListener("abort", () => {
+          const err = new Error("aborted"); err.name = "AbortError"; reject(err);
+        });
+      });
+    }
+    return Promise.resolve(jsonResponse({
+      data: { results: [P(1, 100)], total: 1 },
+    }));
+  });
+  const r = await searchProducts({ query: "drill" }, deps(f, { timeoutMs: { products: 30 } }));
+  assertEquals(callIndex, 2, "должен быть ровно 1 retry");
+  assertEquals(r.status, "ok");
+  assertEquals(r.products.length, 1);
+});
+
+Deno.test("searchProducts: F.4.3 double-timeout → status='timeout' (без infinite retry)", async () => {
+  let callIndex = 0;
+  const f = makeFetch((_url, init) => {
+    callIndex++;
+    return new Promise<Response>((_resolve, reject) => {
+      const sig = init.signal as AbortSignal | undefined;
+      sig?.addEventListener("abort", () => {
+        const err = new Error("aborted"); err.name = "AbortError"; reject(err);
+      });
+    });
+  });
+  const r = await searchProducts({ query: "drill" }, deps(f, { timeoutMs: { products: 20 } }));
+  assertEquals(callIndex, 2, "ровно 2 попытки, без 3-й");
+  assertEquals(r.status, "timeout");
+});
+
+Deno.test("searchProducts: F.4.3 НЕ ретраит HTTP 500 (только транспорт)", async () => {
+  let callIndex = 0;
+  const f = makeFetch(() => {
+    callIndex++;
+    return new Response("server err", { status: 500 });
+  });
+  const r = await searchProducts({ query: "drill" }, deps(f));
+  assertEquals(callIndex, 1, "HTTP-ошибки — не транспортные, retry не применяется");
+  assertEquals(r.status, "http_error");
+  assertEquals(r.httpStatus, 500);
+});
+
 Deno.test("searchProducts: unsafe_param_blocked для control-chars", async () => {
   let called = false;
   const f = makeFetch(() => { called = true; return jsonResponse({}); });

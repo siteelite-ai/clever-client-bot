@@ -348,10 +348,17 @@ serve(async (req) => {
         let catalogContactManager = false;
         let catalogTextEmitted = false;
 
+        // F.4.1 (Stage F.4): S_SIMILAR — отдельный catalog-route. Assembler
+        // (catalog-assembler.ts §4.6 SIMILAR shortcut, ~lines 308-372) уже
+        // полностью обрабатывает его: вызов runSimilarBranch, маппинг
+        // SSimilarOutcome → SearchOutcome, disallowCrosssell=true (§4.6.5
+        // INV-S2), пробрасывание recommendationContext. Здесь — только
+        // включение в catalog-диспатч. См. F4-architect-review.md §F.4.1.
         const isCatalogRoute =
           decision.route === "S_CATALOG" ||
           decision.route === "S_PRICE" ||
-          decision.route === "S_CATALOG_OOD";
+          decision.route === "S_CATALOG_OOD" ||
+          decision.route === "S_SIMILAR";
 
         if (decision.route === "S_KNOWLEDGE") {
           // Step 9: FTS-only поиск по БЗ + cache `kb:<hash>` (TTL 1ч).
@@ -413,7 +420,10 @@ serve(async (req) => {
               console.log(`[v2.catalog.${event}] trace=${traceId}`, data ?? {}),
           });
 
-          // 1) Assembler: resolver → expansion → facets → s_search/s_price.
+          // 1) Assembler: resolver → expansion → facets → s_search/s_price/s_similar.
+          // F.4.1: state пробрасываем для §4.6.2 anchor fallback (s-similar
+          // читает state.last_shown_product_sku, когда пользователь говорит
+          // «подбери аналог» без явного SKU в текущем запросе).
           const assembled = await assembleCatalog(
             {
               route: decision.route,
@@ -422,6 +432,7 @@ serve(async (req) => {
               history: chatReq.history,
               slotMatch: decision.slot_match,
               traceId,
+              state: mutableNextState,
             },
             catalogDeps,
           );
