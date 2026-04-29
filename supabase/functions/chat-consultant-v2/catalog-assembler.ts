@@ -367,6 +367,7 @@ export async function assembleCatalog(
       trace,
       resolvedPagetitle: similarOutcome.pagetitle ?? null,
       disallowCrosssell: true, // §4.6.5 INV-S2: ВСЕГДА true для similar
+      recommendationContext: similarOutcome.recommendationContext || undefined,
     };
   }
 
