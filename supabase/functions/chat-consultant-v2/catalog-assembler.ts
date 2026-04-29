@@ -170,6 +170,13 @@ export interface AssemblerResult {
    * установка false здесь безопасна — приоритет всегда у запрета.
    */
   disallowCrosssell: boolean;
+  /**
+   * §4.6 + §11.6: короткая 1-строка-объяснение от similar-ветки
+   * («Подобрал по характеристикам X, Y, Z.»). НЕ содержит SKU/цен/брендов.
+   * Композер вставляет первой строкой ПЕРЕД LLM intro в similar-сценарии.
+   * undefined для не-similar веток.
+   */
+  recommendationContext?: string;
 }
 
 export interface AssemblerInput {
