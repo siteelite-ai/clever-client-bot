@@ -235,7 +235,7 @@ export async function matchFacets(
     facetsResult.status === 'network_error' ||
     facetsResult.status === 'upstream_unavailable'
   ) {
-    return {
+    const result: FacetMatchResult = {
       status: 'category_unavailable',
       optionFilters: {},
       optionAliases: {},
@@ -245,10 +245,23 @@ export async function matchFacets(
       source: 'unavailable',
       ms: Date.now() - t0,
     };
+    console.info(`[v2.catalog.facet_matcher.result] ${JSON.stringify({
+      pagetitle,
+      status: result.status,
+      source: result.source,
+      api_status: facetsResult.status,
+      api_error: facetsResult.errorMessage ?? null,
+      options_count: 0,
+      totalProducts: facetsResult.totalProducts ?? 0,
+      matchedModifiers: result.matchedModifiers,
+      unmatchedModifiers: result.unmatchedModifiers,
+      ms: result.ms,
+    })}`);
+    return result;
   }
 
   if (facetsResult.status === 'empty' || facetsResult.options.length === 0) {
-    return {
+    const result: FacetMatchResult = {
       status: 'no_facets',
       optionFilters: {},
       optionAliases: {},
@@ -258,6 +271,18 @@ export async function matchFacets(
       source,
       ms: Date.now() - t0,
     };
+    console.info(`[v2.catalog.facet_matcher.result] ${JSON.stringify({
+      pagetitle,
+      status: result.status,
+      source: result.source,
+      api_status: facetsResult.status,
+      options_count: facetsResult.options.length,
+      totalProducts: facetsResult.totalProducts ?? 0,
+      matchedModifiers: result.matchedModifiers,
+      unmatchedModifiers: result.unmatchedModifiers,
+      ms: result.ms,
+    })}`);
+    return result;
   }
 
   // ── 3. Alias collapse. ─────────────────────────────────────────────────
