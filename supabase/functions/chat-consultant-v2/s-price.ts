@@ -361,7 +361,8 @@ export async function priceBranch(
   if (
     probe.status === "http_error" ||
     probe.status === "timeout" ||
-    probe.status === "network_error"
+    probe.status === "network_error" ||
+    probe.status === "upstream_unavailable"
   ) {
     return {
       status: "error",
@@ -447,7 +448,8 @@ export async function priceBranch(
     if (
       full.status === "http_error" ||
       full.status === "timeout" ||
-      full.status === "network_error"
+      full.status === "network_error" ||
+      full.status === "upstream_unavailable"
     ) {
       return {
         status: "error",
@@ -501,7 +503,8 @@ export async function priceBranch(
   if (
     top.status === "http_error" ||
     top.status === "timeout" ||
-    top.status === "network_error"
+    top.status === "network_error" ||
+    top.status === "upstream_unavailable"
   ) {
     return {
       status: "error",
