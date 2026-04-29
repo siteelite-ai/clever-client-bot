@@ -340,7 +340,8 @@ export async function searchProducts(
   const params = buildProductsParams(input);
   const url = `${deps.baseUrl}/products?${params.toString()}`;
 
-  const fetched = await fetchWithTimeout(url, deps.apiToken, timeoutMs, fetchFn);
+  // F.4.3: единая retry-политика (timeout/network → 1 retry с x1.33 timeout).
+  const fetched = await fetchWithRetry(url, deps.apiToken, timeoutMs, fetchFn);
   if (!fetched.ok) {
     return {
       status: fetched.kind,
@@ -410,6 +411,9 @@ export async function searchProducts(
       }
       const recoveryParams = buildProductsParams(input, exclude);
       const recoveryUrl = `${deps.baseUrl}/products?${recoveryParams.toString()}`;
+      // F.4.3 NB: НЕ применяем fetchWithRetry — recovery это semantic-слой
+      // (Q3 quirk), не транспорт. При timeout/network на recovery просто
+      // пропускаем degrade-флаг и возвращаем оригинальный empty.
       const rec = await fetchWithTimeout(recoveryUrl, deps.apiToken, timeoutMs, fetchFn);
       if (rec.ok && rec.res.ok) {
         try {
@@ -475,12 +479,12 @@ export async function getCategoryOptions(
 
   const url = `${deps.baseUrl}/categories/options?pagetitle=${encodeURIComponent(pagetitle)}`;
 
-  // Attempt 1, и при abort — attempt 2 с увеличенным таймаутом.
-  let fetched = await fetchWithTimeout(url, deps.apiToken, timeoutMs, fetchFn);
-  if (!fetched.ok && fetched.kind === 'timeout') {
-    await new Promise((r) => setTimeout(r, 300));
-    fetched = await fetchWithTimeout(url, deps.apiToken, Math.round(timeoutMs * 1.33), fetchFn);
-  }
+  // F.4.3: ранее inline-retry дублировал логику fetchWithRetry — заменено
+  // на единый helper. Семантика идентична: 1 retry на timeout/network, x1.33.
+  // Восстановленные различия от прежней версии: теперь ретраим и network_error
+  // (раньше только timeout) — это корректно по спеке retry policy и
+  // приводит к симметрии с searchProducts.
+  const fetched = await fetchWithRetry(url, deps.apiToken, timeoutMs, fetchFn);
 
   if (!fetched.ok) {
     return {
