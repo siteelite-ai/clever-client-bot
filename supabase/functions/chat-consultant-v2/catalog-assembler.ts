@@ -41,6 +41,44 @@ import { priceBranch } from "./s-price.ts";
 import type { ApiClientDeps, RawOption } from "./catalog/api-client.ts";
 import { getCategoryOptions } from "./catalog/api-client.ts";
 import type { SearchOutcome, SearchStatus } from "./catalog/search.ts";
+
+// ─── F.5.8: defense-in-depth для disallowCrosssell ──────────────────────────
+//
+// Контракт (§5.4.1 + §11.5b + Core memory «Cross-sell NOT shown for similar»):
+//
+//   Cross-sell разрешён ТОЛЬКО когда у пользователя на руках валидная выдача
+//   с товарами (scenario='normal' в композере). Любой другой исход —
+//   уточнение, escalation, soft_404, soft_fallback, infrastructure failure —
+//   запрет cross-sell.
+//
+//   Composer применяет ту же логику OR на своём уровне (`scenarioDisallowed =
+//   scenario !== 'normal'`). F.5.8 добавляет ВТОРОЙ слой защиты в assembler:
+//   запрет проставляется ЯВНО на основании финального статуса outcome'а,
+//   независимо от того, как composer ИНТЕРПРЕТИРУЕТ scenario. Это страхует
+//   от регрессий decideScenario и от добавления новых веток с дефолтом
+//   `disallowCrosssell=false`.
+//
+//   Helper'ы — pure functions, тестируются отдельно.
+
+/**
+ * Запрет cross-sell для S_PRICE: разрешён ТОЛЬКО когда branch ∈ {'show_all','show_top'},
+ * т.е. когда есть готовая отсортированная выдача товаров. Все остальные ветки
+ * (clarify, error, all_zero_price, empty, out_of_domain) — запрет.
+ */
+export function shouldDisallowCrosssellForPrice(outcome: SPriceOutcome): boolean {
+  return !(outcome.status === "ok" &&
+    (outcome.branch === "show_all" || outcome.branch === "show_top"));
+}
+
+/**
+ * Запрет cross-sell для S_CATALOG (search): разрешён ТОЛЬКО при status='ok'
+ * с непустыми товарами. soft_fallback тоже запрещён (§4.8: уточнение, не
+ * место для cross-sell). Согласовано с composer'ом (см. §5.4.1).
+ */
+export function shouldDisallowCrosssellForSearch(outcome: SearchOutcome): boolean {
+  if (outcome.status !== "ok") return true;
+  return outcome.products.length === 0;
+}
 import type { SSimilarDeps, SSimilarOutcome } from "./s-similar/index.ts";
 import { runSimilarBranch } from "./s-similar/index.ts";
 
