@@ -27,6 +27,7 @@ import { createProductionExpansionDeps } from "./query-expansion.ts";
 import type { ExpansionDeps } from "./query-expansion.ts";
 import { createProductionFacetMatcherDeps } from "./catalog/facet-matcher.ts";
 import type { FacetMatcherDeps } from "./catalog/facet-matcher.ts";
+import type { FacetMatcherLLMDeps } from "./catalog/facet-matcher-llm.ts";
 import type { SSearchDeps } from "./s-search.ts";
 import type { SPriceDeps } from "./s-price.ts";
 import type { SSimilarDeps } from "./s-similar/index.ts";
@@ -207,6 +208,8 @@ export interface CatalogProductionDeps {
   resolver: ResolverDeps;
   expansion: ExpansionDeps;
   facets: FacetMatcherDeps;
+  /** §9.3 LLM Facet Matcher (опциональный). Если undefined — используется только детерминированный matcher. */
+  facetsLLM?: FacetMatcherLLMDeps;
   search: SSearchDeps;
   price: SPriceDeps;
   similar: SSimilarDeps;
@@ -250,6 +253,22 @@ export function createCatalogProductionDeps(
     facetsTtlSec: TTL.facets,
   });
 
+  // §9.3 LLM Facet Matcher — production deps. Использует тот же кэш facets:<pagetitle>
+  // и OpenRouter (Gemini Flash) для маппинга трейтов на schema.values[].
+  const facetsLLM: FacetMatcherLLMDeps = {
+    apiClient,
+    cacheGetOrCompute: <T>(
+      namespace: string,
+      rawKey: string,
+      ttlSec: number,
+      compute: () => Promise<T>,
+    ) => getOrCompute(namespace, rawKey, ttlSec, compute),
+    facetsTtlSec: TTL.facets,
+    callLLM: (params) => facetMatcherCallLLM(params, cfg.openRouterKey, resolverModel),
+    llmMaxRetries: 1, // §28: retry 1 раз
+    log: (event, data) => log(`facet_matcher_llm.${event}`, data),
+  };
+
   const search: SSearchDeps = {
     apiClient,
     log: (event, data) => log(`s_search.${event}`, data),
@@ -270,7 +289,51 @@ export function createCatalogProductionDeps(
 
   const composer = createCatalogComposerDeps(cfg.openRouterKey);
 
-  return { apiClient, resolver, expansion, facets, search, price, similar, composer };
+  return { apiClient, resolver, expansion, facets, facetsLLM, search, price, similar, composer };
+}
+
+// ─── Facet Matcher LLM call (OpenRouter, Gemini Flash) ──────────────────────
+//
+// §9.3 + Core Memory: только OpenRouter / Gemini, никаких прямых Google.
+// Возвращаем сырой text — парсинг JSON в matchFacetsWithLLM.parseLLMResponse.
+async function facetMatcherCallLLM(
+  params: { systemPrompt: string; userMessage: string; purpose: string },
+  openRouterKey: string,
+  model: string,
+): Promise<{ text: string; model: string }> {
+  const res = await fetch(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${openRouterKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://chat-volt.testdevops.ru",
+        "X-Title": "220volt-chat-consultant-v2-facet-matcher",
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        max_tokens: 1500,
+        messages: [
+          { role: "system", content: params.systemPrompt },
+          { role: "user", content: params.userMessage },
+        ],
+      }),
+      signal: AbortSignal.timeout(RESOLVER_HTTP_TIMEOUT_MS),
+    },
+  );
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`facet-matcher LLM HTTP ${res.status}: ${errText.slice(0, 200)}`);
+  }
+  // deno-lint-ignore no-explicit-any
+  const json: any = await res.json();
+  const text = json?.choices?.[0]?.message?.content;
+  if (typeof text !== "string") {
+    throw new Error("facet-matcher LLM: empty content");
+  }
+  return { text, model: json?.model ?? model };
 }
 
 // ─── s-similar LLM call (OpenRouter, tool calling) ──────────────────────────
