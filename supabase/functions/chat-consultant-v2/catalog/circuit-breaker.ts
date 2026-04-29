@@ -196,7 +196,7 @@ export class CircuitBreaker {
    */
   recordSuccess(): void {
     if (this.state === 'HALF_OPEN') {
-      this.state = 'CLOSED';
+      this.transitionTo('CLOSED', this.nowFn());
       this.failureTimestamps = [];
       this.inFlightProbes = 0;
       this.openedAt = null;
