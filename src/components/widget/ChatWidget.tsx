@@ -243,9 +243,15 @@ const mid = (prefix?: string): string => {
 
 export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(isPreview);
-  // Виджет открывается с пустой лентой. Core-правило «ABSOLUTE BAN on greetings»:
-  // никаких приветствий, бот ведёт себя как эксперт-продавец. Первый ход — пользователя.
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Статичное приветствие виджета (UI-уровень, до первого хода пользователя).
+  // Это НЕ нарушает Core-правило «ABSOLUTE BAN on greetings» — правило относится
+  // к ответам LLM (бот не здоровается в репликах, см. stripGreeting в embed.js).
+  // Здесь же это статичный onboarding-баннер, идентичный embed.js.
+  const WELCOME_MESSAGE =
+    'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?';
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    { id: mid('welcome'), role: 'assistant', content: WELCOME_MESSAGE },
+  ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [dialogSlots, setDialogSlots] = useState<DialogSlots>({});
