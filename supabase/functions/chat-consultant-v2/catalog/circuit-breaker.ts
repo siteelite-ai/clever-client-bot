@@ -162,16 +162,20 @@ export class CircuitBreaker {
     if (this.state === 'OPEN') {
       // Истёк OPEN-период → переход в HALF_OPEN.
       if (this.openedAt !== null && now - this.openedAt >= this.config.openDurationMs) {
-        this.state = 'HALF_OPEN';
+        this.transitionTo('HALF_OPEN', now);
         this.openedAt = null;
         this.inFlightProbes = 0;
       } else {
+        this.upstreamUnavailableCount++;
         return false;
       }
     }
 
     if (this.state === 'HALF_OPEN') {
-      if (this.inFlightProbes >= this.config.halfOpenMaxProbes) return false;
+      if (this.inFlightProbes >= this.config.halfOpenMaxProbes) {
+        this.upstreamUnavailableCount++;
+        return false;
+      }
       this.inFlightProbes++;
       return true;
     }
