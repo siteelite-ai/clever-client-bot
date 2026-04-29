@@ -433,7 +433,11 @@ export async function searchProducts(
 
   const data = raw?.data ?? raw;
   const results: RawProduct[] = Array.isArray(data?.results) ? data.results : [];
-  const totalFromApi: number = Number(data?.total ?? results.length) || 0;
+  // FIX: Catalog API возвращает total в data.pagination.total (см. swagger.json
+  // PaginatedProductsResponse). Старое чтение `data.total` всегда давало undefined →
+  // fallback на results.length, что ломало пагинацию (totalPages всегда = 1).
+  const totalFromApi: number =
+    Number(data?.pagination?.total ?? data?.total ?? results.length) || 0;
 
   // ── HARD BAN price=0 (core memory). Двойной фильтр. ────────────────────
   const priced = results.filter((p) => typeof p?.price === 'number' && p.price > 0);
@@ -468,7 +472,7 @@ export async function searchProducts(
         try {
           const recRaw = await rec.res.json();
           const recData = recRaw?.data ?? recRaw;
-          const recCount = Number(recData?.total ?? (Array.isArray(recData?.results) ? recData.results.length : 0)) || 0;
+          const recCount = Number(recData?.pagination?.total ?? recData?.total ?? (Array.isArray(recData?.results) ? recData.results.length : 0)) || 0;
           if (recCount > 0) {
             return {
               status: 'empty_degraded',

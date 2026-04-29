@@ -431,7 +431,10 @@ function toApiInput(
 ): SearchProductsInput {
   return {
     query: input.query,
-    pagetitle: input.category,
+    // FIX: Catalog API распознаёт категорию через ?category=<title>.
+    // Параметр ?pagetitle= ищет EXACT match по названию ПРОДУКТА (см. swagger.json).
+    // Раньше передавалось в pagetitle → API возвращал total=0 для любых категорий.
+    category: input.category,
     article: input.article,
     minPrice: input.minPrice,
     maxPrice: input.maxPrice,
