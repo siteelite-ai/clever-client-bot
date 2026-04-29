@@ -4653,23 +4653,32 @@ serve(async (req) => {
         console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → intent=${classification?.intent || 'none'}, has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}", is_replacement=${classification?.is_replacement || false}`);
 
         // === TITLE-FIRST FAST-PATH (mirrors article-first) ===
-        // If classifier returned a model-like product_name (digits/latin present),
-        // try a single Catalog API hop with ?pagetitle=… and skip the heavy
+        // If the Micro-LLM classifier extracted a strong product name (model-like:
+        // contains digits or latin letters such as "A60", "LED", "9W", "E27"),
+        // run a single Catalog API hop with ?query=… BEFORE entering the heavy
         // slot/category/strict-search pipeline. Same Flash-model short-circuit
-        // semantics as article-first; reuses the existing articleShortCircuit
-        // flag so all downstream branches treat the result identically.
-        const titleCandidate = extractCandidateTitle(classification);
-        if (titleCandidate) {
-          console.log(`[Chat] Title-first: candidate="${titleCandidate}", searching directly...`);
-          const titleResults = await searchByPagetitle(titleCandidate, appSettings.volt220_api_token);
-          if (titleResults.length > 0) {
-            foundProducts = titleResults;
-            articleShortCircuit = true;
-            responseModel = 'google/gemini-2.5-flash';
-            responseModelReason = 'title-shortcircuit';
-            console.log(`[Chat] Title-first SUCCESS: found ${titleResults.length} product(s) for "${titleCandidate}", skipping slot/category pipeline`);
-          } else {
-            console.log(`[Chat] Title-first: no results for "${titleCandidate}", falling back to normal pipeline`);
+        // semantics as article-first; reuses articleShortCircuit so all downstream
+        // branches treat the result identically. Skipped for replacement intent —
+        // that pipeline needs the original product's traits, not the product itself.
+        if (!articleShortCircuit && classification?.has_product_name && !classification?.is_replacement) {
+          const titleCandidate = extractCandidateTitle(classification);
+          if (titleCandidate) {
+            const tStart = Date.now();
+            const titleResults = await searchProductsByCandidate(
+              { query: titleCandidate, brand: null, category: null, min_price: null, max_price: null },
+              appSettings.volt220_api_token,
+              15
+            );
+            const tElapsed = Date.now() - tStart;
+            if (titleResults.length > 0) {
+              foundProducts = titleResults.slice(0, 10);
+              articleShortCircuit = true;
+              responseModel = 'google/gemini-2.5-flash';
+              responseModelReason = 'title-shortcircuit';
+              console.log(`[Chat] Title-first FAST-PATH SUCCESS: ${foundProducts.length} products in ${tElapsed}ms for "${titleCandidate}", skipping slot/category pipeline`);
+            } else {
+              console.log(`[Chat] Title-first FAST-PATH: 0 results in ${tElapsed}ms for "${titleCandidate}", continuing pipeline`);
+            }
           }
         }
 
