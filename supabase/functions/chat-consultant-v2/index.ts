@@ -62,6 +62,7 @@ import {
   loadCatalogAppSettings,
 } from "./catalog-deps-factory.ts";
 import { composeCatalogAnswer } from "./s-catalog-composer.ts";
+import { computeNextAnchor } from "./anchor-tracker.ts";
 import { DEFAULT_SLOT_STATE } from "./types.ts";
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
