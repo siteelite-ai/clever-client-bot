@@ -314,8 +314,10 @@ Deno.test("G1 price-intent-clarify-001: total=705 → clarify slot, disallowCros
   assertEquals(result.disallowCrosssell, true);
 
   // Trace: все стадии присутствуют в правильном порядке.
+  // §4.10: добавилась стадия parallel_probe между category_resolver и facet_matcher
+  // (запускается параллельно с query_expansion, но в trace push после await).
   const stageOrder = result.trace.stages.map((s) => s.stage);
-  assertEquals(stageOrder, ["category_resolver", "query_expansion", "facet_matcher", "s_price"]);
+  assertEquals(stageOrder, ["category_resolver", "query_expansion", "parallel_probe", "facet_matcher", "s_price"]);
   assertEquals(result.trace.flavor, "price");
 });
 
@@ -387,9 +389,10 @@ Deno.test("G2 price-intent-ok-001: total=5 cheapest → show_all ASC, disallowCr
   // §11.5b: show_all → cross-sell разрешён (assembler не запрещает)
   assertEquals(result.disallowCrosssell, false);
 
-  // probe-then-fetch: ровно 1 probe + 1 full fetch (без дублирования)
+  // §4.10 probe-then-fetch + parallel-probe: 1 probe (s-price) + 1 full fetch
+  // + 1 parallel-probe (per_page=N_PROBE для bootstrap §4.10.1) = 2 fullCalls.
   assertEquals(probeCalls, 1);
-  assertEquals(fullCalls, 1);
+  assertEquals(fullCalls, 2);
 });
 
 // ─── Invariants (защита от регрессий core memory) ───────────────────────────
@@ -424,5 +427,12 @@ Deno.test("INV: assembler НИКОГДА не сужает funnel сам (clarif
     deps,
   );
   const productCalls = m.calls.filter((c) => c.path.endsWith("/products"));
-  assertEquals(productCalls.length, 1, "clarify-ветка должна делать ровно 1 probe-вызов");
+  // §4.10: 1 probe (s-price per_page=1) + 1 parallel-probe (per_page=N_PROBE
+  // для bootstrap-фасетов). Оба БЕЗ optionFilters в URL — проверка
+  // "не самосужает funnel" сохраняется ниже.
+  assertEquals(productCalls.length, 2, "clarify-ветка: 1 probe + 1 parallel-probe");
+  for (const c of productCalls) {
+    assert(!c.url.includes("options%5B") && !c.url.includes("options["),
+      `assembler не должен инжектить optionFilters в probe (${c.url})`);
+  }
 });

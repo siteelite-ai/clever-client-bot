@@ -33,7 +33,19 @@ export type FacetMatchStatus =
   | 'ok'                    // ≥1 модификатор замэтчился, optionFilters непуст
   | 'no_matches'            // facets есть, но ни один modifier не совпал
   | 'no_facets'             // /categories/options вернул пустой список (ok-empty)
-  | 'category_unavailable'; // API: timeout/network_error/http_error
+  | 'category_unavailable'; // API: timeout/network_error/http_error И bootstrap не дал результата
+
+/**
+ * Источник схемы фасетов:
+ *   • 'live'      — свежий ответ /categories/options
+ *   • 'cache'     — HOT-кэш (§6.3)
+ *   • 'stale'     — STALE-кэш отдан при transport-failure (§4.11)
+ *   • 'bootstrap' — собрано из per-item Product.options[] probe-ответа (§4.10.1).
+ *                   Counts реконструированы по частоте (ограничены N_PROBE) →
+ *                   НЕ годятся для price_clarify slot.
+ *   • 'unavailable' — не удалось получить ни одним способом.
+ */
+export type FacetSource = 'cache' | 'live' | 'stale' | 'bootstrap' | 'unavailable';
 
 export interface FacetMatchResult {
   status: FacetMatchStatus;
@@ -48,7 +60,7 @@ export interface FacetMatchResult {
   /** Какие — нет (для Soft Fallback / диагностики). */
   unmatchedModifiers: string[];
   /** Откуда пришёл результат facets-вызова. */
-  source: 'cache' | 'live' | 'unavailable';
+  source: FacetSource;
   ms: number;
 }
 
@@ -204,6 +216,19 @@ export async function matchFacets(
   pagetitle: string,
   modifiers: string[],
   deps: FacetMatcherDeps,
+  /**
+   * §4.10.1 Self-Bootstrap Facets fallback. Если /categories/options вернул
+   * transport-failure (timeout/5xx/network/breaker) И bootstrapOptions непуст —
+   * матчинг идёт по bootstrapOptions, source='bootstrap'. Это спасает запрос
+   * от status='category_unavailable' (полная потеря фасет-словаря).
+   *
+   * Передаётся вызывающим (catalog-assembler), который собирает options из
+   * параллельного probe-запроса через extractFacetSchemaFromProducts.
+   *
+   * НЕ участвует в price_clarify slot (см. §4.10.1) — counts реконструированы
+   * из частоты в N_PROBE и статистически некорректны для UX-clarify.
+   */
+  bootstrapOptions?: RawOption[],
 ): Promise<FacetMatchResult> {
   const t0 = Date.now();
   const ttl = deps.facetsTtlSec ?? 3600;
@@ -233,64 +258,92 @@ export async function matchFacets(
   }
 
   // ── 2. Обработка статуса API. ───────────────────────────────────────────
-  if (
+  // §4.10.1: при transport-failure пробуем bootstrap (per-item options из probe).
+  // Если bootstrap пуст — отдаём 'category_unavailable' как раньше.
+  let optionsForMatch: RawOption[] = facetsResult.options ?? [];
+  let effectiveSource: FacetSource = source;
+  const isTransportFailure =
     facetsResult.status === 'http_error' ||
     facetsResult.status === 'timeout' ||
     facetsResult.status === 'network_error' ||
-    facetsResult.status === 'upstream_unavailable'
-  ) {
-    const result: FacetMatchResult = {
-      status: 'category_unavailable',
-      optionFilters: {},
-      optionAliases: {},
-      facetCaptions: {},
-      matchedModifiers: [],
-      unmatchedModifiers: modifiers.filter((m) => typeof m === 'string' && m.trim().length > 0),
-      source: 'unavailable',
-      ms: Date.now() - t0,
-    };
-    console.info(`[v2.catalog.facet_matcher.result] ${JSON.stringify({
-      pagetitle,
-      status: result.status,
-      source: result.source,
-      api_status: facetsResult.status,
-      api_error: facetsResult.errorMessage ?? null,
-      options_count: 0,
-      totalProducts: facetsResult.totalProducts ?? 0,
-      matchedModifiers: result.matchedModifiers,
-      unmatchedModifiers: result.unmatchedModifiers,
-      ms: result.ms,
-    })}`);
-    return result;
+    facetsResult.status === 'upstream_unavailable';
+
+  if (isTransportFailure) {
+    if (bootstrapOptions && bootstrapOptions.length > 0) {
+      optionsForMatch = bootstrapOptions;
+      effectiveSource = 'bootstrap';
+      console.info(`[v2.catalog.facet_matcher.bootstrap_used] ${JSON.stringify({
+        pagetitle,
+        api_status: facetsResult.status,
+        bootstrap_options_count: bootstrapOptions.length,
+      })}`);
+    } else {
+      const result: FacetMatchResult = {
+        status: 'category_unavailable',
+        optionFilters: {},
+        optionAliases: {},
+        facetCaptions: {},
+        matchedModifiers: [],
+        unmatchedModifiers: modifiers.filter((m) => typeof m === 'string' && m.trim().length > 0),
+        source: 'unavailable',
+        ms: Date.now() - t0,
+      };
+      console.info(`[v2.catalog.facet_matcher.result] ${JSON.stringify({
+        pagetitle,
+        status: result.status,
+        source: result.source,
+        api_status: facetsResult.status,
+        api_error: facetsResult.errorMessage ?? null,
+        options_count: 0,
+        totalProducts: facetsResult.totalProducts ?? 0,
+        matchedModifiers: result.matchedModifiers,
+        unmatchedModifiers: result.unmatchedModifiers,
+        bootstrap_attempted: bootstrapOptions !== undefined,
+        ms: result.ms,
+      })}`);
+      return result;
+    }
   }
 
-  if (facetsResult.status === 'empty' || facetsResult.options.length === 0) {
-    const result: FacetMatchResult = {
-      status: 'no_facets',
-      optionFilters: {},
-      optionAliases: {},
-      facetCaptions: {},
-      matchedModifiers: [],
-      unmatchedModifiers: modifiers.filter((m) => typeof m === 'string' && m.trim().length > 0),
-      source,
-      ms: Date.now() - t0,
-    };
-    console.info(`[v2.catalog.facet_matcher.result] ${JSON.stringify({
-      pagetitle,
-      status: result.status,
-      source: result.source,
-      api_status: facetsResult.status,
-      options_count: facetsResult.options.length,
-      totalProducts: facetsResult.totalProducts ?? 0,
-      matchedModifiers: result.matchedModifiers,
-      unmatchedModifiers: result.unmatchedModifiers,
-      ms: result.ms,
-    })}`);
-    return result;
+  // §4.10.1: при empty live-ответе тоже пробуем bootstrap.
+  if (!isTransportFailure && (facetsResult.status === 'empty' || facetsResult.options.length === 0)) {
+    if (bootstrapOptions && bootstrapOptions.length > 0) {
+      optionsForMatch = bootstrapOptions;
+      effectiveSource = 'bootstrap';
+      console.info(`[v2.catalog.facet_matcher.bootstrap_used] ${JSON.stringify({
+        pagetitle,
+        api_status: facetsResult.status,
+        bootstrap_options_count: bootstrapOptions.length,
+        reason: 'empty_live',
+      })}`);
+    } else {
+      const result: FacetMatchResult = {
+        status: 'no_facets',
+        optionFilters: {},
+        optionAliases: {},
+        facetCaptions: {},
+        matchedModifiers: [],
+        unmatchedModifiers: modifiers.filter((m) => typeof m === 'string' && m.trim().length > 0),
+        source: effectiveSource,
+        ms: Date.now() - t0,
+      };
+      console.info(`[v2.catalog.facet_matcher.result] ${JSON.stringify({
+        pagetitle,
+        status: result.status,
+        source: result.source,
+        api_status: facetsResult.status,
+        options_count: facetsResult.options.length,
+        totalProducts: facetsResult.totalProducts ?? 0,
+        matchedModifiers: result.matchedModifiers,
+        unmatchedModifiers: result.unmatchedModifiers,
+        ms: result.ms,
+      })}`);
+      return result;
+    }
   }
 
   // ── 3. Alias collapse. ─────────────────────────────────────────────────
-  const groups = collapseOptions(facetsResult.options);
+  const groups = collapseOptions(optionsForMatch);
 
   // ── 4. Матчинг модификаторов. ───────────────────────────────────────────
   const optionFilters: Record<string, string[]> = {};
@@ -318,8 +371,6 @@ export async function matchFacets(
       if (!optionFilters[g.canonicalKey].includes(original)) {
         optionFilters[g.canonicalKey].push(original);
       }
-      // Один модификатор может матчиться в разных опциях (редко) — допускаем
-      // мультифасетное применение, это безопасно для searchProducts.
     }
 
     if (hit) matched.push(rawMod);
@@ -334,7 +385,7 @@ export async function matchFacets(
     facetCaptions,
     matchedModifiers: matched,
     unmatchedModifiers: unmatched,
-    source,
+    source: effectiveSource,
     ms: Date.now() - t0,
   };
 

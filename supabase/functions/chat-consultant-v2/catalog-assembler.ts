@@ -40,9 +40,10 @@ import type { SSearchDeps, SSearchOutcome } from "./s-search.ts";
 import { runSearch } from "./s-search.ts";
 import type { SPriceDeps, SPriceOutcome } from "./s-price.ts";
 import { priceBranch } from "./s-price.ts";
-import type { ApiClientDeps, RawOption } from "./catalog/api-client.ts";
-import { getCategoryOptions } from "./catalog/api-client.ts";
+import type { ApiClientDeps, RawOption, RawProduct } from "./catalog/api-client.ts";
+import { getCategoryOptions, searchProducts, extractFacetSchemaFromProducts } from "./catalog/api-client.ts";
 import type { SearchOutcome, SearchStatus } from "./catalog/search.ts";
+import { N_PROBE } from "./config.ts";
 
 // ─── F.5.8: defense-in-depth для disallowCrosssell ──────────────────────────
 //
@@ -166,6 +167,7 @@ function adaptSSimilarToSearchOutcome(s: SSimilarOutcome): SearchOutcome {
 export type AssemblerStage =
   | "ood_shortcut"
   | "category_resolver"
+  | "parallel_probe"
   | "query_expansion"
   | "facet_matcher"
   | "s_search"
@@ -453,7 +455,41 @@ export async function assembleCatalog(
     meta: { status: resolver.status, pagetitle: resolver.pagetitle, confidence: resolver.confidence },
   });
 
-  // ── 3. Query Expansion ────────────────────────────────────────────────────
+  // ── 3. §4.10 Parallel Probe (kick-off, awaited перед Facet Matcher) ──────
+  // Запускаем probe-запрос /products?per_page=N_PROBE параллельно с Query
+  // Expansion. Результат нужен ТОЛЬКО как Self-Bootstrap fallback для Facet
+  // Matcher (§4.10.1) — на случай транспортного сбоя /categories/options.
+  //
+  // Probe идёт category-only (+ price из intent.price_range, если задан) —
+  // НЕ инжектим unmatchedModifiers в query (§4.10.2 sanitization).
+  // Если pagetitle пуст — probe пропускаем (нечего запрашивать).
+  const tProbe0 = now();
+  const probePromise: Promise<RawProduct[]> = (async () => {
+    if (!resolver.pagetitle) return [];
+    try {
+      const minP = input.intent.price_intent === "range"
+        ? (input.intent.price_range?.min as number | undefined)
+        : undefined;
+      const maxP = input.intent.price_intent === "range"
+        ? (input.intent.price_range?.max as number | undefined)
+        : undefined;
+      const probe = await searchProducts(
+        {
+          category: resolver.pagetitle,
+          perPage: N_PROBE,
+          minPrice: typeof minP === "number" ? minP : undefined,
+          maxPrice: typeof maxP === "number" ? maxP : undefined,
+        },
+        deps.apiClient,
+      );
+      return probe.status === "ok" ? probe.products : [];
+    } catch (e) {
+      log("assembler.probe_failed", { msg: e instanceof Error ? e.message : String(e) });
+      return [];
+    }
+  })();
+
+  // ── 4. Query Expansion ────────────────────────────────────────────────────
   // §9.2b §3: вместо сырой реплики передаём извлечённые Intent-LLM трейты
   // (`search_modifiers ∪ critical_modifiers`). Это `extractRuTokens` из
   // спеки — отбрасываем шумовые слова реплики («найди», «подскажи» и т.п.),
@@ -511,9 +547,29 @@ export async function assembleCatalog(
   let llmFacetUnresolvedCount = 0;
   let llmFacetSoftMatchesCount = 0;
   let llmFacetResolvedCount = 0;
+  let bootstrapUsed = false;
+  let probeProductsCount = 0;
 
   if (resolver.pagetitle) {
     const modifiers = collectModifiers(input.intent);
+
+    // §4.10.1: дожидаемся probe и собираем bootstrap-схему фасетов из
+    // per-item Product.options[]. Это fallback на случай transport-failure
+    // /categories/options. Если probe пуст — bootstrap=[] и matchFacets
+    // вернёт 'category_unavailable' как раньше.
+    const probeProducts = await probePromise;
+    probeProductsCount = probeProducts.length;
+    const bootstrapOptions: RawOption[] = probeProducts.length > 0
+      ? extractFacetSchemaFromProducts(probeProducts)
+      : [];
+    trace.stages.push({
+      stage: "parallel_probe",
+      ms: now() - tProbe0,
+      meta: {
+        probe_products: probeProductsCount,
+        bootstrap_options: bootstrapOptions.length,
+      },
+    });
 
     // §9.3 канонический путь: LLM Facet Matcher.
     let llmResult: Awaited<ReturnType<typeof matchFacetsWithLLM>> | null = null;
@@ -540,7 +596,8 @@ export async function assembleCatalog(
     }
 
     // Если LLM сработал успешно (mode='ok') — используем его результат как
-    // источник optionFilters. Иначе degrade на детерминированный matcher.
+    // источник optionFilters. Иначе degrade на детерминированный matcher
+    // (с bootstrap-fallback §4.10.1).
     if (llmResult && llmResult.mode === "ok") {
       const matchedTraits = [
         ...llmResult.resolved.map((r) => r.trait),
@@ -559,10 +616,15 @@ export async function assembleCatalog(
       };
     } else {
       // Degrade-путь: либо LLM-deps нет, либо mode='llm_failed'/'no_facets'/'no_traits'/'category_unavailable'/'exception'.
-      // Детерминированный matcher даёт baseline (exact-match), не нарушая §9.3
-      // (не «выдумывает значения», а просто проверяет точное равенство).
+      // Передаём bootstrapOptions — если /categories/options вернёт transport-failure,
+      // matchFacets продолжит работать на bootstrap-схеме (source='bootstrap').
       try {
-        facetMatch = await matchFacets(resolver.pagetitle, modifiers, deps.facets);
+        facetMatch = await matchFacets(
+          resolver.pagetitle,
+          modifiers,
+          deps.facets,
+          bootstrapOptions.length > 0 ? bootstrapOptions : undefined,
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         trace.errors.push({ stage: "facet_matcher", message: msg });
@@ -578,15 +640,21 @@ export async function assembleCatalog(
         };
       }
     }
+    bootstrapUsed = facetMatch.source === "bootstrap";
 
     // Для S_PRICE composer-clarify нужны RawOption[] — берём прямой вызов
     // (через тот же кэш facets:<pagetitle> результат, в идеале — но
     // matchFacets его уже прогрел). Делаем отдельный getCategoryOptions
     // только если route=S_PRICE и facetMatch не отдал нам options.
+    //
+    // §4.10.1: bootstrap-counts НЕ годятся для price_clarify (counts
+    // ограничены N_PROBE → статистически некорректны). Если facets живой
+    // схемы недоступны И bootstrap использован → facetOptions остаётся пуст,
+    // composer уйдёт в S-CATALOG без clarify (см. spec).
     if (input.route === "S_PRICE") {
       try {
         const opts = await getCategoryOptions(resolver.pagetitle, deps.apiClient);
-        facetOptions = opts.options ?? [];
+        facetOptions = opts.status === "ok" ? (opts.options ?? []) : [];
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         log("assembler.facet_options_fetch_failed", { msg });
@@ -611,6 +679,9 @@ export async function assembleCatalog(
       status: facetMatch.status,
       filters_count: Object.keys(facetMatch.optionFilters).length,
       facetOptions_count: facetOptions.length,
+      facets_source: facetMatch.source,
+      bootstrap_used: bootstrapUsed,
+      probe_products: probeProductsCount,
       llm_mode: llmFacetMode,
       llm_ms: llmFacetMs,
       llm_resolved: llmFacetResolvedCount,
@@ -618,6 +689,25 @@ export async function assembleCatalog(
       llm_unresolved: llmFacetUnresolvedCount,
     },
   });
+
+  // ── §4.10.2 Sanitization ─────────────────────────────────────────────────
+  // Если фасет-схема недоступна (category_unavailable) И bootstrap не спас —
+  // НЕ инжектим unmatchedModifiers в ?query=. Strict-search идёт category-only
+  // (+price из intent.price_range, если есть). Это защищает от каскадного zero-result
+  // при сбоях /categories/options. Defect `auto_query_pollution_total`=0.
+  if (facetMatch.status === "category_unavailable" && resolver.pagetitle) {
+    const sanitizedExpansion: ExpansionResult = {
+      attempts: [{ form: "as_is_ru", text: resolver.pagetitle }],
+      skipped: expansion.skipped,
+      ms: expansion.ms,
+    };
+    log("assembler.sanitize_query_on_category_unavailable", {
+      pagetitle: resolver.pagetitle,
+      original_attempts: expansion.attempts.length,
+      dropped_traits: expansionTraits,
+    });
+    expansion = sanitizedExpansion;
+  }
 
   // ── 5a. PRICE branch (§4.4) ───────────────────────────────────────────────
   if (input.route === "S_PRICE") {

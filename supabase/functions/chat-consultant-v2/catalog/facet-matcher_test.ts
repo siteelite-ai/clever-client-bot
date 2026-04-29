@@ -11,6 +11,7 @@ import type {
   CategoryOptionsResult,
   RawOption,
 } from './api-client.ts';
+import { __resetCatalogBreakerForTests } from './circuit-breaker.ts';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -297,3 +298,114 @@ Deno.test('Test 12: пунктуация в модификаторе норма�
 // а не детерминированного exact-matcher'а. Удерживать здесь «защитную»
 // нормализацию противоречит §0 (data-agnostic) и §9.3 (LLM-only morphology).
 
+
+// ─── §4.10.1 Self-Bootstrap Facets ──────────────────────────────────────────
+
+function stubApiClientFailing(status: 'http_error' | 'timeout' | 'network_error', fetchCounter: { n: number }): ApiClientDeps {
+  const fakeFetch: typeof fetch = async (_url, _init) => {
+    fetchCounter.n++;
+    if (status === 'http_error') return new Response('boom', { status: 500 });
+    if (status === 'timeout') {
+      throw new DOMException('timeout', 'AbortError');
+    }
+    throw new TypeError('network down');
+  };
+  return {
+    baseUrl: 'https://test.local/api',
+    apiToken: 't',
+    fetch: fakeFetch,
+    timeoutMs: { products: 50, categoryOptions: 50 },
+  };
+}
+
+Deno.test('Bootstrap: transport-failure + bootstrapOptions → match с source=bootstrap', async () => {
+  __resetCatalogBreakerForTests();
+  const fc = { n: 0 };
+  const cache = makeCacheStub();
+  const bootstrap: RawOption[] = [
+    { key: 'vendor', caption_ru: 'Бренд', values: [{ value_ru: 'Acme', count: 3 }] },
+  ];
+  const r = await matchFacets(
+    'cat',
+    ['acme'],
+    { apiClient: stubApiClientFailing('http_error', fc), cacheGetOrCompute: cache.cacheGetOrCompute },
+    bootstrap,
+  );
+  assertEquals(r.status, 'ok');
+  assertEquals(r.source, 'bootstrap');
+  assertEquals(r.optionFilters, { vendor: ['Acme'] });
+  assertEquals(r.matchedModifiers, ['acme']);
+});
+
+Deno.test('Bootstrap: transport-failure БЕЗ bootstrapOptions → category_unavailable', async () => {
+  __resetCatalogBreakerForTests();
+  const fc = { n: 0 };
+  const cache = makeCacheStub();
+  const r = await matchFacets(
+    'cat',
+    ['acme'],
+    { apiClient: stubApiClientFailing('timeout', fc), cacheGetOrCompute: cache.cacheGetOrCompute },
+    // bootstrap omitted
+  );
+  assertEquals(r.status, 'category_unavailable');
+  assertEquals(r.source, 'unavailable');
+  assertEquals(r.optionFilters, {});
+  assertEquals(r.unmatchedModifiers, ['acme']);
+});
+
+Deno.test('Bootstrap: transport-failure + ПУСТОЙ bootstrapOptions → category_unavailable', async () => {
+  __resetCatalogBreakerForTests();
+  const fc = { n: 0 };
+  const cache = makeCacheStub();
+  const r = await matchFacets(
+    'cat',
+    ['acme'],
+    { apiClient: stubApiClientFailing('network_error', fc), cacheGetOrCompute: cache.cacheGetOrCompute },
+    [],
+  );
+  assertEquals(r.status, 'category_unavailable');
+  assertEquals(r.source, 'unavailable');
+});
+
+Deno.test('Bootstrap: live OK игнорирует bootstrapOptions (не подменяет рабочую схему)', async () => {
+  __resetCatalogBreakerForTests();
+  const live = makeOptions([
+    { key: 'color', caption_ru: 'Цвет', values: [{ value_ru: 'Красный' }] },
+  ]);
+  const fc = { n: 0 };
+  const cache = makeCacheStub();
+  const bootstrap: RawOption[] = [
+    { key: 'vendor', caption_ru: 'Бренд', values: [{ value_ru: 'Acme', count: 3 }] },
+  ];
+  const r = await matchFacets(
+    'cat',
+    ['красный', 'acme'],
+    { apiClient: stubApiClient(live, fc), cacheGetOrCompute: cache.cacheGetOrCompute },
+    bootstrap,
+  );
+  assertEquals(r.status, 'ok');
+  assertEquals(r.source, 'live');
+  // 'acme' НЕ матчится (его нет в live), 'красный' матчится
+  assertEquals(r.optionFilters, { color: ['Красный'] });
+  assertEquals(r.matchedModifiers, ['красный']);
+  assertEquals(r.unmatchedModifiers, ['acme']);
+});
+
+Deno.test('Bootstrap: empty live + bootstrapOptions → bootstrap путь работает', async () => {
+  __resetCatalogBreakerForTests();
+  const empty: CategoryOptionsResult = { status: 'empty', options: [], totalProducts: 0, ms: 1 };
+  const fc = { n: 0 };
+  const cache = makeCacheStub();
+  const bootstrap: RawOption[] = [
+    { key: 'vendor', caption_ru: 'Бренд', values: [{ value_ru: 'Acme', count: 5 }] },
+  ];
+  const r = await matchFacets(
+    'cat',
+    ['acme'],
+    { apiClient: stubApiClient(empty, fc), cacheGetOrCompute: cache.cacheGetOrCompute },
+    bootstrap,
+  );
+  assertEquals(r.status, 'ok');
+  assertEquals(r.source, 'bootstrap');
+  assertEquals(r.optionFilters, { vendor: ['Acme'] });
+});
