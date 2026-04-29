@@ -564,3 +564,115 @@ export function createProductionApiClientDeps(args: {
     apiToken: args.apiToken,
   };
 }
+
+// ─── §4.10.1 Self-Bootstrap Facets ──────────────────────────────────────────
+//
+// Чистый helper: агрегирует per-item `Product.options[]` из probe-ответа
+// в `RawOption[]` — структуру, совместимую с CategoryOptionsResult.options.
+//
+// Контракт (mem://architecture/catalog-api-quirks + spec §4.10.1):
+//   • На входе — массив сырых продуктов из /products?per_page=N (probe).
+//   • Per-item options приходят как `[{key, caption_ru, caption_kz,
+//     value_ru, value_kz}]` БЕЗ count. Counts реконструируются как частота
+//     встречаемости (key,value) среди products.
+//   • Output помечается source='bootstrap' вызывающим кодом (через поле
+//     CategoryOptionsResult, не здесь — мы возвращаем только RawOption[]).
+//   • Data-agnostic: НИ одного hardcoded ключа/значения 220volt.
+//   • Идемпотентен, без сайд-эффектов.
+//
+// НЕ участвует в price_clarify slot — counts ограничены N_PROBE и
+// статистически некорректны для facet-counts UX. См. §4.10.1.
+export function extractFacetSchemaFromProducts(products: RawProduct[]): RawOption[] {
+  if (!Array.isArray(products) || products.length === 0) return [];
+
+  // key → { caption_ru, caption_kz, valuesMap: Map<canonicalValue, RawOptionValue & {count:number}> }
+  const acc = new Map<
+    string,
+    {
+      caption_ru: string | null;
+      caption_kz: string | null;
+      values: Map<
+        string,
+        { value_ru: string | null; value_kz: string | null; count: number }
+      >;
+    }
+  >();
+
+  for (const p of products) {
+    const opts = (p as { options?: unknown }).options;
+    if (!Array.isArray(opts)) continue;
+    for (const raw of opts) {
+      if (!raw || typeof raw !== 'object') continue;
+      const o = raw as {
+        key?: unknown;
+        caption_ru?: unknown;
+        caption_kz?: unknown;
+        value_ru?: unknown;
+        value_kz?: unknown;
+        value?: unknown;
+      };
+      const key = typeof o.key === 'string' ? o.key.trim() : '';
+      if (!key) continue;
+
+      const captionRu = typeof o.caption_ru === 'string' ? o.caption_ru : null;
+      const captionKz = typeof o.caption_kz === 'string' ? o.caption_kz : null;
+      const valueRu =
+        typeof o.value_ru === 'string'
+          ? o.value_ru
+          : typeof o.value === 'string'
+            ? o.value
+            : null;
+      const valueKz = typeof o.value_kz === 'string' ? o.value_kz : null;
+
+      // Канонический ключ значения для дедупликации: ru → kz → пусто-skip
+      const canon = (valueRu ?? valueKz ?? '').trim();
+      if (!canon) continue;
+
+      let bucket = acc.get(key);
+      if (!bucket) {
+        bucket = {
+          caption_ru: captionRu,
+          caption_kz: captionKz,
+          values: new Map(),
+        };
+        acc.set(key, bucket);
+      } else {
+        // первый непустой caption выигрывает
+        if (!bucket.caption_ru && captionRu) bucket.caption_ru = captionRu;
+        if (!bucket.caption_kz && captionKz) bucket.caption_kz = captionKz;
+      }
+
+      const v = bucket.values.get(canon);
+      if (v) {
+        v.count += 1;
+        if (!v.value_ru && valueRu) v.value_ru = valueRu;
+        if (!v.value_kz && valueKz) v.value_kz = valueKz;
+      } else {
+        bucket.values.set(canon, {
+          value_ru: valueRu,
+          value_kz: valueKz,
+          count: 1,
+        });
+      }
+    }
+  }
+
+  const out: RawOption[] = [];
+  for (const [key, bucket] of acc) {
+    const values: RawOptionValue[] = Array.from(bucket.values.values())
+      .sort((a, b) => b.count - a.count)
+      .map((v) => ({
+        value_ru: v.value_ru,
+        value_kz: v.value_kz,
+        count: v.count,
+      }));
+    out.push({
+      key,
+      caption: bucket.caption_ru ?? bucket.caption_kz ?? null,
+      caption_ru: bucket.caption_ru,
+      caption_kz: bucket.caption_kz,
+      values,
+    });
+  }
+  return out;
+}
