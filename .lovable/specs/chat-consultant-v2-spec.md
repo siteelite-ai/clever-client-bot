@@ -1138,7 +1138,55 @@ B: [intent=catalog, is_replacement=true]
 2. Breaker НЕ открывается на 4xx и логические нули — это НЕ outage.
 3. Breaker НЕ создаёт новых пользовательских сценариев: всё, что видит конечный пользователь — это уже описанный `[CONTACT_MANAGER]` через `SearchOutcome.status='error'` (§5.6.1).
 4. `nowFn` инжектируется для детерминированных тестов; никаких реальных `setTimeout`.
-5. Покрытие тестами: `circuit-breaker_test.ts` (FSM, окно, single-shot probe) + интеграционные кейсы в `api-client_test.ts` (маппинг `UpstreamUnavailableError → upstream_unavailable`).
+5. Покрытие тестами: `circuit-breaker_test.ts` (FSM, окно, single-shot probe) + интеграционные кейсы в `api-client_test.ts` (маппинг `UpstreamUnavailableError → upstream_unavailable`) + `circuit-breaker-observability_test.ts` (логи переходов, монотонность счётчика).
+
+### 13.2 Observability Circuit Breaker (Stage F.5.7)
+
+**Назначение.** Дать оператору наблюдаемость за состоянием breaker'а через Supabase Edge Function logs и метрику в snapshot — без введения внешних систем (Prometheus и т.п.).
+
+**Контракт логирования.** Breaker принимает опциональный `BreakerLogger` (DI). Каждая смена FSM-состояния — и ТОЛЬКО смена — порождает один структурированный JSON-объект, сериализуется через `console.log` (попадает в Edge Function logs):
+
+```ts
+interface BreakerTransitionEvent {
+  event: 'breaker_transition';   // дискриминатор
+  from: BreakerState;            // 'CLOSED' | 'OPEN' | 'HALF_OPEN'
+  to: BreakerState;
+  ts: number;                    // эпоха-мс из инжектированного nowFn
+  recentFailures: number;        // снапшот счётчика на момент перехода
+}
+
+interface BreakerLogger {
+  onTransition(e: BreakerTransitionEvent): void;
+}
+```
+
+**Инварианты логирования.**
+1. Идемпотентность: `transitionTo(sameState)` НЕ логируется (нет смены).
+2. Полный цикл восстановления `OPEN → HALF_OPEN → CLOSED` даёт РОВНО 2 transition-события (плюс 1 для исходного `CLOSED → OPEN`).
+3. Исключения логгера НЕ ломают FSM: `onTransition` обёрнут `try/catch`, ошибки молча проглатываются (логирование — best-effort).
+4. Логгер не имеет доступа к мутации breaker'а (read-only по контракту).
+
+**Контракт метрики.** `BreakerSnapshot` расширен полем `upstreamUnavailableCount: number` — монотонный счётчик, инкрементируется каждый раз, когда `canPass()` возвращает `false`:
+
+```ts
+interface BreakerSnapshot {
+  state: BreakerState;
+  recentFailures: number;
+  upstreamUnavailableCount: number;  // monotonic, reset только через reset()
+  // ... прочие поля
+}
+```
+
+**Инварианты метрики.**
+1. Инкрементируется в двух случаях: (a) `state==='OPEN'` и окно не истекло; (b) `state==='HALF_OPEN'` и `inFlightProbes >= halfOpenMaxProbes` (concurrent overflow).
+2. НЕ инкрементируется в `CLOSED` (там `canPass()` всегда `true`).
+3. НЕ инкрементируется при первом probe в `HALF_OPEN` — он пропускается.
+4. Сбрасывается ТОЛЬКО через `reset()` (вместе со всем FSM-state).
+5. Семантически соответствует метрике `upstream_unavailable_count` из риск-таблицы §13: суммарное число запросов, которым breaker отказал.
+
+**Использование в проде.** `catalog-deps-factory.ts` инжектирует продакшен-логгер, который сериализует события в `console.log(JSON.stringify(e))`. Snapshot читается из health-endpoint / диагностических роутов (TODO Stage 8). Никаких алертов в коде breaker'а — это ответственность внешнего observability-слоя.
+
+**Покрытие тестами.** `circuit-breaker-observability_test.ts` — 9 кейсов: транзишены всех направлений, отсутствие лога при отсутствии смены, монотонность счётчика в OPEN и HALF_OPEN-overflow, нулевой счётчик в CLOSED, reset обнуляет, throwing logger не ломает FSM.
 
 ---
 
