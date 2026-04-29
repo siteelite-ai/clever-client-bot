@@ -89,3 +89,19 @@ export const CATALOG_BREAKER_DEFAULTS = {
   openDurationMs: 30_000,
   halfOpenMaxProbes: 1,
 } as const;
+
+// ─── §4.10 Parallel Probe / §4.10.1 Self-Bootstrap ──────────────────────────
+
+/**
+ * N_PROBE — сколько товаров запрашивать в parallel-probe (§4.10).
+ *
+ * Источник: согласовано с пользователем 2026-04-29 — «100 (max coverage)».
+ *
+ * Цель — собрать богатый Self-Bootstrap фасет-словарь (§4.10.1) на случай
+ * недоступности /categories/options. 100 товаров дают максимум фасетных
+ * ключей при +200-400ms latency — оправдано редкими сбоями upstream.
+ *
+ * Probe-запрос ВСЕГДА уходит в первом hop пайплайна (после Resolver) и
+ * не зависит от facets-результата — это защита от каскадного сбоя.
+ */
+export const N_PROBE = 100;
