@@ -921,6 +921,27 @@ async function searchByArticle(article: string, apiToken: string): Promise<Produ
 }
 
 /**
+ * Decide whether a Micro-LLM classification yields a candidate title strong enough
+ * for the title-first fast-path (single API hop via ?query=, skip slot/category/strict).
+ *
+ * Heuristic: classifier flagged has_product_name AND the name looks like a real
+ * product model — long enough, contains a digit OR a latin letter (model markers
+ * such as "A60", "LED", "9W", "E27", "GX53", "IP44"). Pure "лампы для школы" or
+ * "розетки белые" → no digit/latin → NOT a candidate, fall through to normal pipeline.
+ */
+function extractCandidateTitle(classification: ClassificationResult | null): string | null {
+  if (!classification?.has_product_name) return null;
+  const name = (classification.product_name || '').trim();
+  if (name.length < 6) return null;
+  const hasLetter = /[A-Za-zА-Яа-яЁё]/.test(name);
+  const hasDigitOrLatin = /[\dA-Za-z]/.test(name);
+  if (!hasLetter || !hasDigitOrLatin) return null;
+  return name;
+}
+
+
+
+/**
  * Search products by site identifier
  */
 async function searchBySiteId(siteId: string, apiToken: string): Promise<Product[]> {
@@ -4598,7 +4619,38 @@ serve(async (req) => {
         classification = await classifyProductName(userMessage, recentHistoryForClassifier, appSettings);
         const classifyElapsed = Date.now() - classifyStart;
         console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → intent=${classification?.intent || 'none'}, has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}", is_replacement=${classification?.is_replacement || false}`);
-        
+
+        // === TITLE-FIRST FAST-PATH (mirrors article-first) ===
+        // If the Micro-LLM classifier extracted a strong product name (model-like:
+        // contains digits or latin letters such as "A60", "LED", "9W", "E27"),
+        // run a single Catalog API hop with ?query=… BEFORE entering the heavy
+        // slot/category/strict-search pipeline. Same Flash-model short-circuit
+        // semantics as article-first; reuses articleShortCircuit so all downstream
+        // branches treat the result identically. Skipped for replacement intent —
+        // that pipeline needs the original product's traits, not the product itself.
+        if (!articleShortCircuit && classification?.has_product_name && !classification?.is_replacement) {
+          const titleCandidate = extractCandidateTitle(classification);
+          if (titleCandidate) {
+            const tStart = Date.now();
+            const titleResults = await searchProductsByCandidate(
+              { query: titleCandidate, brand: null, category: null, min_price: null, max_price: null },
+              appSettings.volt220_api_token,
+              15
+            );
+            const tElapsed = Date.now() - tStart;
+            if (titleResults.length > 0) {
+              foundProducts = titleResults.slice(0, 10);
+              articleShortCircuit = true;
+              responseModel = 'google/gemini-2.5-flash';
+              responseModelReason = 'title-shortcircuit';
+              console.log(`[Chat] Title-first FAST-PATH SUCCESS: ${foundProducts.length} products in ${tElapsed}ms for "${titleCandidate}", skipping slot/category pipeline`);
+            } else {
+              console.log(`[Chat] Title-first FAST-PATH: 0 results in ${tElapsed}ms for "${titleCandidate}", continuing pipeline`);
+            }
+          }
+        }
+
+        if (!articleShortCircuit) {
         // === DIALOG SLOTS: try slot-based resolution FIRST ===
         // Filter out "none" — classifier returns string "none", not null
         effectivePriceIntent = 
@@ -4868,27 +4920,10 @@ serve(async (req) => {
           console.log(`[Chat] Price intent detected but no category, skipping`);
         }
         
-        // === TITLE-FIRST (only if price intent didn't handle it AND not a replacement intent) ===
-        // For is_replacement=true: skip title-first short-circuit so the replacement-block can do
-        // characteristics-first search and return ANALOGS (not the original product) to the user.
-        if (!articleShortCircuit && classification?.has_product_name && classification.product_name && !classification?.is_replacement) {
-          const searchStart = Date.now();
-          const directResults = await searchProductsByCandidate(
-            { query: classification.product_name, brand: null, category: null, min_price: null, max_price: null },
-            appSettings.volt220_api_token!,
-            15
-          );
-          const searchElapsed = Date.now() - searchStart;
-          console.log(`[Chat] Title-first search: ${directResults.length} products in ${searchElapsed}ms for "${classification.product_name}"`);
-          
-          if (directResults.length > 0) {
-            foundProducts = directResults.slice(0, 10);
-            articleShortCircuit = true;
-            console.log(`[Chat] Title-first SUCCESS: ${foundProducts.length} products, skipping LLM 1 (total ${classifyElapsed + searchElapsed}ms)`);
-          } else {
-            console.log(`[Chat] Title-first: 0 results for "${classification.product_name}", proceeding to LLM 1`);
-          }
-        } else if (classification?.is_replacement && classification?.has_product_name && classification?.product_name) {
+        // === TITLE-FIRST: handled by FAST-PATH above (right after Micro-LLM classify).
+        // The legacy duplicate block was removed; if the fast-path returned 0,
+        // we don't repeat the identical ?query= call here.
+        if (classification?.is_replacement && classification?.has_product_name && classification?.product_name) {
           console.log(`[Chat] Title-first SKIPPED: is_replacement=true, deferring to replacement-pipeline (characteristics-first)`);
         }
         
@@ -5921,7 +5956,8 @@ serve(async (req) => {
            console.log(`[Chat] Replacement pipeline error (original product still returned):`, replErr);
            // replacementMeta may already be set; if not, leave as null so normal flow continues
          }
-        }
+         }
+        } // end if (!articleShortCircuit) — guard around slot/category pipeline (title-first short-circuit)
       } catch (e) {
         console.log(`[Chat] Pipeline error (post-classify branch, fallback to LLM 1):`, e);
       }
