@@ -109,42 +109,37 @@ function makeDeps(state: MockState): SSimilarDeps {
 
   let categorySearchIdx = 0;
 
-  const mockFetch: typeof fetch = async (input, init) => {
+  const mockFetch: typeof fetch = (input, _init) => {
     const url = typeof input === 'string' ? input : (input as Request).url;
     const u = new URL(url);
-    // products?article=SKU-A → anchor lookup
+    // products?article=SKU-A → anchor lookup (api-client ждёт {data:{results,total}})
     if (u.pathname.endsWith('/products') && u.searchParams.get('article')) {
-      return makeFetchResponse(state.searchByArticle);
+      const r = state.searchByArticle;
+      const body = r.status === 'ok' && r.products.length > 0
+        ? { data: { results: r.products, total: r.totalFromApi } }
+        : { data: { results: [], total: 0 } };
+      return Promise.resolve(makeFetchResponse(body));
     }
-    // categories/options → facets для facet-matcher
-    if (u.pathname.includes('/categories') && u.pathname.endsWith('/options')) {
-      // Возвращаем "options" в виде, который facet-matcher распарсит → но мы
-      // обходим matcher через прямой mock — всё равно ничего не вернём,
-      // поскольку s-similar НЕ вызывает getCategoryOptions напрямую, а через matchFacets,
-      // который мы подменим ниже через cacheGetOrCompute.
-      return makeFetchResponse({ status: 'ok', options: [], totalProducts: 0, ms: 1, source: 'live' });
+    // categories/.../options → пустой список (matchFacets вернёт no_facets/no_matches,
+    // что нам и нужно: optionFilters будут пустыми, поиск пройдёт без must — это
+    // эмулирует «degrade до нуля must»).
+    if (u.pathname.includes('/categories/') && u.pathname.endsWith('/options')) {
+      return Promise.resolve(makeFetchResponse({ data: { options: [] } }));
     }
-    // products?... → category search
+    // products?... (без article) → category search
     if (u.pathname.endsWith('/products')) {
       const idx = categorySearchIdx++;
-      const oc = state.searchOutcomes[Math.min(idx, state.searchOutcomes.length - 1)];
-      // Возвращаем «сырой» SearchProductsResult-эквивалент, который search.ts завернёт.
-      const raw: SearchProductsResult = {
-        status: oc.status === 'soft_fallback' || oc.status === 'ok' ? 'ok'
-              : oc.status === 'all_zero_price' ? 'all_zero_price'
-              : oc.status === 'empty' ? 'empty' : 'http_error',
-        products: oc.products ?? [],
-        totalFromApi: oc.totalFromApi ?? oc.products?.length ?? 0,
-        zeroPriceFiltered: 0,
-        ms: 1,
-      };
-      // search.ts ожидает реальный JSON-ответ API. Эмулируем минимально.
-      return makeFetchResponse({
-        data: raw.products,
-        meta: { total: raw.totalFromApi },
-      });
+      const oc = state.searchOutcomes[Math.min(idx, state.searchOutcomes.length - 1)] ?? {
+        status: 'empty', products: [], totalFromApi: 0,
+      } as Partial<SearchOutcome>;
+      return Promise.resolve(makeFetchResponse({
+        data: {
+          results: oc.products ?? [],
+          total: oc.totalFromApi ?? oc.products?.length ?? 0,
+        },
+      }));
     }
-    return new Response('not found', { status: 404 });
+    return Promise.resolve(new Response('not found', { status: 404 }));
   };
 
   return {
