@@ -22,6 +22,7 @@ import type {
   ChatHistoryMessage,
   Intent,
   Slot,
+  ConversationState,
 } from "./types.ts";
 import type { ComposerOutcome } from "./s-catalog-composer.ts";
 import type { S1Match } from "./s1-slot-resolver.ts";
@@ -40,6 +41,8 @@ import { priceBranch } from "./s-price.ts";
 import type { ApiClientDeps, RawOption } from "./catalog/api-client.ts";
 import { getCategoryOptions } from "./catalog/api-client.ts";
 import type { SearchOutcome, SearchStatus } from "./catalog/search.ts";
+import type { SSimilarDeps, SSimilarOutcome } from "./s-similar/index.ts";
+import { runSimilarBranch } from "./s-similar/index.ts";
 
 /**
  * Адаптер SSearchOutcome → SearchOutcome (тип, который ждёт composer).
@@ -71,6 +74,53 @@ function adaptSSearchToSearchOutcome(s: SSearchOutcome): SearchOutcome {
   };
 }
 
+/**
+ * §4.6: Адаптер SSimilarOutcome → SearchOutcome для composer.
+ *
+ * Маппинг status:
+ *   - 'ok'                 → 'ok'             (composer scenario='normal',
+ *                                              cards рендерятся; cross-sell
+ *                                              запретится через disallowCrosssell=true)
+ *   - 'clarify_anchor'     → 'empty'          (composer выдаст soft_404 — НО мы
+ *                                              форсим контактный текст через
+ *                                              отдельный путь: clarifyQuestion
+ *                                              кладём в errorMessage для пробро-
+ *                                              са, а composer будет уведомлён
+ *                                              о specific сценарии через trace)
+ *   - 'anchor_not_found'   → 'empty'          (soft_404)
+ *   - 'all_zero_price'     → 'all_zero_price' (contactManager=true §5.6.1)
+ *   - 'empty'              → 'empty'          (soft_404)
+ *   - 'error'              → 'error'          (contactManager=true §5.6.1)
+ *
+ * NB: clarify_anchor — это разовый вопрос БЕЗ slot (INV-S3). Композер не имеет
+ * специального scenario под него — мы пользуемся soft_404 веткой и инжектим
+ * `clarifyQuestion` через `errorMessage`. Шаг 8.5 (отдельный композер для
+ * similar) может это улучшить, но сейчас это data-agnostic минимум.
+ */
+function adaptSSimilarToSearchOutcome(s: SSimilarOutcome): SearchOutcome {
+  let status: SearchStatus;
+  switch (s.status) {
+    case 'ok':              status = 'ok'; break;
+    case 'all_zero_price':  status = 'all_zero_price'; break;
+    case 'error':           status = 'error'; break;
+    case 'clarify_anchor':
+    case 'anchor_not_found':
+    case 'empty':
+    default:                status = 'empty'; break;
+  }
+  return {
+    status,
+    products: s.products,
+    totalFromApi: s.products.length,
+    zeroPriceFiltered: 0,
+    postFilterDropped: 0,
+    attempts: [],
+    softFallbackContext: null,
+    errorMessage: s.errorMessage ?? s.clarifyQuestion,
+    ms: s.trace.ms,
+  };
+}
+
 // ─── Public types ───────────────────────────────────────────────────────────
 
 export type AssemblerStage =
@@ -79,7 +129,8 @@ export type AssemblerStage =
   | "query_expansion"
   | "facet_matcher"
   | "s_search"
-  | "s_price";
+  | "s_price"
+  | "s_similar";
 
 export interface AssemblerTrace {
   route: Route;
@@ -87,7 +138,7 @@ export interface AssemblerTrace {
   /** Итоговый pagetitle (если был выбран). null для OOD/unresolved. */
   pagetitle: string | null;
   /** Вид сборки (для метрик). */
-  flavor: "catalog" | "price" | "ood";
+  flavor: "catalog" | "price" | "ood" | "similar";
   /** Итоговый winning form (если search). */
   winningForm?: string | null;
   /** Резерв: ошибки на любой стадии. */
@@ -134,6 +185,12 @@ export interface AssemblerInput {
   /** Pagination для S_search (default 1/12). */
   page?: number;
   perPage?: number;
+  /**
+   * §4.6.2: текущий ConversationState. Нужен similar-ветке для anchor fallback
+   * (`state.last_shown_product_sku`). Опционально для backward-compat — другие
+   * ветки игнорируют.
+   */
+  state?: ConversationState;
 }
 
 export interface AssemblerDeps {
@@ -147,6 +204,12 @@ export interface AssemblerDeps {
   search: SSearchDeps;
   /** S_price. */
   price: SPriceDeps;
+  /**
+   * §4.6 Similar/Replacement branch. Опционально для backward-compat:
+   * если route===S_SIMILAR, а deps.similar отсутствует → assembler возвращает
+   * empty SearchOutcome (composer выдаст soft_404), а не падает.
+   */
+  similar?: SSimilarDeps;
   /**
    * Catalog API client (для прямого вызова /categories/options перед s-price —
    * чтобы передать `facetOptions` в `priceBranch.input`). Тот же `apiClient`,
@@ -214,7 +277,10 @@ export async function assembleCatalog(
     route: input.route,
     stages: [],
     pagetitle: null,
-    flavor: input.route === "S_PRICE" ? "price" : input.route === "S_CATALOG_OOD" ? "ood" : "catalog",
+    flavor: input.route === "S_PRICE" ? "price"
+          : input.route === "S_CATALOG_OOD" ? "ood"
+          : input.route === "S_SIMILAR" ? "similar"
+          : "catalog",
     errors: [],
   };
 
@@ -229,6 +295,71 @@ export async function assembleCatalog(
       trace,
       resolvedPagetitle: null,
       disallowCrosssell: false, // composer не вызывается; флаг иррелевантен
+    };
+  }
+
+  // ── 1b. SIMILAR shortcut (§4.6) ────────────────────────────────────────────
+  // Similar — отдельная ветка: НЕ переиспользует Category Resolver / Query
+  // Expansion / Facet Matcher из основной воронки. У неё свой anchor-driven
+  // pipeline (см. s-similar/index.ts §4.6.4). Сразу делегируем.
+  if (input.route === "S_SIMILAR") {
+    const t0 = now();
+    if (!deps.similar) {
+      // Backward-compat: deps.similar не подключён → возвращаем soft_404 как
+      // безопасный fallback. Это лучше падения и сохраняет контракт composer.
+      log("assembler.similar_deps_missing", { traceId: input.traceId });
+      trace.stages.push({
+        stage: "s_similar",
+        ms: now() - t0,
+        meta: { error: "deps.similar not provided" },
+      });
+      const emptyOutcome: SearchOutcome = {
+        status: "empty",
+        products: [],
+        totalFromApi: 0,
+        zeroPriceFiltered: 0,
+        postFilterDropped: 0,
+        attempts: [],
+        softFallbackContext: null,
+        ms: 0,
+      };
+      return {
+        composerOutcome: { kind: "search", outcome: emptyOutcome },
+        ood: false,
+        trace,
+        resolvedPagetitle: null,
+        disallowCrosssell: true, // INV-S2: similar ВСЕГДА запрещает cross-sell
+      };
+    }
+    const similarOutcome: SSimilarOutcome = await runSimilarBranch(
+      {
+        intent: input.intent,
+        state: input.state ?? { conversation_id: "unknown", slots: [] },
+        message: input.query,
+      },
+      deps.similar,
+    );
+    trace.pagetitle = similarOutcome.pagetitle ?? null;
+    trace.stages.push({
+      stage: "s_similar",
+      ms: now() - t0,
+      meta: {
+        status: similarOutcome.status,
+        products: similarOutcome.products.length,
+        anchor_status: similarOutcome.trace.anchor.status,
+        classify_calls: similarOutcome.trace.classifyTraitsCalls,
+        degrade_iterations: similarOutcome.trace.degradeIterations,
+      },
+    });
+    return {
+      composerOutcome: {
+        kind: "search",
+        outcome: adaptSSimilarToSearchOutcome(similarOutcome),
+      },
+      ood: false,
+      trace,
+      resolvedPagetitle: similarOutcome.pagetitle ?? null,
+      disallowCrosssell: true, // §4.6.5 INV-S2: ВСЕГДА true для similar
     };
   }
 

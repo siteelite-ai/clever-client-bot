@@ -105,6 +105,39 @@ Deno.test('s3: catalog + price_intent + out_of_domain → S_CATALOG_OOD (OOD п�
   assertEquals(r.route, 'S_CATALOG_OOD');
 });
 
+// ─── §4.6 similar/replacement: is_replacement → S_SIMILAR ────────────────────
+
+Deno.test('s3: catalog + is_replacement=true → S_SIMILAR', () => {
+  const r = routeIntent(makeIntent({ intent: 'catalog', is_replacement: true }));
+  assertEquals(r.route, 'S_SIMILAR');
+  assertEquals(r.reason, 'intent_catalog_similar');
+});
+
+Deno.test('s3: catalog + is_replacement=false → S_CATALOG', () => {
+  const r = routeIntent(makeIntent({ intent: 'catalog', is_replacement: false }));
+  assertEquals(r.route, 'S_CATALOG');
+});
+
+Deno.test('s3: priority OOD > PRICE > SIMILAR > CATALOG', () => {
+  // OOD vs SIMILAR — OOD выигрывает (не вызываем API даже на is_replacement)
+  const ood = routeIntent(makeIntent({
+    intent: 'catalog', is_replacement: true, domain_check: 'out_of_domain',
+  }));
+  assertEquals(ood.route, 'S_CATALOG_OOD');
+
+  // PRICE vs SIMILAR — PRICE выигрывает (price_intent более конкретен)
+  const price = routeIntent(makeIntent({
+    intent: 'catalog', is_replacement: true, price_intent: 'cheapest',
+  }));
+  assertEquals(price.route, 'S_PRICE');
+
+  // SIMILAR срабатывает только при отсутствии OOD и price_intent
+  const sim = routeIntent(makeIntent({
+    intent: 'catalog', is_replacement: true, price_intent: null, domain_check: 'in_domain',
+  }));
+  assertEquals(sim.route, 'S_SIMILAR');
+});
+
 // ─── Защита от грязных данных ────────────────────────────────────────────────
 
 Deno.test('s3: неизвестный intent → throw (контракт нарушен → шумим)', () => {
