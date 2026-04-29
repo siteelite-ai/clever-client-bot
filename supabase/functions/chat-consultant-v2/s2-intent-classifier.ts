@@ -312,6 +312,14 @@ export async function classifyIntent(
     const cached = await deps.getFromCache(queryHash);
     if (cached && new Date(cached.expires_at).getTime() > now()) {
       const latency = now() - t0;
+      console.info(`[v2.s2.intent.cache_hit] ${JSON.stringify({
+        query,
+        category_hint: cached.intent.category_hint ?? null,
+        search_modifiers: cached.intent.search_modifiers ?? [],
+        critical_modifiers: cached.intent.critical_modifiers ?? [],
+        price_intent: cached.intent.price_intent ?? null,
+        latency_ms: latency,
+      })}`);
       return {
         intent: cached.intent,
         cache_hit: true,
