@@ -387,3 +387,102 @@ Deno.test("createProductionApiClientDeps: throws on missing args", () => {
   catch { threw = true; }
   assertEquals(threw, true);
 });
+
+// ─── F.5.2: circuit breaker integration ─────────────────────────────────────
+
+Deno.test("F.5.2: серия timeout'ов открывает breaker → следующий вызов 'upstream_unavailable'", async () => {
+  __resetCatalogBreakerForTests();
+  // Каждый вызов = AbortError; F.4.3 retry удваивает count (2 attempt'а на вызов).
+  // Дефолт failureThreshold=5: после 3-х вызовов (6 failures) breaker точно OPEN.
+  const f = makeFetch(() => new Promise((_, reject) => {
+    setTimeout(() => {
+      const e = new Error("aborted"); e.name = "AbortError"; reject(e);
+    }, 5);
+  }));
+  // Маленький timeout, чтобы тест шёл быстро.
+  const d = deps(f, { timeoutMs: { products: 10 } });
+
+  // 3 вызова, оба attempt'а каждого фейлятся → 6 recordFailure → OPEN.
+  for (let i = 0; i < 3; i++) {
+    const r = await searchProducts({ query: `q${i}` }, d);
+    assert(r.status === "timeout" || r.status === "upstream_unavailable",
+      `attempt ${i} status=${r.status}`);
+  }
+  // Следующий вызов — breaker уже OPEN, fetch НЕ должен быть вызван вовсе.
+  let fetchCalled = false;
+  const f2 = makeFetch(() => { fetchCalled = true; return jsonResponse({ data: { results: [] } }); });
+  const r = await searchProducts({ query: "after-open" }, deps(f2, { timeoutMs: { products: 10 } }));
+  assertEquals(r.status, "upstream_unavailable");
+  assertEquals(fetchCalled, false);
+});
+
+Deno.test("F.5.2: HTTP 5xx инкрементирует breaker (5 подряд → OPEN)", async () => {
+  __resetCatalogBreakerForTests();
+  const f = makeFetch(() => new Response("err", { status: 503 }));
+  const d = deps(f);
+  // 5xx НЕ ретраится → 1 recordFailure на вызов. Нужно 5 вызовов до OPEN.
+  for (let i = 0; i < 5; i++) {
+    const r = await searchProducts({ query: `q${i}` }, d);
+    assertEquals(r.status, "http_error");
+  }
+  // 6-й — breaker OPEN.
+  let called = false;
+  const f2 = makeFetch(() => { called = true; return jsonResponse({ data: { results: [] } }); });
+  const r = await searchProducts({ query: "x" }, deps(f2));
+  assertEquals(r.status, "upstream_unavailable");
+  assertEquals(called, false);
+});
+
+Deno.test("F.5.2: HTTP 404 НЕ открывает breaker (это наш баг запроса, не сбой upstream)", async () => {
+  __resetCatalogBreakerForTests();
+  const f = makeFetch(() => new Response("not found", { status: 404 }));
+  const d = deps(f);
+  // 10 раз 404 — breaker должен оставаться CLOSED.
+  for (let i = 0; i < 10; i++) {
+    const r = await searchProducts({ query: `q${i}` }, d);
+    assertEquals(r.status, "http_error");
+  }
+  // Следующий валидный вызов должен пройти к upstream.
+  let called = false;
+  const f2 = makeFetch(() => { called = true; return jsonResponse({ data: { results: [], total: 0 } }); });
+  const r = await searchProducts({ query: "x" }, deps(f2));
+  assertEquals(r.status, "empty");
+  assertEquals(called, true);
+});
+
+Deno.test("F.5.2: успешный вызов сбрасывает счётчик failure (CLOSED stays CLOSED)", async () => {
+  __resetCatalogBreakerForTests();
+  // 4 фейла → счётчик=4, не открыт.
+  const fFail = makeFetch(() => new Response("err", { status: 500 }));
+  for (let i = 0; i < 4; i++) {
+    await searchProducts({ query: `f${i}` }, deps(fFail));
+  }
+  // Один success → сброс.
+  const fOk = makeFetch(() => jsonResponse({ data: { results: [{ id: 1, price: 100 }], total: 1 } }));
+  await searchProducts({ query: "ok" }, deps(fOk));
+  // Ещё 4 фейла → должно быть всё ещё CLOSED (счётчик начался заново).
+  for (let i = 0; i < 4; i++) {
+    await searchProducts({ query: `f2-${i}` }, deps(fFail));
+  }
+  // 5-й → пройдёт к upstream (CLOSED), вернёт ok.
+  let called = false;
+  const f2 = makeFetch(() => { called = true; return jsonResponse({ data: { results: [{id:1,price:1}], total:1 } }); });
+  const r = await searchProducts({ query: "still-closed" }, deps(f2));
+  assertEquals(called, true);
+  assertEquals(r.status, "ok");
+});
+
+Deno.test("F.5.2: getCategoryOptions тоже под общим breaker'ом", async () => {
+  __resetCatalogBreakerForTests();
+  // Открываем breaker через searchProducts.
+  const f5xx = makeFetch(() => new Response("err", { status: 500 }));
+  for (let i = 0; i < 5; i++) {
+    await searchProducts({ query: `q${i}` }, deps(f5xx));
+  }
+  // getCategoryOptions должен сразу получить upstream_unavailable (общий breaker).
+  let called = false;
+  const f2 = makeFetch(() => { called = true; return jsonResponse({ data: { options: [] } }); });
+  const r = await getCategoryOptions("cat", deps(f2));
+  assertEquals(r.status, "upstream_unavailable");
+  assertEquals(called, false);
+});
