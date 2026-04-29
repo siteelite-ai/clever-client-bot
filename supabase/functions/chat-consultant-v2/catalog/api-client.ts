@@ -428,53 +428,7 @@ export async function searchProducts(
   const priced = results.filter((p) => typeof p?.price === 'number' && p.price > 0);
   const zeroPriceFiltered = results.length - priced.length;
 
-  // ── Recovery for Q3: total=0 и есть не-ASCII ключи в optionFilters. ────
-  if (totalFromApi === 0 && input.optionFilters) {
-    const suspectKeys = Object.keys(input.optionFilters).filter(hasNonAscii);
-    // Также проверяем alias-ключи — реальный запрос мог уйти на не-ASCII alias.
-    if (input.optionAliases) {
-      for (const [k, aliases] of Object.entries(input.optionAliases)) {
-        if (input.optionFilters[k]) {
-          for (const a of aliases) if (hasNonAscii(a) && !suspectKeys.includes(a)) suspectKeys.push(a);
-        }
-      }
-    }
-
-    if (suspectKeys.length > 0) {
-      // Recovery попытка: выкидываем все подозрительные ключи (и canonical, и aliases).
-      const exclude = new Set(suspectKeys);
-      // Если canonical-ключ не-ASCII, его aliases тоже выкидываем.
-      for (const k of suspectKeys) {
-        if (input.optionAliases?.[k]) for (const a of input.optionAliases[k]) exclude.add(a);
-      }
-      const recoveryParams = buildProductsParams(input, exclude);
-      const recoveryUrl = `${deps.baseUrl}/products?${recoveryParams.toString()}`;
-      // F.4.3 NB: НЕ применяем fetchWithRetry — recovery это semantic-слой
-      // (Q3 quirk), не транспорт. При timeout/network на recovery просто
-      // пропускаем degrade-флаг и возвращаем оригинальный empty.
-      const rec = await fetchWithTimeout(recoveryUrl, deps.apiToken, timeoutMs, fetchFn);
-      if (rec.ok && rec.res.ok) {
-        try {
-          const recRaw = await rec.res.json();
-          const recData = recRaw?.data ?? recRaw;
-          const recCount = Number(recData?.pagination?.total ?? recData?.total ?? (Array.isArray(recData?.results) ? recData.results.length : 0)) || 0;
-          if (recCount > 0) {
-            return {
-              status: 'empty_degraded',
-              products: [],
-              totalFromApi: 0,
-              zeroPriceFiltered,
-              ms: Date.now() - t0,
-              degradedHint: {
-                suspectedQuirkKey: suspectKeys[0],
-                recoveredCount: recCount,
-              },
-            };
-          }
-        } catch { /* swallow recovery parse errors */ }
-      }
-    }
-  }
+  // (REMOVED) Q3 recovery — non-ASCII facet keys валидны (см. swagger.json).
 
   if (results.length > 0 && priced.length === 0) {
     return {
