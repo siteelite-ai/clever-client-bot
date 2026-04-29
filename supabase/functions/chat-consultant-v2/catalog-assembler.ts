@@ -40,9 +40,10 @@ import type { SSearchDeps, SSearchOutcome } from "./s-search.ts";
 import { runSearch } from "./s-search.ts";
 import type { SPriceDeps, SPriceOutcome } from "./s-price.ts";
 import { priceBranch } from "./s-price.ts";
-import type { ApiClientDeps, RawOption } from "./catalog/api-client.ts";
-import { getCategoryOptions } from "./catalog/api-client.ts";
+import type { ApiClientDeps, RawOption, RawProduct } from "./catalog/api-client.ts";
+import { getCategoryOptions, searchProducts, extractFacetSchemaFromProducts } from "./catalog/api-client.ts";
 import type { SearchOutcome, SearchStatus } from "./catalog/search.ts";
+import { N_PROBE } from "./config.ts";
 
 // ─── F.5.8: defense-in-depth для disallowCrosssell ──────────────────────────
 //
