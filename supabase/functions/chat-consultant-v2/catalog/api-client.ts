@@ -30,6 +30,8 @@
 //
 // V1 НЕ ТРОГАЕТСЯ. Этот файл живёт ТОЛЬКО внутри chat-consultant-v2/catalog/.
 
+import { CircuitBreaker, getCatalogBreaker } from './circuit-breaker.ts';
+
 // ─── Public types ───────────────────────────────────────────────────────────
 
 /**
