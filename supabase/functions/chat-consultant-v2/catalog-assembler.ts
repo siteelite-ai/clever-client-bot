@@ -74,6 +74,53 @@ function adaptSSearchToSearchOutcome(s: SSearchOutcome): SearchOutcome {
   };
 }
 
+/**
+ * §4.6: Адаптер SSimilarOutcome → SearchOutcome для composer.
+ *
+ * Маппинг status:
+ *   - 'ok'                 → 'ok'             (composer scenario='normal',
+ *                                              cards рендерятся; cross-sell
+ *                                              запретится через disallowCrosssell=true)
+ *   - 'clarify_anchor'     → 'empty'          (composer выдаст soft_404 — НО мы
+ *                                              форсим контактный текст через
+ *                                              отдельный путь: clarifyQuestion
+ *                                              кладём в errorMessage для пробро-
+ *                                              са, а composer будет уведомлён
+ *                                              о specific сценарии через trace)
+ *   - 'anchor_not_found'   → 'empty'          (soft_404)
+ *   - 'all_zero_price'     → 'all_zero_price' (contactManager=true §5.6.1)
+ *   - 'empty'              → 'empty'          (soft_404)
+ *   - 'error'              → 'error'          (contactManager=true §5.6.1)
+ *
+ * NB: clarify_anchor — это разовый вопрос БЕЗ slot (INV-S3). Композер не имеет
+ * специального scenario под него — мы пользуемся soft_404 веткой и инжектим
+ * `clarifyQuestion` через `errorMessage`. Шаг 8.5 (отдельный композер для
+ * similar) может это улучшить, но сейчас это data-agnostic минимум.
+ */
+function adaptSSimilarToSearchOutcome(s: SSimilarOutcome): SearchOutcome {
+  let status: SearchStatus;
+  switch (s.status) {
+    case 'ok':              status = 'ok'; break;
+    case 'all_zero_price':  status = 'all_zero_price'; break;
+    case 'error':           status = 'error'; break;
+    case 'clarify_anchor':
+    case 'anchor_not_found':
+    case 'empty':
+    default:                status = 'empty'; break;
+  }
+  return {
+    status,
+    products: s.products,
+    totalFromApi: s.products.length,
+    zeroPriceFiltered: 0,
+    postFilterDropped: 0,
+    attempts: [],
+    softFallbackContext: null,
+    errorMessage: s.errorMessage ?? s.clarifyQuestion,
+    ms: s.trace.ms,
+  };
+}
+
 // ─── Public types ───────────────────────────────────────────────────────────
 
 export type AssemblerStage =
