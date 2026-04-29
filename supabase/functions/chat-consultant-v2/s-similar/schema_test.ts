@@ -38,11 +38,10 @@ Deno.test('validate: accepts valid minimal payload (1 must trait)', () => {
 });
 
 Deno.test('validate: accepts mixed weights up to 8 traits', () => {
-  const traits = Array.from({ length: 8 }, (_, i) => ({
-    key: `k${i}`,
-    value: `v${i}`,
-    weight: (i === 0 ? 'must' : i < 4 ? 'should' : 'nice') as const,
-  }));
+  const traits = Array.from({ length: 8 }, (_, i) => {
+    const weight: 'must' | 'should' | 'nice' = i === 0 ? 'must' : i < 4 ? 'should' : 'nice';
+    return { key: `k${i}`, value: `v${i}`, weight };
+  });
   const result = validateClassifyTraitsResult({ category_pagetitle: 'c', traits });
   assertEquals(result.traits.length, 8);
 });
