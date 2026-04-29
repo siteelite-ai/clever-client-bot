@@ -209,6 +209,7 @@ export interface CatalogProductionDeps {
   facets: FacetMatcherDeps;
   search: SSearchDeps;
   price: SPriceDeps;
+  similar: SSimilarDeps;
   composer: CatalogComposerDeps;
 }
 
