@@ -63,7 +63,43 @@ export interface BreakerSnapshot {
   recentFailures: number;
   openedAt: number | null;
   inFlightProbes: number;
+  /**
+   * F.5.7 — observability: сколько вызовов было отклонено breaker'ом
+   * (canPass()===false в OPEN или HALF_OPEN с исчерпанными probes) с момента
+   * старта инстанса edge-функции. Монотонно растёт. Используется метрикой
+   * `upstream_unavailable_count` (см. spec §13).
+   */
+  upstreamUnavailableCount: number;
 }
+
+/**
+ * F.5.7 — структурированный логгер переходов состояний breaker'а.
+ *
+ * Каждый transition (CLOSED→OPEN, OPEN→HALF_OPEN, HALF_OPEN→CLOSED, HALF_OPEN→OPEN)
+ * логируется одной записью с полями: `event`, `from`, `to`, `recentFailures`,
+ * `ts`. Это база для алертинга в Supabase Edge Function logs (spec §13.1).
+ *
+ * Дефолтная реализация — `console.log(JSON.stringify(...))`. Тесты могут
+ * инжектировать spy-логгер через конструктор.
+ */
+export interface BreakerLogger {
+  onTransition(event: BreakerTransitionEvent): void;
+}
+
+export interface BreakerTransitionEvent {
+  event: 'breaker_transition';
+  from: BreakerState;
+  to: BreakerState;
+  recentFailures: number;
+  ts: number;
+}
+
+const defaultLogger: BreakerLogger = {
+  onTransition(e) {
+    // Структурный JSON — попадает в Supabase Edge Function logs как одна строка.
+    console.log(JSON.stringify(e));
+  },
+};
 
 /**
  * Брошен `canPass()`-обёртками когда вызов отклонён в состоянии OPEN.
