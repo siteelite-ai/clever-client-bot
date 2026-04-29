@@ -14,7 +14,7 @@
 // Composer (Задача 5) читает `outcome.status` и решает:
 //   - 'ok'              → рендерим карточки (через formatter), soft404_streak=0.
 //   - 'soft_fallback'   → рендерим карточки + tail-line «Уточните…», streak=0.
-//   - 'empty_degraded'  → пустой результат + degraded-флаг (для метрики), streak+=1.
+//   (Q3 'empty_degraded' status REMOVED — non-ASCII facet keys валидны.)
 //   - 'empty'           → soft404_streak += 1 (см. §5.6.1).
 //   - 'all_zero_price'  → НИКОГДА не показываем товары (HARD BAN), streak += 1.
 //   - 'error'           → escalation сразу, без инкремента streak.
@@ -114,10 +114,7 @@ export interface SearchOutcome {
     perPage: number;
     totalPages: number;
   };
-  degradedHint?: {
-    suspectedQuirkKey: string;
-    recoveredCount: number;
-  };
+  // (REMOVED degradedHint) — Q3 quirk признан ложным.
   /**
    * §4.8.1: Заполнено ТОЛЬКО при status === 'soft_fallback'. При других статусах = null.
    */
