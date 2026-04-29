@@ -70,11 +70,13 @@ function makeAnchor(): RawProduct {
 }
 
 function makeCandidate(id: number, article: string): RawProduct {
+  // pagetitle содержит "Anchor" токен — иначе word-boundary post-filter
+  // в catalogSearch отфильтрует кандидатов (query=anchor.pagetitle="Anchor").
   // deno-lint-ignore no-explicit-any
   return {
     id,
-    name: `Cand-${id}`,
-    pagetitle: `Cand-${id}`,
+    name: `Anchor-Cand-${id}`,
+    pagetitle: `Anchor-Cand-${id}`,
     url: `/p/${id}`,
     price: 1000 + id,
     vendor: "VendorA",
