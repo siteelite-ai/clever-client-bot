@@ -252,6 +252,15 @@ export interface Slot {
   pending_modifiers: string[];  // модификаторы вне категории
   pending_filters: Record<string, string[]> | null; // уже выбранные фильтры
 
+  /**
+   * Slot-уровневые метаданные, не привязанные к конкретной option.
+   * Используется price_clarify для facetKey/facetCaption/totalCount —
+   * композер берёт их при рендере вопроса, s1-slot-resolver — при
+   * резолве ответа пользователя в outgoing API-параметры.
+   * Чисто опциональное поле: остальные типы slot его не используют.
+   */
+  metadata?: Record<string, unknown>;
+
   consumed: boolean;            // true → удалить из state
   closed_reason?: 'matched' | 'no_match' | 'ttl_turns' | 'ttl_time' | 'new_intent';
 }

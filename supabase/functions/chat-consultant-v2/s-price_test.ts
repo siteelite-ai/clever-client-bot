@@ -471,3 +471,34 @@ Deno.test("Test 15: autoNarrowingAttempts === 0 во ВСЕХ статусах (
   );
   assertEquals(r2.autoNarrowingAttempts, 0);
 });
+
+// ─── Test 16 (REGRESSION): category mapping контракт ─────────────────────────
+//
+// БАГ: до фикса 2026-04-29 toApiInput() мапил `input.pagetitle` (= название
+// КАТЕГОРИИ от Resolver) в `apiInput.pagetitle`, который в Catalog API означает
+// "EXACT match по названию ПРОДУКТА". Это приводило к total=0 для любого
+// price-запроса с категорией ("розетки до 2000", "самый дешёвый автомат").
+//
+// Контракт (core memory + swagger):
+//   • Категория из Resolver → ВСЕГДА в `?category=`, НИКОГДА в `?pagetitle=`.
+//
+// Тест валидирует исходящий HTTP-параметр probe-вызова.
+Deno.test("Test 16 (regression): probe uses ?category=, NOT ?pagetitle= for category from Resolver", async () => {
+  const m = mockApiClient(() => ({ results: [p(1, 100)], total: 5 }));
+  await priceBranch(
+    { pagetitle: "Розетки", query: "розетки", intent: intent({ price_intent: "cheapest" }) },
+    { apiClient: m.deps },
+  );
+  assert(m.calls.length >= 1, "probe должен быть вызван хотя бы раз");
+  const probeParams = m.calls[0].params;
+  assertEquals(
+    probeParams.get("category"),
+    "Розетки",
+    "категория должна уходить в ?category=",
+  );
+  assertEquals(
+    probeParams.get("pagetitle"),
+    null,
+    "?pagetitle= НЕ должен использоваться для категории",
+  );
+});
