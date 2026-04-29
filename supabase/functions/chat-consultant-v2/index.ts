@@ -348,10 +348,17 @@ serve(async (req) => {
         let catalogContactManager = false;
         let catalogTextEmitted = false;
 
+        // F.4.1 (Stage F.4): S_SIMILAR — отдельный catalog-route. Assembler
+        // (catalog-assembler.ts §4.6 SIMILAR shortcut, ~lines 308-372) уже
+        // полностью обрабатывает его: вызов runSimilarBranch, маппинг
+        // SSimilarOutcome → SearchOutcome, disallowCrosssell=true (§4.6.5
+        // INV-S2), пробрасывание recommendationContext. Здесь — только
+        // включение в catalog-диспатч. См. F4-architect-review.md §F.4.1.
         const isCatalogRoute =
           decision.route === "S_CATALOG" ||
           decision.route === "S_PRICE" ||
-          decision.route === "S_CATALOG_OOD";
+          decision.route === "S_CATALOG_OOD" ||
+          decision.route === "S_SIMILAR";
 
         if (decision.route === "S_KNOWLEDGE") {
           // Step 9: FTS-only поиск по БЗ + cache `kb:<hash>` (TTL 1ч).
