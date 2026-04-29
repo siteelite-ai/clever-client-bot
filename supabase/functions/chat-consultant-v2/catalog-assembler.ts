@@ -277,7 +277,10 @@ export async function assembleCatalog(
     route: input.route,
     stages: [],
     pagetitle: null,
-    flavor: input.route === "S_PRICE" ? "price" : input.route === "S_CATALOG_OOD" ? "ood" : "catalog",
+    flavor: input.route === "S_PRICE" ? "price"
+          : input.route === "S_CATALOG_OOD" ? "ood"
+          : input.route === "S_SIMILAR" ? "similar"
+          : "catalog",
     errors: [],
   };
 
@@ -292,6 +295,71 @@ export async function assembleCatalog(
       trace,
       resolvedPagetitle: null,
       disallowCrosssell: false, // composer не вызывается; флаг иррелевантен
+    };
+  }
+
+  // ── 1b. SIMILAR shortcut (§4.6) ────────────────────────────────────────────
+  // Similar — отдельная ветка: НЕ переиспользует Category Resolver / Query
+  // Expansion / Facet Matcher из основной воронки. У неё свой anchor-driven
+  // pipeline (см. s-similar/index.ts §4.6.4). Сразу делегируем.
+  if (input.route === "S_SIMILAR") {
+    const t0 = now();
+    if (!deps.similar) {
+      // Backward-compat: deps.similar не подключён → возвращаем soft_404 как
+      // безопасный fallback. Это лучше падения и сохраняет контракт composer.
+      log("assembler.similar_deps_missing", { traceId: input.traceId });
+      trace.stages.push({
+        stage: "s_similar",
+        ms: now() - t0,
+        meta: { error: "deps.similar not provided" },
+      });
+      const emptyOutcome: SearchOutcome = {
+        status: "empty",
+        products: [],
+        totalFromApi: 0,
+        zeroPriceFiltered: 0,
+        postFilterDropped: 0,
+        attempts: [],
+        softFallbackContext: null,
+        ms: 0,
+      };
+      return {
+        composerOutcome: { kind: "search", outcome: emptyOutcome },
+        ood: false,
+        trace,
+        resolvedPagetitle: null,
+        disallowCrosssell: true, // INV-S2: similar ВСЕГДА запрещает cross-sell
+      };
+    }
+    const similarOutcome: SSimilarOutcome = await runSimilarBranch(
+      {
+        intent: input.intent,
+        state: input.state ?? { conversation_id: "unknown", slots: [] },
+        message: input.query,
+      },
+      deps.similar,
+    );
+    trace.pagetitle = similarOutcome.pagetitle ?? null;
+    trace.stages.push({
+      stage: "s_similar",
+      ms: now() - t0,
+      meta: {
+        status: similarOutcome.status,
+        products: similarOutcome.products.length,
+        anchor_status: similarOutcome.trace.anchor.status,
+        classify_calls: similarOutcome.trace.classifyTraitsCalls,
+        degrade_iterations: similarOutcome.trace.degradeIterations,
+      },
+    });
+    return {
+      composerOutcome: {
+        kind: "search",
+        outcome: adaptSSimilarToSearchOutcome(similarOutcome),
+      },
+      ood: false,
+      trace,
+      resolvedPagetitle: similarOutcome.pagetitle ?? null,
+      disallowCrosssell: true, // §4.6.5 INV-S2: ВСЕГДА true для similar
     };
   }
 
