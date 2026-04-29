@@ -130,10 +130,13 @@ export class CircuitBreaker {
   private openedAt: number | null = null;
   /** Сколько пробных запросов сейчас «в полёте» в HALF_OPEN. */
   private inFlightProbes = 0;
+  /** F.5.7 — монотонный счётчик отказов canPass() (для метрики). */
+  private upstreamUnavailableCount = 0;
 
   constructor(
     private readonly config: BreakerConfig,
     private readonly nowFn: () => number = Date.now,
+    private readonly logger: BreakerLogger = defaultLogger,
   ) {
     if (config.failureThreshold < 1) throw new Error('failureThreshold must be >= 1');
     if (config.failureWindowMs < 1) throw new Error('failureWindowMs must be >= 1');
