@@ -17,10 +17,10 @@
 //           Сортировка — на стороне V2, после получения списка.
 //       Q2. /categories/options DOUBLE wrapping: `{ data: { data: { options: [...] } } }`
 //           ИЛИ `{ data: { options: [...] } }`. Распаковываем оба варианта.
-//       Q3. Non-ASCII facet keys (e.g. `cvet__tүs`) могут silently вернуть total=0.
-//           Recovery-then-degrade: если `total=0` ПРИ наличии не-ASCII ключа в
-//           `options[...]`, и retry без этого ключа даёт total>0 — возвращаем
-//           degraded-флаг наверх (вызывающий код решает, как объяснить недостачу).
+//       Q3. (REMOVED) Ранее предполагалось, что non-ASCII facet keys (e.g. `cvet__tүs`)
+//           silently возвращают total=0. Сверка со swagger показала: такие ключи
+//           ВАЛИДНЫ (см. примеры options[cvetovaya_temperatura__k__tүs_temperaturasy__k][]).
+//           Recovery-блок и status `empty_degraded` УДАЛЕНЫ как ложно-положительные.
 //       Q4. `Product.name=null` встречается. Нормализуем через `pagetitle`.
 //       Q5. price=0 (товары «под заказ» / без цены) — HARD BAN на любом выводе.
 //           Двойной фильтр: ЗДЕСЬ (Catalog Search) + Composer pre-render.
@@ -103,8 +103,7 @@ export interface RawProduct {
 
 export type SearchStatus =
   | 'ok'                    // ≥1 товар после price>0 фильтра
-  | 'empty'                 // total=0 от API без признаков quirk
-  | 'empty_degraded'        // total=0, но recovery-без-quirk-ключа дал >0 → есть подозрение на Q3
+  | 'empty'                 // total=0 от API
   | 'all_zero_price'        // API вернул товары, но все с price=0 (HARD BAN)
   | 'http_error'
   | 'timeout'
@@ -116,10 +115,6 @@ export interface SearchProductsResult {
   products: RawProduct[];        // ВСЕГДА только price>0; пустой при non-ok
   totalFromApi: number;          // что сообщил API (для метрик; может != products.length)
   zeroPriceFiltered: number;     // сколько отброшено из-за price<=0 (метрика zero_price_leak)
-  degradedHint?: {
-    suspectedQuirkKey: string;   // какой ключ подозревается в Q3
-    recoveredCount: number;      // сколько товаров нашлось без него
-  };
   ms: number;
   httpStatus?: number;
   errorMessage?: string;
@@ -158,17 +153,7 @@ const DEFAULT_TIMEOUTS = {
   categoryOptions: 6_000,
 } as const;
 
-/**
- * Грубая проверка ASCII. Для quirk Q3: если ключ содержит не-ASCII (кириллица,
- * диакритика — типичные для двуязычных facet-ключей вида `cvet__tүs`), мы помечаем
- * его как «подозрительный» и при total=0 запускаем recovery.
- */
-function hasNonAscii(s: string): boolean {
-  for (let i = 0; i < s.length; i++) {
-    if (s.charCodeAt(i) > 127) return true;
-  }
-  return false;
-}
+// (REMOVED hasNonAscii) — Quirk Q3 признан ложным; см. шапку файла.
 
 /**
  * Защита от инъекций в API-параметры. Запрещаем символы, которые могут сломать
