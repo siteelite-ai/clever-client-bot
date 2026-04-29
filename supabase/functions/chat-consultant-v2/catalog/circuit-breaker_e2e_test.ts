@@ -206,9 +206,7 @@ Deno.test('F.5.5 T4: 10×HTTP-200/empty НЕ открывает breaker (лог�
 
   for (let i = 0; i < 10; i++) {
     const out = await search({ category: 'cat-x', query: 'thing' }, deps(f));
-    // Может быть 'empty' — это валидный non-error статус.
-    assert(out.status === 'empty' || out.status === 'empty_degraded',
-      `iteration ${i}: ожидался empty*, got ${out.status}`);
+    assertEquals(out.status, 'empty', `iteration ${i}: ожидался empty, got ${out.status}`);
   }
 
   const snap = getCatalogBreaker().snapshot();

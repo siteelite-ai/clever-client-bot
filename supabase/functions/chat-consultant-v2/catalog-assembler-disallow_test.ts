@@ -135,10 +135,7 @@ Deno.test("F.5.8 search: empty → ЗАПРЕТ (Soft 404)", () => {
   assertEquals(shouldDisallowCrosssellForSearch(out), true);
 });
 
-Deno.test("F.5.8 search: empty_degraded → ЗАПРЕТ (Q3 quirk recovery)", () => {
-  const out = searchOutcome({ status: "empty_degraded", products: [] });
-  assertEquals(shouldDisallowCrosssellForSearch(out), true);
-});
+// (REMOVED) F.5.8 empty_degraded — статус удалён.
 
 Deno.test("F.5.8 search: all_zero_price → ЗАПРЕТ (HARD BAN price=0)", () => {
   const out = searchOutcome({ status: "all_zero_price", products: [] });
