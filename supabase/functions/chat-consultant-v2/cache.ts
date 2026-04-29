@@ -140,6 +140,112 @@ export async function getOrCompute<T>(
   return { value, cacheHit: false, cacheKey };
 }
 
+/**
+ * §4.11 Stale-on-error: расширение `getOrCompute`. Двухслойный кэш:
+ *
+ *   • HOT слой — `cacheKey` со стандартным `ttlSec` (как у getOrCompute).
+ *   • STALE слой — `<cacheKey>:stale` с `staleTtlSec >> ttlSec`. Перезаписывается
+ *     при КАЖДОМ успешном compute() — там лежит «последний известный успех».
+ *
+ * Контракт (см. spec §4.11):
+ *   1. Свежее значение из HOT → возвращаем `{ source: 'hot' }`.
+ *   2. HOT miss → запускаем `compute()`. Если success — пишем в HOT и STALE,
+ *      возвращаем `{ source: 'fresh' }`.
+ *   3. compute() кинул исключение ИЛИ вернул значение, для которого
+ *      `isTransportFailure(value) === true` → пробуем STALE. Если есть —
+ *      возвращаем `{ source: 'stale' }`. Иначе — пробрасываем исходный fail
+ *      (значение или повторно бросаем ошибку).
+ *
+ *   STALE НЕ отдаётся при «нормальных» исходах compute (например, API
+ *   осознанно вернул `empty`) — только при transport-failure. Это инвариант
+ *   §4.11: stale — это страховка от падения upstream, не замена hot miss.
+ *
+ *   Метрика `facets_stale_served_total` считается вызывающим кодом по
+ *   возвращённому `source === 'stale'` (cache.ts data-agnostic, метрики не
+ *   эмитим тут — это ответственность caller'а в catalog/api-client.ts).
+ */
+export type StaleSource = 'hot' | 'fresh' | 'stale';
+
+export interface StaleResult<T> {
+  value: T;
+  source: StaleSource;
+  cacheKey: string;
+}
+
+/**
+ * Чистое ядро `getOrComputeWithStale`. Извлечено для тестируемости без Supabase.
+ * Принимает `getFn`/`setFn` как DI — production-обёртка ниже инъектирует
+ * `get`/`set` из этого же модуля.
+ */
+export async function getOrComputeWithStaleCore<T>(
+  cacheKey: string,
+  ttlSec: number,
+  staleTtlSec: number,
+  compute: () => Promise<T>,
+  isTransportFailure: (value: T) => boolean,
+  getFn: <U>(key: string) => Promise<U | null>,
+  setFn: <U>(key: string, value: U, ttlSec: number) => Promise<void>,
+): Promise<StaleResult<T>> {
+  const staleKey = `${cacheKey}:stale`;
+
+  // 1. HOT
+  const hot = await getFn<T>(cacheKey);
+  if (hot !== null && hot !== undefined) {
+    return { value: hot, source: 'hot', cacheKey };
+  }
+
+  // 2. compute()
+  let computed: T;
+  let computeThrew = false;
+  let thrown: unknown = null;
+  try {
+    computed = await compute();
+  } catch (e) {
+    computeThrew = true;
+    thrown = e;
+    computed = undefined as unknown as T;
+  }
+
+  if (!computeThrew && !isTransportFailure(computed)) {
+    // success — пишем оба слоя fire-and-forget
+    setFn(cacheKey, computed, ttlSec).catch(() => {});
+    setFn(staleKey, computed, staleTtlSec).catch(() => {});
+    return { value: computed, source: 'fresh', cacheKey };
+  }
+
+  // 3. transport-failure → STALE
+  const stale = await getFn<T>(staleKey);
+  if (stale !== null && stale !== undefined) {
+    return { value: stale, source: 'stale', cacheKey };
+  }
+
+  // 4. STALE пуст — пробрасываем оригинальный fail
+  if (computeThrew) throw thrown;
+  return { value: computed, source: 'fresh', cacheKey };
+}
+
+/** Production-обёртка: hashKey + DI default get/set. */
+export async function getOrComputeWithStale<T>(
+  namespace: string,
+  rawKey: string,
+  ttlSec: number,
+  staleTtlSec: number,
+  compute: () => Promise<T>,
+  isTransportFailure: (value: T) => boolean,
+  locale: string = DEFAULT_LOCALE,
+): Promise<StaleResult<T>> {
+  const cacheKey = await hashKey(namespace, rawKey, locale);
+  return getOrComputeWithStaleCore(
+    cacheKey,
+    ttlSec,
+    staleTtlSec,
+    compute,
+    isTransportFailure,
+    get,
+    set,
+  );
+}
+
 // ─── Lazy GC (§6.2: 1% запросов) ────────────────────────────────────────────
 export function maybeRunGC(probability = 0.01): void {
   if (Math.random() >= probability) return;
@@ -152,12 +258,13 @@ export function maybeRunGC(probability = 0.01): void {
   }
 }
 
-// ─── TTL пресеты (§6.3) ─────────────────────────────────────────────────────
+// ─── TTL пресеты (§6.3 + §4.11) ─────────────────────────────────────────────
 export const TTL = {
   probe: 60 * 60,          // 1ч
   intent: 24 * 60 * 60,    // 24ч
   syn: 24 * 60 * 60,       // 24ч
   search: 15 * 60,         // 15м
-  facets: 60 * 60,         // 1ч
+  facets: 60 * 60,         // 1ч (HOT)
+  facetsStale: 60 * 60,    // 1ч (§4.11 STALE: согласовано с пользователем 2026-04-29 — «свежее»)
   kb: 60 * 60,             // 1ч
 } as const;
