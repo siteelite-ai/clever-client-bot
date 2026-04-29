@@ -557,8 +557,11 @@ export async function assembleCatalog(
       ood: false,
       trace,
       resolvedPagetitle: resolver.pagetitle,
-      // §4.4 + §11.5b: clarify-вопрос НЕ должен сопровождаться cross-sell.
-      disallowCrosssell: priceOutcome.branch === "clarify",
+      // F.5.8 + §4.4 + §11.5b + §5.6.1: запрет cross-sell для всех price-веток
+      // кроме show_all/show_top (clarify-вопрос, error от breaker, all_zero_price,
+      // empty, out_of_domain — все требуют запрета). Defense in depth: composer
+      // отдельно форсит то же через scenario != 'normal'.
+      disallowCrosssell: shouldDisallowCrosssellForPrice(priceOutcome),
     };
   }
 
@@ -583,13 +586,14 @@ export async function assembleCatalog(
       ms: now() - tSS0,
       meta: { skipped: "no_pagetitle" },
     });
+    const adaptedEmpty = adaptSSearchToSearchOutcome(emptyOutcome);
     return {
-      composerOutcome: { kind: "search", outcome: adaptSSearchToSearchOutcome(emptyOutcome) },
+      composerOutcome: { kind: "search", outcome: adaptedEmpty },
       ood: false,
       trace,
       resolvedPagetitle: null,
-      // empty → composer сам форсит запрет (scenario != normal); ставим false.
-      disallowCrosssell: false,
+      // F.5.8: empty → запрет (defense in depth). Composer всё равно форсит то же.
+      disallowCrosssell: shouldDisallowCrosssellForSearch(adaptedEmpty),
     };
   }
 
@@ -619,14 +623,15 @@ export async function assembleCatalog(
     },
   });
 
+  const adaptedSearch = adaptSSearchToSearchOutcome(searchOutcome);
   return {
-    composerOutcome: { kind: "search", outcome: adaptSSearchToSearchOutcome(searchOutcome) },
+    composerOutcome: { kind: "search", outcome: adaptedSearch },
     ood: false,
     trace,
     resolvedPagetitle: resolver.pagetitle,
-    // S_CATALOG normal/soft_fallback: запрет не нужен на уровне assembler —
-    // композер сам решит по scenario. similar-ветка (Stage 8) проставит true.
-    disallowCrosssell: false,
+    // F.5.8: cross-sell разрешён ТОЛЬКО при ok+products. soft_fallback/empty/error
+    // → запрет (defense in depth поверх composer scenario-логики).
+    disallowCrosssell: shouldDisallowCrosssellForSearch(adaptedSearch),
   };
 }
 
