@@ -83,18 +83,20 @@ export function routeIntent(intent: Intent): RouteDecision {
 
     case 'catalog':
       // §3.2 S_CATALOG step 1: domain check ПЕРЕД любым другим действием.
-      // Если запрос вне домена — Router сразу направляет в OOD-ветку,
-      // чтобы caller не вызывал Catalog API впустую (метрика wasted_api_calls).
-      // OOD имеет высший приоритет: даже с price_intent мы не вызываем API.
+      // Приоритет (§4.6.1 + §4.4 + §4.7):
+      //   OOD > PRICE > SIMILAR > CATALOG.
+      // OOD — высший: даже с price_intent/is_replacement не вызываем API.
       if (intent.domain_check === 'out_of_domain') {
         return { route: 'S_CATALOG_OOD', reason: 'intent_catalog_out_of_domain' };
       }
-      // §4.4 + Core Memory: раннее ветвление — price_intent уходит в S_PRICE
-      // (probe-then-fetch), а НЕ в S_CATALOG как пост-обработка. Это убирает
-      // дублирование вызовов API и делает roуter единственным детерминированным
-      // диспетчером веток.
+      // §4.4: price_intent уходит в отдельную S_PRICE ветку (probe-then-fetch).
       if (intent.price_intent !== null) {
         return { route: 'S_PRICE', reason: 'intent_catalog_price' };
+      }
+      // §4.6.1: is_replacement → S_SIMILAR. Триггер строго по флагу из S2,
+      // никаких авто-эскалаций (Core Memory: «Bot NEVER self-narrows funnel»).
+      if (intent.is_replacement === true) {
+        return { route: 'S_SIMILAR', reason: 'intent_catalog_similar' };
       }
       return { route: 'S_CATALOG', reason: 'intent_catalog' };
 
