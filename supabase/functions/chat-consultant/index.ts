@@ -5996,7 +5996,8 @@ serve(async (req) => {
            console.log(`[Chat] Replacement pipeline error (original product still returned):`, replErr);
            // replacementMeta may already be set; if not, leave as null so normal flow continues
          }
-        }
+         }
+        } // end if (!articleShortCircuit) — guard around slot/category pipeline (title-first short-circuit)
       } catch (e) {
         console.log(`[Chat] Pipeline error (post-classify branch, fallback to LLM 1):`, e);
       }
