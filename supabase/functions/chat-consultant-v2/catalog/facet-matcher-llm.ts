@@ -165,6 +165,49 @@ const SYSTEM_PROMPT = `Ты — детерминированный мапер п
   ]
 }`;
 
+const FACET_SELECTION_SYSTEM_PROMPT = `Ты определяешь, К КАКОМУ фасету категории относится каждый пользовательский трейт.
+
+ВХОД: JSON со списком traits, исходной user_query и facets — массив { key, caption_ru } БЕЗ values.
+
+ЗАДАЧА:
+- Для каждого trait выбери наиболее вероятный facet_key по смыслу caption_ru.
+- Учитывай морфологию RU/KK, ё↔е, билингвальность и числовые формулировки.
+- Если facet определить нельзя — верни facet_key=null.
+
+ВЫВОД — СТРОГО JSON:
+{
+  "items": [
+    {
+      "trait": "<исходный trait>",
+      "facet_key": "<key из facets или null>",
+      "confidence": <0.0..1.0>
+    }
+  ]
+}`;
+
+const VALUE_SELECTION_SYSTEM_PROMPT = `Ты выбираешь точное значение ОДНОГО заранее выбранного фасета.
+
+ВХОД: JSON со строками user_query, trait и facet = { key, caption_ru, values: string[] }.
+
+ЗАДАЧА:
+- Для trait выбери строго одно значение из facet.values, если оно действительно соответствует trait.
+- Учитывай морфологию RU/KK, ё↔е, билингвальность, числовые эквиваленты.
+- Если значение в facet.values отсутствует — верни unresolved.
+
+ВЫВОД — СТРОГО JSON:
+{
+  "items": [
+    {
+      "trait": "<исходный trait>",
+      "classification": "resolved" | "soft_match" | "unresolved",
+      "facet_key": "<facet.key>",
+      "value": "<одно значение из facet.values или null>",
+      "confidence": <0.0..1.0>,
+      "reason": "morphology" | "typo" | "numeric_equivalent" | "bilingual"
+    }
+  ]
+}`;
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function pickCaption(opt: RawOption): string {
