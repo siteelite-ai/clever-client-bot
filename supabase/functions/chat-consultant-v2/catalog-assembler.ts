@@ -580,6 +580,7 @@ export async function assembleCatalog(
             pagetitle: resolver.pagetitle,
             traits: modifiers,
             user_query_raw: input.query,
+            bootstrapOptions,
           },
           deps.facetsLLM,
         );
