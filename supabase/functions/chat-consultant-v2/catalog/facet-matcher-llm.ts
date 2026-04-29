@@ -468,6 +468,8 @@ export async function matchFacetsWithLLM(
   }));
   const totalValues = facets.reduce((acc, f) => acc + f.values.length, 0);
 
+  const useTwoStage = totalValues > 1200 || facets.length > 32;
+
   // ── 3. LLM вызов. ──────────────────────────────────────────────────────
   const userMessage = JSON.stringify(
     {
@@ -485,6 +487,52 @@ export async function matchFacetsWithLLM(
   let llmModel = '';
   let lastErr: string | null = null;
   let items: LLMItem[] | null = null;
+
+  if (useTwoStage) {
+    try {
+      const selectionResp = await deps.callLLM({
+        systemPrompt: FACET_SELECTION_SYSTEM_PROMPT,
+        userMessage: JSON.stringify({
+          user_query: input.user_query_raw,
+          traits: cleanTraits,
+          facets: facets.map((f) => ({ key: f.key, caption_ru: f.caption })),
+        }),
+        purpose: 'facet_matcher',
+      });
+      llmModel = selectionResp.model;
+      const selected = parseFacetSelectionResponse(selectionResp.text);
+      const stage2Items: LLMItem[] = [];
+      for (const trait of cleanTraits) {
+        const hit = selected.find((s) => s.trait === trait) ?? null;
+        const facet = hit?.facet_key ? facetByKey.get(hit.facet_key) ?? null : null;
+        if (!facet || (hit?.confidence ?? 0) < 0.5) {
+          stage2Items.push({ trait, classification: 'unresolved', facet_key: null, value: null, confidence: 0 });
+          continue;
+        }
+        const valueResp = await deps.callLLM({
+          systemPrompt: VALUE_SELECTION_SYSTEM_PROMPT,
+          userMessage: JSON.stringify({
+            user_query: input.user_query_raw,
+            trait,
+            facet: { key: facet.key, caption_ru: facet.caption, values: facet.values },
+          }),
+          purpose: 'facet_matcher',
+        });
+        llmModel = valueResp.model;
+        const parsed = parseLLMResponse(valueResp.text);
+        if (parsed.length === 0) {
+          stage2Items.push({ trait, classification: 'unresolved', facet_key: facet.key, value: null, confidence: 0 });
+        } else {
+          stage2Items.push(parsed[0]);
+        }
+      }
+      items = stage2Items;
+    } catch (e) {
+      lastErr = `two_stage: ${(e as Error).message}`;
+    }
+  }
+
+  if (items === null) {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // На retry — явно усиливаем требование «верни строго JSON».
@@ -521,6 +569,7 @@ export async function matchFacetsWithLLM(
       });
       continue;
     }
+  }
   }
 
   if (items === null) {
