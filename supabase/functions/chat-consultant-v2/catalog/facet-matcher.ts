@@ -75,20 +75,18 @@ export interface FacetMatcherDeps {
 
 /**
  * Нормализация для сравнения модификаторов и значений фасетов.
- * Unicode-aware: lowercase + trim + ё→е (двунаправленно для RU/KZ) + collapse
- * spaces + remove punctuation. Та же семантика, что cache.normalize, но локальная
- * копия — facet-matcher.ts НЕ должен зависеть от cache.ts (data-agnostic).
+ * Минимальная: lowercase + NFKC + trim + collapse spaces/punctuation.
  *
- * ё/Ё→е: data-agnostic морфо-инвариант русского языка. В выдаче API встречается
- * «Чёрный»/«Двухклавишный», в пользовательском вводе — «черные»/«двухклавишные».
- * Без коллапса ё↔е exact-match рушится. Это НЕ хардкод значений 220volt —
- * это нормализация письма, как Unicode NFKC.
+ * Морфологию (включая ё↔е), числовую и билингвальную нормализацию выполняет
+ * §9.3 LLM Facet Matcher. Детерминированный matcher здесь — это только
+ * exact-match по contract'у §9.3 («resolved при точном совпадении или
+ * лексическом эквиваленте»). Никаких «защитных» добавок поверх данных API.
  */
 function normalizeForMatch(s: string): string {
   return s
+    .normalize('NFKC')
     .toLowerCase()
     .trim()
-    .replace(/ё/g, 'е')
     .replace(/[^\p{L}\p{N}\s]/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
