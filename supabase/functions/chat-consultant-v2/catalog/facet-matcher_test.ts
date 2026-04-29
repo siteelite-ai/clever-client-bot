@@ -11,6 +11,7 @@ import type {
   CategoryOptionsResult,
   RawOption,
 } from './api-client.ts';
+import { __resetCatalogBreakerForTests } from './circuit-breaker.ts';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
