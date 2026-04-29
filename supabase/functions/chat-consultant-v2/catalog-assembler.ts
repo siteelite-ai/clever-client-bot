@@ -454,19 +454,33 @@ export async function assembleCatalog(
   });
 
   // ── 3. Query Expansion ────────────────────────────────────────────────────
+  // §9.2b §3: вместо сырой реплики передаём извлечённые Intent-LLM трейты
+  // (`search_modifiers ∪ critical_modifiers`). Это `extractRuTokens` из
+  // спеки — отбрасываем шумовые слова реплики («найди», «подскажи» и т.п.),
+  // которые ломают word-boundary post-filter §9.2c.
   const tQE0 = now();
+  const expansionTraits = collectModifiers(input.intent);
   let expansion: ExpansionResult;
   try {
     expansion = await expandQuery(
-      { query: input.query, locale: "ru", traceId: input.traceId },
+      {
+        query: input.query,
+        locale: "ru",
+        traceId: input.traceId,
+        traits: expansionTraits,
+      },
       deps.expansion,
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     trace.errors.push({ stage: "query_expansion", message: msg });
-    // Минимальный fallback — одна форма as_is_ru.
+    // Минимальный fallback — одна форма as_is_ru на базе трейтов
+    // (или сырого query, если трейтов нет).
+    const fallbackText = expansionTraits.length > 0
+      ? expansionTraits.join(" ")
+      : input.query;
     expansion = {
-      attempts: [{ form: "as_is_ru", text: input.query }],
+      attempts: [{ form: "as_is_ru", text: fallbackText }],
       skipped: [],
       ms: 0,
     };
