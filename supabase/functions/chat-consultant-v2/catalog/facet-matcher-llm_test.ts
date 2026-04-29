@@ -27,6 +27,15 @@ function stubApiClient(result: CategoryOptionsResult): ApiClientDeps {
     baseUrl: 'https://test.local/api',
     apiToken: 't',
     fetch: async () => {
+      if (result.status === 'timeout') {
+        throw new DOMException('timed out', 'AbortError');
+      }
+      if (result.status === 'network_error' || result.status === 'upstream_unavailable') {
+        throw new TypeError('network down');
+      }
+      if (result.status === 'http_error') {
+        return new Response('upstream error', { status: 500 });
+      }
       const body = JSON.stringify({
         data: {
           data: {
@@ -250,4 +259,26 @@ Deno.test('LLM-12: трейт пропущен LLM → попадает в unres
   assertEquals(r.resolved.length, 1);
   assertEquals(r.unresolved.length, 1);
   assertEquals(r.unresolved[0].trait, 'забытый');
+});
+
+Deno.test('LLM-13: transport-failure /categories/options → использует bootstrap schema', async () => {
+  const apiDown: CategoryOptionsResult = { status: 'timeout', options: [], totalProducts: 0, ms: 1 };
+  const bootstrap: RawOption[] = [
+    { key: 'color', caption_ru: 'Цвет', values: [{ value_ru: 'Белый' }, { value_ru: 'Чёрный' }] },
+    { key: 'count', caption_ru: 'Количество разъемов', values: [{ value_ru: '2' }, { value_ru: '3' }] },
+  ];
+  const llm = JSON.stringify({
+    items: [
+      { trait: 'белые', classification: 'soft_match', facet_key: 'color', value: 'Белый', confidence: 0.8, reason: 'morphology' },
+      { trait: '2 места', classification: 'soft_match', facet_key: 'count', value: '2', confidence: 0.8, reason: 'numeric_equivalent' },
+    ],
+  });
+  const r = await matchFacetsWithLLM(
+    { pagetitle: 'cat', traits: ['белые', '2 места'], user_query_raw: 'белые 2 места', bootstrapOptions: bootstrap },
+    deps({ api: apiDown, llmReply: llm }),
+  );
+  assertEquals(r.mode, 'ok');
+  assertEquals(r.source, 'bootstrap');
+  assertEquals(r.optionFilters, { color: ['Белый'], count: ['2'] });
+  assertEquals(r.unresolved, []);
 });
