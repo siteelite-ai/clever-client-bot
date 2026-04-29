@@ -124,9 +124,51 @@ export interface ConversationState {
   slot_state?: SlotState;
   last_intent?: IntentType;
   last_category_hint?: string;
+  /**
+   * §4.6.2: SKU единственного товара, показанного в предыдущем ходе
+   * (scenario='normal' AND products.length===1). Используется ТОЛЬКО
+   * similar-веткой как fallback-anchor. Опционально, может отсутствовать.
+   */
+  last_shown_product_sku?: string;
   user_city?: string;
   user_country?: string;
 }
+
+// ─── Similar / Replacement Branch (§4.6) ─────────────────────────────────────
+// classify_traits tool calling contract — STRUCTURED, без free-form.
+// JSON-Schema нормативно описана в §4.6.3.
+
+export type TraitWeight = 'must' | 'should' | 'nice';
+
+export interface ClassifiedTrait {
+  /** Ключ характеристики (мапится на facetKey через facet-matcher). */
+  key: string;
+  /** Значение характеристики (мапится на facetValue через facet-matcher). */
+  value: string;
+  /**
+   * must  → жёсткий filter[<key>]=<value> в Catalog Search.
+   * should → soft scoring (+0.10 за матч).
+   * nice  → информативно для карточки «Рекомендую X, потому что…».
+   */
+  weight: TraitWeight;
+}
+
+export interface ClassifyTraitsResult {
+  /** Pagetitle категории якоря (от Category Resolver). */
+  category_pagetitle: string;
+  /** 1..8 traits, отсортированы по убыванию важности (must первыми). */
+  traits: ClassifiedTrait[];
+}
+
+/**
+ * §4.6.4: anchor resolution result.
+ * - 'resolved' — найден SKU, можно идти дальше по алгоритму.
+ * - 'clarify_anchor' — нужен разовый уточняющий вопрос (БЕЗ slot).
+ */
+export type SimilarAnchor =
+  | { status: 'resolved'; sku: string; source: 'intent_sku' | 'last_shown' }
+  | { status: 'clarify_anchor' };
+
 
 // ─── ChatRequest / ChatResponse ──────────────────────────────────────────────
 // §3.3 ChatRequest

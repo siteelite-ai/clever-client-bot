@@ -412,15 +412,131 @@ Domain Guard penalty применяется ПОСЛЕ ranking:
 
 Без изменений: parallel category + query search → bucketize → resolveFiltersWithLLM per bucket → pick best. Малые buckets (<10) автоматически расширяются дополнительным API-вызовом.
 
-### 4.6 Replacements
+### 4.6 Similar / Replacement Branch
 
-Триггер: `is_replacement: true` от классификатора + ключевые фразы («снят с производства», «замена», «аналог»).
+Единая ветка для запросов «аналог / замена / похожий товар». Терминологически
+объединяет понятия Replacement (замена снятого с производства) и Similar
+(похожий по характеристикам) — это **один концепт, одна ветка, одно имя
+модуля `s-similar.ts`**. Cross-sell для этой ветки **запрещён всегда**
+(`disallowCrosssell=true`, см. §11.5).
 
-Алгоритм:
-1. Извлечь характеристики оригинала (либо из контекста, либо через `getCategoryOptionsSchema` если SKU известен)
-2. Multi-query поиск по характеристикам
-3. LLM-сравнение топ-5 кандидатов с оригиналом (модель: flash, JSON-mode)
-4. Вернуть карточку «Рекомендую X вместо Y, потому что Z»
+#### 4.6.1 Trigger (state-machine, нормативно)
+
+Ветка активируется в `s3-router` тогда и только тогда, когда выполнено ВСЁ:
+
+```
+intent.intent === 'catalog'
+  AND intent.is_replacement === true
+  AND intent.domain_check !== 'out_of_domain'
+  AND intent.price_intent === null
+```
+
+Приоритет в роутере: `S_CATALOG_OOD` > `S_PRICE` > `S_SIMILAR` > `S_CATALOG`.
+Никаких авто-эскалаций в similar (например, из Soft-404) — это нарушило бы
+инвариант «Bot NEVER self-narrows funnel» (Core Memory).
+
+#### 4.6.2 Anchor Resolution (детерминированно, в порядке приоритета)
+
+```
+1. anchor_sku   ← intent.sku_candidate            (если has_sku === true)
+2. anchor_sku   ← state.last_shown_product_sku    (если бот в предыдущем
+                                                    ходе показал ровно одну
+                                                    карточку)
+3. action       ← 'clarify_anchor'                (иначе)
+```
+
+`last_shown_product_sku` — новое опциональное поле `ConversationState`,
+выставляется композером при `scenario='normal' AND products.length === 1`.
+Используется ИСКЛЮЧИТЕЛЬНО similar-веткой; не влияет на другие ветки.
+
+При `action='clarify_anchor'` ветка возвращает один уточняющий вопрос
+(«Подскажите артикул или название товара, к которому подобрать аналог»)
+и НЕ создаёт slot — это разовый вопрос, а не facet-уточнение.
+
+#### 4.6.3 `classify_traits` Tool Calling Contract
+
+Структурный экстрактор характеристик якоря. Вызывается через OpenRouter
+tool calling (Gemini), `tool_choice` = принудительный.
+
+**JSON Schema (нормативно):**
+
+```json
+{
+  "name": "classify_traits",
+  "description": "Extract structured traits from the anchor product to drive similarity search.",
+  "parameters": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["category_pagetitle", "traits"],
+    "properties": {
+      "category_pagetitle": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Pagetitle of the anchor's category (resolved via Catalog API)."
+      },
+      "traits": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 8,
+        "items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["key", "value", "weight"],
+          "properties": {
+            "key":    { "type": "string", "minLength": 1 },
+            "value":  { "type": "string", "minLength": 1 },
+            "weight": { "type": "string", "enum": ["must", "should", "nice"] }
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Маппинг weight → search behaviour (детерминированно):
+- `must`   → жёсткий фильтр в Catalog Search (`filter[<facetKey>]=<value>`).
+  Если по `must` не нашлось ни одного товара → degrade: понизить
+  младший по порядку `must` до `should` и повторить (max 2 итерации).
+- `should` → soft scoring при ranking (бонус +0.10 за каждый матч).
+- `nice`   → информативно, не влияет на поиск (используется в карточке
+  «Рекомендую X, потому что …»).
+
+**Ключи `key` / `value`** обязаны мапиться на реальные facets из
+`getCategoryOptionsSchema` через `facet-matcher.ts` (тот же модуль, что
+используется в основном поиске). Несматчившиеся traits **молча
+отбрасываются** (zero-config, no whitelists — §0).
+
+#### 4.6.4 Алгоритм ветки (E2E)
+
+```
+1. Resolve anchor             →  anchor_sku | clarify_anchor
+2. Fetch anchor product       →  Catalog API getProduct(anchor_sku)
+3. Resolve category           →  Category Resolver (live API only)
+4. Fetch category options     →  getCategoryOptionsSchema(categoryId)
+5. classify_traits (LLM tool) →  {category_pagetitle, traits[]}
+6. Match traits → facets      →  facet-matcher (must/should/nice split)
+7. Strict Search Multi-Attempt with must-filters
+   (degrade must→should on zero-result, max 2 iterations)
+8. Word-boundary post-filter (общий с §4.3)
+9. Rank: base score + 0.10 × matched_should_traits
+10. Top-3 + composer scenario='similar'
+    disallowCrosssell = true (всегда)
+```
+
+Если шаг 2 вернул `null` (SKU не существует) → composer scenario =
+`'all_zero_price'` ветви аналог: `scenario='similar_anchor_not_found'` +
+`contactManager=true` (§5.6.1 path B).
+
+#### 4.6.5 Инварианты (нормативно, проверяются тестами)
+
+- **INV-S1:** ровно один вызов `classify_traits` за один ход similar-ветки.
+- **INV-S2:** `disallowCrosssell === true` всегда, без исключений.
+- **INV-S3:** при отсутствии anchor НЕ создаётся slot — только разовый
+  `clarify_anchor` ответ (slot-state не меняется).
+- **INV-S4:** `auto_narrowing_attempts_total` не растёт от similar-ветки
+  (degrade must→should — это recovery, не narrowing).
+- **INV-S5:** ноль hardcoded категорий/traits в коде ветки (data-agnostic).
 
 ### 4.7 Domain Guard
 
