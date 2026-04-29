@@ -305,33 +305,45 @@ export async function matchFacets(
     }
   }
 
-  if (facetsResult.status === 'empty' || facetsResult.options.length === 0) {
-    const result: FacetMatchResult = {
-      status: 'no_facets',
-      optionFilters: {},
-      optionAliases: {},
-      facetCaptions: {},
-      matchedModifiers: [],
-      unmatchedModifiers: modifiers.filter((m) => typeof m === 'string' && m.trim().length > 0),
-      source,
-      ms: Date.now() - t0,
-    };
-    console.info(`[v2.catalog.facet_matcher.result] ${JSON.stringify({
-      pagetitle,
-      status: result.status,
-      source: result.source,
-      api_status: facetsResult.status,
-      options_count: facetsResult.options.length,
-      totalProducts: facetsResult.totalProducts ?? 0,
-      matchedModifiers: result.matchedModifiers,
-      unmatchedModifiers: result.unmatchedModifiers,
-      ms: result.ms,
-    })}`);
-    return result;
+  // §4.10.1: при empty live-ответе тоже пробуем bootstrap.
+  if (!isTransportFailure && (facetsResult.status === 'empty' || facetsResult.options.length === 0)) {
+    if (bootstrapOptions && bootstrapOptions.length > 0) {
+      optionsForMatch = bootstrapOptions;
+      effectiveSource = 'bootstrap';
+      console.info(`[v2.catalog.facet_matcher.bootstrap_used] ${JSON.stringify({
+        pagetitle,
+        api_status: facetsResult.status,
+        bootstrap_options_count: bootstrapOptions.length,
+        reason: 'empty_live',
+      })}`);
+    } else {
+      const result: FacetMatchResult = {
+        status: 'no_facets',
+        optionFilters: {},
+        optionAliases: {},
+        facetCaptions: {},
+        matchedModifiers: [],
+        unmatchedModifiers: modifiers.filter((m) => typeof m === 'string' && m.trim().length > 0),
+        source: effectiveSource,
+        ms: Date.now() - t0,
+      };
+      console.info(`[v2.catalog.facet_matcher.result] ${JSON.stringify({
+        pagetitle,
+        status: result.status,
+        source: result.source,
+        api_status: facetsResult.status,
+        options_count: facetsResult.options.length,
+        totalProducts: facetsResult.totalProducts ?? 0,
+        matchedModifiers: result.matchedModifiers,
+        unmatchedModifiers: result.unmatchedModifiers,
+        ms: result.ms,
+      })}`);
+      return result;
+    }
   }
 
   // ── 3. Alias collapse. ─────────────────────────────────────────────────
-  const groups = collapseOptions(facetsResult.options);
+  const groups = collapseOptions(optionsForMatch);
 
   // ── 4. Матчинг модификаторов. ───────────────────────────────────────────
   const optionFilters: Record<string, string[]> = {};
@@ -359,8 +371,6 @@ export async function matchFacets(
       if (!optionFilters[g.canonicalKey].includes(original)) {
         optionFilters[g.canonicalKey].push(original);
       }
-      // Один модификатор может матчиться в разных опциях (редко) — допускаем
-      // мультифасетное применение, это безопасно для searchProducts.
     }
 
     if (hit) matched.push(rawMod);
@@ -375,7 +385,7 @@ export async function matchFacets(
     facetCaptions,
     matchedModifiers: matched,
     unmatchedModifiers: unmatched,
-    source,
+    source: effectiveSource,
     ms: Date.now() - t0,
   };
 
