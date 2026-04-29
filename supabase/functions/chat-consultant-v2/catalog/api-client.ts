@@ -283,35 +283,81 @@ async function fetchWithTimeout(
  * F.4.3 (Stage F.4 architect review) — единая retry-политика для всех
  * Catalog API-вызовов.
  *
- * Контракт (спека §3.3 + Core Memory «Retry policy: 1 попытка, при
- * abort/network — ещё одна с увеличенным таймаутом»):
+ * F.5.2 (Stage F.5) — обёрнут circuit breaker'ом.
  *
+ * Контракт (спека §3.3 + Core Memory «Retry policy: 1 попытка, при
+ * abort/network — ещё одна с увеличенным таймаутом» + spec §5.6.1 строка 697):
+ *
+ *   • Перед каждой attempt — `breaker.canPass()`. Если breaker OPEN или
+ *     HALF_OPEN исчерпал probes → возвращаем `kind='upstream_unavailable'`
+ *     БЕЗ обращения к upstream (fail-fast, защита latency-бюджета §7.1).
+ *   • После каждой attempt:
+ *       - HTTP 2xx/3xx, 4xx → `breaker.recordSuccess()` (4xx — наш баг
+ *         запроса, не сбой upstream; не открываем breaker).
+ *       - HTTP 5xx, timeout, network_error → `breaker.recordFailure()`.
  *   • 1 попытка с базовым `timeoutMs`.
  *   • При `kind ∈ {'timeout','network_error'}` → пауза 300ms и 2-я попытка
- *     с таймаутом × 1.33.
+ *     с таймаутом × 1.33. (5xx НЕ ретраим — это уже ответ сервера, не транспорт.)
  *   • НИКАКИХ дальнейших ретраев. Это синхронный live-API в SSE-потоке —
  *     длительные backoff-ы недопустимы (fail-fast).
- *   • НЕ ретраим HTTP-ошибки (4xx/5xx) и JSON parse errors — это семантика,
- *     не транспорт.
  *   • Q3 recovery (semantic, для не-ASCII facet keys) — отдельный слой,
  *     живёт ВНУТРИ `searchProducts` и срабатывает после успешного fetch
- *     при `total=0`. НЕ смешивать с этим helper-ом.
+ *     при `total=0`. НЕ смешивать с этим helper-ом и НЕ пропускать через
+ *     breaker (recovery — semantic, не transport).
  *
  * Применяется ОБОИМИ публичными вызовами: `searchProducts`, `getCategoryOptions`.
- * До F.4.3 retry был только в `getCategoryOptions` — несимметрично.
  */
 async function fetchWithRetry(
   url: string,
   apiToken: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
-): Promise<{ ok: true; res: Response } | { ok: false; kind: 'timeout' | 'network_error'; message: string }> {
+): Promise<
+  | { ok: true; res: Response }
+  | { ok: false; kind: 'timeout' | 'network_error' | 'upstream_unavailable'; message: string }
+> {
+  const breaker = getCatalogBreaker();
+
+  // ── Attempt 1 ──────────────────────────────────────────────────────────
+  if (!breaker.canPass()) {
+    return { ok: false, kind: 'upstream_unavailable', message: 'circuit_breaker_open' };
+  }
   let attempt = await fetchWithTimeout(url, apiToken, timeoutMs, fetchFn);
-  if (!attempt.ok && (attempt.kind === 'timeout' || attempt.kind === 'network_error')) {
+  recordAttemptOutcome(breaker, attempt);
+
+  if (attempt.ok) return attempt;
+
+  // Ретраим только транспорт (timeout/network), НЕ 5xx.
+  if (attempt.kind === 'timeout' || attempt.kind === 'network_error') {
     await new Promise((r) => setTimeout(r, 300));
+    if (!breaker.canPass()) {
+      return { ok: false, kind: 'upstream_unavailable', message: 'circuit_breaker_open_on_retry' };
+    }
     attempt = await fetchWithTimeout(url, apiToken, Math.round(timeoutMs * 1.33), fetchFn);
+    recordAttemptOutcome(breaker, attempt);
   }
   return attempt;
+}
+
+/**
+ * Классификатор результата attempt → success/failure для breaker.
+ *   • Транспорт (timeout/network)  → failure.
+ *   • HTTP 5xx                     → failure (upstream сломан, breaker должен реагировать).
+ *   • HTTP 2xx/3xx/4xx             → success (4xx — наш запрос виноват, breaker не открываем).
+ */
+function recordAttemptOutcome(
+  breaker: CircuitBreaker,
+  attempt: { ok: true; res: Response } | { ok: false; kind: 'timeout' | 'network_error'; message: string },
+): void {
+  if (!attempt.ok) {
+    breaker.recordFailure();
+    return;
+  }
+  if (attempt.res.status >= 500 && attempt.res.status <= 599) {
+    breaker.recordFailure();
+    return;
+  }
+  breaker.recordSuccess();
 }
 
 // ─── searchProducts ─────────────────────────────────────────────────────────
