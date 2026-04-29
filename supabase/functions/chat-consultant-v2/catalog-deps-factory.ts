@@ -29,6 +29,9 @@ import { createProductionFacetMatcherDeps } from "./catalog/facet-matcher.ts";
 import type { FacetMatcherDeps } from "./catalog/facet-matcher.ts";
 import type { SSearchDeps } from "./s-search.ts";
 import type { SPriceDeps } from "./s-price.ts";
+import type { SSimilarDeps } from "./s-similar/index.ts";
+import { SIMILAR_LLM_MODEL } from "./s-similar/index.ts";
+import { validateClassifyTraitsResult } from "./s-similar/schema.ts";
 import {
   createProductionApiClientDeps,
   type ApiClientDeps,
