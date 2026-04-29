@@ -478,3 +478,102 @@ Deno.test("F.5.2: getCategoryOptions тоже под общим breaker'ом", a
   assertEquals(r.status, "upstream_unavailable");
   assertEquals(called, false);
 });
+
+// ─── §4.10.1 Self-Bootstrap Facets ──────────────────────────────────────────
+
+import { extractFacetSchemaFromProducts } from "./api-client.ts";
+
+Deno.test("bootstrap: пустой/невалидный вход → []", () => {
+  assertEquals(extractFacetSchemaFromProducts([]), []);
+  // @ts-expect-error — runtime guard
+  assertEquals(extractFacetSchemaFromProducts(null), []);
+  // @ts-expect-error
+  assertEquals(extractFacetSchemaFromProducts(undefined), []);
+});
+
+Deno.test("bootstrap: продукты без options → []", () => {
+  const r = extractFacetSchemaFromProducts([
+    { id: 1, name: "x", pagetitle: "x", url: null, price: 100 } as RawProduct,
+    { id: 2, name: "y", pagetitle: "y", url: null, price: 200, options: null as unknown as never } as RawProduct,
+  ]);
+  assertEquals(r, []);
+});
+
+Deno.test("bootstrap: агрегация key+caption + counts по частоте", () => {
+  const products = [
+    {
+      id: 1, name: "a", pagetitle: "a", url: null, price: 100,
+      options: [
+        { key: "vendor", caption_ru: "Бренд", caption_kz: "Бренд", value_ru: "Acme", value_kz: "Acme" },
+        { key: "color", caption_ru: "Цвет", caption_kz: "Түс", value_ru: "Красный", value_kz: "Қызыл" },
+      ],
+    },
+    {
+      id: 2, name: "b", pagetitle: "b", url: null, price: 200,
+      options: [
+        { key: "vendor", caption_ru: "Бренд", caption_kz: "Бренд", value_ru: "Acme", value_kz: "Acme" },
+        { key: "color", caption_ru: "Цвет", caption_kz: "Түс", value_ru: "Синий", value_kz: "Көк" },
+      ],
+    },
+    {
+      id: 3, name: "c", pagetitle: "c", url: null, price: 300,
+      options: [
+        { key: "vendor", caption_ru: "Бренд", caption_kz: "Бренд", value_ru: "Beta", value_kz: "Beta" },
+      ],
+    },
+  ] as unknown as RawProduct[];
+
+  const r = extractFacetSchemaFromProducts(products);
+  assertEquals(r.length, 2);
+
+  const vendor = r.find((o) => o.key === "vendor")!;
+  assertExists(vendor);
+  assertEquals(vendor.caption_ru, "Бренд");
+  // Acme: 2, Beta: 1 → отсортировано по count desc
+  assertEquals(vendor.values?.[0].value_ru, "Acme");
+  assertEquals(vendor.values?.[0].count, 2);
+  assertEquals(vendor.values?.[1].value_ru, "Beta");
+  assertEquals(vendor.values?.[1].count, 1);
+
+  const color = r.find((o) => o.key === "color")!;
+  assertEquals(color.caption_kz, "Түс");
+  assertEquals(color.values?.length, 2);
+});
+
+Deno.test("bootstrap: пустой key/value → пропуск, мусор не падает", () => {
+  const products = [
+    {
+      id: 1, name: "a", pagetitle: "a", url: null, price: 100,
+      options: [
+        { key: "", value_ru: "X" },             // empty key
+        { key: "ok", value_ru: "" },            // empty value
+        { key: "ok", value_ru: "  " },          // whitespace value
+        null,                                    // junk
+        "string",                                // junk
+        { key: "ok", value_ru: "Real" },        // valid
+      ],
+    },
+  ] as unknown as RawProduct[];
+  const r = extractFacetSchemaFromProducts(products);
+  assertEquals(r.length, 1);
+  assertEquals(r[0].key, "ok");
+  assertEquals(r[0].values?.length, 1);
+  assertEquals(r[0].values?.[0].value_ru, "Real");
+});
+
+Deno.test("bootstrap: fallback value→canon, kz-only также учитывается", () => {
+  const products = [
+    {
+      id: 1, name: "a", pagetitle: "a", url: null, price: 100,
+      options: [
+        { key: "k", value: "Generic" },                    // legacy `value`
+        { key: "k", value_kz: "OnlyKz" },                  // kz-only
+        { key: "k", value_ru: "Generic" },                 // дубль через ru → +1 к "Generic"
+      ],
+    },
+  ] as unknown as RawProduct[];
+  const r = extractFacetSchemaFromProducts(products);
+  assertEquals(r[0].values?.length, 2);
+  const generic = r[0].values?.find((v) => (v.value_ru ?? v.value_kz) === "Generic");
+  assertEquals(generic?.count, 2);
+});
