@@ -246,6 +246,7 @@ export class CircuitBreaker {
       recentFailures: this.failureTimestamps.length,
       openedAt: this.openedAt,
       inFlightProbes: this.inFlightProbes,
+      upstreamUnavailableCount: this.upstreamUnavailableCount,
     };
   }
 
@@ -255,15 +256,38 @@ export class CircuitBreaker {
     this.failureTimestamps = [];
     this.openedAt = null;
     this.inFlightProbes = 0;
+    this.upstreamUnavailableCount = 0;
   }
 
   // ─── private ─────────────────────────────────────────────────────────────
 
   private tripOpen(now: number): void {
-    this.state = 'OPEN';
+    this.transitionTo('OPEN', now);
     this.openedAt = now;
     this.failureTimestamps = [];
     this.inFlightProbes = 0;
+  }
+
+  /**
+   * F.5.7 — централизованный switch state с логированием. Любая смена
+   * состояния FSM ОБЯЗАНА проходить через этот helper, иначе мы потеряем
+   * запись в Supabase Edge Function logs.
+   */
+  private transitionTo(to: BreakerState, now: number): void {
+    if (this.state === to) return;
+    const from = this.state;
+    this.state = to;
+    try {
+      this.logger.onTransition({
+        event: 'breaker_transition',
+        from,
+        to,
+        recentFailures: this.failureTimestamps.length,
+        ts: now,
+      });
+    } catch {
+      // Логгер не должен ломать FSM. Молча игнорируем сбои логирования.
+    }
   }
 
   private pruneOldFailures(now: number): void {
