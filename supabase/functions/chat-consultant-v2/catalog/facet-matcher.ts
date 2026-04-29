@@ -33,7 +33,19 @@ export type FacetMatchStatus =
   | 'ok'                    // ≥1 модификатор замэтчился, optionFilters непуст
   | 'no_matches'            // facets есть, но ни один modifier не совпал
   | 'no_facets'             // /categories/options вернул пустой список (ok-empty)
-  | 'category_unavailable'; // API: timeout/network_error/http_error
+  | 'category_unavailable'; // API: timeout/network_error/http_error И bootstrap не дал результата
+
+/**
+ * Источник схемы фасетов:
+ *   • 'live'      — свежий ответ /categories/options
+ *   • 'cache'     — HOT-кэш (§6.3)
+ *   • 'stale'     — STALE-кэш отдан при transport-failure (§4.11)
+ *   • 'bootstrap' — собрано из per-item Product.options[] probe-ответа (§4.10.1).
+ *                   Counts реконструированы по частоте (ограничены N_PROBE) →
+ *                   НЕ годятся для price_clarify slot.
+ *   • 'unavailable' — не удалось получить ни одним способом.
+ */
+export type FacetSource = 'cache' | 'live' | 'stale' | 'bootstrap' | 'unavailable';
 
 export interface FacetMatchResult {
   status: FacetMatchStatus;
@@ -48,7 +60,7 @@ export interface FacetMatchResult {
   /** Какие — нет (для Soft Fallback / диагностики). */
   unmatchedModifiers: string[];
   /** Откуда пришёл результат facets-вызова. */
-  source: 'cache' | 'live' | 'unavailable';
+  source: FacetSource;
   ms: number;
 }
 
