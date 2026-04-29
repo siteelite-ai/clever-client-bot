@@ -66,9 +66,19 @@ export interface ApiClientDeps {
  */
 export interface SearchProductsInput {
   query?: string;
-  pagetitle?: string;        // точная категория из Category Resolver
-  article?: string;          // SKU
-  category?: string;         // legacy-параметр API
+  /**
+   * EXACT match по названию ПРОДУКТА (swagger: "Поиск по названию (точное
+   * совпадение)"). НЕ для категорий! Для фильтра по категории используй
+   * `category`. Маппинг категории сюда → API вернёт total=0.
+   */
+  pagetitle?: string;
+  article?: string;          // SKU (точное совпадение по артикулу)
+  /**
+   * Фильтр по КАТЕГОРИИ товара (swagger: "Фильтр по категории товара
+   * (pagetitle родительского ресурса)"). Сюда мапится результат
+   * Category Resolver. Это основной способ ограничить выдачу категорией.
+   */
+  category?: string;
   minPrice?: number;
   maxPrice?: number;
   perPage?: number;          // default 30, max 200
