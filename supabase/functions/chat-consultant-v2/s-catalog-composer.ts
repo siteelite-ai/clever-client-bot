@@ -209,6 +209,12 @@ export interface ComposeCatalogInput {
    * у запрета). Если флаг не передан → false (нет внешнего запрета).
    */
   disallowCrosssell?: boolean;
+  /**
+   * §4.6 + §11.6: 1-строка-объяснение от similar-ветки. Если задана и
+   * scenario==='normal', вставляется ПЕРЕД LLM intro отдельным абзацем.
+   * Никогда не подаётся в LLM (это deterministic-текст из traits).
+   */
+  recommendationContext?: string;
   /** Опциональный AbortSignal. */
   signal?: AbortSignal;
   /** Колбек на каждый delta-токен (для проксирования в SSE). */
