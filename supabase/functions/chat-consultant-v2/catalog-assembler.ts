@@ -22,6 +22,7 @@ import type {
   ChatHistoryMessage,
   Intent,
   Slot,
+  ConversationState,
 } from "./types.ts";
 import type { ComposerOutcome } from "./s-catalog-composer.ts";
 import type { S1Match } from "./s1-slot-resolver.ts";
@@ -40,6 +41,8 @@ import { priceBranch } from "./s-price.ts";
 import type { ApiClientDeps, RawOption } from "./catalog/api-client.ts";
 import { getCategoryOptions } from "./catalog/api-client.ts";
 import type { SearchOutcome, SearchStatus } from "./catalog/search.ts";
+import type { SSimilarDeps, SSimilarOutcome } from "./s-similar/index.ts";
+import { runSimilarBranch } from "./s-similar/index.ts";
 
 /**
  * Адаптер SSearchOutcome → SearchOutcome (тип, который ждёт composer).
