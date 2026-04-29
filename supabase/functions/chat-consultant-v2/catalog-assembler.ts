@@ -34,6 +34,8 @@ import { expandQuery } from "./query-expansion.ts";
 import type { FacetMatcherDeps } from "./catalog/facet-matcher.ts";
 import { matchFacets } from "./catalog/facet-matcher.ts";
 import type { FacetMatchResult } from "./catalog/facet-matcher.ts";
+import type { FacetMatcherLLMDeps } from "./catalog/facet-matcher-llm.ts";
+import { matchFacetsWithLLM } from "./catalog/facet-matcher-llm.ts";
 import type { SSearchDeps, SSearchOutcome } from "./s-search.ts";
 import { runSearch } from "./s-search.ts";
 import type { SPriceDeps, SPriceOutcome } from "./s-price.ts";
@@ -243,8 +245,14 @@ export interface AssemblerDeps {
   resolver: ResolverDeps;
   /** Query Expansion. */
   expansion: ExpansionDeps;
-  /** Facet Matcher. */
+  /** Facet Matcher (детерминированный — fallback). */
   facets: FacetMatcherDeps;
+  /**
+   * §9.3 LLM Facet Matcher (опциональный). Когда задан — используется как
+   * основной путь резолва трейтов; детерминированный matcher остаётся как
+   * deep-fallback при mode='llm_failed' (uptime).
+   */
+  facetsLLM?: FacetMatcherLLMDeps;
   /** S_search. */
   search: SSearchDeps;
   /** S_price. */
