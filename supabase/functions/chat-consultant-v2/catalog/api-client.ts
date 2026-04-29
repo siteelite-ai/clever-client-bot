@@ -472,7 +472,7 @@ export async function searchProducts(
         try {
           const recRaw = await rec.res.json();
           const recData = recRaw?.data ?? recRaw;
-          const recCount = Number(recData?.total ?? (Array.isArray(recData?.results) ? recData.results.length : 0)) || 0;
+          const recCount = Number(recData?.pagination?.total ?? recData?.total ?? (Array.isArray(recData?.results) ? recData.results.length : 0)) || 0;
           if (recCount > 0) {
             return {
               status: 'empty_degraded',
