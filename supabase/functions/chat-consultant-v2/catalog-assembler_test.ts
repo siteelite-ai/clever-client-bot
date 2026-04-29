@@ -314,8 +314,10 @@ Deno.test("G1 price-intent-clarify-001: total=705 → clarify slot, disallowCros
   assertEquals(result.disallowCrosssell, true);
 
   // Trace: все стадии присутствуют в правильном порядке.
+  // §4.10: добавилась стадия parallel_probe между category_resolver и facet_matcher
+  // (запускается параллельно с query_expansion, но в trace push после await).
   const stageOrder = result.trace.stages.map((s) => s.stage);
-  assertEquals(stageOrder, ["category_resolver", "query_expansion", "facet_matcher", "s_price"]);
+  assertEquals(stageOrder, ["category_resolver", "query_expansion", "parallel_probe", "facet_matcher", "s_price"]);
   assertEquals(result.trace.flavor, "price");
 });
 
