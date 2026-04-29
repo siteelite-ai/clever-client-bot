@@ -400,36 +400,51 @@ export async function matchFacetsWithLLM(
     0,
   );
 
-  let llmText: string;
+  // §28 строка 2324: «retry 1 раз с явным "верни строго JSON"». Default 1.
+  const maxAttempts = 1 + Math.max(0, deps.llmMaxRetries ?? 1);
+  let llmText = '';
   let llmModel = '';
-  try {
-    const resp = await deps.callLLM({
-      systemPrompt: SYSTEM_PROMPT,
-      userMessage,
-      purpose: 'facet_matcher',
-    });
-    llmText = resp.text;
-    llmModel = resp.model;
-  } catch (e) {
-    const err = (e as Error).message;
-    log('facet_matcher_llm.llm_error', { pagetitle: input.pagetitle, error: err });
-    return {
-      ...baseEmpty,
-      mode: 'llm_failed',
-      unresolved: cleanTraits.map((t) => ({ trait: t })),
-      source,
-      ms: Date.now() - t0,
-      schemaDigest: { facets_count: facets.length, total_values: totalValues },
-      llmError: err,
-    };
+  let lastErr: string | null = null;
+  let items: LLMItem[] | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    // На retry — явно усиливаем требование «верни строго JSON».
+    const reinforce = attempt > 1
+      ? '\n\nВНИМАНИЕ: верни СТРОГО валидный JSON по описанной схеме, без markdown, без преамбул, без комментариев.'
+      : '';
+    try {
+      const resp = await deps.callLLM({
+        systemPrompt: SYSTEM_PROMPT + reinforce,
+        userMessage,
+        purpose: 'facet_matcher',
+      });
+      llmText = resp.text;
+      llmModel = resp.model;
+    } catch (e) {
+      lastErr = `call: ${(e as Error).message}`;
+      log('facet_matcher_llm.llm_error', {
+        pagetitle: input.pagetitle, attempt, error: lastErr,
+      });
+      continue;
+    }
+
+    try {
+      items = parseLLMResponse(llmText);
+      lastErr = null;
+      break;
+    } catch (e) {
+      lastErr = `parse: ${(e as Error).message}`;
+      log('facet_matcher_llm.parse_error', {
+        pagetitle: input.pagetitle,
+        attempt,
+        error: lastErr,
+        raw_preview: llmText.slice(0, 200),
+      });
+      continue;
+    }
   }
 
-  let items: LLMItem[];
-  try {
-    items = parseLLMResponse(llmText);
-  } catch (e) {
-    const err = `parse: ${(e as Error).message}`;
-    log('facet_matcher_llm.parse_error', { pagetitle: input.pagetitle, error: err, raw_preview: llmText.slice(0, 200) });
+  if (items === null) {
     return {
       ...baseEmpty,
       mode: 'llm_failed',
@@ -438,9 +453,10 @@ export async function matchFacetsWithLLM(
       ms: Date.now() - t0,
       schemaDigest: { facets_count: facets.length, total_values: totalValues },
       llmModel,
-      llmError: err,
+      llmError: lastErr ?? 'unknown',
     };
   }
+
 
   // ── 4. Пост-валидация и сборка результата. ─────────────────────────────
   const resolved: AppliedFilter[] = [];
