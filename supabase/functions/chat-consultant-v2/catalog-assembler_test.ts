@@ -432,8 +432,7 @@ Deno.test("INV: assembler НИКОГДА не сужает funnel сам (clarif
   // "не самосужает funnel" сохраняется ниже.
   assertEquals(productCalls.length, 2, "clarify-ветка: 1 probe + 1 parallel-probe");
   for (const c of productCalls) {
-    for (const k of c.params.keys()) {
-      assert(!k.startsWith("options["), `assembler не должен инжектить optionFilters в probe (${k})`);
-    }
+    assert(!c.url.includes("options%5B") && !c.url.includes("options["),
+      `assembler не должен инжектить optionFilters в probe (${c.url})`);
   }
 });
