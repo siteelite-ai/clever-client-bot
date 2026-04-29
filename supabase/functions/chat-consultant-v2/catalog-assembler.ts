@@ -138,6 +138,12 @@ export interface AssemblerInput {
   /** Pagination для S_search (default 1/12). */
   page?: number;
   perPage?: number;
+  /**
+   * §4.6.2: текущий ConversationState. Нужен similar-ветке для anchor fallback
+   * (`state.last_shown_product_sku`). Опционально для backward-compat — другие
+   * ветки игнорируют.
+   */
+  state?: ConversationState;
 }
 
 export interface AssemblerDeps {
@@ -151,6 +157,12 @@ export interface AssemblerDeps {
   search: SSearchDeps;
   /** S_price. */
   price: SPriceDeps;
+  /**
+   * §4.6 Similar/Replacement branch. Опционально для backward-compat:
+   * если route===S_SIMILAR, а deps.similar отсутствует → assembler возвращает
+   * empty SearchOutcome (composer выдаст soft_404), а не падает.
+   */
+  similar?: SSimilarDeps;
   /**
    * Catalog API client (для прямого вызова /categories/options перед s-price —
    * чтобы передать `facetOptions` в `priceBranch.input`). Тот же `apiClient`,
