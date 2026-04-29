@@ -63,7 +63,43 @@ export interface BreakerSnapshot {
   recentFailures: number;
   openedAt: number | null;
   inFlightProbes: number;
+  /**
+   * F.5.7 — observability: сколько вызовов было отклонено breaker'ом
+   * (canPass()===false в OPEN или HALF_OPEN с исчерпанными probes) с момента
+   * старта инстанса edge-функции. Монотонно растёт. Используется метрикой
+   * `upstream_unavailable_count` (см. spec §13).
+   */
+  upstreamUnavailableCount: number;
 }
+
+/**
+ * F.5.7 — структурированный логгер переходов состояний breaker'а.
+ *
+ * Каждый transition (CLOSED→OPEN, OPEN→HALF_OPEN, HALF_OPEN→CLOSED, HALF_OPEN→OPEN)
+ * логируется одной записью с полями: `event`, `from`, `to`, `recentFailures`,
+ * `ts`. Это база для алертинга в Supabase Edge Function logs (spec §13.1).
+ *
+ * Дефолтная реализация — `console.log(JSON.stringify(...))`. Тесты могут
+ * инжектировать spy-логгер через конструктор.
+ */
+export interface BreakerLogger {
+  onTransition(event: BreakerTransitionEvent): void;
+}
+
+export interface BreakerTransitionEvent {
+  event: 'breaker_transition';
+  from: BreakerState;
+  to: BreakerState;
+  recentFailures: number;
+  ts: number;
+}
+
+const defaultLogger: BreakerLogger = {
+  onTransition(e) {
+    // Структурный JSON — попадает в Supabase Edge Function logs как одна строка.
+    console.log(JSON.stringify(e));
+  },
+};
 
 /**
  * Брошен `canPass()`-обёртками когда вызов отклонён в состоянии OPEN.
@@ -94,10 +130,13 @@ export class CircuitBreaker {
   private openedAt: number | null = null;
   /** Сколько пробных запросов сейчас «в полёте» в HALF_OPEN. */
   private inFlightProbes = 0;
+  /** F.5.7 — монотонный счётчик отказов canPass() (для метрики). */
+  private upstreamUnavailableCount = 0;
 
   constructor(
     private readonly config: BreakerConfig,
     private readonly nowFn: () => number = Date.now,
+    private readonly logger: BreakerLogger = defaultLogger,
   ) {
     if (config.failureThreshold < 1) throw new Error('failureThreshold must be >= 1');
     if (config.failureWindowMs < 1) throw new Error('failureWindowMs must be >= 1');
@@ -123,16 +162,20 @@ export class CircuitBreaker {
     if (this.state === 'OPEN') {
       // Истёк OPEN-период → переход в HALF_OPEN.
       if (this.openedAt !== null && now - this.openedAt >= this.config.openDurationMs) {
-        this.state = 'HALF_OPEN';
+        this.transitionTo('HALF_OPEN', now);
         this.openedAt = null;
         this.inFlightProbes = 0;
       } else {
+        this.upstreamUnavailableCount++;
         return false;
       }
     }
 
     if (this.state === 'HALF_OPEN') {
-      if (this.inFlightProbes >= this.config.halfOpenMaxProbes) return false;
+      if (this.inFlightProbes >= this.config.halfOpenMaxProbes) {
+        this.upstreamUnavailableCount++;
+        return false;
+      }
       this.inFlightProbes++;
       return true;
     }
@@ -153,7 +196,7 @@ export class CircuitBreaker {
    */
   recordSuccess(): void {
     if (this.state === 'HALF_OPEN') {
-      this.state = 'CLOSED';
+      this.transitionTo('CLOSED', this.nowFn());
       this.failureTimestamps = [];
       this.inFlightProbes = 0;
       this.openedAt = null;
@@ -203,6 +246,7 @@ export class CircuitBreaker {
       recentFailures: this.failureTimestamps.length,
       openedAt: this.openedAt,
       inFlightProbes: this.inFlightProbes,
+      upstreamUnavailableCount: this.upstreamUnavailableCount,
     };
   }
 
@@ -212,15 +256,38 @@ export class CircuitBreaker {
     this.failureTimestamps = [];
     this.openedAt = null;
     this.inFlightProbes = 0;
+    this.upstreamUnavailableCount = 0;
   }
 
   // ─── private ─────────────────────────────────────────────────────────────
 
   private tripOpen(now: number): void {
-    this.state = 'OPEN';
+    this.transitionTo('OPEN', now);
     this.openedAt = now;
     this.failureTimestamps = [];
     this.inFlightProbes = 0;
+  }
+
+  /**
+   * F.5.7 — централизованный switch state с логированием. Любая смена
+   * состояния FSM ОБЯЗАНА проходить через этот helper, иначе мы потеряем
+   * запись в Supabase Edge Function logs.
+   */
+  private transitionTo(to: BreakerState, now: number): void {
+    if (this.state === to) return;
+    const from = this.state;
+    this.state = to;
+    try {
+      this.logger.onTransition({
+        event: 'breaker_transition',
+        from,
+        to,
+        recentFailures: this.failureTimestamps.length,
+        ts: now,
+      });
+    } catch {
+      // Логгер не должен ломать FSM. Молча игнорируем сбои логирования.
+    }
   }
 
   private pruneOldFailures(now: number): void {
