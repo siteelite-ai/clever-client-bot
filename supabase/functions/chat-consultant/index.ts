@@ -4651,7 +4651,29 @@ serve(async (req) => {
         classification = await classifyProductName(userMessage, recentHistoryForClassifier, appSettings);
         const classifyElapsed = Date.now() - classifyStart;
         console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → intent=${classification?.intent || 'none'}, has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}", is_replacement=${classification?.is_replacement || false}`);
-        
+
+        // === TITLE-FIRST FAST-PATH (mirrors article-first) ===
+        // If classifier returned a model-like product_name (digits/latin present),
+        // try a single Catalog API hop with ?pagetitle=… and skip the heavy
+        // slot/category/strict-search pipeline. Same Flash-model short-circuit
+        // semantics as article-first; reuses the existing articleShortCircuit
+        // flag so all downstream branches treat the result identically.
+        const titleCandidate = extractCandidateTitle(classification);
+        if (titleCandidate) {
+          console.log(`[Chat] Title-first: candidate="${titleCandidate}", searching directly...`);
+          const titleResults = await searchByPagetitle(titleCandidate, appSettings.volt220_api_token);
+          if (titleResults.length > 0) {
+            foundProducts = titleResults;
+            articleShortCircuit = true;
+            responseModel = 'google/gemini-2.5-flash';
+            responseModelReason = 'title-shortcircuit';
+            console.log(`[Chat] Title-first SUCCESS: found ${titleResults.length} product(s) for "${titleCandidate}", skipping slot/category pipeline`);
+          } else {
+            console.log(`[Chat] Title-first: no results for "${titleCandidate}", falling back to normal pipeline`);
+          }
+        }
+
+        if (!articleShortCircuit) {
         // === DIALOG SLOTS: try slot-based resolution FIRST ===
         // Filter out "none" — classifier returns string "none", not null
         effectivePriceIntent = 
