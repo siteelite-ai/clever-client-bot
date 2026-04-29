@@ -678,6 +678,9 @@ export async function assembleCatalog(
       status: facetMatch.status,
       filters_count: Object.keys(facetMatch.optionFilters).length,
       facetOptions_count: facetOptions.length,
+      facets_source: facetMatch.source,
+      bootstrap_used: bootstrapUsed,
+      probe_products: probeProductsCount,
       llm_mode: llmFacetMode,
       llm_ms: llmFacetMs,
       llm_resolved: llmFacetResolvedCount,
@@ -685,6 +688,25 @@ export async function assembleCatalog(
       llm_unresolved: llmFacetUnresolvedCount,
     },
   });
+
+  // ── §4.10.2 Sanitization ─────────────────────────────────────────────────
+  // Если фасет-схема недоступна (category_unavailable) И bootstrap не спас —
+  // НЕ инжектим unmatchedModifiers в ?query=. Strict-search идёт category-only
+  // (+price из intent.price_range, если есть). Это защищает от каскадного zero-result
+  // при сбоях /categories/options. Defect `auto_query_pollution_total`=0.
+  if (facetMatch.status === "category_unavailable" && resolver.pagetitle) {
+    const sanitizedExpansion: ExpansionResult = {
+      attempts: [{ form: "as_is_ru", text: resolver.pagetitle }],
+      skipped: expansion.skipped,
+      ms: expansion.ms,
+    };
+    log("assembler.sanitize_query_on_category_unavailable", {
+      pagetitle: resolver.pagetitle,
+      original_attempts: expansion.attempts.length,
+      dropped_traits: expansionTraits,
+    });
+    expansion = sanitizedExpansion;
+  }
 
   // ── 5a. PRICE branch (§4.4) ───────────────────────────────────────────────
   if (input.route === "S_PRICE") {
