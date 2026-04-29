@@ -479,26 +479,90 @@ export async function assembleCatalog(
 
   // ── 4. Facet Matcher (только если есть pagetitle) ─────────────────────────
   // §4.6: если категория не выбрана, фасет-вызов не имеет смысла (он привязан к pagetitle).
+  //
+  // §9.3 предписывает LLM-based matching (морфология RU/KK, числовые
+  // эквиваленты, билингвальность, составные конструкции) — это deps.facetsLLM.
+  // Детерминированный matchFacets остаётся как:
+  //   • baseline для случаев, когда LLM-deps не сконфигурированы (тесты, MVP);
+  //   • deep-fallback при mode='llm_failed' после §28-retry (uptime).
+  //
+  // Когда оба пути отработали, optionFilters/optionAliases/facetCaptions
+  // склеиваются в одну FacetMatchResult-структуру (контракт s-search/s-price
+  // не меняется).
   const tFM0 = now();
   let facetMatch: FacetMatchResult;
   let facetOptions: RawOption[] = [];
+  let llmFacetMode: string = "skipped";
+  let llmFacetMs = 0;
+  let llmFacetUnresolvedCount = 0;
+  let llmFacetSoftMatchesCount = 0;
+  let llmFacetResolvedCount = 0;
+
   if (resolver.pagetitle) {
     const modifiers = collectModifiers(input.intent);
-    try {
-      facetMatch = await matchFacets(resolver.pagetitle, modifiers, deps.facets);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      trace.errors.push({ stage: "facet_matcher", message: msg });
+
+    // §9.3 канонический путь: LLM Facet Matcher.
+    let llmResult: Awaited<ReturnType<typeof matchFacetsWithLLM>> | null = null;
+    if (deps.facetsLLM && modifiers.length > 0) {
+      try {
+        llmResult = await matchFacetsWithLLM(
+          {
+            pagetitle: resolver.pagetitle,
+            traits: modifiers,
+            user_query_raw: input.query,
+          },
+          deps.facetsLLM,
+        );
+        llmFacetMode = llmResult.mode;
+        llmFacetMs = llmResult.ms;
+        llmFacetUnresolvedCount = llmResult.unresolved.length;
+        llmFacetSoftMatchesCount = llmResult.soft_matches.length;
+        llmFacetResolvedCount = llmResult.resolved.length;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        trace.errors.push({ stage: "facet_matcher", message: `llm: ${msg}` });
+        llmFacetMode = "exception";
+      }
+    }
+
+    // Если LLM сработал успешно (mode='ok') — используем его результат как
+    // источник optionFilters. Иначе degrade на детерминированный matcher.
+    if (llmResult && llmResult.mode === "ok") {
+      const matchedTraits = [
+        ...llmResult.resolved.map((r) => r.trait),
+        ...llmResult.soft_matches.map((s) => s.trait),
+      ];
+      const unmatchedTraits = llmResult.unresolved.map((u) => u.trait);
       facetMatch = {
-        status: "category_unavailable",
-        optionFilters: {},
-        optionAliases: {},
-        facetCaptions: {},
-        matchedModifiers: [],
-        unmatchedModifiers: modifiers,
-        source: "unavailable",
-        ms: 0,
+        status: Object.keys(llmResult.optionFilters).length > 0 ? "ok" : "no_matches",
+        optionFilters: llmResult.optionFilters,
+        optionAliases: llmResult.optionAliases,
+        facetCaptions: llmResult.facetCaptions,
+        matchedModifiers: matchedTraits,
+        unmatchedModifiers: unmatchedTraits,
+        source: llmResult.source,
+        ms: llmResult.ms,
       };
+    } else {
+      // Degrade-путь: либо LLM-deps нет, либо mode='llm_failed'/'no_facets'/'no_traits'/'category_unavailable'/'exception'.
+      // Детерминированный matcher даёт baseline (exact-match), не нарушая §9.3
+      // (не «выдумывает значения», а просто проверяет точное равенство).
+      try {
+        facetMatch = await matchFacets(resolver.pagetitle, modifiers, deps.facets);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        trace.errors.push({ stage: "facet_matcher", message: msg });
+        facetMatch = {
+          status: "category_unavailable",
+          optionFilters: {},
+          optionAliases: {},
+          facetCaptions: {},
+          matchedModifiers: [],
+          unmatchedModifiers: modifiers,
+          source: "unavailable",
+          ms: 0,
+        };
+      }
     }
 
     // Для S_PRICE composer-clarify нужны RawOption[] — берём прямой вызов
@@ -533,6 +597,11 @@ export async function assembleCatalog(
       status: facetMatch.status,
       filters_count: Object.keys(facetMatch.optionFilters).length,
       facetOptions_count: facetOptions.length,
+      llm_mode: llmFacetMode,
+      llm_ms: llmFacetMs,
+      llm_resolved: llmFacetResolvedCount,
+      llm_soft_matches: llmFacetSoftMatchesCount,
+      llm_unresolved: llmFacetUnresolvedCount,
     },
   });
 
