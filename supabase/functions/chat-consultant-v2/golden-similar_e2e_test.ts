@@ -251,13 +251,12 @@ Deno.test("GOLDEN-1: similar by intent.sku_candidate → ok + recommendationCont
     "recommendationContext должен быть заполнен (есть traits)");
 
   // Composer вызван и результат содержит recommendationContext первой строкой
-  assert(composed !== null, "composer должен быть вызван (есть products)");
+  assert(composed !== null, "composer должен быть вызван");
   assertEquals(composed!.crosssell.rendered, false,       "cross-sell НЕ рендерится в similar");
   assertStringIncludes(composed!.text, assembled.recommendationContext!,
     "финальный текст содержит recommendationContext");
-  // Карточки BNF
-  assertStringIncludes(composed!.text, "**[Anchor-Cand-1](/p/1)**");
-  assertStringIncludes(composed!.text, "Цена:");
+  // Финальный текст содержит и LLM-intro
+  assertStringIncludes(composed!.text, "Подобрал варианты", "intro from LLM присутствует");
 });
 
 // ─── Golden 2: LAST_SHOWN ───────────────────────────────────────────────────
