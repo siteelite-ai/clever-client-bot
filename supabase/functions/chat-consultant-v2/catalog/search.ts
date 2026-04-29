@@ -205,11 +205,13 @@ export async function search(
   const strictRaw = await searchProducts(strictInput, deps);
   attempts.push({ label: "strict", ms: strictRaw.ms, raw: strictRaw });
 
-  // Хард-фейлы: HTTP/timeout/network → error (escalation, без soft404 streak).
+  // Хард-фейлы: HTTP/timeout/network/breaker → error (escalation, без soft404 streak).
+  // F.5: 'upstream_unavailable' (circuit breaker OPEN) — синоним transport-failure.
   if (
     strictRaw.status === "http_error" ||
     strictRaw.status === "timeout" ||
-    strictRaw.status === "network_error"
+    strictRaw.status === "network_error" ||
+    strictRaw.status === "upstream_unavailable"
   ) {
     return {
       status: "error",
@@ -339,7 +341,8 @@ export async function search(
     if (
       softRaw.status === "http_error" ||
       softRaw.status === "timeout" ||
-      softRaw.status === "network_error"
+      softRaw.status === "network_error" ||
+      softRaw.status === "upstream_unavailable"
     ) {
       return {
         status: "empty",

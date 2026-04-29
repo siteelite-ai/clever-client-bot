@@ -226,7 +226,8 @@ export async function matchFacets(
   if (
     facetsResult.status === 'http_error' ||
     facetsResult.status === 'timeout' ||
-    facetsResult.status === 'network_error'
+    facetsResult.status === 'network_error' ||
+    facetsResult.status === 'upstream_unavailable'
   ) {
     return {
       status: 'category_unavailable',
