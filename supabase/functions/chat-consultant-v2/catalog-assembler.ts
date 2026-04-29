@@ -454,7 +454,41 @@ export async function assembleCatalog(
     meta: { status: resolver.status, pagetitle: resolver.pagetitle, confidence: resolver.confidence },
   });
 
-  // ── 3. Query Expansion ────────────────────────────────────────────────────
+  // ── 3. §4.10 Parallel Probe (kick-off, awaited перед Facet Matcher) ──────
+  // Запускаем probe-запрос /products?per_page=N_PROBE параллельно с Query
+  // Expansion. Результат нужен ТОЛЬКО как Self-Bootstrap fallback для Facet
+  // Matcher (§4.10.1) — на случай транспортного сбоя /categories/options.
+  //
+  // Probe идёт category-only (+ price из intent.price_range, если задан) —
+  // НЕ инжектим unmatchedModifiers в query (§4.10.2 sanitization).
+  // Если pagetitle пуст — probe пропускаем (нечего запрашивать).
+  const tProbe0 = now();
+  const probePromise: Promise<RawProduct[]> = (async () => {
+    if (!resolver.pagetitle) return [];
+    try {
+      const minP = input.intent.price_intent === "range"
+        ? (input.intent.price_range?.min as number | undefined)
+        : undefined;
+      const maxP = input.intent.price_intent === "range"
+        ? (input.intent.price_range?.max as number | undefined)
+        : undefined;
+      const probe = await searchProducts(
+        {
+          category: resolver.pagetitle,
+          perPage: N_PROBE,
+          minPrice: typeof minP === "number" ? minP : undefined,
+          maxPrice: typeof maxP === "number" ? maxP : undefined,
+        },
+        deps.apiClient,
+      );
+      return probe.status === "ok" ? probe.products : [];
+    } catch (e) {
+      log("assembler.probe_failed", { msg: e instanceof Error ? e.message : String(e) });
+      return [];
+    }
+  })();
+
+  // ── 4. Query Expansion ────────────────────────────────────────────────────
   // §9.2b §3: вместо сырой реплики передаём извлечённые Intent-LLM трейты
   // (`search_modifiers ∪ critical_modifiers`). Это `extractRuTokens` из
   // спеки — отбрасываем шумовые слова реплики («найди», «подскажи» и т.п.),
