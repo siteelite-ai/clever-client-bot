@@ -41,6 +41,44 @@ import { priceBranch } from "./s-price.ts";
 import type { ApiClientDeps, RawOption } from "./catalog/api-client.ts";
 import { getCategoryOptions } from "./catalog/api-client.ts";
 import type { SearchOutcome, SearchStatus } from "./catalog/search.ts";
+
+// ─── F.5.8: defense-in-depth для disallowCrosssell ──────────────────────────
+//
+// Контракт (§5.4.1 + §11.5b + Core memory «Cross-sell NOT shown for similar»):
+//
+//   Cross-sell разрешён ТОЛЬКО когда у пользователя на руках валидная выдача
+//   с товарами (scenario='normal' в композере). Любой другой исход —
+//   уточнение, escalation, soft_404, soft_fallback, infrastructure failure —
+//   запрет cross-sell.
+//
+//   Composer применяет ту же логику OR на своём уровне (`scenarioDisallowed =
+//   scenario !== 'normal'`). F.5.8 добавляет ВТОРОЙ слой защиты в assembler:
+//   запрет проставляется ЯВНО на основании финального статуса outcome'а,
+//   независимо от того, как composer ИНТЕРПРЕТИРУЕТ scenario. Это страхует
+//   от регрессий decideScenario и от добавления новых веток с дефолтом
+//   `disallowCrosssell=false`.
+//
+//   Helper'ы — pure functions, тестируются отдельно.
+
+/**
+ * Запрет cross-sell для S_PRICE: разрешён ТОЛЬКО когда branch ∈ {'show_all','show_top'},
+ * т.е. когда есть готовая отсортированная выдача товаров. Все остальные ветки
+ * (clarify, error, all_zero_price, empty, out_of_domain) — запрет.
+ */
+export function shouldDisallowCrosssellForPrice(outcome: SPriceOutcome): boolean {
+  return !(outcome.status === "ok" &&
+    (outcome.branch === "show_all" || outcome.branch === "show_top"));
+}
+
+/**
+ * Запрет cross-sell для S_CATALOG (search): разрешён ТОЛЬКО при status='ok'
+ * с непустыми товарами. soft_fallback тоже запрещён (§4.8: уточнение, не
+ * место для cross-sell). Согласовано с composer'ом (см. §5.4.1).
+ */
+export function shouldDisallowCrosssellForSearch(outcome: SearchOutcome): boolean {
+  if (outcome.status !== "ok") return true;
+  return outcome.products.length === 0;
+}
 import type { SSimilarDeps, SSimilarOutcome } from "./s-similar/index.ts";
 import { runSimilarBranch } from "./s-similar/index.ts";
 
@@ -519,8 +557,11 @@ export async function assembleCatalog(
       ood: false,
       trace,
       resolvedPagetitle: resolver.pagetitle,
-      // §4.4 + §11.5b: clarify-вопрос НЕ должен сопровождаться cross-sell.
-      disallowCrosssell: priceOutcome.branch === "clarify",
+      // F.5.8 + §4.4 + §11.5b + §5.6.1: запрет cross-sell для всех price-веток
+      // кроме show_all/show_top (clarify-вопрос, error от breaker, all_zero_price,
+      // empty, out_of_domain — все требуют запрета). Defense in depth: composer
+      // отдельно форсит то же через scenario != 'normal'.
+      disallowCrosssell: shouldDisallowCrosssellForPrice(priceOutcome),
     };
   }
 
@@ -545,13 +586,14 @@ export async function assembleCatalog(
       ms: now() - tSS0,
       meta: { skipped: "no_pagetitle" },
     });
+    const adaptedEmpty = adaptSSearchToSearchOutcome(emptyOutcome);
     return {
-      composerOutcome: { kind: "search", outcome: adaptSSearchToSearchOutcome(emptyOutcome) },
+      composerOutcome: { kind: "search", outcome: adaptedEmpty },
       ood: false,
       trace,
       resolvedPagetitle: null,
-      // empty → composer сам форсит запрет (scenario != normal); ставим false.
-      disallowCrosssell: false,
+      // F.5.8: empty → запрет (defense in depth). Composer всё равно форсит то же.
+      disallowCrosssell: shouldDisallowCrosssellForSearch(adaptedEmpty),
     };
   }
 
@@ -581,14 +623,15 @@ export async function assembleCatalog(
     },
   });
 
+  const adaptedSearch = adaptSSearchToSearchOutcome(searchOutcome);
   return {
-    composerOutcome: { kind: "search", outcome: adaptSSearchToSearchOutcome(searchOutcome) },
+    composerOutcome: { kind: "search", outcome: adaptedSearch },
     ood: false,
     trace,
     resolvedPagetitle: resolver.pagetitle,
-    // S_CATALOG normal/soft_fallback: запрет не нужен на уровне assembler —
-    // композер сам решит по scenario. similar-ветка (Stage 8) проставит true.
-    disallowCrosssell: false,
+    // F.5.8: cross-sell разрешён ТОЛЬКО при ok+products. soft_fallback/empty/error
+    // → запрет (defense in depth поверх composer scenario-логики).
+    disallowCrosssell: shouldDisallowCrosssellForSearch(adaptedSearch),
   };
 }
 
