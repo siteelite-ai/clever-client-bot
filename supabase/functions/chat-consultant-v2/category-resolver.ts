@@ -218,12 +218,22 @@ export async function resolveCategory(
   }
 
   // ----- 3. Полный путь: live list + LLM ----------------------------------
+  // Timing breakdown (§5 плана, §6.2 спеки — для диагностики деградации p50).
+  // Каждый интервал измеряется отдельно, чтобы видно было, кто конкретно
+  // ест бюджет 400 ms: HTTP /api/categories, LLM round-trip или JSON-парсинг.
+  let httpCategoriesMs = 0;
+  let llmMs = 0;
+  let parseMs = 0;
+
+  const tHttpStart = Date.now();
   let categories: string[];
   try {
     categories = await deps.listCategories();
+    httpCategoriesMs = Date.now() - tHttpStart;
   } catch (e) {
+    httpCategoriesMs = Date.now() - tHttpStart;
     const msg = e instanceof Error ? e.message : String(e);
-    deps.log("category_resolver.list_failed", { traceId, error: msg });
+    deps.log("category_resolver.list_failed", { traceId, error: msg, http_categories_ms: httpCategoriesMs });
     return {
       status: "unresolved",
       pagetitle: null,
@@ -235,7 +245,7 @@ export async function resolveCategory(
     };
   }
   if (!Array.isArray(categories) || categories.length === 0) {
-    deps.log("category_resolver.empty_list", { traceId });
+    deps.log("category_resolver.empty_list", { traceId, http_categories_ms: httpCategoriesMs });
     return {
       status: "unresolved",
       pagetitle: null,
@@ -252,6 +262,7 @@ export async function resolveCategory(
 
   let llmText = "";
   let llmModel = "";
+  const tLlmStart = Date.now();
   try {
     const res = await deps.callLLM([
       { role: "system", content: SYSTEM_PROMPT },
@@ -259,9 +270,16 @@ export async function resolveCategory(
     ]);
     llmText = res.text;
     llmModel = res.model;
+    llmMs = Date.now() - tLlmStart;
   } catch (e) {
+    llmMs = Date.now() - tLlmStart;
     const msg = e instanceof Error ? e.message : String(e);
-    deps.log("category_resolver.llm_failed", { traceId, error: msg });
+    deps.log("category_resolver.llm_failed", {
+      traceId,
+      error: msg,
+      http_categories_ms: httpCategoriesMs,
+      llm_ms: llmMs,
+    });
     return {
       status: "unresolved",
       pagetitle: null,
@@ -273,7 +291,9 @@ export async function resolveCategory(
     };
   }
 
+  const tParseStart = Date.now();
   const candidates = parseLLMResponse(llmText, validSet);
+  parseMs = Date.now() - tParseStart;
   const top = candidates[0];
   const conf = top?.confidence ?? 0;
 
@@ -295,6 +315,19 @@ export async function resolveCategory(
     returnCandidates = candidates; // оставляем для трассировки
   }
 
+  const totalMs = Date.now() - t0;
+
+  // Структурированный timing-лог (план Шаг 5). Тег фиксированный для grep.
+  deps.log("category_resolver.timing", {
+    traceId,
+    http_categories_ms: httpCategoriesMs,
+    llm_ms: llmMs,
+    parse_ms: parseMs,
+    total_ms: totalMs,
+    catalog_size: categories.length,
+    model: llmModel,
+  });
+
   deps.log("category_resolver.done", {
     traceId,
     status,
@@ -304,7 +337,10 @@ export async function resolveCategory(
     catalog_size: categories.length,
     model: llmModel,
     thresholds,
-    ms: Date.now() - t0,
+    http_categories_ms: httpCategoriesMs,
+    llm_ms: llmMs,
+    parse_ms: parseMs,
+    ms: totalMs,
   });
 
   return {
@@ -313,6 +349,6 @@ export async function resolveCategory(
     candidates: returnCandidates,
     confidence: conf,
     source: "llm",
-    ms: Date.now() - t0,
+    ms: totalMs,
   };
 }
