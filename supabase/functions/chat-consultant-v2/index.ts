@@ -420,7 +420,10 @@ serve(async (req) => {
               console.log(`[v2.catalog.${event}] trace=${traceId}`, data ?? {}),
           });
 
-          // 1) Assembler: resolver → expansion → facets → s_search/s_price.
+          // 1) Assembler: resolver → expansion → facets → s_search/s_price/s_similar.
+          // F.4.1: state пробрасываем для §4.6.2 anchor fallback (s-similar
+          // читает state.last_shown_product_sku, когда пользователь говорит
+          // «подбери аналог» без явного SKU в текущем запросе).
           const assembled = await assembleCatalog(
             {
               route: decision.route,
@@ -429,6 +432,7 @@ serve(async (req) => {
               history: chatReq.history,
               slotMatch: decision.slot_match,
               traceId,
+              state: mutableNextState,
             },
             catalogDeps,
           );
