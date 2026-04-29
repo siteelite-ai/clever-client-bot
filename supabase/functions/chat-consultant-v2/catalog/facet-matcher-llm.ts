@@ -306,6 +306,8 @@ export interface FacetMatcherLLMInput {
   traits: string[];
   /** Исходная реплика — для составных конструкций (§9.3 пункт 2.5). */
   user_query_raw: string;
+  /** §4.10.1 Self-Bootstrap Facets fallback для transport-failure /categories/options. */
+  bootstrapOptions?: RawOption[];
 }
 
 export async function matchFacetsWithLLM(
@@ -337,7 +339,7 @@ export async function matchFacetsWithLLM(
 
   // ── 1. Загрузка facets через кэш. ──────────────────────────────────────
   let facetsResult: CategoryOptionsResult;
-  let source: 'cache' | 'live' | 'unavailable' = 'live';
+  let source: 'cache' | 'live' | 'bootstrap' | 'unavailable' = 'live';
   try {
     const cached = await deps.cacheGetOrCompute<CategoryOptionsResult>(
       'facets',
@@ -358,6 +360,15 @@ export async function matchFacetsWithLLM(
     facetsResult.status === 'network_error' ||
     facetsResult.status === 'upstream_unavailable'
   ) {
+    if (Array.isArray(input.bootstrapOptions) && input.bootstrapOptions.length > 0) {
+      facetsResult = {
+        status: 'ok',
+        options: input.bootstrapOptions,
+        totalProducts: input.bootstrapOptions.length,
+        ms: facetsResult.ms,
+      };
+      source = 'bootstrap';
+    } else {
     return {
       ...baseEmpty,
       mode: 'category_unavailable',
@@ -365,6 +376,7 @@ export async function matchFacetsWithLLM(
       source: 'unavailable',
       ms: Date.now() - t0,
     };
+    }
   }
 
   if (facetsResult.status === 'empty' || facetsResult.options.length === 0) {
