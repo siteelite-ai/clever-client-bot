@@ -57,3 +57,35 @@ export const CATEGORIES_TTL_MS = 15 * 60 * 1000;
 
 /** Базовый URL Catalog API (можно переопределить env-переменной). */
 export const CATALOG_API_BASE_URL_DEFAULT = "https://220volt.kz/api";
+
+// ─── Circuit Breaker для Catalog API (Stage F.5) ────────────────────────────
+
+/**
+ * Defaults для circuit breaker'а вокруг Catalog API.
+ *
+ * Источники:
+ *   • spec §5.6.1 строка 697: транспортный сбой (HTTP 5xx/timeout/network) →
+ *     `SearchOutcome.status='error'` → `contactManager=true` минуя streak.
+ *     Breaker — фронт этой защиты: при серии сбоев перестаёт стучаться к
+ *     upstream, экономит latency-бюджет (§7.1) и даёт upstream восстановиться.
+ *   • Core Memory: «No hardcoded values» — пороги здесь, не в api-client.ts.
+ *   • Core Memory: «Real-time catalog API only. Do not sync» — state
+ *     in-memory на инстанс edge-функции, без Postgres.
+ *
+ * Подбор параметров (консервативный baseline под сегодняшний инцидент):
+ *   • failureThreshold=5 — устойчиво к одиночным jitter'ам upstream.
+ *   • failureWindowMs=30s — окно учёта; при «штормовых» отказах 5 сбоев
+ *     набираются за секунды, breaker открывается быстро.
+ *   • openDurationMs=30s — даём upstream восстановиться, но не висим долго:
+ *     пользователь получит [CONTACT_MANAGER] и сможет повторить через ~30с.
+ *   • halfOpenMaxProbes=1 — single-shot probe (минимум нагрузки на upstream).
+ *
+ * TODO(stage-8): вынести в `app_settings.catalog_breaker_json` для тонкой
+ * настройки админом без редеплоя.
+ */
+export const CATALOG_BREAKER_DEFAULTS = {
+  failureThreshold: 5,
+  failureWindowMs: 30_000,
+  openDurationMs: 30_000,
+  halfOpenMaxProbes: 1,
+} as const;
