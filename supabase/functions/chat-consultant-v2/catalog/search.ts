@@ -262,6 +262,22 @@ export async function search(
   const strictFiltered = strictRaw.products.filter((p) => matchesWordBoundary(p, queryTokens));
   const strictPostDropped = strictRaw.products.length - strictFiltered.length;
 
+  // [DEBUG-F.4.2 TEMP] эффективность word-boundary post-filter.
+  // Удалить после диагностики strict-search regression.
+  try {
+    const droppedSample = strictRaw.products
+      .filter((p) => !matchesWordBoundary(p, queryTokens))
+      .slice(0, 3)
+      .map((p: any) => ({ id: p?.id, pagetitle: p?.pagetitle }));
+    console.log(`[v2.debug.search.post_filter] ${JSON.stringify({
+      query_tokens: queryTokens,
+      products_in: strictRaw.products.length,
+      products_out: strictFiltered.length,
+      dropped: strictPostDropped,
+      dropped_sample: droppedSample,
+    })}`);
+  } catch { /* never break on debug */ }
+
   if (strictFiltered.length > 0) {
     return {
       status: "ok",
