@@ -230,3 +230,32 @@ export class CircuitBreaker {
     this.failureTimestamps = this.failureTimestamps.filter((t) => t >= cutoff);
   }
 }
+
+// ─── Module-level singleton (Stage F.5.2) ───────────────────────────────────
+//
+// Один CircuitBreaker на инстанс edge-функции, вокруг ВСЕГО Catalog API
+// (общий для /products и /categories/options — см. F.5 architect review:
+// раздельные breakers по эндпоинтам — преждевременная оптимизация).
+//
+// Lazy init: первая попытка использовать создаёт инстанс с дефолтами из
+// config.ts. `__resetCatalogBreakerForTests` существует только для unit-тестов
+// `api-client_test.ts` — production-код его не вызывает.
+
+import { CATALOG_BREAKER_DEFAULTS } from '../config.ts';
+
+let _catalogBreaker: CircuitBreaker | null = null;
+
+export function getCatalogBreaker(): CircuitBreaker {
+  if (_catalogBreaker === null) {
+    _catalogBreaker = new CircuitBreaker({ ...CATALOG_BREAKER_DEFAULTS });
+  }
+  return _catalogBreaker;
+}
+
+/**
+ * ТОЛЬКО для тестов. Сбрасывает singleton, чтобы каждый тест начинал с CLOSED.
+ * Имя с двойным подчёркиванием — социальный маркер «не вызывать в проде».
+ */
+export function __resetCatalogBreakerForTests(): void {
+  _catalogBreaker = null;
+}
