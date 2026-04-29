@@ -939,24 +939,7 @@ function extractCandidateTitle(classification: ClassificationResult | null): str
   return name;
 }
 
-/**
- * Decide whether a Micro-LLM classification yields a candidate title strong enough
- * for a title-fast-path (single API hop, skip slot/category/strict-search).
- *
- * Heuristic: classifier flagged has_product_name AND the name looks like a real
- * product model — long enough, contains a digit OR a latin letter (model markers
- * such as "A60", "LED", "9W", "E27", "GX53", "IP44"). Pure "лампы для школы" or
- * "розетки белые" → no digit/latin → NOT a candidate, fall through to normal pipeline.
- */
-function extractCandidateTitle(classification: ClassificationResult | null): string | null {
-  if (!classification?.has_product_name) return null;
-  const name = (classification.product_name || '').trim();
-  if (name.length < 6) return null;
-  const hasLetter = /[A-Za-zА-Яа-яЁё]/.test(name);
-  const hasDigitOrLatin = /[\dA-Za-z]/.test(name);
-  if (!hasLetter || !hasDigitOrLatin) return null;
-  return name;
-}
+
 
 /**
  * Search products by site identifier
