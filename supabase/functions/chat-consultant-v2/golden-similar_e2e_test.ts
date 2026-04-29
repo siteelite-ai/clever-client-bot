@@ -256,7 +256,7 @@ Deno.test("GOLDEN-1: similar by intent.sku_candidate → ok + recommendationCont
   assertStringIncludes(composed!.text, assembled.recommendationContext!,
     "финальный текст содержит recommendationContext");
   // Карточки BNF
-  assertStringIncludes(composed!.text, "**[Cand-1](/p/1)**");
+  assertStringIncludes(composed!.text, "**[Anchor-Cand-1](/p/1)**");
   assertStringIncludes(composed!.text, "Цена:");
 });
 
@@ -291,7 +291,7 @@ Deno.test("GOLDEN-2: similar by state.last_shown_product_sku → ok + recommenda
   assertEquals(env.classifyCalls, 1);
   assert(composed !== null);
   assertEquals(composed!.crosssell.rendered, false);
-  assertStringIncludes(composed!.text, "**[Cand-3](/p/3)**");
+  assertStringIncludes(composed!.text, "**[Anchor-Cand-3](/p/3)**");
 });
 
 // ─── Golden 3: CLARIFY_ANCHOR ───────────────────────────────────────────────
@@ -325,7 +325,7 @@ Deno.test("GOLDEN-3: no SKU & no last_shown → clarify_anchor (no LLM, no slot,
   assert(assembled.composerOutcome !== null);
   assert(composed !== null);
   // Никаких карточек не должно быть
-  assert(!composed!.text.includes("**[Cand"), "никаких товарных карточек");
+  assert(!composed!.text.includes("**[Anchor-Cand"), "никаких товарных карточек");
   // Cross-sell не рендерится
   assertEquals(composed!.crosssell.rendered, false);
   // INV-S3: clarify_anchor НЕ создаёт slot — assembler не возвращает slot,
