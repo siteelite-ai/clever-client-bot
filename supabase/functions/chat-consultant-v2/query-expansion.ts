@@ -180,12 +180,30 @@ export async function expandQuery(
   const attempts: QueryAttempt[] = [];
 
   const original = (input.query ?? "").trim();
+  // §9.2b §3 `extractRuTokens`: если Intent-LLM выделил трейты — используем
+  // их как базу `as_is_ru` (вместо сырой реплики со словами-шумами вроде
+  // «найди», «подскажи»). Это критично для word-boundary post-filter §9.2c:
+  // он требует, чтобы КАЖДЫЙ токен из query нашёлся как отдельное слово в
+  // pagetitle/article/content. Глаголы и служебные слова в карточках товаров
+  // отсутствуют → если они попали в query, выдача всегда 0.
+  const traits = (input.traits ?? [])
+    .map((t) => (t ?? "").trim())
+    .filter((t) => t.length > 0);
+  const asIsBase = traits.length > 0 ? traits.join(" ") : original;
   // Нормализованная база для сравнения «изменилось ли» — collapse пробелов.
-  const asIsNormalized = original.replace(/\s+/g, " ");
+  const asIsNormalized = asIsBase.replace(/\s+/g, " ");
 
   // ── 1. as_is_ru — всегда первый ──────────────────────────────────────────
-  attempts.push({ form: "as_is_ru", text: asIsNormalized });
-  log("expansion.as_is_ru", { text: asIsNormalized, traceId: input.traceId });
+  attempts.push({
+    form: "as_is_ru",
+    text: asIsNormalized,
+    meta: traits.length > 0 ? { source: "traits", traits } : { source: "raw_query" },
+  });
+  log("expansion.as_is_ru", {
+    text: asIsNormalized,
+    source: traits.length > 0 ? "traits" : "raw_query",
+    traceId: input.traceId,
+  });
 
   // ── 2. lexicon_canonical ─────────────────────────────────────────────────
   let lexicon: Record<string, string> = {};
