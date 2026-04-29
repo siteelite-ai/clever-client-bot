@@ -209,6 +209,12 @@ export interface ComposeCatalogInput {
    * у запрета). Если флаг не передан → false (нет внешнего запрета).
    */
   disallowCrosssell?: boolean;
+  /**
+   * §4.6 + §11.6: 1-строка-объяснение от similar-ветки. Если задана и
+   * scenario==='normal', вставляется ПЕРЕД LLM intro отдельным абзацем.
+   * Никогда не подаётся в LLM (это deterministic-текст из traits).
+   */
+  recommendationContext?: string;
   /** Опциональный AbortSignal. */
   signal?: AbortSignal;
   /** Колбек на каждый delta-токен (для проксирования в SSE). */
@@ -580,7 +586,18 @@ async function composeWithProducts(
   const cards = formatProductList(norm.products, input.formatterOptions);
 
   // ── 5. Сборка финального текста ──
+  // §4.6 + §11.6: similar-ветка передаёт recommendationContext — вставляем
+  // ПЕРЕД intro отдельным абзацем. Только при scenario='normal' (есть товары).
+  // Гарантирует, что юзер видит «Подобрал по характеристикам …» как первую
+  // строку similar-ответа, до творческого intro от LLM.
   const parts: string[] = [];
+  if (
+    typeof input.recommendationContext === "string" &&
+    input.recommendationContext.trim().length > 0 &&
+    scenario === "normal"
+  ) {
+    parts.push(input.recommendationContext.trim());
+  }
   if (intro) parts.push(intro);
   if (cards.markdown) parts.push(cards.markdown);
   if (scenario === "soft_fallback") {

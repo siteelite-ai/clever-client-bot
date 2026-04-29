@@ -456,6 +456,8 @@ serve(async (req) => {
                   // §5.4.1 + §11.5b: внешний запрет cross-sell — единственный
                   // источник правды — assembler (см. AssemblerResult.disallowCrosssell).
                   disallowCrosssell: assembled.disallowCrosssell,
+                  // §4.6 + §11.6: similar-ветка передаёт 1-строку «Подобрал по…».
+                  recommendationContext: assembled.recommendationContext,
                   onDelta: (delta) => {
                     controller.enqueue(
                       sseChunk({ choices: [{ delta: { content: delta } }] }),
