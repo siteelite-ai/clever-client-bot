@@ -137,6 +137,9 @@ export async function getOrCompute<T>(
   const value = await compute();
   // fire-and-forget set (не блокирует ответ пользователю)
   set(cacheKey, value, ttlSec).catch(() => {});
+  return { value, cacheHit: false, cacheKey };
+}
+
 /**
  * §4.11 Stale-on-error: расширение `getOrCompute`. Двухслойный кэш:
  *
