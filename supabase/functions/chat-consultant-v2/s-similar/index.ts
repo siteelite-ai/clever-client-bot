@@ -263,17 +263,22 @@ export async function runSimilarBranch(
   // LLM-резолва, поскольку Catalog API уже сказал, в какой категории живёт товар).
   let pagetitle = anchorProduct.category?.pagetitle ?? '';
   if (!pagetitle) {
-    // Fallback: gо через resolver по anchor.name/pagetitle.
+    // Fallback: идём через resolver по anchor.name/pagetitle.
     const resolverRes = await resolveCategory(
       {
         query: anchorProduct.pagetitle || anchorProduct.name || anchor.sku,
         intent: 'catalog',
-        slots: [],
+        slot: null,
+        traceId: `s-similar-${anchor.sku}`,
       },
       deps.resolver,
     );
     trace.resolverStatus = resolverRes.status;
-    if (resolverRes.status !== 'ok' || resolverRes.candidates.length === 0) {
+    const resolved = resolverRes.pagetitle ?? resolverRes.candidates[0]?.pagetitle ?? '';
+    if (
+      (resolverRes.status !== 'resolved' && resolverRes.status !== 'ambiguous' && resolverRes.status !== 'skipped_slot') ||
+      !resolved
+    ) {
       trace.ms = now() - t0;
       return {
         status: 'error',
@@ -284,7 +289,7 @@ export async function runSimilarBranch(
         errorMessage: `category resolver failed for anchor: ${resolverRes.status}`,
       };
     }
-    pagetitle = resolverRes.candidates[0].pagetitle;
+    pagetitle = resolved;
   }
   trace.anchorPagetitle = pagetitle;
 
