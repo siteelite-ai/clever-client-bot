@@ -389,17 +389,6 @@ export async function searchProducts(
   const params = buildProductsParams(input);
   const url = `${deps.baseUrl}/products?${params.toString()}`;
 
-  // [DEBUG-F.4.2 TEMP] какой запрос реально уходит в каталог 220volt.
-  // Удалить после диагностики strict-search regression.
-  try {
-    console.log(`[v2.debug.search.outgoing_url] ${url}`);
-    console.log(`[v2.debug.search.input] ${JSON.stringify({
-      query: input.query, pagetitle: input.pagetitle, article: input.article,
-      category: input.category, optionFilters: input.optionFilters,
-      optionAliases: input.optionAliases, page: input.page, perPage: input.perPage,
-    })}`);
-  } catch { /* never break on debug */ }
-
   // F.4.3: единая retry-политика (timeout/network → 1 retry с x1.33 timeout).
   const fetched = await fetchWithRetry(url, deps.apiToken, timeoutMs, fetchFn);
   if (!fetched.ok) {
