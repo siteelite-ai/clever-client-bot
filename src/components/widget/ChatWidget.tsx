@@ -250,7 +250,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
   const WELCOME_MESSAGE =
     'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?';
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { id: mid('welcome'), role: 'assistant', content: WELCOME_MESSAGE },
+    { id: mid('welcome'), role: 'assistant', content: WELCOME_MESSAGE, timestamp: new Date() },
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
