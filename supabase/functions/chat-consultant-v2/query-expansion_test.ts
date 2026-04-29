@@ -224,3 +224,41 @@ Deno.test("qe: пустой query → as_is_ru с '', не падает", async 
   const r = await expandQuery({ query: "   ", traceId: "t" }, deps);
   assertEquals(r.attempts[0].text, "");
 });
+
+// ─── 16. §9.2b §3 — traits заменяют сырую реплику в as_is_ru ───────────────
+
+Deno.test("qe §9.2b §3: traits override raw query for as_is_ru", async () => {
+  const { deps } = makeDeps({});
+  const r = await expandQuery(
+    {
+      query: "найди черные двухгнёздые розетки пожалуйста",
+      traceId: "t",
+      traits: ["черные", "двухгнёздые", "розетки"],
+    },
+    deps,
+  );
+  assertEquals(r.attempts[0].form, "as_is_ru");
+  // Шумовые слова "найди", "пожалуйста" должны быть отброшены — в attempt
+  // только трейты, иначе word-boundary post-filter §9.2c обнулит выдачу.
+  assertEquals(r.attempts[0].text, "черные двухгнёздые розетки");
+  assertEquals(r.attempts[0].meta?.source, "traits");
+});
+
+Deno.test("qe §9.2b §3: пустой traits → fallback на raw query", async () => {
+  const { deps } = makeDeps({});
+  const r = await expandQuery(
+    { query: "сырой запрос", traceId: "t", traits: [] },
+    deps,
+  );
+  assertEquals(r.attempts[0].text, "сырой запрос");
+  assertEquals(r.attempts[0].meta?.source, "raw_query");
+});
+
+Deno.test("qe §9.2b §3: undefined traits → fallback на raw query (бекcompat)", async () => {
+  const { deps } = makeDeps({});
+  const r = await expandQuery(
+    { query: "обратная совместимость", traceId: "t" },
+    deps,
+  );
+  assertEquals(r.attempts[0].text, "обратная совместимость");
+});
