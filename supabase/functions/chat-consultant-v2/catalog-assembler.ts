@@ -167,6 +167,7 @@ function adaptSSimilarToSearchOutcome(s: SSimilarOutcome): SearchOutcome {
 export type AssemblerStage =
   | "ood_shortcut"
   | "category_resolver"
+  | "parallel_probe"
   | "query_expansion"
   | "facet_matcher"
   | "s_search"
