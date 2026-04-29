@@ -100,13 +100,14 @@ export interface RawProduct {
 }
 
 export type SearchStatus =
-  | 'ok'              // ≥1 товар после price>0 фильтра
-  | 'empty'           // total=0 от API без признаков quirk
-  | 'empty_degraded'  // total=0, но recovery-без-quirk-ключа дал >0 → есть подозрение на Q3
-  | 'all_zero_price'  // API вернул товары, но все с price=0 (HARD BAN)
+  | 'ok'                    // ≥1 товар после price>0 фильтра
+  | 'empty'                 // total=0 от API без признаков quirk
+  | 'empty_degraded'        // total=0, но recovery-без-quirk-ключа дал >0 → есть подозрение на Q3
+  | 'all_zero_price'        // API вернул товары, но все с price=0 (HARD BAN)
   | 'http_error'
   | 'timeout'
-  | 'network_error';
+  | 'network_error'
+  | 'upstream_unavailable'; // F.5: circuit breaker OPEN (синоним transport-failure для верхних слоёв)
 
 export interface SearchProductsResult {
   status: SearchStatus;
@@ -140,7 +141,7 @@ export interface RawOption {
 }
 
 export interface CategoryOptionsResult {
-  status: 'ok' | 'empty' | 'http_error' | 'timeout' | 'network_error';
+  status: 'ok' | 'empty' | 'http_error' | 'timeout' | 'network_error' | 'upstream_unavailable';
   options: RawOption[];
   totalProducts: number;     // category.total_products из API (может быть 0 при degraded)
   ms: number;
