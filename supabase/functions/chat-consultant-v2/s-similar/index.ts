@@ -334,18 +334,18 @@ export async function runSimilarBranch(
   for (let iter = 0; iter <= MAX_DEGRADE_ITERATIONS; iter++) {
     const activeModifiers = traitsToModifiers([...must, ...should]);
     const facetMatch: FacetMatchResult = await matchFacets(
-      { pagetitle, modifiers: activeModifiers },
+      pagetitle,
+      activeModifiers,
       deps.facetMatcher,
     );
 
-    // Применяем ТОЛЬКО must как hard filters; should остаётся как ranking-сигнал.
-    const mustKeysSet = new Set(must.map((t) => `${t.key}|${t.value}`));
+    // Применяем ТОЛЬКО must как hard filters; should остаётся как ranking-сигнал
+    // (post-search, в rankBySoftTraits).
     const hardFilters: Record<string, string[]> = {};
     const hardAliases: Record<string, string[]> = {};
+    const hardCaptions: Record<string, string> = {};
     for (const [canonicalKey, values] of Object.entries(facetMatch.optionFilters)) {
       const matchedHard = values.filter((v) => {
-        // Проверяем, есть ли пара (canonicalKey, v) среди must.
-        // facet-matcher нормализует значения, поэтому ищем мягко через includes.
         for (const mt of must) {
           if (
             normalizeLoose(mt.key) === normalizeLoose(canonicalKey) ||
@@ -354,39 +354,35 @@ export async function runSimilarBranch(
             return true;
           }
         }
-        return mustKeysSet.has(`${canonicalKey}|${v}`);
+        return false;
       });
       if (matchedHard.length > 0) {
         hardFilters[canonicalKey] = matchedHard;
         if (facetMatch.optionAliases[canonicalKey]) {
           hardAliases[canonicalKey] = facetMatch.optionAliases[canonicalKey];
         }
+        if (facetMatch.facetCaptions[canonicalKey]) {
+          hardCaptions[canonicalKey] = facetMatch.facetCaptions[canonicalKey];
+        }
       }
     }
     trace.appliedMustKeys = Object.keys(hardFilters);
 
-    // catalogSearch ожидает FacetMatchResult-подобную структуру.
-    // Передаём отфильтрованную "must-only" версию.
-    const mustOnlyFacetMatch: FacetMatchResult = {
-      ...facetMatch,
-      optionFilters: hardFilters,
-      optionAliases: hardAliases,
-    };
-
     const outcome = await catalogSearch(
       {
-        pagetitle,
+        category: pagetitle,
         query: anchorProduct.pagetitle || anchorProduct.name || '',
-        facetMatch: mustOnlyFacetMatch,
-        // exclude anchor SKU из результатов — иначе вернётся сам якорь.
-        excludeArticles: anchorProduct.article ? [anchorProduct.article] : [],
+        optionFilters: hardFilters,
+        optionAliases: hardAliases,
+        optionFilterCaptions: hardCaptions,
         perPage,
-      } as never,
+      },
       deps.apiClient,
     );
     trace.searchAttempts += outcome.attempts?.length ?? 1;
     lastOutcome = outcome;
 
+    // Исключаем сам якорь из результатов (иначе он первым же и вернётся).
     const products = (outcome.products ?? []).filter(
       (p) => !anchorProduct.article || p.article !== anchorProduct.article,
     );
