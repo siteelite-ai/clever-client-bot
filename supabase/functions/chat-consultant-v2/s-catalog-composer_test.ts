@@ -88,9 +88,7 @@ Deno.test("decideScenario: empty → soft_404", () => {
   assertEquals(decideScenario(mockOutcome("empty")), "soft_404");
 });
 
-Deno.test("decideScenario: empty_degraded → soft_404", () => {
-  assertEquals(decideScenario(mockOutcome("empty_degraded")), "soft_404");
-});
+// (REMOVED) decideScenario: empty_degraded — статус удалён.
 
 Deno.test("decideScenario: all_zero_price → all_zero_price", () => {
   assertEquals(decideScenario(mockOutcome("all_zero_price")), "all_zero_price");

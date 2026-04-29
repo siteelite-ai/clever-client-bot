@@ -235,50 +235,42 @@ Deno.test("searchProducts: optionAliases дублируют ключ на все
   assert(calledUrl.includes("options%5Bcolor_b%5D%5B%5D=red"));
 });
 
-// ─── Q3 recovery ────────────────────────────────────────────────────────────
+// ─── non-ASCII facet keys (ранее Q3 recovery — УДАЛЁН) ─────────────────────
 
-Deno.test("searchProducts: empty_degraded — Q3 recovery находит товары без не-ASCII ключа", async () => {
+Deno.test("searchProducts: non-ASCII facet keys пробрасываются как есть, без recovery", async () => {
   __resetCatalogBreakerForTests();
   let callIndex = 0;
+  let firstUrl = "";
   const f = makeFetch((url) => {
     callIndex++;
-    if (callIndex === 1) {
-      // Первый запрос — с не-ASCII ключом, total=0.
-      assert(url.includes("color_%D2%AF") || /%D[0-9A-F]/.test(url),
-        "first call must include non-ASCII option key");
-      return jsonResponse({ data: { results: [], total: 0 } });
-    }
-    // Recovery: без подозрительного ключа — есть товары.
-    assert(!/options%5Bcolor_%D2/.test(url),
-      "recovery call must NOT include suspect non-ASCII key");
-    return jsonResponse({ data: { results: [P(1, 100)], total: 5 } });
+    if (callIndex === 1) firstUrl = url;
+    return jsonResponse({ data: { results: [P(1, 100)], pagination: { total: 5 } } });
   });
 
   const r = await searchProducts({
     query: "x",
-    optionFilters: { "color_ү": ["red"] }, // не-ASCII ключ
+    optionFilters: { "color_ү": ["red"] },
   }, deps(f));
 
-  assertEquals(callIndex, 2);
-  assertEquals(r.status, "empty_degraded");
-  assertEquals(r.products.length, 0);
-  assertExists(r.degradedHint);
-  assertEquals(r.degradedHint!.suspectedQuirkKey, "color_ү");
-  assertEquals(r.degradedHint!.recoveredCount, 5);
+  assertEquals(callIndex, 1, "no recovery — single call");
+  assertEquals(r.status, "ok");
+  assertEquals(r.totalFromApi, 5);
+  assert(firstUrl.includes("color_%D2%AF") || /%D[0-9A-F]/.test(firstUrl),
+    "non-ASCII key must reach API encoded");
 });
 
-Deno.test("searchProducts: НЕТ recovery если все ключи ASCII", async () => {
+Deno.test("searchProducts: total=0 с non-ASCII ключом → 'empty' (без recovery)", async () => {
   __resetCatalogBreakerForTests();
   let callIndex = 0;
   const f = makeFetch(() => {
     callIndex++;
-    return jsonResponse({ data: { results: [], total: 0 } });
+    return jsonResponse({ data: { results: [], pagination: { total: 0 } } });
   });
   const r = await searchProducts({
     query: "x",
-    optionFilters: { color_ascii: ["red"] },
+    optionFilters: { "color_ү": ["red"] },
   }, deps(f));
-  assertEquals(callIndex, 1); // recovery НЕ вызвался
+  assertEquals(callIndex, 1, "recovery полностью удалён");
   assertEquals(r.status, "empty");
 });
 

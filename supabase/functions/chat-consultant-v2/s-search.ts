@@ -248,8 +248,7 @@ export async function runSearch(
       };
     }
 
-    // status === 'empty' | 'empty_degraded' → пробуем следующую форму.
-    // empty_degraded мы НЕ финализируем — может, другая форма (en) обойдёт quirk.
+    // status === 'empty' → пробуем следующую форму.
   }
 
   // ── Все формы перебраны. Решаем финальный статус. ─────────────────────
@@ -270,7 +269,7 @@ export async function runSearch(
     };
   }
 
-  // Все формы дали empty/empty_degraded → финальный empty.
+  // Все формы дали empty → финальный empty.
   // Soft Fallback здесь НЕ запускаем повторно — catalog/search уже сделал его
   // внутри каждой формы (включая прогрессивное снятие всех фасетов).
   return {

@@ -222,7 +222,7 @@ Deno.test("§4.8.1: softFallbackContext === null при status='empty' без ф
   assertEquals(out.softFallbackContext, null);
 });
 
-Deno.test("§4.8.1: softFallbackContext === null при error/all_zero_price/empty_degraded", async () => {
+Deno.test("§4.8.1: softFallbackContext === null при error/all_zero_price", async () => {
   // error
   const fErr = makeFetch(() => new Response("x", { status: 500 }));
   const oErr = await search({ query: "abc" }, deps(fErr));
@@ -339,25 +339,7 @@ Deno.test("search: all_zero_price — все товары price=0", async () => 
   assertEquals(out.products.length, 0);
 });
 
-Deno.test("search: empty_degraded — Q3 quirk пробрасывается с degradedHint", async () => {
-  let callIndex = 0;
-  const f = makeFetch((url) => {
-    callIndex++;
-    if (callIndex === 1) return jsonResponse({ data: { results: [], total: 0 } });
-    // recovery в api-client должен дать товары
-    assert(!/options%5Bcolor_%D2/.test(url), "recovery без не-ASCII ключа");
-    return jsonResponse({ data: { results: [P(1, "X")], total: 1 } });
-  });
-  const out = await search({
-    query: "abc",
-    optionFilters: { "color_ү": ["red"] },
-  }, deps(f));
-  assertEquals(out.status, "empty_degraded");
-  assertExists(out.degradedHint);
-  assertEquals(out.degradedHint!.suspectedQuirkKey, "color_ү");
-  // soft_fallback на degraded НЕ запускается (api-client уже сделал recovery).
-  assertEquals(out.attempts.length, 1);
-});
+// (REMOVED Q3 empty_degraded test) — non-ASCII keys валидны, recovery удалён.
 
 // ─── pagination ────────────────────────────────────────────────────────────
 

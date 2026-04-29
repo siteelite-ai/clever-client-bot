@@ -14,7 +14,7 @@
 // Composer (Задача 5) читает `outcome.status` и решает:
 //   - 'ok'              → рендерим карточки (через formatter), soft404_streak=0.
 //   - 'soft_fallback'   → рендерим карточки + tail-line «Уточните…», streak=0.
-//   - 'empty_degraded'  → пустой результат + degraded-флаг (для метрики), streak+=1.
+//   (Q3 'empty_degraded' status REMOVED — non-ASCII facet keys валидны.)
 //   - 'empty'           → soft404_streak += 1 (см. §5.6.1).
 //   - 'all_zero_price'  → НИКОГДА не показываем товары (HARD BAN), streak += 1.
 //   - 'error'           → escalation сразу, без инкремента streak.
@@ -88,8 +88,7 @@ export interface SearchInput {
 export type SearchStatus =
   | "ok"               // ≥1 товар после всех фильтров
   | "soft_fallback"    // 0 со strict, но ≥1 без optionFilters → composer должен tail-line
-  | "empty"            // 0 везде, без quirk-признаков
-  | "empty_degraded"   // api-client вернул признак Q3 quirk
+  | "empty"            // 0 везде
   | "all_zero_price"   // API дал товары, но все price≤0 (HARD BAN)
   | "error";           // HTTP/timeout/network — escalation, не считаем soft 404
 
@@ -115,10 +114,7 @@ export interface SearchOutcome {
     perPage: number;
     totalPages: number;
   };
-  degradedHint?: {
-    suspectedQuirkKey: string;
-    recoveredCount: number;
-  };
+  // (REMOVED degradedHint) — Q3 quirk признан ложным.
   /**
    * §4.8.1: Заполнено ТОЛЬКО при status === 'soft_fallback'. При других статусах = null.
    */
@@ -241,22 +237,7 @@ export async function search(
     };
   }
 
-  // empty_degraded — Q3 quirk. Мы НЕ делаем здесь soft_fallback, потому что
-  // api-client уже попробовал retry-без-quirk-ключа. Возвращаем как есть, чтобы
-  // composer мог показать корректный Soft 404 (с пометкой degraded для метрик).
-  if (strictRaw.status === "empty_degraded") {
-    return {
-      status: "empty_degraded",
-      products: [],
-      totalFromApi: 0,
-      zeroPriceFiltered: strictRaw.zeroPriceFiltered,
-      postFilterDropped: 0,
-      attempts,
-      degradedHint: strictRaw.degradedHint,
-      softFallbackContext: null,
-      ms: Date.now() - t0,
-    };
-  }
+  // (REMOVED) empty_degraded ветка — api-client больше не возвращает этот status.
 
   // status === 'ok' | 'empty' → применяем word-boundary post-filter.
   const strictFiltered = strictRaw.products.filter((p) => matchesWordBoundary(p, queryTokens));
@@ -371,19 +352,7 @@ export async function search(
       };
     }
 
-    if (softRaw.status === "empty_degraded") {
-      return {
-        status: "empty_degraded",
-        products: [],
-        totalFromApi: 0,
-        zeroPriceFiltered: cumulativeZero,
-        postFilterDropped: cumulativePostDropped,
-        attempts,
-        degradedHint: softRaw.degradedHint,
-        softFallbackContext: null,
-        ms: Date.now() - t0,
-      };
-    }
+    // (REMOVED) empty_degraded больше не возвращается api-client'ом.
 
     const softFiltered = softRaw.products.filter((p) => matchesWordBoundary(p, queryTokens));
     cumulativePostDropped += softRaw.products.length - softFiltered.length;
