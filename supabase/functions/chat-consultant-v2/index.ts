@@ -72,7 +72,7 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-const BUILD_MARKER = "v2-step11-catalog-assembler-2026-04-28";
+const BUILD_MARKER = "v2-step11-debug-f42-2026-04-29";
 
 // ─── Контракт V2 запроса (Zod) ───────────────────────────────────────────────
 // Сохраняем backward-compat с виджетом: conversationId/query/messages/dialogSlots.
@@ -214,6 +214,85 @@ serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
+
+  // ─── [DEBUG-F.4.2 TEMP] /debug-catalog ─────────────────────────────────
+  // Дёргает 220volt /api/products напрямую с production-токеном для
+  // диагностики strict-search regression. Удалить после диагностики.
+  const url = new URL(req.url);
+  if (req.method === "GET" && url.pathname.endsWith("/debug-catalog")) {
+    const apiToken = Deno.env.get("VOLT220_API_TOKEN") ?? "";
+    const baseUrl = Deno.env.get("VOLT220_API_BASE_URL") ?? "https://220volt.kz/api";
+    const pagetitle = url.searchParams.get("pagetitle") ?? "Розетки";
+    const query = url.searchParams.get("query") ?? "";
+    const tokenLen = apiToken.length;
+    const tokenPreview = apiToken ? `${apiToken.slice(0, 4)}…${apiToken.slice(-4)}` : "(empty)";
+
+    const probes: Array<{ label: string; url: string; status?: number; total?: number; results_len?: number; sample?: any; error?: string }> = [];
+
+    const runProbe = async (label: string, qs: string) => {
+      const fullUrl = `${baseUrl}/products?${qs}`;
+      try {
+        const r = await fetch(fullUrl, {
+          headers: { Authorization: `Bearer ${apiToken}`, Accept: "application/json" },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!r.ok) {
+          const body = (await r.text()).slice(0, 300);
+          probes.push({ label, url: fullUrl, status: r.status, error: body });
+          return;
+        }
+        const raw = await r.json();
+        const data = raw?.data ?? raw;
+        const results = Array.isArray(data?.results) ? data.results : [];
+        probes.push({
+          label, url: fullUrl, status: r.status,
+          total: Number(data?.total ?? results.length) || 0,
+          results_len: results.length,
+          sample: results.slice(0, 2).map((p: any) => ({
+            id: p?.id, pagetitle: p?.pagetitle, price: p?.price, vendor: p?.vendor,
+          })),
+        });
+      } catch (e) {
+        probes.push({ label, url: fullUrl, error: (e as Error).message });
+      }
+    };
+
+    // Probe 1: только pagetitle (как делает наш s_search)
+    await runProbe("pagetitle_only", `pagetitle=${encodeURIComponent(pagetitle)}&perPage=10`);
+    // Probe 2: без фильтров — что вообще возвращает API
+    await runProbe("no_filters", `perPage=5`);
+    // Probe 3: query как у нас
+    if (query) await runProbe("query_only", `query=${encodeURIComponent(query)}&perPage=10`);
+    // Probe 4: pagetitle + query
+    await runProbe("pagetitle_plus_query", `pagetitle=${encodeURIComponent(pagetitle)}&query=розетка&perPage=10`);
+    // Probe 5: /categories endpoint (для сравнения — он работает в category_resolver)
+    let categoriesProbe: any = null;
+    try {
+      const cUrl = `${baseUrl}/categories`;
+      const r = await fetch(cUrl, {
+        headers: { Authorization: `Bearer ${apiToken}`, Accept: "application/json" },
+        signal: AbortSignal.timeout(8000),
+      });
+      const raw = r.ok ? await r.json() : await r.text();
+      const data = (raw as any)?.data ?? raw;
+      categoriesProbe = {
+        url: cUrl, status: r.status,
+        items_count: Array.isArray((data as any)?.results) ? (data as any).results.length : (Array.isArray(data) ? data.length : null),
+        sample: Array.isArray((data as any)?.results) ? (data as any).results.slice(0, 3) : null,
+      };
+    } catch (e) {
+      categoriesProbe = { error: (e as Error).message };
+    }
+
+    return new Response(JSON.stringify({
+      meta: { baseUrl, tokenLen, tokenPreview, pagetitle, query },
+      probes,
+      categoriesProbe,
+    }, null, 2), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
   if (req.method !== "POST") {
     return new Response(JSON.stringify({ error: "method_not_allowed" }), {
       status: 405,
