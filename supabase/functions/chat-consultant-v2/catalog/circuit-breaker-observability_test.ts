@@ -57,8 +57,9 @@ Deno.test('observability: CLOSED → OPEN logs transition with recentFailures sn
   assertEquals(events[0].from, 'CLOSED');
   assertEquals(events[0].to, 'OPEN');
   assertEquals(events[0].ts, clock.now());
-  // recentFailures фиксируется ПОСЛЕ tripOpen (failures очищены) — это документированное поведение
-  assertEquals(events[0].recentFailures, 0);
+  // recentFailures фиксируется ДО tripOpen-cleanup — это информативно для алертинга:
+  // видим, что tripped именно по достижению порога.
+  assertEquals(events[0].recentFailures, 3);
 });
 
 Deno.test('observability: OPEN → HALF_OPEN → CLOSED full recovery cycle logs 2 transitions', () => {
