@@ -312,6 +312,14 @@ export async function classifyIntent(
     const cached = await deps.getFromCache(queryHash);
     if (cached && new Date(cached.expires_at).getTime() > now()) {
       const latency = now() - t0;
+      console.info(`[v2.s2.intent.cache_hit] ${JSON.stringify({
+        query,
+        category_hint: cached.intent.category_hint ?? null,
+        search_modifiers: cached.intent.search_modifiers ?? [],
+        critical_modifiers: cached.intent.critical_modifiers ?? [],
+        price_intent: cached.intent.price_intent ?? null,
+        latency_ms: latency,
+      })}`);
       return {
         intent: cached.intent,
         cache_hit: true,
@@ -343,6 +351,15 @@ export async function classifyIntent(
     } catch (err) {
       console.warn(`[v2.s2] cache write failed: ${(err as Error).message}`);
     }
+
+    console.info(`[v2.s2.intent.extracted] ${JSON.stringify({
+      query,
+      category_hint: intent.category_hint ?? null,
+      search_modifiers: intent.search_modifiers ?? [],
+      critical_modifiers: intent.critical_modifiers ?? [],
+      price_intent: intent.price_intent ?? null,
+      latency_ms: latency,
+    })}`);
 
     return { intent, cache_hit: false, latency_ms: latency, used_fallback: false };
   } catch (err) {

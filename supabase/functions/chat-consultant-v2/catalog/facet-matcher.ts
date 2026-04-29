@@ -204,6 +204,12 @@ export async function matchFacets(
   const t0 = Date.now();
   const ttl = deps.facetsTtlSec ?? 3600;
 
+  console.info(`[v2.catalog.facet_matcher.input] ${JSON.stringify({
+    pagetitle,
+    modifiers,
+    modifiers_count: modifiers.length,
+  })}`);
+
   // ── 1. Загрузка facets через кэш. ──────────────────────────────────────
   let facetsResult: CategoryOptionsResult;
   let source: 'cache' | 'live' | 'unavailable' = 'live';
@@ -292,7 +298,7 @@ export async function matchFacets(
   }
 
   const hasAny = Object.keys(optionFilters).length > 0;
-  return {
+  const result: FacetMatchResult = {
     status: hasAny ? 'ok' : 'no_matches',
     optionFilters,
     optionAliases,
@@ -302,6 +308,24 @@ export async function matchFacets(
     source,
     ms: Date.now() - t0,
   };
+
+  console.info(`[v2.catalog.facet_matcher.result] ${JSON.stringify({
+    pagetitle,
+    status: result.status,
+    source: result.source,
+    optionFilters: result.optionFilters,
+    matchedModifiers: result.matchedModifiers,
+    unmatchedModifiers: result.unmatchedModifiers,
+    available_facets: groups.map((g) => ({
+      canonicalKey: g.canonicalKey,
+      caption: g.caption,
+      values_count: g.valueIndex.size,
+      sample_values: Array.from(g.valueIndex.values()).slice(0, 8),
+    })),
+    ms: result.ms,
+  })}`);
+
+  return result;
 }
 
 // ─── Production factory ─────────────────────────────────────────────────────
