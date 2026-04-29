@@ -278,6 +278,41 @@ async function fetchWithTimeout(
   }
 }
 
+/**
+ * F.4.3 (Stage F.4 architect review) — единая retry-политика для всех
+ * Catalog API-вызовов.
+ *
+ * Контракт (спека §3.3 + Core Memory «Retry policy: 1 попытка, при
+ * abort/network — ещё одна с увеличенным таймаутом»):
+ *
+ *   • 1 попытка с базовым `timeoutMs`.
+ *   • При `kind ∈ {'timeout','network_error'}` → пауза 300ms и 2-я попытка
+ *     с таймаутом × 1.33.
+ *   • НИКАКИХ дальнейших ретраев. Это синхронный live-API в SSE-потоке —
+ *     длительные backoff-ы недопустимы (fail-fast).
+ *   • НЕ ретраим HTTP-ошибки (4xx/5xx) и JSON parse errors — это семантика,
+ *     не транспорт.
+ *   • Q3 recovery (semantic, для не-ASCII facet keys) — отдельный слой,
+ *     живёт ВНУТРИ `searchProducts` и срабатывает после успешного fetch
+ *     при `total=0`. НЕ смешивать с этим helper-ом.
+ *
+ * Применяется ОБОИМИ публичными вызовами: `searchProducts`, `getCategoryOptions`.
+ * До F.4.3 retry был только в `getCategoryOptions` — несимметрично.
+ */
+async function fetchWithRetry(
+  url: string,
+  apiToken: string,
+  timeoutMs: number,
+  fetchFn: typeof fetch,
+): Promise<{ ok: true; res: Response } | { ok: false; kind: 'timeout' | 'network_error'; message: string }> {
+  let attempt = await fetchWithTimeout(url, apiToken, timeoutMs, fetchFn);
+  if (!attempt.ok && (attempt.kind === 'timeout' || attempt.kind === 'network_error')) {
+    await new Promise((r) => setTimeout(r, 300));
+    attempt = await fetchWithTimeout(url, apiToken, Math.round(timeoutMs * 1.33), fetchFn);
+  }
+  return attempt;
+}
+
 // ─── searchProducts ─────────────────────────────────────────────────────────
 
 export async function searchProducts(
