@@ -102,7 +102,8 @@ supabase/functions/
     ├── intent-classifier.ts        # Micro-LLM на flash-lite
     ├── slot-manager.ts             # Создание/матчинг/закрытие слотов
     ├── catalog/
-    │   ├── api-client.ts           # 220volt API клиент
+    │   ├── api-client.ts           # 220volt API клиент (обёрнут circuit breaker'ом)
+    │   ├── circuit-breaker.ts      # FSM CLOSED/OPEN/HALF_OPEN для upstream Catalog API (Stage F.5)
     │   ├── search.ts               # Multi-query search + ranking
     │   ├── price-intent.ts         # cheapest/expensive логика
     │   ├── sku-detection.ts        # Regex + правила для артикулов
@@ -694,14 +695,15 @@ export const ALLOWED_DOMAINS: Domain[] = ['POWER', 'TELECOM', 'TOOLS', 'LIGHTING
 | любое | `intent.domain_check === 'out_of_domain'` | без изменения | Сразу `[CONTACT_MANAGER]`, минуя streak. |
 | любое | `intent.intent !== 'catalog'` (knowledge/contact/...) | без изменения | streak не трогаем. |
 | любое | `SearchOutcome.status === 'all_zero_price'` | без изменения | Сразу `[CONTACT_MANAGER]`, минуя streak. Без товаров. |
-| любое | `SearchOutcome.status === 'error'` (HTTP/timeout/network) | без изменения | Сразу `[CONTACT_MANAGER]`, минуя streak. Инфраструктурный сбой ≠ «ничего нет». |
+| любое | `SearchOutcome.status === 'error'` (HTTP 5xx/timeout/network ИЛИ `upstream_unavailable` от breaker'а) | без изменения | Сразу `[CONTACT_MANAGER]`, минуя streak. Инфраструктурный сбой ≠ «ничего нет». Cross-sell принудительно вырезается (`disallowCrosssell=true`, §5.4.1). |
 
 Инварианты:
 1. `soft404_streak` обновляется ровно один раз за catalog-ход, ПОСЛЕ финального счёта товаров (после Recovery и Soft Fallback).
 2. Флаг `contactManager` композера выставляется в `true` **двумя независимыми путями**:
    - **через streak**: `nextStreak === 2`
    - **через scenario** (минуя streak): `status ∈ {all_zero_price, error}` ИЛИ `intent.domain_check === 'out_of_domain'`
-3. State-machine покрывается тестами `soft404-streak.test.ts` и `s-catalog-composer_test.ts`.
+3. Подстатус `upstream_unavailable` (Catalog API client / circuit breaker, §13.1) ОБЯЗАН мапиться экзекьюторами (`s-search`, `s-price`, `s-similar`, `facet-matcher`) в `SearchOutcome.status='error'`. Новых UI-сценариев не вводится — breaker — инфраструктурная деталь, скрытая под существующим контрактом.
+4. State-machine покрывается тестами `soft404-streak.test.ts` и `s-catalog-composer_test.ts`. Маппинг `upstream_unavailable → error` покрывается `circuit-breaker_test.ts` + `api-client_test.ts`.
 
 Структура карточки контактов из `mem://features/conversational-rules`:
 - WhatsApp (primary)
@@ -1098,6 +1100,45 @@ B: [intent=catalog, is_replacement=true]
 | Регрессия в SKU-поиске | Low | High | Отдельный suite + canary deploy |
 | Слот закроется когда не надо | Medium | Medium | Логирование каждого consume + метрика «слотов закрыто/протекло» |
 | Domain Guard слишком строгий | Medium | Medium | Whitelist + ручной override через ambiguous |
+| Шторм отказов upstream Catalog API → выгорание latency-бюджета (§7.1), каскадные таймауты | Medium | High | **Circuit Breaker (§13.1)** перед `api-client.fetchWithRetry`. При серии сбоев OPEN на короткое окно → быстрый `upstream_unavailable` → `SearchOutcome.status='error'` → `[CONTACT_MANAGER]`. |
+
+### 13.1 Circuit Breaker для Catalog API (Stage F.5)
+
+**Назначение.** Защитить latency-бюджет (§7.1) и upstream от штормового re-try, когда Catalog API деградирует (HTTP 5xx, network errors, таймауты).
+
+**Скоуп.** Один singleton-breaker на инстанс edge-функции, обёрнут вокруг `catalog/api-client.ts::fetchWithRetry`. State хранится in-memory (Core Memory: «Real-time catalog API only. Do not sync» — никакого Postgres).
+
+**FSM** (`catalog/circuit-breaker.ts`):
+
+| Состояние | Поведение | Переход |
+|---|---|---|
+| `CLOSED` | Все запросы проходят. Считаем сбои в скользящем окне `failureWindowMs`. | `failures ≥ failureThreshold` → `OPEN` |
+| `OPEN` | Все запросы немедленно отклоняются с `UpstreamUnavailableError`. Upstream не дёргается. | По истечении `openDurationMs` → `HALF_OPEN` |
+| `HALF_OPEN` | Single-shot probe (`halfOpenMaxProbes=1`): пропускаем РОВНО один запрос. Остальные — отклоняем. | probe success → `CLOSED` (счётчик сбоен сбрасывается); probe failure → `OPEN` (новое окно) |
+
+**Классификация сбоев** (что инкрементирует счётчик):
+- ✅ Считается сбоем: timeout, network error (DNS/conn refused/reset), HTTP 5xx.
+- ❌ НЕ считается сбоем: HTTP 2xx/3xx/4xx (4xx — клиентская/контрактная проблема, не outage), логические «ноль результатов» (пустой `data[]`), `total=0`.
+
+**Контракт ошибки.** Breaker в OPEN бросает `UpstreamUnavailableError`. `api-client.ts` ловит её и возвращает результат с `status='upstream_unavailable'` (расширение `SearchStatus` / `CategoryOptionsResult`). Все downstream-экзекьюторы (`s-search`, `s-price`, `s-similar`, `facet-matcher`, `category-resolver`) ОБЯЗАНЫ мапить этот подстатус в `SearchOutcome.status='error'` (§5.6.1) — новых UI-сценариев не вводится.
+
+**Defaults** (`config.ts::CATALOG_BREAKER_DEFAULTS`):
+
+| Параметр | Default | Обоснование |
+|---|---|---|
+| `failureThreshold` | 5 | Устойчиво к одиночным jitter'ам upstream |
+| `failureWindowMs` | 30 000 | Окно учёта; при штормах 5 сбоев набираются за секунды |
+| `openDurationMs` | 30 000 | Даём upstream восстановиться, но не висим долго |
+| `halfOpenMaxProbes` | 1 | Минимум нагрузки на восстанавливающийся upstream |
+
+Параметры переопределяются через `app_settings.catalog_breaker_json` без редеплоя (TODO Stage 8).
+
+**Инварианты.**
+1. Breaker НЕ синхронизируется между инстансами edge-функции (in-memory, по дизайну).
+2. Breaker НЕ открывается на 4xx и логические нули — это НЕ outage.
+3. Breaker НЕ создаёт новых пользовательских сценариев: всё, что видит конечный пользователь — это уже описанный `[CONTACT_MANAGER]` через `SearchOutcome.status='error'` (§5.6.1).
+4. `nowFn` инжектируется для детерминированных тестов; никаких реальных `setTimeout`.
+5. Покрытие тестами: `circuit-breaker_test.ts` (FSM, окно, single-shot probe) + интеграционные кейсы в `api-client_test.ts` (маппинг `UpstreamUnavailableError → upstream_unavailable`).
 
 ---
 
