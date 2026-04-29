@@ -546,9 +546,29 @@ export async function assembleCatalog(
   let llmFacetUnresolvedCount = 0;
   let llmFacetSoftMatchesCount = 0;
   let llmFacetResolvedCount = 0;
+  let bootstrapUsed = false;
+  let probeProductsCount = 0;
 
   if (resolver.pagetitle) {
     const modifiers = collectModifiers(input.intent);
+
+    // §4.10.1: дожидаемся probe и собираем bootstrap-схему фасетов из
+    // per-item Product.options[]. Это fallback на случай transport-failure
+    // /categories/options. Если probe пуст — bootstrap=[] и matchFacets
+    // вернёт 'category_unavailable' как раньше.
+    const probeProducts = await probePromise;
+    probeProductsCount = probeProducts.length;
+    const bootstrapOptions: RawOption[] = probeProducts.length > 0
+      ? extractFacetSchemaFromProducts(probeProducts)
+      : [];
+    trace.stages.push({
+      stage: "parallel_probe",
+      ms: now() - tProbe0,
+      meta: {
+        probe_products: probeProductsCount,
+        bootstrap_options: bootstrapOptions.length,
+      },
+    });
 
     // §9.3 канонический путь: LLM Facet Matcher.
     let llmResult: Awaited<ReturnType<typeof matchFacetsWithLLM>> | null = null;
@@ -575,7 +595,8 @@ export async function assembleCatalog(
     }
 
     // Если LLM сработал успешно (mode='ok') — используем его результат как
-    // источник optionFilters. Иначе degrade на детерминированный matcher.
+    // источник optionFilters. Иначе degrade на детерминированный matcher
+    // (с bootstrap-fallback §4.10.1).
     if (llmResult && llmResult.mode === "ok") {
       const matchedTraits = [
         ...llmResult.resolved.map((r) => r.trait),
@@ -594,10 +615,15 @@ export async function assembleCatalog(
       };
     } else {
       // Degrade-путь: либо LLM-deps нет, либо mode='llm_failed'/'no_facets'/'no_traits'/'category_unavailable'/'exception'.
-      // Детерминированный matcher даёт baseline (exact-match), не нарушая §9.3
-      // (не «выдумывает значения», а просто проверяет точное равенство).
+      // Передаём bootstrapOptions — если /categories/options вернёт transport-failure,
+      // matchFacets продолжит работать на bootstrap-схеме (source='bootstrap').
       try {
-        facetMatch = await matchFacets(resolver.pagetitle, modifiers, deps.facets);
+        facetMatch = await matchFacets(
+          resolver.pagetitle,
+          modifiers,
+          deps.facets,
+          bootstrapOptions.length > 0 ? bootstrapOptions : undefined,
+        );
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         trace.errors.push({ stage: "facet_matcher", message: msg });
@@ -613,15 +639,21 @@ export async function assembleCatalog(
         };
       }
     }
+    bootstrapUsed = facetMatch.source === "bootstrap";
 
     // Для S_PRICE composer-clarify нужны RawOption[] — берём прямой вызов
     // (через тот же кэш facets:<pagetitle> результат, в идеале — но
     // matchFacets его уже прогрел). Делаем отдельный getCategoryOptions
     // только если route=S_PRICE и facetMatch не отдал нам options.
+    //
+    // §4.10.1: bootstrap-counts НЕ годятся для price_clarify (counts
+    // ограничены N_PROBE → статистически некорректны). Если facets живой
+    // схемы недоступны И bootstrap использован → facetOptions остаётся пуст,
+    // composer уйдёт в S-CATALOG без clarify (см. spec).
     if (input.route === "S_PRICE") {
       try {
         const opts = await getCategoryOptions(resolver.pagetitle, deps.apiClient);
-        facetOptions = opts.options ?? [];
+        facetOptions = opts.status === "ok" ? (opts.options ?? []) : [];
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         log("assembler.facet_options_fetch_failed", { msg });
