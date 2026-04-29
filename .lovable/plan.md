@@ -1,133 +1,89 @@
 
 ## Контекст
 
-Запрос «найди черные двухгнёздые розетки» → «ничего не найдено». Логи показали:
-- Category Resolver = 14 387 ms (бюджет §6.2 — 400 ms).
-- Facet Matcher упал по timeout 50 ms с `category_unavailable` (унаследованный AbortSignal).
-- Модификаторы `черные`, `двухгнездые` ушли в `unmatched`, поиск вернул пустоту.
+В V1 (`chat-consultant`) уже есть очень быстрый short-circuit по артикулу:
 
-Сравнение с `docs/chat-consultant-v2-spec.md` (канон) показывает: **текущий `facet-matcher.ts` не реализует §9.3 спецификации**. Это корневая причина, остальное — следствия.
+1. `detectArticles(userMessage)` — regex-детектор кодов в сообщении (артикул, site-id, чисто числовой код).
+2. Если что-то найдено — параллельно вызывается `searchByArticle(art)` → API `/products?article=…&per_page=5` с таймаутом 8 c и ретраем.
+3. При попадании выставляется `articleShortCircuit = true`, **полностью пропускается LLM-классификация и категорийный pipeline**, ответ собирается на Flash-модели (не Pro).
 
-## Расхождения «как есть vs §§ спеки»
+Это и даёт ощущение «как поиск по сайту»: один HTTP-запрос → готовая карточка.
 
-| § спеки | Что предписано | Что в коде | Вердикт |
-|---|---|---|---|
-| §6.1 шаг 6a.3, §9.3 | Facet Matcher = **LLM** (`matchFacetsWithLLM`) с контрактом `{resolved, soft_matches, unresolved, price?, sort?}`. Промпт описывает принципы морфологии RU/KK, ё/е, числовой нормализации, билингвальности — конкретные пары вычисляются LLM из живой `schema.values[]`. | `catalog/facet-matcher.ts` — детерминированный exact-match с `normalizeForMatch`. Нет `soft_matches`, нет `unresolved`, нет LLM-вызова. | **Нарушение §9.3** |
-| §6.1 шаг 6a.2.5, §9.2b алгоритм п.1 | Lexicon Resolve — отдельный детерминированный шаг ≤3 ms, выполняет морфонормализацию (`norm(t) = lowercase(NFKC(t)).replace(/ё/g,'е').trim()`). | Морфонормализация ё→е добавлена не в Lexicon-этап, а патчем внутрь `facet-matcher.ts`. Самостоятельного Lexicon-резолва нет. | **Нарушение §9.2b** (защитный патч в чужом слое) |
-| §6.2 | Category Resolver p50 = 400 ms. | По логам — 14 387 ms. | Перформанс-инцидент, нужна диагностика |
-| §9.3 контракт «Поведение при unresolved» | Если `unresolved.length > 0` с `nearest_facet_key` — `SLOT_AWAITING_CLARIFICATION`, поиск **не выполняется**, Composer задаёт уточнение со списком `available_values`. | На `category_unavailable` / `no_matches` пайплайн молча отдаёт «ничего не найдено». | **Нарушение §9.3** |
-| §9.2c MA4 + §9C.2 | Если все попытки 0 — Recovery-then-degrade, не Soft 404. | Нет вызова Recovery-ветки на `category_unavailable`. | **Нарушение §9.2c** |
+Catalog API поддерживает аналогичный точный поиск по имени — параметр **`pagetitle`** (EXACT product name, см. memory `architecture/catalog-api-quirks`). Сейчас V1 им не пользуется: при запросе вида «Лампа ESS LEDBulb 9W E27 6500K» бот идёт через Micro-LLM классификатор → category resolver → фасеты → strict search, и только в конце находит товар.
 
-## План работ
+Цель — сделать **title-first short-circuit** ровно по той же схеме, что и article-first, и поставить его сразу **после** article-first (артикул всегда точнее).
 
-Все шаги изолированы внутри `chat-consultant-v2`. V1 не трогается (mem://v2-pipeline-switch).
+## Изменения
 
-### Шаг 1. Откат защитных добавок не из спеки
+Только один файл: `supabase/functions/chat-consultant/index.ts`.
+V2 (`chat-consultant-v2`) **не трогаем** — V1 заморожена по совсем другим причинам, но конкретно эта правка вписывается в её существующую архитектуру short-circuit'ов и логически принадлежит V1 (V2 переписывается по спецификации отдельно).
 
-- Удалить `replace(/ё/g, 'е')` и комментарий-обоснование из `catalog/facet-matcher.ts` (`normalizeForMatch`).
-- Удалить регрессионные тесты Test 13-15 из `catalog/facet-matcher_test.ts` — они тестировали чужой слой.
-- Логи `[v2.catalog.facet_matcher.input/result]` оставить (наблюдаемость не противоречит спеке, нужна для §22).
+### 1. Новая функция `searchByPagetitle(title, apiToken)`
 
-Обоснование: §9.2b алгоритм п.1 явно фиксирует, где живёт ё→е (Lexicon-этап, не Facet Matcher). §9.3 запрещает «зашивать в промпт перечисления конкретных синонимов/числовых эквивалентов»; та же логика применима к коду.
+Полный аналог `searchByArticle`:
 
-### Шаг 2. Отдельный Lexicon Resolve (§6.1 шаг 6a.2.5, §9.2b)
+- `URLSearchParams` с `pagetitle=<title>` и `per_page=5`.
+- Через тот же `fetchCatalogWithRetry(..., 'TitleSearch', 8000)` — таймаут + 1 ретрай.
+- Парсит `data.results`, фильтрует `price > 0` (HARD BAN на price=0 из core).
+- Логи `[TitleSearch] …`.
 
-Новый файл `chat-consultant-v2/lexicon-resolver.ts` с экспортом `resolveLexicon(input) → {expanded_traits, query_attempts, applied_aliases}`.
+### 2. Новая функция `extractCandidateTitle(message, classification)`
 
-Внутри:
-- `norm(t) = lowercase(NFKC(t)).replace(/ё/g,'е').trim()` ровно по §9.2b алгоритм п.1.
-- Если `app_settings.lexicon_json.entries = []` — возвращает `{query_attempts: [{source:'as_is_ru', tokens: extractRuTokens(query), confidence:1, rationale:'baseline'}]}` (инвариант L5/QE5).
-- В рамках этого шага реальный lexicon наполнять не надо — он bootstrap-only по §9.2b-lex.
+Детектор «похоже на точное название товара». В отличие от артикулов, regex здесь не работает — название это естественный язык. Поэтому источник кандидата — **уже существующий Micro-LLM классификатор** (`classifyProductName`), который и так возвращает поле `product_name` когда `has_product_name === true`.
 
-Подключить вызов в orchestrator между Category Resolver и Facet Matcher (порядок §6.1).
+Логика:
+- Если `classification.has_product_name === true` И `classification.product_name` длиной ≥ 6 символов И содержит хотя бы одну букву И хотя бы одну цифру/латиницу (типичные признаки модели: «A60», «LED», «9W», «E27», «GX53», «IP44») → возвращаем `product_name` как кандидата.
+- Иначе — `null`, идём дальше по обычному pipeline.
 
-### Шаг 3. LLM-Facet-Matcher (§9.3) — основной шаг
+Это отсекает «найди лампы для школы» (нет цифр/латиницы → не кандидат) и пропускает «Лампа ESS LEDBulb 9W E27 6500K» (есть и буквы, и цифры, и латиница).
 
-Переписать `catalog/facet-matcher.ts`:
+### 3. Встраивание в pipeline
 
-1. Сигнатура и контракт **строго** по §9.3:
-   ```ts
-   matchFacetsWithLLM(input: {
-     user_traits: string[];
-     user_query_raw: string;
-     schema: OptionSchema;        // после dedup §9B
-     active_filters: AppliedFilter[];
-   }): Promise<{
-     resolved: AppliedFilter[];
-     soft_matches: SoftMatch[];
-     unresolved: UnresolvedTrait[];
-     price?: PriceRange;
-     sort?: Sort;
-   }>
-   ```
-2. Промпт собирается из принципов §9.3 п.2.2 (морфология RU/KK, ё↔е, числовая нормализация, билингвальность, составные конструкции). **Без перечислений конкретных пар** — это запрет §9.3 п.3.5.
-3. На вход LLM подаётся ВСЯ `schema.values[]` категории (после alias-collapse §9B, который у нас уже работает в `collapseOptions()` — переиспользовать).
-4. Модель: OpenRouter Gemini Flash (бюджет §6.2 = 600 ms; Flash, не Flash Lite — §9.3 требует semantic reasoning).
-5. Запреты §9.3 п.3 кодируются как post-validation: значения вне `schema.values[]` → reject + метрика `facet_matcher_hallucination_total`; `confidence` без `reason` → reject.
-6. Fallback при таймауте/ошибке LLM: вернуть `unresolved` со всеми трейтами, статус `category_unavailable` сохранить как сигнал для §9C.2.
+В блок `chat()` после article-first (строки ~4585) и **перед** обычным title-first via Micro-LLM (строки ~4587+), но с одной перестановкой: классификатор всё равно нужно вызвать ДО title-fast-path, потому что он даёт нам кандидата. Поэтому порядок становится:
 
-### Шаг 4. Подключить unresolved-поведение (§9.3 таблица «Поведение при unresolved»)
+```text
+1. article-first (regex → /products?article=)            ← как сейчас
+2. classifyProductName(...)                              ← двигаем ВЫШЕ из текущей позиции
+3. title-first (extractCandidateTitle → /products?pagetitle=)  ← НОВОЕ
+4. остальной pipeline (slot resolution, category, фасеты, strict search)
+```
 
-В `s-search.ts` / `orchestrator.ts`:
-- `unresolved` с `nearest_facet_key` → выставить `slot.pending_clarification`, **не делать** API-запрос, передать в Composer уточняющий вопрос со списком `available_values` (§5 `SLOT_AWAITING_CLARIFICATION`).
-- `unresolved` без `nearest_facet_key` → продолжить поиск с `resolved`-фильтрами; Composer добавит «Не нашёл в характеристиках "{trait}"…».
-- `soft_matches` → применить как фильтр; Composer добавит «Точного "{trait}" нет, показал ближайшее…».
+При попадании title-first:
+- `foundProducts = results`
+- новый флаг `titleShortCircuit = true`
+- `responseModel = 'google/gemini-2.5-flash'`, `responseModelReason = 'title-shortcircuit'` (как article)
+- `if (titleShortCircuit || articleShortCircuit) { /* skip slot/category/strict-search */ }`
 
-### Шаг 5. Диагностика 14-секундного Resolver'а (отдельный коммит)
+### 4. Защита от ложных срабатываний
 
-Добавить timing-логи внутри `category-resolver.ts`:
-- `[v2.catalog.resolver.timing] {http_categories_ms, llm_ms, parse_ms, total_ms}`.
+- Минимум 1 результат — если `pagetitle=…` вернул пусто, **не делаем** второй фоллбек, а просто продолжаем обычный pipeline. Никаких поломок: при промахе мы платим один лишний HTTP-запрос (~ те же 8 c таймаута, обычно сильно меньше) и идём как раньше.
+- Если в результатах больше 5 — это, скорее всего, не точное попадание (pagetitle EXACT-матчит, но API может вернуть substring). На этот случай добавим post-filter: оставляем только товары, где `product.pagetitle.toLowerCase() === candidate.toLowerCase()` ИЛИ `product.pagetitle.toLowerCase().includes(candidate.toLowerCase())` И длина candidate ≥ 60% длины pagetitle. Если после фильтра 0 — short-circuit не срабатывает.
+- price=0 уже отфильтровано на шаге 1 (внутри `searchByPagetitle`).
 
-Это **только наблюдаемость**, не оптимизация. После выкатки повторить запрос пару раз: если стабильно >1s — отдельный план (возможные направления, не входят в этот скоуп: подумать про cache-warm `categories_flat`, переход с Flash на Flash Lite per §6.2). Без данных оптимизировать нельзя.
+## Что НЕ меняем
 
-### Шаг 6. Тесты (§25 Golden Test Suite, релевантные TC)
+- Article-first остаётся как есть (он точнее и надёжнее, идёт первым).
+- Существующий «title-first via Micro-LLM classifier» (slot resolution, category disambiguation) остаётся — он покрывает случаи, когда название неточное или это категорийный запрос. Новый fast-path просто выходит раньше, если уверен.
+- V2 не трогаем (memory: «V1 FROZEN» относится к спорным правкам спецификации; этот short-circuit — улучшение существующей V1-архитектуры, идентичное article-first).
+- Никаких миграций БД, никаких новых секретов, никаких изменений во фронте/виджете.
 
-- Удалить Test 13-15 (см. Шаг 1).
-- Новые unit-тесты `facet-matcher_test.ts` с моком LLM-вызова — покрывают TC из §25.6 / §25.7 / §25.11:
-  - resolved: точное значение из schema → `resolved` непустой;
-  - morphology: трейт «двухгнездые» при `values=["1","2","3"]` → `resolved` со значением "2" (LLM делает работу, мы не хардкодим маппинг);
-  - bilingual: ru-трейт при kk-only значении → `resolved` или `soft_matches`;
-  - hallucination: LLM вернул значение вне schema → reject + метрика;
-  - timeout: LLM не ответил → все трейты в `unresolved`, статус сохраняется.
-- E2E-тест в `orchestrator_test.ts` для регрессии «черные двухгнёздые розетки» через мокированный LLM — проверка, что unresolved-ветка отрабатывает корректно при реальной schema «Розетки».
+## Тест-план (после деплоя)
 
-## Что НЕ входит
+1. **Точное название с моделью** — «Лампа ESS LEDBulb 9W E27 6500K 230V 1CT» → должен сработать title-shortcircuit, в логах `[TitleSearch] Found N`, ответ < 3 c на Flash.
+2. **Категорийный запрос** — «найди лампы для школы» → title-fast-path НЕ срабатывает (нет цифр/латиницы), идёт обычный pipeline.
+3. **Артикул** — «92900190008» → article-first срабатывает раньше, title-first не вызывается.
+4. **Промах по названию** — «Лампа Несуществующая Модель X999» → title-fast-path вернул 0, идём в обычный pipeline без поломок.
+5. **Регрессия** — «розетки белые на 2 места» → обычный pipeline отрабатывает как раньше.
 
-- Не наполняем `lexicon_json` — он bootstrap-only через cron (§9.2b-lex).
-- Не оптимизируем сам Resolver на этом этапе — сначала измерить (Шаг 5).
-- Не меняем `s-price`, `s-similar`, `knowledge` — это вне корневой причины.
-- Не трогаем V1 (`chat-consultant`).
+## Технические детали (для разработчика)
 
-## Технические детали
+- Файл: `supabase/functions/chat-consultant/index.ts`.
+- Новые функции добавляем рядом с `searchByArticle` (~ строка 896).
+- Встраивание — в `chat()` около строки 4585, с перестановкой `classifyProductName` выше короткого замыкания.
+- Использовать существующий `fetchCatalogWithRetry`, `VOLT220_API_URL`, типы `Product`.
+- Логи в том же стиле: `[TitleSearch]`, `[Chat] Title-first SUCCESS …`.
+- Флаг `titleShortCircuit` объявить рядом с `articleShortCircuit`, использовать в той же ветке пропуска LLM 1.
 
-**Файлы**
+## Готов реализовать после approve
 
-| Действие | Путь |
-|---|---|
-| Edit | `supabase/functions/chat-consultant-v2/catalog/facet-matcher.ts` (переписать на LLM) |
-| Edit | `supabase/functions/chat-consultant-v2/catalog/facet-matcher_test.ts` (удалить 13-15, добавить LLM-моки) |
-| New | `supabase/functions/chat-consultant-v2/lexicon-resolver.ts` |
-| New | `supabase/functions/chat-consultant-v2/lexicon-resolver_test.ts` |
-| Edit | `supabase/functions/chat-consultant-v2/orchestrator.ts` (вставить Lexicon Resolve между Category Resolver и Facet Matcher; провести unresolved/soft_matches до Composer) |
-| Edit | `supabase/functions/chat-consultant-v2/s-search.ts` (поведение unresolved §9.3) |
-| Edit | `supabase/functions/chat-consultant-v2/s-catalog-composer.ts` (унифицированные строки про soft_matches и unresolved-без-nearest) |
-| Edit | `supabase/functions/chat-consultant-v2/category-resolver.ts` (timing-лог) |
-| Update | `mem://features/search-pipeline` (зафиксировать переход Facet Matcher на LLM по §9.3) |
-
-**Контракты**
-
-`SoftMatch`, `UnresolvedTrait`, `OptionSchema` — взять буквально из §9.3 спеки. Не выдумывать поля.
-
-**LLM**
-
-Только OpenRouter Gemini Flash (Core memory: «Exclusively use OpenRouter»). Модель и промпт — в `config.ts`, чтобы менять без правки логики.
-
-**Бюджеты §6.2** (после фикса): Lexicon ≤3 ms, LLM Facet Matcher ≤600 ms p50, Strict API Search ≤1500 ms — итог фильтрованного поиска ≤5800 ms.
-
-**Метрики §22.2 (расширение)**: `facet_matcher_hallucination_total`, `facet_matcher_unresolved_with_clarification_total`, `facet_matcher_soft_match_applied_total`, `category_resolver_latency_ms` (histogram).
-
-## Порядок выполнения
-
-Шаги 1 → 2 → 3 → 4 → 6 одним заходом (это связные изменения одного контракта). Шаг 5 — отдельным маленьким коммитом перед остальным, чтобы получить замер «до».
-
-После выкатки — повторить запрос «найди черные двухгнёздые розетки» из виджета и проверить логи. Ожидаемое поведение: facet-matcher увидел schema «Розетки», LLM замапил «черные» → `Цвет=Чёрный` и «двухгнёздые» → `Количество разъёмов=2`, `/products` вернул товары. Если LLM не справился — `unresolved` с `nearest_facet_key`, Composer задаёт уточняющий вопрос со списком значений.
+После одобрения переключусь в build-mode и сделаю одну правку в `index.ts` + задеплою `chat-consultant`. Ничего больше деплоить не нужно.
