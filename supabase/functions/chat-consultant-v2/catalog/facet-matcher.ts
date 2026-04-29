@@ -258,35 +258,51 @@ export async function matchFacets(
   }
 
   // ── 2. Обработка статуса API. ───────────────────────────────────────────
-  if (
+  // §4.10.1: при transport-failure пробуем bootstrap (per-item options из probe).
+  // Если bootstrap пуст — отдаём 'category_unavailable' как раньше.
+  let optionsForMatch: RawOption[] = facetsResult.options ?? [];
+  let effectiveSource: FacetSource = source;
+  const isTransportFailure =
     facetsResult.status === 'http_error' ||
     facetsResult.status === 'timeout' ||
     facetsResult.status === 'network_error' ||
-    facetsResult.status === 'upstream_unavailable'
-  ) {
-    const result: FacetMatchResult = {
-      status: 'category_unavailable',
-      optionFilters: {},
-      optionAliases: {},
-      facetCaptions: {},
-      matchedModifiers: [],
-      unmatchedModifiers: modifiers.filter((m) => typeof m === 'string' && m.trim().length > 0),
-      source: 'unavailable',
-      ms: Date.now() - t0,
-    };
-    console.info(`[v2.catalog.facet_matcher.result] ${JSON.stringify({
-      pagetitle,
-      status: result.status,
-      source: result.source,
-      api_status: facetsResult.status,
-      api_error: facetsResult.errorMessage ?? null,
-      options_count: 0,
-      totalProducts: facetsResult.totalProducts ?? 0,
-      matchedModifiers: result.matchedModifiers,
-      unmatchedModifiers: result.unmatchedModifiers,
-      ms: result.ms,
-    })}`);
-    return result;
+    facetsResult.status === 'upstream_unavailable';
+
+  if (isTransportFailure) {
+    if (bootstrapOptions && bootstrapOptions.length > 0) {
+      optionsForMatch = bootstrapOptions;
+      effectiveSource = 'bootstrap';
+      console.info(`[v2.catalog.facet_matcher.bootstrap_used] ${JSON.stringify({
+        pagetitle,
+        api_status: facetsResult.status,
+        bootstrap_options_count: bootstrapOptions.length,
+      })}`);
+    } else {
+      const result: FacetMatchResult = {
+        status: 'category_unavailable',
+        optionFilters: {},
+        optionAliases: {},
+        facetCaptions: {},
+        matchedModifiers: [],
+        unmatchedModifiers: modifiers.filter((m) => typeof m === 'string' && m.trim().length > 0),
+        source: 'unavailable',
+        ms: Date.now() - t0,
+      };
+      console.info(`[v2.catalog.facet_matcher.result] ${JSON.stringify({
+        pagetitle,
+        status: result.status,
+        source: result.source,
+        api_status: facetsResult.status,
+        api_error: facetsResult.errorMessage ?? null,
+        options_count: 0,
+        totalProducts: facetsResult.totalProducts ?? 0,
+        matchedModifiers: result.matchedModifiers,
+        unmatchedModifiers: result.unmatchedModifiers,
+        bootstrap_attempted: bootstrapOptions !== undefined,
+        ms: result.ms,
+      })}`);
+      return result;
+    }
   }
 
   if (facetsResult.status === 'empty' || facetsResult.options.length === 0) {
