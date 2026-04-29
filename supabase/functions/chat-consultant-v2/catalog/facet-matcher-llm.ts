@@ -309,6 +309,12 @@ interface LLMItem {
   reason?: 'morphology' | 'typo' | 'numeric_equivalent' | 'bilingual';
 }
 
+interface FacetSelectionItem {
+  trait: string;
+  facet_key: string | null;
+  confidence: number;
+}
+
 function parseLLMResponse(text: string): LLMItem[] {
   // Снимаем потенциальные markdown-обёртки ```json ... ```
   let cleaned = text.trim();
@@ -339,6 +345,24 @@ function parseLLMResponse(text: string): LLMItem[] {
     });
   }
   return out;
+}
+
+function parseFacetSelectionResponse(text: string): FacetSelectionItem[] {
+  let cleaned = text.trim();
+  const fence = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fence) cleaned = fence[1].trim();
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+  const parsed = JSON.parse(cleaned);
+  if (!parsed || !Array.isArray(parsed.items)) throw new Error('Facet selection response: missing items[]');
+  return parsed.items
+    .filter((it: unknown) => !!it && typeof (it as any).trait === 'string')
+    .map((it: any) => ({
+      trait: it.trait,
+      facet_key: typeof it.facet_key === 'string' ? it.facet_key : null,
+      confidence: typeof it.confidence === 'number' ? it.confidence : 0,
+    }));
 }
 
 // ─── Main entry ─────────────────────────────────────────────────────────────
