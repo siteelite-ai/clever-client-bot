@@ -973,6 +973,9 @@ function extractCandidateTitle(classification: ClassificationResult | null): str
   return name;
 }
 
+/**
+ * Search products by site identifier
+ */
 async function searchBySiteId(siteId: string, apiToken: string): Promise<Product[]> {
   const params = new URLSearchParams();
   params.append('options[identifikator_sayta__sayt_identifikatory][]', siteId);
