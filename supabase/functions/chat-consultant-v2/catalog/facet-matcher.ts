@@ -216,6 +216,19 @@ export async function matchFacets(
   pagetitle: string,
   modifiers: string[],
   deps: FacetMatcherDeps,
+  /**
+   * §4.10.1 Self-Bootstrap Facets fallback. Если /categories/options вернул
+   * transport-failure (timeout/5xx/network/breaker) И bootstrapOptions непуст —
+   * матчинг идёт по bootstrapOptions, source='bootstrap'. Это спасает запрос
+   * от status='category_unavailable' (полная потеря фасет-словаря).
+   *
+   * Передаётся вызывающим (catalog-assembler), который собирает options из
+   * параллельного probe-запроса через extractFacetSchemaFromProducts.
+   *
+   * НЕ участвует в price_clarify slot (см. §4.10.1) — counts реконструированы
+   * из частоты в N_PROBE и статистически некорректны для UX-clarify.
+   */
+  bootstrapOptions?: RawOption[],
 ): Promise<FacetMatchResult> {
   const t0 = Date.now();
   const ttl = deps.facetsTtlSec ?? 3600;
