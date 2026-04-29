@@ -27,6 +27,15 @@ function stubApiClient(result: CategoryOptionsResult): ApiClientDeps {
     baseUrl: 'https://test.local/api',
     apiToken: 't',
     fetch: async () => {
+      if (result.status === 'timeout') {
+        throw new DOMException('timed out', 'AbortError');
+      }
+      if (result.status === 'network_error' || result.status === 'upstream_unavailable') {
+        throw new TypeError('network down');
+      }
+      if (result.status === 'http_error') {
+        return new Response('upstream error', { status: 500 });
+      }
       const body = JSON.stringify({
         data: {
           data: {
