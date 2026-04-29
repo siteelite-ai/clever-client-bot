@@ -319,6 +319,7 @@ function stubApiClientFailing(status: 'http_error' | 'timeout' | 'network_error'
 }
 
 Deno.test('Bootstrap: transport-failure + bootstrapOptions → match с source=bootstrap', async () => {
+  __resetCatalogBreakerForTests();
   const fc = { n: 0 };
   const cache = makeCacheStub();
   const bootstrap: RawOption[] = [
@@ -337,6 +338,7 @@ Deno.test('Bootstrap: transport-failure + bootstrapOptions → match с source=b
 });
 
 Deno.test('Bootstrap: transport-failure БЕЗ bootstrapOptions → category_unavailable', async () => {
+  __resetCatalogBreakerForTests();
   const fc = { n: 0 };
   const cache = makeCacheStub();
   const r = await matchFacets(
@@ -352,6 +354,7 @@ Deno.test('Bootstrap: transport-failure БЕЗ bootstrapOptions → category_una
 });
 
 Deno.test('Bootstrap: transport-failure + ПУСТОЙ bootstrapOptions → category_unavailable', async () => {
+  __resetCatalogBreakerForTests();
   const fc = { n: 0 };
   const cache = makeCacheStub();
   const r = await matchFacets(
@@ -365,6 +368,7 @@ Deno.test('Bootstrap: transport-failure + ПУСТОЙ bootstrapOptions → cate
 });
 
 Deno.test('Bootstrap: live OK игнорирует bootstrapOptions (не подменяет рабочую схему)', async () => {
+  __resetCatalogBreakerForTests();
   const live = makeOptions([
     { key: 'color', caption_ru: 'Цвет', values: [{ value_ru: 'Красный' }] },
   ]);
@@ -388,6 +392,7 @@ Deno.test('Bootstrap: live OK игнорирует bootstrapOptions (не под
 });
 
 Deno.test('Bootstrap: empty live + bootstrapOptions → bootstrap путь работает', async () => {
+  __resetCatalogBreakerForTests();
   const empty: CategoryOptionsResult = { status: 'empty', options: [], totalProducts: 0, ms: 1 };
   const fc = { n: 0 };
   const cache = makeCacheStub();
