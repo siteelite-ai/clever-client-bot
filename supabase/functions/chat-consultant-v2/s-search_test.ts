@@ -394,3 +394,25 @@ Deno.test("Test 14: пустые формы → empty без вызовов API"
   assertEquals(m.calls.length, 0);
   assertEquals(r.attempts.length, 0);
 });
+
+Deno.test("Test 15: без modifiers и фасетов поиск идёт только по category, без raw query", async () => {
+  const m = mockApiClient((_url, params) => {
+    assertEquals(params.get("category"), "Лампы");
+    assertEquals(params.get("query"), null);
+    return { results: [makeProduct(50, "Школьная лампа")] };
+  });
+
+  const r = await runSearch(
+    input({
+      pagetitle: "Лампы",
+      expansion: expansion([{ text: "найди лампы для школы", form: "as_is_ru" }]),
+      intent: intent({ search_modifiers: [], critical_modifiers: [] }),
+      facetMatch: emptyFacets(),
+    }),
+    { apiClient: m.deps },
+  );
+
+  assertEquals(r.status, "ok");
+  assertEquals(r.products.length, 1);
+  assertEquals(m.calls.length, 1);
+});
