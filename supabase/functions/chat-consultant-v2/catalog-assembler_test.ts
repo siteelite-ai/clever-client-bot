@@ -389,9 +389,10 @@ Deno.test("G2 price-intent-ok-001: total=5 cheapest → show_all ASC, disallowCr
   // §11.5b: show_all → cross-sell разрешён (assembler не запрещает)
   assertEquals(result.disallowCrosssell, false);
 
-  // probe-then-fetch: ровно 1 probe + 1 full fetch (без дублирования)
+  // §4.10 probe-then-fetch + parallel-probe: 1 probe (s-price) + 1 full fetch
+  // + 1 parallel-probe (per_page=N_PROBE для bootstrap §4.10.1) = 2 fullCalls.
   assertEquals(probeCalls, 1);
-  assertEquals(fullCalls, 1);
+  assertEquals(fullCalls, 2);
 });
 
 // ─── Invariants (защита от регрессий core memory) ───────────────────────────
