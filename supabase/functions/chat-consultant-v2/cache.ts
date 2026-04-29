@@ -169,20 +169,24 @@ export interface StaleResult<T> {
   cacheKey: string;
 }
 
-export async function getOrComputeWithStale<T>(
-  namespace: string,
-  rawKey: string,
+/**
+ * Чистое ядро `getOrComputeWithStale`. Извлечено для тестируемости без Supabase.
+ * Принимает `getFn`/`setFn` как DI — production-обёртка ниже инъектирует
+ * `get`/`set` из этого же модуля.
+ */
+export async function getOrComputeWithStaleCore<T>(
+  cacheKey: string,
   ttlSec: number,
   staleTtlSec: number,
   compute: () => Promise<T>,
   isTransportFailure: (value: T) => boolean,
-  locale: string = DEFAULT_LOCALE,
+  getFn: <U>(key: string) => Promise<U | null>,
+  setFn: <U>(key: string, value: U, ttlSec: number) => Promise<void>,
 ): Promise<StaleResult<T>> {
-  const cacheKey = await hashKey(namespace, rawKey, locale);
   const staleKey = `${cacheKey}:stale`;
 
   // 1. HOT
-  const hot = await get<T>(cacheKey);
+  const hot = await getFn<T>(cacheKey);
   if (hot !== null && hot !== undefined) {
     return { value: hot, source: 'hot', cacheKey };
   }
@@ -201,13 +205,13 @@ export async function getOrComputeWithStale<T>(
 
   if (!computeThrew && !isTransportFailure(computed)) {
     // success — пишем оба слоя fire-and-forget
-    set(cacheKey, computed, ttlSec).catch(() => {});
-    set(staleKey, computed, staleTtlSec).catch(() => {});
+    setFn(cacheKey, computed, ttlSec).catch(() => {});
+    setFn(staleKey, computed, staleTtlSec).catch(() => {});
     return { value: computed, source: 'fresh', cacheKey };
   }
 
   // 3. transport-failure → STALE
-  const stale = await get<T>(staleKey);
+  const stale = await getFn<T>(staleKey);
   if (stale !== null && stale !== undefined) {
     return { value: stale, source: 'stale', cacheKey };
   }
@@ -215,6 +219,28 @@ export async function getOrComputeWithStale<T>(
   // 4. STALE пуст — пробрасываем оригинальный fail
   if (computeThrew) throw thrown;
   return { value: computed, source: 'fresh', cacheKey };
+}
+
+/** Production-обёртка: hashKey + DI default get/set. */
+export async function getOrComputeWithStale<T>(
+  namespace: string,
+  rawKey: string,
+  ttlSec: number,
+  staleTtlSec: number,
+  compute: () => Promise<T>,
+  isTransportFailure: (value: T) => boolean,
+  locale: string = DEFAULT_LOCALE,
+): Promise<StaleResult<T>> {
+  const cacheKey = await hashKey(namespace, rawKey, locale);
+  return getOrComputeWithStaleCore(
+    cacheKey,
+    ttlSec,
+    staleTtlSec,
+    compute,
+    isTransportFailure,
+    get,
+    set,
+  );
 }
 
 // ─── Lazy GC (§6.2: 1% запросов) ────────────────────────────────────────────
