@@ -102,6 +102,17 @@ export interface ExpansionInput {
   query: string;
   locale?: "ru" | "kk" | "en"; // default 'ru'
   traceId: string;
+  /**
+   * §9.2b §3 — `extractRuTokens(user_query_raw)`. Источник трейтов уже
+   * извлечён Intent-LLM (`intent.search_modifiers` ∪ `critical_modifiers`).
+   * Если массив непустой — он становится базой `as_is_ru.text` (joined
+   * пробелом). Это удаляет шумовые слова реплики («найди», «пожалуйста»),
+   * которые иначе ломают word-boundary post-filter §9.2c.
+   *
+   * Если массив пуст / undefined — fallback на сырую `query` (старое
+   * поведение, нужно для тестов и для случаев без Intent-traits).
+   */
+  traits?: string[];
 }
 
 // ─── Lexicon: применение замен ──────────────────────────────────────────────
