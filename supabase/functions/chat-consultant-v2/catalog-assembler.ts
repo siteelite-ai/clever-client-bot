@@ -82,7 +82,8 @@ export type AssemblerStage =
   | "query_expansion"
   | "facet_matcher"
   | "s_search"
-  | "s_price";
+  | "s_price"
+  | "s_similar";
 
 export interface AssemblerTrace {
   route: Route;
@@ -90,7 +91,7 @@ export interface AssemblerTrace {
   /** Итоговый pagetitle (если был выбран). null для OOD/unresolved. */
   pagetitle: string | null;
   /** Вид сборки (для метрик). */
-  flavor: "catalog" | "price" | "ood";
+  flavor: "catalog" | "price" | "ood" | "similar";
   /** Итоговый winning form (если search). */
   winningForm?: string | null;
   /** Резерв: ошибки на любой стадии. */
