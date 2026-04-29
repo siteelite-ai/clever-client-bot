@@ -86,7 +86,7 @@ export interface FacetMatcherLLMResult {
   facetCaptions: Record<string, string>;
   /** facet → alias-keys (для optionAliases в searchProducts; совместимость с §3.1). */
   optionAliases: Record<string, string[]>;
-  source: 'cache' | 'live' | 'unavailable';
+  source: 'cache' | 'live' | 'bootstrap' | 'unavailable';
   ms: number;
   /** Краткий слепок схемы, переданной LLM (для логов/отладки). */
   schemaDigest: { facets_count: number; total_values: number };
