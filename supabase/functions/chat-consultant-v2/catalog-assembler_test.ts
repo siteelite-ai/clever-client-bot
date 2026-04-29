@@ -427,5 +427,13 @@ Deno.test("INV: assembler НИКОГДА не сужает funnel сам (clarif
     deps,
   );
   const productCalls = m.calls.filter((c) => c.path.endsWith("/products"));
-  assertEquals(productCalls.length, 1, "clarify-ветка должна делать ровно 1 probe-вызов");
+  // §4.10: 1 probe (s-price per_page=1) + 1 parallel-probe (per_page=N_PROBE
+  // для bootstrap-фасетов). Оба БЕЗ optionFilters в URL — проверка
+  // "не самосужает funnel" сохраняется ниже.
+  assertEquals(productCalls.length, 2, "clarify-ветка: 1 probe + 1 parallel-probe");
+  for (const c of productCalls) {
+    for (const k of c.params.keys()) {
+      assert(!k.startsWith("options["), `assembler не должен инжектить optionFilters в probe (${k})`);
+    }
+  }
 });
