@@ -352,6 +352,15 @@ export async function classifyIntent(
       console.warn(`[v2.s2] cache write failed: ${(err as Error).message}`);
     }
 
+    console.info(`[v2.s2.intent.extracted] ${JSON.stringify({
+      query,
+      category_hint: intent.category_hint ?? null,
+      search_modifiers: intent.search_modifiers ?? [],
+      critical_modifiers: intent.critical_modifiers ?? [],
+      price_intent: intent.price_intent ?? null,
+      latency_ms: latency,
+    })}`);
+
     return { intent, cache_hit: false, latency_ms: latency, used_fallback: false };
   } catch (err) {
     // 4. Safe fallback — НЕ кэшируем
