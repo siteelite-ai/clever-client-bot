@@ -29,6 +29,9 @@ import { createProductionFacetMatcherDeps } from "./catalog/facet-matcher.ts";
 import type { FacetMatcherDeps } from "./catalog/facet-matcher.ts";
 import type { SSearchDeps } from "./s-search.ts";
 import type { SPriceDeps } from "./s-price.ts";
+import type { SSimilarDeps } from "./s-similar/index.ts";
+import { SIMILAR_LLM_MODEL } from "./s-similar/index.ts";
+import { validateClassifyTraitsResult } from "./s-similar/schema.ts";
 import {
   createProductionApiClientDeps,
   type ApiClientDeps,
@@ -206,6 +209,7 @@ export interface CatalogProductionDeps {
   facets: FacetMatcherDeps;
   search: SSearchDeps;
   price: SPriceDeps;
+  similar: SSimilarDeps;
   composer: CatalogComposerDeps;
 }
 
@@ -256,7 +260,76 @@ export function createCatalogProductionDeps(
     log: (event, data) => log(`s_price.${event}`, data),
   };
 
+  const similar: SSimilarDeps = {
+    apiClient,
+    facetMatcher: facets,
+    resolver,
+    callLLM: (params) => similarCallLLM(params, cfg.openRouterKey),
+    validateTraits: validateClassifyTraitsResult,
+  };
+
   const composer = createCatalogComposerDeps(cfg.openRouterKey);
 
-  return { apiClient, resolver, expansion, facets, search, price, composer };
+  return { apiClient, resolver, expansion, facets, search, price, similar, composer };
+}
+
+// ─── s-similar LLM call (OpenRouter, tool calling) ──────────────────────────
+//
+// Контракт §4.6.3: ровно один tool call classify_traits, tool_choice
+// принудительный. Возвращаем сырые arguments — валидация в
+// validateClassifyTraitsResult.
+async function similarCallLLM(
+  params: {
+    systemPrompt: string;
+    userMessage: string;
+    // deno-lint-ignore no-explicit-any
+    tool: any;
+    // deno-lint-ignore no-explicit-any
+    toolChoice: any;
+  },
+  openRouterKey: string,
+): Promise<unknown> {
+  const res = await fetch(
+    "https://openrouter.ai/api/v1/chat/completions",
+    {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${openRouterKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://chat-volt.testdevops.ru",
+        "X-Title": "220volt-chat-consultant-v2-s-similar",
+      },
+      body: JSON.stringify({
+        model: SIMILAR_LLM_MODEL,
+        temperature: 0,
+        max_tokens: 600,
+        messages: [
+          { role: "system", content: params.systemPrompt },
+          { role: "user", content: params.userMessage },
+        ],
+        tools: [params.tool],
+        tool_choice: params.toolChoice,
+      }),
+      signal: AbortSignal.timeout(RESOLVER_HTTP_TIMEOUT_MS),
+    },
+  );
+  if (!res.ok) {
+    const errText = await res.text().catch(() => "");
+    throw new Error(`s-similar LLM HTTP ${res.status}: ${errText.slice(0, 200)}`);
+  }
+  // deno-lint-ignore no-explicit-any
+  const json: any = await res.json();
+  const toolCalls = json?.choices?.[0]?.message?.tool_calls;
+  if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
+    throw new Error("s-similar LLM: no tool_calls in response");
+  }
+  const argsRaw = toolCalls[0]?.function?.arguments;
+  if (typeof argsRaw !== "string") {
+    throw new Error("s-similar LLM: tool_call.arguments is not a string");
+  }
+  try {
+    return JSON.parse(argsRaw);
+  } catch (e) {
+    throw new Error(`s-similar LLM: arguments not valid JSON: ${(e as Error).message}`);
+  }
 }

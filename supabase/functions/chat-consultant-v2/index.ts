@@ -62,6 +62,7 @@ import {
   loadCatalogAppSettings,
 } from "./catalog-deps-factory.ts";
 import { composeCatalogAnswer } from "./s-catalog-composer.ts";
+import { computeNextAnchor } from "./anchor-tracker.ts";
 import { DEFAULT_SLOT_STATE } from "./types.ts";
 
 // ─── CORS ────────────────────────────────────────────────────────────────────
@@ -479,10 +480,19 @@ serve(async (req) => {
               ) {
                 updatedSlots.push(assembled.composerOutcome.outcome.clarifySlot);
               }
+              // §4.6.2 + §4.6.2.1: обновляем якорь для similar-ветки.
+              // Решение архитектора: пишем ТОЛЬКО при scenario='normal' AND
+              // products.length===1. См. anchor-tracker.ts.
+              const nextAnchorSku = computeNextAnchor({
+                prevAnchorSku: mutableNextState.last_shown_product_sku ?? null,
+                composerOutcome: assembled.composerOutcome,
+                scenario: composed.scenario,
+              });
               mutableNextState = {
                 ...mutableNextState,
                 slots: updatedSlots,
                 slot_state: { soft404_streak: composed.newSoft404Streak },
+                last_shown_product_sku: nextAnchorSku ?? undefined,
               };
 
               catalogMeta = {

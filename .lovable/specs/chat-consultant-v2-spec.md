@@ -453,6 +453,44 @@ intent.intent === 'catalog'
 («Подскажите артикул или название товара, к которому подобрать аналог»)
 и НЕ создаёт slot — это разовый вопрос, а не facet-уточнение.
 
+#### 4.6.2.1 Anchor Lifecycle (нормативно)
+
+Полный жизненный цикл `state.last_shown_product_sku` определяется
+детерминированной функцией от результата текущего хода. Реализация:
+`anchor-tracker.ts::computeNextAnchor`. Caller вызывает её ровно один
+раз — после композера, перед формированием SSE `done`-события.
+
+```
+WRITE     ← composerOutcome.outcome.products[0].article
+            WHEN composerOutcome.kind ∈ {'search','price'}
+             AND scenario === 'normal'
+             AND products.length === 1
+             AND products[0].article != null
+
+PRESERVE  ← prev
+            WHEN composerOutcome === null  (lightweight-ветка:
+                 greeting / knowledge / contacts / escalation / OOD-shortcut)
+
+RESET     ← null
+            WHEN scenario != 'normal'
+                 (soft_fallback / soft_404 / all_zero_price / error / clarify)
+             ИЛИ products.length !== 1
+                 (включая 0 и >1)
+             ИЛИ products[0].article отсутствует
+```
+
+Обоснование (§4.6.2 + Core Memory «Bot NEVER self-narrows funnel»):
+- При `products.length > 1` референт «похожие на это» неоднозначен.
+  Записать `products[0]` = молчаливо угадать выбор пользователя.
+  Корректный путь — `clarify_anchor` в s-similar на следующем ходу.
+- `scenario='soft_fallback'` означает дрейф (мы сняли facet-ограничение).
+  Делать дрейфовавший товар якорем = усугубить дрейф в следующем «похожие».
+- Lightweight-ветки не меняют каталоговый контекст → якорь сохраняется
+  через всю not-catalog паузу (юзер может вернуться к диалогу).
+
+State-machine тесты: `anchor-tracker_test.ts` (10 кейсов, покрывают все
+ветви WRITE/PRESERVE/RESET).
+
 #### 4.6.3 `classify_traits` Tool Calling Contract
 
 Структурный экстрактор характеристик якоря. Вызывается через OpenRouter
