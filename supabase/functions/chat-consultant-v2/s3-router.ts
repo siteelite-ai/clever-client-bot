@@ -33,7 +33,8 @@ export type Route =
   | 'S_ESCALATION'
   | 'S_CATALOG'
   | 'S_CATALOG_OOD'    // catalog + out_of_domain → soft 404 без API
-  | 'S_PRICE';         // catalog + price_intent !== null → §4.4 probe-then-fetch
+  | 'S_PRICE'          // catalog + price_intent !== null → §4.4 probe-then-fetch
+  | 'S_SIMILAR';       // catalog + is_replacement === true → §4.6 similar/replacement
 
 export interface RouteDecision {
   route: Route;
@@ -49,7 +50,8 @@ export interface RouteDecision {
     | 'intent_escalation'
     | 'intent_catalog'
     | 'intent_catalog_out_of_domain'
-    | 'intent_catalog_price';
+    | 'intent_catalog_price'
+    | 'intent_catalog_similar';
 }
 
 // ─── Главная функция ─────────────────────────────────────────────────────────
