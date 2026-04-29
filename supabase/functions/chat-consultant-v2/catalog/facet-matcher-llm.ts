@@ -118,8 +118,11 @@ export interface FacetMatcherLLMDeps {
     /** Для метрик/трасс. */
     purpose: 'facet_matcher';
   }) => Promise<{ text: string; model: string }>;
-  /** HTTP timeout для LLM (default 8s). */
-  llmTimeoutMs?: number;
+  /**
+   * Сколько раз retry LLM-вызов при сбое (network/HTTP/parse).
+   * §28 строка 2324: «retry 1 раз с явным "верни строго JSON"». Default 1.
+   */
+  llmMaxRetries?: number;
   log?: (event: string, data?: Record<string, unknown>) => void;
 }
 
