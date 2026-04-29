@@ -165,6 +165,49 @@ const SYSTEM_PROMPT = `Ты — детерминированный мапер п
   ]
 }`;
 
+const FACET_SELECTION_SYSTEM_PROMPT = `Ты определяешь, К КАКОМУ фасету категории относится каждый пользовательский трейт.
+
+ВХОД: JSON со списком traits, исходной user_query и facets — массив { key, caption_ru } БЕЗ values.
+
+ЗАДАЧА:
+- Для каждого trait выбери наиболее вероятный facet_key по смыслу caption_ru.
+- Учитывай морфологию RU/KK, ё↔е, билингвальность и числовые формулировки.
+- Если facet определить нельзя — верни facet_key=null.
+
+ВЫВОД — СТРОГО JSON:
+{
+  "items": [
+    {
+      "trait": "<исходный trait>",
+      "facet_key": "<key из facets или null>",
+      "confidence": <0.0..1.0>
+    }
+  ]
+}`;
+
+const VALUE_SELECTION_SYSTEM_PROMPT = `Ты выбираешь точное значение ОДНОГО заранее выбранного фасета.
+
+ВХОД: JSON со строками user_query, trait и facet = { key, caption_ru, values: string[] }.
+
+ЗАДАЧА:
+- Для trait выбери строго одно значение из facet.values, если оно действительно соответствует trait.
+- Учитывай морфологию RU/KK, ё↔е, билингвальность, числовые эквиваленты.
+- Если значение в facet.values отсутствует — верни unresolved.
+
+ВЫВОД — СТРОГО JSON:
+{
+  "items": [
+    {
+      "trait": "<исходный trait>",
+      "classification": "resolved" | "soft_match" | "unresolved",
+      "facet_key": "<facet.key>",
+      "value": "<одно значение из facet.values или null>",
+      "confidence": <0.0..1.0>,
+      "reason": "morphology" | "typo" | "numeric_equivalent" | "bilingual"
+    }
+  ]
+}`;
+
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function pickCaption(opt: RawOption): string {
@@ -266,6 +309,12 @@ interface LLMItem {
   reason?: 'morphology' | 'typo' | 'numeric_equivalent' | 'bilingual';
 }
 
+interface FacetSelectionItem {
+  trait: string;
+  facet_key: string | null;
+  confidence: number;
+}
+
 function parseLLMResponse(text: string): LLMItem[] {
   // Снимаем потенциальные markdown-обёртки ```json ... ```
   let cleaned = text.trim();
@@ -296,6 +345,24 @@ function parseLLMResponse(text: string): LLMItem[] {
     });
   }
   return out;
+}
+
+function parseFacetSelectionResponse(text: string): FacetSelectionItem[] {
+  let cleaned = text.trim();
+  const fence = cleaned.match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i);
+  if (fence) cleaned = fence[1].trim();
+  const firstBrace = cleaned.indexOf('{');
+  const lastBrace = cleaned.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) cleaned = cleaned.slice(firstBrace, lastBrace + 1);
+  const parsed = JSON.parse(cleaned);
+  if (!parsed || !Array.isArray(parsed.items)) throw new Error('Facet selection response: missing items[]');
+  return parsed.items
+    .filter((it: unknown) => !!it && typeof (it as any).trait === 'string')
+    .map((it: any) => ({
+      trait: it.trait,
+      facet_key: typeof it.facet_key === 'string' ? it.facet_key : null,
+      confidence: typeof it.confidence === 'number' ? it.confidence : 0,
+    }));
 }
 
 // ─── Main entry ─────────────────────────────────────────────────────────────
@@ -401,6 +468,8 @@ export async function matchFacetsWithLLM(
   }));
   const totalValues = facets.reduce((acc, f) => acc + f.values.length, 0);
 
+  const useTwoStage = totalValues > 1200 || facets.length > 32;
+
   // ── 3. LLM вызов. ──────────────────────────────────────────────────────
   const userMessage = JSON.stringify(
     {
@@ -418,6 +487,52 @@ export async function matchFacetsWithLLM(
   let llmModel = '';
   let lastErr: string | null = null;
   let items: LLMItem[] | null = null;
+
+  if (useTwoStage) {
+    try {
+      const selectionResp = await deps.callLLM({
+        systemPrompt: FACET_SELECTION_SYSTEM_PROMPT,
+        userMessage: JSON.stringify({
+          user_query: input.user_query_raw,
+          traits: cleanTraits,
+          facets: facets.map((f) => ({ key: f.key, caption_ru: f.caption })),
+        }),
+        purpose: 'facet_matcher',
+      });
+      llmModel = selectionResp.model;
+      const selected = parseFacetSelectionResponse(selectionResp.text);
+      const stage2Items: LLMItem[] = [];
+      for (const trait of cleanTraits) {
+        const hit = selected.find((s) => s.trait === trait) ?? null;
+        const facet = hit?.facet_key ? facetByKey.get(hit.facet_key) ?? null : null;
+        if (!facet || (hit?.confidence ?? 0) < 0.5) {
+          stage2Items.push({ trait, classification: 'unresolved', facet_key: null, value: null, confidence: 0 });
+          continue;
+        }
+        const valueResp = await deps.callLLM({
+          systemPrompt: VALUE_SELECTION_SYSTEM_PROMPT,
+          userMessage: JSON.stringify({
+            user_query: input.user_query_raw,
+            trait,
+            facet: { key: facet.key, caption_ru: facet.caption, values: facet.values },
+          }),
+          purpose: 'facet_matcher',
+        });
+        llmModel = valueResp.model;
+        const parsed = parseLLMResponse(valueResp.text);
+        if (parsed.length === 0) {
+          stage2Items.push({ trait, classification: 'unresolved', facet_key: facet.key, value: null, confidence: 0 });
+        } else {
+          stage2Items.push(parsed[0]);
+        }
+      }
+      items = stage2Items;
+    } catch (e) {
+      lastErr = `two_stage: ${(e as Error).message}`;
+    }
+  }
+
+  if (items === null) {
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     // На retry — явно усиливаем требование «верни строго JSON».
@@ -454,6 +569,7 @@ export async function matchFacetsWithLLM(
       });
       continue;
     }
+  }
   }
 
   if (items === null) {
