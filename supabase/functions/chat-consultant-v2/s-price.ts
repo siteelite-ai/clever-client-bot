@@ -390,10 +390,8 @@ export async function priceBranch(
     };
   }
 
-  // empty / empty_degraded — оба означают «нет товаров». degraded мы не
-  // обрабатываем по-особому в price-ветке: тут нет soft fallback (фасеты
-  // никто не снимал — мы их не выбирали). Просто 'empty'.
-  if (probe.status === "empty" || probe.status === "empty_degraded") {
+  // empty — нет товаров. (Q3 'empty_degraded' статус удалён.)
+  if (probe.status === "empty") {
     return {
       status: "empty",
       products: [],

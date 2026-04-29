@@ -353,7 +353,6 @@ export function decideScenario(
     case "soft_fallback":
       return "soft_fallback";
     case "empty":
-    case "empty_degraded":
       return "soft_404";
     case "all_zero_price":
       return "all_zero_price";
@@ -391,7 +390,6 @@ export function nextSoft404Streak(
 
   const isZero =
     norm.status === "empty" ||
-    norm.status === "empty_degraded" ||
     norm.status === "all_zero_price";
   if (!isZero) {
     // Любой ненулевой результат (включая soft_fallback с товарами) → reset.
