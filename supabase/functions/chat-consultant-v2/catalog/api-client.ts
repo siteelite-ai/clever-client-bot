@@ -450,17 +450,6 @@ export async function searchProducts(
   const priced = results.filter((p) => typeof p?.price === 'number' && p.price > 0);
   const zeroPriceFiltered = results.length - priced.length;
 
-  // [DEBUG-F.4.2 TEMP] что вернул каталог. Удалить после диагностики.
-  try {
-    const sample = results.slice(0, 3).map((p: any) => ({
-      id: p?.id, pagetitle: p?.pagetitle, price: p?.price, vendor: p?.vendor,
-    }));
-    console.log(`[v2.debug.search.api_response] ${JSON.stringify({
-      totalFromApi, results_len: results.length, priced_len: priced.length,
-      zeroPriceFiltered, sample,
-    })}`);
-  } catch { /* never break on debug */ }
-
   // ── Recovery for Q3: total=0 и есть не-ASCII ключи в optionFilters. ────
   if (totalFromApi === 0 && input.optionFilters) {
     const suspectKeys = Object.keys(input.optionFilters).filter(hasNonAscii);
