@@ -186,7 +186,16 @@ function priceBoundsFromIntent(
 
 /**
  * Построение SearchProductsInput из SPriceInput.
- * Все фасеты/aliases пробрасываем как есть (Q3 recovery работает в api-client).
+ *
+ * ВАЖНО (Catalog API contract, core memory):
+ *   `input.pagetitle` здесь — это название КАТЕГОРИИ от Category Resolver
+ *   (см. SPriceInput.pagetitle JSDoc). По swagger'у `/products` принимает
+ *   РАЗДЕЛЬНЫЕ параметры:
+ *     • `category=<title>` — фильтр по категории (это наш кейс);
+ *     • `pagetitle=<title>` — EXACT match по названию ПРОДУКТА.
+ *   Маппинг в `pagetitle` приведёт к `total=0` и сломает price-branch для
+ *   любого категорийного запроса. Регрессия каралась тестом
+ *   "s-price uses ?category= for category from Resolver".
  */
 function toApiInput(
   input: SPriceInput,
@@ -197,7 +206,7 @@ function toApiInput(
     perPage,
     page: 1,
   };
-  if (input.pagetitle) apiInput.pagetitle = input.pagetitle;
+  if (input.pagetitle) apiInput.category = input.pagetitle;
   if (input.query) apiInput.query = input.query;
   if (typeof minPrice === "number") apiInput.minPrice = minPrice;
   if (typeof maxPrice === "number") apiInput.maxPrice = maxPrice;
