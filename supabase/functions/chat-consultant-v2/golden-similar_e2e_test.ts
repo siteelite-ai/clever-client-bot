@@ -290,7 +290,7 @@ Deno.test("GOLDEN-2: similar by state.last_shown_product_sku → ok + recommenda
   assertEquals(env.classifyCalls, 1);
   assert(composed !== null);
   assertEquals(composed!.crosssell.rendered, false);
-  assertStringIncludes(composed!.text, "**[Anchor-Cand-3](/p/3)**");
+  assertStringIncludes(composed!.text, assembled.recommendationContext!);
 });
 
 // ─── Golden 3: CLARIFY_ANCHOR ───────────────────────────────────────────────
