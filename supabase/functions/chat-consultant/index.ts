@@ -2439,18 +2439,26 @@ async function handlePriceIntent(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
     
-    const probeResponse = await fetch(`${VOLT220_API_URL}?${probeParams}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${apiToken}`,
-        'Content-Type': 'application/json',
-      },
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
+    let probeResponse: Response;
+    try {
+      probeResponse = await fetch(`${VOLT220_API_URL}?${probeParams}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${apiToken}`,
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+    } catch (fetchErr) {
+      clearTimeout(timeoutId);
+      markIfCatalogError('PriceIntent.probe', fetchErr);
+      throw fetchErr;
+    }
     
     if (!probeResponse.ok) {
       console.error(`[PriceIntent] Probe API error: ${probeResponse.status}`);
+      markIfCatalogHttpError('PriceIntent.probe', probeResponse.status);
       return { action: 'not_found' };
     }
     
