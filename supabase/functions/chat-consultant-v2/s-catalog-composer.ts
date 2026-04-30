@@ -215,6 +215,14 @@ export interface ComposeCatalogInput {
    * Никогда не подаётся в LLM (это deterministic-текст из traits).
    */
   recommendationContext?: string;
+  /**
+   * §22.3/§22.4 (spec) Soft-Suggest HINT-блок (Branch B, экспериментальный, под
+   * флагом app_settings.soft_suggest_enabled). Готовый markdown-блок от
+   * runSoftSuggest. Когда задан и scenario==='normal' — инжектится ПОСЛЕ карточек,
+   * ПОСЛЕ cross-sell, ПЕРЕД soft-fallback tail-line. БЕЗ молчаливой фильтрации
+   * (правило «no self-narrowing» сохраняется).
+   */
+  softSuggestHint?: string | null;
   /** Опциональный AbortSignal. */
   signal?: AbortSignal;
   /** Колбек на каждый delta-токен (для проксирования в SSE). */
@@ -607,6 +615,17 @@ async function composeWithProducts(
     parts.push(softFallbackTail(norm.softFallbackContext?.droppedFacetCaption));
   }
   if (crosssellRendered) parts.push(crosssellRendered);
+
+  // §22.3/§22.4: Soft-Suggest HINT (Branch B). Только при scenario='normal' —
+  // т.е. реально показаны карточки. При soft_fallback HINT не нужен (там уже
+  // tail-line про снятый фасет, иначе UX путается).
+  if (
+    scenario === "normal" &&
+    typeof input.softSuggestHint === "string" &&
+    input.softSuggestHint.trim().length > 0
+  ) {
+    parts.push(input.softSuggestHint.trim());
+  }
 
   const finalText = parts.join("\n\n");
 
