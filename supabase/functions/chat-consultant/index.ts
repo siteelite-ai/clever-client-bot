@@ -5169,13 +5169,42 @@ serve(async (req) => {
             .slice(-3)
             .map((m: any) => `- ${String(typeof m.content === 'string' ? m.content : JSON.stringify(m.content)).slice(0, 200)}`)
             .join('\n');
-          // ===== QUERY-FIRST PROBE (flag-gated, V1 experiment) =====
-          // When app_settings.query_first_enabled = true, we try ?query=<noun> FIRST.
-          // If it returns hits, we synthesise the matcher result from the actual product
-          // categories — skipping the heavy LLM Category Resolver entirely.
-          // On empty/error → silent fallback to the legacy matcher (no behavioural change).
-          let qfMatchesOverride: string[] | null = null;
+          // ═══════════════════════════════════════════════════════════════════
+          // QUERY-FIRST v2 — Direct facet pipeline (no Category Resolver).
+          // ───────────────────────────────────────────────────────────────────
+          // Architectural decision (2026-04-30, mem://constraints/disambiguation-disabled):
+          //   The bot must NEVER self-narrow the funnel by guessing a category.
+          //   Instead: trust ?query=<noun>, build facet schema from the live pool
+          //   (Self-Bootstrap §4.10.1), let the LLM map modifiers→options against
+          //   that schema, then re-query with ?query=<noun>&options[...]= ...
+          //   WITHOUT ?category=. The catalog API filters; we never pick a
+          //   category on the user's behalf.
+          //
+          // Flow when query_first_enabled = true:
+          //   1) extractCategoryNoun(userMessage)                        → noun
+          //   2) /products?query=noun&perPage=100                        → pool
+          //   3) extractFacetSchemaFromPool(pool)                        → schema
+          //   4) resolveFiltersWithLLM(pool, modifiers, schema)          → options
+          //   5) /products?query=noun&options[<k>][]=<v>&perPage=30      → final
+          //   6a) final.length > 0 → display final, articleShortCircuit=true
+          //   6b) final.length = 0 → Soft Fallback: display pool + droppedFacet
+          //   ANY throw / pool=0 → silent fallback to legacy Category Resolver
+          //
+          // What is removed vs old behaviour:
+          //   ✗ qfMatchesOverride (categories ranked by frequency in pool)
+          //   ✗ ?category= in any /products call from this branch
+          //   ✗ /categories/options HTTP roundtrip (timeouts source)
+          //   ✗ Domain Guard / allowedCategoryTitles (no category to guard)
+          //
+          // Metrics (logs):
+          //   query_first_v2_win, query_first_v2_soft_fallback,
+          //   query_first_v2_pool_empty, query_first_v2_error
+          // ═══════════════════════════════════════════════════════════════════
+          let qfV2Resolved = false;        // true → skip the legacy matcher block entirely
+          let qfV2DroppedFacetCaption: string | null = null;
+
           if (appSettings.query_first_enabled && appSettings.openrouter_api_key && appSettings.volt220_api_token) {
+            const qfStart = Date.now();
             try {
               const { extractCategoryNoun, createProductionExtractorDeps } = await import("../_shared/category-noun-extractor.ts");
               const extractorDeps = createProductionExtractorDeps(appSettings.openrouter_api_key);
@@ -5187,38 +5216,136 @@ serve(async (req) => {
                 extractDeadline,
               ]);
               const noun = (extractRes.categoryNoun || '').trim();
-              console.log(`[Chat] [QueryFirst] noun="${noun}" (source=${(extractRes as any).source || 'n/a'})`);
-              if (noun.length > 0) {
-                const probe = await searchProductsByCandidate(
+              console.log(`[QueryFirstV2] noun="${noun}" (source=${(extractRes as any).source || 'n/a'})`);
+
+              if (noun.length === 0) {
+                console.log(`[QueryFirstV2] empty noun → fallback to Category Resolver`);
+              } else {
+                // ── (2) Pool: broad ?query=noun, perPage=100 (data-agnostic balance: enough
+                // products to cover real facet variability without wasting bandwidth).
+                const QF_POOL_SIZE = 100;
+                const pool = await searchProductsByCandidate(
                   { query: noun, brand: null, category: null, min_price: null, max_price: null },
-                  appSettings.volt220_api_token!, 30
+                  appSettings.volt220_api_token!,
+                  QF_POOL_SIZE
                 );
-                if (probe.length > 0) {
-                  // Synthesise matches from the actual product categories returned by ?query=.
-                  // This lets the existing pipeline (ambiguity, fullSchema, server-filtering) run
-                  // unchanged, but anchored on real query results instead of a guessed category.
-                  const catCounts = new Map<string, number>();
-                  for (const p of probe) {
-                    const cat = (p as any).category?.pagetitle;
-                    if (cat && typeof cat === 'string') {
-                      catCounts.set(cat, (catCounts.get(cat) || 0) + 1);
+                console.log(`[QueryFirstV2] pool noun="${noun}" size=${pool.length} (perPage=${QF_POOL_SIZE})`);
+
+                if (pool.length === 0) {
+                  console.log(`[QueryFirstV2] query_first_v2_pool_empty noun="${noun}" → fallback to Category Resolver`);
+                } else {
+                  // ── (3) Self-Bootstrap facet schema from the live pool.
+                  // Format = exact V1 contract: Map<key, {caption, values: Set<string>}>.
+                  // No /categories/options HTTP call. No category assumption.
+                  const bootstrapSchema = new Map<string, { caption: string; values: Set<string> }>();
+                  for (const p of pool) {
+                    const opts = (p as any).options;
+                    if (!Array.isArray(opts)) continue;
+                    for (const opt of opts) {
+                      if (!opt || typeof opt !== 'object') continue;
+                      const key = typeof opt.key === 'string' ? opt.key.trim() : '';
+                      if (!key || isExcludedOption(key)) continue;
+                      const caption =
+                        (typeof opt.caption === 'string' && opt.caption) ||
+                        (typeof opt.caption_ru === 'string' && opt.caption_ru) ||
+                        (typeof opt.caption_kz === 'string' && opt.caption_kz) ||
+                        key;
+                      const value =
+                        (typeof opt.value === 'string' && opt.value) ||
+                        (typeof opt.value_ru === 'string' && opt.value_ru) ||
+                        (typeof opt.value_kz === 'string' && opt.value_kz) ||
+                        '';
+                      const trimmedValue = value.trim();
+                      if (!trimmedValue) continue;
+                      let bucket = bootstrapSchema.get(key);
+                      if (!bucket) {
+                        bucket = { caption: String(caption), values: new Set<string>() };
+                        bootstrapSchema.set(key, bucket);
+                      }
+                      bucket.values.add(trimmedValue);
                     }
                   }
-                  // Top categories by frequency (up to 5).
-                  qfMatchesOverride = Array.from(catCounts.entries())
-                    .sort((a, b) => b[1] - a[1])
-                    .slice(0, 5)
-                    .map(([c]) => c);
-                  console.log(`[Chat] [QueryFirst] WIN noun="${noun}" probe=${probe.length} synthesised_matches=${JSON.stringify(qfMatchesOverride)}`);
-                } else {
-                  console.log(`[Chat] [QueryFirst] probe=0 → fallback to Category Resolver`);
+                  console.log(`[QueryFirstV2] bootstrap schema: ${bootstrapSchema.size} keys, ${Array.from(bootstrapSchema.values()).reduce((s, b) => s + b.values.size, 0)} values (source=bootstrap)`);
+
+                  // ── (4) Resolve modifiers → option filters against the live schema.
+                  // If no modifiers: skip resolution, just display pool.
+                  let resolvedFilters: Record<string, string> = {};
+                  if (modifiers.length > 0 && bootstrapSchema.size > 0) {
+                    try {
+                      const { resolved: rRaw, unresolved: rUnresolved } = await resolveFiltersWithLLM(
+                        pool,
+                        modifiers,
+                        appSettings,
+                        classification?.critical_modifiers,
+                        bootstrapSchema,
+                        'full'
+                      );
+                      resolvedFilters = flattenResolvedFilters(rRaw);
+                      console.log(`[QueryFirstV2] resolved=${JSON.stringify(resolvedFilters)} unresolved=[${rUnresolved.join(', ')}]`);
+                    } catch (rErr) {
+                      console.log(`[QueryFirstV2] resolveFilters error=${(rErr as Error).message} → continuing with empty filters`);
+                    }
+                  } else if (modifiers.length === 0) {
+                    console.log(`[QueryFirstV2] no modifiers → display pool directly`);
+                  }
+
+                  // ── (5/6) Final search.
+                  // (5a) modifiers + at least one resolved option → re-query with options.
+                  // (5b) no resolved options → display the pool we already have.
+                  let displayList: Product[] = pool;
+                  let branchTag = 'qfv2_pool_no_modifiers';
+
+                  if (Object.keys(resolvedFilters).length > 0) {
+                    const final = await searchProductsByCandidate(
+                      { query: noun, brand: null, category: null, min_price: null, max_price: null },
+                      appSettings.volt220_api_token!,
+                      30,
+                      resolvedFilters
+                    );
+                    console.log(`[QueryFirstV2] final query="${noun}" filters=${JSON.stringify(resolvedFilters)} → ${final.length}`);
+
+                    if (final.length > 0) {
+                      displayList = final;
+                      branchTag = 'qfv2_win';
+                      console.log(`[QueryFirstV2] query_first_v2_win noun="${noun}" filters=${Object.keys(resolvedFilters).length} count=${final.length} elapsed=${Date.now() - qfStart}ms`);
+                    } else {
+                      // Soft Fallback (§4.8.1): display the broader pool, mark dropped facet.
+                      // Pick the first dropped filter's caption from bootstrap schema for the tail line.
+                      displayList = pool;
+                      branchTag = 'qfv2_soft_fallback';
+                      const firstKey = Object.keys(resolvedFilters)[0];
+                      const bucket = bootstrapSchema.get(firstKey);
+                      qfV2DroppedFacetCaption = bucket?.caption || firstKey || null;
+                      console.log(`[QueryFirstV2] query_first_v2_soft_fallback noun="${noun}" droppedFacet="${qfV2DroppedFacetCaption}" pool=${pool.length} elapsed=${Date.now() - qfStart}ms`);
+                    }
+                  }
+
+                  // Commit results into the orchestrator state.
+                  const _r = pickDisplayWithTotal(displayList);
+                  foundProducts = _r.displayed;
+                  totalCollected = _r.total;
+                  totalCollectedBranch = branchTag;
+                  articleShortCircuit = true;
+                  categoryFirstWinResolved = true;  // also short-circuits the legacy bucket fallback below
+                  qfV2Resolved = true;
+                  console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=${branchTag} zeroFiltered=${_r.filteredZeroPrice}`);
                 }
               }
             } catch (qfErr) {
-              console.log(`[Chat] [QueryFirst] error=${(qfErr as Error).message} → fallback to Category Resolver`);
+              console.log(`[QueryFirstV2] query_first_v2_error=${(qfErr as Error).message} → fallback to Category Resolver`);
             }
           }
 
+          // Legacy matcher path keeps running ONLY when QFv2 did not resolve.
+          // qfMatchesOverride is intentionally unused now — kept null so legacy code
+          // below sees no override and runs its standard Category Resolver flow.
+          let qfMatchesOverride: string[] | null = null;
+          if (qfV2Resolved) {
+            // Skip legacy block; the do-nothing branch below short-circuits via articleShortCircuit.
+            console.log(`[QueryFirstV2] resolved=true → skipping legacy Category Resolver`);
+          }
+
+          if (!qfV2Resolved) {
           try {
             const matcherDeadline = new Promise<{ matches: string[] }>((_, rej) =>
               setTimeout(() => rej(new Error('matcher_timeout_10s')), 10000)
@@ -5398,6 +5525,7 @@ serve(async (req) => {
           } catch (matcherErr) {
             console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS reason=${(matcherErr as Error).message}`);
           }
+          } // end if (!qfV2Resolved)
 
           if (!categoryFirstWinResolved) {
           // ===== LEGACY bucket-logic (fallback when matcher fails) =====
