@@ -6963,6 +6963,7 @@ ${productInstructions}`;
         if (slotsUpdated) {
           responseBody.slot_update = dialogSlots;
         }
+        persistSlotsAsync(conversationId, dialogSlots);
         
         return new Response(
           JSON.stringify(responseBody),
