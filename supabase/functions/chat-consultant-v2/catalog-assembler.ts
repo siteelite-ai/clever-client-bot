@@ -483,6 +483,37 @@ export async function assembleCatalog(
     meta: { status: resolver.status, pagetitle: resolver.pagetitle, confidence: resolver.confidence },
   });
 
+  // ── 2b. §22.2 spec — Branch A kick-off (Query-First Category Noun Extractor)
+  // Запускаем параллельно с probe и Query Expansion. Не блокирует пайплайн —
+  // ждём только перед runSearch. Если флаг выключен ИЛИ deps нет ИЛИ extractor
+  // вернул "" → categoryNounOverride остаётся пустым (поведение без изменений).
+  const tCNE0 = now();
+  const categoryNounPromise: Promise<string> = (async () => {
+    if (!input.queryFirstEnabled) return "";
+    if (!deps.categoryNounExtractor) return "";
+    try {
+      const r = await extractCategoryNoun(
+        { userQuery: input.query, locale: "ru" },
+        deps.categoryNounExtractor,
+      );
+      trace.stages.push({
+        stage: "category_noun_extractor",
+        ms: now() - tCNE0,
+        meta: { source: r.source, noun: r.categoryNoun, raw: r.rawLLMValue },
+      });
+      return r.categoryNoun;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      trace.errors.push({ stage: "category_noun_extractor", message: msg });
+      trace.stages.push({
+        stage: "category_noun_extractor",
+        ms: now() - tCNE0,
+        meta: { error: msg },
+      });
+      return "";
+    }
+  })();
+
   // ── 3. §4.10 Parallel Probe (kick-off, awaited перед Facet Matcher) ──────
   // Запускаем probe-запрос /products?per_page=N_PROBE параллельно с Query
   // Expansion. Результат нужен ТОЛЬКО как Self-Bootstrap fallback для Facet
