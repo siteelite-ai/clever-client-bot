@@ -854,11 +854,69 @@ function detectArticles(message: string): string[] {
  */
 // Plan V5: timeout-bounded fetch with single retry for catalog API.
 // Protects article/siteId fast paths from hanging on slow upstream (was up to 70s in logs).
+// ============================================================
+// Degraded-mode tracking (V1 honest-fail)
+// ============================================================
+// Per-request flag: was there ANY transport-level failure when calling
+// the 220volt catalog API during this request? If so, the final LLM
+// must NOT say "ничего не нашлось" — it must honestly admit the outage
+// and offer verbal advice + manager handoff.
+//
+// State is keyed by reqId (set once per `serve` invocation) and lives
+// in a module-level Map with TTL cleanup (Deno isolates are reused).
+// We do NOT thread the flag through every helper — instead the central
+// fetch wrapper marks it, and direct fetch() callsites use markIfCatalogError().
+type DegradedState = { reasons: string[]; ts: number };
+const _catalogDegraded = new Map<string, DegradedState>();
+const _DEGRADED_TTL_MS = 5 * 60 * 1000;
+
+function _gcDegraded() {
+  const now = Date.now();
+  for (const [k, v] of _catalogDegraded.entries()) {
+    if (now - v.ts > _DEGRADED_TTL_MS) _catalogDegraded.delete(k);
+  }
+}
+
+function markCatalogError(reqId: string | undefined, reason: string): void {
+  if (!reqId) return;
+  const cur = _catalogDegraded.get(reqId);
+  if (cur) {
+    if (cur.reasons.length < 8) cur.reasons.push(reason);
+    cur.ts = Date.now();
+  } else {
+    _catalogDegraded.set(reqId, { reasons: [reason], ts: Date.now() });
+    if (_catalogDegraded.size > 1000) _gcDegraded();
+  }
+  console.warn(`[Degraded] Catalog API failure marked (reqId=${reqId}): ${reason}`);
+}
+
+function isCatalogDegraded(reqId: string | undefined): boolean {
+  if (!reqId) return false;
+  return _catalogDegraded.has(reqId);
+}
+
+function getCatalogDegradedReasons(reqId: string | undefined): string[] {
+  if (!reqId) return [];
+  return _catalogDegraded.get(reqId)?.reasons ?? [];
+}
+
+function clearCatalogDegraded(reqId: string | undefined): void {
+  if (!reqId) return;
+  _catalogDegraded.delete(reqId);
+}
+
+/** Mark degraded if the error came from a 220volt catalog fetch (used by direct fetch callsites). */
+function markIfCatalogError(reqId: string | undefined, tag: string, err: unknown): void {
+  const isAbort = (err as Error)?.name === 'AbortError';
+  markCatalogError(reqId, isAbort ? `${tag}:timeout` : `${tag}:${(err as Error)?.message || 'fetch_error'}`);
+}
+
 async function fetchCatalogWithRetry(
   url: string,
   apiToken: string,
   tag: string,
-  timeoutMs = 8000
+  timeoutMs = 8000,
+  reqId?: string
 ): Promise<Response | null> {
   for (let attempt = 1; attempt <= 2; attempt++) {
     const controller = new AbortController();
@@ -875,7 +933,10 @@ async function fetchCatalogWithRetry(
       clearTimeout(timer);
       if (!resp.ok) {
         console.error(`[${tag}] API error: ${resp.status} (attempt ${attempt})`);
-        if (attempt === 2) return null;
+        if (attempt === 2) {
+          markCatalogError(reqId, `${tag}:http_${resp.status}`);
+          return null;
+        }
         continue;
       }
       return resp;
@@ -887,7 +948,10 @@ async function fetchCatalogWithRetry(
       } else {
         console.error(`[${tag}] fetch error (attempt ${attempt}):`, err);
       }
-      if (attempt === 2) return null;
+      if (attempt === 2) {
+        markCatalogError(reqId, isAbort ? `${tag}:timeout` : `${tag}:${(err as Error)?.message || 'fetch_error'}`);
+        return null;
+      }
     }
   }
   return null;
