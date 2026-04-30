@@ -525,7 +525,10 @@ export async function getCategoryOptions(
 
   // Q2: double-unwrap.
   const data: any = unwrapDouble(raw);
-  const optionsArr: RawOption[] = Array.isArray(data?.options) ? data.options : [];
+  const optionsArrRaw: RawOption[] = Array.isArray(data?.options) ? data.options : [];
+  // Manual blacklist (facet-filter.ts) — отсекаем технические/служебные ключи
+  // и медиа-поля до того, как они попадут в Facet Matcher / price_clarify / кэш.
+  const optionsArr: RawOption[] = filterRawOptions(optionsArrRaw);
   const totalProducts = Number(data?.category?.total_products) || 0;
 
   if (optionsArr.length === 0) {
