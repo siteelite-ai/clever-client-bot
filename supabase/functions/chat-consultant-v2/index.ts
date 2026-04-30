@@ -523,6 +523,12 @@ serve(async (req) => {
                   assembled.composerOutcome.kind === "price" &&
                   !!assembled.composerOutcome.outcome.clarifySlot,
                 assembler: assembled.trace,
+                // §22 spec — статус экспериментальных веток для метрик/дебага.
+                experimental_flags: {
+                  query_first_enabled: catalogSettings.query_first_enabled,
+                  soft_suggest_enabled: catalogSettings.soft_suggest_enabled,
+                  soft_suggest_hint_rendered: !!assembled.softSuggestHint,
+                },
               };
             } catch (e) {
               const msg = e instanceof Error ? e.message : String(e);
