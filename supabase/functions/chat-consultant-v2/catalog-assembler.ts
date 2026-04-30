@@ -44,6 +44,10 @@ import type { ApiClientDeps, RawOption, RawProduct } from "./catalog/api-client.
 import { getCategoryOptions, searchProducts, extractFacetSchemaFromProducts } from "./catalog/api-client.ts";
 import type { SearchOutcome, SearchStatus } from "./catalog/search.ts";
 import { N_PROBE } from "./config.ts";
+import type { CategoryNounExtractorDeps } from "./category-noun-extractor.ts";
+import { extractCategoryNoun } from "./category-noun-extractor.ts";
+import type { SoftSuggestDeps } from "./soft-suggest.ts";
+import { runSoftSuggest } from "./soft-suggest.ts";
 
 // ─── F.5.8: defense-in-depth для disallowCrosssell ──────────────────────────
 //
