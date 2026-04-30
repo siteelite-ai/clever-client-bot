@@ -1,0 +1,1 @@
+UPDATE public.app_settings SET query_first_enabled = true;
