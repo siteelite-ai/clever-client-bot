@@ -4,7 +4,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "*",
 };
 
-const API = "https://api.220volt.kz/api";
+const API = "https://220volt.kz/api";
 const TOKEN = Deno.env.get("CATALOG_API_TOKEN") || "";
 
 const BLACKLIST = new Set([
