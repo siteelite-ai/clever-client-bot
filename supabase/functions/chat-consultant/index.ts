@@ -5101,11 +5101,64 @@ serve(async (req) => {
             .slice(-3)
             .map((m: any) => `- ${String(typeof m.content === 'string' ? m.content : JSON.stringify(m.content)).slice(0, 200)}`)
             .join('\n');
+          // ===== QUERY-FIRST PROBE (flag-gated, V1 experiment) =====
+          // When app_settings.query_first_enabled = true, we try ?query=<noun> FIRST.
+          // If it returns hits, we synthesise the matcher result from the actual product
+          // categories — skipping the heavy LLM Category Resolver entirely.
+          // On empty/error → silent fallback to the legacy matcher (no behavioural change).
+          let qfMatchesOverride: string[] | null = null;
+          if (appSettings.query_first_enabled && appSettings.openrouter_api_key && appSettings.volt220_api_token) {
+            try {
+              const { extractCategoryNoun, createProductionExtractorDeps } = await import("../_shared/category-noun-extractor.ts");
+              const extractorDeps = createProductionExtractorDeps(appSettings.openrouter_api_key);
+              const extractDeadline = new Promise<{ categoryNoun: string }>((_, rej) =>
+                setTimeout(() => rej(new Error('qf_extract_timeout_3s')), 3000)
+              );
+              const extractRes = await Promise.race([
+                extractCategoryNoun({ userQuery: userMessage, locale: 'ru' }, extractorDeps),
+                extractDeadline,
+              ]);
+              const noun = (extractRes.categoryNoun || '').trim();
+              console.log(`[Chat] [QueryFirst] noun="${noun}" (source=${(extractRes as any).source || 'n/a'})`);
+              if (noun.length > 0) {
+                const probe = await searchProductsByCandidate(
+                  { query: noun, brand: null, category: null, min_price: null, max_price: null },
+                  appSettings.volt220_api_token!, 30
+                );
+                if (probe.length > 0) {
+                  // Synthesise matches from the actual product categories returned by ?query=.
+                  // This lets the existing pipeline (ambiguity, fullSchema, server-filtering) run
+                  // unchanged, but anchored on real query results instead of a guessed category.
+                  const catCounts = new Map<string, number>();
+                  for (const p of probe) {
+                    const cat = (p as any).category?.pagetitle;
+                    if (cat && typeof cat === 'string') {
+                      catCounts.set(cat, (catCounts.get(cat) || 0) + 1);
+                    }
+                  }
+                  // Top categories by frequency (up to 5).
+                  qfMatchesOverride = Array.from(catCounts.entries())
+                    .sort((a, b) => b[1] - a[1])
+                    .slice(0, 5)
+                    .map(([c]) => c);
+                  console.log(`[Chat] [QueryFirst] WIN noun="${noun}" probe=${probe.length} synthesised_matches=${JSON.stringify(qfMatchesOverride)}`);
+                } else {
+                  console.log(`[Chat] [QueryFirst] probe=0 → fallback to Category Resolver`);
+                }
+              }
+            } catch (qfErr) {
+              console.log(`[Chat] [QueryFirst] error=${(qfErr as Error).message} → fallback to Category Resolver`);
+            }
+          }
+
           try {
             const matcherDeadline = new Promise<{ matches: string[] }>((_, rej) =>
               setTimeout(() => rej(new Error('matcher_timeout_10s')), 10000)
             );
             const matcherWork = (async () => {
+              if (qfMatchesOverride && qfMatchesOverride.length > 0) {
+                return { matches: qfMatchesOverride };
+              }
               const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
               if (catalog.length === 0) return { matches: [] };
               const matches = await matchCategoriesWithLLM(effectiveCategory, catalog, appSettings, historyContextForMatcher);
