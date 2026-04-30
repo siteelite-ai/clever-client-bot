@@ -252,6 +252,18 @@ export interface AssemblerInput {
    * ветки игнорируют.
    */
   state?: ConversationState;
+  /**
+   * §22.2 spec — Branch A флаг (Query-First). Когда true (Option A: всегда вызывается
+   * extractor если флаг включён), assembler пытается извлечь категорию-существительное
+   * и пробрасывает его как `categoryNounOverride` в `runSearch`. Default false.
+   */
+  queryFirstEnabled?: boolean;
+  /**
+   * §22.3 spec — Branch B флаг (Soft-Suggest). Когда true и есть unmatchedModifiers
+   * + живая schema, assembler вызывает `runSoftSuggest` и возвращает `softSuggestHint`
+   * для composer. Default false. БЕЗ молчаливой фильтрации (правило «no self-narrowing»).
+   */
+  softSuggestEnabled?: boolean;
 }
 
 export interface AssemblerDeps {
