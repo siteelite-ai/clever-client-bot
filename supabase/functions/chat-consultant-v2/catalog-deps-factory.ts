@@ -310,7 +310,32 @@ export function createCatalogProductionDeps(
 
   const composer = createCatalogComposerDeps(cfg.openRouterKey);
 
-  return { apiClient, resolver, expansion, facets, facetsLLM, search, price, similar, composer };
+  // §22.2/§22.3 spec: extractor + soft-suggest deps (LLM через OpenRouter).
+  // Внутри лог-обёртка, чтобы события попали в общий поток ассемблера.
+  const extractorBase = createProductionExtractorDeps(cfg.openRouterKey);
+  const categoryNounExtractor: CategoryNounExtractorDeps = {
+    callLLMTool: extractorBase.callLLMTool,
+    log: (event, data) => log(`category_noun.${event}`, data),
+  };
+  const softSuggestBase = createProductionSoftSuggestDeps(cfg.openRouterKey);
+  const softSuggest: SoftSuggestDeps = {
+    callLLMTool: softSuggestBase.callLLMTool,
+    log: (event, data) => log(`soft_suggest.${event}`, data),
+  };
+
+  return {
+    apiClient,
+    resolver,
+    expansion,
+    facets,
+    facetsLLM,
+    search,
+    price,
+    similar,
+    composer,
+    categoryNounExtractor,
+    softSuggest,
+  };
 }
 
 // ─── Facet Matcher LLM call (OpenRouter, Gemini Flash) ──────────────────────
