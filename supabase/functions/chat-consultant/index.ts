@@ -4694,10 +4694,21 @@ serve(async (req) => {
     }
     
     // === DIALOG SLOTS: read and validate ===
+    // Server-managed persistence (V1): если фронт не прислал dialogSlots —
+    // подтягиваем последнее сохранённое состояние по sessionId из chat_cache_v2.
+    // Если прислал — он приоритетнее (обратная совместимость с виджетом).
+    const clientSentSlots = body.dialogSlots && Object.keys(body.dialogSlots).length > 0;
     let dialogSlots: DialogSlots = validateAndSanitizeSlots(body.dialogSlots);
+    if (!clientSentSlots) {
+      const persisted = await loadPersistedSlots(conversationId);
+      if (persisted && Object.keys(persisted).length > 0) {
+        dialogSlots = persisted;
+        console.log(`[Chat] Dialog slots restored from cache: ${Object.keys(dialogSlots).length} slot(s)`);
+      }
+    }
     let slotsUpdated = false;
-    console.log(`[Chat] Dialog slots received: ${Object.keys(dialogSlots).length} slot(s)`);
-    
+    console.log(`[Chat] Dialog slots active: ${Object.keys(dialogSlots).length} slot(s) (clientSent=${clientSentSlots})`);
+
     // Age all pending slots by 1 turn
     dialogSlots = ageSlots(dialogSlots);
     
