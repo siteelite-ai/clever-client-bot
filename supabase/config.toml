@@ -16,3 +16,6 @@ verify_jwt = false
 verify_jwt = false
 
 
+
+[functions.diag-lampa]
+verify_jwt = false
