@@ -433,6 +433,9 @@ serve(async (req) => {
               slotMatch: decision.slot_match,
               traceId,
               state: mutableNextState,
+              // §22.2/§22.3 spec — экспериментальные ветки под двумя независимыми флагами.
+              queryFirstEnabled: catalogSettings.query_first_enabled,
+              softSuggestEnabled: catalogSettings.soft_suggest_enabled,
             },
             catalogDeps,
           );
