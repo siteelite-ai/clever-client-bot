@@ -2571,7 +2571,9 @@ async function handlePriceIntent(
         });
         clearTimeout(retryTimeout);
         
-        if (retryResp.ok) {
+        if (!retryResp.ok) {
+          markIfCatalogHttpError('PriceIntent.retry', retryResp.status);
+        } else {
           const retryRaw = await retryResp.json();
           const retryData = retryRaw.data || retryRaw;
           const retryProducts: Product[] = (retryData.results || []).filter((p: Product) => p.price > 0);
@@ -2584,6 +2586,7 @@ async function handlePriceIntent(
         }
       } catch (retryErr) {
         console.error(`[PriceIntent] Retry also failed:`, retryErr);
+        markIfCatalogError('PriceIntent.retry', retryErr);
       }
     }
     
