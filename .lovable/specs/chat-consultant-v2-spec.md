@@ -1369,4 +1369,135 @@ interface BreakerSnapshot {
 
 ---
 
+## 22. Query-First Branch + Soft-Suggest (экспериментальные ветки)
+
+**Статус:** experimental, под флагами, default OFF.
+**Применимость:** V1 + V2 (V1 временно разморожен на время теста).
+**Цель:** обработать модификаторы, которые не матчатся ни как category, ни как facet,
+без нарушения правила «bot NEVER self-narrows funnel».
+
+### 22.1 Контракт флагов
+
+| Флаг | Тип | Default | Эффект |
+|------|-----|---------|--------|
+| `app_settings.query_first_enabled` | bool | false | Первый hop strict-search идёт через `?query=<category_root>` вместо `?category=<pagetitle>` |
+| `app_settings.soft_suggest_enabled` | bool | false | При наличии `unmatchedModifiers` запускается LLM-suggester и Composer добавляет HINT-блок |
+
+Флаги независимые. Все четыре комбинации валидны.
+
+### 22.2 Query-First branch (Branch A)
+
+**Активация:** `query_first_enabled === true` И Resolver вернул category-token (C1/C2).
+
+**Изменение пайплайна:** в catalog-search первый hop:
+- БЫЛО: `GET /products?category=<pagetitle>`
+- СТАЛО: `GET /products?query=<pagetitle>`
+
+`<pagetitle>` берётся из ResolverOutcome без изменений — никаких новых LLM-вызовов
+для «извлечения корня». Resolver уже отдаёт категорийную сущность.
+
+**Что НЕ меняется:**
+- §4.10 parallel probe — без изменений
+- §4.10.1 Self-Bootstrap — без изменений
+- §4.10.2 sanitization — без изменений
+- Facet Matcher — без изменений
+- Strict Search Multi-Attempt — внутри использует тот же `query`-режим
+- Soft Fallback / Soft 404 — без изменений
+
+**Метрика:** `query_first_used_total` (counter).
+
+### 22.3 Soft-Suggest branch (Branch B)
+
+**Активация:** `soft_suggest_enabled === true` И `facetMatch.unmatchedModifiers.length > 0`
+И SearchOutcome.status ∈ {ok, soft_fallback}.
+
+**Контракт LLM-вызова `suggest_facet_clarifications`** (data-agnostic, OpenRouter only):
+
+```
+Input:
+  unmatchedModifier: string         // первый из unmatchedModifiers
+  facetSchema: RawOption[]          // из live | stale | bootstrap
+  pagetitle: string                 // для контекста промпта
+  locale: 'ru' | 'kk'
+
+Output (tool calling, JSON Schema):
+{
+  "type": "object",
+  "properties": {
+    "suggestions": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 3,
+      "items": {
+        "type": "object",
+        "properties": {
+          "facet_key": { "type": "string" },
+          "facet_caption": { "type": "string" },
+          "value": { "type": "string" },
+          "value_caption": { "type": "string" },
+          "rationale_short": { "type": "string", "maxLength": 60 }
+        },
+        "required": ["facet_key", "facet_caption", "value", "value_caption", "rationale_short"]
+      }
+    }
+  },
+  "required": ["suggestions"]
+}
+```
+
+**Post-validation (обязательная):** для каждого suggestion проверяется:
+1. `facet_key` существует в `facetSchema`
+2. `value` существует в `facetSchema[k].values[].value_ru` (или `value_kz` для locale='kk')
+
+Невалидные suggestions отбрасываются молча. Если ВСЕ отброшены — HINT не рендерится.
+
+**Метрики:**
+- `soft_suggest_emitted_total` — сколько ответов получили HINT
+- `soft_suggest_invalid_dropped_total` — сколько suggestions отброшено (должно ≈0)
+- `soft_suggest_applied_total` — proxy: пользователь следующим ходом применил один из предложенных facet
+
+### 22.4 Composer HINT (BNF)
+
+HINT рендерится **ПОСЛЕ карточек товаров и ПОСЛЕ cross-sell**, ПЕРЕД tail-line Soft Fallback (если есть).
+
+```
+hint_block ::=
+  "\n\nДля «" <unmatchedModifier> "» обычно подходит:\n"
+  hint_line { hint_line }
+  "\nХотите применить эти уточнения или показать всё?"
+
+hint_line ::=
+  "- " <facet_caption> ": " <value_caption> " — " <rationale_short> "\n"
+```
+
+### 22.5 Инварианты
+
+| ID | Инвариант | Verification |
+|----|-----------|--------------|
+| QF-1 | При обоих флагах=false поведение идентично текущему | snapshot-test пайплайна |
+| QF-2 | Soft-Suggest НЕ применяет фильтры (только текст) | unit-test: SearchInput.optionFilters не зависит от soft-suggest |
+| QF-3 | Невалидные suggestions (key/value not in schema) не попадают в HINT | unit-test post-validator |
+| QF-4 | Query-First не меняет логику Self-Bootstrap | snapshot-test §4.10.1 |
+| QF-5 | HINT отсутствует при unmatchedModifiers=[] | unit-test composer |
+| QF-6 | LLM-вызов идёт через OpenRouter (Gemini) | grep: нет direct google.* импортов |
+
+### 22.6 Откат
+
+1. Выключить оба флага в админке (`UPDATE app_settings SET query_first_enabled=false, soft_suggest_enabled=false`).
+2. Полный код-rollback: миграция `ALTER TABLE app_settings DROP COLUMN ...` + revert файлов.
+
+### 22.7 V1 порт (минимальный)
+
+Те же два флага, тот же контракт. Различия:
+- V1 Composer не модульный → HINT инжектится в финальный prompt-template как отдельная переменная.
+- V1 facet schema source: только live (нет §4.10.1 bootstrap). Если schema пустая —
+  Soft-Suggest пропускается (skipped: 'schema_empty').
+
+**После теста** принимается одно из решений:
+- Оставить только в V2, V1 вернуть в frozen.
+- Удалить V1 целиком (если V2 признан стабильным).
+
+---
+
 **Конец документа.**
+
