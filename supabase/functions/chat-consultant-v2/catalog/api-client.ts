@@ -617,6 +617,8 @@ export function extractFacetSchemaFromProducts(products: RawProduct[]): RawOptio
       };
       const key = typeof o.key === 'string' ? o.key.trim() : '';
       if (!key) continue;
+      // Manual blacklist (facet-filter.ts) — симметрично с getCategoryOptions().
+      if (isBlacklistedFacetKey(key)) continue;
 
       const captionRu = typeof o.caption_ru === 'string' ? o.caption_ru : null;
       const captionKz = typeof o.caption_kz === 'string' ? o.caption_kz : null;
