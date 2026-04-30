@@ -6437,8 +6437,27 @@ ${directAnswerBlock}
     }
 
     const customPrompt = appSettings.system_prompt || '';
-    
-    const systemPrompt = `Ты — профессиональный консультант интернет-магазина электротоваров 220volt.kz.
+
+    // Honest-fail: if catalog API failed during this request AND we have nothing
+    // to show, the LLM must NOT pretend "ничего не нашлось". Inject a hard
+    // override block at the very top of the system prompt.
+    const _degraded = isCatalogDegraded(reqId) && foundProducts.length === 0;
+    if (_degraded) {
+      console.warn(`[Chat req=${reqId}] DEGRADED MODE: catalog API failures detected, switching prompt. Reasons: ${getCatalogDegradedReasons(reqId).join(', ')}`);
+    }
+    const degradedBlock = _degraded ? `
+🚨 ТЕХНИЧЕСКИЙ СБОЙ КАТАЛОГА (КРИТИЧЕСКИ ВАЖНО, ПЕРЕОПРЕДЕЛЯЕТ ВСЁ ОСТАЛЬНОЕ):
+Каталог 220volt.kz сейчас временно недоступен (таймауты/сетевая ошибка на стороне API). Это НЕ значит, что товара нет в магазине — это значит, что мы прямо сейчас не можем проверить наличие.
+
+ТВОЙ ОТВЕТ ДОЛЖЕН:
+1. ЧЕСТНО признать сбой одной короткой фразой (например: «Каталог сейчас временно недоступен — не могу проверить наличие в реальном времени.»). НЕ говори «ничего не нашлось», «товара нет», «не удалось найти» — это будет враньё.
+2. Помочь СЛОВОМ: дай 2–4 коротких экспертных совета по подбору именно того, что спросил клиент (на что смотреть: мощность, цоколь, IP-класс, сечение, материал и т.д. — релевантно запросу). Используй свои знания об электротоварах, НЕ выдумывай конкретные модели/цены.
+3. Предложить связаться с менеджером для проверки наличия и точной цены — добавь маркер [CONTACT_MANAGER] в конец сообщения.
+4. НЕ показывай ссылку на каталог как «решение» — каталог сейчас тоже может не отвечать.
+
+` : '';
+
+    const systemPrompt = `${degradedBlock}Ты — профессиональный консультант интернет-магазина электротоваров 220volt.kz.
 ${customPrompt}
 
 🚫 АБСОЛЮТНЫЙ ЗАПРЕТ ПРИВЕТСТВИЙ:
