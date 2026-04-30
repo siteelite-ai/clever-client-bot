@@ -2483,7 +2483,9 @@ async function handlePriceIntent(
             signal: altCtrl.signal,
           });
           clearTimeout(altTimeout);
-          if (altResp.ok) {
+          if (!altResp.ok) {
+            markIfCatalogHttpError('PriceIntent.alt', altResp.status);
+          } else {
             const altRaw = await altResp.json();
             const altTotal = (altRaw.data || altRaw).pagination?.total || 0;
             if (altTotal > 0 && altTotal <= 50) {
@@ -2495,7 +2497,10 @@ async function handlePriceIntent(
               return { action: 'clarify', total: altTotal, category: primaryQuery };
             }
           }
-        } catch { clearTimeout(altTimeout); }
+        } catch (altErr) {
+          clearTimeout(altTimeout);
+          markIfCatalogError('PriceIntent.alt', altErr);
+        }
       }
     }
     
