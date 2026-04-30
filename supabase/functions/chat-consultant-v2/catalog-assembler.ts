@@ -296,6 +296,10 @@ export interface AssemblerDeps {
    * мокирующими тестами.
    */
   apiClient: ApiClientDeps;
+  /** §22.2 spec — extractor для Branch A. Опциональный (без него Branch A пропускается). */
+  categoryNounExtractor?: CategoryNounExtractorDeps;
+  /** §22.3 spec — Soft-Suggest LLM. Опциональный (без него Branch B пропускается). */
+  softSuggest?: SoftSuggestDeps;
   /** Опциональный логгер общего уровня. */
   log?: (event: string, data?: Record<string, unknown>) => void;
   /** Источник времени. */
