@@ -838,6 +838,15 @@ export async function assembleCatalog(
     };
   }
 
+  // §22.2 spec — Branch A: дожидаемся extractor (запущен параллельно с probe).
+  const categoryNounOverride = await categoryNounPromise;
+  if (categoryNounOverride) {
+    log("assembler.query_first_active", {
+      pagetitle: resolver.pagetitle,
+      categoryNoun: categoryNounOverride,
+    });
+  }
+
   const tSS0 = now();
   const searchOutcome: SSearchOutcome = await runSearch(
     {
@@ -847,6 +856,7 @@ export async function assembleCatalog(
       intent: input.intent,
       page: input.page,
       perPage: input.perPage,
+      categoryNounOverride: categoryNounOverride || undefined,
     },
     deps.search,
   );
@@ -861,8 +871,81 @@ export async function assembleCatalog(
       winning_form: searchOutcome.winningForm,
       zero_price_leak: searchOutcome.zeroPriceLeak,
       post_filter_dropped: searchOutcome.postFilterDropped,
+      query_first_used: !!categoryNounOverride,
     },
   });
+
+  // ── §22.3 spec — Branch B: Soft-Suggest ─────────────────────────────────
+  // Запускаем ТОЛЬКО когда:
+  //   • soft_suggest_enabled=true
+  //   • deps.softSuggest задан
+  //   • search вернул товары (ok / soft_fallback) — иначе HINT поверх «ничего не нашёл» нерелевантен
+  //   • есть unmatchedModifiers от Facet Matcher
+  //   • есть живая schema (facetOptions из /categories/options ИЛИ bootstrap из probe)
+  //
+  // НЕ применяет фильтры (no self-narrowing). Только генерирует HINT для composer.
+  let softSuggestHint: string | null = null;
+  const canSoftSuggest =
+    !!input.softSuggestEnabled &&
+    !!deps.softSuggest &&
+    (searchOutcome.status === "ok" || searchOutcome.status === "soft_fallback") &&
+    facetMatch.unmatchedModifiers.length > 0;
+
+  if (canSoftSuggest) {
+    const tSSG0 = now();
+    // Live schema: пробуем /categories/options (если facetOptions ещё не загружены).
+    let schemaForSuggest: RawOption[] = facetOptions;
+    if (schemaForSuggest.length === 0) {
+      try {
+        const opts = await getCategoryOptions(resolver.pagetitle, deps.apiClient);
+        if (opts.status === "ok" && opts.options) schemaForSuggest = opts.options;
+      } catch (_e) { /* ignore — fallback на bootstrap ниже */ }
+    }
+    // Bootstrap fallback: per-item Product.options[] из текущего search.products.
+    if (schemaForSuggest.length === 0 && searchOutcome.products.length > 0) {
+      schemaForSuggest = extractFacetSchemaFromProducts(searchOutcome.products);
+    }
+
+    if (schemaForSuggest.length > 0) {
+      try {
+        // Берём ПЕРВЫЙ unmatchedModifier (контракт §22.3 — один запрос на ход).
+        const sg = await runSoftSuggest(
+          {
+            unmatchedModifier: facetMatch.unmatchedModifiers[0],
+            facetSchema: schemaForSuggest,
+            pagetitle: resolver.pagetitle,
+            locale: "ru",
+          },
+          deps.softSuggest!,
+        );
+        softSuggestHint = sg.hintText;
+        trace.stages.push({
+          stage: "soft_suggest",
+          ms: now() - tSSG0,
+          meta: {
+            source: sg.source,
+            count: sg.suggestions.length,
+            raw_count: sg.rawCount,
+            invalid_dropped: sg.invalidDropped,
+          },
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        trace.errors.push({ stage: "soft_suggest", message: msg });
+        trace.stages.push({
+          stage: "soft_suggest",
+          ms: now() - tSSG0,
+          meta: { error: msg },
+        });
+      }
+    } else {
+      trace.stages.push({
+        stage: "soft_suggest",
+        ms: now() - tSSG0,
+        meta: { skipped: "no_schema_available" },
+      });
+    }
+  }
 
   const adaptedSearch = adaptSSearchToSearchOutcome(searchOutcome);
   return {
@@ -873,6 +956,7 @@ export async function assembleCatalog(
     // F.5.8: cross-sell разрешён ТОЛЬКО при ok+products. soft_fallback/empty/error
     // → запрет (defense in depth поверх composer scenario-логики).
     disallowCrosssell: shouldDisallowCrosssellForSearch(adaptedSearch),
+    softSuggestHint,
   };
 }
 
