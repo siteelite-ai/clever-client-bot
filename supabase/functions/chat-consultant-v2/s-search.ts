@@ -81,6 +81,14 @@ export interface SSearchInput {
   page?: number;
   /** Default 12 (§7.2). */
   perPage?: number;
+  /**
+   * §22.2 Query-First Branch (experimental, под флагом app_settings.query_first_enabled).
+   * Когда задано непустой строкой:
+   *   - Первый hop strict-search идёт через `?query=<categoryNoun>` вместо `?category=<pagetitle>`.
+   *   - Все остальные параметры (фасеты, aliases, captions, цена, page) — без изменений.
+   * Когда undefined / "": поведение идентично текущему (default OFF).
+   */
+  categoryNounOverride?: string;
 }
 
 export interface SSearchAttemptTrace {
@@ -182,10 +190,22 @@ export async function runSearch(
   let postFilterDropped = 0;
   let lastTerminalOutcome: CatalogSearchOutcome | null = null;
 
+  // §22.2 Query-First (Branch A): когда categoryNounOverride задан, первый hop
+  // уходит через ?query=<noun> вместо ?category=<pagetitle>. Это даёт более
+  // широкую выборку (например, для §4.10.1 Self-Bootstrap).
+  const useQueryFirst = !!input.categoryNounOverride && input.categoryNounOverride.trim().length > 0;
+  if (useQueryFirst) {
+    log("s_search.query_first_enabled", { categoryNoun: input.categoryNounOverride });
+  }
+
   for (const attempt of formsToTry) {
     const catalogInput: CatalogSearchInput = {
-      category: input.pagetitle,
-      query: shouldUseCategoryOnlySearch ? undefined : attempt.text,
+      // §22.2: Branch A → отправляем ?query=<categoryNoun>, БЕЗ ?category=
+      // (иначе API применит И то, И то, что сводит на нет смысл расширения).
+      category: useQueryFirst ? undefined : input.pagetitle,
+      query: useQueryFirst
+        ? input.categoryNounOverride
+        : (shouldUseCategoryOnlySearch ? undefined : attempt.text),
       article: input.intent.has_sku && input.intent.sku_candidate
         ? input.intent.sku_candidate
         : undefined,
