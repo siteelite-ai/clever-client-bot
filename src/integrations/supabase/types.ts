@@ -58,7 +58,9 @@ export type Database = {
           id: string
           lexicon_json: Json
           openrouter_api_key: string | null
+          query_first_enabled: boolean
           resolver_thresholds_json: Json
+          soft_suggest_enabled: boolean
           system_prompt: string | null
           updated_at: string
           volt220_api_token: string | null
@@ -73,7 +75,9 @@ export type Database = {
           id?: string
           lexicon_json?: Json
           openrouter_api_key?: string | null
+          query_first_enabled?: boolean
           resolver_thresholds_json?: Json
+          soft_suggest_enabled?: boolean
           system_prompt?: string | null
           updated_at?: string
           volt220_api_token?: string | null
@@ -88,7 +92,9 @@ export type Database = {
           id?: string
           lexicon_json?: Json
           openrouter_api_key?: string | null
+          query_first_enabled?: boolean
           resolver_thresholds_json?: Json
+          soft_suggest_enabled?: boolean
           system_prompt?: string | null
           updated_at?: string
           volt220_api_token?: string | null
