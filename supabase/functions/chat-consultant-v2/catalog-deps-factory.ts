@@ -41,6 +41,14 @@ import { getOrCompute, TTL } from "./cache.ts";
 import { createCatalogComposerDeps } from "./s-catalog-composer.ts";
 import type { CatalogComposerDeps } from "./s-catalog-composer.ts";
 import {
+  createProductionExtractorDeps,
+  type CategoryNounExtractorDeps,
+} from "./category-noun-extractor.ts";
+import {
+  createProductionSoftSuggestDeps,
+  type SoftSuggestDeps,
+} from "./soft-suggest.ts";
+import {
   CATALOG_API_BASE_URL_DEFAULT,
   CATEGORIES_TTL_MS,
   RESOLVER_HTTP_TIMEOUT_MS,
