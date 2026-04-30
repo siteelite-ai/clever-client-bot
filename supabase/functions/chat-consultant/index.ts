@@ -529,6 +529,8 @@ async function getAppSettings(): Promise<CachedSettings> {
       system_prompt: null,
       classifier_provider: 'auto',
       classifier_model: 'gemini-2.5-flash-lite',
+      query_first_enabled: false,
+      soft_suggest_enabled: false,
     };
   }
 
@@ -536,7 +538,7 @@ async function getAppSettings(): Promise<CachedSettings> {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const { data, error } = await supabase
       .from('app_settings')
-      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model, system_prompt, classifier_provider, classifier_model')
+      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model, system_prompt, classifier_provider, classifier_model, query_first_enabled, soft_suggest_enabled')
       .limit(1)
       .single();
 
@@ -551,7 +553,17 @@ async function getAppSettings(): Promise<CachedSettings> {
         system_prompt: null,
         classifier_provider: 'auto',
         classifier_model: 'gemini-2.5-flash-lite',
+        query_first_enabled: false,
+        soft_suggest_enabled: false,
       };
+    }
+
+    // §22 spec: V1 — observability-only (см. mem://features/query-first-branch).
+    // Полная имплементация Branch A/B живёт в V2. Здесь только лог-эхо состояния флагов.
+    const qf = (data as { query_first_enabled?: boolean }).query_first_enabled === true;
+    const ss = (data as { soft_suggest_enabled?: boolean }).soft_suggest_enabled === true;
+    if (qf || ss) {
+      console.log(`[Settings] V1 sees experimental flags: query_first=${qf} soft_suggest=${ss} (no-op in V1, switch active_pipeline to v2 to use)`);
     }
 
     // Fallback to env vars if DB values are empty
@@ -564,6 +576,8 @@ async function getAppSettings(): Promise<CachedSettings> {
       system_prompt: data.system_prompt || null,
       classifier_provider: data.classifier_provider || 'auto',
       classifier_model: data.classifier_model || 'gemini-2.5-flash-lite',
+      query_first_enabled: qf,
+      soft_suggest_enabled: ss,
     };
   } catch (e) {
     console.error('[Settings] Failed to load settings:', e);
@@ -576,6 +590,8 @@ async function getAppSettings(): Promise<CachedSettings> {
         system_prompt: null,
         classifier_provider: 'auto',
         classifier_model: 'gemini-2.5-flash-lite',
+        query_first_enabled: false,
+        soft_suggest_enabled: false,
       };
   }
 }
