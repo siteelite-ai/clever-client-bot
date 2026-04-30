@@ -886,7 +886,18 @@ function _gcDegraded() {
   }
 }
 
-function markCatalogError(reqId: string | undefined, reason: string): void {
+function markCatalogError(reqIdOrReason: string | undefined, maybeReason?: string): void {
+  // Overload: markCatalogError(reason) — reads reqId from async context.
+  // Or:       markCatalogError(reqId, reason) — explicit form (kept for fetchCatalogWithRetry).
+  let reqId: string | undefined;
+  let reason: string;
+  if (maybeReason === undefined) {
+    reqId = _currentReqId();
+    reason = reqIdOrReason ?? 'unknown';
+  } else {
+    reqId = reqIdOrReason ?? _currentReqId();
+    reason = maybeReason;
+  }
   if (!reqId) return;
   const cur = _catalogDegraded.get(reqId);
   if (cur) {
@@ -899,25 +910,33 @@ function markCatalogError(reqId: string | undefined, reason: string): void {
   console.warn(`[Degraded] Catalog API failure marked (reqId=${reqId}): ${reason}`);
 }
 
-function isCatalogDegraded(reqId: string | undefined): boolean {
-  if (!reqId) return false;
-  return _catalogDegraded.has(reqId);
+function isCatalogDegraded(reqId?: string): boolean {
+  const id = reqId ?? _currentReqId();
+  if (!id) return false;
+  return _catalogDegraded.has(id);
 }
 
-function getCatalogDegradedReasons(reqId: string | undefined): string[] {
-  if (!reqId) return [];
-  return _catalogDegraded.get(reqId)?.reasons ?? [];
+function getCatalogDegradedReasons(reqId?: string): string[] {
+  const id = reqId ?? _currentReqId();
+  if (!id) return [];
+  return _catalogDegraded.get(id)?.reasons ?? [];
 }
 
-function clearCatalogDegraded(reqId: string | undefined): void {
-  if (!reqId) return;
-  _catalogDegraded.delete(reqId);
+function clearCatalogDegraded(reqId?: string): void {
+  const id = reqId ?? _currentReqId();
+  if (!id) return;
+  _catalogDegraded.delete(id);
 }
 
-/** Mark degraded if the error came from a 220volt catalog fetch (used by direct fetch callsites). */
-function markIfCatalogError(reqId: string | undefined, tag: string, err: unknown): void {
+/** Mark degraded if the error came from a 220volt catalog fetch. reqId optional — falls back to async context. */
+function markIfCatalogError(tag: string, err: unknown, reqId?: string): void {
   const isAbort = (err as Error)?.name === 'AbortError';
-  markCatalogError(reqId, isAbort ? `${tag}:timeout` : `${tag}:${(err as Error)?.message || 'fetch_error'}`);
+  markCatalogError(reqId ?? _currentReqId(), isAbort ? `${tag}:timeout` : `${tag}:${(err as Error)?.message || 'fetch_error'}`);
+}
+
+/** Mark degraded for a non-OK HTTP response from catalog API. */
+function markIfCatalogHttpError(tag: string, status: number, reqId?: string): void {
+  markCatalogError(reqId ?? _currentReqId(), `${tag}:http_${status}`);
 }
 
 async function fetchCatalogWithRetry(
