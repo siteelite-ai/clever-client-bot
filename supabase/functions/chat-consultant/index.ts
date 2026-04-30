@@ -6836,6 +6836,7 @@ ${productInstructions}`;
           quick_replies: dr.quick_replies,
         };
         if (slotsUpdated) responseBody.slot_update = dialogSlots;
+        persistSlotsAsync(conversationId, dialogSlots);
         return new Response(
           JSON.stringify(responseBody),
           { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
