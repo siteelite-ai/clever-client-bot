@@ -7076,6 +7076,7 @@ ${productInstructions}`;
               const slotEvent = `data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`;
               controller.enqueue(encoder.encode(slotEvent));
             }
+            persistSlotsAsync(conversationId, dialogSlots);
             controller.enqueue(encoder.encode('data: [DONE]\n\n'));
             return;
           }
