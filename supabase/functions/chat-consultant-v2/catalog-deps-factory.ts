@@ -41,6 +41,14 @@ import { getOrCompute, TTL } from "./cache.ts";
 import { createCatalogComposerDeps } from "./s-catalog-composer.ts";
 import type { CatalogComposerDeps } from "./s-catalog-composer.ts";
 import {
+  createProductionExtractorDeps,
+  type CategoryNounExtractorDeps,
+} from "./category-noun-extractor.ts";
+import {
+  createProductionSoftSuggestDeps,
+  type SoftSuggestDeps,
+} from "./soft-suggest.ts";
+import {
   CATALOG_API_BASE_URL_DEFAULT,
   CATEGORIES_TTL_MS,
   RESOLVER_HTTP_TIMEOUT_MS,
@@ -161,6 +169,10 @@ async function resolverCallLLM(
 interface AppSettingsForCatalog {
   volt220_api_token: string;
   resolver_thresholds_json: { category_high: number; category_low: number } | null;
+  /** §22.2 (spec) Branch A: Query-First категория-существительное вместо ?category=. */
+  query_first_enabled: boolean;
+  /** §22.3 (spec) Branch B: Soft-Suggest — LLM-уточнения в HINT-блоке (без молчаливой фильтрации). */
+  soft_suggest_enabled: boolean;
 }
 
 export async function loadCatalogAppSettings(
@@ -169,7 +181,7 @@ export async function loadCatalogAppSettings(
 ): Promise<AppSettingsForCatalog> {
   const { data, error } = await supabase
     .from("app_settings")
-    .select("volt220_api_token, resolver_thresholds_json")
+    .select("volt220_api_token, resolver_thresholds_json, query_first_enabled, soft_suggest_enabled")
     .limit(1)
     .single();
   if (error) {
@@ -188,7 +200,12 @@ export async function loadCatalogAppSettings(
   ) {
     thresholds = { category_high: raw.category_high, category_low: raw.category_low };
   }
-  return { volt220_api_token: token, resolver_thresholds_json: thresholds };
+  return {
+    volt220_api_token: token,
+    resolver_thresholds_json: thresholds,
+    query_first_enabled: data?.query_first_enabled === true,
+    soft_suggest_enabled: data?.soft_suggest_enabled === true,
+  };
 }
 
 // ─── Bundled production deps ────────────────────────────────────────────────
@@ -214,6 +231,10 @@ export interface CatalogProductionDeps {
   price: SPriceDeps;
   similar: SSimilarDeps;
   composer: CatalogComposerDeps;
+  /** §22.2 spec — Branch A category-noun extractor (всегда инициализируется; assembler вызывает только при `query_first_enabled`). */
+  categoryNounExtractor: CategoryNounExtractorDeps;
+  /** §22.3 spec — Branch B soft-suggest LLM. Условный вызов в assembler по `soft_suggest_enabled`. */
+  softSuggest: SoftSuggestDeps;
 }
 
 export function createCatalogProductionDeps(
@@ -289,7 +310,32 @@ export function createCatalogProductionDeps(
 
   const composer = createCatalogComposerDeps(cfg.openRouterKey);
 
-  return { apiClient, resolver, expansion, facets, facetsLLM, search, price, similar, composer };
+  // §22.2/§22.3 spec: extractor + soft-suggest deps (LLM через OpenRouter).
+  // Внутри лог-обёртка, чтобы события попали в общий поток ассемблера.
+  const extractorBase = createProductionExtractorDeps(cfg.openRouterKey);
+  const categoryNounExtractor: CategoryNounExtractorDeps = {
+    callLLMTool: extractorBase.callLLMTool,
+    log: (event, data) => log(`category_noun.${event}`, data),
+  };
+  const softSuggestBase = createProductionSoftSuggestDeps(cfg.openRouterKey);
+  const softSuggest: SoftSuggestDeps = {
+    callLLMTool: softSuggestBase.callLLMTool,
+    log: (event, data) => log(`soft_suggest.${event}`, data),
+  };
+
+  return {
+    apiClient,
+    resolver,
+    expansion,
+    facets,
+    facetsLLM,
+    search,
+    price,
+    similar,
+    composer,
+    categoryNounExtractor,
+    softSuggest,
+  };
 }
 
 // ─── Facet Matcher LLM call (OpenRouter, Gemini Flash) ──────────────────────

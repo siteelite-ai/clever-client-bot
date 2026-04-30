@@ -433,6 +433,9 @@ serve(async (req) => {
               slotMatch: decision.slot_match,
               traceId,
               state: mutableNextState,
+              // §22.2/§22.3 spec — экспериментальные ветки под двумя независимыми флагами.
+              queryFirstEnabled: catalogSettings.query_first_enabled,
+              softSuggestEnabled: catalogSettings.soft_suggest_enabled,
             },
             catalogDeps,
           );
@@ -469,6 +472,8 @@ serve(async (req) => {
                   disallowCrosssell: assembled.disallowCrosssell,
                   // §4.6 + §11.6: similar-ветка передаёт 1-строку «Подобрал по…».
                   recommendationContext: assembled.recommendationContext,
+                  // §22.3 spec — Soft-Suggest HINT-блок (опциональный, только при флаге).
+                  softSuggestHint: assembled.softSuggestHint ?? null,
                   onDelta: (delta) => {
                     controller.enqueue(
                       sseChunk({ choices: [{ delta: { content: delta } }] }),
@@ -518,6 +523,12 @@ serve(async (req) => {
                   assembled.composerOutcome.kind === "price" &&
                   !!assembled.composerOutcome.outcome.clarifySlot,
                 assembler: assembled.trace,
+                // §22 spec — статус экспериментальных веток для метрик/дебага.
+                experimental_flags: {
+                  query_first_enabled: catalogSettings.query_first_enabled,
+                  soft_suggest_enabled: catalogSettings.soft_suggest_enabled,
+                  soft_suggest_hint_rendered: !!assembled.softSuggestHint,
+                },
               };
             } catch (e) {
               const msg = e instanceof Error ? e.message : String(e);

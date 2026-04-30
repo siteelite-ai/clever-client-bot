@@ -44,6 +44,10 @@ import type { ApiClientDeps, RawOption, RawProduct } from "./catalog/api-client.
 import { getCategoryOptions, searchProducts, extractFacetSchemaFromProducts } from "./catalog/api-client.ts";
 import type { SearchOutcome, SearchStatus } from "./catalog/search.ts";
 import { N_PROBE } from "./config.ts";
+import type { CategoryNounExtractorDeps } from "./category-noun-extractor.ts";
+import { extractCategoryNoun } from "./category-noun-extractor.ts";
+import type { SoftSuggestDeps } from "./soft-suggest.ts";
+import { runSoftSuggest } from "./soft-suggest.ts";
 
 // ─── F.5.8: defense-in-depth для disallowCrosssell ──────────────────────────
 //
@@ -170,6 +174,8 @@ export type AssemblerStage =
   | "parallel_probe"
   | "query_expansion"
   | "facet_matcher"
+  | "category_noun_extractor"
+  | "soft_suggest"
   | "s_search"
   | "s_price"
   | "s_similar";
@@ -219,6 +225,12 @@ export interface AssemblerResult {
    * undefined для не-similar веток.
    */
   recommendationContext?: string;
+  /**
+   * §22.3 spec — готовый markdown HINT-блок от Soft-Suggest. Когда задан,
+   * `index.ts` пробрасывает его в `composeCatalogAnswer.input.softSuggestHint`.
+   * undefined для веток, где Soft-Suggest не запускался / выключен / не дал результатов.
+   */
+  softSuggestHint?: string | null;
 }
 
 export interface AssemblerInput {
@@ -240,6 +252,18 @@ export interface AssemblerInput {
    * ветки игнорируют.
    */
   state?: ConversationState;
+  /**
+   * §22.2 spec — Branch A флаг (Query-First). Когда true (Option A: всегда вызывается
+   * extractor если флаг включён), assembler пытается извлечь категорию-существительное
+   * и пробрасывает его как `categoryNounOverride` в `runSearch`. Default false.
+   */
+  queryFirstEnabled?: boolean;
+  /**
+   * §22.3 spec — Branch B флаг (Soft-Suggest). Когда true и есть unmatchedModifiers
+   * + живая schema, assembler вызывает `runSoftSuggest` и возвращает `softSuggestHint`
+   * для composer. Default false. БЕЗ молчаливой фильтрации (правило «no self-narrowing»).
+   */
+  softSuggestEnabled?: boolean;
 }
 
 export interface AssemblerDeps {
@@ -272,6 +296,10 @@ export interface AssemblerDeps {
    * мокирующими тестами.
    */
   apiClient: ApiClientDeps;
+  /** §22.2 spec — extractor для Branch A. Опциональный (без него Branch A пропускается). */
+  categoryNounExtractor?: CategoryNounExtractorDeps;
+  /** §22.3 spec — Soft-Suggest LLM. Опциональный (без него Branch B пропускается). */
+  softSuggest?: SoftSuggestDeps;
   /** Опциональный логгер общего уровня. */
   log?: (event: string, data?: Record<string, unknown>) => void;
   /** Источник времени. */
@@ -454,6 +482,37 @@ export async function assembleCatalog(
     ms: now() - tCR0,
     meta: { status: resolver.status, pagetitle: resolver.pagetitle, confidence: resolver.confidence },
   });
+
+  // ── 2b. §22.2 spec — Branch A kick-off (Query-First Category Noun Extractor)
+  // Запускаем параллельно с probe и Query Expansion. Не блокирует пайплайн —
+  // ждём только перед runSearch. Если флаг выключен ИЛИ deps нет ИЛИ extractor
+  // вернул "" → categoryNounOverride остаётся пустым (поведение без изменений).
+  const tCNE0 = now();
+  const categoryNounPromise: Promise<string> = (async () => {
+    if (!input.queryFirstEnabled) return "";
+    if (!deps.categoryNounExtractor) return "";
+    try {
+      const r = await extractCategoryNoun(
+        { userQuery: input.query, locale: "ru" },
+        deps.categoryNounExtractor,
+      );
+      trace.stages.push({
+        stage: "category_noun_extractor",
+        ms: now() - tCNE0,
+        meta: { source: r.source, noun: r.categoryNoun, raw: r.rawLLMValue },
+      });
+      return r.categoryNoun;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      trace.errors.push({ stage: "category_noun_extractor", message: msg });
+      trace.stages.push({
+        stage: "category_noun_extractor",
+        ms: now() - tCNE0,
+        meta: { error: msg },
+      });
+      return "";
+    }
+  })();
 
   // ── 3. §4.10 Parallel Probe (kick-off, awaited перед Facet Matcher) ──────
   // Запускаем probe-запрос /products?per_page=N_PROBE параллельно с Query
@@ -779,6 +838,15 @@ export async function assembleCatalog(
     };
   }
 
+  // §22.2 spec — Branch A: дожидаемся extractor (запущен параллельно с probe).
+  const categoryNounOverride = await categoryNounPromise;
+  if (categoryNounOverride) {
+    log("assembler.query_first_active", {
+      pagetitle: resolver.pagetitle,
+      categoryNoun: categoryNounOverride,
+    });
+  }
+
   const tSS0 = now();
   const searchOutcome: SSearchOutcome = await runSearch(
     {
@@ -788,6 +856,7 @@ export async function assembleCatalog(
       intent: input.intent,
       page: input.page,
       perPage: input.perPage,
+      categoryNounOverride: categoryNounOverride || undefined,
     },
     deps.search,
   );
@@ -802,8 +871,81 @@ export async function assembleCatalog(
       winning_form: searchOutcome.winningForm,
       zero_price_leak: searchOutcome.zeroPriceLeak,
       post_filter_dropped: searchOutcome.postFilterDropped,
+      query_first_used: !!categoryNounOverride,
     },
   });
+
+  // ── §22.3 spec — Branch B: Soft-Suggest ─────────────────────────────────
+  // Запускаем ТОЛЬКО когда:
+  //   • soft_suggest_enabled=true
+  //   • deps.softSuggest задан
+  //   • search вернул товары (ok / soft_fallback) — иначе HINT поверх «ничего не нашёл» нерелевантен
+  //   • есть unmatchedModifiers от Facet Matcher
+  //   • есть живая schema (facetOptions из /categories/options ИЛИ bootstrap из probe)
+  //
+  // НЕ применяет фильтры (no self-narrowing). Только генерирует HINT для composer.
+  let softSuggestHint: string | null = null;
+  const canSoftSuggest =
+    !!input.softSuggestEnabled &&
+    !!deps.softSuggest &&
+    (searchOutcome.status === "ok" || searchOutcome.status === "soft_fallback") &&
+    facetMatch.unmatchedModifiers.length > 0;
+
+  if (canSoftSuggest) {
+    const tSSG0 = now();
+    // Live schema: пробуем /categories/options (если facetOptions ещё не загружены).
+    let schemaForSuggest: RawOption[] = facetOptions;
+    if (schemaForSuggest.length === 0) {
+      try {
+        const opts = await getCategoryOptions(resolver.pagetitle, deps.apiClient);
+        if (opts.status === "ok" && opts.options) schemaForSuggest = opts.options;
+      } catch (_e) { /* ignore — fallback на bootstrap ниже */ }
+    }
+    // Bootstrap fallback: per-item Product.options[] из текущего search.products.
+    if (schemaForSuggest.length === 0 && searchOutcome.products.length > 0) {
+      schemaForSuggest = extractFacetSchemaFromProducts(searchOutcome.products);
+    }
+
+    if (schemaForSuggest.length > 0) {
+      try {
+        // Берём ПЕРВЫЙ unmatchedModifier (контракт §22.3 — один запрос на ход).
+        const sg = await runSoftSuggest(
+          {
+            unmatchedModifier: facetMatch.unmatchedModifiers[0],
+            facetSchema: schemaForSuggest,
+            pagetitle: resolver.pagetitle,
+            locale: "ru",
+          },
+          deps.softSuggest!,
+        );
+        softSuggestHint = sg.hintText;
+        trace.stages.push({
+          stage: "soft_suggest",
+          ms: now() - tSSG0,
+          meta: {
+            source: sg.source,
+            count: sg.suggestions.length,
+            raw_count: sg.rawCount,
+            invalid_dropped: sg.invalidDropped,
+          },
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        trace.errors.push({ stage: "soft_suggest", message: msg });
+        trace.stages.push({
+          stage: "soft_suggest",
+          ms: now() - tSSG0,
+          meta: { error: msg },
+        });
+      }
+    } else {
+      trace.stages.push({
+        stage: "soft_suggest",
+        ms: now() - tSSG0,
+        meta: { skipped: "no_schema_available" },
+      });
+    }
+  }
 
   const adaptedSearch = adaptSSearchToSearchOutcome(searchOutcome);
   return {
@@ -814,6 +956,7 @@ export async function assembleCatalog(
     // F.5.8: cross-sell разрешён ТОЛЬКО при ok+products. soft_fallback/empty/error
     // → запрет (defense in depth поверх composer scenario-логики).
     disallowCrosssell: shouldDisallowCrosssellForSearch(adaptedSearch),
+    softSuggestHint,
   };
 }
 
