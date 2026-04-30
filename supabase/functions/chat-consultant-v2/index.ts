@@ -472,6 +472,8 @@ serve(async (req) => {
                   disallowCrosssell: assembled.disallowCrosssell,
                   // §4.6 + §11.6: similar-ветка передаёт 1-строку «Подобрал по…».
                   recommendationContext: assembled.recommendationContext,
+                  // §22.3 spec — Soft-Suggest HINT-блок (опциональный, только при флаге).
+                  softSuggestHint: assembled.softSuggestHint ?? null,
                   onDelta: (delta) => {
                     controller.enqueue(
                       sseChunk({ choices: [{ delta: { content: delta } }] }),
