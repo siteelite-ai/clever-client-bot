@@ -5326,6 +5326,7 @@ serve(async (req) => {
                   totalCollected = _r.total;
                   totalCollectedBranch = branchTag;
                   articleShortCircuit = true;
+                  categoryFirstWinResolved = true;  // also short-circuits the legacy bucket fallback below
                   qfV2Resolved = true;
                   console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=${branchTag} zeroFiltered=${_r.filteredZeroPrice}`);
                 }
@@ -5344,6 +5345,7 @@ serve(async (req) => {
             console.log(`[QueryFirstV2] resolved=true → skipping legacy Category Resolver`);
           }
 
+          if (!qfV2Resolved) {
           try {
             const matcherDeadline = new Promise<{ matches: string[] }>((_, rej) =>
               setTimeout(() => rej(new Error('matcher_timeout_10s')), 10000)
@@ -5523,6 +5525,7 @@ serve(async (req) => {
           } catch (matcherErr) {
             console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS reason=${(matcherErr as Error).message}`);
           }
+          } // end if (!qfV2Resolved)
 
           if (!categoryFirstWinResolved) {
           // ===== LEGACY bucket-logic (fallback when matcher fails) =====
