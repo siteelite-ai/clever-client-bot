@@ -4582,6 +4582,63 @@ function extractRelevantExcerpt(content: string, query: string, maxLen: number =
   return parts.join('\n\n---\n\n');
 }
 
+// ─── Server-side slot-state persistence (V1) ────────────────────────────────
+// Хранит finalised dialogSlots между ходами в `chat_cache_v2` под ключом
+// `slot:v1:<sessionId>`. Восстанавливается, если фронт не прислал dialogSlots.
+// Backward-совместимо: если body.dialogSlots пришли — они приоритетнее.
+const SLOT_STATE_TTL_SEC = 30 * 60; // 30 минут
+
+function slotStateKey(sessionId: string): string {
+  return `slot:v1:${sessionId}`;
+}
+
+async function loadPersistedSlots(sessionId: string): Promise<DialogSlots | null> {
+  const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
+  const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return null;
+  try {
+    const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    const { data, error } = await sb
+      .from('chat_cache_v2')
+      .select('cache_value, expires_at')
+      .eq('cache_key', slotStateKey(sessionId))
+      .maybeSingle();
+    if (error || !data) return null;
+    if (new Date(data.expires_at as string).getTime() < Date.now()) return null;
+    const raw = (data.cache_value as { slots?: unknown })?.slots;
+    return raw ? validateAndSanitizeSlots(raw) : null;
+  } catch (e) {
+    console.warn('[SlotPersist] load failed:', e);
+    return null;
+  }
+}
+
+// Fire-and-forget: не ждём, не блокируем стрим.
+function persistSlotsAsync(sessionId: string, slots: DialogSlots): void {
+  const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
+  const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return;
+  const expiresAt = new Date(Date.now() + SLOT_STATE_TTL_SEC * 1000).toISOString();
+  (async () => {
+    try {
+      const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      const { error } = await sb
+        .from('chat_cache_v2')
+        .upsert(
+          {
+            cache_key: slotStateKey(sessionId),
+            cache_value: { slots, persisted_at: new Date().toISOString() },
+            expires_at: expiresAt,
+          },
+          { onConflict: 'cache_key' },
+        );
+      if (error) console.warn('[SlotPersist] upsert error:', error.message);
+    } catch (e) {
+      console.warn('[SlotPersist] upsert exception:', e);
+    }
+  })();
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
