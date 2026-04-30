@@ -3307,22 +3307,50 @@ async function resolveFiltersWithLLM(
 
   // Build option schema. Prefer prebuilt full-category schema when provided
   // (covers all products in category, not just a 30-item sample).
-  let optionIndex: Map<string, { caption: string; values: Set<string> }>;
+  let rawIndex: Map<string, { caption: string; values: Set<string> }>;
   if (prebuiltSchema && prebuiltSchema.size > 0) {
-    optionIndex = prebuiltSchema;
-    console.log(`[FilterLLM] Using prebuilt category schema (${optionIndex.size} keys, confidence=${schemaConfidence}${keyOnlyMode ? ', mode=key-only' : ''})`);
+    rawIndex = prebuiltSchema;
+    console.log(`[FilterLLM] Using prebuilt category schema (${rawIndex.size} keys, confidence=${schemaConfidence}${keyOnlyMode ? ', mode=key-only' : ''})`);
   } else {
-    optionIndex = new Map();
+    rawIndex = new Map();
     for (const product of products) {
       if (!product.options) continue;
       for (const opt of product.options) {
         if (isExcludedOption(opt.key)) continue;
-        if (!optionIndex.has(opt.key)) {
-          optionIndex.set(opt.key, { caption: opt.caption, values: new Set() });
+        if (!rawIndex.has(opt.key)) {
+          rawIndex.set(opt.key, { caption: opt.caption, values: new Set() });
         }
-        optionIndex.get(opt.key)!.values.add(opt.value);
+        rawIndex.get(opt.key)!.values.add(opt.value);
       }
     }
+  }
+
+  // PROMPT-SIZE GUARDRAILS (fix: prebuiltSchema bypassed extended-blacklist + unbounded
+  // value lists blew prompt to ~244k tokens, causing 18s+ FilterLLM calls and edge
+  // function "connection closed before message completed" on multi-turn dialogs).
+  // 1) Drop extended/service keys (kodnomenklatury, identifikator_sayta, fayl, ...
+  //    — never used as filter, always huge cardinality).
+  // 2) Cap each key to top-N representative values; truncate overlong individual values.
+  const MAX_VALUES_PER_KEY = 40;
+  const MAX_VALUE_LEN = 80;
+  const optionIndex: Map<string, { caption: string; values: Set<string> }> = new Map();
+  let droppedKeys = 0;
+  let truncatedKeys = 0;
+  for (const [apiKey, info] of rawIndex.entries()) {
+    if (isExcludedOption(apiKey, true)) { droppedKeys++; continue; }
+    const cleanedVals: string[] = [];
+    for (const v of info.values) {
+      const cleaned = (v ?? '').split('//')[0].trim();
+      if (!cleaned) continue;
+      cleanedVals.push(cleaned.length > MAX_VALUE_LEN ? cleaned.slice(0, MAX_VALUE_LEN) + '…' : cleaned);
+      if (cleanedVals.length >= MAX_VALUES_PER_KEY) break;
+    }
+    if (cleanedVals.length === 0) { droppedKeys++; continue; }
+    if (info.values.size > MAX_VALUES_PER_KEY) truncatedKeys++;
+    optionIndex.set(apiKey, { caption: info.caption, values: new Set(cleanedVals) });
+  }
+  if (droppedKeys > 0 || truncatedKeys > 0) {
+    console.log(`[FilterLLM] Schema trimmed: dropped ${droppedKeys} keys, truncated ${truncatedKeys} (cap=${MAX_VALUES_PER_KEY}/key, max ${MAX_VALUE_LEN} chars/value)`);
   }
 
   if (optionIndex.size === 0) {
@@ -3335,13 +3363,13 @@ async function resolveFiltersWithLLM(
   const schemaDebug: string[] = [];
   for (const [apiKey, info] of optionIndex.entries()) {
     const caption = (info?.caption ?? '').split('//')[0].trim();
-    const allVals = [...(info?.values ?? [])].filter(Boolean).map(v => (v ?? '').split('//')[0].trim());
+    const allVals = [...(info?.values ?? [])];
     const vals = allVals.join(', ');
     schemaLines.push(`KEY="${apiKey}" | ${caption} | values: ${vals}`);
     schemaDebug.push(`  ${apiKey} (${caption}): ${allVals.slice(0, 5).join(', ')}${allVals.length > 5 ? ` ... +${allVals.length - 5}` : ''}`);
   }
   const schemaText = schemaLines.join('\n');
-  console.log(`[FilterLLM] Schema (${optionIndex.size} keys):\n${schemaDebug.join('\n')}`);
+  console.log(`[FilterLLM] Schema (${optionIndex.size} keys, ~${schemaText.length} chars):\n${schemaDebug.join('\n')}`);
 
   const systemPrompt = `Ты резолвер фильтров товаров интернет-магазина электротоваров.
 
