@@ -161,6 +161,10 @@ async function resolverCallLLM(
 interface AppSettingsForCatalog {
   volt220_api_token: string;
   resolver_thresholds_json: { category_high: number; category_low: number } | null;
+  /** §22.2 (spec) Branch A: Query-First категория-существительное вместо ?category=. */
+  query_first_enabled: boolean;
+  /** §22.3 (spec) Branch B: Soft-Suggest — LLM-уточнения в HINT-блоке (без молчаливой фильтрации). */
+  soft_suggest_enabled: boolean;
 }
 
 export async function loadCatalogAppSettings(
@@ -169,7 +173,7 @@ export async function loadCatalogAppSettings(
 ): Promise<AppSettingsForCatalog> {
   const { data, error } = await supabase
     .from("app_settings")
-    .select("volt220_api_token, resolver_thresholds_json")
+    .select("volt220_api_token, resolver_thresholds_json, query_first_enabled, soft_suggest_enabled")
     .limit(1)
     .single();
   if (error) {
@@ -188,7 +192,12 @@ export async function loadCatalogAppSettings(
   ) {
     thresholds = { category_high: raw.category_high, category_low: raw.category_low };
   }
-  return { volt220_api_token: token, resolver_thresholds_json: thresholds };
+  return {
+    volt220_api_token: token,
+    resolver_thresholds_json: thresholds,
+    query_first_enabled: data?.query_first_enabled === true,
+    soft_suggest_enabled: data?.soft_suggest_enabled === true,
+  };
 }
 
 // ─── Bundled production deps ────────────────────────────────────────────────
