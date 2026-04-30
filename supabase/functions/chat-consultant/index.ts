@@ -4533,6 +4533,11 @@ serve(async (req) => {
   // out of the firehose of concurrent requests.
   const reqId = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).slice(0, 8);
 
+  // Run the entire request inside an AsyncLocalStorage context so deeply nested
+  // catalog helpers can read reqId via _currentReqId() and mark Degraded-mode
+  // without threading the id through every signature.
+  return await _reqContext.run({ reqId }, async () => {
+
   const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
     || req.headers.get('cf-connecting-ip')
     || 'unknown';
