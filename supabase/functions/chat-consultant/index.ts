@@ -7012,6 +7012,7 @@ ${productInstructions}`;
               const slotEvent = `data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`;
               controller.enqueue(encoder.encode(slotEvent));
             }
+            persistSlotsAsync(conversationId, dialogSlots);
             const estInputTokens = Math.ceil(systemPrompt.length / 3);
             const estOutputTokens = Math.ceil(fullContent.length / 3);
             logTokenUsage(estInputTokens, estOutputTokens, aiConfig.model);
