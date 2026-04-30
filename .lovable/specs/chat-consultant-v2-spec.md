@@ -1387,14 +1387,30 @@ interface BreakerSnapshot {
 
 ### 22.2 Query-First branch (Branch A)
 
-**Активация:** `query_first_enabled === true` И Resolver вернул category-token (C1/C2).
+**Активация:** `query_first_enabled === true` И `categoryNoun !== ''`.
 
-**Изменение пайплайна:** в catalog-search первый hop:
+**Новый компонент `category-noun-extractor`** (LLM, OpenRouter/Gemini, tool calling):
+
+```
+Input:  { userQuery: string, locale: 'ru' | 'kk' }
+Output (tool `extract_category_noun`):
+  { "category_noun": string }   // одно существительное в лемме (им. п., ед. ч.)
+                                // ИЛИ "" если в запросе нет товарной категории
+```
+
+**Промпт-инварианты (data-agnostic):**
+- Только одно существительное.
+- Без прилагательных, причастий, модификаторов, предлогов.
+- Лемма: именительный падеж, единственное число, lowercase.
+- Если категории нет — пустая строка (Branch A пропускается, fallback на `?category=`).
+
+**Post-validation** (отбрасываем мусор LLM):
+- regex: `^[\p{L}]{2,30}$` (только буквы, длина 2..30).
+- Иначе → пропуск Branch A, метрика `category_noun_extract_failed_total`.
+
+**Изменение пайплайна:** первый hop catalog-search:
 - БЫЛО: `GET /products?category=<pagetitle>`
-- СТАЛО: `GET /products?query=<pagetitle>`
-
-`<pagetitle>` берётся из ResolverOutcome без изменений — никаких новых LLM-вызовов
-для «извлечения корня». Resolver уже отдаёт категорийную сущность.
+- СТАЛО: `GET /products?query=<categoryNoun>`
 
 **Что НЕ меняется:**
 - §4.10 parallel probe — без изменений
@@ -1404,7 +1420,11 @@ interface BreakerSnapshot {
 - Strict Search Multi-Attempt — внутри использует тот же `query`-режим
 - Soft Fallback / Soft 404 — без изменений
 
-**Метрика:** `query_first_used_total` (counter).
+**Метрики:**
+- `query_first_used_total` — Branch A реально применён
+- `category_noun_extracted_total` — extractor вернул непустую строку
+- `category_noun_extract_failed_total` — post-validation отбросил результат
+
 
 ### 22.3 Soft-Suggest branch (Branch B)
 
