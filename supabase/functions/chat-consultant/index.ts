@@ -3892,6 +3892,7 @@ async function searchProductsByCandidate(
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`[Search] API error ${response.status}:`, errorText);
+      markIfCatalogHttpError('Search', response.status);
       return [];
     }
     
@@ -3907,6 +3908,7 @@ async function searchProductsByCandidate(
     } else {
       console.error(`[Search] Error:`, error);
     }
+    markIfCatalogError('Search', error);
     return [];
   }
 }
