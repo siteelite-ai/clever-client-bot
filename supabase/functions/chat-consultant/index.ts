@@ -2,6 +2,15 @@
 // build-marker: layer1-confidence-gate-2026-04-28T09:00Z (single-flight + SWR + key-only mode + parallel buckets)
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { AsyncLocalStorage } from "node:async_hooks";
+
+// Per-request async context (carries reqId implicitly through all awaits inside `serve`).
+// Used by Degraded-mode tracker so deeply nested catalog helpers do NOT need to thread
+// reqId through their signatures — they read it from the active async context.
+const _reqContext = new AsyncLocalStorage<{ reqId: string }>();
+function _currentReqId(): string | undefined {
+  return _reqContext.getStore()?.reqId;
+}
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -854,11 +863,88 @@ function detectArticles(message: string): string[] {
  */
 // Plan V5: timeout-bounded fetch with single retry for catalog API.
 // Protects article/siteId fast paths from hanging on slow upstream (was up to 70s in logs).
+// ============================================================
+// Degraded-mode tracking (V1 honest-fail)
+// ============================================================
+// Per-request flag: was there ANY transport-level failure when calling
+// the 220volt catalog API during this request? If so, the final LLM
+// must NOT say "ничего не нашлось" — it must honestly admit the outage
+// and offer verbal advice + manager handoff.
+//
+// State is keyed by reqId (set once per `serve` invocation) and lives
+// in a module-level Map with TTL cleanup (Deno isolates are reused).
+// We do NOT thread the flag through every helper — instead the central
+// fetch wrapper marks it, and direct fetch() callsites use markIfCatalogError().
+type DegradedState = { reasons: string[]; ts: number };
+const _catalogDegraded = new Map<string, DegradedState>();
+const _DEGRADED_TTL_MS = 5 * 60 * 1000;
+
+function _gcDegraded() {
+  const now = Date.now();
+  for (const [k, v] of _catalogDegraded.entries()) {
+    if (now - v.ts > _DEGRADED_TTL_MS) _catalogDegraded.delete(k);
+  }
+}
+
+function markCatalogError(reqIdOrReason: string | undefined, maybeReason?: string): void {
+  // Overload: markCatalogError(reason) — reads reqId from async context.
+  // Or:       markCatalogError(reqId, reason) — explicit form (kept for fetchCatalogWithRetry).
+  let reqId: string | undefined;
+  let reason: string;
+  if (maybeReason === undefined) {
+    reqId = _currentReqId();
+    reason = reqIdOrReason ?? 'unknown';
+  } else {
+    reqId = reqIdOrReason ?? _currentReqId();
+    reason = maybeReason;
+  }
+  if (!reqId) return;
+  const cur = _catalogDegraded.get(reqId);
+  if (cur) {
+    if (cur.reasons.length < 8) cur.reasons.push(reason);
+    cur.ts = Date.now();
+  } else {
+    _catalogDegraded.set(reqId, { reasons: [reason], ts: Date.now() });
+    if (_catalogDegraded.size > 1000) _gcDegraded();
+  }
+  console.warn(`[Degraded] Catalog API failure marked (reqId=${reqId}): ${reason}`);
+}
+
+function isCatalogDegraded(reqId?: string): boolean {
+  const id = reqId ?? _currentReqId();
+  if (!id) return false;
+  return _catalogDegraded.has(id);
+}
+
+function getCatalogDegradedReasons(reqId?: string): string[] {
+  const id = reqId ?? _currentReqId();
+  if (!id) return [];
+  return _catalogDegraded.get(id)?.reasons ?? [];
+}
+
+function clearCatalogDegraded(reqId?: string): void {
+  const id = reqId ?? _currentReqId();
+  if (!id) return;
+  _catalogDegraded.delete(id);
+}
+
+/** Mark degraded if the error came from a 220volt catalog fetch. reqId optional — falls back to async context. */
+function markIfCatalogError(tag: string, err: unknown, reqId?: string): void {
+  const isAbort = (err as Error)?.name === 'AbortError';
+  markCatalogError(reqId ?? _currentReqId(), isAbort ? `${tag}:timeout` : `${tag}:${(err as Error)?.message || 'fetch_error'}`);
+}
+
+/** Mark degraded for a non-OK HTTP response from catalog API. */
+function markIfCatalogHttpError(tag: string, status: number, reqId?: string): void {
+  markCatalogError(reqId ?? _currentReqId(), `${tag}:http_${status}`);
+}
+
 async function fetchCatalogWithRetry(
   url: string,
   apiToken: string,
   tag: string,
-  timeoutMs = 8000
+  timeoutMs = 8000,
+  reqId?: string
 ): Promise<Response | null> {
   for (let attempt = 1; attempt <= 2; attempt++) {
     const controller = new AbortController();
@@ -875,7 +961,10 @@ async function fetchCatalogWithRetry(
       clearTimeout(timer);
       if (!resp.ok) {
         console.error(`[${tag}] API error: ${resp.status} (attempt ${attempt})`);
-        if (attempt === 2) return null;
+        if (attempt === 2) {
+          markCatalogError(reqId, `${tag}:http_${resp.status}`);
+          return null;
+        }
         continue;
       }
       return resp;
@@ -887,7 +976,10 @@ async function fetchCatalogWithRetry(
       } else {
         console.error(`[${tag}] fetch error (attempt ${attempt}):`, err);
       }
-      if (attempt === 2) return null;
+      if (attempt === 2) {
+        markCatalogError(reqId, isAbort ? `${tag}:timeout` : `${tag}:${(err as Error)?.message || 'fetch_error'}`);
+        return null;
+      }
     }
   }
   return null;
@@ -1713,15 +1805,23 @@ async function getCategoryOptionsSchemaLegacy(
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 12000);
-      const res = await fetch(`${VOLT220_API_URL}?${params}`, {
-        method: 'GET',
-        headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
+      let res: Response;
+      try {
+        res = await fetch(`${VOLT220_API_URL}?${params}`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+      } catch (fetchErr) {
+        clearTimeout(timeoutId);
+        markIfCatalogError('CategoryOptionsSchemaLegacy', fetchErr);
+        throw fetchErr;
+      }
 
       if (!res.ok) {
         console.log(`[CategoryOptionsSchemaLegacy] HTTP ${res.status} on page ${page} for "${categoryPagetitle}", aborting`);
+        markIfCatalogHttpError('CategoryOptionsSchemaLegacy', res.status);
         break;
       }
       const raw = await res.json();
@@ -2339,18 +2439,26 @@ async function handlePriceIntent(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 15000);
     
-    const probeResponse = await fetch(`${VOLT220_API_URL}?${probeParams}`, {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${apiToken}`,
-        'Content-Type': 'application/json',
-      },
-      signal: controller.signal,
-    });
-    clearTimeout(timeoutId);
+    let probeResponse: Response;
+    try {
+      probeResponse = await fetch(`${VOLT220_API_URL}?${probeParams}`, {
+        method: 'GET',
+        headers: {
+          'Authorization': `Bearer ${apiToken}`,
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+    } catch (fetchErr) {
+      clearTimeout(timeoutId);
+      markIfCatalogError('PriceIntent.probe', fetchErr);
+      throw fetchErr;
+    }
     
     if (!probeResponse.ok) {
       console.error(`[PriceIntent] Probe API error: ${probeResponse.status}`);
+      markIfCatalogHttpError('PriceIntent.probe', probeResponse.status);
       return { action: 'not_found' };
     }
     
@@ -2375,7 +2483,9 @@ async function handlePriceIntent(
             signal: altCtrl.signal,
           });
           clearTimeout(altTimeout);
-          if (altResp.ok) {
+          if (!altResp.ok) {
+            markIfCatalogHttpError('PriceIntent.alt', altResp.status);
+          } else {
             const altRaw = await altResp.json();
             const altTotal = (altRaw.data || altRaw).pagination?.total || 0;
             if (altTotal > 0 && altTotal <= 50) {
@@ -2387,7 +2497,10 @@ async function handlePriceIntent(
               return { action: 'clarify', total: altTotal, category: primaryQuery };
             }
           }
-        } catch { clearTimeout(altTimeout); }
+        } catch (altErr) {
+          clearTimeout(altTimeout);
+          markIfCatalogError('PriceIntent.alt', altErr);
+        }
       }
     }
     
@@ -2458,7 +2571,9 @@ async function handlePriceIntent(
         });
         clearTimeout(retryTimeout);
         
-        if (retryResp.ok) {
+        if (!retryResp.ok) {
+          markIfCatalogHttpError('PriceIntent.retry', retryResp.status);
+        } else {
           const retryRaw = await retryResp.json();
           const retryData = retryRaw.data || retryRaw;
           const retryProducts: Product[] = (retryData.results || []).filter((p: Product) => p.price > 0);
@@ -2471,6 +2586,7 @@ async function handlePriceIntent(
         }
       } catch (retryErr) {
         console.error(`[PriceIntent] Retry also failed:`, retryErr);
+        markIfCatalogError('PriceIntent.retry', retryErr);
       }
     }
     
@@ -3776,6 +3892,7 @@ async function searchProductsByCandidate(
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`[Search] API error ${response.status}:`, errorText);
+      markIfCatalogHttpError('Search', response.status);
       return [];
     }
     
@@ -3791,6 +3908,7 @@ async function searchProductsByCandidate(
     } else {
       console.error(`[Search] Error:`, error);
     }
+    markIfCatalogError('Search', error);
     return [];
   }
 }
@@ -4440,6 +4558,11 @@ serve(async (req) => {
   // grep one user's full pipeline (classify → facets → filter-LLM → rerank)
   // out of the firehose of concurrent requests.
   const reqId = (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`).slice(0, 8);
+
+  // Run the entire request inside an AsyncLocalStorage context so deeply nested
+  // catalog helpers can read reqId via _currentReqId() and mark Degraded-mode
+  // without threading the id through every signature.
+  return await _reqContext.run({ reqId }, async () => {
 
   const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim()
     || req.headers.get('cf-connecting-ip')
@@ -6373,8 +6496,27 @@ ${directAnswerBlock}
     }
 
     const customPrompt = appSettings.system_prompt || '';
-    
-    const systemPrompt = `Ты — профессиональный консультант интернет-магазина электротоваров 220volt.kz.
+
+    // Honest-fail: if catalog API failed during this request AND we have nothing
+    // to show, the LLM must NOT pretend "ничего не нашлось". Inject a hard
+    // override block at the very top of the system prompt.
+    const _degraded = isCatalogDegraded(reqId) && foundProducts.length === 0;
+    if (_degraded) {
+      console.warn(`[Chat req=${reqId}] DEGRADED MODE: catalog API failures detected, switching prompt. Reasons: ${getCatalogDegradedReasons(reqId).join(', ')}`);
+    }
+    const degradedBlock = _degraded ? `
+🚨 ТЕХНИЧЕСКИЙ СБОЙ КАТАЛОГА (КРИТИЧЕСКИ ВАЖНО, ПЕРЕОПРЕДЕЛЯЕТ ВСЁ ОСТАЛЬНОЕ):
+Каталог 220volt.kz сейчас временно недоступен (таймауты/сетевая ошибка на стороне API). Это НЕ значит, что товара нет в магазине — это значит, что мы прямо сейчас не можем проверить наличие.
+
+ТВОЙ ОТВЕТ ДОЛЖЕН:
+1. ЧЕСТНО признать сбой одной короткой фразой (например: «Каталог сейчас временно недоступен — не могу проверить наличие в реальном времени.»). НЕ говори «ничего не нашлось», «товара нет», «не удалось найти» — это будет враньё.
+2. Помочь СЛОВОМ: дай 2–4 коротких экспертных совета по подбору именно того, что спросил клиент (на что смотреть: мощность, цоколь, IP-класс, сечение, материал и т.д. — релевантно запросу). Используй свои знания об электротоварах, НЕ выдумывай конкретные модели/цены.
+3. Предложить связаться с менеджером для проверки наличия и точной цены — добавь маркер [CONTACT_MANAGER] в конец сообщения.
+4. НЕ показывай ссылку на каталог как «решение» — каталог сейчас тоже может не отвечать.
+
+` : '';
+
+    const systemPrompt = `${degradedBlock}Ты — профессиональный консультант интернет-магазина электротоваров 220volt.kz.
 ${customPrompt}
 
 🚫 АБСОЛЮТНЫЙ ЗАПРЕТ ПРИВЕТСТВИЙ:
@@ -6887,4 +7029,5 @@ ${productInstructions}`;
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
+  }); // end _reqContext.run
 });
