@@ -31,6 +31,7 @@
 // V1 НЕ ТРОГАЕТСЯ. Этот файл живёт ТОЛЬКО внутри chat-consultant-v2/catalog/.
 
 import { CircuitBreaker, getCatalogBreaker } from './circuit-breaker.ts';
+import { filterRawOptions, isBlacklistedFacetKey } from './facet-filter.ts';
 
 // ─── Public types ───────────────────────────────────────────────────────────
 
@@ -524,7 +525,10 @@ export async function getCategoryOptions(
 
   // Q2: double-unwrap.
   const data: any = unwrapDouble(raw);
-  const optionsArr: RawOption[] = Array.isArray(data?.options) ? data.options : [];
+  const optionsArrRaw: RawOption[] = Array.isArray(data?.options) ? data.options : [];
+  // Manual blacklist (facet-filter.ts) — отсекаем технические/служебные ключи
+  // и медиа-поля до того, как они попадут в Facet Matcher / price_clarify / кэш.
+  const optionsArr: RawOption[] = filterRawOptions(optionsArrRaw);
   const totalProducts = Number(data?.category?.total_products) || 0;
 
   if (optionsArr.length === 0) {
@@ -613,6 +617,8 @@ export function extractFacetSchemaFromProducts(products: RawProduct[]): RawOptio
       };
       const key = typeof o.key === 'string' ? o.key.trim() : '';
       if (!key) continue;
+      // Manual blacklist (facet-filter.ts) — симметрично с getCategoryOptions().
+      if (isBlacklistedFacetKey(key)) continue;
 
       const captionRu = typeof o.caption_ru === 'string' ? o.caption_ru : null;
       const captionKz = typeof o.caption_kz === 'string' ? o.caption_kz : null;

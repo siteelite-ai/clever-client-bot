@@ -4121,24 +4121,38 @@ function toProductionUrl(url: string): string {
 }
 
 // Prefixes to ALWAYS exclude (service/SEO fields)
+// Hard blacklist для фасетов из /categories/options и Product.options.
+// Согласовано вручную с продакт-владельцем (2026-04-30, аудит «Розетки»).
+// Эти ключи НЕ попадают ни в Facet Matcher, ни в LLM-промпт, ни в кэш.
+// V2-зеркало: supabase/functions/chat-consultant-v2/catalog/facet-filter.ts
 const EXCLUDED_OPTION_PREFIXES = [
+  // Группа A — техническая метаинформация (9)
+  'kodnomenklatury',
+  'idsayta',
+  'idsoputstvuyushchikh',
+  'tovar_internet_magazina',
+  'tip_nomenklatury',
+  'kategoriya',
+  'proizvoditel',
+  'artikul',
   'poiskovyy_zapros',
+  // Группа B — файлы/медиа (2)
+  'fayl',
+  'izobrazhenie',
+  // Pre-existing legacy V1 exclusions (оставляем — это V1-специфика):
   'kod_tn_ved',
   'ogranichennyy_prosmotr',
   'prodaetsya_to',
-  'tovar_internet_magazina',
 ];
 
 // Extended fields — included only when user query is relevant
 const EXTENDED_OPTION_PREFIXES = [
-  'fayl',              // PDF documentation links
   'opisaniefayla',     // file descriptions
   'novinka',           // new arrival flag
   'populyarnyy',      // popularity flag
   'soputstvuyuschiy',  // related products
   'garantiynyy',       // warranty
   'naimenovanie_na_kazahskom', // Kazakh name
-  'kodnomenklatury',   // nomenclature code
   'identifikator_sayta', // site ID
   'edinica_izmereniya',  // unit of measurement
 ];
