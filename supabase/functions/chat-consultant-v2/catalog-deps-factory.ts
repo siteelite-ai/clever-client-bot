@@ -231,6 +231,10 @@ export interface CatalogProductionDeps {
   price: SPriceDeps;
   similar: SSimilarDeps;
   composer: CatalogComposerDeps;
+  /** §22.2 spec — Branch A category-noun extractor (всегда инициализируется; assembler вызывает только при `query_first_enabled`). */
+  categoryNounExtractor: CategoryNounExtractorDeps;
+  /** §22.3 spec — Branch B soft-suggest LLM. Условный вызов в assembler по `soft_suggest_enabled`. */
+  softSuggest: SoftSuggestDeps;
 }
 
 export function createCatalogProductionDeps(
