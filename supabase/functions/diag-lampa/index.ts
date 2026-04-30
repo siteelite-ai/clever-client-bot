@@ -5,7 +5,7 @@ const corsHeaders = {
 };
 
 const API = "https://220volt.kz/api";
-const TOKEN = Deno.env.get("CATALOG_API_TOKEN") || "";
+const TOKEN = "a8f3d9c4b7e24c5fa1e6b0d8c92f4e7b6a1d5c9f2e0b8a4c7d3f6e9b2";
 
 const BLACKLIST = new Set([
   "kodnomenklatury","poiskovyy_zapros","opisaniefayla","artikul",
