@@ -5235,43 +5235,23 @@ serve(async (req) => {
             const { matches } = await Promise.race([matcherWork, matcherDeadline]);
 
             if (matches.length > 0) {
-              // Plan V7 — Category disambiguation: if matcher returned ≥2 buckets, ask the
-              // dedicated classifier whether they are SYNONYMS (proceed normally) or DISTINCT
-              // groups (ask the user). Skips classifier when matches.length < 2.
-              if (matches.length >= 2 && !disambiguationResponse) {
-                const ambiguity = await classifyCategoryAmbiguity(
-                  effectiveCategory, matches, appSettings, historyContextForMatcher
-                );
-                if (ambiguity.ambiguous) {
-                  const preMods = (classification?.search_modifiers || []).join(' ').trim();
-                  const slotKey = `cd_${Date.now()}`;
-                  dialogSlots[slotKey] = {
-                    intent: 'category_disambiguation',
-                    base_category: effectiveCategory,
-                    candidate_options: JSON.stringify(ambiguity.options),
-                    pending_modifiers: preMods || undefined,
-                    original_query: userMessage.slice(0, 200),
-                    status: 'pending',
-                    created_turn: messages.length,
-                    turns_since_touched: 0,
-                  };
-                  slotsUpdated = true;
-                  const optionLabels = ambiguity.options.map(o => o.label);
-                  const niceList = optionLabels.length === 2
-                    ? `${optionLabels[0]} или ${optionLabels[1]}`
-                    : optionLabels.slice(0, -1).join(', ') + ` или ${optionLabels[optionLabels.length - 1]}`;
-                  disambiguationResponse = {
-                    content: `Уточните, пожалуйста: вас интересуют ${niceList}?`,
-                    quick_replies: ambiguity.options.map(o => ({ label: o.label, value: o.value })),
-                  };
-                  console.log(`[Chat] CategoryAmbiguity SHORT-CIRCUIT: slot="${slotKey}", options=${JSON.stringify(optionLabels)}, preMods="${preMods}"`);
-                  // [QR] Detailed diagnostics for quick_replies emission. Use tag [QR]
-                  // to grep across logs and trace why a particular option was offered.
-                  console.log(`[QR] EMIT slot="${slotKey}" base_category="${effectiveCategory}" original_query="${userMessage.slice(0, 200)}" pending_modifiers="${preMods}" pending_filters=null options=${JSON.stringify(ambiguity.options.map(o => ({ label: o.label, value: o.value, pagetitle: o.pagetitle || null })))}`);
-                  categoryFirstWinResolved = true;
-                  articleShortCircuit = true;
-                }
+              // ──────────────────────────────────────────────────────────────
+              // Plan V7 disambiguation DISABLED (architectural decision 2026-04-30):
+              //   Disambiguation противоречит core-правилу «Bot NEVER self-narrows
+              //   funnel». LLM придумывал ярлыки несуществующих категорий
+              //   («Бытовые для дома»), задавал лишний вопрос ДО показа товара
+              //   — лишний шаг в воронке без выгоды. Заменяется связкой
+              //   Query-First (выше, str. 5172+) + Soft-Suggest (HINT после карточек).
+              //   Все matches идут в параллельный поиск по ВСЕМ категориям сразу
+              //   (str. 5281+), пользователь сразу видит товары, фасеты —
+              //   мягкая подсказка после.
+              // Сохранён пустой if-блок, чтобы не плодить diff в логике flow:
+              //   следующий блок (Domain Guard) опирается на matches.length>0.
+              // ──────────────────────────────────────────────────────────────
+              if (false) {
+                // legacy disambiguation block removed — see comment above
               }
+
 
               // Plan V4 — Domain Guard: remember which categories matcher selected
               // so rerankProducts can drop products from unrelated categories later.
