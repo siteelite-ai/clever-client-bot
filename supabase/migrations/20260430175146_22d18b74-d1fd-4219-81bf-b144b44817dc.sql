@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX IF NOT EXISTS chat_cache_v2_cache_key_uniq ON public.chat_cache_v2 (cache_key);
