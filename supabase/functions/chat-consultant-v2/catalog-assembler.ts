@@ -225,6 +225,12 @@ export interface AssemblerResult {
    * undefined для не-similar веток.
    */
   recommendationContext?: string;
+  /**
+   * §22.3 spec — готовый markdown HINT-блок от Soft-Suggest. Когда задан,
+   * `index.ts` пробрасывает его в `composeCatalogAnswer.input.softSuggestHint`.
+   * undefined для веток, где Soft-Suggest не запускался / выключен / не дал результатов.
+   */
+  softSuggestHint?: string | null;
 }
 
 export interface AssemblerInput {
