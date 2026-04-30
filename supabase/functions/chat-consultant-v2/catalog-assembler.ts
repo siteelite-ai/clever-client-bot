@@ -174,6 +174,8 @@ export type AssemblerStage =
   | "parallel_probe"
   | "query_expansion"
   | "facet_matcher"
+  | "category_noun_extractor"
+  | "soft_suggest"
   | "s_search"
   | "s_price"
   | "s_similar";
