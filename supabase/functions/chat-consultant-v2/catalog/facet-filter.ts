@@ -15,41 +15,43 @@
 //   • Data-agnostic ограничение спеки сохраняется: blacklist — это
 //     технический маппинг ключей API, а НЕ бизнес-онтология категорий/брендов.
 //
-// Источник списка: ручной аудит /categories/options?pagetitle=Розетки
-// (53 ключа, 2026-04-30). Согласовано с пользователем.
+// Источник списка: ручной аудит + проверочный запрос
+// /categories/options?pagetitle=Розетки (53 ключа, 2026-04-30).
+// Реальные ключи API сверены, несуществующие удалены, добавлены
+// казахские дубли и крупные служебные ID. Согласовано с пользователем.
+//
+// Эффект на эталонной категории «Розетки»:
+//   payload 1228 KB → ~340 KB (-72%), фасетов 53 → 45.
 
 /**
- * 11 ключей: техническая метаинформация (9) + файлы/медиа (2).
+ * 8 ключей: техническая метаинформация / служебные ID / казахские дубли / медиа.
  *
- * Группа A — техническая метаинформация:
- *   1. kodnomenklatury           — КодНоменклатуры (внутренний код 1С)
- *   2. idsayta                   — IDСайта (внутренний идентификатор)
- *   3. idsoputstvuyushchikh      — IDСопутствующих (служебный ID)
- *   4. tovar_internet_magazina   — ТоварИнтернетМагазина (boolean-флаг)
- *   5. tip_nomenklatury          — ТипНоменклатуры (служебная классификация)
- *   6. kategoriya                — Категория (дублирует Category Resolver)
- *   7. proizvoditel              — Производитель (дублирует `vendor`)
- *   8. artikul                   — Артикул (есть отдельный API-параметр `article`)
- *   9. poiskovyy_zapros          — ПоисковыйЗапрос (служебный поиск-лог)
+ * Группа A — техническая метаинформация и служебные ID:
+ *   1. kodnomenklatury                              — КодНоменклатуры (внутренний код 1С, 121 KB)
+ *   2. identifikator_sayta__sayt_identifikatory     — Идентификатор сайта (служебный ID, 121 KB)
+ *   3. soputstvuyuschiytovar                        — СопутствующийТовар (служебный ID, 72 KB)
+ *   4. tovar_internet_magazina                      — ТоварИнтернетМагазина (boolean-флаг)
+ *   5. poiskovyy_zapros                             — ПоисковыйЗапрос (служебный поиск-лог, 271 KB)
  *
- * Группа B — файлы/медиа (бесполезны для consultant-а в текстовом ответе):
- *  10. fayl                      — Файл
- *  11. izobrazhenie              — Изображение
+ * Группа B — казахские дубли (бот отвечает на русском, для фильтрации не используются):
+ *   6. naimenovanie_na_kazahskom_yazyke             — Название на казахском (219 KB)
+ *   7. opisanie_na_kazahskom_yazyke                 — Описание на казахском (44 KB)
+ *
+ * Группа C — медиа:
+ *   8. fayl                                         — Файл (232 KB)
  */
 export const FACET_BLACKLIST_KEYS: ReadonlySet<string> = new Set([
-  // Группа A
+  // Группа A — техническая метаинформация / служебные ID
   'kodnomenklatury',
-  'idsayta',
-  'idsoputstvuyushchikh',
+  'identifikator_sayta__sayt_identifikatory',
+  'soputstvuyuschiytovar',
   'tovar_internet_magazina',
-  'tip_nomenklatury',
-  'kategoriya',
-  'proizvoditel',
-  'artikul',
   'poiskovyy_zapros',
-  // Группа B
+  // Группа B — казахские дубли
+  'naimenovanie_na_kazahskom_yazyke',
+  'opisanie_na_kazahskom_yazyke',
+  // Группа C — медиа
   'fayl',
-  'izobrazhenie',
 ]);
 
 /**
