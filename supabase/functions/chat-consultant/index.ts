@@ -504,6 +504,14 @@ interface CachedSettings {
   system_prompt: string | null;
   classifier_provider: string;
   classifier_model: string;
+  /**
+   * §22.2 spec — Branch A флаг (Query-First). Прочитывается для observability;
+   * полная V1-имплементация отложена (V1 ветка остаётся stable fallback).
+   * Эксперимент проводится через V2 (`chat-consultant-v2`).
+   */
+  query_first_enabled: boolean;
+  /** §22.3 spec — Branch B флаг (Soft-Suggest). Аналогично — пока observability-only в V1. */
+  soft_suggest_enabled: boolean;
 }
 
 async function getAppSettings(): Promise<CachedSettings> {
