@@ -4126,19 +4126,17 @@ function toProductionUrl(url: string): string {
 // Эти ключи НЕ попадают ни в Facet Matcher, ни в LLM-промпт, ни в кэш.
 // V2-зеркало: supabase/functions/chat-consultant-v2/catalog/facet-filter.ts
 const EXCLUDED_OPTION_PREFIXES = [
-  // Группа A — техническая метаинформация (9)
+  // Группа A — техническая метаинформация / служебные ID (5)
   'kodnomenklatury',
-  'idsayta',
-  'idsoputstvuyushchikh',
+  'identifikator_sayta__sayt_identifikatory',
+  'soputstvuyuschiytovar',
   'tovar_internet_magazina',
-  'tip_nomenklatury',
-  'kategoriya',
-  'proizvoditel',
-  'artikul',
   'poiskovyy_zapros',
-  // Группа B — файлы/медиа (2)
+  // Группа B — казахские дубли (2)
+  'naimenovanie_na_kazahskom_yazyke',
+  'opisanie_na_kazahskom_yazyke',
+  // Группа C — медиа (1)
   'fayl',
-  'izobrazhenie',
   // Pre-existing legacy V1 exclusions (оставляем — это V1-специфика):
   'kod_tn_ved',
   'ogranichennyy_prosmotr',
@@ -4150,10 +4148,7 @@ const EXTENDED_OPTION_PREFIXES = [
   'opisaniefayla',     // file descriptions
   'novinka',           // new arrival flag
   'populyarnyy',      // popularity flag
-  'soputstvuyuschiy',  // related products
   'garantiynyy',       // warranty
-  'naimenovanie_na_kazahskom', // Kazakh name
-  'identifikator_sayta', // site ID
   'edinica_izmereniya',  // unit of measurement
 ];
 
