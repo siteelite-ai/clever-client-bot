@@ -15,5 +15,3 @@ verify_jwt = false
 [functions.knowledge-process]
 verify_jwt = false
 
-[functions.diag-probe]
-verify_jwt = false
