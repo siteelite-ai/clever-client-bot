@@ -1805,15 +1805,23 @@ async function getCategoryOptionsSchemaLegacy(
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 12000);
-      const res = await fetch(`${VOLT220_API_URL}?${params}`, {
-        method: 'GET',
-        headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
+      let res: Response;
+      try {
+        res = await fetch(`${VOLT220_API_URL}?${params}`, {
+          method: 'GET',
+          headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+      } catch (fetchErr) {
+        clearTimeout(timeoutId);
+        markIfCatalogError('CategoryOptionsSchemaLegacy', fetchErr);
+        throw fetchErr;
+      }
 
       if (!res.ok) {
         console.log(`[CategoryOptionsSchemaLegacy] HTTP ${res.status} on page ${page} for "${categoryPagetitle}", aborting`);
+        markIfCatalogHttpError('CategoryOptionsSchemaLegacy', res.status);
         break;
       }
       const raw = await res.json();
