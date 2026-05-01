@@ -436,14 +436,14 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         }]);
       },
       onDone: () => {
-        setMessages(prev => prev.filter(m => !m.id.startsWith('typing2-')));
+        setMessages(prev => prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-')));
         setIsLoading(false);
         sendingRef.current = false;
         setPendingQuickReply(null);
       },
       onError: (error) => {
         setMessages(prev => {
-          const filtered = prev.filter(m => !m.id.startsWith('typing2-'));
+          const filtered = prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-'));
           return [...filtered, {
             id: mid('error'),
             role: 'assistant',
