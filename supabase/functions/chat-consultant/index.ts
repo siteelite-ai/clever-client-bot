@@ -604,9 +604,13 @@ function getAIConfig(settings: CachedSettings): { url: string; apiKeys: string[]
     throw new Error('OpenRouter API key не настроен. Добавьте ключ в Настройках.');
   }
 
-  // Ensure model is in OpenRouter format (must contain "/", e.g. "google/gemini-2.5-pro")
-  let model = settings.ai_model || 'google/gemini-2.5-pro';
+  // MODEL UPGRADE (2026-05-02): switched final response model from Gemini to Claude.
+  // Gemini галлюцинировал в коротких ветках (price/title/article shortcircuit) — выдумывал
+  // ссылки и товары, которых нет в переданном списке. Claude Sonnet 4.5 строго цитирует
+  // только переданные товары и не дописывает от себя. Стоимость ~2-3x, latency +2-4с.
+  let model = settings.ai_model || 'anthropic/claude-sonnet-4.5';
   if (!model.includes('/')) {
+    // Bare names like "gemini-2.5-flash" → assume Google. Claude/OpenAI всегда указываются с префиксом.
     model = `google/${model}`;
   }
 
