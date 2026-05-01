@@ -49,16 +49,13 @@ const THINKING_CATALOG = [
   'Сейчас посмотрю, что есть',
 ];
 
-const THINKING_INFO = [
-  'Сейчас проверю информацию',
-  'Минутку, уточняю',
-  'Секунду, проверю детали',
-  'Сейчас найду ответ',
-];
-
-function pickThinkingPhrase(message: string): string {
-  const pool = PRODUCT_KEYWORDS.test(message) ? THINKING_CATALOG : THINKING_INFO;
-  return pool[Math.floor(Math.random() * pool.length)];
+/**
+ * Возвращает thinking-фразу ТОЛЬКО для каталожных запросов.
+ * Для приветствий, общих вопросов и болталки — null (показываем только typing-точки).
+ */
+function pickThinkingPhrase(message: string): string | null {
+  if (!PRODUCT_KEYWORDS.test(message)) return null;
+  return THINKING_CATALOG[Math.floor(Math.random() * THINKING_CATALOG.length)];
 }
 
 // Dialog slot types for persistent intent memory
@@ -358,7 +355,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         let updated = prev;
         if (!typing2Removed) {
           typing2Removed = true;
-          updated = prev.filter(m => !m.id.startsWith('typing2-'));
+          updated = prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-'));
           const id = mid('stream');
           streamMsgId = id;
           return [...updated, {
@@ -439,14 +436,14 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         }]);
       },
       onDone: () => {
-        setMessages(prev => prev.filter(m => !m.id.startsWith('typing2-')));
+        setMessages(prev => prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-')));
         setIsLoading(false);
         sendingRef.current = false;
         setPendingQuickReply(null);
       },
       onError: (error) => {
         setMessages(prev => {
-          const filtered = prev.filter(m => !m.id.startsWith('typing2-'));
+          const filtered = prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-'));
           return [...filtered, {
             id: mid('error'),
             role: 'assistant',
@@ -461,26 +458,29 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     });
 
     // Step 2: Show thinking phrase after longer typing animation (runs in parallel with API)
+    // Только для каталожных запросов. Иначе оставляем крутиться typing-точки.
     await new Promise(r => setTimeout(r, 3000));
-    const thinkingId = mid('thinking');
-    setMessages(prev => {
-      const withoutTyping = prev.filter(m => m.id !== typingId);
-      // Only add thinking phrase + typing2 if stream hasn't already started delivering
-      if (!typing2Removed) {
-        return [...withoutTyping, {
-          id: thinkingId,
-          role: 'assistant' as const,
-          content: thinkingPhrase,
-          timestamp: new Date()
-        }, {
-          id: mid('typing2'),
-          role: 'assistant' as const,
-          content: '__TYPING__',
-          timestamp: new Date()
-        }];
-      }
-      return withoutTyping;
-    });
+    if (thinkingPhrase) {
+      const thinkingId = mid('thinking');
+      setMessages(prev => {
+        const withoutTyping = prev.filter(m => m.id !== typingId);
+        // Only add thinking phrase + typing2 if stream hasn't already started delivering
+        if (!typing2Removed) {
+          return [...withoutTyping, {
+            id: thinkingId,
+            role: 'assistant' as const,
+            content: thinkingPhrase,
+            timestamp: new Date()
+          }, {
+            id: mid('typing2'),
+            role: 'assistant' as const,
+            content: '__TYPING__',
+            timestamp: new Date()
+          }];
+        }
+        return withoutTyping;
+      });
+    }
 
     // Wait for stream to complete
     await streamPromise;

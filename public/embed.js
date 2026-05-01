@@ -102,15 +102,10 @@
     'Подбираю подходящие товары',
     'Сейчас посмотрю, что есть',
   ];
-  const THINKING_INFO = [
-    'Сейчас проверю информацию',
-    'Минутку, уточняю',
-    'Секунду, проверю детали',
-    'Сейчас найду ответ',
-  ];
+  // Возвращает фразу ТОЛЬКО для каталожных запросов; иначе null (показываем только typing-точки).
   function pickThinkingPhrase(msg) {
-    var pool = PRODUCT_KEYWORDS.test(msg) ? THINKING_CATALOG : THINKING_INFO;
-    return pool[Math.floor(Math.random() * pool.length)];
+    if (!PRODUCT_KEYWORDS.test(msg)) return null;
+    return THINKING_CATALOG[Math.floor(Math.random() * THINKING_CATALOG.length)];
   }
   // Save state to sessionStorage
   function saveState() {
@@ -984,10 +979,10 @@
     })();
 
     // Step 2: After longer delay, show thinking phrase (runs in parallel with API call)
+    // Только для каталожных запросов. Иначе оставляем крутиться typing-точки.
     await new Promise(function(r) { setTimeout(r, 3000); });
 
-    // Only show thinking phrase if first token hasn't arrived yet
-    if (!firstTokenArrived) {
+    if (thinkingPhrase && !firstTokenArrived) {
       var typingEl1 = document.getElementById('volt-typing-indicator');
       if (typingEl1) typingEl1.remove();
 
