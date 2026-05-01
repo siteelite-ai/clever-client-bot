@@ -3556,7 +3556,7 @@ ${JSON.stringify(modifiers)}
     model,
     messages: [{ role: 'user', content: systemPrompt }],
     ...DETERMINISTIC_SAMPLING,
-    max_tokens: 500,
+    max_tokens: 1500,
     response_format: { type: 'json_object' },
     reasoning: { exclude: true },
   };
