@@ -1284,11 +1284,11 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       ...(recentHistory || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
       { role: 'user', content: message }
     ],
-    ...DETERMINISTIC_SAMPLING,
+    ...samplingFor(model),
     max_tokens: 300,
     reasoning: { exclude: true },
   };
-  console.log(`[ExtractIntent] Sampling: top_k=1 seed=42 provider=google-ai-studio`);
+  console.log(`[ExtractIntent] Sampling for ${model}: ${model.startsWith('anthropic/') ? 'temperature=0 top_p=1 (Claude)' : 'top_k=1 seed=42 google-ai-studio'}`);
 
   // STRICT OpenRouter: single deterministic attempt, no cascade fallbacks.
   // Fallbacks to other providers caused different users to get different classifier outputs.
