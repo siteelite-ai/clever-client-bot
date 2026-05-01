@@ -173,6 +173,22 @@ const DETERMINISTIC_SAMPLING = {
   provider: { order: ['google-ai-studio'], allow_fallbacks: true },
 } as const;
 
+// Anthropic не поддерживает top_k/seed и роутится через own provider.
+// OpenRouter выкинет лишние поля, но указание `provider.order=google-ai-studio`
+// для Claude приведёт к фолбэку (allow_fallbacks=true), что добавляет latency.
+// Для Claude/OpenAI — отдельный пресет без Gemini-only полей.
+const DETERMINISTIC_SAMPLING_CLAUDE = {
+  temperature: 0,
+  top_p: 1,
+} as const;
+
+function samplingFor(model: string): Record<string, unknown> {
+  if (model.startsWith('anthropic/') || model.startsWith('openai/')) {
+    return { ...DETERMINISTIC_SAMPLING_CLAUDE };
+  }
+  return { ...DETERMINISTIC_SAMPLING };
+}
+
 // SHA-256 hex hash for response signatures (used to detect non-determinism in logs).
 async function sha256Hex(input: string): Promise<string> {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
