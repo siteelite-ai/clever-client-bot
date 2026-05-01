@@ -173,6 +173,22 @@ const DETERMINISTIC_SAMPLING = {
   provider: { order: ['google-ai-studio'], allow_fallbacks: true },
 } as const;
 
+// Anthropic не поддерживает top_k/seed и роутится через own provider.
+// OpenRouter выкинет лишние поля, но указание `provider.order=google-ai-studio`
+// для Claude приведёт к фолбэку (allow_fallbacks=true), что добавляет latency.
+// Для Claude/OpenAI — отдельный пресет без Gemini-only полей.
+const DETERMINISTIC_SAMPLING_CLAUDE = {
+  temperature: 0,
+  top_p: 1,
+} as const;
+
+function samplingFor(model: string): Record<string, unknown> {
+  if (model.startsWith('anthropic/') || model.startsWith('openai/')) {
+    return { ...DETERMINISTIC_SAMPLING_CLAUDE };
+  }
+  return { ...DETERMINISTIC_SAMPLING };
+}
+
 // SHA-256 hex hash for response signatures (used to detect non-determinism in logs).
 async function sha256Hex(input: string): Promise<string> {
   const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(input));
@@ -604,9 +620,13 @@ function getAIConfig(settings: CachedSettings): { url: string; apiKeys: string[]
     throw new Error('OpenRouter API key не настроен. Добавьте ключ в Настройках.');
   }
 
-  // Ensure model is in OpenRouter format (must contain "/", e.g. "google/gemini-2.5-pro")
-  let model = settings.ai_model || 'google/gemini-2.5-pro';
+  // MODEL UPGRADE (2026-05-02): switched final response model from Gemini to Claude.
+  // Gemini галлюцинировал в коротких ветках (price/title/article shortcircuit) — выдумывал
+  // ссылки и товары, которых нет в переданном списке. Claude Sonnet 4.5 строго цитирует
+  // только переданные товары и не дописывает от себя. Стоимость ~2-3x, latency +2-4с.
+  let model = settings.ai_model || 'anthropic/claude-sonnet-4.5';
   if (!model.includes('/')) {
+    // Bare names like "gemini-2.5-flash" → assume Google. Claude/OpenAI всегда указываются с префиксом.
     model = `google/${model}`;
   }
 
@@ -1162,14 +1182,16 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
     return null;
   }
 
-  // FORCED UPGRADE: flash-lite is non-deterministic for matching tasks (per OpenRouter docs).
-  // Hardcoded to flash for classifier — ignores DB setting until determinism proven on flash.
-  const model = 'google/gemini-2.5-flash';
+  // MODEL UPGRADE (2026-05-02): switched Classifier from Gemini Flash to Claude Sonnet 4.5.
+  // Gemini Flash нестабильно определял price_intent (самый дешёвый/дорогой) и critical_modifiers,
+  // что приводило к выбору неправильной ветки (catalog vs price-shortcircuit) и к выдуманным
+  // ответам. Claude строже следует JSON-схеме классификатора.
+  const model = 'anthropic/claude-sonnet-4.5';
 
   const url = 'https://openrouter.ai/api/v1/chat/completions';
   const apiKeys = [settings.openrouter_api_key];
 
-  console.log(`[Classify] OpenRouter (strict), model=${model} (forced upgrade from flash-lite)`);
+  console.log(`[Classify] OpenRouter (strict), model=${model} (Claude — strict intent/price_intent)`);
 
   const classifyBody = {
     model: model,
@@ -1262,11 +1284,11 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       ...(recentHistory || []).map(m => ({ role: m.role as 'user' | 'assistant', content: m.content })),
       { role: 'user', content: message }
     ],
-    ...DETERMINISTIC_SAMPLING,
+    ...samplingFor(model),
     max_tokens: 300,
     reasoning: { exclude: true },
   };
-  console.log(`[ExtractIntent] Sampling: top_k=1 seed=42 provider=google-ai-studio`);
+  console.log(`[ExtractIntent] Sampling for ${model}: ${model.startsWith('anthropic/') ? 'temperature=0 top_p=1 (Claude)' : 'top_k=1 seed=42 google-ai-studio'}`);
 
   // STRICT OpenRouter: single deterministic attempt, no cascade fallbacks.
   // Fallbacks to other providers caused different users to get different classifier outputs.
@@ -4856,7 +4878,7 @@ serve(async (req) => {
         foundProducts = Array.from(articleProducts.values());
         articleShortCircuit = true;
         // Plan V5: для article-hit Pro избыточен — берём Flash.
-        responseModel = 'google/gemini-2.5-flash';
+        responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
         responseModelReason = 'article-shortcircuit';
         console.log(`[Chat] Article-first SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
       } else {
@@ -4876,7 +4898,7 @@ serve(async (req) => {
           foundProducts = Array.from(articleProducts.values());
           articleShortCircuit = true;
           // Plan V5: siteId-hit — тоже точное попадание, Flash хватает.
-          responseModel = 'google/gemini-2.5-flash';
+          responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
           responseModelReason = 'siteid-shortcircuit';
           console.log(`[Chat] SiteId-fallback SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
         } else {
@@ -4921,7 +4943,7 @@ serve(async (req) => {
             if (titleResults.length > 0) {
               foundProducts = titleResults.slice(0, 10);
               articleShortCircuit = true;
-              responseModel = 'google/gemini-2.5-flash';
+              responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
               responseModelReason = 'title-shortcircuit';
               console.log(`[Chat] Title-first FAST-PATH SUCCESS: ${foundProducts.length} products in ${tElapsed}ms for "${titleCandidate}", skipping slot/category pipeline`);
             } else {
@@ -5159,7 +5181,7 @@ serve(async (req) => {
               foundProducts = priceResult.products;
               articleShortCircuit = true;
               // Plan V5: ответ "самая дорогая X — это Y, цена Z" — простой формат, Flash справится.
-              responseModel = 'google/gemini-2.5-flash';
+              responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
               responseModelReason = 'price-shortcircuit';
               console.log(`[Chat] PriceIntent SUCCESS: ${foundProducts.length} products sorted by ${effectivePriceIntent} (total ${priceResult.total})`);
               
@@ -5172,7 +5194,7 @@ serve(async (req) => {
               priceIntentClarify = { total: priceResult.total!, category: priceResult.category! };
               articleShortCircuit = true;
               // Уточняющий вопрос — короткий, Flash хватает.
-              responseModel = 'google/gemini-2.5-flash';
+              responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
               responseModelReason = 'price-clarify';
               foundProducts = [];
               console.log(`[Chat] PriceIntent CLARIFY: ${priceResult.total} products in "${priceResult.category}", asking user to narrow down`);
@@ -6996,7 +7018,7 @@ ${productInstructions}`;
     
     console.log(`[Chat] Response model: ${responseModel} (reason: ${responseModelReason})`);
     console.log(`[Chat] Streaming with reasoning: excluded (model=${responseModel})`);
-    console.log(`[Chat] Sampling: top_k=1 seed=42 provider=google-ai-studio`);
+    console.log(`[Chat] Sampling for ${responseModel}: ${responseModel.startsWith('anthropic/') || responseModel.startsWith('openai/') ? 'temperature=0 top_p=1' : 'top_k=1 seed=42 google-ai-studio'}`);
 
     // ─────────────────────────────────────────────────────────────────────────
     // Plan V7 — Category Disambiguation SHORT-CIRCUIT
@@ -7064,7 +7086,7 @@ ${productInstructions}`;
       model: responseModel,
       messages: messagesForAI,
       stream: useStreaming,
-      ...DETERMINISTIC_SAMPLING,
+      ...samplingFor(responseModel),
       reasoning: { exclude: true },
       // 4096 — safe ceiling: avg response 800-1500 tokens, list of 5-7 products with descriptions ~2500-3000.
       // Without this, OpenRouter uses provider default (~1024-2048) and gemini-2.5-pro burns part of it on hidden reasoning,
