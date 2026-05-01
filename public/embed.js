@@ -102,15 +102,10 @@
     'Подбираю подходящие товары',
     'Сейчас посмотрю, что есть',
   ];
-  const THINKING_INFO = [
-    'Сейчас проверю информацию',
-    'Минутку, уточняю',
-    'Секунду, проверю детали',
-    'Сейчас найду ответ',
-  ];
+  // Возвращает фразу ТОЛЬКО для каталожных запросов; иначе null (показываем только typing-точки).
   function pickThinkingPhrase(msg) {
-    var pool = PRODUCT_KEYWORDS.test(msg) ? THINKING_CATALOG : THINKING_INFO;
-    return pool[Math.floor(Math.random() * pool.length)];
+    if (!PRODUCT_KEYWORDS.test(msg)) return null;
+    return THINKING_CATALOG[Math.floor(Math.random() * THINKING_CATALOG.length)];
   }
   // Save state to sessionStorage
   function saveState() {
