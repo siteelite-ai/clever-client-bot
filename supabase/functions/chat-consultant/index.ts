@@ -3569,7 +3569,9 @@ ${JSON.stringify(modifiers)}
   try {
     console.log(`[FilterLLM] Resolving ${modifiers.length} modifier(s) against ${optionIndex.size} option(s)`);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+    // Timeout 25s: Claude Sonnet 4.5 на схеме 100-150 ключей думает 8-15с (vs Gemini 2-3с).
+    // Точность критичнее скорости — лучше 12с правильного матчинга, чем 2с галлюцинации.
+    const timeout = setTimeout(() => controller.abort(), 25000);
 
     const response = await fetch(url, {
       method: 'POST',
