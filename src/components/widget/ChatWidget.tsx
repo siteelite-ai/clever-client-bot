@@ -355,7 +355,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         let updated = prev;
         if (!typing2Removed) {
           typing2Removed = true;
-          updated = prev.filter(m => !m.id.startsWith('typing2-'));
+          updated = prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-'));
           const id = mid('stream');
           streamMsgId = id;
           return [...updated, {
