@@ -49,16 +49,13 @@ const THINKING_CATALOG = [
   'Сейчас посмотрю, что есть',
 ];
 
-const THINKING_INFO = [
-  'Сейчас проверю информацию',
-  'Минутку, уточняю',
-  'Секунду, проверю детали',
-  'Сейчас найду ответ',
-];
-
-function pickThinkingPhrase(message: string): string {
-  const pool = PRODUCT_KEYWORDS.test(message) ? THINKING_CATALOG : THINKING_INFO;
-  return pool[Math.floor(Math.random() * pool.length)];
+/**
+ * Возвращает thinking-фразу ТОЛЬКО для каталожных запросов.
+ * Для приветствий, общих вопросов и болталки — null (показываем только typing-точки).
+ */
+function pickThinkingPhrase(message: string): string | null {
+  if (!PRODUCT_KEYWORDS.test(message)) return null;
+  return THINKING_CATALOG[Math.floor(Math.random() * THINKING_CATALOG.length)];
 }
 
 // Dialog slot types for persistent intent memory
