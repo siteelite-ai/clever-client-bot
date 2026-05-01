@@ -5393,9 +5393,9 @@ serve(async (req) => {
               setTimeout(() => rej(new Error('matcher_timeout_10s')), 10000)
             );
             const matcherWork = (async () => {
-              if (qfMatchesOverride && qfMatchesOverride.length > 0) {
-                return { matches: qfMatchesOverride };
-              }
+              // qfMatchesOverride intentionally unused (see line 5382-5384):
+              // QueryFirstV2-resolved path short-circuits earlier via articleShortCircuit,
+              // so this legacy block always runs the standard Category Resolver.
               const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
               if (catalog.length === 0) return { matches: [] };
               const matches = await matchCategoriesWithLLM(effectiveCategory, catalog, appSettings, historyContextForMatcher);
