@@ -3545,27 +3545,26 @@ ${JSON.stringify(modifiers)}
     console.log('[FilterLLM] OpenRouter key missing — skipping (deterministic empty)');
     return { resolved: {}, unresolved: [...modifiers] };
   }
-  // MODEL UPGRADE (probe 2026-05-01): gemini-2.5-flash возвращал filters={} даже когда
-  // нужный facet был в схеме (intent распознан, шаг MATCH пустой). gemini-3-flash-preview
-  // решает ту же задачу за ~2с без reasoning-токенов и без флагов. Probe-сводка:
-  //   2.5-flash + reasoning:exclude → ❌ MISS (0.9s, 76 tok)
-  //   2.5-flash + reasoning:effort=medium → ✅ MATCH (6.4s, 1075 tok)
-  //   3-flash-preview (default)            → ✅ MATCH (2.1s, 302 tok)
-  //   2.5-pro                              → ✅ MATCH (11.5s, 1234 tok)
-  // Флаг reasoning:exclude убран — на 3-flash-preview он не нужен (CoT встроен в обычный output).
-  const model = 'google/gemini-3-flash-preview';
+  // MODEL UPGRADE (2026-05-01 → 2026-05-02): switched FilterLLM from Gemini to Claude.
+  // Reason: Gemini (2.5-flash и 3-flash-preview) галлюцинировал значения, выбирая value
+  // которого нет в schema[key].values для конкретной категории (bootstrap агрегирует
+  // значения из всего pool, поэтому value валиден глобально, но не для подкатегории).
+  // Claude Sonnet 4.5 строже следует структурным ограничениям и проверяет ∈ enum.
+  // Эта стадия — единственная, где FilterLLM выбирает key=value из схемы фасетов;
+  // остальные стадии (classify, candidates, composer) остаются на Gemini.
+  const model = 'anthropic/claude-sonnet-4.5';
   const url = 'https://openrouter.ai/api/v1/chat/completions';
   const apiKeys = [settings.openrouter_api_key];
-  console.log(`[FilterLLM] OpenRouter (strict), model=${model} (upgraded from 2.5-flash — CoT capability)`);
+  console.log(`[FilterLLM] OpenRouter (strict), model=${model} (Claude — strict schema adherence)`);
 
   const reqBody = {
     model,
     messages: [{ role: 'user', content: systemPrompt }],
-    ...DETERMINISTIC_SAMPLING,
-    max_tokens: 1500,
+    temperature: 0,
+    max_tokens: 2000,
     response_format: { type: 'json_object' },
   };
-  console.log(`[FilterLLM] Sampling: top_k=1 seed=42 provider=google-ai-studio model=${model}`);
+  console.log(`[FilterLLM] Sampling: temperature=0 model=${model}`);
 
   try {
     console.log(`[FilterLLM] Resolving ${modifiers.length} modifier(s) against ${optionIndex.size} option(s)`);
