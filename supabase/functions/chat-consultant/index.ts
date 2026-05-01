@@ -5378,12 +5378,11 @@ serve(async (req) => {
             }
           }
 
-          // Legacy matcher path keeps running ONLY when QFv2 did not resolve.
-          // qfMatchesOverride is intentionally unused now — kept null so legacy code
-          // below sees no override and runs its standard Category Resolver flow.
-          let qfMatchesOverride: string[] | null = null;
+          // QueryFirstV2-resolved path short-circuits earlier via articleShortCircuit,
+          // so this legacy Category Resolver block runs only when QFv2 did NOT resolve.
+          // Previously a `qfMatchesOverride` variable existed here as a no-op placeholder;
+          // removed (was unreachable + caused TS narrowing issue inside async closure).
           if (qfV2Resolved) {
-            // Skip legacy block; the do-nothing branch below short-circuits via articleShortCircuit.
             console.log(`[QueryFirstV2] resolved=true → skipping legacy Category Resolver`);
           }
 
