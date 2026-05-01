@@ -7018,7 +7018,7 @@ ${productInstructions}`;
     
     console.log(`[Chat] Response model: ${responseModel} (reason: ${responseModelReason})`);
     console.log(`[Chat] Streaming with reasoning: excluded (model=${responseModel})`);
-    console.log(`[Chat] Sampling: top_k=1 seed=42 provider=google-ai-studio`);
+    console.log(`[Chat] Sampling for ${responseModel}: ${responseModel.startsWith('anthropic/') || responseModel.startsWith('openai/') ? 'temperature=0 top_p=1' : 'top_k=1 seed=42 google-ai-studio'}`);
 
     // ─────────────────────────────────────────────────────────────────────────
     // Plan V7 — Category Disambiguation SHORT-CIRCUIT
