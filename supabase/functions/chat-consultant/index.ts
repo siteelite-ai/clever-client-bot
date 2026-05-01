@@ -3545,12 +3545,18 @@ ${JSON.stringify(modifiers)}
     console.log('[FilterLLM] OpenRouter key missing — skipping (deterministic empty)');
     return { resolved: {}, unresolved: [...modifiers] };
   }
-  // FORCED UPGRADE: flash-lite is non-deterministic for filter resolution (per OpenRouter docs).
-  // Hardcoded to flash — ignores DB setting until determinism proven on flash.
-  const model = 'google/gemini-2.5-flash';
+  // MODEL UPGRADE (probe 2026-05-01): gemini-2.5-flash возвращал filters={} даже когда
+  // нужный facet был в схеме (intent распознан, шаг MATCH пустой). gemini-3-flash-preview
+  // решает ту же задачу за ~2с без reasoning-токенов и без флагов. Probe-сводка:
+  //   2.5-flash + reasoning:exclude → ❌ MISS (0.9s, 76 tok)
+  //   2.5-flash + reasoning:effort=medium → ✅ MATCH (6.4s, 1075 tok)
+  //   3-flash-preview (default)            → ✅ MATCH (2.1s, 302 tok)
+  //   2.5-pro                              → ✅ MATCH (11.5s, 1234 tok)
+  // Флаг reasoning:exclude убран — на 3-flash-preview он не нужен (CoT встроен в обычный output).
+  const model = 'google/gemini-3-flash-preview';
   const url = 'https://openrouter.ai/api/v1/chat/completions';
   const apiKeys = [settings.openrouter_api_key];
-  console.log(`[FilterLLM] OpenRouter (strict), model=${model} (forced upgrade from flash-lite)`);
+  console.log(`[FilterLLM] OpenRouter (strict), model=${model} (upgraded from 2.5-flash — CoT capability)`);
 
   const reqBody = {
     model,
@@ -3558,7 +3564,6 @@ ${JSON.stringify(modifiers)}
     ...DETERMINISTIC_SAMPLING,
     max_tokens: 1500,
     response_format: { type: 'json_object' },
-    reasoning: { exclude: true },
   };
   console.log(`[FilterLLM] Sampling: top_k=1 seed=42 provider=google-ai-studio model=${model}`);
 
