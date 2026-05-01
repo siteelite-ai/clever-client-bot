@@ -979,10 +979,10 @@
     })();
 
     // Step 2: After longer delay, show thinking phrase (runs in parallel with API call)
+    // Только для каталожных запросов. Иначе оставляем крутиться typing-точки.
     await new Promise(function(r) { setTimeout(r, 3000); });
 
-    // Only show thinking phrase if first token hasn't arrived yet
-    if (!firstTokenArrived) {
+    if (thinkingPhrase && !firstTokenArrived) {
       var typingEl1 = document.getElementById('volt-typing-indicator');
       if (typingEl1) typingEl1.remove();
 
