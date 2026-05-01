@@ -1166,14 +1166,16 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
     return null;
   }
 
-  // FORCED UPGRADE: flash-lite is non-deterministic for matching tasks (per OpenRouter docs).
-  // Hardcoded to flash for classifier — ignores DB setting until determinism proven on flash.
-  const model = 'google/gemini-2.5-flash';
+  // MODEL UPGRADE (2026-05-02): switched Classifier from Gemini Flash to Claude Sonnet 4.5.
+  // Gemini Flash нестабильно определял price_intent (самый дешёвый/дорогой) и critical_modifiers,
+  // что приводило к выбору неправильной ветки (catalog vs price-shortcircuit) и к выдуманным
+  // ответам. Claude строже следует JSON-схеме классификатора.
+  const model = 'anthropic/claude-sonnet-4.5';
 
   const url = 'https://openrouter.ai/api/v1/chat/completions';
   const apiKeys = [settings.openrouter_api_key];
 
-  console.log(`[Classify] OpenRouter (strict), model=${model} (forced upgrade from flash-lite)`);
+  console.log(`[Classify] OpenRouter (strict), model=${model} (Claude — strict intent/price_intent)`);
 
   const classifyBody = {
     model: model,
