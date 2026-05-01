@@ -7086,7 +7086,7 @@ ${productInstructions}`;
       model: responseModel,
       messages: messagesForAI,
       stream: useStreaming,
-      ...DETERMINISTIC_SAMPLING,
+      ...samplingFor(responseModel),
       reasoning: { exclude: true },
       // 4096 — safe ceiling: avg response 800-1500 tokens, list of 5-7 products with descriptions ~2500-3000.
       // Without this, OpenRouter uses provider default (~1024-2048) and gemini-2.5-pro burns part of it on hidden reasoning,
