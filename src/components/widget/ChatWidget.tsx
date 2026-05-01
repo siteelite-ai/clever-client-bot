@@ -458,26 +458,29 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     });
 
     // Step 2: Show thinking phrase after longer typing animation (runs in parallel with API)
+    // Только для каталожных запросов. Иначе оставляем крутиться typing-точки.
     await new Promise(r => setTimeout(r, 3000));
-    const thinkingId = mid('thinking');
-    setMessages(prev => {
-      const withoutTyping = prev.filter(m => m.id !== typingId);
-      // Only add thinking phrase + typing2 if stream hasn't already started delivering
-      if (!typing2Removed) {
-        return [...withoutTyping, {
-          id: thinkingId,
-          role: 'assistant' as const,
-          content: thinkingPhrase,
-          timestamp: new Date()
-        }, {
-          id: mid('typing2'),
-          role: 'assistant' as const,
-          content: '__TYPING__',
-          timestamp: new Date()
-        }];
-      }
-      return withoutTyping;
-    });
+    if (thinkingPhrase) {
+      const thinkingId = mid('thinking');
+      setMessages(prev => {
+        const withoutTyping = prev.filter(m => m.id !== typingId);
+        // Only add thinking phrase + typing2 if stream hasn't already started delivering
+        if (!typing2Removed) {
+          return [...withoutTyping, {
+            id: thinkingId,
+            role: 'assistant' as const,
+            content: thinkingPhrase,
+            timestamp: new Date()
+          }, {
+            id: mid('typing2'),
+            role: 'assistant' as const,
+            content: '__TYPING__',
+            timestamp: new Date()
+          }];
+        }
+        return withoutTyping;
+      });
+    }
 
     // Wait for stream to complete
     await streamPromise;
