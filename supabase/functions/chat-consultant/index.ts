@@ -3600,6 +3600,10 @@ ${JSON.stringify(modifiers)}
       console.log(`[FilterLLM] JSON parse failed: ${(e as Error).message}`);
       return { resolved: {}, unresolved: [...modifiers] };
     }
+    // [intent-reasoning] surface decompose/match/verify trail to logs (does not affect downstream)
+    if (Array.isArray(parsed?.intents)) console.log(`[FilterLLM][intents] ${JSON.stringify(parsed.intents)}`);
+    if (Array.isArray(parsed?.matches)) console.log(`[FilterLLM][matches] ${JSON.stringify(parsed.matches)}`);
+    if (Array.isArray(parsed?.verifications)) console.log(`[FilterLLM][verify] ${JSON.stringify(parsed.verifications)}`);
     const filters = parsed.filters || parsed;
 
     if (typeof filters !== 'object' || Array.isArray(filters)) {
