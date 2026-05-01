@@ -3599,9 +3599,22 @@ ${JSON.stringify(modifiers)}
       return { resolved: {}, unresolved: [...modifiers] };
     }
 
+    // Strip markdown code fences (Claude often wraps JSON in ```json ... ```)
+    const stripFences = (s: string): string => {
+      let t = s.trim();
+      const fence = t.match(/^```(?:json|JSON)?\s*\n?([\s\S]*?)\n?```\s*$/);
+      if (fence) t = fence[1].trim();
+      // Fallback: extract first {...} block if still not pure JSON
+      if (!t.startsWith('{')) {
+        const m = t.match(/\{[\s\S]*\}/);
+        if (m) t = m[0];
+      }
+      return t;
+    };
+
     let parsed: any;
     try {
-      parsed = JSON.parse(content);
+      parsed = JSON.parse(stripFences(content));
     } catch (e) {
       console.log(`[FilterLLM] JSON parse failed: ${(e as Error).message}`);
       return { resolved: {}, unresolved: [...modifiers] };
