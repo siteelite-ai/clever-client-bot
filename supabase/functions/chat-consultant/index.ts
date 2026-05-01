@@ -6412,9 +6412,12 @@ serve(async (req) => {
       };
     } else {
       // catalog/brands or no intent — full pipeline
-      // Хардкодим Flash для AI Candidates: задача класса "извлечь структурированные параметры из короткой фразы",
-      // Pro здесь избыточен и медленнее. Финальный ответ пользователю по-прежнему идёт на aiConfig.model.
-      const candidatesModel = 'google/gemini-2.5-flash';
+      // MODEL UPGRADE (probe 2026-05-01): gemini-2.5-flash галлюцинировал brand из произвольных
+      // слов («PROBEMARKER» → brand) и терял модификаторы («двухместная» → option_filters={}).
+      // Без CoT/reasoning tool-calling extraction нестабилен. gemini-3-flash-preview даёт
+      // нативный CoT без явных reasoning-флагов, +1-2с latency, кратно выше точность.
+      // Финальный ответ пользователю по-прежнему идёт на aiConfig.model.
+      const candidatesModel = 'google/gemini-3-flash-preview';
       extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
     }
     console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}, ShortCircuit: ${articleShortCircuit}`);
