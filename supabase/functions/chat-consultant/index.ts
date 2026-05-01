@@ -4860,7 +4860,7 @@ serve(async (req) => {
         foundProducts = Array.from(articleProducts.values());
         articleShortCircuit = true;
         // Plan V5: для article-hit Pro избыточен — берём Flash.
-        responseModel = 'google/gemini-2.5-flash';
+        responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
         responseModelReason = 'article-shortcircuit';
         console.log(`[Chat] Article-first SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
       } else {
@@ -4880,7 +4880,7 @@ serve(async (req) => {
           foundProducts = Array.from(articleProducts.values());
           articleShortCircuit = true;
           // Plan V5: siteId-hit — тоже точное попадание, Flash хватает.
-          responseModel = 'google/gemini-2.5-flash';
+          responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
           responseModelReason = 'siteid-shortcircuit';
           console.log(`[Chat] SiteId-fallback SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
         } else {
@@ -4925,7 +4925,7 @@ serve(async (req) => {
             if (titleResults.length > 0) {
               foundProducts = titleResults.slice(0, 10);
               articleShortCircuit = true;
-              responseModel = 'google/gemini-2.5-flash';
+              responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
               responseModelReason = 'title-shortcircuit';
               console.log(`[Chat] Title-first FAST-PATH SUCCESS: ${foundProducts.length} products in ${tElapsed}ms for "${titleCandidate}", skipping slot/category pipeline`);
             } else {
@@ -5163,7 +5163,7 @@ serve(async (req) => {
               foundProducts = priceResult.products;
               articleShortCircuit = true;
               // Plan V5: ответ "самая дорогая X — это Y, цена Z" — простой формат, Flash справится.
-              responseModel = 'google/gemini-2.5-flash';
+              responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
               responseModelReason = 'price-shortcircuit';
               console.log(`[Chat] PriceIntent SUCCESS: ${foundProducts.length} products sorted by ${effectivePriceIntent} (total ${priceResult.total})`);
               
@@ -5176,7 +5176,7 @@ serve(async (req) => {
               priceIntentClarify = { total: priceResult.total!, category: priceResult.category! };
               articleShortCircuit = true;
               // Уточняющий вопрос — короткий, Flash хватает.
-              responseModel = 'google/gemini-2.5-flash';
+              responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
               responseModelReason = 'price-clarify';
               foundProducts = [];
               console.log(`[Chat] PriceIntent CLARIFY: ${priceResult.total} products in "${priceResult.category}", asking user to narrow down`);
