@@ -5211,11 +5211,14 @@ serve(async (req) => {
                   console.log(`[Chat] PriceClarify bootstrap: pool=${pool.length} for "${priceQuery}" in ${Date.now() - poolT0}ms`);
                   const agg = new Map<string, { caption: string; counts: Map<string, number> }>();
                   for (const p of pool) {
-                    if (!Array.isArray(p.options)) continue;
-                    for (const o of p.options) {
+                    if (!Array.isArray((p as any).options)) continue;
+                    for (const o of (p as any).options) {
                       if (!o || typeof o.key !== 'string' || isExcludedOption(o.key)) continue;
-                      const cap = cleanOptionCaption(o.caption);
-                      const val = cleanOptionValue(o.value);
+                      // API возвращает caption_ru/value_ru (live shape), не плоские caption/value.
+                      const capRaw = (o.caption_ru ?? o.caption ?? '').toString();
+                      const valRaw = (o.value_ru ?? o.value ?? '').toString();
+                      const cap = cleanOptionCaption(capRaw);
+                      const val = cleanOptionValue(valRaw);
                       if (!cap || !val) continue;
                       if (!agg.has(o.key)) agg.set(o.key, { caption: cap, counts: new Map() });
                       const slot = agg.get(o.key)!;
