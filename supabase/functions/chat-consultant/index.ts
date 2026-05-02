@@ -5172,34 +5172,25 @@ serve(async (req) => {
         if (effectivePriceIntent && appSettings.volt220_api_token) {
           const priceQuery = effectiveCategory || classification?.product_name || '';
           if (priceQuery) {
-            // Сценарий B: фильтры из классификации (черная, двухместная и т.п.) идут в тот же запрос.
-            // Источники (по приоритету): candidates[0].option_filters → search_modifiers[].
-            // search_modifiers — массив строк типа ["черная","двухместная"]; каждый превращаем
-            // в pseudo-filter с тем же ключом — getAliasKeysFor резолвит alias по реальной API-схеме.
-            let priceOptionFilters: Record<string, string> | undefined =
-              classification?.candidates?.[0]?.option_filters || undefined;
-            if (!priceOptionFilters || Object.keys(priceOptionFilters).length === 0) {
-              const mods: string[] = Array.isArray(classification?.search_modifiers)
-                ? classification!.search_modifiers
-                : [];
-              if (mods.length > 0) {
-                priceOptionFilters = {};
-                for (const m of mods) {
-                  if (typeof m === 'string' && m.trim()) {
-                    priceOptionFilters[m.trim()] = m.trim();
-                  }
-                }
-              }
-            }
-            console.log(`[Chat] Price intent detected: ${effectivePriceIntent} for "${priceQuery}", option_filters=${JSON.stringify(priceOptionFilters || {})}`);
+            // Сценарий B: модификаторы из классификатора (черная, двухместная) подмешиваем в query.
+            // API ищет полнотекст → "розетка черная двухместная" вернёт только подходящие SKU,
+            // а top-N min_price=1 даст самые дешёвые ИМЕННО из этой подборки.
+            // Это убирает галлюцинацию URL'ов: LLM получает реальные товары, соответствующие
+            // запросу, и не вынужден выдумывать ссылки. Если 0 совпадений — handlePriceIntent
+            // сам пройдётся по synonymQueries и попадёт на priceQuery без модификаторов.
+            const mods: string[] = Array.isArray(classification?.search_modifiers)
+              ? classification!.search_modifiers.filter((m: unknown): m is string => typeof m === 'string' && m.trim().length > 0)
+              : [];
+            const enrichedQuery = mods.length > 0 ? `${priceQuery} ${mods.join(' ')}`.trim() : priceQuery;
+            console.log(`[Chat] Price intent detected: ${effectivePriceIntent} for "${priceQuery}", modifiers=[${mods.join(', ')}], enrichedQuery="${enrichedQuery}"`);
 
-
-            const synonymQueries = generatePriceSynonyms(priceQuery);
+            const synonymQueries = mods.length > 0
+              ? [enrichedQuery, ...generatePriceSynonyms(priceQuery)]
+              : generatePriceSynonyms(priceQuery);
             const priceResult = await handlePriceIntent(
               synonymQueries,
               effectivePriceIntent,
-              appSettings.volt220_api_token!,
-              priceOptionFilters
+              appSettings.volt220_api_token!
             );
 
             if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
