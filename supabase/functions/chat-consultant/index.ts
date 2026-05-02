@@ -5199,6 +5199,8 @@ serve(async (req) => {
               console.log(`[Chat] PriceIntent: no results for "${priceQuery}" (tried ${synonymQueries.length} variants), falling through WITH price intent preserved`);
               // CRITICAL: Do NOT reset effectivePriceIntent here — it will be used by fallback pipeline
             }
+          }
+        }
 
         // === TITLE-FIRST: handled by FAST-PATH above (right after Micro-LLM classify).
         // The legacy duplicate block was removed; if the fast-path returned 0,
