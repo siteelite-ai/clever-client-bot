@@ -5185,6 +5185,29 @@ serve(async (req) => {
               appSettings.volt220_api_token!
             );
 
+            // POST-FILTER: если есть модификаторы и priceResult вернулся через fallback (без модификаторов),
+            // отфильтровать товары по совпадению модификаторов в pagetitle. Без этого LLM получит
+            // 10 случайных розеток и СГЕНЕРИРУЕТ URL'ы под запрос «черная двухместная» (галлюцинация).
+            if (priceResult.action === 'answer' && priceResult.products && mods.length > 0) {
+              const modsLower = mods.map(m => m.toLowerCase().trim());
+              const filtered = priceResult.products.filter(p => {
+                const hay = ((p.pagetitle || '') + ' ' + JSON.stringify((p as any).options || [])).toLowerCase();
+                return modsLower.every(m => {
+                  // Корень слова (без последних 2 символов) — «черная»→«черн», «двухместная»→«двухместн»
+                  const root = m.length > 4 ? m.slice(0, -2) : m;
+                  return hay.includes(root);
+                });
+              });
+              console.log(`[Chat] PriceIntent post-filter: ${priceResult.products.length} → ${filtered.length} matching modifiers [${mods.join(', ')}]`);
+              if (filtered.length > 0) {
+                priceResult.products = filtered;
+              } else {
+                console.log(`[Chat] PriceIntent post-filter: ZERO match — degrade to not_found to avoid URL hallucination`);
+                priceResult.action = 'not_found';
+                priceResult.products = undefined;
+              }
+            }
+
             if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
               foundProducts = priceResult.products;
               articleShortCircuit = true;
