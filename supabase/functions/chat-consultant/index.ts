@@ -2411,24 +2411,31 @@ function resolveSlotRefinement(
   
   if (!pendingKey || !pendingSlot) return null;
   
-  // Check if user message is a refinement (short, no explicit new price intent)
+  // Check if user message is a refinement (short reply continuing the pending slot)
   const isShort = userMessage.length < 80;
   const hasNewPriceIntent = classificationResult?.price_intent != null 
     && (classificationResult.price_intent as string) !== 'none';
+  const classifiedCategory = (classificationResult?.product_category || '').trim().toLowerCase();
+  const baseCategoryLower = pendingSlot.base_category.trim().toLowerCase();
   
-  // If classifier found a new price_intent with a different category, it's a new request
-  if (hasNewPriceIntent && classificationResult?.product_category && 
-      classificationResult.product_category !== pendingSlot.base_category) {
+  // If classifier found a new price_intent with a DIFFERENT category, it's a new request → drop slot path
+  if (hasNewPriceIntent && classifiedCategory && classifiedCategory !== baseCategoryLower) {
     return null;
   }
   
-  // If message is short and no new price intent → treat as refinement
-  if (isShort && !hasNewPriceIntent) {
-    // Use LLM classifier's extracted category/product_name as the clean refinement
-    // This lets the LLM strip conversational filler ("давай", "ладно", etc.) naturally
-    const refinement = classificationResult?.product_category 
-      || classificationResult?.product_name 
-      || userMessage.trim();
+  // Treat as refinement if:
+  //   (a) short message AND no new price intent (e.g. "встраиваемая"), OR
+  //   (b) short message AND classifier echoed the SAME base category (LLM lost the modifier
+  //       and just repeated "розетка" — but the user's raw word IS the refinement).
+  const sameCategoryEcho = hasNewPriceIntent && classifiedCategory === baseCategoryLower;
+  if (isShort && (!hasNewPriceIntent || sameCategoryEcho)) {
+    // When classifier echoed the base, prefer the raw user message — it carries the refinement.
+    // Otherwise prefer LLM-cleaned category/product_name (strips filler like "давай", "ладно").
+    const refinement = sameCategoryEcho
+      ? userMessage.trim()
+      : (classificationResult?.product_category 
+        || classificationResult?.product_name 
+        || userMessage.trim());
     const combinedQuery = `${refinement} ${pendingSlot.base_category}`.trim();
     
     const updatedSlots = { ...slots };
@@ -2438,7 +2445,7 @@ function resolveSlotRefinement(
       turns_since_touched: 0,
     };
     
-    console.log(`[Slots] Resolved refinement: "${refinement}" + base "${pendingSlot.base_category}" → "${combinedQuery}", dir=${pendingSlot.price_dir}`);
+    console.log(`[Slots] Resolved refinement: "${refinement}" + base "${pendingSlot.base_category}" → "${combinedQuery}", dir=${pendingSlot.price_dir} (sameCategoryEcho=${sameCategoryEcho})`);
     
     return {
       slotKey: pendingKey,
