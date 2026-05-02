@@ -2491,13 +2491,13 @@ function ageSlots(slots: DialogSlots): DialogSlots {
 async function handlePriceIntent(
   queries: string[],
   priceIntent: 'most_expensive' | 'cheapest',
-  apiToken: string,
-  optionFilters?: Record<string, string>
+  apiToken: string
 ): Promise<PriceIntentResult> {
   const overallStart = Date.now();
   const PER_PAGE = 10;
   // No threshold: server sort + min_price=1 даёт верный top-N даже на 10 000 товаров.
-  // Сценарий B (фасеты + price): прокидываем optionFilters в тот же запрос.
+  // Сценарий B (фасеты + price): модификаторы подмешаны в `queries[0]` на уровне call-site,
+  // synonymQueries[1..N] = чистые фолбэки без модификаторов.
 
   const primaryQuery = queries[0];
 
@@ -2508,14 +2508,6 @@ async function handlePriceIntent(
     p.append('min_price', '1');
     p.append('per_page', String(perPage));
     p.append('page', String(page));
-    if (optionFilters) {
-      for (const [key, value] of Object.entries(optionFilters)) {
-        const aliasKeys = getAliasKeysFor(key);
-        for (const aliasKey of aliasKeys) {
-          p.append(`options[${aliasKey}][]`, value);
-        }
-      }
-    }
     return p;
   };
   
