@@ -2491,14 +2491,16 @@ function ageSlots(slots: DialogSlots): DialogSlots {
 async function handlePriceIntent(
   queries: string[],
   priceIntent: 'most_expensive' | 'cheapest',
-  apiToken: string
+  apiToken: string,
+  optionFilters?: Record<string, string>
 ): Promise<PriceIntentResult> {
   const overallStart = Date.now();
   const PER_PAGE = 10;
-  const MAX_TOTAL_FOR_DIRECT_ANSWER = 1000; // server-side sort работает на любом size, но > 1000 пагинация может зависнуть
-  
+  // No threshold: server sort + min_price=1 даёт верный top-N даже на 10 000 товаров.
+  // Сценарий B (фасеты + price): прокидываем optionFilters в тот же запрос.
+
   const primaryQuery = queries[0];
-  
+
   /** Build params with min_price=1 to trigger server sort + price=0 filter */
   const buildParams = (q: string, perPage: number, page: number): URLSearchParams => {
     const p = new URLSearchParams();
@@ -2506,6 +2508,14 @@ async function handlePriceIntent(
     p.append('min_price', '1');
     p.append('per_page', String(perPage));
     p.append('page', String(page));
+    if (optionFilters) {
+      for (const [key, value] of Object.entries(optionFilters)) {
+        const aliasKeys = getAliasKeysFor(key);
+        for (const aliasKey of aliasKeys) {
+          p.append(`options[${aliasKey}][]`, value);
+        }
+      }
+    }
     return p;
   };
   
