@@ -5184,13 +5184,32 @@ serve(async (req) => {
                 slotsUpdated = true;
               }
             } else if (priceResult.action === 'clarify') {
-              priceIntentClarify = { total: priceResult.total!, category: priceResult.category! };
+              // === FACET-DRIVEN CLARIFY (anti-hallucination) ===
+              // Загружаем РЕАЛЬНЫЕ фасеты из /categories/options и передаём их LLM
+              // как единственный allowed-set для уточнения. Без этого Claude генерирует
+              // несуществующие подкатегории/бренды → выдуманные товары и URL.
+              let clarifyFacets: Array<{ caption: string; values: string[] }> = [];
+              try {
+                const facetsT0 = Date.now();
+                const facetsResult = await getCategoryOptionsSchema(priceResult.category!, appSettings.volt220_api_token!);
+                // Топ-5 фасетов с наибольшим числом значений (но >= 2 — иначе не «уточняет»)
+                const ranked = Array.from(facetsResult.schema.entries())
+                  .map(([key, v]) => ({ key, caption: v.caption.split('//')[0].trim(), values: Array.from(v.values).map(s => s.split('//')[0].trim()).filter(Boolean) }))
+                  .filter(f => f.values.length >= 2 && f.values.length <= 30)
+                  .sort((a, b) => b.values.length - a.values.length)
+                  .slice(0, 5);
+                clarifyFacets = ranked.map(f => ({ caption: f.caption, values: f.values.slice(0, 8) }));
+                console.log(`[Chat] PriceClarify facets loaded for "${priceResult.category}": ${clarifyFacets.length} facets in ${Date.now() - facetsT0}ms (source=${facetsResult.source}, conf=${facetsResult.confidence})`);
+              } catch (e) {
+                console.log(`[Chat] PriceClarify facets load FAILED for "${priceResult.category}": ${(e as Error).message} → falling back to text-only clarify`);
+              }
+              priceIntentClarify = { total: priceResult.total!, category: priceResult.category!, facets: clarifyFacets };
               articleShortCircuit = true;
               // Уточняющий вопрос — короткий, Flash хватает.
               responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
               responseModelReason = 'price-clarify';
               foundProducts = [];
-              console.log(`[Chat] PriceIntent CLARIFY: ${priceResult.total} products in "${priceResult.category}", asking user to narrow down`);
+              console.log(`[Chat] PriceIntent CLARIFY: ${priceResult.total} products in "${priceResult.category}", asking user to narrow down (facets=${clarifyFacets.length})`);
               
               // Create a new pending slot for this clarification
               if (!slotResolution) {
