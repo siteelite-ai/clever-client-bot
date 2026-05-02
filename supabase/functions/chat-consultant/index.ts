@@ -1947,7 +1947,7 @@ async function getUnionCategoryOptionsSchema(
 
 
 interface PriceIntentResult {
-  action: 'answer' | 'clarify' | 'not_found';
+  action: 'answer' | 'not_found';
   products?: Product[];
   total?: number;
   category?: string;
