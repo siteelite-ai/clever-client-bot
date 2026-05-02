@@ -4898,7 +4898,11 @@ serve(async (req) => {
 
     // === TITLE-FIRST SHORT-CIRCUIT via Micro-LLM classifier ===
     // AI determines if message contains a product name and/or price intent
-    let priceIntentClarify: { total: number; category: string } | null = null;
+    let priceIntentClarify: {
+      total: number;
+      category: string;
+      facets: Array<{ caption: string; values: string[] }>;
+    } | null = null;
     let effectivePriceIntent: 'most_expensive' | 'cheapest' | undefined = undefined;
     let effectiveCategory = '';
     let classification: any = null;
@@ -5180,13 +5184,71 @@ serve(async (req) => {
                 slotsUpdated = true;
               }
             } else if (priceResult.action === 'clarify') {
-              priceIntentClarify = { total: priceResult.total!, category: priceResult.category! };
+              // === FACET-DRIVEN CLARIFY (anti-hallucination) ===
+              // Загружаем РЕАЛЬНЫЕ фасеты из /categories/options и передаём их LLM
+              // как единственный allowed-set для уточнения. Без этого Claude генерирует
+              // несуществующие подкатегории/бренды → выдуманные товары и URL.
+              let clarifyFacets: Array<{ caption: string; values: string[] }> = [];
+              try {
+                const facetsT0 = Date.now();
+                const facetsResult = await getCategoryOptionsSchema(priceResult.category!, appSettings.volt220_api_token!);
+                let rankedFromSchema = Array.from(facetsResult.schema.entries())
+                  .map(([key, v]) => ({ key, caption: v.caption.split('//')[0].trim(), values: Array.from(v.values).map(s => s.split('//')[0].trim()).filter(Boolean) }))
+                  .filter(f => f.values.length >= 2 && f.values.length <= 30)
+                  .sort((a, b) => b.values.length - a.values.length)
+                  .slice(0, 5);
+
+                // FALLBACK: /categories/options не нашёл категорию (pagetitle не совпал —
+                // частая ситуация когда юзер пишет «розетка», а в каталоге «Розетки силовые»).
+                // Self-bootstrap: берём 100 товаров по query и агрегируем Product.options[].
+                if (rankedFromSchema.length === 0) {
+                  const poolT0 = Date.now();
+                  const pool = await searchProductsByCandidate(
+                    { query: priceQuery, brand: null, category: null, min_price: 1, max_price: null },
+                    appSettings.volt220_api_token!,
+                    100
+                  );
+                  console.log(`[Chat] PriceClarify bootstrap: pool=${pool.length} for "${priceQuery}" in ${Date.now() - poolT0}ms`);
+                  const agg = new Map<string, { caption: string; counts: Map<string, number> }>();
+                  for (const p of pool) {
+                    if (!Array.isArray((p as any).options)) continue;
+                    for (const o of (p as any).options) {
+                      if (!o || typeof o.key !== 'string' || isExcludedOption(o.key)) continue;
+                      // API возвращает caption_ru/value_ru (live shape), не плоские caption/value.
+                      const capRaw = (o.caption_ru ?? o.caption ?? '').toString();
+                      const valRaw = (o.value_ru ?? o.value ?? '').toString();
+                      const cap = cleanOptionCaption(capRaw);
+                      const val = cleanOptionValue(valRaw);
+                      if (!cap || !val) continue;
+                      if (!agg.has(o.key)) agg.set(o.key, { caption: cap, counts: new Map() });
+                      const slot = agg.get(o.key)!;
+                      slot.counts.set(val, (slot.counts.get(val) || 0) + 1);
+                    }
+                  }
+                  rankedFromSchema = Array.from(agg.entries())
+                    .map(([key, v]) => ({
+                      key,
+                      caption: v.caption,
+                      values: Array.from(v.counts.entries()).sort((a, b) => b[1] - a[1]).map(([val]) => val),
+                    }))
+                    .filter(f => f.values.length >= 2 && f.values.length <= 30)
+                    .sort((a, b) => b.values.length - a.values.length)
+                    .slice(0, 5);
+                  console.log(`[Chat] PriceClarify bootstrap aggregated: ${rankedFromSchema.length} facets`);
+                }
+
+                clarifyFacets = rankedFromSchema.map(f => ({ caption: f.caption, values: f.values.slice(0, 8) }));
+                console.log(`[Chat] PriceClarify facets loaded for "${priceResult.category}": ${clarifyFacets.length} facets in ${Date.now() - facetsT0}ms (source=${facetsResult.source}, conf=${facetsResult.confidence})`);
+              } catch (e) {
+                console.log(`[Chat] PriceClarify facets load FAILED for "${priceResult.category}": ${(e as Error).message} → falling back to text-only clarify`);
+              }
+              priceIntentClarify = { total: priceResult.total!, category: priceResult.category!, facets: clarifyFacets };
               articleShortCircuit = true;
               // Уточняющий вопрос — короткий, Flash хватает.
               responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
               responseModelReason = 'price-clarify';
               foundProducts = [];
-              console.log(`[Chat] PriceIntent CLARIFY: ${priceResult.total} products in "${priceResult.category}", asking user to narrow down`);
+              console.log(`[Chat] PriceIntent CLARIFY: ${priceResult.total} products in "${priceResult.category}", asking user to narrow down (facets=${clarifyFacets.length})`);
               
               // Create a new pending slot for this clarification
               if (!slotResolution) {
@@ -6674,18 +6736,33 @@ ${productContext}
    НЕ ВЫДУМЫВАЙ cross-sell если не знаешь категорию! В этом случае просто спроси: «Что ещё подобрать для вашего проекта?»
 3. Тон: профессиональный, как опытный консультант. БЕЗ восклицательных знаков, без «отличный выбор!», без давления.`;
     } else if (priceIntentClarify) {
-      // Price intent with too many products — ask user to narrow down
+      // Price intent with too many products — ask user to narrow down USING REAL FACETS FROM API.
+      // Anti-hallucination: фасеты приходят из /categories/options, LLM ОБЯЗАН использовать
+      // только их. Без этого блока модель выдумывает подкатегории/бренды → фейковые товары и URL.
+      const facetsBlock = priceIntentClarify.facets.length > 0
+        ? priceIntentClarify.facets
+            .map(f => `   • **${f.caption}**: ${f.values.join(', ')}`)
+            .join('\n')
+        : '   (фасеты для этой категории недоступны — попроси клиента описать тип/назначение своими словами)';
       productInstructions = `
-🔍 ЦЕНОВОЙ ЗАПРОС — НУЖНО УТОЧНЕНИЕ
+🔍 ЦЕНОВОЙ ЗАПРОС — НУЖНО УТОЧНЕНИЕ ЧЕРЕЗ ФАСЕТЫ КАТАЛОГА
 
-Клиент ищет самый ${priceIntentClarify.category ? `дорогой/дешёвый товар в категории "${priceIntentClarify.category}"` : 'дорогой/дешёвый товар'}.
-В этой категории найдено **${priceIntentClarify.total} товаров** — это слишком много, чтобы точно определить крайнюю цену.
+Клиент ищет крайнюю цену в категории "${priceIntentClarify.category}".
+В этой категории найдено **${priceIntentClarify.total} товаров** — нужно сузить через РЕАЛЬНЫЕ фильтры каталога.
 
-ТВОЙ ОТВЕТ:
-1. Скажи клиенту, что в категории "${priceIntentClarify.category}" найдено ${priceIntentClarify.total} товаров
-2. Попроси УТОЧНИТЬ тип или подкатегорию, чтобы сузить поиск. Предложи 3-4 варианта подкатегорий, если знаешь (например, для фонарей: налобный, аккумуляторный, LED и т.д.)
-3. Объясни, что после уточнения ты сможешь точно найти самый дорогой/дешёвый вариант
-4. Тон: профессиональный, дружелюбный, без давления`;
+📋 РЕАЛЬНЫЕ ФИЛЬТРЫ ИЗ API КАТАЛОГА (используй ТОЛЬКО эти значения):
+${facetsBlock}
+
+🚫 АБСОЛЮТНЫЙ ЗАПРЕТ:
+- НЕ перечисляй конкретные товары, артикулы, бренды (если их нет в фильтрах выше)
+- НЕ давай markdown-ссылки [...](https://...) — товаров в этом ответе нет
+- НЕ выдумывай подкатегории, типы, серии, которых нет в списке фильтров выше
+- НЕ предлагай «налобный/аккумуляторный/LED» из общих знаний — только то, что в фильтрах
+
+✅ ТВОЙ ОТВЕТ (2-4 коротких предложения, БЕЗ ссылок и товаров):
+1. Скажи: «В категории "${priceIntentClarify.category}" найдено ${priceIntentClarify.total} товаров — давайте сузим поиск.»
+2. Перечисли 1-2 фильтра из списка выше с их значениями и спроси, какой подходит. Например: «Какой тип монтажа вам нужен — скрытый или накладной?» или «Какой бренд предпочитаете: IEK, Schneider, Legrand?»
+3. Тон: профессиональный, без давления, без восклицательных знаков`;
     } else if (articleShortCircuit && productContext) {
       // Title-first or price-intent answer: товар найден.
       // displayedCount  — сколько карточек реально ушло в LLM-контекст (≤ DISPLAY_LIMIT).
