@@ -2574,12 +2574,10 @@ async function handlePriceIntent(
       if (total === 0) return { action: 'not_found' };
     }
     
-    // Step 2: Refuse only on truly absurd sizes (1000+) — server sort handles 999 just fine
-    if (total > MAX_TOTAL_FOR_DIRECT_ANSWER) {
-      console.log(`[PriceIntent] Too many products (${total} > ${MAX_TOTAL_FOR_DIRECT_ANSWER}), requesting clarification`);
-      return { action: 'clarify', total, category: primaryQuery };
-    }
-    
+    // No threshold gate — server sort handles any total. Top-N показываем всегда,
+    // composer добавит «найдено N товаров» как уточняющий хвост.
+
+
     // Step 3: Fetch the right page based on direction
     const fetchStart = Date.now();
     let targetPage: number;
