@@ -2491,13 +2491,13 @@ function ageSlots(slots: DialogSlots): DialogSlots {
 async function handlePriceIntent(
   queries: string[],
   priceIntent: 'most_expensive' | 'cheapest',
-  apiToken: string,
-  optionFilters?: Record<string, string>
+  apiToken: string
 ): Promise<PriceIntentResult> {
   const overallStart = Date.now();
   const PER_PAGE = 10;
   // No threshold: server sort + min_price=1 даёт верный top-N даже на 10 000 товаров.
-  // Сценарий B (фасеты + price): прокидываем optionFilters в тот же запрос.
+  // Сценарий B (фасеты + price): модификаторы подмешаны в `queries[0]` на уровне call-site,
+  // synonymQueries[1..N] = чистые фолбэки без модификаторов.
 
   const primaryQuery = queries[0];
 
@@ -2508,14 +2508,6 @@ async function handlePriceIntent(
     p.append('min_price', '1');
     p.append('per_page', String(perPage));
     p.append('page', String(page));
-    if (optionFilters) {
-      for (const [key, value] of Object.entries(optionFilters)) {
-        const aliasKeys = getAliasKeysFor(key);
-        for (const aliasKey of aliasKeys) {
-          p.append(`options[${aliasKey}][]`, value);
-        }
-      }
-    }
     return p;
   };
   
@@ -5172,17 +5164,49 @@ serve(async (req) => {
         if (effectivePriceIntent && appSettings.volt220_api_token) {
           const priceQuery = effectiveCategory || classification?.product_name || '';
           if (priceQuery) {
-            // Сценарий B: фильтры из классификации (черная, двухместная и т.п.) идут в тот же запрос.
-            const priceOptionFilters = classification?.candidates?.[0]?.option_filters || undefined;
-            console.log(`[Chat] Price intent detected: ${effectivePriceIntent} for "${priceQuery}", option_filters=${JSON.stringify(priceOptionFilters || {})}`);
+            // Сценарий B: модификаторы из классификатора (черная, двухместная) подмешиваем в query.
+            // API ищет полнотекст → "розетка черная двухместная" вернёт только подходящие SKU,
+            // а top-N min_price=1 даст самые дешёвые ИМЕННО из этой подборки.
+            // Это убирает галлюцинацию URL'ов: LLM получает реальные товары, соответствующие
+            // запросу, и не вынужден выдумывать ссылки. Если 0 совпадений — handlePriceIntent
+            // сам пройдётся по synonymQueries и попадёт на priceQuery без модификаторов.
+            const mods: string[] = Array.isArray(classification?.search_modifiers)
+              ? classification!.search_modifiers.filter((m: unknown): m is string => typeof m === 'string' && m.trim().length > 0)
+              : [];
+            const enrichedQuery = mods.length > 0 ? `${priceQuery} ${mods.join(' ')}`.trim() : priceQuery;
+            console.log(`[Chat] Price intent detected: ${effectivePriceIntent} for "${priceQuery}", modifiers=[${mods.join(', ')}], enrichedQuery="${enrichedQuery}"`);
 
-            const synonymQueries = generatePriceSynonyms(priceQuery);
+            const synonymQueries = mods.length > 0
+              ? [enrichedQuery, ...generatePriceSynonyms(priceQuery)]
+              : generatePriceSynonyms(priceQuery);
             const priceResult = await handlePriceIntent(
               synonymQueries,
               effectivePriceIntent,
-              appSettings.volt220_api_token!,
-              priceOptionFilters
+              appSettings.volt220_api_token!
             );
+
+            // POST-FILTER: если есть модификаторы и priceResult вернулся через fallback (без модификаторов),
+            // отфильтровать товары по совпадению модификаторов в pagetitle. Без этого LLM получит
+            // 10 случайных розеток и СГЕНЕРИРУЕТ URL'ы под запрос «черная двухместная» (галлюцинация).
+            if (priceResult.action === 'answer' && priceResult.products && mods.length > 0) {
+              const modsLower = mods.map(m => m.toLowerCase().trim());
+              const filtered = priceResult.products.filter(p => {
+                const hay = ((p.pagetitle || '') + ' ' + JSON.stringify((p as any).options || [])).toLowerCase();
+                return modsLower.every(m => {
+                  // Корень слова (без последних 2 символов) — «черная»→«черн», «двухместная»→«двухместн»
+                  const root = m.length > 4 ? m.slice(0, -2) : m;
+                  return hay.includes(root);
+                });
+              });
+              console.log(`[Chat] PriceIntent post-filter: ${priceResult.products.length} → ${filtered.length} matching modifiers [${mods.join(', ')}]`);
+              if (filtered.length > 0) {
+                priceResult.products = filtered;
+              } else {
+                console.log(`[Chat] PriceIntent post-filter: ZERO match — degrade to not_found to avoid URL hallucination`);
+                priceResult.action = 'not_found';
+                priceResult.products = undefined;
+              }
+            }
 
             if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
               foundProducts = priceResult.products;
