@@ -4898,7 +4898,11 @@ serve(async (req) => {
 
     // === TITLE-FIRST SHORT-CIRCUIT via Micro-LLM classifier ===
     // AI determines if message contains a product name and/or price intent
-    let priceIntentClarify: { total: number; category: string } | null = null;
+    let priceIntentClarify: {
+      total: number;
+      category: string;
+      facets: Array<{ caption: string; values: string[] }>;
+    } | null = null;
     let effectivePriceIntent: 'most_expensive' | 'cheapest' | undefined = undefined;
     let effectiveCategory = '';
     let classification: any = null;
