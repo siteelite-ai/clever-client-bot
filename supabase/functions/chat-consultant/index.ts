@@ -2579,12 +2579,12 @@ async function handlePriceIntent(
       targetPage = Math.max(1, Math.ceil(total / PER_PAGE)); // last page = most expensive
     }
     
-    const pageResult = await fetchPage(buildParams(activeQuery, PER_PAGE, targetPage), 15000);
+    let pageResult = await fetchPage(buildParams(activeQuery, PER_PAGE, targetPage), 15000);
     if (!pageResult || pageResult.results.length === 0) {
       console.log(`[PriceIntent] Empty page ${targetPage} for total=${total}, falling back to page=1`);
       const fallback = await fetchPage(buildParams(activeQuery, PER_PAGE, 1), 15000);
       if (!fallback || fallback.results.length === 0) return { action: 'not_found' };
-      pageResult.results = fallback.results;
+      pageResult = fallback;
     }
     
     let products = pageResult.results.filter(p => p.price > 0); // belt-and-suspenders
