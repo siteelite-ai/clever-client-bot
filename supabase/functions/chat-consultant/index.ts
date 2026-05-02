@@ -5173,8 +5173,26 @@ serve(async (req) => {
           const priceQuery = effectiveCategory || classification?.product_name || '';
           if (priceQuery) {
             // Сценарий B: фильтры из классификации (черная, двухместная и т.п.) идут в тот же запрос.
-            const priceOptionFilters = classification?.candidates?.[0]?.option_filters || undefined;
+            // Источники (по приоритету): candidates[0].option_filters → search_modifiers[].
+            // search_modifiers — массив строк типа ["черная","двухместная"]; каждый превращаем
+            // в pseudo-filter с тем же ключом — getAliasKeysFor резолвит alias по реальной API-схеме.
+            let priceOptionFilters: Record<string, string> | undefined =
+              classification?.candidates?.[0]?.option_filters || undefined;
+            if (!priceOptionFilters || Object.keys(priceOptionFilters).length === 0) {
+              const mods: string[] = Array.isArray(classification?.search_modifiers)
+                ? classification!.search_modifiers
+                : [];
+              if (mods.length > 0) {
+                priceOptionFilters = {};
+                for (const m of mods) {
+                  if (typeof m === 'string' && m.trim()) {
+                    priceOptionFilters[m.trim()] = m.trim();
+                  }
+                }
+              }
+            }
             console.log(`[Chat] Price intent detected: ${effectivePriceIntent} for "${priceQuery}", option_filters=${JSON.stringify(priceOptionFilters || {})}`);
+
 
             const synonymQueries = generatePriceSynonyms(priceQuery);
             const priceResult = await handlePriceIntent(
