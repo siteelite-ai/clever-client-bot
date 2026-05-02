@@ -1947,7 +1947,7 @@ async function getUnionCategoryOptionsSchema(
 
 
 interface PriceIntentResult {
-  action: 'answer' | 'clarify' | 'not_found';
+  action: 'answer' | 'not_found';
   products?: Product[];
   total?: number;
   category?: string;
@@ -2491,14 +2491,16 @@ function ageSlots(slots: DialogSlots): DialogSlots {
 async function handlePriceIntent(
   queries: string[],
   priceIntent: 'most_expensive' | 'cheapest',
-  apiToken: string
+  apiToken: string,
+  optionFilters?: Record<string, string>
 ): Promise<PriceIntentResult> {
   const overallStart = Date.now();
   const PER_PAGE = 10;
-  const MAX_TOTAL_FOR_DIRECT_ANSWER = 1000; // server-side sort работает на любом size, но > 1000 пагинация может зависнуть
-  
+  // No threshold: server sort + min_price=1 даёт верный top-N даже на 10 000 товаров.
+  // Сценарий B (фасеты + price): прокидываем optionFilters в тот же запрос.
+
   const primaryQuery = queries[0];
-  
+
   /** Build params with min_price=1 to trigger server sort + price=0 filter */
   const buildParams = (q: string, perPage: number, page: number): URLSearchParams => {
     const p = new URLSearchParams();
@@ -2506,6 +2508,14 @@ async function handlePriceIntent(
     p.append('min_price', '1');
     p.append('per_page', String(perPage));
     p.append('page', String(page));
+    if (optionFilters) {
+      for (const [key, value] of Object.entries(optionFilters)) {
+        const aliasKeys = getAliasKeysFor(key);
+        for (const aliasKey of aliasKeys) {
+          p.append(`options[${aliasKey}][]`, value);
+        }
+      }
+    }
     return p;
   };
   
@@ -2564,12 +2574,10 @@ async function handlePriceIntent(
       if (total === 0) return { action: 'not_found' };
     }
     
-    // Step 2: Refuse only on truly absurd sizes (1000+) — server sort handles 999 just fine
-    if (total > MAX_TOTAL_FOR_DIRECT_ANSWER) {
-      console.log(`[PriceIntent] Too many products (${total} > ${MAX_TOTAL_FOR_DIRECT_ANSWER}), requesting clarification`);
-      return { action: 'clarify', total, category: primaryQuery };
-    }
-    
+    // No threshold gate — server sort handles any total. Top-N показываем всегда,
+    // composer добавит «найдено N товаров» как уточняющий хвост.
+
+
     // Step 3: Fetch the right page based on direction
     const fetchStart = Date.now();
     let targetPage: number;
@@ -4898,11 +4906,7 @@ serve(async (req) => {
 
     // === TITLE-FIRST SHORT-CIRCUIT via Micro-LLM classifier ===
     // AI determines if message contains a product name and/or price intent
-    let priceIntentClarify: {
-      total: number;
-      category: string;
-      facets: Array<{ caption: string; values: string[] }>;
-    } | null = null;
+
     let effectivePriceIntent: 'most_expensive' | 'cheapest' | undefined = undefined;
     let effectiveCategory = '';
     let classification: any = null;
@@ -5162,117 +5166,42 @@ serve(async (req) => {
         }
         
         // === PRICE INTENT HANDLING ===
+        // Сценарий A: «дешёвая розетка» → query=розетка + min_price=1 → top-N.
+        // Сценарий B: «самая дешёвая чёрная двухместная розетка» → query + option_filters + min_price=1 → top-N.
+        // В обоих случаях один запрос к API, никаких clarify-вопросов до показа товаров.
         if (effectivePriceIntent && appSettings.volt220_api_token) {
           const priceQuery = effectiveCategory || classification?.product_name || '';
           if (priceQuery) {
-            console.log(`[Chat] Price intent detected: ${effectivePriceIntent} for "${priceQuery}"`);
-            
+            // Сценарий B: фильтры из классификации (черная, двухместная и т.п.) идут в тот же запрос.
+            const priceOptionFilters = classification?.candidates?.[0]?.option_filters || undefined;
+            console.log(`[Chat] Price intent detected: ${effectivePriceIntent} for "${priceQuery}", option_filters=${JSON.stringify(priceOptionFilters || {})}`);
+
             const synonymQueries = generatePriceSynonyms(priceQuery);
-            const priceResult = await handlePriceIntent(synonymQueries, effectivePriceIntent, appSettings.volt220_api_token!);
-            
+            const priceResult = await handlePriceIntent(
+              synonymQueries,
+              effectivePriceIntent,
+              appSettings.volt220_api_token!,
+              priceOptionFilters
+            );
+
             if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
               foundProducts = priceResult.products;
               articleShortCircuit = true;
-              // Plan V5: ответ "самая дорогая X — это Y, цена Z" — простой формат, Flash справится.
-              responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
+              responseModel = 'anthropic/claude-sonnet-4.5';
               responseModelReason = 'price-shortcircuit';
               console.log(`[Chat] PriceIntent SUCCESS: ${foundProducts.length} products sorted by ${effectivePriceIntent} (total ${priceResult.total})`);
-              
-              // Mark slot as done
+
               if (slotResolution) {
                 dialogSlots[slotResolution.slotKey] = { ...dialogSlots[slotResolution.slotKey], status: 'done' };
                 slotsUpdated = true;
-              }
-            } else if (priceResult.action === 'clarify') {
-              // === FACET-DRIVEN CLARIFY (anti-hallucination) ===
-              // Загружаем РЕАЛЬНЫЕ фасеты из /categories/options и передаём их LLM
-              // как единственный allowed-set для уточнения. Без этого Claude генерирует
-              // несуществующие подкатегории/бренды → выдуманные товары и URL.
-              let clarifyFacets: Array<{ caption: string; values: string[] }> = [];
-              try {
-                const facetsT0 = Date.now();
-                const facetsResult = await getCategoryOptionsSchema(priceResult.category!, appSettings.volt220_api_token!);
-                let rankedFromSchema = Array.from(facetsResult.schema.entries())
-                  .map(([key, v]) => ({ key, caption: v.caption.split('//')[0].trim(), values: Array.from(v.values).map(s => s.split('//')[0].trim()).filter(Boolean) }))
-                  .filter(f => f.values.length >= 2 && f.values.length <= 30)
-                  .sort((a, b) => b.values.length - a.values.length)
-                  .slice(0, 5);
-
-                // FALLBACK: /categories/options не нашёл категорию (pagetitle не совпал —
-                // частая ситуация когда юзер пишет «розетка», а в каталоге «Розетки силовые»).
-                // Self-bootstrap: берём 100 товаров по query и агрегируем Product.options[].
-                if (rankedFromSchema.length === 0) {
-                  const poolT0 = Date.now();
-                  const pool = await searchProductsByCandidate(
-                    { query: priceQuery, brand: null, category: null, min_price: 1, max_price: null },
-                    appSettings.volt220_api_token!,
-                    100
-                  );
-                  console.log(`[Chat] PriceClarify bootstrap: pool=${pool.length} for "${priceQuery}" in ${Date.now() - poolT0}ms`);
-                  const agg = new Map<string, { caption: string; counts: Map<string, number> }>();
-                  for (const p of pool) {
-                    if (!Array.isArray((p as any).options)) continue;
-                    for (const o of (p as any).options) {
-                      if (!o || typeof o.key !== 'string' || isExcludedOption(o.key)) continue;
-                      // API возвращает caption_ru/value_ru (live shape), не плоские caption/value.
-                      const capRaw = (o.caption_ru ?? o.caption ?? '').toString();
-                      const valRaw = (o.value_ru ?? o.value ?? '').toString();
-                      const cap = cleanOptionCaption(capRaw);
-                      const val = cleanOptionValue(valRaw);
-                      if (!cap || !val) continue;
-                      if (!agg.has(o.key)) agg.set(o.key, { caption: cap, counts: new Map() });
-                      const slot = agg.get(o.key)!;
-                      slot.counts.set(val, (slot.counts.get(val) || 0) + 1);
-                    }
-                  }
-                  rankedFromSchema = Array.from(agg.entries())
-                    .map(([key, v]) => ({
-                      key,
-                      caption: v.caption,
-                      values: Array.from(v.counts.entries()).sort((a, b) => b[1] - a[1]).map(([val]) => val),
-                    }))
-                    .filter(f => f.values.length >= 2 && f.values.length <= 30)
-                    .sort((a, b) => b.values.length - a.values.length)
-                    .slice(0, 5);
-                  console.log(`[Chat] PriceClarify bootstrap aggregated: ${rankedFromSchema.length} facets`);
-                }
-
-                clarifyFacets = rankedFromSchema.map(f => ({ caption: f.caption, values: f.values.slice(0, 8) }));
-                console.log(`[Chat] PriceClarify facets loaded for "${priceResult.category}": ${clarifyFacets.length} facets in ${Date.now() - facetsT0}ms (source=${facetsResult.source}, conf=${facetsResult.confidence})`);
-              } catch (e) {
-                console.log(`[Chat] PriceClarify facets load FAILED for "${priceResult.category}": ${(e as Error).message} → falling back to text-only clarify`);
-              }
-              priceIntentClarify = { total: priceResult.total!, category: priceResult.category!, facets: clarifyFacets };
-              articleShortCircuit = true;
-              // Уточняющий вопрос — короткий, Flash хватает.
-              responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
-              responseModelReason = 'price-clarify';
-              foundProducts = [];
-              console.log(`[Chat] PriceIntent CLARIFY: ${priceResult.total} products in "${priceResult.category}", asking user to narrow down (facets=${clarifyFacets.length})`);
-              
-              // Create a new pending slot for this clarification
-              if (!slotResolution) {
-                const slotKey = `slot_${Date.now()}`;
-                dialogSlots[slotKey] = {
-                  intent: 'price_extreme',
-                  price_dir: effectivePriceIntent,
-                  base_category: priceResult.category!,
-                  status: 'pending',
-                  created_turn: messages.length,
-                  turns_since_touched: 0,
-                };
-                slotsUpdated = true;
-                console.log(`[Chat] Created new price slot: "${slotKey}" for "${priceResult.category}" (${effectivePriceIntent})`);
               }
             } else {
               console.log(`[Chat] PriceIntent: no results for "${priceQuery}" (tried ${synonymQueries.length} variants), falling through WITH price intent preserved`);
               // CRITICAL: Do NOT reset effectivePriceIntent here — it will be used by fallback pipeline
             }
           }
-        } else if (effectivePriceIntent && !effectiveCategory) {
-          console.log(`[Chat] Price intent detected but no category, skipping`);
         }
-        
+
         // === TITLE-FIRST: handled by FAST-PATH above (right after Micro-LLM classify).
         // The legacy duplicate block was removed; if the fast-path returned 0,
         // we don't repeat the identical ?query= call here.
@@ -6735,34 +6664,6 @@ ${productContext}
    - Светильник → «К нему подойдут лампы с цоколем E27. Показать варианты?»
    НЕ ВЫДУМЫВАЙ cross-sell если не знаешь категорию! В этом случае просто спроси: «Что ещё подобрать для вашего проекта?»
 3. Тон: профессиональный, как опытный консультант. БЕЗ восклицательных знаков, без «отличный выбор!», без давления.`;
-    } else if (priceIntentClarify) {
-      // Price intent with too many products — ask user to narrow down USING REAL FACETS FROM API.
-      // Anti-hallucination: фасеты приходят из /categories/options, LLM ОБЯЗАН использовать
-      // только их. Без этого блока модель выдумывает подкатегории/бренды → фейковые товары и URL.
-      const facetsBlock = priceIntentClarify.facets.length > 0
-        ? priceIntentClarify.facets
-            .map(f => `   • **${f.caption}**: ${f.values.join(', ')}`)
-            .join('\n')
-        : '   (фасеты для этой категории недоступны — попроси клиента описать тип/назначение своими словами)';
-      productInstructions = `
-🔍 ЦЕНОВОЙ ЗАПРОС — НУЖНО УТОЧНЕНИЕ ЧЕРЕЗ ФАСЕТЫ КАТАЛОГА
-
-Клиент ищет крайнюю цену в категории "${priceIntentClarify.category}".
-В этой категории найдено **${priceIntentClarify.total} товаров** — нужно сузить через РЕАЛЬНЫЕ фильтры каталога.
-
-📋 РЕАЛЬНЫЕ ФИЛЬТРЫ ИЗ API КАТАЛОГА (используй ТОЛЬКО эти значения):
-${facetsBlock}
-
-🚫 АБСОЛЮТНЫЙ ЗАПРЕТ:
-- НЕ перечисляй конкретные товары, артикулы, бренды (если их нет в фильтрах выше)
-- НЕ давай markdown-ссылки [...](https://...) — товаров в этом ответе нет
-- НЕ выдумывай подкатегории, типы, серии, которых нет в списке фильтров выше
-- НЕ предлагай «налобный/аккумуляторный/LED» из общих знаний — только то, что в фильтрах
-
-✅ ТВОЙ ОТВЕТ (2-4 коротких предложения, БЕЗ ссылок и товаров):
-1. Скажи: «В категории "${priceIntentClarify.category}" найдено ${priceIntentClarify.total} товаров — давайте сузим поиск.»
-2. Перечисли 1-2 фильтра из списка выше с их значениями и спроси, какой подходит. Например: «Какой тип монтажа вам нужен — скрытый или накладной?» или «Какой бренд предпочитаете: IEK, Schneider, Legrand?»
-3. Тон: профессиональный, без давления, без восклицательных знаков`;
     } else if (articleShortCircuit && productContext) {
       // Title-first or price-intent answer: товар найден.
       // displayedCount  — сколько карточек реально ушло в LLM-контекст (≤ DISPLAY_LIMIT).
