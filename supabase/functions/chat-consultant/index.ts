@@ -5192,13 +5192,49 @@ serve(async (req) => {
               try {
                 const facetsT0 = Date.now();
                 const facetsResult = await getCategoryOptionsSchema(priceResult.category!, appSettings.volt220_api_token!);
-                // Топ-5 фасетов с наибольшим числом значений (но >= 2 — иначе не «уточняет»)
-                const ranked = Array.from(facetsResult.schema.entries())
+                let rankedFromSchema = Array.from(facetsResult.schema.entries())
                   .map(([key, v]) => ({ key, caption: v.caption.split('//')[0].trim(), values: Array.from(v.values).map(s => s.split('//')[0].trim()).filter(Boolean) }))
                   .filter(f => f.values.length >= 2 && f.values.length <= 30)
                   .sort((a, b) => b.values.length - a.values.length)
                   .slice(0, 5);
-                clarifyFacets = ranked.map(f => ({ caption: f.caption, values: f.values.slice(0, 8) }));
+
+                // FALLBACK: /categories/options не нашёл категорию (pagetitle не совпал —
+                // частая ситуация когда юзер пишет «розетка», а в каталоге «Розетки силовые»).
+                // Self-bootstrap: берём 100 товаров по query и агрегируем Product.options[].
+                if (rankedFromSchema.length === 0) {
+                  const poolT0 = Date.now();
+                  const pool = await searchProductsByCandidate(
+                    { query: priceQuery, brand: null, category: null, min_price: 1, max_price: null },
+                    appSettings.volt220_api_token!,
+                    100
+                  );
+                  console.log(`[Chat] PriceClarify bootstrap: pool=${pool.length} for "${priceQuery}" in ${Date.now() - poolT0}ms`);
+                  const agg = new Map<string, { caption: string; counts: Map<string, number> }>();
+                  for (const p of pool) {
+                    if (!Array.isArray(p.options)) continue;
+                    for (const o of p.options) {
+                      if (!o || typeof o.key !== 'string' || isExcludedOption(o.key)) continue;
+                      const cap = cleanOptionCaption(o.caption);
+                      const val = cleanOptionValue(o.value);
+                      if (!cap || !val) continue;
+                      if (!agg.has(o.key)) agg.set(o.key, { caption: cap, counts: new Map() });
+                      const slot = agg.get(o.key)!;
+                      slot.counts.set(val, (slot.counts.get(val) || 0) + 1);
+                    }
+                  }
+                  rankedFromSchema = Array.from(agg.entries())
+                    .map(([key, v]) => ({
+                      key,
+                      caption: v.caption,
+                      values: Array.from(v.counts.entries()).sort((a, b) => b[1] - a[1]).map(([val]) => val),
+                    }))
+                    .filter(f => f.values.length >= 2 && f.values.length <= 30)
+                    .sort((a, b) => b.values.length - a.values.length)
+                    .slice(0, 5);
+                  console.log(`[Chat] PriceClarify bootstrap aggregated: ${rankedFromSchema.length} facets`);
+                }
+
+                clarifyFacets = rankedFromSchema.map(f => ({ caption: f.caption, values: f.values.slice(0, 8) }));
                 console.log(`[Chat] PriceClarify facets loaded for "${priceResult.category}": ${clarifyFacets.length} facets in ${Date.now() - facetsT0}ms (source=${facetsResult.source}, conf=${facetsResult.confidence})`);
               } catch (e) {
                 console.log(`[Chat] PriceClarify facets load FAILED for "${priceResult.category}": ${(e as Error).message} → falling back to text-only clarify`);
