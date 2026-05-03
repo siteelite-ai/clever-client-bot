@@ -5342,7 +5342,8 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
             const priceResult = await handlePriceIntent(
               synonymQueries,
               effectivePriceIntent,
-              appSettings.volt220_api_token!
+              appSettings.volt220_api_token!,
+              [priceQuery, enrichedQuery, ...mods]
             );
 
             // POST-FILTER: если есть модификаторы и priceResult вернулся через fallback (без модификаторов),
