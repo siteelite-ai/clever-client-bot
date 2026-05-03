@@ -5302,75 +5302,7 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
         }
         
         // === PRICE INTENT HANDLING ===
-        // Сценарий A: «дешёвая розетка» → query=розетка + min_price=1 → top-N.
-        // Сценарий B: «самая дешёвая чёрная двухместная розетка» → query + option_filters + min_price=1 → top-N.
-        // В обоих случаях один запрос к API, никаких clarify-вопросов до показа товаров.
-        if (effectivePriceIntent && appSettings.volt220_api_token) {
-          const priceQuery = effectiveCategory || classification?.product_name || '';
-          if (priceQuery) {
-            // Сценарий B: модификаторы из классификатора (черная, двухместная) подмешиваем в query.
-            // API ищет полнотекст → "розетка черная двухместная" вернёт только подходящие SKU,
-            // а top-N min_price=1 даст самые дешёвые ИМЕННО из этой подборки.
-            // Это убирает галлюцинацию URL'ов: LLM получает реальные товары, соответствующие
-            // запросу, и не вынужден выдумывать ссылки. Если 0 совпадений — handlePriceIntent
-            // сам пройдётся по synonymQueries и попадёт на priceQuery без модификаторов.
-            const mods: string[] = Array.isArray(classification?.search_modifiers)
-              ? classification!.search_modifiers.filter((m: unknown): m is string => typeof m === 'string' && m.trim().length > 0)
-              : [];
-            const enrichedQuery = mods.length > 0 ? `${priceQuery} ${mods.join(' ')}`.trim() : priceQuery;
-            console.log(`[Chat] Price intent detected: ${effectivePriceIntent} for "${priceQuery}", modifiers=[${mods.join(', ')}], enrichedQuery="${enrichedQuery}"`);
-
-            const synonymQueries = mods.length > 0
-              ? [enrichedQuery, ...generatePriceSynonyms(priceQuery)]
-              : generatePriceSynonyms(priceQuery);
-            const priceResult = await handlePriceIntent(
-              synonymQueries,
-              effectivePriceIntent,
-              appSettings.volt220_api_token!,
-              [priceQuery, enrichedQuery, ...mods]
-            );
-
-            // POST-FILTER: если есть модификаторы и priceResult вернулся через fallback (без модификаторов),
-            // отфильтровать товары по совпадению модификаторов в pagetitle. Без этого LLM получит
-            // 10 случайных розеток и СГЕНЕРИРУЕТ URL'ы под запрос «черная двухместная» (галлюцинация).
-            if (priceResult.action === 'answer' && priceResult.products && mods.length > 0) {
-              const modsLower = mods.map(m => m.toLowerCase().trim());
-              const filtered = priceResult.products.filter(p => {
-                const hay = ((p.pagetitle || '') + ' ' + JSON.stringify((p as any).options || [])).toLowerCase();
-                return modsLower.every(m => {
-                  // Корень слова (без последних 2 символов) — «черная»→«черн», «двухместная»→«двухместн»
-                  const root = m.length > 4 ? m.slice(0, -2) : m;
-                  return hay.includes(root);
-                });
-              });
-              console.log(`[Chat] PriceIntent post-filter: ${priceResult.products.length} → ${filtered.length} matching modifiers [${mods.join(', ')}]`);
-              if (filtered.length > 0) {
-                priceResult.products = filtered;
-              } else {
-                console.log(`[Chat] PriceIntent post-filter: ZERO match — degrade to not_found to avoid URL hallucination`);
-                priceResult.action = 'not_found';
-                priceResult.products = undefined;
-              }
-            }
-
-            if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
-              foundProducts = priceResult.products;
-              articleShortCircuit = true;
-              responseModel = 'anthropic/claude-sonnet-4.5';
-              responseModelReason = 'price-shortcircuit';
-              console.log(`[Chat] PriceIntent SUCCESS: ${foundProducts.length} products sorted by ${effectivePriceIntent} (total ${priceResult.total})`);
-
-              if (slotResolution) {
-                dialogSlots[slotResolution.slotKey] = { ...dialogSlots[slotResolution.slotKey], status: 'done' };
-                slotsUpdated = true;
-              }
-            } else {
-              console.log(`[Chat] PriceIntent: no results for "${priceQuery}" (tried ${synonymQueries.length} variants), falling through WITH price intent preserved`);
-              // CRITICAL: Do NOT reset effectivePriceIntent here — it will be used by fallback pipeline
-            }
-          }
-        }
-
+        // A) Resume price_facet_clarify slot if user reply matches stored facet value
         // === TITLE-FIRST: handled by FAST-PATH above (right after Micro-LLM classify).
         // The legacy duplicate block was removed; if the fast-path returned 0,
         // we don't repeat the identical ?query= call here.
