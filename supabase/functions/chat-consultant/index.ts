@@ -2491,10 +2491,12 @@ function ageSlots(slots: DialogSlots): DialogSlots {
 async function handlePriceIntent(
   queries: string[],
   priceIntent: 'most_expensive' | 'cheapest',
-  apiToken: string
+  apiToken: string,
+  relevanceQueries: string[] = queries
 ): Promise<PriceIntentResult> {
   const overallStart = Date.now();
-  const PER_PAGE = 10;
+  const RESULT_WINDOW = 100;
+  const MAX_SCAN_PAGES = 5;
   // No threshold: server sort + min_price=1 даёт верный top-N даже на 10 000 товаров.
   // Сценарий B (фасеты + price): модификаторы подмешаны в `queries[0]` на уровне call-site,
   // synonymQueries[1..N] = чистые фолбэки без модификаторов.
@@ -2570,36 +2572,58 @@ async function handlePriceIntent(
     // composer добавит «найдено N товаров» как уточняющий хвост.
 
 
-    // Step 3: Fetch the right page based on direction
+    // Step 3: Fetch sorted pages and keep only products relevant to requested category.
+    // Catalog API `?query=розетка&min_price=1` may return ultra-cheap cable accessories,
+    // so a single page is not safe. We scan a few 100-item windows in sorted order.
     const fetchStart = Date.now();
-    let targetPage: number;
-    if (priceIntent === 'cheapest') {
-      targetPage = 1; // server sort ASC → first page = cheapest
-    } else {
-      targetPage = Math.max(1, Math.ceil(total / PER_PAGE)); // last page = most expensive
+    const maxPage = Math.max(1, Math.ceil(total / RESULT_WINDOW));
+    const startPage = priceIntent === 'cheapest' ? 1 : maxPage;
+    const pagesToScan: number[] = [];
+    for (let offset = 0; offset < MAX_SCAN_PAGES; offset++) {
+      const page = priceIntent === 'cheapest' ? startPage + offset : startPage - offset;
+      if (page < 1 || page > maxPage) break;
+      pagesToScan.push(page);
     }
-    
-    let pageResult = await fetchPage(buildParams(activeQuery, PER_PAGE, targetPage), 15000);
-    if (!pageResult || pageResult.results.length === 0) {
-      console.log(`[PriceIntent] Empty page ${targetPage} for total=${total}, falling back to page=1`);
-      const fallback = await fetchPage(buildParams(activeQuery, PER_PAGE, 1), 15000);
-      if (!fallback || fallback.results.length === 0) return { action: 'not_found' };
-      pageResult = fallback;
+
+    const relevanceStems = buildPriceIntentRelevanceStems(relevanceQueries);
+    const collected: Product[] = [];
+    const seenIds = new Set<number>();
+
+    for (const page of pagesToScan) {
+      const pageResult = await fetchPage(buildParams(activeQuery, RESULT_WINDOW, page), 15000);
+      if (!pageResult || pageResult.results.length === 0) {
+        console.log(`[PriceIntent] Empty page ${page}/${maxPage} for query="${activeQuery}"`);
+        continue;
+      }
+
+      let pageProducts = pageResult.results.filter(p => p.price > 0);
+      if (priceIntent === 'most_expensive') {
+        pageProducts = pageProducts.reverse();
+      }
+
+      const relevantProducts = filterPriceIntentProductsByRelevance(pageProducts, relevanceQueries);
+      console.log(`[PriceIntent] Relevance page=${page}/${maxPage}: raw=${pageProducts.length}, relevant=${relevantProducts.length}, stems=${relevanceStems.join(',')}`);
+
+      for (const product of relevantProducts) {
+        if (seenIds.has(product.id)) continue;
+        seenIds.add(product.id);
+        collected.push(product);
+        if (collected.length >= 10) break;
+      }
+
+      if (collected.length >= 10) break;
     }
-    
-    let products = pageResult.results.filter(p => p.price > 0); // belt-and-suspenders
-    
-    // For most_expensive on last page: results are still ASC within the page,
-    // we want highest first → reverse the slice
-    if (priceIntent === 'most_expensive') {
-      products = products.reverse();
+
+    if (collected.length === 0) {
+      console.log(`[PriceIntent] No relevant products after scanning ${pagesToScan.length} page(s) for query="${activeQuery}"`);
+      return { action: 'not_found' };
     }
-    
+
     const fetchElapsed = Date.now() - fetchStart;
     const totalElapsed = Date.now() - overallStart;
-    console.log(`[PriceIntent] Server-sorted ${products.length} products (page=${targetPage}/${Math.ceil(total / PER_PAGE)}, ${priceIntent}), fetch ${fetchElapsed}ms, total ${totalElapsed}ms`);
+    console.log(`[PriceIntent] Server-sorted ${collected.length} relevant products (pages=${pagesToScan.join(',')}, ${priceIntent}), fetch ${fetchElapsed}ms, total ${totalElapsed}ms`);
     
-    return { action: 'answer', products: products.slice(0, 10), total };
+    return { action: 'answer', products: collected.slice(0, 10), total };
   } catch (error) {
     console.error(`[PriceIntent] Error:`, error);
     
@@ -2607,7 +2631,7 @@ async function handlePriceIntent(
     if (error instanceof DOMException && error.name === 'AbortError' && queries.length > 0) {
       console.log(`[PriceIntent] Timeout, retry with simplified query: "${queries[0]}"`);
       try {
-        const retry = await fetchPage(buildParams(queries[0], PER_PAGE, 1), 15000);
+        const retry = await fetchPage(buildParams(queries[0], RESULT_WINDOW, 1), 15000);
         if (retry && retry.results.length > 0) {
           let products = retry.results.filter(p => p.price > 0);
           if (priceIntent === 'most_expensive') {
@@ -2617,7 +2641,12 @@ async function handlePriceIntent(
           } else {
             console.log(`[PriceIntent] Retry SUCCESS: ${products.length} cheapest products`);
           }
-          return { action: 'answer', products: products.slice(0, 10), total: retry.total };
+          const relevantProducts = filterPriceIntentProductsByRelevance(products, relevanceQueries);
+          if (relevantProducts.length === 0) {
+            console.log(`[PriceIntent] Retry rejected: 0 relevant products for query="${queries[0]}"`);
+            return { action: 'not_found' };
+          }
+          return { action: 'answer', products: relevantProducts.slice(0, 10), total: retry.total };
         }
       } catch (retryErr) {
         console.error(`[PriceIntent] Retry also failed:`, retryErr);
