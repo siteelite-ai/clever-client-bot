@@ -4784,7 +4784,7 @@ function persistSlotsAsync(sessionId: string, slots: DialogSlots): void {
   })();
 }
 
-serve(async (req) => {
+export async function handleChatConsultant(req: Request): Promise<Response> {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
   }
@@ -7158,6 +7158,51 @@ ${productInstructions}`;
     }
 
 
+    if (isDeterministicShortCircuitReason(responseModelReason) && foundProducts.length > 0) {
+      const content = buildDeterministicShortCircuitContent({
+        products: foundProducts,
+        reason: responseModelReason,
+        userMessage,
+        effectivePriceIntent,
+      });
+      console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${responseModelReason} products=${foundProducts.length} contentLen=${content.length}`);
+
+      if (!useStreaming) {
+        const responseBody: { content: string; slot_update?: DialogSlots } = { content };
+        if (slotsUpdated) responseBody.slot_update = dialogSlots;
+        persistSlotsAsync(conversationId, dialogSlots);
+        return new Response(JSON.stringify(responseBody), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          const contentDelta = `data: ${JSON.stringify({
+            choices: [{ delta: { content }, index: 0 }],
+          })}\n\n`;
+          controller.enqueue(encoder.encode(contentDelta));
+          if (slotsUpdated) {
+            const slotEvent = `data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`;
+            controller.enqueue(encoder.encode(slotEvent));
+          }
+          persistSlotsAsync(conversationId, dialogSlots);
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      });
+
+      return new Response(stream, {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
+    }
+
     const response = await callAIWithKeyFallback(aiConfig.url, aiConfig.apiKeys, {
       model: responseModel,
       messages: messagesForAI,
@@ -7471,4 +7516,6 @@ ${productInstructions}`;
     );
   }
   }); // end _reqContext.run
-});
+}
+
+serve(handleChatConsultant);
