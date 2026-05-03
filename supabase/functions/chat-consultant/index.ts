@@ -5301,17 +5301,6 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
           }
         }
         
-        // === PRICE INTENT HANDLING ===
-        // A) Resume price_facet_clarify slot if user reply matches stored facet value.
-        // B) Mods present -> straight handlePriceIntent with mods in ?query=.
-        // C) Bootstrap facets from /products?query=<>&per_page=100 + ask one question.
-        let pendingClarifyFacet: BootstrapFacet | null = null;
-        let pendingClarifyIntent: 'most_expensive' | 'cheapest' | null = null;
-        if (effectivePriceIntent && appSettings.volt220_api_token) {
-          const priceQuery = effectiveCategory || classification?.product_name || '';
-          if (priceQuery) {
-            const mods: string[] = Array.isArray(classification?.search_modifiers)
-              ? classification!.search_modifiers.
         // === TITLE-FIRST: handled by FAST-PATH above (right after Micro-LLM classify).
         // The legacy duplicate block was removed; if the fast-path returned 0,
         // we don't repeat the identical ?query= call here.
