@@ -4358,7 +4358,7 @@ function formatProductsForAI(products: Product[], includeExtended: boolean = tru
   return lines.join('\n\n');
 }
 
-function formatProductCardDeterministic(product: Product): string {
+export function formatProductCardDeterministic(product: Product): string {
   const safeName = (typeof product?.pagetitle === 'string' ? product.pagetitle : 'Товар')
     .replace(/\(/g, '\\(')
     .replace(/\)/g, '\\)');
@@ -4392,7 +4392,7 @@ function formatProductCardDeterministic(product: Product): string {
   return lines.filter(Boolean).join('\n');
 }
 
-function buildDeterministicShortCircuitContent(params: {
+export function buildDeterministicShortCircuitContent(params: {
   products: Product[];
   reason: string;
   userMessage: string;
@@ -4432,7 +4432,7 @@ function buildDeterministicShortCircuitContent(params: {
   return `${intro}\n\n${cards}\n\n${followUp}`.trim();
 }
 
-function isDeterministicShortCircuitReason(reason: string): boolean {
+export function isDeterministicShortCircuitReason(reason: string): boolean {
   return ['price-shortcircuit', 'article-shortcircuit', 'siteid-shortcircuit', 'title-shortcircuit'].includes(reason);
 }
 
@@ -7518,4 +7518,6 @@ ${productInstructions}`;
   }); // end _reqContext.run
 }
 
-serve(handleChatConsultant);
+if (import.meta.main) {
+  serve(handleChatConsultant);
+}
