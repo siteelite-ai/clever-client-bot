@@ -2160,7 +2160,7 @@ function detectPendingPriceIntent(
 // ============================================================
 
 interface DialogSlot {
-  intent: 'price_extreme' | 'product_search' | 'category_disambiguation';
+  intent: 'price_extreme' | 'product_search' | 'category_disambiguation' | 'price_facet_clarify';
   price_dir?: 'most_expensive' | 'cheapest';
   base_category: string;
   refinement?: string;
@@ -2176,6 +2176,9 @@ interface DialogSlot {
   pending_modifiers?: string;  // saved modifiers from original query: "черные двухместные"
   pending_filters?: string;    // JSON: {"cvet":"чёрный"} — pre-resolved from original query
   original_query?: string;     // user's original message before disambiguation
+  // price_facet_clarify state (V1 bootstrap-facets clarify)
+  // JSON: {"query":"розетка","facet":{"key":"tip","caption_ru":"Тип","values":[{"value_ru":"Бытовая","count":5},...]},"min_price":null,"max_price":null}
+  price_facet_state?: string;
   // replacement metadata
   isReplacement?: boolean;
   originalName?: string;
@@ -2200,7 +2203,7 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
     const s = val as Record<string, unknown>;
     
     // Validate intent
-    if (s.intent !== 'price_extreme' && s.intent !== 'product_search' && s.intent !== 'category_disambiguation') continue;
+    if (s.intent !== 'price_extreme' && s.intent !== 'product_search' && s.intent !== 'category_disambiguation' && s.intent !== 'price_facet_clarify') continue;
     // Validate status
     if (s.status !== 'pending' && s.status !== 'done') continue;
     // Validate base_category
@@ -2213,7 +2216,7 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
     };
 
     slots[key.substring(0, 20)] = {
-      intent: s.intent as 'price_extreme' | 'product_search' | 'category_disambiguation',
+      intent: s.intent as DialogSlot['intent'],
       price_dir: (s.price_dir === 'most_expensive' || s.price_dir === 'cheapest') ? s.price_dir : undefined,
       base_category: sanitize(s.base_category),
       refinement: s.refinement ? sanitize(s.refinement) : undefined,
@@ -2227,6 +2230,7 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
       pending_modifiers: typeof s.pending_modifiers === 'string' ? sanitize(s.pending_modifiers) : undefined,
       pending_filters: typeof s.pending_filters === 'string' ? s.pending_filters.substring(0, 2000) : undefined,
       original_query: typeof s.original_query === 'string' ? sanitize(s.original_query) : undefined,
+      price_facet_state: typeof s.price_facet_state === 'string' ? s.price_facet_state.substring(0, 4000) : undefined,
     };
     count++;
   }
@@ -2492,28 +2496,21 @@ async function handlePriceIntent(
   queries: string[],
   priceIntent: 'most_expensive' | 'cheapest',
   apiToken: string,
-  relevanceQueries: string[] = queries
+  extraParams: Array<[string, string]> = [],
 ): Promise<PriceIntentResult> {
   const overallStart = Date.now();
-  const RESULT_WINDOW = 100;
-  const MAX_SCAN_PAGES = 5;
-  // No threshold: server sort + min_price=1 даёт верный top-N даже на 10 000 товаров.
-  // Сценарий B (фасеты + price): модификаторы подмешаны в `queries[0]` на уровне call-site,
-  // synonymQueries[1..N] = чистые фолбэки без модификаторов.
+  const PER_PAGE = 10;
 
-  const primaryQuery = queries[0];
-
-  /** Build params with min_price=1 to trigger server sort + price=0 filter */
-  const buildParams = (q: string, perPage: number, page: number): URLSearchParams => {
+  const buildParams = (q: string, page: number): URLSearchParams => {
     const p = new URLSearchParams();
     p.append('query', q);
     p.append('min_price', '1');
-    p.append('per_page', String(perPage));
+    p.append('per_page', String(PER_PAGE));
     p.append('page', String(page));
+    for (const [k, v] of extraParams) p.append(k, v);
     return p;
   };
-  
-  /** Fetch with timeout, returns parsed data or null on error */
+
   const fetchPage = async (params: URLSearchParams, timeoutMs: number): Promise<{ results: Product[]; total: number } | null> => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -2537,125 +2534,165 @@ async function handlePriceIntent(
     } catch (err) {
       clearTimeout(timeoutId);
       markIfCatalogError('PriceIntent.fetch', err);
-      throw err;
+      return null;
     }
   };
-  
-  try {
-    // Step 1: Probe with min_price=1 — gives us total of priced products only
-    let activeQuery = primaryQuery;
-    let probeResult = await fetchPage(buildParams(activeQuery, 1, 1), 15000);
-    
-    if (!probeResult) return { action: 'not_found' };
-    
-    let total = probeResult.total;
-    const probeElapsed = Date.now() - overallStart;
-    console.log(`[PriceIntent] Probe: query="${activeQuery}" min_price=1, total=${total}, ${probeElapsed}ms`);
-    
-    // Step 1b: If primary query empty, try alternatives
-    if (total === 0) {
-      for (const altQuery of queries.slice(1, 4)) {
-        try {
-          const altResult = await fetchPage(buildParams(altQuery, 1, 1), 8000);
-          if (altResult && altResult.total > 0) {
-            console.log(`[PriceIntent] Alt query "${altQuery}" found ${altResult.total} priced products`);
-            activeQuery = altQuery;
-            total = altResult.total;
-            break;
-          }
-        } catch { /* try next */ }
-      }
-      if (total === 0) return { action: 'not_found' };
-    }
-    
-    // No threshold gate — server sort handles any total. Top-N показываем всегда,
-    // composer добавит «найдено N товаров» как уточняющий хвост.
 
+  let activeQuery = queries[0];
+  let probe = await fetchPage(buildParams(activeQuery, 1), 15000);
 
-    // Step 3: Fetch sorted pages and keep only products relevant to requested category.
-    // Catalog API `?query=розетка&min_price=1` may return ultra-cheap cable accessories,
-    // so a single page is not safe. We scan a few 100-item windows in sorted order.
-    const fetchStart = Date.now();
-    const maxPage = Math.max(1, Math.ceil(total / RESULT_WINDOW));
-    const startPage = priceIntent === 'cheapest' ? 1 : maxPage;
-    const pagesToScan: number[] = [];
-    for (let offset = 0; offset < MAX_SCAN_PAGES; offset++) {
-      const page = priceIntent === 'cheapest' ? startPage + offset : startPage - offset;
-      if (page < 1 || page > maxPage) break;
-      pagesToScan.push(page);
-    }
-
-    const relevanceStems = buildPriceIntentRelevanceStems(relevanceQueries);
-    const collected: Product[] = [];
-    const seenIds = new Set<number>();
-
-    for (const page of pagesToScan) {
-      const pageResult = await fetchPage(buildParams(activeQuery, RESULT_WINDOW, page), 15000);
-      if (!pageResult || pageResult.results.length === 0) {
-        console.log(`[PriceIntent] Empty page ${page}/${maxPage} for query="${activeQuery}"`);
-        continue;
-      }
-
-      let pageProducts = pageResult.results.filter(p => p.price > 0);
-      if (priceIntent === 'most_expensive') {
-        pageProducts = pageProducts.reverse();
-      }
-
-      const relevantProducts = filterPriceIntentProductsByRelevance(pageProducts, relevanceQueries);
-      console.log(`[PriceIntent] Relevance page=${page}/${maxPage}: raw=${pageProducts.length}, relevant=${relevantProducts.length}, stems=${relevanceStems.join(',')}`);
-
-      for (const product of relevantProducts) {
-        if (seenIds.has(product.id)) continue;
-        seenIds.add(product.id);
-        collected.push(product);
-        if (collected.length >= 10) break;
-      }
-
-      if (collected.length >= 10) break;
-    }
-
-    if (collected.length === 0) {
-      console.log(`[PriceIntent] No relevant products after scanning ${pagesToScan.length} page(s) for query="${activeQuery}"`);
-      return { action: 'not_found' };
-    }
-
-    const fetchElapsed = Date.now() - fetchStart;
-    const totalElapsed = Date.now() - overallStart;
-    console.log(`[PriceIntent] Server-sorted ${collected.length} relevant products (pages=${pagesToScan.join(',')}, ${priceIntent}), fetch ${fetchElapsed}ms, total ${totalElapsed}ms`);
-    
-    return { action: 'answer', products: collected.slice(0, 10), total };
-  } catch (error) {
-    console.error(`[PriceIntent] Error:`, error);
-    
-    // Retry once on timeout — single page=1 fetch with server sort
-    if (error instanceof DOMException && error.name === 'AbortError' && queries.length > 0) {
-      console.log(`[PriceIntent] Timeout, retry with simplified query: "${queries[0]}"`);
-      try {
-        const retry = await fetchPage(buildParams(queries[0], RESULT_WINDOW, 1), 15000);
-        if (retry && retry.results.length > 0) {
-          let products = retry.results.filter(p => p.price > 0);
-          if (priceIntent === 'most_expensive') {
-            // Without knowing total here, page=1 ASC gives us cheapest — bad fallback for most_expensive,
-            // but it's better than not_found. The composer will explain.
-            console.log(`[PriceIntent] Retry: most_expensive degraded to page=1 (cheapest sample) — ${products.length} products`);
-          } else {
-            console.log(`[PriceIntent] Retry SUCCESS: ${products.length} cheapest products`);
-          }
-          const relevantProducts = filterPriceIntentProductsByRelevance(products, relevanceQueries);
-          if (relevantProducts.length === 0) {
-            console.log(`[PriceIntent] Retry rejected: 0 relevant products for query="${queries[0]}"`);
-            return { action: 'not_found' };
-          }
-          return { action: 'answer', products: relevantProducts.slice(0, 10), total: retry.total };
-        }
-      } catch (retryErr) {
-        console.error(`[PriceIntent] Retry also failed:`, retryErr);
-        markIfCatalogError('PriceIntent.retry', retryErr);
+  if (!probe || probe.total === 0) {
+    for (const altQuery of queries.slice(1, 4)) {
+      const altResult = await fetchPage(buildParams(altQuery, 1), 8000);
+      if (altResult && altResult.total > 0) {
+        activeQuery = altQuery;
+        probe = altResult;
+        break;
       }
     }
-    
-    return { action: 'not_found' };
   }
+
+  if (!probe || probe.total === 0) return { action: 'not_found' };
+
+  let products = probe.results.filter(p => p.price > 0);
+
+  // most_expensive: jump to last page (server sort ASC via min_price=1, then reverse)
+  if (priceIntent === 'most_expensive' && probe.total > PER_PAGE) {
+    const lastPage = Math.ceil(probe.total / PER_PAGE);
+    const lastResult = await fetchPage(buildParams(activeQuery, lastPage), 15000);
+    if (lastResult) {
+      products = lastResult.results.filter(p => p.price > 0).reverse();
+    } else {
+      products = products.reverse();
+    }
+  }
+
+  console.log(`[PriceIntent] simplified: query="${activeQuery}" extra=${JSON.stringify(extraParams)} intent=${priceIntent} total=${probe.total} returned=${products.length} ${Date.now() - overallStart}ms`);
+  return { action: 'answer', products: products.slice(0, PER_PAGE), total: probe.total };
+}
+
+// ============================================================
+// PRICE-FACET CLARIFY — bootstrap facets from /products + slot-based clarify
+// ============================================================
+// Flow:
+//   1) User asks «самая дешёвая розетка» (no characteristics).
+//   2) Probe `/products?query=розетка&per_page=100` (single hop, no Resolver).
+//   3) Aggregate Product.options[] → facets list (key + caption_ru + values+counts).
+//   4) Pick BEST facet (≥2 distinct values, max diversity). Show top-3 cheapest + ask.
+//   5) Save slot `price_facet_clarify` with full facet snapshot.
+//   6) Next turn: strict-match user reply against snapshot.values → re-call handlePriceIntent
+//      with `options[<key>][]=<value_ru>` and same min_price=1.
+// NO LLM picks facets/values — bootstrap is the source of truth.
+
+export interface BootstrapFacet {
+  key: string;
+  caption_ru: string;
+  values: Array<{ value_ru: string; count: number }>;
+}
+
+export function extractFacetsFromProducts(products: Product[]): BootstrapFacet[] {
+  const map = new Map<string, { caption_ru: string; values: Map<string, number> }>();
+  for (const p of products) {
+    const opts = Array.isArray((p as any)?.options) ? (p as any).options : [];
+    for (const o of opts) {
+      const key = typeof o?.key === 'string' ? o.key.trim() : '';
+      const caption = typeof o?.caption_ru === 'string' ? o.caption_ru.trim() : '';
+      const value = typeof o?.value_ru === 'string' ? o.value_ru.trim() : '';
+      if (!key || !caption || !value) continue;
+      let entry = map.get(key);
+      if (!entry) {
+        entry = { caption_ru: caption, values: new Map() };
+        map.set(key, entry);
+      }
+      entry.values.set(value, (entry.values.get(value) || 0) + 1);
+    }
+  }
+  const facets: BootstrapFacet[] = [];
+  for (const [key, entry] of map.entries()) {
+    const values = Array.from(entry.values.entries())
+      .map(([value_ru, count]) => ({ value_ru, count }))
+      .sort((a, b) => b.count - a.count);
+    facets.push({ key, caption_ru: entry.caption_ru, values });
+  }
+  return facets;
+}
+
+/** Pick facet most useful for clarification: ≥2 distinct values, prefer max diversity then total coverage. */
+export function pickClarifyFacet(facets: BootstrapFacet[]): BootstrapFacet | null {
+  const candidates = facets.filter(f => f.values.length >= 2);
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => {
+    const diversityDiff = b.values.length - a.values.length;
+    if (diversityDiff !== 0) return diversityDiff;
+    const coverageA = a.values.reduce((s, v) => s + v.count, 0);
+    const coverageB = b.values.reduce((s, v) => s + v.count, 0);
+    return coverageB - coverageA;
+  });
+  const chosen = candidates[0];
+  return { ...chosen, values: chosen.values.slice(0, 5) };
+}
+
+/** Bootstrap-facets probe: /products?query=<>&per_page=100 (single hop). */
+async function probeFacetsForPriceQuery(query: string, apiToken: string): Promise<{ products: Product[]; facets: BootstrapFacet[]; total: number } | null> {
+  const params = new URLSearchParams();
+  params.append('query', query);
+  params.append('min_price', '1');
+  params.append('per_page', '100');
+  params.append('page', '1');
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  try {
+    const resp = await fetch(`${VOLT220_API_URL}?${params}`, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (!resp.ok) {
+      markIfCatalogHttpError('PriceFacetProbe', resp.status);
+      return null;
+    }
+    const raw = await resp.json();
+    const data = raw.data || raw;
+    const products = (data.results || []).filter((p: Product) => p.price > 0);
+    const facets = extractFacetsFromProducts(products);
+    return { products, facets, total: data.pagination?.total || products.length };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    markIfCatalogError('PriceFacetProbe', err);
+    return null;
+  }
+}
+
+/** Build clarify message: top-3 cheapest cards + ONE question with real facet values. */
+export function buildPriceFacetClarifyContent(params: {
+  products: Product[];
+  priceIntent: 'most_expensive' | 'cheapest';
+  facet: BootstrapFacet;
+}): string {
+  const { products, priceIntent, facet } = params;
+  const intro = priceIntent === 'most_expensive'
+    ? 'Вот самые дорогие варианты из подборки:'
+    : 'Вот самые доступные варианты из подборки:';
+  const cards = products.slice(0, 3).map(p => formatProductCardDeterministic(p)).join('\n');
+  const valueList = facet.values
+    .map(v => `*${v.value_ru}* (${v.count})`)
+    .join(', ');
+  const tail = `\n\nЧтобы сузить выдачу, уточните **${facet.caption_ru}**: ${valueList}.`;
+  return `${intro}\n\n${cards}${tail}`;
+}
+
+/** Strict match user reply against snapshot facet values (normalized, word-boundary). */
+export function matchFacetValueFromReply(reply: string, facet: BootstrapFacet): { value_ru: string } | null {
+  const norm = (s: string) => s.toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/g, ' ').trim();
+  const replyNorm = ` ${norm(reply)} `;
+  const sorted = [...facet.values].sort((a, b) => b.value_ru.length - a.value_ru.length);
+  for (const v of sorted) {
+    const valNorm = norm(v.value_ru);
+    if (!valNorm) continue;
+    if (replyNorm.includes(` ${valNorm} `)) return { value_ru: v.value_ru };
+  }
+  return null;
 }
 
 // ============================================================
@@ -2674,62 +2711,6 @@ function extractTokens(text: string): string[] {
     .filter(t => t.length >= 2);
 }
 
-function normalizeSearchableText(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/ё/g, 'е')
-    .replace(/[^\p{L}\p{N}]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function stemSearchToken(token: string): string {
-  const normalized = normalizeSearchableText(token);
-  if (!normalized) return '';
-  return normalized.length >= 4 ? normalized.slice(0, 4) : normalized;
-}
-
-function buildPriceIntentRelevanceStems(relevanceQueries: string[]): string[] {
-  const stems = new Set<string>();
-  for (const query of relevanceQueries) {
-    for (const token of extractTokens(query)) {
-      const stem = stemSearchToken(token);
-      if (stem.length >= 4) stems.add(stem);
-    }
-  }
-  return Array.from(stems);
-}
-
-function buildProductSearchHaystack(product: Product): string {
-  const optionText = Array.isArray(product?.options)
-    ? product.options
-        .map((o) => `${o?.caption ?? ''} ${o?.value ?? ''}`.trim())
-        .filter(Boolean)
-        .join(' ')
-    : '';
-
-  return normalizeSearchableText([
-    product?.pagetitle ?? '',
-    product?.category?.pagetitle ?? '',
-    product?.alias ?? '',
-    product?.url ?? '',
-    optionText,
-  ].join(' '));
-}
-
-export function filterPriceIntentProductsByRelevance(products: Product[], relevanceQueries: string[]): Product[] {
-  const stems = buildPriceIntentRelevanceStems(relevanceQueries);
-  if (stems.length === 0) return products;
-
-  const fullQuery = relevanceQueries.join(' ').trim();
-
-  return products.filter((product) => {
-    const haystack = buildProductSearchHaystack(product);
-    const hasStemMatch = stems.some((stem) => haystack.includes(stem));
-    if (!hasStemMatch) return false;
-    return scoreProductMatch(product, extractTokens(fullQuery), extractSpecs(fullQuery), undefined, fullQuery) >= 25;
-  });
-}
 
 /**
  * Extract technical specs from text: numbers with units (18Вт, 6500К, 230В, 7Вт, 4000К)
@@ -2756,27 +2737,21 @@ function extractSpecs(text: string): string[] {
  * Returns a penalty value (0, 15, or 30) to subtract from the product score.
  */
 const TELECOM_KEYWORDS = ['rj11', 'rj12', 'rj45', 'rj-11', 'rj-12', 'rj-45', 'телефон', 'компьютер', 'интернет', 'lan', 'data', 'ethernet', 'cat5', 'cat6', 'utp', 'ftp'];
-const SOCKET_SPECIALTY_KEYWORDS = ['антенн', 'tv', 'sat', 'usb', 'hdmi', 'аудио', 'акуст', 'телефон', 'компьютер', 'интернет', 'rj', 'патрон', 'реле', 'автоматик'];
 
 function domainPenalty(product: Product, userQuery: string): number {
   const queryLower = userQuery.toLowerCase();
   const titleLower = product.pagetitle.toLowerCase();
   const categoryLower = (product.category?.pagetitle || '').toLowerCase();
   const combined = titleLower + ' ' + categoryLower;
-  
+
   const isSocketQuery = /розетк/i.test(queryLower);
   if (!isSocketQuery) return 0;
-  
+
   const userWantsTelecom = TELECOM_KEYWORDS.some(kw => queryLower.includes(kw));
   const productIsTelecom = TELECOM_KEYWORDS.some(kw => combined.includes(kw));
-  
+
   if (!userWantsTelecom && productIsTelecom) return 30;
   if (userWantsTelecom && !productIsTelecom) return 15;
-
-  const userWantsSpecialtySocket = SOCKET_SPECIALTY_KEYWORDS.some(kw => queryLower.includes(kw));
-  const productIsSpecialtySocket = SOCKET_SPECIALTY_KEYWORDS.some(kw => combined.includes(kw));
-  if (!userWantsSpecialtySocket && productIsSpecialtySocket) return 30;
-  
   return 0;
 }
 
@@ -5325,78 +5300,60 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
             }
           }
         }
-        
+
         // === PRICE INTENT HANDLING ===
-        // Сценарий A: «дешёвая розетка» → query=розетка + min_price=1 → top-N.
-        // Сценарий B: «самая дешёвая чёрная двухместная розетка» → query + option_filters + min_price=1 → top-N.
-        // В обоих случаях один запрос к API, никаких clarify-вопросов до показа товаров.
+        // A) Resume price_facet_clarify slot if user reply matches stored facet value.
+        // B) Mods present -> straight handlePriceIntent (Scenario C from spec).
+        // C) Bootstrap facets from /products?query=<>&per_page=100 + ask one question.
+        let pendingClarifyFacet: BootstrapFacet | null = null;
+        let pendingClarifyIntent: 'most_expensive' | 'cheapest' | null = null;
         if (effectivePriceIntent && appSettings.volt220_api_token) {
           const priceQuery = effectiveCategory || classification?.product_name || '';
           if (priceQuery) {
-            // Сценарий B: модификаторы из классификатора (черная, двухместная) подмешиваем в query.
-            // API ищет полнотекст → "розетка черная двухместная" вернёт только подходящие SKU,
-            // а top-N min_price=1 даст самые дешёвые ИМЕННО из этой подборки.
-            // Это убирает галлюцинацию URL'ов: LLM получает реальные товары, соответствующие
-            // запросу, и не вынужден выдумывать ссылки. Если 0 совпадений — handlePriceIntent
-            // сам пройдётся по synonymQueries и попадёт на priceQuery без модификаторов.
             const mods: string[] = Array.isArray(classification?.search_modifiers)
               ? classification!.search_modifiers.filter((m: unknown): m is string => typeof m === 'string' && m.trim().length > 0)
               : [];
-            const enrichedQuery = mods.length > 0 ? `${priceQuery} ${mods.join(' ')}`.trim() : priceQuery;
-            console.log(`[Chat] Price intent detected: ${effectivePriceIntent} for "${priceQuery}", modifiers=[${mods.join(', ')}], enrichedQuery="${enrichedQuery}"`);
 
-            const synonymQueries = mods.length > 0
-              ? [enrichedQuery, ...generatePriceSynonyms(priceQuery)]
-              : generatePriceSynonyms(priceQuery);
-            const priceResult = await handlePriceIntent(
-              synonymQueries,
-              effectivePriceIntent,
-              appSettings.volt220_api_token!,
-              [priceQuery, enrichedQuery, ...mods]
-            );
-
-            // POST-FILTER: если есть модификаторы и priceResult вернулся через fallback (без модификаторов),
-            // отфильтровать товары по совпадению модификаторов в pagetitle. Без этого LLM получит
-            // 10 случайных розеток и СГЕНЕРИРУЕТ URL'ы под запрос «черная двухместная» (галлюцинация).
-            if (priceResult.action === 'answer' && priceResult.products && mods.length > 0) {
-              const modsLower = mods.map(m => m.toLowerCase().trim());
-              const filtered = priceResult.products.filter(p => {
-                const hay = ((p.pagetitle || '') + ' ' + JSON.stringify((p as any).options || [])).toLowerCase();
-                return modsLower.every(m => {
-                  // Корень слова (без последних 2 символов) — «черная»→«черн», «двухместная»→«двухместн»
-                  const root = m.length > 4 ? m.slice(0, -2) : m;
-                  return hay.includes(root);
-                });
-              });
-              console.log(`[Chat] PriceIntent post-filter: ${priceResult.products.length} → ${filtered.length} matching modifiers [${mods.join(', ')}]`);
-              if (filtered.length > 0) {
-                priceResult.products = filtered;
-              } else {
-                console.log(`[Chat] PriceIntent post-filter: ZERO match — degrade to not_found to avoid URL hallucination`);
-                priceResult.action = 'not_found';
-                priceResult.products = undefined;
+            let resumedFromClarify = false;
+            for (const [slotKey, slot] of Object.entries(dialogSlots)) {
+              if (slot.status !== 'pending' || slot.intent !== 'price_facet_clarify' || !slot.price_facet_state || !slot.price_dir) continue;
+              try {
+                const state = JSON.parse(slot.price_facet_state) as { query: string; facet: BootstrapFacet };
+                const matched = matchFacetValueFromReply(userMessage, state.facet);
+                if (!matched) continue;
+                console.log(`[Chat] PriceFacetClarify resumed: facet=${state.facet.key} value="${matched.value_ru}"`);
+                const priceResult = await handlePriceIntent(
+                  [state.query],
+                  slot.price_dir,
+                  appSettings.volt220_api_token!,
+                  [[`options[${state.facet.key}][]`, matched.value_ru]],
+                );
+                if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
+                  foundProducts = priceResult.products;
+                  articleShortCircuit = true;
+                  responseModel = 'anthropic/claude-sonnet-4.5';
+                  responseModelReason = 'price-shortcircuit';
+                  dialogSlots[slotKey] = { ...slot, status: 'done', refinement: matched.value_ru };
+                  slotsUpdated = true;
+                  resumedFromClarify = true;
+                }
+              } catch (e) {
+                console.error(`[Chat] PriceFacetClarify resume parse error:`, e);
               }
+              break;
             }
 
-            if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
-              foundProducts = priceResult.products;
-              articleShortCircuit = true;
-              responseModel = 'anthropic/claude-sonnet-4.5';
-              responseModelReason = 'price-shortcircuit';
-              console.log(`[Chat] PriceIntent SUCCESS: ${foundProducts.length} products sorted by ${effectivePriceIntent} (total ${priceResult.total})`);
-
-              if (slotResolution) {
-                dialogSlots[slotResolution.slotKey] = { ...dialogSlots[slotResolution.slotKey], status: 'done' };
-                slotsUpdated = true;
-              }
-            } else {
-              console.log(`[Chat] PriceIntent: no results for "${priceQuery}" (tried ${synonymQueries.length} variants), falling through WITH price intent preserved`);
-              // CRITICAL: Do NOT reset effectivePriceIntent here — it will be used by fallback pipeline
-            }
-          }
-        }
-
-        // === TITLE-FIRST: handled by FAST-PATH above (right after Micro-LLM classify).
+            if (!resumedFromClarify) {
+              if (mods.length > 0) {
+                const enrichedQuery = `${priceQuery} ${mods.join(' ')}`.trim();
+                console.log(`[Chat] Price intent with mods: "${enrichedQuery}"`);
+                const synonymQueries = [enrichedQuery, ...generatePriceSynonyms(priceQuery)];
+                const priceResult = await handlePriceIntent(synonymQueries, effectivePriceIntent, appSettings.volt220_api_token!);
+                if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
+                  foundProducts = priceResult.products;
+                  articleShortCircuit = true;
+                  responseModel = 'anthropic/claude-sonnet-4.5';
+                
         // The legacy duplicate block was removed; if the fast-path returned 0,
         // we don't repeat the identical ?query= call here.
         if (classification?.is_replacement && classification?.has_product_name && classification?.product_name) {
