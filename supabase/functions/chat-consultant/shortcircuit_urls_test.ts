@@ -32,6 +32,7 @@ Deno.test('deterministic content for price-shortcircuit uses only original URLs'
         pagetitle: 'Розетка IEK BRITE',
         url: 'https://220volt.kz/rozetki_i_vyklyuchateli/rozetka-iek-brite-br-r10-16-k47/',
         vendor: 'IEK',
+        options: [{ key: 'brend__brend', caption: 'Бренд', value: 'IEK' }],
       } as any,
     ],
     reason: 'price-shortcircuit',
