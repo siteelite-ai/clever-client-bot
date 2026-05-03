@@ -4358,6 +4358,84 @@ function formatProductsForAI(products: Product[], includeExtended: boolean = tru
   return lines.join('\n\n');
 }
 
+function formatProductCardDeterministic(product: Product): string {
+  const safeName = (typeof product?.pagetitle === 'string' ? product.pagetitle : 'Товар')
+    .replace(/\(/g, '\\(')
+    .replace(/\)/g, '\\)');
+  const rawUrl = typeof product?.url === 'string' ? product.url : '';
+  const normalizedUrl = rawUrl
+    ? toProductionUrl(rawUrl).replace(/\(/g, '%28').replace(/\)/g, '%29')
+    : '';
+
+  let brand = '';
+  if (Array.isArray(product?.options)) {
+    const brandOption = product.options.find((o: any) => o && o.key === 'brend__brend');
+    if (brandOption) brand = cleanOptionValue(brandOption.value);
+  }
+  if (!brand) brand = (typeof product?.vendor === 'string' ? product.vendor.trim() : '') || '';
+
+  const lines = [
+    normalizedUrl ? `- **[${safeName}](${normalizedUrl})**` : `- **${safeName}**`,
+    `  - Цена: *${(typeof product?.price === 'number' ? product.price : 0).toLocaleString('ru-KZ')} ₸*`,
+    brand ? `  - Бренд: ${brand}` : '',
+    (() => {
+      const available = (Array.isArray(product?.warehouses) ? product.warehouses : []).filter((w: any) => w && Number(w.amount) > 0);
+      if (available.length > 0) {
+        const shown = available.slice(0, 3).map((w: any) => `${w.city}: ${w.amount} шт.`).join(', ');
+        return `  - Наличие: ${shown}`;
+      }
+      const amount = Number(product?.amount) || 0;
+      return amount > 0 ? `  - Наличие: ${amount} шт.` : '';
+    })(),
+  ];
+
+  return lines.filter(Boolean).join('\n');
+}
+
+function buildDeterministicShortCircuitContent(params: {
+  products: Product[];
+  reason: string;
+  userMessage: string;
+  effectivePriceIntent?: 'most_expensive' | 'cheapest';
+}): string {
+  const { products, reason, userMessage, effectivePriceIntent } = params;
+  if (!products.length) return '';
+
+  const intro =
+    reason === 'price-shortcircuit'
+      ? effectivePriceIntent === 'most_expensive'
+        ? 'Подобрал самые дорогие варианты из каталога:'
+        : 'Подобрал самые доступные варианты из каталога:'
+      : reason === 'article-shortcircuit' || reason === 'siteid-shortcircuit'
+        ? 'Нашёл товар по точному запросу:'
+        : 'Подобрал товары из каталога:';
+
+  const cards = products.slice(0, 3).map(formatProductCardDeterministic).join('\n\n');
+  const brands = extractBrandsFromProducts(products).slice(0, 3);
+  const lowerMessage = userMessage.toLowerCase();
+
+  let followUp = '';
+  if (reason === 'price-shortcircuit') {
+    followUp = brands.length > 1
+      ? `Если хотите, могу сразу сузить подборку по бренду: ${brands.join(', ')}.`
+      : 'Если хотите, могу сразу сузить подборку по бренду, характеристике или наличию в городе.';
+  } else if (reason === 'article-shortcircuit' || reason === 'siteid-shortcircuit') {
+    followUp = 'Если нужно, сразу проверю аналоги, наличие по городам или более бюджетную замену.';
+  } else if (lowerMessage.includes('самый') || lowerMessage.includes('деш') || lowerMessage.includes('дорог')) {
+    followUp = 'Если хотите, могу следом показать соседние варианты по цене или отфильтровать по бренду.';
+  } else {
+    followUp = brands.length > 1
+      ? `Если хотите, могу уточнить по бренду (${brands.join(', ')}) или по ключевой характеристике.`
+      : 'Если хотите, могу сузить подборку по бренду, цене или ключевой характеристике.';
+  }
+
+  return `${intro}\n\n${cards}\n\n${followUp}`.trim();
+}
+
+function isDeterministicShortCircuitReason(reason: string): boolean {
+  return ['price-shortcircuit', 'article-shortcircuit', 'siteid-shortcircuit', 'title-shortcircuit'].includes(reason);
+}
+
 function describeAppliedFilters(candidates: SearchCandidate[]): string {
   const filters: string[] = [];
   const seen = new Set<string>();
