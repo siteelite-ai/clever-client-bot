@@ -96,6 +96,17 @@ Deno.test('price intent relevance filter drops non-socket products for socket qu
       category: { id: 4, pagetitle: 'Комплектующие для светильников' },
     } as any,
     {
+      id: 14,
+      pagetitle: 'Розетка для пром реле РР102-4-03',
+      alias: 'rozetka-dlya-rele',
+      url: 'https://220volt.kz/catalog/rele/rozetka-dlya-rele',
+      price: 318,
+      vendor: 'Delixi',
+      amount: 11,
+      options: [],
+      category: { id: 5, pagetitle: 'Релейная автоматика' },
+    } as any,
+    {
       id: 11,
       pagetitle: 'Розетка штепсельная карболитовая открытой установки 16 А',
       alias: 'rozetka-rexant',
