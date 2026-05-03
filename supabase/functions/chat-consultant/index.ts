@@ -2572,6 +2572,130 @@ async function handlePriceIntent(
 }
 
 // ============================================================
+// PRICE-FACET CLARIFY — bootstrap facets from /products + slot-based clarify
+// ============================================================
+// Flow:
+//   1) User asks «самая дешёвая розетка» (no characteristics).
+//   2) Probe `/products?query=розетка&per_page=100` (single hop, no Resolver).
+//   3) Aggregate Product.options[] → facets list (key + caption_ru + values+counts).
+//   4) Pick BEST facet (≥2 distinct values, max diversity). Show top-3 cheapest + ask.
+//   5) Save slot `price_facet_clarify` with full facet snapshot.
+//   6) Next turn: strict-match user reply against snapshot.values → re-call handlePriceIntent
+//      with `options[<key>][]=<value_ru>` and same min_price=1.
+// NO LLM picks facets/values — bootstrap is the source of truth.
+
+export interface BootstrapFacet {
+  key: string;
+  caption_ru: string;
+  values: Array<{ value_ru: string; count: number }>;
+}
+
+export function extractFacetsFromProducts(products: Product[]): BootstrapFacet[] {
+  const map = new Map<string, { caption_ru: string; values: Map<string, number> }>();
+  for (const p of products) {
+    const opts = Array.isArray((p as any)?.options) ? (p as any).options : [];
+    for (const o of opts) {
+      const key = typeof o?.key === 'string' ? o.key.trim() : '';
+      const caption = typeof o?.caption_ru === 'string' ? o.caption_ru.trim() : '';
+      const value = typeof o?.value_ru === 'string' ? o.value_ru.trim() : '';
+      if (!key || !caption || !value) continue;
+      let entry = map.get(key);
+      if (!entry) {
+        entry = { caption_ru: caption, values: new Map() };
+        map.set(key, entry);
+      }
+      entry.values.set(value, (entry.values.get(value) || 0) + 1);
+    }
+  }
+  const facets: BootstrapFacet[] = [];
+  for (const [key, entry] of map.entries()) {
+    const values = Array.from(entry.values.entries())
+      .map(([value_ru, count]) => ({ value_ru, count }))
+      .sort((a, b) => b.count - a.count);
+    facets.push({ key, caption_ru: entry.caption_ru, values });
+  }
+  return facets;
+}
+
+/** Pick facet most useful for clarification: ≥2 distinct values, prefer max diversity then total coverage. */
+export function pickClarifyFacet(facets: BootstrapFacet[]): BootstrapFacet | null {
+  const candidates = facets.filter(f => f.values.length >= 2);
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => {
+    const diversityDiff = b.values.length - a.values.length;
+    if (diversityDiff !== 0) return diversityDiff;
+    const coverageA = a.values.reduce((s, v) => s + v.count, 0);
+    const coverageB = b.values.reduce((s, v) => s + v.count, 0);
+    return coverageB - coverageA;
+  });
+  const chosen = candidates[0];
+  return { ...chosen, values: chosen.values.slice(0, 5) };
+}
+
+/** Bootstrap-facets probe: /products?query=<>&per_page=100 (single hop). */
+async function probeFacetsForPriceQuery(query: string, apiToken: string): Promise<{ products: Product[]; facets: BootstrapFacet[]; total: number } | null> {
+  const params = new URLSearchParams();
+  params.append('query', query);
+  params.append('min_price', '1');
+  params.append('per_page', '100');
+  params.append('page', '1');
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000);
+  try {
+    const resp = await fetch(`${VOLT220_API_URL}?${params}`, {
+      method: 'GET',
+      headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (!resp.ok) {
+      markIfCatalogHttpError('PriceFacetProbe', resp.status);
+      return null;
+    }
+    const raw = await resp.json();
+    const data = raw.data || raw;
+    const products = (data.results || []).filter((p: Product) => p.price > 0);
+    const facets = extractFacetsFromProducts(products);
+    return { products, facets, total: data.pagination?.total || products.length };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    markIfCatalogError('PriceFacetProbe', err);
+    return null;
+  }
+}
+
+/** Build clarify message: top-3 cheapest cards + ONE question with real facet values. */
+export function buildPriceFacetClarifyContent(params: {
+  products: Product[];
+  priceIntent: 'most_expensive' | 'cheapest';
+  facet: BootstrapFacet;
+}): string {
+  const { products, priceIntent, facet } = params;
+  const intro = priceIntent === 'most_expensive'
+    ? 'Вот самые дорогие варианты из подборки:'
+    : 'Вот самые доступные варианты из подборки:';
+  const cards = products.slice(0, 3).map(p => formatProductCardDeterministic(p)).join('\n');
+  const valueList = facet.values
+    .map(v => `*${v.value_ru}* (${v.count})`)
+    .join(', ');
+  const tail = `\n\nЧтобы сузить выдачу, уточните **${facet.caption_ru}**: ${valueList}.`;
+  return `${intro}\n\n${cards}${tail}`;
+}
+
+/** Strict match user reply against snapshot facet values (normalized, word-boundary). */
+export function matchFacetValueFromReply(reply: string, facet: BootstrapFacet): { value_ru: string } | null {
+  const norm = (s: string) => s.toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9]+/g, ' ').trim();
+  const replyNorm = ` ${norm(reply)} `;
+  const sorted = [...facet.values].sort((a, b) => b.value_ru.length - a.value_ru.length);
+  for (const v of sorted) {
+    const valNorm = norm(v.value_ru);
+    if (!valNorm) continue;
+    if (replyNorm.includes(` ${valNorm} `)) return { value_ru: v.value_ru };
+  }
+  return null;
+}
+
+// ============================================================
 // TITLE SCORING — compute how well a product matches a query
 // ============================================================
 
