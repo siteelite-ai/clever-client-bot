@@ -2721,9 +2721,13 @@ export function filterPriceIntentProductsByRelevance(products: Product[], releva
   const stems = buildPriceIntentRelevanceStems(relevanceQueries);
   if (stems.length === 0) return products;
 
+  const fullQuery = relevanceQueries.join(' ').trim();
+
   return products.filter((product) => {
     const haystack = buildProductSearchHaystack(product);
-    return stems.some((stem) => haystack.includes(stem));
+    const hasStemMatch = stems.some((stem) => haystack.includes(stem));
+    if (!hasStemMatch) return false;
+    return scoreProductMatch(product, extractTokens(fullQuery), extractSpecs(fullQuery), undefined, fullQuery) >= 25;
   });
 }
 
