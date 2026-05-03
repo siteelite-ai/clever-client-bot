@@ -5300,8 +5300,60 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
             }
           }
         }
-        
-        // === TITLE-FIRST: handled by FAST-PATH above (right after Micro-LLM classify).
+
+        // === PRICE INTENT HANDLING ===
+        // A) Resume price_facet_clarify slot if user reply matches stored facet value.
+        // B) Mods present -> straight handlePriceIntent (Scenario C from spec).
+        // C) Bootstrap facets from /products?query=<>&per_page=100 + ask one question.
+        let pendingClarifyFacet: BootstrapFacet | null = null;
+        let pendingClarifyIntent: 'most_expensive' | 'cheapest' | null = null;
+        if (effectivePriceIntent && appSettings.volt220_api_token) {
+          const priceQuery = effectiveCategory || classification?.product_name || '';
+          if (priceQuery) {
+            const mods: string[] = Array.isArray(classification?.search_modifiers)
+              ? classification!.search_modifiers.filter((m: unknown): m is string => typeof m === 'string' && m.trim().length > 0)
+              : [];
+
+            let resumedFromClarify = false;
+            for (const [slotKey, slot] of Object.entries(dialogSlots)) {
+              if (slot.status !== 'pending' || slot.intent !== 'price_facet_clarify' || !slot.price_facet_state || !slot.price_dir) continue;
+              try {
+                const state = JSON.parse(slot.price_facet_state) as { query: string; facet: BootstrapFacet };
+                const matched = matchFacetValueFromReply(userMessage, state.facet);
+                if (!matched) continue;
+                console.log(`[Chat] PriceFacetClarify resumed: facet=${state.facet.key} value="${matched.value_ru}"`);
+                const priceResult = await handlePriceIntent(
+                  [state.query],
+                  slot.price_dir,
+                  appSettings.volt220_api_token!,
+                  [[`options[${state.facet.key}][]`, matched.value_ru]],
+                );
+                if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
+                  foundProducts = priceResult.products;
+                  articleShortCircuit = true;
+                  responseModel = 'anthropic/claude-sonnet-4.5';
+                  responseModelReason = 'price-shortcircuit';
+                  dialogSlots[slotKey] = { ...slot, status: 'done', refinement: matched.value_ru };
+                  slotsUpdated = true;
+                  resumedFromClarify = true;
+                }
+              } catch (e) {
+                console.error(`[Chat] PriceFacetClarify resume parse error:`, e);
+              }
+              break;
+            }
+
+            if (!resumedFromClarify) {
+              if (mods.length > 0) {
+                const enrichedQuery = `${priceQuery} ${mods.join(' ')}`.trim();
+                console.log(`[Chat] Price intent with mods: "${enrichedQuery}"`);
+                const synonymQueries = [enrichedQuery, ...generatePriceSynonyms(priceQuery)];
+                const priceResult = await handlePriceIntent(synonymQueries, effectivePriceIntent, appSettings.volt220_api_token!);
+                if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
+                  foundProducts = priceResult.products;
+                  articleShortCircuit = true;
+                  responseModel = 'anthropic/claude-sonnet-4.5';
+                
         // The legacy duplicate block was removed; if the fast-path returned 0,
         // we don't repeat the identical ?query= call here.
         if (classification?.is_replacement && classification?.has_product_name && classification?.product_name) {
