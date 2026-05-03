@@ -2756,7 +2756,7 @@ function extractSpecs(text: string): string[] {
  * Returns a penalty value (0, 15, or 30) to subtract from the product score.
  */
 const TELECOM_KEYWORDS = ['rj11', 'rj12', 'rj45', 'rj-11', 'rj-12', 'rj-45', 'телефон', 'компьютер', 'интернет', 'lan', 'data', 'ethernet', 'cat5', 'cat6', 'utp', 'ftp'];
-const SOCKET_SPECIALTY_KEYWORDS = ['антенн', 'tv', 'sat', 'usb', 'hdmi', 'аудио', 'акуст', 'телефон', 'компьютер', 'интернет', 'rj', 'патрон'];
+const SOCKET_SPECIALTY_KEYWORDS = ['антенн', 'tv', 'sat', 'usb', 'hdmi', 'аудио', 'акуст', 'телефон', 'компьютер', 'интернет', 'rj', 'патрон', 'реле', 'автоматик'];
 
 function domainPenalty(product: Product, userQuery: string): number {
   const queryLower = userQuery.toLowerCase();
