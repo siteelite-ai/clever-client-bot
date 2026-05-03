@@ -2160,7 +2160,7 @@ function detectPendingPriceIntent(
 // ============================================================
 
 interface DialogSlot {
-  intent: 'price_extreme' | 'product_search' | 'category_disambiguation';
+  intent: 'price_extreme' | 'product_search' | 'category_disambiguation' | 'price_facet_clarify';
   price_dir?: 'most_expensive' | 'cheapest';
   base_category: string;
   refinement?: string;
@@ -2176,6 +2176,9 @@ interface DialogSlot {
   pending_modifiers?: string;  // saved modifiers from original query: "черные двухместные"
   pending_filters?: string;    // JSON: {"cvet":"чёрный"} — pre-resolved from original query
   original_query?: string;     // user's original message before disambiguation
+  // price_facet_clarify state (V1 bootstrap-facets clarify)
+  // JSON: {"query":"розетка","facet":{"key":"tip","caption_ru":"Тип","values":[{"value_ru":"Бытовая","count":5},...]},"min_price":null,"max_price":null}
+  price_facet_state?: string;
   // replacement metadata
   isReplacement?: boolean;
   originalName?: string;
@@ -2200,7 +2203,7 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
     const s = val as Record<string, unknown>;
     
     // Validate intent
-    if (s.intent !== 'price_extreme' && s.intent !== 'product_search' && s.intent !== 'category_disambiguation') continue;
+    if (s.intent !== 'price_extreme' && s.intent !== 'product_search' && s.intent !== 'category_disambiguation' && s.intent !== 'price_facet_clarify') continue;
     // Validate status
     if (s.status !== 'pending' && s.status !== 'done') continue;
     // Validate base_category
@@ -2213,7 +2216,7 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
     };
 
     slots[key.substring(0, 20)] = {
-      intent: s.intent as 'price_extreme' | 'product_search' | 'category_disambiguation',
+      intent: s.intent as DialogSlot['intent'],
       price_dir: (s.price_dir === 'most_expensive' || s.price_dir === 'cheapest') ? s.price_dir : undefined,
       base_category: sanitize(s.base_category),
       refinement: s.refinement ? sanitize(s.refinement) : undefined,
@@ -2227,6 +2230,7 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
       pending_modifiers: typeof s.pending_modifiers === 'string' ? sanitize(s.pending_modifiers) : undefined,
       pending_filters: typeof s.pending_filters === 'string' ? s.pending_filters.substring(0, 2000) : undefined,
       original_query: typeof s.original_query === 'string' ? sanitize(s.original_query) : undefined,
+      price_facet_state: typeof s.price_facet_state === 'string' ? s.price_facet_state.substring(0, 4000) : undefined,
     };
     count++;
   }
