@@ -2492,28 +2492,21 @@ async function handlePriceIntent(
   queries: string[],
   priceIntent: 'most_expensive' | 'cheapest',
   apiToken: string,
-  relevanceQueries: string[] = queries
+  extraParams: Array<[string, string]> = [],
 ): Promise<PriceIntentResult> {
   const overallStart = Date.now();
-  const RESULT_WINDOW = 100;
-  const MAX_SCAN_PAGES = 5;
-  // No threshold: server sort + min_price=1 даёт верный top-N даже на 10 000 товаров.
-  // Сценарий B (фасеты + price): модификаторы подмешаны в `queries[0]` на уровне call-site,
-  // synonymQueries[1..N] = чистые фолбэки без модификаторов.
+  const PER_PAGE = 10;
 
-  const primaryQuery = queries[0];
-
-  /** Build params with min_price=1 to trigger server sort + price=0 filter */
-  const buildParams = (q: string, perPage: number, page: number): URLSearchParams => {
+  const buildParams = (q: string, page: number): URLSearchParams => {
     const p = new URLSearchParams();
     p.append('query', q);
     p.append('min_price', '1');
-    p.append('per_page', String(perPage));
+    p.append('per_page', String(PER_PAGE));
     p.append('page', String(page));
+    for (const [k, v] of extraParams) p.append(k, v);
     return p;
   };
-  
-  /** Fetch with timeout, returns parsed data or null on error */
+
   const fetchPage = async (params: URLSearchParams, timeoutMs: number): Promise<{ results: Product[]; total: number } | null> => {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -2537,125 +2530,41 @@ async function handlePriceIntent(
     } catch (err) {
       clearTimeout(timeoutId);
       markIfCatalogError('PriceIntent.fetch', err);
-      throw err;
+      return null;
     }
   };
-  
-  try {
-    // Step 1: Probe with min_price=1 — gives us total of priced products only
-    let activeQuery = primaryQuery;
-    let probeResult = await fetchPage(buildParams(activeQuery, 1, 1), 15000);
-    
-    if (!probeResult) return { action: 'not_found' };
-    
-    let total = probeResult.total;
-    const probeElapsed = Date.now() - overallStart;
-    console.log(`[PriceIntent] Probe: query="${activeQuery}" min_price=1, total=${total}, ${probeElapsed}ms`);
-    
-    // Step 1b: If primary query empty, try alternatives
-    if (total === 0) {
-      for (const altQuery of queries.slice(1, 4)) {
-        try {
-          const altResult = await fetchPage(buildParams(altQuery, 1, 1), 8000);
-          if (altResult && altResult.total > 0) {
-            console.log(`[PriceIntent] Alt query "${altQuery}" found ${altResult.total} priced products`);
-            activeQuery = altQuery;
-            total = altResult.total;
-            break;
-          }
-        } catch { /* try next */ }
-      }
-      if (total === 0) return { action: 'not_found' };
-    }
-    
-    // No threshold gate — server sort handles any total. Top-N показываем всегда,
-    // composer добавит «найдено N товаров» как уточняющий хвост.
 
+  let activeQuery = queries[0];
+  let probe = await fetchPage(buildParams(activeQuery, 1), 15000);
 
-    // Step 3: Fetch sorted pages and keep only products relevant to requested category.
-    // Catalog API `?query=розетка&min_price=1` may return ultra-cheap cable accessories,
-    // so a single page is not safe. We scan a few 100-item windows in sorted order.
-    const fetchStart = Date.now();
-    const maxPage = Math.max(1, Math.ceil(total / RESULT_WINDOW));
-    const startPage = priceIntent === 'cheapest' ? 1 : maxPage;
-    const pagesToScan: number[] = [];
-    for (let offset = 0; offset < MAX_SCAN_PAGES; offset++) {
-      const page = priceIntent === 'cheapest' ? startPage + offset : startPage - offset;
-      if (page < 1 || page > maxPage) break;
-      pagesToScan.push(page);
-    }
-
-    const relevanceStems = buildPriceIntentRelevanceStems(relevanceQueries);
-    const collected: Product[] = [];
-    const seenIds = new Set<number>();
-
-    for (const page of pagesToScan) {
-      const pageResult = await fetchPage(buildParams(activeQuery, RESULT_WINDOW, page), 15000);
-      if (!pageResult || pageResult.results.length === 0) {
-        console.log(`[PriceIntent] Empty page ${page}/${maxPage} for query="${activeQuery}"`);
-        continue;
-      }
-
-      let pageProducts = pageResult.results.filter(p => p.price > 0);
-      if (priceIntent === 'most_expensive') {
-        pageProducts = pageProducts.reverse();
-      }
-
-      const relevantProducts = filterPriceIntentProductsByRelevance(pageProducts, relevanceQueries);
-      console.log(`[PriceIntent] Relevance page=${page}/${maxPage}: raw=${pageProducts.length}, relevant=${relevantProducts.length}, stems=${relevanceStems.join(',')}`);
-
-      for (const product of relevantProducts) {
-        if (seenIds.has(product.id)) continue;
-        seenIds.add(product.id);
-        collected.push(product);
-        if (collected.length >= 10) break;
-      }
-
-      if (collected.length >= 10) break;
-    }
-
-    if (collected.length === 0) {
-      console.log(`[PriceIntent] No relevant products after scanning ${pagesToScan.length} page(s) for query="${activeQuery}"`);
-      return { action: 'not_found' };
-    }
-
-    const fetchElapsed = Date.now() - fetchStart;
-    const totalElapsed = Date.now() - overallStart;
-    console.log(`[PriceIntent] Server-sorted ${collected.length} relevant products (pages=${pagesToScan.join(',')}, ${priceIntent}), fetch ${fetchElapsed}ms, total ${totalElapsed}ms`);
-    
-    return { action: 'answer', products: collected.slice(0, 10), total };
-  } catch (error) {
-    console.error(`[PriceIntent] Error:`, error);
-    
-    // Retry once on timeout — single page=1 fetch with server sort
-    if (error instanceof DOMException && error.name === 'AbortError' && queries.length > 0) {
-      console.log(`[PriceIntent] Timeout, retry with simplified query: "${queries[0]}"`);
-      try {
-        const retry = await fetchPage(buildParams(queries[0], RESULT_WINDOW, 1), 15000);
-        if (retry && retry.results.length > 0) {
-          let products = retry.results.filter(p => p.price > 0);
-          if (priceIntent === 'most_expensive') {
-            // Without knowing total here, page=1 ASC gives us cheapest — bad fallback for most_expensive,
-            // but it's better than not_found. The composer will explain.
-            console.log(`[PriceIntent] Retry: most_expensive degraded to page=1 (cheapest sample) — ${products.length} products`);
-          } else {
-            console.log(`[PriceIntent] Retry SUCCESS: ${products.length} cheapest products`);
-          }
-          const relevantProducts = filterPriceIntentProductsByRelevance(products, relevanceQueries);
-          if (relevantProducts.length === 0) {
-            console.log(`[PriceIntent] Retry rejected: 0 relevant products for query="${queries[0]}"`);
-            return { action: 'not_found' };
-          }
-          return { action: 'answer', products: relevantProducts.slice(0, 10), total: retry.total };
-        }
-      } catch (retryErr) {
-        console.error(`[PriceIntent] Retry also failed:`, retryErr);
-        markIfCatalogError('PriceIntent.retry', retryErr);
+  if (!probe || probe.total === 0) {
+    for (const altQuery of queries.slice(1, 4)) {
+      const altResult = await fetchPage(buildParams(altQuery, 1), 8000);
+      if (altResult && altResult.total > 0) {
+        activeQuery = altQuery;
+        probe = altResult;
+        break;
       }
     }
-    
-    return { action: 'not_found' };
   }
+
+  if (!probe || probe.total === 0) return { action: 'not_found' };
+
+  let products = probe.results.filter(p => p.price > 0);
+
+  // most_expensive: jump to last page (server sort ASC via min_price=1, then reverse)
+  if (priceIntent === 'most_expensive' && probe.total > PER_PAGE) {
+    const lastPage = Math.ceil(probe.total / PER_PAGE);
+    const lastResult = await fetchPage(buildParams(activeQuery, lastPage), 15000);
+    if (lastResult) {
+      products = lastResult.results.filter(p => p.price > 0).reverse();
+    } else {
+      products = products.reverse();
+    }
+  }
+
+  console.log(`[PriceIntent] simplified: query="${activeQuery}" extra=${JSON.stringify(extraParams)} intent=${priceIntent} total=${probe.total} returned=${products.length} ${Date.now() - overallStart}ms`);
+  return { action: 'answer', products: products.slice(0, PER_PAGE), total: probe.total };
 }
 
 // ============================================================
