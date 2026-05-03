@@ -1,5 +1,5 @@
 import { assertEquals, assertStringIncludes, assertFalse } from 'https://deno.land/std@0.224.0/assert/mod.ts';
-import { buildDeterministicShortCircuitContent, formatProductCardDeterministic } from './index.ts';
+import { buildDeterministicShortCircuitContent, filterPriceIntentProductsByRelevance, formatProductCardDeterministic } from './index.ts';
 
 const baseProduct = {
   id: 1,
@@ -58,4 +58,66 @@ Deno.test('deterministic article response keeps consultant next-step without AI'
   assertStringIncludes(content, 'Нашёл товар по точному запросу:');
   assertStringIncludes(content, 'Если нужно, сразу проверю аналоги, наличие по городам или более бюджетную замену.');
   assertEquals((content.match(/https:\/\/220volt\.kz\//g) || []).length, 1);
+});
+
+Deno.test('price intent relevance filter drops non-socket products for socket query', () => {
+  const filtered = filterPriceIntentProductsByRelevance([
+    {
+      id: 10,
+      pagetitle: 'Клемма плоская изолированная штекер 4.8 мм REXANT',
+      alias: 'klemma-rexant',
+      url: 'https://220volt.kz/catalog/kabel/klemma-rexant',
+      price: 10,
+      vendor: 'REXANT',
+      amount: 20,
+      options: [],
+      category: { id: 1, pagetitle: 'Наконечники' },
+    } as any,
+    {
+      id: 12,
+      pagetitle: 'Выключатель 3SEM 1006 антенна',
+      alias: 'vyklyuchatel-antenna',
+      url: 'https://220volt.kz/catalog/rozetki/vyklyuchatel-antenna',
+      price: 52,
+      vendor: 'Sassin',
+      amount: 5,
+      options: [],
+      category: { id: 3, pagetitle: 'Розетки' },
+    } as any,
+    {
+      id: 13,
+      pagetitle: 'Патрон-розетка карболитовый Е27 черный',
+      alias: 'patron-rozetka-e27',
+      url: 'https://220volt.kz/catalog/svet/patron-rozetka-e27',
+      price: 200,
+      vendor: 'REXANT',
+      amount: 8,
+      options: [],
+      category: { id: 4, pagetitle: 'Комплектующие для светильников' },
+    } as any,
+    {
+      id: 14,
+      pagetitle: 'Розетка для пром реле РР102-4-03',
+      alias: 'rozetka-dlya-rele',
+      url: 'https://220volt.kz/catalog/rele/rozetka-dlya-rele',
+      price: 318,
+      vendor: 'Delixi',
+      amount: 11,
+      options: [],
+      category: { id: 5, pagetitle: 'Релейная автоматика' },
+    } as any,
+    {
+      id: 11,
+      pagetitle: 'Розетка штепсельная карболитовая открытой установки 16 А',
+      alias: 'rozetka-rexant',
+      url: 'https://220volt.kz/catalog/rozetki/rozetka-rexant',
+      price: 335,
+      vendor: 'REXANT',
+      amount: 12,
+      options: [],
+      category: { id: 2, pagetitle: 'Розетки' },
+    } as any,
+  ], ['розетка']);
+
+  assertEquals(filtered.map((p: any) => p.id), [11]);
 });
