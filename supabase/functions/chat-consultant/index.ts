@@ -2583,62 +2583,6 @@ function extractTokens(text: string): string[] {
     .filter(t => t.length >= 2);
 }
 
-function normalizeSearchableText(text: string): string {
-  return text
-    .toLowerCase()
-    .replace(/ё/g, 'е')
-    .replace(/[^\p{L}\p{N}]/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function stemSearchToken(token: string): string {
-  const normalized = normalizeSearchableText(token);
-  if (!normalized) return '';
-  return normalized.length >= 4 ? normalized.slice(0, 4) : normalized;
-}
-
-function buildPriceIntentRelevanceStems(relevanceQueries: string[]): string[] {
-  const stems = new Set<string>();
-  for (const query of relevanceQueries) {
-    for (const token of extractTokens(query)) {
-      const stem = stemSearchToken(token);
-      if (stem.length >= 4) stems.add(stem);
-    }
-  }
-  return Array.from(stems);
-}
-
-function buildProductSearchHaystack(product: Product): string {
-  const optionText = Array.isArray(product?.options)
-    ? product.options
-        .map((o) => `${o?.caption ?? ''} ${o?.value ?? ''}`.trim())
-        .filter(Boolean)
-        .join(' ')
-    : '';
-
-  return normalizeSearchableText([
-    product?.pagetitle ?? '',
-    product?.category?.pagetitle ?? '',
-    product?.alias ?? '',
-    product?.url ?? '',
-    optionText,
-  ].join(' '));
-}
-
-export function filterPriceIntentProductsByRelevance(products: Product[], relevanceQueries: string[]): Product[] {
-  const stems = buildPriceIntentRelevanceStems(relevanceQueries);
-  if (stems.length === 0) return products;
-
-  const fullQuery = relevanceQueries.join(' ').trim();
-
-  return products.filter((product) => {
-    const haystack = buildProductSearchHaystack(product);
-    const hasStemMatch = stems.some((stem) => haystack.includes(stem));
-    if (!hasStemMatch) return false;
-    return scoreProductMatch(product, extractTokens(fullQuery), extractSpecs(fullQuery), undefined, fullQuery) >= 25;
-  });
-}
 
 /**
  * Extract technical specs from text: numbers with units (18Вт, 6500К, 230В, 7Вт, 4000К)
