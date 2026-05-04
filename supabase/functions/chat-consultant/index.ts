@@ -1125,8 +1125,10 @@ interface Product {
   };
   options?: Array<{
     key: string;
-    caption: string;
-    value: string;
+    caption?: string;
+    value?: string;
+    caption_ru?: string;
+    value_ru?: string;
   }>;
   warehouses?: Array<{
     city: string;
@@ -3581,12 +3583,13 @@ async function resolveFiltersWithLLM(
     optionIndex = new Map();
     for (const product of products) {
       if (!product.options) continue;
-      for (const opt of product.options) {
+        for (const opt of product.options) {
         if (isExcludedOption(opt.key)) continue;
         if (!optionIndex.has(opt.key)) {
-          optionIndex.set(opt.key, { caption: opt.caption, values: new Set() });
+            optionIndex.set(opt.key, { caption: cleanOptionCaption(opt.caption_ru ?? opt.caption) || opt.key, values: new Set() });
         }
-        optionIndex.get(opt.key)!.values.add(opt.value);
+          const normalizedValue = cleanOptionValue(opt.value_ru ?? opt.value);
+          if (normalizedValue) optionIndex.get(opt.key)!.values.add(normalizedValue);
       }
     }
   }
