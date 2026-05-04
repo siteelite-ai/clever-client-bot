@@ -5589,14 +5589,33 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                       branchTag = 'qfv2_win';
                       console.log(`[QueryFirstV2] query_first_v2_win noun="${noun}" filters=${Object.keys(resolvedFilters).length} count=${final.length} elapsed=${Date.now() - qfStart}ms`);
                     } else {
-                      // Soft Fallback (§4.8.1): display the broader pool, mark dropped facet.
-                      // Pick the first dropped filter's caption from bootstrap schema for the tail line.
-                      displayList = pool;
-                      branchTag = 'qfv2_soft_fallback';
+                      // HONEST-EMPTY (was: silent Soft Fallback showing the broader pool).
+                      // Showing the pool here mixes irrelevant categories (e.g. "удлинитель"
+                      // pool includes wires/ПВС because the API matches them as related).
+                      // Instead: collect what we tried (facet captions + values + alternatives
+                      // available in the pool) and clear results so the pipeline reaches
+                      // Soft-404 with a rich context for an honest, scalable LLM answer.
+                      const attemptedFacets: Array<{ caption: string; value: string; alternativeValues: string[] }> = [];
+                      for (const [fKey, fValue] of Object.entries(resolvedFilters)) {
+                        const bucket = bootstrapSchema.get(fKey);
+                        const caption = bucket?.caption || fKey;
+                        const allValues = bucket ? Array.from(bucket.values) : [];
+                        const alternativeValues = allValues.filter(v => v !== fValue).slice(0, 8);
+                        attemptedFacets.push({ caption, value: String(fValue), alternativeValues });
+                      }
+                      qfv2HonestEmptyContext = {
+                        noun,
+                        originalQuery: extractedIntent.originalQuery || noun,
+                        attemptedFacets,
+                      };
+                      // Force foundProducts=0 → pipeline routes into Soft-404 branch below.
+                      displayList = [];
+                      branchTag = 'qfv2_honest_empty';
+                      // Keep dropped facet caption for legacy compatibility (composer tail).
                       const firstKey = Object.keys(resolvedFilters)[0];
                       const bucket = bootstrapSchema.get(firstKey);
                       qfV2DroppedFacetCaption = bucket?.caption || firstKey || null;
-                      console.log(`[QueryFirstV2] query_first_v2_soft_fallback noun="${noun}" droppedFacet="${qfV2DroppedFacetCaption}" pool=${pool.length} elapsed=${Date.now() - qfStart}ms`);
+                      console.log(`[QueryFirstV2] query_first_v2_honest_empty noun="${noun}" attemptedFacets=${JSON.stringify(attemptedFacets)} elapsed=${Date.now() - qfStart}ms`);
                     }
                   }
 
@@ -5605,7 +5624,10 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                   foundProducts = _r.displayed;
                   totalCollected = _r.total;
                   totalCollectedBranch = branchTag;
-                  articleShortCircuit = true;
+                  // articleShortCircuit only when we actually have products to render
+                  // deterministically. For honest-empty we want pipeline to flow into
+                  // Soft-404 (which builds productInstructions for the LLM).
+                  articleShortCircuit = _r.displayed.length > 0;
                   categoryFirstWinResolved = true;  // also short-circuits the legacy bucket fallback below
                   qfV2Resolved = true;
                   console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=${branchTag} zeroFiltered=${_r.filteredZeroPrice}`);
