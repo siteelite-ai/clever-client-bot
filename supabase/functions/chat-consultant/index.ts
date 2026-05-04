@@ -6988,6 +6988,24 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           : '';
         
         productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**${filterNote}${contextNote}${priceIntentNote}\n${formattedProducts}`;
+
+        // === DETERMINISTIC RENDER GUARD (2026-05-04) ===
+        // Если пользователь явно указал характеристики (option_filters в кандидатах)
+        // и Pass 2 успешно нашёл товары по этим фильтрам — показываем карточки
+        // детерминистично, без LLM-стрима. LLM в этом сценарии всё равно
+        // не имеет ценности (просто перечислит товары + перепишет URL),
+        // а риск галлюцинаций реален.
+        // ИСКЛЮЧЕНИЯ:
+        //   • compute (spec_query) — LLM нужна для расчёта/формулировки;
+        //   • effectivePriceIntent — там своя ветка price-clarify/price-render.
+        const hadOptionFilters = extractedIntent.candidates.some(
+          c => c.option_filters && Object.keys(c.option_filters).length > 0
+        );
+        const hasComputeReq = !!(extractedIntent.compute && extractedIntent.compute.attribute);
+        if (hadOptionFilters && !hasComputeReq && !effectivePriceIntent) {
+          articleShortCircuit = true;
+          console.log(`[Chat] Catalog-search: option_filters present + ${foundProducts.length} products → articleShortCircuit=true (deterministic render)`);
+        }
       }
     }
 
