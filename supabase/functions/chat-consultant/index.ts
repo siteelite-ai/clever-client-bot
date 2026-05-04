@@ -6734,12 +6734,25 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     let extractedIntent: ExtractedIntent;
     
     if (articleShortCircuit) {
+      // При short-circuit маршрут и candidates определены — но нужно вызвать
+      // classifier для compute-поля (spec_query: «сколько весит 5 штук»).
+      // Classifier вызывается параллельно с knowledge/contacts, задержка ~1-2s.
+      let computeField: ComputeRequest | undefined;
+      try {
+        const candidatesModel = 'google/gemini-3-flash-preview';
+        const classifierResult = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
+        computeField = classifierResult.compute;
+      } catch (e) {
+        console.warn(`[Chat] Classifier for compute (shortcircuit) failed:`, e instanceof Error ? e.message : String(e));
+      }
+
       extractedIntent = {
         intent: 'catalog',
         candidates: detectedArticles.length > 0 
           ? detectedArticles.map(a => ({ query: a, brand: null, category: null, min_price: null, max_price: null }))
           : [{ query: cleanQueryForDirectSearch(userMessage), brand: null, category: null, min_price: null, max_price: null }],
         originalQuery: userMessage,
+        compute: computeField,
       };
     } else if (classification?.intent === 'info' || classification?.intent === 'general') {
       // Micro-LLM already determined intent — skip expensive Gemini Pro call
