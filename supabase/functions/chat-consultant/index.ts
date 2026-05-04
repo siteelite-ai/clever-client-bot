@@ -5226,7 +5226,15 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
         // semantics as article-first; reuses articleShortCircuit so all downstream
         // branches treat the result identically. Skipped for replacement intent —
         // that pipeline needs the original product's traits, not the product itself.
-        if (!articleShortCircuit && classification?.has_product_name && !classification?.is_replacement) {
+        // SYSTEMIC GUARD (2026-05-04): если у классификатора есть critical_modifiers
+        // (характеристики типа "ВВГнг", "3х2.5", "12W", "E27", "IP44") — title-first
+        // FAST-PATH ПРОПУСКАЕТСЯ. Один хоп ?query=... вернёт >0 товаров без фильтрации
+        // по характеристикам, и LLM получит шумный список (и 1.5мм², и 4мм², и т.д.).
+        // Полный pipeline (catalog branch) применит option_filters через Pass 2 и
+        // вернёт релевантный результат. Title-first остаётся для чистых имён без
+        // модификаторов: "лампа A60", "розетка двойная", "выключатель Schneider".
+        const hasCriticalModifiers = Array.isArray(classification?.critical_modifiers) && classification.critical_modifiers.length > 0;
+        if (!articleShortCircuit && classification?.has_product_name && !classification?.is_replacement && !hasCriticalModifiers) {
           const titleCandidate = extractCandidateTitle(classification);
           if (titleCandidate) {
             const tStart = Date.now();
