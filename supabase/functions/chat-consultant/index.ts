@@ -4578,7 +4578,9 @@ export function buildDeterministicShortCircuitContent(params: {
         : 'Подобрал самые доступные варианты из каталога:'
       : reason === 'article-shortcircuit' || reason === 'siteid-shortcircuit'
         ? 'Нашёл товар по точному запросу:'
-        : 'Подобрал товары из каталога:';
+        : reason === 'pass2-shortcircuit'
+          ? 'Подобрал по вашим характеристикам:'
+          : 'Подобрал товары из каталога:';
 
   const cards = products.slice(0, 3).map(formatProductCardDeterministic).join('\n\n');
   const brands = extractBrandsFromProducts(products).slice(0, 3);
