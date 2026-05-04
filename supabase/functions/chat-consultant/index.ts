@@ -5592,9 +5592,63 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
         }
         
         // === CATEGORY-FIRST (category without specific product name) ===
-        if (!articleShortCircuit && effectiveCategory && !classification?.has_product_name && !classification?.is_replacement && !effectivePriceIntent && appSettings.volt220_api_token) {
-          const modifiers = classification?.search_modifiers || [];
-          console.log(`[Chat] Category-first: category="${effectiveCategory}", modifiers=[${modifiers.join(', ')}]`);
+        // 2026-05-04 (systemic fix for "has_product_name=true bypass"):
+        //   When the classifier flags has_product_name=true (e.g. "Кабель ВВГнг 3х2.5"),
+        //   the title-first FAST-PATH (?pagetitle/?article/?query=full_name) runs first.
+        //   If ALL of those return 0 (articleShortCircuit stays false), we previously
+        //   had no bridge into QFv2 — pipeline went straight to broad query → 0 →
+        //   jargon-fallback (which proposes ALTERNATIVE terms, not facet decomposition).
+        //   Result: technical markings like "ВВГнг" (stored as "ВВГ нг" in catalog) never
+        //   triggered Self-Bootstrap Facets even though product_category was correctly
+        //   identified ("кабель"). Fix: enter CATEGORY-FIRST + QFv2 when has_product_name=true
+        //   AND we still have no products AND there is a product_category to use as noun.
+        //   Inside the block we synthesise modifiers from product_name tokens when classifier
+        //   left search_modifiers=[] (which it does per spec when has_product_name=true).
+        if (!articleShortCircuit && effectiveCategory && !classification?.is_replacement && !effectivePriceIntent && appSettings.volt220_api_token) {
+          let modifiers = classification?.search_modifiers || [];
+          // Synthetic modifiers from product_name when classifier left them empty
+          // (data-agnostic tokeniser: split on whitespace/hyphens + letter↔digit + cyrillic↔latin
+          // boundaries, then drop the base category noun). Pure pre-LLM normalisation;
+          // the Facet Matcher still maps tokens → real options from bootstrap schema.
+          if (
+            modifiers.length === 0 &&
+            classification?.has_product_name &&
+            typeof classification?.product_name === 'string' &&
+            classification.product_name.trim().length > 0
+          ) {
+            const rawName = classification.product_name.trim();
+            const categoryLower = (classification?.product_category || '').trim().toLowerCase();
+            const synthesised: string[] = [];
+            const seen = new Set<string>();
+            // Step 1: split on whitespace, hyphens, slashes, parentheses, commas.
+            const chunks = rawName.split(/[\s,()/\\-]+/).filter(Boolean);
+            for (const chunk of chunks) {
+              // Step 2: split each chunk on script/script-class boundaries:
+              //   letter↔digit (ВВГнг3 → ВВГнг, 3), cyrillic↔latin (LSPVS → LS, PVS only if mixed).
+              //   Common separators inside numeric specs: × * х x . , (treated as token break too).
+              const subTokens = chunk
+                .replace(/([а-яА-ЯёЁ])([a-zA-Z])/g, '$1 $2')
+                .replace(/([a-zA-Z])([а-яА-ЯёЁ])/g, '$1 $2')
+                .replace(/([а-яА-ЯёЁa-zA-Z])(\d)/g, '$1 $2')
+                .replace(/(\d)([а-яА-ЯёЁa-zA-Z])/g, '$1 $2')
+                .split(/[×*хxХ]/i)
+                .flatMap((t) => t.split(/\s+/))
+                .map((t) => t.trim())
+                .filter(Boolean);
+              for (const tok of subTokens) {
+                const tLower = tok.toLowerCase();
+                if (tLower === categoryLower) continue;       // drop base noun ("кабель")
+                if (seen.has(tLower)) continue;
+                seen.add(tLower);
+                synthesised.push(tok);
+              }
+            }
+            if (synthesised.length > 0) {
+              modifiers = synthesised;
+              console.log(`[Chat] Synthesised modifiers from product_name="${rawName}": [${modifiers.join(', ')}] (has_product_name=true bridge)`);
+            }
+          }
+          console.log(`[Chat] Category-first: category="${effectiveCategory}", modifiers=[${modifiers.join(', ')}], hasProductName=${!!classification?.has_product_name}`);
           const categoryStart = Date.now();
 
           // ===== NEW: SEMANTIC CATEGORY-MATCHER PATH (race with 10s timeout) =====
