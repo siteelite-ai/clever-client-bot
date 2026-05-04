@@ -7674,7 +7674,11 @@ ${productInstructions}`;
     }
 
 
-    const shouldUseDeterministicProductRender = foundProducts.length > 0 && (
+    // spec_query (compute) ВСЕГДА требует LLM-обработки: нужна формулировка
+    // ответа про характеристику + опц. умножение на N — детерминистичный
+    // рендерер этого не умеет (он рисует только карточки + intro/followUp).
+    const hasComputeRequest = !!(extractedIntent.compute && extractedIntent.compute.attribute);
+    const shouldUseDeterministicProductRender = !hasComputeRequest && foundProducts.length > 0 && (
       isDeterministicShortCircuitReason(responseModelReason) ||
       responseModelReason === 'price-facet-clarify' ||
       articleShortCircuit
