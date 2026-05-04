@@ -5345,6 +5345,7 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
 
             if (!resumedFromClarify) {
               if (mods.length > 0) {
+                // Scenario C: характеристики уже заданы — пропускаем clarify, идём прямо в API.
                 const enrichedQuery = `${priceQuery} ${mods.join(' ')}`.trim();
                 console.log(`[Chat] Price intent with mods: "${enrichedQuery}"`);
                 const synonymQueries = [enrichedQuery, ...generatePriceSynonyms(priceQuery)];
@@ -5353,7 +5354,63 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                   foundProducts = priceResult.products;
                   articleShortCircuit = true;
                   responseModel = 'anthropic/claude-sonnet-4.5';
-                
+                  responseModelReason = 'price-shortcircuit';
+                }
+              } else {
+                // Scenario A/B: характеристик нет — bootstrap-фасеты + один уточняющий вопрос.
+                console.log(`[Chat] Price intent NO mods → bootstrap facet probe for "${priceQuery}"`);
+                const probe = await probeFacetsForPriceQuery(priceQuery, appSettings.volt220_api_token!);
+                if (probe && probe.products.length > 0) {
+                  const facet = pickClarifyFacet(probe.facets);
+                  if (facet) {
+                    pendingClarifyFacet = facet;
+                    pendingClarifyIntent = effectivePriceIntent;
+                    // top-3 cheapest для карточек: products уже отсортированы ASC сервером (min_price=1).
+                    const topProducts = effectivePriceIntent === 'most_expensive'
+                      ? [...probe.products].reverse().slice(0, 3)
+                      : probe.products.slice(0, 3);
+                    foundProducts = topProducts;
+                    articleShortCircuit = true;
+                    responseModel = 'anthropic/claude-sonnet-4.5';
+                    responseModelReason = 'price-facet-clarify';
+                    // Сохраняем слот: следующее сообщение пользователя будет матчиться против facet.values.
+                    const slotKey = `pfc_${Date.now()}`;
+                    dialogSlots[slotKey] = {
+                      intent: 'price_facet_clarify',
+                      base_category: priceQuery,
+                      price_dir: effectivePriceIntent,
+                      price_facet_state: JSON.stringify({ query: priceQuery, facet }),
+                      status: 'pending',
+                      created_turn: messages.length,
+                      turns_since_touched: 0,
+                    };
+                    slotsUpdated = true;
+                    console.log(`[Chat] PriceFacetClarify created slot=${slotKey} facet=${facet.key} values=${facet.values.length}`);
+                  } else {
+                    // Нет фасета с ≥2 значениями — отдаём 10 карточек без вопроса.
+                    const priceResult = await handlePriceIntent([priceQuery], effectivePriceIntent, appSettings.volt220_api_token!);
+                    if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
+                      foundProducts = priceResult.products;
+                      articleShortCircuit = true;
+                      responseModel = 'anthropic/claude-sonnet-4.5';
+                      responseModelReason = 'price-shortcircuit';
+                    }
+                  }
+                } else {
+                  // probe не дал товаров — fallback на прямой handlePriceIntent.
+                  const priceResult = await handlePriceIntent([priceQuery], effectivePriceIntent, appSettings.volt220_api_token!);
+                  if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
+                    foundProducts = priceResult.products;
+                    articleShortCircuit = true;
+                    responseModel = 'anthropic/claude-sonnet-4.5';
+                    responseModelReason = 'price-shortcircuit';
+                  }
+                }
+              }
+            }
+          }
+        }
+
         // The legacy duplicate block was removed; if the fast-path returned 0,
         // we don't repeat the identical ?query= call here.
         if (classification?.is_replacement && classification?.has_product_name && classification?.product_name) {
