@@ -6847,10 +6847,20 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           foundProducts = _r.displayed;
           totalCollected = _r.total;
           totalCollectedBranch = 'jargon-fallback-early';
-          // productContext будет пересобран ниже из новых foundProducts? Проверка:
-          // на самом деле productContext уже сформирован выше — нужно пересобрать его.
-          // Используем тот же formatter, что использует основной flow.
+          // productContext был сформирован выше из старого pool — пересобираем.
           productContext = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
+        } else {
+          // Системный фикс (2026-05-04): если critical_modifier не разрешён И
+          // jargon-fallback тоже не нашёл альтернатив — НЕЛЬЗЯ показывать
+          // pool из 15 случайных товаров (это «молчаливое» вранье — игнор
+          // ключевого слова "початок"/"кукуруза"). Очищаем foundProducts,
+          // чтобы пайплайн дошёл до Soft-404 с clarifyQuestion от LLM.
+          console.log(`[Chat req=${reqId}] [JargonFallback] EARLY all_empty → clearing pool to force Soft-404 (was ${foundProducts.length} unrelated products)`);
+          foundProducts = [];
+          totalCollected = 0;
+          totalCollectedBranch = 'jargon-fallback-empty';
+          articleShortCircuit = false;
+          productContext = '';
         }
       }
     } catch (e) {
