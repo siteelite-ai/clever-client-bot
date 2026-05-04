@@ -7374,7 +7374,13 @@ ${productInstructions}`;
     }
 
 
-    if ((isDeterministicShortCircuitReason(responseModelReason) || responseModelReason === 'price-facet-clarify') && foundProducts.length > 0) {
+    const shouldUseDeterministicProductRender = foundProducts.length > 0 && (
+      isDeterministicShortCircuitReason(responseModelReason) ||
+      responseModelReason === 'price-facet-clarify' ||
+      articleShortCircuit
+    );
+
+    if (shouldUseDeterministicProductRender) {
       const content = responseModelReason === 'price-facet-clarify' && pendingClarifyFacet && pendingClarifyIntent
         ? buildPriceFacetClarifyContent({
             products: foundProducts,
