@@ -6996,14 +6996,66 @@ ${directAnswerBlock}
 В Базе Знаний нет информации по этому вопросу. Предложи связаться с менеджером.`;
       }
     } else if (extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
-      // Soft 404 — каталог-интент с нулевыми результатами.
-      // SYSTEMIC FIX (probe 2026-05-01): старая инструкция явно разрешала
-      // «предложи АЛЬТЕРНАТИВЫ если знаешь что это за товар» — это легализация
-      // галлюцинаций (модель выдумывала товары/артикулы, отсутствующие в каталоге).
-      // Также нельзя утверждать «бренда X нет в ассортименте» — extracted intent
-      // не равен факту отсутствия в БД (см. core: «Bot NEVER self-narrows funnel»).
-      // По §5.6.1 (out_of_domain/empty) → честный Soft 404 + [CONTACT_MANAGER].
-      productInstructions = `
+      // ─── JARGON FALLBACK (см. mem://features/jargon-fallback) ─────────────
+      // Перед Soft-404 спрашиваем Claude Sonnet 4.5: «может это бытовое
+      // название?» (кукуруза → corn lamp / лампа-початок, груша → A60).
+      // Если LLM предложит альтернативу, по которой реально находятся товары →
+      // используем их и пропускаем Soft-404. Если все альтернативы пустые →
+      // подставляем clarifyQuestion в Soft-404 промпт.
+      // Любая ошибка LLM → silent fallback на стандартный Soft-404.
+      let jargonClarifyQuestion = '';
+      if (
+        appSettings.openrouter_api_key &&
+        appSettings.volt220_api_token &&
+        extractedIntent.originalQuery &&
+        extractedIntent.originalQuery.trim().length > 0
+      ) {
+        try {
+          const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
+          const jargonResult = await tryJargonFallback({
+            originalQuery: extractedIntent.originalQuery,
+            openrouterKey: appSettings.openrouter_api_key,
+            searchFn: async (alt: string) => {
+              return await searchProductsByCandidate(
+                { query: alt, brand: null, category: null, min_price: null, max_price: null },
+                appSettings.volt220_api_token!,
+                30
+              );
+            },
+            log: (event, data) => console.log(`[Chat req=${reqId}] [JargonFallback] ${event}`, data ?? {}),
+          });
+          if (jargonResult.products.length > 0) {
+            // Нашли товары через альтернативу — подставляем и пропускаем Soft-404.
+            console.log(`[Chat req=${reqId}] [JargonFallback] Recovered via alternative "${jargonResult.matchedAlternative}": ${jargonResult.products.length} products`);
+            const _r = pickDisplayWithTotal(jargonResult.products);
+            foundProducts = _r.displayed;
+            totalCollected = _r.total;
+            totalCollectedBranch = 'jargon-fallback';
+            // Пересчитываем productInstructions через стандартную S-CATALOG ветку:
+            // выходим из этой ветки, чтобы основной flow подобрал foundProducts.
+            // Для этого продолжаем НЕ задавая productInstructions для Soft-404 —
+            // дальше код проверяет foundProducts.length и выдаёт обычные карточки.
+          } else {
+            jargonClarifyQuestion = jargonResult.clarifyQuestion;
+          }
+        } catch (e) {
+          console.warn(`[Chat req=${reqId}] [JargonFallback] silent fail:`, e instanceof Error ? e.message : String(e));
+        }
+      }
+
+      // Если jargon не помог (или не вызывался) — строим Soft-404
+      if (foundProducts.length === 0) {
+        // Soft 404 — каталог-интент с нулевыми результатами.
+        // SYSTEMIC FIX (probe 2026-05-01): старая инструкция явно разрешала
+        // «предложи АЛЬТЕРНАТИВЫ если знаешь что это за товар» — это легализация
+        // галлюцинаций (модель выдумывала товары/артикулы, отсутствующие в каталоге).
+        // Также нельзя утверждать «бренда X нет в ассортименте» — extracted intent
+        // не равен факту отсутствия в БД (см. core: «Bot NEVER self-narrows funnel»).
+        // По §5.6.1 (out_of_domain/empty) → честный Soft 404 + [CONTACT_MANAGER].
+        const clarifyLine = jargonClarifyQuestion
+          ? `Одним коротким уточняющим вопросом помоги клиенту переформулировать. Используй ИМЕННО этот вопрос (он подобран под запрос клиента): «${jargonClarifyQuestion}»`
+          : `Одним коротким уточняющим вопросом помоги клиенту переформулировать (например: «Уточните, пожалуйста, бренд или артикул — поищу точнее» / «Для какой задачи нужен товар?»). ОДИН вопрос, не список.`;
+        productInstructions = `
 🔍 ТОВАР НЕ НАЙДЕН В КАТАЛОГЕ (Soft 404)
 
 Клиент написал: "${extractedIntent.originalQuery}"
@@ -7017,11 +7069,13 @@ ${directAnswerBlock}
 
 ✅ ТВОЙ ОТВЕТ (короткий, 2-3 предложения):
 1. Одной фразой признай, что по этому запросу товаров не подобралось.
-2. Одним коротким уточняющим вопросом помоги клиенту переформулировать (например: «Уточните, пожалуйста, бренд или артикул — поищу точнее» / «Для какой задачи нужен товар?»). ОДИН вопрос, не список.
+2. ${clarifyLine}
 3. В САМЫЙ КОНЕЦ ответа добавь маркер [CONTACT_MANAGER] — фронт покажет кнопку связи с менеджером.
 
 Тон: спокойный, профессиональный, без извинений и восклицательных знаков.`;
+      }
     }
+
 
     // Geo context for system prompt
     let geoContext = '';
