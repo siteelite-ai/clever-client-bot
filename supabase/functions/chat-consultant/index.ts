@@ -5309,8 +5309,7 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
         // A) Resume price_facet_clarify slot if user reply matches stored facet value.
         // B) Mods present -> straight handlePriceIntent (Scenario C from spec).
         // C) Bootstrap facets from /products?query=<>&per_page=100 + ask one question.
-        let pendingClarifyFacet: BootstrapFacet | null = null;
-        let pendingClarifyIntent: 'most_expensive' | 'cheapest' | null = null;
+        // pendingClarifyFacet / pendingClarifyIntent объявлены выше (верхний scope).
         if (effectivePriceIntent && appSettings.volt220_api_token) {
           const priceQuery = effectiveCategory || classification?.product_name || '';
           if (priceQuery) {
