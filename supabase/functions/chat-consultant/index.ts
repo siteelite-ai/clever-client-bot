@@ -6831,14 +6831,23 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
         originalQuery: userMessage,
         compute: computeField,
       };
-    } else if (classification?.intent === 'info' || classification?.intent === 'general') {
+    } else if ((classification?.intent === 'info' || classification?.intent === 'general') && !classification?.product_category) {
       // Micro-LLM already determined intent — skip expensive Gemini Pro call
+      // GUARD (2026-05-04): если micro-LLM сказал info/general, НО при этом
+      // определил product_category (например «есть кабеля ВВГнг 3х2.5?» → general
+      // + product_category=кабель), это caталог-вопрос, замаскированный под info.
+      // Не верим intent, идём в полный pipeline (как §1373).
       console.log(`[Chat] Micro-LLM intent="${classification.intent}" — skipping generateSearchCandidates`);
       extractedIntent = {
         intent: classification.intent,
         candidates: [],
         originalQuery: userMessage,
       };
+    } else if (classification?.intent === 'info' || classification?.intent === 'general') {
+      // info/general WITH product_category → fall through to full pipeline
+      console.log(`[Chat] Micro-LLM intent="${classification.intent}" but product_category="${classification.product_category}" → forcing catalog pipeline`);
+      const candidatesModel = 'anthropic/claude-sonnet-4.5';
+      extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
     } else {
       // catalog/brands or no intent — full pipeline
       // MODEL UPGRADE (probe 2026-05-01): gemini-2.5-flash галлюцинировал brand из произвольных
