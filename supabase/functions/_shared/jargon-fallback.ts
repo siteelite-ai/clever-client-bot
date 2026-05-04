@@ -169,22 +169,64 @@ export async function tryJargonFallback(input: JargonFallbackInput): Promise<Jar
 
   log("jargon.llm_ok", { alternatives, clarifyQuestion, ms: Date.now() - t0 });
 
-  // 2. Ретрай поиска по каждой альтернативе
+  // 2. Ретрай поиска по каждой альтернативе.
+  //
+  // ВАЖНО (2026-05-04): Catalog API ищет фразу как AND по всем словам.
+  // То есть «лампа кукуруза» = должны встретиться оба слова в одном товаре,
+  // а реальные товары называются «Лампа LED CORN» — слова «кукуруза» нет → 0.
+  // Поэтому для каждой альтернативы помимо фразы целиком пробуем каждое
+  // значимое слово (>=3 букв, не стоп-слово) как отдельный запрос.
+  // Это покрывает кейс, когда LLM выдала «лампа кукуруза», но в каталоге
+  // лежат «corn lamp» — отдельный поиск «corn» (если бы LLM его выдала)
+  // или «кукуруза» сработает.
+  const STOP_WORDS = new Set([
+    "лампа", "лампы", "лампочка", "лампочки",
+    "светильник", "светильники", "светодиодная", "светодиодный", "led",
+    "для", "под", "и", "или", "с", "без", "от", "до",
+    "the", "a", "an", "of", "for", "and", "or",
+  ]);
+  const seen = new Set<string>();
+  const candidates: { query: string; source: "phrase" | "token"; parent: string }[] = [];
   for (const alt of alternatives) {
+    const altLower = alt.toLowerCase();
+    if (!seen.has(altLower)) {
+      seen.add(altLower);
+      candidates.push({ query: alt, source: "phrase", parent: alt });
+    }
+    // Разбиваем на токены и добавляем значимые слова
+    const tokens = alt.split(/[\s,;/()\-]+/).map(t => t.trim()).filter(Boolean);
+    if (tokens.length > 1) {
+      for (const tok of tokens) {
+        const tokLower = tok.toLowerCase();
+        if (
+          tok.length >= 3 &&
+          !STOP_WORDS.has(tokLower) &&
+          !seen.has(tokLower) &&
+          tokLower !== query.toLowerCase()
+        ) {
+          seen.add(tokLower);
+          candidates.push({ query: tok, source: "token", parent: alt });
+        }
+      }
+    }
+  }
+  log("jargon.candidates_expanded", { total: candidates.length, list: candidates.map(c => `${c.query}(${c.source})`) });
+
+  for (const cand of candidates) {
     try {
-      const products = await input.searchFn(alt);
+      const products = await input.searchFn(cand.query);
       if (Array.isArray(products) && products.length > 0) {
-        log("jargon.match", { alternative: alt, count: products.length });
+        log("jargon.match", { alternative: cand.query, source: cand.source, parent: cand.parent, count: products.length });
         return {
           products,
-          matchedAlternative: alt,
+          matchedAlternative: cand.query,
           alternatives,
           clarifyQuestion,
           llmOk: true,
         };
       }
     } catch (e) {
-      log("jargon.search_error", { alternative: alt, error: e instanceof Error ? e.message : String(e) });
+      log("jargon.search_error", { alternative: cand.query, error: e instanceof Error ? e.message : String(e) });
     }
   }
 
