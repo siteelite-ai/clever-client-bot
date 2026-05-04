@@ -4594,144 +4594,33 @@ function extractBrandsFromProducts(products: Product[]): string[] {
 }
 
 // ============================================================
-// COMPUTE / SPEC LOOKUP — find a characteristic by user's natural-language hint
+// COMPUTE BLOCK — spec_query надстройка
 // ============================================================
-// User can ask «сколько весит», «какая мощность», «какой IP» — extract the
-// matching option from Product.options[] using a synonym dictionary +
-// fuzzy substring match against caption_ru / key.
-// Returns first match per product. Defensive read of both shapes:
-// new {caption_ru, value_ru} (live API) and old {caption, value} (legacy interface).
+// Классификатор пометил compute={attribute, multiplier?} — пользователь
+// спросил о характеристике товара (опц. ×N). Список характеристик товара
+// УЖЕ есть в LLM-контексте (см. formatProductsForAI → "Характеристики: ...").
+// LLM сама находит подходящее поле и считает — никаких словарей синонимов,
+// никакого ручного матчинга. Здесь только короткая инструкция-задача.
+// Anti-hallucination: использовать ТОЛЬКО значения из контекста; если поля
+// нет — честно сказать «не указано».
 // ============================================================
-
-const COMPUTE_SYNONYMS: Record<string, string[]> = {
-  'вес': ['вес', 'масса', 'weight', 'ves', 'massa'],
-  'масса': ['вес', 'масса', 'weight', 'ves', 'massa'],
-  'мощность': ['мощност', 'мощн', 'power', 'watt', 'moshchnost', 'квт', 'вт'],
-  'напряжение': ['напряжен', 'voltage', 'volt', 'napryazhen'],
-  'ток': ['ток ', 'сила тока', 'current', 'ампераж', 'ампер'],
-  'ip': ['ip', 'степень защит', 'stepen_zashch', 'влагозащит', 'пылевлаг'],
-  'степень защиты': ['ip', 'степень защит', 'stepen_zashch', 'влагозащит', 'пылевлаг'],
-  'габариты': ['габарит', 'размер', 'dimension', 'razmer', 'gabarit', 'длина', 'ширина', 'высота'],
-  'размер': ['размер', 'габарит', 'dimension', 'razmer', 'gabarit'],
-  'длина': ['длина', 'length', 'dlina'],
-  'ширина': ['ширина', 'width', 'shirina'],
-  'высота': ['высота', 'height', 'vysota'],
-  'диаметр': ['диаметр', 'diameter', 'диам'],
-  'сечение': ['сечен', 'sechenie'],
-  'материал': ['материал', 'material'],
-  'цвет': ['цвет', 'color', 'tsvet', 'colour'],
-  'цоколь': ['цокол', 'tsokol', 'cap'],
-  'количество ламп': ['количество ламп', 'число ламп', 'кол-во ламп'],
-  'количество розеток': ['количество розет', 'число розет', 'кол-во розет', 'розеток'],
-  'количество модулей': ['количество модул', 'число модул', 'модуле'],
-  'гарантия': ['гарант', 'warranty', 'garant'],
-  'страна': ['страна', 'country'],
-  'объём': ['объ', 'volume'],
-  'объем': ['объ', 'volume'],
-  'тип': ['тип', 'type', 'vid_'],
-  'класс': ['класс', 'class'],
-};
-
-interface CharacteristicHit {
-  product: Product;
-  caption: string;
-  value: string;
-}
-
-function getComputeSearchTokens(attributeHint: string): string[] {
-  const lower = attributeHint.toLowerCase().trim();
-  if (COMPUTE_SYNONYMS[lower]) return COMPUTE_SYNONYMS[lower];
-  for (const [key, tokens] of Object.entries(COMPUTE_SYNONYMS)) {
-    if (lower.includes(key) || key.includes(lower)) return tokens;
-  }
-  return lower.length >= 3 ? [lower] : [];
-}
-
-export function findCharacteristicInProducts(
-  products: Product[],
-  attributeHint: string,
-): CharacteristicHit[] {
-  if (!attributeHint || !Array.isArray(products) || products.length === 0) return [];
-  const tokens = getComputeSearchTokens(attributeHint);
-  if (tokens.length === 0) return [];
-
-  const hits: CharacteristicHit[] = [];
-  for (const product of products) {
-    if (!Array.isArray(product?.options)) continue;
-    let bestHit: { caption: string; value: string } | null = null;
-
-    for (const opt of product.options as any[]) {
-      if (!opt) continue;
-      const captionRaw = (opt.caption_ru ?? opt.caption ?? opt.key ?? '').toString();
-      const keyRaw = (opt.key ?? '').toString();
-      const valueRaw = (opt.value_ru ?? opt.value ?? '').toString();
-      if (!valueRaw.trim()) continue;
-
-      const captionLower = captionRaw.toLowerCase();
-      const keyLower = keyRaw.toLowerCase();
-      const matched = tokens.some(t => captionLower.includes(t) || keyLower.includes(t));
-      if (!matched) continue;
-
-      const cleanValue = valueRaw.split('//')[0].trim();
-      if (!cleanValue) continue;
-
-      bestHit = { caption: (cleanOptionCaption(captionRaw) || captionRaw).trim(), value: cleanValue };
-      break;
-    }
-
-    if (bestHit) {
-      hits.push({ product, caption: bestHit.caption, value: bestHit.value });
-    }
-  }
-  return hits;
-}
-
-/**
- * Build a compute-block text injected into productInstructions BEFORE product cards.
- * Tells the LLM (or downstream renderer) what the user asked, what we found,
- * and how to answer (with multiplier). Anti-hallucination: NEVER invents values —
- * if option missing, instructs LLM to say honestly «не указано».
- */
 function buildComputeInstructionBlock(params: {
   attribute: string;
   multiplier: number | null | undefined;
-  hits: CharacteristicHit[];
-  totalProducts: number;
 }): string {
-  const { attribute, multiplier, hits, totalProducts } = params;
+  const { attribute, multiplier } = params;
   const mulText = (multiplier && multiplier > 1) ? ` × ${multiplier} шт.` : '';
-  const askLine = `🧮 КЛИЕНТ ЗАПРОСИЛ ХАРАКТЕРИСТИКУ: «${attribute}»${mulText}`;
+  return `🧮 КЛИЕНТ СПРАШИВАЕТ О ХАРАКТЕРИСТИКЕ: «${attribute}»${mulText}
 
-  if (hits.length === 0) {
-    return `${askLine}
-
-В характеристиках найденных товаров (всего ${totalProducts}) НЕТ поля, соответствующего «${attribute}».
+Список характеристик каждого товара (поле «Характеристики: …») у тебя уже есть ниже. Найди в нём поле, соответствующее запросу клиента (значение бери ТОЛЬКО оттуда — не выдумывай).
 
 ✅ ТВОЯ ЗАДАЧА:
-1. Честно одной фразой скажи, что эта характеристика не указана в карточке товара. НИКОГДА не выдумывай числовые значения.
-2. Предложи клиенту посмотреть полную карточку товара по ссылке ниже или связаться с менеджером.
-3. Дальше покажи карточки найденных товаров как обычно.
-`;
-  }
-
-  const lines = hits.slice(0, 3).map(h => {
-    const name = (h.product.pagetitle || 'Товар').trim();
-    return `   • «${name}» → ${h.caption}: ${h.value}`;
-  }).join('\n');
-
-  const computeHint = (multiplier && multiplier > 1)
-    ? `\n3. Если значение чисто числовое (например, «1.2 кг», «60 Вт») — умножь на ${multiplier} и выведи итог В ОДНУ СТРОКУ перед карточкой (например: «${attribute} × ${multiplier} шт. = <число с единицей>»). Если значение нечисловое (например, «IP44», «белый») — просто повтори значение, умножение не применяй.`
-    : `\n3. Дай прямой ответ ОДНОЙ строкой ПЕРЕД карточкой товара (например: «${attribute}: <значение из данных выше>»).`;
-
-  return `${askLine}
-
-В характеристиках товаров найдены следующие значения:
-${lines}
-
-✅ ТВОЯ ЗАДАЧА:
-1. Используй ТОЛЬКО значения из списка выше. НЕ выдумывай и НЕ округляй числа без необходимости.
-2. Если найдено несколько товаров с разными значениями — отвечай по ПЕРВОМУ (самому релевантному) товару, остальные просто покажи карточками.${computeHint}
-4. После прямого ответа покажи карточку(и) товара как обычно (BNF: название-ссылка + Цена + Бренд + Наличие).
+1. Найди в характеристиках товара значение, соответствующее «${attribute}». Подходящее поле может называться по-разному (например, для «вес» подойдёт «Масса, кг» или «Вес нетто»).
+2. ${(multiplier && multiplier > 1)
+    ? `Если значение чисто числовое — умножь на ${multiplier} и выведи итог одной строкой ПЕРЕД карточкой товара (например: «${attribute} × ${multiplier} шт. = <число с единицей>»). Если значение нечисловое (IP-класс, цвет, материал) — просто повтори его, умножение не применяй.`
+    : `Дай прямой ответ одной короткой строкой ПЕРЕД карточкой товара (например: «${attribute}: <значение>»).`}
+3. После прямого ответа покажи карточку(и) товара как обычно: название-ссылка, Цена, Бренд, Наличие.
+4. Если в характеристиках НЕТ поля, соответствующего «${attribute}» — честно одной фразой скажи, что эта характеристика не указана в карточке, и предложи уточнить у менеджера или посмотреть полную страницу товара. НИКОГДА не выдумывай числовые значения.
 `;
 }
 
@@ -6845,12 +6734,33 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     let extractedIntent: ExtractedIntent;
     
     if (articleShortCircuit) {
+      // При short-circuit маршрут и candidates определены — но нужно проверить,
+      // не спрашивает ли пользователь о характеристике товара (compute).
+      // Вызываем classifier ТОЛЬКО если сообщение похоже на вопрос о свойстве —
+      // это НЕ словарь фасетов, а простой gate «нужен ли classifier для compute?».
+      let computeField: ComputeRequest | undefined;
+      const lowerMsg = userMessage.toLowerCase();
+      const looksLikeSpecQuery = /сколько|какой|какая|какое|каков|какие|весит|вес\b|мощност|длин|ширин|высот|размер|габарит|гарант|объ[её]м|диаметр|сечен|ip\d|ампер|\bвт\b|\bкг\b|\bквт\b|характеристик/i.test(lowerMsg);
+      if (looksLikeSpecQuery) {
+        try {
+          const candidatesModel = 'google/gemini-3-flash-preview';
+          const classifierResult = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
+          computeField = classifierResult.compute;
+          if (computeField) {
+            console.log(`[Chat] Compute extracted from classifier (shortcircuit path): attribute="${computeField.attribute}", multiplier=${computeField.multiplier ?? 'null'}`);
+          }
+        } catch (e) {
+          console.warn(`[Chat] Classifier for compute (shortcircuit) failed:`, e instanceof Error ? e.message : String(e));
+        }
+      }
+
       extractedIntent = {
         intent: 'catalog',
         candidates: detectedArticles.length > 0 
           ? detectedArticles.map(a => ({ query: a, brand: null, category: null, min_price: null, max_price: null }))
           : [{ query: cleanQueryForDirectSearch(userMessage), brand: null, category: null, min_price: null, max_price: null }],
         originalQuery: userMessage,
+        compute: computeField,
       };
     } else if (classification?.intent === 'info' || classification?.intent === 'general') {
       // Micro-LLM already determined intent — skip expensive Gemini Pro call
@@ -6915,7 +6825,7 @@ ${kbParts.join('\n\n')}
       }
     }
     if (articleShortCircuit && foundProducts.length > 0) {
-      const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
+      const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
       console.log(`[Chat] Short-circuit formatted products for AI:\n${formattedProducts}`);
       
       // Check if it was article/site-id or title-first
@@ -6933,7 +6843,7 @@ ${kbParts.join('\n\n')}
         
         if (foundProducts.length > 0) {
           const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
-          const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
+          const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
           console.log(`[Chat] Formatted products for AI:\n${formattedProducts}`);
           productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**\n\n${formattedProducts}`;
         }
@@ -6993,7 +6903,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
         }
         
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
-        const formattedProducts = formatProductsForAI(foundProducts.slice(0, 10), needsExtendedOptions(userMessage));
+        const formattedProducts = formatProductsForAI(foundProducts.slice(0, 10), needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
         console.log(`[Chat] Formatted products for AI:\n${formattedProducts}`);
         
         const appliedFilters = describeAppliedFilters(extractedIntent.candidates);
@@ -7072,7 +6982,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           totalCollected = _r.total;
           totalCollectedBranch = 'jargon-fallback-early';
           // productContext был сформирован выше из старого pool — пересобираем.
-          productContext = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
+          productContext = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
         } else {
           // Системный фикс (2026-05-04): если critical_modifier не разрешён И
           // jargon-fallback тоже не нашёл альтернатив — НЕЛЬЗЯ показывать
@@ -7416,14 +7326,11 @@ ${facetsList}
       productInstructions.trim().length > 0
     ) {
       try {
-        const hits = findCharacteristicInProducts(foundProducts.slice(0, 10), extractedIntent.compute.attribute);
         const computeBlock = buildComputeInstructionBlock({
           attribute: extractedIntent.compute.attribute,
           multiplier: extractedIntent.compute.multiplier ?? null,
-          hits,
-          totalProducts: foundProducts.length,
         });
-        console.log(`[Chat] Compute block injected: attribute="${extractedIntent.compute.attribute}", multiplier=${extractedIntent.compute.multiplier ?? 'null'}, hits=${hits.length}/${foundProducts.length}`);
+        console.log(`[Chat] Compute block injected: attribute="${extractedIntent.compute.attribute}", multiplier=${extractedIntent.compute.multiplier ?? 'null'}`);
         productInstructions = `${computeBlock}\n${productInstructions}`;
       } catch (e) {
         console.warn(`[Chat] Compute block silent fail:`, e instanceof Error ? e.message : String(e));
