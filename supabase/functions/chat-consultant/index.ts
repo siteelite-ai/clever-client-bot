@@ -6961,7 +6961,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           totalCollected = _r.total;
           totalCollectedBranch = 'jargon-fallback-early';
           // productContext был сформирован выше из старого pool — пересобираем.
-          productContext = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
+          productContext = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
         } else {
           // Системный фикс (2026-05-04): если critical_modifier не разрешён И
           // jargon-fallback тоже не нашёл альтернатив — НЕЛЬЗЯ показывать
