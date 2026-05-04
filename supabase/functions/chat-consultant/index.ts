@@ -6803,7 +6803,59 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
     );
     
     console.log(`[Chat] hasAssistantGreeting: ${hasAssistantGreeting}`);
-    
+
+    // ─── EARLY JARGON FALLBACK (см. mem://features/jargon-fallback) ──────────
+    // Кейс: Query-First v2 нашёл пул по noun (например "лампа"), но НИ ОДИН
+    // critical_modifier не сматчился со схемой фасетов (branch=qfv2_pool_no_modifiers).
+    // В этом случае мы показывали бы клиенту 15 случайных ламп — это «молчаливое»
+    // вранье: бот делает вид, что нашёл, хотя по сути проигнорировал ключевое
+    // слово ("кукуруза"). Лучше попробовать жаргон-фоллбек:
+    // спросить Claude, не бытовое ли это название (кукуруза → corn lamp),
+    // и поискать по альтернативе. Если найдём — покажем эти товары вместо пула.
+    try {
+      const cand = extractedIntent?.candidates?.[0];
+      const criticalMods = (cand?.critical_modifiers || cand?.search_modifiers || []) as string[];
+      const isPoolNoModifiers = totalCollectedBranch === 'qfv2_pool_no_modifiers';
+      if (
+        isPoolNoModifiers &&
+        criticalMods.length > 0 &&
+        appSettings.openrouter_api_key &&
+        appSettings.volt220_api_token &&
+        extractedIntent.originalQuery &&
+        extractedIntent.originalQuery.trim().length > 0
+      ) {
+        console.log(`[Chat req=${reqId}] [JargonFallback] EARLY trigger: branch=qfv2_pool_no_modifiers criticalMods=${JSON.stringify(criticalMods)}`);
+        const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
+        const jargonResult = await tryJargonFallback({
+          originalQuery: extractedIntent.originalQuery,
+          openrouterKey: appSettings.openrouter_api_key,
+          searchFn: async (alt: string) => {
+            return await searchProductsByCandidate(
+              { query: alt, brand: null, category: null, min_price: null, max_price: null },
+              appSettings.volt220_api_token!,
+              30
+            );
+          },
+          log: (event, data) => console.log(`[Chat req=${reqId}] [JargonFallback] ${event}`, data ?? {}),
+        });
+        if (jargonResult.products.length > 0) {
+          console.log(`[Chat req=${reqId}] [JargonFallback] EARLY recovered via "${jargonResult.matchedAlternative}": ${jargonResult.products.length} products (replacing pool)`);
+          const _r = pickDisplayWithTotal(jargonResult.products);
+          foundProducts = _r.displayed;
+          totalCollected = _r.total;
+          totalCollectedBranch = 'jargon-fallback-early';
+          // productContext будет пересобран ниже из новых foundProducts? Проверка:
+          // на самом деле productContext уже сформирован выше — нужно пересобрать его.
+          // Используем тот же formatter, что использует основной flow.
+          if (typeof formatProductsForAI === 'function') {
+            productContext = formatProductsForAI(foundProducts);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn(`[Chat req=${reqId}] [JargonFallback] EARLY silent fail:`, e instanceof Error ? e.message : String(e));
+    }
+
     let productInstructions = '';
     const isReplacementIntent = !!replacementMeta?.isReplacement;
     const replacementOriginal = replacementMeta?.original || undefined;
