@@ -5254,6 +5254,8 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
               console.log(`[Chat] Title-first FAST-PATH: 0 results in ${tElapsed}ms for "${titleCandidate}", continuing pipeline`);
             }
           }
+        } else if (!articleShortCircuit && classification?.has_product_name && hasCriticalModifiers) {
+          console.log(`[Chat] Title-first FAST-PATH SKIPPED: critical_modifiers=[${classification.critical_modifiers.join(', ')}] → routing to full catalog pipeline (Pass 2 will apply option_filters)`);
         }
 
         if (!articleShortCircuit) {
