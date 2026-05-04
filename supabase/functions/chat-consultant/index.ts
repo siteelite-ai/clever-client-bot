@@ -1125,8 +1125,10 @@ interface Product {
   };
   options?: Array<{
     key: string;
-    caption: string;
-    value: string;
+    caption?: string;
+    value?: string;
+    caption_ru?: string;
+    value_ru?: string;
   }>;
   warehouses?: Array<{
     city: string;
@@ -3581,12 +3583,13 @@ async function resolveFiltersWithLLM(
     optionIndex = new Map();
     for (const product of products) {
       if (!product.options) continue;
-      for (const opt of product.options) {
+        for (const opt of product.options) {
         if (isExcludedOption(opt.key)) continue;
         if (!optionIndex.has(opt.key)) {
-          optionIndex.set(opt.key, { caption: opt.caption, values: new Set() });
+            optionIndex.set(opt.key, { caption: cleanOptionCaption(opt.caption_ru ?? opt.caption) || opt.key, values: new Set() });
         }
-        optionIndex.get(opt.key)!.values.add(opt.value);
+          const normalizedValue = cleanOptionValue(opt.value_ru ?? opt.value);
+          if (normalizedValue) optionIndex.get(opt.key)!.values.add(normalizedValue);
       }
     }
   }
@@ -4182,6 +4185,58 @@ async function searchProductsMulti(
   }
   
   console.log(`[Search] Pass 1 (broad): ${productMap.size} unique products`);
+
+  // === PASS 2: Apply human-readable option_filters via existing dynamic resolver ===
+  // No hardcoded mapping tables: resolve against real product/category options from Pass 1,
+  // then replay the same queries with concrete options[<real_key>][]=<value> in API.
+  if (hasHumanFilters && productMap.size > 0 && settings) {
+    const allProducts = Array.from(productMap.values());
+    const humanModifiers = Array.from(new Set(
+      Object.entries(humanFilters)
+        .map(([k, v]) => {
+          const label = cleanOptionCaption(k.replace(/__.*/, '').replace(/_/g, ' '));
+          const value = cleanOptionValue(v);
+          return `${label || k} ${value}`.trim();
+        })
+        .filter(Boolean)
+    ));
+
+    if (humanModifiers.length > 0) {
+      const { resolved: resolvedFromHumanRaw, unresolved: unresolvedHuman } = await resolveFiltersWithLLM(
+        allProducts,
+        humanModifiers,
+        settings,
+        humanModifiers,
+      );
+      const resolvedFromHuman = flattenResolvedFilters(resolvedFromHumanRaw);
+
+      if (Object.keys(resolvedFromHuman).length > 0) {
+        console.log(`[Search] Human option_filters resolved: ${JSON.stringify(resolvedFromHuman)}; unresolved=[${unresolvedHuman.join(', ')}]`);
+        const pass2Promises = cappedPass1.map(candidate =>
+          searchProductsByCandidate(candidate, apiToken, perPage, resolvedFromHuman)
+        );
+        const pass2Results = await Promise.all(pass2Promises);
+        const pass2Map = new Map<number, Product>();
+        for (const products of pass2Results) {
+          for (const product of products) {
+            if (!pass2Map.has(product.id)) {
+              pass2Map.set(product.id, product);
+            }
+          }
+        }
+
+        console.log(`[Search] Pass 2 (resolved option_filters): ${pass2Map.size} unique products`);
+        if (pass2Map.size > 0) {
+          productMap.clear();
+          for (const [id, product] of pass2Map.entries()) {
+            productMap.set(id, product);
+          }
+        }
+      } else {
+        console.log(`[Search] Human option_filters present but could not be resolved against Pass 1 products`);
+      }
+    }
+  }
   
   // === LOCAL CHARACTERISTIC FILTERING (primary mechanism) ===
   if (modifiers && modifiers.length > 0 && productMap.size > 0 && settings) {
@@ -6853,7 +6908,7 @@ ${kbParts.join('\n\n')}
       
       if (hasSpecificBrand) {
         console.log(`[Chat] "brands" intent with specific brand → treating as catalog search`);
-        foundProducts = await searchProductsMulti(extractedIntent.candidates, 8, appSettings.volt220_api_token || undefined);
+        foundProducts = await searchProductsMulti(extractedIntent.candidates, 8, appSettings.volt220_api_token || undefined, undefined, undefined, appSettings);
         
         if (foundProducts.length > 0) {
           const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
@@ -6862,7 +6917,7 @@ ${kbParts.join('\n\n')}
           productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**\n\n${formattedProducts}`;
         }
       } else {
-        foundProducts = await searchProductsMulti(extractedIntent.candidates, 50, appSettings.volt220_api_token || undefined);
+        foundProducts = await searchProductsMulti(extractedIntent.candidates, 50, appSettings.volt220_api_token || undefined, undefined, undefined, appSettings);
         
         if (foundProducts.length > 0) {
           const brands = extractBrandsFromProducts(foundProducts);
@@ -6880,7 +6935,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
       }
     } else if (!articleShortCircuit && extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
       const searchLimit = extractedIntent.usage_context ? 25 : 15;
-      foundProducts = await searchProductsMulti(extractedIntent.candidates, searchLimit, appSettings.volt220_api_token || undefined);
+      foundProducts = await searchProductsMulti(extractedIntent.candidates, searchLimit, appSettings.volt220_api_token || undefined, undefined, undefined, appSettings);
       
       // === ENGLISH FALLBACK: Only if <3 results AND have english_queries ===
       if (foundProducts.length === 0 && extractedIntent.english_queries && extractedIntent.english_queries.length > 0) {
@@ -6893,7 +6948,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           max_price: extractedIntent.candidates[0]?.max_price || null,
           option_filters: extractedIntent.candidates[0]?.option_filters,
         }));
-        const englishResults = await searchProductsMulti(englishCandidates, searchLimit, appSettings.volt220_api_token || undefined);
+        const englishResults = await searchProductsMulti(englishCandidates, searchLimit, appSettings.volt220_api_token || undefined, undefined, undefined, appSettings);
         if (englishResults.length > 0) {
           console.log(`[Chat] English fallback found ${englishResults.length} additional products`);
           const mergedMap = new Map<number, Product>();
