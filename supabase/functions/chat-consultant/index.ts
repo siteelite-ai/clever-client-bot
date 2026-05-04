@@ -4974,6 +4974,17 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     // not the truncated 15. Reset to 0 each turn.
     let totalCollected = 0;
     let totalCollectedBranch = '';
+    // QueryFirstV2 honest-empty context: when final filtered search returns 0,
+    // we DO NOT silently show the broader pool (which mixes irrelevant products).
+    // Instead, we clear results and pass this context into Soft-404 so the LLM
+    // can craft an honest answer: "не нашёл <noun> с <facets>, что важнее?".
+    // Each entry: { caption: human-readable facet name, value: requested value,
+    // alternativeValues: other values available in pool for that facet }.
+    let qfv2HonestEmptyContext: {
+      noun: string;
+      originalQuery: string;
+      attemptedFacets: Array<{ caption: string; value: string; alternativeValues: string[] }>;
+    } | null = null;
     let brandsContext = '';
     let knowledgeContext = '';
     let articleShortCircuit = false;
