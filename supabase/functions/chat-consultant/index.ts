@@ -6755,6 +6755,20 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
         }
       }
       
+      // === JARGON FALLBACK: total=0 → lookup lexicon → LLM alternatives ===
+      if (foundProducts.length === 0) {
+        const jargonResult = await tryJargonFallback(
+          userMessage,
+          extractedIntent.candidates,
+          searchLimit,
+          appSettings,
+        );
+        if (jargonResult.products.length > 0) {
+          foundProducts = jargonResult.products;
+          console.log(`[JargonFallback] HIT source=${jargonResult.source} term="${jargonResult.term}" canonical="${jargonResult.canonical}" → ${foundProducts.length} products`);
+        }
+      }
+
       // === RERANK before presenting results ===
       if (foundProducts.length > 0) {
         // === SERVER-SIDE PRICE SORT: if effectivePriceIntent is active, sort by price before reranking ===
