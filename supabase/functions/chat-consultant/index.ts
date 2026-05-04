@@ -7403,6 +7403,32 @@ ${facetsList}
       }
     }
 
+    // ─── COMPUTE BLOCK (spec_query надстройка) ──────────────────────────────
+    // Если классификатор пометил compute и у нас есть товары — клиент спросил
+    // о КОНКРЕТНОЙ характеристике (опц. ×N). Добавляем инструкцию в самый верх
+    // productInstructions: характеристика берётся ТОЛЬКО из реальных options
+    // товара, никаких выдуманных значений. Работает поверх любой ветки выше
+    // (article / title / replacement / regular catalog).
+    if (
+      extractedIntent.compute &&
+      extractedIntent.compute.attribute &&
+      foundProducts.length > 0 &&
+      productInstructions.trim().length > 0
+    ) {
+      try {
+        const hits = findCharacteristicInProducts(foundProducts.slice(0, 10), extractedIntent.compute.attribute);
+        const computeBlock = buildComputeInstructionBlock({
+          attribute: extractedIntent.compute.attribute,
+          multiplier: extractedIntent.compute.multiplier ?? null,
+          hits,
+          totalProducts: foundProducts.length,
+        });
+        console.log(`[Chat] Compute block injected: attribute="${extractedIntent.compute.attribute}", multiplier=${extractedIntent.compute.multiplier ?? 'null'}, hits=${hits.length}/${foundProducts.length}`);
+        productInstructions = `${computeBlock}\n${productInstructions}`;
+      } catch (e) {
+        console.warn(`[Chat] Compute block silent fail:`, e instanceof Error ? e.message : String(e));
+      }
+    }
 
     // Geo context for system prompt
     let geoContext = '';
