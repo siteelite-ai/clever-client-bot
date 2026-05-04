@@ -6867,6 +6867,17 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
       // Финальный ответ пользователю по-прежнему идёт на aiConfig.model.
       const candidatesModel = 'anthropic/claude-sonnet-4.5';
       extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
+      // SYSTEMIC GUARD (2026-05-04): Micro-LLM (Claude) уже определил intent — это первичный источник правды.
+      // generateSearchCandidates иногда возвращает intent='general' для разговорных формулировок
+      // ("есть кабеля ВВГнг 3х2.5?"), потому что фокусируется на извлечении candidates, а не на
+      // классификации. Если Micro-LLM сказал catalog/brands — доверяем ему и форсим intent.
+      // Candidates от generateSearchCandidates сохраняем (там option_filters для Pass 2).
+      if (classification?.intent === 'catalog' || classification?.intent === 'brands') {
+        if (extractedIntent.intent !== classification.intent) {
+          console.log(`[Chat] Intent override: Micro-LLM='${classification.intent}' wins over generateSearchCandidates='${extractedIntent.intent}' (Micro-LLM is primary classifier)`);
+          extractedIntent.intent = classification.intent;
+        }
+      }
     }
     console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}, ShortCircuit: ${articleShortCircuit}`);
 
