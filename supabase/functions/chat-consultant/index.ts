@@ -4988,6 +4988,10 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     let responseModel = aiConfig.model;
     let responseModelReason = 'default';
     let replacementMeta: { isReplacement: boolean; original: Product | null; originalName?: string; noResults: boolean } | null = null;
+    // Price-Facet-Clarify state (V1 bootstrap-facets clarify) — поднято на верхний scope,
+    // чтобы deterministic short-circuit ниже мог построить корректное сообщение.
+    let pendingClarifyFacet: BootstrapFacet | null = null;
+    let pendingClarifyIntent: 'most_expensive' | 'cheapest' | null = null;
 
     // === ARTICLE FIRST: Detect SKU/article codes BEFORE LLM 1 ===
     const detectedArticles = detectArticles(userMessage);
