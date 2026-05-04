@@ -6813,8 +6813,11 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
     // спросить Claude, не бытовое ли это название (кукуруза → corn lamp),
     // и поискать по альтернативе. Если найдём — покажем эти товары вместо пула.
     try {
-      const cand = extractedIntent?.candidates?.[0];
-      const criticalMods = (cand?.critical_modifiers || cand?.search_modifiers || []) as string[];
+      const criticalMods = (
+        (Array.isArray(classification?.critical_modifiers) && classification.critical_modifiers.length > 0)
+          ? classification.critical_modifiers
+          : (Array.isArray(classification?.search_modifiers) ? classification.search_modifiers : [])
+      ) as string[];
       const isPoolNoModifiers = totalCollectedBranch === 'qfv2_pool_no_modifiers';
       if (
         isPoolNoModifiers &&
