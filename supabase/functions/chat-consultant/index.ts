@@ -1146,12 +1146,21 @@ interface SearchCandidate {
 
 // NO hardcoded option keys! We discover them dynamically from API results.
 
+interface ComputeRequest {
+  /** Что спрашивают: «вес», «мощность», «IP», «габариты», «гарантия», «количество ламп» и т.п. */
+  attribute: string;
+  /** Множитель ×N штук, если пользователь указал количество. null/undefined = одна штука. */
+  multiplier?: number | null;
+}
+
 interface ExtractedIntent {
   intent: 'catalog' | 'brands' | 'info' | 'general';
   candidates: SearchCandidate[];
   originalQuery: string;
   usage_context?: string;
   english_queries?: string[];
+  /** Надстройка к любой ветке: пользователь хочет узнать характеристику найденного товара (опц. ×N). */
+  compute?: ComputeRequest;
 }
 
 // ============================================================
@@ -3044,6 +3053,13 @@ ${recentHistory.length > 0 ? 'Анализируй текущее сообщен
 КОНТЕКСТ ИСПОЛЬЗОВАНИЯ (usage_context):
 Если пользователь описывает не сам товар, а место или условия его применения («для улицы», «в баню», «на производство», «в детскую») — заполни usage_context описанием контекста и одновременно выведи в option_filters предполагаемые технические характеристики, которые этому контексту соответствуют (степень защиты, климатическое исполнение и т.п.). Если пользователь сам назвал конкретную характеристику (IP65, IK10) — это не контекст, а признак: ставь только в option_filters, usage_context оставь пустым.
 
+ПОДСЧЁТ / ХАРАКТЕРИСТИКА (compute):
+Это НАДСТРОЙКА к любому intent — основной intent (catalog/brands/info) и кандидаты не меняются. Заполняй compute, когда пользователь спрашивает о КОНКРЕТНОЙ характеристике товара или просит её посчитать (умножить на количество). Примеры: «сколько весит», «какой вес у 5 штук», «какая мощность», «какой IP», «какие габариты», «сколько ламп», «гарантия», «диаметр», «длина кабеля».
+- compute.attribute — короткое русское название характеристики, как её обычно называет пользователь («вес», «мощность», «IP», «габариты», «гарантия», «длина», «количество ламп», «материал»). НЕ перечисляй несколько — выбери главную.
+- compute.multiplier — целое число, если пользователь явно указал количество («5 штук», «×3», «для 10 светильников»). Если количество не названо — null.
+- Если пользователь просто ищет товар без вопроса о характеристике — compute=null. Не выдумывай.
+- Если пользователь спрашивает про характеристику без привязки к товару, но в контексте уже обсуждавшегося товара (followup: «а сколько он весит?») — всё равно заполни compute, кандидаты могут быть пустыми/общими, дальше система возьмёт товар из контекста.
+
 ИЕРАРХИЯ КАНДИДАТОВ:
 1. Первый кандидат — основной товар: то родовое или каталожное имя, которым этот предмет называют в магазине.
 2. Остальные кандидаты — основной товар плюс характеристика, либо альтернативные имена того же товара (разговорное / техническое / каталожное). Подумай, как этот предмет может быть записан в каталоге электротоваров: по разговорному имени, по техническому термину, по альтернативному названию.
@@ -3134,6 +3150,24 @@ ${recentHistory.length > 0 ? 'Анализируй текущее сообщен
                   items: { type: 'string' },
                   nullable: true,
                   description: 'Английские переводы поисковых терминов для каталога электротоваров. Переводи ТОЛЬКО названия товаров/категорий (существительные), НЕ переводи общие слова (купить, нужен, для улицы). Примеры: "кукуруза" → "corn", "свеча" → "candle", "груша" → "pear", "удлинитель" → "extension cord". null если все термины уже на английском или перевод не нужен.'
+                },
+                compute: {
+                  type: 'object',
+                  nullable: true,
+                  description: 'Надстройка: пользователь спрашивает о характеристике товара (опционально ×N штук). null если вопроса о характеристике нет.',
+                  properties: {
+                    attribute: {
+                      type: 'string',
+                      description: 'Короткое русское название характеристики, как её называет пользователь: «вес», «мощность», «IP», «габариты», «гарантия», «длина», «количество ламп», «материал» и т.п.'
+                    },
+                    multiplier: {
+                      type: 'number',
+                      nullable: true,
+                      description: 'Множитель ×N штук, если пользователь указал количество («5 штук», «×3»). null если количество не названо.'
+                    }
+                  },
+                  required: ['attribute'],
+                  additionalProperties: false
                 }
               },
               required: ['intent', 'candidates'],
@@ -3222,12 +3256,27 @@ ${recentHistory.length > 0 ? 'Анализируй текущее сообщен
         finalIntent = 'catalog';
       }
       
+      // Compute надстройка — пользователь спрашивает о характеристике (опц. ×N).
+      let compute: ComputeRequest | undefined;
+      if (parsed.compute && typeof parsed.compute === 'object' && typeof parsed.compute.attribute === 'string') {
+        const attribute = parsed.compute.attribute.trim();
+        if (attribute.length > 0) {
+          const rawMul = parsed.compute.multiplier;
+          const multiplier = (typeof rawMul === 'number' && Number.isFinite(rawMul) && rawMul > 0)
+            ? Math.floor(rawMul)
+            : null;
+          compute = { attribute, multiplier };
+          console.log(`[AI Candidates] Compute request: attribute="${attribute}", multiplier=${multiplier}`);
+        }
+      }
+
       return {
         intent: finalIntent,
         candidates: broadened,
         originalQuery: message,
         usage_context: usageContext,
         english_queries: englishQueries.length > 0 ? englishQueries : undefined,
+        compute,
       };
     }
 
