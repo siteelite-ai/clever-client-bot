@@ -6788,10 +6788,10 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
       // catalog/brands or no intent — full pipeline
       // MODEL UPGRADE (probe 2026-05-01): gemini-2.5-flash галлюцинировал brand из произвольных
       // слов («PROBEMARKER» → brand) и терял модификаторы («двухместная» → option_filters={}).
-      // Без CoT/reasoning tool-calling extraction нестабилен. gemini-3-flash-preview даёт
-      // нативный CoT без явных reasoning-флагов, +1-2с latency, кратно выше точность.
+      // EXPERIMENT 2026-05-04: переключаемся с gemini-3-flash-preview на Claude Sonnet 4.5 —
+      // Gemini тоже терял модификаторы для технических артикулов («ВВГнг 3х2.5» → []).
       // Финальный ответ пользователю по-прежнему идёт на aiConfig.model.
-      const candidatesModel = 'google/gemini-3-flash-preview';
+      const candidatesModel = 'anthropic/claude-sonnet-4.5';
       extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
     }
     console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}, ShortCircuit: ${articleShortCircuit}`);
