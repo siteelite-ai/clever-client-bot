@@ -5605,7 +5605,7 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                       }
                       qfv2HonestEmptyContext = {
                         noun,
-                        originalQuery: extractedIntent.originalQuery || noun,
+                        originalQuery: userMessage || noun,
                         attemptedFacets,
                       };
                       // Force foundProducts=0 → pipeline routes into Soft-404 branch below.
