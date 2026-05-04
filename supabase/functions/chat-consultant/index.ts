@@ -7264,13 +7264,19 @@ ${productInstructions}`;
     }
 
 
-    if (isDeterministicShortCircuitReason(responseModelReason) && foundProducts.length > 0) {
-      const content = buildDeterministicShortCircuitContent({
-        products: foundProducts,
-        reason: responseModelReason,
-        userMessage,
-        effectivePriceIntent,
-      });
+    if ((isDeterministicShortCircuitReason(responseModelReason) || responseModelReason === 'price-facet-clarify') && foundProducts.length > 0) {
+      const content = responseModelReason === 'price-facet-clarify' && pendingClarifyFacet && pendingClarifyIntent
+        ? buildPriceFacetClarifyContent({
+            products: foundProducts,
+            priceIntent: pendingClarifyIntent,
+            facet: pendingClarifyFacet,
+          })
+        : buildDeterministicShortCircuitContent({
+            products: foundProducts,
+            reason: responseModelReason,
+            userMessage,
+            effectivePriceIntent,
+          });
       console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${responseModelReason} products=${foundProducts.length} contentLen=${content.length}`);
 
       if (!useStreaming) {
