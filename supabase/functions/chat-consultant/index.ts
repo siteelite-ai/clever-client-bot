@@ -6804,7 +6804,7 @@ ${kbParts.join('\n\n')}
       }
     }
     if (articleShortCircuit && foundProducts.length > 0) {
-      const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
+      const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
       console.log(`[Chat] Short-circuit formatted products for AI:\n${formattedProducts}`);
       
       // Check if it was article/site-id or title-first
@@ -6822,7 +6822,7 @@ ${kbParts.join('\n\n')}
         
         if (foundProducts.length > 0) {
           const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
-          const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
+          const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
           console.log(`[Chat] Formatted products for AI:\n${formattedProducts}`);
           productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**\n\n${formattedProducts}`;
         }
@@ -6882,7 +6882,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
         }
         
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
-        const formattedProducts = formatProductsForAI(foundProducts.slice(0, 10), needsExtendedOptions(userMessage));
+        const formattedProducts = formatProductsForAI(foundProducts.slice(0, 10), needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
         console.log(`[Chat] Formatted products for AI:\n${formattedProducts}`);
         
         const appliedFilters = describeAppliedFilters(extractedIntent.candidates);
