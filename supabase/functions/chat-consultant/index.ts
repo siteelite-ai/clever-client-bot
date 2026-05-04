@@ -4974,6 +4974,17 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     // not the truncated 15. Reset to 0 each turn.
     let totalCollected = 0;
     let totalCollectedBranch = '';
+    // QueryFirstV2 honest-empty context: when final filtered search returns 0,
+    // we DO NOT silently show the broader pool (which mixes irrelevant products).
+    // Instead, we clear results and pass this context into Soft-404 so the LLM
+    // can craft an honest answer: "не нашёл <noun> с <facets>, что важнее?".
+    // Each entry: { caption: human-readable facet name, value: requested value,
+    // alternativeValues: other values available in pool for that facet }.
+    let qfv2HonestEmptyContext: {
+      noun: string;
+      originalQuery: string;
+      attemptedFacets: Array<{ caption: string; value: string; alternativeValues: string[] }>;
+    } | null = null;
     let brandsContext = '';
     let knowledgeContext = '';
     let articleShortCircuit = false;
@@ -5578,14 +5589,33 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                       branchTag = 'qfv2_win';
                       console.log(`[QueryFirstV2] query_first_v2_win noun="${noun}" filters=${Object.keys(resolvedFilters).length} count=${final.length} elapsed=${Date.now() - qfStart}ms`);
                     } else {
-                      // Soft Fallback (§4.8.1): display the broader pool, mark dropped facet.
-                      // Pick the first dropped filter's caption from bootstrap schema for the tail line.
-                      displayList = pool;
-                      branchTag = 'qfv2_soft_fallback';
+                      // HONEST-EMPTY (was: silent Soft Fallback showing the broader pool).
+                      // Showing the pool here mixes irrelevant categories (e.g. "удлинитель"
+                      // pool includes wires/ПВС because the API matches them as related).
+                      // Instead: collect what we tried (facet captions + values + alternatives
+                      // available in the pool) and clear results so the pipeline reaches
+                      // Soft-404 with a rich context for an honest, scalable LLM answer.
+                      const attemptedFacets: Array<{ caption: string; value: string; alternativeValues: string[] }> = [];
+                      for (const [fKey, fValue] of Object.entries(resolvedFilters)) {
+                        const bucket = bootstrapSchema.get(fKey);
+                        const caption = bucket?.caption || fKey;
+                        const allValues = bucket ? Array.from(bucket.values) : [];
+                        const alternativeValues = allValues.filter(v => v !== fValue).slice(0, 8);
+                        attemptedFacets.push({ caption, value: String(fValue), alternativeValues });
+                      }
+                      qfv2HonestEmptyContext = {
+                        noun,
+                        originalQuery: extractedIntent.originalQuery || noun,
+                        attemptedFacets,
+                      };
+                      // Force foundProducts=0 → pipeline routes into Soft-404 branch below.
+                      displayList = [];
+                      branchTag = 'qfv2_honest_empty';
+                      // Keep dropped facet caption for legacy compatibility (composer tail).
                       const firstKey = Object.keys(resolvedFilters)[0];
                       const bucket = bootstrapSchema.get(firstKey);
                       qfV2DroppedFacetCaption = bucket?.caption || firstKey || null;
-                      console.log(`[QueryFirstV2] query_first_v2_soft_fallback noun="${noun}" droppedFacet="${qfV2DroppedFacetCaption}" pool=${pool.length} elapsed=${Date.now() - qfStart}ms`);
+                      console.log(`[QueryFirstV2] query_first_v2_honest_empty noun="${noun}" attemptedFacets=${JSON.stringify(attemptedFacets)} elapsed=${Date.now() - qfStart}ms`);
                     }
                   }
 
@@ -5594,7 +5624,10 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                   foundProducts = _r.displayed;
                   totalCollected = _r.total;
                   totalCollectedBranch = branchTag;
-                  articleShortCircuit = true;
+                  // articleShortCircuit only when we actually have products to render
+                  // deterministically. For honest-empty we want pipeline to flow into
+                  // Soft-404 (which builds productInstructions for the LLM).
+                  articleShortCircuit = _r.displayed.length > 0;
                   categoryFirstWinResolved = true;  // also short-circuits the legacy bucket fallback below
                   qfV2Resolved = true;
                   console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=${branchTag} zeroFiltered=${_r.filteredZeroPrice}`);
@@ -7115,10 +7148,49 @@ ${directAnswerBlock}
         // Также нельзя утверждать «бренда X нет в ассортименте» — extracted intent
         // не равен факту отсутствия в БД (см. core: «Bot NEVER self-narrows funnel»).
         // По §5.6.1 (out_of_domain/empty) → честный Soft 404 + [CONTACT_MANAGER].
-        const clarifyLine = jargonClarifyQuestion
-          ? `Одним коротким уточняющим вопросом помоги клиенту переформулировать. Используй ИМЕННО этот вопрос (он подобран под запрос клиента): «${jargonClarifyQuestion}»`
-          : `Одним коротким уточняющим вопросом помоги клиенту переформулировать (например: «Уточните, пожалуйста, бренд или артикул — поищу точнее» / «Для какой задачи нужен товар?»). ОДИН вопрос, не список.`;
-        productInstructions = `
+        if (qfv2HonestEmptyContext && qfv2HonestEmptyContext.attemptedFacets.length > 0) {
+          // SPECIALIZED Soft-404 for QueryFirstV2 honest-empty:
+          // We DO know what facets we tried and what alternatives exist in the pool.
+          // Tell the LLM the truth so it can craft a precise, helpful clarify question.
+          // This case explicitly OVERRIDES rule #4 (no facet explanations) — here the
+          // facet info IS the helpful answer ("не нашёл с 5 розетками И заземлением,
+          // что важнее?"). Without it the bot would sound vague.
+          const ctx = qfv2HonestEmptyContext;
+          const facetsList = ctx.attemptedFacets
+            .map(f => {
+              const altsPart = f.alternativeValues.length > 0
+                ? ` (в наличии другие значения: ${f.alternativeValues.join(', ')})`
+                : ` (других значений в подборке нет)`;
+              return `   • ${f.caption} = «${f.value}»${altsPart}`;
+            })
+            .join('\n');
+          productInstructions = `
+🔍 ТОВАР С ТАКОЙ КОМБИНАЦИЕЙ ХАРАКТЕРИСТИК НЕ НАЙДЕН (Soft 404)
+
+Клиент написал: "${ctx.originalQuery}"
+Мы нашли в каталоге товары по основному запросу «${ctx.noun}», но НИ ОДИН из них не подходит под ВСЕ заявленные характеристики ОДНОВРЕМЕННО.
+
+Применённые фильтры (все одновременно дали 0 результатов):
+${facetsList}
+
+⛔ КАТЕГОРИЧЕСКИЕ ЗАПРЕТЫ:
+1. НЕ выдумывай товары, артикулы, бренды, модели.
+2. НЕ показывай списки товаров — у тебя их сейчас нет.
+3. НЕ говори «такого товара нет в магазине» — мы не нашли только эту КОМБИНАЦИЮ, отдельные характеристики возможно есть.
+4. НЕ извиняйся, не используй восклицательные знаки.
+
+✅ ТВОЙ ОТВЕТ (3-4 коротких предложения):
+1. Честно скажи: «Не нашёл <${ctx.noun}> с одновременно <перечисли применённые значения через "и">».
+2. Спроси, что для клиента важнее — назови 2 заявленные характеристики и предложи выбрать одну как обязательную.
+3. Если у какой-то из характеристик есть «другие значения в подборке» (см. список выше) — мягко предложи рассмотреть их (например: «или рассмотрите варианты с 3, 4, 6 розетками»). Используй ТОЛЬКО значения из списка выше, не выдумывай свои.
+4. В самый конец добавь маркер [CONTACT_MANAGER].
+
+Тон: спокойный, профессиональный, экспертный.`;
+        } else {
+          const clarifyLine = jargonClarifyQuestion
+            ? `Одним коротким уточняющим вопросом помоги клиенту переформулировать. Используй ИМЕННО этот вопрос (он подобран под запрос клиента): «${jargonClarifyQuestion}»`
+            : `Одним коротким уточняющим вопросом помоги клиенту переформулировать (например: «Уточните, пожалуйста, бренд или артикул — поищу точнее» / «Для какой задачи нужен товар?»). ОДИН вопрос, не список.`;
+          productInstructions = `
 🔍 ТОВАР НЕ НАЙДЕН В КАТАЛОГЕ (Soft 404)
 
 Клиент написал: "${extractedIntent.originalQuery}"
@@ -7136,6 +7208,7 @@ ${directAnswerBlock}
 3. В САМЫЙ КОНЕЦ ответа добавь маркер [CONTACT_MANAGER] — фронт покажет кнопку связи с менеджером.
 
 Тон: спокойный, профессиональный, без извинений и восклицательных знаков.`;
+        }
       }
     }
 
