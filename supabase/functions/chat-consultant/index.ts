@@ -4988,6 +4988,10 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     let responseModel = aiConfig.model;
     let responseModelReason = 'default';
     let replacementMeta: { isReplacement: boolean; original: Product | null; originalName?: string; noResults: boolean } | null = null;
+    // Price-Facet-Clarify state (V1 bootstrap-facets clarify) — поднято на верхний scope,
+    // чтобы deterministic short-circuit ниже мог построить корректное сообщение.
+    let pendingClarifyFacet: BootstrapFacet | null = null;
+    let pendingClarifyIntent: 'most_expensive' | 'cheapest' | null = null;
 
     // === ARTICLE FIRST: Detect SKU/article codes BEFORE LLM 1 ===
     const detectedArticles = detectArticles(userMessage);
@@ -5305,8 +5309,7 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
         // A) Resume price_facet_clarify slot if user reply matches stored facet value.
         // B) Mods present -> straight handlePriceIntent (Scenario C from spec).
         // C) Bootstrap facets from /products?query=<>&per_page=100 + ask one question.
-        let pendingClarifyFacet: BootstrapFacet | null = null;
-        let pendingClarifyIntent: 'most_expensive' | 'cheapest' | null = null;
+        // pendingClarifyFacet / pendingClarifyIntent объявлены выше (верхний scope).
         if (effectivePriceIntent && appSettings.volt220_api_token) {
           const priceQuery = effectiveCategory || classification?.product_name || '';
           if (priceQuery) {
@@ -5345,6 +5348,7 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
 
             if (!resumedFromClarify) {
               if (mods.length > 0) {
+                // Scenario C: характеристики уже заданы — пропускаем clarify, идём прямо в API.
                 const enrichedQuery = `${priceQuery} ${mods.join(' ')}`.trim();
                 console.log(`[Chat] Price intent with mods: "${enrichedQuery}"`);
                 const synonymQueries = [enrichedQuery, ...generatePriceSynonyms(priceQuery)];
@@ -5353,7 +5357,63 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                   foundProducts = priceResult.products;
                   articleShortCircuit = true;
                   responseModel = 'anthropic/claude-sonnet-4.5';
-                
+                  responseModelReason = 'price-shortcircuit';
+                }
+              } else {
+                // Scenario A/B: характеристик нет — bootstrap-фасеты + один уточняющий вопрос.
+                console.log(`[Chat] Price intent NO mods → bootstrap facet probe for "${priceQuery}"`);
+                const probe = await probeFacetsForPriceQuery(priceQuery, appSettings.volt220_api_token!);
+                if (probe && probe.products.length > 0) {
+                  const facet = pickClarifyFacet(probe.facets);
+                  if (facet) {
+                    pendingClarifyFacet = facet;
+                    pendingClarifyIntent = effectivePriceIntent;
+                    // top-3 cheapest для карточек: products уже отсортированы ASC сервером (min_price=1).
+                    const topProducts = effectivePriceIntent === 'most_expensive'
+                      ? [...probe.products].reverse().slice(0, 3)
+                      : probe.products.slice(0, 3);
+                    foundProducts = topProducts;
+                    articleShortCircuit = true;
+                    responseModel = 'anthropic/claude-sonnet-4.5';
+                    responseModelReason = 'price-facet-clarify';
+                    // Сохраняем слот: следующее сообщение пользователя будет матчиться против facet.values.
+                    const slotKey = `pfc_${Date.now()}`;
+                    dialogSlots[slotKey] = {
+                      intent: 'price_facet_clarify',
+                      base_category: priceQuery,
+                      price_dir: effectivePriceIntent,
+                      price_facet_state: JSON.stringify({ query: priceQuery, facet }),
+                      status: 'pending',
+                      created_turn: messages.length,
+                      turns_since_touched: 0,
+                    };
+                    slotsUpdated = true;
+                    console.log(`[Chat] PriceFacetClarify created slot=${slotKey} facet=${facet.key} values=${facet.values.length}`);
+                  } else {
+                    // Нет фасета с ≥2 значениями — отдаём 10 карточек без вопроса.
+                    const priceResult = await handlePriceIntent([priceQuery], effectivePriceIntent, appSettings.volt220_api_token!);
+                    if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
+                      foundProducts = priceResult.products;
+                      articleShortCircuit = true;
+                      responseModel = 'anthropic/claude-sonnet-4.5';
+                      responseModelReason = 'price-shortcircuit';
+                    }
+                  }
+                } else {
+                  // probe не дал товаров — fallback на прямой handlePriceIntent.
+                  const priceResult = await handlePriceIntent([priceQuery], effectivePriceIntent, appSettings.volt220_api_token!);
+                  if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
+                    foundProducts = priceResult.products;
+                    articleShortCircuit = true;
+                    responseModel = 'anthropic/claude-sonnet-4.5';
+                    responseModelReason = 'price-shortcircuit';
+                  }
+                }
+              }
+            }
+          }
+        }
+
         // The legacy duplicate block was removed; if the fast-path returned 0,
         // we don't repeat the identical ?query= call here.
         if (classification?.is_replacement && classification?.has_product_name && classification?.product_name) {
@@ -7207,13 +7267,19 @@ ${productInstructions}`;
     }
 
 
-    if (isDeterministicShortCircuitReason(responseModelReason) && foundProducts.length > 0) {
-      const content = buildDeterministicShortCircuitContent({
-        products: foundProducts,
-        reason: responseModelReason,
-        userMessage,
-        effectivePriceIntent,
-      });
+    if ((isDeterministicShortCircuitReason(responseModelReason) || responseModelReason === 'price-facet-clarify') && foundProducts.length > 0) {
+      const content = responseModelReason === 'price-facet-clarify' && pendingClarifyFacet && pendingClarifyIntent
+        ? buildPriceFacetClarifyContent({
+            products: foundProducts,
+            priceIntent: pendingClarifyIntent,
+            facet: pendingClarifyFacet,
+          })
+        : buildDeterministicShortCircuitContent({
+            products: foundProducts,
+            reason: responseModelReason,
+            userMessage,
+            effectivePriceIntent,
+          });
       console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${responseModelReason} products=${foundProducts.length} contentLen=${content.length}`);
 
       if (!useStreaming) {
