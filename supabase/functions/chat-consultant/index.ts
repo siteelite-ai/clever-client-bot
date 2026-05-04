@@ -7702,14 +7702,28 @@ ${productInstructions}`;
     // ответа про характеристику + опц. умножение на N — детерминистичный
     // рендерер этого не умеет (он рисует только карточки + intro/followUp).
     const hasComputeRequest = !!(extractedIntent.compute && extractedIntent.compute.attribute);
+    // SYSTEMIC ANTI-HALLUCINATION (2026-05-04): любой ответ с найденными товарами
+    // обязан рендериться детерминистично из ProductResource — иначе LLM переписывает
+    // URL даже при инструкции «копируй как есть» (см. mem://constraints/deterministic-product-render).
+    // Раньше условие требовало articleShortCircuit=true ИЛИ известный reason — но catalog-ветка
+    // с Pass 2 (option_filters) использует общий поток без short-circuit и попадала на LLM-стрим.
+    // Теперь правило: foundProducts>0 && !compute && intent='catalog' → ВСЕГДА детерминистично.
+    // Replacement и similar-ветки имеют свои composer'ы и сюда не доходят.
+    const isCatalogIntent = extractedIntent.intent === 'catalog' || extractedIntent.intent === 'brands';
     const shouldUseDeterministicProductRender = !hasComputeRequest && foundProducts.length > 0 && (
       isDeterministicShortCircuitReason(responseModelReason) ||
       responseModelReason === 'price-facet-clarify' ||
-      articleShortCircuit
+      articleShortCircuit ||
+      isCatalogIntent
     );
 
     if (shouldUseDeterministicProductRender) {
-      const content = responseModelReason === 'price-facet-clarify' && pendingClarifyFacet && pendingClarifyIntent
+      // Если попали сюда из общего catalog-потока (не short-circuit) — нормализуем reason
+      // под обычный 'pass2-shortcircuit', чтобы intro/followUp подхватились корректно.
+      const renderReason = (isDeterministicShortCircuitReason(responseModelReason) || responseModelReason === 'price-facet-clarify')
+        ? responseModelReason
+        : 'pass2-shortcircuit';
+      const content = renderReason === 'price-facet-clarify' && pendingClarifyFacet && pendingClarifyIntent
         ? buildPriceFacetClarifyContent({
             products: foundProducts,
             priceIntent: pendingClarifyIntent,
@@ -7717,11 +7731,11 @@ ${productInstructions}`;
           })
         : buildDeterministicShortCircuitContent({
             products: foundProducts,
-            reason: responseModelReason,
+            reason: renderReason,
             userMessage,
             effectivePriceIntent,
           });
-      console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${responseModelReason} products=${foundProducts.length} contentLen=${content.length}`);
+      console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${content.length}`);
 
       if (!useStreaming) {
         const responseBody: { content: string; slot_update?: DialogSlots } = { content };
