@@ -6756,7 +6756,8 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
       const looksLikeSpecQuery = /сколько|какой|какая|какое|каков|какие|весит|вес\b|мощност|длин|ширин|высот|размер|габарит|гарант|объ[её]м|диаметр|сечен|ip\d|ампер|\bвт\b|\bкг\b|\bквт\b|характеристик/i.test(lowerMsg);
       if (looksLikeSpecQuery) {
         try {
-          const candidatesModel = 'google/gemini-3-flash-preview';
+          // EXPERIMENT 2026-05-04: Claude Sonnet 4.5 для классификатора (Gemini терял модификаторы типа "ВВГнг", "3х2.5" → []).
+          const candidatesModel = 'anthropic/claude-sonnet-4.5';
           const classifierResult = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
           computeField = classifierResult.compute;
           if (computeField) {
