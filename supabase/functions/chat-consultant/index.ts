@@ -7305,14 +7305,11 @@ ${facetsList}
       productInstructions.trim().length > 0
     ) {
       try {
-        const hits = findCharacteristicInProducts(foundProducts.slice(0, 10), extractedIntent.compute.attribute);
         const computeBlock = buildComputeInstructionBlock({
           attribute: extractedIntent.compute.attribute,
           multiplier: extractedIntent.compute.multiplier ?? null,
-          hits,
-          totalProducts: foundProducts.length,
         });
-        console.log(`[Chat] Compute block injected: attribute="${extractedIntent.compute.attribute}", multiplier=${extractedIntent.compute.multiplier ?? 'null'}, hits=${hits.length}/${foundProducts.length}`);
+        console.log(`[Chat] Compute block injected: attribute="${extractedIntent.compute.attribute}", multiplier=${extractedIntent.compute.multiplier ?? 'null'}`);
         productInstructions = `${computeBlock}\n${productInstructions}`;
       } catch (e) {
         console.warn(`[Chat] Compute block silent fail:`, e instanceof Error ? e.message : String(e));
