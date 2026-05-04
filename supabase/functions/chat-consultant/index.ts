@@ -6734,16 +6734,24 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     let extractedIntent: ExtractedIntent;
     
     if (articleShortCircuit) {
-      // При short-circuit маршрут и candidates определены — но нужно вызвать
-      // classifier для compute-поля (spec_query: «сколько весит 5 штук»).
-      // Classifier вызывается параллельно с knowledge/contacts, задержка ~1-2s.
+      // При short-circuit маршрут и candidates определены — но нужно проверить,
+      // не спрашивает ли пользователь о характеристике товара (compute).
+      // Вызываем classifier ТОЛЬКО если сообщение похоже на вопрос о свойстве —
+      // это НЕ словарь фасетов, а простой gate «нужен ли classifier для compute?».
       let computeField: ComputeRequest | undefined;
-      try {
-        const candidatesModel = 'google/gemini-3-flash-preview';
-        const classifierResult = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
-        computeField = classifierResult.compute;
-      } catch (e) {
-        console.warn(`[Chat] Classifier for compute (shortcircuit) failed:`, e instanceof Error ? e.message : String(e));
+      const lowerMsg = userMessage.toLowerCase();
+      const looksLikeSpecQuery = /сколько|какой|какая|какое|каков|какие|весит|вес\b|мощност|длин|ширин|высот|размер|габарит|гарант|объ[её]м|диаметр|сечен|ip\d|ампер|\bвт\b|\bкг\b|\bквт\b|характеристик/i.test(lowerMsg);
+      if (looksLikeSpecQuery) {
+        try {
+          const candidatesModel = 'google/gemini-3-flash-preview';
+          const classifierResult = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
+          computeField = classifierResult.compute;
+          if (computeField) {
+            console.log(`[Chat] Compute extracted from classifier (shortcircuit path): attribute="${computeField.attribute}", multiplier=${computeField.multiplier ?? 'null'}`);
+          }
+        } catch (e) {
+          console.warn(`[Chat] Classifier for compute (shortcircuit) failed:`, e instanceof Error ? e.message : String(e));
+        }
       }
 
       extractedIntent = {
