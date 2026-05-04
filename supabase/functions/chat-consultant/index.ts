@@ -4445,7 +4445,7 @@ function formatProductsForAI(products: Product[], includeExtended: boolean = tru
       if (Array.isArray(p?.options) && p.options.length > 0) {
         const specs = p.options
           .filter((o: any) => o && !isExcludedOption(o.key, includeExtended))
-          .map((o: any) => `${cleanOptionCaption(o.caption)}: ${cleanOptionValue(o.value)}`)
+          .map((o: any) => `${cleanOptionCaption(o.caption_ru ?? o.caption)}: ${cleanOptionValue(o.value_ru ?? o.value)}`)
           .filter((s: string) => s && !s.startsWith(': '));
 
         if (specs.length > 0) {
