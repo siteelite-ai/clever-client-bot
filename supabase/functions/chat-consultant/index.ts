@@ -4624,7 +4624,7 @@ function buildComputeInstructionBlock(params: {
 `;
 }
 
-
+function formatContactsForDisplay(contactsText: string): string | null {
   if (!contactsText || contactsText.trim().length === 0) return null;
   
   const lines: string[] = [];
