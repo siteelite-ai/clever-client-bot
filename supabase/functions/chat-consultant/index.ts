@@ -4593,6 +4593,148 @@ function extractBrandsFromProducts(products: Product[]): string[] {
   return Array.from(brands).sort();
 }
 
+// ============================================================
+// COMPUTE / SPEC LOOKUP — find a characteristic by user's natural-language hint
+// ============================================================
+// User can ask «сколько весит», «какая мощность», «какой IP» — extract the
+// matching option from Product.options[] using a synonym dictionary +
+// fuzzy substring match against caption_ru / key.
+// Returns first match per product. Defensive read of both shapes:
+// new {caption_ru, value_ru} (live API) and old {caption, value} (legacy interface).
+// ============================================================
+
+const COMPUTE_SYNONYMS: Record<string, string[]> = {
+  'вес': ['вес', 'масса', 'weight', 'ves', 'massa'],
+  'масса': ['вес', 'масса', 'weight', 'ves', 'massa'],
+  'мощность': ['мощност', 'мощн', 'power', 'watt', 'moshchnost', 'квт', 'вт'],
+  'напряжение': ['напряжен', 'voltage', 'volt', 'napryazhen'],
+  'ток': ['ток ', 'сила тока', 'current', 'ампераж', 'ампер'],
+  'ip': ['ip', 'степень защит', 'stepen_zashch', 'влагозащит', 'пылевлаг'],
+  'степень защиты': ['ip', 'степень защит', 'stepen_zashch', 'влагозащит', 'пылевлаг'],
+  'габариты': ['габарит', 'размер', 'dimension', 'razmer', 'gabarit', 'длина', 'ширина', 'высота'],
+  'размер': ['размер', 'габарит', 'dimension', 'razmer', 'gabarit'],
+  'длина': ['длина', 'length', 'dlina'],
+  'ширина': ['ширина', 'width', 'shirina'],
+  'высота': ['высота', 'height', 'vysota'],
+  'диаметр': ['диаметр', 'diameter', 'диам'],
+  'сечение': ['сечен', 'sechenie'],
+  'материал': ['материал', 'material'],
+  'цвет': ['цвет', 'color', 'tsvet', 'colour'],
+  'цоколь': ['цокол', 'tsokol', 'cap'],
+  'количество ламп': ['количество ламп', 'число ламп', 'кол-во ламп'],
+  'количество розеток': ['количество розет', 'число розет', 'кол-во розет', 'розеток'],
+  'количество модулей': ['количество модул', 'число модул', 'модуле'],
+  'гарантия': ['гарант', 'warranty', 'garant'],
+  'страна': ['страна', 'country'],
+  'объём': ['объ', 'volume'],
+  'объем': ['объ', 'volume'],
+  'тип': ['тип', 'type', 'vid_'],
+  'класс': ['класс', 'class'],
+};
+
+interface CharacteristicHit {
+  product: Product;
+  caption: string;
+  value: string;
+}
+
+function getComputeSearchTokens(attributeHint: string): string[] {
+  const lower = attributeHint.toLowerCase().trim();
+  if (COMPUTE_SYNONYMS[lower]) return COMPUTE_SYNONYMS[lower];
+  for (const [key, tokens] of Object.entries(COMPUTE_SYNONYMS)) {
+    if (lower.includes(key) || key.includes(lower)) return tokens;
+  }
+  return lower.length >= 3 ? [lower] : [];
+}
+
+export function findCharacteristicInProducts(
+  products: Product[],
+  attributeHint: string,
+): CharacteristicHit[] {
+  if (!attributeHint || !Array.isArray(products) || products.length === 0) return [];
+  const tokens = getComputeSearchTokens(attributeHint);
+  if (tokens.length === 0) return [];
+
+  const hits: CharacteristicHit[] = [];
+  for (const product of products) {
+    if (!Array.isArray(product?.options)) continue;
+    let bestHit: { caption: string; value: string } | null = null;
+
+    for (const opt of product.options as any[]) {
+      if (!opt) continue;
+      const captionRaw = (opt.caption_ru ?? opt.caption ?? opt.key ?? '').toString();
+      const keyRaw = (opt.key ?? '').toString();
+      const valueRaw = (opt.value_ru ?? opt.value ?? '').toString();
+      if (!valueRaw.trim()) continue;
+
+      const captionLower = captionRaw.toLowerCase();
+      const keyLower = keyRaw.toLowerCase();
+      const matched = tokens.some(t => captionLower.includes(t) || keyLower.includes(t));
+      if (!matched) continue;
+
+      const cleanValue = valueRaw.split('//')[0].trim();
+      if (!cleanValue) continue;
+
+      bestHit = { caption: (cleanOptionCaption(captionRaw) || captionRaw).trim(), value: cleanValue };
+      break;
+    }
+
+    if (bestHit) {
+      hits.push({ product, caption: bestHit.caption, value: bestHit.value });
+    }
+  }
+  return hits;
+}
+
+/**
+ * Build a compute-block text injected into productInstructions BEFORE product cards.
+ * Tells the LLM (or downstream renderer) what the user asked, what we found,
+ * and how to answer (with multiplier). Anti-hallucination: NEVER invents values —
+ * if option missing, instructs LLM to say honestly «не указано».
+ */
+function buildComputeInstructionBlock(params: {
+  attribute: string;
+  multiplier: number | null | undefined;
+  hits: CharacteristicHit[];
+  totalProducts: number;
+}): string {
+  const { attribute, multiplier, hits, totalProducts } = params;
+  const mulText = (multiplier && multiplier > 1) ? ` × ${multiplier} шт.` : '';
+  const askLine = `🧮 КЛИЕНТ ЗАПРОСИЛ ХАРАКТЕРИСТИКУ: «${attribute}»${mulText}`;
+
+  if (hits.length === 0) {
+    return `${askLine}
+
+В характеристиках найденных товаров (всего ${totalProducts}) НЕТ поля, соответствующего «${attribute}».
+
+✅ ТВОЯ ЗАДАЧА:
+1. Честно одной фразой скажи, что эта характеристика не указана в карточке товара. НИКОГДА не выдумывай числовые значения.
+2. Предложи клиенту посмотреть полную карточку товара по ссылке ниже или связаться с менеджером.
+3. Дальше покажи карточки найденных товаров как обычно.
+`;
+  }
+
+  const lines = hits.slice(0, 3).map(h => {
+    const name = (h.product.pagetitle || 'Товар').trim();
+    return `   • «${name}» → ${h.caption}: ${h.value}`;
+  }).join('\n');
+
+  const computeHint = (multiplier && multiplier > 1)
+    ? `\n3. Если значение чисто числовое (например, «1.2 кг», «60 Вт») — умножь на ${multiplier} и выведи итог В ОДНУ СТРОКУ перед карточкой (например: «${attribute} × ${multiplier} шт. = <число с единицей>»). Если значение нечисловое (например, «IP44», «белый») — просто повтори значение, умножение не применяй.`
+    : `\n3. Дай прямой ответ ОДНОЙ строкой ПЕРЕД карточкой товара (например: «${attribute}: <значение из данных выше>»).`;
+
+  return `${askLine}
+
+В характеристиках товаров найдены следующие значения:
+${lines}
+
+✅ ТВОЯ ЗАДАЧА:
+1. Используй ТОЛЬКО значения из списка выше. НЕ выдумывай и НЕ округляй числа без необходимости.
+2. Если найдено несколько товаров с разными значениями — отвечай по ПЕРВОМУ (самому релевантному) товару, остальные просто покажи карточками.${computeHint}
+4. После прямого ответа покажи карточку(и) товара как обычно (BNF: название-ссылка + Цена + Бренд + Наличие).
+`;
+}
+
 function formatContactsForDisplay(contactsText: string): string | null {
   if (!contactsText || contactsText.trim().length === 0) return null;
   
@@ -7261,6 +7403,32 @@ ${facetsList}
       }
     }
 
+    // ─── COMPUTE BLOCK (spec_query надстройка) ──────────────────────────────
+    // Если классификатор пометил compute и у нас есть товары — клиент спросил
+    // о КОНКРЕТНОЙ характеристике (опц. ×N). Добавляем инструкцию в самый верх
+    // productInstructions: характеристика берётся ТОЛЬКО из реальных options
+    // товара, никаких выдуманных значений. Работает поверх любой ветки выше
+    // (article / title / replacement / regular catalog).
+    if (
+      extractedIntent.compute &&
+      extractedIntent.compute.attribute &&
+      foundProducts.length > 0 &&
+      productInstructions.trim().length > 0
+    ) {
+      try {
+        const hits = findCharacteristicInProducts(foundProducts.slice(0, 10), extractedIntent.compute.attribute);
+        const computeBlock = buildComputeInstructionBlock({
+          attribute: extractedIntent.compute.attribute,
+          multiplier: extractedIntent.compute.multiplier ?? null,
+          hits,
+          totalProducts: foundProducts.length,
+        });
+        console.log(`[Chat] Compute block injected: attribute="${extractedIntent.compute.attribute}", multiplier=${extractedIntent.compute.multiplier ?? 'null'}, hits=${hits.length}/${foundProducts.length}`);
+        productInstructions = `${computeBlock}\n${productInstructions}`;
+      } catch (e) {
+        console.warn(`[Chat] Compute block silent fail:`, e instanceof Error ? e.message : String(e));
+      }
+    }
 
     // Geo context for system prompt
     let geoContext = '';
@@ -7506,7 +7674,11 @@ ${productInstructions}`;
     }
 
 
-    const shouldUseDeterministicProductRender = foundProducts.length > 0 && (
+    // spec_query (compute) ВСЕГДА требует LLM-обработки: нужна формулировка
+    // ответа про характеристику + опц. умножение на N — детерминистичный
+    // рендерер этого не умеет (он рисует только карточки + intro/followUp).
+    const hasComputeRequest = !!(extractedIntent.compute && extractedIntent.compute.attribute);
+    const shouldUseDeterministicProductRender = !hasComputeRequest && foundProducts.length > 0 && (
       isDeterministicShortCircuitReason(responseModelReason) ||
       responseModelReason === 'price-facet-clarify' ||
       articleShortCircuit
