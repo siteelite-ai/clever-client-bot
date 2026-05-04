@@ -13,7 +13,6 @@ import Analytics from "./pages/Analytics";
 import UsersManagement from "./pages/UsersManagement";
 import Integration from "./pages/Integration";
 import Settings from "./pages/Settings";
-import Lexicon from "./pages/Lexicon";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -34,7 +33,6 @@ const App = () => (
             <Route path="/users" element={<ProtectedRoute requiredRole="admin"><UsersManagement /></ProtectedRoute>} />
             <Route path="/integration" element={<ProtectedRoute><Integration /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute requiredRole="admin"><Settings /></ProtectedRoute>} />
-            <Route path="/lexicon" element={<ProtectedRoute requiredRole="admin"><Lexicon /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>

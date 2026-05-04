@@ -191,42 +191,6 @@ export type Database = {
         }
         Relationships: []
       }
-      jargon_lexicon: {
-        Row: {
-          canonical: string
-          created_at: string
-          created_by: string | null
-          hits: number
-          id: string
-          last_used_at: string | null
-          note: string | null
-          term: string
-          updated_at: string
-        }
-        Insert: {
-          canonical: string
-          created_at?: string
-          created_by?: string | null
-          hits?: number
-          id?: string
-          last_used_at?: string | null
-          note?: string | null
-          term: string
-          updated_at?: string
-        }
-        Update: {
-          canonical?: string
-          created_at?: string
-          created_by?: string | null
-          hits?: number
-          id?: string
-          last_used_at?: string | null
-          note?: string | null
-          term?: string
-          updated_at?: string
-        }
-        Relationships: []
-      }
       knowledge_chunks: {
         Row: {
           chunk_index: number

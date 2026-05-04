@@ -8,7 +8,6 @@ import {
   Users,
   BarChart3,
   Code,
-  BookOpen,
   ChevronLeft,
   ChevronRight,
   Zap,
@@ -24,7 +23,6 @@ const menuItems = [
   // { icon: BarChart3, label: 'Аналитика', path: '/analytics', soon: true },
   { icon: Users, label: 'Пользователи', path: '/users', requiredRole: 'admin' as const },
   { icon: Code, label: 'Интеграция', path: '/integration' },
-  { icon: BookOpen, label: 'Словарь жаргона', path: '/lexicon', requiredRole: 'admin' as const },
   { icon: Settings, label: 'Настройки', path: '/settings', requiredRole: 'admin' as const },
 ];
 
