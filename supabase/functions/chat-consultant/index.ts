@@ -6847,9 +6847,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           // productContext будет пересобран ниже из новых foundProducts? Проверка:
           // на самом деле productContext уже сформирован выше — нужно пересобрать его.
           // Используем тот же formatter, что использует основной flow.
-          if (typeof formatProductsForAI === 'function') {
-            productContext = formatProductsForAI(foundProducts);
-          }
+          productContext = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
         }
       }
     } catch (e) {
