@@ -6861,10 +6861,6 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           totalCollectedBranch = 'jargon-fallback-empty';
           articleShortCircuit = false;
           productContext = '';
-          // Пробрасываем clarifyQuestion для Soft-404 промпта.
-          if (jargonResult.clarifyQuestion) {
-            (globalThis as any).__jargonClarifyQuestion = jargonResult.clarifyQuestion;
-          }
         }
       }
     } catch (e) {
