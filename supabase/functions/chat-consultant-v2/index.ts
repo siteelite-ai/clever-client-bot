@@ -182,6 +182,8 @@ async function runLightBranch(
     case "S_PRICE":
       return null; // обрабатывается catalog-flow в start()
   }
+
+  return null;
 }
 
 /** Placeholder для ещё не реализованных веток (Steps 9–11). */
