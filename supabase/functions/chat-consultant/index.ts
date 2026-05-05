@@ -7936,11 +7936,28 @@ ${productInstructions}`;
       // Пропускаем для price-facet-clarify (там и так уточняющий вопрос) и replacement (similar-ветка
       // сюда не доходит — у неё свой композер).
       const allowCrossSellTail = renderReason !== 'price-facet-clarify' && !replacementMeta?.isReplacement;
-      const crossSellTail = allowCrossSellTail
+      const crossSellResult = allowCrossSellTail
         ? await generateCrossSellTail({ products: foundProducts, userMessage, settings: appSettings })
-        : '';
+        : { text: '', offerQuery: '' };
+      const crossSellTail = crossSellResult.text;
       const finalContent = crossSellTail ? `${content}\n\n${crossSellTail}` : content;
-      if (crossSellTail) console.log(`[Chat] Cross-sell tail appended (${crossSellTail.length} chars)`);
+      if (crossSellTail) console.log(`[Chat] Cross-sell tail appended (${crossSellTail.length} chars, offer_query="${crossSellResult.offerQuery}")`);
+
+      // Сохраняем pending_offer slot, если LLM вернула непустой offer_query.
+      // Это позволит на следующем ходу при «давай/да/покажи» прозрачно подменить запрос.
+      if (crossSellResult.offerQuery) {
+        dialogSlots['pending_offer'] = {
+          intent: 'pending_offer',
+          base_category: crossSellResult.offerQuery,
+          status: 'pending',
+          created_turn: 0,
+          turns_since_touched: 0,
+          offer_text: crossSellTail.slice(0, 200),
+          offer_query: crossSellResult.offerQuery,
+        };
+        slotsUpdated = true;
+      }
+
 
       if (!useStreaming) {
         const responseBody: { content: string; slot_update?: DialogSlots } = { content: finalContent };
