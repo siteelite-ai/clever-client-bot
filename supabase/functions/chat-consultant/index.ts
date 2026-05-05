@@ -177,9 +177,19 @@ const DETERMINISTIC_SAMPLING = {
 // OpenRouter выкинет лишние поля, но указание `provider.order=google-ai-studio`
 // для Claude приведёт к фолбэку (allow_fallbacks=true), что добавляет latency.
 // Для Claude/OpenAI — отдельный пресет без Gemini-only полей.
+// Lock Claude to native Anthropic provider first.
+// Без provider-lock OpenRouter роутит часть запросов в Google Vertex Anthropic
+// (provider_name="Google", request id req_vrtx_*), который отвечает 400
+// "messages: at least one message is required" на наш payload с tool_calls.
+// Имена провайдеров в OpenRouter регистрозависимые: "Anthropic", "Amazon Bedrock", "Google Vertex".
 const DETERMINISTIC_SAMPLING_CLAUDE = {
   temperature: 0,
   top_p: 1,
+  provider: {
+    order: ['Anthropic', 'Amazon Bedrock'],
+    ignore: ['Google Vertex', 'Google'],
+    allow_fallbacks: true,
+  },
 } as const;
 
 function samplingFor(model: string): Record<string, unknown> {
@@ -3085,7 +3095,7 @@ ${recentHistory.length > 0 ? 'Анализируй текущее сообщен
         { role: 'system', content: extractionPrompt },
         { role: 'user', content: message }
       ],
-      ...DETERMINISTIC_SAMPLING,
+      ...samplingFor(aiModel),
       reasoning: { exclude: true },
       tools: [
         {
