@@ -5787,15 +5787,37 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
               if (noun.length === 0) {
                 console.log(`[QueryFirstV2] empty noun → fallback to Category Resolver`);
               } else {
-                // ── (2) Pool: broad ?query=noun, perPage=100 (data-agnostic balance: enough
-                // products to cover real facet variability without wasting bandwidth).
+                // ── (2) Pool: ?query=noun [+ critical_modifiers], perPage=100.
+                // 2026-05-05: pool query enriched with up to 3 critical modifiers so that
+                // the catalog's poiskovyy_zapros + full-text matching does the heavy
+                // lifting (e.g. "лампа для школьника" → НТО-12, "розетка чёрная двухместная"
+                // → narrowed pool). FilterLLM then only cleans residual noise via options[].
+                // Fallback: if enriched query returns 0, retry with bare noun (no regression
+                // vs prior behavior). Cap = 3 modifiers to avoid over-long queries that
+                // the catalog full-text degrades on.
                 const QF_POOL_SIZE = 100;
-                const pool = await searchProductsByCandidate(
-                  { query: noun, brand: null, category: null, min_price: null, max_price: null },
+                const QF_MAX_MODIFIERS_IN_QUERY = 3;
+                const enrichMods = (classification?.critical_modifiers && classification.critical_modifiers.length > 0
+                  ? classification.critical_modifiers
+                  : modifiers).slice(0, QF_MAX_MODIFIERS_IN_QUERY);
+                const enrichedQuery = enrichMods.length > 0 ? `${noun} ${enrichMods.join(' ')}`.trim() : noun;
+
+                let pool = await searchProductsByCandidate(
+                  { query: enrichedQuery, brand: null, category: null, min_price: null, max_price: null },
                   appSettings.volt220_api_token!,
                   QF_POOL_SIZE
                 );
-                console.log(`[QueryFirstV2] pool noun="${noun}" size=${pool.length} (perPage=${QF_POOL_SIZE})`);
+                console.log(`[QueryFirstV2] pool query="${enrichedQuery}" size=${pool.length} (perPage=${QF_POOL_SIZE})`);
+
+                if (pool.length === 0 && enrichedQuery !== noun) {
+                  console.log(`[QueryFirstV2] enriched pool=0 → retry with bare noun="${noun}"`);
+                  pool = await searchProductsByCandidate(
+                    { query: noun, brand: null, category: null, min_price: null, max_price: null },
+                    appSettings.volt220_api_token!,
+                    QF_POOL_SIZE
+                  );
+                  console.log(`[QueryFirstV2] pool noun="${noun}" size=${pool.length} (fallback)`);
+                }
 
                 if (pool.length === 0) {
                   console.log(`[QueryFirstV2] query_first_v2_pool_empty noun="${noun}" → fallback to Category Resolver`);
