@@ -2181,7 +2181,7 @@ function detectPendingPriceIntent(
 // ============================================================
 
 interface DialogSlot {
-  intent: 'price_extreme' | 'product_search' | 'category_disambiguation' | 'price_facet_clarify';
+  intent: 'price_extreme' | 'product_search' | 'category_disambiguation' | 'price_facet_clarify' | 'pending_offer';
   price_dir?: 'most_expensive' | 'cheapest';
   base_category: string;
   refinement?: string;
@@ -2200,6 +2200,11 @@ interface DialogSlot {
   // price_facet_clarify state (V1 bootstrap-facets clarify)
   // JSON: {"query":"розетка","facet":{"key":"tip","caption_ru":"Тип","values":[{"value_ru":"Бытовая","count":5},...]},"min_price":null,"max_price":null}
   price_facet_state?: string;
+  // pending_offer state (cross-sell follow-up): bot proposed something at end of previous turn
+  // offer_text  — фраза, которую сказал бот (для контекста LLM-резолвера)
+  // offer_query — короткий поисковый запрос, который применяем при «давай/да/ок»
+  offer_text?: string;
+  offer_query?: string;
   // replacement metadata
   isReplacement?: boolean;
   originalName?: string;
@@ -2224,7 +2229,7 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
     const s = val as Record<string, unknown>;
     
     // Validate intent
-    if (s.intent !== 'price_extreme' && s.intent !== 'product_search' && s.intent !== 'category_disambiguation' && s.intent !== 'price_facet_clarify') continue;
+    if (s.intent !== 'price_extreme' && s.intent !== 'product_search' && s.intent !== 'category_disambiguation' && s.intent !== 'price_facet_clarify' && s.intent !== 'pending_offer') continue;
     // Validate status
     if (s.status !== 'pending' && s.status !== 'done') continue;
     // Validate base_category
@@ -2252,6 +2257,8 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
       pending_filters: typeof s.pending_filters === 'string' ? s.pending_filters.substring(0, 2000) : undefined,
       original_query: typeof s.original_query === 'string' ? sanitize(s.original_query) : undefined,
       price_facet_state: typeof s.price_facet_state === 'string' ? s.price_facet_state.substring(0, 4000) : undefined,
+      offer_text: typeof s.offer_text === 'string' ? sanitize(s.offer_text) : undefined,
+      offer_query: typeof s.offer_query === 'string' ? sanitize(s.offer_query) : undefined,
     };
     count++;
   }
@@ -4621,13 +4628,13 @@ async function generateCrossSellTail(params: {
   products: Product[];
   userMessage: string;
   settings: CachedSettings;
-}): Promise<string> {
+}): Promise<{ text: string; offerQuery: string }> {
   const { products, userMessage, settings } = params;
-  if (!products.length || !settings.openrouter_api_key) return '';
+  if (!products.length || !settings.openrouter_api_key) return { text: '', offerQuery: '' };
 
   // Берём только названия первых 3 товаров — этого достаточно, чтобы LLM поняла категорию.
   const titles = products.slice(0, 3).map(p => (p.pagetitle || '').trim()).filter(Boolean);
-  if (!titles.length) return '';
+  if (!titles.length) return { text: '', offerQuery: '' };
 
   const systemPrompt = `Ты эксперт-консультант 220volt.kz. Клиенту только что показали карточки товаров. Твоя задача — добавить ОДНУ короткую фразу контекстного cross-sell: предложить ЛОГИЧЕСКИ СВЯЗАННЫЙ аксессуар или сопутствующий товар, который обычно докупают вместе.
 
@@ -4644,14 +4651,18 @@ ${titles.map(t => `- ${t}`).join('\n')}
 - Лампа → подходящий светильник или патрон
 - Кабель → клеммы, гильзы, гофра
 
-ПРАВИЛА:
+ПРАВИЛА для phrase:
 - Ровно ОДНА фраза, до 180 символов, заканчивается мягким CTA: «— подобрать?», «— показать варианты?», «— подскажу подходящие».
 - Тон: спокойный, профессиональный, как опытный консультант.
 - ЗАПРЕЩЕНО: артикулы, цены, ссылки, названия конкретных товаров, бренды, восклицательные знаки, «отличный выбор», давление, маркетинговые штампы.
-- Если категория товара неочевидна или сопутствующих нет — верни ПУСТУЮ строку (лучше промолчать, чем выдумать).
 - НЕ повторяй то, что уже показано в карточках. НЕ предлагай ту же категорию.
 
-Ответь ТОЛЬКО текстом фразы (без кавычек, без префиксов, без JSON). Пустой ответ = пропустить cross-sell.`;
+ПРАВИЛА для offer_query:
+- Это короткий поисковый запрос (2-5 слов), который применим, если клиент скажет «да/давай/покажи».
+- Должен описывать ИМЕННО ту категорию/тип товара, который предлагаешь во фразе. Если упоминаешь серию/коллекцию (например "серия Florence" или "под цоколь E27") — добавь её в запрос.
+- Только то, что РЕАЛЬНО можно искать в каталоге электротоваров. Никаких брендов и артикулов.
+
+Если для этого запроса cross-sell неуместен (категория неочевидна, сопутствующих нет, уже показаны аксессуары) — верни phrase="" и offer_query="".`;
 
   try {
     const controller = new AbortController();
@@ -4663,27 +4674,125 @@ ${titles.map(t => `- ${t}`).join('\n')}
         model: 'anthropic/claude-sonnet-4.5',
         messages: [{ role: 'user', content: systemPrompt }],
         temperature: 0.3,
-        max_tokens: 150,
+        max_tokens: 250,
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'propose_cross_sell',
+            description: 'Return a one-sentence cross-sell phrase plus a follow-up search query.',
+            parameters: {
+              type: 'object',
+              properties: {
+                phrase: { type: 'string', description: 'One short sentence ending in a soft CTA. Empty string if cross-sell is inappropriate.' },
+                offer_query: { type: 'string', description: 'Short catalog search query (2-5 words) for the proposed item. Empty if phrase is empty.' },
+              },
+              required: ['phrase', 'offer_query'],
+              additionalProperties: false,
+            },
+          },
+        }],
+        tool_choice: { type: 'function', function: { name: 'propose_cross_sell' } },
       }),
       signal: controller.signal,
     });
     clearTimeout(timeout);
     if (!response.ok) {
       console.log(`[CrossSellTail] API error: ${response.status}`);
-      return '';
+      return { text: '', offerQuery: '' };
     }
     const data = await response.json();
-    let text: string = (data.choices?.[0]?.message?.content || '').trim();
-    // Sanitize: вырезаем потенциальные markdown-ссылки, артикулы, цены
+    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    if (!toolCall?.function?.arguments) return { text: '', offerQuery: '' };
+    let parsed: { phrase?: string; offer_query?: string };
+    try { parsed = JSON.parse(toolCall.function.arguments); } catch { return { text: '', offerQuery: '' }; }
+    let text = (parsed.phrase || '').trim();
+    const offerQuery = (parsed.offer_query || '').trim().slice(0, 100);
+    // Sanitize: вырезаем markdown-ссылки/цены — на всякий случай
     if (/\[.*?\]\(.*?\)/.test(text) || /https?:\/\//i.test(text) || /\d+\s*(?:₸|тг|тенге|руб)/i.test(text)) {
       console.log(`[CrossSellTail] Sanitize: rejected text with link/price: ${text.slice(0, 80)}`);
-      return '';
+      return { text: '', offerQuery: '' };
     }
     if (text.length > 300) text = text.slice(0, 300);
-    return text;
+    return { text, offerQuery: text ? offerQuery : '' };
   } catch (e) {
     console.log(`[CrossSellTail] Error (silent skip): ${(e as Error).message}`);
-    return '';
+    return { text: '', offerQuery: '' };
+  }
+}
+
+/**
+ * LLM-классификатор: принимает ли пользователь cross-sell offer прошлого хода.
+ * Без хардкод-списка слов: модель сама решает на основе семантики.
+ * Возвращает 'accept' (короткое согласие БЕЗ новых сущностей), 'new_request' (что-то иное),
+ * либо 'unclear' (пропускаем — пусть основной pipeline разбирается).
+ */
+async function classifyOfferResponse(params: {
+  offerText: string;
+  offerQuery: string;
+  userMessage: string;
+  settings: CachedSettings;
+}): Promise<'accept' | 'new_request' | 'unclear'> {
+  const { offerText, offerQuery, userMessage, settings } = params;
+  if (!settings.openrouter_api_key) return 'unclear';
+  if (!offerText || !userMessage.trim()) return 'unclear';
+
+  const prompt = `Ты классификатор намерений в чат-консультанте магазина электротоваров.
+
+В прошлом ходе бот предложил клиенту дополнительный товар:
+Фраза бота: "${offerText}"
+(внутренний поисковый запрос для этого предложения: "${offerQuery}")
+
+Сейчас клиент написал: "${userMessage}"
+
+Определи, что значит сообщение клиента в КОНТЕКСТЕ предложения бота:
+- "accept": клиент СОГЛАШАЕТСЯ с предложением бота и хочет его увидеть. Это короткие подтверждения без новой темы и без новых требований ("да", "давай", "ок", "покажи", "хочу", "интересно" и любые семантически близкие).
+- "new_request": клиент проигнорировал предложение и пишет ЧТО-ТО ДРУГОЕ — новый запрос, уточнение по уже показанным товарам, изменение фильтров (другой цвет/цена/бренд), вопрос не по теме предложения. Любое сообщение, которое содержит новые сущности или модификаторы — это new_request.
+- "unclear": неоднозначно, либо сообщение не относится ни к одному варианту.
+
+Важно: даже если клиент пишет "давай покажи розетки подешевле" после предложения подрозетников — это NEW_REQUEST, потому что есть новая тема (розетки) и модификатор (дешевле). "Accept" — только когда клиент НЕ добавляет ничего своего.`;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${settings.openrouter_api_key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash-lite',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0,
+        max_tokens: 50,
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'classify_offer_response',
+            description: 'Classify user reply to a previous cross-sell offer.',
+            parameters: {
+              type: 'object',
+              properties: {
+                decision: { type: 'string', enum: ['accept', 'new_request', 'unclear'] },
+              },
+              required: ['decision'],
+              additionalProperties: false,
+            },
+          },
+        }],
+        tool_choice: { type: 'function', function: { name: 'classify_offer_response' } },
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!response.ok) return 'unclear';
+    const data = await response.json();
+    const args = data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
+    if (!args) return 'unclear';
+    const parsed = JSON.parse(args);
+    const decision = parsed.decision;
+    if (decision === 'accept' || decision === 'new_request') return decision;
+    return 'unclear';
+  } catch (e) {
+    console.log(`[OfferResolver] Error (silent skip): ${(e as Error).message}`);
+    return 'unclear';
   }
 }
 
@@ -5164,7 +5273,7 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     const lastMessage = messages[messages.length - 1];
     const rawUserMessage = lastMessage?.content || '';
     
-    const userMessage = sanitizeUserInput(rawUserMessage);
+    let userMessage = sanitizeUserInput(rawUserMessage);
     
     messages = messages.map(m => ({
       ...m,
@@ -5173,6 +5282,35 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     
     console.log(`[Chat req=${reqId}] Processing: "${userMessage.substring(0, 100)}"`);
     console.log(`[Chat req=${reqId}] Conversation ID: ${conversationId}`);
+
+    // === PENDING OFFER RESOLVER (V1) ===
+    // Если на прошлом ходу бот предложил cross-sell и мы сохранили pending_offer slot —
+    // спрашиваем у LLM, является ли текущее сообщение согласием с этим предложением.
+    // На "accept" подменяем userMessage на offer_query и идём через обычный pipeline.
+    // На "new_request"/"unclear" — слот удаляем (предложение неактуально), pipeline без изменений.
+    const pendingOfferSlot = dialogSlots['pending_offer'];
+    if (pendingOfferSlot && pendingOfferSlot.offer_query) {
+      const decision = await classifyOfferResponse({
+        offerText: pendingOfferSlot.offer_text || '',
+        offerQuery: pendingOfferSlot.offer_query,
+        userMessage,
+        settings: appSettings,
+      });
+      console.log(`[Chat req=${reqId}] Pending offer decision: ${decision} (offer_query="${pendingOfferSlot.offer_query}", user="${userMessage.slice(0, 60)}")`);
+      if (decision === 'accept') {
+        const newQuery = pendingOfferSlot.offer_query;
+        userMessage = newQuery;
+        // Подменяем последнее user-сообщение, чтобы classifier и весь pipeline увидели новый запрос
+        if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
+          messages = [...messages.slice(0, -1), { role: 'user', content: newQuery }];
+        }
+        console.log(`[Chat req=${reqId}] Pending offer ACCEPTED → userMessage rewritten to "${newQuery}"`);
+      }
+      // В любом случае удаляем slot — он одноразовый
+      delete dialogSlots['pending_offer'];
+      slotsUpdated = true;
+    }
+
 
     const historyForContext = messages.slice(0, -1);
 
@@ -7903,11 +8041,28 @@ ${productInstructions}`;
       // Пропускаем для price-facet-clarify (там и так уточняющий вопрос) и replacement (similar-ветка
       // сюда не доходит — у неё свой композер).
       const allowCrossSellTail = renderReason !== 'price-facet-clarify' && !replacementMeta?.isReplacement;
-      const crossSellTail = allowCrossSellTail
+      const crossSellResult = allowCrossSellTail
         ? await generateCrossSellTail({ products: foundProducts, userMessage, settings: appSettings })
-        : '';
+        : { text: '', offerQuery: '' };
+      const crossSellTail = crossSellResult.text;
       const finalContent = crossSellTail ? `${content}\n\n${crossSellTail}` : content;
-      if (crossSellTail) console.log(`[Chat] Cross-sell tail appended (${crossSellTail.length} chars)`);
+      if (crossSellTail) console.log(`[Chat] Cross-sell tail appended (${crossSellTail.length} chars, offer_query="${crossSellResult.offerQuery}")`);
+
+      // Сохраняем pending_offer slot, если LLM вернула непустой offer_query.
+      // Это позволит на следующем ходу при «давай/да/покажи» прозрачно подменить запрос.
+      if (crossSellResult.offerQuery) {
+        dialogSlots['pending_offer'] = {
+          intent: 'pending_offer',
+          base_category: crossSellResult.offerQuery,
+          status: 'pending',
+          created_turn: 0,
+          turns_since_touched: 0,
+          offer_text: crossSellTail.slice(0, 200),
+          offer_query: crossSellResult.offerQuery,
+        };
+        slotsUpdated = true;
+      }
+
 
       if (!useStreaming) {
         const responseBody: { content: string; slot_update?: DialogSlots } = { content: finalContent };
