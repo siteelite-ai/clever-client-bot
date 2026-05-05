@@ -3091,7 +3091,7 @@ ${recentHistory.length > 0 ? 'Анализируй текущее сообщен
         { role: 'system', content: extractionPrompt },
         { role: 'user', content: message }
       ],
-      ...DETERMINISTIC_SAMPLING,
+      ...samplingFor(aiModel),
       reasoning: { exclude: true },
       tools: [
         {
