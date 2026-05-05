@@ -8039,9 +8039,33 @@ ${productInstructions}`;
           });
       console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${content.length}`);
 
-      // Cross-sell tail (отдельный LLM-вызов, безопасен для URL — не работает с ProductResource).
-      // Пропускаем для price-facet-clarify (там и так уточняющий вопрос) и replacement (similar-ветка
-      // сюда не доходит — у неё свой композер).
+      // ─────────────────────────────────────────────────────────────────────
+      // CROSS-SELL: ОТКЛЮЧЁН (V1, 2026-05-05).
+      //
+      // Старый LLM-генератор cross-sell tail (generateCrossSellTail + pending_offer)
+      // выключен полностью: он галлюцинировал бренды/серии/коллекции, которых
+      // нет в каталоге, и навязывал товары без реальной связи с показанными.
+      //
+      // НОВАЯ СХЕМА (ожидает backend): разработчик готовит endpoint
+      //   GET /products/{id}/related  → список реально сопутствующих товаров,
+      // привязанных к конкретному артикулу (на базе facet `soputstvuyuschiytovar`,
+      // в котором сейчас лежат внутренние UUID 1С — без endpoint'а зарезолвить
+      // их в товары невозможно).
+      //
+      // КАК ТОЛЬКО endpoint появится:
+      //   1. Реализовать `fetchRelatedProducts(productId)` в catalog API клиенте.
+      //   2. Раскомментировать блок ниже и заменить generateCrossSellTail
+      //      на детерминистичный рендер реальных related-товаров для
+      //      foundProducts[0] (или N первых).
+      //   3. Текст-обёртку («что обычно покупают вместе…») оставить
+      //      data-agnostic — без хардкода категорий/брендов.
+      //
+      // Пока endpoint не готов — никакого cross-sell не добавляем.
+      // finalContent = content без хвоста; pending_offer slot не создаём.
+      // ─────────────────────────────────────────────────────────────────────
+      const finalContent = content;
+
+      /* TODO(cross-sell-related): раскомментировать после появления /products/{id}/related
       const allowCrossSellTail = renderReason !== 'price-facet-clarify' && !replacementMeta?.isReplacement;
       const crossSellResult = allowCrossSellTail
         ? await generateCrossSellTail({ products: foundProducts, userMessage, settings: appSettings })
@@ -8050,8 +8074,6 @@ ${productInstructions}`;
       const finalContent = crossSellTail ? `${content}\n\n${crossSellTail}` : content;
       if (crossSellTail) console.log(`[Chat] Cross-sell tail appended (${crossSellTail.length} chars, offer_query="${crossSellResult.offerQuery}")`);
 
-      // Сохраняем pending_offer slot, если LLM вернула непустой offer_query.
-      // Это позволит на следующем ходу при «давай/да/покажи» прозрачно подменить запрос.
       if (crossSellResult.offerQuery) {
         dialogSlots['pending_offer'] = {
           intent: 'pending_offer',
@@ -8064,6 +8086,7 @@ ${productInstructions}`;
         };
         slotsUpdated = true;
       }
+      */
 
 
       if (!useStreaming) {
