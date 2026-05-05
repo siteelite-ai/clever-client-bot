@@ -14,7 +14,7 @@
 //     (вызывающий код делает fallback на ?category=).
 
 const EXTRACTOR_TIMEOUT_MS = 8_000;
-const EXTRACTOR_MODEL_DEFAULT = "anthropic/claude-sonnet-4.5";
+const EXTRACTOR_MODEL_DEFAULT = "google/gemini-2.5-flash-lite";
 const NOUN_REGEX = /^[\p{L}]{2,30}$/u;
 
 export type CategoryNounSource = "llm" | "empty" | "invalid";
@@ -144,13 +144,6 @@ export function createProductionExtractorDeps(
           model,
           temperature: 0,
           max_tokens: 60,
-          // Provider lock: без него OpenRouter роутит часть запросов в Google Vertex
-          // Anthropic, который отвечает 400 на наш payload с tool_calls.
-          provider: {
-            order: ["Anthropic", "Amazon Bedrock"],
-            ignore: ["Google Vertex", "Google"],
-            allow_fallbacks: true,
-          },
           messages: [
             { role: "system", content: params.systemPrompt },
             { role: "user", content: params.userMessage },

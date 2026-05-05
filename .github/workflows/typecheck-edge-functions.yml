@@ -4,19 +4,15 @@ on:
   push:
     paths:
       - 'supabase/functions/chat-consultant/**'
-      - 'supabase/functions/chat-consultant-v2/**'
-      - 'supabase/functions/_shared/**'
       - '.github/workflows/typecheck-edge-functions.yml'
   pull_request:
     paths:
       - 'supabase/functions/chat-consultant/**'
-      - 'supabase/functions/chat-consultant-v2/**'
-      - 'supabase/functions/_shared/**'
       - '.github/workflows/typecheck-edge-functions.yml'
 
 jobs:
   deno-check:
-    name: deno check edge functions
+    name: deno check chat-consultant
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -29,6 +25,3 @@ jobs:
 
       - name: Type-check chat-consultant
         run: deno check supabase/functions/chat-consultant/index.ts
-
-      - name: Type-check chat-consultant-v2
-        run: deno check supabase/functions/chat-consultant-v2/index.ts
