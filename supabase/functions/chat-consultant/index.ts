@@ -2257,6 +2257,8 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
       pending_filters: typeof s.pending_filters === 'string' ? s.pending_filters.substring(0, 2000) : undefined,
       original_query: typeof s.original_query === 'string' ? sanitize(s.original_query) : undefined,
       price_facet_state: typeof s.price_facet_state === 'string' ? s.price_facet_state.substring(0, 4000) : undefined,
+      offer_text: typeof s.offer_text === 'string' ? sanitize(s.offer_text) : undefined,
+      offer_query: typeof s.offer_query === 'string' ? sanitize(s.offer_query) : undefined,
     };
     count++;
   }
