@@ -5273,7 +5273,7 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     const lastMessage = messages[messages.length - 1];
     const rawUserMessage = lastMessage?.content || '';
     
-    const userMessage = sanitizeUserInput(rawUserMessage);
+    let userMessage = sanitizeUserInput(rawUserMessage);
     
     messages = messages.map(m => ({
       ...m,
@@ -5282,6 +5282,35 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     
     console.log(`[Chat req=${reqId}] Processing: "${userMessage.substring(0, 100)}"`);
     console.log(`[Chat req=${reqId}] Conversation ID: ${conversationId}`);
+
+    // === PENDING OFFER RESOLVER (V1) ===
+    // Если на прошлом ходу бот предложил cross-sell и мы сохранили pending_offer slot —
+    // спрашиваем у LLM, является ли текущее сообщение согласием с этим предложением.
+    // На "accept" подменяем userMessage на offer_query и идём через обычный pipeline.
+    // На "new_request"/"unclear" — слот удаляем (предложение неактуально), pipeline без изменений.
+    const pendingOfferSlot = dialogSlots['pending_offer'];
+    if (pendingOfferSlot && pendingOfferSlot.offer_query) {
+      const decision = await classifyOfferResponse({
+        offerText: pendingOfferSlot.offer_text || '',
+        offerQuery: pendingOfferSlot.offer_query,
+        userMessage,
+        settings: appSettings,
+      });
+      console.log(`[Chat req=${reqId}] Pending offer decision: ${decision} (offer_query="${pendingOfferSlot.offer_query}", user="${userMessage.slice(0, 60)}")`);
+      if (decision === 'accept') {
+        const newQuery = pendingOfferSlot.offer_query;
+        userMessage = newQuery;
+        // Подменяем последнее user-сообщение, чтобы classifier и весь pipeline увидели новый запрос
+        if (messages.length > 0 && messages[messages.length - 1].role === 'user') {
+          messages = [...messages.slice(0, -1), { role: 'user', content: newQuery }];
+        }
+        console.log(`[Chat req=${reqId}] Pending offer ACCEPTED → userMessage rewritten to "${newQuery}"`);
+      }
+      // В любом случае удаляем slot — он одноразовый
+      delete dialogSlots['pending_offer'];
+      slotsUpdated = true;
+    }
+
 
     const historyForContext = messages.slice(0, -1);
 
