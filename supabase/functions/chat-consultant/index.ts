@@ -3555,7 +3555,8 @@ async function resolveFiltersWithLLM(
   settings: CachedSettings,
   criticalModifiers?: string[],
   prebuiltSchema?: Map<string, { caption: string; values: Set<string> }>,
-  schemaConfidence: SchemaConfidence = 'full'
+  schemaConfidence: SchemaConfidence = 'full',
+  productNoun?: string
 ): Promise<{ resolved: Record<string, ResolvedFilter>; unresolved: string[] }> {
   if (!modifiers || modifiers.length === 0) return { resolved: {}, unresolved: [] };
 
