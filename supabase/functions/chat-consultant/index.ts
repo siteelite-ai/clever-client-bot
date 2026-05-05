@@ -7902,7 +7902,7 @@ ${productInstructions}`;
       // Cross-sell tail (отдельный LLM-вызов, безопасен для URL — не работает с ProductResource).
       // Пропускаем для price-facet-clarify (там и так уточняющий вопрос) и replacement (similar-ветка
       // сюда не доходит — у неё свой композер).
-      const allowCrossSellTail = renderReason !== 'price-facet-clarify' && !extractedIntent.is_replacement;
+      const allowCrossSellTail = renderReason !== 'price-facet-clarify' && !replacementMeta?.isReplacement;
       const crossSellTail = allowCrossSellTail
         ? await generateCrossSellTail({ products: foundProducts, userMessage, settings: appSettings })
         : '';
