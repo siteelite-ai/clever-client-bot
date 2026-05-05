@@ -602,8 +602,11 @@ async function getAppSettings(): Promise<CachedSettings> {
       system_prompt: data.system_prompt || null,
       classifier_provider: data.classifier_provider || 'auto',
       classifier_model: data.classifier_model || 'gemini-2.5-flash-lite',
-      query_first_enabled: qf,
-      soft_suggest_enabled: ss,
+      // TEMP DISABLED: QueryFirstV2 ветка отключена принудительно по запросу пользователя
+      // (см. чат 2026-05-05 — даёт хуже результаты чем legacy Category Resolver).
+      // Чтобы вернуть — заменить на `qf` / `ss`.
+      query_first_enabled: false,
+      soft_suggest_enabled: false,
     };
   } catch (e) {
     console.error('[Settings] Failed to load settings:', e);
