@@ -8063,7 +8063,13 @@ ${productInstructions}`;
       // Пока endpoint не готов — никакого cross-sell не добавляем.
       // finalContent = content без хвоста; pending_offer slot не создаём.
       // ─────────────────────────────────────────────────────────────────────
-      const finalContent = content;
+      // Временный хвост вместо cross-sell: простая универсальная фраза.
+      // Не зависит от категории/бренда/фасетов — пропускаем только для price-clarify
+      // (там и так уточняющий вопрос) и replacement (similar-ветка сюда не доходит).
+      const allowHelpTail = renderReason !== 'price-facet-clarify' && !replacementMeta?.isReplacement;
+      const finalContent = allowHelpTail
+        ? `${content}\n\nМогу чем-то ещё помочь?`
+        : content;
 
       /* TODO(cross-sell-related): раскомментировать после появления /products/{id}/related
       const allowCrossSellTail = renderReason !== 'price-facet-clarify' && !replacementMeta?.isReplacement;
