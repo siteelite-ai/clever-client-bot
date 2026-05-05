@@ -1974,171 +1974,10 @@ interface PriceIntentResult {
   category?: string;
 }
 
-/**
- * Generate synonym queries for a product category for broader price-intent search.
- * E.g. "кемпинговый фонарь" → ["кемпинговый фонарь", "фонарь кемпинговый", "фонарь", "прожектор кемпинговый"]
- */
-function generatePriceSynonyms(query: string): string[] {
-  const synonyms = new Set<string>();
-  synonyms.add(query);
-  
-  const words = query.toLowerCase().split(/\s+/).filter(w => w.length >= 2);
-  
-  // Add reversed word order: "кемпинговый фонарь" → "фонарь кемпинговый"
-  if (words.length >= 2) {
-    synonyms.add(words.reverse().join(' '));
-  }
-  
-  // Add each individual word (if meaningful, ≥3 chars)
-  for (const w of words) {
-    if (w.length >= 3) synonyms.add(w);
-  }
-  
-  // Common product synonym mappings for electrical store
-  const synonymMap: Record<string, string[]> = {
-    'фонарь': ['фонарь', 'фонарик', 'прожектор', 'светильник переносной'],
-    'фонарик': ['фонарь', 'фонарик', 'прожектор'],
-    'автомат': ['автомат', 'автоматический выключатель', 'выключатель автоматический'],
-    'кабель': ['кабель', 'провод'],
-    'розетка': ['розетка', 'розетки'],
-    'лампа': ['лампа', 'лампочка', 'светодиодная лампа'],
-    'щиток': ['щиток', 'бокс', 'щит', 'корпус модульный'],
-    'удлинитель': ['удлинитель', 'колодка', 'сетевой фильтр'],
-    'болгарка': ['УШМ', 'болгарка', 'угловая шлифмашина'],
-    'дрель': ['дрель', 'дрели'],
-    'перфоратор': ['перфоратор', 'бурильный молоток'],
-    'стабилизатор': ['стабилизатор', 'стабилизатор напряжения'],
-    'рубильник': ['рубильник', 'выключатель-разъединитель', 'выключатель нагрузки'],
-    'светильник': ['светильник', 'светильники', 'люстра'],
-    'генератор': ['генератор', 'электростанция'],
-  };
-  
-  for (const w of words) {
-    const syns = synonymMap[w];
-    if (syns) {
-      for (const s of syns) {
-        synonyms.add(s);
-        // Also add with adjective if original had one: "кемпинговый" + "прожектор"
-        const adjectives = words.filter(ww => ww !== w && ww.length >= 3);
-        for (const adj of adjectives) {
-          synonyms.add(`${adj} ${s}`);
-          synonyms.add(`${s} ${adj}`);
-        }
-      }
-    }
-  }
-  
-  const result = Array.from(synonyms).slice(0, 8); // Cap at 8 variants
-  console.log(`[PriceSynonyms] "${query}" → ${result.length} variants: ${result.join(', ')}`);
-  return result;
-}
-
-// ============================================================
-// CATEGORY SYNONYMS — generate search variants via micro-LLM
-// ============================================================
-
-async function generateCategorySynonyms(
-  category: string,
-  settings: CachedSettings | null
-): Promise<string[]> {
-  const fallbackVariants = generatePriceSynonyms(category);
-  
-  try {
-    // Determine provider/key for micro-LLM (same logic as classifyProductName)
-    const classifierProvider = settings?.classifier_provider || 'auto';
-    const classifierModel = settings?.classifier_model || 'gemini-2.5-flash-lite';
-    
-    let url: string;
-    let apiKeys: string[];
-    let model: string = classifierModel;
-
-    if (classifierProvider === 'openrouter' || classifierProvider === 'auto') {
-      if (settings?.openrouter_api_key) {
-        url = 'https://openrouter.ai/api/v1/chat/completions';
-        apiKeys = [settings.openrouter_api_key];
-        if (!model.includes('/')) model = `google/${model}`;
-      } else {
-        console.log('[CategorySynonyms] No OpenRouter key, using fallback');
-        return fallbackVariants;
-      }
-    } else {
-      console.log('[CategorySynonyms] Unsupported provider, using fallback');
-      return fallbackVariants;
-    }
-
-    const body = {
-      model,
-      messages: [
-        {
-          role: 'system',
-          content: `Ты генератор поисковых вариантов для каталога электротоваров.
-Тебе дают категорию товара. Сгенерируй 3-5 вариантов написания для поиска в каталоге.
-Учитывай:
-- Сокращения числительных: двухместная→2-местная, трёхфазный→3-фазный, двойная→2-я
-- Синонимы: розетка двойная = розетка двухместная = розетка 2-местная
-- Перестановки слов: "розетка накладная" = "накладная розетка"
-- Технические обозначения: если есть
-
-Ответь СТРОГО JSON-массивом строк, без пояснений.
-Пример: ["2-местная розетка", "розетка двойная", "розетка 2 поста"]`
-        },
-        { role: 'user', content: category }
-      ],
-      ...DETERMINISTIC_SAMPLING,
-      max_tokens: 150,
-    };
-    console.log(`[CategorySynonyms] Sampling: top_k=1 seed=42 provider=google-ai-studio`);
-
-    const fetchPromise = callAIWithKeyFallback(url, apiKeys, body, 'CategorySynonyms');
-    const timeoutPromise = new Promise<Response>((_, reject) =>
-      setTimeout(() => reject(new DOMException('Timeout', 'AbortError')), 4000)
-    );
-
-    const response = await Promise.race([fetchPromise, timeoutPromise]);
-    if (!response.ok) {
-      console.log(`[CategorySynonyms] API error ${response.status}, using fallback`);
-      return fallbackVariants;
-    }
-
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
-    if (!content) {
-      console.log('[CategorySynonyms] Empty response, using fallback');
-      return fallbackVariants;
-    }
-
-    const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-    const parsed = JSON.parse(jsonStr);
-
-    if (!Array.isArray(parsed) || parsed.length === 0) {
-      console.log('[CategorySynonyms] Invalid JSON array, using fallback');
-      return fallbackVariants;
-    }
-
-    // Combine: original category + LLM variants + fallback variants (deduplicated)
-    const allVariants = new Set<string>();
-    allVariants.add(category);
-    for (const v of parsed) {
-      if (typeof v === 'string' && v.trim().length >= 2) {
-        allVariants.add(v.trim());
-      }
-    }
-    for (const v of fallbackVariants) {
-      allVariants.add(v);
-    }
-
-    const result = Array.from(allVariants).slice(0, 8);
-    console.log(`[CategorySynonyms] "${category}" → ${result.length} variants: ${result.join(', ')}`);
-    return result;
-  } catch (e) {
-    if (e instanceof DOMException && e.name === 'AbortError') {
-      console.log(`[CategorySynonyms] Timeout (4s), using fallback`);
-    } else {
-      console.error('[CategorySynonyms] Error:', e, ', using fallback');
-    }
-    return fallbackVariants;
-  }
-}
+// Removed: generatePriceSynonyms / generateCategorySynonyms (static synonym dictionaries).
+// Reason: violated "Systemic, scalable solutions only" core rule — hardcoded list of 14 categories.
+// Price branch now uses single-query + min_price=1 server sort (see Core memory 2026-05-02).
+// generateCategorySynonyms was dead code (never called).
 
 /**
  * DEPRECATED: detectPendingPriceIntent is replaced by dialog slots.
@@ -5745,8 +5584,7 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                 // Scenario C: характеристики уже заданы — пропускаем clarify, идём прямо в API.
                 const enrichedQuery = `${priceQuery} ${mods.join(' ')}`.trim();
                 console.log(`[Chat] Price intent with mods: "${enrichedQuery}"`);
-                const synonymQueries = [enrichedQuery, ...generatePriceSynonyms(priceQuery)];
-                const priceResult = await handlePriceIntent(synonymQueries, effectivePriceIntent, appSettings.volt220_api_token!);
+                const priceResult = await handlePriceIntent([enrichedQuery], effectivePriceIntent, appSettings.volt220_api_token!);
                 if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
                   foundProducts = priceResult.products;
                   articleShortCircuit = true;
