@@ -4236,11 +4236,16 @@ async function searchProductsMulti(
         }
 
         console.log(`[Search] Pass 2 (resolved option_filters): ${pass2Map.size} unique products`);
-        if (pass2Map.size > 0) {
-          productMap.clear();
-          for (const [id, product] of pass2Map.entries()) {
-            productMap.set(id, product);
-          }
+        // HONEST EMPTY: even when pass2 returns 0, replace productMap with the
+        // (empty) filtered set. Otherwise downstream sees stale Pass 1 results
+        // and treats them as "matching" the requested filters — which is a lie
+        // and triggers garbage deterministic renders.
+        productMap.clear();
+        for (const [id, product] of pass2Map.entries()) {
+          productMap.set(id, product);
+        }
+        if (pass2Map.size === 0) {
+          console.log(`[Search] Pass 2 returned 0 — productMap cleared (honest empty, no Pass 1 fallback)`);
         }
       } else {
         console.log(`[Search] Human option_filters present but could not be resolved against Pass 1 products`);
