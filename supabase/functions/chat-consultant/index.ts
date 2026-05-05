@@ -5703,7 +5703,7 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
               const { extractCategoryNoun, createProductionExtractorDeps } = await import("../_shared/category-noun-extractor.ts");
               const extractorDeps = createProductionExtractorDeps(appSettings.openrouter_api_key);
               const extractDeadline = new Promise<{ categoryNoun: string }>((_, rej) =>
-                setTimeout(() => rej(new Error('qf_extract_timeout_3s')), 3000)
+                setTimeout(() => rej(new Error('qf_extract_timeout_8s')), 8000)
               );
               const extractRes = await Promise.race([
                 extractCategoryNoun({ userQuery: userMessage, locale: 'ru' }, extractorDeps),
