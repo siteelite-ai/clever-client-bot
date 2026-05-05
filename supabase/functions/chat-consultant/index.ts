@@ -4626,7 +4626,7 @@ async function generateCrossSellTail(params: {
   if (!products.length || !settings.openrouter_api_key) return '';
 
   // Берём только названия первых 3 товаров — этого достаточно, чтобы LLM поняла категорию.
-  const titles = products.slice(0, 3).map(p => p.pagetitle || p.name || '').filter(Boolean);
+  const titles = products.slice(0, 3).map(p => (p.pagetitle || '').trim()).filter(Boolean);
   if (!titles.length) return '';
 
   const systemPrompt = `Ты эксперт-консультант 220volt.kz. Клиенту только что показали карточки товаров. Твоя задача — добавить ОДНУ короткую фразу контекстного cross-sell: предложить ЛОГИЧЕСКИ СВЯЗАННЫЙ аксессуар или сопутствующий товар, который обычно докупают вместе.
@@ -7902,7 +7902,7 @@ ${productInstructions}`;
       // Cross-sell tail (отдельный LLM-вызов, безопасен для URL — не работает с ProductResource).
       // Пропускаем для price-facet-clarify (там и так уточняющий вопрос) и replacement (similar-ветка
       // сюда не доходит — у неё свой композер).
-      const allowCrossSellTail = renderReason !== 'price-facet-clarify' && !extractedIntent.is_replacement;
+      const allowCrossSellTail = renderReason !== 'price-facet-clarify' && !replacementMeta?.isReplacement;
       const crossSellTail = allowCrossSellTail
         ? await generateCrossSellTail({ products: foundProducts, userMessage, settings: appSettings })
         : '';
