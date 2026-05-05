@@ -5745,8 +5745,7 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                 // Scenario C: характеристики уже заданы — пропускаем clarify, идём прямо в API.
                 const enrichedQuery = `${priceQuery} ${mods.join(' ')}`.trim();
                 console.log(`[Chat] Price intent with mods: "${enrichedQuery}"`);
-                const synonymQueries = [enrichedQuery, ...generatePriceSynonyms(priceQuery)];
-                const priceResult = await handlePriceIntent(synonymQueries, effectivePriceIntent, appSettings.volt220_api_token!);
+                const priceResult = await handlePriceIntent([enrichedQuery], effectivePriceIntent, appSettings.volt220_api_token!);
                 if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
                   foundProducts = priceResult.products;
                   articleShortCircuit = true;
