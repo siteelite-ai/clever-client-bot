@@ -14,7 +14,7 @@
 //     (вызывающий код делает fallback на ?category=).
 
 const EXTRACTOR_TIMEOUT_MS = 8_000;
-const EXTRACTOR_MODEL_DEFAULT = "google/gemini-2.5-flash-lite";
+const EXTRACTOR_MODEL_DEFAULT = "anthropic/claude-sonnet-4.5";
 const NOUN_REGEX = /^[\p{L}]{2,30}$/u;
 
 export type CategoryNounSource = "llm" | "empty" | "invalid";
