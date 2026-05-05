@@ -5822,12 +5822,13 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                       30,
                       resolvedFilters
                     );
-                    console.log(`[QueryFirstV2] final query="${noun}" filters=${JSON.stringify(resolvedFilters)} → ${final.length}`);
+                    const finalFiltered = applyNounFilter(final);
+                    console.log(`[QueryFirstV2] final query="${noun}" filters=${JSON.stringify(resolvedFilters)} → ${final.length} (after noun-filter: ${finalFiltered.length})`);
 
-                    if (final.length > 0) {
-                      displayList = final;
+                    if (finalFiltered.length > 0) {
+                      displayList = finalFiltered;
                       branchTag = 'qfv2_win';
-                      console.log(`[QueryFirstV2] query_first_v2_win noun="${noun}" filters=${Object.keys(resolvedFilters).length} count=${final.length} elapsed=${Date.now() - qfStart}ms`);
+                      console.log(`[QueryFirstV2] query_first_v2_win noun="${noun}" filters=${Object.keys(resolvedFilters).length} count=${finalFiltered.length} elapsed=${Date.now() - qfStart}ms`);
                     } else {
                       // HONEST-EMPTY (was: silent Soft Fallback showing the broader pool).
                       // Showing the pool here mixes irrelevant categories (e.g. "удлинитель"
