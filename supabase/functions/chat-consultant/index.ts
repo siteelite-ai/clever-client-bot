@@ -4604,25 +4604,78 @@ export function buildDeterministicShortCircuitContent(params: {
           : 'Подобрал товары из каталога:';
 
   const cards = products.slice(0, 3).map(formatProductCardDeterministic).join('\n\n');
-  const brands = extractBrandsFromProducts(products).slice(0, 3);
-  const lowerMessage = userMessage.toLowerCase();
+  // followUp убран намеренно (2026-05-05): захардкоженная фраза «могу уточнить по бренду…»
+  // не контекстна и раздражает. Cross-sell теперь генерируется отдельным LLM-вызовом
+  // generateCrossSellTail() после рендера и дописывается как отдельный chunk в стрим.
+  return `${intro}\n\n${cards}`.trim();
+}
 
-  let followUp = '';
-  if (reason === 'price-shortcircuit') {
-    followUp = brands.length > 1
-      ? `Если хотите, могу сразу сузить подборку по бренду: ${brands.join(', ')}.`
-      : 'Если хотите, могу сразу сузить подборку по бренду, характеристике или наличию в городе.';
-  } else if (reason === 'article-shortcircuit' || reason === 'siteid-shortcircuit') {
-    followUp = 'Если нужно, сразу проверю аналоги, наличие по городам или более бюджетную замену.';
-  } else if (lowerMessage.includes('самый') || lowerMessage.includes('деш') || lowerMessage.includes('дорог')) {
-    followUp = 'Если хотите, могу следом показать соседние варианты по цене или отфильтровать по бренду.';
-  } else {
-    followUp = brands.length > 1
-      ? `Если хотите, могу уточнить по бренду (${brands.join(', ')}) или по ключевой характеристике.`
-      : 'Если хотите, могу сузить подборку по бренду, цене или ключевой характеристике.';
+/**
+ * Cross-sell tail для детерминистичного рендера.
+ * Отдельный LLM-вызов (Claude Sonnet 4.5), 1-3 предложения, БЕЗ SKU/цен/ссылок/брендов
+ * найденных товаров — чистый текст про сопутствующие категории. Безопасен для URL,
+ * т.к. инструкция запрещает любые ссылки/артикулы.
+ * Возвращает '' при любой ошибке/таймауте — silent skip, карточки уходят без хвоста.
+ */
+async function generateCrossSellTail(params: {
+  products: Product[];
+  userMessage: string;
+  settings: CachedSettings;
+}): Promise<string> {
+  const { products, userMessage, settings } = params;
+  if (!products.length || !settings.openrouter_api_key) return '';
+
+  // Берём только названия первых 3 товаров — этого достаточно, чтобы LLM поняла категорию.
+  const titles = products.slice(0, 3).map(p => p.pagetitle || p.name || '').filter(Boolean);
+  if (!titles.length) return '';
+
+  const systemPrompt = `Ты эксперт-продавец электротоваров 220volt.kz. Тебе показали клиенту товары, теперь нужно одной короткой фразой (1-3 предложения, до 200 символов) предложить ЛОГИЧЕСКИ СВЯЗАННЫЕ сопутствующие товары — то, что обычно докупают вместе.
+
+Запрос клиента: "${userMessage}"
+Показанные товары:
+${titles.map(t => `- ${t}`).join('\n')}
+
+ПРАВИЛА:
+- Только текст про сопутствующие категории (например: «к розеткам обычно берут рамки и подрозетники — подобрать?»)
+- ЗАПРЕЩЕНО: артикулы, цены, ссылки, названия конкретных товаров, бренды, маркетинговые восклицания, «отличный выбор», давление
+- Тон: спокойный, профессиональный, без восклицательных знаков
+- Если категория неочевидна или сопутствующих нет — верни пустую строку
+- Если уже задаётся уточняющий вопрос или показан только один товар-замена — верни пустую строку
+
+Ответь ТОЛЬКО текстом фразы (без кавычек, без префиксов, без JSON). Пустой ответ = пропустить cross-sell.`;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${settings.openrouter_api_key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'anthropic/claude-sonnet-4.5',
+        messages: [{ role: 'user', content: systemPrompt }],
+        temperature: 0.3,
+        max_tokens: 150,
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!response.ok) {
+      console.log(`[CrossSellTail] API error: ${response.status}`);
+      return '';
+    }
+    const data = await response.json();
+    let text: string = (data.choices?.[0]?.message?.content || '').trim();
+    // Sanitize: вырезаем потенциальные markdown-ссылки, артикулы, цены
+    if (/\[.*?\]\(.*?\)/.test(text) || /https?:\/\//i.test(text) || /\d+\s*(?:₸|тг|тенге|руб)/i.test(text)) {
+      console.log(`[CrossSellTail] Sanitize: rejected text with link/price: ${text.slice(0, 80)}`);
+      return '';
+    }
+    if (text.length > 300) text = text.slice(0, 300);
+    return text;
+  } catch (e) {
+    console.log(`[CrossSellTail] Error (silent skip): ${(e as Error).message}`);
+    return '';
   }
-
-  return `${intro}\n\n${cards}\n\n${followUp}`.trim();
 }
 
 export function isDeterministicShortCircuitReason(reason: string): boolean {
@@ -7837,8 +7890,18 @@ ${productInstructions}`;
           });
       console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${content.length}`);
 
+      // Cross-sell tail (отдельный LLM-вызов, безопасен для URL — не работает с ProductResource).
+      // Пропускаем для price-facet-clarify (там и так уточняющий вопрос) и replacement (similar-ветка
+      // сюда не доходит — у неё свой композер).
+      const allowCrossSellTail = renderReason !== 'price-facet-clarify' && !extractedIntent.is_replacement;
+      const crossSellTail = allowCrossSellTail
+        ? await generateCrossSellTail({ products: foundProducts, userMessage, settings: appSettings })
+        : '';
+      const finalContent = crossSellTail ? `${content}\n\n${crossSellTail}` : content;
+      if (crossSellTail) console.log(`[Chat] Cross-sell tail appended (${crossSellTail.length} chars)`);
+
       if (!useStreaming) {
-        const responseBody: { content: string; slot_update?: DialogSlots } = { content };
+        const responseBody: { content: string; slot_update?: DialogSlots } = { content: finalContent };
         if (slotsUpdated) responseBody.slot_update = dialogSlots;
         persistSlotsAsync(conversationId, dialogSlots);
         return new Response(JSON.stringify(responseBody), {
@@ -7850,7 +7913,7 @@ ${productInstructions}`;
       const stream = new ReadableStream({
         start(controller) {
           const contentDelta = `data: ${JSON.stringify({
-            choices: [{ delta: { content }, index: 0 }],
+            choices: [{ delta: { content: finalContent }, index: 0 }],
           })}\n\n`;
           controller.enqueue(encoder.encode(contentDelta));
           if (slotsUpdated) {
