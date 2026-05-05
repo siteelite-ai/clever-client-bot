@@ -7890,8 +7890,18 @@ ${productInstructions}`;
           });
       console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${content.length}`);
 
+      // Cross-sell tail (отдельный LLM-вызов, безопасен для URL — не работает с ProductResource).
+      // Пропускаем для price-facet-clarify (там и так уточняющий вопрос) и replacement (similar-ветка
+      // сюда не доходит — у неё свой композер).
+      const allowCrossSellTail = renderReason !== 'price-facet-clarify' && !extractedIntent.is_replacement;
+      const crossSellTail = allowCrossSellTail
+        ? await generateCrossSellTail({ products: foundProducts, userMessage, settings: appSettings })
+        : '';
+      const finalContent = crossSellTail ? `${content}\n\n${crossSellTail}` : content;
+      if (crossSellTail) console.log(`[Chat] Cross-sell tail appended (${crossSellTail.length} chars)`);
+
       if (!useStreaming) {
-        const responseBody: { content: string; slot_update?: DialogSlots } = { content };
+        const responseBody: { content: string; slot_update?: DialogSlots } = { content: finalContent };
         if (slotsUpdated) responseBody.slot_update = dialogSlots;
         persistSlotsAsync(conversationId, dialogSlots);
         return new Response(JSON.stringify(responseBody), {
@@ -7903,7 +7913,7 @@ ${productInstructions}`;
       const stream = new ReadableStream({
         start(controller) {
           const contentDelta = `data: ${JSON.stringify({
-            choices: [{ delta: { content }, index: 0 }],
+            choices: [{ delta: { content: finalContent }, index: 0 }],
           })}\n\n`;
           controller.enqueue(encoder.encode(contentDelta));
           if (slotsUpdated) {
