@@ -144,6 +144,9 @@ export function createProductionExtractorDeps(
           model,
           temperature: 0,
           max_tokens: 60,
+          // Provider lock: без него OpenRouter роутит часть запросов в Google Vertex
+          // Anthropic, который отвечает 400 на наш payload с tool_calls.
+          provider: { order: ["anthropic", "amazon-bedrock"], allow_fallbacks: true },
           messages: [
             { role: "system", content: params.systemPrompt },
             { role: "user", content: params.userMessage },
