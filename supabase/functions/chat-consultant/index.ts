@@ -2229,7 +2229,7 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
     const s = val as Record<string, unknown>;
     
     // Validate intent
-    if (s.intent !== 'price_extreme' && s.intent !== 'product_search' && s.intent !== 'category_disambiguation' && s.intent !== 'price_facet_clarify') continue;
+    if (s.intent !== 'price_extreme' && s.intent !== 'product_search' && s.intent !== 'category_disambiguation' && s.intent !== 'price_facet_clarify' && s.intent !== 'pending_offer') continue;
     // Validate status
     if (s.status !== 'pending' && s.status !== 'done') continue;
     // Validate base_category
