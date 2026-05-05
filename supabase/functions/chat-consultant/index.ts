@@ -177,9 +177,19 @@ const DETERMINISTIC_SAMPLING = {
 // OpenRouter выкинет лишние поля, но указание `provider.order=google-ai-studio`
 // для Claude приведёт к фолбэку (allow_fallbacks=true), что добавляет latency.
 // Для Claude/OpenAI — отдельный пресет без Gemini-only полей.
+// Lock Claude to native Anthropic provider first.
+// Без provider-lock OpenRouter роутит часть запросов в Google Vertex Anthropic
+// (provider_name="Google", request id req_vrtx_*), который отвечает 400
+// "messages: at least one message is required" на наш payload с tool_calls.
+// Имена провайдеров в OpenRouter регистрозависимые: "Anthropic", "Amazon Bedrock", "Google Vertex".
 const DETERMINISTIC_SAMPLING_CLAUDE = {
   temperature: 0,
   top_p: 1,
+  provider: {
+    order: ['Anthropic', 'Amazon Bedrock'],
+    ignore: ['Google Vertex', 'Google'],
+    allow_fallbacks: true,
+  },
 } as const;
 
 function samplingFor(model: string): Record<string, unknown> {
@@ -592,8 +602,11 @@ async function getAppSettings(): Promise<CachedSettings> {
       system_prompt: data.system_prompt || null,
       classifier_provider: data.classifier_provider || 'auto',
       classifier_model: data.classifier_model || 'gemini-2.5-flash-lite',
-      query_first_enabled: qf,
-      soft_suggest_enabled: ss,
+      // TEMP DISABLED: QueryFirstV2 ветка отключена принудительно по запросу пользователя
+      // (см. чат 2026-05-05 — даёт хуже результаты чем legacy Category Resolver).
+      // Чтобы вернуть — заменить на `qf` / `ss`.
+      query_first_enabled: false,
+      soft_suggest_enabled: false,
     };
   } catch (e) {
     console.error('[Settings] Failed to load settings:', e);
@@ -1125,8 +1138,10 @@ interface Product {
   };
   options?: Array<{
     key: string;
-    caption: string;
-    value: string;
+    caption?: string;
+    value?: string;
+    caption_ru?: string;
+    value_ru?: string;
   }>;
   warehouses?: Array<{
     city: string;
@@ -1146,12 +1161,21 @@ interface SearchCandidate {
 
 // NO hardcoded option keys! We discover them dynamically from API results.
 
+interface ComputeRequest {
+  /** Что спрашивают: «вес», «мощность», «IP», «габариты», «гарантия», «количество ламп» и т.п. */
+  attribute: string;
+  /** Множитель ×N штук, если пользователь указал количество. null/undefined = одна штука. */
+  multiplier?: number | null;
+}
+
 interface ExtractedIntent {
   intent: 'catalog' | 'brands' | 'info' | 'general';
   candidates: SearchCandidate[];
   originalQuery: string;
   usage_context?: string;
   english_queries?: string[];
+  /** Надстройка к любой ветке: пользователь хочет узнать характеристику найденного товара (опц. ×N). */
+  compute?: ComputeRequest;
 }
 
 // ============================================================
@@ -1415,11 +1439,11 @@ function extractModifiersFromProduct(product: Product): string[] {
 
   for (const opt of product.options) {
     const keyLower = opt.key.toLowerCase();
-    const captionLower = opt.caption.toLowerCase();
+    const captionLower = (opt.caption ?? '').toLowerCase();
 
     if (!importantPatterns.some(p => p.test(keyLower) || p.test(captionLower))) continue;
 
-    const cleanValue = opt.value.split('//')[0].trim();
+    const cleanValue = (opt.value ?? '').split('//')[0].trim();
     if (!cleanValue) continue;
 
     // Compact only "number space unit" → "numberunit", keep everything else as-is
@@ -3044,6 +3068,13 @@ ${recentHistory.length > 0 ? 'Анализируй текущее сообщен
 КОНТЕКСТ ИСПОЛЬЗОВАНИЯ (usage_context):
 Если пользователь описывает не сам товар, а место или условия его применения («для улицы», «в баню», «на производство», «в детскую») — заполни usage_context описанием контекста и одновременно выведи в option_filters предполагаемые технические характеристики, которые этому контексту соответствуют (степень защиты, климатическое исполнение и т.п.). Если пользователь сам назвал конкретную характеристику (IP65, IK10) — это не контекст, а признак: ставь только в option_filters, usage_context оставь пустым.
 
+ПОДСЧЁТ / ХАРАКТЕРИСТИКА (compute):
+Это НАДСТРОЙКА к любому intent — основной intent (catalog/brands/info) и кандидаты не меняются. Заполняй compute, когда пользователь спрашивает о КОНКРЕТНОЙ характеристике товара или просит её посчитать (умножить на количество). Примеры: «сколько весит», «какой вес у 5 штук», «какая мощность», «какой IP», «какие габариты», «сколько ламп», «гарантия», «диаметр», «длина кабеля», «какой объём 100 розеток», «сколько места займут 50 кабелей», «влезет ли в Газель 200 ламп».
+- compute.attribute — короткое русское название характеристики, как её обычно называет пользователь («вес», «мощность», «IP», «габариты», «гарантия», «длина», «количество ламп», «материал», «объём»). Для вопросов о транспортировке, перевозке, «сколько места», «влезет ли в машину/Газель/кузов» — ставь attribute="объём". НЕ перечисляй несколько — выбери главную.
+- compute.multiplier — целое число, если пользователь явно указал количество («5 штук», «×3», «для 10 светильников»). Если количество не названо — null.
+- Если пользователь просто ищет товар без вопроса о характеристике — compute=null. Не выдумывай.
+- Если пользователь спрашивает про характеристику без привязки к товару, но в контексте уже обсуждавшегося товара (followup: «а сколько он весит?») — всё равно заполни compute, кандидаты могут быть пустыми/общими, дальше система возьмёт товар из контекста.
+
 ИЕРАРХИЯ КАНДИДАТОВ:
 1. Первый кандидат — основной товар: то родовое или каталожное имя, которым этот предмет называют в магазине.
 2. Остальные кандидаты — основной товар плюс характеристика, либо альтернативные имена того же товара (разговорное / техническое / каталожное). Подумай, как этот предмет может быть записан в каталоге электротоваров: по разговорному имени, по техническому термину, по альтернативному названию.
@@ -3067,7 +3098,7 @@ ${recentHistory.length > 0 ? 'Анализируй текущее сообщен
         { role: 'system', content: extractionPrompt },
         { role: 'user', content: message }
       ],
-      ...DETERMINISTIC_SAMPLING,
+      ...samplingFor(aiModel),
       reasoning: { exclude: true },
       tools: [
         {
@@ -3134,6 +3165,24 @@ ${recentHistory.length > 0 ? 'Анализируй текущее сообщен
                   items: { type: 'string' },
                   nullable: true,
                   description: 'Английские переводы поисковых терминов для каталога электротоваров. Переводи ТОЛЬКО названия товаров/категорий (существительные), НЕ переводи общие слова (купить, нужен, для улицы). Примеры: "кукуруза" → "corn", "свеча" → "candle", "груша" → "pear", "удлинитель" → "extension cord". null если все термины уже на английском или перевод не нужен.'
+                },
+                compute: {
+                  type: 'object',
+                  nullable: true,
+                  description: 'Надстройка: пользователь спрашивает о характеристике товара (опционально ×N штук). null если вопроса о характеристике нет.',
+                  properties: {
+                    attribute: {
+                      type: 'string',
+                      description: 'Короткое русское название характеристики, как её называет пользователь: «вес», «мощность», «IP», «габариты», «гарантия», «длина», «количество ламп», «материал» и т.п.'
+                    },
+                    multiplier: {
+                      type: 'number',
+                      nullable: true,
+                      description: 'Множитель ×N штук, если пользователь указал количество («5 штук», «×3»). null если количество не названо.'
+                    }
+                  },
+                  required: ['attribute'],
+                  additionalProperties: false
                 }
               },
               required: ['intent', 'candidates'],
@@ -3222,12 +3271,27 @@ ${recentHistory.length > 0 ? 'Анализируй текущее сообщен
         finalIntent = 'catalog';
       }
       
+      // Compute надстройка — пользователь спрашивает о характеристике (опц. ×N).
+      let compute: ComputeRequest | undefined;
+      if (parsed.compute && typeof parsed.compute === 'object' && typeof parsed.compute.attribute === 'string') {
+        const attribute = parsed.compute.attribute.trim();
+        if (attribute.length > 0) {
+          const rawMul = parsed.compute.multiplier;
+          const multiplier = (typeof rawMul === 'number' && Number.isFinite(rawMul) && rawMul > 0)
+            ? Math.floor(rawMul)
+            : null;
+          compute = { attribute, multiplier };
+          console.log(`[AI Candidates] Compute request: attribute="${attribute}", multiplier=${multiplier}`);
+        }
+      }
+
       return {
         intent: finalIntent,
         candidates: broadened,
         originalQuery: message,
         usage_context: usageContext,
         english_queries: englishQueries.length > 0 ? englishQueries : undefined,
+        compute,
       };
     }
 
@@ -3369,9 +3433,9 @@ function discoverOptionKeys(
     for (const opt of product.options) {
       if (isExcludedOption(opt.key)) continue;
       if (!optionIndex.has(opt.key)) {
-        optionIndex.set(opt.key, { key: opt.key, caption: opt.caption, values: new Set() });
+        optionIndex.set(opt.key, { key: opt.key, caption: opt.caption ?? '', values: new Set() });
       }
-      optionIndex.get(opt.key)!.values.add(opt.value);
+      optionIndex.get(opt.key)!.values.add(opt.value ?? '');
     }
   }
   
@@ -3532,12 +3596,13 @@ async function resolveFiltersWithLLM(
     optionIndex = new Map();
     for (const product of products) {
       if (!product.options) continue;
-      for (const opt of product.options) {
+        for (const opt of product.options) {
         if (isExcludedOption(opt.key)) continue;
         if (!optionIndex.has(opt.key)) {
-          optionIndex.set(opt.key, { caption: opt.caption, values: new Set() });
+            optionIndex.set(opt.key, { caption: cleanOptionCaption(opt.caption_ru ?? opt.caption) || opt.key, values: new Set() });
         }
-        optionIndex.get(opt.key)!.values.add(opt.value);
+          const normalizedValue = cleanOptionValue(opt.value_ru ?? opt.value);
+          if (normalizedValue) optionIndex.get(opt.key)!.values.add(normalizedValue);
       }
     }
   }
@@ -3972,7 +4037,7 @@ function matchQuickFilter(product: Product, filter: { type: 'color'; value: stri
     });
     if (!colorOpt) return false;
     const normalize = (s: string) => s.toLowerCase().replace(/ё/g, 'е');
-    const optNorm = normalize(colorOpt.value.toString());
+    const optNorm = normalize((colorOpt.value ?? '').toString());
     const filterNorm = normalize(filter.value);
     return optNorm.includes(filterNorm) || filterNorm.includes(optNorm);
   }
@@ -4133,6 +4198,58 @@ async function searchProductsMulti(
   }
   
   console.log(`[Search] Pass 1 (broad): ${productMap.size} unique products`);
+
+  // === PASS 2: Apply human-readable option_filters via existing dynamic resolver ===
+  // No hardcoded mapping tables: resolve against real product/category options from Pass 1,
+  // then replay the same queries with concrete options[<real_key>][]=<value> in API.
+  if (hasHumanFilters && productMap.size > 0 && settings) {
+    const allProducts = Array.from(productMap.values());
+    const humanModifiers = Array.from(new Set(
+      Object.entries(humanFilters)
+        .map(([k, v]) => {
+          const label = cleanOptionCaption(k.replace(/__.*/, '').replace(/_/g, ' '));
+          const value = cleanOptionValue(v);
+          return `${label || k} ${value}`.trim();
+        })
+        .filter(Boolean)
+    ));
+
+    if (humanModifiers.length > 0) {
+      const { resolved: resolvedFromHumanRaw, unresolved: unresolvedHuman } = await resolveFiltersWithLLM(
+        allProducts,
+        humanModifiers,
+        settings,
+        humanModifiers,
+      );
+      const resolvedFromHuman = flattenResolvedFilters(resolvedFromHumanRaw);
+
+      if (Object.keys(resolvedFromHuman).length > 0) {
+        console.log(`[Search] Human option_filters resolved: ${JSON.stringify(resolvedFromHuman)}; unresolved=[${unresolvedHuman.join(', ')}]`);
+        const pass2Promises = cappedPass1.map(candidate =>
+          searchProductsByCandidate(candidate, apiToken, perPage, resolvedFromHuman)
+        );
+        const pass2Results = await Promise.all(pass2Promises);
+        const pass2Map = new Map<number, Product>();
+        for (const products of pass2Results) {
+          for (const product of products) {
+            if (!pass2Map.has(product.id)) {
+              pass2Map.set(product.id, product);
+            }
+          }
+        }
+
+        console.log(`[Search] Pass 2 (resolved option_filters): ${pass2Map.size} unique products`);
+        if (pass2Map.size > 0) {
+          productMap.clear();
+          for (const [id, product] of pass2Map.entries()) {
+            productMap.set(id, product);
+          }
+        }
+      } else {
+        console.log(`[Search] Human option_filters present but could not be resolved against Pass 1 products`);
+      }
+    }
+  }
   
   // === LOCAL CHARACTERISTIC FILTERING (primary mechanism) ===
   if (modifiers && modifiers.length > 0 && productMap.size > 0 && settings) {
@@ -4150,7 +4267,7 @@ async function searchProductsMulti(
         for (const [key, value] of Object.entries(resolvedFilters)) {
           const opt = product.options.find(o => o.key === key);
           if (opt) {
-            const pv = opt.value.toString().toLowerCase().trim();
+            const pv = (opt.value ?? '').toString().toLowerCase().trim();
             const fv = value.toString().toLowerCase().trim();
             if (pv === fv || pv.includes(fv) || fv.includes(pv)) {
               matchCount++;
@@ -4396,7 +4513,7 @@ function formatProductsForAI(products: Product[], includeExtended: boolean = tru
       if (Array.isArray(p?.options) && p.options.length > 0) {
         const specs = p.options
           .filter((o: any) => o && !isExcludedOption(o.key, includeExtended))
-          .map((o: any) => `${cleanOptionCaption(o.caption)}: ${cleanOptionValue(o.value)}`)
+          .map((o: any) => `${cleanOptionCaption(o.caption_ru ?? o.caption)}: ${cleanOptionValue(o.value_ru ?? o.value)}`)
           .filter((s: string) => s && !s.startsWith(': '));
 
         if (specs.length > 0) {
@@ -4474,7 +4591,9 @@ export function buildDeterministicShortCircuitContent(params: {
         : 'Подобрал самые доступные варианты из каталога:'
       : reason === 'article-shortcircuit' || reason === 'siteid-shortcircuit'
         ? 'Нашёл товар по точному запросу:'
-        : 'Подобрал товары из каталога:';
+        : reason === 'pass2-shortcircuit'
+          ? 'Подобрал по вашим характеристикам:'
+          : 'Подобрал товары из каталога:';
 
   const cards = products.slice(0, 3).map(formatProductCardDeterministic).join('\n\n');
   const brands = extractBrandsFromProducts(products).slice(0, 3);
@@ -4542,6 +4661,50 @@ function extractBrandsFromProducts(products: Product[]): string[] {
   }
   
   return Array.from(brands).sort();
+}
+
+// ============================================================
+// COMPUTE BLOCK — spec_query надстройка
+// ============================================================
+// Классификатор пометил compute={attribute, multiplier?} — пользователь
+// спросил о характеристике товара (опц. ×N). Список характеристик товара
+// УЖЕ есть в LLM-контексте (см. formatProductsForAI → "Характеристики: ...").
+// LLM сама находит подходящее поле и считает — никаких словарей синонимов,
+// никакого ручного матчинга. Здесь только короткая инструкция-задача.
+// Anti-hallucination: использовать ТОЛЬКО значения из контекста; если поля
+// нет — честно сказать «не указано».
+// ============================================================
+function buildComputeInstructionBlock(params: {
+  attribute: string;
+  multiplier: number | null | undefined;
+}): string {
+  const { attribute, multiplier } = params;
+  const mulText = (multiplier && multiplier > 1) ? ` × ${multiplier} шт.` : '';
+  const attrLower = attribute.toLowerCase();
+  const isVolumeQuery = /объ[её]м|места|место|перевоз|транспорт|машин|газел|кузов|влез|помест/i.test(attrLower);
+  const volumeBlock = isVolumeQuery ? `
+
+📦 СПЕЦПРАВИЛО ДЛЯ ОБЪЁМА (для расчёта транспортировки):
+- Возьми объём единицы из характеристик товара и умножь на количество.
+- Применяй внутренний коэффициент запаса (упаковка/намотка/паллетирование), но **НИКОГДА не упоминай его в ответе** — ни число, ни слово «коэффициент», ни «×1.1», ни «×1.2», ни «с учётом запаса», ни «с запасом на намотку». Просто посчитай и сразу выдай итог.
+  • Если товар — КАБЕЛЬ или ПРОВОД (определи это сам по названию и характеристикам) → умножай дополнительно на 1.2.
+  • Любой другой товар → умножай дополнительно на 1.1.
+- Приведи ответ в м³. Если в характеристиках указаны дм³ / литры / см³ — переведи самостоятельно (1 м³ = 1000 л = 1000 дм³ = 1 000 000 см³). Единицу в ответе указывай.
+- Пример формулировки (живым языком, БЕЗ упоминания коэффициента): «100 метров такого кабеля займут примерно 0.06 м³» или «50 таких розеток — около 0.03 м³».
+- Если поля «объём» (или эквивалентного) нет в характеристиках — честно скажи, что объём не указан, и предложи уточнить у менеджера. НЕ выдумывай числа.
+` : '';
+  return `🧮 КЛИЕНТ СПРАШИВАЕТ О ХАРАКТЕРИСТИКЕ: «${attribute}»${mulText}
+
+Список характеристик каждого товара (поле «Характеристики: …») у тебя уже есть ниже. Найди в нём поле, соответствующее запросу клиента (значение бери ТОЛЬКО оттуда — не выдумывай).
+
+✅ ТВОЯ ЗАДАЧА:
+1. Найди в характеристиках товара значение, соответствующее «${attribute}». Подходящее поле может называться по-разному (например, для «вес» подойдёт «Масса, кг» или «Вес нетто»; для «объём» — «Объём, м³», «Объём упаковки» и т.п.).
+2. ${(multiplier && multiplier > 1)
+    ? `Если значение числовое — умножь на ${multiplier} и дай ответ ЖИВЫМ ЧЕЛОВЕЧЕСКИМ ЯЗЫКОМ одной фразой ПЕРЕД карточкой товара. Пиши как консультант в магазине: «${multiplier} таких светильников будут весить около 3.5 кг» или «Суммарная мощность ${multiplier} штук — 300 Вт». НЕ пиши сухие формулы вида «вес × 5 = 3.5 кг». Если значение нечисловое (IP-класс, цвет, материал) — просто ответь на вопрос клиента, умножение не применяй.`
+    : `Ответь ЖИВЫМ ЧЕЛОВЕЧЕСКИМ ЯЗЫКОМ одной фразой ПЕРЕД карточкой товара, как консультант в магазине. Например: «Этот светильник весит 0.7 кг» или «Степень защиты — IP44, подойдёт для влажных помещений». НЕ пиши сухие формулы вида «вес: 0.7 кг».`}
+3. После ответа покажи карточку(и) товара как обычно: название-ссылка, Цена, Бренд, Наличие.
+4. Если в характеристиках НЕТ поля, соответствующего «${attribute}» — честно одной фразой скажи, что эта характеристика не указана в карточке, и предложи уточнить у менеджера или посмотреть полную страницу товара. НИКОГДА не выдумывай числовые значения.${volumeBlock}
+`;
 }
 
 function formatContactsForDisplay(contactsText: string): string | null {
@@ -5078,7 +5241,15 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
         // semantics as article-first; reuses articleShortCircuit so all downstream
         // branches treat the result identically. Skipped for replacement intent —
         // that pipeline needs the original product's traits, not the product itself.
-        if (!articleShortCircuit && classification?.has_product_name && !classification?.is_replacement) {
+        // SYSTEMIC GUARD (2026-05-04): если у классификатора есть critical_modifiers
+        // (характеристики типа "ВВГнг", "3х2.5", "12W", "E27", "IP44") — title-first
+        // FAST-PATH ПРОПУСКАЕТСЯ. Один хоп ?query=... вернёт >0 товаров без фильтрации
+        // по характеристикам, и LLM получит шумный список (и 1.5мм², и 4мм², и т.д.).
+        // Полный pipeline (catalog branch) применит option_filters через Pass 2 и
+        // вернёт релевантный результат. Title-first остаётся для чистых имён без
+        // модификаторов: "лампа A60", "розетка двойная", "выключатель Schneider".
+        const hasCriticalModifiers = Array.isArray(classification?.critical_modifiers) && classification.critical_modifiers.length > 0;
+        if (!articleShortCircuit && classification?.has_product_name && !classification?.is_replacement && !hasCriticalModifiers) {
           const titleCandidate = extractCandidateTitle(classification);
           if (titleCandidate) {
             const tStart = Date.now();
@@ -5098,6 +5269,8 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
               console.log(`[Chat] Title-first FAST-PATH: 0 results in ${tElapsed}ms for "${titleCandidate}", continuing pipeline`);
             }
           }
+        } else if (!articleShortCircuit && classification?.has_product_name && hasCriticalModifiers) {
+          console.log(`[Chat] Title-first FAST-PATH SKIPPED: critical_modifiers=[${classification.critical_modifiers.join(', ')}] → routing to full catalog pipeline (Pass 2 will apply option_filters)`);
         }
 
         if (!articleShortCircuit) {
@@ -5432,9 +5605,63 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
         }
         
         // === CATEGORY-FIRST (category without specific product name) ===
-        if (!articleShortCircuit && effectiveCategory && !classification?.has_product_name && !classification?.is_replacement && !effectivePriceIntent && appSettings.volt220_api_token) {
-          const modifiers = classification?.search_modifiers || [];
-          console.log(`[Chat] Category-first: category="${effectiveCategory}", modifiers=[${modifiers.join(', ')}]`);
+        // 2026-05-04 (systemic fix for "has_product_name=true bypass"):
+        //   When the classifier flags has_product_name=true (e.g. "Кабель ВВГнг 3х2.5"),
+        //   the title-first FAST-PATH (?pagetitle/?article/?query=full_name) runs first.
+        //   If ALL of those return 0 (articleShortCircuit stays false), we previously
+        //   had no bridge into QFv2 — pipeline went straight to broad query → 0 →
+        //   jargon-fallback (which proposes ALTERNATIVE terms, not facet decomposition).
+        //   Result: technical markings like "ВВГнг" (stored as "ВВГ нг" in catalog) never
+        //   triggered Self-Bootstrap Facets even though product_category was correctly
+        //   identified ("кабель"). Fix: enter CATEGORY-FIRST + QFv2 when has_product_name=true
+        //   AND we still have no products AND there is a product_category to use as noun.
+        //   Inside the block we synthesise modifiers from product_name tokens when classifier
+        //   left search_modifiers=[] (which it does per spec when has_product_name=true).
+        if (!articleShortCircuit && effectiveCategory && !classification?.is_replacement && !effectivePriceIntent && appSettings.volt220_api_token) {
+          let modifiers = classification?.search_modifiers || [];
+          // Synthetic modifiers from product_name when classifier left them empty
+          // (data-agnostic tokeniser: split on whitespace/hyphens + letter↔digit + cyrillic↔latin
+          // boundaries, then drop the base category noun). Pure pre-LLM normalisation;
+          // the Facet Matcher still maps tokens → real options from bootstrap schema.
+          if (
+            modifiers.length === 0 &&
+            classification?.has_product_name &&
+            typeof classification?.product_name === 'string' &&
+            classification.product_name.trim().length > 0
+          ) {
+            const rawName = classification.product_name.trim();
+            const categoryLower = (classification?.product_category || '').trim().toLowerCase();
+            const synthesised: string[] = [];
+            const seen = new Set<string>();
+            // Step 1: split on whitespace, hyphens, slashes, parentheses, commas.
+            const chunks = rawName.split(/[\s,()/\\-]+/).filter(Boolean);
+            for (const chunk of chunks) {
+              // Step 2: split each chunk on script/script-class boundaries:
+              //   letter↔digit (ВВГнг3 → ВВГнг, 3), cyrillic↔latin (LSPVS → LS, PVS only if mixed).
+              //   Common separators inside numeric specs: × * х x . , (treated as token break too).
+              const subTokens = chunk
+                .replace(/([а-яА-ЯёЁ])([a-zA-Z])/g, '$1 $2')
+                .replace(/([a-zA-Z])([а-яА-ЯёЁ])/g, '$1 $2')
+                .replace(/([а-яА-ЯёЁa-zA-Z])(\d)/g, '$1 $2')
+                .replace(/(\d)([а-яА-ЯёЁa-zA-Z])/g, '$1 $2')
+                .split(/[×*хxХ]/i)
+                .flatMap((t: string) => t.split(/\s+/))
+                .map((t: string) => t.trim())
+                .filter(Boolean);
+              for (const tok of subTokens) {
+                const tLower = tok.toLowerCase();
+                if (tLower === categoryLower) continue;       // drop base noun ("кабель")
+                if (seen.has(tLower)) continue;
+                seen.add(tLower);
+                synthesised.push(tok);
+              }
+            }
+            if (synthesised.length > 0) {
+              modifiers = synthesised;
+              console.log(`[Chat] Synthesised modifiers from product_name="${rawName}": [${modifiers.join(', ')}] (has_product_name=true bridge)`);
+            }
+          }
+          console.log(`[Chat] Category-first: category="${effectiveCategory}", modifiers=[${modifiers.join(', ')}], hasProductName=${!!classification?.has_product_name}`);
           const categoryStart = Date.now();
 
           // ===== NEW: SEMANTIC CATEGORY-MATCHER PATH (race with 10s timeout) =====
@@ -5489,7 +5716,7 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
               const { extractCategoryNoun, createProductionExtractorDeps } = await import("../_shared/category-noun-extractor.ts");
               const extractorDeps = createProductionExtractorDeps(appSettings.openrouter_api_key);
               const extractDeadline = new Promise<{ categoryNoun: string }>((_, rej) =>
-                setTimeout(() => rej(new Error('qf_extract_timeout_3s')), 3000)
+                setTimeout(() => rej(new Error('qf_extract_timeout_8s')), 8000)
               );
               const extractRes = await Promise.race([
                 extractCategoryNoun({ userQuery: userMessage, locale: 'ru' }, extractorDeps),
@@ -5572,7 +5799,37 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                   // ── (5/6) Final search.
                   // (5a) modifiers + at least one resolved option → re-query with options.
                   // (5b) no resolved options → display the pool we already have.
-                  let displayList: Product[] = pool;
+                  // ── Noun stem post-filter (Variant Б, 2026-05-05).
+                  // QFv2 pool/final by ?query=noun is fuzzy: API returns related categories
+                  // (e.g. "розетка" → frames, supports). To avoid showing off-topic items
+                  // we keep only products whose pagetitle/category contains the noun stem.
+                  // Fallback: if the filter produces 0, return the original list (don't make
+                  // things worse than before). Data-agnostic: stem = lowercase + strip trailing
+                  // vowels (works for ru morphology of common nouns).
+                  const stripVowel = (s: string) => s.replace(/[аяоеёуюыиэ]+$/iu, '');
+                  const nounStem = stripVowel(noun.toLowerCase().trim());
+                  const matchesNoun = (p: Product): boolean => {
+                    if (!nounStem || nounStem.length < 3) return true;
+                    const title = (p.pagetitle || '').toLowerCase();
+                    const cat = (p.category?.pagetitle || '').toLowerCase();
+                    return title.includes(nounStem) || cat.includes(nounStem);
+                  };
+                  const applyNounFilter = (list: Product[], strict = false): Product[] => {
+                    const filtered = list.filter(matchesNoun);
+                    if (filtered.length === 0 && list.length > 0) {
+                      if (strict) {
+                        console.log(`[QueryFirstV2] noun-filter stem="${nounStem}" STRICT → 0 of ${list.length}, dropping all (off-topic results filtered out)`);
+                        return [];
+                      }
+                      console.log(`[QueryFirstV2] noun-filter stem="${nounStem}" → 0 of ${list.length}, keeping original (no off-topic guard available)`);
+                      return list;
+                    }
+                    if (filtered.length !== list.length) {
+                      console.log(`[QueryFirstV2] noun-filter stem="${nounStem}" → kept ${filtered.length}/${list.length}`);
+                    }
+                    return filtered;
+                  };
+                  let displayList: Product[] = applyNounFilter(pool);
                   let branchTag = 'qfv2_pool_no_modifiers';
 
                   if (Object.keys(resolvedFilters).length > 0) {
@@ -5582,12 +5839,13 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                       30,
                       resolvedFilters
                     );
-                    console.log(`[QueryFirstV2] final query="${noun}" filters=${JSON.stringify(resolvedFilters)} → ${final.length}`);
+                    const finalFiltered = applyNounFilter(final, true);
+                    console.log(`[QueryFirstV2] final query="${noun}" filters=${JSON.stringify(resolvedFilters)} → ${final.length} (after noun-filter: ${finalFiltered.length})`);
 
-                    if (final.length > 0) {
-                      displayList = final;
+                    if (finalFiltered.length > 0) {
+                      displayList = finalFiltered;
                       branchTag = 'qfv2_win';
-                      console.log(`[QueryFirstV2] query_first_v2_win noun="${noun}" filters=${Object.keys(resolvedFilters).length} count=${final.length} elapsed=${Date.now() - qfStart}ms`);
+                      console.log(`[QueryFirstV2] query_first_v2_win noun="${noun}" filters=${Object.keys(resolvedFilters).length} count=${finalFiltered.length} elapsed=${Date.now() - qfStart}ms`);
                     } else {
                       // HONEST-EMPTY (was: silent Soft Fallback showing the broader pool).
                       // Showing the pool here mixes irrelevant categories (e.g. "удлинитель"
@@ -6654,30 +6912,72 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     let extractedIntent: ExtractedIntent;
     
     if (articleShortCircuit) {
+      // При short-circuit маршрут и candidates определены — но нужно проверить,
+      // не спрашивает ли пользователь о характеристике товара (compute).
+      // Вызываем classifier ТОЛЬКО если сообщение похоже на вопрос о свойстве —
+      // это НЕ словарь фасетов, а простой gate «нужен ли classifier для compute?».
+      let computeField: ComputeRequest | undefined;
+      const lowerMsg = userMessage.toLowerCase();
+      const looksLikeSpecQuery = /сколько|какой|какая|какое|каков|какие|весит|вес\b|мощност|длин|ширин|высот|размер|габарит|гарант|объ[её]м|диаметр|сечен|ip\d|ампер|\bвт\b|\bкг\b|\bквт\b|характеристик/i.test(lowerMsg);
+      if (looksLikeSpecQuery) {
+        try {
+          // EXPERIMENT 2026-05-04: Claude Sonnet 4.5 для классификатора (Gemini терял модификаторы типа "ВВГнг", "3х2.5" → []).
+          const candidatesModel = 'anthropic/claude-sonnet-4.5';
+          const classifierResult = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
+          computeField = classifierResult.compute;
+          if (computeField) {
+            console.log(`[Chat] Compute extracted from classifier (shortcircuit path): attribute="${computeField.attribute}", multiplier=${computeField.multiplier ?? 'null'}`);
+          }
+        } catch (e) {
+          console.warn(`[Chat] Classifier for compute (shortcircuit) failed:`, e instanceof Error ? e.message : String(e));
+        }
+      }
+
       extractedIntent = {
         intent: 'catalog',
         candidates: detectedArticles.length > 0 
           ? detectedArticles.map(a => ({ query: a, brand: null, category: null, min_price: null, max_price: null }))
           : [{ query: cleanQueryForDirectSearch(userMessage), brand: null, category: null, min_price: null, max_price: null }],
         originalQuery: userMessage,
+        compute: computeField,
       };
-    } else if (classification?.intent === 'info' || classification?.intent === 'general') {
+    } else if ((classification?.intent === 'info' || classification?.intent === 'general') && !classification?.product_category) {
       // Micro-LLM already determined intent — skip expensive Gemini Pro call
+      // GUARD (2026-05-04): если micro-LLM сказал info/general, НО при этом
+      // определил product_category (например «есть кабеля ВВГнг 3х2.5?» → general
+      // + product_category=кабель), это caталог-вопрос, замаскированный под info.
+      // Не верим intent, идём в полный pipeline (как §1373).
       console.log(`[Chat] Micro-LLM intent="${classification.intent}" — skipping generateSearchCandidates`);
       extractedIntent = {
         intent: classification.intent,
         candidates: [],
         originalQuery: userMessage,
       };
+    } else if (classification?.intent === 'info' || classification?.intent === 'general') {
+      // info/general WITH product_category → fall through to full pipeline
+      console.log(`[Chat] Micro-LLM intent="${classification.intent}" but product_category="${classification.product_category}" → forcing catalog pipeline`);
+      const candidatesModel = 'anthropic/claude-sonnet-4.5';
+      extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
     } else {
       // catalog/brands or no intent — full pipeline
       // MODEL UPGRADE (probe 2026-05-01): gemini-2.5-flash галлюцинировал brand из произвольных
       // слов («PROBEMARKER» → brand) и терял модификаторы («двухместная» → option_filters={}).
-      // Без CoT/reasoning tool-calling extraction нестабилен. gemini-3-flash-preview даёт
-      // нативный CoT без явных reasoning-флагов, +1-2с latency, кратно выше точность.
+      // EXPERIMENT 2026-05-04: переключаемся с gemini-3-flash-preview на Claude Sonnet 4.5 —
+      // Gemini тоже терял модификаторы для технических артикулов («ВВГнг 3х2.5» → []).
       // Финальный ответ пользователю по-прежнему идёт на aiConfig.model.
-      const candidatesModel = 'google/gemini-3-flash-preview';
+      const candidatesModel = 'anthropic/claude-sonnet-4.5';
       extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
+      // SYSTEMIC GUARD (2026-05-04): Micro-LLM (Claude) уже определил intent — это первичный источник правды.
+      // generateSearchCandidates иногда возвращает intent='general' для разговорных формулировок
+      // ("есть кабеля ВВГнг 3х2.5?"), потому что фокусируется на извлечении candidates, а не на
+      // классификации. Если Micro-LLM сказал catalog/brands — доверяем ему и форсим intent.
+      // Candidates от generateSearchCandidates сохраняем (там option_filters для Pass 2).
+      if (classification?.intent === 'catalog' || classification?.intent === 'brands') {
+        if (extractedIntent.intent !== classification.intent) {
+          console.log(`[Chat] Intent override: Micro-LLM='${classification.intent}' wins over generateSearchCandidates='${extractedIntent.intent}' (Micro-LLM is primary classifier)`);
+          extractedIntent.intent = classification.intent;
+        }
+      }
     }
     console.log(`[Chat] AI Intent=${extractedIntent.intent}, Candidates: ${extractedIntent.candidates.length}, ShortCircuit: ${articleShortCircuit}`);
 
@@ -6724,7 +7024,7 @@ ${kbParts.join('\n\n')}
       }
     }
     if (articleShortCircuit && foundProducts.length > 0) {
-      const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
+      const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
       console.log(`[Chat] Short-circuit formatted products for AI:\n${formattedProducts}`);
       
       // Check if it was article/site-id or title-first
@@ -6738,16 +7038,16 @@ ${kbParts.join('\n\n')}
       
       if (hasSpecificBrand) {
         console.log(`[Chat] "brands" intent with specific brand → treating as catalog search`);
-        foundProducts = await searchProductsMulti(extractedIntent.candidates, 8, appSettings.volt220_api_token || undefined);
+        foundProducts = await searchProductsMulti(extractedIntent.candidates, 8, appSettings.volt220_api_token || undefined, undefined, undefined, appSettings);
         
         if (foundProducts.length > 0) {
           const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
-          const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
+          const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
           console.log(`[Chat] Formatted products for AI:\n${formattedProducts}`);
           productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**\n\n${formattedProducts}`;
         }
       } else {
-        foundProducts = await searchProductsMulti(extractedIntent.candidates, 50, appSettings.volt220_api_token || undefined);
+        foundProducts = await searchProductsMulti(extractedIntent.candidates, 50, appSettings.volt220_api_token || undefined, undefined, undefined, appSettings);
         
         if (foundProducts.length > 0) {
           const brands = extractBrandsFromProducts(foundProducts);
@@ -6765,7 +7065,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
       }
     } else if (!articleShortCircuit && extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
       const searchLimit = extractedIntent.usage_context ? 25 : 15;
-      foundProducts = await searchProductsMulti(extractedIntent.candidates, searchLimit, appSettings.volt220_api_token || undefined);
+      foundProducts = await searchProductsMulti(extractedIntent.candidates, searchLimit, appSettings.volt220_api_token || undefined, undefined, undefined, appSettings);
       
       // === ENGLISH FALLBACK: Only if <3 results AND have english_queries ===
       if (foundProducts.length === 0 && extractedIntent.english_queries && extractedIntent.english_queries.length > 0) {
@@ -6778,7 +7078,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           max_price: extractedIntent.candidates[0]?.max_price || null,
           option_filters: extractedIntent.candidates[0]?.option_filters,
         }));
-        const englishResults = await searchProductsMulti(englishCandidates, searchLimit, appSettings.volt220_api_token || undefined);
+        const englishResults = await searchProductsMulti(englishCandidates, searchLimit, appSettings.volt220_api_token || undefined, undefined, undefined, appSettings);
         if (englishResults.length > 0) {
           console.log(`[Chat] English fallback found ${englishResults.length} additional products`);
           const mergedMap = new Map<number, Product>();
@@ -6802,7 +7102,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
         }
         
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
-        const formattedProducts = formatProductsForAI(foundProducts.slice(0, 10), needsExtendedOptions(userMessage));
+        const formattedProducts = formatProductsForAI(foundProducts.slice(0, 10), needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
         console.log(`[Chat] Formatted products for AI:\n${formattedProducts}`);
         
         const appliedFilters = describeAppliedFilters(extractedIntent.candidates);
@@ -6818,6 +7118,24 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           : '';
         
         productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**${filterNote}${contextNote}${priceIntentNote}\n${formattedProducts}`;
+
+        // === DETERMINISTIC RENDER GUARD (2026-05-04) ===
+        // Если пользователь явно указал характеристики (option_filters в кандидатах)
+        // и Pass 2 успешно нашёл товары по этим фильтрам — показываем карточки
+        // детерминистично, без LLM-стрима. LLM в этом сценарии всё равно
+        // не имеет ценности (просто перечислит товары + перепишет URL),
+        // а риск галлюцинаций реален.
+        // ИСКЛЮЧЕНИЯ:
+        //   • compute (spec_query) — LLM нужна для расчёта/формулировки;
+        //   • effectivePriceIntent — там своя ветка price-clarify/price-render.
+        const hadOptionFilters = extractedIntent.candidates.some(
+          c => c.option_filters && Object.keys(c.option_filters).length > 0
+        );
+        const hasComputeReq = !!(extractedIntent.compute && extractedIntent.compute.attribute);
+        if (hadOptionFilters && !hasComputeReq && !effectivePriceIntent) {
+          articleShortCircuit = true;
+          console.log(`[Chat] Catalog-search: option_filters present + ${foundProducts.length} products → articleShortCircuit=true (deterministic render)`);
+        }
       }
     }
 
@@ -6881,7 +7199,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           totalCollected = _r.total;
           totalCollectedBranch = 'jargon-fallback-early';
           // productContext был сформирован выше из старого pool — пересобираем.
-          productContext = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
+          productContext = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
         } else {
           // Системный фикс (2026-05-04): если critical_modifier не разрешён И
           // jargon-fallback тоже не нашёл альтернатив — НЕЛЬЗЯ показывать
@@ -7212,6 +7530,29 @@ ${facetsList}
       }
     }
 
+    // ─── COMPUTE BLOCK (spec_query надстройка) ──────────────────────────────
+    // Если классификатор пометил compute и у нас есть товары — клиент спросил
+    // о КОНКРЕТНОЙ характеристике (опц. ×N). Добавляем инструкцию в самый верх
+    // productInstructions: характеристика берётся ТОЛЬКО из реальных options
+    // товара, никаких выдуманных значений. Работает поверх любой ветки выше
+    // (article / title / replacement / regular catalog).
+    if (
+      extractedIntent.compute &&
+      extractedIntent.compute.attribute &&
+      foundProducts.length > 0 &&
+      productInstructions.trim().length > 0
+    ) {
+      try {
+        const computeBlock = buildComputeInstructionBlock({
+          attribute: extractedIntent.compute.attribute,
+          multiplier: extractedIntent.compute.multiplier ?? null,
+        });
+        console.log(`[Chat] Compute block injected: attribute="${extractedIntent.compute.attribute}", multiplier=${extractedIntent.compute.multiplier ?? 'null'}`);
+        productInstructions = `${computeBlock}\n${productInstructions}`;
+      } catch (e) {
+        console.warn(`[Chat] Compute block silent fail:`, e instanceof Error ? e.message : String(e));
+      }
+    }
 
     // Geo context for system prompt
     let geoContext = '';
@@ -7457,14 +7798,32 @@ ${productInstructions}`;
     }
 
 
-    const shouldUseDeterministicProductRender = foundProducts.length > 0 && (
+    // spec_query (compute) ВСЕГДА требует LLM-обработки: нужна формулировка
+    // ответа про характеристику + опц. умножение на N — детерминистичный
+    // рендерер этого не умеет (он рисует только карточки + intro/followUp).
+    const hasComputeRequest = !!(extractedIntent.compute && extractedIntent.compute.attribute);
+    // SYSTEMIC ANTI-HALLUCINATION (2026-05-04): любой ответ с найденными товарами
+    // обязан рендериться детерминистично из ProductResource — иначе LLM переписывает
+    // URL даже при инструкции «копируй как есть» (см. mem://constraints/deterministic-product-render).
+    // Раньше условие требовало articleShortCircuit=true ИЛИ известный reason — но catalog-ветка
+    // с Pass 2 (option_filters) использует общий поток без short-circuit и попадала на LLM-стрим.
+    // Теперь правило: foundProducts>0 && !compute && intent='catalog' → ВСЕГДА детерминистично.
+    // Replacement и similar-ветки имеют свои composer'ы и сюда не доходят.
+    const isCatalogIntent = extractedIntent.intent === 'catalog' || extractedIntent.intent === 'brands';
+    const shouldUseDeterministicProductRender = !hasComputeRequest && foundProducts.length > 0 && (
       isDeterministicShortCircuitReason(responseModelReason) ||
       responseModelReason === 'price-facet-clarify' ||
-      articleShortCircuit
+      articleShortCircuit ||
+      isCatalogIntent
     );
 
     if (shouldUseDeterministicProductRender) {
-      const content = responseModelReason === 'price-facet-clarify' && pendingClarifyFacet && pendingClarifyIntent
+      // Если попали сюда из общего catalog-потока (не short-circuit) — нормализуем reason
+      // под обычный 'pass2-shortcircuit', чтобы intro/followUp подхватились корректно.
+      const renderReason = (isDeterministicShortCircuitReason(responseModelReason) || responseModelReason === 'price-facet-clarify')
+        ? responseModelReason
+        : 'pass2-shortcircuit';
+      const content = renderReason === 'price-facet-clarify' && pendingClarifyFacet && pendingClarifyIntent
         ? buildPriceFacetClarifyContent({
             products: foundProducts,
             priceIntent: pendingClarifyIntent,
@@ -7472,11 +7831,11 @@ ${productInstructions}`;
           })
         : buildDeterministicShortCircuitContent({
             products: foundProducts,
-            reason: responseModelReason,
+            reason: renderReason,
             userMessage,
             effectivePriceIntent,
           });
-      console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${responseModelReason} products=${foundProducts.length} contentLen=${content.length}`);
+      console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${content.length}`);
 
       if (!useStreaming) {
         const responseBody: { content: string; slot_update?: DialogSlots } = { content };
