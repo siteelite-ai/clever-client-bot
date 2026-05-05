@@ -2181,7 +2181,7 @@ function detectPendingPriceIntent(
 // ============================================================
 
 interface DialogSlot {
-  intent: 'price_extreme' | 'product_search' | 'category_disambiguation' | 'price_facet_clarify';
+  intent: 'price_extreme' | 'product_search' | 'category_disambiguation' | 'price_facet_clarify' | 'pending_offer';
   price_dir?: 'most_expensive' | 'cheapest';
   base_category: string;
   refinement?: string;
@@ -2200,6 +2200,11 @@ interface DialogSlot {
   // price_facet_clarify state (V1 bootstrap-facets clarify)
   // JSON: {"query":"розетка","facet":{"key":"tip","caption_ru":"Тип","values":[{"value_ru":"Бытовая","count":5},...]},"min_price":null,"max_price":null}
   price_facet_state?: string;
+  // pending_offer state (cross-sell follow-up): bot proposed something at end of previous turn
+  // offer_text  — фраза, которую сказал бот (для контекста LLM-резолвера)
+  // offer_query — короткий поисковый запрос, который применяем при «давай/да/ок»
+  offer_text?: string;
+  offer_query?: string;
   // replacement metadata
   isReplacement?: boolean;
   originalName?: string;
