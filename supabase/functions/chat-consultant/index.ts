@@ -5786,7 +5786,33 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                   // ── (5/6) Final search.
                   // (5a) modifiers + at least one resolved option → re-query with options.
                   // (5b) no resolved options → display the pool we already have.
-                  let displayList: Product[] = pool;
+                  // ── Noun stem post-filter (Variant Б, 2026-05-05).
+                  // QFv2 pool/final by ?query=noun is fuzzy: API returns related categories
+                  // (e.g. "розетка" → frames, supports). To avoid showing off-topic items
+                  // we keep only products whose pagetitle/category contains the noun stem.
+                  // Fallback: if the filter produces 0, return the original list (don't make
+                  // things worse than before). Data-agnostic: stem = lowercase + strip trailing
+                  // vowels (works for ru morphology of common nouns).
+                  const stripVowel = (s: string) => s.replace(/[аяоеёуюыиэ]+$/iu, '');
+                  const nounStem = stripVowel(noun.toLowerCase().trim());
+                  const matchesNoun = (p: Product): boolean => {
+                    if (!nounStem || nounStem.length < 3) return true;
+                    const title = (p.pagetitle || '').toLowerCase();
+                    const cat = (p.category?.pagetitle || '').toLowerCase();
+                    return title.includes(nounStem) || cat.includes(nounStem);
+                  };
+                  const applyNounFilter = (list: Product[]): Product[] => {
+                    const filtered = list.filter(matchesNoun);
+                    if (filtered.length === 0 && list.length > 0) {
+                      console.log(`[QueryFirstV2] noun-filter stem="${nounStem}" → 0 of ${list.length}, keeping original (no off-topic guard available)`);
+                      return list;
+                    }
+                    if (filtered.length !== list.length) {
+                      console.log(`[QueryFirstV2] noun-filter stem="${nounStem}" → kept ${filtered.length}/${list.length}`);
+                    }
+                    return filtered;
+                  };
+                  let displayList: Product[] = applyNounFilter(pool);
                   let branchTag = 'qfv2_pool_no_modifiers';
 
                   if (Object.keys(resolvedFilters).length > 0) {
@@ -5796,12 +5822,13 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                       30,
                       resolvedFilters
                     );
-                    console.log(`[QueryFirstV2] final query="${noun}" filters=${JSON.stringify(resolvedFilters)} → ${final.length}`);
+                    const finalFiltered = applyNounFilter(final);
+                    console.log(`[QueryFirstV2] final query="${noun}" filters=${JSON.stringify(resolvedFilters)} → ${final.length} (after noun-filter: ${finalFiltered.length})`);
 
-                    if (final.length > 0) {
-                      displayList = final;
+                    if (finalFiltered.length > 0) {
+                      displayList = finalFiltered;
                       branchTag = 'qfv2_win';
-                      console.log(`[QueryFirstV2] query_first_v2_win noun="${noun}" filters=${Object.keys(resolvedFilters).length} count=${final.length} elapsed=${Date.now() - qfStart}ms`);
+                      console.log(`[QueryFirstV2] query_first_v2_win noun="${noun}" filters=${Object.keys(resolvedFilters).length} count=${finalFiltered.length} elapsed=${Date.now() - qfStart}ms`);
                     } else {
                       // HONEST-EMPTY (was: silent Soft Fallback showing the broader pool).
                       // Showing the pool here mixes irrelevant categories (e.g. "удлинитель"
