@@ -1426,11 +1426,11 @@ function extractModifiersFromProduct(product: Product): string[] {
 
   for (const opt of product.options) {
     const keyLower = opt.key.toLowerCase();
-    const captionLower = opt.caption.toLowerCase();
+    const captionLower = (opt.caption ?? '').toLowerCase();
 
     if (!importantPatterns.some(p => p.test(keyLower) || p.test(captionLower))) continue;
 
-    const cleanValue = opt.value.split('//')[0].trim();
+    const cleanValue = (opt.value ?? '').split('//')[0].trim();
     if (!cleanValue) continue;
 
     // Compact only "number space unit" → "numberunit", keep everything else as-is
@@ -3420,9 +3420,9 @@ function discoverOptionKeys(
     for (const opt of product.options) {
       if (isExcludedOption(opt.key)) continue;
       if (!optionIndex.has(opt.key)) {
-        optionIndex.set(opt.key, { key: opt.key, caption: opt.caption, values: new Set() });
+        optionIndex.set(opt.key, { key: opt.key, caption: opt.caption ?? '', values: new Set() });
       }
-      optionIndex.get(opt.key)!.values.add(opt.value);
+      optionIndex.get(opt.key)!.values.add(opt.value ?? '');
     }
   }
   
@@ -4024,7 +4024,7 @@ function matchQuickFilter(product: Product, filter: { type: 'color'; value: stri
     });
     if (!colorOpt) return false;
     const normalize = (s: string) => s.toLowerCase().replace(/ё/g, 'е');
-    const optNorm = normalize(colorOpt.value.toString());
+    const optNorm = normalize((colorOpt.value ?? '').toString());
     const filterNorm = normalize(filter.value);
     return optNorm.includes(filterNorm) || filterNorm.includes(optNorm);
   }
@@ -4254,7 +4254,7 @@ async function searchProductsMulti(
         for (const [key, value] of Object.entries(resolvedFilters)) {
           const opt = product.options.find(o => o.key === key);
           if (opt) {
-            const pv = opt.value.toString().toLowerCase().trim();
+            const pv = (opt.value ?? '').toString().toLowerCase().trim();
             const fv = value.toString().toLowerCase().trim();
             if (pv === fv || pv.includes(fv) || fv.includes(pv)) {
               matchCount++;
@@ -5632,8 +5632,8 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                 .replace(/([а-яА-ЯёЁa-zA-Z])(\d)/g, '$1 $2')
                 .replace(/(\d)([а-яА-ЯёЁa-zA-Z])/g, '$1 $2')
                 .split(/[×*хxХ]/i)
-                .flatMap((t) => t.split(/\s+/))
-                .map((t) => t.trim())
+                .flatMap((t: string) => t.split(/\s+/))
+                .map((t: string) => t.trim())
                 .filter(Boolean);
               for (const tok of subTokens) {
                 const tLower = tok.toLowerCase();
