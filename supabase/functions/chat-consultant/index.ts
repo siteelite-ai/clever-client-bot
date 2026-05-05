@@ -5793,7 +5793,8 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                         appSettings,
                         classification?.critical_modifiers,
                         bootstrapSchema,
-                        'full'
+                        'full',
+                        noun
                       );
                       resolvedFilters = flattenResolvedFilters(rRaw);
                       console.log(`[QueryFirstV2] resolved=${JSON.stringify(resolvedFilters)} unresolved=[${rUnresolved.join(', ')}]`);
