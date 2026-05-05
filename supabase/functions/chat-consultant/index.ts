@@ -1146,21 +1146,12 @@ interface SearchCandidate {
 
 // NO hardcoded option keys! We discover them dynamically from API results.
 
-interface ComputeRequest {
-  /** Что спрашивают: «вес», «мощность», «IP», «габариты», «гарантия», «количество ламп» и т.п. */
-  attribute: string;
-  /** Множитель ×N штук, если пользователь указал количество. null/undefined = одна штука. */
-  multiplier?: number | null;
-}
-
 interface ExtractedIntent {
   intent: 'catalog' | 'brands' | 'info' | 'general';
   candidates: SearchCandidate[];
   originalQuery: string;
   usage_context?: string;
   english_queries?: string[];
-  /** Надстройка к любой ветке: пользователь хочет узнать характеристику найденного товара (опц. ×N). */
-  compute?: ComputeRequest;
 }
 
 // ============================================================
@@ -3053,13 +3044,6 @@ ${recentHistory.length > 0 ? 'Анализируй текущее сообщен
 КОНТЕКСТ ИСПОЛЬЗОВАНИЯ (usage_context):
 Если пользователь описывает не сам товар, а место или условия его применения («для улицы», «в баню», «на производство», «в детскую») — заполни usage_context описанием контекста и одновременно выведи в option_filters предполагаемые технические характеристики, которые этому контексту соответствуют (степень защиты, климатическое исполнение и т.п.). Если пользователь сам назвал конкретную характеристику (IP65, IK10) — это не контекст, а признак: ставь только в option_filters, usage_context оставь пустым.
 
-ПОДСЧЁТ / ХАРАКТЕРИСТИКА (compute):
-Это НАДСТРОЙКА к любому intent — основной intent (catalog/brands/info) и кандидаты не меняются. Заполняй compute, когда пользователь спрашивает о КОНКРЕТНОЙ характеристике товара или просит её посчитать (умножить на количество). Примеры: «сколько весит», «какой вес у 5 штук», «какая мощность», «какой IP», «какие габариты», «сколько ламп», «гарантия», «диаметр», «длина кабеля».
-- compute.attribute — короткое русское название характеристики, как её обычно называет пользователь («вес», «мощность», «IP», «габариты», «гарантия», «длина», «количество ламп», «материал»). НЕ перечисляй несколько — выбери главную.
-- compute.multiplier — целое число, если пользователь явно указал количество («5 штук», «×3», «для 10 светильников»). Если количество не названо — null.
-- Если пользователь просто ищет товар без вопроса о характеристике — compute=null. Не выдумывай.
-- Если пользователь спрашивает про характеристику без привязки к товару, но в контексте уже обсуждавшегося товара (followup: «а сколько он весит?») — всё равно заполни compute, кандидаты могут быть пустыми/общими, дальше система возьмёт товар из контекста.
-
 ИЕРАРХИЯ КАНДИДАТОВ:
 1. Первый кандидат — основной товар: то родовое или каталожное имя, которым этот предмет называют в магазине.
 2. Остальные кандидаты — основной товар плюс характеристика, либо альтернативные имена того же товара (разговорное / техническое / каталожное). Подумай, как этот предмет может быть записан в каталоге электротоваров: по разговорному имени, по техническому термину, по альтернативному названию.
@@ -3150,24 +3134,6 @@ ${recentHistory.length > 0 ? 'Анализируй текущее сообщен
                   items: { type: 'string' },
                   nullable: true,
                   description: 'Английские переводы поисковых терминов для каталога электротоваров. Переводи ТОЛЬКО названия товаров/категорий (существительные), НЕ переводи общие слова (купить, нужен, для улицы). Примеры: "кукуруза" → "corn", "свеча" → "candle", "груша" → "pear", "удлинитель" → "extension cord". null если все термины уже на английском или перевод не нужен.'
-                },
-                compute: {
-                  type: 'object',
-                  nullable: true,
-                  description: 'Надстройка: пользователь спрашивает о характеристике товара (опционально ×N штук). null если вопроса о характеристике нет.',
-                  properties: {
-                    attribute: {
-                      type: 'string',
-                      description: 'Короткое русское название характеристики, как её называет пользователь: «вес», «мощность», «IP», «габариты», «гарантия», «длина», «количество ламп», «материал» и т.п.'
-                    },
-                    multiplier: {
-                      type: 'number',
-                      nullable: true,
-                      description: 'Множитель ×N штук, если пользователь указал количество («5 штук», «×3»). null если количество не названо.'
-                    }
-                  },
-                  required: ['attribute'],
-                  additionalProperties: false
                 }
               },
               required: ['intent', 'candidates'],
@@ -3256,27 +3222,12 @@ ${recentHistory.length > 0 ? 'Анализируй текущее сообщен
         finalIntent = 'catalog';
       }
       
-      // Compute надстройка — пользователь спрашивает о характеристике (опц. ×N).
-      let compute: ComputeRequest | undefined;
-      if (parsed.compute && typeof parsed.compute === 'object' && typeof parsed.compute.attribute === 'string') {
-        const attribute = parsed.compute.attribute.trim();
-        if (attribute.length > 0) {
-          const rawMul = parsed.compute.multiplier;
-          const multiplier = (typeof rawMul === 'number' && Number.isFinite(rawMul) && rawMul > 0)
-            ? Math.floor(rawMul)
-            : null;
-          compute = { attribute, multiplier };
-          console.log(`[AI Candidates] Compute request: attribute="${attribute}", multiplier=${multiplier}`);
-        }
-      }
-
       return {
         intent: finalIntent,
         candidates: broadened,
         originalQuery: message,
         usage_context: usageContext,
         english_queries: englishQueries.length > 0 ? englishQueries : undefined,
-        compute,
       };
     }
 
@@ -4445,7 +4396,7 @@ function formatProductsForAI(products: Product[], includeExtended: boolean = tru
       if (Array.isArray(p?.options) && p.options.length > 0) {
         const specs = p.options
           .filter((o: any) => o && !isExcludedOption(o.key, includeExtended))
-          .map((o: any) => `${cleanOptionCaption(o.caption_ru ?? o.caption)}: ${cleanOptionValue(o.value_ru ?? o.value)}`)
+          .map((o: any) => `${cleanOptionCaption(o.caption)}: ${cleanOptionValue(o.value)}`)
           .filter((s: string) => s && !s.startsWith(': '));
 
         if (specs.length > 0) {
@@ -4591,37 +4542,6 @@ function extractBrandsFromProducts(products: Product[]): string[] {
   }
   
   return Array.from(brands).sort();
-}
-
-// ============================================================
-// COMPUTE BLOCK — spec_query надстройка
-// ============================================================
-// Классификатор пометил compute={attribute, multiplier?} — пользователь
-// спросил о характеристике товара (опц. ×N). Список характеристик товара
-// УЖЕ есть в LLM-контексте (см. formatProductsForAI → "Характеристики: ...").
-// LLM сама находит подходящее поле и считает — никаких словарей синонимов,
-// никакого ручного матчинга. Здесь только короткая инструкция-задача.
-// Anti-hallucination: использовать ТОЛЬКО значения из контекста; если поля
-// нет — честно сказать «не указано».
-// ============================================================
-function buildComputeInstructionBlock(params: {
-  attribute: string;
-  multiplier: number | null | undefined;
-}): string {
-  const { attribute, multiplier } = params;
-  const mulText = (multiplier && multiplier > 1) ? ` × ${multiplier} шт.` : '';
-  return `🧮 КЛИЕНТ СПРАШИВАЕТ О ХАРАКТЕРИСТИКЕ: «${attribute}»${mulText}
-
-Список характеристик каждого товара (поле «Характеристики: …») у тебя уже есть ниже. Найди в нём поле, соответствующее запросу клиента (значение бери ТОЛЬКО оттуда — не выдумывай).
-
-✅ ТВОЯ ЗАДАЧА:
-1. Найди в характеристиках товара значение, соответствующее «${attribute}». Подходящее поле может называться по-разному (например, для «вес» подойдёт «Масса, кг» или «Вес нетто»).
-2. ${(multiplier && multiplier > 1)
-    ? `Если значение числовое — умножь на ${multiplier} и дай ответ ЖИВЫМ ЧЕЛОВЕЧЕСКИМ ЯЗЫКОМ одной фразой ПЕРЕД карточкой товара. Пиши как консультант в магазине: «${multiplier} таких светильников будут весить около 3.5 кг» или «Суммарная мощность ${multiplier} штук — 300 Вт». НЕ пиши сухие формулы вида «вес × 5 = 3.5 кг». Если значение нечисловое (IP-класс, цвет, материал) — просто ответь на вопрос клиента, умножение не применяй.`
-    : `Ответь ЖИВЫМ ЧЕЛОВЕЧЕСКИМ ЯЗЫКОМ одной фразой ПЕРЕД карточкой товара, как консультант в магазине. Например: «Этот светильник весит 0.7 кг» или «Степень защиты — IP44, подойдёт для влажных помещений». НЕ пиши сухие формулы вида «вес: 0.7 кг».`}
-3. После ответа покажи карточку(и) товара как обычно: название-ссылка, Цена, Бренд, Наличие.
-4. Если в характеристиках НЕТ поля, соответствующего «${attribute}» — честно одной фразой скажи, что эта характеристика не указана в карточке, и предложи уточнить у менеджера или посмотреть полную страницу товара. НИКОГДА не выдумывай числовые значения.
-`;
 }
 
 function formatContactsForDisplay(contactsText: string): string | null {
@@ -6734,33 +6654,12 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     let extractedIntent: ExtractedIntent;
     
     if (articleShortCircuit) {
-      // При short-circuit маршрут и candidates определены — но нужно проверить,
-      // не спрашивает ли пользователь о характеристике товара (compute).
-      // Вызываем classifier ТОЛЬКО если сообщение похоже на вопрос о свойстве —
-      // это НЕ словарь фасетов, а простой gate «нужен ли classifier для compute?».
-      let computeField: ComputeRequest | undefined;
-      const lowerMsg = userMessage.toLowerCase();
-      const looksLikeSpecQuery = /сколько|какой|какая|какое|каков|какие|весит|вес\b|мощност|длин|ширин|высот|размер|габарит|гарант|объ[её]м|диаметр|сечен|ip\d|ампер|\bвт\b|\bкг\b|\bквт\b|характеристик/i.test(lowerMsg);
-      if (looksLikeSpecQuery) {
-        try {
-          const candidatesModel = 'google/gemini-3-flash-preview';
-          const classifierResult = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
-          computeField = classifierResult.compute;
-          if (computeField) {
-            console.log(`[Chat] Compute extracted from classifier (shortcircuit path): attribute="${computeField.attribute}", multiplier=${computeField.multiplier ?? 'null'}`);
-          }
-        } catch (e) {
-          console.warn(`[Chat] Classifier for compute (shortcircuit) failed:`, e instanceof Error ? e.message : String(e));
-        }
-      }
-
       extractedIntent = {
         intent: 'catalog',
         candidates: detectedArticles.length > 0 
           ? detectedArticles.map(a => ({ query: a, brand: null, category: null, min_price: null, max_price: null }))
           : [{ query: cleanQueryForDirectSearch(userMessage), brand: null, category: null, min_price: null, max_price: null }],
         originalQuery: userMessage,
-        compute: computeField,
       };
     } else if (classification?.intent === 'info' || classification?.intent === 'general') {
       // Micro-LLM already determined intent — skip expensive Gemini Pro call
@@ -6825,7 +6724,7 @@ ${kbParts.join('\n\n')}
       }
     }
     if (articleShortCircuit && foundProducts.length > 0) {
-      const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
+      const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
       console.log(`[Chat] Short-circuit formatted products for AI:\n${formattedProducts}`);
       
       // Check if it was article/site-id or title-first
@@ -6843,7 +6742,7 @@ ${kbParts.join('\n\n')}
         
         if (foundProducts.length > 0) {
           const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
-          const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
+          const formattedProducts = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
           console.log(`[Chat] Formatted products for AI:\n${formattedProducts}`);
           productContext = `\n\n**Найденные товары (поиск по: ${candidateQueries}):**\n\n${formattedProducts}`;
         }
@@ -6903,7 +6802,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
         }
         
         const candidateQueries = extractedIntent.candidates.map(c => c.query).join(', ');
-        const formattedProducts = formatProductsForAI(foundProducts.slice(0, 10), needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
+        const formattedProducts = formatProductsForAI(foundProducts.slice(0, 10), needsExtendedOptions(userMessage));
         console.log(`[Chat] Formatted products for AI:\n${formattedProducts}`);
         
         const appliedFilters = describeAppliedFilters(extractedIntent.candidates);
@@ -6982,7 +6881,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           totalCollected = _r.total;
           totalCollectedBranch = 'jargon-fallback-early';
           // productContext был сформирован выше из старого pool — пересобираем.
-          productContext = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
+          productContext = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage));
         } else {
           // Системный фикс (2026-05-04): если critical_modifier не разрешён И
           // jargon-fallback тоже не нашёл альтернатив — НЕЛЬЗЯ показывать
@@ -7313,29 +7212,6 @@ ${facetsList}
       }
     }
 
-    // ─── COMPUTE BLOCK (spec_query надстройка) ──────────────────────────────
-    // Если классификатор пометил compute и у нас есть товары — клиент спросил
-    // о КОНКРЕТНОЙ характеристике (опц. ×N). Добавляем инструкцию в самый верх
-    // productInstructions: характеристика берётся ТОЛЬКО из реальных options
-    // товара, никаких выдуманных значений. Работает поверх любой ветки выше
-    // (article / title / replacement / regular catalog).
-    if (
-      extractedIntent.compute &&
-      extractedIntent.compute.attribute &&
-      foundProducts.length > 0 &&
-      productInstructions.trim().length > 0
-    ) {
-      try {
-        const computeBlock = buildComputeInstructionBlock({
-          attribute: extractedIntent.compute.attribute,
-          multiplier: extractedIntent.compute.multiplier ?? null,
-        });
-        console.log(`[Chat] Compute block injected: attribute="${extractedIntent.compute.attribute}", multiplier=${extractedIntent.compute.multiplier ?? 'null'}`);
-        productInstructions = `${computeBlock}\n${productInstructions}`;
-      } catch (e) {
-        console.warn(`[Chat] Compute block silent fail:`, e instanceof Error ? e.message : String(e));
-      }
-    }
 
     // Geo context for system prompt
     let geoContext = '';
@@ -7581,11 +7457,7 @@ ${productInstructions}`;
     }
 
 
-    // spec_query (compute) ВСЕГДА требует LLM-обработки: нужна формулировка
-    // ответа про характеристику + опц. умножение на N — детерминистичный
-    // рендерер этого не умеет (он рисует только карточки + intro/followUp).
-    const hasComputeRequest = !!(extractedIntent.compute && extractedIntent.compute.attribute);
-    const shouldUseDeterministicProductRender = !hasComputeRequest && foundProducts.length > 0 && (
+    const shouldUseDeterministicProductRender = foundProducts.length > 0 && (
       isDeterministicShortCircuitReason(responseModelReason) ||
       responseModelReason === 'price-facet-clarify' ||
       articleShortCircuit
