@@ -4720,6 +4720,82 @@ ${titles.map(t => `- ${t}`).join('\n')}
   }
 }
 
+/**
+ * LLM-классификатор: принимает ли пользователь cross-sell offer прошлого хода.
+ * Без хардкод-списка слов: модель сама решает на основе семантики.
+ * Возвращает 'accept' (короткое согласие БЕЗ новых сущностей), 'new_request' (что-то иное),
+ * либо 'unclear' (пропускаем — пусть основной pipeline разбирается).
+ */
+async function classifyOfferResponse(params: {
+  offerText: string;
+  offerQuery: string;
+  userMessage: string;
+  settings: CachedSettings;
+}): Promise<'accept' | 'new_request' | 'unclear'> {
+  const { offerText, offerQuery, userMessage, settings } = params;
+  if (!settings.openrouter_api_key) return 'unclear';
+  if (!offerText || !userMessage.trim()) return 'unclear';
+
+  const prompt = `Ты классификатор намерений в чат-консультанте магазина электротоваров.
+
+В прошлом ходе бот предложил клиенту дополнительный товар:
+Фраза бота: "${offerText}"
+(внутренний поисковый запрос для этого предложения: "${offerQuery}")
+
+Сейчас клиент написал: "${userMessage}"
+
+Определи, что значит сообщение клиента в КОНТЕКСТЕ предложения бота:
+- "accept": клиент СОГЛАШАЕТСЯ с предложением бота и хочет его увидеть. Это короткие подтверждения без новой темы и без новых требований ("да", "давай", "ок", "покажи", "хочу", "интересно" и любые семантически близкие).
+- "new_request": клиент проигнорировал предложение и пишет ЧТО-ТО ДРУГОЕ — новый запрос, уточнение по уже показанным товарам, изменение фильтров (другой цвет/цена/бренд), вопрос не по теме предложения. Любое сообщение, которое содержит новые сущности или модификаторы — это new_request.
+- "unclear": неоднозначно, либо сообщение не относится ни к одному варианту.
+
+Важно: даже если клиент пишет "давай покажи розетки подешевле" после предложения подрозетников — это NEW_REQUEST, потому что есть новая тема (розетки) и модификатор (дешевле). "Accept" — только когда клиент НЕ добавляет ничего своего.`;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${settings.openrouter_api_key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'google/gemini-2.5-flash-lite',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0,
+        max_tokens: 50,
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'classify_offer_response',
+            description: 'Classify user reply to a previous cross-sell offer.',
+            parameters: {
+              type: 'object',
+              properties: {
+                decision: { type: 'string', enum: ['accept', 'new_request', 'unclear'] },
+              },
+              required: ['decision'],
+              additionalProperties: false,
+            },
+          },
+        }],
+        tool_choice: { type: 'function', function: { name: 'classify_offer_response' } },
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!response.ok) return 'unclear';
+    const data = await response.json();
+    const args = data.choices?.[0]?.message?.tool_calls?.[0]?.function?.arguments;
+    if (!args) return 'unclear';
+    const parsed = JSON.parse(args);
+    const decision = parsed.decision;
+    if (decision === 'accept' || decision === 'new_request') return decision;
+    return 'unclear';
+  } catch (e) {
+    console.log(`[OfferResolver] Error (silent skip): ${(e as Error).message}`);
+    return 'unclear';
+  }
+}
+
 export function isDeterministicShortCircuitReason(reason: string): boolean {
   return ['price-shortcircuit', 'article-shortcircuit', 'siteid-shortcircuit', 'title-shortcircuit'].includes(reason);
 }
