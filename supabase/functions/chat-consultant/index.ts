@@ -1,7 +1,7 @@
 // chat-consultant v4.0 — Micro-LLM intent classifier + latency optimization
 // build-marker: layer1-confidence-gate-2026-04-28T09:00Z (single-flight + SWR + key-only mode + parallel buckets)
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import { createClient } from 'npm:@supabase/supabase-js@2';
 import { AsyncLocalStorage } from "node:async_hooks";
 
 // Per-request async context (carries reqId implicitly through all awaits inside `serve`).
