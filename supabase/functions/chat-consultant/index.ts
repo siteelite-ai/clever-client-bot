@@ -554,7 +554,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
       system_prompt: null,
       classifier_provider: 'auto',
-      classifier_model: 'gemini-2.5-flash-lite',
+      classifier_model: 'anthropic/claude-sonnet-4.5',
       query_first_enabled: false,
       soft_suggest_enabled: false,
     };
@@ -578,7 +578,7 @@ async function getAppSettings(): Promise<CachedSettings> {
         ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
         system_prompt: null,
         classifier_provider: 'auto',
-        classifier_model: 'gemini-2.5-flash-lite',
+        classifier_model: 'anthropic/claude-sonnet-4.5',
         query_first_enabled: false,
         soft_suggest_enabled: false,
       };
@@ -601,7 +601,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       ai_model: data.ai_model || 'meta-llama/llama-3.3-70b-instruct:free',
       system_prompt: data.system_prompt || null,
       classifier_provider: data.classifier_provider || 'auto',
-      classifier_model: data.classifier_model || 'gemini-2.5-flash-lite',
+      classifier_model: data.classifier_model || 'anthropic/claude-sonnet-4.5',
       query_first_enabled: qf,
       soft_suggest_enabled: ss,
     };
@@ -615,7 +615,7 @@ async function getAppSettings(): Promise<CachedSettings> {
         ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
         system_prompt: null,
         classifier_provider: 'auto',
-        classifier_model: 'gemini-2.5-flash-lite',
+        classifier_model: 'anthropic/claude-sonnet-4.5',
         query_first_enabled: false,
         soft_suggest_enabled: false,
       };
