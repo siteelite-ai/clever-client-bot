@@ -1,0 +1,1 @@
+UPDATE app_settings SET classifier_model = 'anthropic/claude-sonnet-4.5', classifier_provider = 'openrouter';
