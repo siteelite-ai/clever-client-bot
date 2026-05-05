@@ -4628,13 +4628,13 @@ async function generateCrossSellTail(params: {
   products: Product[];
   userMessage: string;
   settings: CachedSettings;
-}): Promise<string> {
+}): Promise<{ text: string; offerQuery: string }> {
   const { products, userMessage, settings } = params;
-  if (!products.length || !settings.openrouter_api_key) return '';
+  if (!products.length || !settings.openrouter_api_key) return { text: '', offerQuery: '' };
 
   // Берём только названия первых 3 товаров — этого достаточно, чтобы LLM поняла категорию.
   const titles = products.slice(0, 3).map(p => (p.pagetitle || '').trim()).filter(Boolean);
-  if (!titles.length) return '';
+  if (!titles.length) return { text: '', offerQuery: '' };
 
   const systemPrompt = `Ты эксперт-консультант 220volt.kz. Клиенту только что показали карточки товаров. Твоя задача — добавить ОДНУ короткую фразу контекстного cross-sell: предложить ЛОГИЧЕСКИ СВЯЗАННЫЙ аксессуар или сопутствующий товар, который обычно докупают вместе.
 
@@ -4651,14 +4651,18 @@ ${titles.map(t => `- ${t}`).join('\n')}
 - Лампа → подходящий светильник или патрон
 - Кабель → клеммы, гильзы, гофра
 
-ПРАВИЛА:
+ПРАВИЛА для phrase:
 - Ровно ОДНА фраза, до 180 символов, заканчивается мягким CTA: «— подобрать?», «— показать варианты?», «— подскажу подходящие».
 - Тон: спокойный, профессиональный, как опытный консультант.
 - ЗАПРЕЩЕНО: артикулы, цены, ссылки, названия конкретных товаров, бренды, восклицательные знаки, «отличный выбор», давление, маркетинговые штампы.
-- Если категория товара неочевидна или сопутствующих нет — верни ПУСТУЮ строку (лучше промолчать, чем выдумать).
 - НЕ повторяй то, что уже показано в карточках. НЕ предлагай ту же категорию.
 
-Ответь ТОЛЬКО текстом фразы (без кавычек, без префиксов, без JSON). Пустой ответ = пропустить cross-sell.`;
+ПРАВИЛА для offer_query:
+- Это короткий поисковый запрос (2-5 слов), который применим, если клиент скажет «да/давай/покажи».
+- Должен описывать ИМЕННО ту категорию/тип товара, который предлагаешь во фразе. Если упоминаешь серию/коллекцию (например "серия Florence" или "под цоколь E27") — добавь её в запрос.
+- Только то, что РЕАЛЬНО можно искать в каталоге электротоваров. Никаких брендов и артикулов.
+
+Если для этого запроса cross-sell неуместен (категория неочевидна, сопутствующих нет, уже показаны аксессуары) — верни phrase="" и offer_query="".`;
 
   try {
     const controller = new AbortController();
@@ -4670,27 +4674,49 @@ ${titles.map(t => `- ${t}`).join('\n')}
         model: 'anthropic/claude-sonnet-4.5',
         messages: [{ role: 'user', content: systemPrompt }],
         temperature: 0.3,
-        max_tokens: 150,
+        max_tokens: 250,
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'propose_cross_sell',
+            description: 'Return a one-sentence cross-sell phrase plus a follow-up search query.',
+            parameters: {
+              type: 'object',
+              properties: {
+                phrase: { type: 'string', description: 'One short sentence ending in a soft CTA. Empty string if cross-sell is inappropriate.' },
+                offer_query: { type: 'string', description: 'Short catalog search query (2-5 words) for the proposed item. Empty if phrase is empty.' },
+              },
+              required: ['phrase', 'offer_query'],
+              additionalProperties: false,
+            },
+          },
+        }],
+        tool_choice: { type: 'function', function: { name: 'propose_cross_sell' } },
       }),
       signal: controller.signal,
     });
     clearTimeout(timeout);
     if (!response.ok) {
       console.log(`[CrossSellTail] API error: ${response.status}`);
-      return '';
+      return { text: '', offerQuery: '' };
     }
     const data = await response.json();
-    let text: string = (data.choices?.[0]?.message?.content || '').trim();
-    // Sanitize: вырезаем потенциальные markdown-ссылки, артикулы, цены
+    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    if (!toolCall?.function?.arguments) return { text: '', offerQuery: '' };
+    let parsed: { phrase?: string; offer_query?: string };
+    try { parsed = JSON.parse(toolCall.function.arguments); } catch { return { text: '', offerQuery: '' }; }
+    let text = (parsed.phrase || '').trim();
+    const offerQuery = (parsed.offer_query || '').trim().slice(0, 100);
+    // Sanitize: вырезаем markdown-ссылки/цены — на всякий случай
     if (/\[.*?\]\(.*?\)/.test(text) || /https?:\/\//i.test(text) || /\d+\s*(?:₸|тг|тенге|руб)/i.test(text)) {
       console.log(`[CrossSellTail] Sanitize: rejected text with link/price: ${text.slice(0, 80)}`);
-      return '';
+      return { text: '', offerQuery: '' };
     }
     if (text.length > 300) text = text.slice(0, 300);
-    return text;
+    return { text, offerQuery: text ? offerQuery : '' };
   } catch (e) {
     console.log(`[CrossSellTail] Error (silent skip): ${(e as Error).message}`);
-    return '';
+    return { text: '', offerQuery: '' };
   }
 }
 
