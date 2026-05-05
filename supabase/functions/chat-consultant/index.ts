@@ -5801,9 +5801,13 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                     const cat = (p.category?.pagetitle || '').toLowerCase();
                     return title.includes(nounStem) || cat.includes(nounStem);
                   };
-                  const applyNounFilter = (list: Product[]): Product[] => {
+                  const applyNounFilter = (list: Product[], strict = false): Product[] => {
                     const filtered = list.filter(matchesNoun);
                     if (filtered.length === 0 && list.length > 0) {
+                      if (strict) {
+                        console.log(`[QueryFirstV2] noun-filter stem="${nounStem}" STRICT → 0 of ${list.length}, dropping all (off-topic results filtered out)`);
+                        return [];
+                      }
                       console.log(`[QueryFirstV2] noun-filter stem="${nounStem}" → 0 of ${list.length}, keeping original (no off-topic guard available)`);
                       return list;
                     }
@@ -5822,7 +5826,7 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                       30,
                       resolvedFilters
                     );
-                    const finalFiltered = applyNounFilter(final);
+                    const finalFiltered = applyNounFilter(final, true);
                     console.log(`[QueryFirstV2] final query="${noun}" filters=${JSON.stringify(resolvedFilters)} → ${final.length} (after noun-filter: ${finalFiltered.length})`);
 
                     if (finalFiltered.length > 0) {
