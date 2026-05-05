@@ -5893,20 +5893,12 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                     const cat = (p.category?.pagetitle || '').toLowerCase();
                     return title.includes(nounStem) || cat.includes(nounStem);
                   };
-                  const applyNounFilter = (list: Product[], strict = false): Product[] => {
-                    const filtered = list.filter(matchesNoun);
-                    if (filtered.length === 0 && list.length > 0) {
-                      if (strict) {
-                        console.log(`[QueryFirstV2] noun-filter stem="${nounStem}" STRICT → 0 of ${list.length}, dropping all (off-topic results filtered out)`);
-                        return [];
-                      }
-                      console.log(`[QueryFirstV2] noun-filter stem="${nounStem}" → 0 of ${list.length}, keeping original (no off-topic guard available)`);
-                      return list;
-                    }
-                    if (filtered.length !== list.length) {
-                      console.log(`[QueryFirstV2] noun-filter stem="${nounStem}" → kept ${filtered.length}/${list.length}`);
-                    }
-                    return filtered;
+                  const applyNounFilter = (list: Product[], _strict = false): Product[] => {
+                    // EXPERIMENT 2026-05-05: noun-filter disabled to test if facet-only filtering
+                    // (without stem-based pagetitle/category match) returns more relevant results.
+                    // Previously dropped products whose pagetitle/category didn't contain the noun stem.
+                    console.log(`[QueryFirstV2] noun-filter DISABLED (experiment) — passing ${list.length} as-is`);
+                    return list;
                   };
                   let displayList: Product[] = applyNounFilter(pool);
                   let branchTag = 'qfv2_pool_no_modifiers';
