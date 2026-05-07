@@ -4,7 +4,8 @@ import { supabase } from '@/integrations/supabase/client';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { RefreshCw, Search, ChevronDown, ChevronRight } from 'lucide-react';
+import { RefreshCw, Search, ChevronDown, ChevronRight, Copy, Check } from 'lucide-react';
+import { toast } from 'sonner';
 
 interface LogRow {
   id: string;
@@ -37,6 +38,17 @@ export default function RequestLogs() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const handleCopy = async (value: string | null | undefined, key: string, label: string) => {
+    if (!value) return;
+    await navigator.clipboard.writeText(value);
+    setCopiedKey(key);
+    toast.success(`${label} скопирован${label.endsWith('с') ? 'ы' : ''}`);
+    window.setTimeout(() => setCopiedKey((current) => (current === key ? null : current)), 1500);
+  };
+
+  const isCopied = (key: string) => copiedKey === key;
 
   const load = async () => {
     setLoading(true);
@@ -122,10 +134,44 @@ export default function RequestLogs() {
                       </span>
                       {r.error && <Badge variant="destructive" className="text-[10px]">error</Badge>}
                     </div>
-                    <p className="mt-1 font-medium truncate">{r.user_query || <span className="text-muted-foreground">— пусто —</span>}</p>
-                    <p className="text-xs text-muted-foreground truncate">
-                      session: {r.session_id?.slice(0, 12) || '—'} · ip: {r.client_ip || '—'}
-                    </p>
+                    <div className="mt-1 flex items-start gap-2">
+                      <p className="font-medium truncate flex-1 min-w-0">{r.user_query || <span className="text-muted-foreground">— пусто —</span>}</p>
+                      {r.user_query && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 flex-shrink-0"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            void handleCopy(r.user_query, `query:${r.id}`, 'Запрос');
+                          }}
+                          title="Скопировать запрос"
+                        >
+                          {isCopied(`query:${r.id}`) ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        </Button>
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground truncate flex items-center gap-1.5">
+                      <span className="truncate">session: {r.session_id?.slice(0, 12) || '—'} · ip: {r.client_ip || '—'}</span>
+                      {r.session_id && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 flex-shrink-0"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            void handleCopy(r.session_id, `session:${r.id}`, 'Session ID');
+                          }}
+                          title="Скопировать session ID"
+                        >
+                          {isCopied(`session:${r.id}`) ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </button>
 
