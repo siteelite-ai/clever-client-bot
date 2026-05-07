@@ -4868,27 +4868,73 @@ function buildComputeInstructionBlock(params: {
 `;
 }
 
+/**
+ * Превращает «голые» контакты в кликабельные markdown-ссылки внутри ЛЮБОГО
+ * текста: телефон → tel:, email → mailto:, WhatsApp/wa.me → https://wa.me/.
+ * Идемпотентна: уже оформленные `[label](tel:|mailto:|http...)` не трогает.
+ * Используется для:
+ *   1) Пред-обработки contactsInfo (источник для LLM) — гарантия, что модель
+ *      физически не видит голые контакты и не сможет их скопировать.
+ *   2) Пост-обработки финального текста (страховка для не-стримовой ветки).
+ */
+function linkifyContacts(text: string): string {
+  if (!text) return text;
+  // Защищаем уже существующие markdown-ссылки от повторной обработки.
+  const protectedSlots: string[] = [];
+  let out = text.replace(/\[[^\]]+\]\([^)]+\)/g, (m) => {
+    protectedSlots.push(m);
+    return `\u0000LINK${protectedSlots.length - 1}\u0000`;
+  });
+
+  // Email → mailto:
+  out = out.replace(
+    /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g,
+    (_m, email) => `[${email}](mailto:${email})`,
+  );
+
+  // WhatsApp ссылки и упоминания «WhatsApp: +7...»
+  out = out.replace(/https?:\/\/wa\.me\/(\d+)/gi, (_m, n) => `[WhatsApp](https://wa.me/${n})`);
+  out = out.replace(
+    /\bWhatsApp\b\s*[:\-—]?\s*((?:\+7|8)[\s\(\)\-]*\d{3}[\s\(\)\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2})/gi,
+    (_m, raw) => {
+      const num = raw.replace(/[\s\(\)\-]/g, '');
+      return `[WhatsApp](https://wa.me/${num})`;
+    },
+  );
+
+  // Телефоны → tel:
+  out = out.replace(
+    /(?:\+7|8)[\s\(\)\-]*\d{3}[\s\(\)\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/g,
+    (raw) => {
+      const num = raw.replace(/[\s\(\)\-]/g, '');
+      return `[${raw.trim()}](tel:${num})`;
+    },
+  );
+
+  // Возвращаем защищённые ссылки.
+  out = out.replace(/\u0000LINK(\d+)\u0000/g, (_m, i) => protectedSlots[Number(i)]);
+  return out;
+}
+
 function formatContactsForDisplay(contactsText: string): string | null {
   if (!contactsText || contactsText.trim().length === 0) return null;
-  
+
   const lines: string[] = [];
-  const seen = new Set<string>();
-  
+  const seenPhones = new Set<string>();
+
   const phoneRegex = /(?:\+7|8)[\s\(\)\-]*\d{3}[\s\(\)\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/g;
   const phoneMatches = contactsText.match(phoneRegex);
   if (phoneMatches) {
     for (const raw of phoneMatches) {
       const telNumber = raw.replace(/[\s\(\)\-]/g, '');
-      if (!seen.has(telNumber)) {
-        seen.add(telNumber);
-        const formatted = raw.trim();
-        lines.push(`📞 [${formatted}](tel:${telNumber})`);
-      }
+      if (seenPhones.has(telNumber)) continue;
+      seenPhones.add(telNumber);
+      lines.push(`📞 [${raw.trim()}](tel:${telNumber})`);
       if (lines.filter(l => l.startsWith('📞')).length >= 2) break;
     }
   }
-  
-  const waMatch = contactsText.match(/https?:\/\/wa\.me\/\d+/i) 
+
+  const waMatch = contactsText.match(/https?:\/\/wa\.me\/\d+/i)
     || contactsText.match(/WhatsApp[^:]*:\s*([\+\d\s]+)/i);
   if (waMatch) {
     const value = waMatch[0];
@@ -4899,14 +4945,14 @@ function formatContactsForDisplay(contactsText: string): string | null {
       if (num) lines.push(`💬 [WhatsApp](https://wa.me/${num})`);
     }
   }
-  
+
   const emailMatch = contactsText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
   if (emailMatch) {
     lines.push(`📧 [${emailMatch[0]}](mailto:${emailMatch[0]})`);
   }
-  
+
   if (lines.length === 0) return null;
-  
+
   return `**Наши контакты:**\n${lines.join('\n')}`;
 }
 
@@ -7964,15 +8010,21 @@ ${hasAssistantGreeting ? '⚠️ Ты УЖЕ поздоровался в это�
 🕐 режим работы
 
 Если у филиала нет телефона/режима — просто пропусти строку.
-WhatsApp всегда кликабельный: [WhatsApp](https://wa.me/номер)
+
+# 🔗 ЖЕЛЕЗНОЕ ПРАВИЛО ДЛЯ ВСЕХ КОНТАКТОВ (телефон, email, WhatsApp)
+Любой контакт в ответе ДОЛЖЕН быть кликабельной markdown-ссылкой. БЕЗ ИСКЛЮЧЕНИЙ:
+- Телефон → `[+7 (XXX) XXX-XX-XX](tel:+7XXXXXXXXXX)` — в `tel:` только цифры со знаком +, без пробелов/скобок/дефисов.
+- Email → `[user@domain](mailto:user@domain)` — НИКОГДА не пиши email просто текстом.
+- WhatsApp → `[WhatsApp](https://wa.me/7XXXXXXXXXX)` — НИКОГДА не упоминай «WhatsApp» без ссылки.
+ЗАПРЕЩЕНО: писать «WhatsApp или email: intermag@220volt.kz», «звоните +7 721 230-35-51», «пишите на почту …» — без markdown-ссылок. Если не знаешь точного номера/адреса — НЕ выдумывай, используй блок ниже.
 
 # Контакты компании и филиалы (из Базы Знаний)
-Ниже — ЕДИНСТВЕННЫЙ источник контактных данных. WhatsApp, email, телефоны, адреса — всё бери ОТСЮДА.
+Ниже — ЕДИНСТВЕННЫЙ источник контактных данных. Все телефоны/email/WhatsApp здесь УЖЕ оформлены markdown-ссылками — копируй их В ТОЧНОСТИ как есть, не разворачивай обратно в plain-текст.
 
-${contactsInfo || 'Данные о контактах не загружены.'}
+${linkifyContacts(contactsInfo) || 'Данные о контактах не загружены.'}
 
 # Эскалация менеджеру
-Когда нужен менеджер — добавь маркер [CONTACT_MANAGER] в конец сообщения (он скрыт от клиента, заменяется карточкой контактов). Перед маркером предложи WhatsApp и email из данных выше.
+Когда нужен менеджер — добавь маркер [CONTACT_MANAGER] в конец сообщения (он скрыт от клиента, заменяется карточкой контактов). Перед маркером предложи WhatsApp и email из данных выше — обязательно как кликабельные markdown-ссылки.
 
 ${(() => {
       const shouldIncludeKnowledge = 
@@ -8305,6 +8357,8 @@ ${productInstructions}`;
         
         const shouldShowContacts = content.includes('[CONTACT_MANAGER]');
         content = content.replace(/\s*\[CONTACT_MANAGER\]\s*/g, '').trim();
+        // Страховка: даже если LLM вставил голые контакты — линкуем их.
+        content = linkifyContacts(content);
         
         const responseBody: { content: string; contacts?: string | null; slot_update?: DialogSlots } = { content };
         if (shouldShowContacts && formattedContacts) {
