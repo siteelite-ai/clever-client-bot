@@ -5170,7 +5170,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     } else {
       throw new Error('Invalid request format: missing messages or message');
     }
-    
+    // Логирование сессии и текста запроса
+    try {
+      const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+      logSetSession(conversationId);
+      logSetUserQuery(lastUserMsg ? lastUserMsg.content : null);
+    } catch (_) { /* ignore */ }
     // === DIALOG SLOTS: read and validate ===
     // Server-managed persistence (V1): если фронт не прислал dialogSlots —
     // подтягиваем последнее сохранённое состояние по sessionId из chat_cache_v2.
