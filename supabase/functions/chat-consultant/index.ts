@@ -4430,25 +4430,25 @@ export function buildDeterministicShortCircuitContent(params: {
   const { products, reason, userMessage, effectivePriceIntent, subIntent } = params;
   if (!products.length) return '';
 
-  // Под-интент перебивает дефолтные intro для article/title-first веток.
-  // Цель: при «есть в наличии?» / «сколько стоит?» отвечаем на вопрос, а не «подобрал товары».
-  const isArticleLike = reason === 'article-shortcircuit' || reason === 'siteid-shortcircuit';
+  // Под-интент перебивает дефолтные intro для ЛЮБОЙ ветки с реальным товаром
+  // (article/siteid/pass2/qfv2). Цель: на «есть в наличии?»/«сколько стоит?»
+  // отвечаем на вопрос, а не «подобрал товары».
   let intro: string;
-  if (subIntent === 'availability' && isArticleLike) {
+  if (subIntent === 'availability') {
     intro = products.length === 1
       ? 'Да, есть в наличии:'
       : 'Да, есть в наличии. Вот подходящие позиции:';
-  } else if (subIntent === 'price' && isArticleLike) {
+  } else if (subIntent === 'price') {
     intro = products.length === 1
       ? 'Вот актуальная цена:'
       : 'Актуальные цены по вашему запросу:';
-  } else if (subIntent === 'location' && isArticleLike) {
+  } else if (subIntent === 'location') {
     intro = 'Товар доступен в каталоге — наличие по магазинам уточняйте у менеджера:';
   } else if (reason === 'price-shortcircuit') {
     intro = effectivePriceIntent === 'most_expensive'
       ? 'Подобрал самые дорогие варианты из каталога:'
       : 'Подобрал самые доступные варианты из каталога:';
-  } else if (isArticleLike) {
+  } else if (reason === 'article-shortcircuit' || reason === 'siteid-shortcircuit') {
     intro = 'Нашёл товар по точному запросу:';
   } else if (reason === 'pass2-shortcircuit') {
     intro = 'Подобрал по вашим характеристикам:';
