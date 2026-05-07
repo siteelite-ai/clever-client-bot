@@ -3,6 +3,7 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { AsyncLocalStorage } from "node:async_hooks";
+import { DEFAULT_CLASSIFIER_PROMPT } from "../_shared/classifier-prompt.ts";
 import {
   createLogCtx,
   runWithLogCtx,
