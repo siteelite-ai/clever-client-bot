@@ -5838,15 +5838,30 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             // Step 1: split on whitespace, hyphens, slashes, parentheses, commas.
             const chunks = rawName.split(/[\s,()/\\-]+/).filter(Boolean);
             for (const chunk of chunks) {
+              // Pre-check: монолитная alphanumeric-маркировка (≤ 8 символов, и буквы и цифры)
+              // GX53, E27, T75, IP44, BA15s, MR16, R7s, 7Вт, 9Вт, 12В, 220В, 16А — НЕ режем.
+              const hasLetter = /[а-яА-ЯёЁa-zA-Z]/.test(chunk);
+              const hasDigit = /\d/.test(chunk);
+              if (chunk.length <= 8 && hasLetter && hasDigit) {
+                subTokens_label_skip: {
+                  const tLower = chunk.toLowerCase();
+                  if (tLower === categoryLower) break subTokens_label_skip;
+                  if (seen.has(tLower)) break subTokens_label_skip;
+                  seen.add(tLower);
+                  synthesised.push(chunk);
+                }
+                continue;
+              }
               // Step 2: split each chunk on script/script-class boundaries:
               //   letter↔digit (ВВГнг3 → ВВГнг, 3), cyrillic↔latin (LSPVS → LS, PVS only if mixed).
-              //   Common separators inside numeric specs: × * х x . , (treated as token break too).
+              //   Common separators inside numeric specs: × * х . , (treated as token break too).
+              //   ВНИМАНИЕ: латинская x/X из multiplier-split исключена — иначе ломает GX53, MR16x.
               const subTokens = chunk
                 .replace(/([а-яА-ЯёЁ])([a-zA-Z])/g, '$1 $2')
                 .replace(/([a-zA-Z])([а-яА-ЯёЁ])/g, '$1 $2')
                 .replace(/([а-яА-ЯёЁa-zA-Z])(\d)/g, '$1 $2')
                 .replace(/(\d)([а-яА-ЯёЁa-zA-Z])/g, '$1 $2')
-                .split(/[×*хxХ]/i)
+                .split(/[×*хХ]/)
                 .flatMap((t: string) => t.split(/\s+/))
                 .map((t: string) => t.trim())
                 .filter(Boolean);
