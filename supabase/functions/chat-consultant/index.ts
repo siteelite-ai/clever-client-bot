@@ -578,7 +578,7 @@ async function getAppSettings(): Promise<CachedSettings> {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const { data, error } = await supabase
       .from('app_settings')
-      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model, system_prompt, classifier_provider, classifier_model, query_first_enabled, soft_suggest_enabled')
+      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model, system_prompt, classifier_provider, classifier_model, classifier_prompt, query_first_enabled, soft_suggest_enabled')
       .limit(1)
       .single();
 
