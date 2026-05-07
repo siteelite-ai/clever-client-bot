@@ -6022,6 +6022,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   };
                   let displayList: Product[] = applyNounFilter(pool);
                   let branchTag = 'qfv2_pool_no_modifiers';
+                  logSetBranch('qfv2');
 
                   if (Object.keys(resolvedFilters).length > 0) {
                     const final = await searchProductsByCandidate(
