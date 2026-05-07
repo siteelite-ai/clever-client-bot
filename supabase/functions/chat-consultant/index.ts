@@ -7495,6 +7495,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     console.log(`[Chat] GeoIP: city=${detectedCity || 'unknown'}, VPN=${isVPN}, country=${userCountry || 'unknown'} (${userCountryCode || '?'})`);
     console.log(`[Chat] Contacts loaded: ${contactsInfo.length} chars`);
 
+    const infoKbSelection = extractedIntent.intent === 'info' && knowledgeResults.length > 0
+      ? pickBestKnowledgeEntryForInfoQuery(userMessage, knowledgeResults)
+      : null;
+
     if (knowledgeResults.length > 0) {
       // Plan V5: для article-shortcircuit ответ — простой "да, есть, X тг". 15 КБ статей раздувают токены и латентность.
       // Режем budget до 2 КБ и берём только топ-1 самую релевантную запись.
@@ -7849,49 +7853,48 @@ ${productContext}
 - Тон: профессиональный, без восклицательных знаков, без давления`;
     } else if (isGreeting) {
       productInstructions = '';
-    } else if (extractedIntent.intent === 'info') {
-      if (knowledgeResults.length > 0) {
-        // Find the most relevant KB entry by title/content match to user query
-        // Strip punctuation from query words for accurate matching
-        // Strip punctuation from query words for accurate matching
-        const queryWords = userMessage.toLowerCase().replace(/[?!.,;:()«»"']/g, '').split(/\s+/).filter(w => w.length > 2);
+      } else if (extractedIntent.intent === 'info') {
+        const directHoursAnswer = extractTodayWorkingHoursFromContacts(contactsInfo, userMessage);
+        if (directHoursAnswer) {
+          console.log(`[Chat] Info hours short-circuit: ${directHoursAnswer}`);
+          const content = linkifyContacts(directHoursAnswer);
+          if (!useStreaming) {
+            const responseBody: { content: string; slot_update?: DialogSlots } = { content };
+            if (slotsUpdated) responseBody.slot_update = dialogSlots;
+            persistSlotsAsync(conversationId, dialogSlots);
+            return new Response(JSON.stringify(responseBody), {
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
+          }
 
-        // Intent-aware topic boost: типичные классы info-вопросов → ключевые слова в TITLE релевантной записи.
-        // Когда вопрос про режим работы — реально нужна запись «Контакты», даже если в её title нет «караганды».
-        // Раньше использовался first-match по слову из запроса (Array.find), что приводило к «hijack»:
-        // запись «Тарифы доставки по Караганде» перебивала «Контакты», просто потому что title содержит «караганде».
-        const lq = userMessage.toLowerCase();
-        const topicBoosts: Array<{ match: RegExp; titleKeywords: string[] }> = [
-          { match: /(работа\w*|работ?ете|режим|график|открыт\w*|закрыт\w*|часы|до\s+скольк\w*|со\s+скольк\w*|выходн\w*)/i, titleKeywords: ['контакт', 'режим', 'график', 'часы работы', 'время работы'] },
-          { match: /(достав\w*|курьер\w*|самовывоз\w*|привез\w*)/i, titleKeywords: ['доставк'] },
-          { match: /(оплат\w*|kaspi|каспи|карта|наличн\w*|перевод\w*|счёт|счет)/i, titleKeywords: ['оплат'] },
-          { match: /(гаранти\w*)/i, titleKeywords: ['гаранти'] },
-          { match: /(возврат\w*|обмен\w*|вернуть)/i, titleKeywords: ['возврат', 'обмен'] },
-          { match: /(адрес\w*|где\s+(вы|нах|купить|магазин)|филиал\w*|офис\w*|магазин\w*)/i, titleKeywords: ['контакт', 'филиал', 'адрес'] },
-          { match: /(телефон\w*|номер|позвон\w*|связ\w*|email|почт\w*|whatsapp|ватсап)/i, titleKeywords: ['контакт'] },
-        ];
-        const activeBoostKeywords: string[] = [];
-        for (const tb of topicBoosts) {
-          if (tb.match.test(lq)) activeBoostKeywords.push(...tb.titleKeywords);
+          const encoder = new TextEncoder();
+          const stream = new ReadableStream({
+            start(controller) {
+              const contentDelta = `data: ${JSON.stringify({ choices: [{ delta: { content }, index: 0 }] })}\n\n`;
+              controller.enqueue(encoder.encode(contentDelta));
+              if (slotsUpdated) {
+                const slotEvent = `data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`;
+                controller.enqueue(encoder.encode(slotEvent));
+              }
+              persistSlotsAsync(conversationId, dialogSlots);
+              controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+              controller.close();
+            },
+          });
+
+          return new Response(stream, {
+            headers: {
+              ...corsHeaders,
+              'Content-Type': 'text/event-stream; charset=utf-8',
+              'Cache-Control': 'no-cache',
+              'Connection': 'keep-alive',
+            },
+          });
         }
 
-        const scored = knowledgeResults.map((r) => {
-          const titleLc = r.title.toLowerCase();
-          const contentLc = r.content.toLowerCase();
-          let score = 0;
-          for (const w of queryWords) {
-            if (titleLc.includes(w)) score += 3;
-            if (contentLc.includes(w)) score += 1;
-          }
-          for (const kw of activeBoostKeywords) {
-            if (titleLc.includes(kw)) score += 10; // intent-anchor — самый сильный сигнал
-          }
-          return { r, score };
-        }).sort((a, b) => b.score - a.score);
-
-        const bestMatch = scored.length > 0 && scored[0].score > 0 ? scored[0].r : null;
-
-        console.log(`[Chat] Info intent: queryWords=${JSON.stringify(queryWords)}, topicBoosts=${JSON.stringify(activeBoostKeywords)}, bestMatch=${bestMatch?.title || 'NONE'} (score=${scored[0]?.score ?? 0}), runnerUp=${scored[1]?.r.title || 'NONE'}(${scored[1]?.score ?? 0})`);
+      if (knowledgeResults.length > 0) {
+        const bestMatch = infoKbSelection?.bestMatch ?? null;
+        console.log(`[Chat] Info intent: topicBoosts=${JSON.stringify(infoKbSelection?.activeBoostKeywords ?? [])}, bestMatch=${bestMatch?.title || 'NONE'} (score=${infoKbSelection?.bestScore ?? 0}), runnerUp=${infoKbSelection?.runnerUp?.title || 'NONE'}(${infoKbSelection?.runnerUpScore ?? 0})`);
         
         // Build direct answer quote from best match
         let directAnswerBlock = '';
