@@ -4956,6 +4956,163 @@ function formatContactsForDisplay(contactsText: string): string | null {
   return `**Наши контакты:**\n${lines.join('\n')}`;
 }
 
+function scoreKnowledgeEntryForInfoQuery(
+  query: string,
+  entry: { title: string; content: string },
+): { score: number; activeBoostKeywords: string[] } {
+  const queryWords = query.toLowerCase().replace(/[?!.,;:()«»"']/g, '').split(/\s+/).filter(w => w.length > 2);
+  const lq = query.toLowerCase();
+  const topicBoosts: Array<{ match: RegExp; titleKeywords: string[] }> = [
+    { match: /(работа\w*|работ?ете|режим|график|открыт\w*|закрыт\w*|часы|до\s+скольк\w*|со\s+скольк\w*|выходн\w*)/i, titleKeywords: ['контакт', 'режим', 'график', 'часы работы', 'время работы'] },
+    { match: /(достав\w*|курьер\w*|самовывоз\w*|привез\w*)/i, titleKeywords: ['доставк'] },
+    { match: /(оплат\w*|kaspi|каспи|карта|наличн\w*|перевод\w*|счёт|счет)/i, titleKeywords: ['оплат'] },
+    { match: /(гаранти\w*)/i, titleKeywords: ['гаранти'] },
+    { match: /(возврат\w*|обмен\w*|вернуть)/i, titleKeywords: ['возврат', 'обмен'] },
+    { match: /(адрес\w*|где\s+(вы|нах|купить|магазин)|филиал\w*|офис\w*|магазин\w*)/i, titleKeywords: ['контакт', 'филиал', 'адрес'] },
+    { match: /(телефон\w*|номер|позвон\w*|связ\w*|email|почт\w*|whatsapp|ватсап)/i, titleKeywords: ['контакт'] },
+  ];
+
+  const activeBoostKeywords: string[] = [];
+  for (const tb of topicBoosts) {
+    if (tb.match.test(lq)) activeBoostKeywords.push(...tb.titleKeywords);
+  }
+
+  const titleLc = entry.title.toLowerCase();
+  const contentLc = entry.content.toLowerCase();
+  let score = 0;
+
+  for (const w of queryWords) {
+    if (titleLc.includes(w)) score += 3;
+    if (contentLc.includes(w)) score += 1;
+  }
+  for (const kw of activeBoostKeywords) {
+    if (titleLc.includes(kw)) score += 10;
+  }
+
+  return { score, activeBoostKeywords };
+}
+
+function pickBestKnowledgeEntryForInfoQuery<T extends { title: string; content: string }>(
+  query: string,
+  knowledgeResults: T[],
+): { bestMatch: T | null; runnerUp: T | null; bestScore: number; runnerUpScore: number; activeBoostKeywords: string[] } {
+  const scored = knowledgeResults.map((r) => {
+    const { score, activeBoostKeywords } = scoreKnowledgeEntryForInfoQuery(query, r);
+    return { r, score, activeBoostKeywords };
+  }).sort((a, b) => b.score - a.score);
+
+  return {
+    bestMatch: scored.length > 0 && scored[0].score > 0 ? scored[0].r : null,
+    runnerUp: scored[1]?.r ?? null,
+    bestScore: scored[0]?.score ?? 0,
+    runnerUpScore: scored[1]?.score ?? 0,
+    activeBoostKeywords: scored[0]?.activeBoostKeywords ?? [],
+  };
+}
+
+function getCurrentWeekdayLabelsInAlmaty(now = new Date()): { ruShort: string; weekdayIndex: number } {
+  const weekdayShort = new Intl.DateTimeFormat('ru-RU', {
+    timeZone: 'Asia/Almaty',
+    weekday: 'short',
+  }).format(now).toLowerCase().replace('.', '');
+  const weekdayMap: Record<string, number> = {
+    'вс': 0,
+    'пн': 1,
+    'вт': 2,
+    'ср': 3,
+    'чт': 4,
+    'пт': 5,
+    'сб': 6,
+  };
+  return { ruShort: weekdayShort, weekdayIndex: weekdayMap[weekdayShort] ?? -1 };
+}
+
+function extractTodayWorkingHoursFromContacts(contactsText: string, query: string): string | null {
+  if (!contactsText) return null;
+  const lq = query.toLowerCase();
+  if (!/(работа\w*|работ?ете|режим|график|до\s+скольк\w*|со\s+скольк\w*|открыт\w*|закрыт\w*|часы)/i.test(lq)) {
+    return null;
+  }
+
+  const cityMatch = lq.match(/(?:в|по)\s+(караганде|астане|алматы|шымкенте|актобе)\b/i);
+  const city = cityMatch?.[1]?.toLowerCase() ?? '';
+  const cityToHeader: Record<string, string> = {
+    'караганде': 'караганда',
+    'астане': 'астана',
+    'алматы': 'алматы',
+    'шымкенте': 'шымкент',
+    'актобе': 'актобе',
+  };
+  const targetCity = cityToHeader[city] ?? '';
+  const lines = contactsText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const candidates = lines.filter(line => {
+    const lc = line.toLowerCase();
+    if (!lc.includes('филиал:')) return false;
+    if (targetCity && !lc.includes(targetCity)) return false;
+    return /(пн|вт|ср|чт|пт|сб|вс)/i.test(lc);
+  });
+  if (candidates.length === 0) return null;
+
+  const { ruShort, weekdayIndex } = getCurrentWeekdayLabelsInAlmaty();
+  const todayFullMap: Record<string, string> = {
+    'пн': 'сегодня, в понедельник',
+    'вт': 'сегодня, во вторник',
+    'ср': 'сегодня, в среду',
+    'чт': 'сегодня, в четверг',
+    'пт': 'сегодня, в пятницу',
+    'сб': 'сегодня, в субботу',
+    'вс': 'сегодня, в воскресенье',
+  };
+
+  const extractForLine = (line: string): { hours: string; branchName: string } | null => {
+    const parts = line.split('|').map(p => p.trim()).filter(Boolean);
+    const branchName = parts[2] || parts[1] || 'филиал';
+    const scheduleSource = parts.slice(3).join(' | ');
+    if (!scheduleSource) return null;
+
+    const src = scheduleSource.toLowerCase();
+    const clean = scheduleSource.replace(/\s+/g, ' ').trim();
+
+    if (/пн-?вс/.test(src)) {
+      const m = clean.match(/пн-?вс\.?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2})/i);
+      if (m) return { hours: m[1].replace(/\./g, ':'), branchName };
+    }
+
+    const directDayPatterns: Array<{ days: number[]; regex: RegExp }> = [
+      { days: [1, 2, 3, 4, 5], regex: /пн\.?\s*-\s*пт\.?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2})/i },
+      { days: [6, 0], regex: /сб\.?\s*-\s*вс\.?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
+      { days: [6], regex: /сб\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
+      { days: [0], regex: /вс\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
+      { days: [1], regex: /пн\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
+      { days: [2], regex: /вт\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
+      { days: [3], regex: /ср\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
+      { days: [4], regex: /чт\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
+      { days: [5], regex: /пт\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
+    ];
+
+    for (const pattern of directDayPatterns) {
+      if (!pattern.days.includes(weekdayIndex)) continue;
+      const match = clean.match(pattern.regex);
+      if (!match) continue;
+      return { hours: match[1].replace(/\./g, ':'), branchName };
+    }
+
+    return null;
+  };
+
+  for (const line of candidates) {
+    const resolved = extractForLine(line);
+    if (!resolved) continue;
+    const hoursLc = resolved.hours.toLowerCase();
+    if (hoursLc.includes('выходной')) {
+      return `${todayFullMap[ruShort] || 'сегодня'} ${resolved.branchName} не работает.`;
+    }
+    return `${todayFullMap[ruShort] || 'сегодня'} ${resolved.branchName} работает до **${resolved.hours.split('-')[1]?.trim() || resolved.hours}**.`;
+  }
+
+  return null;
+}
+
 // Simple in-memory rate limiter
 const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 const RATE_LIMIT_MAX = 20;
