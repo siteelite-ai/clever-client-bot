@@ -1039,6 +1039,53 @@ async function fetchCatalogWithRetry(
   return null;
 }
 
+/**
+ * Exact lookup by Catalog `?pagetitle=` (full product title, символ-в-символ).
+ * Используется как первая ступень PAGETITLE-FIRST FAST-PATH перед ?query=.
+ * 0 результатов = нормальная ситуация (название не совпало точно) — продолжаем pipeline.
+ */
+async function searchByPagetitle(pagetitle: string, apiToken: string, perPage = 10): Promise<Product[]> {
+  if (!pagetitle || !isSafeApiParam(pagetitle)) return [];
+  const params = new URLSearchParams();
+  params.append('pagetitle', pagetitle);
+  params.append('per_page', perPage.toString());
+
+  console.log(`[PagetitleSearch] Searching by pagetitle: "${pagetitle.substring(0, 80)}"`);
+
+  const response = await fetchCatalogWithRetry(
+    `${VOLT220_API_URL}?${params}`,
+    apiToken,
+    'PagetitleSearch',
+    8000
+  );
+  if (!response) return [];
+
+  try {
+    const rawData = await response.json();
+    const data = rawData.data || rawData;
+    const results = data.results || [];
+    console.log(`[PagetitleSearch] Found ${results.length} product(s) for pagetitle "${pagetitle.substring(0, 60)}"`);
+    return results;
+  } catch (error) {
+    console.error(`[PagetitleSearch] Parse error:`, error);
+    return [];
+  }
+}
+
+/**
+ * Эвристика «запрос похож на конкретную модель/SKU» — цифры + единицы/размеры/IP/модули.
+ * Используется как ДОПОЛНИТЕЛЬНЫЙ триггер pagetitle-first, если классификатор
+ * пропустил has_product_name (типичный кейс: «Щит ... 75*124*57мм IP20»).
+ */
+function looksLikeProductMarking(text: string): boolean {
+  if (!text || text.length < 6) return false;
+  const t = text.toLowerCase();
+  const hasDigit = /\d/.test(t);
+  if (!hasDigit) return false;
+  // Размеры (75*124*57, 3х2.5, 12x24), IP-класс, единицы, «модул», «мм», артикул-подобные
+  return /(\d+\s*[x×х*]\s*\d+)|ip\s*\d{2}|\bмм\b|\bсм\b|\bвт\b|\bw\b|\bмодул|[a-zа-я]+\d|\d[a-zа-я]+/i.test(t);
+}
+
 async function searchByArticle(article: string, apiToken: string): Promise<Product[]> {
   const params = new URLSearchParams();
   params.append('article', article);
@@ -5289,6 +5336,36 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
         classification = await classifyProductName(userMessage, recentHistoryForClassifier, appSettings);
         const classifyElapsed = Date.now() - classifyStart;
         console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → intent=${classification?.intent || 'none'}, has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}", is_replacement=${classification?.is_replacement || false}`);
+
+        // === PAGETITLE-FIRST FAST-PATH (точное совпадение по названию) ===
+        // Если классификатор отметил has_product_name=true ИЛИ запрос содержит
+        // характерные маркеры конкретной модели (размеры 75*124*57мм, IP20, артикул-
+        // подобные сочетания букв+цифр) — пробуем точное совпадение через ?pagetitle=.
+        // Это решает кейс «Щит для автом. выключателей на 2-4 модуля 75*124*57мм IP20»,
+        // когда классификатор ставит has_product_name=false и QFv2 ищет по «щит» → шум.
+        // Любой ≥1 результат → short-circuit, пропускаем весь дальнейший pipeline.
+        try {
+          const pagetitleCandidate = (classification?.product_name || '').trim() || (userMessage || '').trim();
+          const pagetitleTrigger =
+            (!!classification?.has_product_name && pagetitleCandidate.length >= 6) ||
+            looksLikeProductMarking(pagetitleCandidate);
+          if (!articleShortCircuit && !classification?.is_replacement && pagetitleTrigger) {
+            const ptStart = Date.now();
+            const ptResults = await searchByPagetitle(pagetitleCandidate, appSettings.volt220_api_token, 10);
+            const ptElapsed = Date.now() - ptStart;
+            if (ptResults.length > 0) {
+              foundProducts = ptResults.slice(0, 10);
+              articleShortCircuit = true;
+              responseModel = 'anthropic/claude-sonnet-4.5';
+              responseModelReason = 'pagetitle-shortcircuit';
+              console.log(`[Chat] Pagetitle-first FAST-PATH SUCCESS: ${foundProducts.length} products in ${ptElapsed}ms for "${pagetitleCandidate.substring(0, 80)}", skipping downstream pipeline`);
+            } else {
+              console.log(`[Chat] Pagetitle-first FAST-PATH: 0 results in ${ptElapsed}ms for "${pagetitleCandidate.substring(0, 80)}", continuing`);
+            }
+          }
+        } catch (ptErr) {
+          console.error('[Chat] Pagetitle-first FAST-PATH error (silent fallback):', ptErr);
+        }
 
         // === TITLE-FIRST FAST-PATH (mirrors article-first) ===
         // If the Micro-LLM classifier extracted a strong product name (model-like:
