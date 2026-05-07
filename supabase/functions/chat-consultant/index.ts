@@ -1039,6 +1039,53 @@ async function fetchCatalogWithRetry(
   return null;
 }
 
+/**
+ * Exact lookup by Catalog `?pagetitle=` (full product title, символ-в-символ).
+ * Используется как первая ступень PAGETITLE-FIRST FAST-PATH перед ?query=.
+ * 0 результатов = нормальная ситуация (название не совпало точно) — продолжаем pipeline.
+ */
+async function searchByPagetitle(pagetitle: string, apiToken: string, perPage = 10): Promise<Product[]> {
+  if (!pagetitle || !isSafeApiParam(pagetitle)) return [];
+  const params = new URLSearchParams();
+  params.append('pagetitle', pagetitle);
+  params.append('per_page', perPage.toString());
+
+  console.log(`[PagetitleSearch] Searching by pagetitle: "${pagetitle.substring(0, 80)}"`);
+
+  const response = await fetchCatalogWithRetry(
+    `${VOLT220_API_URL}?${params}`,
+    apiToken,
+    'PagetitleSearch',
+    8000
+  );
+  if (!response) return [];
+
+  try {
+    const rawData = await response.json();
+    const data = rawData.data || rawData;
+    const results = data.results || [];
+    console.log(`[PagetitleSearch] Found ${results.length} product(s) for pagetitle "${pagetitle.substring(0, 60)}"`);
+    return results;
+  } catch (error) {
+    console.error(`[PagetitleSearch] Parse error:`, error);
+    return [];
+  }
+}
+
+/**
+ * Эвристика «запрос похож на конкретную модель/SKU» — цифры + единицы/размеры/IP/модули.
+ * Используется как ДОПОЛНИТЕЛЬНЫЙ триггер pagetitle-first, если классификатор
+ * пропустил has_product_name (типичный кейс: «Щит ... 75*124*57мм IP20»).
+ */
+function looksLikeProductMarking(text: string): boolean {
+  if (!text || text.length < 6) return false;
+  const t = text.toLowerCase();
+  const hasDigit = /\d/.test(t);
+  if (!hasDigit) return false;
+  // Размеры (75*124*57, 3х2.5, 12x24), IP-класс, единицы, «модул», «мм», артикул-подобные
+  return /(\d+\s*[x×х*]\s*\d+)|ip\s*\d{2}|\bмм\b|\bсм\b|\bвт\b|\bw\b|\bмодул|[a-zа-я]+\d|\d[a-zа-я]+/i.test(t);
+}
+
 async function searchByArticle(article: string, apiToken: string): Promise<Product[]> {
   const params = new URLSearchParams();
   params.append('article', article);
