@@ -7362,6 +7362,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
         extractedIntent.originalQuery.trim().length > 0
       ) {
         console.log(`[Chat req=${reqId}] [JargonFallback] EARLY trigger: branch=qfv2_pool_no_modifiers criticalMods=${JSON.stringify(criticalMods)}`);
+        logSetBranch('jargon-fallback');
         const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
         const jargonResult = await tryJargonFallback({
           originalQuery: extractedIntent.originalQuery,
