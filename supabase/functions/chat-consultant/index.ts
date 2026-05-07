@@ -4868,27 +4868,73 @@ function buildComputeInstructionBlock(params: {
 `;
 }
 
+/**
+ * Превращает «голые» контакты в кликабельные markdown-ссылки внутри ЛЮБОГО
+ * текста: телефон → tel:, email → mailto:, WhatsApp/wa.me → https://wa.me/.
+ * Идемпотентна: уже оформленные `[label](tel:|mailto:|http...)` не трогает.
+ * Используется для:
+ *   1) Пред-обработки contactsInfo (источник для LLM) — гарантия, что модель
+ *      физически не видит голые контакты и не сможет их скопировать.
+ *   2) Пост-обработки финального текста (страховка для не-стримовой ветки).
+ */
+function linkifyContacts(text: string): string {
+  if (!text) return text;
+  // Защищаем уже существующие markdown-ссылки от повторной обработки.
+  const protectedSlots: string[] = [];
+  let out = text.replace(/\[[^\]]+\]\([^)]+\)/g, (m) => {
+    protectedSlots.push(m);
+    return `\u0000LINK${protectedSlots.length - 1}\u0000`;
+  });
+
+  // Email → mailto:
+  out = out.replace(
+    /([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g,
+    (_m, email) => `[${email}](mailto:${email})`,
+  );
+
+  // WhatsApp ссылки и упоминания «WhatsApp: +7...»
+  out = out.replace(/https?:\/\/wa\.me\/(\d+)/gi, (_m, n) => `[WhatsApp](https://wa.me/${n})`);
+  out = out.replace(
+    /\bWhatsApp\b\s*[:\-—]?\s*((?:\+7|8)[\s\(\)\-]*\d{3}[\s\(\)\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2})/gi,
+    (_m, raw) => {
+      const num = raw.replace(/[\s\(\)\-]/g, '');
+      return `[WhatsApp](https://wa.me/${num})`;
+    },
+  );
+
+  // Телефоны → tel:
+  out = out.replace(
+    /(?:\+7|8)[\s\(\)\-]*\d{3}[\s\(\)\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/g,
+    (raw) => {
+      const num = raw.replace(/[\s\(\)\-]/g, '');
+      return `[${raw.trim()}](tel:${num})`;
+    },
+  );
+
+  // Возвращаем защищённые ссылки.
+  out = out.replace(/\u0000LINK(\d+)\u0000/g, (_m, i) => protectedSlots[Number(i)]);
+  return out;
+}
+
 function formatContactsForDisplay(contactsText: string): string | null {
   if (!contactsText || contactsText.trim().length === 0) return null;
-  
+
   const lines: string[] = [];
-  const seen = new Set<string>();
-  
+  const seenPhones = new Set<string>();
+
   const phoneRegex = /(?:\+7|8)[\s\(\)\-]*\d{3}[\s\(\)\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/g;
   const phoneMatches = contactsText.match(phoneRegex);
   if (phoneMatches) {
     for (const raw of phoneMatches) {
       const telNumber = raw.replace(/[\s\(\)\-]/g, '');
-      if (!seen.has(telNumber)) {
-        seen.add(telNumber);
-        const formatted = raw.trim();
-        lines.push(`📞 [${formatted}](tel:${telNumber})`);
-      }
+      if (seenPhones.has(telNumber)) continue;
+      seenPhones.add(telNumber);
+      lines.push(`📞 [${raw.trim()}](tel:${telNumber})`);
       if (lines.filter(l => l.startsWith('📞')).length >= 2) break;
     }
   }
-  
-  const waMatch = contactsText.match(/https?:\/\/wa\.me\/\d+/i) 
+
+  const waMatch = contactsText.match(/https?:\/\/wa\.me\/\d+/i)
     || contactsText.match(/WhatsApp[^:]*:\s*([\+\d\s]+)/i);
   if (waMatch) {
     const value = waMatch[0];
@@ -4899,14 +4945,14 @@ function formatContactsForDisplay(contactsText: string): string | null {
       if (num) lines.push(`💬 [WhatsApp](https://wa.me/${num})`);
     }
   }
-  
+
   const emailMatch = contactsText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
   if (emailMatch) {
     lines.push(`📧 [${emailMatch[0]}](mailto:${emailMatch[0]})`);
   }
-  
+
   if (lines.length === 0) return null;
-  
+
   return `**Наши контакты:**\n${lines.join('\n')}`;
 }
 
