@@ -1159,12 +1159,14 @@ function buildTitleSearchCandidates(input: string): { exact: string[]; query: st
 
   pushUnique(exact, base);
   pushUnique(query, base);
+  pushUnique(exact, base.replace(/\s+IP(\d{2})\b/gi, '  IP$1'));
 
   const separatorNormalized = base
     .replace(/\s*[x×хХX]\s*/g, '*')
     .replace(/мм/gi, 'mm');
 
   pushUnique(exact, separatorNormalized);
+  pushUnique(exact, separatorNormalized.replace(/\bmm\b/gi, 'мм'));
   pushUnique(query, separatorNormalized.replace(/\*/g, ' '));
 
   const gluedMatches = Array.from(separatorNormalized.matchAll(/(\d{5,9})\s*(mm|мм)\b/gi));
@@ -1174,6 +1176,8 @@ function buildTitleSearchCandidates(input: string): { exact: string[]; query: st
     const groupings = buildDimensionGroupings(digits, 4);
     for (const grouped of groupings) {
       pushUnique(exact, separatorNormalized.replace(fullMatch, `${grouped}mm`));
+      pushUnique(exact, separatorNormalized.replace(fullMatch, `${grouped}мм`));
+      pushUnique(exact, separatorNormalized.replace(fullMatch, `${grouped}мм`).replace(/\s+IP(\d{2})\b/gi, '  IP$1'));
       pushUnique(query, separatorNormalized.replace(fullMatch, `${grouped.replace(/\*/g, ' ')} mm`));
     }
   }
