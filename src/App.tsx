@@ -34,6 +34,7 @@ const App = () => (
             <Route path="/users" element={<ProtectedRoute requiredRole="admin"><UsersManagement /></ProtectedRoute>} />
             <Route path="/integration" element={<ProtectedRoute><Integration /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute requiredRole="admin"><Settings /></ProtectedRoute>} />
+            <Route path="/logs" element={<ProtectedRoute requiredRole="editor"><RequestLogs /></ProtectedRoute>} />
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>
