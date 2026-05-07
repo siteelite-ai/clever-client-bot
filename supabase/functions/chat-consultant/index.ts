@@ -3451,8 +3451,24 @@ async function resolveFiltersWithLLM(
   prebuiltSchema?: Map<string, { caption: string; values: Set<string> }>,
   schemaConfidence: SchemaConfidence = 'full',
   productNoun?: string
-): Promise<{ resolved: Record<string, ResolvedFilter>; unresolved: string[] }> {
-  if (!modifiers || modifiers.length === 0) return { resolved: {}, unresolved: [] };
+): Promise<{
+  resolved: Record<string, ResolvedFilter>;
+  unresolved: string[];
+  /**
+   * Schema-known but value-unresolved modifiers.
+   * LLM matched the modifier to a real facet key (e.g. "мощность 7Вт" → key "moschnost"),
+   * but the requested value (7) was NOT in the live catalog values for that key.
+   * Used by QFv2 to trigger honest-empty even when other filters yielded results.
+   */
+  unresolvedDetails?: Array<{
+    modifier: string;
+    key: string;
+    caption: string;
+    requestedValue: string;
+    availableValues: string[];
+  }>;
+}> {
+  if (!modifiers || modifiers.length === 0) return { resolved: {}, unresolved: [], unresolvedDetails: [] };
 
   // CONFIDENCE GATE — Layer 1 P0: never resolve filters against degraded schema.
   //   'empty'   → no usable schema at all. Skip LLM entirely (saves tokens, prevents
@@ -3814,10 +3830,42 @@ ${JSON.stringify(modifiers)}
     // Unresolved = modifiers NOT matched by successful validation + those that failed validation
     const unresolved = modifiers.filter(m => !matchedModifiers.has(m) || failedModifiers.has(m));
 
+    // unresolvedDetails: schema-known KEY but value not in schema. Source = parsed.matches
+    // entries where value=null AND key resolves to a real optionIndex entry. This lets QFv2
+    // honest-empty distinguish "we tried this exact attribute, the value just doesn't exist
+    // in catalog" from "we couldn't even map the modifier to anything".
+    const unresolvedDetails: Array<{ modifier: string; key: string; caption: string; requestedValue: string; availableValues: string[] }> = [];
+    if (Array.isArray(parsed?.matches)) {
+      for (const m of parsed.matches) {
+        if (!m || typeof m !== 'object') continue;
+        if (m.value !== null && m.value !== undefined) continue;
+        const rawK = typeof m.key === 'string' ? m.key : '';
+        if (!rawK) continue;
+        let resolvedK = rawK;
+        if (!optionIndex.has(resolvedK)) {
+          const stripped = resolvedK.split(' (')[0].trim();
+          if (optionIndex.has(stripped)) resolvedK = stripped;
+        }
+        if (!optionIndex.has(resolvedK)) continue;
+        const bucket = optionIndex.get(resolvedK)!;
+        const modStr = typeof m.modifier === 'string' ? m.modifier : '';
+        // Extract numeric/value token from modifier (e.g. "мощность 7Вт" → "7")
+        const numMatch = modStr.match(/[\d.,]+/);
+        const requestedValue = numMatch ? numMatch[0].replace(',', '.') : modStr;
+        unresolvedDetails.push({
+          modifier: modStr,
+          key: resolvedK,
+          caption: bucket.caption,
+          requestedValue,
+          availableValues: [...bucket.values].filter(Boolean).slice(0, 12),
+        });
+      }
+    }
+
     const criticalitySummary = Object.entries(validated).map(([k, v]) => `${k}=${v.value}(${v.is_critical ? 'crit' : 'opt'})`).join(', ');
     const filterSig = await sha256Hex(JSON.stringify(Object.entries(validated).map(([k, v]) => [k, v.value]).sort()));
-    console.log(`[FilterLLM] Resolved with criticality: {${criticalitySummary}}, unresolved=[${unresolved.join(', ')}] | signature=${filterSig}`);
-    return { resolved: validated, unresolved };
+    console.log(`[FilterLLM] Resolved with criticality: {${criticalitySummary}}, unresolved=[${unresolved.join(', ')}] unresolvedDetails=${JSON.stringify(unresolvedDetails)} | signature=${filterSig}`);
+    return { resolved: validated, unresolved, unresolvedDetails };
   } catch (error) {
     console.error(`[FilterLLM] Error:`, error);
     return { resolved: {}, unresolved: [...modifiers] };
@@ -6016,9 +6064,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // ── (4) Resolve modifiers → option filters against the live schema.
                   // If no modifiers: skip resolution, just display pool.
                   let resolvedFilters: Record<string, string> = {};
+                  let resolverUnresolvedDetails: Array<{ modifier: string; key: string; caption: string; requestedValue: string; availableValues: string[] }> = [];
                   if (modifiers.length > 0 && bootstrapSchema.size > 0) {
                     try {
-                      const { resolved: rRaw, unresolved: rUnresolved } = await resolveFiltersWithLLM(
+                      const { resolved: rRaw, unresolved: rUnresolved, unresolvedDetails: rDetails } = await resolveFiltersWithLLM(
                         pool,
                         modifiers,
                         appSettings,
@@ -6028,7 +6077,8 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                         noun
                       );
                       resolvedFilters = flattenResolvedFilters(rRaw);
-                      console.log(`[QueryFirstV2] resolved=${JSON.stringify(resolvedFilters)} unresolved=[${rUnresolved.join(', ')}]`);
+                      resolverUnresolvedDetails = rDetails || [];
+                      console.log(`[QueryFirstV2] resolved=${JSON.stringify(resolvedFilters)} unresolved=[${rUnresolved.join(', ')}] unresolvedDetails=${resolverUnresolvedDetails.length}`);
                     } catch (rErr) {
                       console.log(`[QueryFirstV2] resolveFilters error=${(rErr as Error).message} → continuing with empty filters`);
                     }
@@ -6065,48 +6115,79 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   let branchTag = 'qfv2_pool_no_modifiers';
                   logSetBranch('qfv2');
 
-                  if (Object.keys(resolvedFilters).length > 0) {
-                    const final = await searchProductsByCandidate(
-                      { query: noun, brand: null, category: null, min_price: null, max_price: null },
-                      appSettings.volt220_api_token!,
-                      30,
-                      resolvedFilters
-                    );
-                    const finalFiltered = applyNounFilter(final, true);
-                    console.log(`[QueryFirstV2] final query="${noun}" filters=${JSON.stringify(resolvedFilters)} → ${final.length} (after noun-filter: ${finalFiltered.length})`);
+                  // Helper: build attemptedFacets array from resolved filters + unresolvedDetails.
+                  // Resolved entries take their requested value; unresolved-details entries
+                  // surface "value not in catalog" with the original requested value so the LLM
+                  // can answer honestly ("7 Вт нет, есть 6, 8, 10").
+                  const buildAttemptedFacets = (): Array<{ caption: string; value: string; alternativeValues: string[] }> => {
+                    const out: Array<{ caption: string; value: string; alternativeValues: string[] }> = [];
+                    const seenKeys = new Set<string>();
+                    for (const [fKey, fValue] of Object.entries(resolvedFilters)) {
+                      const bucket = bootstrapSchema.get(fKey);
+                      const caption = bucket?.caption || fKey;
+                      const allValues = bucket ? Array.from(bucket.values) : [];
+                      const alternativeValues = allValues.filter(v => v !== fValue).slice(0, 8);
+                      out.push({ caption, value: String(fValue), alternativeValues });
+                      seenKeys.add(fKey);
+                    }
+                    for (const d of resolverUnresolvedDetails) {
+                      if (seenKeys.has(d.key)) continue;
+                      out.push({
+                        caption: d.caption,
+                        value: d.requestedValue,
+                        alternativeValues: d.availableValues.slice(0, 8),
+                      });
+                    }
+                    return out;
+                  };
 
-                    if (finalFiltered.length > 0) {
-                      displayList = finalFiltered;
-                      branchTag = 'qfv2_win';
-                      console.log(`[QueryFirstV2] query_first_v2_win noun="${noun}" filters=${Object.keys(resolvedFilters).length} count=${finalFiltered.length} elapsed=${Date.now() - qfStart}ms`);
-                    } else {
-                      // HONEST-EMPTY (was: silent Soft Fallback showing the broader pool).
-                      // Showing the pool here mixes irrelevant categories (e.g. "удлинитель"
-                      // pool includes wires/ПВС because the API matches them as related).
-                      // Instead: collect what we tried (facet captions + values + alternatives
-                      // available in the pool) and clear results so the pipeline reaches
-                      // Soft-404 with a rich context for an honest, scalable LLM answer.
-                      const attemptedFacets: Array<{ caption: string; value: string; alternativeValues: string[] }> = [];
-                      for (const [fKey, fValue] of Object.entries(resolvedFilters)) {
-                        const bucket = bootstrapSchema.get(fKey);
-                        const caption = bucket?.caption || fKey;
-                        const allValues = bucket ? Array.from(bucket.values) : [];
-                        const alternativeValues = allValues.filter(v => v !== fValue).slice(0, 8);
-                        attemptedFacets.push({ caption, value: String(fValue), alternativeValues });
-                      }
+                  if (Object.keys(resolvedFilters).length > 0 || resolverUnresolvedDetails.length > 0) {
+                    // PARTIAL-UNRESOLVED HONEST-EMPTY (2026-05-07):
+                    // если LLM распознал ключ фасета, но значения нет в каталоге
+                    // (например «7Вт» при доступных {5.5, 6, 8, 10}) — показывать
+                    // отфильтрованную выдачу без этого значения = обман пользователя.
+                    // Сразу уходим в honest-empty с честным контекстом.
+                    if (resolverUnresolvedDetails.length > 0) {
+                      const attemptedFacets = buildAttemptedFacets();
                       qfv2HonestEmptyContext = {
                         noun,
                         originalQuery: userMessage || noun,
                         attemptedFacets,
                       };
-                      // Force foundProducts=0 → pipeline routes into Soft-404 branch below.
                       displayList = [];
-                      branchTag = 'qfv2_honest_empty';
-                      // Keep dropped facet caption for legacy compatibility (composer tail).
-                      const firstKey = Object.keys(resolvedFilters)[0];
-                      const bucket = bootstrapSchema.get(firstKey);
-                      qfV2DroppedFacetCaption = bucket?.caption || firstKey || null;
-                      console.log(`[QueryFirstV2] query_first_v2_honest_empty noun="${noun}" attemptedFacets=${JSON.stringify(attemptedFacets)} elapsed=${Date.now() - qfStart}ms`);
+                      branchTag = 'qfv2_honest_empty_partial';
+                      const firstUnresolvedKey = resolverUnresolvedDetails[0].key;
+                      qfV2DroppedFacetCaption = bootstrapSchema.get(firstUnresolvedKey)?.caption || firstUnresolvedKey || null;
+                      console.log(`[QueryFirstV2] query_first_v2_honest_empty_partial noun="${noun}" unresolvedDetails=${JSON.stringify(resolverUnresolvedDetails)} attemptedFacets=${JSON.stringify(attemptedFacets)} elapsed=${Date.now() - qfStart}ms`);
+                    } else if (Object.keys(resolvedFilters).length > 0) {
+                      const final = await searchProductsByCandidate(
+                        { query: noun, brand: null, category: null, min_price: null, max_price: null },
+                        appSettings.volt220_api_token!,
+                        30,
+                        resolvedFilters
+                      );
+                      const finalFiltered = applyNounFilter(final, true);
+                      console.log(`[QueryFirstV2] final query="${noun}" filters=${JSON.stringify(resolvedFilters)} → ${final.length} (after noun-filter: ${finalFiltered.length})`);
+
+                      if (finalFiltered.length > 0) {
+                        displayList = finalFiltered;
+                        branchTag = 'qfv2_win';
+                        console.log(`[QueryFirstV2] query_first_v2_win noun="${noun}" filters=${Object.keys(resolvedFilters).length} count=${finalFiltered.length} elapsed=${Date.now() - qfStart}ms`);
+                      } else {
+                        // HONEST-EMPTY (final=0 with all filters resolved against schema).
+                        const attemptedFacets = buildAttemptedFacets();
+                        qfv2HonestEmptyContext = {
+                          noun,
+                          originalQuery: userMessage || noun,
+                          attemptedFacets,
+                        };
+                        displayList = [];
+                        branchTag = 'qfv2_honest_empty';
+                        const firstKey = Object.keys(resolvedFilters)[0];
+                        const bucket = bootstrapSchema.get(firstKey);
+                        qfV2DroppedFacetCaption = bucket?.caption || firstKey || null;
+                        console.log(`[QueryFirstV2] query_first_v2_honest_empty noun="${noun}" attemptedFacets=${JSON.stringify(attemptedFacets)} elapsed=${Date.now() - qfStart}ms`);
+                      }
                     }
                   }
 
@@ -7283,7 +7364,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           }
         }
       }
-    } else if (!articleShortCircuit && extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
+    } else if (!articleShortCircuit && !qfv2HonestEmptyContext && extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
       const searchLimit = extractedIntent.usage_context ? 25 : 15;
       foundProducts = await searchProductsMulti(extractedIntent.candidates, searchLimit, appSettings.volt220_api_token || undefined, undefined, undefined, appSettings);
       
@@ -7631,6 +7712,7 @@ ${directAnswerBlock}
       // Любая ошибка LLM → silent fallback на стандартный Soft-404.
       let jargonClarifyQuestion = '';
       if (
+        !qfv2HonestEmptyContext &&  // QFv2 honest-empty уже знает причину пустоты — не запускаем jargon, иначе перезапишет foundProducts
         appSettings.openrouter_api_key &&
         appSettings.volt220_api_token &&
         extractedIntent.originalQuery &&
