@@ -5062,56 +5062,70 @@ function extractTodayWorkingHoursFromContacts(contactsText: string, query: strin
     'вс': 'сегодня, в воскресенье',
   };
 
-  const extractForLine = (line: string): { hours: string; branchName: string } | null => {
+  type BranchInfo = {
+    name: string;
+    address: string;
+    phone: string | null;
+    hours: string;
+  };
+
+  const extractForLine = (line: string): BranchInfo | null => {
     const parts = line.split('|').map(p => p.trim()).filter(Boolean);
-    const branchName = parts[2] || parts[1] || 'филиал';
-    const scheduleSource = parts.slice(3).join(' | ');
+    // Формат: "Филиал: г. Караганда | <address> | <name?> | <phone?> | <schedule>"
+    if (parts.length < 2) return null;
+
+    const phoneRegex = /(?:\+7|8)[\s\(\)\-]*\d{3}[\s\(\)\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/;
+    const scheduleRegex = /(пн|вт|ср|чт|пт|сб|вс)/i;
+
+    let address = parts[1] || '';
+    let name = '';
+    let phone: string | null = null;
+    let scheduleSource = '';
+
+    for (let i = 2; i < parts.length; i++) {
+      const p = parts[i];
+      const phoneM = p.match(phoneRegex);
+      if (phoneM && !phone) {
+        phone = phoneM[0].trim();
+        continue;
+      }
+      if (scheduleRegex.test(p)) {
+        // Берём ПОСЛЕДНЕЕ расписание (часто две колонки — будни/выходные суммарно).
+        scheduleSource = scheduleSource ? `${scheduleSource}; ${p}` : p;
+        continue;
+      }
+      if (!name) {
+        name = p;
+      }
+    }
+
     if (!scheduleSource) return null;
 
     const src = scheduleSource.toLowerCase();
     const clean = scheduleSource.replace(/\s+/g, ' ').trim();
+    let hours = '';
 
     if (/пн-?вс/.test(src)) {
       const m = clean.match(/пн-?вс\.?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2})/i);
-      if (m) return { hours: m[1].replace(/\./g, ':'), branchName };
+      if (m) hours = m[1].replace(/\./g, ':');
     }
-
-    const directDayPatterns: Array<{ days: number[]; regex: RegExp }> = [
-      { days: [1, 2, 3, 4, 5], regex: /пн\.?\s*-\s*пт\.?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2})/i },
-      { days: [6, 0], regex: /сб\.?\s*-\s*вс\.?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
-      { days: [6], regex: /сб\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
-      { days: [0], regex: /вс\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
-      { days: [1], regex: /пн\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
-      { days: [2], regex: /вт\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
-      { days: [3], regex: /ср\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
-      { days: [4], regex: /чт\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
-      { days: [5], regex: /пт\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
-    ];
-
-    for (const pattern of directDayPatterns) {
-      if (!pattern.days.includes(weekdayIndex)) continue;
-      const match = clean.match(pattern.regex);
-      if (!match) continue;
-      return { hours: match[1].replace(/\./g, ':'), branchName };
+    if (!hours) {
+      for (const pattern of directDayPatterns) {
+        if (!pattern.days.includes(weekdayIndex)) continue;
+        const match = clean.match(pattern.regex);
+        if (!match) continue;
+        hours = match[1].replace(/\./g, ':');
+        break;
+      }
     }
+    if (!hours) return null;
 
-    return null;
-  };
-
-  // Достаём первый телефон и WhatsApp из контактов — чтобы предложить связаться.
-  const pickContactSnippet = (): string => {
-    const phoneMatch = contactsText.match(/(?:\+7|8)[\s\(\)\-]*\d{3}[\s\(\)\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/);
-    const waMatch = contactsText.match(/https?:\/\/wa\.me\/(\d+)/i);
-    const parts: string[] = [];
-    if (phoneMatch) {
-      const raw = phoneMatch[0].trim();
-      const num = raw.replace(/[\s\(\)\-]/g, '');
-      parts.push(`[${raw}](tel:${num})`);
-    }
-    if (waMatch) {
-      parts.push(`[WhatsApp](https://wa.me/${waMatch[1]})`);
-    }
-    return parts.join(' или ');
+    return {
+      name: name || 'Магазин 220 VOLT',
+      address,
+      phone,
+      hours,
+    };
   };
 
   // Лёгкий вопрос для удержания — менеджер так и общается.
@@ -5122,34 +5136,65 @@ function extractTodayWorkingHoursFromContacts(contactsText: string, query: strin
   ];
   const followUp = followUpQuestions[new Date().getMinutes() % followUpQuestions.length];
 
+  const todayLabel = todayFullMap[ruShort] || 'сегодня';
+  const cityLabel = targetCity ? targetCity.charAt(0).toUpperCase() + targetCity.slice(1) : '';
+
+  const branches: BranchInfo[] = [];
+  const seenKey = new Set<string>();
   for (const line of candidates) {
     const resolved = extractForLine(line);
     if (!resolved) continue;
-    const todayLabel = todayFullMap[ruShort] || 'сегодня';
-    const contactSnippet = pickContactSnippet();
-    const hoursLc = resolved.hours.toLowerCase();
-
-    if (hoursLc.includes('выходной')) {
-      const lines = [`${todayLabel} ${resolved.branchName} не работает.`];
-      if (contactSnippet) {
-        lines.push(`Если вопрос срочный — напишите ${contactSnippet}, менеджер ответит в рабочее время.`);
-      }
-      lines.push(followUp);
-      return lines.join(' ');
-    }
-
-    const [startRaw, endRaw] = resolved.hours.split('-').map((s) => s.trim());
-    const start = startRaw || resolved.hours;
-    const end = endRaw || resolved.hours;
-    const lines = [`${todayLabel} ${resolved.branchName} работает с **${start}** до **${end}**.`];
-    if (contactSnippet) {
-      lines.push(`Можете позвонить или написать: ${contactSnippet}.`);
-    }
-    lines.push(followUp);
-    return lines.join(' ');
+    const key = `${resolved.address}|${resolved.hours}|${resolved.phone ?? ''}`;
+    if (seenKey.has(key)) continue;
+    seenKey.add(key);
+    branches.push(resolved);
   }
 
-  return null;
+  if (branches.length === 0) return null;
+
+  const formatBranch = (b: BranchInfo): string => {
+    const parts: string[] = [];
+    parts.push(`- **${b.name}**`);
+    if (b.address) parts.push(`  ${b.address}`);
+    const hoursLc = b.hours.toLowerCase();
+    if (hoursLc.includes('выходной')) {
+      parts.push(`  ${todayLabel === 'сегодня' ? 'Сегодня' : todayLabel.charAt(0).toUpperCase() + todayLabel.slice(1)} — выходной.`);
+    } else {
+      const [s, e] = b.hours.split('-').map((x) => x.trim());
+      parts.push(`  Сегодня работает с **${s}** до **${e || s}**.`);
+    }
+    if (b.phone) {
+      const num = b.phone.replace(/[\s\(\)\-]/g, '');
+      parts.push(`  Телефон: [${b.phone}](tel:${num})`);
+    }
+    return parts.join('\n');
+  };
+
+  // Один филиал — короткая фраза, не нужен список.
+  if (branches.length === 1) {
+    const b = branches[0];
+    const hoursLc = b.hours.toLowerCase();
+    const lead = hoursLc.includes('выходной')
+      ? `${todayLabel} ${b.name}${b.address ? ` (${b.address})` : ''} не работает.`
+      : (() => {
+          const [s, e] = b.hours.split('-').map((x) => x.trim());
+          return `${todayLabel} ${b.name}${b.address ? ` (${b.address})` : ''} работает с **${s}** до **${e || s}**.`;
+        })();
+    const tail: string[] = [];
+    if (b.phone) {
+      const num = b.phone.replace(/[\s\(\)\-]/g, '');
+      tail.push(`Можете позвонить: [${b.phone}](tel:${num}).`);
+    }
+    tail.push(followUp);
+    return [lead, ...tail].join(' ');
+  }
+
+  // Несколько филиалов — список.
+  const header = cityLabel
+    ? `${todayLabel === 'сегодня' ? 'Сегодня' : todayLabel.charAt(0).toUpperCase() + todayLabel.slice(1)} в ${cityLabel} работают ${branches.length} наших точек:`
+    : `${todayLabel === 'сегодня' ? 'Сегодня' : todayLabel.charAt(0).toUpperCase() + todayLabel.slice(1)} работают наши точки:`;
+
+  return [header, branches.map(formatBranch).join('\n'), followUp].join('\n\n');
 }
 
 // Simple in-memory rate limiter
