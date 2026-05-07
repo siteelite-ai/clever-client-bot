@@ -3830,10 +3830,42 @@ ${JSON.stringify(modifiers)}
     // Unresolved = modifiers NOT matched by successful validation + those that failed validation
     const unresolved = modifiers.filter(m => !matchedModifiers.has(m) || failedModifiers.has(m));
 
+    // unresolvedDetails: schema-known KEY but value not in schema. Source = parsed.matches
+    // entries where value=null AND key resolves to a real optionIndex entry. This lets QFv2
+    // honest-empty distinguish "we tried this exact attribute, the value just doesn't exist
+    // in catalog" from "we couldn't even map the modifier to anything".
+    const unresolvedDetails: Array<{ modifier: string; key: string; caption: string; requestedValue: string; availableValues: string[] }> = [];
+    if (Array.isArray(parsed?.matches)) {
+      for (const m of parsed.matches) {
+        if (!m || typeof m !== 'object') continue;
+        if (m.value !== null && m.value !== undefined) continue;
+        const rawK = typeof m.key === 'string' ? m.key : '';
+        if (!rawK) continue;
+        let resolvedK = rawK;
+        if (!optionIndex.has(resolvedK)) {
+          const stripped = resolvedK.split(' (')[0].trim();
+          if (optionIndex.has(stripped)) resolvedK = stripped;
+        }
+        if (!optionIndex.has(resolvedK)) continue;
+        const bucket = optionIndex.get(resolvedK)!;
+        const modStr = typeof m.modifier === 'string' ? m.modifier : '';
+        // Extract numeric/value token from modifier (e.g. "мощность 7Вт" → "7")
+        const numMatch = modStr.match(/[\d.,]+/);
+        const requestedValue = numMatch ? numMatch[0].replace(',', '.') : modStr;
+        unresolvedDetails.push({
+          modifier: modStr,
+          key: resolvedK,
+          caption: bucket.caption,
+          requestedValue,
+          availableValues: [...bucket.values].filter(Boolean).slice(0, 12),
+        });
+      }
+    }
+
     const criticalitySummary = Object.entries(validated).map(([k, v]) => `${k}=${v.value}(${v.is_critical ? 'crit' : 'opt'})`).join(', ');
     const filterSig = await sha256Hex(JSON.stringify(Object.entries(validated).map(([k, v]) => [k, v.value]).sort()));
-    console.log(`[FilterLLM] Resolved with criticality: {${criticalitySummary}}, unresolved=[${unresolved.join(', ')}] | signature=${filterSig}`);
-    return { resolved: validated, unresolved };
+    console.log(`[FilterLLM] Resolved with criticality: {${criticalitySummary}}, unresolved=[${unresolved.join(', ')}] unresolvedDetails=${JSON.stringify(unresolvedDetails)} | signature=${filterSig}`);
+    return { resolved: validated, unresolved, unresolvedDetails };
   } catch (error) {
     console.error(`[FilterLLM] Error:`, error);
     return { resolved: {}, unresolved: [...modifiers] };
