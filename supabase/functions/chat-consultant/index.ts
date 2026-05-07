@@ -7712,6 +7712,7 @@ ${directAnswerBlock}
       // Любая ошибка LLM → silent fallback на стандартный Soft-404.
       let jargonClarifyQuestion = '';
       if (
+        !qfv2HonestEmptyContext &&  // QFv2 honest-empty уже знает причину пустоты — не запускаем jargon, иначе перезапишет foundProducts
         appSettings.openrouter_api_key &&
         appSettings.volt220_api_token &&
         extractedIntent.originalQuery &&
