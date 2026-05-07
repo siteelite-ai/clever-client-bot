@@ -5105,6 +5105,23 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     return new Response('ok', { headers: corsHeaders });
   }
 
+  // Request-scoped logger (TTL 24ч в chat_request_logs)
+  const logCtx = createLogCtx(req, 'v1');
+  return await runWithLogCtx(logCtx, async () => {
+    try {
+      const res = await _handleChatConsultantInner(req);
+      return wrapResponseForLogging(res, logCtx);
+    } catch (e) {
+      logSetError(e);
+      const { flushLog } = await import('../_shared/request-logger.ts');
+      flushLog(logCtx).catch(() => {});
+      throw e;
+    }
+  });
+}
+
+async function _handleChatConsultantInner(req: Request): Promise<Response> {
+
   // Per-request correlation id — included in every key log line so we can
   // grep one user's full pipeline (classify → facets → filter-LLM → rerank)
   // out of the firehose of concurrent requests.
