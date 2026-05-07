@@ -8249,9 +8249,7 @@ ${productInstructions}`;
     // so the LLM cannot ignore it (system prompt instructions get lost in long contexts)
     const infoKbInjection: any[] = [];
     if (extractedIntent.intent === 'info' && knowledgeResults.length > 0) {
-      const qw = userMessage.toLowerCase().replace(/[?!.,;:()«»"']/g, '').split(/\s+/).filter((w: string) => w.length > 2);
-      const bm = knowledgeResults.find((r: any) => qw.some((w: string) => r.title.toLowerCase().includes(w))) 
-        || knowledgeResults.find((r: any) => qw.some((w: string) => r.content.toLowerCase().includes(w)));
+      const bm = infoKbSelection?.bestMatch ?? null;
       if (bm) {
         console.log(`[Chat] Info KB injection: matched entry "${bm.title}" (${bm.content.length} chars)`);
         infoKbInjection.push({
