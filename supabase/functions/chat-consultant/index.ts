@@ -7364,7 +7364,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           }
         }
       }
-    } else if (!articleShortCircuit && extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
+    } else if (!articleShortCircuit && !qfv2HonestEmptyContext && extractedIntent.intent === 'catalog' && extractedIntent.candidates.length > 0) {
       const searchLimit = extractedIntent.usage_context ? 25 : 15;
       foundProducts = await searchProductsMulti(extractedIntent.candidates, searchLimit, appSettings.volt220_api_token || undefined, undefined, undefined, appSettings);
       
