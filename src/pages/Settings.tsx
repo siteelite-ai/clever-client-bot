@@ -767,6 +767,51 @@ export default function Settings() {
             </div>
           </div>
 
+          {/* Промпт классификатора (системный) — редактируется отдельной кнопкой,
+              чтобы итерации над промптом не требовали трогать остальные поля. */}
+          <div className="bg-card border border-border rounded-lg p-6 space-y-4">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div>
+                <h2 className="text-lg font-semibold flex items-center gap-2">
+                  <GitBranch className="w-5 h-5" />
+                  Системный промпт классификатора
+                </h2>
+                <p className="text-sm text-muted-foreground mt-1">
+                  Управляет тем, как чат-бот понимает запрос пользователя: тип товара, конкретное название, цена, замена.
+                  Пусто — используется встроенный по умолчанию. Тестируйте изменения на странице «Тесты классификатора» перед публикацией.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => window.open('/classifier-tests', '_blank')}
+              >
+                Открыть тесты
+              </Button>
+            </div>
+            <textarea
+              value={classifierPrompt}
+              onChange={(e) => setClassifierPrompt(e.target.value)}
+              placeholder="Оставьте пустым, чтобы использовать встроенный промпт по умолчанию"
+              className="w-full min-h-[300px] font-mono text-xs p-3 rounded-md border border-input bg-background"
+              spellCheck={false}
+            />
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">
+                Длина: {classifierPrompt.length} симв.
+              </p>
+              <div className="flex gap-2">
+                <Button variant="ghost" size="sm" onClick={() => setClassifierPrompt('')}>
+                  Сбросить на дефолт
+                </Button>
+                <Button onClick={handleSaveClassifierPrompt} disabled={classifierPromptSaving} size="sm">
+                  {classifierPromptSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
+                  Сохранить промпт
+                </Button>
+              </div>
+            </div>
+          </div>
+
           {/* Save */}
           <Button onClick={handleSave} disabled={saving} className="w-full">
             {saving ? (
