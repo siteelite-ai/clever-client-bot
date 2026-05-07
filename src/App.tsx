@@ -14,7 +14,7 @@ import UsersManagement from "./pages/UsersManagement";
 import Integration from "./pages/Integration";
 import Settings from "./pages/Settings";
 import RequestLogs from "./pages/RequestLogs";
-import ClassifierTests from "./pages/ClassifierTests";
+
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -36,7 +36,7 @@ const App = () => (
             <Route path="/integration" element={<ProtectedRoute><Integration /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute requiredRole="admin"><Settings /></ProtectedRoute>} />
             <Route path="/logs" element={<ProtectedRoute requiredRole="editor"><RequestLogs /></ProtectedRoute>} />
-            <Route path="/classifier-tests" element={<ProtectedRoute requiredRole="admin"><ClassifierTests /></ProtectedRoute>} />
+            
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>
