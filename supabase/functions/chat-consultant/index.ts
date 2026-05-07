@@ -8357,6 +8357,8 @@ ${productInstructions}`;
         
         const shouldShowContacts = content.includes('[CONTACT_MANAGER]');
         content = content.replace(/\s*\[CONTACT_MANAGER\]\s*/g, '').trim();
+        // Страховка: даже если LLM вставил голые контакты — линкуем их.
+        content = linkifyContacts(content);
         
         const responseBody: { content: string; contacts?: string | null; slot_update?: DialogSlots } = { content };
         if (shouldShowContacts && formattedContacts) {
