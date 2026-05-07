@@ -14,7 +14,7 @@ import UsersManagement from "./pages/UsersManagement";
 import Integration from "./pages/Integration";
 import Settings from "./pages/Settings";
 import RequestLogs from "./pages/RequestLogs";
-import ClassifierTests from "./pages/ClassifierTests";
+
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
