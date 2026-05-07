@@ -1262,6 +1262,43 @@ interface ClassificationResult {
   sub_intent?: 'availability' | 'price' | 'location' | 'spec';
 }
 
+function detectSubIntentFallback(message: string): ClassificationResult['sub_intent'] {
+  const normalized = message
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/[?!.:,;]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!normalized) return undefined;
+
+  if (
+    /(сколько стоит|какая цена|почем|почём|цена)/.test(normalized)
+  ) {
+    return 'price';
+  }
+
+  if (
+    /(где забрат|в каком магазин|в каком городе|самовывоз|где находится|где есть)/.test(normalized)
+  ) {
+    return 'location';
+  }
+
+  if (
+    /(какая мощност|какой ток|какая длина|какое сечение|какой материал|какая характеристик|сколько ват|сколько киловат|сколько ампер)/.test(normalized)
+  ) {
+    return 'spec';
+  }
+
+  if (
+    /(есть в наличии|в наличии|есть ли|остал(?:ся|ись|ось)|можно купить|доступен|доступна|доступны)/.test(normalized)
+  ) {
+    return 'availability';
+  }
+
+  return undefined;
+}
+
 async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>, settings?: CachedSettings | null): Promise<ClassificationResult | null> {
   // STRICT OpenRouter: no cascade, no Google direct, no Lovable Gateway.
   // Cascade fallbacks were a primary source of non-determinism (different users got different providers).
@@ -1376,7 +1413,11 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       console.log(`[Chat] Classifier critical_modifiers: [${rawCritical.join(', ')}] (of search_modifiers: [${rawSearchMods.join(', ')}])`);
       const validSubIntents = ['availability', 'price', 'location', 'spec'];
       const rawSubIntent = typeof parsed.sub_intent === 'string' ? parsed.sub_intent.toLowerCase().trim() : null;
-      const subIntent = validSubIntents.includes(rawSubIntent!) ? rawSubIntent as ClassificationResult['sub_intent'] : undefined;
+      const llmSubIntent = validSubIntents.includes(rawSubIntent!) ? rawSubIntent as ClassificationResult['sub_intent'] : undefined;
+      const subIntent = llmSubIntent ?? detectSubIntentFallback(message);
+      if (!llmSubIntent && subIntent) {
+        console.log(`[Classify] sub_intent fallback=${subIntent} for message="${message.slice(0, 120)}"`);
+      }
       return {
         intent: finalIntent as string | undefined,
         has_product_name: !!parsed.has_product_name,
