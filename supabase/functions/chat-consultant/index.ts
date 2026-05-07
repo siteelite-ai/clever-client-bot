@@ -4425,20 +4425,36 @@ export function buildDeterministicShortCircuitContent(params: {
   reason: string;
   userMessage: string;
   effectivePriceIntent?: 'most_expensive' | 'cheapest';
+  subIntent?: 'availability' | 'price' | 'location' | 'spec';
 }): string {
-  const { products, reason, userMessage, effectivePriceIntent } = params;
+  const { products, reason, userMessage, effectivePriceIntent, subIntent } = params;
   if (!products.length) return '';
 
-  const intro =
-    reason === 'price-shortcircuit'
-      ? effectivePriceIntent === 'most_expensive'
-        ? 'Подобрал самые дорогие варианты из каталога:'
-        : 'Подобрал самые доступные варианты из каталога:'
-      : reason === 'article-shortcircuit' || reason === 'siteid-shortcircuit'
-        ? 'Нашёл товар по точному запросу:'
-        : reason === 'pass2-shortcircuit'
-          ? 'Подобрал по вашим характеристикам:'
-          : 'Подобрал товары из каталога:';
+  // Под-интент перебивает дефолтные intro для article/title-first веток.
+  // Цель: при «есть в наличии?» / «сколько стоит?» отвечаем на вопрос, а не «подобрал товары».
+  const isArticleLike = reason === 'article-shortcircuit' || reason === 'siteid-shortcircuit';
+  let intro: string;
+  if (subIntent === 'availability' && isArticleLike) {
+    intro = products.length === 1
+      ? 'Да, есть в наличии:'
+      : 'Да, есть в наличии. Вот подходящие позиции:';
+  } else if (subIntent === 'price' && isArticleLike) {
+    intro = products.length === 1
+      ? 'Вот актуальная цена:'
+      : 'Актуальные цены по вашему запросу:';
+  } else if (subIntent === 'location' && isArticleLike) {
+    intro = 'Товар доступен в каталоге — наличие по магазинам уточняйте у менеджера:';
+  } else if (reason === 'price-shortcircuit') {
+    intro = effectivePriceIntent === 'most_expensive'
+      ? 'Подобрал самые дорогие варианты из каталога:'
+      : 'Подобрал самые доступные варианты из каталога:';
+  } else if (isArticleLike) {
+    intro = 'Нашёл товар по точному запросу:';
+  } else if (reason === 'pass2-shortcircuit') {
+    intro = 'Подобрал по вашим характеристикам:';
+  } else {
+    intro = 'Подобрал товары из каталога:';
+  }
 
   const cards = products.slice(0, 3).map(formatProductCardDeterministic).join('\n\n');
   // followUp убран намеренно (2026-05-05): захардкоженная фраза «могу уточнить по бренду…»
