@@ -25,6 +25,7 @@ const menuItems = [
   { icon: Users, label: 'Пользователи', path: '/users', requiredRole: 'admin' as const },
   { icon: Code, label: 'Интеграция', path: '/integration' },
   { icon: ScrollText, label: 'Логи запросов', path: '/logs' },
+  { icon: ScrollText, label: 'Тесты классификатора', path: '/classifier-tests', requiredRole: 'admin' as const },
   { icon: Settings, label: 'Настройки', path: '/settings', requiredRole: 'admin' as const },
 ];
 
