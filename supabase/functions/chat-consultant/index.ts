@@ -5896,22 +5896,29 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             looksLikeProductMarking(candidate);
 
           if (trigger && candidate) {
+            const titleSearchCandidates = buildTitleSearchCandidates(candidate);
             // STEP 1: pagetitle (exact)
             try {
               const t0 = Date.now();
-              const ptResults = await searchByPagetitle(candidate, appSettings.volt220_api_token, 10);
+              let pagetitleVariantUsed = titleSearchCandidates.exact[0] || candidate;
+              let ptResults: Product[] = [];
+              for (const exactCandidate of titleSearchCandidates.exact) {
+                ptResults = await searchByPagetitle(exactCandidate, appSettings.volt220_api_token, 10);
+                pagetitleVariantUsed = exactCandidate;
+                if (ptResults.length > 0) break;
+              }
               const elapsed = Date.now() - t0;
               if (ptResults.length > 0) {
                 foundProducts = ptResults.slice(0, 10);
                 articleShortCircuit = true;
                 responseModel = 'anthropic/claude-sonnet-4.5';
                 responseModelReason = 'pagetitle-shortcircuit';
-                console.log(`[Chat] NAME-FIRST step=pagetitle SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${candidate.substring(0, 80)}"`);
-                logAddStep({ step: 'pagetitle', total: ptResults.length, ms: elapsed, meta: { candidate: candidate.substring(0, 120) } });
+                console.log(`[Chat] NAME-FIRST step=pagetitle SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${pagetitleVariantUsed.substring(0, 80)}"`);
+                logAddStep({ step: 'pagetitle', total: ptResults.length, ms: elapsed, meta: { candidate: pagetitleVariantUsed.substring(0, 120), variantsTried: titleSearchCandidates.exact.length } });
                 logSetBranch('pagetitle');
               } else {
-                console.log(`[Chat] NAME-FIRST step=pagetitle: 0 results in ${elapsed}ms for "${candidate.substring(0, 80)}"`);
-                logAddStep({ step: 'pagetitle', total: 0, ms: elapsed, meta: { candidate: candidate.substring(0, 120) } });
+                console.log(`[Chat] NAME-FIRST step=pagetitle: 0 results in ${elapsed}ms for "${candidate.substring(0, 80)}" (variants=${titleSearchCandidates.exact.length})`);
+                logAddStep({ step: 'pagetitle', total: 0, ms: elapsed, meta: { candidate: candidate.substring(0, 120), variantsTried: titleSearchCandidates.exact.length } });
               }
             } catch (err) {
               console.error('[Chat] NAME-FIRST step=pagetitle error (silent fallback):', err);
@@ -5921,26 +5928,33 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             // STEP 2: query (fuzzy) — только если pagetitle пуст и нет critical_modifiers
             if (!articleShortCircuit && !hasCriticalModifiers) {
               const titleCandidate = extractCandidateTitle(classification) || candidate;
+              const queryCandidates = buildTitleSearchCandidates(titleCandidate).query;
               if (titleCandidate.length >= 6) {
                 try {
                   const t0 = Date.now();
-                  const qResults = await searchProductsByCandidate(
-                    { query: titleCandidate, brand: null, category: null, min_price: null, max_price: null },
-                    appSettings.volt220_api_token,
-                    15
-                  );
+                  let queryVariantUsed = queryCandidates[0] || titleCandidate;
+                  let qResults: Product[] = [];
+                  for (const queryCandidate of queryCandidates) {
+                    qResults = await searchProductsByCandidate(
+                      { query: queryCandidate, brand: null, category: null, min_price: null, max_price: null },
+                      appSettings.volt220_api_token,
+                      15
+                    );
+                    queryVariantUsed = queryCandidate;
+                    if (qResults.length > 0) break;
+                  }
                   const elapsed = Date.now() - t0;
                   if (qResults.length > 0) {
                     foundProducts = qResults.slice(0, 10);
                     articleShortCircuit = true;
                     responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash hallucinated URLs
                     responseModelReason = 'title-shortcircuit';
-                    console.log(`[Chat] NAME-FIRST step=query SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${titleCandidate}"`);
-                    logAddStep({ step: 'name-query', total: qResults.length, ms: elapsed, meta: { candidate: titleCandidate.substring(0, 120) } });
+                    console.log(`[Chat] NAME-FIRST step=query SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${queryVariantUsed}"`);
+                    logAddStep({ step: 'name-query', total: qResults.length, ms: elapsed, meta: { candidate: queryVariantUsed.substring(0, 120), variantsTried: queryCandidates.length } });
                     logSetBranch('name-query');
                   } else {
-                    console.log(`[Chat] NAME-FIRST step=query: 0 results in ${elapsed}ms for "${titleCandidate}"`);
-                    logAddStep({ step: 'name-query', total: 0, ms: elapsed, meta: { candidate: titleCandidate.substring(0, 120) } });
+                    console.log(`[Chat] NAME-FIRST step=query: 0 results in ${elapsed}ms for "${titleCandidate}" (variants=${queryCandidates.length})`);
+                    logAddStep({ step: 'name-query', total: 0, ms: elapsed, meta: { candidate: titleCandidate.substring(0, 120), variantsTried: queryCandidates.length } });
                   }
                 } catch (err) {
                   console.error('[Chat] NAME-FIRST step=query error (silent fallback):', err);
