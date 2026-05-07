@@ -5337,75 +5337,73 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
         const classifyElapsed = Date.now() - classifyStart;
         console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → intent=${classification?.intent || 'none'}, has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}", is_replacement=${classification?.is_replacement || false}`);
 
-        // === PAGETITLE-FIRST FAST-PATH (точное совпадение по названию) ===
-        // Если классификатор отметил has_product_name=true ИЛИ запрос содержит
-        // характерные маркеры конкретной модели (размеры 75*124*57мм, IP20, артикул-
-        // подобные сочетания букв+цифр) — пробуем точное совпадение через ?pagetitle=.
-        // Это решает кейс «Щит для автом. выключателей на 2-4 модуля 75*124*57мм IP20»,
-        // когда классификатор ставит has_product_name=false и QFv2 ищет по «щит» → шум.
-        // Любой ≥1 результат → short-circuit, пропускаем весь дальнейший pipeline.
-        try {
-          const pagetitleCandidate = (classification?.product_name || '').trim() || (userMessage || '').trim();
-          const pagetitleTrigger =
-            (!!classification?.has_product_name && pagetitleCandidate.length >= 6) ||
-            looksLikeProductMarking(pagetitleCandidate);
-          if (!articleShortCircuit && !classification?.is_replacement && pagetitleTrigger) {
-            const ptStart = Date.now();
-            const ptResults = await searchByPagetitle(pagetitleCandidate, appSettings.volt220_api_token, 10);
-            const ptElapsed = Date.now() - ptStart;
-            if (ptResults.length > 0) {
-              foundProducts = ptResults.slice(0, 10);
-              articleShortCircuit = true;
-              responseModel = 'anthropic/claude-sonnet-4.5';
-              responseModelReason = 'pagetitle-shortcircuit';
-              console.log(`[Chat] Pagetitle-first FAST-PATH SUCCESS: ${foundProducts.length} products in ${ptElapsed}ms for "${pagetitleCandidate.substring(0, 80)}", skipping downstream pipeline`);
-            } else {
-              console.log(`[Chat] Pagetitle-first FAST-PATH: 0 results in ${ptElapsed}ms for "${pagetitleCandidate.substring(0, 80)}", continuing`);
+        // === NAME-FIRST FAST-PATH (single block, two API steps) ===
+        // Один short-circuit перед всем pipeline. Две ступени по эскалации точности:
+        //   STEP 1: ?pagetitle=<candidate>  — точное совпадение названия (символ-в-символ).
+        //           Безопасно для critical_modifiers — это exact match, не fuzzy.
+        //   STEP 2: ?query=<candidate>       — fuzzy. ПРОПУСКАЕМ при critical_modifiers,
+        //           иначе вернём шумный список без учёта характеристик (Pass 2 нужен).
+        // Триггер: has_product_name=true ИЛИ запрос «выглядит как маркировка»
+        // (looksLikeProductMarking: цифры + размеры/IP/мм/Вт/буквенно-цифровые сочетания).
+        // Skip для replacement intent — там нужны traits оригинала, а не сам товар.
+        // Любой ≥1 результат → articleShortCircuit=true, downstream рендерит детерминистично.
+        const hasCriticalModifiers = Array.isArray(classification?.critical_modifiers) && classification.critical_modifiers.length > 0;
+        if (!articleShortCircuit && !classification?.is_replacement) {
+          const candidate = (classification?.product_name || '').trim() || (userMessage || '').trim();
+          const trigger =
+            (!!classification?.has_product_name && candidate.length >= 6) ||
+            looksLikeProductMarking(candidate);
+
+          if (trigger && candidate) {
+            // STEP 1: pagetitle (exact)
+            try {
+              const t0 = Date.now();
+              const ptResults = await searchByPagetitle(candidate, appSettings.volt220_api_token, 10);
+              const elapsed = Date.now() - t0;
+              if (ptResults.length > 0) {
+                foundProducts = ptResults.slice(0, 10);
+                articleShortCircuit = true;
+                responseModel = 'anthropic/claude-sonnet-4.5';
+                responseModelReason = 'pagetitle-shortcircuit';
+                console.log(`[Chat] NAME-FIRST step=pagetitle SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${candidate.substring(0, 80)}"`);
+              } else {
+                console.log(`[Chat] NAME-FIRST step=pagetitle: 0 results in ${elapsed}ms for "${candidate.substring(0, 80)}"`);
+              }
+            } catch (err) {
+              console.error('[Chat] NAME-FIRST step=pagetitle error (silent fallback):', err);
+            }
+
+            // STEP 2: query (fuzzy) — только если pagetitle пуст и нет critical_modifiers
+            if (!articleShortCircuit && !hasCriticalModifiers) {
+              const titleCandidate = extractCandidateTitle(classification) || candidate;
+              if (titleCandidate.length >= 6) {
+                try {
+                  const t0 = Date.now();
+                  const qResults = await searchProductsByCandidate(
+                    { query: titleCandidate, brand: null, category: null, min_price: null, max_price: null },
+                    appSettings.volt220_api_token,
+                    15
+                  );
+                  const elapsed = Date.now() - t0;
+                  if (qResults.length > 0) {
+                    foundProducts = qResults.slice(0, 10);
+                    articleShortCircuit = true;
+                    responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash hallucinated URLs
+                    responseModelReason = 'title-shortcircuit';
+                    console.log(`[Chat] NAME-FIRST step=query SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${titleCandidate}"`);
+                  } else {
+                    console.log(`[Chat] NAME-FIRST step=query: 0 results in ${elapsed}ms for "${titleCandidate}"`);
+                  }
+                } catch (err) {
+                  console.error('[Chat] NAME-FIRST step=query error (silent fallback):', err);
+                }
+              }
+            } else if (!articleShortCircuit && hasCriticalModifiers) {
+              console.log(`[Chat] NAME-FIRST step=query SKIPPED: critical_modifiers=[${classification!.critical_modifiers!.join(', ')}] → full catalog pipeline (Pass 2 applies option_filters)`);
             }
           }
-        } catch (ptErr) {
-          console.error('[Chat] Pagetitle-first FAST-PATH error (silent fallback):', ptErr);
         }
 
-        // === TITLE-FIRST FAST-PATH (mirrors article-first) ===
-        // If the Micro-LLM classifier extracted a strong product name (model-like:
-        // contains digits or latin letters such as "A60", "LED", "9W", "E27"),
-        // run a single Catalog API hop with ?query=… BEFORE entering the heavy
-        // slot/category/strict-search pipeline. Same Flash-model short-circuit
-        // semantics as article-first; reuses articleShortCircuit so all downstream
-        // branches treat the result identically. Skipped for replacement intent —
-        // that pipeline needs the original product's traits, not the product itself.
-        // SYSTEMIC GUARD (2026-05-04): если у классификатора есть critical_modifiers
-        // (характеристики типа "ВВГнг", "3х2.5", "12W", "E27", "IP44") — title-first
-        // FAST-PATH ПРОПУСКАЕТСЯ. Один хоп ?query=... вернёт >0 товаров без фильтрации
-        // по характеристикам, и LLM получит шумный список (и 1.5мм², и 4мм², и т.д.).
-        // Полный pipeline (catalog branch) применит option_filters через Pass 2 и
-        // вернёт релевантный результат. Title-first остаётся для чистых имён без
-        // модификаторов: "лампа A60", "розетка двойная", "выключатель Schneider".
-        const hasCriticalModifiers = Array.isArray(classification?.critical_modifiers) && classification.critical_modifiers.length > 0;
-        if (!articleShortCircuit && classification?.has_product_name && !classification?.is_replacement && !hasCriticalModifiers) {
-          const titleCandidate = extractCandidateTitle(classification);
-          if (titleCandidate) {
-            const tStart = Date.now();
-            const titleResults = await searchProductsByCandidate(
-              { query: titleCandidate, brand: null, category: null, min_price: null, max_price: null },
-              appSettings.volt220_api_token,
-              15
-            );
-            const tElapsed = Date.now() - tStart;
-            if (titleResults.length > 0) {
-              foundProducts = titleResults.slice(0, 10);
-              articleShortCircuit = true;
-              responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
-              responseModelReason = 'title-shortcircuit';
-              console.log(`[Chat] Title-first FAST-PATH SUCCESS: ${foundProducts.length} products in ${tElapsed}ms for "${titleCandidate}", skipping slot/category pipeline`);
-            } else {
-              console.log(`[Chat] Title-first FAST-PATH: 0 results in ${tElapsed}ms for "${titleCandidate}", continuing pipeline`);
-            }
-          }
-        } else if (!articleShortCircuit && classification?.has_product_name && hasCriticalModifiers) {
-          console.log(`[Chat] Title-first FAST-PATH SKIPPED: critical_modifiers=[${classification.critical_modifiers.join(', ')}] → routing to full catalog pipeline (Pass 2 will apply option_filters)`);
-        }
 
         if (!articleShortCircuit) {
         // === DIALOG SLOTS: try slot-based resolution FIRST ===
