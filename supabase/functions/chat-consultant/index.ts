@@ -3451,8 +3451,24 @@ async function resolveFiltersWithLLM(
   prebuiltSchema?: Map<string, { caption: string; values: Set<string> }>,
   schemaConfidence: SchemaConfidence = 'full',
   productNoun?: string
-): Promise<{ resolved: Record<string, ResolvedFilter>; unresolved: string[] }> {
-  if (!modifiers || modifiers.length === 0) return { resolved: {}, unresolved: [] };
+): Promise<{
+  resolved: Record<string, ResolvedFilter>;
+  unresolved: string[];
+  /**
+   * Schema-known but value-unresolved modifiers.
+   * LLM matched the modifier to a real facet key (e.g. "мощность 7Вт" → key "moschnost"),
+   * but the requested value (7) was NOT in the live catalog values for that key.
+   * Used by QFv2 to trigger honest-empty even when other filters yielded results.
+   */
+  unresolvedDetails?: Array<{
+    modifier: string;
+    key: string;
+    caption: string;
+    requestedValue: string;
+    availableValues: string[];
+  }>;
+}> {
+  if (!modifiers || modifiers.length === 0) return { resolved: {}, unresolved: [], unresolvedDetails: [] };
 
   // CONFIDENCE GATE — Layer 1 P0: never resolve filters against degraded schema.
   //   'empty'   → no usable schema at all. Skip LLM entirely (saves tokens, prevents
