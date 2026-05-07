@@ -1259,6 +1259,7 @@ interface ClassificationResult {
   is_replacement?: boolean;
   search_modifiers?: string[];
   critical_modifiers?: string[];
+  sub_intent?: 'availability' | 'price' | 'location' | 'spec';
 }
 
 async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>, settings?: CachedSettings | null): Promise<ClassificationResult | null> {
@@ -1373,6 +1374,9 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       let rawCritical = Array.isArray(parsed.critical_modifiers) ? parsed.critical_modifiers.filter((m: unknown) => typeof m === 'string' && m.trim().length > 0) : [];
       if (rawCritical.length === 0 && rawSearchMods.length > 0) rawCritical = [...rawSearchMods];
       console.log(`[Chat] Classifier critical_modifiers: [${rawCritical.join(', ')}] (of search_modifiers: [${rawSearchMods.join(', ')}])`);
+      const validSubIntents = ['availability', 'price', 'location', 'spec'];
+      const rawSubIntent = typeof parsed.sub_intent === 'string' ? parsed.sub_intent.toLowerCase().trim() : null;
+      const subIntent = validSubIntents.includes(rawSubIntent!) ? rawSubIntent as ClassificationResult['sub_intent'] : undefined;
       return {
         intent: finalIntent as string | undefined,
         has_product_name: !!parsed.has_product_name,
@@ -1382,6 +1386,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
         is_replacement: !!parsed.is_replacement,
         search_modifiers: rawSearchMods,
         critical_modifiers: rawCritical,
+        sub_intent: subIntent,
       };
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
@@ -4420,20 +4425,36 @@ export function buildDeterministicShortCircuitContent(params: {
   reason: string;
   userMessage: string;
   effectivePriceIntent?: 'most_expensive' | 'cheapest';
+  subIntent?: 'availability' | 'price' | 'location' | 'spec';
 }): string {
-  const { products, reason, userMessage, effectivePriceIntent } = params;
+  const { products, reason, userMessage, effectivePriceIntent, subIntent } = params;
   if (!products.length) return '';
 
-  const intro =
-    reason === 'price-shortcircuit'
-      ? effectivePriceIntent === 'most_expensive'
-        ? 'Подобрал самые дорогие варианты из каталога:'
-        : 'Подобрал самые доступные варианты из каталога:'
-      : reason === 'article-shortcircuit' || reason === 'siteid-shortcircuit'
-        ? 'Нашёл товар по точному запросу:'
-        : reason === 'pass2-shortcircuit'
-          ? 'Подобрал по вашим характеристикам:'
-          : 'Подобрал товары из каталога:';
+  // Под-интент перебивает дефолтные intro для article/title-first веток.
+  // Цель: при «есть в наличии?» / «сколько стоит?» отвечаем на вопрос, а не «подобрал товары».
+  const isArticleLike = reason === 'article-shortcircuit' || reason === 'siteid-shortcircuit';
+  let intro: string;
+  if (subIntent === 'availability' && isArticleLike) {
+    intro = products.length === 1
+      ? 'Да, есть в наличии:'
+      : 'Да, есть в наличии. Вот подходящие позиции:';
+  } else if (subIntent === 'price' && isArticleLike) {
+    intro = products.length === 1
+      ? 'Вот актуальная цена:'
+      : 'Актуальные цены по вашему запросу:';
+  } else if (subIntent === 'location' && isArticleLike) {
+    intro = 'Товар доступен в каталоге — наличие по магазинам уточняйте у менеджера:';
+  } else if (reason === 'price-shortcircuit') {
+    intro = effectivePriceIntent === 'most_expensive'
+      ? 'Подобрал самые дорогие варианты из каталога:'
+      : 'Подобрал самые доступные варианты из каталога:';
+  } else if (isArticleLike) {
+    intro = 'Нашёл товар по точному запросу:';
+  } else if (reason === 'pass2-shortcircuit') {
+    intro = 'Подобрал по вашим характеристикам:';
+  } else {
+    intro = 'Подобрал товары из каталога:';
+  }
 
   const cards = products.slice(0, 3).map(formatProductCardDeterministic).join('\n\n');
   // followUp убран намеренно (2026-05-05): захардкоженная фраза «могу уточнить по бренду…»
@@ -5288,9 +5309,9 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
         const recentHistoryForClassifier = historyForContext.slice(-4).map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }));
         classification = await classifyProductName(userMessage, recentHistoryForClassifier, appSettings);
         const classifyElapsed = Date.now() - classifyStart;
-        console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → intent=${classification?.intent || 'none'}, has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}", is_replacement=${classification?.is_replacement || false}`);
+        console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → intent=${classification?.intent || 'none'}, sub_intent=${classification?.sub_intent || 'none'}, has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}", is_replacement=${classification?.is_replacement || false}`);
         logSetClassifier(classification ?? null);
-        logAddStep({ step: 'classify', ms: classifyElapsed, meta: { intent: classification?.intent, has_product_name: classification?.has_product_name, price_intent: classification?.price_intent, category: classification?.product_category, critical_modifiers: classification?.critical_modifiers } });
+        logAddStep({ step: 'classify', ms: classifyElapsed, meta: { intent: classification?.intent, sub_intent: classification?.sub_intent, has_product_name: classification?.has_product_name, price_intent: classification?.price_intent, category: classification?.product_category, critical_modifiers: classification?.critical_modifiers } });
 
         // === NAME-FIRST FAST-PATH (single block, two API steps) ===
         // Один short-circuit перед всем pipeline. Две ступени по эскалации точности:
@@ -7939,6 +7960,7 @@ ${productInstructions}`;
             reason: renderReason,
             userMessage,
             effectivePriceIntent,
+            subIntent: classification?.sub_intent,
           });
       console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${content.length}`);
       logSetProductsCount(foundProducts.length);
