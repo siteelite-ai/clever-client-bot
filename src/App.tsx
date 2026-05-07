@@ -13,6 +13,7 @@ import Analytics from "./pages/Analytics";
 import UsersManagement from "./pages/UsersManagement";
 import Integration from "./pages/Integration";
 import Settings from "./pages/Settings";
+import RequestLogs from "./pages/RequestLogs";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
