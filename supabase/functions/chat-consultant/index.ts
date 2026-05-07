@@ -4477,6 +4477,57 @@ export function formatProductCardDeterministic(product: Product): string {
   return lines.filter(Boolean).join('\n');
 }
 
+/**
+ * Единый форматтер intro-фразы по sub_intent + reason.
+ * Вынесен из buildDeterministicShortCircuitContent (Шаг 3, 2026-05-07)
+ * для переиспользования во всех ветках ответа.
+ *
+ * Приоритет: sub_intent (availability/price/location/spec) → reason-specific → generic.
+ */
+export function buildIntroBySubIntent(params: {
+  productsCount: number;
+  reason: string;
+  subIntent?: 'availability' | 'price' | 'location' | 'spec';
+  effectivePriceIntent?: 'most_expensive' | 'cheapest';
+}): string {
+  const { productsCount, reason, subIntent, effectivePriceIntent } = params;
+
+  // Под-интент перебивает дефолтные intro для ЛЮБОЙ ветки с реальным товаром
+  if (subIntent === 'availability') {
+    return productsCount === 1
+      ? 'Да, есть в наличии:'
+      : 'Да, есть в наличии. Вот подходящие позиции:';
+  }
+  if (subIntent === 'price') {
+    return productsCount === 1
+      ? 'Вот актуальная цена:'
+      : 'Актуальные цены по вашему запросу:';
+  }
+  if (subIntent === 'location') {
+    return 'Товар доступен в каталоге — наличие по магазинам уточняйте у менеджера:';
+  }
+  if (subIntent === 'spec') {
+    // spec БЕЗ compute → детерминистичный рендер с контекстным intro
+    return productsCount === 1
+      ? 'Вот товар — характеристики указаны на карточке:'
+      : 'Вот подходящие товары — характеристики указаны на карточках:';
+  }
+
+  // Reason-specific intros (без sub_intent)
+  if (reason === 'price-shortcircuit') {
+    return effectivePriceIntent === 'most_expensive'
+      ? 'Подобрал самые дорогие варианты из каталога:'
+      : 'Подобрал самые доступные варианты из каталога:';
+  }
+  if (reason === 'article-shortcircuit' || reason === 'siteid-shortcircuit') {
+    return 'Нашёл товар по точному запросу:';
+  }
+  if (reason === 'pass2-shortcircuit') {
+    return 'Подобрал по вашим характеристикам:';
+  }
+  return 'Подобрал товары из каталога:';
+}
+
 export function buildDeterministicShortCircuitContent(params: {
   products: Product[];
   reason: string;
@@ -4487,36 +4538,14 @@ export function buildDeterministicShortCircuitContent(params: {
   const { products, reason, userMessage, effectivePriceIntent, subIntent } = params;
   if (!products.length) return '';
 
-  // Под-интент перебивает дефолтные intro для ЛЮБОЙ ветки с реальным товаром
-  // (article/siteid/pass2/qfv2). Цель: на «есть в наличии?»/«сколько стоит?»
-  // отвечаем на вопрос, а не «подобрал товары».
-  let intro: string;
-  if (subIntent === 'availability') {
-    intro = products.length === 1
-      ? 'Да, есть в наличии:'
-      : 'Да, есть в наличии. Вот подходящие позиции:';
-  } else if (subIntent === 'price') {
-    intro = products.length === 1
-      ? 'Вот актуальная цена:'
-      : 'Актуальные цены по вашему запросу:';
-  } else if (subIntent === 'location') {
-    intro = 'Товар доступен в каталоге — наличие по магазинам уточняйте у менеджера:';
-  } else if (reason === 'price-shortcircuit') {
-    intro = effectivePriceIntent === 'most_expensive'
-      ? 'Подобрал самые дорогие варианты из каталога:'
-      : 'Подобрал самые доступные варианты из каталога:';
-  } else if (reason === 'article-shortcircuit' || reason === 'siteid-shortcircuit') {
-    intro = 'Нашёл товар по точному запросу:';
-  } else if (reason === 'pass2-shortcircuit') {
-    intro = 'Подобрал по вашим характеристикам:';
-  } else {
-    intro = 'Подобрал товары из каталога:';
-  }
+  const intro = buildIntroBySubIntent({
+    productsCount: products.length,
+    reason,
+    subIntent,
+    effectivePriceIntent,
+  });
 
   const cards = products.slice(0, 3).map(formatProductCardDeterministic).join('\n\n');
-  // followUp убран намеренно (2026-05-05): захардкоженная фраза «могу уточнить по бренду…»
-  // не контекстна и раздражает. Cross-sell теперь генерируется отдельным LLM-вызовом
-  // generateCrossSellTail() после рендера и дописывается как отдельный chunk в стрим.
   return `${intro}\n\n${cards}`.trim();
 }
 
