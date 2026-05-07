@@ -1105,6 +1105,99 @@ function looksLikeProductMarking(text: string): boolean {
   return /(\d+\s*[x×х*]\s*\d+)|ip\s*\d{2}|\bмм\b|\bсм\b|\bвт\b|\bw\b|\bмодул|[a-zа-я]+\d|\d[a-zа-я]+/i.test(t);
 }
 
+function scoreDimensionGrouping(parts: string[]): number {
+  const lengths = parts.map((p) => p.length);
+  const spread = Math.max(...lengths) - Math.min(...lengths);
+  const singleDigitPenalty = lengths.some((len) => len === 1) ? 2 : 0;
+  const middleBonus = parts.length === 3 && lengths[1] === 3 ? -0.25 : 0;
+  const edgePenalty = (lengths[0] === 2 ? 0 : 0.2) + (lengths[lengths.length - 1] === 2 ? 0 : 0.2);
+  return spread + singleDigitPenalty + edgePenalty + middleBonus;
+}
+
+function buildDimensionGroupings(digits: string, maxVariants = 4): string[] {
+  if (!/^\d{5,9}$/.test(digits)) return [];
+
+  const candidates: string[][] = [];
+  const visit = (offset: number, remainingGroups: number, parts: string[]) => {
+    if (remainingGroups === 1) {
+      const tailLen = digits.length - offset;
+      if (tailLen < 1 || tailLen > 3) return;
+      candidates.push([...parts, digits.slice(offset)]);
+      return;
+    }
+
+    for (let len = 1; len <= 3; len += 1) {
+      const next = offset + len;
+      const remainingDigits = digits.length - next;
+      const minNeeded = remainingGroups - 1;
+      const maxNeeded = (remainingGroups - 1) * 3;
+      if (remainingDigits < minNeeded || remainingDigits > maxNeeded) continue;
+      visit(next, remainingGroups - 1, [...parts, digits.slice(offset, next)]);
+    }
+  };
+
+  visit(0, 3, []);
+
+  return candidates
+    .sort((a, b) => scoreDimensionGrouping(a) - scoreDimensionGrouping(b))
+    .map((parts) => parts.join('*'))
+    .filter((value, index, arr) => arr.indexOf(value) === index)
+    .slice(0, maxVariants);
+}
+
+function buildTitleSearchCandidates(input: string): { exact: string[]; query: string[] } {
+  const base = input.trim().replace(/\s+/g, ' ');
+  const exact: string[] = [];
+  const query: string[] = [];
+  const pushUniqueExact = (value: string) => {
+    const cleaned = value.trim();
+    if (!cleaned || exact.includes(cleaned)) return;
+    exact.push(cleaned);
+  };
+  const pushUniqueQuery = (value: string) => {
+    const cleaned = value.trim().replace(/\s+/g, ' ');
+    if (!cleaned || query.includes(cleaned)) return;
+    query.push(cleaned);
+  };
+
+  if (!base) return { exact, query };
+
+  const addExactVariants = (value: string) => {
+    pushUniqueExact(value);
+    pushUniqueExact(value.replace(/\.\s+(?=[A-Za-zА-Яа-яЁё])/g, '.'));
+    pushUniqueExact(value.replace(/\s+IP(\d{2})\b/gi, '  IP$1'));
+    pushUniqueExact(value.replace(/\.\s+(?=[A-Za-zА-Яа-яЁё])/g, '.').replace(/\s+IP(\d{2})\b/gi, '  IP$1'));
+  };
+
+  addExactVariants(base);
+  pushUniqueQuery(base);
+
+  const separatorNormalized = base
+    .replace(/\s*[x×хХX]\s*/g, '*')
+    .replace(/мм/gi, 'mm');
+
+  addExactVariants(separatorNormalized);
+  addExactVariants(separatorNormalized.replace(/\bmm\b/gi, 'мм'));
+  pushUniqueQuery(separatorNormalized.replace(/\*/g, ' '));
+
+  const gluedMatches = Array.from(separatorNormalized.matchAll(/(\d{5,9})\s*(mm|мм)\b/gi));
+  for (const match of gluedMatches) {
+    const fullMatch = match[0];
+    const digits = match[1];
+    const groupings = buildDimensionGroupings(digits, 4);
+    for (const grouped of groupings) {
+      addExactVariants(separatorNormalized.replace(fullMatch, `${grouped}mm`));
+      addExactVariants(separatorNormalized.replace(fullMatch, `${grouped}мм`));
+      pushUniqueQuery(separatorNormalized.replace(fullMatch, `${grouped.replace(/\*/g, ' ')} mm`));
+    }
+  }
+
+  return {
+    exact: exact.slice(0, 10),
+    query: query.slice(0, 4),
+  };
+}
+
 async function searchByArticle(article: string, apiToken: string): Promise<Product[]> {
   const params = new URLSearchParams();
   params.append('article', article);
@@ -5817,22 +5910,29 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             looksLikeProductMarking(candidate);
 
           if (trigger && candidate) {
+            const titleSearchCandidates = buildTitleSearchCandidates(candidate);
             // STEP 1: pagetitle (exact)
             try {
               const t0 = Date.now();
-              const ptResults = await searchByPagetitle(candidate, appSettings.volt220_api_token, 10);
+              let pagetitleVariantUsed = titleSearchCandidates.exact[0] || candidate;
+              let ptResults: Product[] = [];
+              for (const exactCandidate of titleSearchCandidates.exact) {
+                ptResults = await searchByPagetitle(exactCandidate, appSettings.volt220_api_token, 10);
+                pagetitleVariantUsed = exactCandidate;
+                if (ptResults.length > 0) break;
+              }
               const elapsed = Date.now() - t0;
               if (ptResults.length > 0) {
                 foundProducts = ptResults.slice(0, 10);
                 articleShortCircuit = true;
                 responseModel = 'anthropic/claude-sonnet-4.5';
                 responseModelReason = 'pagetitle-shortcircuit';
-                console.log(`[Chat] NAME-FIRST step=pagetitle SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${candidate.substring(0, 80)}"`);
-                logAddStep({ step: 'pagetitle', total: ptResults.length, ms: elapsed, meta: { candidate: candidate.substring(0, 120) } });
+                console.log(`[Chat] NAME-FIRST step=pagetitle SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${pagetitleVariantUsed.substring(0, 80)}"`);
+                logAddStep({ step: 'pagetitle', total: ptResults.length, ms: elapsed, meta: { candidate: pagetitleVariantUsed.substring(0, 120), variantsTried: titleSearchCandidates.exact.length } });
                 logSetBranch('pagetitle');
               } else {
-                console.log(`[Chat] NAME-FIRST step=pagetitle: 0 results in ${elapsed}ms for "${candidate.substring(0, 80)}"`);
-                logAddStep({ step: 'pagetitle', total: 0, ms: elapsed, meta: { candidate: candidate.substring(0, 120) } });
+                console.log(`[Chat] NAME-FIRST step=pagetitle: 0 results in ${elapsed}ms for "${candidate.substring(0, 80)}" (variants=${titleSearchCandidates.exact.length})`);
+                logAddStep({ step: 'pagetitle', total: 0, ms: elapsed, meta: { candidate: candidate.substring(0, 120), variantsTried: titleSearchCandidates.exact.length } });
               }
             } catch (err) {
               console.error('[Chat] NAME-FIRST step=pagetitle error (silent fallback):', err);
@@ -5842,26 +5942,33 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             // STEP 2: query (fuzzy) — только если pagetitle пуст и нет critical_modifiers
             if (!articleShortCircuit && !hasCriticalModifiers) {
               const titleCandidate = extractCandidateTitle(classification) || candidate;
+              const queryCandidates = buildTitleSearchCandidates(titleCandidate).query;
               if (titleCandidate.length >= 6) {
                 try {
                   const t0 = Date.now();
-                  const qResults = await searchProductsByCandidate(
-                    { query: titleCandidate, brand: null, category: null, min_price: null, max_price: null },
-                    appSettings.volt220_api_token,
-                    15
-                  );
+                  let queryVariantUsed = queryCandidates[0] || titleCandidate;
+                  let qResults: Product[] = [];
+                  for (const queryCandidate of queryCandidates) {
+                    qResults = await searchProductsByCandidate(
+                      { query: queryCandidate, brand: null, category: null, min_price: null, max_price: null },
+                      appSettings.volt220_api_token,
+                      15
+                    );
+                    queryVariantUsed = queryCandidate;
+                    if (qResults.length > 0) break;
+                  }
                   const elapsed = Date.now() - t0;
                   if (qResults.length > 0) {
                     foundProducts = qResults.slice(0, 10);
                     articleShortCircuit = true;
                     responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash hallucinated URLs
                     responseModelReason = 'title-shortcircuit';
-                    console.log(`[Chat] NAME-FIRST step=query SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${titleCandidate}"`);
-                    logAddStep({ step: 'name-query', total: qResults.length, ms: elapsed, meta: { candidate: titleCandidate.substring(0, 120) } });
+                    console.log(`[Chat] NAME-FIRST step=query SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${queryVariantUsed}"`);
+                    logAddStep({ step: 'name-query', total: qResults.length, ms: elapsed, meta: { candidate: queryVariantUsed.substring(0, 120), variantsTried: queryCandidates.length } });
                     logSetBranch('name-query');
                   } else {
-                    console.log(`[Chat] NAME-FIRST step=query: 0 results in ${elapsed}ms for "${titleCandidate}"`);
-                    logAddStep({ step: 'name-query', total: 0, ms: elapsed, meta: { candidate: titleCandidate.substring(0, 120) } });
+                    console.log(`[Chat] NAME-FIRST step=query: 0 results in ${elapsed}ms for "${titleCandidate}" (variants=${queryCandidates.length})`);
+                    logAddStep({ step: 'name-query', total: 0, ms: elapsed, meta: { candidate: titleCandidate.substring(0, 120), variantsTried: queryCandidates.length } });
                   }
                 } catch (err) {
                   console.error('[Chat] NAME-FIRST step=query error (silent fallback):', err);
