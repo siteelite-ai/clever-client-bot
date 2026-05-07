@@ -1260,6 +1260,8 @@ interface ClassificationResult {
   search_modifiers?: string[];
   critical_modifiers?: string[];
   sub_intent?: 'availability' | 'price' | 'location' | 'spec';
+  /** Расчёт характеристики, заполняется только при sub_intent="spec". */
+  compute?: ComputeRequest;
 }
 
 function detectSubIntentFallback(message: string): ClassificationResult['sub_intent'] {
