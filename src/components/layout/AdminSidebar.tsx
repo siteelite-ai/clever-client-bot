@@ -11,7 +11,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Zap,
-  LogOut
+  LogOut,
+  ScrollText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
@@ -23,6 +24,7 @@ const menuItems = [
   // { icon: BarChart3, label: 'Аналитика', path: '/analytics', soon: true },
   { icon: Users, label: 'Пользователи', path: '/users', requiredRole: 'admin' as const },
   { icon: Code, label: 'Интеграция', path: '/integration' },
+  { icon: ScrollText, label: 'Логи запросов', path: '/logs' },
   { icon: Settings, label: 'Настройки', path: '/settings', requiredRole: 'admin' as const },
 ];
 

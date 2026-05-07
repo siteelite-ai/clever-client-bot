@@ -170,6 +170,60 @@ export type Database = {
         }
         Relationships: []
       }
+      chat_request_logs: {
+        Row: {
+          branch: string | null
+          classifier: Json | null
+          client_ip: string | null
+          created_at: string
+          error: string | null
+          expires_at: string
+          final_products_count: number
+          final_response: string | null
+          id: string
+          pipeline: string | null
+          session_id: string | null
+          steps: Json
+          total_ms: number | null
+          user_agent: string | null
+          user_query: string | null
+        }
+        Insert: {
+          branch?: string | null
+          classifier?: Json | null
+          client_ip?: string | null
+          created_at?: string
+          error?: string | null
+          expires_at?: string
+          final_products_count?: number
+          final_response?: string | null
+          id?: string
+          pipeline?: string | null
+          session_id?: string | null
+          steps?: Json
+          total_ms?: number | null
+          user_agent?: string | null
+          user_query?: string | null
+        }
+        Update: {
+          branch?: string | null
+          classifier?: Json | null
+          client_ip?: string | null
+          created_at?: string
+          error?: string | null
+          expires_at?: string
+          final_products_count?: number
+          final_response?: string | null
+          id?: string
+          pipeline?: string | null
+          session_id?: string | null
+          steps?: Json
+          total_ms?: number | null
+          user_agent?: string | null
+          user_query?: string | null
+        }
+        Relationships: []
+      }
       classifier_cache: {
         Row: {
           created_at: string

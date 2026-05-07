@@ -3,6 +3,18 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from 'npm:@supabase/supabase-js@2';
 import { AsyncLocalStorage } from "node:async_hooks";
+import {
+  createLogCtx,
+  runWithLogCtx,
+  wrapResponseForLogging,
+  logSetSession,
+  logSetUserQuery,
+  logSetClassifier,
+  logSetBranch,
+  logAddStep,
+  logSetProductsCount,
+  logSetError,
+} from '../_shared/request-logger.ts';
 
 // Per-request async context (carries reqId implicitly through all awaits inside `serve`).
 // Used by Degraded-mode tracker so deeply nested catalog helpers do NOT need to thread
@@ -5093,6 +5105,23 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     return new Response('ok', { headers: corsHeaders });
   }
 
+  // Request-scoped logger (TTL 24ч в chat_request_logs)
+  const logCtx = createLogCtx(req, 'v1');
+  return await runWithLogCtx(logCtx, async () => {
+    try {
+      const res = await _handleChatConsultantInner(req);
+      return wrapResponseForLogging(res, logCtx);
+    } catch (e) {
+      logSetError(e);
+      const { flushLog } = await import('../_shared/request-logger.ts');
+      flushLog(logCtx).catch(() => {});
+      throw e;
+    }
+  });
+}
+
+async function _handleChatConsultantInner(req: Request): Promise<Response> {
+
   // Per-request correlation id — included in every key log line so we can
   // grep one user's full pipeline (classify → facets → filter-LLM → rerank)
   // out of the firehose of concurrent requests.
@@ -5141,7 +5170,12 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     } else {
       throw new Error('Invalid request format: missing messages or message');
     }
-    
+    // Логирование сессии и текста запроса
+    try {
+      const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
+      logSetSession(conversationId);
+      logSetUserQuery(lastUserMsg ? lastUserMsg.content : null);
+    } catch (_) { /* ignore */ }
     // === DIALOG SLOTS: read and validate ===
     // Server-managed persistence (V1): если фронт не прислал dialogSlots —
     // подтягиваем последнее сохранённое состояние по sessionId из chat_cache_v2.
@@ -5336,6 +5370,8 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
         classification = await classifyProductName(userMessage, recentHistoryForClassifier, appSettings);
         const classifyElapsed = Date.now() - classifyStart;
         console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → intent=${classification?.intent || 'none'}, has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}", is_replacement=${classification?.is_replacement || false}`);
+        logSetClassifier(classification ?? null);
+        logAddStep({ step: 'classify', ms: classifyElapsed, meta: { intent: classification?.intent, has_product_name: classification?.has_product_name, price_intent: classification?.price_intent, category: classification?.product_category, critical_modifiers: classification?.critical_modifiers } });
 
         // === NAME-FIRST FAST-PATH (single block, two API steps) ===
         // Один short-circuit перед всем pipeline. Две ступени по эскалации точности:
@@ -5366,11 +5402,15 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                 responseModel = 'anthropic/claude-sonnet-4.5';
                 responseModelReason = 'pagetitle-shortcircuit';
                 console.log(`[Chat] NAME-FIRST step=pagetitle SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${candidate.substring(0, 80)}"`);
+                logAddStep({ step: 'pagetitle', total: ptResults.length, ms: elapsed, meta: { candidate: candidate.substring(0, 120) } });
+                logSetBranch('pagetitle');
               } else {
                 console.log(`[Chat] NAME-FIRST step=pagetitle: 0 results in ${elapsed}ms for "${candidate.substring(0, 80)}"`);
+                logAddStep({ step: 'pagetitle', total: 0, ms: elapsed, meta: { candidate: candidate.substring(0, 120) } });
               }
             } catch (err) {
               console.error('[Chat] NAME-FIRST step=pagetitle error (silent fallback):', err);
+              logAddStep({ step: 'pagetitle', meta: { error: String(err) } });
             }
 
             // STEP 2: query (fuzzy) — только если pagetitle пуст и нет critical_modifiers
@@ -5391,15 +5431,20 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                     responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash hallucinated URLs
                     responseModelReason = 'title-shortcircuit';
                     console.log(`[Chat] NAME-FIRST step=query SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${titleCandidate}"`);
+                    logAddStep({ step: 'name-query', total: qResults.length, ms: elapsed, meta: { candidate: titleCandidate.substring(0, 120) } });
+                    logSetBranch('name-query');
                   } else {
                     console.log(`[Chat] NAME-FIRST step=query: 0 results in ${elapsed}ms for "${titleCandidate}"`);
+                    logAddStep({ step: 'name-query', total: 0, ms: elapsed, meta: { candidate: titleCandidate.substring(0, 120) } });
                   }
                 } catch (err) {
                   console.error('[Chat] NAME-FIRST step=query error (silent fallback):', err);
+                  logAddStep({ step: 'name-query', meta: { error: String(err) } });
                 }
               }
             } else if (!articleShortCircuit && hasCriticalModifiers) {
               console.log(`[Chat] NAME-FIRST step=query SKIPPED: critical_modifiers=[${classification!.critical_modifiers!.join(', ')}] → full catalog pipeline (Pass 2 applies option_filters)`);
+              logAddStep({ step: 'name-query', meta: { skipped: 'critical_modifiers', critical_modifiers: classification!.critical_modifiers } });
             }
           }
         }
@@ -5977,6 +6022,7 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
                   };
                   let displayList: Product[] = applyNounFilter(pool);
                   let branchTag = 'qfv2_pool_no_modifiers';
+                  logSetBranch('qfv2');
 
                   if (Object.keys(resolvedFilters).length > 0) {
                     const final = await searchProductsByCandidate(
@@ -7316,6 +7362,7 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
         extractedIntent.originalQuery.trim().length > 0
       ) {
         console.log(`[Chat req=${reqId}] [JargonFallback] EARLY trigger: branch=qfv2_pool_no_modifiers criticalMods=${JSON.stringify(criticalMods)}`);
+        logSetBranch('jargon-fallback');
         const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
         const jargonResult = await tryJargonFallback({
           originalQuery: extractedIntent.originalQuery,
@@ -7596,6 +7643,8 @@ ${directAnswerBlock}
 
       // Если jargon не помог (или не вызывался) — строим Soft-404
       if (foundProducts.length === 0) {
+        logSetBranch(qfv2HonestEmptyContext ? 'qfv2-honest-empty' : 'soft-404');
+        logAddStep({ step: 'soft-404', total: 0 });
         // Soft 404 — каталог-интент с нулевыми результатами.
         // SYSTEMIC FIX (probe 2026-05-01): старая инструкция явно разрешала
         // «предложи АЛЬТЕРНАТИВЫ если знаешь что это за товар» — это легализация
@@ -7973,6 +8022,8 @@ ${productInstructions}`;
             effectivePriceIntent,
           });
       console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${content.length}`);
+      logSetProductsCount(foundProducts.length);
+      logAddStep({ step: 'final-deterministic', total: foundProducts.length, meta: { reason: renderReason } });
 
       // ─────────────────────────────────────────────────────────────────────
       // CROSS-SELL: ОТКЛЮЧЁН (V1, 2026-05-05).
