@@ -5062,6 +5062,18 @@ function extractTodayWorkingHoursFromContacts(contactsText: string, query: strin
     'вс': 'сегодня, в воскресенье',
   };
 
+  const directDayPatterns: Array<{ days: number[]; regex: RegExp }> = [
+    { days: [1, 2, 3, 4, 5], regex: /пн\.?\s*-\s*пт\.?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2})/i },
+    { days: [6, 0], regex: /сб\.?\s*-\s*вс\.?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
+    { days: [6], regex: /сб\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
+    { days: [0], regex: /вс\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
+    { days: [1], regex: /пн\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
+    { days: [2], regex: /вт\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
+    { days: [3], regex: /ср\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
+    { days: [4], regex: /чт\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
+    { days: [5], regex: /пт\.?\s*[:\-]?\s*([0-2]?\d[:.]\d{2}\s*-\s*[0-2]?\d[:.]\d{2}|выходной)/i },
+  ];
+
   type BranchInfo = {
     name: string;
     address: string;
