@@ -5098,14 +5098,55 @@ function extractTodayWorkingHoursFromContacts(contactsText: string, query: strin
     return null;
   };
 
+  // Достаём первый телефон и WhatsApp из контактов — чтобы предложить связаться.
+  const pickContactSnippet = (): string => {
+    const phoneMatch = contactsText.match(/(?:\+7|8)[\s\(\)\-]*\d{3}[\s\(\)\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/);
+    const waMatch = contactsText.match(/https?:\/\/wa\.me\/(\d+)/i);
+    const parts: string[] = [];
+    if (phoneMatch) {
+      const raw = phoneMatch[0].trim();
+      const num = raw.replace(/[\s\(\)\-]/g, '');
+      parts.push(`[${raw}](tel:${num})`);
+    }
+    if (waMatch) {
+      parts.push(`[WhatsApp](https://wa.me/${waMatch[1]})`);
+    }
+    return parts.join(' или ');
+  };
+
+  // Лёгкий вопрос для удержания — менеджер так и общается.
+  const followUpQuestions = [
+    'А что вы подбираете — подскажу прямо сейчас?',
+    'Кстати, что именно ищете? Помогу с выбором.',
+    'А по какому товару вопрос? Подскажу варианты.',
+  ];
+  const followUp = followUpQuestions[new Date().getMinutes() % followUpQuestions.length];
+
   for (const line of candidates) {
     const resolved = extractForLine(line);
     if (!resolved) continue;
+    const todayLabel = todayFullMap[ruShort] || 'сегодня';
+    const contactSnippet = pickContactSnippet();
     const hoursLc = resolved.hours.toLowerCase();
+
     if (hoursLc.includes('выходной')) {
-      return `${todayFullMap[ruShort] || 'сегодня'} ${resolved.branchName} не работает.`;
+      const lines = [`${todayLabel} ${resolved.branchName} не работает.`];
+      if (contactSnippet) {
+        lines.push(`Если вопрос срочный — напишите ${contactSnippet}, менеджер ответит в рабочее время.`);
+      }
+      lines.push(followUp);
+      return lines.join(' ');
     }
-    return `${todayFullMap[ruShort] || 'сегодня'} ${resolved.branchName} работает до **${resolved.hours.split('-')[1]?.trim() || resolved.hours}**.`;
+
+    const [startRaw, endRaw] = resolved.hours.split('-').map((s) => s.trim());
+    const start = startRaw || resolved.hours;
+    const end = endRaw || resolved.hours;
+    const lines = [`${todayLabel} ${resolved.branchName} работает с **${start}** до **${end}**.`];
+    if (contactSnippet) {
+      lines.push(`Можете позвонить или написать: ${contactSnippet}.`);
+    }
+    lines.push(followUp);
+    return lines.join(' ');
   }
 
   return null;
