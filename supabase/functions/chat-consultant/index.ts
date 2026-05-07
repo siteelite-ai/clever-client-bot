@@ -542,6 +542,8 @@ interface CachedSettings {
   system_prompt: string | null;
   classifier_provider: string;
   classifier_model: string;
+  /** Editable classifier system prompt (admin /settings). Null = use DEFAULT_CLASSIFIER_PROMPT. */
+  classifier_prompt: string | null;
   /**
    * §22.2 spec — Branch A флаг (Query-First). Прочитывается для observability;
    * полная V1-имплементация отложена (V1 ветка остаётся stable fallback).
