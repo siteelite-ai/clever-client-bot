@@ -63,6 +63,14 @@ export const DEFAULT_CLASSIFIER_PROMPT = `Ты классификатор соо
 - Смягчающие слова рядом («желательно», «примерно», «около», «можно», «хотелось бы») → модификатор НЕ критичный.
 - Если модификаторов нет — пустой массив.
 
+ПОД-ИНТЕНТ (sub_intent) — ЧТО именно хочет узнать пользователь о товаре
+- "availability" — спрашивает, есть ли товар, в наличии ли, остался ли, можно ли купить.
+- "price" — спрашивает «сколько стоит», «какая цена», «почём» (но БЕЗ экстремума — экстремум уходит в price_intent).
+- "location" — спрашивает, где забрать, в каком магазине/городе, есть ли самовывоз.
+- "spec" — спрашивает про конкретную характеристику (мощность, длина, ток, материал и т.п.) — обычно сопровождается компьютером/умножением.
+- null — нет явного под-интента, общий запрос «найди / покажи / есть что-то такое».
+Под-интент НЕ исключает intent=catalog: «есть в наличии Х?» = catalog + sub_intent=availability.
+
 ВЫВОД
 Ответь СТРОГО одним JSON-объектом без префиксов, без markdown, без пояснений:
-{"intent":"catalog"|"brands"|"info"|"general","has_product_name":bool,"product_name":string|null,"price_intent":"most_expensive"|"cheapest"|null,"product_category":string|null,"is_replacement":bool,"search_modifiers":string[],"critical_modifiers":string[]}`;
+{"intent":"catalog"|"brands"|"info"|"general","has_product_name":bool,"product_name":string|null,"price_intent":"most_expensive"|"cheapest"|null,"product_category":string|null,"is_replacement":bool,"search_modifiers":string[],"critical_modifiers":string[],"sub_intent":"availability"|"price"|"location"|"spec"|null}`;
