@@ -81,10 +81,17 @@ export const DEFAULT_CLASSIFIER_PROMPT = `Ты классификатор соо
 - "availability" — спрашивает, есть ли товар, в наличии ли, остался ли, можно ли купить.
 - "price" — спрашивает «сколько стоит», «какая цена», «почём» (но БЕЗ экстремума — экстремум уходит в price_intent).
 - "location" — спрашивает, где забрать, в каком магазине/городе, есть ли самовывоз.
-- "spec" — спрашивает про конкретную характеристику (мощность, длина, ток, материал и т.п.) — обычно сопровождается компьютером/умножением.
+- "spec" — спрашивает про конкретную характеристику (мощность, длина, ток, материал, вес, IP, габариты, объём и т.п.).
 - null — нет явного под-интента, общий запрос «найди / покажи / есть что-то такое».
 Под-интент НЕ исключает intent=catalog: «есть в наличии Х?» = catalog + sub_intent=availability.
 
+РАСЧЁТ / ХАРАКТЕРИСТИКА (compute) — заполняй ТОЛЬКО если sub_intent="spec"
+- Поле compute = {"attribute": <короткое русское название характеристики>, "multiplier": <целое число | null>}.
+- attribute = одно слово, как клиент обычно называет характеристику: «вес», «мощность», «IP», «габариты», «гарантия», «длина», «количество ламп», «материал», «объём». НЕ перечисляй несколько — выбери главную.
+- Для вопросов про транспортировку/перевозку («сколько места», «влезет ли в Газель», «помещается ли в кузов») — attribute="объём".
+- multiplier = целое число, если явно указано количество («5 штук», «×3», «для 10 светильников»). Если количество не названо — null.
+- Если sub_intent ≠ "spec" — compute = null. Не выдумывай.
+
 ВЫВОД
 Ответь СТРОГО одним JSON-объектом без префиксов, без markdown, без пояснений:
-{"intent":"catalog"|"brands"|"info"|"general","has_product_name":bool,"product_name":string|null,"price_intent":"most_expensive"|"cheapest"|null,"product_category":string|null,"is_replacement":bool,"search_modifiers":string[],"critical_modifiers":string[],"sub_intent":"availability"|"price"|"location"|"spec"|null}`;
+{"intent":"catalog"|"brands"|"info"|"general","has_product_name":bool,"product_name":string|null,"price_intent":"most_expensive"|"cheapest"|null,"product_category":string|null,"is_replacement":bool,"search_modifiers":string[],"critical_modifiers":string[],"sub_intent":"availability"|"price"|"location"|"spec"|null,"compute":{"attribute":string,"multiplier":number|null}|null}`;
