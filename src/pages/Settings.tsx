@@ -198,6 +198,27 @@ export default function Settings() {
       setPipelineSaving(false);
     }
   };
+
+  // Save classifier prompt independently — admins iterate on it often;
+  // empty string clears the override and edge function falls back to DEFAULT_CLASSIFIER_PROMPT.
+  const handleSaveClassifierPrompt = async () => {
+    if (!settings?.id) return;
+    setClassifierPromptSaving(true);
+    try {
+      const { error } = await supabase
+        .from('app_settings')
+        .update({ classifier_prompt: classifierPrompt.trim() || null } as any)
+        .eq('id', settings.id);
+      if (error) throw error;
+      toast.success(classifierPrompt.trim() ? 'Промпт классификатора сохранён' : 'Промпт сброшен на встроенный по умолчанию');
+    } catch (e) {
+      console.error('Save classifier prompt failed:', e);
+      toast.error('Не удалось сохранить промпт');
+    } finally {
+      setClassifierPromptSaving(false);
+    }
+  };
+
   // Ping a single model via OpenRouter
   const pingModel = async (modelId: string) => {
     if (!openrouterKey) {
