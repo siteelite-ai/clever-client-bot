@@ -1105,6 +1105,85 @@ function looksLikeProductMarking(text: string): boolean {
   return /(\d+\s*[x×х*]\s*\d+)|ip\s*\d{2}|\bмм\b|\bсм\b|\bвт\b|\bw\b|\bмодул|[a-zа-я]+\d|\d[a-zа-я]+/i.test(t);
 }
 
+function scoreDimensionGrouping(parts: string[]): number {
+  const lengths = parts.map((p) => p.length);
+  const spread = Math.max(...lengths) - Math.min(...lengths);
+  const singleDigitPenalty = lengths.some((len) => len === 1) ? 2 : 0;
+  const middleBonus = parts.length === 3 && lengths[1] === 3 ? -0.25 : 0;
+  const edgePenalty = (lengths[0] === 2 ? 0 : 0.2) + (lengths[lengths.length - 1] === 2 ? 0 : 0.2);
+  return spread + singleDigitPenalty + edgePenalty + middleBonus;
+}
+
+function buildDimensionGroupings(digits: string, maxVariants = 4): string[] {
+  if (!/^\d{5,9}$/.test(digits)) return [];
+
+  const candidates: string[][] = [];
+  const visit = (offset: number, remainingGroups: number, parts: string[]) => {
+    if (remainingGroups === 1) {
+      const tailLen = digits.length - offset;
+      if (tailLen < 1 || tailLen > 3) return;
+      candidates.push([...parts, digits.slice(offset)]);
+      return;
+    }
+
+    for (let len = 1; len <= 3; len += 1) {
+      const next = offset + len;
+      const remainingDigits = digits.length - next;
+      const minNeeded = remainingGroups - 1;
+      const maxNeeded = (remainingGroups - 1) * 3;
+      if (remainingDigits < minNeeded || remainingDigits > maxNeeded) continue;
+      visit(next, remainingGroups - 1, [...parts, digits.slice(offset, next)]);
+    }
+  };
+
+  visit(0, 3, []);
+
+  return candidates
+    .sort((a, b) => scoreDimensionGrouping(a) - scoreDimensionGrouping(b))
+    .map((parts) => parts.join('*'))
+    .filter((value, index, arr) => arr.indexOf(value) === index)
+    .slice(0, maxVariants);
+}
+
+function buildTitleSearchCandidates(input: string): { exact: string[]; query: string[] } {
+  const base = input.trim().replace(/\s+/g, ' ');
+  const exact: string[] = [];
+  const query: string[] = [];
+  const pushUnique = (target: string[], value: string) => {
+    const cleaned = value.trim().replace(/\s+/g, ' ');
+    if (!cleaned || target.includes(cleaned)) return;
+    target.push(cleaned);
+  };
+
+  if (!base) return { exact, query };
+
+  pushUnique(exact, base);
+  pushUnique(query, base);
+
+  const separatorNormalized = base
+    .replace(/\s*[x×хХX]\s*/g, '*')
+    .replace(/мм/gi, 'mm');
+
+  pushUnique(exact, separatorNormalized);
+  pushUnique(query, separatorNormalized.replace(/\*/g, ' '));
+
+  const gluedMatches = Array.from(separatorNormalized.matchAll(/(\d{5,9})\s*(mm|мм)\b/gi));
+  for (const match of gluedMatches) {
+    const fullMatch = match[0];
+    const digits = match[1];
+    const groupings = buildDimensionGroupings(digits, 4);
+    for (const grouped of groupings) {
+      pushUnique(exact, separatorNormalized.replace(fullMatch, `${grouped}mm`));
+      pushUnique(query, separatorNormalized.replace(fullMatch, `${grouped.replace(/\*/g, ' ')} mm`));
+    }
+  }
+
+  return {
+    exact: exact.slice(0, 4),
+    query: query.slice(0, 4),
+  };
+}
+
 async function searchByArticle(article: string, apiToken: string): Promise<Product[]> {
   const params = new URLSearchParams();
   params.append('article', article);
