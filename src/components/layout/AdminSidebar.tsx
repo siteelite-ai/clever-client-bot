@@ -11,7 +11,8 @@ import {
   ChevronLeft,
   ChevronRight,
   Zap,
-  LogOut
+  LogOut,
+  ScrollText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuth } from '@/hooks/useAuth';
