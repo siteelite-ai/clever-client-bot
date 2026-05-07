@@ -5164,49 +5164,51 @@ function extractTodayWorkingHoursFromContacts(contactsText: string, query: strin
 
   if (branches.length === 0) return null;
 
-  const formatBranch = (b: BranchInfo): string => {
-    const parts: string[] = [];
-    parts.push(`- **${b.name}**`);
-    if (b.address) parts.push(`  ${b.address}`);
-    const hoursLc = b.hours.toLowerCase();
-    if (hoursLc.includes('выходной')) {
-      parts.push(`  ${todayLabel === 'сегодня' ? 'Сегодня' : todayLabel.charAt(0).toUpperCase() + todayLabel.slice(1)} — выходной.`);
-    } else {
-      const [s, e] = b.hours.split('-').map((x) => x.trim());
-      parts.push(`  Сегодня работает с **${s}** до **${e || s}**.`);
-    }
-    if (b.phone) {
-      const num = b.phone.replace(/[\s\(\)\-]/g, '');
-      parts.push(`  Телефон: [${b.phone}](tel:${num})`);
-    }
-    return parts.join('\n');
+  // NBSP внутри номера, чтобы браузер не переносил цифры на новую строку.
+  const formatPhone = (raw: string): string => {
+    const num = raw.replace(/[\s\(\)\-]/g, '');
+    const display = raw.trim().replace(/\s+/g, '\u00A0').replace(/-/g, '\u2011');
+    return `[${display}](tel:${num})`;
   };
 
-  // Один филиал — короткая фраза, не нужен список.
+  const todayCap = todayLabel === 'сегодня'
+    ? 'Сегодня'
+    : todayLabel.charAt(0).toUpperCase() + todayLabel.slice(1);
+
+  const formatHoursLine = (hours: string): string => {
+    if (hours.toLowerCase().includes('выходной')) return `${todayCap} — выходной`;
+    const [s, e] = hours.split('-').map((x) => x.trim());
+    return `${todayCap} работает с **${s}** до **${e || s}**`;
+  };
+
+  const formatBranch = (b: BranchInfo): string => {
+    const lines: string[] = [];
+    lines.push(`- **${b.name}**`);
+    if (b.address) lines.push(`  - 📍\u00A0${b.address}`);
+    lines.push(`  - 🕒\u00A0${formatHoursLine(b.hours)}`);
+    if (b.phone) lines.push(`  - 📞\u00A0${formatPhone(b.phone)}`);
+    return lines.join('\n');
+  };
+
+  // Один филиал — компактный блок, но с переносами «поле — значение».
   if (branches.length === 1) {
     const b = branches[0];
-    const hoursLc = b.hours.toLowerCase();
-    const lead = hoursLc.includes('выходной')
-      ? `${todayLabel} ${b.name}${b.address ? ` (${b.address})` : ''} не работает.`
-      : (() => {
-          const [s, e] = b.hours.split('-').map((x) => x.trim());
-          return `${todayLabel} ${b.name}${b.address ? ` (${b.address})` : ''} работает с **${s}** до **${e || s}**.`;
-        })();
-    const tail: string[] = [];
-    if (b.phone) {
-      const num = b.phone.replace(/[\s\(\)\-]/g, '');
-      tail.push(`Можете позвонить: [${b.phone}](tel:${num}).`);
-    }
-    tail.push(followUp);
-    return [lead, ...tail].join(' ');
+    const lines: string[] = [];
+    lines.push(`**${b.name}**`);
+    if (b.address) lines.push(`📍 ${b.address}`);
+    lines.push(`🕒 ${formatHoursLine(b.hours)}.`);
+    if (b.phone) lines.push(`📞 ${formatPhone(b.phone)}`);
+    lines.push('');
+    lines.push(followUp);
+    return lines.join('\n');
   }
 
   // Несколько филиалов — список.
   const header = cityLabel
-    ? `${todayLabel === 'сегодня' ? 'Сегодня' : todayLabel.charAt(0).toUpperCase() + todayLabel.slice(1)} в ${cityLabel} работают ${branches.length} наших точек:`
-    : `${todayLabel === 'сегодня' ? 'Сегодня' : todayLabel.charAt(0).toUpperCase() + todayLabel.slice(1)} работают наши точки:`;
+    ? `${todayCap} в ${cityLabel} работают ${branches.length} наших точек:`
+    : `${todayCap} работают наши точки:`;
 
-  return [header, branches.map(formatBranch).join('\n'), followUp].join('\n\n');
+  return [header, branches.map(formatBranch).join('\n\n'), followUp].join('\n\n');
 }
 
 // Simple in-memory rate limiter
