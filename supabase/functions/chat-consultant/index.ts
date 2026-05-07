@@ -8020,6 +8020,8 @@ ${productInstructions}`;
             effectivePriceIntent,
           });
       console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${content.length}`);
+      logSetProductsCount(foundProducts.length);
+      logAddStep({ step: 'final-deterministic', total: foundProducts.length, meta: { reason: renderReason } });
 
       // ─────────────────────────────────────────────────────────────────────
       // CROSS-SELL: ОТКЛЮЧЁН (V1, 2026-05-05).
