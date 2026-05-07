@@ -1259,6 +1259,7 @@ interface ClassificationResult {
   is_replacement?: boolean;
   search_modifiers?: string[];
   critical_modifiers?: string[];
+  sub_intent?: 'availability' | 'price' | 'location' | 'spec';
 }
 
 async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>, settings?: CachedSettings | null): Promise<ClassificationResult | null> {
