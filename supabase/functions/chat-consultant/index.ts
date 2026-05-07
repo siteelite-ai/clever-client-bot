@@ -7499,6 +7499,46 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
       ? pickBestKnowledgeEntryForInfoQuery(userMessage, knowledgeResults)
       : null;
 
+    const directHoursAnswer = extractedIntent.intent === 'info'
+      ? extractTodayWorkingHoursFromContacts(contactsInfo, userMessage)
+      : null;
+    if (directHoursAnswer) {
+      console.log(`[Chat] Info hours short-circuit: ${directHoursAnswer}`);
+      const content = linkifyContacts(directHoursAnswer);
+      if (!useStreaming) {
+        const responseBody: { content: string; slot_update?: DialogSlots } = { content };
+        if (slotsUpdated) responseBody.slot_update = dialogSlots;
+        persistSlotsAsync(conversationId, dialogSlots);
+        return new Response(JSON.stringify(responseBody), {
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
+      }
+
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          const contentDelta = `data: ${JSON.stringify({ choices: [{ delta: { content }, index: 0 }] })}\n\n`;
+          controller.enqueue(encoder.encode(contentDelta));
+          if (slotsUpdated) {
+            const slotEvent = `data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`;
+            controller.enqueue(encoder.encode(slotEvent));
+          }
+          persistSlotsAsync(conversationId, dialogSlots);
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      });
+
+      return new Response(stream, {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
+    }
+
     if (knowledgeResults.length > 0) {
       // Plan V5: для article-shortcircuit ответ — простой "да, есть, X тг". 15 КБ статей раздувают токены и латентность.
       // Режем budget до 2 КБ и берём только топ-1 самую релевантную запись.
@@ -7853,45 +7893,7 @@ ${productContext}
 - Тон: профессиональный, без восклицательных знаков, без давления`;
     } else if (isGreeting) {
       productInstructions = '';
-      } else if (extractedIntent.intent === 'info') {
-        const directHoursAnswer = extractTodayWorkingHoursFromContacts(contactsInfo, userMessage);
-        if (directHoursAnswer) {
-          console.log(`[Chat] Info hours short-circuit: ${directHoursAnswer}`);
-          const content = linkifyContacts(directHoursAnswer);
-          if (!useStreaming) {
-            const responseBody: { content: string; slot_update?: DialogSlots } = { content };
-            if (slotsUpdated) responseBody.slot_update = dialogSlots;
-            persistSlotsAsync(conversationId, dialogSlots);
-            return new Response(JSON.stringify(responseBody), {
-              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            });
-          }
-
-          const encoder = new TextEncoder();
-          const stream = new ReadableStream({
-            start(controller) {
-              const contentDelta = `data: ${JSON.stringify({ choices: [{ delta: { content }, index: 0 }] })}\n\n`;
-              controller.enqueue(encoder.encode(contentDelta));
-              if (slotsUpdated) {
-                const slotEvent = `data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`;
-                controller.enqueue(encoder.encode(slotEvent));
-              }
-              persistSlotsAsync(conversationId, dialogSlots);
-              controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-              controller.close();
-            },
-          });
-
-          return new Response(stream, {
-            headers: {
-              ...corsHeaders,
-              'Content-Type': 'text/event-stream; charset=utf-8',
-              'Cache-Control': 'no-cache',
-              'Connection': 'keep-alive',
-            },
-          });
-        }
-
+    } else if (extractedIntent.intent === 'info') {
       if (knowledgeResults.length > 0) {
         const bestMatch = infoKbSelection?.bestMatch ?? null;
         console.log(`[Chat] Info intent: topicBoosts=${JSON.stringify(infoKbSelection?.activeBoostKeywords ?? [])}, bestMatch=${bestMatch?.title || 'NONE'} (score=${infoKbSelection?.bestScore ?? 0}), runnerUp=${infoKbSelection?.runnerUp?.title || 'NONE'}(${infoKbSelection?.runnerUpScore ?? 0})`);
