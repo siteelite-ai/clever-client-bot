@@ -92,6 +92,8 @@ export default function Settings() {
   const [pingAllLoading, setPingAllLoading] = useState(false);
   const [classifierProvider, setClassifierProvider] = useState<ClassifierProvider>('auto');
   const [classifierModel, setClassifierModel] = useState('gemini-2.5-flash-lite');
+  const [classifierPrompt, setClassifierPrompt] = useState('');
+  const [classifierPromptSaving, setClassifierPromptSaving] = useState(false);
 
   // V1 vs V2 pipeline toggle (manual switch, no auto-fallback).
   // Saved separately from the big "Save settings" so admins can flip back fast.
