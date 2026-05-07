@@ -5337,6 +5337,36 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
         const classifyElapsed = Date.now() - classifyStart;
         console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → intent=${classification?.intent || 'none'}, has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}", is_replacement=${classification?.is_replacement || false}`);
 
+        // === PAGETITLE-FIRST FAST-PATH (точное совпадение по названию) ===
+        // Если классификатор отметил has_product_name=true ИЛИ запрос содержит
+        // характерные маркеры конкретной модели (размеры 75*124*57мм, IP20, артикул-
+        // подобные сочетания букв+цифр) — пробуем точное совпадение через ?pagetitle=.
+        // Это решает кейс «Щит для автом. выключателей на 2-4 модуля 75*124*57мм IP20»,
+        // когда классификатор ставит has_product_name=false и QFv2 ищет по «щит» → шум.
+        // Любой ≥1 результат → short-circuit, пропускаем весь дальнейший pipeline.
+        try {
+          const pagetitleCandidate = (classification?.product_name || '').trim() || (userMessage || '').trim();
+          const pagetitleTrigger =
+            (!!classification?.has_product_name && pagetitleCandidate.length >= 6) ||
+            looksLikeProductMarking(pagetitleCandidate);
+          if (!articleShortCircuit && !classification?.is_replacement && pagetitleTrigger) {
+            const ptStart = Date.now();
+            const ptResults = await searchByPagetitle(pagetitleCandidate, appSettings.volt220_api_token, 10);
+            const ptElapsed = Date.now() - ptStart;
+            if (ptResults.length > 0) {
+              foundProducts = ptResults.slice(0, 10);
+              articleShortCircuit = true;
+              responseModel = 'anthropic/claude-sonnet-4.5';
+              responseModelReason = 'pagetitle-shortcircuit';
+              console.log(`[Chat] Pagetitle-first FAST-PATH SUCCESS: ${foundProducts.length} products in ${ptElapsed}ms for "${pagetitleCandidate.substring(0, 80)}", skipping downstream pipeline`);
+            } else {
+              console.log(`[Chat] Pagetitle-first FAST-PATH: 0 results in ${ptElapsed}ms for "${pagetitleCandidate.substring(0, 80)}", continuing`);
+            }
+          }
+        } catch (ptErr) {
+          console.error('[Chat] Pagetitle-first FAST-PATH error (silent fallback):', ptErr);
+        }
+
         // === TITLE-FIRST FAST-PATH (mirrors article-first) ===
         // If the Micro-LLM classifier extracted a strong product name (model-like:
         // contains digits or latin letters such as "A60", "LED", "9W", "E27"),
