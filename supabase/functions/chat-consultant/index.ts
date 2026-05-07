@@ -6064,9 +6064,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // ── (4) Resolve modifiers → option filters against the live schema.
                   // If no modifiers: skip resolution, just display pool.
                   let resolvedFilters: Record<string, string> = {};
+                  let resolverUnresolvedDetails: Array<{ modifier: string; key: string; caption: string; requestedValue: string; availableValues: string[] }> = [];
                   if (modifiers.length > 0 && bootstrapSchema.size > 0) {
                     try {
-                      const { resolved: rRaw, unresolved: rUnresolved } = await resolveFiltersWithLLM(
+                      const { resolved: rRaw, unresolved: rUnresolved, unresolvedDetails: rDetails } = await resolveFiltersWithLLM(
                         pool,
                         modifiers,
                         appSettings,
@@ -6076,7 +6077,8 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                         noun
                       );
                       resolvedFilters = flattenResolvedFilters(rRaw);
-                      console.log(`[QueryFirstV2] resolved=${JSON.stringify(resolvedFilters)} unresolved=[${rUnresolved.join(', ')}]`);
+                      resolverUnresolvedDetails = rDetails || [];
+                      console.log(`[QueryFirstV2] resolved=${JSON.stringify(resolvedFilters)} unresolved=[${rUnresolved.join(', ')}] unresolvedDetails=${resolverUnresolvedDetails.length}`);
                     } catch (rErr) {
                       console.log(`[QueryFirstV2] resolveFilters error=${(rErr as Error).message} → continuing with empty filters`);
                     }
