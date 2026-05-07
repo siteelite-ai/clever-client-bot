@@ -5431,15 +5431,20 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     responseModel = 'anthropic/claude-sonnet-4.5'; // 2026-05-02: Gemini Flash hallucinated URLs
                     responseModelReason = 'title-shortcircuit';
                     console.log(`[Chat] NAME-FIRST step=query SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${titleCandidate}"`);
+                    logAddStep({ step: 'name-query', total: qResults.length, ms: elapsed, meta: { candidate: titleCandidate.substring(0, 120) } });
+                    logSetBranch('name-query');
                   } else {
                     console.log(`[Chat] NAME-FIRST step=query: 0 results in ${elapsed}ms for "${titleCandidate}"`);
+                    logAddStep({ step: 'name-query', total: 0, ms: elapsed, meta: { candidate: titleCandidate.substring(0, 120) } });
                   }
                 } catch (err) {
                   console.error('[Chat] NAME-FIRST step=query error (silent fallback):', err);
+                  logAddStep({ step: 'name-query', meta: { error: String(err) } });
                 }
               }
             } else if (!articleShortCircuit && hasCriticalModifiers) {
               console.log(`[Chat] NAME-FIRST step=query SKIPPED: critical_modifiers=[${classification!.critical_modifiers!.join(', ')}] → full catalog pipeline (Pass 2 applies option_filters)`);
+              logAddStep({ step: 'name-query', meta: { skipped: 'critical_modifiers', critical_modifiers: classification!.critical_modifiers } });
             }
           }
         }
