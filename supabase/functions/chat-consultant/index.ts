@@ -5402,11 +5402,15 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 responseModel = 'anthropic/claude-sonnet-4.5';
                 responseModelReason = 'pagetitle-shortcircuit';
                 console.log(`[Chat] NAME-FIRST step=pagetitle SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${candidate.substring(0, 80)}"`);
+                logAddStep({ step: 'pagetitle', total: ptResults.length, ms: elapsed, meta: { candidate: candidate.substring(0, 120) } });
+                logSetBranch('pagetitle');
               } else {
                 console.log(`[Chat] NAME-FIRST step=pagetitle: 0 results in ${elapsed}ms for "${candidate.substring(0, 80)}"`);
+                logAddStep({ step: 'pagetitle', total: 0, ms: elapsed, meta: { candidate: candidate.substring(0, 120) } });
               }
             } catch (err) {
               console.error('[Chat] NAME-FIRST step=pagetitle error (silent fallback):', err);
+              logAddStep({ step: 'pagetitle', meta: { error: String(err) } });
             }
 
             // STEP 2: query (fuzzy) — только если pagetitle пуст и нет critical_modifiers
