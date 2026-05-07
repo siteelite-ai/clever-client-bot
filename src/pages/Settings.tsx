@@ -778,16 +778,9 @@ export default function Settings() {
                 </h2>
                 <p className="text-sm text-muted-foreground mt-1">
                   Управляет тем, как чат-бот понимает запрос пользователя: тип товара, конкретное название, цена, замена.
-                  Пусто — используется встроенный по умолчанию. Тестируйте изменения на странице «Тесты классификатора» перед публикацией.
+                  Пусто — используется встроенный по умолчанию.
                 </p>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => window.open('/classifier-tests', '_blank')}
-              >
-                Открыть тесты
-              </Button>
             </div>
             <textarea
               value={classifierPrompt}
