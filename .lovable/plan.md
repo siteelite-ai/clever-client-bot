@@ -1,89 +1,92 @@
+## Консилиум по сессии 2c4c6864
 
-## Контекст
+Привлечены 3 роли из AUDIT_PROMPT.md + архитектор. Все говорят прямо.
 
-В V1 (`chat-consultant`) уже есть очень быстрый short-circuit по артикулу:
+---
 
-1. `detectArticles(userMessage)` — regex-детектор кодов в сообщении (артикул, site-id, чисто числовой код).
-2. Если что-то найдено — параллельно вызывается `searchByArticle(art)` → API `/products?article=…&per_page=5` с таймаутом 8 c и ретраем.
-3. При попадании выставляется `articleShortCircuit = true`, **полностью пропускается LLM-классификация и категорийный pipeline**, ответ собирается на Flash-модели (не Pro).
+### Edge Functions Stability Auditor (роль 4) — что сейчас сломано
 
-Это и даёт ощущение «как поиск по сайту»: один HTTP-запрос → готовая карточка.
+Изучил `supabase/functions/chat-consultant/index.ts` (строки 5260–5440, 7085–8020) и `_shared/classifier-prompt.ts`.
 
-Catalog API поддерживает аналогичный точный поиск по имени — параметр **`pagetitle`** (EXACT product name, см. memory `architecture/catalog-api-quirks`). Сейчас V1 им не пользуется: при запросе вида «Лампа ESS LEDBulb 9W E27 6500K» бот идёт через Micro-LLM классификатор → category resolver → фасеты → strict search, и только в конце находит товар.
+**Дефект 1 — двойной классификатор.** В short-circuit ветке после успешного `pagetitle`/`name-query` мы вторым вызовом дёргаем Claude (`generateSearchCandidates`) только ради `compute={attribute, multiplier}`. +3-4с латентности и нестабильно: на длинных product_name Claude иногда возвращает `compute=null`, и расчёт молча теряется (сессия 09:14).
 
-Цель — сделать **title-first short-circuit** ровно по той же схеме, что и article-first, и поставить его сразу **после** article-first (артикул всегда точнее).
+**Дефект 2 — sub_intent ломает поиск.** Классификатор на «Щит … 75*124*57мм IP20 **есть в наличии?**» ставит `has_product_name=false` и сваливает всё в `critical_modifiers=["2-4 модуля 75*124*57мм IP20"]` (сессии 08:19/08:29/08:42 → branch=jargon-fallback, 15 шумных карточек вместо одной точной). Разговорная обёртка про наличие искажает определение product_name.
 
-## Изменения
+**Дефект 3 — sub_intent intro прибит к одной ветке.** `buildIntroBySubIntent` живёт прямо внутри `buildDeterministicShortCircuitContent` (строки 4477–4498). Branches типа QFv2-soft / jargon-fallback-early используют тот же helper — это OK; но если catalog-ветка с Pass 2 проходит мимо — intro теряется. Сейчас условие `shouldUseDeterministicProductRender` это покрыло, но логика рассыпана и ломается при каждом следующем рефакторе.
 
-Только один файл: `supabase/functions/chat-consultant/index.ts`.
-V2 (`chat-consultant-v2`) **не трогаем** — V1 заморожена по совсем другим причинам, но конкретно эта правка вписывается в её существующую архитектуру short-circuit'ов и логически принадлежит V1 (V2 переписывается по спецификации отдельно).
+### Sales Logic Auditor (роль 2) — что видит клиент
 
-### 1. Новая функция `searchByPagetitle(title, apiToken)`
+«Сколько весить 5 шт» → карточка без веса. Это провал по checklist: «При запросе характеристик — даёт ссылку на товар» — ссылку даёт, **но на сам вопрос не отвечает**. С точки зрения продаж это хуже, чем «не нашёл»: клиент чувствует, что бот его не слышит.
 
-Полный аналог `searchByArticle`:
+«Есть в наличии?» иногда даёт 15 карточек вместо 1 — это размывание воронки (роль 5: «Путь от вопроса до товара ≤ 2-3 сообщения» нарушен).
 
-- `URLSearchParams` с `pagetitle=<title>` и `per_page=5`.
-- Через тот же `fetchCatalogWithRetry(..., 'TitleSearch', 8000)` — таймаут + 1 ретрай.
-- Парсит `data.results`, фильтрует `price > 0` (HARD BAN на price=0 из core).
-- Логи `[TitleSearch] …`.
+### Архитектор — корневая причина
 
-### 2. Новая функция `extractCandidateTitle(message, classification)`
+`sub_intent` сейчас протекает в **поисковую** часть pipeline и одновременно слабо влияет на **ответную**. Должно быть строго наоборот:
 
-Детектор «похоже на точное название товара». В отличие от артикулов, regex здесь не работает — название это естественный язык. Поэтому источник кандидата — **уже существующий Micro-LLM классификатор** (`classifyProductName`), который и так возвращает поле `product_name` когда `has_product_name === true`.
-
-Логика:
-- Если `classification.has_product_name === true` И `classification.product_name` длиной ≥ 6 символов И содержит хотя бы одну букву И хотя бы одну цифру/латиницу (типичные признаки модели: «A60», «LED», «9W», «E27», «GX53», «IP44») → возвращаем `product_name` как кандидата.
-- Иначе — `null`, идём дальше по обычному pipeline.
-
-Это отсекает «найди лампы для школы» (нет цифр/латиницы → не кандидат) и пропускает «Лампа ESS LEDBulb 9W E27 6500K» (есть и буквы, и цифры, и латиница).
-
-### 3. Встраивание в pipeline
-
-В блок `chat()` после article-first (строки ~4585) и **перед** обычным title-first via Micro-LLM (строки ~4587+), но с одной перестановкой: классификатор всё равно нужно вызвать ДО title-fast-path, потому что он даёт нам кандидата. Поэтому порядок становится:
-
-```text
-1. article-first (regex → /products?article=)            ← как сейчас
-2. classifyProductName(...)                              ← двигаем ВЫШЕ из текущей позиции
-3. title-first (extractCandidateTitle → /products?pagetitle=)  ← НОВОЕ
-4. остальной pipeline (slot resolution, category, фасеты, strict search)
+```
+ПОИСК (ствол) — sub_intent НЕ ВЛИЯЕТ ВООБЩЕ
+classify → pagetitle → name-query → QFv2 → jargon-fallback → soft-404
+                                                                 ↓
+                                                          foundProducts
+                                                                 ↓
+ОТВЕТ (надстройка) — единый sink, читает sub_intent и compute
+                  ↓
+          buildAnswer(products, subIntent, compute?)
+                  ↓
+   availability → "Да, есть в наличии: <карточка>"
+   price        → "Стоит X ₸: <карточка>"
+   location     → "Доступен в <города>: <карточка>"
+   spec+compute → LLM считает "<value> × N = <итог>: <карточка>"
+   spec без compute → "По характеристикам: <карточка>" (детерминистично)
+   null         → "Подобрал: <карточка>"
 ```
 
-При попадании title-first:
-- `foundProducts = results`
-- новый флаг `titleShortCircuit = true`
-- `responseModel = 'google/gemini-2.5-flash'`, `responseModelReason = 'title-shortcircuit'` (как article)
-- `if (titleShortCircuit || articleShortCircuit) { /* skip slot/category/strict-search */ }`
+---
 
-### 4. Защита от ложных срабатываний
+## План внедрения (4 шага, по правилу «step-by-step + confirm»)
 
-- Минимум 1 результат — если `pagetitle=…` вернул пусто, **не делаем** второй фоллбек, а просто продолжаем обычный pipeline. Никаких поломок: при промахе мы платим один лишний HTTP-запрос (~ те же 8 c таймаута, обычно сильно меньше) и идём как раньше.
-- Если в результатах больше 5 — это, скорее всего, не точное попадание (pagetitle EXACT-матчит, но API может вернуть substring). На этот случай добавим post-filter: оставляем только товары, где `product.pagetitle.toLowerCase() === candidate.toLowerCase()` ИЛИ `product.pagetitle.toLowerCase().includes(candidate.toLowerCase())` И длина candidate ≥ 60% длины pagetitle. Если после фильтра 0 — short-circuit не срабатывает.
-- price=0 уже отфильтровано на шаге 1 (внутри `searchByPagetitle`).
+### Шаг 1. Classifier-prompt: разделение поиска и намерения
 
-## Что НЕ меняем
+`supabase/functions/_shared/classifier-prompt.ts`:
+- Добавить в схему поле `compute: {attribute: string, multiplier: number|null} | null` рядом с `sub_intent` (классификатор уже Claude Sonnet 4.5 — справится одним вызовом).
+- Явное правило: разговорные обёртки (`есть в наличии?`, `сколько стоит?`, `где забрать?`, `сколько весит?`) — это **только** `sub_intent`/`compute`. Они НЕ влияют на `has_product_name`, НЕ попадают в `product_name`, НЕ становятся `critical_modifiers`. Алгоритм: сначала срезать «хвост-вопрос» → классифицировать оставшееся как товар → метку sub_intent поставить отдельно.
+- Самопроверка для LLM: «если убрать слова про наличие/цену/место/характеристику — получится валидное название товара или фильтр? Если да → используй то, что осталось».
 
-- Article-first остаётся как есть (он точнее и надёжнее, идёт первым).
-- Существующий «title-first via Micro-LLM classifier» (slot resolution, category disambiguation) остаётся — он покрывает случаи, когда название неточное или это категорийный запрос. Новый fast-path просто выходит раньше, если уверен.
-- V2 не трогаем (memory: «V1 FROZEN» относится к спорным правкам спецификации; этот short-circuit — улучшение существующей V1-архитектуры, идентичное article-first).
-- Никаких миграций БД, никаких новых секретов, никаких изменений во фронте/виджете.
+### Шаг 2. Удалить двойной вызов Claude в short-circuit
 
-## Тест-план (после деплоя)
+`chat-consultant/index.ts` строки 7087–7115:
+- Убрать regex-gate `looksLikeSpecQuery` и второй вызов `generateSearchCandidates`.
+- `compute` читается напрямую из `classification.compute` (заполненного в шаге 1).
+- Удалить `ComputeRequest` extraction из `generateSearchCandidates` (или оставить как fallback, но не вызывать ради него).
 
-1. **Точное название с моделью** — «Лампа ESS LEDBulb 9W E27 6500K 230V 1CT» → должен сработать title-shortcircuit, в логах `[TitleSearch] Found N`, ответ < 3 c на Flash.
-2. **Категорийный запрос** — «найди лампы для школы» → title-fast-path НЕ срабатывает (нет цифр/латиницы), идёт обычный pipeline.
-3. **Артикул** — «92900190008» → article-first срабатывает раньше, title-first не вызывается.
-4. **Промах по названию** — «Лампа Несуществующая Модель X999» → title-fast-path вернул 0, идём в обычный pipeline без поломок.
-5. **Регрессия** — «розетки белые на 2 места» → обычный pipeline отрабатывает как раньше.
+### Шаг 3. Единый форматтер ответа
+
+Вынести из `buildDeterministicShortCircuitContent` (строки 4464–4505) функцию `buildIntroBySubIntent(subIntent, products, fallbackReason, effectivePriceIntent)` в отдельный helper. Все ветки (article/siteid/pagetitle/name-query/qfv2/jargon-fallback/pass2) вызывают её через одну точку.
+
+Правило: если `sub_intent='spec' && compute` — детерминистичный рендер выключен (как сейчас), идём в LLM с `buildComputeInstructionBlock`. Если `sub_intent='spec' && !compute` — детерминистичный рендер включён с intro «Вот товар, по характеристикам:» (а не молчаливое «Подобрал товары»).
+
+### Шаг 4. Регрессионная проверка
+
+Прогнать через `supabase--curl_edge_functions` ровно 4 запроса и сверить branch+intro+products в `chat_request_logs`:
+1. `Щит … 75*124*57мм IP20 есть в наличии?` → branch=pagetitle ИЛИ name-query, 1 товар, intro=«Да, есть в наличии:»
+2. `сколько будет весить 5 Корпус метал ЩРв-12з-3 …` → branch=pagetitle/name-query, intro содержит вычисленный вес × 5
+3. `найди лампы-кукурузы` → branch=jargon-fallback, intro=«Подобрал товары…»
+4. `сколько стоит автомат IEK ВА47-29 16А` → sub_intent=price, intro=«Вот актуальная цена:»
+
+Каждый шаг — отдельный коммит + deploy + проверка логов перед переходом к следующему.
+
+---
 
 ## Технические детали (для разработчика)
 
-- Файл: `supabase/functions/chat-consultant/index.ts`.
-- Новые функции добавляем рядом с `searchByArticle` (~ строка 896).
-- Встраивание — в `chat()` около строки 4585, с перестановкой `classifyProductName` выше короткого замыкания.
-- Использовать существующий `fetchCatalogWithRetry`, `VOLT220_API_URL`, типы `Product`.
-- Логи в том же стиле: `[TitleSearch]`, `[Chat] Title-first SUCCESS …`.
-- Флаг `titleShortCircuit` объявить рядом с `articleShortCircuit`, использовать в той же ветке пропуска LLM 1.
+| Файл | Изменение |
+|---|---|
+| `_shared/classifier-prompt.ts` | +поле `compute` в JSON-схеме, +правило про срезание хвоста-вопроса |
+| `chat-consultant/index.ts:1230-1265` | расширить `ClassificationResult.compute`, парсить из основного классификатора |
+| `chat-consultant/index.ts:7087-7115` | удалить `looksLikeSpecQuery` + второй `generateSearchCandidates`; `computeField = classification?.compute` |
+| `chat-consultant/index.ts:4464-4498` | вынести intro-логику в `buildIntroBySubIntent`, экспортировать |
+| `chat-consultant/index.ts:7980` | условие отключения детерминистичного рендера: `hasComputeRequest` (без изменений) |
+| `mem://features/spec-query` | обновить: compute теперь в основном classifier, второй вызов удалён |
 
-## Готов реализовать после approve
-
-После одобрения переключусь в build-mode и сделаю одну правку в `index.ts` + задеплою `chat-consultant`. Ничего больше деплоить не нужно.
+Подтверди — стартую с **Шага 1**.
