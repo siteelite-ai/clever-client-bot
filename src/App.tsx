@@ -36,7 +36,7 @@ const App = () => (
             <Route path="/integration" element={<ProtectedRoute><Integration /></ProtectedRoute>} />
             <Route path="/settings" element={<ProtectedRoute requiredRole="admin"><Settings /></ProtectedRoute>} />
             <Route path="/logs" element={<ProtectedRoute requiredRole="editor"><RequestLogs /></ProtectedRoute>} />
-            <Route path="/classifier-tests" element={<ProtectedRoute requiredRole="admin"><ClassifierTests /></ProtectedRoute>} />
+            
             <Route path="*" element={<NotFound />} />
           </Routes>
         </AuthProvider>
