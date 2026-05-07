@@ -5184,9 +5184,9 @@ function extractTodayWorkingHoursFromContacts(contactsText: string, query: strin
   const formatBranch = (b: BranchInfo): string => {
     const lines: string[] = [];
     lines.push(`- **${b.name}**`);
-    if (b.address) lines.push(`  - 📍 ${b.address}`);
-    lines.push(`  - 🕒 ${formatHoursLine(b.hours)}`);
-    if (b.phone) lines.push(`  - 📞 ${formatPhone(b.phone)}`);
+    if (b.address) lines.push(`  - 📍\u00A0${b.address}`);
+    lines.push(`  - 🕒\u00A0${formatHoursLine(b.hours)}`);
+    if (b.phone) lines.push(`  - 📞\u00A0${formatPhone(b.phone)}`);
     return lines.join('\n');
   };
 
