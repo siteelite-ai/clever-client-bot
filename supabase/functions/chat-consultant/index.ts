@@ -7643,6 +7643,8 @@ ${directAnswerBlock}
 
       // Если jargon не помог (или не вызывался) — строим Soft-404
       if (foundProducts.length === 0) {
+        logSetBranch(qfv2HonestEmptyContext ? 'qfv2-honest-empty' : 'soft-404');
+        logAddStep({ step: 'soft-404', total: 0 });
         // Soft 404 — каталог-интент с нулевыми результатами.
         // SYSTEMIC FIX (probe 2026-05-01): старая инструкция явно разрешала
         // «предложи АЛЬТЕРНАТИВЫ если знаешь что это за товар» — это легализация
