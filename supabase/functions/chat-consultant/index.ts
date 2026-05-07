@@ -7117,7 +7117,6 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
         originalQuery: userMessage,
         compute: computeField,
       };
-      };
     } else if ((classification?.intent === 'info' || classification?.intent === 'general') && !classification?.product_category) {
       // Micro-LLM already determined intent — skip expensive Gemini Pro call
       // GUARD (2026-05-04): если micro-LLM сказал info/general, НО при этом
