@@ -1420,6 +1420,19 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       if (!llmSubIntent && subIntent) {
         console.log(`[Classify] sub_intent fallback=${subIntent} for message="${message.slice(0, 120)}"`);
       }
+      // Compute (spec_query): принимаем только когда sub_intent='spec' и attribute непустой.
+      let computeField: ComputeRequest | undefined;
+      if (subIntent === 'spec' && parsed.compute && typeof parsed.compute === 'object') {
+        const rawAttr = (parsed.compute as Record<string, unknown>).attribute;
+        if (typeof rawAttr === 'string' && rawAttr.trim().length > 0) {
+          const rawMul = (parsed.compute as Record<string, unknown>).multiplier;
+          const multiplier = (typeof rawMul === 'number' && Number.isFinite(rawMul) && rawMul > 0)
+            ? Math.floor(rawMul)
+            : null;
+          computeField = { attribute: rawAttr.trim(), multiplier };
+          console.log(`[Classify] compute extracted: attribute="${computeField.attribute}", multiplier=${multiplier ?? 'null'}`);
+        }
+      }
       return {
         intent: finalIntent as string | undefined,
         has_product_name: !!parsed.has_product_name,
@@ -1430,6 +1443,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
         search_modifiers: rawSearchMods,
         critical_modifiers: rawCritical,
         sub_intent: subIntent,
+        compute: computeField,
       };
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
