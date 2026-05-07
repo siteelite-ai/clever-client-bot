@@ -92,8 +92,6 @@ export default function Settings() {
   const [pingAllLoading, setPingAllLoading] = useState(false);
   const [classifierProvider, setClassifierProvider] = useState<ClassifierProvider>('auto');
   const [classifierModel, setClassifierModel] = useState('gemini-2.5-flash-lite');
-  const [classifierPrompt, setClassifierPrompt] = useState('');
-  const [classifierPromptSaving, setClassifierPromptSaving] = useState(false);
 
   // V1 vs V2 pipeline toggle (manual switch, no auto-fallback).
   // Saved separately from the big "Save settings" so admins can flip back fast.
@@ -134,7 +132,6 @@ export default function Settings() {
         setSelectedModel(d.ai_model || 'qwen/qwen3.6-plus:free');
         setClassifierProvider((d.classifier_provider as ClassifierProvider) || 'auto');
         setClassifierModel(d.classifier_model || 'gemini-2.5-flash-lite');
-        setClassifierPrompt(d.classifier_prompt || '');
         setActivePipeline((d.active_pipeline === 'v2' ? 'v2' : 'v1') as PipelineVersion);
       }
     } catch (error) {
@@ -198,27 +195,6 @@ export default function Settings() {
       setPipelineSaving(false);
     }
   };
-
-  // Save classifier prompt independently — admins iterate on it often;
-  // empty string clears the override and edge function falls back to DEFAULT_CLASSIFIER_PROMPT.
-  const handleSaveClassifierPrompt = async () => {
-    if (!settings?.id) return;
-    setClassifierPromptSaving(true);
-    try {
-      const { error } = await supabase
-        .from('app_settings')
-        .update({ classifier_prompt: classifierPrompt.trim() || null } as any)
-        .eq('id', settings.id);
-      if (error) throw error;
-      toast.success(classifierPrompt.trim() ? 'Промпт классификатора сохранён' : 'Промпт сброшен на встроенный по умолчанию');
-    } catch (e) {
-      console.error('Save classifier prompt failed:', e);
-      toast.error('Не удалось сохранить промпт');
-    } finally {
-      setClassifierPromptSaving(false);
-    }
-  };
-
   // Ping a single model via OpenRouter
   const pingModel = async (modelId: string) => {
     if (!openrouterKey) {
@@ -764,51 +740,6 @@ export default function Settings() {
                     </label>
                   ))}
               </RadioGroup>
-            </div>
-          </div>
-
-          {/* Промпт классификатора (системный) — редактируется отдельной кнопкой,
-              чтобы итерации над промптом не требовали трогать остальные поля. */}
-          <div className="bg-card border border-border rounded-lg p-6 space-y-4">
-            <div className="flex items-center justify-between gap-4 flex-wrap">
-              <div>
-                <h2 className="text-lg font-semibold flex items-center gap-2">
-                  <GitBranch className="w-5 h-5" />
-                  Системный промпт классификатора
-                </h2>
-                <p className="text-sm text-muted-foreground mt-1">
-                  Управляет тем, как чат-бот понимает запрос пользователя: тип товара, конкретное название, цена, замена.
-                  Пусто — используется встроенный по умолчанию. Тестируйте изменения на странице «Тесты классификатора» перед публикацией.
-                </p>
-              </div>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => window.open('/classifier-tests', '_blank')}
-              >
-                Открыть тесты
-              </Button>
-            </div>
-            <textarea
-              value={classifierPrompt}
-              onChange={(e) => setClassifierPrompt(e.target.value)}
-              placeholder="Оставьте пустым, чтобы использовать встроенный промпт по умолчанию"
-              className="w-full min-h-[300px] font-mono text-xs p-3 rounded-md border border-input bg-background"
-              spellCheck={false}
-            />
-            <div className="flex items-center justify-between gap-2">
-              <p className="text-xs text-muted-foreground">
-                Длина: {classifierPrompt.length} симв.
-              </p>
-              <div className="flex gap-2">
-                <Button variant="ghost" size="sm" onClick={() => setClassifierPrompt('')}>
-                  Сбросить на дефолт
-                </Button>
-                <Button onClick={handleSaveClassifierPrompt} disabled={classifierPromptSaving} size="sm">
-                  {classifierPromptSaving ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Save className="w-4 h-4 mr-2" />}
-                  Сохранить промпт
-                </Button>
-              </div>
             </div>
           </div>
 
