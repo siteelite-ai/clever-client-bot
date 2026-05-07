@@ -4,6 +4,8 @@
 
 **URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
 
+> 🟢 Stable working version (2026-05-07) — рабочая прод-версия V1 pipeline. Безопасная точка отката.
+
 ## How can I edit this code?
 
 There are several ways of editing your application.
