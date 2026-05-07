@@ -53,6 +53,7 @@ export type Database = {
           ai_model: string
           ai_provider: string
           classifier_model: string
+          classifier_prompt: string | null
           classifier_provider: string
           google_api_key: string | null
           id: string
@@ -70,6 +71,7 @@ export type Database = {
           ai_model?: string
           ai_provider?: string
           classifier_model?: string
+          classifier_prompt?: string | null
           classifier_provider?: string
           google_api_key?: string | null
           id?: string
@@ -87,6 +89,7 @@ export type Database = {
           ai_model?: string
           ai_provider?: string
           classifier_model?: string
+          classifier_prompt?: string | null
           classifier_provider?: string
           google_api_key?: string | null
           id?: string
@@ -242,6 +245,107 @@ export type Database = {
           expires_at?: string
           intent?: Json
           query_hash?: string
+        }
+        Relationships: []
+      }
+      classifier_eval_runs: {
+        Row: {
+          actual: Json | null
+          batch_id: string
+          created_at: string
+          diff: Json | null
+          duration_ms: number | null
+          error: string | null
+          eval_id: string | null
+          expected: Json | null
+          id: string
+          model: string | null
+          passed: boolean
+          prompt_snapshot: string | null
+          user_query: string
+        }
+        Insert: {
+          actual?: Json | null
+          batch_id: string
+          created_at?: string
+          diff?: Json | null
+          duration_ms?: number | null
+          error?: string | null
+          eval_id?: string | null
+          expected?: Json | null
+          id?: string
+          model?: string | null
+          passed?: boolean
+          prompt_snapshot?: string | null
+          user_query: string
+        }
+        Update: {
+          actual?: Json | null
+          batch_id?: string
+          created_at?: string
+          diff?: Json | null
+          duration_ms?: number | null
+          error?: string | null
+          eval_id?: string | null
+          expected?: Json | null
+          id?: string
+          model?: string | null
+          passed?: boolean
+          prompt_snapshot?: string | null
+          user_query?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "classifier_eval_runs_eval_id_fkey"
+            columns: ["eval_id"]
+            isOneToOne: false
+            referencedRelation: "classifier_evals"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      classifier_evals: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          expected_has_product_name: boolean | null
+          expected_intent: string | null
+          expected_is_replacement: boolean | null
+          expected_product_category: string | null
+          expected_product_name: string | null
+          id: string
+          is_active: boolean
+          note: string | null
+          updated_at: string
+          user_query: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          expected_has_product_name?: boolean | null
+          expected_intent?: string | null
+          expected_is_replacement?: boolean | null
+          expected_product_category?: string | null
+          expected_product_name?: string | null
+          id?: string
+          is_active?: boolean
+          note?: string | null
+          updated_at?: string
+          user_query: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          expected_has_product_name?: boolean | null
+          expected_intent?: string | null
+          expected_is_replacement?: boolean | null
+          expected_product_category?: string | null
+          expected_product_name?: string | null
+          id?: string
+          is_active?: boolean
+          note?: string | null
+          updated_at?: string
+          user_query?: string
         }
         Relationships: []
       }
