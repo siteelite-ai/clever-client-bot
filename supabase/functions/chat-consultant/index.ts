@@ -7101,25 +7101,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     let extractedIntent: ExtractedIntent;
     
     if (articleShortCircuit) {
-      // При short-circuit маршрут и candidates определены — но нужно проверить,
-      // не спрашивает ли пользователь о характеристике товара (compute).
-      // Вызываем classifier ТОЛЬКО если сообщение похоже на вопрос о свойстве —
-      // это НЕ словарь фасетов, а простой gate «нужен ли classifier для compute?».
-      let computeField: ComputeRequest | undefined;
-      const lowerMsg = userMessage.toLowerCase();
-      const looksLikeSpecQuery = /сколько|какой|какая|какое|каков|какие|весит|вес\b|мощност|длин|ширин|высот|размер|габарит|гарант|объ[её]м|диаметр|сечен|ip\d|ампер|\bвт\b|\bкг\b|\bквт\b|характеристик/i.test(lowerMsg);
-      if (looksLikeSpecQuery) {
-        try {
-          // EXPERIMENT 2026-05-04: Claude Sonnet 4.5 для классификатора (Gemini терял модификаторы типа "ВВГнг", "3х2.5" → []).
-          const candidatesModel = 'anthropic/claude-sonnet-4.5';
-          const classifierResult = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
-          computeField = classifierResult.compute;
-          if (computeField) {
-            console.log(`[Chat] Compute extracted from classifier (shortcircuit path): attribute="${computeField.attribute}", multiplier=${computeField.multiplier ?? 'null'}`);
-          }
-        } catch (e) {
-          console.warn(`[Chat] Classifier for compute (shortcircuit) failed:`, e instanceof Error ? e.message : String(e));
-        }
+      // Compute читается напрямую из основного classifier (Шаг 1).
+      // Удалён двойной вызов Claude (regex-gate looksLikeSpecQuery + generateSearchCandidates) —
+      // см. .lovable/plan.md Шаг 2: -3-4с латентности и фикс нестабильности на длинных product_name.
+      const computeField: ComputeRequest | undefined = classification?.compute;
+      if (computeField) {
+        console.log(`[Chat] Compute extracted from main classifier (shortcircuit path): attribute="${computeField.attribute}", multiplier=${computeField.multiplier ?? 'null'}`);
       }
 
       extractedIntent = {
@@ -7129,6 +7116,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
           : [{ query: cleanQueryForDirectSearch(userMessage), brand: null, category: null, min_price: null, max_price: null }],
         originalQuery: userMessage,
         compute: computeField,
+      };
       };
     } else if ((classification?.intent === 'info' || classification?.intent === 'general') && !classification?.product_category) {
       // Micro-LLM already determined intent — skip expensive Gemini Pro call
