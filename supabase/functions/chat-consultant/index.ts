@@ -5034,16 +5034,14 @@ function extractTodayWorkingHoursFromContacts(contactsText: string, query: strin
     return null;
   }
 
-  const cityMatch = lq.match(/(?:в|по)\s+(караганде|астане|алматы|шымкенте|актобе)\b/i);
-  const city = cityMatch?.[1]?.toLowerCase() ?? '';
-  const cityToHeader: Record<string, string> = {
-    'караганде': 'караганда',
-    'астане': 'астана',
-    'алматы': 'алматы',
-    'шымкенте': 'шымкент',
-    'актобе': 'актобе',
-  };
-  const targetCity = cityToHeader[city] ?? '';
+  const cityVariants: Array<{ target: string; variants: string[] }> = [
+    { target: 'караганда', variants: ['караганда', 'караганде'] },
+    { target: 'астана', variants: ['астана', 'астане'] },
+    { target: 'алматы', variants: ['алматы', 'алмате'] },
+    { target: 'шымкент', variants: ['шымкент', 'шымкенте'] },
+    { target: 'актобе', variants: ['актобе', 'актобе'] },
+  ];
+  const targetCity = cityVariants.find(({ variants }) => variants.some((variant) => lq.includes(variant)))?.target ?? '';
   const lines = contactsText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   const candidates = lines.filter(line => {
     const lc = line.toLowerCase();
