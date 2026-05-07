@@ -614,7 +614,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       openrouter_api_key: data.openrouter_api_key || null,
       google_api_key: data.google_api_key || null,
       ai_provider: data.ai_provider || 'openrouter',
-      classifier_prompt: null,
+      classifier_prompt: (data as { classifier_prompt?: string | null }).classifier_prompt || null,
       ai_model: data.ai_model || 'meta-llama/llama-3.3-70b-instruct:free',
       system_prompt: data.system_prompt || null,
       classifier_provider: data.classifier_provider || 'auto',
