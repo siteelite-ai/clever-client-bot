@@ -2505,14 +2505,13 @@ async function handlePriceIntent(
   priceIntent: 'most_expensive' | 'cheapest',
   apiToken: string,
   extraParams: Array<[string, string]> = [],
-  queryParamName: 'query' | 'category' = 'query',
 ): Promise<PriceIntentResult> {
   const overallStart = Date.now();
   const PER_PAGE = 10;
 
   const buildParams = (q: string, page: number): URLSearchParams => {
     const p = new URLSearchParams();
-    p.append(queryParamName, q);
+    p.append('query', q);
     p.append('min_price', '1');
     p.append('per_page', String(PER_PAGE));
     p.append('page', String(page));
@@ -2576,7 +2575,7 @@ async function handlePriceIntent(
     }
   }
 
-  console.log(`[PriceIntent] simplified: ${queryParamName}="${activeQuery}" extra=${JSON.stringify(extraParams)} intent=${priceIntent} total=${probe.total} returned=${products.length} ${Date.now() - overallStart}ms`);
+  console.log(`[PriceIntent] simplified: query="${activeQuery}" extra=${JSON.stringify(extraParams)} intent=${priceIntent} total=${probe.total} returned=${products.length} ${Date.now() - overallStart}ms`);
   return { action: 'answer', products: products.slice(0, PER_PAGE), total: probe.total };
 }
 
@@ -3535,114 +3534,6 @@ function flattenResolvedFilters(resolved: Record<string, ResolvedFilter | string
     out[k] = typeof v === 'object' && v !== null ? (v as ResolvedFilter).value : (v as string);
   }
   return out;
-}
-
-export function buildApiOptionParamsFromFilters(resolvedFilters: Record<string, string>): Array<[string, string]> {
-  const params: Array<[string, string]> = [];
-  for (const [key, value] of Object.entries(resolvedFilters || {})) {
-    if (!value) continue;
-    const aliasKeys = getAliasKeysFor(key);
-    for (const aliasKey of aliasKeys) {
-      params.push([`options[${aliasKey}][]`, value]);
-    }
-  }
-  return params;
-}
-
-const PRICE_INTENT_MODIFIER_STOPWORDS = /(сам(?:ый|ая|ое|ые)?|наиболее|максимально|минимально|самые|самая|самое|самый|очень|более|менее|по|цене|стоимости|ценник|дешевле|дёшево|дешево|дешёв|дешев|бюджетн|недорог|эконом|дорог|дороже|премиальн|люкс|элит)/i;
-
-export function stripPriceOnlyModifiers(modifiers: string[]): string[] {
-  return (modifiers || []).filter((modifier) => {
-    const cleaned = modifier
-      .toLowerCase()
-      .replace(/ё/g, 'е')
-      .replace(/[^а-яa-z0-9\s-]/gi, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-    if (!cleaned) return false;
-    return !PRICE_INTENT_MODIFIER_STOPWORDS.test(cleaned);
-  });
-}
-
-async function resolvePriceIntentFilters(params: {
-  category: string;
-  modifiers: string[];
-  apiToken: string;
-  settings: CachedSettings;
-}): Promise<{ resolvedFilters: Record<string, string>; unresolvedModifiers: string[]; schemaSource: string; schemaConfidence: SchemaConfidence }> {
-  const cleanModifiers = stripPriceOnlyModifiers(params.modifiers);
-  if (cleanModifiers.length === 0) {
-    return { resolvedFilters: {}, unresolvedModifiers: [], schemaSource: 'none', schemaConfidence: 'empty' };
-  }
-
-  const emptyResult: CategorySchemaResult = { schema: new Map(), productCount: 0, cacheHit: false, confidence: 'empty', source: 'none' };
-  const schemaResult = await getCategoryOptionsSchema(params.category, params.apiToken).catch(() => emptyResult);
-  const prebuiltSchema = schemaResult.schema;
-  let schemaProducts: Product[] = [];
-  if (prebuiltSchema.size === 0) {
-    schemaProducts = await searchProductsByCandidate(
-      { query: null, brand: null, category: params.category, min_price: null, max_price: null },
-      params.apiToken,
-      50
-    );
-  }
-
-  const resolved = await resolveFiltersWithLLM(
-    schemaProducts,
-    cleanModifiers,
-    params.settings,
-    cleanModifiers,
-    prebuiltSchema.size > 0 ? prebuiltSchema : undefined,
-    schemaResult.confidence,
-    params.category
-  );
-
-  return {
-    resolvedFilters: flattenResolvedFilters(resolved.resolved),
-    unresolvedModifiers: resolved.unresolved || [],
-    schemaSource: schemaResult.source,
-    schemaConfidence: schemaResult.confidence,
-  };
-}
-
-async function resolveAndSearchPriceIntent(params: {
-  category: string;
-  priceIntent: 'most_expensive' | 'cheapest';
-  modifiers: string[];
-  apiToken: string;
-  settings: CachedSettings;
-}): Promise<{
-  priceResult: PriceIntentResult;
-  resolvedFilters: Record<string, string>;
-  unresolvedModifiers: string[];
-  schemaSource: string;
-  schemaConfidence: SchemaConfidence;
-}> {
-  const resolved = await resolvePriceIntentFilters({
-    category: params.category,
-    modifiers: params.modifiers,
-    apiToken: params.apiToken,
-    settings: params.settings,
-  });
-  const extraParams = buildApiOptionParamsFromFilters(resolved.resolvedFilters);
-  const literalTail = resolved.unresolvedModifiers.filter(Boolean).join(' ').trim();
-  const queries = literalTail ? [literalTail, params.category] : [params.category];
-  const queryParamName: 'query' | 'category' = extraParams.length > 0 ? 'category' : 'query';
-  const priceResult = await handlePriceIntent(
-    queries,
-    params.priceIntent,
-    params.apiToken,
-    extraParams,
-    queryParamName,
-  );
-
-  return {
-    priceResult,
-    resolvedFilters: resolved.resolvedFilters,
-    unresolvedModifiers: resolved.unresolvedModifiers,
-    schemaSource: resolved.schemaSource,
-    schemaConfidence: resolved.schemaConfidence,
-  };
 }
 
 async function resolveFiltersWithLLM(
@@ -6351,34 +6242,15 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
 
             if (!resumedFromClarify) {
               if (mods.length > 0) {
-                // Scenario C: price intent + характеристики.
-                // ВАЖНО: не склеиваем всё в literal query — сначала резолвим фасеты,
-                // потом ищем по category + options[] + min_price=1. Только unresolved
-                // хвост оставляем в literal query как мягкий сигнал.
-                const priceSearch = await resolveAndSearchPriceIntent({
-                  category: priceQuery,
-                  priceIntent: effectivePriceIntent,
-                  modifiers: mods,
-                  apiToken: appSettings.volt220_api_token!,
-                  settings: appSettings,
-                });
-                console.log(
-                  `[Chat] Price intent structured search: category="${priceQuery}" resolved=${JSON.stringify(priceSearch.resolvedFilters)} unresolved=${JSON.stringify(priceSearch.unresolvedModifiers)} schema=${priceSearch.schemaSource}/${priceSearch.schemaConfidence}`,
-                );
-                if (priceSearch.priceResult.action === 'answer' && priceSearch.priceResult.products && priceSearch.priceResult.products.length > 0) {
-                  foundProducts = priceSearch.priceResult.products;
+                // Scenario C: характеристики уже заданы — пропускаем clarify, идём прямо в API.
+                const enrichedQuery = `${priceQuery} ${mods.join(' ')}`.trim();
+                console.log(`[Chat] Price intent with mods: "${enrichedQuery}"`);
+                const priceResult = await handlePriceIntent([enrichedQuery], effectivePriceIntent, appSettings.volt220_api_token!);
+                if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
+                  foundProducts = priceResult.products;
                   articleShortCircuit = true;
                   responseModel = 'anthropic/claude-sonnet-4.5';
                   responseModelReason = 'price-shortcircuit';
-                } else {
-                  console.log(`[Chat] Price intent structured search fallback: no products for category="${priceQuery}" with resolved filters → retry noun-only price search`);
-                  const priceResult = await handlePriceIntent([priceQuery], effectivePriceIntent, appSettings.volt220_api_token!);
-                  if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
-                    foundProducts = priceResult.products;
-                    articleShortCircuit = true;
-                    responseModel = 'anthropic/claude-sonnet-4.5';
-                    responseModelReason = 'price-shortcircuit';
-                  }
                 }
               } else {
                 // Scenario A/B: характеристик нет — bootstrap-фасеты + один уточняющий вопрос.
