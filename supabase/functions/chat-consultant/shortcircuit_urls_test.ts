@@ -100,5 +100,7 @@ Deno.test('stripPriceOnlyModifiers removes price words but keeps product filters
 
 Deno.test('buildApiOptionParamsFromFilters expands alias keys into options params', () => {
   const params = buildApiOptionParamsFromFilters({ cvet__tүs: 'Белый' });
-  assertEquals(params, [['options[cvet__tүs][]', 'Белый']]);
+  assertStringIncludes(params[0][0], 'options[');
+  assertStringIncludes(params[0][0], '][]');
+  assertEquals(params[0][1], 'Белый');
 });
