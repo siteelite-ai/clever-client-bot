@@ -6351,15 +6351,34 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
 
             if (!resumedFromClarify) {
               if (mods.length > 0) {
-                // Scenario C: характеристики уже заданы — пропускаем clarify, идём прямо в API.
-                const enrichedQuery = `${priceQuery} ${mods.join(' ')}`.trim();
-                console.log(`[Chat] Price intent with mods: "${enrichedQuery}"`);
-                const priceResult = await handlePriceIntent([enrichedQuery], effectivePriceIntent, appSettings.volt220_api_token!);
-                if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
-                  foundProducts = priceResult.products;
+                // Scenario C: price intent + характеристики.
+                // ВАЖНО: не склеиваем всё в literal query — сначала резолвим фасеты,
+                // потом ищем по category + options[] + min_price=1. Только unresolved
+                // хвост оставляем в literal query как мягкий сигнал.
+                const priceSearch = await resolveAndSearchPriceIntent({
+                  category: priceQuery,
+                  priceIntent: effectivePriceIntent,
+                  modifiers: mods,
+                  apiToken: appSettings.volt220_api_token!,
+                  settings: appSettings,
+                });
+                console.log(
+                  `[Chat] Price intent structured search: category="${priceQuery}" resolved=${JSON.stringify(priceSearch.resolvedFilters)} unresolved=${JSON.stringify(priceSearch.unresolvedModifiers)} schema=${priceSearch.schemaSource}/${priceSearch.schemaConfidence}`,
+                );
+                if (priceSearch.priceResult.action === 'answer' && priceSearch.priceResult.products && priceSearch.priceResult.products.length > 0) {
+                  foundProducts = priceSearch.priceResult.products;
                   articleShortCircuit = true;
                   responseModel = 'anthropic/claude-sonnet-4.5';
                   responseModelReason = 'price-shortcircuit';
+                } else {
+                  console.log(`[Chat] Price intent structured search fallback: no products for category="${priceQuery}" with resolved filters → retry noun-only price search`);
+                  const priceResult = await handlePriceIntent([priceQuery], effectivePriceIntent, appSettings.volt220_api_token!);
+                  if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
+                    foundProducts = priceResult.products;
+                    articleShortCircuit = true;
+                    responseModel = 'anthropic/claude-sonnet-4.5';
+                    responseModelReason = 'price-shortcircuit';
+                  }
                 }
               } else {
                 // Scenario A/B: характеристик нет — bootstrap-фасеты + один уточняющий вопрос.
