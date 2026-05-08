@@ -3537,6 +3537,114 @@ function flattenResolvedFilters(resolved: Record<string, ResolvedFilter | string
   return out;
 }
 
+function buildApiOptionParamsFromFilters(resolvedFilters: Record<string, string>): Array<[string, string]> {
+  const params: Array<[string, string]> = [];
+  for (const [key, value] of Object.entries(resolvedFilters || {})) {
+    if (!value) continue;
+    const aliasKeys = getAliasKeysFor(key);
+    for (const aliasKey of aliasKeys) {
+      params.push([`options[${aliasKey}][]`, value]);
+    }
+  }
+  return params;
+}
+
+const PRICE_INTENT_MODIFIER_STOPWORDS = /(сам(?:ый|ая|ое|ые)?|наиболее|максимально|минимально|самые|самая|самое|самый|очень|более|менее|по|цене|стоимости|ценник|дешевле|дёшево|дешево|дешёв|дешев|бюджетн|недорог|эконом|дорог|дороже|премиальн|люкс|элит)/i;
+
+function stripPriceOnlyModifiers(modifiers: string[]): string[] {
+  return (modifiers || []).filter((modifier) => {
+    const cleaned = modifier
+      .toLowerCase()
+      .replace(/ё/g, 'е')
+      .replace(/[^а-яa-z0-9\s-]/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!cleaned) return false;
+    return !PRICE_INTENT_MODIFIER_STOPWORDS.test(cleaned);
+  });
+}
+
+async function resolvePriceIntentFilters(params: {
+  category: string;
+  modifiers: string[];
+  apiToken: string;
+  settings: CachedSettings;
+}): Promise<{ resolvedFilters: Record<string, string>; unresolvedModifiers: string[]; schemaSource: string; schemaConfidence: SchemaConfidence }> {
+  const cleanModifiers = stripPriceOnlyModifiers(params.modifiers);
+  if (cleanModifiers.length === 0) {
+    return { resolvedFilters: {}, unresolvedModifiers: [], schemaSource: 'none', schemaConfidence: 'empty' };
+  }
+
+  const emptyResult: CategorySchemaResult = { schema: new Map(), productCount: 0, cacheHit: false, confidence: 'empty', source: 'none' };
+  const schemaResult = await getCategoryOptionsSchema(params.category, params.apiToken).catch(() => emptyResult);
+  const prebuiltSchema = schemaResult.schema;
+  let schemaProducts: Product[] = [];
+  if (prebuiltSchema.size === 0) {
+    schemaProducts = await searchProductsByCandidate(
+      { query: null, brand: null, category: params.category, min_price: null, max_price: null },
+      params.apiToken,
+      50
+    );
+  }
+
+  const resolved = await resolveFiltersWithLLM(
+    schemaProducts,
+    cleanModifiers,
+    params.settings,
+    cleanModifiers,
+    prebuiltSchema.size > 0 ? prebuiltSchema : undefined,
+    schemaResult.confidence,
+    params.category
+  );
+
+  return {
+    resolvedFilters: flattenResolvedFilters(resolved.resolved),
+    unresolvedModifiers: resolved.unresolved || [],
+    schemaSource: schemaResult.source,
+    schemaConfidence: schemaResult.confidence,
+  };
+}
+
+async function resolveAndSearchPriceIntent(params: {
+  category: string;
+  priceIntent: 'most_expensive' | 'cheapest';
+  modifiers: string[];
+  apiToken: string;
+  settings: CachedSettings;
+}): Promise<{
+  priceResult: PriceIntentResult;
+  resolvedFilters: Record<string, string>;
+  unresolvedModifiers: string[];
+  schemaSource: string;
+  schemaConfidence: SchemaConfidence;
+}> {
+  const resolved = await resolvePriceIntentFilters({
+    category: params.category,
+    modifiers: params.modifiers,
+    apiToken: params.apiToken,
+    settings: params.settings,
+  });
+  const extraParams = buildApiOptionParamsFromFilters(resolved.resolvedFilters);
+  const literalTail = resolved.unresolvedModifiers.filter(Boolean).join(' ').trim();
+  const queries = literalTail ? [literalTail, params.category] : [params.category];
+  const queryParamName: 'query' | 'category' = extraParams.length > 0 ? 'category' : 'query';
+  const priceResult = await handlePriceIntent(
+    queries,
+    params.priceIntent,
+    params.apiToken,
+    extraParams,
+    queryParamName,
+  );
+
+  return {
+    priceResult,
+    resolvedFilters: resolved.resolvedFilters,
+    unresolvedModifiers: resolved.unresolvedModifiers,
+    schemaSource: resolved.schemaSource,
+    schemaConfidence: resolved.schemaConfidence,
+  };
+}
+
 async function resolveFiltersWithLLM(
   products: Product[],
   modifiers: string[],
