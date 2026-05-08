@@ -1,5 +1,5 @@
 import { assertEquals, assertStringIncludes, assertFalse } from 'https://deno.land/std@0.224.0/assert/mod.ts';
-import { buildDeterministicShortCircuitContent, formatProductCardDeterministic, extractFacetsFromProducts, buildPriceFacetClarifyContent } from './index.ts';
+import { buildDeterministicShortCircuitContent, formatProductCardDeterministic, extractFacetsFromProducts, buildPriceFacetClarifyContent, stripPriceOnlyModifiers, buildApiOptionParamsFromFilters } from './index.ts';
 
 const baseProduct = {
   id: 1,
@@ -91,4 +91,14 @@ Deno.test('buildPriceFacetClarifyContent renders cards and asks via real facet v
   assertStringIncludes(text, 'Бытовая');
   assertStringIncludes(text, 'Промышленная');
   assertStringIncludes(text, 'https://220volt.kz/');
+});
+
+Deno.test('stripPriceOnlyModifiers removes price words but keeps product filters', () => {
+  const result = stripPriceOnlyModifiers(['самые дешевые', 'белые', 'двойные']);
+  assertEquals(result, ['белые', 'двойные']);
+});
+
+Deno.test('buildApiOptionParamsFromFilters expands alias keys into options params', () => {
+  const params = buildApiOptionParamsFromFilters({ cvet__tүs: 'Белый' });
+  assertEquals(params, [['options[cvet__tүs][]', 'Белый']]);
 });
