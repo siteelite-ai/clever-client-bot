@@ -40,7 +40,7 @@ Deno.test('deterministic content for price-shortcircuit uses only original URLs'
     effectivePriceIntent: 'cheapest',
   });
 
-  assertStringIncludes(content, 'Подобрал самые доступные варианты из каталога:');
+  assertStringIncludes(content, 'Вот что подешевле:');
   assertStringIncludes(content, 'https://220volt.kz/rozetki_i_vyklyuchateli/rozetka-werkel-gallant-w5071101/');
   assertStringIncludes(content, 'https://220volt.kz/rozetki_i_vyklyuchateli/rozetka-iek-brite-br-r10-16-k47/');
   assertFalse(content.includes('/catalog/'));
@@ -54,8 +54,7 @@ Deno.test('deterministic article response keeps consultant next-step without AI'
     userMessage: 'найди по артикулу',
   });
 
-  assertStringIncludes(content, 'Нашёл товар по точному запросу:');
-  assertStringIncludes(content, 'Если нужно, сразу проверю аналоги, наличие по городам или более бюджетную замену.');
+  assertStringIncludes(content, 'Держите — нашёл:');
   assertEquals((content.match(/https:\/\/220volt\.kz\//g) || []).length, 1);
 });
 
