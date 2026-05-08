@@ -3537,7 +3537,7 @@ function flattenResolvedFilters(resolved: Record<string, ResolvedFilter | string
   return out;
 }
 
-function buildApiOptionParamsFromFilters(resolvedFilters: Record<string, string>): Array<[string, string]> {
+export function buildApiOptionParamsFromFilters(resolvedFilters: Record<string, string>): Array<[string, string]> {
   const params: Array<[string, string]> = [];
   for (const [key, value] of Object.entries(resolvedFilters || {})) {
     if (!value) continue;
@@ -3551,7 +3551,7 @@ function buildApiOptionParamsFromFilters(resolvedFilters: Record<string, string>
 
 const PRICE_INTENT_MODIFIER_STOPWORDS = /(сам(?:ый|ая|ое|ые)?|наиболее|максимально|минимально|самые|самая|самое|самый|очень|более|менее|по|цене|стоимости|ценник|дешевле|дёшево|дешево|дешёв|дешев|бюджетн|недорог|эконом|дорог|дороже|премиальн|люкс|элит)/i;
 
-function stripPriceOnlyModifiers(modifiers: string[]): string[] {
+export function stripPriceOnlyModifiers(modifiers: string[]): string[] {
   return (modifiers || []).filter((modifier) => {
     const cleaned = modifier
       .toLowerCase()
