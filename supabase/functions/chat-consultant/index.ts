@@ -2505,13 +2505,14 @@ async function handlePriceIntent(
   priceIntent: 'most_expensive' | 'cheapest',
   apiToken: string,
   extraParams: Array<[string, string]> = [],
+  queryParamName: 'query' | 'category' = 'query',
 ): Promise<PriceIntentResult> {
   const overallStart = Date.now();
   const PER_PAGE = 10;
 
   const buildParams = (q: string, page: number): URLSearchParams => {
     const p = new URLSearchParams();
-    p.append('query', q);
+    p.append(queryParamName, q);
     p.append('min_price', '1');
     p.append('per_page', String(PER_PAGE));
     p.append('page', String(page));
@@ -2575,7 +2576,7 @@ async function handlePriceIntent(
     }
   }
 
-  console.log(`[PriceIntent] simplified: query="${activeQuery}" extra=${JSON.stringify(extraParams)} intent=${priceIntent} total=${probe.total} returned=${products.length} ${Date.now() - overallStart}ms`);
+  console.log(`[PriceIntent] simplified: ${queryParamName}="${activeQuery}" extra=${JSON.stringify(extraParams)} intent=${priceIntent} total=${probe.total} returned=${products.length} ${Date.now() - overallStart}ms`);
   return { action: 'answer', products: products.slice(0, PER_PAGE), total: probe.total };
 }
 
