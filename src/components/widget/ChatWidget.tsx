@@ -93,6 +93,7 @@ async function streamChat({
   onContacts?: (contacts: string) => void;
   onSlotUpdate?: (slots: DialogSlots) => void;
   onQuickReplies?: (replies: QuickReply[]) => void;
+  onFollowup?: (text: string) => void;
   conversationId: string;
   dialogSlots: DialogSlots;
   endpointUrl: string;
