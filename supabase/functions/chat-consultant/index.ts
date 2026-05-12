@@ -5842,11 +5842,27 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             if (Array.isArray(parsedCats)) preferredCategories = parsedCats.filter((x) => typeof x === 'string');
           } catch { /* ignore */ }
 
+          // Если пользователь упомянул одну из предложенных категорий («подбери коробки
+          // монтажные» из 3 предложенных) — сужаем post-filter ТОЛЬКО до неё. Иначе
+          // показываем все 3. Маппинг через нормализованное substring-сопоставление
+          // (без морфологии — короткое пересечение по корню достаточно).
+          const normalize = (s: string) => s.toLowerCase().replace(/ё/g, 'е').replace(/[^а-яa-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+          const userNorm = ' ' + normalize(userMessage) + ' ';
+          const matchedCats = preferredCategories.filter((cat) => {
+            const tokens = normalize(cat).split(' ').filter((t) => t.length >= 4);
+            return tokens.some((t) => userNorm.includes(' ' + t.slice(0, Math.min(t.length, 6))));
+          });
+          const effectiveCategories = matchedCats.length ? matchedCats : preferredCategories;
+          if (matchedCats.length) {
+            console.log(`[Chat req=${reqId}] Cross-sell narrowed to user-picked categories: ${JSON.stringify(matchedCats)}`);
+          }
+
           const relatedProducts = appSettings.volt220_api_token
             ? await acceptRelatedOffer({
                 anchorIds,
                 deps: buildRelatedDeps(appSettings.volt220_api_token, appSettings),
-                preferredCategories,
+                preferredCategories: effectiveCategories,
+                strictCategories: matchedCats.length > 0,
                 limit: 6,
               })
             : [];
