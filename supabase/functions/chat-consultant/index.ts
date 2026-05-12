@@ -6975,6 +6975,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // If no modifiers: skip resolution, just display pool.
                   let resolvedFilters: Record<string, string> = {};
                   let resolverUnresolvedDetails: Array<{ modifier: string; key: string; caption: string; requestedValue: string; availableValues: string[] }> = [];
+                  let resolverUnresolved: string[] = [];
                   if (modifiers.length > 0 && bootstrapSchema.size > 0) {
                     const filterStartMs = Date.now();
                     try {
@@ -6989,6 +6990,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       );
                       resolvedFilters = flattenResolvedFilters(rRaw);
                       resolverUnresolvedDetails = rDetails || [];
+                      resolverUnresolved = rUnresolved || [];
                       console.log(`[QueryFirstV2] resolved=${JSON.stringify(resolvedFilters)} unresolved=[${rUnresolved.join(', ')}] unresolvedDetails=${resolverUnresolvedDetails.length}`);
                       logAddStep({
                         step: 'qfv2-filter-llm',
@@ -7007,6 +7009,84 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   } else if (modifiers.length === 0) {
                     console.log(`[QueryFirstV2] no modifiers → display pool directly`);
                     logAddStep({ step: 'qfv2-filter-llm', meta: { skipped: 'no_modifiers' } });
+                  }
+
+                  // ── (4.5) ESCALATION: bootstrap из pool — это топ-100 товаров по релевантности
+                  // запроса. Если модификатор относится к длинному хвосту категории (нишевая
+                  // коллекция/бренд/редкий цвет), его value НЕ попадает в bootstrap-схему →
+                  // FilterLLM честно возвращает unresolved (ему просто не из чего матчить).
+                  //
+                  // Системный fallback: подтянуть ПОЛНУЮ схему фасетов категории через
+                  // /api/categories/options (это и есть «работа через категории», которую
+                  // QFv2 обходил ради скорости). Категория = доминирующая category.pagetitle
+                  // pool'а (без отдельного Category Resolver — у нас уже есть подтверждение
+                  // через 100 живых товаров). Cache 30 мин в getCategoryOptionsSchema.
+                  //
+                  // Срабатывает ТОЛЬКО при unresolved.length > 0 — для популярных модификаторов
+                  // («двухместная», «белая») путь остаётся прежний. Любая ошибка — silent skip.
+                  if (resolverUnresolved.length > 0 && Object.keys(resolvedFilters).length < modifiers.length) {
+                    const escStart = Date.now();
+                    try {
+                      // Доминирующая категория pool'а.
+                      const catCounts = new Map<string, number>();
+                      for (const p of pool) {
+                        const cpt = p.category?.pagetitle?.trim();
+                        if (cpt) catCounts.set(cpt, (catCounts.get(cpt) || 0) + 1);
+                      }
+                      const dominantCat = [...catCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+                      if (!dominantCat) {
+                        console.log(`[QueryFirstV2] escalate SKIP: no dominant category in pool`);
+                        logAddStep({ step: 'qfv2-escalate-skip', meta: { reason: 'no_dominant_category', unresolved: resolverUnresolved } });
+                      } else {
+                        const fullRes = await getCategoryOptionsSchema(dominantCat, appSettings.volt220_api_token!);
+                        if (!fullRes.schema || fullRes.schema.size === 0) {
+                          console.log(`[QueryFirstV2] escalate SKIP: full schema empty for "${dominantCat}"`);
+                          logAddStep({ step: 'qfv2-escalate-skip', meta: { reason: 'empty_full_schema', dominantCat, unresolved: resolverUnresolved } });
+                        } else {
+                          console.log(`[QueryFirstV2] escalate: dominantCat="${dominantCat}" fullSchema=${fullRes.schema.size}keys src=${fullRes.source} → re-resolve unresolved=[${resolverUnresolved.join(', ')}]`);
+                          const { resolved: rRaw2, unresolved: rUnresolved2, unresolvedDetails: rDetails2 } = await resolveFiltersWithLLM(
+                            pool,
+                            resolverUnresolved,
+                            appSettings,
+                            classification?.critical_modifiers,
+                            fullRes.schema,
+                            fullRes.confidence || 'full',
+                            noun
+                          );
+                          const escResolved = flattenResolvedFilters(rRaw2);
+                          if (Object.keys(escResolved).length > 0) {
+                            // Merge: escalated wins over bootstrap (более полный источник).
+                            const merged = { ...resolvedFilters, ...escResolved };
+                            // Replace bootstrapSchema buckets with full ones for keys we resolved
+                            // → buildAttemptedFacets() будет иметь правильные alternativeValues.
+                            for (const k of Object.keys(escResolved)) {
+                              const fullBucket = fullRes.schema.get(k);
+                              if (fullBucket) bootstrapSchema.set(k, fullBucket);
+                            }
+                            resolvedFilters = merged;
+                            // Drop now-resolved modifiers from unresolvedDetails.
+                            const stillUnresolved = new Set((rUnresolved2 || []).map(m => m.toLowerCase().trim()));
+                            const justResolvedMods = new Set(
+                              resolverUnresolved
+                                .filter(m => !stillUnresolved.has(m.toLowerCase().trim()))
+                                .map(m => m.toLowerCase().trim())
+                            );
+                            resolverUnresolvedDetails = (rDetails2 || []).concat(
+                              resolverUnresolvedDetails.filter(d => !justResolvedMods.has(d.modifier.toLowerCase().trim()))
+                            );
+                            resolverUnresolved = rUnresolved2 || [];
+                            console.log(`[QueryFirstV2] escalate WIN: +${Object.keys(escResolved).length} filters merged=${JSON.stringify(merged)} stillUnresolved=[${resolverUnresolved.join(', ')}] elapsed=${Date.now() - escStart}ms`);
+                            logAddStep({ step: 'qfv2-escalate-win', ms: Date.now() - escStart, meta: { dominantCat, src: fullRes.source, escalatedResolved: escResolved, stillUnresolved: resolverUnresolved } });
+                          } else {
+                            console.log(`[QueryFirstV2] escalate MISS: full schema didn't resolve any modifier (still unresolved=[${(rUnresolved2 || []).join(', ')}])`);
+                            logAddStep({ step: 'qfv2-escalate-miss', ms: Date.now() - escStart, meta: { dominantCat, src: fullRes.source, stillUnresolved: rUnresolved2 || [] } });
+                          }
+                        }
+                      }
+                    } catch (escErr) {
+                      console.log(`[QueryFirstV2] escalate error=${(escErr as Error).message} → silent skip (continue with bootstrap result)`);
+                      logAddStep({ step: 'qfv2-escalate-error', ms: Date.now() - escStart, meta: { error: String((escErr as Error).message), unresolved: resolverUnresolved } });
+                    }
                   }
 
                   // ── (5/6) Final search.
