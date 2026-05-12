@@ -6936,6 +6936,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       qfV2DroppedFacetCaption = bootstrapSchema.get(firstUnresolvedKey)?.caption || firstUnresolvedKey || null;
                       console.log(`[QueryFirstV2] query_first_v2_honest_empty_partial noun="${noun}" unresolvedDetails=${JSON.stringify(resolverUnresolvedDetails)} attemptedFacets=${JSON.stringify(attemptedFacets)} elapsed=${Date.now() - qfStart}ms`);
                     } else if (Object.keys(resolvedFilters).length > 0) {
+                      const finalStartMs = Date.now();
                       const final = await searchProductsByCandidate(
                         { query: noun, brand: null, category: null, min_price: null, max_price: null },
                         appSettings.volt220_api_token!,
@@ -6944,6 +6945,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       );
                       const finalFiltered = applyNounFilter(final, true);
                       console.log(`[QueryFirstV2] final query="${noun}" filters=${JSON.stringify(resolvedFilters)} → ${final.length} (after noun-filter: ${finalFiltered.length})`);
+                      logAddStep({
+                        step: 'qfv2-final',
+                        total: finalFiltered.length,
+                        ms: Date.now() - finalStartMs,
+                        meta: { query: noun, filters: resolvedFilters, raw_total: final.length, after_noun_filter: finalFiltered.length },
+                      });
 
                       if (finalFiltered.length > 0) {
                         displayList = finalFiltered;
@@ -6979,10 +6986,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   categoryFirstWinResolved = true;  // also short-circuits the legacy bucket fallback below
                   qfV2Resolved = true;
                   console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=${branchTag} zeroFiltered=${_r.filteredZeroPrice}`);
+                  logAddStep({ step: 'qfv2-branch', total: _r.displayed.length, ms: Date.now() - qfStart, meta: { branch: branchTag, collected: _r.total, displayed: _r.displayed.length, dropped_facet: qfV2DroppedFacetCaption } });
                 }
               }
             } catch (qfErr) {
               console.log(`[QueryFirstV2] query_first_v2_error=${(qfErr as Error).message} → fallback to Category Resolver`);
+              logAddStep({ step: 'qfv2-error', ms: Date.now() - qfStart, meta: { error: String((qfErr as Error).message) } });
             }
           }
 
