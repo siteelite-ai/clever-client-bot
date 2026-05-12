@@ -2185,7 +2185,7 @@ function detectPendingPriceIntent(
 // ============================================================
 
 interface DialogSlot {
-  intent: 'price_extreme' | 'product_search' | 'category_disambiguation' | 'price_facet_clarify' | 'pending_offer';
+  intent: 'price_extreme' | 'product_search' | 'category_disambiguation' | 'price_facet_clarify' | 'pending_offer' | 'cross_sell_offer';
   price_dir?: 'most_expensive' | 'cheapest';
   base_category: string;
   refinement?: string;
@@ -2209,6 +2209,13 @@ interface DialogSlot {
   // offer_query — короткий поисковый запрос, который применяем при «давай/да/ок»
   offer_text?: string;
   offer_query?: string;
+  // cross_sell_offer state (V1 Step 3): бот показал нативную фразу про сопутствующие
+  // и сохранил anchor_ids чтобы по «да/покажи» отдать реальные /related товары
+  // БЕЗ нового catalog-search.
+  // anchor_ids — JSON массив id (например "[12345,67890]")
+  // related_categories — JSON массив строк-категорий, которые упомянуты в фразе (для post-filter)
+  anchor_ids?: string;
+  related_categories?: string;
   // replacement metadata
   isReplacement?: boolean;
   originalName?: string;
