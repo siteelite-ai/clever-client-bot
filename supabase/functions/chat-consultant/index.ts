@@ -6350,107 +6350,165 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                         bucket.values.add(trimmedValue);
                       }
                     }
-                    console.log(`[Chat] [PriceProbe] bootstrap schema: ${bootstrapSchema.size} keys`);
-                    if (bootstrapSchema.size > 0) {
-                      try {
-                        const criticalMods = Array.isArray(classification?.critical_modifiers)
-                          ? classification!.critical_modifiers as string[]
-                          : undefined;
-                        const { resolved: rRaw, unresolved: rUnresolved, unresolvedDetails: rDetails } = await resolveFiltersWithLLM(
-                          probePool,
-                          mods,
-                          appSettings,
-                          criticalMods,
-                          bootstrapSchema,
-                          'full',
-                          priceQuery
-                        );
-                        const resolvedFilters = flattenResolvedFilters(rRaw);
-                        console.log(`[Chat] [PriceResolve] resolved=${JSON.stringify(resolvedFilters)} unresolved=[${(rUnresolved || []).join(', ')}] unresolvedDetails=${(rDetails || []).length}`);
+                    ptrace('bootstrap_schema', {
+                       keys: bootstrapSchema.size,
+                       sample: Array.from(bootstrapSchema.entries()).slice(0, 8).map(([k, v]) => ({
+                         key: k,
+                         caption: v.caption,
+                         valuesCount: v.values.size,
+                         values: Array.from(v.values).slice(0, 5),
+                       })),
+                     });
+                     console.log(`[Chat] [PriceProbe] bootstrap schema: ${bootstrapSchema.size} keys`);
+                     if (bootstrapSchema.size > 0) {
+                       try {
+                         const criticalMods = Array.isArray(classification?.critical_modifiers)
+                           ? classification!.critical_modifiers as string[]
+                           : undefined;
+                         const tR1 = Date.now();
+                         const { resolved: rRaw, unresolved: rUnresolved, unresolvedDetails: rDetails } = await resolveFiltersWithLLM(
+                           probePool,
+                           mods,
+                           appSettings,
+                           criticalMods,
+                           bootstrapSchema,
+                           'full',
+                           priceQuery
+                         );
+                         const resolvedFilters = flattenResolvedFilters(rRaw);
+                         ptrace('resolve1', {
+                           input: mods,
+                           schemaKeys: bootstrapSchema.size,
+                           resolved: resolvedFilters,
+                           unresolved: rUnresolved || [],
+                           ms: Date.now() - tR1,
+                         });
+                         console.log(`[Chat] [PriceResolve] resolved=${JSON.stringify(resolvedFilters)} unresolved=[${(rUnresolved || []).join(', ')}] unresolvedDetails=${(rDetails || []).length}`);
 
-                        // ── Этап 2 (2026-05-12): если первый проход оставил unresolved
-                        // модификаторы — bootstrap-схема pool'а слишком узкая (например,
-                        // в pool «розетки» попали в основном крышки/подрозетники, и ключ
-                        // "kolichestvo_mest" со значениями 1/2/3/4 в schema отсутствует).
-                        // Делаем второй заход: matcher → real category pagetitle →
-                        // getCategoryOptionsSchema (full /categories/options) → resolve
-                        // только нерезолвенных модификаторов на широкой схеме → merge.
-                        if (rUnresolved && rUnresolved.length > 0) {
-                          try {
-                            const t2 = Date.now();
-                            const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
-                            if (catalog.length > 0) {
-                              const classifierCategoryRaw = (classification?.product_category || '').trim();
-                              let catTitle = '';
-                              let matcherMatches: string[] = [];
+                         // ── Этап 2 (2026-05-12): если первый проход оставил unresolved
+                         // модификаторы — bootstrap-схема pool'а слишком узкая (например,
+                         // в pool «розетки» попали в основном крышки/подрозетники, и ключ
+                         // "kolichestvo_mest" со значениями 1/2/3/4 в schema отсутствует).
+                         // Делаем второй заход: matcher → real category pagetitle →
+                         // getCategoryOptionsSchema (full /categories/options) → resolve
+                         // только нерезолвенных модификаторов на широкой схеме → merge.
+                         if (rUnresolved && rUnresolved.length > 0) {
+                           try {
+                             const t2 = Date.now();
+                             const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
+                             if (catalog.length > 0) {
+                               const classifierCategoryRaw = (classification?.product_category || '').trim();
+                               let catTitle = '';
+                               let matcherMatches: string[] = [];
+                               let categorySource: string = 'none';
 
-                              if (!choosePriceResolve2Category({ classifierCategory: classifierCategoryRaw, catalog })) {
-                                matcherMatches = await matchCategoriesWithLLM(priceQuery, catalog, appSettings);
-                              }
+                               if (!choosePriceResolve2Category({ classifierCategory: classifierCategoryRaw, catalog })) {
+                                 matcherMatches = await matchCategoriesWithLLM(priceQuery, catalog, appSettings);
+                               }
 
-                              catTitle = choosePriceResolve2Category({
-                                classifierCategory: classifierCategoryRaw,
-                                catalog,
-                                matcherMatches,
-                              });
+                               catTitle = choosePriceResolve2Category({
+                                 classifierCategory: classifierCategoryRaw,
+                                 catalog,
+                                 matcherMatches,
+                               });
 
-                              if (catTitle && classifierCategoryRaw && catTitle === classifierCategoryRaw) {
-                                console.log(`[Chat] [PriceResolve2] classifier category exact match="${catTitle}"`);
-                              } else if (catTitle && classifierCategoryRaw && catTitle === toPluralCategory(classifierCategoryRaw)) {
-                                console.log(`[Chat] [PriceResolve2] classifier category plural match="${catTitle}" (from "${classifierCategoryRaw}")`);
-                              }
+                               if (catTitle && classifierCategoryRaw && catTitle === classifierCategoryRaw) {
+                                 categorySource = 'classifier_exact';
+                                 console.log(`[Chat] [PriceResolve2] classifier category exact match="${catTitle}"`);
+                               } else if (catTitle && classifierCategoryRaw && catTitle === toPluralCategory(classifierCategoryRaw)) {
+                                 categorySource = 'classifier_plural';
+                                 console.log(`[Chat] [PriceResolve2] classifier category plural match="${catTitle}" (from "${classifierCategoryRaw}")`);
+                               } else if (catTitle) {
+                                 categorySource = 'matcher_first';
+                               }
 
-                              if (catTitle) {
-                                console.log(`[Chat] [PriceResolve2] matched category="${catTitle}" for noun="${priceQuery}"`);
-                                const wideProducts = await searchProductsByCandidate(
-                                  { query: null, brand: null, category: catTitle, min_price: 1, max_price: null },
-                                  appSettings.volt220_api_token!,
-                                  200
-                                );
-                                const wideSchema = extractSchemaFromProducts(wideProducts);
-                                if (wideSchema.size > 0) {
-                                  console.log(`[Chat] [PriceResolve2] wide schema: ${wideSchema.size} keys (source=category-products-sample, products=${wideProducts.length})`);
-                                  // Используем pool как контекст товаров, но schema — широкая.
-                                  const { resolved: r2Raw, unresolved: r2Unresolved } = await resolveFiltersWithLLM(
-                                    probePool,
-                                    rUnresolved,
-                                    appSettings,
-                                    criticalMods,
-                                    wideSchema,
-                                    'partial',
-                                    priceQuery
-                                  );
-                                  const resolved2 = flattenResolvedFilters(r2Raw);
-                                  console.log(`[Chat] [PriceResolve2] resolved=${JSON.stringify(resolved2)} unresolved=[${(r2Unresolved || []).join(', ')}] elapsed=${Date.now() - t2}ms`);
-                                  for (const [k, v] of Object.entries(resolved2)) {
-                                    if (!resolvedFilters[k]) resolvedFilters[k] = v;
-                                  }
-                                } else {
-                                  console.log(`[Chat] [PriceResolve2] wide schema empty for "${catTitle}"`);
-                                }
-                              } else {
-                                console.log(`[Chat] [PriceResolve2] no category match for noun="${priceQuery}"`);
-                              }
-                            }
-                          } catch (e2) {
-                            console.log(`[Chat] [PriceResolve2] error=${(e2 as Error).message} → continuing with first-pass filters only`);
-                          }
-                        }
+                               ptrace('resolve2_category', {
+                                 unresolvedIn: rUnresolved,
+                                 classifierCategory: classifierCategoryRaw,
+                                 matcherMatches: matcherMatches.slice(0, 5),
+                                 chosen: catTitle || null,
+                                 source: categorySource,
+                               });
 
-                        for (const [k, v] of Object.entries(resolvedFilters)) {
-                          extraParams.push([`options[${k}][]`, String(v)]);
-                        }
-                      } catch (rErr) {
-                        console.log(`[Chat] [PriceResolve] error=${(rErr as Error).message} → continuing without options[]`);
-                      }
-                    }
-                  }
-                } catch (probeErr) {
-                  console.log(`[Chat] [PriceProbe] error=${(probeErr as Error).message}`);
-                }
+                               if (catTitle) {
+                                 console.log(`[Chat] [PriceResolve2] matched category="${catTitle}" for noun="${priceQuery}"`);
+                                 const tWide = Date.now();
+                                 const wideProducts = await searchProductsByCandidate(
+                                   { query: null, brand: null, category: catTitle, min_price: 1, max_price: null },
+                                   appSettings.volt220_api_token!,
+                                   200
+                                 );
+                                 const wideSchema = extractSchemaFromProducts(wideProducts);
+                                 const newKeys = Array.from(wideSchema.keys()).filter(k => !bootstrapSchema.has(k));
+                                 ptrace('resolve2_schema', {
+                                   wideKeys: wideSchema.size,
+                                   wideProducts: wideProducts.length,
+                                   newKeysVsPool: newKeys.length,
+                                   newKeysSample: newKeys.slice(0, 10),
+                                   ms: Date.now() - tWide,
+                                 });
+                                 if (wideSchema.size > 0) {
+                                   console.log(`[Chat] [PriceResolve2] wide schema: ${wideSchema.size} keys (source=category-products-sample, products=${wideProducts.length})`);
+                                   const tR2 = Date.now();
+                                   const { resolved: r2Raw, unresolved: r2Unresolved } = await resolveFiltersWithLLM(
+                                     probePool,
+                                     rUnresolved,
+                                     appSettings,
+                                     criticalMods,
+                                     wideSchema,
+                                     'partial',
+                                     priceQuery
+                                   );
+                                   const resolved2 = flattenResolvedFilters(r2Raw);
+                                   ptrace('resolve2', {
+                                     input: rUnresolved,
+                                     schemaKeys: wideSchema.size,
+                                     resolved: resolved2,
+                                     unresolved: r2Unresolved || [],
+                                     ms: Date.now() - tR2,
+                                   });
+                                   console.log(`[Chat] [PriceResolve2] resolved=${JSON.stringify(resolved2)} unresolved=[${(r2Unresolved || []).join(', ')}] elapsed=${Date.now() - t2}ms`);
+                                   for (const [k, v] of Object.entries(resolved2)) {
+                                     if (!resolvedFilters[k]) resolvedFilters[k] = v;
+                                   }
+                                 } else {
+                                   console.log(`[Chat] [PriceResolve2] wide schema empty for "${catTitle}"`);
+                                 }
+                               } else {
+                                 console.log(`[Chat] [PriceResolve2] no category match for noun="${priceQuery}"`);
+                               }
+                             } else {
+                               ptrace('resolve2_category', { error: 'empty_catalog' });
+                             }
+                           } catch (e2) {
+                             ptrace('resolve2_error', { message: (e2 as Error).message });
+                             console.log(`[Chat] [PriceResolve2] error=${(e2 as Error).message} → continuing with first-pass filters only`);
+                           }
+                         }
 
-                const priceQueryFinal = extraParams.length > 0 ? priceQuery : `${priceQuery} ${mods.join(' ')}`.trim();
-                console.log(`[Chat] Price final: query="${priceQueryFinal}" extraParams=${extraParams.length}`);
+                         for (const [k, v] of Object.entries(resolvedFilters)) {
+                           extraParams.push([`options[${k}][]`, String(v)]);
+                         }
+                       } catch (rErr) {
+                         ptrace('resolve_error', { message: (rErr as Error).message });
+                         console.log(`[Chat] [PriceResolve] error=${(rErr as Error).message} → continuing without options[]`);
+                       }
+                     } else {
+                       ptrace('bootstrap_empty', {});
+                     }
+                   }
+                 } catch (probeErr) {
+                   ptrace('probe_error', { message: (probeErr as Error).message });
+                   console.log(`[Chat] [PriceProbe] error=${(probeErr as Error).message}`);
+                 }
+
+                 const priceQueryFinal = extraParams.length > 0 ? priceQuery : `${priceQuery} ${mods.join(' ')}`.trim();
+                 ptrace('final', {
+                   query: priceQueryFinal,
+                   extraParams,
+                   modsInQuery: extraParams.length === 0,
+                 });
+                 console.log(`[Chat] Price final: query="${priceQueryFinal}" extraParams=${extraParams.length}`);
                 const priceResult = await handlePriceIntent(
                   [priceQueryFinal],
                   effectivePriceIntent,
