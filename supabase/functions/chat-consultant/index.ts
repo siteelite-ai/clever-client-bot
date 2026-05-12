@@ -6522,6 +6522,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   responseModelReason = 'price-shortcircuit';
                   logSetBranch('price-shortcircuit');
                 }
+                ptrace('result', {
+                  action: priceResult.action,
+                  productsReturned: priceResult.products?.length || 0,
+                  total: (priceResult as any).total ?? null,
+                  topPrices: (priceResult.products || []).slice(0, 5).map((p: any) => p?.price),
+                });
               } else {
                 // Scenario A/B: характеристик нет — bootstrap-фасеты + один уточняющий вопрос.
                 console.log(`[Chat] Price intent NO mods → bootstrap facet probe for "${priceQuery}"`);
