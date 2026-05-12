@@ -16,6 +16,11 @@ import {
   logSetProductsCount,
   logSetError,
 } from '../_shared/request-logger.ts';
+import {
+  generateRelatedFollowup,
+  fetchRelatedProducts as fetchRelatedProductsShared,
+  type RelatedFollowupDeps,
+} from '../_shared/related-followup.ts';
 
 // Per-request async context (carries reqId implicitly through all awaits inside `serve`).
 // Used by Degraded-mode tracker so deeply nested catalog helpers do NOT need to thread
