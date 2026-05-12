@@ -9120,64 +9120,42 @@ ${productInstructions}`;
       logAddStep({ step: 'final-deterministic', total: foundProducts.length, meta: { reason: renderReason } });
 
       // ─────────────────────────────────────────────────────────────────────
-      // CROSS-SELL: ОТКЛЮЧЁН (V1, 2026-05-05).
+      // RELATED-FOLLOWUP (V1, 2026-05-12).
       //
-      // Старый LLM-генератор cross-sell tail (generateCrossSellTail + pending_offer)
-      // выключен полностью: он галлюцинировал бренды/серии/коллекции, которых
-      // нет в каталоге, и навязывал товары без реальной связи с показанными.
+      // Вместо хвоста «Могу чем-то ещё помочь?» отправляем ОТДЕЛЬНЫМ пузырём
+      // короткую естественную фразу про сопутствующие товары, основанную
+      // на реальных данных `GET /api/products/{id}/related` для якоря foundProducts[0].
       //
-      // НОВАЯ СХЕМА (ожидает backend): разработчик готовит endpoint
-      //   GET /products/{id}/related  → список реально сопутствующих товаров,
-      // привязанных к конкретному артикулу (на базе facet `soputstvuyuschiytovar`,
-      // в котором сейчас лежат внутренние UUID 1С — без endpoint'а зарезолвить
-      // их в товары невозможно).
+      // Условия пропуска (followup НЕ отправляем):
+      //   • renderReason === 'price-facet-clarify' (там и так уточняющий вопрос)
+      //   • replacementMeta.isReplacement (similar-ветка имеет свой композер)
+      //   • foundProducts пуст
+      //   • /related вернул < 2 категорий после фильтра price=0 + удаления категории якоря
+      //   • LLM-formulator вернул пустую строку / упал (silent skip)
       //
-      // КАК ТОЛЬКО endpoint появится:
-      //   1. Реализовать `fetchRelatedProducts(productId)` в catalog API клиенте.
-      //   2. Раскомментировать блок ниже и заменить generateCrossSellTail
-      //      на детерминистичный рендер реальных related-товаров для
-      //      foundProducts[0] (или N первых).
-      //   3. Текст-обёртку («что обычно покупают вместе…») оставить
-      //      data-agnostic — без хардкода категорий/брендов.
-      //
-      // Пока endpoint не готов — никакого cross-sell не добавляем.
-      // finalContent = content без хвоста; pending_offer slot не создаём.
+      // Старый LLM-cross-sell (generateCrossSellTail + pending_offer) ОТКЛЮЧЁН
+      // полностью — функция оставлена в коде как dead code до отдельного refactor PR.
       // ─────────────────────────────────────────────────────────────────────
-      // Временный хвост вместо cross-sell: простая универсальная фраза.
-      // Не зависит от категории/бренда/фасетов — пропускаем только для price-clarify
-      // (там и так уточняющий вопрос) и replacement (similar-ветка сюда не доходит).
-      const allowHelpTail = renderReason !== 'price-facet-clarify' && !replacementMeta?.isReplacement;
-      const finalContent = allowHelpTail
-        ? `${content}\n\nМогу чем-то ещё помочь?`
-        : content;
-
-      /* TODO(cross-sell-related): раскомментировать после появления /products/{id}/related
-      const allowCrossSellTail = renderReason !== 'price-facet-clarify' && !replacementMeta?.isReplacement;
-      const crossSellResult = allowCrossSellTail
-        ? await generateCrossSellTail({ products: foundProducts, userMessage, settings: appSettings })
-        : { text: '', offerQuery: '' };
-      const crossSellTail = crossSellResult.text;
-      const finalContent = crossSellTail ? `${content}\n\n${crossSellTail}` : content;
-      if (crossSellTail) console.log(`[Chat] Cross-sell tail appended (${crossSellTail.length} chars, offer_query="${crossSellResult.offerQuery}")`);
-
-      if (crossSellResult.offerQuery) {
-        dialogSlots['pending_offer'] = {
-          intent: 'pending_offer',
-          base_category: crossSellResult.offerQuery,
-          status: 'pending',
-          created_turn: 0,
-          turns_since_touched: 0,
-          offer_text: crossSellTail.slice(0, 200),
-          offer_query: crossSellResult.offerQuery,
-        };
-        slotsUpdated = true;
-      }
-      */
-
+      const finalContent = content;
+      const allowFollowup =
+        renderReason !== 'price-facet-clarify' &&
+        !replacementMeta?.isReplacement &&
+        foundProducts.length > 0;
+      const anchorProduct = allowFollowup ? foundProducts[0] : null;
 
       if (!useStreaming) {
-        const responseBody: { content: string; slot_update?: DialogSlots } = { content: finalContent };
+        // Non-streaming: ждём followup (если применимо) и кладём в отдельное поле.
+        let followupText = '';
+        if (anchorProduct && appSettings.volt220_api_token) {
+          followupText = await generateRelatedFollowup({
+            anchor: anchorProduct,
+            apiToken: appSettings.volt220_api_token,
+            settings: appSettings,
+          });
+        }
+        const responseBody: { content: string; slot_update?: DialogSlots; followup?: { text: string } } = { content: finalContent };
         if (slotsUpdated) responseBody.slot_update = dialogSlots;
+        if (followupText) responseBody.followup = { text: followupText };
         persistSlotsAsync(conversationId, dialogSlots);
         return new Response(JSON.stringify(responseBody), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -9186,7 +9164,7 @@ ${productInstructions}`;
 
       const encoder = new TextEncoder();
       const stream = new ReadableStream({
-        start(controller) {
+        async start(controller) {
           const contentDelta = `data: ${JSON.stringify({
             choices: [{ delta: { content: finalContent }, index: 0 }],
           })}\n\n`;
@@ -9196,6 +9174,25 @@ ${productInstructions}`;
             controller.enqueue(encoder.encode(slotEvent));
           }
           persistSlotsAsync(conversationId, dialogSlots);
+
+          // Related-followup эмитим ПОСЛЕ основного контента, но ДО [DONE].
+          // Frontend сам добавит визуальную задержку перед рендером пузыря.
+          if (anchorProduct && appSettings.volt220_api_token) {
+            try {
+              const followupText = await generateRelatedFollowup({
+                anchor: anchorProduct,
+                apiToken: appSettings.volt220_api_token,
+                settings: appSettings,
+              });
+              if (followupText) {
+                const followupEvent = `data: ${JSON.stringify({ followup: { text: followupText } })}\n\n`;
+                controller.enqueue(encoder.encode(followupEvent));
+              }
+            } catch (e) {
+              console.log(`[RelatedFollowup] stream error (silent skip): ${(e as Error).message}`);
+            }
+          }
+
           controller.enqueue(encoder.encode('data: [DONE]\n\n'));
           controller.close();
         },
@@ -9210,6 +9207,7 @@ ${productInstructions}`;
         },
       });
     }
+
 
     const response = await callAIWithKeyFallback(aiConfig.url, aiConfig.apiKeys, {
       model: responseModel,
