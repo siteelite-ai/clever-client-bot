@@ -6317,8 +6317,22 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                             const t2 = Date.now();
                             const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
                             if (catalog.length > 0) {
-                              const matches = await matchCategoriesWithLLM(priceQuery, catalog, appSettings);
-                              const catTitle = matches[0];
+                              const catalogSet = new Set(catalog);
+                              const classifierCategoryRaw = (classification?.product_category || '').trim();
+                              const classifierCategoryPlural = classifierCategoryRaw ? toPluralCategory(classifierCategoryRaw) : '';
+                              let catTitle = '';
+
+                              if (classifierCategoryRaw && catalogSet.has(classifierCategoryRaw)) {
+                                catTitle = classifierCategoryRaw;
+                                console.log(`[Chat] [PriceResolve2] classifier category exact match="${catTitle}"`);
+                              } else if (classifierCategoryPlural && catalogSet.has(classifierCategoryPlural)) {
+                                catTitle = classifierCategoryPlural;
+                                console.log(`[Chat] [PriceResolve2] classifier category plural match="${catTitle}" (from "${classifierCategoryRaw}")`);
+                              } else {
+                                const matches = await matchCategoriesWithLLM(priceQuery, catalog, appSettings);
+                                catTitle = matches[0] || '';
+                              }
+
                               if (catTitle) {
                                 console.log(`[Chat] [PriceResolve2] matched category="${catTitle}" for noun="${priceQuery}"`);
                                 const wide = await getCategoryOptionsSchema(catTitle, appSettings.volt220_api_token!);
