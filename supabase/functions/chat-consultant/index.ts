@@ -1226,6 +1226,33 @@ async function searchByArticle(article: string, apiToken: string): Promise<Produ
 }
 
 /**
+ * Fetch "related" (сопутствующие) products for a given product id from the catalog API.
+ * Endpoint: GET /api/products/{id}/related (verified live 2026-05-12).
+ * Response shape: { success, data: { results: Product[] } }  (без pagination).
+ *
+ * HARD-фильтрует price=0 (Core Memory: ABSOLUTE BAN на любую утечку price=0).
+ * Любая транспортная ошибка/таймаут → возвращает [] (silent skip — followup пузырь
+ * просто не появится, основной ответ не страдает).
+ */
+async function fetchRelatedProducts(productId: number, apiToken: string): Promise<Product[]> {
+  const url = `https://220volt.kz/api/products/${productId}/related`;
+  console.log(`[Related] Fetching ${url}`);
+  const response = await fetchCatalogWithRetry(url, apiToken, 'Related', 6000);
+  if (!response) return [];
+  try {
+    const rawData = await response.json();
+    const data = rawData.data || rawData;
+    const results: Product[] = Array.isArray(data.results) ? data.results : [];
+    const filtered = results.filter(p => Number(p.price) > 0);
+    console.log(`[Related] productId=${productId} raw=${results.length} afterPriceFilter=${filtered.length}`);
+    return filtered;
+  } catch (error) {
+    console.error(`[Related] Parse error:`, error);
+    return [];
+  }
+}
+
+/**
  * Decide whether a Micro-LLM classification yields a candidate title strong enough
  * for the title-first fast-path (single API hop via ?query=, skip slot/category/strict).
  *
@@ -4882,11 +4909,131 @@ ${titles.map(t => `- ${t}`).join('\n')}
 }
 
 /**
+ * Related-followup (V1, 2026-05-12).
+ *
+ * Цель: после того как пользователь увидел карточки товаров, отправить ОТДЕЛЬНЫМ
+ * пузырём короткую естественную фразу про сопутствующие категории — на основе
+ * РЕАЛЬНЫХ данных из `GET /api/products/{id}/related`. Без SKU/цен/брендов/ссылок (§11.5).
+ *
+ * Алгоритм:
+ *   1. Дёргаем /related для anchor-товара (foundProducts[0]).
+ *   2. Агрегируем категории из results[].category.pagetitle, исключаем категорию якоря,
+ *      берём top-3 по частоте.
+ *   3. Если категорий < 2 → возвращаем '' (фраза «С этим покупают X» из одной категории
+ *      звучит куцо; лучше промолчать).
+ *   4. Прогоняем категории через Claude Sonnet 4.5 (tool calling) с очень узким промптом —
+ *      LLM отвечает за ЕСТЕСТВЕННУЮ формулировку, но НЕ может выйти за рамки
+ *      переданного списка категорий (anti-hallucination).
+ *   5. Любая ошибка/таймаут/sanitize-fail → '' (silent skip).
+ */
+async function generateRelatedFollowup(params: {
+  anchor: Product;
+  apiToken: string;
+  settings: CachedSettings;
+}): Promise<string> {
+  const { anchor, apiToken, settings } = params;
+  if (!anchor?.id || !apiToken || !settings.openrouter_api_key) return '';
+
+  // 1. Fetch related
+  const related = await fetchRelatedProducts(anchor.id, apiToken);
+  if (!related.length) return '';
+
+  // 2. Aggregate categories (исключаем категорию самого якоря)
+  const anchorCatId = anchor.category?.id;
+  const counts = new Map<string, number>();
+  for (const p of related) {
+    const cat = p.category?.pagetitle?.trim();
+    if (!cat) continue;
+    if (anchorCatId && p.category?.id === anchorCatId) continue;
+    counts.set(cat, (counts.get(cat) || 0) + 1);
+  }
+  const topCategories = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([cat]) => cat);
+  console.log(`[RelatedFollowup] anchor=${anchor.id} categories=${JSON.stringify(topCategories)}`);
+  if (topCategories.length < 2) return '';
+
+  // 3. LLM formulation — узкий промпт, можно использовать ТОЛЬКО переданные категории.
+  const systemPrompt = `Ты эксперт-консультант 220volt.kz. Клиенту только что показали карточки товаров. Сформулируй ОДНУ короткую естественную фразу про сопутствующие товары.
+
+Якорный товар (тип/категория): ${anchor.category?.pagetitle || anchor.pagetitle}
+Сопутствующие категории (используй ТОЛЬКО их, в любом порядке, можно склонять):
+${topCategories.map(c => `- ${c}`).join('\n')}
+
+ПРАВИЛА:
+- Ровно ОДНА фраза, до 160 символов.
+- Начни с естественного оборота: «С этим часто берут …», «К этому обычно докупают …», «Также пригодятся …».
+- Перечисли 2-3 категории из списка выше (можно слегка склонять/упрощать формулировку категории, но НЕ выдумывать новые).
+- Тон: спокойный, профессиональный, без давления.
+- ЗАПРЕЩЕНО: артикулы, цены, ссылки, бренды, серии, коллекции, конкретные модели, восклицательные знаки, маркетинговые штампы («отличный выбор», «лучший»).
+- БЕЗ призывов «подобрать?»/«показать?» в конце — просто констатация.
+
+Если список категорий бессмысленный или их нельзя естественно объединить в одну фразу — верни phrase="".`;
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${settings.openrouter_api_key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'anthropic/claude-sonnet-4.5',
+        messages: [{ role: 'user', content: systemPrompt }],
+        temperature: 0.4,
+        max_tokens: 200,
+        tools: [{
+          type: 'function',
+          function: {
+            name: 'propose_related_followup',
+            description: 'Return one natural sentence about related product categories.',
+            parameters: {
+              type: 'object',
+              properties: {
+                phrase: { type: 'string', description: 'One short sentence (≤160 chars). Empty if cannot be formulated.' },
+              },
+              required: ['phrase'],
+              additionalProperties: false,
+            },
+          },
+        }],
+        tool_choice: { type: 'function', function: { name: 'propose_related_followup' } },
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timeout);
+    if (!response.ok) {
+      console.log(`[RelatedFollowup] API error: ${response.status}`);
+      return '';
+    }
+    const data = await response.json();
+    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
+    if (!toolCall?.function?.arguments) return '';
+    let parsed: { phrase?: string };
+    try { parsed = JSON.parse(toolCall.function.arguments); } catch { return ''; }
+    let text = (parsed.phrase || '').trim();
+    if (!text) return '';
+    // Sanitize: вырезаем markdown-ссылки/цены/артикулы — на всякий случай.
+    if (/\[.*?\]\(.*?\)/.test(text) || /https?:\/\//i.test(text) || /\d+\s*(?:₸|тг|тенге|руб)/i.test(text)) {
+      console.log(`[RelatedFollowup] Sanitize: rejected text with link/price: ${text.slice(0, 80)}`);
+      return '';
+    }
+    if (text.length > 240) text = text.slice(0, 240);
+    console.log(`[RelatedFollowup] Generated: "${text}"`);
+    return text;
+  } catch (e) {
+    console.log(`[RelatedFollowup] Error (silent skip): ${(e as Error).message}`);
+    return '';
+  }
+}
+
+/**
  * LLM-классификатор: принимает ли пользователь cross-sell offer прошлого хода.
  * Без хардкод-списка слов: модель сама решает на основе семантики.
  * Возвращает 'accept' (короткое согласие БЕЗ новых сущностей), 'new_request' (что-то иное),
  * либо 'unclear' (пропускаем — пусть основной pipeline разбирается).
  */
+
 async function classifyOfferResponse(params: {
   offerText: string;
   offerQuery: string;
@@ -8975,64 +9122,42 @@ ${productInstructions}`;
       logAddStep({ step: 'final-deterministic', total: foundProducts.length, meta: { reason: renderReason } });
 
       // ─────────────────────────────────────────────────────────────────────
-      // CROSS-SELL: ОТКЛЮЧЁН (V1, 2026-05-05).
+      // RELATED-FOLLOWUP (V1, 2026-05-12).
       //
-      // Старый LLM-генератор cross-sell tail (generateCrossSellTail + pending_offer)
-      // выключен полностью: он галлюцинировал бренды/серии/коллекции, которых
-      // нет в каталоге, и навязывал товары без реальной связи с показанными.
+      // Вместо хвоста «Могу чем-то ещё помочь?» отправляем ОТДЕЛЬНЫМ пузырём
+      // короткую естественную фразу про сопутствующие товары, основанную
+      // на реальных данных `GET /api/products/{id}/related` для якоря foundProducts[0].
       //
-      // НОВАЯ СХЕМА (ожидает backend): разработчик готовит endpoint
-      //   GET /products/{id}/related  → список реально сопутствующих товаров,
-      // привязанных к конкретному артикулу (на базе facet `soputstvuyuschiytovar`,
-      // в котором сейчас лежат внутренние UUID 1С — без endpoint'а зарезолвить
-      // их в товары невозможно).
+      // Условия пропуска (followup НЕ отправляем):
+      //   • renderReason === 'price-facet-clarify' (там и так уточняющий вопрос)
+      //   • replacementMeta.isReplacement (similar-ветка имеет свой композер)
+      //   • foundProducts пуст
+      //   • /related вернул < 2 категорий после фильтра price=0 + удаления категории якоря
+      //   • LLM-formulator вернул пустую строку / упал (silent skip)
       //
-      // КАК ТОЛЬКО endpoint появится:
-      //   1. Реализовать `fetchRelatedProducts(productId)` в catalog API клиенте.
-      //   2. Раскомментировать блок ниже и заменить generateCrossSellTail
-      //      на детерминистичный рендер реальных related-товаров для
-      //      foundProducts[0] (или N первых).
-      //   3. Текст-обёртку («что обычно покупают вместе…») оставить
-      //      data-agnostic — без хардкода категорий/брендов.
-      //
-      // Пока endpoint не готов — никакого cross-sell не добавляем.
-      // finalContent = content без хвоста; pending_offer slot не создаём.
+      // Старый LLM-cross-sell (generateCrossSellTail + pending_offer) ОТКЛЮЧЁН
+      // полностью — функция оставлена в коде как dead code до отдельного refactor PR.
       // ─────────────────────────────────────────────────────────────────────
-      // Временный хвост вместо cross-sell: простая универсальная фраза.
-      // Не зависит от категории/бренда/фасетов — пропускаем только для price-clarify
-      // (там и так уточняющий вопрос) и replacement (similar-ветка сюда не доходит).
-      const allowHelpTail = renderReason !== 'price-facet-clarify' && !replacementMeta?.isReplacement;
-      const finalContent = allowHelpTail
-        ? `${content}\n\nМогу чем-то ещё помочь?`
-        : content;
-
-      /* TODO(cross-sell-related): раскомментировать после появления /products/{id}/related
-      const allowCrossSellTail = renderReason !== 'price-facet-clarify' && !replacementMeta?.isReplacement;
-      const crossSellResult = allowCrossSellTail
-        ? await generateCrossSellTail({ products: foundProducts, userMessage, settings: appSettings })
-        : { text: '', offerQuery: '' };
-      const crossSellTail = crossSellResult.text;
-      const finalContent = crossSellTail ? `${content}\n\n${crossSellTail}` : content;
-      if (crossSellTail) console.log(`[Chat] Cross-sell tail appended (${crossSellTail.length} chars, offer_query="${crossSellResult.offerQuery}")`);
-
-      if (crossSellResult.offerQuery) {
-        dialogSlots['pending_offer'] = {
-          intent: 'pending_offer',
-          base_category: crossSellResult.offerQuery,
-          status: 'pending',
-          created_turn: 0,
-          turns_since_touched: 0,
-          offer_text: crossSellTail.slice(0, 200),
-          offer_query: crossSellResult.offerQuery,
-        };
-        slotsUpdated = true;
-      }
-      */
-
+      const finalContent = content;
+      const allowFollowup =
+        renderReason !== 'price-facet-clarify' &&
+        !replacementMeta?.isReplacement &&
+        foundProducts.length > 0;
+      const anchorProduct = allowFollowup ? foundProducts[0] : null;
 
       if (!useStreaming) {
-        const responseBody: { content: string; slot_update?: DialogSlots } = { content: finalContent };
+        // Non-streaming: ждём followup (если применимо) и кладём в отдельное поле.
+        let followupText = '';
+        if (anchorProduct && appSettings.volt220_api_token) {
+          followupText = await generateRelatedFollowup({
+            anchor: anchorProduct,
+            apiToken: appSettings.volt220_api_token,
+            settings: appSettings,
+          });
+        }
+        const responseBody: { content: string; slot_update?: DialogSlots; followup?: { text: string } } = { content: finalContent };
         if (slotsUpdated) responseBody.slot_update = dialogSlots;
+        if (followupText) responseBody.followup = { text: followupText };
         persistSlotsAsync(conversationId, dialogSlots);
         return new Response(JSON.stringify(responseBody), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -9041,7 +9166,7 @@ ${productInstructions}`;
 
       const encoder = new TextEncoder();
       const stream = new ReadableStream({
-        start(controller) {
+        async start(controller) {
           const contentDelta = `data: ${JSON.stringify({
             choices: [{ delta: { content: finalContent }, index: 0 }],
           })}\n\n`;
@@ -9051,6 +9176,25 @@ ${productInstructions}`;
             controller.enqueue(encoder.encode(slotEvent));
           }
           persistSlotsAsync(conversationId, dialogSlots);
+
+          // Related-followup эмитим ПОСЛЕ основного контента, но ДО [DONE].
+          // Frontend сам добавит визуальную задержку перед рендером пузыря.
+          if (anchorProduct && appSettings.volt220_api_token) {
+            try {
+              const followupText = await generateRelatedFollowup({
+                anchor: anchorProduct,
+                apiToken: appSettings.volt220_api_token,
+                settings: appSettings,
+              });
+              if (followupText) {
+                const followupEvent = `data: ${JSON.stringify({ followup: { text: followupText } })}\n\n`;
+                controller.enqueue(encoder.encode(followupEvent));
+              }
+            } catch (e) {
+              console.log(`[RelatedFollowup] stream error (silent skip): ${(e as Error).message}`);
+            }
+          }
+
           controller.enqueue(encoder.encode('data: [DONE]\n\n'));
           controller.close();
         },
@@ -9065,6 +9209,7 @@ ${productInstructions}`;
         },
       });
     }
+
 
     const response = await callAIWithKeyFallback(aiConfig.url, aiConfig.apiKeys, {
       model: responseModel,
