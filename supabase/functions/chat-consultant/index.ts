@@ -6815,12 +6815,21 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     }
                   }
                   console.log(`[QueryFirstV2] bootstrap schema: ${bootstrapSchema.size} keys, ${Array.from(bootstrapSchema.values()).reduce((s, b) => s + b.values.size, 0)} values (source=bootstrap)`);
+                  logAddStep({
+                    step: 'qfv2-bootstrap',
+                    meta: {
+                      keys: bootstrapSchema.size,
+                      values_total: Array.from(bootstrapSchema.values()).reduce((s, b) => s + b.values.size, 0),
+                      sample: Array.from(bootstrapSchema.entries()).slice(0, 8).map(([k, v]) => ({ key: k, caption: v.caption, values: Array.from(v.values).slice(0, 5) })),
+                    },
+                  });
 
                   // ── (4) Resolve modifiers → option filters against the live schema.
                   // If no modifiers: skip resolution, just display pool.
                   let resolvedFilters: Record<string, string> = {};
                   let resolverUnresolvedDetails: Array<{ modifier: string; key: string; caption: string; requestedValue: string; availableValues: string[] }> = [];
                   if (modifiers.length > 0 && bootstrapSchema.size > 0) {
+                    const filterStartMs = Date.now();
                     try {
                       const { resolved: rRaw, unresolved: rUnresolved, unresolvedDetails: rDetails } = await resolveFiltersWithLLM(
                         pool,
@@ -6834,11 +6843,23 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       resolvedFilters = flattenResolvedFilters(rRaw);
                       resolverUnresolvedDetails = rDetails || [];
                       console.log(`[QueryFirstV2] resolved=${JSON.stringify(resolvedFilters)} unresolved=[${rUnresolved.join(', ')}] unresolvedDetails=${resolverUnresolvedDetails.length}`);
+                      logAddStep({
+                        step: 'qfv2-filter-llm',
+                        ms: Date.now() - filterStartMs,
+                        meta: {
+                          modifiers,
+                          resolved: resolvedFilters,
+                          unresolved: rUnresolved,
+                          unresolvedDetails: resolverUnresolvedDetails.map(d => ({ modifier: d.modifier, key: d.key, caption: d.caption, requestedValue: d.requestedValue, availableValues: d.availableValues.slice(0, 8) })),
+                        },
+                      });
                     } catch (rErr) {
                       console.log(`[QueryFirstV2] resolveFilters error=${(rErr as Error).message} → continuing with empty filters`);
+                      logAddStep({ step: 'qfv2-filter-llm', ms: Date.now() - filterStartMs, meta: { error: String((rErr as Error).message), modifiers } });
                     }
                   } else if (modifiers.length === 0) {
                     console.log(`[QueryFirstV2] no modifiers → display pool directly`);
+                    logAddStep({ step: 'qfv2-filter-llm', meta: { skipped: 'no_modifiers' } });
                   }
 
                   // ── (5/6) Final search.
