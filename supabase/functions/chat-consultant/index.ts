@@ -9139,10 +9139,20 @@ ${productInstructions}`;
       // полностью — функция оставлена в коде как dead code до отдельного refactor PR.
       // ─────────────────────────────────────────────────────────────────────
       const finalContent = content;
+      // Single-anchor only: followup имеет смысл, только когда якорь однозначен —
+      // точечный поиск (article/siteid/title short-circuit) ИЛИ ровно одна карточка.
+      // При широкой выдаче (qfv2 pool, jargon-fallback-early, category-browse) первый
+      // товар арбитрарен → его /related вводит в заблуждение (см. кейс «розетка Vega»
+      // → силовая ИЭК → автоматы/кабели). Пропускаем.
+      const isSingleAnchorReason =
+        renderReason === 'article-shortcircuit' ||
+        renderReason === 'siteid-shortcircuit' ||
+        renderReason === 'title-shortcircuit';
       const allowFollowup =
         renderReason !== 'price-facet-clarify' &&
         !replacementMeta?.isReplacement &&
-        foundProducts.length > 0;
+        foundProducts.length > 0 &&
+        (foundProducts.length === 1 || isSingleAnchorReason);
       const anchorProduct = allowFollowup ? foundProducts[0] : null;
 
       if (!useStreaming) {
