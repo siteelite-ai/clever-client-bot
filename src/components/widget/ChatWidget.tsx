@@ -445,6 +445,18 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
           timestamp: new Date()
         }]);
       },
+      onFollowup: (text) => {
+        // Render related-products follow-up as a SEPARATE assistant bubble
+        // shortly after main message, so it visually feels like a new turn.
+        setTimeout(() => {
+          setMessages(prev => [...prev, {
+            id: mid('followup'),
+            role: 'assistant' as const,
+            content: text,
+            timestamp: new Date()
+          }]);
+        }, 1000);
+      },
       onDone: () => {
         setMessages(prev => prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-')));
         setIsLoading(false);
