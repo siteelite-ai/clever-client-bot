@@ -6288,16 +6288,39 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 // → resolveFiltersWithLLM → options[<key>][]=<value> → handlePriceIntent.
                 // Если probe/resolve ничего не дал — fallback на старое поведение (mods в query),
                 // чтобы не регрессировать на сценариях, где schema пустая.
-                console.log(`[Chat] Price intent with mods: noun="${priceQuery}" mods=${JSON.stringify(mods)}`);
-                let extraParams: Array<[string, string]> = [];
-                try {
-                  const QF_POOL_SIZE = 100;
-                  const probePool = await searchProductsByCandidate(
-                    { query: priceQuery, brand: null, category: null, min_price: null, max_price: null },
-                    appSettings.volt220_api_token!,
-                    QF_POOL_SIZE
-                  );
-                  console.log(`[Chat] [PriceProbe] noun="${priceQuery}" pool=${probePool.length}`);
+                 const ptrace = (tag: string, payload: Record<string, unknown>) => {
+                   try {
+                     console.log(`[PriceTrace] ${JSON.stringify({ tag, sid: conversationId, ...payload })}`);
+                   } catch (_) { /* ignore */ }
+                 };
+                 ptrace('start', {
+                   noun: priceQuery,
+                   mods,
+                   intent: effectivePriceIntent,
+                   classifierCategory: classification?.product_category || null,
+                   criticalMods: Array.isArray(classification?.critical_modifiers) ? classification!.critical_modifiers : null,
+                 });
+                 console.log(`[Chat] Price intent with mods: noun="${priceQuery}" mods=${JSON.stringify(mods)}`);
+                 let extraParams: Array<[string, string]> = [];
+                 try {
+                   const QF_POOL_SIZE = 100;
+                   const tProbe = Date.now();
+                   const probePool = await searchProductsByCandidate(
+                     { query: priceQuery, brand: null, category: null, min_price: null, max_price: null },
+                     appSettings.volt220_api_token!,
+                     QF_POOL_SIZE
+                   );
+                   ptrace('probe', {
+                     noun: priceQuery,
+                     poolSize: probePool.length,
+                     ms: Date.now() - tProbe,
+                     sample: probePool.slice(0, 3).map((p: any) => ({
+                       title: p?.pagetitle,
+                       price: p?.price,
+                       optsKeys: Array.isArray(p?.options) ? p.options.map((o: any) => o?.key).slice(0, 8) : [],
+                     })),
+                   });
+                   console.log(`[Chat] [PriceProbe] noun="${priceQuery}" pool=${probePool.length}`);
                   if (probePool.length > 0 && appSettings.openrouter_api_key) {
                     const bootstrapSchema = new Map<string, { caption: string; values: Set<string> }>();
                     for (const p of probePool) {
