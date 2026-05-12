@@ -1226,6 +1226,33 @@ async function searchByArticle(article: string, apiToken: string): Promise<Produ
 }
 
 /**
+ * Fetch "related" (сопутствующие) products for a given product id from the catalog API.
+ * Endpoint: GET /api/products/{id}/related (verified live 2026-05-12).
+ * Response shape: { success, data: { results: Product[] } }  (без pagination).
+ *
+ * HARD-фильтрует price=0 (Core Memory: ABSOLUTE BAN на любую утечку price=0).
+ * Любая транспортная ошибка/таймаут → возвращает [] (silent skip — followup пузырь
+ * просто не появится, основной ответ не страдает).
+ */
+async function fetchRelatedProducts(productId: number, apiToken: string): Promise<Product[]> {
+  const url = `https://220volt.kz/api/products/${productId}/related`;
+  console.log(`[Related] Fetching ${url}`);
+  const response = await fetchCatalogWithRetry(url, apiToken, 'Related', 6000);
+  if (!response) return [];
+  try {
+    const rawData = await response.json();
+    const data = rawData.data || rawData;
+    const results: Product[] = Array.isArray(data.results) ? data.results : [];
+    const filtered = results.filter(p => Number(p.price) > 0);
+    console.log(`[Related] productId=${productId} raw=${results.length} afterPriceFilter=${filtered.length}`);
+    return filtered;
+  } catch (error) {
+    console.error(`[Related] Parse error:`, error);
+    return [];
+  }
+}
+
+/**
  * Decide whether a Micro-LLM classification yields a candidate title strong enough
  * for the title-first fast-path (single API hop via ?query=, skip slot/category/strict).
  *
