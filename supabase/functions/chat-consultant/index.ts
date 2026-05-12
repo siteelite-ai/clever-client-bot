@@ -6288,11 +6288,23 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 // → resolveFiltersWithLLM → options[<key>][]=<value> → handlePriceIntent.
                 // Если probe/resolve ничего не дал — fallback на старое поведение (mods в query),
                 // чтобы не регрессировать на сценариях, где schema пустая.
-                 const ptrace = (tag: string, payload: Record<string, unknown>) => {
-                   try {
-                     console.log(`[PriceTrace] ${JSON.stringify({ tag, sid: conversationId, ...payload })}`);
-                   } catch (_) { /* ignore */ }
-                 };
+                  const ptrace = (tag: string, payload: Record<string, unknown>) => {
+                    try {
+                      console.log(`[PriceTrace] ${JSON.stringify({ tag, sid: conversationId, ...payload })}`);
+                    } catch (_) { /* ignore */ }
+                    try {
+                      // Зеркалим в chat_request_logs.steps, чтобы было видно в UI /logs
+                      const total = typeof (payload as any).total === 'number'
+                        ? (payload as any).total
+                        : (typeof (payload as any).poolSize === 'number'
+                          ? (payload as any).poolSize
+                          : (typeof (payload as any).productsReturned === 'number'
+                            ? (payload as any).productsReturned
+                            : undefined));
+                      const ms = typeof (payload as any).ms === 'number' ? (payload as any).ms : undefined;
+                      logAddStep({ step: `price:${tag}`, total, ms, meta: payload });
+                    } catch (_) { /* ignore */ }
+                  };
                  ptrace('start', {
                    noun: priceQuery,
                    mods,
