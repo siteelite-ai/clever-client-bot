@@ -2270,6 +2270,8 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
       price_facet_state: typeof s.price_facet_state === 'string' ? s.price_facet_state.substring(0, 4000) : undefined,
       offer_text: typeof s.offer_text === 'string' ? sanitize(s.offer_text) : undefined,
       offer_query: typeof s.offer_query === 'string' ? sanitize(s.offer_query) : undefined,
+      anchor_ids: typeof s.anchor_ids === 'string' ? s.anchor_ids.substring(0, 500) : undefined,
+      related_categories: typeof s.related_categories === 'string' ? s.related_categories.substring(0, 1000) : undefined,
     };
     count++;
   }
