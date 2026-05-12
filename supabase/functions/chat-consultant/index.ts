@@ -9123,8 +9123,7 @@ ${productInstructions}`;
         if (anchorProduct && appSettings.volt220_api_token) {
           followupText = await generateRelatedFollowup({
             anchor: anchorProduct,
-            apiToken: appSettings.volt220_api_token,
-            settings: appSettings,
+            deps: buildRelatedDeps(appSettings.volt220_api_token, appSettings),
           });
         }
         const responseBody: { content: string; slot_update?: DialogSlots; followup?: { text: string } } = { content: finalContent };
@@ -9155,8 +9154,7 @@ ${productInstructions}`;
             try {
               const followupText = await generateRelatedFollowup({
                 anchor: anchorProduct,
-                apiToken: appSettings.volt220_api_token,
-                settings: appSettings,
+                deps: buildRelatedDeps(appSettings.volt220_api_token, appSettings),
               });
               if (followupText) {
                 const followupEvent = `data: ${JSON.stringify({ followup: { text: followupText } })}\n\n`;
