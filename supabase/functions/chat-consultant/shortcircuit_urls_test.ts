@@ -1,5 +1,5 @@
 import { assertEquals, assertStringIncludes, assertFalse } from 'https://deno.land/std@0.224.0/assert/mod.ts';
-import { buildDeterministicShortCircuitContent, formatProductCardDeterministic, extractFacetsFromProducts, buildPriceFacetClarifyContent } from './index.ts';
+import { buildDeterministicShortCircuitContent, formatProductCardDeterministic, extractFacetsFromProducts, buildPriceFacetClarifyContent, choosePriceResolve2Category } from './index.ts';
 
 const baseProduct = {
   id: 1,
@@ -91,4 +91,14 @@ Deno.test('buildPriceFacetClarifyContent renders cards and asks via real facet v
   assertStringIncludes(text, 'Бытовая');
   assertStringIncludes(text, 'Промышленная');
   assertStringIncludes(text, 'https://220volt.kz/');
+});
+
+Deno.test('price resolve2 prefers classifier category over matcher first hit', () => {
+  const chosen = choosePriceResolve2Category({
+    classifierCategory: 'розетки',
+    catalog: ['Блоки электроустановочные', 'Розетки', 'Розетки силовые'],
+    matcherMatches: ['Блоки электроустановочные', 'Розетки', 'Розетки силовые'],
+  });
+
+  assertEquals(chosen, 'Розетки');
 });
