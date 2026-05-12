@@ -80,6 +80,7 @@ async function streamChat({
   onContacts,
   onSlotUpdate,
   onQuickReplies,
+  onFollowup,
   conversationId,
   dialogSlots,
   endpointUrl,
