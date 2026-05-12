@@ -5027,11 +5027,13 @@ ${topCategories.map(c => `- ${c}`).join('\n')}
   }
 }
 
-
+/**
+ * LLM-классификатор: принимает ли пользователь cross-sell offer прошлого хода.
  * Без хардкод-списка слов: модель сама решает на основе семантики.
  * Возвращает 'accept' (короткое согласие БЕЗ новых сущностей), 'new_request' (что-то иное),
  * либо 'unclear' (пропускаем — пусть основной pipeline разбирается).
  */
+
 async function classifyOfferResponse(params: {
   offerText: string;
   offerQuery: string;
