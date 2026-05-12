@@ -6935,6 +6935,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       const firstUnresolvedKey = resolverUnresolvedDetails[0].key;
                       qfV2DroppedFacetCaption = bootstrapSchema.get(firstUnresolvedKey)?.caption || firstUnresolvedKey || null;
                       console.log(`[QueryFirstV2] query_first_v2_honest_empty_partial noun="${noun}" unresolvedDetails=${JSON.stringify(resolverUnresolvedDetails)} attemptedFacets=${JSON.stringify(attemptedFacets)} elapsed=${Date.now() - qfStart}ms`);
+                      logAddStep({ step: 'qfv2-honest-empty-partial', total: 0, meta: { noun, unresolvedDetails: resolverUnresolvedDetails.map(d => ({ modifier: d.modifier, key: d.key, caption: d.caption, requestedValue: d.requestedValue, availableValues: d.availableValues.slice(0, 8) })), attemptedFacets } });
                     } else if (Object.keys(resolvedFilters).length > 0) {
                       const finalStartMs = Date.now();
                       const final = await searchProductsByCandidate(
