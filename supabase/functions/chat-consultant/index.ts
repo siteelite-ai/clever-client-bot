@@ -2043,10 +2043,14 @@ async function getCategoryOptionsSchemaLegacy(
           if (!opt || typeof opt.key !== 'string') continue;
           if (isExcludedOption(opt.key)) continue;
           if (!schema.has(opt.key)) {
-            schema.set(opt.key, { caption: opt.caption || opt.key, values: new Set() });
+            schema.set(opt.key, {
+              caption: cleanOptionCaption(opt.caption_ru ?? opt.caption ?? opt.key) || opt.key,
+              values: new Set(),
+            });
           }
-          if (typeof opt.value === 'string' && opt.value.trim()) {
-            schema.get(opt.key)!.values.add(opt.value);
+          const normalizedValue = cleanOptionValue(opt.value_ru ?? opt.value);
+          if (normalizedValue) {
+            schema.get(opt.key)!.values.add(normalizedValue);
           }
         }
       }
@@ -6362,7 +6366,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                                     appSettings,
                                     criticalMods,
                                     wide.schema,
-                                    'full',
+                                    wide.confidence,
                                     priceQuery
                                   );
                                   const resolved2 = flattenResolvedFilters(r2Raw);
