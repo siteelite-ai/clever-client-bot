@@ -5842,12 +5842,14 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             if (Array.isArray(parsedCats)) preferredCategories = parsedCats.filter((x) => typeof x === 'string');
           } catch { /* ignore */ }
 
-          const relatedProducts = await acceptRelatedOffer({
-            anchorIds,
-            deps: buildRelatedDeps(appSettings.volt220_api_token, appSettings),
-            preferredCategories,
-            limit: 6,
-          });
+          const relatedProducts = appSettings.volt220_api_token
+            ? await acceptRelatedOffer({
+                anchorIds,
+                deps: buildRelatedDeps(appSettings.volt220_api_token, appSettings),
+                preferredCategories,
+                limit: 6,
+              })
+            : [];
 
           // Удаляем слот в любом случае — он одноразовый
           delete dialogSlots['cross_sell_offer'];
