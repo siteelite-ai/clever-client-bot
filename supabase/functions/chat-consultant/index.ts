@@ -19,7 +19,10 @@ import {
 import {
   generateRelatedFollowup,
   fetchRelatedProducts as fetchRelatedProductsShared,
+  acceptRelatedOffer,
+  classifyRelatedOfferResponse,
   type RelatedFollowupDeps,
+  type RelatedAnchor,
 } from '../_shared/related-followup.ts';
 
 // Per-request async context (carries reqId implicitly through all awaits inside `serve`).
