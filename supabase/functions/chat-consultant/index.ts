@@ -5862,6 +5862,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 anchorIds,
                 deps: buildRelatedDeps(appSettings.volt220_api_token, appSettings),
                 preferredCategories: effectiveCategories,
+                strictCategories: matchedCats.length > 0,
                 limit: 6,
               })
             : [];
