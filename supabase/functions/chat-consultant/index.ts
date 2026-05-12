@@ -1239,10 +1239,10 @@ async function searchByArticle(article: string, apiToken: string): Promise<Produ
  * чтобы сохранить request-scoped circuit-breaker и логирование Degraded-mode.
  */
 async function fetchRelatedProducts(productId: number, apiToken: string): Promise<Product[]> {
-  return await fetchRelatedProductsShared(productId, {
+  return (await fetchRelatedProductsShared(productId, {
     fetchRelatedRaw: (id) =>
       fetchCatalogWithRetry(`https://220volt.kz/api/products/${id}/related`, apiToken, 'Related', 6000),
-  }) as Product[];
+  })) as unknown as Product[];
 }
 
 /**
