@@ -6731,12 +6731,14 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               const extractDeadline = new Promise<{ categoryNoun: string }>((_, rej) =>
                 setTimeout(() => rej(new Error('qf_extract_timeout_8s')), 8000)
               );
+              const nounStartMs = Date.now();
               const extractRes = await Promise.race([
                 extractCategoryNoun({ userQuery: userMessage, locale: 'ru' }, extractorDeps),
                 extractDeadline,
               ]);
               const noun = (extractRes.categoryNoun || '').trim();
               console.log(`[QueryFirstV2] noun="${noun}" (source=${(extractRes as any).source || 'n/a'})`);
+              logAddStep({ step: 'qfv2-noun', ms: Date.now() - nounStartMs, meta: { noun, source: (extractRes as any).source || null } });
 
               if (noun.length === 0) {
                 console.log(`[QueryFirstV2] empty noun → fallback to Category Resolver`);
