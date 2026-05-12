@@ -4898,123 +4898,15 @@ ${titles.map(t => `- ${t}`).join('\n')}
   }
 }
 
-/**
- * Related-followup (V1, 2026-05-12).
- *
- * Цель: после того как пользователь увидел карточки товаров, отправить ОТДЕЛЬНЫМ
- * пузырём короткую естественную фразу про сопутствующие категории — на основе
- * РЕАЛЬНЫХ данных из `GET /api/products/{id}/related`. Без SKU/цен/брендов/ссылок (§11.5).
- *
- * Алгоритм:
- *   1. Дёргаем /related для anchor-товара (foundProducts[0]).
- *   2. Агрегируем категории из results[].category.pagetitle, исключаем категорию якоря,
- *      берём top-3 по частоте.
- *   3. Если категорий < 2 → возвращаем '' (фраза «С этим покупают X» из одной категории
- *      звучит куцо; лучше промолчать).
- *   4. Прогоняем категории через Claude Sonnet 4.5 (tool calling) с очень узким промптом —
- *      LLM отвечает за ЕСТЕСТВЕННУЮ формулировку, но НЕ может выйти за рамки
- *      переданного списка категорий (anti-hallucination).
- *   5. Любая ошибка/таймаут/sanitize-fail → '' (silent skip).
- */
-async function generateRelatedFollowup(params: {
-  anchor: Product;
-  apiToken: string;
-  settings: CachedSettings;
-}): Promise<string> {
-  const { anchor, apiToken, settings } = params;
-  if (!anchor?.id || !apiToken || !settings.openrouter_api_key) return '';
-
-  // 1. Fetch related
-  const related = await fetchRelatedProducts(anchor.id, apiToken);
-  if (!related.length) return '';
-
-  // 2. Aggregate categories (исключаем категорию самого якоря)
-  const anchorCatId = anchor.category?.id;
-  const counts = new Map<string, number>();
-  for (const p of related) {
-    const cat = p.category?.pagetitle?.trim();
-    if (!cat) continue;
-    if (anchorCatId && p.category?.id === anchorCatId) continue;
-    counts.set(cat, (counts.get(cat) || 0) + 1);
-  }
-  const topCategories = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([cat]) => cat);
-  console.log(`[RelatedFollowup] anchor=${anchor.id} categories=${JSON.stringify(topCategories)}`);
-  if (topCategories.length < 2) return '';
-
-  // 3. LLM formulation — узкий промпт, можно использовать ТОЛЬКО переданные категории.
-  const systemPrompt = `Ты эксперт-консультант 220volt.kz. Клиенту только что показали карточки товаров. Сформулируй ОДНУ короткую естественную фразу про сопутствующие товары.
-
-Якорный товар (тип/категория): ${anchor.category?.pagetitle || anchor.pagetitle}
-Сопутствующие категории (используй ТОЛЬКО их, в любом порядке, можно склонять):
-${topCategories.map(c => `- ${c}`).join('\n')}
-
-ПРАВИЛА:
-- Ровно ОДНА фраза, до 160 символов.
-- Начни с естественного оборота: «С этим часто берут …», «К этому обычно докупают …», «Также пригодятся …».
-- Перечисли 2-3 категории из списка выше (можно слегка склонять/упрощать формулировку категории, но НЕ выдумывать новые).
-- Тон: спокойный, профессиональный, без давления.
-- ЗАПРЕЩЕНО: артикулы, цены, ссылки, бренды, серии, коллекции, конкретные модели, восклицательные знаки, маркетинговые штампы («отличный выбор», «лучший»).
-- БЕЗ призывов «подобрать?»/«показать?» в конце — просто констатация.
-
-Если список категорий бессмысленный или их нельзя естественно объединить в одну фразу — верни phrase="".`;
-
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${settings.openrouter_api_key}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'anthropic/claude-sonnet-4.5',
-        messages: [{ role: 'user', content: systemPrompt }],
-        temperature: 0.4,
-        max_tokens: 200,
-        tools: [{
-          type: 'function',
-          function: {
-            name: 'propose_related_followup',
-            description: 'Return one natural sentence about related product categories.',
-            parameters: {
-              type: 'object',
-              properties: {
-                phrase: { type: 'string', description: 'One short sentence (≤160 chars). Empty if cannot be formulated.' },
-              },
-              required: ['phrase'],
-              additionalProperties: false,
-            },
-          },
-        }],
-        tool_choice: { type: 'function', function: { name: 'propose_related_followup' } },
-      }),
-      signal: controller.signal,
-    });
-    clearTimeout(timeout);
-    if (!response.ok) {
-      console.log(`[RelatedFollowup] API error: ${response.status}`);
-      return '';
-    }
-    const data = await response.json();
-    const toolCall = data.choices?.[0]?.message?.tool_calls?.[0];
-    if (!toolCall?.function?.arguments) return '';
-    let parsed: { phrase?: string };
-    try { parsed = JSON.parse(toolCall.function.arguments); } catch { return ''; }
-    let text = (parsed.phrase || '').trim();
-    if (!text) return '';
-    // Sanitize: вырезаем markdown-ссылки/цены/артикулы — на всякий случай.
-    if (/\[.*?\]\(.*?\)/.test(text) || /https?:\/\//i.test(text) || /\d+\s*(?:₸|тг|тенге|руб)/i.test(text)) {
-      console.log(`[RelatedFollowup] Sanitize: rejected text with link/price: ${text.slice(0, 80)}`);
-      return '';
-    }
-    if (text.length > 240) text = text.slice(0, 240);
-    console.log(`[RelatedFollowup] Generated: "${text}"`);
-    return text;
-  } catch (e) {
-    console.log(`[RelatedFollowup] Error (silent skip): ${(e as Error).message}`);
-    return '';
-  }
+// `generateRelatedFollowup` extracted to ../_shared/related-followup.ts (2026-05-12).
+// Call-sites теперь передают `deps: { fetchRelatedRaw, openrouterApiKey }`. Это локально
+// обёрнуто в `buildRelatedDeps(apiToken, settings)` — см. helper ниже.
+function buildRelatedDeps(apiToken: string, settings: CachedSettings): RelatedFollowupDeps {
+  return {
+    fetchRelatedRaw: (id) =>
+      fetchCatalogWithRetry(`https://220volt.kz/api/products/${id}/related`, apiToken, 'Related', 6000),
+    openrouterApiKey: settings.openrouter_api_key,
+  };
 }
 
 /**
