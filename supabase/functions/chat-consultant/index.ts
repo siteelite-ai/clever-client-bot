@@ -9191,34 +9191,68 @@ ${productInstructions}`;
       // полностью — функция оставлена в коде как dead code до отдельного refactor PR.
       // ─────────────────────────────────────────────────────────────────────
       const finalContent = content;
-      // Single-anchor only: followup имеет смысл, только когда якорь однозначен —
-      // точечный поиск (article/siteid/title short-circuit) ИЛИ ровно одна карточка.
-      // При широкой выдаче (qfv2 pool, jargon-fallback-early, category-browse) первый
-      // товар арбитрарен → его /related вводит в заблуждение (см. кейс «розетка Vega»
-      // → силовая ИЭК → автоматы/кабели). Пропускаем.
-      const isSingleAnchorReason =
-        renderReason === 'article-shortcircuit' ||
-        renderReason === 'siteid-shortcircuit' ||
-        renderReason === 'title-shortcircuit';
+      // Step 2 (2026-05-12): убрано single-anchor ограничение. Анкоры берём из
+      // первых foundProducts с уникальными категориями (до 3-х). При широкой
+      // выдаче это даёт более устойчивую агрегацию /related (категории-победители
+      // отражают пересечение, а не «арбитрарного первого товара»).
       const allowFollowup =
         renderReason !== 'price-facet-clarify' &&
         !replacementMeta?.isReplacement &&
-        foundProducts.length > 0 &&
-        (foundProducts.length === 1 || isSingleAnchorReason);
-      const anchorProduct = allowFollowup ? foundProducts[0] : null;
+        foundProducts.length > 0;
+
+      const followupAnchors: RelatedAnchor[] = (() => {
+        if (!allowFollowup) return [];
+        const picked: RelatedAnchor[] = [];
+        const seenCats = new Set<number>();
+        for (const p of foundProducts) {
+          if (!p?.id) continue;
+          const catId = p.category?.id;
+          if (catId && seenCats.has(catId)) continue;
+          if (catId) seenCats.add(catId);
+          picked.push({
+            id: p.id,
+            pagetitle: p.pagetitle,
+            category: p.category ? { id: p.category.id, pagetitle: p.category.pagetitle } : undefined,
+          });
+          if (picked.length >= 3) break;
+        }
+        return picked;
+      })();
+
+      const runFollowup = async () => {
+        if (!followupAnchors.length || !appSettings.volt220_api_token) {
+          return { text: '', anchorIds: [] as number[], categories: [] as string[] };
+        }
+        return await generateRelatedFollowup({
+          anchors: followupAnchors,
+          userMessage: rawUserMessage,
+          productCategory: classification?.product_category,
+          deps: buildRelatedDeps(appSettings.volt220_api_token, appSettings),
+        });
+      };
+
+      // Сохранение cross_sell_offer slot — общее для streaming/non-streaming.
+      const saveCrossSellSlot = (followup: { text: string; anchorIds: number[]; categories: string[] }) => {
+        if (!followup.text || !followup.anchorIds.length) return;
+        dialogSlots['cross_sell_offer'] = {
+          intent: 'cross_sell_offer',
+          base_category: classification?.product_category || 'cross_sell',
+          status: 'pending',
+          created_turn: 0,
+          turns_since_touched: 0,
+          offer_text: followup.text.slice(0, 500),
+          anchor_ids: JSON.stringify(followup.anchorIds.slice(0, 5)),
+          related_categories: JSON.stringify(followup.categories.slice(0, 5)),
+        };
+        slotsUpdated = true;
+      };
 
       if (!useStreaming) {
-        // Non-streaming: ждём followup (если применимо) и кладём в отдельное поле.
-        let followupText = '';
-        if (anchorProduct && appSettings.volt220_api_token) {
-          followupText = await generateRelatedFollowup({
-            anchor: anchorProduct,
-            deps: buildRelatedDeps(appSettings.volt220_api_token, appSettings),
-          });
-        }
+        const followup = await runFollowup();
+        saveCrossSellSlot(followup);
         const responseBody: { content: string; slot_update?: DialogSlots; followup?: { text: string } } = { content: finalContent };
         if (slotsUpdated) responseBody.slot_update = dialogSlots;
-        if (followupText) responseBody.followup = { text: followupText };
+        if (followup.text) responseBody.followup = { text: followup.text };
         persistSlotsAsync(conversationId, dialogSlots);
         return new Response(JSON.stringify(responseBody), {
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -9232,27 +9266,27 @@ ${productInstructions}`;
             choices: [{ delta: { content: finalContent }, index: 0 }],
           })}\n\n`;
           controller.enqueue(encoder.encode(contentDelta));
+
+          // Related-followup эмитим ПОСЛЕ основного контента, но ДО [DONE].
+          // Frontend сам добавит визуальную задержку перед рендером пузыря.
+          let followup = { text: '', anchorIds: [] as number[], categories: [] as string[] };
+          try {
+            followup = await runFollowup();
+            saveCrossSellSlot(followup);
+          } catch (e) {
+            console.log(`[RelatedFollowup] stream error (silent skip): ${(e as Error).message}`);
+          }
+
+          // slot_update эмитим ПОСЛЕ followup, чтобы оно содержало cross_sell_offer.
           if (slotsUpdated) {
             const slotEvent = `data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`;
             controller.enqueue(encoder.encode(slotEvent));
           }
           persistSlotsAsync(conversationId, dialogSlots);
 
-          // Related-followup эмитим ПОСЛЕ основного контента, но ДО [DONE].
-          // Frontend сам добавит визуальную задержку перед рендером пузыря.
-          if (anchorProduct && appSettings.volt220_api_token) {
-            try {
-              const followupText = await generateRelatedFollowup({
-                anchor: anchorProduct,
-                deps: buildRelatedDeps(appSettings.volt220_api_token, appSettings),
-              });
-              if (followupText) {
-                const followupEvent = `data: ${JSON.stringify({ followup: { text: followupText } })}\n\n`;
-                controller.enqueue(encoder.encode(followupEvent));
-              }
-            } catch (e) {
-              console.log(`[RelatedFollowup] stream error (silent skip): ${(e as Error).message}`);
-            }
+          if (followup.text) {
+            const followupEvent = `data: ${JSON.stringify({ followup: { text: followup.text } })}\n\n`;
+            controller.enqueue(encoder.encode(followupEvent));
           }
 
           controller.enqueue(encoder.encode('data: [DONE]\n\n'));
