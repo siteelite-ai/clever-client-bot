@@ -6671,6 +6671,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             if (synthesised.length > 0) {
               modifiers = synthesised;
               console.log(`[Chat] Synthesised modifiers from product_name="${rawName}": [${modifiers.join(', ')}] (has_product_name=true bridge)`);
+              logAddStep({ step: 'qfv2-bridge', meta: { product_name: rawName.substring(0, 120), synthesised_modifiers: synthesised.slice(0, 20) } });
             }
           }
           console.log(`[Chat] Category-first: category="${effectiveCategory}", modifiers=[${modifiers.join(', ')}], hasProductName=${!!classification?.has_product_name}`);
