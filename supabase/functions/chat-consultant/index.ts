@@ -6671,6 +6671,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             if (synthesised.length > 0) {
               modifiers = synthesised;
               console.log(`[Chat] Synthesised modifiers from product_name="${rawName}": [${modifiers.join(', ')}] (has_product_name=true bridge)`);
+              logAddStep({ step: 'qfv2-bridge', meta: { product_name: rawName.substring(0, 120), synthesised_modifiers: synthesised.slice(0, 20) } });
             }
           }
           console.log(`[Chat] Category-first: category="${effectiveCategory}", modifiers=[${modifiers.join(', ')}], hasProductName=${!!classification?.has_product_name}`);
@@ -6730,12 +6731,14 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               const extractDeadline = new Promise<{ categoryNoun: string }>((_, rej) =>
                 setTimeout(() => rej(new Error('qf_extract_timeout_8s')), 8000)
               );
+              const nounStartMs = Date.now();
               const extractRes = await Promise.race([
                 extractCategoryNoun({ userQuery: userMessage, locale: 'ru' }, extractorDeps),
                 extractDeadline,
               ]);
               const noun = (extractRes.categoryNoun || '').trim();
               console.log(`[QueryFirstV2] noun="${noun}" (source=${(extractRes as any).source || 'n/a'})`);
+              logAddStep({ step: 'qfv2-noun', ms: Date.now() - nounStartMs, meta: { noun, source: (extractRes as any).source || null } });
 
               if (noun.length === 0) {
                 console.log(`[QueryFirstV2] empty noun → fallback to Category Resolver`);
@@ -6755,25 +6758,30 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   : modifiers).slice(0, QF_MAX_MODIFIERS_IN_QUERY);
                 const enrichedQuery = enrichMods.length > 0 ? `${noun} ${enrichMods.join(' ')}`.trim() : noun;
 
+                const poolStartMs = Date.now();
                 let pool = await searchProductsByCandidate(
                   { query: enrichedQuery, brand: null, category: null, min_price: null, max_price: null },
                   appSettings.volt220_api_token!,
                   QF_POOL_SIZE
                 );
                 console.log(`[QueryFirstV2] pool query="${enrichedQuery}" size=${pool.length} (perPage=${QF_POOL_SIZE})`);
+                logAddStep({ step: 'qfv2-pool', total: pool.length, ms: Date.now() - poolStartMs, meta: { query: enrichedQuery.substring(0, 200), perPage: QF_POOL_SIZE, enrichMods: enrichMods.slice(0, 5) } });
 
                 if (pool.length === 0 && enrichedQuery !== noun) {
                   console.log(`[QueryFirstV2] enriched pool=0 → retry with bare noun="${noun}"`);
+                  const poolRetryStart = Date.now();
                   pool = await searchProductsByCandidate(
                     { query: noun, brand: null, category: null, min_price: null, max_price: null },
                     appSettings.volt220_api_token!,
                     QF_POOL_SIZE
                   );
                   console.log(`[QueryFirstV2] pool noun="${noun}" size=${pool.length} (fallback)`);
+                  logAddStep({ step: 'qfv2-pool-retry', total: pool.length, ms: Date.now() - poolRetryStart, meta: { query: noun, fallback: true } });
                 }
 
                 if (pool.length === 0) {
                   console.log(`[QueryFirstV2] query_first_v2_pool_empty noun="${noun}" → fallback to Category Resolver`);
+                  logAddStep({ step: 'qfv2-pool-empty', total: 0, meta: { noun } });
                 } else {
                   // ── (3) Self-Bootstrap facet schema from the live pool.
                   // Format = exact V1 contract: Map<key, {caption, values: Set<string>}>.
@@ -6807,12 +6815,21 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     }
                   }
                   console.log(`[QueryFirstV2] bootstrap schema: ${bootstrapSchema.size} keys, ${Array.from(bootstrapSchema.values()).reduce((s, b) => s + b.values.size, 0)} values (source=bootstrap)`);
+                  logAddStep({
+                    step: 'qfv2-bootstrap',
+                    meta: {
+                      keys: bootstrapSchema.size,
+                      values_total: Array.from(bootstrapSchema.values()).reduce((s, b) => s + b.values.size, 0),
+                      sample: Array.from(bootstrapSchema.entries()).slice(0, 8).map(([k, v]) => ({ key: k, caption: v.caption, values: Array.from(v.values).slice(0, 5) })),
+                    },
+                  });
 
                   // ── (4) Resolve modifiers → option filters against the live schema.
                   // If no modifiers: skip resolution, just display pool.
                   let resolvedFilters: Record<string, string> = {};
                   let resolverUnresolvedDetails: Array<{ modifier: string; key: string; caption: string; requestedValue: string; availableValues: string[] }> = [];
                   if (modifiers.length > 0 && bootstrapSchema.size > 0) {
+                    const filterStartMs = Date.now();
                     try {
                       const { resolved: rRaw, unresolved: rUnresolved, unresolvedDetails: rDetails } = await resolveFiltersWithLLM(
                         pool,
@@ -6826,11 +6843,23 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       resolvedFilters = flattenResolvedFilters(rRaw);
                       resolverUnresolvedDetails = rDetails || [];
                       console.log(`[QueryFirstV2] resolved=${JSON.stringify(resolvedFilters)} unresolved=[${rUnresolved.join(', ')}] unresolvedDetails=${resolverUnresolvedDetails.length}`);
+                      logAddStep({
+                        step: 'qfv2-filter-llm',
+                        ms: Date.now() - filterStartMs,
+                        meta: {
+                          modifiers,
+                          resolved: resolvedFilters,
+                          unresolved: rUnresolved,
+                          unresolvedDetails: resolverUnresolvedDetails.map(d => ({ modifier: d.modifier, key: d.key, caption: d.caption, requestedValue: d.requestedValue, availableValues: d.availableValues.slice(0, 8) })),
+                        },
+                      });
                     } catch (rErr) {
                       console.log(`[QueryFirstV2] resolveFilters error=${(rErr as Error).message} → continuing with empty filters`);
+                      logAddStep({ step: 'qfv2-filter-llm', ms: Date.now() - filterStartMs, meta: { error: String((rErr as Error).message), modifiers } });
                     }
                   } else if (modifiers.length === 0) {
                     console.log(`[QueryFirstV2] no modifiers → display pool directly`);
+                    logAddStep({ step: 'qfv2-filter-llm', meta: { skipped: 'no_modifiers' } });
                   }
 
                   // ── (5/6) Final search.
@@ -6906,7 +6935,9 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       const firstUnresolvedKey = resolverUnresolvedDetails[0].key;
                       qfV2DroppedFacetCaption = bootstrapSchema.get(firstUnresolvedKey)?.caption || firstUnresolvedKey || null;
                       console.log(`[QueryFirstV2] query_first_v2_honest_empty_partial noun="${noun}" unresolvedDetails=${JSON.stringify(resolverUnresolvedDetails)} attemptedFacets=${JSON.stringify(attemptedFacets)} elapsed=${Date.now() - qfStart}ms`);
+                      logAddStep({ step: 'qfv2-honest-empty-partial', total: 0, meta: { noun, unresolvedDetails: resolverUnresolvedDetails.map(d => ({ modifier: d.modifier, key: d.key, caption: d.caption, requestedValue: d.requestedValue, availableValues: d.availableValues.slice(0, 8) })), attemptedFacets } });
                     } else if (Object.keys(resolvedFilters).length > 0) {
+                      const finalStartMs = Date.now();
                       const final = await searchProductsByCandidate(
                         { query: noun, brand: null, category: null, min_price: null, max_price: null },
                         appSettings.volt220_api_token!,
@@ -6915,6 +6946,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       );
                       const finalFiltered = applyNounFilter(final, true);
                       console.log(`[QueryFirstV2] final query="${noun}" filters=${JSON.stringify(resolvedFilters)} → ${final.length} (after noun-filter: ${finalFiltered.length})`);
+                      logAddStep({
+                        step: 'qfv2-final',
+                        total: finalFiltered.length,
+                        ms: Date.now() - finalStartMs,
+                        meta: { query: noun, filters: resolvedFilters, raw_total: final.length, after_noun_filter: finalFiltered.length },
+                      });
 
                       if (finalFiltered.length > 0) {
                         displayList = finalFiltered;
@@ -6950,10 +6987,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   categoryFirstWinResolved = true;  // also short-circuits the legacy bucket fallback below
                   qfV2Resolved = true;
                   console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=${branchTag} zeroFiltered=${_r.filteredZeroPrice}`);
+                  logAddStep({ step: 'qfv2-branch', total: _r.displayed.length, ms: Date.now() - qfStart, meta: { branch: branchTag, collected: _r.total, displayed: _r.displayed.length, dropped_facet: qfV2DroppedFacetCaption } });
                 }
               }
             } catch (qfErr) {
               console.log(`[QueryFirstV2] query_first_v2_error=${(qfErr as Error).message} → fallback to Category Resolver`);
+              logAddStep({ step: 'qfv2-error', ms: Date.now() - qfStart, meta: { error: String((qfErr as Error).message) } });
             }
           }
 
