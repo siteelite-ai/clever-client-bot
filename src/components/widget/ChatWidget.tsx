@@ -80,6 +80,7 @@ async function streamChat({
   onContacts,
   onSlotUpdate,
   onQuickReplies,
+  onFollowup,
   conversationId,
   dialogSlots,
   endpointUrl,
@@ -93,6 +94,7 @@ async function streamChat({
   onContacts?: (contacts: string) => void;
   onSlotUpdate?: (slots: DialogSlots) => void;
   onQuickReplies?: (replies: QuickReply[]) => void;
+  onFollowup?: (text: string) => void;
   conversationId: string;
   dialogSlots: DialogSlots;
   endpointUrl: string;
@@ -184,6 +186,10 @@ async function streamChat({
             onQuickReplies(parsed.quick_replies);
             continue;
           }
+          if (parsed.followup?.text && onFollowup) {
+            onFollowup(parsed.followup.text);
+            continue;
+          }
           const content = parsed.choices?.[0]?.delta?.content as string | undefined;
           if (content) onDelta(content);
         } catch {
@@ -214,6 +220,10 @@ async function streamChat({
           }
           if (Array.isArray(parsed.quick_replies) && onQuickReplies) {
             onQuickReplies(parsed.quick_replies);
+            continue;
+          }
+          if (parsed.followup?.text && onFollowup) {
+            onFollowup(parsed.followup.text);
             continue;
           }
           const content = parsed.choices?.[0]?.delta?.content as string | undefined;
@@ -434,6 +444,18 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
           content: contacts,
           timestamp: new Date()
         }]);
+      },
+      onFollowup: (text) => {
+        // Render related-products follow-up as a SEPARATE assistant bubble
+        // shortly after main message, so it visually feels like a new turn.
+        setTimeout(() => {
+          setMessages(prev => [...prev, {
+            id: mid('followup'),
+            role: 'assistant' as const,
+            content: text,
+            timestamp: new Date()
+          }]);
+        }, 1000);
       },
       onDone: () => {
         setMessages(prev => prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-')));
