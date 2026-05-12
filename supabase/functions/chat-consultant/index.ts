@@ -2043,10 +2043,14 @@ async function getCategoryOptionsSchemaLegacy(
           if (!opt || typeof opt.key !== 'string') continue;
           if (isExcludedOption(opt.key)) continue;
           if (!schema.has(opt.key)) {
-            schema.set(opt.key, { caption: opt.caption || opt.key, values: new Set() });
+            schema.set(opt.key, {
+              caption: cleanOptionCaption(opt.caption_ru ?? opt.caption ?? opt.key) || opt.key,
+              values: new Set(),
+            });
           }
-          if (typeof opt.value === 'string' && opt.value.trim()) {
-            schema.get(opt.key)!.values.add(opt.value);
+          const normalizedValue = cleanOptionValue(opt.value_ru ?? opt.value);
+          if (normalizedValue) {
+            schema.get(opt.key)!.values.add(normalizedValue);
           }
         }
       }
@@ -2638,6 +2642,29 @@ export function pickClarifyFacet(facets: BootstrapFacet[]): BootstrapFacet | nul
   });
   const chosen = candidates[0];
   return { ...chosen, values: chosen.values.slice(0, 5) };
+}
+
+function extractSchemaFromProducts(products: Product[]): Map<string, { caption: string; values: Set<string> }> {
+  const schema = new Map<string, { caption: string; values: Set<string> }>();
+  for (const p of products) {
+    const opts = (p as any).options;
+    if (!Array.isArray(opts)) continue;
+    for (const opt of opts) {
+      if (!opt || typeof opt !== 'object') continue;
+      const key = typeof opt.key === 'string' ? opt.key.trim() : '';
+      if (!key || isExcludedOption(key)) continue;
+      const caption = cleanOptionCaption(opt.caption_ru ?? opt.caption ?? opt.caption_kz ?? key) || key;
+      const value = cleanOptionValue(opt.value_ru ?? opt.value ?? opt.value_kz);
+      let bucket = schema.get(key);
+      if (!bucket) {
+        bucket = { caption, values: new Set<string>() };
+        schema.set(key, bucket);
+      }
+      if (value) bucket.values.add(value);
+    }
+  }
+  dedupeSchemaInPlace(schema, 'products-sample');
+  return schema;
 }
 
 /** Bootstrap-facets probe: /products?query=<>&per_page=100 (single hop). */
@@ -6352,17 +6379,22 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
 
                               if (catTitle) {
                                 console.log(`[Chat] [PriceResolve2] matched category="${catTitle}" for noun="${priceQuery}"`);
-                                const wide = await getCategoryOptionsSchema(catTitle, appSettings.volt220_api_token!);
-                                if (wide.schema && wide.schema.size > 0) {
-                                  console.log(`[Chat] [PriceResolve2] wide schema: ${wide.schema.size} keys (source=${wide.source})`);
+                                const wideProducts = await searchProductsByCandidate(
+                                  { query: null, brand: null, category: catTitle, min_price: 1, max_price: null },
+                                  appSettings.volt220_api_token!,
+                                  200
+                                );
+                                const wideSchema = extractSchemaFromProducts(wideProducts);
+                                if (wideSchema.size > 0) {
+                                  console.log(`[Chat] [PriceResolve2] wide schema: ${wideSchema.size} keys (source=category-products-sample, products=${wideProducts.length})`);
                                   // Используем pool как контекст товаров, но schema — широкая.
                                   const { resolved: r2Raw, unresolved: r2Unresolved } = await resolveFiltersWithLLM(
                                     probePool,
                                     rUnresolved,
                                     appSettings,
                                     criticalMods,
-                                    wide.schema,
-                                    'full',
+                                    wideSchema,
+                                    'partial',
                                     priceQuery
                                   );
                                   const resolved2 = flattenResolvedFilters(r2Raw);
