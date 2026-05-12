@@ -5813,6 +5813,84 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     console.log(`[Chat req=${reqId}] Processing: "${userMessage.substring(0, 100)}"`);
     console.log(`[Chat req=${reqId}] Conversation ID: ${conversationId}`);
 
+    // === CROSS_SELL_OFFER RESOLVER (V1, Step 3) ===
+    // На прошлом ходу мы показали нативную фразу про сопутствующие товары и
+    // сохранили `cross_sell_offer` slot с anchor_ids. Если клиент соглашается —
+    // фетчим /related для этих anchor_ids и отдаём реальные карточки БЕЗ нового
+    // catalog-search (защита от галлюцинаций).
+    // Слот одноразовый: после resolve удаляется в любом случае.
+    const crossSellSlot = dialogSlots['cross_sell_offer'];
+    if (crossSellSlot && crossSellSlot.anchor_ids) {
+      let anchorIds: number[] = [];
+      try {
+        const parsed = JSON.parse(crossSellSlot.anchor_ids);
+        if (Array.isArray(parsed)) anchorIds = parsed.filter((x) => Number.isFinite(x));
+      } catch { /* malformed → silent skip */ }
+
+      if (anchorIds.length) {
+        const decision = await classifyRelatedOfferResponse({
+          offerText: crossSellSlot.offer_text || '',
+          userMessage,
+          openrouterApiKey: appSettings.openrouter_api_key,
+        });
+        console.log(`[Chat req=${reqId}] Cross-sell offer decision: ${decision} (anchors=${anchorIds.join(',')}, user="${userMessage.slice(0, 60)}")`);
+
+        if (decision === 'accept') {
+          let preferredCategories: string[] = [];
+          try {
+            const parsedCats = JSON.parse(crossSellSlot.related_categories || '[]');
+            if (Array.isArray(parsedCats)) preferredCategories = parsedCats.filter((x) => typeof x === 'string');
+          } catch { /* ignore */ }
+
+          const relatedProducts = await acceptRelatedOffer({
+            anchorIds,
+            deps: buildRelatedDeps(appSettings.volt220_api_token, appSettings),
+            preferredCategories,
+            limit: 6,
+          });
+
+          // Удаляем слот в любом случае — он одноразовый
+          delete dialogSlots['cross_sell_offer'];
+          slotsUpdated = true;
+
+          if (relatedProducts.length) {
+            const intro = 'Вот что обычно берут к этому:';
+            const cards = relatedProducts.slice(0, 6).map((p) => formatProductCardDeterministic(p as unknown as Product)).join('\n\n');
+            const content = `${intro}\n\n${cards}`.trim();
+            console.log(`[Chat req=${reqId}] Cross-sell ACCEPT → rendered ${relatedProducts.length} related products deterministically`);
+            persistSlotsAsync(conversationId, dialogSlots);
+
+            if (!useStreaming) {
+              return new Response(JSON.stringify({ content, slot_update: dialogSlots }), {
+                headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+              });
+            }
+            const encoder = new TextEncoder();
+            const stream = new ReadableStream({
+              start(controller) {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content }, index: 0 }] })}\n\n`));
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`));
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+                controller.close();
+              },
+            });
+            return new Response(stream, {
+              headers: { ...corsHeaders, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
+            });
+          }
+          // accept, но /related пуст → silent skip, идём в обычный pipeline.
+          console.log(`[Chat req=${reqId}] Cross-sell ACCEPT but /related returned 0 → fall through to normal pipeline`);
+        } else {
+          // new_request / unclear → удаляем слот, идём дальше как обычно.
+          delete dialogSlots['cross_sell_offer'];
+          slotsUpdated = true;
+        }
+      } else {
+        delete dialogSlots['cross_sell_offer'];
+        slotsUpdated = true;
+      }
+    }
+
     // === PENDING OFFER RESOLVER (V1) ===
     // Если на прошлом ходу бот предложил cross-sell и мы сохранили pending_offer slot —
     // спрашиваем у LLM, является ли текущее сообщение согласием с этим предложением.
