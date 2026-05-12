@@ -4029,6 +4029,19 @@ function toPluralCategory(word: string): string {
   return plural.charAt(0).toUpperCase() + plural.slice(1);
 }
 
+export function choosePriceResolve2Category(params: {
+  classifierCategory?: string;
+  catalog: string[];
+  matcherMatches?: string[];
+}): string {
+  const raw = (params.classifierCategory || '').trim();
+  const plural = raw ? toPluralCategory(raw) : '';
+  const catalogSet = new Set(params.catalog || []);
+  if (raw && catalogSet.has(raw)) return raw;
+  if (plural && catalogSet.has(plural)) return plural;
+  return (params.matcherMatches || [])[0] || '';
+}
+
 /**
  * Extract "quick" filters from modifiers — ones we can match immediately
  * without LLM (e.g., color words). Returns quick filters + remaining modifiers.
@@ -6317,8 +6330,26 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                             const t2 = Date.now();
                             const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
                             if (catalog.length > 0) {
-                              const matches = await matchCategoriesWithLLM(priceQuery, catalog, appSettings);
-                              const catTitle = matches[0];
+                              const classifierCategoryRaw = (classification?.product_category || '').trim();
+                              let catTitle = '';
+                              let matcherMatches: string[] = [];
+
+                              if (!choosePriceResolve2Category({ classifierCategory: classifierCategoryRaw, catalog })) {
+                                matcherMatches = await matchCategoriesWithLLM(priceQuery, catalog, appSettings);
+                              }
+
+                              catTitle = choosePriceResolve2Category({
+                                classifierCategory: classifierCategoryRaw,
+                                catalog,
+                                matcherMatches,
+                              });
+
+                              if (catTitle && classifierCategoryRaw && catTitle === classifierCategoryRaw) {
+                                console.log(`[Chat] [PriceResolve2] classifier category exact match="${catTitle}"`);
+                              } else if (catTitle && classifierCategoryRaw && catTitle === toPluralCategory(classifierCategoryRaw)) {
+                                console.log(`[Chat] [PriceResolve2] classifier category plural match="${catTitle}" (from "${classifierCategoryRaw}")`);
+                              }
+
                               if (catTitle) {
                                 console.log(`[Chat] [PriceResolve2] matched category="${catTitle}" for noun="${priceQuery}"`);
                                 const wide = await getCategoryOptionsSchema(catTitle, appSettings.volt220_api_token!);
