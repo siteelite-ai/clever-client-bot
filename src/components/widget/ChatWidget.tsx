@@ -186,6 +186,10 @@ async function streamChat({
             onQuickReplies(parsed.quick_replies);
             continue;
           }
+          if (parsed.followup?.text && onFollowup) {
+            onFollowup(parsed.followup.text);
+            continue;
+          }
           const content = parsed.choices?.[0]?.delta?.content as string | undefined;
           if (content) onDelta(content);
         } catch {
