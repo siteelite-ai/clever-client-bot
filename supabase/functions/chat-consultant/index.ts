@@ -6242,15 +6242,94 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
 
             if (!resumedFromClarify) {
               if (mods.length > 0) {
-                // Scenario C: характеристики уже заданы — пропускаем clarify, идём прямо в API.
-                const enrichedQuery = `${priceQuery} ${mods.join(' ')}`.trim();
-                console.log(`[Chat] Price intent with mods: "${enrichedQuery}"`);
-                const priceResult = await handlePriceIntent([enrichedQuery], effectivePriceIntent, appSettings.volt220_api_token!);
+                // Scenario C (rewritten 2026-05-12): мы НЕ клеим mods в ?query=, потому что
+                // 220volt full-text по pagetitle не матчит фразы вроде «розетки белые двойные».
+                // Делаем тот же путь, что QFv2: probe pool по noun → bootstrap-схема фасетов
+                // → resolveFiltersWithLLM → options[<key>][]=<value> → handlePriceIntent.
+                // Если probe/resolve ничего не дал — fallback на старое поведение (mods в query),
+                // чтобы не регрессировать на сценариях, где schema пустая.
+                console.log(`[Chat] Price intent with mods: noun="${priceQuery}" mods=${JSON.stringify(mods)}`);
+                let extraParams: Array<[string, string]> = [];
+                try {
+                  const QF_POOL_SIZE = 100;
+                  const probePool = await searchProductsByCandidate(
+                    { query: priceQuery, brand: null, category: null, min_price: null, max_price: null },
+                    appSettings.volt220_api_token!,
+                    QF_POOL_SIZE
+                  );
+                  console.log(`[Chat] [PriceProbe] noun="${priceQuery}" pool=${probePool.length}`);
+                  if (probePool.length > 0 && appSettings.openrouter_api_key) {
+                    const bootstrapSchema = new Map<string, { caption: string; values: Set<string> }>();
+                    for (const p of probePool) {
+                      const opts = (p as any).options;
+                      if (!Array.isArray(opts)) continue;
+                      for (const opt of opts) {
+                        if (!opt || typeof opt !== 'object') continue;
+                        const key = typeof opt.key === 'string' ? opt.key.trim() : '';
+                        if (!key || isExcludedOption(key)) continue;
+                        const caption =
+                          (typeof opt.caption === 'string' && opt.caption) ||
+                          (typeof opt.caption_ru === 'string' && opt.caption_ru) ||
+                          (typeof opt.caption_kz === 'string' && opt.caption_kz) ||
+                          key;
+                        const value =
+                          (typeof opt.value === 'string' && opt.value) ||
+                          (typeof opt.value_ru === 'string' && opt.value_ru) ||
+                          (typeof opt.value_kz === 'string' && opt.value_kz) ||
+                          '';
+                        const trimmedValue = value.trim();
+                        if (!trimmedValue) continue;
+                        let bucket = bootstrapSchema.get(key);
+                        if (!bucket) {
+                          bucket = { caption: String(caption), values: new Set<string>() };
+                          bootstrapSchema.set(key, bucket);
+                        }
+                        bucket.values.add(trimmedValue);
+                      }
+                    }
+                    console.log(`[Chat] [PriceProbe] bootstrap schema: ${bootstrapSchema.size} keys`);
+                    if (bootstrapSchema.size > 0) {
+                      try {
+                        const criticalMods = Array.isArray(classification?.critical_modifiers)
+                          ? classification!.critical_modifiers as string[]
+                          : undefined;
+                        const { resolved: rRaw, unresolvedDetails: rDetails } = await resolveFiltersWithLLM(
+                          probePool,
+                          mods,
+                          appSettings,
+                          criticalMods,
+                          bootstrapSchema,
+                          'full',
+                          priceQuery
+                        );
+                        const resolvedFilters = flattenResolvedFilters(rRaw);
+                        console.log(`[Chat] [PriceResolve] resolved=${JSON.stringify(resolvedFilters)} unresolvedDetails=${(rDetails || []).length}`);
+                        for (const [k, v] of Object.entries(resolvedFilters)) {
+                          extraParams.push([`options[${k}][]`, String(v)]);
+                        }
+                      } catch (rErr) {
+                        console.log(`[Chat] [PriceResolve] error=${(rErr as Error).message} → continuing without options[]`);
+                      }
+                    }
+                  }
+                } catch (probeErr) {
+                  console.log(`[Chat] [PriceProbe] error=${(probeErr as Error).message}`);
+                }
+
+                const priceQueryFinal = extraParams.length > 0 ? priceQuery : `${priceQuery} ${mods.join(' ')}`.trim();
+                console.log(`[Chat] Price final: query="${priceQueryFinal}" extraParams=${extraParams.length}`);
+                const priceResult = await handlePriceIntent(
+                  [priceQueryFinal],
+                  effectivePriceIntent,
+                  appSettings.volt220_api_token!,
+                  extraParams.length > 0 ? extraParams : undefined
+                );
                 if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
                   foundProducts = priceResult.products;
                   articleShortCircuit = true;
                   responseModel = 'anthropic/claude-sonnet-4.5';
                   responseModelReason = 'price-shortcircuit';
+                  logSetBranch('price-shortcircuit');
                 }
               } else {
                 // Scenario A/B: характеристик нет — bootstrap-фасеты + один уточняющий вопрос.
