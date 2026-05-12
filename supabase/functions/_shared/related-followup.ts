@@ -242,19 +242,24 @@ export async function acceptRelatedOffer(params: {
   deps: Pick<RelatedFollowupDeps, 'fetchRelatedRaw'>;
   /** Категории, на которые ориентируемся (опционально, для post-filter). */
   preferredCategories?: string[];
+  /**
+   * strict=true — если ни один товар не попал в preferredCategories, вернуть [].
+   * Используется когда пользователь явно назвал ОДНУ из предложенных категорий
+   * («подбери коробки монтажные») — лучше пустой ответ + fallthrough в catalog-search,
+   * чем показать «всё подряд».
+   * strict=false (default) — при пустом матче показать общий pool.
+   */
+  strictCategories?: boolean;
   /** Сколько товаров вернуть. */
   limit?: number;
 }): Promise<RelatedProduct[]> {
-  const { anchorIds, deps, preferredCategories, limit = 6 } = params;
+  const { anchorIds, deps, preferredCategories, strictCategories = false, limit = 6 } = params;
   if (!anchorIds?.length) return [];
 
   const anchors: RelatedAnchor[] = anchorIds.map((id) => ({ id }));
   const { merged } = await fetchRelatedForAnchors(anchors, deps);
   if (!merged.length) return [];
 
-  // Frequency by id across anchors уже учтена в merged (dedup), но «частоту»
-  // можно поднять, посчитав, в скольких списках товар встречался.
-  // Проще — оставить порядок merged (он уже относительно популярности /related).
   let pool = merged;
 
   if (preferredCategories && preferredCategories.length) {
@@ -263,7 +268,9 @@ export async function acceptRelatedOffer(params: {
       const cat = p.category?.pagetitle?.trim().toLowerCase();
       return cat && wantedLower.has(cat);
     });
-    if (matching.length >= 2) pool = matching;
+    const minMatch = strictCategories ? 1 : 2;
+    if (matching.length >= minMatch) pool = matching;
+    else if (strictCategories) return [];
   }
 
   return pool.slice(0, limit);
