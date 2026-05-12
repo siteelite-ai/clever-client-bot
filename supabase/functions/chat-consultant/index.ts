@@ -6880,12 +6880,24 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     const cat = (p.category?.pagetitle || '').toLowerCase();
                     return title.includes(nounStem) || cat.includes(nounStem);
                   };
-                  const applyNounFilter = (list: Product[], _strict = false): Product[] => {
-                    // EXPERIMENT 2026-05-05: noun-filter disabled to test if facet-only filtering
-                    // (without stem-based pagetitle/category match) returns more relevant results.
-                    // Previously dropped products whose pagetitle/category didn't contain the noun stem.
-                    console.log(`[QueryFirstV2] noun-filter DISABLED (experiment) — passing ${list.length} as-is`);
-                    return list;
+                  const applyNounFilter = (list: Product[], strict = false): Product[] => {
+                    // RE-ENABLED 2026-05-12: noun-filter дропает товары, у которых нет
+                    // стема noun ни в pagetitle, ни в category.pagetitle. Защита от мусора:
+                    // ?query=щит возвращает «стабилизаторы» / «счётчики» с IP20=20.
+                    // Безопасный fallback: если фильтр оставил 0 — возвращаем исходный список
+                    // (не хуже, чем было). strict=true для финального re-query: если 0 —
+                    // оставляем 0 (caller ведёт в honest-empty).
+                    if (!nounStem || nounStem.length < 3) {
+                      console.log(`[QueryFirstV2] noun-filter SKIP (stem too short: "${nounStem}") — passing ${list.length} as-is`);
+                      return list;
+                    }
+                    const filtered = list.filter(matchesNoun);
+                    if (filtered.length === 0 && !strict) {
+                      console.log(`[QueryFirstV2] noun-filter stem="${nounStem}" → 0 (non-strict fallback to ${list.length} as-is)`);
+                      return list;
+                    }
+                    console.log(`[QueryFirstV2] noun-filter stem="${nounStem}" strict=${strict}: ${list.length} → ${filtered.length}`);
+                    return filtered;
                   };
                   let displayList: Product[] = applyNounFilter(pool);
                   let branchTag = 'qfv2_pool_no_modifiers';
