@@ -6758,25 +6758,30 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   : modifiers).slice(0, QF_MAX_MODIFIERS_IN_QUERY);
                 const enrichedQuery = enrichMods.length > 0 ? `${noun} ${enrichMods.join(' ')}`.trim() : noun;
 
+                const poolStartMs = Date.now();
                 let pool = await searchProductsByCandidate(
                   { query: enrichedQuery, brand: null, category: null, min_price: null, max_price: null },
                   appSettings.volt220_api_token!,
                   QF_POOL_SIZE
                 );
                 console.log(`[QueryFirstV2] pool query="${enrichedQuery}" size=${pool.length} (perPage=${QF_POOL_SIZE})`);
+                logAddStep({ step: 'qfv2-pool', total: pool.length, ms: Date.now() - poolStartMs, meta: { query: enrichedQuery.substring(0, 200), perPage: QF_POOL_SIZE, enrichMods: enrichMods.slice(0, 5) } });
 
                 if (pool.length === 0 && enrichedQuery !== noun) {
                   console.log(`[QueryFirstV2] enriched pool=0 → retry with bare noun="${noun}"`);
+                  const poolRetryStart = Date.now();
                   pool = await searchProductsByCandidate(
                     { query: noun, brand: null, category: null, min_price: null, max_price: null },
                     appSettings.volt220_api_token!,
                     QF_POOL_SIZE
                   );
                   console.log(`[QueryFirstV2] pool noun="${noun}" size=${pool.length} (fallback)`);
+                  logAddStep({ step: 'qfv2-pool-retry', total: pool.length, ms: Date.now() - poolRetryStart, meta: { query: noun, fallback: true } });
                 }
 
                 if (pool.length === 0) {
                   console.log(`[QueryFirstV2] query_first_v2_pool_empty noun="${noun}" → fallback to Category Resolver`);
+                  logAddStep({ step: 'qfv2-pool-empty', total: 0, meta: { noun } });
                 } else {
                   // ── (3) Self-Bootstrap facet schema from the live pool.
                   // Format = exact V1 contract: Map<key, {caption, values: Set<string>}>.
