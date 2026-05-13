@@ -40,9 +40,23 @@ export interface RelatedAnchor {
   category?: { id: number; pagetitle?: string };
 }
 
+/**
+ * Query-параметры для /api/products/{id}/related.
+ * Согласно swagger.json (verified 2026-05-13) endpoint поддерживает те же
+ * фильтры, что и /products: pagination + category + price + options[][].
+ * Это даёт ДЕТЕРМИНИРОВАННЫЙ постраничный список вместо рандом-выборки.
+ */
+export interface RelatedQueryParams {
+  page?: number;
+  perPage?: number;
+  category?: string;
+  minPrice?: number;
+  maxPrice?: number;
+}
+
 export interface RelatedFollowupDeps {
   /** Live-fetch /api/products/{id}/related (response объект, как у fetch). null = транспортная ошибка. */
-  fetchRelatedRaw: (productId: number) => Promise<Response | null>;
+  fetchRelatedRaw: (productId: number, params?: RelatedQueryParams) => Promise<Response | null>;
   /** OpenRouter API key (Claude Sonnet 4.5). null/пустой → silent skip. */
   openrouterApiKey: string | null;
 }
@@ -63,9 +77,11 @@ export interface RelatedFollowupResult {
 export async function fetchRelatedProducts(
   productId: number,
   deps: Pick<RelatedFollowupDeps, 'fetchRelatedRaw'>,
+  params?: RelatedQueryParams,
 ): Promise<RelatedProduct[]> {
-  console.log(`[Related] Fetching productId=${productId}`);
-  const response = await deps.fetchRelatedRaw(productId);
+  const tag = params?.category ? ` category="${params.category}"` : '';
+  console.log(`[Related] Fetching productId=${productId} perPage=${params?.perPage ?? 'default'}${tag}`);
+  const response = await deps.fetchRelatedRaw(productId, params);
   if (!response) return [];
   try {
     const rawData = await response.json();
@@ -87,13 +103,14 @@ export async function fetchRelatedProducts(
 async function fetchRelatedForAnchors(
   anchors: RelatedAnchor[],
   deps: Pick<RelatedFollowupDeps, 'fetchRelatedRaw'>,
+  params?: RelatedQueryParams,
 ): Promise<{ byAnchor: Map<number, RelatedProduct[]>; merged: RelatedProduct[] }> {
   const byAnchor = new Map<number, RelatedProduct[]>();
   const merged: RelatedProduct[] = [];
   const seen = new Set<number>();
 
   const lists = await Promise.all(
-    anchors.map((a) => fetchRelatedProducts(a.id, deps).then((r) => [a.id, r] as const)),
+    anchors.map((a) => fetchRelatedProducts(a.id, deps, params).then((r) => [a.id, r] as const)),
   );
 
   for (const [anchorId, list] of lists) {
@@ -131,7 +148,8 @@ export async function generateRelatedFollowup(params: {
   const anchorIds = usedAnchors.map((a) => a.id).filter((id) => Number.isFinite(id));
   if (!anchorIds.length) return empty;
 
-  const { merged } = await fetchRelatedForAnchors(usedAnchors, deps);
+  // perPage=50 — широкий пул для устойчивой агрегации категорий (swagger §/related, 2026-05-13).
+  const { merged } = await fetchRelatedForAnchors(usedAnchors, deps, { perPage: 50, page: 1 });
   if (!merged.length) return empty;
 
   // Aggregate categories (исключаем категории самих анкоров)
@@ -257,15 +275,33 @@ export async function acceptRelatedOffer(params: {
   if (!anchorIds?.length) return [];
 
   const anchors: RelatedAnchor[] = anchorIds.map((id) => ({ id }));
-  const { merged } = await fetchRelatedForAnchors(anchors, deps);
+
+  // Шаг 1. Если пользователь явно выбрал ОДНУ из предложенных категорий —
+  // используем серверный фильтр /related?category=<pagetitle> (swagger 2026-05-13).
+  // Это убирает рандом из соседних tv-категорий и даёт детерминированную выдачу.
+  if (strictCategories && preferredCategories && preferredCategories.length === 1) {
+    const cat = preferredCategories[0];
+    const { merged } = await fetchRelatedForAnchors(anchors, deps, {
+      category: cat,
+      perPage: Math.max(limit, 20),
+      page: 1,
+    });
+    if (merged.length) {
+      console.log(`[Related] strict server-side category filter "${cat}" → ${merged.length} items`);
+      return merged.slice(0, limit);
+    }
+    // Fallthrough: пустой ответ от сервера → пробуем без фильтра + post-filter.
+    console.log(`[Related] server-side category="${cat}" returned 0 → fallback to client-side filter`);
+  }
+
+  // Шаг 2. Общий пул (perPage=50 для устойчивости) + клиентский post-filter
+  // по preferredCategories (когда категорий несколько или strict-фильтр пуст).
+  const { merged } = await fetchRelatedForAnchors(anchors, deps, { perPage: 50, page: 1 });
   if (!merged.length) return [];
 
   let pool = merged;
 
   if (preferredCategories && preferredCategories.length) {
-    // Substring match: каждый «корневой» токен (>=4 символов) категории-предложения
-    // ищем в названии категории товара и наоборот. Это устойчиво к склонениям и
-    // лишним прилагательным («Коробки монтажные» ↔ «Коробки распределительные»).
     const norm = (s: string) => s.toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
     const wantedTokens = preferredCategories
       .flatMap((c) => norm(c).split(' '))
@@ -281,8 +317,6 @@ export async function acceptRelatedOffer(params: {
     if (matching.length) {
       pool = matching;
     } else if (strictCategories) {
-      // Пользователь явно назвал категорию, но в /related её нет.
-      // НЕ уходим в общий каталог (там рандом) — отдаём общий /related-пул.
       console.log('[Related] strict miss → fallback to full /related pool (not catalog search)');
     }
   }
