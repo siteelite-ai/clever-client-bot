@@ -393,6 +393,12 @@ ${topCategories.map((c) => `- ${c}`).join('\n')}
 
 export async function acceptRelatedOffer(params: {
   anchorIds: number[];
+  /**
+   * Полные anchor-снапшоты (с price/options) для построения фильтров через
+   * fetchWithRelaxation. Если не передано — используем bare anchorIds (старое
+   * поведение, без price/options-сужения).
+   */
+  anchors?: RelatedAnchor[];
   deps: Pick<RelatedFollowupDeps, 'fetchRelatedRaw'>;
   /** Категории, на которые ориентируемся (опционально, для post-filter). */
   preferredCategories?: string[];
@@ -407,32 +413,35 @@ export async function acceptRelatedOffer(params: {
   /** Сколько товаров вернуть. */
   limit?: number;
 }): Promise<RelatedProduct[]> {
-  const { anchorIds, deps, preferredCategories, strictCategories = false, limit = 6 } = params;
+  const { anchorIds, anchors: anchorsFull, deps, preferredCategories, strictCategories = false, limit = 6 } = params;
   if (!anchorIds?.length) return [];
 
-  const anchors: RelatedAnchor[] = anchorIds.map((id) => ({ id }));
+  // Если расширенные anchors не пришли — деградируем до id-only (relaxation сразу
+  // падает на «bare», т.к. buildAnchorFilters не получит ни price, ни options).
+  const anchors: RelatedAnchor[] = (anchorsFull && anchorsFull.length)
+    ? anchorsFull
+    : anchorIds.map((id) => ({ id }));
 
   // Шаг 1. Если пользователь явно выбрал ОДНУ из предложенных категорий —
-  // используем серверный фильтр /related?category=<pagetitle> (swagger 2026-05-13).
-  // Это убирает рандом из соседних tv-категорий и даёт детерминированную выдачу.
+  // используем серверный фильтр /related?category=<pagetitle> + price/options
+  // через fetchWithRelaxation. category — НЕ ослабляется (остаётся в baseParams).
   if (strictCategories && preferredCategories && preferredCategories.length === 1) {
     const cat = preferredCategories[0];
-    const { merged } = await fetchRelatedForAnchors(anchors, deps, {
-      category: cat,
-      perPage: Math.max(limit, 20),
-      page: 1,
-    });
+    const { merged, attempt } = await fetchWithRelaxation(
+      anchors,
+      { category: cat, perPage: Math.max(limit, 20), page: 1 },
+      deps,
+    );
     if (merged.length) {
-      console.log(`[Related] strict server-side category filter "${cat}" → ${merged.length} items`);
+      console.log(`[Related] strict server-side category filter "${cat}" → ${merged.length} items (relax attempt=${attempt})`);
       return merged.slice(0, limit);
     }
-    // Fallthrough: пустой ответ от сервера → пробуем без фильтра + post-filter.
     console.log(`[Related] server-side category="${cat}" returned 0 → fallback to client-side filter`);
   }
 
-  // Шаг 2. Общий пул (perPage=50 для устойчивости) + клиентский post-filter
-  // по preferredCategories (когда категорий несколько или strict-фильтр пуст).
-  const { merged } = await fetchRelatedForAnchors(anchors, deps, { perPage: 50, page: 1 });
+  // Шаг 2. Общий пул через fetchWithRelaxation (price+options → ослабление).
+  const { merged, attempt } = await fetchWithRelaxation(anchors, { perPage: 50, page: 1 }, deps);
+  console.log(`[Related] accept general pool=${merged.length} (relax attempt=${attempt})`);
   if (!merged.length) return [];
 
   let pool = merged;

@@ -1249,7 +1249,7 @@ async function fetchRelatedProducts(productId: number, apiToken: string): Promis
  * Build /api/products/{id}/related URL with optional query params.
  * Mirrors /products: page, per_page, category, min_price, max_price (swagger 2026-05-13).
  */
-function buildRelatedUrl(id: number, params?: { page?: number; perPage?: number; category?: string; minPrice?: number; maxPrice?: number }): string {
+function buildRelatedUrl(id: number, params?: { page?: number; perPage?: number; category?: string; minPrice?: number; maxPrice?: number; options?: Record<string, string[]> }): string {
   const base = `https://220volt.kz/api/products/${id}/related`;
   if (!params) return base;
   const qs = new URLSearchParams();
@@ -1258,6 +1258,11 @@ function buildRelatedUrl(id: number, params?: { page?: number; perPage?: number;
   if (params.category) qs.set('category', params.category);
   if (params.minPrice != null) qs.set('min_price', String(params.minPrice));
   if (params.maxPrice != null) qs.set('max_price', String(params.maxPrice));
+  if (params.options) {
+    for (const [k, vals] of Object.entries(params.options)) {
+      for (const v of vals) qs.append(`options[${k}][]`, v);
+    }
+  }
   const s = qs.toString();
   return s ? `${base}?${s}` : base;
 }
@@ -2233,6 +2238,9 @@ interface DialogSlot {
   // related_categories — JSON массив строк-категорий, которые упомянуты в фразе (для post-filter)
   anchor_ids?: string;
   related_categories?: string;
+  // anchors — JSON snapshot RelatedAnchor[] (id+price+options+category) для acceptRelatedOffer
+  // позволяет fetchWithRelaxation строить фильтры без повторного fetch'а каталога.
+  anchors?: string;
   // replacement metadata
   isReplacement?: boolean;
   originalName?: string;
@@ -2289,6 +2297,7 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
       offer_query: typeof s.offer_query === 'string' ? sanitize(s.offer_query) : undefined,
       anchor_ids: typeof s.anchor_ids === 'string' ? s.anchor_ids.substring(0, 500) : undefined,
       related_categories: typeof s.related_categories === 'string' ? s.related_categories.substring(0, 1000) : undefined,
+      anchors: typeof s.anchors === 'string' ? s.anchors.substring(0, 4000) : undefined,
     };
     count++;
   }
@@ -5874,9 +5883,25 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             console.log(`[Chat req=${reqId}] Cross-sell narrowed to user-picked categories: ${JSON.stringify(matchedCats)}`);
           }
 
+          let anchorsFull: RelatedAnchor[] = [];
+          try {
+            const parsedAnchors = JSON.parse(crossSellSlot.anchors || '[]');
+            if (Array.isArray(parsedAnchors)) {
+              anchorsFull = parsedAnchors
+                .filter((a: any) => a && Number.isFinite(a.id))
+                .map((a: any) => ({
+                  id: a.id,
+                  price: typeof a.price === 'number' ? a.price : undefined,
+                  category: a.category || undefined,
+                  options: Array.isArray(a.options) ? a.options : undefined,
+                }));
+            }
+          } catch { /* malformed → degrade to id-only */ }
+
           const relatedProducts = appSettings.volt220_api_token
             ? await acceptRelatedOffer({
                 anchorIds,
+                anchors: anchorsFull,
                 deps: buildRelatedDeps(appSettings.volt220_api_token, appSettings),
                 preferredCategories: effectiveCategories,
                 strictCategories: matchedCats.length > 0,
@@ -9269,7 +9294,17 @@ ${productInstructions}`;
           picked.push({
             id: p.id,
             pagetitle: p.pagetitle,
+            price: typeof p.price === 'number' ? p.price : undefined,
             category: p.category ? { id: p.category.id, pagetitle: p.category.pagetitle } : undefined,
+            options: Array.isArray(p.options)
+              ? p.options
+                  .filter((o: any) => o && typeof o.key === 'string')
+                  .map((o: any) => ({
+                    key: o.key,
+                    value_ru: (o.value_ru ?? o.value ?? '') || undefined,
+                    caption_ru: (o.caption_ru ?? o.caption ?? '') || undefined,
+                  }))
+              : undefined,
           });
           if (picked.length >= 3) break;
         }
@@ -9291,6 +9326,18 @@ ${productInstructions}`;
       // Сохранение cross_sell_offer slot — общее для streaming/non-streaming.
       const saveCrossSellSlot = (followup: { text: string; anchorIds: number[]; categories: string[] }) => {
         if (!followup.text || !followup.anchorIds.length) return;
+        // Snapshot расширенных anchor-ов для последующего acceptRelatedOffer:
+        // храним price + options, чтобы fetchWithRelaxation мог построить фильтры
+        // БЕЗ повторного fetch'а каталога. Ограничиваем до 5.
+        const anchorSnapshot = followupAnchors
+          .filter((a) => followup.anchorIds.includes(a.id))
+          .slice(0, 5)
+          .map((a) => ({
+            id: a.id,
+            price: a.price,
+            options: a.options,
+            category: a.category,
+          }));
         dialogSlots['cross_sell_offer'] = {
           intent: 'cross_sell_offer',
           base_category: classification?.product_category || 'cross_sell',
@@ -9300,6 +9347,7 @@ ${productInstructions}`;
           offer_text: followup.text.slice(0, 500),
           anchor_ids: JSON.stringify(followup.anchorIds.slice(0, 5)),
           related_categories: JSON.stringify(followup.categories.slice(0, 5)),
+          anchors: JSON.stringify(anchorSnapshot),
         };
         slotsUpdated = true;
       };
