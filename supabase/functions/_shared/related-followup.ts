@@ -1,3 +1,5 @@
+import { logAddStep } from './request-logger.ts';
+
 /**
  * Related-followup module (V1, extracted 2026-05-12, Step 2+3 2026-05-12).
  *
