@@ -138,6 +138,122 @@ async function fetchRelatedForAnchors(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Anchor-derived filters + progressive relaxation (Шаг 1, 2026-05-13).
+//
+// /related теперь принимает те же параметры, что /products (swagger 2026-05-13).
+// Используем характеристики самого anchor'а (цена + ключевые опции — vendor/color),
+// чтобы сузить выдачу до СОВМЕСТИМЫХ товаров. Если фильтры схлопнули пул —
+// последовательно ослабляем (vendor → color → price → none).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Какие per-item options пробрасывать в /related?options[k][]=... */
+export const RELATED_FILTER_OPTION_KEYS: readonly string[] = ['vendor', 'color'];
+/** ±X% вокруг медианной цены якорей. */
+export const RELATED_PRICE_BAND_PCT = 0.5;
+/** Минимальный размер пула, при котором останавливаем relaxation. */
+export const RELATED_MIN_POOL = 10;
+/** Широкий пул для устойчивой агрегации категорий. */
+export const RELATED_PER_PAGE = 100;
+
+function median(nums: number[]): number {
+  const s = nums.slice().sort((a, b) => a - b);
+  const n = s.length;
+  if (!n) return 0;
+  return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+}
+
+/**
+ * Строит фильтры для /related из anchor-ов.
+ *  - price: median(prices) ± RELATED_PRICE_BAND_PCT, если у всех есть цена.
+ *  - options[k]: пересечение по ключу — берётся ТОЛЬКО если у всех anchor-ов
+ *    одно и то же значение (иначе ключ пропускается, чтобы не схлопнуть).
+ */
+export function buildAnchorFilters(
+  anchors: RelatedAnchor[],
+  allowKeys: readonly string[] = RELATED_FILTER_OPTION_KEYS,
+): { minPrice?: number; maxPrice?: number; options?: Record<string, string[]> } {
+  const out: { minPrice?: number; maxPrice?: number; options?: Record<string, string[]> } = {};
+  if (!anchors?.length) return out;
+
+  const prices = anchors.map((a) => Number(a.price)).filter((n) => Number.isFinite(n) && n > 0);
+  if (prices.length === anchors.length && prices.length > 0) {
+    const m = median(prices);
+    out.minPrice = Math.max(1, Math.floor(m * (1 - RELATED_PRICE_BAND_PCT)));
+    out.maxPrice = Math.ceil(m * (1 + RELATED_PRICE_BAND_PCT));
+  }
+
+  const opts: Record<string, string[]> = {};
+  for (const key of allowKeys) {
+    const values = anchors.map((a) => {
+      const found = (a.options || []).find((o) => o?.key === key);
+      const v = found?.value_ru?.trim();
+      return v && v.length ? v : null;
+    });
+    if (values.some((v) => v === null)) continue;
+    const uniq = Array.from(new Set(values as string[]));
+    if (uniq.length === 1) opts[key] = uniq;
+  }
+  if (Object.keys(opts).length) out.options = opts;
+  return out;
+}
+
+/**
+ * Прогрессивное ослабление: vendor → color → price → none.
+ * Останавливаемся, как только пул ≥ RELATED_MIN_POOL ИЛИ дошли до bare.
+ */
+export async function fetchWithRelaxation(
+  anchors: RelatedAnchor[],
+  baseParams: RelatedQueryParams,
+  deps: Pick<RelatedFollowupDeps, 'fetchRelatedRaw'>,
+  allowKeys: readonly string[] = RELATED_FILTER_OPTION_KEYS,
+): Promise<{ byAnchor: Map<number, RelatedProduct[]>; merged: RelatedProduct[]; usedFilters: RelatedQueryParams; attempt: number }> {
+  const filters = buildAnchorFilters(anchors, allowKeys);
+  const first: RelatedQueryParams = {
+    perPage: RELATED_PER_PAGE,
+    page: 1,
+    ...baseParams,
+    ...(filters.minPrice != null ? { minPrice: filters.minPrice } : {}),
+    ...(filters.maxPrice != null ? { maxPrice: filters.maxPrice } : {}),
+    ...(filters.options ? { options: { ...filters.options } } : {}),
+  };
+
+  const sequence: RelatedQueryParams[] = [first];
+  let cur = { ...first };
+  for (const key of allowKeys) {
+    if (cur.options && key in cur.options) {
+      const next = { ...cur, options: { ...cur.options } };
+      delete next.options![key];
+      if (Object.keys(next.options!).length === 0) delete next.options;
+      sequence.push(next);
+      cur = next;
+    }
+  }
+  if (cur.minPrice != null || cur.maxPrice != null) {
+    const next = { ...cur };
+    delete next.minPrice;
+    delete next.maxPrice;
+    sequence.push(next);
+    cur = next;
+  }
+  const bare: RelatedQueryParams = { perPage: RELATED_PER_PAGE, page: 1, ...baseParams };
+  if (JSON.stringify(bare) !== JSON.stringify(cur)) sequence.push(bare);
+
+  for (let i = 0; i < sequence.length; i++) {
+    const params = sequence[i];
+    const { byAnchor, merged } = await fetchRelatedForAnchors(anchors, deps, params);
+    console.log(
+      `[Related] relax attempt=${i + 1}/${sequence.length} ` +
+      `filters=${JSON.stringify({ minPrice: params.minPrice, maxPrice: params.maxPrice, options: params.options, category: params.category })} ` +
+      `pool=${merged.length}`,
+    );
+    if (merged.length >= RELATED_MIN_POOL || i === sequence.length - 1) {
+      return { byAnchor, merged, usedFilters: params, attempt: i + 1 };
+    }
+  }
+  return { byAnchor: new Map(), merged: [], usedFilters: bare, attempt: sequence.length };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // generateRelatedFollowup — Step 2:
 //   - multi-anchor (aggregate categories across up to 3 anchors)
 //   - userMessage + productCategory passed into prompt for nativeness
