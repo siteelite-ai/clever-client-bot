@@ -37,7 +37,11 @@ export interface RelatedProduct {
 export interface RelatedAnchor {
   id: number;
   pagetitle?: string;
+  /** Цена якоря — для построения min/max price band. */
+  price?: number;
   category?: { id: number; pagetitle?: string };
+  /** Опции якоря — для intersection-фильтра (vendor/color/...). */
+  options?: RelatedAnchorOption[];
 }
 
 /**
