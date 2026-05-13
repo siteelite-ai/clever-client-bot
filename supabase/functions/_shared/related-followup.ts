@@ -404,9 +404,11 @@ ${topCategories.map((c) => `- ${c}`).join('\n')}
     }
     if (text.length > 280) text = text.slice(0, 280);
     console.log(`[RelatedFollowup] Generated: "${text}"`);
+    logAddStep({ step: 'related-followup-text', meta: { text, categories: topCategories } });
     return { text, anchorIds, categories: topCategories };
   } catch (e) {
     console.log(`[RelatedFollowup] Error (silent skip): ${(e as Error).message}`);
+    logAddStep({ step: 'related-followup-error', meta: { error: (e as Error).message } });
     return empty;
   }
 }
