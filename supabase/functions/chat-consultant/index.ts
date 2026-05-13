@@ -5896,8 +5896,30 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               headers: { ...corsHeaders, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
             });
           }
-          // accept, но /related пуст → silent skip, идём в обычный pipeline.
-          console.log(`[Chat req=${reqId}] Cross-sell ACCEPT but /related returned 0 → fall through to normal pipeline`);
+          // accept, но /related пуст по якорю — НЕ уходим в общий catalog-search
+          // (там рандомные товары не из /related). Отдаём короткое soft-сообщение.
+          const softContent = 'К сожалению, по этому товару сопутствующих позиций сейчас нет. Подскажите, что именно ищете — подберу отдельно.';
+          console.log(`[Chat req=${reqId}] Cross-sell ACCEPT but /related returned 0 → soft reply (no fallthrough)`);
+          persistSlotsAsync(conversationId, dialogSlots);
+          if (!useStreaming) {
+            return new Response(JSON.stringify({ content: softContent, slot_update: dialogSlots }), {
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
+          }
+          {
+            const encoder = new TextEncoder();
+            const stream = new ReadableStream({
+              start(controller) {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: softContent }, index: 0 }] })}\n\n`));
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`));
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+                controller.close();
+              },
+            });
+            return new Response(stream, {
+              headers: { ...corsHeaders, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
+            });
+          }
         } else {
           // new_request / unclear → удаляем слот, идём дальше как обычно.
           delete dialogSlots['cross_sell_offer'];
