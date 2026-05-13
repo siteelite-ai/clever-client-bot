@@ -40,9 +40,23 @@ export interface RelatedAnchor {
   category?: { id: number; pagetitle?: string };
 }
 
+/**
+ * Query-параметры для /api/products/{id}/related.
+ * Согласно swagger.json (verified 2026-05-13) endpoint поддерживает те же
+ * фильтры, что и /products: pagination + category + price + options[][].
+ * Это даёт ДЕТЕРМИНИРОВАННЫЙ постраничный список вместо рандом-выборки.
+ */
+export interface RelatedQueryParams {
+  page?: number;
+  perPage?: number;
+  category?: string;
+  minPrice?: number;
+  maxPrice?: number;
+}
+
 export interface RelatedFollowupDeps {
   /** Live-fetch /api/products/{id}/related (response объект, как у fetch). null = транспортная ошибка. */
-  fetchRelatedRaw: (productId: number) => Promise<Response | null>;
+  fetchRelatedRaw: (productId: number, params?: RelatedQueryParams) => Promise<Response | null>;
   /** OpenRouter API key (Claude Sonnet 4.5). null/пустой → silent skip. */
   openrouterApiKey: string | null;
 }
