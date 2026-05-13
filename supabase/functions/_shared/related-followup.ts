@@ -470,6 +470,7 @@ export async function acceptRelatedOffer(params: {
   // Шаг 2. Общий пул через fetchWithRelaxation (price+options → ослабление).
   const { merged, attempt } = await fetchWithRelaxation(anchors, { perPage: 50, page: 1 }, deps);
   console.log(`[Related] accept general pool=${merged.length} (relax attempt=${attempt})`);
+  logAddStep({ step: 'related-accept-pool', total: merged.length, meta: { anchors: anchorIds, relaxAttempt: attempt, preferredCategories, strictCategories } });
   if (!merged.length) return [];
 
   let pool = merged;
