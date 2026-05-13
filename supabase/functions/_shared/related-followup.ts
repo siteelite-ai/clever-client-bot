@@ -402,7 +402,7 @@ ${topCategories.map((c) => `- ${c}`).join('\n')}
       console.log(`[RelatedFollowup] Sanitize: rejected text with link/price: ${text.slice(0, 80)}`);
       return empty;
     }
-    if (text.length > 280) text = text.slice(0, 280);
+    if (text.length > 320) text = text.slice(0, 320);
     console.log(`[RelatedFollowup] Generated: "${text}"`);
     logAddStep({ step: 'related-followup-text', meta: { text, categories: topCategories } });
     return { text, anchorIds, categories: topCategories };
