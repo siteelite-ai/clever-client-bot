@@ -52,6 +52,15 @@ export interface RelatedQueryParams {
   category?: string;
   minPrice?: number;
   maxPrice?: number;
+  /** options[<key>][]=<value> — vendor, color и т.п. (см. RELATED_FILTER_OPTION_KEYS). */
+  options?: Record<string, string[]>;
+}
+
+/** Per-item Product.options shape (см. mem://architecture/catalog-api-quirks). */
+export interface RelatedAnchorOption {
+  key: string;
+  value_ru?: string;
+  caption_ru?: string;
 }
 
 export interface RelatedFollowupDeps {
