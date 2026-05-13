@@ -317,6 +317,16 @@ export async function generateRelatedFollowup(params: {
     .slice(0, 3)
     .map(([cat]) => cat);
   console.log(`[RelatedFollowup] anchors=${anchorIds.join(',')} categories=${JSON.stringify(topCategories)} relaxAttempt=${attempt} filters=${JSON.stringify({minPrice:usedFilters.minPrice,maxPrice:usedFilters.maxPrice,options:usedFilters.options})}`);
+  logAddStep({
+    step: 'related-followup',
+    total: merged.length,
+    meta: {
+      anchors: anchorIds,
+      categories: topCategories,
+      relaxAttempt: attempt,
+      usedFilters: { minPrice: usedFilters.minPrice, maxPrice: usedFilters.maxPrice, options: usedFilters.options },
+    },
+  });
   // Снижено с <2 до <1: одна валидная категория — это всё ещё полезный followup.
   if (topCategories.length < 1) return empty;
 
