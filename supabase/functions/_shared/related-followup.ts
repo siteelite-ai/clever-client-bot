@@ -1,3 +1,5 @@
+import { logAddStep } from './request-logger.ts';
+
 /**
  * Related-followup module (V1, extracted 2026-05-12, Step 2+3 2026-05-12).
  *
@@ -245,12 +247,26 @@ export async function fetchWithRelaxation(
 
   for (let i = 0; i < sequence.length; i++) {
     const params = sequence[i];
+    const t0 = Date.now();
     const { byAnchor, merged } = await fetchRelatedForAnchors(anchors, deps, params);
+    const ms = Date.now() - t0;
+    const filtersMeta = { minPrice: params.minPrice, maxPrice: params.maxPrice, options: params.options, category: params.category };
     console.log(
       `[Related] relax attempt=${i + 1}/${sequence.length} ` +
-      `filters=${JSON.stringify({ minPrice: params.minPrice, maxPrice: params.maxPrice, options: params.options, category: params.category })} ` +
+      `filters=${JSON.stringify(filtersMeta)} ` +
       `pool=${merged.length}`,
     );
+    logAddStep({
+      step: 'related-relax',
+      total: merged.length,
+      ms,
+      meta: {
+        attempt: i + 1,
+        of: sequence.length,
+        anchors: anchors.map((a) => a.id),
+        filters: filtersMeta,
+      },
+    });
     if (merged.length >= RELATED_MIN_POOL || i === sequence.length - 1) {
       return { byAnchor, merged, usedFilters: params, attempt: i + 1 };
     }
@@ -301,6 +317,16 @@ export async function generateRelatedFollowup(params: {
     .slice(0, 3)
     .map(([cat]) => cat);
   console.log(`[RelatedFollowup] anchors=${anchorIds.join(',')} categories=${JSON.stringify(topCategories)} relaxAttempt=${attempt} filters=${JSON.stringify({minPrice:usedFilters.minPrice,maxPrice:usedFilters.maxPrice,options:usedFilters.options})}`);
+  logAddStep({
+    step: 'related-followup',
+    total: merged.length,
+    meta: {
+      anchors: anchorIds,
+      categories: topCategories,
+      relaxAttempt: attempt,
+      usedFilters: { minPrice: usedFilters.minPrice, maxPrice: usedFilters.maxPrice, options: usedFilters.options },
+    },
+  });
   // Снижено с <2 до <1: одна валидная категория — это всё ещё полезный followup.
   if (topCategories.length < 1) return empty;
 
@@ -378,9 +404,11 @@ ${topCategories.map((c) => `- ${c}`).join('\n')}
     }
     if (text.length > 280) text = text.slice(0, 280);
     console.log(`[RelatedFollowup] Generated: "${text}"`);
+    logAddStep({ step: 'related-followup-text', meta: { text, categories: topCategories } });
     return { text, anchorIds, categories: topCategories };
   } catch (e) {
     console.log(`[RelatedFollowup] Error (silent skip): ${(e as Error).message}`);
+    logAddStep({ step: 'related-followup-error', meta: { error: (e as Error).message } });
     return empty;
   }
 }
@@ -442,6 +470,7 @@ export async function acceptRelatedOffer(params: {
   // Шаг 2. Общий пул через fetchWithRelaxation (price+options → ослабление).
   const { merged, attempt } = await fetchWithRelaxation(anchors, { perPage: 50, page: 1 }, deps);
   console.log(`[Related] accept general pool=${merged.length} (relax attempt=${attempt})`);
+  logAddStep({ step: 'related-accept-pool', total: merged.length, meta: { anchors: anchorIds, relaxAttempt: attempt, preferredCategories, strictCategories } });
   if (!merged.length) return [];
 
   let pool = merged;
