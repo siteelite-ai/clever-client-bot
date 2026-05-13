@@ -222,8 +222,10 @@ export async function fetchWithRelaxation(
   for (const key of allowKeys) {
     if (cur.options && key in cur.options) {
       const next = { ...cur, options: { ...cur.options } };
-      delete next.options![key];
-      if (Object.keys(next.options!).length === 0) delete next.options;
+      delete (next.options as Record<string, string[]>)[key];
+      if (Object.keys(next.options as Record<string, string[]>).length === 0) {
+        next.options = undefined;
+      }
       sequence.push(next);
       cur = next;
     }
