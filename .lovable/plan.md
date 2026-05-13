@@ -1,151 +1,113 @@
-## Итог разведки по двум кейсам
+## Цель
 
-Тесты проходят — но они проверяют **совсем не тот сценарий**, который ломается у вас на проде. Ниже разбор обоих логов с конкретными строчками.
+Сделать выборку `/related` точнее, пробрасывая фильтры самого anchor-товара (цена, опции — vendor, color и т.п.). При пустом результате — мягко ослаблять фильтры. Это работает и в `generateRelatedFollowup` (фраза), и в `acceptRelatedOffer` (карточки).
 
----
+## Изменения
 
-### Кейс 1 — `72ad0196` («самые дешёвые белые двойные розетки»)
+### 1. `supabase/functions/_shared/related-followup.ts`
 
-Классификатор:
-
-```json
-{ "intent":"catalog", "price_intent":"cheapest",
-  "product_category":"розетки",
-  "critical_modifiers":["белые","двойные"] }
-```
-
-steps: `classify → final-deterministic(reason=pass2-shortcircuit), total=25`. Выдача — «Крышки ЮЛИГ».
-
-**Где это решается в коде:** `index.ts:6207-6254`
-
+**a) Расширить `RelatedQueryParams`:**
 ```ts
-6207: if (effectivePriceIntent && appSettings.volt220_api_token) {
-...
-6244:   if (mods.length > 0) {
-6246:     const enrichedQuery = `${priceQuery} ${mods.join(' ')}`.trim();
-6248:     const priceResult = await handlePriceIntent([enrichedQuery], effectivePriceIntent, ...);
+export interface RelatedQueryParams {
+  page?: number;
+  perPage?: number;
+  category?: string;
+  minPrice?: number;
+  maxPrice?: number;
+  options?: Record<string, string[]>;   // NEW: {vendor: ['IEK'], color: ['белый']}
+}
 ```
 
-То есть как только `price_intent !== null`:
-- Поток уходит в **price-ветку РАНЬШЕ**, чем QFv2 (QFv2 живёт ниже, на `6437+`, под `if (appSettings.query_first_enabled ...)`).
-- Внутри price-ветки **нет ни probe-pool'а, ни bootstrap-схемы фасетов, ни `resolveFiltersWithLLM`**. Модификаторы тупо склеиваются в `query=`.
-- `handlePriceIntent` (`2503-2580`) шлёт `?query="розетки самые дешевые белые двойные"&min_price=1`. Каталог ищет фразу буквально → 0.
-- `priceResult.action='not_found'` → `articleShortCircuit` остаётся `false` → пайплайн валится в jargon-fallback, который опускает запрос до `розетка` и берёт первое попавшееся (Крышки).
-
-**Почему тесты молчат:** в репо есть `s-price_test.ts` для V2, есть `shortcircuit_urls_test.ts` для V1. V2-тесты проверяют s3-router → s-price (там probe-then-fetch + facets через `matchFacets`). V1-тесты на price-ветку в этом виде нет вообще — она была упрощена 2026-05-02 (см. core-memory) до «один запрос query+min_price=1» и больше не проверяется на сценарии «модификаторы должны лететь через `options[]`».
-
----
-
-### Кейс 2 — `f20fc782` («розетки коллекции гармония»)
-
-Классификатор:
-
-```json
-{ "intent":"catalog", "price_intent": null,
-  "product_category":"розетки",
-  "critical_modifiers":["коллекции","гармония"] }
+**b) Расширить `RelatedAnchor`** (нужно для построения фильтров):
+```ts
+export interface RelatedAnchor {
+  id: number;
+  pagetitle?: string;
+  price?: number;                                       // NEW
+  category?: { id: number; pagetitle?: string };
+  options?: Array<{ key: string; value_ru?: string }>;  // NEW (как в Product.options)
+}
 ```
 
-steps: `classify → final-deterministic(reason=pass2-shortcircuit), total=15`. Выдача — Светоприбор-розетки, никакой коллекции «Гармония».
+**c) Хелпер `buildAnchorFilters(anchors, allowKeys)`** — собирает фильтры из anchor-ов:
+- `minPrice = floor(median(prices) * 0.5)`, `maxPrice = ceil(median * 1.5)` — если у всех anchor-ов есть цена
+- `options[k]` = пересечение значений по ключам из `allowKeys` (по умолчанию `['vendor','color']`), берётся только если у ВСЕХ anchor-ов значение совпадает (иначе ключ пропускается — иначе схлопнем выдачу)
+- ключи опций конфигурируются через config (см. ниже)
 
-Здесь price-ветка **не запустилась** (нет `price_intent`) — поток ушёл в QFv2. Это то, что вы и хотите. Но результат всё равно мусорный. Смотрим, почему:
+**d) `fetchRelatedRaw` URL-builder в index.ts** должен поддержать `options[k][]=v` (см. п.3).
 
-**Где это решается:** `index.ts:6437-6664` (QFv2)
+**e) Прогрессивное ослабление в `fetchWithRelaxation(anchors, baseParams, allowKeys)`** — единая утилита, используется и в generate, и в accept:
 
-1. `noun = "розетка"` (extractor, `6440-6450`).
-2. `enrichedQuery = "розетка коллекции гармония"`, pool=100 (`6470-6475`).
-3. **Bootstrap schema из pool** (`6493-6520`) — здесь и зарыта проблема. Catalog по `?query=` возвращает Светоприбор-розетки (full-text по pagetitle); в `Product.options[]` этих товаров **нет ключа «коллекция: Гармония»** — это коллекция Schneider Electric, а не Светоприбор. То есть в bootstrap-схеме факта «коллекция = Гармония» просто нет.
-4. `resolveFiltersWithLLM(pool, ["коллекции","гармония"], schema, ...)` (`6529-6537`) → `resolved={}`, `unresolvedDetails=[]` (LLM не находит в схеме ни ключа, ни значения).
-5. Падаем в `else` ветку `6603`: ни `resolved`, ни `unresolvedDetails` → выполняется хвост `displayList = applyNounFilter(pool); branchTag='qfv2_pool_no_modifiers'` (`6573-6574`).
-6. На `6657` `totalCollectedBranch='qfv2_pool_no_modifiers'`, `articleShortCircuit=true`.
-7. **EARLY JARGON FALLBACK** на `7967-8011` ловит `branch=qfv2_pool_no_modifiers + criticalMods.length>0`. Он ДОЛЖЕН был сработать. Если в вашем логе `total=15`, варианта два:
-   - либо jargon-fallback нашёл по альтернативе и сделал `totalCollectedBranch='jargon-fallback-early'` (но тогда branch в `chat_request_logs` был бы `jargon-fallback`, а у вас в логе `branch=null` — значит этот блок упал silently / не запустился);
-   - либо `branch=null` потому что `logSetBranch('jargon-fallback')` (`7977`) вызывается, но падает дальше в `tryJargonFallback` с альтернативами, которые тоже дают «розетка» → возвращаются те же Светоприбор-блоки. В итоге early jargon-fallback оборачивает мусор в новый мусор, а pipeline это считает «нашли».
-
-В любом случае, **корневая причина**: схема фасетов строится **из тех товаров, которые вернул `?query=коллекция гармония`**, а не из категории «Розетки» целиком. Если узкое значение фасета не попало в pool — резолвер его никогда не увидит.
-
-**Почему тесты молчат:** тесты QFv2 (мы видим следы в `_shared`, в V2 есть `golden-similar_e2e_test.ts`, `catalog-assembler_test.ts` и др.) сделаны на кейсах, где модификатор ЕСТЬ в каталоге как facet (цвет/тип монтажа/мощность). Узкие значения брендовых коллекций (Schneider «Гармония», Legrand «Etika») в фикстурах не покрыты — поэтому pass.
-
----
-
-## Итог: одна и та же системная дыра, два проявления
-
-| Кейс | price_intent | Ушёл в | Где упал |
-|---|---|---|---|
-| 72ad0196 | cheapest | price-branch (6207) | модификаторы клеятся в query=, фасетов нет |
-| f20fc782 | null | QFv2 (6437) | bootstrap-схема из pool без нужного значения |
-
-Системная проблема одна: **схема фасетов строится из неправильного источника**.
-
-- В price-ветке источника **нет вообще** — её надо привести к QFv2-схеме (probe → bootstrap → resolve → options[] → handlePriceIntent с extraParams).
-- В QFv2 источник есть, но он завязан на pool по `?query=`, который не содержит узких коллекций. Нужно при `pool=N товаров без целевого фасета` идти за схемой второй раз — через `?category=<noun>` (более широкий пул) или через `/categories/options` для категории «Розетки», и резолвить уже на полной схеме.
-
----
-
-## План изменений (двумя независимыми этапами)
-
-### Этап 1. Price-ветка использует тот же путь, что QFv2
-
-Файл: `supabase/functions/chat-consultant/index.ts:6244-6254`.
-
-Заменить «mods → glue в query» на:
-
-```
-1. noun = effectiveCategory (или extractCategoryNoun если нужно)
-2. probePool = searchProductsByCandidate(query=noun, perPage=100)
-3. bootstrapSchema = extract из probePool.options[] (тот же код, что в QFv2 6493-6520 — выносим в helper, без копипаста)
-4. {resolved, unresolvedDetails} = resolveFiltersWithLLM(probePool, mods, schema, criticalMods, schema, 'full', noun)
-5. extraParams = Object.entries(resolved).flatMap(...) → [['options[<aliasKey>][]', value], ...] через getAliasKeysFor
-6. handlePriceIntent([noun], priceIntent, token, extraParams)
-7. Если total=0 → honest-empty с attemptedFacets (как в QFv2 honest-empty)
+```text
+attempt 1: per_page=100 + price band + options{vendor,color}
+attempt 2: drop options.vendor                 (если был)
+attempt 3: drop options.color                  (если был)
+attempt 4: drop minPrice/maxPrice              (если были)
+attempt 5: per_page=100, без фильтров          (текущее поведение)
 ```
 
-В steps появятся два новых шага: `price-probe` и `price-resolve`. `branch='price-shortcircuit'` будет проставлять `logSetBranch`.
+После каждого attempt: если merged.length ≥ MIN_POOL (=10) → возвращаем. Между попытками логируем что отвалилось.
 
-Защита от регрессии: если modifiers пусто — оставить старый сценарий A (bootstrap + clarify) и не ломать его.
+**f) `generateRelatedFollowup`:**
+- использует `fetchWithRelaxation` вместо прямого `fetchRelatedForAnchors({perPage:50})`
+- порог `topCategories.length < 2` снижается до `< 1` (если осталась 1 валидная категория — фразу всё равно строим: «С этим часто берут **коробки монтажные**.»). Это решает текущий баг с пустым followup.
 
-### Этап 2. QFv2: вторая попытка резолва на расширенной схеме
+**g) `acceptRelatedOffer`:**
+- при `strictCategories && preferredCategories.length===1` сначала пробует `category=<cat>` + price + options (через `fetchWithRelaxation`)
+- общий путь — также через `fetchWithRelaxation`
 
-Файл: `index.ts:6603` (текущая ветка `else` где `resolved={}` && `unresolvedDetails=[]`).
+### 2. `supabase/functions/chat-consultant/index.ts`
 
-Перед тем как рисовать pool, делаем **второй заход**:
-
+**a) `buildRelatedUrl`** — добавить сериализацию `options[<key>][]=<value>`:
+```ts
+if (params.options) {
+  for (const [k, vals] of Object.entries(params.options))
+    for (const v of vals) qs.append(`options[${k}][]`, v);
+}
 ```
-если resolved=={} и unresolvedDetails==[] и criticalMods.length>0:
-  попробовать получить «широкую» схему фасетов
-    приоритет 1: getCategoryOptionsSchema(noun) — если такая категория существует в /categories
-    приоритет 2: probe на {query=noun, perPage=200} с другой выборкой (sort by random / different page)
-  если в этой расширенной схеме есть ключ "kollektsiya" со значением «Гармония» (нечёткое сравнение) — резолвим и идём в final search
-  если всё равно ноль → honest-empty с attemptedFacets={caption:"Коллекция", value:"Гармония", alternativeValues:[…]}
+
+**b) `followupAnchors`** — пробрасывать `price` и `options` из `foundProducts`:
+```ts
+picked.push({
+  id: p.id,
+  pagetitle: p.pagetitle,
+  price: p.price,
+  category: ...,
+  options: p.options,  // как есть, shape совпадает
+});
 ```
 
-То есть текущий `qfv2_pool_no_modifiers` перестаёт быть «молча показать pool», а становится «либо расширили схему и нашли, либо честно сказали что нет». Это ровно та же философия, что уже зашита для honest-empty (см. core memory про QFv2 honest-empty).
+**c) `acceptRelatedOffer` callsite (5878)** — тоже передать расширенные anchors. Сейчас там `anchors: anchorIds.map(id => ({id}))` — нужно подтянуть price/options либо из cached anchors slot, либо одним батч-fetch'ем `/products?article=...` (по сохранённым ID). Простейшее: сохранять расширенные anchor snapshot в slot `cross_sell_offer.anchors` (рядом с `anchor_ids`).
 
-### Этап 3. Тесты, которые поймали бы оба кейса
+### 3. Config
 
-Добавить в `.lovable/fixtures/`:
+Добавить в `_shared/related-followup.ts` константы (или принимать через deps, чтобы не плодить новых файлов):
+```ts
+const RELATED_FILTER_OPTION_KEYS = ['vendor', 'color'];   // какие опции пробрасывать
+const RELATED_PRICE_BAND_PCT = 0.5;                       // ±50%
+const RELATED_MIN_POOL = 10;                              // когда останавливаемся
+const RELATED_PER_PAGE = 100;                             // широкий пул
+```
 
-1. **price + critical_mods**: «самые дешёвые белые двойные розетки» → ожидание: `branch ∈ {price-shortcircuit, price-honest-empty}`, в выдаче либо реально белые двойные розетки отсортированные по цене ASC, либо честный honest-empty с альтернативами цвета/мест.
-2. **brand-collection**: «розетки коллекции Гармония» → ожидание: `branch=qfv2_win` с реальными розетками Schneider Atlas Гармония, либо `qfv2_honest_empty` с альтернативами по фасету «Коллекция».
+### 4. Логирование
 
-И один e2e-тест на `chat-consultant`, который дёргает edge-функцию и проверяет, что НИКОГДА не приходит «Крышка ЮЛИГ» в ответ на запрос «розетки …».
+В каждом attempt логируем: `[Related] attempt=<n> filters={price:[..], options:{..}} pool=<merged> kept=<afterPriceFilter>`. По логам можно будет настроить набор `RELATED_FILTER_OPTION_KEYS`.
 
----
+## Тесты
 
-## Что НЕ меняем
+В `supabase/functions/_shared/related-followup_test.ts` (если есть, иначе создать):
+- buildAnchorFilters: median price ±50%, intersection options
+- fetchWithRelaxation: моки fetchRelatedRaw, проверяем порядок ослабления
+- generateRelatedFollowup: при 1 уцелевшей категории фраза формируется (порог `<2` → `<1`)
 
-- `handlePriceIntent` сам — он корректный (sort через min_price=1, last-page для most_expensive), нужно только правильно его кормить.
-- QFv2 для случаев, где модификатор реально в pool (90% запросов).
-- V2 пайплайн — у него своя s-price, отдельно.
+## Memory update
 
----
+После проверки: добавить в `mem://features/related-cross-sell` (новый файл) — описание фильтров и progressive relaxation. Обновить Core memory строкой про `/related` фильтры.
 
-## После approve
+## Шаги (с подтверждением)
 
-Иду строго по этапам, после каждого жду «ок»:
+1. **Шаг 1.** Расширение типов + `buildAnchorFilters` + `fetchWithRelaxation` + интеграция в `generateRelatedFollowup`. Снижение порога категорий до `<1`. Тесты.
+2. **Шаг 2.** Поддержка `options[][]` в `buildRelatedUrl`. Проброс `price/options` в `followupAnchors`. Сохранение расширенных anchors в slot. Использование в `acceptRelatedOffer`.
+3. **Шаг 3.** Прогон через прод-кейс «розетка ВЕГА → коробки», верификация по логам, обновление памяти.
 
-1. **Этап 1** — вынести bootstrap+resolve в общий helper, переписать `6244-6254` на полный путь, добавить логирование шагов `price-probe`, `price-resolve`.
-2. **Этап 2** — расширить QFv2 второй попыткой резолва на широкой схеме.
-3. **Этап 3** — фикстуры + e2e.
-
-Никаких заплат. Если на этапе 1 окажется, что `extractFacetSchemaFromProducts` уже есть в `_shared` (V2 им пользуется) — переиспользуем, дублировать не будем.
+После каждого шага останавливаюсь и жду подтверждения.
