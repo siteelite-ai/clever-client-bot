@@ -275,15 +275,33 @@ export async function acceptRelatedOffer(params: {
   if (!anchorIds?.length) return [];
 
   const anchors: RelatedAnchor[] = anchorIds.map((id) => ({ id }));
-  const { merged } = await fetchRelatedForAnchors(anchors, deps);
+
+  // Шаг 1. Если пользователь явно выбрал ОДНУ из предложенных категорий —
+  // используем серверный фильтр /related?category=<pagetitle> (swagger 2026-05-13).
+  // Это убирает рандом из соседних tv-категорий и даёт детерминированную выдачу.
+  if (strictCategories && preferredCategories && preferredCategories.length === 1) {
+    const cat = preferredCategories[0];
+    const { merged } = await fetchRelatedForAnchors(anchors, deps, {
+      category: cat,
+      perPage: Math.max(limit, 20),
+      page: 1,
+    });
+    if (merged.length) {
+      console.log(`[Related] strict server-side category filter "${cat}" → ${merged.length} items`);
+      return merged.slice(0, limit);
+    }
+    // Fallthrough: пустой ответ от сервера → пробуем без фильтра + post-filter.
+    console.log(`[Related] server-side category="${cat}" returned 0 → fallback to client-side filter`);
+  }
+
+  // Шаг 2. Общий пул (perPage=50 для устойчивости) + клиентский post-filter
+  // по preferredCategories (когда категорий несколько или strict-фильтр пуст).
+  const { merged } = await fetchRelatedForAnchors(anchors, deps, { perPage: 50, page: 1 });
   if (!merged.length) return [];
 
   let pool = merged;
 
   if (preferredCategories && preferredCategories.length) {
-    // Substring match: каждый «корневой» токен (>=4 символов) категории-предложения
-    // ищем в названии категории товара и наоборот. Это устойчиво к склонениям и
-    // лишним прилагательным («Коробки монтажные» ↔ «Коробки распределительные»).
     const norm = (s: string) => s.toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
     const wantedTokens = preferredCategories
       .flatMap((c) => norm(c).split(' '))
@@ -299,8 +317,6 @@ export async function acceptRelatedOffer(params: {
     if (matching.length) {
       pool = matching;
     } else if (strictCategories) {
-      // Пользователь явно назвал категорию, но в /related её нет.
-      // НЕ уходим в общий каталог (там рандом) — отдаём общий /related-пул.
       console.log('[Related] strict miss → fallback to full /related pool (not catalog search)');
     }
   }
