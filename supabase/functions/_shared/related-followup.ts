@@ -77,9 +77,11 @@ export interface RelatedFollowupResult {
 export async function fetchRelatedProducts(
   productId: number,
   deps: Pick<RelatedFollowupDeps, 'fetchRelatedRaw'>,
+  params?: RelatedQueryParams,
 ): Promise<RelatedProduct[]> {
-  console.log(`[Related] Fetching productId=${productId}`);
-  const response = await deps.fetchRelatedRaw(productId);
+  const tag = params?.category ? ` category="${params.category}"` : '';
+  console.log(`[Related] Fetching productId=${productId} perPage=${params?.perPage ?? 'default'}${tag}`);
+  const response = await deps.fetchRelatedRaw(productId, params);
   if (!response) return [];
   try {
     const rawData = await response.json();
@@ -101,13 +103,14 @@ export async function fetchRelatedProducts(
 async function fetchRelatedForAnchors(
   anchors: RelatedAnchor[],
   deps: Pick<RelatedFollowupDeps, 'fetchRelatedRaw'>,
+  params?: RelatedQueryParams,
 ): Promise<{ byAnchor: Map<number, RelatedProduct[]>; merged: RelatedProduct[] }> {
   const byAnchor = new Map<number, RelatedProduct[]>();
   const merged: RelatedProduct[] = [];
   const seen = new Set<number>();
 
   const lists = await Promise.all(
-    anchors.map((a) => fetchRelatedProducts(a.id, deps).then((r) => [a.id, r] as const)),
+    anchors.map((a) => fetchRelatedProducts(a.id, deps, params).then((r) => [a.id, r] as const)),
   );
 
   for (const [anchorId, list] of lists) {
