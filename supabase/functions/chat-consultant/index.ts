@@ -1249,7 +1249,7 @@ async function fetchRelatedProducts(productId: number, apiToken: string): Promis
  * Build /api/products/{id}/related URL with optional query params.
  * Mirrors /products: page, per_page, category, min_price, max_price (swagger 2026-05-13).
  */
-function buildRelatedUrl(id: number, params?: { page?: number; perPage?: number; category?: string; minPrice?: number; maxPrice?: number }): string {
+function buildRelatedUrl(id: number, params?: { page?: number; perPage?: number; category?: string; minPrice?: number; maxPrice?: number; options?: Record<string, string[]> }): string {
   const base = `https://220volt.kz/api/products/${id}/related`;
   if (!params) return base;
   const qs = new URLSearchParams();
@@ -1258,6 +1258,11 @@ function buildRelatedUrl(id: number, params?: { page?: number; perPage?: number;
   if (params.category) qs.set('category', params.category);
   if (params.minPrice != null) qs.set('min_price', String(params.minPrice));
   if (params.maxPrice != null) qs.set('max_price', String(params.maxPrice));
+  if (params.options) {
+    for (const [k, vals] of Object.entries(params.options)) {
+      for (const v of vals) qs.append(`options[${k}][]`, v);
+    }
+  }
   const s = qs.toString();
   return s ? `${base}?${s}` : base;
 }
