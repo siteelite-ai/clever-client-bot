@@ -2238,6 +2238,9 @@ interface DialogSlot {
   // related_categories — JSON массив строк-категорий, которые упомянуты в фразе (для post-filter)
   anchor_ids?: string;
   related_categories?: string;
+  // anchors — JSON snapshot RelatedAnchor[] (id+price+options+category) для acceptRelatedOffer
+  // позволяет fetchWithRelaxation строить фильтры без повторного fetch'а каталога.
+  anchors?: string;
   // replacement metadata
   isReplacement?: boolean;
   originalName?: string;
