@@ -9306,6 +9306,18 @@ ${productInstructions}`;
       // Сохранение cross_sell_offer slot — общее для streaming/non-streaming.
       const saveCrossSellSlot = (followup: { text: string; anchorIds: number[]; categories: string[] }) => {
         if (!followup.text || !followup.anchorIds.length) return;
+        // Snapshot расширенных anchor-ов для последующего acceptRelatedOffer:
+        // храним price + options, чтобы fetchWithRelaxation мог построить фильтры
+        // БЕЗ повторного fetch'а каталога. Ограничиваем до 5.
+        const anchorSnapshot = followupAnchors
+          .filter((a) => followup.anchorIds.includes(a.id))
+          .slice(0, 5)
+          .map((a) => ({
+            id: a.id,
+            price: a.price,
+            options: a.options,
+            category: a.category,
+          }));
         dialogSlots['cross_sell_offer'] = {
           intent: 'cross_sell_offer',
           base_category: classification?.product_category || 'cross_sell',
@@ -9315,6 +9327,7 @@ ${productInstructions}`;
           offer_text: followup.text.slice(0, 500),
           anchor_ids: JSON.stringify(followup.anchorIds.slice(0, 5)),
           related_categories: JSON.stringify(followup.categories.slice(0, 5)),
+          anchors: JSON.stringify(anchorSnapshot),
         };
         slotsUpdated = true;
       };
