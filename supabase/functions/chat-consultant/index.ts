@@ -1240,9 +1240,26 @@ async function searchByArticle(article: string, apiToken: string): Promise<Produ
  */
 async function fetchRelatedProducts(productId: number, apiToken: string): Promise<Product[]> {
   return (await fetchRelatedProductsShared(productId, {
-    fetchRelatedRaw: (id) =>
-      fetchCatalogWithRetry(`https://220volt.kz/api/products/${id}/related`, apiToken, 'Related', 6000),
+    fetchRelatedRaw: (id, params) =>
+      fetchCatalogWithRetry(buildRelatedUrl(id, params), apiToken, 'Related', 6000),
   })) as unknown as Product[];
+}
+
+/**
+ * Build /api/products/{id}/related URL with optional query params.
+ * Mirrors /products: page, per_page, category, min_price, max_price (swagger 2026-05-13).
+ */
+function buildRelatedUrl(id: number, params?: { page?: number; perPage?: number; category?: string; minPrice?: number; maxPrice?: number }): string {
+  const base = `https://220volt.kz/api/products/${id}/related`;
+  if (!params) return base;
+  const qs = new URLSearchParams();
+  if (params.page) qs.set('page', String(params.page));
+  if (params.perPage) qs.set('per_page', String(params.perPage));
+  if (params.category) qs.set('category', params.category);
+  if (params.minPrice != null) qs.set('min_price', String(params.minPrice));
+  if (params.maxPrice != null) qs.set('max_price', String(params.maxPrice));
+  const s = qs.toString();
+  return s ? `${base}?${s}` : base;
 }
 
 /**
