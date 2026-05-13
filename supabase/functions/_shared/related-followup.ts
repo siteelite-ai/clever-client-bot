@@ -148,7 +148,8 @@ export async function generateRelatedFollowup(params: {
   const anchorIds = usedAnchors.map((a) => a.id).filter((id) => Number.isFinite(id));
   if (!anchorIds.length) return empty;
 
-  const { merged } = await fetchRelatedForAnchors(usedAnchors, deps);
+  // perPage=50 — широкий пул для устойчивой агрегации категорий (swagger §/related, 2026-05-13).
+  const { merged } = await fetchRelatedForAnchors(usedAnchors, deps, { perPage: 50, page: 1 });
   if (!merged.length) return empty;
 
   // Aggregate categories (исключаем категории самих анкоров)
