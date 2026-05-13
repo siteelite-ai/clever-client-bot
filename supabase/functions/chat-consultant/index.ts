@@ -9274,7 +9274,17 @@ ${productInstructions}`;
           picked.push({
             id: p.id,
             pagetitle: p.pagetitle,
+            price: typeof p.price === 'number' ? p.price : undefined,
             category: p.category ? { id: p.category.id, pagetitle: p.category.pagetitle } : undefined,
+            options: Array.isArray(p.options)
+              ? p.options
+                  .filter((o: any) => o && typeof o.key === 'string')
+                  .map((o: any) => ({
+                    key: o.key,
+                    value_ru: (o.value_ru ?? o.value ?? '') || undefined,
+                    caption_ru: (o.caption_ru ?? o.caption ?? '') || undefined,
+                  }))
+              : undefined,
           });
           if (picked.length >= 3) break;
         }
