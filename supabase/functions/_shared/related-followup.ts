@@ -37,7 +37,11 @@ export interface RelatedProduct {
 export interface RelatedAnchor {
   id: number;
   pagetitle?: string;
+  /** Цена якоря — для построения min/max price band. */
+  price?: number;
   category?: { id: number; pagetitle?: string };
+  /** Опции якоря — для intersection-фильтра (vendor/color/...). */
+  options?: RelatedAnchorOption[];
 }
 
 /**
@@ -52,6 +56,15 @@ export interface RelatedQueryParams {
   category?: string;
   minPrice?: number;
   maxPrice?: number;
+  /** options[<key>][]=<value> — vendor, color и т.п. (см. RELATED_FILTER_OPTION_KEYS). */
+  options?: Record<string, string[]>;
+}
+
+/** Per-item Product.options shape (см. mem://architecture/catalog-api-quirks). */
+export interface RelatedAnchorOption {
+  key: string;
+  value_ru?: string;
+  caption_ru?: string;
 }
 
 export interface RelatedFollowupDeps {
@@ -125,6 +138,127 @@ async function fetchRelatedForAnchors(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Anchor-derived filters + progressive relaxation (Шаг 1, 2026-05-13).
+//
+// /related теперь принимает те же параметры, что /products (swagger 2026-05-13).
+// Используем характеристики самого anchor'а (цена + ключевые опции — vendor/color),
+// чтобы сузить выдачу до СОВМЕСТИМЫХ товаров. Если фильтры схлопнули пул —
+// последовательно ослабляем (vendor → color → price → none).
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Какие per-item options пробрасывать в /related?options[k][]=... */
+export const RELATED_FILTER_OPTION_KEYS: readonly string[] = ['vendor', 'color'];
+/** ±X% вокруг медианной цены якорей. */
+export const RELATED_PRICE_BAND_PCT = 0.5;
+/** Минимальный размер пула, при котором останавливаем relaxation. */
+export const RELATED_MIN_POOL = 10;
+/** Широкий пул для устойчивой агрегации категорий. */
+export const RELATED_PER_PAGE = 100;
+
+function median(nums: number[]): number {
+  const s = nums.slice().sort((a, b) => a - b);
+  const n = s.length;
+  if (!n) return 0;
+  return n % 2 ? s[(n - 1) / 2] : (s[n / 2 - 1] + s[n / 2]) / 2;
+}
+
+/**
+ * Строит фильтры для /related из anchor-ов.
+ *  - price: median(prices) ± RELATED_PRICE_BAND_PCT, если у всех есть цена.
+ *  - options[k]: пересечение по ключу — берётся ТОЛЬКО если у всех anchor-ов
+ *    одно и то же значение (иначе ключ пропускается, чтобы не схлопнуть).
+ */
+export function buildAnchorFilters(
+  anchors: RelatedAnchor[],
+  allowKeys: readonly string[] = RELATED_FILTER_OPTION_KEYS,
+): { minPrice?: number; maxPrice?: number; options?: Record<string, string[]> } {
+  const out: { minPrice?: number; maxPrice?: number; options?: Record<string, string[]> } = {};
+  if (!anchors?.length) return out;
+
+  const prices = anchors.map((a) => Number(a.price)).filter((n) => Number.isFinite(n) && n > 0);
+  if (prices.length === anchors.length && prices.length > 0) {
+    const m = median(prices);
+    out.minPrice = Math.max(1, Math.floor(m * (1 - RELATED_PRICE_BAND_PCT)));
+    out.maxPrice = Math.ceil(m * (1 + RELATED_PRICE_BAND_PCT));
+  }
+
+  const opts: Record<string, string[]> = {};
+  for (const key of allowKeys) {
+    const values = anchors.map((a) => {
+      const found = (a.options || []).find((o) => o?.key === key);
+      const v = found?.value_ru?.trim();
+      return v && v.length ? v : null;
+    });
+    if (values.some((v) => v === null)) continue;
+    const uniq = Array.from(new Set(values as string[]));
+    if (uniq.length === 1) opts[key] = uniq;
+  }
+  if (Object.keys(opts).length) out.options = opts;
+  return out;
+}
+
+/**
+ * Прогрессивное ослабление: vendor → color → price → none.
+ * Останавливаемся, как только пул ≥ RELATED_MIN_POOL ИЛИ дошли до bare.
+ */
+export async function fetchWithRelaxation(
+  anchors: RelatedAnchor[],
+  baseParams: RelatedQueryParams,
+  deps: Pick<RelatedFollowupDeps, 'fetchRelatedRaw'>,
+  allowKeys: readonly string[] = RELATED_FILTER_OPTION_KEYS,
+): Promise<{ byAnchor: Map<number, RelatedProduct[]>; merged: RelatedProduct[]; usedFilters: RelatedQueryParams; attempt: number }> {
+  const filters = buildAnchorFilters(anchors, allowKeys);
+  const first: RelatedQueryParams = {
+    perPage: RELATED_PER_PAGE,
+    page: 1,
+    ...baseParams,
+    ...(filters.minPrice != null ? { minPrice: filters.minPrice } : {}),
+    ...(filters.maxPrice != null ? { maxPrice: filters.maxPrice } : {}),
+    ...(filters.options ? { options: { ...filters.options } } : {}),
+  };
+
+  const sequence: RelatedQueryParams[] = [first];
+  let cur: RelatedQueryParams = { ...first };
+  for (const key of allowKeys) {
+    if (cur.options && key in cur.options) {
+      const nextOpts: Record<string, string[]> = { ...cur.options };
+      delete nextOpts[key];
+      const next: RelatedQueryParams = { ...cur };
+      if (Object.keys(nextOpts).length === 0) {
+        delete (next as { options?: unknown }).options;
+      } else {
+        next.options = nextOpts;
+      }
+      sequence.push(next);
+      cur = next;
+    }
+  }
+  if (cur.minPrice != null || cur.maxPrice != null) {
+    const next: RelatedQueryParams = { ...cur };
+    delete (next as { minPrice?: unknown }).minPrice;
+    delete (next as { maxPrice?: unknown }).maxPrice;
+    sequence.push(next);
+    cur = next;
+  }
+  const bare: RelatedQueryParams = { perPage: RELATED_PER_PAGE, page: 1, ...baseParams };
+  if (JSON.stringify(bare) !== JSON.stringify(cur)) sequence.push(bare);
+
+  for (let i = 0; i < sequence.length; i++) {
+    const params = sequence[i];
+    const { byAnchor, merged } = await fetchRelatedForAnchors(anchors, deps, params);
+    console.log(
+      `[Related] relax attempt=${i + 1}/${sequence.length} ` +
+      `filters=${JSON.stringify({ minPrice: params.minPrice, maxPrice: params.maxPrice, options: params.options, category: params.category })} ` +
+      `pool=${merged.length}`,
+    );
+    if (merged.length >= RELATED_MIN_POOL || i === sequence.length - 1) {
+      return { byAnchor, merged, usedFilters: params, attempt: i + 1 };
+    }
+  }
+  return { byAnchor: new Map(), merged: [], usedFilters: bare, attempt: sequence.length };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // generateRelatedFollowup — Step 2:
 //   - multi-anchor (aggregate categories across up to 3 anchors)
 //   - userMessage + productCategory passed into prompt for nativeness
@@ -148,8 +282,9 @@ export async function generateRelatedFollowup(params: {
   const anchorIds = usedAnchors.map((a) => a.id).filter((id) => Number.isFinite(id));
   if (!anchorIds.length) return empty;
 
-  // perPage=50 — широкий пул для устойчивой агрегации категорий (swagger §/related, 2026-05-13).
-  const { merged } = await fetchRelatedForAnchors(usedAnchors, deps, { perPage: 50, page: 1 });
+  // Шаг 1 (2026-05-13): анкорные фильтры (price + vendor/color) с прогрессивным
+  // ослаблением — точнее выборка, но без риска нулевого пула.
+  const { merged, attempt, usedFilters } = await fetchWithRelaxation(usedAnchors, {}, deps);
   if (!merged.length) return empty;
 
   // Aggregate categories (исключаем категории самих анкоров)
@@ -165,8 +300,9 @@ export async function generateRelatedFollowup(params: {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3)
     .map(([cat]) => cat);
-  console.log(`[RelatedFollowup] anchors=${anchorIds.join(',')} categories=${JSON.stringify(topCategories)}`);
-  if (topCategories.length < 2) return empty;
+  console.log(`[RelatedFollowup] anchors=${anchorIds.join(',')} categories=${JSON.stringify(topCategories)} relaxAttempt=${attempt} filters=${JSON.stringify({minPrice:usedFilters.minPrice,maxPrice:usedFilters.maxPrice,options:usedFilters.options})}`);
+  // Снижено с <2 до <1: одна валидная категория — это всё ещё полезный followup.
+  if (topCategories.length < 1) return empty;
 
   const anchorContext = productCategory
     ? `Тип товара в выдаче: ${productCategory}`
@@ -186,7 +322,7 @@ ${topCategories.map((c) => `- ${c}`).join('\n')}
 ПРАВИЛА:
 - Ровно ОДНА фраза, до 200 символов.
 - Начни с естественного оборота: «С этим часто берут …», «К этому обычно докупают …», «Также пригодятся …», «Под такие розетки обычно нужны …» и т.п. — выбери под контекст вопроса клиента.
-- Перечисли 2-3 категории из списка выше. Каждое название категории ОБЯЗАТЕЛЬНО оберни в **жирный markdown** (например: **рамки**, **подрозетники**). Можно слегка склонять/упрощать формулировку, но НЕ выдумывать новые категории.
+- Перечисли 1-3 категории из списка выше (если в списке одна — используй её). Каждое название категории ОБЯЗАТЕЛЬНО оберни в **жирный markdown** (например: **рамки**, **подрозетники**). Можно слегка склонять/упрощать формулировку, но НЕ выдумывать новые категории.
 - Тон: спокойный, профессиональный, без давления и восклицательных знаков.
 - ЗАПРЕЩЕНО: артикулы, цены, ссылки, бренды, серии, коллекции, конкретные модели, маркетинговые штампы («отличный выбор», «лучший»).
 - БЕЗ призывов «подобрать?»/«показать?» в конце — просто констатация. Если клиент захочет — он сам напишет «да»/«покажи».
