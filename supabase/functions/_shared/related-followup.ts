@@ -277,8 +277,9 @@ export async function generateRelatedFollowup(params: {
   const anchorIds = usedAnchors.map((a) => a.id).filter((id) => Number.isFinite(id));
   if (!anchorIds.length) return empty;
 
-  // perPage=50 — широкий пул для устойчивой агрегации категорий (swagger §/related, 2026-05-13).
-  const { merged } = await fetchRelatedForAnchors(usedAnchors, deps, { perPage: 50, page: 1 });
+  // Шаг 1 (2026-05-13): анкорные фильтры (price + vendor/color) с прогрессивным
+  // ослаблением — точнее выборка, но без риска нулевого пула.
+  const { merged, attempt, usedFilters } = await fetchWithRelaxation(usedAnchors, {}, deps);
   if (!merged.length) return empty;
 
   // Aggregate categories (исключаем категории самих анкоров)
@@ -294,8 +295,9 @@ export async function generateRelatedFollowup(params: {
     .sort((a, b) => b[1] - a[1])
     .slice(0, 3)
     .map(([cat]) => cat);
-  console.log(`[RelatedFollowup] anchors=${anchorIds.join(',')} categories=${JSON.stringify(topCategories)}`);
-  if (topCategories.length < 2) return empty;
+  console.log(`[RelatedFollowup] anchors=${anchorIds.join(',')} categories=${JSON.stringify(topCategories)} relaxAttempt=${attempt} filters=${JSON.stringify({minPrice:usedFilters.minPrice,maxPrice:usedFilters.maxPrice,options:usedFilters.options})}`);
+  // Снижено с <2 до <1: одна валидная категория — это всё ещё полезный followup.
+  if (topCategories.length < 1) return empty;
 
   const anchorContext = productCategory
     ? `Тип товара в выдаче: ${productCategory}`
