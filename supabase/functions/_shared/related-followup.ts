@@ -263,14 +263,28 @@ export async function acceptRelatedOffer(params: {
   let pool = merged;
 
   if (preferredCategories && preferredCategories.length) {
-    const wantedLower = new Set(preferredCategories.map((c) => c.toLowerCase().trim()).filter(Boolean));
-    const matching = pool.filter((p) => {
-      const cat = p.category?.pagetitle?.trim().toLowerCase();
-      return cat && wantedLower.has(cat);
-    });
-    const minMatch = strictCategories ? 1 : 2;
-    if (matching.length >= minMatch) pool = matching;
-    else if (strictCategories) return [];
+    // Substring match: каждый «корневой» токен (>=4 символов) категории-предложения
+    // ищем в названии категории товара и наоборот. Это устойчиво к склонениям и
+    // лишним прилагательным («Коробки монтажные» ↔ «Коробки распределительные»).
+    const norm = (s: string) => s.toLowerCase().replace(/ё/g, 'е').replace(/[^a-zа-я0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+    const wantedTokens = preferredCategories
+      .flatMap((c) => norm(c).split(' '))
+      .filter((t) => t.length >= 4)
+      .map((t) => t.slice(0, 6));
+    const matching = wantedTokens.length
+      ? pool.filter((p) => {
+          const catN = norm(p.category?.pagetitle || '');
+          if (!catN) return false;
+          return wantedTokens.some((t) => catN.includes(t));
+        })
+      : [];
+    if (matching.length) {
+      pool = matching;
+    } else if (strictCategories) {
+      // Пользователь явно назвал категорию, но в /related её нет.
+      // НЕ уходим в общий каталог (там рандом) — отдаём общий /related-пул.
+      console.log('[Related] strict miss → fallback to full /related pool (not catalog search)');
+    }
   }
 
   return pool.slice(0, limit);
