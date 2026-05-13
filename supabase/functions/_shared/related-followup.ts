@@ -247,12 +247,26 @@ export async function fetchWithRelaxation(
 
   for (let i = 0; i < sequence.length; i++) {
     const params = sequence[i];
+    const t0 = Date.now();
     const { byAnchor, merged } = await fetchRelatedForAnchors(anchors, deps, params);
+    const ms = Date.now() - t0;
+    const filtersMeta = { minPrice: params.minPrice, maxPrice: params.maxPrice, options: params.options, category: params.category };
     console.log(
       `[Related] relax attempt=${i + 1}/${sequence.length} ` +
-      `filters=${JSON.stringify({ minPrice: params.minPrice, maxPrice: params.maxPrice, options: params.options, category: params.category })} ` +
+      `filters=${JSON.stringify(filtersMeta)} ` +
       `pool=${merged.length}`,
     );
+    logAddStep({
+      step: 'related-relax',
+      total: merged.length,
+      ms,
+      meta: {
+        attempt: i + 1,
+        of: sequence.length,
+        anchors: anchors.map((a) => a.id),
+        filters: filtersMeta,
+      },
+    });
     if (merged.length >= RELATED_MIN_POOL || i === sequence.length - 1) {
       return { byAnchor, merged, usedFilters: params, attempt: i + 1 };
     }
