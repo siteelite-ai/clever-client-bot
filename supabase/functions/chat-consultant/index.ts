@@ -4932,8 +4932,8 @@ ${titles.map(t => `- ${t}`).join('\n')}
 // обёрнуто в `buildRelatedDeps(apiToken, settings)` — см. helper ниже.
 function buildRelatedDeps(apiToken: string, settings: CachedSettings): RelatedFollowupDeps {
   return {
-    fetchRelatedRaw: (id) =>
-      fetchCatalogWithRetry(`https://220volt.kz/api/products/${id}/related`, apiToken, 'Related', 6000),
+    fetchRelatedRaw: (id, params) =>
+      fetchCatalogWithRetry(buildRelatedUrl(id, params), apiToken, 'Related', 6000),
     openrouterApiKey: settings.openrouter_api_key,
   };
 }
