@@ -5883,9 +5883,25 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             console.log(`[Chat req=${reqId}] Cross-sell narrowed to user-picked categories: ${JSON.stringify(matchedCats)}`);
           }
 
+          let anchorsFull: RelatedAnchor[] = [];
+          try {
+            const parsedAnchors = JSON.parse(crossSellSlot.anchors || '[]');
+            if (Array.isArray(parsedAnchors)) {
+              anchorsFull = parsedAnchors
+                .filter((a: any) => a && Number.isFinite(a.id))
+                .map((a: any) => ({
+                  id: a.id,
+                  price: typeof a.price === 'number' ? a.price : undefined,
+                  category: a.category || undefined,
+                  options: Array.isArray(a.options) ? a.options : undefined,
+                }));
+            }
+          } catch { /* malformed → degrade to id-only */ }
+
           const relatedProducts = appSettings.volt220_api_token
             ? await acceptRelatedOffer({
                 anchorIds,
+                anchors: anchorsFull,
                 deps: buildRelatedDeps(appSettings.volt220_api_token, appSettings),
                 preferredCategories: effectiveCategories,
                 strictCategories: matchedCats.length > 0,
