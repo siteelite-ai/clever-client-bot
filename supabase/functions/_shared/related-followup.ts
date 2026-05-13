@@ -218,22 +218,25 @@ export async function fetchWithRelaxation(
   };
 
   const sequence: RelatedQueryParams[] = [first];
-  let cur = { ...first };
+  let cur: RelatedQueryParams = { ...first };
   for (const key of allowKeys) {
     if (cur.options && key in cur.options) {
-      const next = { ...cur, options: { ...cur.options } };
-      delete (next.options as Record<string, string[]>)[key];
-      if (Object.keys(next.options as Record<string, string[]>).length === 0) {
-        next.options = undefined;
+      const nextOpts: Record<string, string[]> = { ...cur.options };
+      delete nextOpts[key];
+      const next: RelatedQueryParams = { ...cur };
+      if (Object.keys(nextOpts).length === 0) {
+        delete (next as { options?: unknown }).options;
+      } else {
+        next.options = nextOpts;
       }
       sequence.push(next);
       cur = next;
     }
   }
   if (cur.minPrice != null || cur.maxPrice != null) {
-    const next = { ...cur };
-    delete next.minPrice;
-    delete next.maxPrice;
+    const next: RelatedQueryParams = { ...cur };
+    delete (next as { minPrice?: unknown }).minPrice;
+    delete (next as { maxPrice?: unknown }).maxPrice;
     sequence.push(next);
     cur = next;
   }
