@@ -4273,7 +4273,7 @@ async function searchProductsByCandidate(
 ): Promise<Product[]> {
   try {
     // Validate params against injection
-    if (candidate.query && !isSafeApiParam(candidate.query)) {
+    if (candidate.query && !isSafeCatalogQueryParam(candidate.query)) {
       console.log(`[Security] Unsafe query param blocked: ${candidate.query.substring(0, 50)}`);
       return [];
     }
@@ -5621,6 +5621,14 @@ function sanitizeUserInput(input: string): string {
 function isSafeApiParam(value: string): boolean {
   // Allow only letters (any script), digits, spaces, hyphens, dots, commas
   return /^[\p{L}\p{N}\s\-.,()]+$/u.test(value) && value.length <= 200;
+}
+
+function isSafeCatalogQueryParam(value: string): boolean {
+  if (!value || value.length === 0 || value.length > 200) return false;
+  // Для `?query=` каталог принимает реальные товарные строки с `+`, `*`, `×`, `х`, `/`, `№`,
+  // кавычками и двоеточиями. Резать их общим whitelist'ом нельзя — иначе name-first
+  // short-circuit блокируется до запроса в API.
+  return !/[\x00-\x1F\x7F<>\\|&%?#=]/.test(value);
 }
 
 /**
