@@ -5623,6 +5623,21 @@ function isSafeApiParam(value: string): boolean {
   return /^[\p{L}\p{N}\s\-.,()]+$/u.test(value) && value.length <= 200;
 }
 
+/**
+ * Расширенный whitelist специально для exact-match по названию товара
+ * (`?pagetitle=` и `?longtitle=`). В реальных названиях встречаются `+`, `*`,
+ * `×`, `х`, `/`, `№`, кавычки, двоеточия и др. — их санитизировать нельзя,
+ * иначе exact match гарантированно не сработает. URL-encoding делает
+ * URLSearchParams. Защита от инъекций — чёрный список реально опасных
+ * символов в URL/HTTP-контексте + контрольные символы + лимит длины.
+ */
+function isSafeTitleParam(value: string): boolean {
+  if (!value || value.length === 0 || value.length > 200) return false;
+  // Запрещаем: control chars, перевод строк/таб, и символы, ломающие URL/HTTP:
+  // < > \ | & % ? # =
+  return !/[\x00-\x1F\x7F<>\\|&%?#=]/.test(value);
+}
+
 interface GeoResult {
   city: string | null;
   isVPN: boolean;
