@@ -6298,37 +6298,38 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               logAddStep({ step: 'pagetitle', meta: { error: String(err) } });
             }
 
-            // STEP 1B: longtitle (exact, mirror of pagetitle) — для случаев,
-            // когда классификатор отдал «расширенное» имя (с «переносная»/«IP44»),
-            // которое не совпадает с pagetitle, но матчится на longtitle.
-            if (!articleShortCircuit) {
-              try {
-                const t0 = Date.now();
-                let longtitleVariantUsed = titleSearchCandidates.exact[0] || candidate;
-                let ltResults: Product[] = [];
-                for (const exactCandidate of titleSearchCandidates.exact) {
-                  ltResults = await searchByLongtitle(exactCandidate, appSettings.volt220_api_token, 10);
-                  longtitleVariantUsed = exactCandidate;
-                  if (ltResults.length > 0) break;
-                }
-                const elapsed = Date.now() - t0;
-                if (ltResults.length > 0) {
-                  foundProducts = ltResults.slice(0, 10);
-                  articleShortCircuit = true;
-                  responseModel = 'anthropic/claude-sonnet-4.5';
-                  responseModelReason = 'longtitle-shortcircuit';
-                  console.log(`[Chat] NAME-FIRST step=longtitle SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${longtitleVariantUsed.substring(0, 80)}"`);
-                  logAddStep({ step: 'longtitle', total: ltResults.length, ms: elapsed, meta: { candidate: longtitleVariantUsed.substring(0, 120), variantsTried: titleSearchCandidates.exact.length } });
-                  logSetBranch('longtitle');
-                } else {
-                  console.log(`[Chat] NAME-FIRST step=longtitle: 0 results in ${elapsed}ms for "${candidate.substring(0, 80)}" (variants=${titleSearchCandidates.exact.length})`);
-                  logAddStep({ step: 'longtitle', total: 0, ms: elapsed, meta: { candidate: candidate.substring(0, 120), variantsTried: titleSearchCandidates.exact.length } });
-                }
-              } catch (err) {
-                console.error('[Chat] NAME-FIRST step=longtitle error (silent fallback):', err);
-                logAddStep({ step: 'longtitle', meta: { error: String(err) } });
-              }
-            }
+            // STEP 1B: longtitle — ВРЕМЕННО ОТКЛЮЧЕНО (2026-05-14).
+            // Catalog API silently игнорирует `?longtitle=` (verified curl: возвращает
+            // полный каталог 21,971 товар независимо от значения). Ветка отдавала
+            // случайные товары и нарушала price=0 ban. Включить, когда API заработает.
+            // if (!articleShortCircuit) {
+            //   try {
+            //     const t0 = Date.now();
+            //     let longtitleVariantUsed = titleSearchCandidates.exact[0] || candidate;
+            //     let ltResults: Product[] = [];
+            //     for (const exactCandidate of titleSearchCandidates.exact) {
+            //       ltResults = await searchByLongtitle(exactCandidate, appSettings.volt220_api_token, 10);
+            //       longtitleVariantUsed = exactCandidate;
+            //       if (ltResults.length > 0) break;
+            //     }
+            //     const elapsed = Date.now() - t0;
+            //     if (ltResults.length > 0) {
+            //       foundProducts = ltResults.slice(0, 10);
+            //       articleShortCircuit = true;
+            //       responseModel = 'anthropic/claude-sonnet-4.5';
+            //       responseModelReason = 'longtitle-shortcircuit';
+            //       console.log(`[Chat] NAME-FIRST step=longtitle SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${longtitleVariantUsed.substring(0, 80)}"`);
+            //       logAddStep({ step: 'longtitle', total: ltResults.length, ms: elapsed, meta: { candidate: longtitleVariantUsed.substring(0, 120), variantsTried: titleSearchCandidates.exact.length } });
+            //       logSetBranch('longtitle');
+            //     } else {
+            //       console.log(`[Chat] NAME-FIRST step=longtitle: 0 results in ${elapsed}ms for "${candidate.substring(0, 80)}" (variants=${titleSearchCandidates.exact.length})`);
+            //       logAddStep({ step: 'longtitle', total: 0, ms: elapsed, meta: { candidate: candidate.substring(0, 120), variantsTried: titleSearchCandidates.exact.length } });
+            //     }
+            //   } catch (err) {
+            //     console.error('[Chat] NAME-FIRST step=longtitle error (silent fallback):', err);
+            //     logAddStep({ step: 'longtitle', meta: { error: String(err) } });
+            //   }
+            // }
 
             // STEP 2: query (fuzzy) — только если pagetitle/longtitle пусты и нет critical_modifiers
             if (!articleShortCircuit && !hasCriticalModifiers) {
