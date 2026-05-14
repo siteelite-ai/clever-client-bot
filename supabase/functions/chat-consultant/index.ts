@@ -1436,11 +1436,39 @@ function detectSubIntentFallback(message: string): ClassificationResult['sub_int
   return undefined;
 }
 
+// Diagnostics последнего вызова classifyProductName — читается caller'ом для логирования.
+// Прозрачно показывает причину null/деградации: timeout / http_error / empty / parse_error / recovery_path.
+export interface ClassifyDiagnostics {
+  model: string | null;
+  http_status: number | null;
+  response_ms: number | null;
+  timeout: boolean;
+  empty_content: boolean;
+  raw_preview: string | null;       // первые 500 символов content (или error message)
+  parse_error: string | null;       // exception message при JSON.parse
+  recovery_used: 'json_repair' | 'regex_extract' | null;
+  fail_reason: 'no_api_key' | 'http_error' | 'timeout' | 'empty' | 'parse_failed' | 'exception' | null;
+  exception: string | null;
+}
+let __lastClassifyDiagnostics: ClassifyDiagnostics = {
+  model: null, http_status: null, response_ms: null, timeout: false,
+  empty_content: false, raw_preview: null, parse_error: null,
+  recovery_used: null, fail_reason: null, exception: null,
+};
+export function getLastClassifyDiagnostics(): ClassifyDiagnostics { return __lastClassifyDiagnostics; }
+
 async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>, settings?: CachedSettings | null): Promise<ClassificationResult | null> {
+  // Reset diagnostics для нового вызова
+  __lastClassifyDiagnostics = {
+    model: null, http_status: null, response_ms: null, timeout: false,
+    empty_content: false, raw_preview: null, parse_error: null,
+    recovery_used: null, fail_reason: null, exception: null,
+  };
   // STRICT OpenRouter: no cascade, no Google direct, no Lovable Gateway.
   // Cascade fallbacks were a primary source of non-determinism (different users got different providers).
   if (!settings?.openrouter_api_key) {
     console.log('[Classify] OpenRouter key missing — classification skipped (deterministic null)');
+    __lastClassifyDiagnostics.fail_reason = 'no_api_key';
     return null;
   }
 
@@ -1478,6 +1506,8 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
   const attempts: ProviderAttempt[] = [{ url, apiKeys, model, label: 'openrouter(strict)' }];
 
   for (const attempt of attempts) {
+    const attemptStart = Date.now();
+    __lastClassifyDiagnostics.model = attempt.model;
     try {
       const body = { ...classifyBody, model: attempt.model };
       const classifyPromise = callAIWithKeyFallback(attempt.url, attempt.apiKeys, body, 'Classify');
@@ -1486,22 +1516,35 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       );
 
       const response = await Promise.race([classifyPromise, timeoutPromise]);
+      __lastClassifyDiagnostics.response_ms = Date.now() - attemptStart;
+      __lastClassifyDiagnostics.http_status = response.status;
 
       if (!response.ok) {
+        const errBody = await response.text().catch(() => '');
+        __lastClassifyDiagnostics.raw_preview = errBody.slice(0, 500);
+        __lastClassifyDiagnostics.fail_reason = 'http_error';
         console.error(`[Classify] ${attempt.label} error: ${response.status}, trying next...`);
         continue;
       }
 
       const data = await response.json();
       const content = data.choices?.[0]?.message?.content;
-      if (!content) { console.log(`[Classify] ${attempt.label} empty response, trying next...`); continue; }
+      if (!content) {
+        __lastClassifyDiagnostics.empty_content = true;
+        __lastClassifyDiagnostics.raw_preview = JSON.stringify(data).slice(0, 500);
+        __lastClassifyDiagnostics.fail_reason = 'empty';
+        console.log(`[Classify] ${attempt.label} empty response, trying next...`);
+        continue;
+      }
 
       const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+      __lastClassifyDiagnostics.raw_preview = jsonStr.slice(0, 500);
       let parsed: Record<string, unknown>;
       try {
         parsed = JSON.parse(jsonStr);
       } catch (parseErr) {
         // Recovery: try to repair truncated JSON (closing braces/quotes)
+        __lastClassifyDiagnostics.parse_error = (parseErr as Error)?.message ?? String(parseErr);
         console.warn(`[Classify] ${attempt.label} JSON parse failed, attempting recovery...`);
         let repaired = jsonStr;
         // If last char inside an unterminated string, close it
@@ -1516,6 +1559,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
         repaired = repaired.replace(/,(\s*[}\]])/g, '$1');
         try {
           parsed = JSON.parse(repaired);
+          __lastClassifyDiagnostics.recovery_used = 'json_repair';
           console.log(`[Classify] ${attempt.label} JSON recovered successfully`);
         } catch {
           // Last resort: regex-extract critical fields
@@ -1524,6 +1568,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
           const productNameMatch = jsonStr.match(/"product_name"\s*:\s*"([^"]*)"/);
           const categoryMatch = jsonStr.match(/"product_category"\s*:\s*"([^"]*)"/);
           if (intentMatch || hasNameMatch) {
+            __lastClassifyDiagnostics.recovery_used = 'regex_extract';
             console.log(`[Classify] ${attempt.label} regex-extracted partial result`);
             parsed = {
               intent: intentMatch?.[1],
@@ -1533,6 +1578,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
               search_modifiers: [],
             };
           } else {
+            __lastClassifyDiagnostics.fail_reason = 'parse_failed';
             throw parseErr;
           }
         }
@@ -1581,9 +1627,13 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
         compute: computeField,
       };
     } catch (e) {
+      __lastClassifyDiagnostics.exception = (e as Error)?.message ?? String(e);
       if (e instanceof DOMException && e.name === 'AbortError') {
+        __lastClassifyDiagnostics.timeout = true;
+        __lastClassifyDiagnostics.fail_reason = 'timeout';
         console.log(`[Classify] ${attempt.label} timeout (12s), no fallback (strict OpenRouter)`);
       } else {
+        if (!__lastClassifyDiagnostics.fail_reason) __lastClassifyDiagnostics.fail_reason = 'exception';
         console.error(`[Classify] ${attempt.label} error:`, e, ', trying next...');
       }
     }
@@ -6131,7 +6181,25 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
         const classifyElapsed = Date.now() - classifyStart;
         console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → intent=${classification?.intent || 'none'}, sub_intent=${classification?.sub_intent || 'none'}, has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}", is_replacement=${classification?.is_replacement || false}`);
         logSetClassifier(classification ?? null);
-        logAddStep({ step: 'classify', ms: classifyElapsed, meta: { intent: classification?.intent, sub_intent: classification?.sub_intent, has_product_name: classification?.has_product_name, price_intent: classification?.price_intent, category: classification?.product_category, critical_modifiers: classification?.critical_modifiers } });
+        const __classifyDiag = getLastClassifyDiagnostics();
+        logAddStep({
+          step: 'classify',
+          ms: classifyElapsed,
+          meta: {
+            intent: classification?.intent,
+            sub_intent: classification?.sub_intent,
+            has_product_name: classification?.has_product_name,
+            price_intent: classification?.price_intent,
+            category: classification?.product_category,
+            product_name: classification?.product_name,
+            critical_modifiers: classification?.critical_modifiers,
+            search_modifiers: classification?.search_modifiers,
+            is_replacement: classification?.is_replacement,
+            // Diagnostics: всё про сам HTTP-вызов и парсинг — видно root-cause при null/деградации
+            classifier_null: classification === null,
+            diag: __classifyDiag,
+          },
+        });
 
         // === NAME-FIRST FAST-PATH (single block, two API steps) ===
         // Один short-circuit перед всем pipeline. Две ступени по эскалации точности:
