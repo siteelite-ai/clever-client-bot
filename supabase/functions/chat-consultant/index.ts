@@ -4273,7 +4273,7 @@ async function searchProductsByCandidate(
 ): Promise<Product[]> {
   try {
     // Validate params against injection
-    if (candidate.query && !isSafeApiParam(candidate.query)) {
+    if (candidate.query && !isSafeCatalogQueryParam(candidate.query)) {
       console.log(`[Security] Unsafe query param blocked: ${candidate.query.substring(0, 50)}`);
       return [];
     }
