@@ -1506,6 +1506,8 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
   const attempts: ProviderAttempt[] = [{ url, apiKeys, model, label: 'openrouter(strict)' }];
 
   for (const attempt of attempts) {
+    const attemptStart = Date.now();
+    __lastClassifyDiagnostics.model = attempt.model;
     try {
       const body = { ...classifyBody, model: attempt.model };
       const classifyPromise = callAIWithKeyFallback(attempt.url, attempt.apiKeys, body, 'Classify');
@@ -1514,22 +1516,35 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       );
 
       const response = await Promise.race([classifyPromise, timeoutPromise]);
+      __lastClassifyDiagnostics.response_ms = Date.now() - attemptStart;
+      __lastClassifyDiagnostics.http_status = response.status;
 
       if (!response.ok) {
+        const errBody = await response.text().catch(() => '');
+        __lastClassifyDiagnostics.raw_preview = errBody.slice(0, 500);
+        __lastClassifyDiagnostics.fail_reason = 'http_error';
         console.error(`[Classify] ${attempt.label} error: ${response.status}, trying next...`);
         continue;
       }
 
       const data = await response.json();
       const content = data.choices?.[0]?.message?.content;
-      if (!content) { console.log(`[Classify] ${attempt.label} empty response, trying next...`); continue; }
+      if (!content) {
+        __lastClassifyDiagnostics.empty_content = true;
+        __lastClassifyDiagnostics.raw_preview = JSON.stringify(data).slice(0, 500);
+        __lastClassifyDiagnostics.fail_reason = 'empty';
+        console.log(`[Classify] ${attempt.label} empty response, trying next...`);
+        continue;
+      }
 
       const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+      __lastClassifyDiagnostics.raw_preview = jsonStr.slice(0, 500);
       let parsed: Record<string, unknown>;
       try {
         parsed = JSON.parse(jsonStr);
       } catch (parseErr) {
         // Recovery: try to repair truncated JSON (closing braces/quotes)
+        __lastClassifyDiagnostics.parse_error = (parseErr as Error)?.message ?? String(parseErr);
         console.warn(`[Classify] ${attempt.label} JSON parse failed, attempting recovery...`);
         let repaired = jsonStr;
         // If last char inside an unterminated string, close it
