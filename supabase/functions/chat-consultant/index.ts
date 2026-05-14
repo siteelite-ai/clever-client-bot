@@ -1627,9 +1627,13 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
         compute: computeField,
       };
     } catch (e) {
+      __lastClassifyDiagnostics.exception = (e as Error)?.message ?? String(e);
       if (e instanceof DOMException && e.name === 'AbortError') {
+        __lastClassifyDiagnostics.timeout = true;
+        __lastClassifyDiagnostics.fail_reason = 'timeout';
         console.log(`[Classify] ${attempt.label} timeout (12s), no fallback (strict OpenRouter)`);
       } else {
+        if (!__lastClassifyDiagnostics.fail_reason) __lastClassifyDiagnostics.fail_reason = 'exception';
         console.error(`[Classify] ${attempt.label} error:`, e, ', trying next...');
       }
     }
