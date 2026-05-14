@@ -1107,7 +1107,7 @@ async function searchByPagetitle(pagetitle: string, apiToken: string, perPage = 
  * 0 результатов = нормальная ситуация — продолжаем pipeline.
  */
 async function searchByLongtitle(longtitle: string, apiToken: string, perPage = 10): Promise<Product[]> {
-  if (!longtitle || !isSafeApiParam(longtitle)) return [];
+  if (!longtitle || !isSafeTitleParam(longtitle)) return [];
   const params = new URLSearchParams();
   params.append('longtitle', longtitle);
   params.append('per_page', perPage.toString());
