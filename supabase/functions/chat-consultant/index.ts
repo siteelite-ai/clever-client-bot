@@ -5623,6 +5623,14 @@ function isSafeApiParam(value: string): boolean {
   return /^[\p{L}\p{N}\s\-.,()]+$/u.test(value) && value.length <= 200;
 }
 
+function isSafeCatalogQueryParam(value: string): boolean {
+  if (!value || value.length === 0 || value.length > 200) return false;
+  // Для `?query=` каталог принимает реальные товарные строки с `+`, `*`, `×`, `х`, `/`, `№`,
+  // кавычками и двоеточиями. Резать их общим whitelist'ом нельзя — иначе name-first
+  // short-circuit блокируется до запроса в API.
+  return !/[\x00-\x1F\x7F<>\\|&%?#=]/.test(value);
+}
+
 /**
  * Расширенный whitelist специально для exact-match по названию товара
  * (`?pagetitle=` и `?longtitle=`). В реальных названиях встречаются `+`, `*`,
