@@ -1559,6 +1559,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
         repaired = repaired.replace(/,(\s*[}\]])/g, '$1');
         try {
           parsed = JSON.parse(repaired);
+          __lastClassifyDiagnostics.recovery_used = 'json_repair';
           console.log(`[Classify] ${attempt.label} JSON recovered successfully`);
         } catch {
           // Last resort: regex-extract critical fields
@@ -1567,6 +1568,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
           const productNameMatch = jsonStr.match(/"product_name"\s*:\s*"([^"]*)"/);
           const categoryMatch = jsonStr.match(/"product_category"\s*:\s*"([^"]*)"/);
           if (intentMatch || hasNameMatch) {
+            __lastClassifyDiagnostics.recovery_used = 'regex_extract';
             console.log(`[Classify] ${attempt.label} regex-extracted partial result`);
             parsed = {
               intent: intentMatch?.[1],
@@ -1576,6 +1578,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
               search_modifiers: [],
             };
           } else {
+            __lastClassifyDiagnostics.fail_reason = 'parse_failed';
             throw parseErr;
           }
         }
