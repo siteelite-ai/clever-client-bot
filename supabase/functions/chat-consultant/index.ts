@@ -1100,6 +1100,41 @@ async function searchByPagetitle(pagetitle: string, apiToken: string, perPage = 
 }
 
 /**
+ * Exact lookup by Catalog `?longtitle=` (extended product title, символ-в-символ).
+ * Зеркало searchByPagetitle: используется как доп. ступень, если pagetitle вернул 0
+ * (классификатор мог отдать «расширенное» имя с атрибутами вроде «переносная»/«IP44»,
+ * которое матчится на longtitle, а не на pagetitle).
+ * 0 результатов = нормальная ситуация — продолжаем pipeline.
+ */
+async function searchByLongtitle(longtitle: string, apiToken: string, perPage = 10): Promise<Product[]> {
+  if (!longtitle || !isSafeApiParam(longtitle)) return [];
+  const params = new URLSearchParams();
+  params.append('longtitle', longtitle);
+  params.append('per_page', perPage.toString());
+
+  console.log(`[LongtitleSearch] Searching by longtitle: "${longtitle.substring(0, 80)}"`);
+
+  const response = await fetchCatalogWithRetry(
+    `${VOLT220_API_URL}?${params}`,
+    apiToken,
+    'LongtitleSearch',
+    8000
+  );
+  if (!response) return [];
+
+  try {
+    const rawData = await response.json();
+    const data = rawData.data || rawData;
+    const results = data.results || [];
+    console.log(`[LongtitleSearch] Found ${results.length} product(s) for longtitle "${longtitle.substring(0, 60)}"`);
+    return results;
+  } catch (error) {
+    console.error(`[LongtitleSearch] Parse error:`, error);
+    return [];
+  }
+}
+
+/**
  * Эвристика «запрос похож на конкретную модель/SKU» — цифры + единицы/размеры/IP/модули.
  * Используется как ДОПОЛНИТЕЛЬНЫЙ триггер pagetitle-first, если классификатор
  * пропустил has_product_name (типичный кейс: «Щит ... 75*124*57мм IP20»).
