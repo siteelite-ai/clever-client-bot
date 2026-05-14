@@ -1072,7 +1072,7 @@ async function fetchCatalogWithRetry(
  * 0 результатов = нормальная ситуация (название не совпало точно) — продолжаем pipeline.
  */
 async function searchByPagetitle(pagetitle: string, apiToken: string, perPage = 10): Promise<Product[]> {
-  if (!pagetitle || !isSafeApiParam(pagetitle)) return [];
+  if (!pagetitle || !isSafeTitleParam(pagetitle)) return [];
   const params = new URLSearchParams();
   params.append('pagetitle', pagetitle);
   params.append('per_page', perPage.toString());
