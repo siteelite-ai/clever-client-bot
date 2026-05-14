@@ -1436,11 +1436,39 @@ function detectSubIntentFallback(message: string): ClassificationResult['sub_int
   return undefined;
 }
 
+// Diagnostics последнего вызова classifyProductName — читается caller'ом для логирования.
+// Прозрачно показывает причину null/деградации: timeout / http_error / empty / parse_error / recovery_path.
+export interface ClassifyDiagnostics {
+  model: string | null;
+  http_status: number | null;
+  response_ms: number | null;
+  timeout: boolean;
+  empty_content: boolean;
+  raw_preview: string | null;       // первые 500 символов content (или error message)
+  parse_error: string | null;       // exception message при JSON.parse
+  recovery_used: 'json_repair' | 'regex_extract' | null;
+  fail_reason: 'no_api_key' | 'http_error' | 'timeout' | 'empty' | 'parse_failed' | 'exception' | null;
+  exception: string | null;
+}
+let __lastClassifyDiagnostics: ClassifyDiagnostics = {
+  model: null, http_status: null, response_ms: null, timeout: false,
+  empty_content: false, raw_preview: null, parse_error: null,
+  recovery_used: null, fail_reason: null, exception: null,
+};
+export function getLastClassifyDiagnostics(): ClassifyDiagnostics { return __lastClassifyDiagnostics; }
+
 async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>, settings?: CachedSettings | null): Promise<ClassificationResult | null> {
+  // Reset diagnostics для нового вызова
+  __lastClassifyDiagnostics = {
+    model: null, http_status: null, response_ms: null, timeout: false,
+    empty_content: false, raw_preview: null, parse_error: null,
+    recovery_used: null, fail_reason: null, exception: null,
+  };
   // STRICT OpenRouter: no cascade, no Google direct, no Lovable Gateway.
   // Cascade fallbacks were a primary source of non-determinism (different users got different providers).
   if (!settings?.openrouter_api_key) {
     console.log('[Classify] OpenRouter key missing — classification skipped (deterministic null)');
+    __lastClassifyDiagnostics.fail_reason = 'no_api_key';
     return null;
   }
 
