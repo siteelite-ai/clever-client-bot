@@ -1100,6 +1100,41 @@ async function searchByPagetitle(pagetitle: string, apiToken: string, perPage = 
 }
 
 /**
+ * Exact lookup by Catalog `?longtitle=` (extended product title, символ-в-символ).
+ * Зеркало searchByPagetitle: используется как доп. ступень, если pagetitle вернул 0
+ * (классификатор мог отдать «расширенное» имя с атрибутами вроде «переносная»/«IP44»,
+ * которое матчится на longtitle, а не на pagetitle).
+ * 0 результатов = нормальная ситуация — продолжаем pipeline.
+ */
+async function searchByLongtitle(longtitle: string, apiToken: string, perPage = 10): Promise<Product[]> {
+  if (!longtitle || !isSafeApiParam(longtitle)) return [];
+  const params = new URLSearchParams();
+  params.append('longtitle', longtitle);
+  params.append('per_page', perPage.toString());
+
+  console.log(`[LongtitleSearch] Searching by longtitle: "${longtitle.substring(0, 80)}"`);
+
+  const response = await fetchCatalogWithRetry(
+    `${VOLT220_API_URL}?${params}`,
+    apiToken,
+    'LongtitleSearch',
+    8000
+  );
+  if (!response) return [];
+
+  try {
+    const rawData = await response.json();
+    const data = rawData.data || rawData;
+    const results = data.results || [];
+    console.log(`[LongtitleSearch] Found ${results.length} product(s) for longtitle "${longtitle.substring(0, 60)}"`);
+    return results;
+  } catch (error) {
+    console.error(`[LongtitleSearch] Parse error:`, error);
+    return [];
+  }
+}
+
+/**
  * Эвристика «запрос похож на конкретную модель/SKU» — цифры + единицы/размеры/IP/модули.
  * Используется как ДОПОЛНИТЕЛЬНЫЙ триггер pagetitle-first, если классификатор
  * пропустил has_product_name (типичный кейс: «Щит ... 75*124*57мм IP20»).
@@ -6248,7 +6283,39 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               logAddStep({ step: 'pagetitle', meta: { error: String(err) } });
             }
 
-            // STEP 2: query (fuzzy) — только если pagetitle пуст и нет critical_modifiers
+            // STEP 1B: longtitle (exact, mirror of pagetitle) — для случаев,
+            // когда классификатор отдал «расширенное» имя (с «переносная»/«IP44»),
+            // которое не совпадает с pagetitle, но матчится на longtitle.
+            if (!articleShortCircuit) {
+              try {
+                const t0 = Date.now();
+                let longtitleVariantUsed = titleSearchCandidates.exact[0] || candidate;
+                let ltResults: Product[] = [];
+                for (const exactCandidate of titleSearchCandidates.exact) {
+                  ltResults = await searchByLongtitle(exactCandidate, appSettings.volt220_api_token, 10);
+                  longtitleVariantUsed = exactCandidate;
+                  if (ltResults.length > 0) break;
+                }
+                const elapsed = Date.now() - t0;
+                if (ltResults.length > 0) {
+                  foundProducts = ltResults.slice(0, 10);
+                  articleShortCircuit = true;
+                  responseModel = 'anthropic/claude-sonnet-4.5';
+                  responseModelReason = 'longtitle-shortcircuit';
+                  console.log(`[Chat] NAME-FIRST step=longtitle SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${longtitleVariantUsed.substring(0, 80)}"`);
+                  logAddStep({ step: 'longtitle', total: ltResults.length, ms: elapsed, meta: { candidate: longtitleVariantUsed.substring(0, 120), variantsTried: titleSearchCandidates.exact.length } });
+                  logSetBranch('longtitle');
+                } else {
+                  console.log(`[Chat] NAME-FIRST step=longtitle: 0 results in ${elapsed}ms for "${candidate.substring(0, 80)}" (variants=${titleSearchCandidates.exact.length})`);
+                  logAddStep({ step: 'longtitle', total: 0, ms: elapsed, meta: { candidate: candidate.substring(0, 120), variantsTried: titleSearchCandidates.exact.length } });
+                }
+              } catch (err) {
+                console.error('[Chat] NAME-FIRST step=longtitle error (silent fallback):', err);
+                logAddStep({ step: 'longtitle', meta: { error: String(err) } });
+              }
+            }
+
+            // STEP 2: query (fuzzy) — только если pagetitle/longtitle пусты и нет critical_modifiers
             if (!articleShortCircuit && !hasCriticalModifiers) {
               const titleCandidate = extractCandidateTitle(classification) || candidate;
               const queryCandidates = buildTitleSearchCandidates(titleCandidate).query;
