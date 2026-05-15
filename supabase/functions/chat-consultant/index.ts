@@ -2387,6 +2387,7 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
       anchor_ids: typeof s.anchor_ids === 'string' ? s.anchor_ids.substring(0, 500) : undefined,
       related_categories: typeof s.related_categories === 'string' ? s.related_categories.substring(0, 1000) : undefined,
       anchors: typeof s.anchors === 'string' ? s.anchors.substring(0, 4000) : undefined,
+      remaining_products: typeof s.remaining_products === 'string' ? s.remaining_products.substring(0, 12000) : undefined,
     };
     count++;
   }
