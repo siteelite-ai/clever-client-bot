@@ -4909,22 +4909,49 @@ export function buildDeterministicShortCircuitContent(params: {
   userMessage: string;
   effectivePriceIntent?: 'most_expensive' | 'cheapest';
   subIntent?: 'availability' | 'price' | 'location' | 'spec';
+  /**
+   * Реальное число собранных товаров до обрезки до DISPLAY_LIMIT.
+   * Если > products.length — появится строка «Подобрано ещё N — показать остальные?».
+   * Если не передано, берётся products.length (без хвоста).
+   */
+  totalCollected?: number;
 }): string {
   const { products, reason, userMessage, effectivePriceIntent, subIntent } = params;
   if (!products.length) return '';
 
   const intro = buildIntroBySubIntent({
-    productsCount: products.length,
+    productsCount: Math.min(products.length, 3),
     reason,
     subIntent,
     effectivePriceIntent,
   });
 
-  // Render ALL products that the caller passed in. Upstream already truncated to
-  // DISPLAY_LIMIT via pickDisplayWithTotal — re-slicing here loses 10+ cards in
-  // QFv2/matcher branches that legitimately collected more than 3.
-  const cards = products.map(formatProductCardDeterministic).join('\n\n');
-  return `${intro}\n\n${cards}`.trim();
+  // Системный лимит: всегда показываем top-3 карточки в детерминистичном рендере.
+  // Если на входе больше — добавляем хвост «подобрано ещё N — показать остальные?».
+  const SHOWN = 3;
+  const visible = products.slice(0, SHOWN);
+  const cards = visible.map(formatProductCardDeterministic).join('\n\n');
+
+  // total = реальное количество в подборке (totalCollected приоритетен, иначе products.length).
+  const total = Math.max(params.totalCollected ?? 0, products.length);
+  const remaining = Math.max(0, total - visible.length);
+  const tail = remaining > 0
+    ? `\n\nПодобрано ещё ${remaining} ${pluralizeRu(remaining, ['вариант', 'варианта', 'вариантов'])} — показать остальные?`
+    : '';
+
+  return `${intro}\n\n${cards}${tail}`.trim();
+}
+
+/**
+ * Русская плюрализация для "1 вариант / 2 варианта / 5 вариантов".
+ */
+function pluralizeRu(n: number, forms: [string, string, string]): string {
+  const abs = Math.abs(n) % 100;
+  const last = abs % 10;
+  if (abs > 10 && abs < 20) return forms[2];
+  if (last > 1 && last < 5) return forms[1];
+  if (last === 1) return forms[0];
+  return forms[2];
 }
 
 /**
@@ -9440,6 +9467,7 @@ ${productInstructions}`;
             userMessage,
             effectivePriceIntent,
             subIntent: classification?.sub_intent,
+            totalCollected,
           });
       console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${content.length}`);
       logSetProductsCount(foundProducts.length);
