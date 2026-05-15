@@ -6001,6 +6001,9 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     //   accept   → отдаём оставшиеся карточки БЕЗ хвоста + cross-sell-пузырь.
     //   decline  → короткий нативный ack + cross-sell-пузырь.
     //   new_request / unclear → slot чистим, идём в обычный pipeline.
+    // Флаг `tailWasOfferedLastTurn` фиксируем ДО любых мутаций slot'а — он
+    // подавит повторный хвост «Подобрано ещё N» на текущем ходу (one-shot).
+    const tailWasOfferedLastTurn = !!dialogSlots['remaining_offer'];
     const remainingOfferSlot = dialogSlots['remaining_offer'];
     if (remainingOfferSlot && remainingOfferSlot.remaining_products) {
       const decision = await classifyRelatedOfferResponse({
