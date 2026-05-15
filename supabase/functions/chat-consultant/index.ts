@@ -5990,6 +5990,150 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     console.log(`[Chat req=${reqId}] Processing: "${userMessage.substring(0, 100)}"`);
     console.log(`[Chat req=${reqId}] Conversation ID: ${conversationId}`);
 
+    // === REMAINING_OFFER RESOLVER (V1, 2026-05-15) ===
+    // На прошлом ходу мы показали 3 карточки + хвост «Подобрано ещё N — показать остальные?»
+    // и сохранили `remaining_offer` slot с remaining_products + anchors для cross-sell.
+    //   accept   → отдаём оставшиеся карточки БЕЗ хвоста + cross-sell-пузырь.
+    //   decline  → короткий нативный ack + cross-sell-пузырь.
+    //   new_request / unclear → slot чистим, идём в обычный pipeline.
+    const remainingOfferSlot = dialogSlots['remaining_offer'];
+    if (remainingOfferSlot && remainingOfferSlot.remaining_products) {
+      const decision = await classifyRelatedOfferResponse({
+        offerText: remainingOfferSlot.offer_text || 'Подобрано ещё — показать остальные?',
+        userMessage,
+        openrouterApiKey: appSettings.openrouter_api_key,
+      });
+      console.log(`[Chat req=${reqId}] Remaining offer decision: ${decision} (user="${userMessage.slice(0, 60)}")`);
+
+      if (decision === 'accept' || decision === 'decline') {
+        // Парсим сохранённое.
+        let remainingProducts: Product[] = [];
+        try {
+          const parsed = JSON.parse(remainingOfferSlot.remaining_products);
+          if (Array.isArray(parsed)) remainingProducts = parsed as Product[];
+        } catch { /* malformed → degrade */ }
+
+        let savedAnchors: RelatedAnchor[] = [];
+        try {
+          const parsed = JSON.parse(remainingOfferSlot.anchors || '[]');
+          if (Array.isArray(parsed)) {
+            savedAnchors = parsed
+              .filter((a: any) => a && Number.isFinite(a.id))
+              .map((a: any) => ({
+                id: a.id,
+                price: typeof a.price === 'number' ? a.price : undefined,
+                category: a.category || undefined,
+                options: Array.isArray(a.options) ? a.options : undefined,
+              }));
+          }
+        } catch { /* ignore */ }
+
+        // Cross-sell follow-up — общий для accept и decline.
+        const runCrossSell = async () => {
+          if (!savedAnchors.length || !appSettings.volt220_api_token) {
+            return { text: '', anchorIds: [] as number[], categories: [] as string[] };
+          }
+          try {
+            return await generateRelatedFollowup({
+              anchors: savedAnchors,
+              userMessage: rawUserMessage,
+              productCategory: classification?.product_category,
+              deps: buildRelatedDeps(appSettings.volt220_api_token, appSettings),
+            });
+          } catch (e) {
+            console.log(`[RemainingOffer] cross-sell error (silent skip): ${(e as Error).message}`);
+            return { text: '', anchorIds: [] as number[], categories: [] as string[] };
+          }
+        };
+
+        // Сохранение cross_sell_offer slot после показа cross-sell.
+        const saveCrossSellSlotFromRemaining = (followup: { text: string; anchorIds: number[]; categories: string[] }) => {
+          if (!followup.text || !followup.anchorIds.length) return;
+          const anchorSnapshot = savedAnchors
+            .filter((a) => followup.anchorIds.includes(a.id))
+            .slice(0, 5)
+            .map((a) => ({ id: a.id, price: a.price, options: a.options, category: a.category }));
+          dialogSlots['cross_sell_offer'] = {
+            intent: 'cross_sell_offer',
+            base_category: remainingOfferSlot.base_category || 'cross_sell',
+            status: 'pending',
+            created_turn: 0,
+            turns_since_touched: 0,
+            offer_text: followup.text.slice(0, 500),
+            anchor_ids: JSON.stringify(followup.anchorIds.slice(0, 5)),
+            related_categories: JSON.stringify(followup.categories.slice(0, 5)),
+            anchors: JSON.stringify(anchorSnapshot),
+          };
+        };
+
+        // Главный контент:
+        //   accept  → карточки оставшихся товаров без хвоста (intro + cards)
+        //   decline → короткий нативный ack
+        let mainContent: string;
+        if (decision === 'accept' && remainingProducts.length) {
+          const introOptions = ['Конечно, вот остальные:', 'Держите остальные:', 'Хорошо, вот что ещё есть:', 'Вот оставшиеся варианты:'];
+          const intro = introOptions[Math.floor(Math.random() * introOptions.length)];
+          const cards = remainingProducts.map((p) => formatProductCardDeterministic(p)).join('\n\n');
+          mainContent = `${intro}\n\n${cards}`.trim();
+        } else if (decision === 'accept') {
+          // accept, но remaining_products пуст (malformed) → degrade в decline-ack
+          mainContent = 'Хорошо.';
+        } else {
+          // decline
+          const ackOptions = [
+            'Понял, не настаиваю.',
+            'Хорошо, как скажете.',
+            'Ок, не буду перегружать.',
+            'Принято.',
+          ];
+          mainContent = ackOptions[Math.floor(Math.random() * ackOptions.length)];
+        }
+
+        // Удаляем remaining_offer одноразово.
+        delete dialogSlots['remaining_offer'];
+        slotsUpdated = true;
+
+        // Запускаем cross-sell.
+        const followup = await runCrossSell();
+        saveCrossSellSlotFromRemaining(followup);
+        if (followup.text) slotsUpdated = true;
+
+        console.log(`[Chat req=${reqId}] Remaining offer ${decision.toUpperCase()} → main(${mainContent.length} chars) + crossSell(${followup.text ? 'yes' : 'no'})`);
+        persistSlotsAsync(conversationId, dialogSlots);
+
+        if (!useStreaming) {
+          const responseBody: { content: string; slot_update?: DialogSlots; followup?: { text: string } } = { content: mainContent };
+          if (slotsUpdated) responseBody.slot_update = dialogSlots;
+          if (followup.text) responseBody.followup = { text: followup.text };
+          return new Response(JSON.stringify(responseBody), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: mainContent }, index: 0 }] })}\n\n`));
+            if (slotsUpdated) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`));
+            }
+            if (followup.text) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ followup: { text: followup.text } })}\n\n`));
+            }
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        });
+        return new Response(stream, {
+          headers: { ...corsHeaders, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
+        });
+      }
+
+      // new_request / unclear → удаляем слот, идём дальше как обычно.
+      delete dialogSlots['remaining_offer'];
+      slotsUpdated = true;
+    }
+
     // === CROSS_SELL_OFFER RESOLVER (V1, Step 3) ===
     // На прошлом ходу мы показали нативную фразу про сопутствующие товары и
     // сохранили `cross_sell_offer` slot с anchor_ids. Если клиент соглашается —
