@@ -24,6 +24,7 @@ import {
   type RelatedFollowupDeps,
   type RelatedAnchor,
 } from '../_shared/related-followup.ts';
+import { wrapWithHeartbeat } from '../_shared/sse-heartbeat.ts';
 
 // Per-request async context (carries reqId implicitly through all awaits inside `serve`).
 // Used by Degraded-mode tracker so deeply nested catalog helpers do NOT need to thread
@@ -5891,8 +5892,15 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
   const logCtx = createLogCtx(req, 'v1');
   return await runWithLogCtx(logCtx, async () => {
     try {
-      const res = await _handleChatConsultantInner(req);
-      return wrapResponseForLogging(res, logCtx);
+      // SSE heartbeat wrapper:
+      //  • fast inner (<200ms) → pass-through unchanged (errors, duplicates, 429)
+      //  • slow inner (typical pipeline 30–50s) → SSE `: keepalive` every 5s
+      //    sent immediately so proxies/NAT/browser don't drop the idle TCP
+      //    connection (root cause of «Failed to fetch» on long requests).
+      // The heavy pipeline runs unchanged inside _handleChatConsultantInner.
+      const innerPromise = _handleChatConsultantInner(req);
+      const wrapped = await wrapWithHeartbeat(innerPromise, { corsHeaders });
+      return wrapResponseForLogging(wrapped, logCtx);
     } catch (e) {
       logSetError(e);
       const { flushLog } = await import('../_shared/request-logger.ts');

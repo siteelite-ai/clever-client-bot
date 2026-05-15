@@ -1,113 +1,138 @@
-## Цель
+# План: устранить «Failed to fetch» на медленных QFv2-запросах
 
-Сделать выборку `/related` точнее, пробрасывая фильтры самого anchor-товара (цена, опции — vendor, color и т.п.). При пустом результате — мягко ослаблять фильтры. Это работает и в `generateRelatedFollowup` (фраза), и в `acceptRelatedOffer` (карточки).
+## Что подтверждено замером (15 мая, 13:10 UTC)
+
+Запрос **«а белые удлинители на 3 места?»** — `context canceled` на curl-клиенте (~60с лимит). Контрольный **«у тебя есть белые удлинители?»** — успех за ~28-32с.
+
+Посекундный таймлайн «на 3 места»:
+
+```text
+   шаг                                  время
+   ───────────────────────────────────  ──────
+   Classifier (Claude)                   3.07 с
+   QFv2 noun + pool + bootstrap         ~9    с
+   FilterLLM resolve #1 (3 mod / 79)   11.25 с    → resolved=2, unresolved=[места]
+   /categories/options (escalate)        0.78 с
+   FilterLLM resolve #2 (escalate)      9.20 с    → still unresolved=[места] ❌
+   Финальный stream Claude              ~12-15 с
+   ───────────────────────────────────  ──────
+   ИТОГО до закрытия стрима           ~48-55 с    → клиент рвёт соединение
+```
+
+## Корневая причина
+
+Classifier разделил «3 места» на два модификатора `["3", "места"]`. FilterLLM смапил `"3" → kolichestvo_rozetok=3` верно, но оставшееся `"места"` — unit-слово, у которого в принципе нет facet'а. Это запустило escalate-петлю на полной схеме (+11с впустую) — она тоже ничего не нашла, потому что искать нечего: понятие «3 места» уже целиком описано числовым фасетом.
+
+Если бы classifier сохранил quantity-phrase целиком — `["белый", "3 места"]` — FilterLLM бы смапил его одним проходом, `unresolved=[]`, escalate не запустился.
+
+## Стратегия
+
+Два независимых слоя, каждый закрывает свой класс проблем:
+
+- **Слой 1 (транспорт): SSE heartbeat.** Лечит «Failed to fetch» на ВСЕХ медленных ветках, не только на этой. Раскатываем первым.
+- **Слой 2 (логика): детерминированная склейка quantity-phrase в classifier-постпроцессе.** Лечит причину избыточного escalate, без эвристик и словарей.
 
 ## Изменения
 
-### 1. `supabase/functions/_shared/related-followup.ts`
+### Шаг 1. SSE heartbeat в `chat-consultant/index.ts`
 
-**a) Расширить `RelatedQueryParams`:**
+**Где:** место, где сейчас формируется `Response` со `ReadableStream`. Сейчас стрим создаётся ПОСЛЕ всей работы пайплайна (TTFB = total time). Меняем: `Response` отдаётся СРАЗУ, тяжёлая работа уезжает внутрь `start(controller)`, параллельно `setInterval` пишет SSE-комментарий каждые 5 секунд.
+
+**Что пишем:** `: keepalive\n\n` — валидный SSE-комментарий. Browser EventSource и наш widget игнорируют строки, начинающиеся с `:`.
+
+**Корректность:**
+- `clearInterval` в `try/finally` — не утечёт при exception
+- heartbeat прекращается перед первым реальным `data:` чанком (или при `controller.close()`)
+- формат `data: {...}` чанков не меняется → клиент править не нужно
+
+**Что НЕ задевает:**
+- логику пайплайна (классификатор, QFv2, FilterLLM, composer) — ноль изменений
+- метрики и логи — ноль изменений
+- `_shared/request-logger.ts` `wrapResponseForLogging` — добавим фильтр строк с префиксом `:` чтобы heartbeat не попадал в `finalResponseChunks`
+- `chat-consultant-v2` — НЕ трогаем (V1 и V2 — независимые edge functions по правилу из памяти)
+- frontend `ChatWidget.tsx` / `embed.js` — ноль изменений
+
+### Шаг 2. Детерминированная склейка quantity-phrase
+
+**Где:** новый shared-модуль `supabase/functions/_shared/group-quantity-phrases.ts`, вызывается из classifier-обёртки сразу после получения `search_modifiers` от LLM, ДО передачи в QFv2/FilterLLM.
+
+**Контракт:**
+
 ```ts
-export interface RelatedQueryParams {
-  page?: number;
-  perPage?: number;
-  category?: string;
-  minPrice?: number;
-  maxPrice?: number;
-  options?: Record<string, string[]>;   // NEW: {vendor: ['IEK'], color: ['белый']}
-}
+function groupQuantityPhrases(
+  originalQuery: string,
+  searchModifiers: string[],
+  criticalModifiers: string[],
+): { searchModifiers: string[]; criticalModifiers: string[] }
 ```
 
-**b) Расширить `RelatedAnchor`** (нужно для построения фильтров):
-```ts
-export interface RelatedAnchor {
-  id: number;
-  pagetitle?: string;
-  price?: number;                                       // NEW
-  category?: { id: number; pagetitle?: string };
-  options?: Array<{ key: string; value_ru?: string }>;  // NEW (как в Product.options)
-}
-```
+**Алгоритм (data-agnostic, без словарей):**
 
-**c) Хелпер `buildAnchorFilters(anchors, allowKeys)`** — собирает фильтры из anchor-ов:
-- `minPrice = floor(median(prices) * 0.5)`, `maxPrice = ceil(median * 1.5)` — если у всех anchor-ов есть цена
-- `options[k]` = пересечение значений по ключам из `allowKeys` (по умолчанию `['vendor','color']`), берётся только если у ВСЕХ anchor-ов значение совпадает (иначе ключ пропускается — иначе схлопнем выдачу)
-- ключи опций конфигурируются через config (см. ниже)
+1. Найти позиции каждого токена `searchModifiers` в `originalQuery` (case-insensitive, по word-boundary).
+2. Для каждой пары соседних модификаторов проверить:
+   - первый — чисто числовой токен (`/^\d+([.,]\d+)?$/`)
+   - между ними в исходной строке — только пробелы и/или предлог (`на|по`)
+   - второй — словарное слово (буквы), не число
+3. Если условие выполнено — склеить в `"<число> <слово>"` (один модификатор, без предлога).
+4. `criticalModifiers` обновить аналогично: если хотя бы один из склеенных был critical — результат critical.
 
-**d) `fetchRelatedRaw` URL-builder в index.ts** должен поддержать `options[k][]=v` (см. п.3).
+**Примеры (для тестов, НЕ для промпта):**
 
-**e) Прогрессивное ослабление в `fetchWithRelaxation(anchors, baseParams, allowKeys)`** — единая утилита, используется и в generate, и в accept:
+| Исходный запрос | До | После |
+|---|---|---|
+| `белые удлинители на 3 места` | `["белый","3","места"]` | `["белый","3 места"]` |
+| `шнур 5 метров` | `["5","метров"]` | `["5 метров"]` |
+| `розетка по 2 поста` | `["2","поста"]` | `["2 поста"]` |
+| `красивые початки` | `["красивые","початки"]` | `["красивые","початки"]` *(нет числа — без изменений)* |
+| `3` *(одиночное)* | `["3"]` | `["3"]` *(склеивать не с чем)* |
+| `кабель 3х2.5` | `["3х2.5"]` | `["3х2.5"]` *(уже один токен)* |
+| `куплю 5 удлинителей` *(category=удлинитель уже извлечена)* | `["5"]` | `["5"]` |
 
-```text
-attempt 1: per_page=100 + price band + options{vendor,color}
-attempt 2: drop options.vendor                 (если был)
-attempt 3: drop options.color                  (если был)
-attempt 4: drop minPrice/maxPrice              (если были)
-attempt 5: per_page=100, без фильтров          (текущее поведение)
-```
+**Где встроить вызов:** в `_shared/classifier-prompt.ts` (или в обёртку, которая вызывает classifier — уточню при имплементации) сразу после `validateIntent`, перед возвратом в `chat-consultant/index.ts`. Применяется И к V1, И к V2 — оба используют один shared-классификатор.
 
-После каждого attempt: если merged.length ≥ MIN_POOL (=10) → возвращаем. Между попытками логируем что отвалилось.
+**Тесты:** `_shared/group-quantity-phrases_test.ts` — табличные кейсы выше + edge: пустой запрос, только числа, предлог между числом и словом, регистр.
 
-**f) `generateRelatedFollowup`:**
-- использует `fetchWithRelaxation` вместо прямого `fetchRelatedForAnchors({perPage:50})`
-- порог `topCategories.length < 2` снижается до `< 1` (если осталась 1 валидная категория — фразу всё равно строим: «С этим часто берут **коробки монтажные**.»). Это решает текущий баг с пустым followup.
+**Метрика (опционально):** `classifier_quantity_phrase_glued_total` — счётчик, сколько раз склейка сработала.
 
-**g) `acceptRelatedOffer`:**
-- при `strictCategories && preferredCategories.length===1` сначала пробует `category=<cat>` + price + options (через `fetchWithRelaxation`)
-- общий путь — также через `fetchWithRelaxation`
+### Шаг 3. Конфиг
 
-### 2. `supabase/functions/chat-consultant/index.ts`
+В `_shared/config.ts`:
+- `SSE_HEARTBEAT_INTERVAL_MS = 5000`
 
-**a) `buildRelatedUrl`** — добавить сериализацию `options[<key>][]=<value>`:
-```ts
-if (params.options) {
-  for (const [k, vals] of Object.entries(params.options))
-    for (const v of vals) qs.append(`options[${k}][]`, v);
-}
-```
+(больше ничего — Шаг 2 без флагов, поведение детерминировано и безопасно)
 
-**b) `followupAnchors`** — пробрасывать `price` и `options` из `foundProducts`:
-```ts
-picked.push({
-  id: p.id,
-  pagetitle: p.pagetitle,
-  price: p.price,
-  category: ...,
-  options: p.options,  // как есть, shape совпадает
-});
-```
+### Шаг 4. Verification
 
-**c) `acceptRelatedOffer` callsite (5878)** — тоже передать расширенные anchors. Сейчас там `anchors: anchorIds.map(id => ({id}))` — нужно подтянуть price/options либо из cached anchors slot, либо одним батч-fetch'ем `/products?article=...` (по сохранённым ID). Простейшее: сохранять расширенные anchor snapshot в slot `cross_sell_offer.anchors` (рядом с `anchor_ids`).
+После каждого шага:
 
-### 3. Config
+**После Шага 1:**
+1. Curl-replay «а белые удлинители на 3 места?» — первый байт (`: keepalive`) в первые 5с, полный ответ через ~48с (без зависания).
+2. Контрольные запросы — без регресса.
+3. Открыть виджет, послать тот же запрос → нет «Failed to fetch».
 
-Добавить в `_shared/related-followup.ts` константы (или принимать через deps, чтобы не плодить новых файлов):
-```ts
-const RELATED_FILTER_OPTION_KEYS = ['vendor', 'color'];   // какие опции пробрасывать
-const RELATED_PRICE_BAND_PCT = 0.5;                       // ±50%
-const RELATED_MIN_POOL = 10;                              // когда останавливаемся
-const RELATED_PER_PAGE = 100;                             // широкий пул
-```
+**После Шага 2:**
+1. Тот же curl-replay — теперь `[Classifier] search_modifiers=["белый","3 места"]`, FilterLLM resolve один раз, escalate=skip, итого ~30с.
+2. Прогон golden-кейсов: «розетки IP44», «удлинитель катушка 50м», «кабель ВВГнг 3х2.5», «дтехгнездые» (jargon-fallback не должен сломаться).
+3. Юнит-тесты `group-quantity-phrases_test.ts` — все зелёные.
 
-### 4. Логирование
+## Риски
 
-В каждом attempt логируем: `[Related] attempt=<n> filters={price:[..], options:{..}} pool=<merged> kept=<afterPriceFilter>`. По логам можно будет настроить набор `RELATED_FILTER_OPTION_KEYS`.
+| Слой | Риск | Митигация |
+|---|---|---|
+| 1 | `: keepalive` попадёт в логгер | Фильтр по префиксу `:` в `wrapResponseForLogging` |
+| 1 | `setInterval` утечёт при exception | `try/finally` + `clearInterval` |
+| 1 | Кастомный SSE-парсер не понимает `:` | Не наш кейс — стандартный `EventSource` |
+| 2 | Чрезмерная склейка («3 жилы 2.5 мм2» → одно?) | Алгоритм склеивает только пары, не цепочки. `["3 жилы","2.5 мм2"]` — две независимые пары |
+| 2 | Сломается `signature` кэша FilterLLM | Изменение модификаторов даст другую signature — это ОК, новый кэш заполнится естественно |
+| 2 | Unit-слово не в родительном падеже («3 место») | Алгоритм морфологию не проверяет — склеит. Это не ломает FilterLLM (он сам поймёт) |
 
-## Тесты
+**Что НЕ задевается ни в каком слое:**
+- V2 пайплайн (`chat-consultant-v2`) — Шаг 2 в shared, но V2 уже не используется по active_pipeline; если включат — поведение улучшится симметрично
+- Memory rules: token-preservation **сохраняется** (мы НЕ удаляем токены, только склеиваем рядом стоящие); deterministic-product-render, jargon-fallback, slot-persistence, FilterLLM noun anchor, has_product_name bridge — все остаются
+- Frontend, DB schema, RLS, app_settings, secrets
 
-В `supabase/functions/_shared/related-followup_test.ts` (если есть, иначе создать):
-- buildAnchorFilters: median price ±50%, intersection options
-- fetchWithRelaxation: моки fetchRelatedRaw, проверяем порядок ослабления
-- generateRelatedFollowup: при 1 уцелевшей категории фраза формируется (порог `<2` → `<1`)
+## Порядок раскатки (по правилу «step-by-step + ждать подтверждения»)
 
-## Memory update
-
-После проверки: добавить в `mem://features/related-cross-sell` (новый файл) — описание фильтров и progressive relaxation. Обновить Core memory строкой про `/related` фильтры.
-
-## Шаги (с подтверждением)
-
-1. **Шаг 1.** Расширение типов + `buildAnchorFilters` + `fetchWithRelaxation` + интеграция в `generateRelatedFollowup`. Снижение порога категорий до `<1`. Тесты.
-2. **Шаг 2.** Поддержка `options[][]` в `buildRelatedUrl`. Проброс `price/options` в `followupAnchors`. Сохранение расширенных anchors в slot. Использование в `acceptRelatedOffer`.
-3. **Шаг 3.** Прогон через прод-кейс «розетка ВЕГА → коробки», верификация по логам, обновление памяти.
-
-После каждого шага останавливаюсь и жду подтверждения.
+1. **Шаг 1 (heartbeat).** Имплементация → curl-replay → твой OK.
+2. **Шаг 2 (склейка quantity-phrase).** Только после твоего подтверждения первого. Имплементация → юнит-тесты → curl-replay → golden-кейсы → твой OK.
+3. **Память.** После обоих шагов — обновить `mem://features/query-first-branch` или создать `mem://classifier/quantity-phrase-grouping` с правилом склейки.
