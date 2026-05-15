@@ -145,4 +145,6 @@ Deno.test('sse-heartbeat: CORS headers propagated on slow path', async () => {
     corsHeaders: { 'Access-Control-Allow-Origin': '*' },
   });
   assertEquals(out.headers.get('access-control-allow-origin'), '*');
+  // Drain body so the internal heartbeat interval is cleared (leak detector).
+  await readAll(out);
 });
