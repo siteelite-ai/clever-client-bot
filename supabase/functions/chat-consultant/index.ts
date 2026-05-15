@@ -2727,7 +2727,7 @@ async function handlePriceIntent(
     }
   }
 
-  console.log(`[PriceIntent] simplified: query="${activeQuery}" extra=${JSON.stringify(extraParams)} intent=${priceIntent} total=${probe.total} returned=${products.length} ${Date.now() - overallStart}ms`);
+  console.log(`[PriceIntent] simplified: ${category ? `category="${category}"` : `query="${activeQuery}"`} extra=${JSON.stringify(extraParams)} intent=${priceIntent} total=${probe.total} returned=${products.length} ${Date.now() - overallStart}ms`);
   return { action: 'answer', products: products.slice(0, PER_PAGE), total: probe.total };
 }
 
