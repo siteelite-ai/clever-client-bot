@@ -4945,7 +4945,7 @@ export function buildDeterministicShortCircuitContent(params: {
   // total = реальное количество в подборке (totalCollected приоритетен, иначе products.length).
   const total = Math.max(params.totalCollected ?? 0, products.length);
   const remaining = Math.max(0, total - visible.length);
-  const tail = remaining > 0
+  const tail = (remaining > 0 && !suppressTail)
     ? `\n\nПодобрано ещё ${remaining} ${pluralizeRu(remaining, ['вариант', 'варианта', 'вариантов'])} — показать остальные?`
     : '';
 
