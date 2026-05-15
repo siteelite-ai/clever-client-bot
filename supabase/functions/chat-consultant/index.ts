@@ -2649,13 +2649,21 @@ async function handlePriceIntent(
   priceIntent: 'most_expensive' | 'cheapest',
   apiToken: string,
   extraParams: Array<[string, string]> = [],
+  category?: string,
 ): Promise<PriceIntentResult> {
   const overallStart = Date.now();
   const PER_PAGE = 10;
 
   const buildParams = (q: string, page: number): URLSearchParams => {
     const p = new URLSearchParams();
-    p.append('query', q);
+    // Если есть подтверждённая категория каталога — используем ?category=<pagetitle>
+    // (строгий фильтр по категории), а не ?query=<noun> (full-text по описанию,
+    // который втягивает коробки/рамки/крышки из других категорий по совпадению слов).
+    if (category && category.trim().length > 0) {
+      p.append('category', category);
+    } else {
+      p.append('query', q);
+    }
     p.append('min_price', '1');
     p.append('per_page', String(PER_PAGE));
     p.append('page', String(page));
