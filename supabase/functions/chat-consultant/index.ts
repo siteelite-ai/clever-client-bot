@@ -4920,7 +4920,10 @@ export function buildDeterministicShortCircuitContent(params: {
     effectivePriceIntent,
   });
 
-  const cards = products.slice(0, 3).map(formatProductCardDeterministic).join('\n\n');
+  // Render ALL products that the caller passed in. Upstream already truncated to
+  // DISPLAY_LIMIT via pickDisplayWithTotal — re-slicing here loses 10+ cards in
+  // QFv2/matcher branches that legitimately collected more than 3.
+  const cards = products.map(formatProductCardDeterministic).join('\n\n');
   return `${intro}\n\n${cards}`.trim();
 }
 
