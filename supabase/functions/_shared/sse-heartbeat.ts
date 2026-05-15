@@ -77,7 +77,7 @@ export async function wrapWithHeartbeat(
   await new Promise<void>((r) => setTimeout(r, fastPathMs));
   if (settled) {
     if (settledError !== null) throw settledError;
-    return settledValue as Response;
+    return settledValue as unknown as Response;
   }
 
   // Slow path: wrap with heartbeat-injecting SSE stream.
