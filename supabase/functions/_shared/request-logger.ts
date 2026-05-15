@@ -152,10 +152,14 @@ export function wrapResponseForLogging(res: Response, ctx: RequestLogCtx): Respo
       transform(chunk, controller) {
         try {
           const text = decoder.decode(chunk, { stream: true });
-          // Для SSE: вытаскиваем «data: …» payload (если text-streaming)
-          // Иначе просто копим как есть, обрезая длину
-          if (ctx.finalResponseChunks.join('').length < 8000) {
-            ctx.finalResponseChunks.push(text);
+          // Skip SSE heartbeat comments (lines starting with `:`) — they are
+          // transport-level keepalives, not part of the model's response.
+          const cleaned = text
+            .split('\n')
+            .filter((line) => !line.startsWith(':'))
+            .join('\n');
+          if (cleaned && ctx.finalResponseChunks.join('').length < 8000) {
+            ctx.finalResponseChunks.push(cleaned);
           }
         } catch (_) { /* ignore */ }
         controller.enqueue(chunk);
