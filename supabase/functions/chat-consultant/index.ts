@@ -2326,6 +2326,10 @@ interface DialogSlot {
   // anchors — JSON snapshot RelatedAnchor[] (id+price+options+category) для acceptRelatedOffer
   // позволяет fetchWithRelaxation строить фильтры без повторного fetch'а каталога.
   anchors?: string;
+  // remaining_offer state (V1, 2026-05-15): после показа «Подобрано ещё N — показать остальные?»
+  // храним остальные товары + анкоры для cross-sell, чтобы на 2-м сообщении выдать без поиска.
+  // remaining_products — JSON массив ProductLite (id,pagetitle,url,price,vendor,warehouses[≤3],brand)
+  remaining_products?: string;
   // replacement metadata
   isReplacement?: boolean;
   originalName?: string;
