@@ -9495,10 +9495,17 @@ ${productInstructions}`;
       // первых foundProducts с уникальными категориями (до 3-х). При широкой
       // выдаче это даёт более устойчивую агрегацию /related (категории-победители
       // отражают пересечение, а не «арбитрарного первого товара»).
+      // Если показан хвост «Подобрано ещё N — показать остальные?», cross-sell/related-followup
+      // НЕ отправляем: иначе ответ пользователя «давай покажи» интерпретируется как согласие
+      // на cross-sell offer, а не как просьба показать остальные товары из подборки.
+      const shownDeterministicCount = Math.min(foundProducts.length, 3);
+      const totalForTail = Math.max(totalCollected ?? 0, foundProducts.length);
+      const hasRemainingTail = totalForTail > shownDeterministicCount;
       const allowFollowup =
         renderReason !== 'price-facet-clarify' &&
         !replacementMeta?.isReplacement &&
-        foundProducts.length > 0;
+        foundProducts.length > 0 &&
+        !hasRemainingTail;
 
       const followupAnchors: RelatedAnchor[] = (() => {
         if (!allowFollowup) return [];
