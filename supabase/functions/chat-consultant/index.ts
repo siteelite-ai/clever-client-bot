@@ -4920,8 +4920,13 @@ export function buildDeterministicShortCircuitContent(params: {
    * Если не передано, берётся products.length (без хвоста).
    */
   totalCollected?: number;
+  /**
+   * Подавить хвост «Подобрано ещё N — показать остальные?» (one-shot, 2026-05-15).
+   * Используется на 2-м ходу после того, как `remaining_offer` уже был предложен.
+   */
+  suppressTail?: boolean;
 }): string {
-  const { products, reason, userMessage, effectivePriceIntent, subIntent } = params;
+  const { products, reason, userMessage, effectivePriceIntent, subIntent, suppressTail } = params;
   if (!products.length) return '';
 
   const intro = buildIntroBySubIntent({
