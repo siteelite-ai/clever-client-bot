@@ -6257,6 +6257,38 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               headers: { ...corsHeaders, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
             });
           }
+        } else if (decision === 'decline') {
+          // Чистый отказ от cross-sell — короткий нативный ack, БЕЗ нового поиска.
+          delete dialogSlots['cross_sell_offer'];
+          slotsUpdated = true;
+          const ackOptions = [
+            'Понял, как скажете. Если что — обращайтесь.',
+            'Хорошо, не настаиваю. Будут вопросы — пишите.',
+            'Ок, не буду перегружать. Обращайтесь, если что.',
+            'Принято. Если ещё что-то понадобится — я тут.',
+          ];
+          const softContent = ackOptions[Math.floor(Math.random() * ackOptions.length)];
+          console.log(`[Chat req=${reqId}] Cross-sell DECLINE → soft ack`);
+          persistSlotsAsync(conversationId, dialogSlots);
+          if (!useStreaming) {
+            return new Response(JSON.stringify({ content: softContent, slot_update: dialogSlots }), {
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
+          }
+          {
+            const encoder = new TextEncoder();
+            const stream = new ReadableStream({
+              start(controller) {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: softContent }, index: 0 }] })}\n\n`));
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`));
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+                controller.close();
+              },
+            });
+            return new Response(stream, {
+              headers: { ...corsHeaders, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
+            });
+          }
         } else {
           // new_request / unclear → удаляем слот, идём дальше как обычно.
           delete dialogSlots['cross_sell_offer'];
