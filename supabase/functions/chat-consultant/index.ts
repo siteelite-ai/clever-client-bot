@@ -2649,13 +2649,21 @@ async function handlePriceIntent(
   priceIntent: 'most_expensive' | 'cheapest',
   apiToken: string,
   extraParams: Array<[string, string]> = [],
+  category?: string,
 ): Promise<PriceIntentResult> {
   const overallStart = Date.now();
   const PER_PAGE = 10;
 
   const buildParams = (q: string, page: number): URLSearchParams => {
     const p = new URLSearchParams();
-    p.append('query', q);
+    // Если есть подтверждённая категория каталога — используем ?category=<pagetitle>
+    // (строгий фильтр по категории), а не ?query=<noun> (full-text по описанию,
+    // который втягивает коробки/рамки/крышки из других категорий по совпадению слов).
+    if (category && category.trim().length > 0) {
+      p.append('category', category);
+    } else {
+      p.append('query', q);
+    }
     p.append('min_price', '1');
     p.append('per_page', String(PER_PAGE));
     p.append('page', String(page));
@@ -2719,7 +2727,7 @@ async function handlePriceIntent(
     }
   }
 
-  console.log(`[PriceIntent] simplified: query="${activeQuery}" extra=${JSON.stringify(extraParams)} intent=${priceIntent} total=${probe.total} returned=${products.length} ${Date.now() - overallStart}ms`);
+  console.log(`[PriceIntent] simplified: ${category ? `category="${category}"` : `query="${activeQuery}"`} extra=${JSON.stringify(extraParams)} intent=${priceIntent} total=${probe.total} returned=${products.length} ${Date.now() - overallStart}ms`);
   return { action: 'answer', products: products.slice(0, PER_PAGE), total: probe.total };
 }
 
@@ -6674,6 +6682,19 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                  });
                  console.log(`[Chat] Price intent with mods: noun="${priceQuery}" mods=${JSON.stringify(mods)}`);
                  let extraParams: Array<[string, string]> = [];
+                 // Eager: матчим classifier.product_category против реального каталога,
+                 // чтобы финальный price-запрос ушёл с ?category=<pagetitle> вместо
+                 // ?query=<noun> — иначе full-text матчит коробки/рамки/крышки, у которых
+                 // в описании встречается слово «розетки», и ломает price ASC.
+                 let priceCategoryFinal: string | undefined = undefined;
+                 try {
+                   const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
+                   if (catalog.length > 0) {
+                     const cls = (classification?.product_category || '').trim();
+                     const eager = choosePriceResolve2Category({ classifierCategory: cls, catalog });
+                     if (eager) priceCategoryFinal = eager;
+                   }
+                 } catch (_) { /* silent — упадём в legacy ?query= */ }
                  try {
                    const QF_POOL_SIZE = 100;
                    const tProbe = Date.now();
@@ -6692,7 +6713,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                        optsKeys: Array.isArray(p?.options) ? p.options.map((o: any) => o?.key).slice(0, 8) : [],
                      })),
                    });
-                   console.log(`[Chat] [PriceProbe] noun="${priceQuery}" pool=${probePool.length}`);
+                   console.log(`[Chat] [PriceProbe] noun="${priceQuery}" pool=${probePool.length} priceCategory=${priceCategoryFinal || 'none'}`);
                   if (probePool.length > 0 && appSettings.openrouter_api_key) {
                     const bootstrapSchema = new Map<string, { caption: string; values: Set<string> }>();
                     for (const p of probePool) {
@@ -6874,18 +6895,25 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                    console.log(`[Chat] [PriceProbe] error=${(probeErr as Error).message}`);
                  }
 
-                 const priceQueryFinal = extraParams.length > 0 ? priceQuery : `${priceQuery} ${mods.join(' ')}`.trim();
+                 // Если есть подтверждённая категория каталога — финальный запрос идёт
+                 // ?category=<pagetitle>+options[..]+min_price=1, БЕЗ полнотекстового ?query=.
+                 // mods клеим в query ТОЛЬКО как fallback, когда ни category, ни extraParams нет.
+                 const priceQueryFinal = (priceCategoryFinal || extraParams.length > 0)
+                   ? priceQuery
+                   : `${priceQuery} ${mods.join(' ')}`.trim();
                  ptrace('final', {
                    query: priceQueryFinal,
+                   category: priceCategoryFinal || null,
                    extraParams,
-                   modsInQuery: extraParams.length === 0,
+                   modsInQuery: !priceCategoryFinal && extraParams.length === 0,
                  });
-                 console.log(`[Chat] Price final: query="${priceQueryFinal}" extraParams=${extraParams.length}`);
+                 console.log(`[Chat] Price final: query="${priceQueryFinal}" category="${priceCategoryFinal || ''}" extraParams=${extraParams.length}`);
                 const priceResult = await handlePriceIntent(
                   [priceQueryFinal],
                   effectivePriceIntent,
                   appSettings.volt220_api_token!,
-                  extraParams.length > 0 ? extraParams : undefined
+                  extraParams.length > 0 ? extraParams : undefined,
+                  priceCategoryFinal,
                 );
                 if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
                   foundProducts = priceResult.products;
