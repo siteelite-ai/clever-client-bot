@@ -6682,6 +6682,19 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                  });
                  console.log(`[Chat] Price intent with mods: noun="${priceQuery}" mods=${JSON.stringify(mods)}`);
                  let extraParams: Array<[string, string]> = [];
+                 // Eager: матчим classifier.product_category против реального каталога,
+                 // чтобы финальный price-запрос ушёл с ?category=<pagetitle> вместо
+                 // ?query=<noun> — иначе full-text матчит коробки/рамки/крышки, у которых
+                 // в описании встречается слово «розетки», и ломает price ASC.
+                 let priceCategoryFinal: string | undefined = undefined;
+                 try {
+                   const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
+                   if (catalog.length > 0) {
+                     const cls = (classification?.product_category || '').trim();
+                     const eager = choosePriceResolve2Category({ classifierCategory: cls, catalog });
+                     if (eager) priceCategoryFinal = eager;
+                   }
+                 } catch (_) { /* silent — упадём в legacy ?query= */ }
                  try {
                    const QF_POOL_SIZE = 100;
                    const tProbe = Date.now();
@@ -6700,7 +6713,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                        optsKeys: Array.isArray(p?.options) ? p.options.map((o: any) => o?.key).slice(0, 8) : [],
                      })),
                    });
-                   console.log(`[Chat] [PriceProbe] noun="${priceQuery}" pool=${probePool.length}`);
+                   console.log(`[Chat] [PriceProbe] noun="${priceQuery}" pool=${probePool.length} priceCategory=${priceCategoryFinal || 'none'}`);
                   if (probePool.length > 0 && appSettings.openrouter_api_key) {
                     const bootstrapSchema = new Map<string, { caption: string; values: Set<string> }>();
                     for (const p of probePool) {
