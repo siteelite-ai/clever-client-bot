@@ -4920,8 +4920,13 @@ export function buildDeterministicShortCircuitContent(params: {
    * Если не передано, берётся products.length (без хвоста).
    */
   totalCollected?: number;
+  /**
+   * Подавить хвост «Подобрано ещё N — показать остальные?» (one-shot, 2026-05-15).
+   * Используется на 2-м ходу после того, как `remaining_offer` уже был предложен.
+   */
+  suppressTail?: boolean;
 }): string {
-  const { products, reason, userMessage, effectivePriceIntent, subIntent } = params;
+  const { products, reason, userMessage, effectivePriceIntent, subIntent, suppressTail } = params;
   if (!products.length) return '';
 
   const intro = buildIntroBySubIntent({
@@ -4940,7 +4945,7 @@ export function buildDeterministicShortCircuitContent(params: {
   // total = реальное количество в подборке (totalCollected приоритетен, иначе products.length).
   const total = Math.max(params.totalCollected ?? 0, products.length);
   const remaining = Math.max(0, total - visible.length);
-  const tail = remaining > 0
+  const tail = (remaining > 0 && !suppressTail)
     ? `\n\nПодобрано ещё ${remaining} ${pluralizeRu(remaining, ['вариант', 'варианта', 'вариантов'])} — показать остальные?`
     : '';
 
@@ -5928,6 +5933,9 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     const messageId = typeof body.messageId === 'string' ? body.messageId : '';
     if (messageId && !checkIdempotency(messageId)) {
       console.warn(`[Chat] Duplicate blocked: ${messageId}`);
+      // Skip log insert for duplicate calls (избегаем двойной записи user_query).
+      const dupCtx = (await import('../_shared/request-logger.ts')).getLogCtx?.();
+      if (dupCtx) dupCtx.flushed = true;
       return new Response(
         JSON.stringify({ content: '', duplicate: true }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -5996,6 +6004,9 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     //   accept   → отдаём оставшиеся карточки БЕЗ хвоста + cross-sell-пузырь.
     //   decline  → короткий нативный ack + cross-sell-пузырь.
     //   new_request / unclear → slot чистим, идём в обычный pipeline.
+    // Флаг `tailWasOfferedLastTurn` фиксируем ДО любых мутаций slot'а — он
+    // подавит повторный хвост «Подобрано ещё N» на текущем ходу (one-shot).
+    const tailWasOfferedLastTurn = !!dialogSlots['remaining_offer'];
     const remainingOfferSlot = dialogSlots['remaining_offer'];
     if (remainingOfferSlot && remainingOfferSlot.remaining_products) {
       const decision = await classifyRelatedOfferResponse({
@@ -9649,6 +9660,7 @@ ${productInstructions}`;
             effectivePriceIntent,
             subIntent: classification?.sub_intent,
             totalCollected,
+            suppressTail: tailWasOfferedLastTurn,
           });
       console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${content.length}`);
       logSetProductsCount(foundProducts.length);
@@ -9681,7 +9693,7 @@ ${productInstructions}`;
       // остальных товаров для accept-ветки и (б) анкорами для cross-sell после accept/decline.
       const shownDeterministicCount = Math.min(foundProducts.length, 3);
       const totalForTail = Math.max(totalCollected ?? 0, foundProducts.length);
-      const hasRemainingTail = totalForTail > shownDeterministicCount;
+      const hasRemainingTail = totalForTail > shownDeterministicCount && !tailWasOfferedLastTurn;
       const allowFollowup =
         renderReason !== 'price-facet-clarify' &&
         !replacementMeta?.isReplacement &&

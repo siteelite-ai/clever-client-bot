@@ -124,6 +124,10 @@ async function streamChat({
         query,
         messages: messages.map(m => ({ role: m.role, content: m.content })),
         dialogSlots: activeSlots,
+        // Idempotency: уникальный id для каждого отправляемого сообщения,
+        // чтобы серверный idempotency-guard блокировал случайные дубль-POST'ы
+        // (React StrictMode / повтор клика) и не плодил двойные log-rows.
+        messageId: (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`),
       }),
     });
 
