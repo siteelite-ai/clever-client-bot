@@ -9690,7 +9690,7 @@ ${productInstructions}`;
       // остальных товаров для accept-ветки и (б) анкорами для cross-sell после accept/decline.
       const shownDeterministicCount = Math.min(foundProducts.length, 3);
       const totalForTail = Math.max(totalCollected ?? 0, foundProducts.length);
-      const hasRemainingTail = totalForTail > shownDeterministicCount;
+      const hasRemainingTail = totalForTail > shownDeterministicCount && !tailWasOfferedLastTurn;
       const allowFollowup =
         renderReason !== 'price-facet-clarify' &&
         !replacementMeta?.isReplacement &&
