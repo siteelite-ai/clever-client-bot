@@ -9500,9 +9500,9 @@ ${productInstructions}`;
       // первых foundProducts с уникальными категориями (до 3-х). При широкой
       // выдаче это даёт более устойчивую агрегацию /related (категории-победители
       // отражают пересечение, а не «арбитрарного первого товара»).
-      // Если показан хвост «Подобрано ещё N — показать остальные?», cross-sell/related-followup
-      // НЕ отправляем: иначе ответ пользователя «давай покажи» интерпретируется как согласие
-      // на cross-sell offer, а не как просьба показать остальные товары из подборки.
+      // Если показан хвост «Подобрано ещё N — показать остальные?», cross-sell-followup
+      // ОТКЛАДЫВАЕМ до 2-го хода: сохраняем `remaining_offer` slot с (а) карточками
+      // остальных товаров для accept-ветки и (б) анкорами для cross-sell после accept/decline.
       const shownDeterministicCount = Math.min(foundProducts.length, 3);
       const totalForTail = Math.max(totalCollected ?? 0, foundProducts.length);
       const hasRemainingTail = totalForTail > shownDeterministicCount;
@@ -9512,8 +9512,10 @@ ${productInstructions}`;
         foundProducts.length > 0 &&
         !hasRemainingTail;
 
-      const followupAnchors: RelatedAnchor[] = (() => {
-        if (!allowFollowup) return [];
+      // Анкоры для cross-sell — собираем ВСЕГДА (когда есть продукты), чтобы переиспользовать
+      // и для текущего follow-up, и для save в remaining_offer (cross-sell на 2-м ходу).
+      const crossSellAnchors: RelatedAnchor[] = (() => {
+        if (!foundProducts.length) return [];
         const picked: RelatedAnchor[] = [];
         const seenCats = new Set<number>();
         for (const p of foundProducts) {
@@ -9540,6 +9542,40 @@ ${productInstructions}`;
         }
         return picked;
       })();
+      const followupAnchors: RelatedAnchor[] = allowFollowup ? crossSellAnchors : [];
+
+      // Сохраняем remaining_offer slot, если есть хвост — для accept/decline на 2-м ходу.
+      if (hasRemainingTail && foundProducts.length > shownDeterministicCount) {
+        const remainingLite = foundProducts.slice(shownDeterministicCount).map((p: any) => ({
+          id: p?.id,
+          pagetitle: p?.pagetitle,
+          url: p?.url,
+          price: typeof p?.price === 'number' ? p.price : 0,
+          vendor: typeof p?.vendor === 'string' ? p.vendor : undefined,
+          amount: typeof p?.amount === 'number' ? p.amount : undefined,
+          warehouses: Array.isArray(p?.warehouses)
+            ? p.warehouses.filter((w: any) => w && Number(w.amount) > 0).slice(0, 3).map((w: any) => ({ city: w.city, amount: Number(w.amount) }))
+            : undefined,
+          options: Array.isArray(p?.options)
+            ? p.options.filter((o: any) => o && o.key === 'brend__brend').map((o: any) => ({ key: o.key, value_ru: o.value_ru ?? o.value ?? '' }))
+            : undefined,
+        }));
+        const anchorSnapshotForLater = crossSellAnchors.slice(0, 5).map((a) => ({
+          id: a.id, price: a.price, options: a.options, category: a.category,
+        }));
+        const remainingCount = totalForTail - shownDeterministicCount;
+        dialogSlots['remaining_offer'] = {
+          intent: 'remaining_offer',
+          base_category: classification?.product_category || 'remaining',
+          status: 'pending',
+          created_turn: 0,
+          turns_since_touched: 0,
+          offer_text: `Подобрано ещё ${remainingCount} — показать остальные?`,
+          anchors: JSON.stringify(anchorSnapshotForLater),
+          remaining_products: JSON.stringify(remainingLite),
+        };
+        slotsUpdated = true;
+      }
 
       const runFollowup = async () => {
         if (!followupAnchors.length || !appSettings.volt220_api_token) {
@@ -9556,9 +9592,6 @@ ${productInstructions}`;
       // Сохранение cross_sell_offer slot — общее для streaming/non-streaming.
       const saveCrossSellSlot = (followup: { text: string; anchorIds: number[]; categories: string[] }) => {
         if (!followup.text || !followup.anchorIds.length) return;
-        // Snapshot расширенных anchor-ов для последующего acceptRelatedOffer:
-        // храним price + options, чтобы fetchWithRelaxation мог построить фильтры
-        // БЕЗ повторного fetch'а каталога. Ограничиваем до 5.
         const anchorSnapshot = followupAnchors
           .filter((a) => followup.anchorIds.includes(a.id))
           .slice(0, 5)
