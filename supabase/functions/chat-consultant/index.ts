@@ -5933,6 +5933,9 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     const messageId = typeof body.messageId === 'string' ? body.messageId : '';
     if (messageId && !checkIdempotency(messageId)) {
       console.warn(`[Chat] Duplicate blocked: ${messageId}`);
+      // Skip log insert for duplicate calls (избегаем двойной записи user_query).
+      const dupCtx = (await import('../_shared/request-logger.ts')).getLogCtx?.();
+      if (dupCtx) dupCtx.flushed = true;
       return new Response(
         JSON.stringify({ content: '', duplicate: true }),
         { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
