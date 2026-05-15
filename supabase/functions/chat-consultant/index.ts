@@ -6895,18 +6895,25 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                    console.log(`[Chat] [PriceProbe] error=${(probeErr as Error).message}`);
                  }
 
-                 const priceQueryFinal = extraParams.length > 0 ? priceQuery : `${priceQuery} ${mods.join(' ')}`.trim();
+                 // Если есть подтверждённая категория каталога — финальный запрос идёт
+                 // ?category=<pagetitle>+options[..]+min_price=1, БЕЗ полнотекстового ?query=.
+                 // mods клеим в query ТОЛЬКО как fallback, когда ни category, ни extraParams нет.
+                 const priceQueryFinal = (priceCategoryFinal || extraParams.length > 0)
+                   ? priceQuery
+                   : `${priceQuery} ${mods.join(' ')}`.trim();
                  ptrace('final', {
                    query: priceQueryFinal,
+                   category: priceCategoryFinal || null,
                    extraParams,
-                   modsInQuery: extraParams.length === 0,
+                   modsInQuery: !priceCategoryFinal && extraParams.length === 0,
                  });
-                 console.log(`[Chat] Price final: query="${priceQueryFinal}" extraParams=${extraParams.length}`);
+                 console.log(`[Chat] Price final: query="${priceQueryFinal}" category="${priceCategoryFinal || ''}" extraParams=${extraParams.length}`);
                 const priceResult = await handlePriceIntent(
                   [priceQueryFinal],
                   effectivePriceIntent,
                   appSettings.volt220_api_token!,
-                  extraParams.length > 0 ? extraParams : undefined
+                  extraParams.length > 0 ? extraParams : undefined,
+                  priceCategoryFinal,
                 );
                 if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
                   foundProducts = priceResult.products;
