@@ -506,23 +506,22 @@ export async function classifyRelatedOfferResponse(params: {
   offerText: string;
   userMessage: string;
   openrouterApiKey: string | null;
-}): Promise<'accept' | 'new_request' | 'unclear'> {
+}): Promise<'accept' | 'decline' | 'new_request' | 'unclear'> {
   const { offerText, userMessage, openrouterApiKey } = params;
   if (!openrouterApiKey || !offerText || !userMessage.trim()) return 'unclear';
 
   const prompt = `Ты классификатор намерений в чат-консультанте магазина электротоваров.
 
-В прошлом ходе бот предложил клиенту сопутствующие товары:
+В прошлом ходе бот задал клиенту вопрос/предложение:
 Фраза бота: "${offerText}"
 
 Сейчас клиент написал: "${userMessage}"
 
 Определи:
-- "accept": клиент СОГЛАШАЕТСЯ посмотреть предложенные сопутствующие товары. Короткие подтверждения БЕЗ новой темы и БЕЗ новых требований ("да", "давай", "ок", "покажи", "хочу", "интересно", "да, покажи рамки" — это всё accept).
-- "new_request": клиент пишет ЧТО-ТО ДРУГОЕ — новый запрос, вопрос про показанные ранее товары, изменение фильтров (другой цвет/цена/бренд), оффтоп. Любое сообщение с новой сущностью или модификатором, не относящимся к предложенным категориям.
-- "unclear": неоднозначно.
-
-Если клиент назвал ОДНУ из предложенных в фразе бота категорий — это accept.`;
+- "accept": клиент СОГЛАШАЕТСЯ с предложением. Короткие подтверждения БЕЗ новой темы и БЕЗ новых требований ("да", "давай", "ок", "покажи", "хочу", "интересно", "да, покажи рамки" — это всё accept). Если клиент назвал ОДНУ из категорий, упомянутых в фразе бота, — тоже accept.
+- "decline": клиент ОТКАЗЫВАЕТСЯ от предложения БЕЗ новой темы ("нет", "не надо", "не нужно", "спасибо, не надо", "пока не надо", "достаточно", "хватит", "всё", "не сейчас"). Это чистый отказ — никаких новых сущностей, никаких новых параметров.
+- "new_request": клиент пишет ЧТО-ТО ДРУГОЕ — новый запрос, вопрос про показанные ранее товары, изменение фильтров (другой цвет/цена/бренд), оффтоп. Любое сообщение с новой сущностью или модификатором. Даже если начинается с "нет" — но дальше идёт новый запрос («нет, покажи розовые») — это new_request.
+- "unclear": неоднозначно.`;
 
   try {
     const controller = new AbortController();
@@ -539,11 +538,11 @@ export async function classifyRelatedOfferResponse(params: {
           type: 'function',
           function: {
             name: 'classify_related_offer',
-            description: 'Classify user reply to a previous related-products offer.',
+            description: 'Classify user reply to a previous offer question.',
             parameters: {
               type: 'object',
               properties: {
-                decision: { type: 'string', enum: ['accept', 'new_request', 'unclear'] },
+                decision: { type: 'string', enum: ['accept', 'decline', 'new_request', 'unclear'] },
               },
               required: ['decision'],
               additionalProperties: false,
@@ -561,7 +560,7 @@ export async function classifyRelatedOfferResponse(params: {
     if (!args) return 'unclear';
     const parsed = JSON.parse(args);
     const decision = parsed.decision;
-    if (decision === 'accept' || decision === 'new_request') return decision;
+    if (decision === 'accept' || decision === 'decline' || decision === 'new_request') return decision;
     return 'unclear';
   } catch (e) {
     console.log(`[RelatedOfferClassifier] Error (silent skip): ${(e as Error).message}`);

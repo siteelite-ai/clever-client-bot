@@ -2292,7 +2292,7 @@ function detectPendingPriceIntent(
 // ============================================================
 
 interface DialogSlot {
-  intent: 'price_extreme' | 'product_search' | 'category_disambiguation' | 'price_facet_clarify' | 'pending_offer' | 'cross_sell_offer';
+  intent: 'price_extreme' | 'product_search' | 'category_disambiguation' | 'price_facet_clarify' | 'pending_offer' | 'cross_sell_offer' | 'remaining_offer';
   price_dir?: 'most_expensive' | 'cheapest';
   base_category: string;
   refinement?: string;
@@ -2326,6 +2326,10 @@ interface DialogSlot {
   // anchors — JSON snapshot RelatedAnchor[] (id+price+options+category) для acceptRelatedOffer
   // позволяет fetchWithRelaxation строить фильтры без повторного fetch'а каталога.
   anchors?: string;
+  // remaining_offer state (V1, 2026-05-15): после показа «Подобрано ещё N — показать остальные?»
+  // храним остальные товары + анкоры для cross-sell, чтобы на 2-м сообщении выдать без поиска.
+  // remaining_products — JSON массив ProductLite (id,pagetitle,url,price,vendor,warehouses[≤3],brand)
+  remaining_products?: string;
   // replacement metadata
   isReplacement?: boolean;
   originalName?: string;
@@ -2350,7 +2354,7 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
     const s = val as Record<string, unknown>;
     
     // Validate intent
-    if (s.intent !== 'price_extreme' && s.intent !== 'product_search' && s.intent !== 'category_disambiguation' && s.intent !== 'price_facet_clarify' && s.intent !== 'pending_offer' && s.intent !== 'cross_sell_offer') continue;
+    if (s.intent !== 'price_extreme' && s.intent !== 'product_search' && s.intent !== 'category_disambiguation' && s.intent !== 'price_facet_clarify' && s.intent !== 'pending_offer' && s.intent !== 'cross_sell_offer' && s.intent !== 'remaining_offer') continue;
     // Validate status
     if (s.status !== 'pending' && s.status !== 'done') continue;
     // Validate base_category
@@ -2383,6 +2387,7 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
       anchor_ids: typeof s.anchor_ids === 'string' ? s.anchor_ids.substring(0, 500) : undefined,
       related_categories: typeof s.related_categories === 'string' ? s.related_categories.substring(0, 1000) : undefined,
       anchors: typeof s.anchors === 'string' ? s.anchors.substring(0, 4000) : undefined,
+      remaining_products: typeof s.remaining_products === 'string' ? s.remaining_products.substring(0, 12000) : undefined,
     };
     count++;
   }
@@ -5985,6 +5990,150 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     console.log(`[Chat req=${reqId}] Processing: "${userMessage.substring(0, 100)}"`);
     console.log(`[Chat req=${reqId}] Conversation ID: ${conversationId}`);
 
+    // === REMAINING_OFFER RESOLVER (V1, 2026-05-15) ===
+    // На прошлом ходу мы показали 3 карточки + хвост «Подобрано ещё N — показать остальные?»
+    // и сохранили `remaining_offer` slot с remaining_products + anchors для cross-sell.
+    //   accept   → отдаём оставшиеся карточки БЕЗ хвоста + cross-sell-пузырь.
+    //   decline  → короткий нативный ack + cross-sell-пузырь.
+    //   new_request / unclear → slot чистим, идём в обычный pipeline.
+    const remainingOfferSlot = dialogSlots['remaining_offer'];
+    if (remainingOfferSlot && remainingOfferSlot.remaining_products) {
+      const decision = await classifyRelatedOfferResponse({
+        offerText: remainingOfferSlot.offer_text || 'Подобрано ещё — показать остальные?',
+        userMessage,
+        openrouterApiKey: appSettings.openrouter_api_key,
+      });
+      console.log(`[Chat req=${reqId}] Remaining offer decision: ${decision} (user="${userMessage.slice(0, 60)}")`);
+
+      if (decision === 'accept' || decision === 'decline') {
+        // Парсим сохранённое.
+        let remainingProducts: Product[] = [];
+        try {
+          const parsed = JSON.parse(remainingOfferSlot.remaining_products);
+          if (Array.isArray(parsed)) remainingProducts = parsed as Product[];
+        } catch { /* malformed → degrade */ }
+
+        let savedAnchors: RelatedAnchor[] = [];
+        try {
+          const parsed = JSON.parse(remainingOfferSlot.anchors || '[]');
+          if (Array.isArray(parsed)) {
+            savedAnchors = parsed
+              .filter((a: any) => a && Number.isFinite(a.id))
+              .map((a: any) => ({
+                id: a.id,
+                price: typeof a.price === 'number' ? a.price : undefined,
+                category: a.category || undefined,
+                options: Array.isArray(a.options) ? a.options : undefined,
+              }));
+          }
+        } catch { /* ignore */ }
+
+        // Cross-sell follow-up — общий для accept и decline.
+        const runCrossSell = async () => {
+          if (!savedAnchors.length || !appSettings.volt220_api_token) {
+            return { text: '', anchorIds: [] as number[], categories: [] as string[] };
+          }
+          try {
+            return await generateRelatedFollowup({
+              anchors: savedAnchors,
+              userMessage: rawUserMessage,
+              productCategory: classification?.product_category,
+              deps: buildRelatedDeps(appSettings.volt220_api_token, appSettings),
+            });
+          } catch (e) {
+            console.log(`[RemainingOffer] cross-sell error (silent skip): ${(e as Error).message}`);
+            return { text: '', anchorIds: [] as number[], categories: [] as string[] };
+          }
+        };
+
+        // Сохранение cross_sell_offer slot после показа cross-sell.
+        const saveCrossSellSlotFromRemaining = (followup: { text: string; anchorIds: number[]; categories: string[] }) => {
+          if (!followup.text || !followup.anchorIds.length) return;
+          const anchorSnapshot = savedAnchors
+            .filter((a) => followup.anchorIds.includes(a.id))
+            .slice(0, 5)
+            .map((a) => ({ id: a.id, price: a.price, options: a.options, category: a.category }));
+          dialogSlots['cross_sell_offer'] = {
+            intent: 'cross_sell_offer',
+            base_category: remainingOfferSlot.base_category || 'cross_sell',
+            status: 'pending',
+            created_turn: 0,
+            turns_since_touched: 0,
+            offer_text: followup.text.slice(0, 500),
+            anchor_ids: JSON.stringify(followup.anchorIds.slice(0, 5)),
+            related_categories: JSON.stringify(followup.categories.slice(0, 5)),
+            anchors: JSON.stringify(anchorSnapshot),
+          };
+        };
+
+        // Главный контент:
+        //   accept  → карточки оставшихся товаров без хвоста (intro + cards)
+        //   decline → короткий нативный ack
+        let mainContent: string;
+        if (decision === 'accept' && remainingProducts.length) {
+          const introOptions = ['Конечно, вот остальные:', 'Держите остальные:', 'Хорошо, вот что ещё есть:', 'Вот оставшиеся варианты:'];
+          const intro = introOptions[Math.floor(Math.random() * introOptions.length)];
+          const cards = remainingProducts.map((p) => formatProductCardDeterministic(p)).join('\n\n');
+          mainContent = `${intro}\n\n${cards}`.trim();
+        } else if (decision === 'accept') {
+          // accept, но remaining_products пуст (malformed) → degrade в decline-ack
+          mainContent = 'Хорошо.';
+        } else {
+          // decline
+          const ackOptions = [
+            'Понял, не настаиваю.',
+            'Хорошо, как скажете.',
+            'Ок, не буду перегружать.',
+            'Принято.',
+          ];
+          mainContent = ackOptions[Math.floor(Math.random() * ackOptions.length)];
+        }
+
+        // Удаляем remaining_offer одноразово.
+        delete dialogSlots['remaining_offer'];
+        slotsUpdated = true;
+
+        // Запускаем cross-sell.
+        const followup = await runCrossSell();
+        saveCrossSellSlotFromRemaining(followup);
+        if (followup.text) slotsUpdated = true;
+
+        console.log(`[Chat req=${reqId}] Remaining offer ${decision.toUpperCase()} → main(${mainContent.length} chars) + crossSell(${followup.text ? 'yes' : 'no'})`);
+        persistSlotsAsync(conversationId, dialogSlots);
+
+        if (!useStreaming) {
+          const responseBody: { content: string; slot_update?: DialogSlots; followup?: { text: string } } = { content: mainContent };
+          if (slotsUpdated) responseBody.slot_update = dialogSlots;
+          if (followup.text) responseBody.followup = { text: followup.text };
+          return new Response(JSON.stringify(responseBody), {
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+
+        const encoder = new TextEncoder();
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: mainContent }, index: 0 }] })}\n\n`));
+            if (slotsUpdated) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`));
+            }
+            if (followup.text) {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ followup: { text: followup.text } })}\n\n`));
+            }
+            controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+            controller.close();
+          },
+        });
+        return new Response(stream, {
+          headers: { ...corsHeaders, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
+        });
+      }
+
+      // new_request / unclear → удаляем слот, идём дальше как обычно.
+      delete dialogSlots['remaining_offer'];
+      slotsUpdated = true;
+    }
+
     // === CROSS_SELL_OFFER RESOLVER (V1, Step 3) ===
     // На прошлом ходу мы показали нативную фразу про сопутствующие товары и
     // сохранили `cross_sell_offer` slot с anchor_ids. Если клиент соглашается —
@@ -6088,6 +6237,38 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
           // (там рандомные товары не из /related). Отдаём короткое soft-сообщение.
           const softContent = 'К сожалению, по этому товару сопутствующих позиций сейчас нет. Подскажите, что именно ищете — подберу отдельно.';
           console.log(`[Chat req=${reqId}] Cross-sell ACCEPT but /related returned 0 → soft reply (no fallthrough)`);
+          persistSlotsAsync(conversationId, dialogSlots);
+          if (!useStreaming) {
+            return new Response(JSON.stringify({ content: softContent, slot_update: dialogSlots }), {
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
+          }
+          {
+            const encoder = new TextEncoder();
+            const stream = new ReadableStream({
+              start(controller) {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: softContent }, index: 0 }] })}\n\n`));
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`));
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+                controller.close();
+              },
+            });
+            return new Response(stream, {
+              headers: { ...corsHeaders, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
+            });
+          }
+        } else if (decision === 'decline') {
+          // Чистый отказ от cross-sell — короткий нативный ack, БЕЗ нового поиска.
+          delete dialogSlots['cross_sell_offer'];
+          slotsUpdated = true;
+          const ackOptions = [
+            'Понял, как скажете. Если что — обращайтесь.',
+            'Хорошо, не настаиваю. Будут вопросы — пишите.',
+            'Ок, не буду перегружать. Обращайтесь, если что.',
+            'Принято. Если ещё что-то понадобится — я тут.',
+          ];
+          const softContent = ackOptions[Math.floor(Math.random() * ackOptions.length)];
+          console.log(`[Chat req=${reqId}] Cross-sell DECLINE → soft ack`);
           persistSlotsAsync(conversationId, dialogSlots);
           if (!useStreaming) {
             return new Response(JSON.stringify({ content: softContent, slot_update: dialogSlots }), {
@@ -9495,9 +9676,9 @@ ${productInstructions}`;
       // первых foundProducts с уникальными категориями (до 3-х). При широкой
       // выдаче это даёт более устойчивую агрегацию /related (категории-победители
       // отражают пересечение, а не «арбитрарного первого товара»).
-      // Если показан хвост «Подобрано ещё N — показать остальные?», cross-sell/related-followup
-      // НЕ отправляем: иначе ответ пользователя «давай покажи» интерпретируется как согласие
-      // на cross-sell offer, а не как просьба показать остальные товары из подборки.
+      // Если показан хвост «Подобрано ещё N — показать остальные?», cross-sell-followup
+      // ОТКЛАДЫВАЕМ до 2-го хода: сохраняем `remaining_offer` slot с (а) карточками
+      // остальных товаров для accept-ветки и (б) анкорами для cross-sell после accept/decline.
       const shownDeterministicCount = Math.min(foundProducts.length, 3);
       const totalForTail = Math.max(totalCollected ?? 0, foundProducts.length);
       const hasRemainingTail = totalForTail > shownDeterministicCount;
@@ -9507,8 +9688,10 @@ ${productInstructions}`;
         foundProducts.length > 0 &&
         !hasRemainingTail;
 
-      const followupAnchors: RelatedAnchor[] = (() => {
-        if (!allowFollowup) return [];
+      // Анкоры для cross-sell — собираем ВСЕГДА (когда есть продукты), чтобы переиспользовать
+      // и для текущего follow-up, и для save в remaining_offer (cross-sell на 2-м ходу).
+      const crossSellAnchors: RelatedAnchor[] = (() => {
+        if (!foundProducts.length) return [];
         const picked: RelatedAnchor[] = [];
         const seenCats = new Set<number>();
         for (const p of foundProducts) {
@@ -9535,6 +9718,40 @@ ${productInstructions}`;
         }
         return picked;
       })();
+      const followupAnchors: RelatedAnchor[] = allowFollowup ? crossSellAnchors : [];
+
+      // Сохраняем remaining_offer slot, если есть хвост — для accept/decline на 2-м ходу.
+      if (hasRemainingTail && foundProducts.length > shownDeterministicCount) {
+        const remainingLite = foundProducts.slice(shownDeterministicCount).map((p: any) => ({
+          id: p?.id,
+          pagetitle: p?.pagetitle,
+          url: p?.url,
+          price: typeof p?.price === 'number' ? p.price : 0,
+          vendor: typeof p?.vendor === 'string' ? p.vendor : undefined,
+          amount: typeof p?.amount === 'number' ? p.amount : undefined,
+          warehouses: Array.isArray(p?.warehouses)
+            ? p.warehouses.filter((w: any) => w && Number(w.amount) > 0).slice(0, 3).map((w: any) => ({ city: w.city, amount: Number(w.amount) }))
+            : undefined,
+          options: Array.isArray(p?.options)
+            ? p.options.filter((o: any) => o && o.key === 'brend__brend').map((o: any) => ({ key: o.key, value_ru: o.value_ru ?? o.value ?? '' }))
+            : undefined,
+        }));
+        const anchorSnapshotForLater = crossSellAnchors.slice(0, 5).map((a) => ({
+          id: a.id, price: a.price, options: a.options, category: a.category,
+        }));
+        const remainingCount = totalForTail - shownDeterministicCount;
+        dialogSlots['remaining_offer'] = {
+          intent: 'remaining_offer',
+          base_category: classification?.product_category || 'remaining',
+          status: 'pending',
+          created_turn: 0,
+          turns_since_touched: 0,
+          offer_text: `Подобрано ещё ${remainingCount} — показать остальные?`,
+          anchors: JSON.stringify(anchorSnapshotForLater),
+          remaining_products: JSON.stringify(remainingLite),
+        };
+        slotsUpdated = true;
+      }
 
       const runFollowup = async () => {
         if (!followupAnchors.length || !appSettings.volt220_api_token) {
@@ -9551,9 +9768,6 @@ ${productInstructions}`;
       // Сохранение cross_sell_offer slot — общее для streaming/non-streaming.
       const saveCrossSellSlot = (followup: { text: string; anchorIds: number[]; categories: string[] }) => {
         if (!followup.text || !followup.anchorIds.length) return;
-        // Snapshot расширенных anchor-ов для последующего acceptRelatedOffer:
-        // храним price + options, чтобы fetchWithRelaxation мог построить фильтры
-        // БЕЗ повторного fetch'а каталога. Ограничиваем до 5.
         const anchorSnapshot = followupAnchors
           .filter((a) => followup.anchorIds.includes(a.id))
           .slice(0, 5)
