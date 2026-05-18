@@ -92,11 +92,13 @@ export function buildFacetsSummaryContent(input: FacetsSummaryInput): string {
   const rows: Row[] = [];
   for (const [key, info] of schema.entries()) {
     if (FACET_BLACKLIST_KEYS.has(key)) continue;
+    if (FACET_BLACKLIST_PREFIXES.some((p) => key.startsWith(p))) continue;
     const caption = (info?.caption || key).trim();
     if (!caption) continue;
+    if (FACET_BLACKLIST_CAPTION_RE.test(caption)) continue;
     const valuesArr = Array.from(info?.values ?? [])
       .map((v) => (typeof v === 'string' ? v.trim() : ''))
-      .filter((v) => v.length > 0);
+      .filter((v) => v.length > 0 && !isJunkValue(v));
     if (valuesArr.length === 0) continue;
     valuesArr.sort((a, b) => a.localeCompare(b, 'ru'));
     rows.push({
