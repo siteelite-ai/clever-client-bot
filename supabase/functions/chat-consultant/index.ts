@@ -25,6 +25,7 @@ import {
   type RelatedAnchor,
 } from '../_shared/related-followup.ts';
 import { wrapWithHeartbeat } from '../_shared/sse-heartbeat.ts';
+import { buildFacetsSummaryContent } from '../_shared/facets-summary.ts';
 
 // Per-request async context (carries reqId implicitly through all awaits inside `serve`).
 // Used by Degraded-mode tracker so deeply nested catalog helpers do NOT need to thread
@@ -6491,6 +6492,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     // Anchor товара, который мог быть зацеплен article-first/siteid ДО классификатора.
     // Используется как `originalProduct` в replacement-ветке, если is_replacement=true.
     let replacementOriginalHint: Product | null = null;
+    // Step 3 (Plan 2026-05-18). Ветка A — sub_intent='facets'. Если классификатор
+    // сказал «спрашивают про характеристики раздела», мы не показываем карточки,
+    // а возвращаем bullet-summary доступных facet'ов категории и просим выбрать.
+    let facetsResponse: { content: string; category: string } | null = null;
 
     // Классификатор запускаем ВСЕГДА — даже после article-first/siteid hit.
     // Иначе is_replacement остаётся неизвестным и article-hit рендерится сам по себе
@@ -6536,6 +6541,59 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
           responseModel = aiConfig.model;
           responseModelReason = 'default';
         }
+
+        // === FACETS-SUMMARY BRANCH (Step 3 / Plan 2026-05-18) ===
+        // sub_intent='facets' → пользователь спрашивает «по каким характеристикам
+        // можно выбирать в категории». НЕ показываем товары: резолвим категорию
+        // через тот же live /api/categories + LLM-matcher, тянем schema через
+        // getCategoryOptionsSchema (с blacklist) и собираем bullet-summary.
+        // Если категорию не определили или schema пустая — silent fallback на
+        // обычный pipeline (catalog-flow).
+        if (
+          classification?.sub_intent === 'facets' &&
+          !articleShortCircuit &&
+          !classification?.is_replacement
+        ) {
+          try {
+            const queryWord = (
+              classification?.product_category ||
+              classification?.product_name ||
+              userMessage ||
+              ''
+            ).trim();
+            if (queryWord) {
+              const fStart = Date.now();
+              const catalog = await getCategoriesCache(appSettings.volt220_api_token);
+              const matches = catalog.length
+                ? await matchCategoriesWithLLM(queryWord, catalog, appSettings)
+                : [];
+              const chosen = matches[0] || '';
+              if (chosen) {
+                const schemaRes = await getCategoryOptionsSchema(chosen, appSettings.volt220_api_token);
+                const content = buildFacetsSummaryContent({
+                  categoryName: chosen,
+                  schema: schemaRes.schema,
+                });
+                if (content) {
+                  facetsResponse = { content, category: chosen };
+                  console.log(`[Chat] FACETS-SUMMARY short-circuit: category="${chosen}", facets=${schemaRes.schema.size}, took=${Date.now() - fStart}ms`);
+                  logAddStep({
+                    step: 'facets-summary',
+                    ms: Date.now() - fStart,
+                    meta: { category: chosen, facets: schemaRes.schema.size, source: schemaRes.source },
+                  });
+                } else {
+                  console.log(`[Chat] FACETS-SUMMARY: empty schema for "${chosen}" → fallback to catalog-flow`);
+                }
+              } else {
+                console.log(`[Chat] FACETS-SUMMARY: no category match for "${queryWord}" → fallback`);
+              }
+            }
+          } catch (e) {
+            console.log(`[Chat] FACETS-SUMMARY error (silent fallback): ${(e as Error).message}`);
+          }
+        }
+
         // === NAME-FIRST FAST-PATH (single block, two API steps) ===
         // Один short-circuit перед всем pipeline. Две ступени по эскалации точности:
         //   STEP 1: ?pagetitle=<candidate>  — точное совпадение названия (символ-в-символ).
@@ -9653,6 +9711,49 @@ ${productInstructions}`;
     // clarification message + quick_replies. Skip the LLM entirely and return
     // it directly. Saves ~2-4s and avoids the LLM "guessing" a category.
     // ─────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // FACETS-SUMMARY SHORT-CIRCUIT (Step 3 / Plan 2026-05-18)
+    // sub_intent='facets' → возвращаем bullet-summary характеристик категории,
+    // без карточек, без LLM, без cross-sell. dialog_slots не обновляем — следующий
+    // ход пользователя пройдёт обычным catalog-flow с уже знакомой ему категорией.
+    // ─────────────────────────────────────────────────────────────────────────
+    if (facetsResponse) {
+      console.log(`[Chat] FACETS-SUMMARY SHORT-CIRCUIT response: category="${facetsResponse.category}", contentLen=${facetsResponse.content.length}`);
+      logSetProductsCount(0);
+      logAddStep({ step: 'final-facets-summary', meta: { category: facetsResponse.category } });
+      persistSlotsAsync(conversationId, dialogSlots);
+
+      if (!useStreaming) {
+        const body: { content: string; slot_update?: DialogSlots } = { content: facetsResponse.content };
+        if (slotsUpdated) body.slot_update = dialogSlots;
+        return new Response(
+          JSON.stringify(body),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          const delta = `data: ${JSON.stringify({ choices: [{ delta: { content: facetsResponse!.content }, index: 0 }] })}\n\n`;
+          controller.enqueue(encoder.encode(delta));
+          if (slotsUpdated) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`));
+          }
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
+    }
+
     if (disambiguationResponse) {
       console.log(`[Chat] Disambiguation SHORT-CIRCUIT: skipping LLM, returning ${disambiguationResponse.quick_replies.length} quick_replies`);
       const dr = disambiguationResponse;
