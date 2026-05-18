@@ -8471,6 +8471,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // Exclude original product
                   const originalId = originalProduct?.id;
                   if (originalId) rFinal = rFinal.filter(p => p.id !== originalId);
+                  // HARD price=0 filter (replacement-ветка не имеет soft-fallback на «под заказ»).
+                  const rBeforeZero = rFinal.length;
+                  rFinal = rFinal.filter(p => ((p as any)?.price ?? 0) > 0);
+                  if (rBeforeZero !== rFinal.length) {
+                    console.log(`[Chat] Replacement HARD zero-price filter: ${rBeforeZero} → ${rFinal.length}`);
+                  }
 
                   if (rFinal.length > 0) {
                     { const _r = pickDisplayWithTotal(rFinal); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_matcher'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_matcher zeroFiltered=${_r.filteredZeroPrice}`); }
