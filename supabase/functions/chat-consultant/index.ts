@@ -1426,11 +1426,15 @@ interface ClassificationResult {
   has_product_name: boolean;
   product_name?: string;
   price_intent?: 'most_expensive' | 'cheapest';
+  /** Верхняя граница цены в тенге (из фразы «не дороже N», «до N»). Независимо от price_intent. */
+  price_max?: number;
+  /** Нижняя граница цены в тенге (из фразы «не дешевле N», «от N»). */
+  price_min?: number;
   product_category?: string;
   is_replacement?: boolean;
   search_modifiers?: string[];
   critical_modifiers?: string[];
-  sub_intent?: 'availability' | 'price' | 'location' | 'spec';
+  sub_intent?: 'availability' | 'price' | 'location' | 'spec' | 'facets';
   /** Расчёт характеристики, заполняется только при sub_intent="spec". */
   compute?: ComputeRequest;
 }
