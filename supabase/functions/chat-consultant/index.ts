@@ -8714,7 +8714,13 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 if (originalId) {
                   replFiltered = replFiltered.filter(p => p.id !== originalId);
                 }
-                
+                // HARD price=0 filter.
+                const fBeforeZero = replFiltered.length;
+                replFiltered = replFiltered.filter(p => ((p as any)?.price ?? 0) > 0);
+                if (fBeforeZero !== replFiltered.length) {
+                  console.log(`[Chat] Replacement (legacy) HARD zero-price filter: ${fBeforeZero} → ${replFiltered.length}`);
+                }
+
                 if (replFiltered.length > 0) {
                   { const _r = pickDisplayWithTotal(replFiltered); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_filtered'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_filtered zeroFiltered=${_r.filteredZeroPrice}`); }
                   articleShortCircuit = true;
