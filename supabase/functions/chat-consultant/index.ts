@@ -8390,12 +8390,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 // Parallel: GET ?category=<exact pagetitle> + query-fallback safety net
                 const rCatPromises = replMatches.map(cat =>
                   searchProductsByCandidate(
-                    { query: null, brand: null, category: cat, min_price: null, max_price: null },
+                    { query: null, brand: null, category: cat, min_price: null, max_price: replMaxPrice },
                     appSettings.volt220_api_token!, 30
                   )
                 );
                 const rQueryFallback = searchProductsByCandidate(
-                  { query: replCategory, brand: null, category: null, min_price: null, max_price: null },
+                  { query: replCategory, brand: null, category: null, min_price: null, max_price: replMaxPrice },
                   appSettings.volt220_api_token!, 30
                 );
                 const rAllRes = await Promise.all([...rCatPromises, rQueryFallback]);
@@ -8428,7 +8428,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     );
                     const rFiltRes = await Promise.all(replMatches.map(cat =>
                       searchProductsByCandidate(
-                        { query: qText, brand: null, category: cat, min_price: null, max_price: null },
+                        { query: qText, brand: null, category: cat, min_price: null, max_price: replMaxPrice },
                         appSettings.volt220_api_token!, 30,
                         Object.keys(rResolved).length > 0 ? rResolved : undefined
                       )
@@ -8447,7 +8447,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                         delete partial[dropKey];
                         const relaxedRes = await Promise.all(replMatches.map(cat =>
                           searchProductsByCandidate(
-                            { query: null, brand: null, category: cat, min_price: null, max_price: null },
+                            { query: null, brand: null, category: cat, min_price: null, max_price: replMaxPrice },
                             appSettings.volt220_api_token!, 30, partial
                           )
                         ));
@@ -8504,11 +8504,11 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             
             // Two parallel searches: by category + by query
             const replCatPromise = searchProductsByCandidate(
-              { query: null, brand: null, category: pluralRepl, min_price: null, max_price: null },
+              { query: null, brand: null, category: pluralRepl, min_price: null, max_price: replMaxPrice },
               appSettings.volt220_api_token, 50
             );
             const replQueryPromise = searchProductsByCandidate(
-              { query: replCategory, brand: null, category: null, min_price: null, max_price: null },
+              { query: replCategory, brand: null, category: null, min_price: null, max_price: replMaxPrice },
               appSettings.volt220_api_token, 50
             );
             const [replCatRes, replQueryRes] = await Promise.all([replCatPromise, replQueryPromise]);
@@ -8572,7 +8572,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 if (bucketProducts.length < 10 && appSettings.volt220_api_token) {
                   console.log(`[Chat] Replacement bucket "${catName}" too small (${bucketProducts.length}), fetching more...`);
                   const extraProducts = await searchProductsByCandidate(
-                    { query: null, brand: null, category: catName, min_price: null, max_price: null },
+                    { query: null, brand: null, category: catName, min_price: null, max_price: replMaxPrice },
                     appSettings.volt220_api_token, 50
                   );
                   if (extraProducts.length > bucketProducts.length) {
@@ -8614,7 +8614,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 );
                 console.log(`[Chat] Replacement STAGE 3: API call category="${pluralRepl}", options=${JSON.stringify(replResolvedFilters)}, query="${replQueryText}"`);
                 let replFiltered = await searchProductsByCandidate(
-                  { query: replQueryText, brand: null, category: pluralRepl, min_price: null, max_price: null },
+                  { query: replQueryText, brand: null, category: pluralRepl, min_price: null, max_price: replMaxPrice },
                   appSettings.volt220_api_token, 50,
                   Object.keys(replResolvedFilters).length > 0 ? replResolvedFilters : undefined
                 );
@@ -8633,7 +8633,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     );
                     if (altProducts.length < 10 && appSettings.volt220_api_token) {
                       const extra = await searchProductsByCandidate(
-                        { query: null, brand: null, category: altCat, min_price: null, max_price: null },
+                        { query: null, brand: null, category: altCat, min_price: null, max_price: replMaxPrice },
                         appSettings.volt220_api_token, 50
                       );
                       if (extra.length > altProducts.length) altProducts = extra;
@@ -8649,7 +8649,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       { allowEmptyQuery: false, path: 'replacement-alt-bucket' },
                     );
                     const altServer = await searchProductsByCandidate(
-                      { query: altQ, brand: null, category: altCat, min_price: null, max_price: null },
+                      { query: altQ, brand: null, category: altCat, min_price: null, max_price: replMaxPrice },
                       appSettings.volt220_api_token, 50,
                       altResolved
                     );
@@ -8676,7 +8676,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       const partial = { ...replResolvedFilters };
                       delete partial[dropKey];
                       const partialResult = await searchProductsByCandidate(
-                        { query: null, brand: null, category: pluralRepl, min_price: null, max_price: null },
+                        { query: null, brand: null, category: pluralRepl, min_price: null, max_price: replMaxPrice },
                         appSettings.volt220_api_token, 50,
                         partial
                       );
@@ -8696,7 +8696,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   if (replFiltered.length === 0 && (droppableKeys.length > 0 || replFilterKeys.length === 0)) {
                     const modQuery = replModifiers.join(' ');
                     replFiltered = await searchProductsByCandidate(
-                      { query: modQuery, brand: null, category: pluralRepl, min_price: null, max_price: null },
+                      { query: modQuery, brand: null, category: pluralRepl, min_price: null, max_price: replMaxPrice },
                       appSettings.volt220_api_token, 50
                     );
                     console.log(`[Chat] Replacement text fallback: ${replFiltered.length} products`);
