@@ -8307,14 +8307,40 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
          try {
           console.log(`[Chat] Replacement intent detected!`);
           const replacementStart = Date.now();
-          
+
+          // Price-cap из классификатора (фраза «не дороже 1000 тг» в запросе на замену).
+          // price_intent.cap отдельно не существует — поле `price_max` пришло прямо из classifier.
+          const replMaxPrice: number | null = (typeof classification?.price_max === 'number' && classification.price_max > 0)
+            ? Math.floor(classification.price_max)
+            : null;
+          if (replMaxPrice !== null) {
+            console.log(`[Chat] Replacement: price_max cap = ${replMaxPrice} ₸`);
+          }
+
           let originalProduct: Product | null = null;
-          
+
           if (articleShortCircuit && foundProducts.length > 0) {
             originalProduct = foundProducts[0];
-            console.log(`[Chat] Replacement: original found "${originalProduct.pagetitle}"`);
+            console.log(`[Chat] Replacement: original found in pipeline "${originalProduct.pagetitle}"`);
+          } else if (replacementOriginalHint) {
+            originalProduct = replacementOriginalHint;
+            console.log(`[Chat] Replacement: using article-first hint "${originalProduct.pagetitle}" as anchor`);
           }
           
+          // Last-resort: classifier дал product_name, но ни article-first, ни hint не сработали.
+          // Делаем один точечный searchByPagetitle, чтобы у ветки был originalProduct.
+          if (!originalProduct && classification?.product_name && appSettings.volt220_api_token) {
+            try {
+              const hydrate = await searchByPagetitle(classification.product_name, appSettings.volt220_api_token, 1);
+              if (hydrate.length > 0) {
+                originalProduct = hydrate[0];
+                console.log(`[Chat] Replacement: anchor hydrated by pagetitle="${classification.product_name}" → "${originalProduct.pagetitle}"`);
+              }
+            } catch (hErr) {
+              console.log(`[Chat] Replacement: anchor hydrate failed:`, (hErr as Error).message);
+            }
+          }
+
           // Determine category and modifiers for category-first search
           let replCategory = '';
           let replModifiers: string[] = [];
