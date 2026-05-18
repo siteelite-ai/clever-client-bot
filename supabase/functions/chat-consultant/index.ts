@@ -6562,7 +6562,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             // так LLM-matcher интерпретирует их как уточнение типа.
             const baseCat = (classification?.product_category || classification?.product_name || '').trim();
             const critMods = Array.isArray(classification?.critical_modifiers)
-              ? classification!.critical_modifiers.filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
+              ? (classification!.critical_modifiers as unknown[]).filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
               : [];
             const queryWord = (baseCat
               ? [...critMods, baseCat].join(' ').trim()
