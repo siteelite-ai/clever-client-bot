@@ -8760,6 +8760,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 let catProducts = replRawProducts;
                 const originalId = originalProduct?.id;
                 if (originalId) catProducts = catProducts.filter(p => p.id !== originalId);
+                catProducts = catProducts.filter(p => ((p as any)?.price ?? 0) > 0);
                 { const _r = pickDisplayWithTotal(catProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_cat_no_filters'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_cat_no_filters zeroFiltered=${_r.filteredZeroPrice}`); }
                 articleShortCircuit = true;
                 replacementMeta = { isReplacement: true, original: originalProduct, originalName: classification.product_name, noResults: foundProducts.length === 0 };
@@ -8770,6 +8771,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               let catProducts = replRawProducts;
               const originalId = originalProduct?.id;
               if (originalId) catProducts = catProducts.filter(p => p.id !== originalId);
+              catProducts = catProducts.filter(p => ((p as any)?.price ?? 0) > 0);
               { const _r = pickDisplayWithTotal(catProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_cat_no_modifiers'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_cat_no_modifiers zeroFiltered=${_r.filteredZeroPrice}`); }
               articleShortCircuit = true;
               replacementMeta = { isReplacement: true, original: originalProduct, originalName: classification.product_name, noResults: foundProducts.length === 0 };
