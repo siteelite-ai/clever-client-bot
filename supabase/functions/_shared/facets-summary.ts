@@ -48,7 +48,7 @@ const FACET_BLACKLIST_PREFIXES: readonly string[] = [
 ];
 
 /** Если caption матчит — facet точно мусорный (защита от смены ключа на бэке). */
-const FACET_BLACKLIST_CAPTION_RE = /(описаниефайла|опис\w*\s*файл|новинк|популярн|единиц\w*\s*измерен|гарантийн)/i;
+const FACET_BLACKLIST_CAPTION_RE = /(описаниефайла|опис[а-яё]*\s*файл|новинк|популярн|единиц[а-яё]*\s*измерен|гарантийн)/i;
 
 /** Значение похоже на закодированную пару «RU#KZ» / список файлов — отбрасываем. */
 function isJunkValue(v: string): boolean {
