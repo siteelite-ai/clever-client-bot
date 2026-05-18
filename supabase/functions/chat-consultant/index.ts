@@ -6523,6 +6523,19 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
           },
         });
 
+        // === REPLACEMENT GUARD (Step 2 / 2026-05-18) ===
+        // Если article-first/siteid уже зацепили товар, но классификатор сказал
+        // is_replacement=true — НЕ рендерим этот товар (тем более при price=0,
+        // нарушающем HARD BAN). Сохраняем его как anchor для replacement-ветки
+        // и сбрасываем short-circuit, чтобы pipeline дошёл до блока 8287.
+        if (classification?.is_replacement && articleShortCircuit && foundProducts.length > 0) {
+          replacementOriginalHint = foundProducts[0];
+          console.log(`[Chat] Replacement GUARD: detaching article-first hit "${replacementOriginalHint.pagetitle}" as anchor, resetting articleShortCircuit (reason=${responseModelReason})`);
+          foundProducts = [];
+          articleShortCircuit = false;
+          responseModel = aiConfig.model;
+          responseModelReason = 'default';
+        }
         // === NAME-FIRST FAST-PATH (single block, two API steps) ===
         // Один short-circuit перед всем pipeline. Две ступени по эскалации точности:
         //   STEP 1: ?pagetitle=<candidate>  — точное совпадение названия (символ-в-символ).
