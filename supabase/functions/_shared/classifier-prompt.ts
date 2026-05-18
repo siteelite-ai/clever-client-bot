@@ -106,7 +106,12 @@ export const DEFAULT_CLASSIFIER_PROMPT = `Ты классификатор соо
 - "availability" — спрашивает, есть ли товар, в наличии ли, остался ли, можно ли купить.
 - "price" — спрашивает «сколько стоит», «какая цена», «почём» (но БЕЗ экстремума — экстремум уходит в price_intent).
 - "location" — спрашивает, где забрать, в каком магазине/городе, есть ли самовывоз.
-- "spec" — спрашивает про конкретную характеристику (мощность, длина, ток, материал, вес, IP, габариты, объём и т.п.).
+- "spec" — спрашивает про конкретную характеристику ОДНОГО товара (мощность, длина, ток, материал, вес, IP, габариты, объём и т.п.).
+- "facets" — спрашивает про характеристики/опции РАЗДЕЛА (семейства товаров) без интереса к конкретной модели:
+    «какие бывают X?», «какие есть IP у уличных X?», «по каким характеристикам можно выбрать X?»,
+    «расскажи, чем отличаются X», «какие параметры важны для X», «найди X по таким-то характеристикам»
+    (когда пользователь ХОЧЕТ список фильтров раздела, а не сразу карточки).
+    Обязательное условие: product_category заполнен, has_product_name=FALSE.
 - null — нет явного под-интента, общий запрос «найди / покажи / есть что-то такое».
 Под-интент НЕ исключает intent=catalog: «есть в наличии Х?» = catalog + sub_intent=availability.
 
@@ -117,6 +122,16 @@ export const DEFAULT_CLASSIFIER_PROMPT = `Ты классификатор соо
 - multiplier = целое число, если явно указано количество («5 штук», «×3», «для 10 светильников»). Если количество не названо — null.
 - Если sub_intent ≠ "spec" — compute = null. Не выдумывай.
 
+ЦЕНОВАЯ ГРАНИЦА (price_max / price_min) — числа в тенге, или null
+- Если в запросе явно названа верхняя граница цены («не дороже 1000», «до 5000 тг», «в пределах 2000»,
+  «бюджет 3000», «максимум 1500») — заполни price_max целым числом тенге.
+- Если явно названа нижняя граница («не дешевле 500», «от 2000 тг», «минимум 1000») — заполни price_min.
+- Заполняй НЕЗАВИСИМО от intent и is_replacement: при is_replacement=TRUE и фразе «не дороже 1000 тг»
+  price_max=1000 ОБЯЗАТЕЛЕН.
+- НЕ путать с price_intent (экстремум: «самый дешёвый/дорогой»). Это разные поля; могут быть оба null,
+  либо один из них, либо оба заполнены одновременно.
+- Если граница не названа явным числом — null.
+
 ВЫВОД
 Ответь СТРОГО одним JSON-объектом без префиксов, без markdown, без пояснений:
-{"intent":"catalog"|"brands"|"info"|"general","has_product_name":bool,"product_name":string|null,"price_intent":"most_expensive"|"cheapest"|null,"product_category":string|null,"is_replacement":bool,"search_modifiers":string[],"critical_modifiers":string[],"sub_intent":"availability"|"price"|"location"|"spec"|null,"compute":{"attribute":string,"multiplier":number|null}|null}`;
+{"intent":"catalog"|"brands"|"info"|"general","has_product_name":bool,"product_name":string|null,"price_intent":"most_expensive"|"cheapest"|null,"price_max":number|null,"price_min":number|null,"product_category":string|null,"is_replacement":bool,"search_modifiers":string[],"critical_modifiers":string[],"sub_intent":"availability"|"price"|"location"|"spec"|"facets"|null,"compute":{"attribute":string,"multiplier":number|null}|null}`;

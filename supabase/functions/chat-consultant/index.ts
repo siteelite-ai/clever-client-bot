@@ -1426,11 +1426,15 @@ interface ClassificationResult {
   has_product_name: boolean;
   product_name?: string;
   price_intent?: 'most_expensive' | 'cheapest';
+  /** Верхняя граница цены в тенге (из фразы «не дороже N», «до N»). Независимо от price_intent. */
+  price_max?: number;
+  /** Нижняя граница цены в тенге (из фразы «не дешевле N», «от N»). */
+  price_min?: number;
   product_category?: string;
   is_replacement?: boolean;
   search_modifiers?: string[];
   critical_modifiers?: string[];
-  sub_intent?: 'availability' | 'price' | 'location' | 'spec';
+  sub_intent?: 'availability' | 'price' | 'location' | 'spec' | 'facets';
   /** Расчёт характеристики, заполняется только при sub_intent="spec". */
   compute?: ComputeRequest;
 }
@@ -1630,7 +1634,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       let rawCritical = Array.isArray(parsed.critical_modifiers) ? parsed.critical_modifiers.filter((m: unknown) => typeof m === 'string' && m.trim().length > 0) : [];
       if (rawCritical.length === 0 && rawSearchMods.length > 0) rawCritical = [...rawSearchMods];
       console.log(`[Chat] Classifier critical_modifiers: [${rawCritical.join(', ')}] (of search_modifiers: [${rawSearchMods.join(', ')}])`);
-      const validSubIntents = ['availability', 'price', 'location', 'spec'];
+      const validSubIntents = ['availability', 'price', 'location', 'spec', 'facets'];
       const rawSubIntent = typeof parsed.sub_intent === 'string' ? parsed.sub_intent.toLowerCase().trim() : null;
       const llmSubIntent = validSubIntents.includes(rawSubIntent!) ? rawSubIntent as ClassificationResult['sub_intent'] : undefined;
       const subIntent = llmSubIntent ?? detectSubIntentFallback(message);
@@ -1650,11 +1654,27 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
           console.log(`[Classify] compute extracted: attribute="${computeField.attribute}", multiplier=${multiplier ?? 'null'}`);
         }
       }
+      // Price bounds: независимы от price_intent и is_replacement.
+      const parsePriceBound = (raw: unknown): number | undefined => {
+        if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return Math.floor(raw);
+        if (typeof raw === 'string') {
+          const n = Number(raw.replace(/[^\d]/g, ''));
+          if (Number.isFinite(n) && n > 0) return Math.floor(n);
+        }
+        return undefined;
+      };
+      const priceMax = parsePriceBound(parsed.price_max);
+      const priceMin = parsePriceBound(parsed.price_min);
+      if (priceMax != null || priceMin != null) {
+        console.log(`[Classify] price bounds: max=${priceMax ?? 'null'}, min=${priceMin ?? 'null'}`);
+      }
       return {
         intent: finalIntent as string | undefined,
         has_product_name: !!parsed.has_product_name,
         product_name: (typeof parsed.product_name === 'string' ? parsed.product_name : '') || undefined,
         price_intent: (parsed.price_intent === 'most_expensive' || parsed.price_intent === 'cheapest') ? parsed.price_intent : undefined,
+        price_max: priceMax,
+        price_min: priceMin,
         product_category: (typeof parsed.product_category === 'string' ? parsed.product_category : '') || undefined,
         is_replacement: !!parsed.is_replacement,
         search_modifiers: rawSearchMods,
