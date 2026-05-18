@@ -6541,8 +6541,6 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
           responseModel = aiConfig.model;
           responseModelReason = 'default';
         }
-          responseModelReason = 'default';
-        }
 
         // === FACETS-SUMMARY BRANCH (Step 3 / Plan 2026-05-18) ===
         // sub_intent='facets' → пользователь спрашивает «по каким характеристикам
