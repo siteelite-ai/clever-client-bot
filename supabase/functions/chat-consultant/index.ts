@@ -6555,12 +6555,19 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
           !classification?.is_replacement
         ) {
           try {
-            const queryWord = (
-              classification?.product_category ||
-              classification?.product_name ||
-              userMessage ||
-              ''
-            ).trim();
+            // Категорию резолвим с учётом critical_modifiers (например «уличных»),
+            // иначе CategoryMatcher по голому «светильники» может уйти не туда
+            // (видели в логах: «светильники» → «Декоративное освещение» вместо
+            // «Уличное освещение»). Модификаторы кладём ПЕРЕД существительным —
+            // так LLM-matcher интерпретирует их как уточнение типа.
+            const baseCat = (classification?.product_category || classification?.product_name || '').trim();
+            const critMods = Array.isArray(classification?.critical_modifiers)
+              ? (classification!.critical_modifiers as unknown[]).filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
+              : [];
+            const queryWord = (baseCat
+              ? [...critMods, baseCat].join(' ').trim()
+              : (userMessage || '').trim()
+            );
             if (queryWord) {
               const fStart = Date.now();
               const catalog = await getCategoriesCache(appSettings.volt220_api_token);
