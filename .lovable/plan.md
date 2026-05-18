@@ -1,138 +1,86 @@
-# План: устранить «Failed to fetch» на медленных QFv2-запросах
+## Контекст
 
-## Что подтверждено замером (15 мая, 13:10 UTC)
+Сейчас в V1 (`chat-consultant/index.ts`) есть два связанных, но сломанных/отсутствующих сценария:
 
-Запрос **«а белые удлинители на 3 места?»** — `context canceled` на curl-клиенте (~60с лимит). Контрольный **«у тебя есть белые удлинители?»** — успех за ~28-32с.
+**B. «Замена по характеристикам»** (`is_replacement=true`, `has_product_name=true`).
+- Ветка ЕСТЬ (строки 8267–8430, `Replacement matcher`), но в логе из последнего сообщения сработал `pass2-shortcircuit` и отрендерился сам исходный товар с `price=0` — нарушение HARD BAN.
+- Корни (3 шт.):
+  1. `articleShortCircuit` поставился где-то выше по common-pipeline (не в name-first — он guard'нут на 6511), и `replacementMeta` не сформировался → `originalProduct=null` → фильтр исключения оригинала (8408) — no-op.
+  2. После replacement-matcher нет double-фильтра `price=0`.
+  3. Из классификатора **не извлекается price-cap из фразы замены** («не дороже 1000 тг») — `price_intent` живёт отдельно и до replacement-ветки не доносится.
 
-Посекундный таймлайн «на 3 места»:
+**A. «Характеристики раздела»** (нет такой ветки вообще).
+Запросы типа «найди светильники по таким-то характеристикам», «какие IP бывают у уличных светильников» сейчас уходят в обычный catalog-flow → высыпается выдача товаров. Пользователю нужно: показать СПИСОК доступных характеристик/значений раздела (+ мини-сэмпл товаров), чтобы он уточнил.
 
-```text
-   шаг                                  время
-   ───────────────────────────────────  ──────
-   Classifier (Claude)                   3.07 с
-   QFv2 noun + pool + bootstrap         ~9    с
-   FilterLLM resolve #1 (3 mod / 79)   11.25 с    → resolved=2, unresolved=[места]
-   /categories/options (escalate)        0.78 с
-   FilterLLM resolve #2 (escalate)      9.20 с    → still unresolved=[места] ❌
-   Финальный stream Claude              ~12-15 с
-   ───────────────────────────────────  ──────
-   ИТОГО до закрытия стрима           ~48-55 с    → клиент рвёт соединение
-```
+## Цель
 
-## Корневая причина
+1. Починить ветку B — чтобы она реально работала как «similar по anchor с учётом price-cap», БЕЗ показа исходного товара и БЕЗ `price=0`.
+2. Добавить ветку A — `sub_intent='facets'` (или `compute.attribute` для одиночной характеристики), которая возвращает facet-summary раздела вместо карточек.
 
-Classifier разделил «3 места» на два модификатора `["3", "места"]`. FilterLLM смапил `"3" → kolichestvo_rozetok=3` верно, но оставшееся `"места"` — unit-слово, у которого в принципе нет facet'а. Это запустило escalate-петлю на полной схеме (+11с впустую) — она тоже ничего не нашла, потому что искать нечего: понятие «3 места» уже целиком описано числовым фасетом.
-
-Если бы classifier сохранил quantity-phrase целиком — `["белый", "3 места"]` — FilterLLM бы смапил его одним проходом, `unresolved=[]`, escalate не запустился.
-
-## Стратегия
-
-Два независимых слоя, каждый закрывает свой класс проблем:
-
-- **Слой 1 (транспорт): SSE heartbeat.** Лечит «Failed to fetch» на ВСЕХ медленных ветках, не только на этой. Раскатываем первым.
-- **Слой 2 (логика): детерминированная склейка quantity-phrase в classifier-постпроцессе.** Лечит причину избыточного escalate, без эвристик и словарей.
+Никаких словарей синонимов, никакого хардкода категорий — всё через LLM + live catalog API (соответствует core-правилам spec data-agnostic).
 
 ## Изменения
 
-### Шаг 1. SSE heartbeat в `chat-consultant/index.ts`
+### 1. Классификатор (`classifier-prompt.ts` + парсер)
+Расширяем JSON-схему ответа (data-agnostic, без примеров категорий):
+- `sub_intent`: добавить значение `'facets'` — «пользователь спрашивает про характеристики/опции раздела, без интереса к конкретному товару».
+- `price_intent` **должен заполняться и при `is_replacement=true`** (сейчас классификатор это пропускает по дефолту). Добавить в инструкции: «если в запросе на замену есть ценовая граница — обязательно заполняй `price_intent`».
+- `is_replacement=true` уже триггерит ветку B; новых полей не нужно.
 
-**Где:** место, где сейчас формируется `Response` со `ReadableStream`. Сейчас стрим создаётся ПОСЛЕ всей работы пайплайна (TTFB = total time). Меняем: `Response` отдаётся СРАЗУ, тяжёлая работа уезжает внутрь `start(controller)`, параллельно `setInterval` пишет SSE-комментарий каждые 5 секунд.
+Самопроверка контракта остаётся: `len(modifiers) == N_input − N_cat − N_wrap` (см. mem://classifier/token-preservation).
 
-**Что пишем:** `: keepalive\n\n` — валидный SSE-комментарий. Browser EventSource и наш widget игнорируют строки, начинающиеся с `:`.
+### 2. Роутер (`chat-consultant/index.ts`)
 
-**Корректность:**
-- `clearInterval` в `try/finally` — не утечёт при exception
-- heartbeat прекращается перед первым реальным `data:` чанком (или при `controller.close()`)
-- формат `data: {...}` чанков не меняется → клиент править не нужно
+Добавить **раннюю проверку sub_intent='facets'** в s3-роутере (до name-first, до replacement, до catalog-flow):
 
-**Что НЕ задевает:**
-- логику пайплайна (классификатор, QFv2, FilterLLM, composer) — ноль изменений
-- метрики и логи — ноль изменений
-- `_shared/request-logger.ts` `wrapResponseForLogging` — добавим фильтр строк с префиксом `:` чтобы heartbeat не попадал в `finalResponseChunks`
-- `chat-consultant-v2` — НЕ трогаем (V1 и V2 — независимые edge functions по правилу из памяти)
-- frontend `ChatWidget.tsx` / `embed.js` — ноль изменений
-
-### Шаг 2. Детерминированная склейка quantity-phrase
-
-**Где:** новый shared-модуль `supabase/functions/_shared/group-quantity-phrases.ts`, вызывается из classifier-обёртки сразу после получения `search_modifiers` от LLM, ДО передачи в QFv2/FilterLLM.
-
-**Контракт:**
-
-```ts
-function groupQuantityPhrases(
-  originalQuery: string,
-  searchModifiers: string[],
-  criticalModifiers: string[],
-): { searchModifiers: string[]; criticalModifiers: string[] }
+```text
+if (classification.sub_intent === 'facets' && effectiveCategory) {
+  → branch s-facets  (см. п.3)
+  return
+}
 ```
 
-**Алгоритм (data-agnostic, без словарей):**
+Гард `is_replacement` уже корректно выключает name-first (6511) — оставляем.
 
-1. Найти позиции каждого токена `searchModifiers` в `originalQuery` (case-insensitive, по word-boundary).
-2. Для каждой пары соседних модификаторов проверить:
-   - первый — чисто числовой токен (`/^\d+([.,]\d+)?$/`)
-   - между ними в исходной строке — только пробелы и/или предлог (`на|по`)
-   - второй — словарное слово (буквы), не число
-3. Если условие выполнено — склеить в `"<число> <слово>"` (один модификатор, без предлога).
-4. `criticalModifiers` обновить аналогично: если хотя бы один из склеенных был critical — результат critical.
+### 3. Новая ветка `runFacetsSummary` (новый файл `_shared/facets-summary.ts`)
+Алгоритм:
+1. Category Resolver → exact `pagetitle` категории (через `matchCategoriesWithLLM`, уже есть).
+2. Параллельно: `/categories/options` (live → bootstrap fallback из probe) + `/products?category=<X>&per_page=3` (мини-сэмпл).
+3. Фильтр facet-ключей через `FACET_BLACKLIST_KEYS` (уже есть в v2, переэкспортировать в `_shared/`).
+4. Композер: bullet-блок по ТОП-5 facet'ам (`caption_ru` + 3-5 наиболее частых `value_ru`), затем «Хотите, подберу с конкретными значениями?». Карточки товаров **не показываем** (или 1-2 как пример, по флагу).
+5. Сохраняем `dialog_slots.facets_offer = {category, schema}` — следующее сообщение пользователя с конкретными значениями уходит уже в обычный catalog-flow с уже резолвнутой категорией.
 
-**Примеры (для тестов, НЕ для промпта):**
+### 4. Фикс ветки B (replacement по характеристикам)
+Локально в блоке 8267–8430:
+- (a) **Перенести assignment `replacementMeta`** ДО любого short-circuit, чтобы фильтр исключения оригинала (8408) всегда имел `originalId`. Если `originalProduct=null` после `searchByPagetitle/article` — делаем явный `searchByPagetitle(classification.product_name)` РАЗ, забираем `originalProduct` и продолжаем; иначе ветка считает себя «случай 2» (товара нет в каталоге).
+- (b) **Добавить `excludeZeroPrice`** двойным фильтром перед `pickDisplayWithTotal` (8411): `rFinal = rFinal.filter(p => (p.price ?? 0) > 0)`. Метрика `zero_price_leak` остаётся 0.
+- (c) **Прокинуть `price_intent.cap`** в `searchProductsByCandidate` через `max_price` во всех вызовах внутри блока (8327, 8333, 8364, 8385) — это закроет «не дороже 1000 тг».
+- (d) **Запретить отдачу самого товара через articleShortCircuit без replacement-обработки**: добавить guard «если `is_replacement && articleShortCircuit && !replacementMeta` → НЕ рендерить, передать управление в replacement-блок». Сейчас именно эта ситуация привела к показу price=0 ДКУ-LED-03-100W.
 
-| Исходный запрос | До | После |
-|---|---|---|
-| `белые удлинители на 3 места` | `["белый","3","места"]` | `["белый","3 места"]` |
-| `шнур 5 метров` | `["5","метров"]` | `["5 метров"]` |
-| `розетка по 2 поста` | `["2","поста"]` | `["2 поста"]` |
-| `красивые початки` | `["красивые","початки"]` | `["красивые","початки"]` *(нет числа — без изменений)* |
-| `3` *(одиночное)* | `["3"]` | `["3"]` *(склеивать не с чем)* |
-| `кабель 3х2.5` | `["3х2.5"]` | `["3х2.5"]` *(уже один токен)* |
-| `куплю 5 удлинителей` *(category=удлинитель уже извлечена)* | `["5"]` | `["5"]` |
+### 5. Детерминистичный рендер
+- Ветка A (`s-facets`) **не** идёт через `buildDeterministicShortCircuitContent` (там нет продуктов) — собственный шаблон facet-bullet.
+- Ветка B продолжает идти через детерминистичный рендер (как сейчас), плюс `replacementMeta.original` подставляется в intro («Вместо «{originalName}» подобрал похожие, не дороже {cap} ₸:»).
 
-**Где встроить вызов:** в `_shared/classifier-prompt.ts` (или в обёртку, которая вызывает classifier — уточню при имплементации) сразу после `validateIntent`, перед возвратом в `chat-consultant/index.ts`. Применяется И к V1, И к V2 — оба используют один shared-классификатор.
+### 6. Тесты (Deno)
+Новые файлы:
+- `_shared/facets-summary_test.ts` — bootstrap+live schema, blacklist, фильтр price=0 в сэмпле, top-N выбор.
+- `chat-consultant/replacement-zero-price_test.ts` — фикс (b): на синтетическом pool с `price=0` ни одна карточка не утекает.
+- `chat-consultant/replacement-price-cap_test.ts` — фикс (c): при price_intent.cap=1000 все вызовы `searchProductsByCandidate` получают `max_price=1000`.
+- `chat-consultant/router-facets-intent_test.ts` — sub_intent='facets' уходит в новую ветку до name-first.
 
-**Тесты:** `_shared/group-quantity-phrases_test.ts` — табличные кейсы выше + edge: пустой запрос, только числа, предлог между числом и словом, регистр.
+### 7. Памятки
+Добавить mem://features/facets-summary и mem://features/replacement-fix-2026-05-18; обновить Core-строку про replacement.
 
-**Метрика (опционально):** `classifier_quantity_phrase_glued_total` — счётчик, сколько раз склейка сработала.
+## Что НЕ трогаем
+- V2 (`chat-consultant-v2`) — там уже есть s-similar/s-search; перенос идей сделаем отдельным шагом после стабилизации V1.
+- Frontend / widget / SSE-транспорт.
+- Compute (spec_query) — остаётся как сейчас (отдельная надстройка для одиночной характеристики ОДНОГО товара).
+- Cross-sell, jargon-fallback, QFv2 — не задеваем.
 
-### Шаг 3. Конфиг
+## Порядок реализации (по одному шагу с подтверждением)
+1. Расширить классификатор (`sub_intent='facets'` + price_intent при replacement) + тесты.
+2. Фикс B — три подпункта (a/b/c/d) одной правкой + 2 теста.
+3. Новая ветка A (`facets-summary.ts` + роутер + тест).
+4. Памятки + проверка curl-replay двух сценариев из примера.
 
-В `_shared/config.ts`:
-- `SSE_HEARTBEAT_INTERVAL_MS = 5000`
-
-(больше ничего — Шаг 2 без флагов, поведение детерминировано и безопасно)
-
-### Шаг 4. Verification
-
-После каждого шага:
-
-**После Шага 1:**
-1. Curl-replay «а белые удлинители на 3 места?» — первый байт (`: keepalive`) в первые 5с, полный ответ через ~48с (без зависания).
-2. Контрольные запросы — без регресса.
-3. Открыть виджет, послать тот же запрос → нет «Failed to fetch».
-
-**После Шага 2:**
-1. Тот же curl-replay — теперь `[Classifier] search_modifiers=["белый","3 места"]`, FilterLLM resolve один раз, escalate=skip, итого ~30с.
-2. Прогон golden-кейсов: «розетки IP44», «удлинитель катушка 50м», «кабель ВВГнг 3х2.5», «дтехгнездые» (jargon-fallback не должен сломаться).
-3. Юнит-тесты `group-quantity-phrases_test.ts` — все зелёные.
-
-## Риски
-
-| Слой | Риск | Митигация |
-|---|---|---|
-| 1 | `: keepalive` попадёт в логгер | Фильтр по префиксу `:` в `wrapResponseForLogging` |
-| 1 | `setInterval` утечёт при exception | `try/finally` + `clearInterval` |
-| 1 | Кастомный SSE-парсер не понимает `:` | Не наш кейс — стандартный `EventSource` |
-| 2 | Чрезмерная склейка («3 жилы 2.5 мм2» → одно?) | Алгоритм склеивает только пары, не цепочки. `["3 жилы","2.5 мм2"]` — две независимые пары |
-| 2 | Сломается `signature` кэша FilterLLM | Изменение модификаторов даст другую signature — это ОК, новый кэш заполнится естественно |
-| 2 | Unit-слово не в родительном падеже («3 место») | Алгоритм морфологию не проверяет — склеит. Это не ломает FilterLLM (он сам поймёт) |
-
-**Что НЕ задевается ни в каком слое:**
-- V2 пайплайн (`chat-consultant-v2`) — Шаг 2 в shared, но V2 уже не используется по active_pipeline; если включат — поведение улучшится симметрично
-- Memory rules: token-preservation **сохраняется** (мы НЕ удаляем токены, только склеиваем рядом стоящие); deterministic-product-render, jargon-fallback, slot-persistence, FilterLLM noun anchor, has_product_name bridge — все остаются
-- Frontend, DB schema, RLS, app_settings, secrets
-
-## Порядок раскатки (по правилу «step-by-step + ждать подтверждения»)
-
-1. **Шаг 1 (heartbeat).** Имплементация → curl-replay → твой OK.
-2. **Шаг 2 (склейка quantity-phrase).** Только после твоего подтверждения первого. Имплементация → юнит-тесты → curl-replay → golden-кейсы → твой OK.
-3. **Память.** После обоих шагов — обновить `mem://features/query-first-branch` или создать `mem://classifier/quantity-phrase-grouping` с правилом склейки.
+Жду «ок шаг 1», действую только по нему.
