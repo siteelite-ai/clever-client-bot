@@ -8395,17 +8395,74 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             console.log(`[Chat] Replacement: using article-first hint "${originalProduct.pagetitle}" as anchor`);
           }
           
-          // Last-resort: classifier дал product_name, но ни article-first, ни hint не сработали.
-          // Делаем один точечный searchByPagetitle, чтобы у ветки был originalProduct.
+          // === REPLACEMENT ANCHOR LADDER (3 уровня) ===
+          // Цель: получить originalProduct с реальными options[], чтобы
+          // extractModifiersFromProduct отдал НАСТОЯЩИЕ traits, а не оценочные
+          // токены классификатора (типа «ДКУ-LED-03-100W», «(ЭТФ)»).
+          //
+          //   LVL 1: ?pagetitle=<product_name>            — exact name
+          //   LVL 2: ?query=<product_name> per_page=5     — fuzzy, top-1
+          //   LVL 3: Category Resolver → ?category=<X>    — pseudo-anchor (top-1
+          //          товара категории; ID для exclude нет, но traits реальные)
           if (!originalProduct && classification?.product_name && appSettings.volt220_api_token) {
+            // LVL 1: exact pagetitle
             try {
               const hydrate = await searchByPagetitle(classification.product_name, appSettings.volt220_api_token, 1);
               if (hydrate.length > 0) {
                 originalProduct = hydrate[0];
-                console.log(`[Chat] Replacement: anchor hydrated by pagetitle="${classification.product_name}" → "${originalProduct.pagetitle}"`);
+                console.log(`[Chat] Replacement: anchor LVL1 pagetitle="${classification.product_name}" → "${originalProduct.pagetitle}"`);
               }
             } catch (hErr) {
-              console.log(`[Chat] Replacement: anchor hydrate failed:`, (hErr as Error).message);
+              console.log(`[Chat] Replacement: anchor LVL1 pagetitle failed:`, (hErr as Error).message);
+            }
+
+            // LVL 2: fuzzy query (top-1)
+            if (!originalProduct) {
+              try {
+                const fuzz = await searchProductsByCandidate(
+                  { query: classification.product_name, brand: null, category: null, min_price: null, max_price: null },
+                  appSettings.volt220_api_token, 5
+                );
+                const fuzzClean = fuzz.filter(p => ((p as any)?.price ?? 0) > 0);
+                if (fuzzClean.length > 0) {
+                  originalProduct = fuzzClean[0];
+                  console.log(`[Chat] Replacement: anchor LVL2 query="${classification.product_name}" → "${originalProduct.pagetitle}" (of ${fuzz.length} hits)`);
+                }
+              } catch (hErr) {
+                console.log(`[Chat] Replacement: anchor LVL2 query failed:`, (hErr as Error).message);
+              }
+            }
+
+            // LVL 3: category-first pseudo-anchor
+            if (!originalProduct && classification?.product_category) {
+              try {
+                const catalog = await getCategoriesCache(appSettings.volt220_api_token);
+                const matches = catalog.length
+                  ? await matchCategoriesWithLLM(classification.product_category, catalog, appSettings)
+                  : [];
+                const catPagetitle = matches[0] || '';
+                if (catPagetitle) {
+                  const catTop = await searchProductsByCandidate(
+                    { query: null, brand: null, category: catPagetitle, min_price: null, max_price: null },
+                    appSettings.volt220_api_token, 20
+                  );
+                  const catTopClean = catTop.filter(p => ((p as any)?.price ?? 0) > 0 && Array.isArray((p as any).options) && (p as any).options.length > 0);
+                  if (catTopClean.length > 0) {
+                    originalProduct = catTopClean[0];
+                    console.log(`[Chat] Replacement: anchor LVL3 category="${catPagetitle}" → pseudo-anchor "${originalProduct.pagetitle}" (of ${catTop.length} in category)`);
+                  } else {
+                    console.log(`[Chat] Replacement: anchor LVL3 category="${catPagetitle}" → 0 usable products`);
+                  }
+                } else {
+                  console.log(`[Chat] Replacement: anchor LVL3 category resolver returned 0 matches for "${classification.product_category}"`);
+                }
+              } catch (hErr) {
+                console.log(`[Chat] Replacement: anchor LVL3 category-first failed:`, (hErr as Error).message);
+              }
+            }
+
+            if (!originalProduct) {
+              console.log(`[Chat] Replacement: anchor ladder EXHAUSTED — falling through to classifier-modifiers path (may produce honest no_match)`);
             }
           }
 
