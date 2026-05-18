@@ -25,6 +25,7 @@ import {
   type RelatedAnchor,
 } from '../_shared/related-followup.ts';
 import { wrapWithHeartbeat } from '../_shared/sse-heartbeat.ts';
+import { buildFacetsSummaryContent } from '../_shared/facets-summary.ts';
 
 // Per-request async context (carries reqId implicitly through all awaits inside `serve`).
 // Used by Degraded-mode tracker so deeply nested catalog helpers do NOT need to thread
