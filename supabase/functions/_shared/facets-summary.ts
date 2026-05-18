@@ -24,7 +24,39 @@ const FACET_BLACKLIST_KEYS: ReadonlySet<string> = new Set([
   'naimenovanie_na_kazahskom_yazyke',
   'opisanie_na_kazahskom_yazyke',
   'fayl',
+  // V1 legacy служебные (зеркалит EXCLUDED_OPTION_PREFIXES в chat-consultant/index.ts):
+  'kod_tn_ved',
+  'ogranichennyy_prosmotr',
+  'prodaetsya_to',
+  // EXTENDED_OPTION_PREFIXES — низкоинформативные для facet-summary:
+  'opisaniefayla',   // «ОписаниеФайла» — массив имён вложений, не характеристика
+  'novinka',         // флаг новизны
+  'populyarnyy',     // флаг популярности
+  'garantiynyy_srok__let__kepіldіk_merzіmі__ghyl_',
+  'edinica_izmereniya__Өlsheu_bіrlіgі',
 ]);
+
+/** Префиксы ключей — отрезаем по startsWith (для каталогов с локальными суффиксами). */
+const FACET_BLACKLIST_PREFIXES: readonly string[] = [
+  'opisaniefayla',
+  'opisanie_fayla',
+  'fayl',
+  'novinka',
+  'populyarnyy',
+  'garantiynyy',
+  'edinica_izmereniya',
+];
+
+/** Если caption матчит — facet точно мусорный (защита от смены ключа на бэке). */
+const FACET_BLACKLIST_CAPTION_RE = /(описаниефайла|опис\w*\s*файл|новинк|популярн|единиц\w*\s*измерен|гарантийн)/i;
+
+/** Значение похоже на закодированную пару «RU#KZ» / список файлов — отбрасываем. */
+function isJunkValue(v: string): boolean {
+  if (!v) return true;
+  if (v.includes('#')) return true;          // «Декларация 037#Декларация 037»
+  if (v.length > 80) return true;            // длинные строки = почти всегда мусор
+  return false;
+}
 
 export interface FacetsSummaryInput {
   categoryName: string;
