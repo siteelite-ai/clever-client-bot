@@ -6492,6 +6492,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     // Anchor товара, который мог быть зацеплен article-first/siteid ДО классификатора.
     // Используется как `originalProduct` в replacement-ветке, если is_replacement=true.
     let replacementOriginalHint: Product | null = null;
+    // Step 3 (Plan 2026-05-18). Ветка A — sub_intent='facets'. Если классификатор
+    // сказал «спрашивают про характеристики раздела», мы не показываем карточки,
+    // а возвращаем bullet-summary доступных facet'ов категории и просим выбрать.
+    let facetsResponse: { content: string; category: string } | null = null;
 
     // Классификатор запускаем ВСЕГДА — даже после article-first/siteid hit.
     // Иначе is_replacement остаётся неизвестным и article-hit рендерится сам по себе
