@@ -6488,8 +6488,14 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     let effectivePriceIntent: 'most_expensive' | 'cheapest' | undefined = undefined;
     let effectiveCategory = '';
     let classification: any = null;
-    
-    if (!articleShortCircuit && appSettings.volt220_api_token) {
+    // Anchor товара, который мог быть зацеплен article-first/siteid ДО классификатора.
+    // Используется как `originalProduct` в replacement-ветке, если is_replacement=true.
+    let replacementOriginalHint: Product | null = null;
+
+    // Классификатор запускаем ВСЕГДА — даже после article-first/siteid hit.
+    // Иначе is_replacement остаётся неизвестным и article-hit рендерится сам по себе
+    // (нарушение HARD BAN на price=0 и потеря replacement-ветки).
+    if (appSettings.volt220_api_token) {
       const classifyStart = Date.now();
       try {
         const recentHistoryForClassifier = historyForContext.slice(-4).map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }));
