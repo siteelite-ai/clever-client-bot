@@ -83,3 +83,34 @@ Deno.test("facets-summary: topN limits number of facets, ordered by value count"
   assertStringIncludes(out, "**C**");
   assertEquals(out.includes("**A**"), false);
 });
+
+Deno.test("facets-summary: opisaniefayla key dropped even with values", () => {
+  const schema = mkSchema([
+    ["opisaniefayla", "ОписаниеФайла", ["Декларация 037#Декларация 037", "Паспорт#Төлқұжат"]],
+    ["brand", "Бренд", ["A"]],
+  ]);
+  const out = buildFacetsSummaryContent({ categoryName: "X", schema });
+  assertEquals(out.includes("ОписаниеФайла"), false);
+  assertEquals(out.includes("Декларация"), false);
+  assertStringIncludes(out, "**Бренд**");
+});
+
+Deno.test("facets-summary: values containing '#' are filtered out as junk", () => {
+  const schema = mkSchema([
+    ["x", "X-параметр", ["clean1", "Декларация#dup", "clean2"]],
+  ]);
+  const out = buildFacetsSummaryContent({ categoryName: "X", schema });
+  assertEquals(out.includes("Декларация"), false);
+  assertStringIncludes(out, "clean1");
+  assertStringIncludes(out, "clean2");
+});
+
+Deno.test("facets-summary: caption with «Файл/Опис» triggers blacklist", () => {
+  const schema = mkSchema([
+    ["weird_key_123", "Описание файла товара", ["v1"]],
+    ["brand", "Бренд", ["A"]],
+  ]);
+  const out = buildFacetsSummaryContent({ categoryName: "X", schema });
+  assertEquals(out.includes("Описание файла"), false);
+  assertStringIncludes(out, "**Бренд**");
+});
