@@ -1726,11 +1726,14 @@ function extractModifiersFromProduct(product: Product): string[] {
 
   for (const opt of product.options) {
     const keyLower = opt.key.toLowerCase();
-    const captionLower = (opt.caption ?? '').toLowerCase();
+    // Catalog API per-item shape: caption_ru/value_ru. caption/value — legacy fallback.
+    const captionStr = (opt.caption_ru ?? opt.caption ?? '').toString();
+    const valueStr = (opt.value_ru ?? opt.value ?? '').toString();
+    const captionLower = captionStr.toLowerCase();
 
     if (!importantPatterns.some(p => p.test(keyLower) || p.test(captionLower))) continue;
 
-    const cleanValue = (opt.value ?? '').split('//')[0].trim();
+    const cleanValue = valueStr.split('//')[0].trim();
     if (!cleanValue) continue;
 
     // Compact only "number space unit" → "numberunit", keep everything else as-is
