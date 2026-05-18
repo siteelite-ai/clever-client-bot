@@ -6488,8 +6488,14 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     let effectivePriceIntent: 'most_expensive' | 'cheapest' | undefined = undefined;
     let effectiveCategory = '';
     let classification: any = null;
-    
-    if (!articleShortCircuit && appSettings.volt220_api_token) {
+    // Anchor товара, который мог быть зацеплен article-first/siteid ДО классификатора.
+    // Используется как `originalProduct` в replacement-ветке, если is_replacement=true.
+    let replacementOriginalHint: Product | null = null;
+
+    // Классификатор запускаем ВСЕГДА — даже после article-first/siteid hit.
+    // Иначе is_replacement остаётся неизвестным и article-hit рендерится сам по себе
+    // (нарушение HARD BAN на price=0 и потеря replacement-ветки).
+    if (appSettings.volt220_api_token) {
       const classifyStart = Date.now();
       try {
         const recentHistoryForClassifier = historyForContext.slice(-4).map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }));
@@ -6517,6 +6523,19 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
           },
         });
 
+        // === REPLACEMENT GUARD (Step 2 / 2026-05-18) ===
+        // Если article-first/siteid уже зацепили товар, но классификатор сказал
+        // is_replacement=true — НЕ рендерим этот товар (тем более при price=0,
+        // нарушающем HARD BAN). Сохраняем его как anchor для replacement-ветки
+        // и сбрасываем short-circuit, чтобы pipeline дошёл до блока 8287.
+        if (classification?.is_replacement && articleShortCircuit && foundProducts.length > 0) {
+          replacementOriginalHint = foundProducts[0];
+          console.log(`[Chat] Replacement GUARD: detaching article-first hit "${replacementOriginalHint.pagetitle}" as anchor, resetting articleShortCircuit (reason=${responseModelReason})`);
+          foundProducts = [];
+          articleShortCircuit = false;
+          responseModel = aiConfig.model;
+          responseModelReason = 'default';
+        }
         // === NAME-FIRST FAST-PATH (single block, two API steps) ===
         // Один short-circuit перед всем pipeline. Две ступени по эскалации точности:
         //   STEP 1: ?pagetitle=<candidate>  — точное совпадение названия (символ-в-символ).
@@ -8288,14 +8307,40 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
          try {
           console.log(`[Chat] Replacement intent detected!`);
           const replacementStart = Date.now();
-          
+
+          // Price-cap из классификатора (фраза «не дороже 1000 тг» в запросе на замену).
+          // price_intent.cap отдельно не существует — поле `price_max` пришло прямо из classifier.
+          const replMaxPrice: number | null = (typeof classification?.price_max === 'number' && classification.price_max > 0)
+            ? Math.floor(classification.price_max)
+            : null;
+          if (replMaxPrice !== null) {
+            console.log(`[Chat] Replacement: price_max cap = ${replMaxPrice} ₸`);
+          }
+
           let originalProduct: Product | null = null;
-          
+
           if (articleShortCircuit && foundProducts.length > 0) {
             originalProduct = foundProducts[0];
-            console.log(`[Chat] Replacement: original found "${originalProduct.pagetitle}"`);
+            console.log(`[Chat] Replacement: original found in pipeline "${originalProduct.pagetitle}"`);
+          } else if (replacementOriginalHint) {
+            originalProduct = replacementOriginalHint;
+            console.log(`[Chat] Replacement: using article-first hint "${originalProduct.pagetitle}" as anchor`);
           }
           
+          // Last-resort: classifier дал product_name, но ни article-first, ни hint не сработали.
+          // Делаем один точечный searchByPagetitle, чтобы у ветки был originalProduct.
+          if (!originalProduct && classification?.product_name && appSettings.volt220_api_token) {
+            try {
+              const hydrate = await searchByPagetitle(classification.product_name, appSettings.volt220_api_token, 1);
+              if (hydrate.length > 0) {
+                originalProduct = hydrate[0];
+                console.log(`[Chat] Replacement: anchor hydrated by pagetitle="${classification.product_name}" → "${originalProduct.pagetitle}"`);
+              }
+            } catch (hErr) {
+              console.log(`[Chat] Replacement: anchor hydrate failed:`, (hErr as Error).message);
+            }
+          }
+
           // Determine category and modifiers for category-first search
           let replCategory = '';
           let replModifiers: string[] = [];
@@ -8345,12 +8390,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 // Parallel: GET ?category=<exact pagetitle> + query-fallback safety net
                 const rCatPromises = replMatches.map(cat =>
                   searchProductsByCandidate(
-                    { query: null, brand: null, category: cat, min_price: null, max_price: null },
+                    { query: null, brand: null, category: cat, min_price: null, max_price: replMaxPrice },
                     appSettings.volt220_api_token!, 30
                   )
                 );
                 const rQueryFallback = searchProductsByCandidate(
-                  { query: replCategory, brand: null, category: null, min_price: null, max_price: null },
+                  { query: replCategory, brand: null, category: null, min_price: null, max_price: replMaxPrice },
                   appSettings.volt220_api_token!, 30
                 );
                 const rAllRes = await Promise.all([...rCatPromises, rQueryFallback]);
@@ -8383,7 +8428,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     );
                     const rFiltRes = await Promise.all(replMatches.map(cat =>
                       searchProductsByCandidate(
-                        { query: qText, brand: null, category: cat, min_price: null, max_price: null },
+                        { query: qText, brand: null, category: cat, min_price: null, max_price: replMaxPrice },
                         appSettings.volt220_api_token!, 30,
                         Object.keys(rResolved).length > 0 ? rResolved : undefined
                       )
@@ -8402,7 +8447,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                         delete partial[dropKey];
                         const relaxedRes = await Promise.all(replMatches.map(cat =>
                           searchProductsByCandidate(
-                            { query: null, brand: null, category: cat, min_price: null, max_price: null },
+                            { query: null, brand: null, category: cat, min_price: null, max_price: replMaxPrice },
                             appSettings.volt220_api_token!, 30, partial
                           )
                         ));
@@ -8426,6 +8471,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // Exclude original product
                   const originalId = originalProduct?.id;
                   if (originalId) rFinal = rFinal.filter(p => p.id !== originalId);
+                  // HARD price=0 filter (replacement-ветка не имеет soft-fallback на «под заказ»).
+                  const rBeforeZero = rFinal.length;
+                  rFinal = rFinal.filter(p => ((p as any)?.price ?? 0) > 0);
+                  if (rBeforeZero !== rFinal.length) {
+                    console.log(`[Chat] Replacement HARD zero-price filter: ${rBeforeZero} → ${rFinal.length}`);
+                  }
 
                   if (rFinal.length > 0) {
                     { const _r = pickDisplayWithTotal(rFinal); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_matcher'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_matcher zeroFiltered=${_r.filteredZeroPrice}`); }
@@ -8459,11 +8510,11 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             
             // Two parallel searches: by category + by query
             const replCatPromise = searchProductsByCandidate(
-              { query: null, brand: null, category: pluralRepl, min_price: null, max_price: null },
+              { query: null, brand: null, category: pluralRepl, min_price: null, max_price: replMaxPrice },
               appSettings.volt220_api_token, 50
             );
             const replQueryPromise = searchProductsByCandidate(
-              { query: replCategory, brand: null, category: null, min_price: null, max_price: null },
+              { query: replCategory, brand: null, category: null, min_price: null, max_price: replMaxPrice },
               appSettings.volt220_api_token, 50
             );
             const [replCatRes, replQueryRes] = await Promise.all([replCatPromise, replQueryPromise]);
@@ -8527,7 +8578,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 if (bucketProducts.length < 10 && appSettings.volt220_api_token) {
                   console.log(`[Chat] Replacement bucket "${catName}" too small (${bucketProducts.length}), fetching more...`);
                   const extraProducts = await searchProductsByCandidate(
-                    { query: null, brand: null, category: catName, min_price: null, max_price: null },
+                    { query: null, brand: null, category: catName, min_price: null, max_price: replMaxPrice },
                     appSettings.volt220_api_token, 50
                   );
                   if (extraProducts.length > bucketProducts.length) {
@@ -8569,7 +8620,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 );
                 console.log(`[Chat] Replacement STAGE 3: API call category="${pluralRepl}", options=${JSON.stringify(replResolvedFilters)}, query="${replQueryText}"`);
                 let replFiltered = await searchProductsByCandidate(
-                  { query: replQueryText, brand: null, category: pluralRepl, min_price: null, max_price: null },
+                  { query: replQueryText, brand: null, category: pluralRepl, min_price: null, max_price: replMaxPrice },
                   appSettings.volt220_api_token, 50,
                   Object.keys(replResolvedFilters).length > 0 ? replResolvedFilters : undefined
                 );
@@ -8588,7 +8639,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     );
                     if (altProducts.length < 10 && appSettings.volt220_api_token) {
                       const extra = await searchProductsByCandidate(
-                        { query: null, brand: null, category: altCat, min_price: null, max_price: null },
+                        { query: null, brand: null, category: altCat, min_price: null, max_price: replMaxPrice },
                         appSettings.volt220_api_token, 50
                       );
                       if (extra.length > altProducts.length) altProducts = extra;
@@ -8604,7 +8655,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       { allowEmptyQuery: false, path: 'replacement-alt-bucket' },
                     );
                     const altServer = await searchProductsByCandidate(
-                      { query: altQ, brand: null, category: altCat, min_price: null, max_price: null },
+                      { query: altQ, brand: null, category: altCat, min_price: null, max_price: replMaxPrice },
                       appSettings.volt220_api_token, 50,
                       altResolved
                     );
@@ -8631,7 +8682,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       const partial = { ...replResolvedFilters };
                       delete partial[dropKey];
                       const partialResult = await searchProductsByCandidate(
-                        { query: null, brand: null, category: pluralRepl, min_price: null, max_price: null },
+                        { query: null, brand: null, category: pluralRepl, min_price: null, max_price: replMaxPrice },
                         appSettings.volt220_api_token, 50,
                         partial
                       );
@@ -8651,7 +8702,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   if (replFiltered.length === 0 && (droppableKeys.length > 0 || replFilterKeys.length === 0)) {
                     const modQuery = replModifiers.join(' ');
                     replFiltered = await searchProductsByCandidate(
-                      { query: modQuery, brand: null, category: pluralRepl, min_price: null, max_price: null },
+                      { query: modQuery, brand: null, category: pluralRepl, min_price: null, max_price: replMaxPrice },
                       appSettings.volt220_api_token, 50
                     );
                     console.log(`[Chat] Replacement text fallback: ${replFiltered.length} products`);
@@ -8663,7 +8714,13 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 if (originalId) {
                   replFiltered = replFiltered.filter(p => p.id !== originalId);
                 }
-                
+                // HARD price=0 filter.
+                const fBeforeZero = replFiltered.length;
+                replFiltered = replFiltered.filter(p => ((p as any)?.price ?? 0) > 0);
+                if (fBeforeZero !== replFiltered.length) {
+                  console.log(`[Chat] Replacement (legacy) HARD zero-price filter: ${fBeforeZero} → ${replFiltered.length}`);
+                }
+
                 if (replFiltered.length > 0) {
                   { const _r = pickDisplayWithTotal(replFiltered); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_filtered'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_filtered zeroFiltered=${_r.filteredZeroPrice}`); }
                   articleShortCircuit = true;
@@ -8703,6 +8760,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 let catProducts = replRawProducts;
                 const originalId = originalProduct?.id;
                 if (originalId) catProducts = catProducts.filter(p => p.id !== originalId);
+                catProducts = catProducts.filter(p => ((p as any)?.price ?? 0) > 0);
                 { const _r = pickDisplayWithTotal(catProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_cat_no_filters'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_cat_no_filters zeroFiltered=${_r.filteredZeroPrice}`); }
                 articleShortCircuit = true;
                 replacementMeta = { isReplacement: true, original: originalProduct, originalName: classification.product_name, noResults: foundProducts.length === 0 };
@@ -8713,6 +8771,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               let catProducts = replRawProducts;
               const originalId = originalProduct?.id;
               if (originalId) catProducts = catProducts.filter(p => p.id !== originalId);
+              catProducts = catProducts.filter(p => ((p as any)?.price ?? 0) > 0);
               { const _r = pickDisplayWithTotal(catProducts); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_cat_no_modifiers'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_cat_no_modifiers zeroFiltered=${_r.filteredZeroPrice}`); }
               articleShortCircuit = true;
               replacementMeta = { isReplacement: true, original: originalProduct, originalName: classification.product_name, noResults: foundProducts.length === 0 };
