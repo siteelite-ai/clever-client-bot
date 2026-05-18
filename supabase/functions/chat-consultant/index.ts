@@ -9711,6 +9711,49 @@ ${productInstructions}`;
     // clarification message + quick_replies. Skip the LLM entirely and return
     // it directly. Saves ~2-4s and avoids the LLM "guessing" a category.
     // ─────────────────────────────────────────────────────────────────────────
+    // ─────────────────────────────────────────────────────────────────────────
+    // FACETS-SUMMARY SHORT-CIRCUIT (Step 3 / Plan 2026-05-18)
+    // sub_intent='facets' → возвращаем bullet-summary характеристик категории,
+    // без карточек, без LLM, без cross-sell. dialog_slots не обновляем — следующий
+    // ход пользователя пройдёт обычным catalog-flow с уже знакомой ему категорией.
+    // ─────────────────────────────────────────────────────────────────────────
+    if (facetsResponse) {
+      console.log(`[Chat] FACETS-SUMMARY SHORT-CIRCUIT response: category="${facetsResponse.category}", contentLen=${facetsResponse.content.length}`);
+      logSetProductsCount(0);
+      logAddStep({ step: 'final-facets-summary', meta: { category: facetsResponse.category } });
+      persistSlotsAsync(conversationId, dialogSlots);
+
+      if (!useStreaming) {
+        const body: { content: string; slot_update?: DialogSlots } = { content: facetsResponse.content };
+        if (slotsUpdated) body.slot_update = dialogSlots;
+        return new Response(
+          JSON.stringify(body),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          const delta = `data: ${JSON.stringify({ choices: [{ delta: { content: facetsResponse!.content }, index: 0 }] })}\n\n`;
+          controller.enqueue(encoder.encode(delta));
+          if (slotsUpdated) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`));
+          }
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
+    }
+
     if (disambiguationResponse) {
       console.log(`[Chat] Disambiguation SHORT-CIRCUIT: skipping LLM, returning ${disambiguationResponse.quick_replies.length} quick_replies`);
       const dr = disambiguationResponse;
