@@ -1763,7 +1763,7 @@ function extractModifiersFromProduct(product: Product): string[] {
 const CATEGORY_OPTIONS_TTL_MS = 30 * 60 * 1000;
 // Cache version — bump when dedupe logic changes so old entries (with stale dup keys)
 // invalidate immediately on deploy without waiting 30 min TTL.
-const CATEGORY_OPTIONS_CACHE_VERSION = 'v3-confidence';
+const CATEGORY_OPTIONS_CACHE_VERSION = 'v4-ru-only';
 // Confidence reflects whether downstream resolvers may trust the schema:
 //   'full'    — facets API returned with non-empty values for every kept key.
 //               Resolver runs at full strength (key+value lookup against truth).
