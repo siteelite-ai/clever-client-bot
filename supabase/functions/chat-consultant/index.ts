@@ -7779,19 +7779,33 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                         branchTag = 'qfv2_win';
                         console.log(`[QueryFirstV2] query_first_v2_win noun="${noun}" filters=${Object.keys(resolvedFilters).length} count=${finalFiltered.length} elapsed=${Date.now() - qfStart}ms`);
                       } else {
-                        // HONEST-EMPTY (final=0 with all filters resolved against schema).
-                        const attemptedFacets = buildAttemptedFacets();
-                        qfv2HonestEmptyContext = {
-                          noun,
-                          originalQuery: userMessage || noun,
-                          attemptedFacets,
-                        };
-                        displayList = [];
-                        branchTag = 'qfv2_honest_empty';
-                        const firstKey = Object.keys(resolvedFilters)[0];
-                        const bucket = bootstrapSchema.get(firstKey);
-                        qfV2DroppedFacetCaption = bucket?.caption || firstKey || null;
-                        console.log(`[QueryFirstV2] query_first_v2_honest_empty noun="${noun}" attemptedFacets=${JSON.stringify(attemptedFacets)} elapsed=${Date.now() - qfStart}ms`);
+                        // POOL-RESCUE (2026-05-20): фильтры дали 0, но pool узкий (≤ POOL_RESCUE_MAX)
+                        // — значит первичный noun-поиск уже точный. Вместо Soft-404 показываем
+                        // pool, отфильтрованный strict-noun-filter. Принцип «не сужать воронку
+                        // самим себе» сохраняется: рескуем ТОЛЬКО когда честная альтернатива —
+                        // отказать пользователю при наличии релевантных кандидатов.
+                        const POOL_RESCUE_MAX = 7;
+                        const rescuePool = applyNounFilter(pool, true);
+                        if (pool.length > 0 && pool.length <= POOL_RESCUE_MAX && rescuePool.length > 0) {
+                          displayList = rescuePool;
+                          branchTag = 'qfv2_pool_rescue';
+                          console.log(`[QueryFirstV2] query_first_v2_pool_rescue noun="${noun}" pool=${pool.length} rescued=${rescuePool.length} filters=${Object.keys(resolvedFilters).length} elapsed=${Date.now() - qfStart}ms`);
+                          logAddStep({ step: 'qfv2-pool-rescue', total: rescuePool.length, meta: { noun, pool_size: pool.length, rescued: rescuePool.length, attempted_filters: resolvedFilters } });
+                        } else {
+                          // HONEST-EMPTY (final=0 with all filters resolved against schema).
+                          const attemptedFacets = buildAttemptedFacets();
+                          qfv2HonestEmptyContext = {
+                            noun,
+                            originalQuery: userMessage || noun,
+                            attemptedFacets,
+                          };
+                          displayList = [];
+                          branchTag = 'qfv2_honest_empty';
+                          const firstKey = Object.keys(resolvedFilters)[0];
+                          const bucket = bootstrapSchema.get(firstKey);
+                          qfV2DroppedFacetCaption = bucket?.caption || firstKey || null;
+                          console.log(`[QueryFirstV2] query_first_v2_honest_empty noun="${noun}" pool=${pool.length} attemptedFacets=${JSON.stringify(attemptedFacets)} elapsed=${Date.now() - qfStart}ms`);
+                        }
                       }
                     }
                   }
