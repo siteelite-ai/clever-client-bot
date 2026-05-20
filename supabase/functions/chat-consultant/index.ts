@@ -2103,18 +2103,22 @@ async function _doFetchCategoryOptionsSchema(
     for (const opt of optionsArr) {
       if (!opt || typeof opt.key !== 'string') continue;
       if (isExcludedOption(opt.key)) continue;
-      const captionRu = (opt.caption_ru || opt.caption || opt.key).toString().trim();
+      // Schema хранит ТОЛЬКО ru-форму (caption/value). kz-хвост через `//`
+      // ломал отправку в API (`options[k][]=ru//kz` → каталог не находит).
+      // FilterLLM и юзер работают по-русски, kz в схеме не нужен; fallback на kz
+      // оставлен на случай пустого ru.
+      const captionRu = (opt.caption_ru || opt.caption || '').toString().trim();
       const captionKz = (opt.caption_kz || '').toString().trim();
-      const caption = captionKz ? `${captionRu}//${captionKz}` : captionRu;
+      const caption = captionRu || captionKz || opt.key;
       const valuesSet = new Set<string>();
       const values: any[] = Array.isArray(opt.values) ? opt.values : [];
       for (const v of values) {
         if (!v) continue;
         const vr = (v.value_ru ?? v.value ?? '').toString().trim();
         const vk = (v.value_kz ?? '').toString().trim();
-        if (!vr && !vk) continue;
-        const joined = vk ? `${vr}//${vk}` : vr;
-        valuesSet.add(joined);
+        const chosen = vr || vk;
+        if (!chosen) continue;
+        valuesSet.add(chosen);
       }
       if (valuesSet.size === 0) continue;
       schema.set(opt.key, { caption, values: valuesSet });
