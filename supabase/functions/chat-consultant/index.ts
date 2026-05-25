@@ -1661,89 +1661,19 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 
       const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       __lastClassifyDiagnostics.raw_preview = jsonStr.slice(0, 500);
-      let parsed: Record<string, unknown>;
-      try {
-        parsed = JSON.parse(jsonStr);
-      } catch (parseErr) {
-        __lastClassifyDiagnostics.parse_error = (parseErr as Error)?.message ?? String(parseErr);
-        console.warn(`[Classify] ${attempt.label} JSON parse failed, attempting recovery...`);
-        parsed = undefined as unknown as Record<string, unknown>;
-
-        // Recovery 1 (highest fidelity): LLM emitted valid JSON followed by extra prose.
-        // Error message contains "at position N" — truncate to N and re-parse.
-        const posMatch = String(__lastClassifyDiagnostics.parse_error).match(/position\s+(\d+)/i);
-        if (posMatch) {
-          const cutAt = parseInt(posMatch[1], 10);
-          if (Number.isFinite(cutAt) && cutAt > 10 && cutAt <= jsonStr.length) {
-            try {
-              parsed = JSON.parse(jsonStr.slice(0, cutAt));
-              __lastClassifyDiagnostics.recovery_used = 'truncate_after_json';
-              console.log(`[Classify] ${attempt.label} recovered via truncate@${cutAt} (extra prose after JSON)`);
-            } catch { /* fall through */ }
-          }
-        }
-
-        // Recovery 2: repair truncated JSON (unclosed braces/strings).
-        if (!parsed) {
-          let repaired = jsonStr;
-          const quotes = (repaired.match(/"/g) || []).length;
-          if (quotes % 2 !== 0) repaired += '"';
-          const openBraces = (repaired.match(/\{/g) || []).length - (repaired.match(/\}/g) || []).length;
-          const openBrackets = (repaired.match(/\[/g) || []).length - (repaired.match(/\]/g) || []).length;
-          for (let i = 0; i < openBrackets; i++) repaired += ']';
-          for (let i = 0; i < openBraces; i++) repaired += '}';
-          repaired = repaired.replace(/,(\s*[}\]])/g, '$1');
-          try {
-            parsed = JSON.parse(repaired);
-            __lastClassifyDiagnostics.recovery_used = 'json_repair';
-            console.log(`[Classify] ${attempt.label} JSON recovered via json_repair`);
-          } catch { /* fall through */ }
-        }
-
-        // Recovery 3 (last resort): regex-extract critical fields, including arrays and booleans.
-        if (!parsed) {
-          const intentMatch = jsonStr.match(/"intent"\s*:\s*"(\w+)"/);
-          const hasNameMatch = jsonStr.match(/"has_product_name"\s*:\s*(true|false)/);
-          const isReplMatch = jsonStr.match(/"is_replacement"\s*:\s*(true|false)/);
-          const productNameMatch = jsonStr.match(/"product_name"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-          const categoryMatch = jsonStr.match(/"product_category"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-          const subIntentMatch = jsonStr.match(/"sub_intent"\s*:\s*"(\w+)"/);
-          const priceIntentMatch = jsonStr.match(/"price_intent"\s*:\s*"(\w+)"/);
-
-          // Parse flat string arrays: "search_modifiers": ["a", "b", "c"]
-          const extractStringArray = (key: string): string[] | undefined => {
-            const m = jsonStr.match(new RegExp(`"${key}"\\s*:\\s*\\[([^\\]]*)\\]`));
-            if (!m) return undefined;
-            const inner = m[1];
-            const items: string[] = [];
-            const itemRe = /"((?:[^"\\]|\\.)*)"/g;
-            let it: RegExpExecArray | null;
-            while ((it = itemRe.exec(inner)) !== null) items.push(it[1]);
-            return items;
-          };
-          const searchMods = extractStringArray('search_modifiers');
-          const criticalMods = extractStringArray('critical_modifiers');
-
-          if (intentMatch || hasNameMatch) {
-            __lastClassifyDiagnostics.recovery_used = 'regex_extract';
-            console.log(`[Classify] ${attempt.label} regex-extracted partial result (is_replacement=${isReplMatch?.[1]}, modifiers=${searchMods?.length ?? 0})`);
-            parsed = {
-              intent: intentMatch?.[1],
-              has_product_name: hasNameMatch?.[1] === 'true',
-              is_replacement: isReplMatch ? isReplMatch[1] === 'true' : undefined,
-              product_name: productNameMatch?.[1],
-              product_category: categoryMatch?.[1],
-              sub_intent: subIntentMatch?.[1],
-              price_intent: priceIntentMatch?.[1],
-              search_modifiers: searchMods ?? [],
-              critical_modifiers: criticalMods ?? [],
-            };
-          } else {
-            __lastClassifyDiagnostics.fail_reason = 'parse_failed';
-            throw parseErr;
-          }
-        }
+      const parseResult = parseClassifierContent(content);
+      if (!parseResult) {
+        __lastClassifyDiagnostics.parse_error = __lastClassifyDiagnostics.parse_error || 'unparseable';
+        __lastClassifyDiagnostics.fail_reason = 'parse_failed';
+        console.warn(`[Classify] ${attempt.label} JSON unparseable after all recovery paths`);
+        continue;
       }
+      const parsed = parseResult.parsed;
+      if (parseResult.recovery !== 'none') {
+        __lastClassifyDiagnostics.recovery_used = parseResult.recovery;
+        console.log(`[Classify] ${attempt.label} recovered via ${parseResult.recovery}`);
+      }
+
       const validIntents = ['catalog', 'brands', 'info', 'general'];
       const rawIntent = typeof parsed.intent === 'string' ? parsed.intent.toLowerCase().trim() : null;
       const intent = validIntents.includes(rawIntent!) ? rawIntent : undefined;
