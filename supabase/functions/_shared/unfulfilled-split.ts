@@ -12,7 +12,7 @@
 // Caller обязан вызывать только при `final=0` (jargon-fallback или QFv2 honest-empty),
 // чтобы не нагружать API на happy-path.
 
-import type { Product } from './types.ts'; // optional import; type-only — caller may pass own shape
+// Структурный тип ProbeProduct ниже — caller волен передать собственный Product shape.
 
 // Минимально нужный shape — не зависим от конкретного определения Product.
 // Если файл types.ts отсутствует у caller — TS подхватит структурный тип.
