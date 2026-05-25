@@ -317,10 +317,17 @@
       text-indent: 0;
     }
     
+    .volt-list-product {
+      margin-top: 10px;
+      margin-bottom: 2px;
+      padding-left: 16px;
+      text-indent: -10px;
+    }
+
     .volt-list-sub {
-      margin: 2px 0;
-      padding-left: 24px;
-      text-indent: 0;
+      margin: 2px 0 2px 16px;
+      padding-left: 16px;
+      text-indent: -10px;
       color: #bbb;
       font-size: 13px;
     }
