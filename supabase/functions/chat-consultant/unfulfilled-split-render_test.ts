@@ -6,8 +6,8 @@
 import { assertEquals, assertStringIncludes } from 'https://deno.land/std@0.224.0/assert/mod.ts';
 import { buildDeterministicShortCircuitContent } from './index.ts';
 
-// Minimal Product shape — соответствует ProductResource (см. catalog/api-client).
-const mkProduct = (i: number, name: string) => ({
+// deno-lint-ignore no-explicit-any
+const mkProduct = (i: number, name: string): any => ({
   id: i,
   pagetitle: name,
   url: `https://220volt.kz/p/${i}`,
@@ -15,7 +15,7 @@ const mkProduct = (i: number, name: string) => ({
   vendor: 'TestBrand',
   category: { pagetitle: 'лампы', id: 1, url: '/cat' },
   options: [],
-}) as unknown as import('./index.ts').Product extends infer T ? T : never;
+});
 
 Deno.test('split-рендер: 2 непустые секции → intro «вместе не нашлось» + 2 заголовка + карточки', () => {
   const out = buildDeterministicShortCircuitContent({
