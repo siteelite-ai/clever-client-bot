@@ -7835,52 +7835,100 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                          branchTag = 'qfv2_win';
                          console.log(`[QueryFirstV2] query_first_v2_win noun="${noun}" filters=${Object.keys(resolvedFilters).length} count=${finalFiltered.length} elapsed=${Date.now() - qfStart}ms`);
 
-                         // ── Unfulfilled-combination probe at qfv2_win (2026-05-25).
-                         // FilterLLM resolved e.g. {tip_cokolya:"E27"} but другой пользовательский
-                         // модификатор («кукуруза») остался unresolved — мы молча показали 8
-                         // лампочек E27 без кукурузы. Это обман: товары «лампа кукуруза» в каталоге
-                         // ЕСТЬ, просто без E27. Проверяем split-сценарий: если noun+dropped даёт
-                         // результаты, а полная комбинация — 0, рендерим 2 секции честно.
-                         //
-                         // Detection: resolverUnresolved минус те, чей text уже представлен в
-                         // resolvedFilters values (например «е27» совпадает с «E27» — не считаем
-                         // его dropped). Никаких стоп-листов, никакой семантики — чистое сравнение.
-                         try {
-                           const resolvedValuesLc = Object.values(resolvedFilters).map(v => String(v).toLowerCase());
-                           const truelyDropped = (resolverUnresolved || [])
-                             .map(m => (m || '').trim())
-                             .filter(m => m.length > 0)
-                             .filter(m => !resolvedValuesLc.some(v => v.includes(m.toLowerCase()) || m.toLowerCase().includes(v)));
-                           if (truelyDropped.length >= 1 && resolvedValuesLc.length > 0) {
-                             const resolvedLabel = resolvedValuesLc.join(' ');
-                             const { probeUnfulfilledCombination } = await import('../_shared/unfulfilled-split.ts');
-                             const split = await probeUnfulfilledCombination<Product>({
-                               noun,
-                               modifiers: [resolvedLabel, ...truelyDropped],
-                               searchFn: (q) => searchProductsByCandidate(
-                                 { query: q, brand: null, category: null, min_price: null, max_price: null },
-                                 appSettings.volt220_api_token!,
-                                 10,
-                               ),
-                               log: (event, data) => console.log(`[Chat req=${reqId}] [Unfulfilled-QFv2] ${event}`, data ?? {}),
-                             });
-                             if (split.hasSplit) {
-                               const sections = split.perModifier
-                                 .filter(p => p.sample.length > 0)
-                                 .slice(0, 2)
-                                 .map(p => ({ label: p.modifier, products: p.sample }));
-                               if (sections.length >= 2) {
-                                 unfulfilledSplit = { noun, sections };
-                                 displayList = sections.flatMap(s => s.products).slice(0, 6);
-                                 branchTag = 'qfv2_unfulfilled_split';
-                                 console.log(`[Chat req=${reqId}] [Unfulfilled-QFv2] split rendered: noun="${noun}" dropped=[${truelyDropped.join(',')}] sections=${sections.map(s => `${s.label}(${s.products.length})`).join(', ')}`);
-                                 logAddStep({ step: 'qfv2-unfulfilled-split', total: displayList.length, meta: { noun, dropped: truelyDropped, resolved_label: resolvedLabel, sections: sections.map(s => ({ label: s.label, n: s.products.length })) } });
-                               }
-                             }
-                           }
-                         } catch (splitErr) {
-                           console.warn(`[Chat req=${reqId}] [Unfulfilled-QFv2] split probe silent fail:`, splitErr instanceof Error ? splitErr.message : String(splitErr));
-                         }
+                          // ── Unfulfilled-combination split at qfv2_win (2026-05-25, v2).
+                          // FilterLLM resolved e.g. {tip_cokolya:"E27"} но «кукуруза» осталась
+                          // unresolved — молча показали лампы E27 без кукурузы. Это обман:
+                          // в каталоге есть и «лампа e27», и «corn lamp», просто не вместе.
+                          //
+                          // Алгоритм (data-agnostic):
+                          //   1. Делим ИСХОДНЫЕ modifiers на resolved/dropped по сравнению с
+                          //      resolvedFilters values через ASCII-fold (е27 ≡ E27, ё ≡ е).
+                          //   2. Section A = finalFiltered (уже есть, label = resolved originals).
+                          //   3. Для каждого dropped: probe `noun + modifier`. Если 0 —
+                          //      tryJargonFallback с тем же query, ретрай альтернатив.
+                          //      Первый непустой результат → section.
+                          //   4. ≥1 dropped-section с товарами → split=true, рендерим A + dropped.
+                          try {
+                            // ASCII-fold для сравнения: кириллица→латиница (lookalikes), lowercase,
+                            // ё→е, удаление не-alnum. Идемпотентна.
+                            const CYR_LAT: Record<string, string> = {
+                              а:'a', б:'b', в:'v', г:'g', д:'d', е:'e', ё:'e', ж:'zh', з:'z',
+                              и:'i', й:'i', к:'k', л:'l', м:'m', н:'n', о:'o', п:'p', р:'r',
+                              с:'s', т:'t', у:'u', ф:'f', х:'h', ц:'c', ч:'ch', ш:'sh', щ:'sh',
+                              ъ:'', ы:'y', ь:'', э:'e', ю:'yu', я:'ya',
+                            };
+                            const fold = (s: string): string => {
+                              const lower = (s || '').toLowerCase().normalize('NFKC');
+                              let out = '';
+                              for (const ch of lower) out += (CYR_LAT[ch] ?? ch);
+                              return out.replace(/[^a-z0-9]/g, '');
+                            };
+                            const resolvedValuesFolded = Object.values(resolvedFilters)
+                              .map(v => fold(String(v)))
+                              .filter(s => s.length > 0);
+                            const originalMods = (modifiers || []).map(m => (m || '').trim()).filter(m => m.length > 0);
+                            const resolvedOriginals: string[] = [];
+                            const droppedOriginals: string[] = [];
+                            for (const m of originalMods) {
+                              const f = fold(m);
+                              if (f.length === 0) continue;
+                              const isResolved = resolvedValuesFolded.some(v => v.includes(f) || f.includes(v));
+                              (isResolved ? resolvedOriginals : droppedOriginals).push(m);
+                            }
+                            if (droppedOriginals.length >= 1 && resolvedOriginals.length >= 1) {
+                              console.log(`[Chat req=${reqId}] [Unfulfilled-QFv2] split candidate: noun="${noun}" resolved=[${resolvedOriginals.join(',')}] dropped=[${droppedOriginals.join(',')}]`);
+                              const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
+                              const sanitize = (xs: Product[]) =>
+                                xs.filter(p => typeof p.price === 'number' && (p.price as number) > 0).slice(0, 3);
+                              const probeOne = async (mod: string): Promise<Product[]> => {
+                                const q = `${noun} ${mod}`;
+                                const direct = await searchProductsByCandidate(
+                                  { query: q, brand: null, category: null, min_price: null, max_price: null },
+                                  appSettings.volt220_api_token!,
+                                  10,
+                                );
+                                if (direct.length > 0) return sanitize(direct);
+                                // Жаргон: «лампа кукуруза» → пусто, jargon → «corn lamp» → есть.
+                                try {
+                                  const jr = await tryJargonFallback({
+                                    originalQuery: q,
+                                    openrouterKey: appSettings.openrouter_api_key!,
+                                    searchFn: (alt) => searchProductsByCandidate(
+                                      { query: alt, brand: null, category: null, min_price: null, max_price: null },
+                                      appSettings.volt220_api_token!,
+                                      10,
+                                    ),
+                                    log: (event, data) => console.log(`[Chat req=${reqId}] [Unfulfilled-QFv2-Jargon ${mod}] ${event}`, data ?? {}),
+                                  });
+                                  return sanitize((jr.products || []) as Product[]);
+                                } catch (jerr) {
+                                  console.warn(`[Chat req=${reqId}] [Unfulfilled-QFv2-Jargon ${mod}] silent fail:`, jerr instanceof Error ? jerr.message : String(jerr));
+                                  return [];
+                                }
+                              };
+                              const droppedSamples = await Promise.all(droppedOriginals.map(probeOne));
+                              const droppedSections = droppedOriginals
+                                .map((mod, i) => ({ label: mod, products: droppedSamples[i] }))
+                                .filter(s => s.products.length > 0)
+                                .slice(0, 2);
+                              if (droppedSections.length >= 1) {
+                                const sectionA = {
+                                  label: resolvedOriginals.join(' '),
+                                  products: sanitize(finalFiltered),
+                                };
+                                const sections = [sectionA, ...droppedSections];
+                                unfulfilledSplit = { noun, sections };
+                                displayList = sections.flatMap(s => s.products).slice(0, 6);
+                                branchTag = 'qfv2_unfulfilled_split';
+                                console.log(`[Chat req=${reqId}] [Unfulfilled-QFv2] split rendered: noun="${noun}" sections=${sections.map(s => `${s.label}(${s.products.length})`).join(', ')}`);
+                                logAddStep({ step: 'qfv2-unfulfilled-split', total: displayList.length, meta: { noun, resolvedOriginals, droppedOriginals, sections: sections.map(s => ({ label: s.label, n: s.products.length })) } });
+                              } else {
+                                logAddStep({ step: 'qfv2-unfulfilled-split-skip', meta: { reason: 'all_dropped_empty_even_with_jargon', noun, droppedOriginals } });
+                              }
+                            }
+                          } catch (splitErr) {
+                            console.warn(`[Chat req=${reqId}] [Unfulfilled-QFv2] split probe silent fail:`, splitErr instanceof Error ? splitErr.message : String(splitErr));
+                          }
                       } else {
                         // POOL-RESCUE (2026-05-20): фильтры дали 0, но pool узкий (≤ POOL_RESCUE_MAX)
                         // — значит первичный noun-поиск уже точный. Вместо Soft-404 показываем
