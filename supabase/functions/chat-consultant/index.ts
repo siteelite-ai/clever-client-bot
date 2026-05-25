@@ -4972,8 +4972,39 @@ export function buildDeterministicShortCircuitContent(params: {
    * Используется на 2-м ходу после того, как `remaining_offer` уже был предложен.
    */
   suppressTail?: boolean;
+  /**
+   * Split-рендер «и то, и то нашли, вместе — нет» (2026-05-25, unfulfilled-split).
+   * Активируется когда `combined(noun + все modifiers)=0`, но ≥2 компонент дали
+   * непустой результат. Заменяет одиночный список карточек на 2-секционный с
+   * шаблонным дисклеймером (без LLM, нулевой риск галлюцинаций URL/SKU).
+   *
+   * Когда передан — `products` / `totalCollected` / `subIntent` игнорируются.
+   * Кросс-селл, хвост «ещё N» — не применяются.
+   */
+  unfulfilledSplit?: {
+    noun: string;
+    sections: Array<{ label: string; products: Product[] }>;
+  };
 }): string {
-  const { products, reason, userMessage, effectivePriceIntent, subIntent, suppressTail } = params;
+  const { products, reason, userMessage, effectivePriceIntent, subIntent, suppressTail, unfulfilledSplit } = params;
+
+  // ── Split-рендер «комбинации нет, но компоненты есть».
+  if (unfulfilledSplit && unfulfilledSplit.sections.length >= 2) {
+    const { noun, sections } = unfulfilledSplit;
+    const present = sections.filter(s => s.products.length > 0).slice(0, 2);
+    if (present.length >= 2) {
+      const labelsConj = present.map(s => `«${s.label}»`).join(' и ');
+      const intro = `«${noun}» одновременно с ${labelsConj} в каталоге не нашлось. Показываю по отдельности:`;
+      const blocks = present.map(s => {
+        const heading = `**${noun} — ${s.label}:**`;
+        const cards = s.products.slice(0, 3).map(formatProductCardDeterministic).join('\n\n');
+        return `${heading}\n\n${cards}`;
+      });
+      return `${intro}\n\n${blocks.join('\n\n')}`.trim();
+    }
+    // fallthrough: меньше 2 непустых секций — рендерим обычный путь
+  }
+
   if (!products.length) return '';
 
   const intro = buildIntroBySubIntent({
