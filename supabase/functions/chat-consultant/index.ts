@@ -7830,10 +7830,57 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                         meta: { query: noun, filters: resolvedFilters, raw_total: final.length, after_noun_filter: finalFiltered.length },
                       });
 
-                      if (finalFiltered.length > 0) {
-                        displayList = finalFiltered;
-                        branchTag = 'qfv2_win';
-                        console.log(`[QueryFirstV2] query_first_v2_win noun="${noun}" filters=${Object.keys(resolvedFilters).length} count=${finalFiltered.length} elapsed=${Date.now() - qfStart}ms`);
+                       if (finalFiltered.length > 0) {
+                         displayList = finalFiltered;
+                         branchTag = 'qfv2_win';
+                         console.log(`[QueryFirstV2] query_first_v2_win noun="${noun}" filters=${Object.keys(resolvedFilters).length} count=${finalFiltered.length} elapsed=${Date.now() - qfStart}ms`);
+
+                         // ── Unfulfilled-combination probe at qfv2_win (2026-05-25).
+                         // FilterLLM resolved e.g. {tip_cokolya:"E27"} but другой пользовательский
+                         // модификатор («кукуруза») остался unresolved — мы молча показали 8
+                         // лампочек E27 без кукурузы. Это обман: товары «лампа кукуруза» в каталоге
+                         // ЕСТЬ, просто без E27. Проверяем split-сценарий: если noun+dropped даёт
+                         // результаты, а полная комбинация — 0, рендерим 2 секции честно.
+                         //
+                         // Detection: resolverUnresolved минус те, чей text уже представлен в
+                         // resolvedFilters values (например «е27» совпадает с «E27» — не считаем
+                         // его dropped). Никаких стоп-листов, никакой семантики — чистое сравнение.
+                         try {
+                           const resolvedValuesLc = Object.values(resolvedFilters).map(v => String(v).toLowerCase());
+                           const truelyDropped = (resolverUnresolved || [])
+                             .map(m => (m || '').trim())
+                             .filter(m => m.length > 0)
+                             .filter(m => !resolvedValuesLc.some(v => v.includes(m.toLowerCase()) || m.toLowerCase().includes(v)));
+                           if (truelyDropped.length >= 1 && resolvedValuesLc.length > 0) {
+                             const resolvedLabel = resolvedValuesLc.join(' ');
+                             const { probeUnfulfilledCombination } = await import('../_shared/unfulfilled-split.ts');
+                             const split = await probeUnfulfilledCombination<Product>({
+                               noun,
+                               modifiers: [resolvedLabel, ...truelyDropped],
+                               searchFn: (q) => searchProductsByCandidate(
+                                 { query: q, brand: null, category: null, min_price: null, max_price: null },
+                                 appSettings.volt220_api_token!,
+                                 10,
+                               ),
+                               log: (event, data) => console.log(`[Chat req=${reqId}] [Unfulfilled-QFv2] ${event}`, data ?? {}),
+                             });
+                             if (split.hasSplit) {
+                               const sections = split.perModifier
+                                 .filter(p => p.sample.length > 0)
+                                 .slice(0, 2)
+                                 .map(p => ({ label: p.modifier, products: p.sample }));
+                               if (sections.length >= 2) {
+                                 unfulfilledSplit = { noun, sections };
+                                 displayList = sections.flatMap(s => s.products).slice(0, 6);
+                                 branchTag = 'qfv2_unfulfilled_split';
+                                 console.log(`[Chat req=${reqId}] [Unfulfilled-QFv2] split rendered: noun="${noun}" dropped=[${truelyDropped.join(',')}] sections=${sections.map(s => `${s.label}(${s.products.length})`).join(', ')}`);
+                                 logAddStep({ step: 'qfv2-unfulfilled-split', total: displayList.length, meta: { noun, dropped: truelyDropped, resolved_label: resolvedLabel, sections: sections.map(s => ({ label: s.label, n: s.products.length })) } });
+                               }
+                             }
+                           }
+                         } catch (splitErr) {
+                           console.warn(`[Chat req=${reqId}] [Unfulfilled-QFv2] split probe silent fail:`, splitErr instanceof Error ? splitErr.message : String(splitErr));
+                         }
                       } else {
                         // POOL-RESCUE (2026-05-20): фильтры дали 0, но pool узкий (≤ POOL_RESCUE_MAX)
                         // — значит первичный noun-поиск уже точный. Вместо Soft-404 показываем
