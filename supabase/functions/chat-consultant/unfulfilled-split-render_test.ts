@@ -30,7 +30,7 @@ Deno.test('split-рендер: 2 непустые секции → intro «вм�
       ],
     },
   });
-  assertStringIncludes(out, 'вместе');
+  assertStringIncludes(out, 'одновременно');
   assertStringIncludes(out, 'не нашлось');
   assertStringIncludes(out, '«лампа»');
   assertStringIncludes(out, '«corn lamp»');
