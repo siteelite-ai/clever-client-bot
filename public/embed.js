@@ -317,10 +317,17 @@
       text-indent: 0;
     }
     
+    .volt-list-product {
+      margin-top: 10px;
+      margin-bottom: 2px;
+      padding-left: 16px;
+      text-indent: -10px;
+    }
+
     .volt-list-sub {
-      margin: 2px 0;
-      padding-left: 24px;
-      text-indent: 0;
+      margin: 2px 0 2px 16px;
+      padding-left: 16px;
+      text-indent: -10px;
       color: #bbb;
       font-size: 13px;
     }
@@ -628,8 +635,10 @@
     // Handle numbered lists (1. 2. 3.) - main product items
     result = result.replace(/^(\d+)\.\s+(.+)$/gm, '<div class="volt-list-item volt-list-main">$1. $2</div>');
     
-    // Handle sub-items with dash (- Цена: ...) - these are details
-    result = result.replace(/^\s*[\-•]\s+(.+)$/gm, '<div class="volt-list-item volt-list-sub">• $1</div>');
+    // Nested sub-items (≥2 leading spaces or tab) — детали карточки (Цена/Бренд/Наличие)
+    result = result.replace(/^(?:[ ]{2,}|\t+)[\-•]\s+(.+)$/gm, '<div class="volt-list-item volt-list-sub">• $1</div>');
+    // Root-level dash items — карточка товара (название с ссылкой)
+    result = result.replace(/^[\-•]\s+(.+)$/gm, '<div class="volt-list-item volt-list-product">• $1</div>');
     
     // Handle bullet lists with asterisks at line start (not sub-items)
     result = result.replace(/^\*\s+(.+)$/gm, '<div class="volt-list-item">• $1</div>');
