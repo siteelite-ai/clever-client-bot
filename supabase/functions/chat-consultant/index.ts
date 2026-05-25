@@ -10042,6 +10042,7 @@ ${productInstructions}`;
             subIntent: classification?.sub_intent,
             totalCollected,
             suppressTail: tailWasOfferedLastTurn,
+            unfulfilledSplit: unfulfilledSplit ?? undefined,
           });
       console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${content.length}`);
       logSetProductsCount(foundProducts.length);
