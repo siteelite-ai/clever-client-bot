@@ -22,18 +22,18 @@ export interface ProbeProduct {
   url?: string | null;
 }
 
-export interface PerModifierProbe {
+export interface PerModifierProbe<P extends ProbeProduct = ProbeProduct> {
   modifier: string;
   total: number;
-  /** Топ-3 товара с price>0 (HARD BAN price=0 соблюдается). */
-  sample: ProbeProduct[];
+  /** Топ-3 товара с price>0 (HARD BAN price=0 соблюдается). Сохраняется исходный generic-тип. */
+  sample: P[];
 }
 
-export interface SplitProbeResult {
+export interface SplitProbeResult<P extends ProbeProduct = ProbeProduct> {
   /** Полная комбинация noun + все modifiers. */
-  combined: { total: number; sample: ProbeProduct[] };
+  combined: { total: number; sample: P[] };
   /** Раскладка по отдельным модификаторам. */
-  perModifier: PerModifierProbe[];
+  perModifier: PerModifierProbe<P>[];
   /**
    * true ↔ combined пуст И ≥2 компонент дали непустой результат.
    * Это сигнал caller'у показать split-disclaimer вместо обычного рендера/Soft-404.
@@ -53,15 +53,14 @@ export interface ProbeArgs<P extends ProbeProduct = ProbeProduct> {
 
 const dedupe = (xs: string[]): string[] => Array.from(new Set(xs.map(x => x.trim()).filter(Boolean)));
 
-const sanitizeSample = <P extends ProbeProduct>(xs: P[]): ProbeProduct[] =>
+const sanitizeSample = <P extends ProbeProduct>(xs: P[]): P[] =>
   xs
     .filter(p => typeof p.price === 'number' && (p.price as number) > 0) // HARD BAN price=0
-    .slice(0, 3)
-    .map(p => ({ price: p.price, pagetitle: p.pagetitle ?? null, url: p.url ?? null }));
+    .slice(0, 3);
 
 export async function probeUnfulfilledCombination<P extends ProbeProduct = ProbeProduct>(
   args: ProbeArgs<P>,
-): Promise<SplitProbeResult> {
+): Promise<SplitProbeResult<P>> {
   const noun = (args.noun ?? '').trim();
   const modifiers = dedupe(args.modifiers ?? []);
   if (!noun || modifiers.length < 2) {
@@ -69,7 +68,7 @@ export async function probeUnfulfilledCombination<P extends ProbeProduct = Probe
     args.log?.('probe.split.skip', { reason: 'lt2_modifiers', noun, modifiers });
     return {
       combined: { total: 0, sample: [] },
-      perModifier: modifiers.map(m => ({ modifier: m, total: 0, sample: [] })),
+      perModifier: modifiers.map(m => ({ modifier: m, total: 0, sample: [] as P[] })),
       hasSplit: false,
       presentModifiers: [],
     };
@@ -82,7 +81,7 @@ export async function probeUnfulfilledCombination<P extends ProbeProduct = Probe
     ...perQueries.map(q => args.searchFn(q)),
   ]);
 
-  const perModifier: PerModifierProbe[] = modifiers.map((m, i) => {
+  const perModifier: PerModifierProbe<P>[] = modifiers.map((m, i) => {
     const list = partialsRaw[i] || [];
     return { modifier: m, total: list.length, sample: sanitizeSample(list) };
   });
