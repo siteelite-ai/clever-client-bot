@@ -4972,8 +4972,39 @@ export function buildDeterministicShortCircuitContent(params: {
    * Используется на 2-м ходу после того, как `remaining_offer` уже был предложен.
    */
   suppressTail?: boolean;
+  /**
+   * Split-рендер «и то, и то нашли, вместе — нет» (2026-05-25, unfulfilled-split).
+   * Активируется когда `combined(noun + все modifiers)=0`, но ≥2 компонент дали
+   * непустой результат. Заменяет одиночный список карточек на 2-секционный с
+   * шаблонным дисклеймером (без LLM, нулевой риск галлюцинаций URL/SKU).
+   *
+   * Когда передан — `products` / `totalCollected` / `subIntent` игнорируются.
+   * Кросс-селл, хвост «ещё N» — не применяются.
+   */
+  unfulfilledSplit?: {
+    noun: string;
+    sections: Array<{ label: string; products: Product[] }>;
+  };
 }): string {
-  const { products, reason, userMessage, effectivePriceIntent, subIntent, suppressTail } = params;
+  const { products, reason, userMessage, effectivePriceIntent, subIntent, suppressTail, unfulfilledSplit } = params;
+
+  // ── Split-рендер «комбинации нет, но компоненты есть».
+  if (unfulfilledSplit && unfulfilledSplit.sections.length >= 2) {
+    const { noun, sections } = unfulfilledSplit;
+    const present = sections.filter(s => s.products.length > 0).slice(0, 2);
+    if (present.length >= 2) {
+      const labelsConj = present.map(s => `«${s.label}»`).join(' и ');
+      const intro = `«${noun}» одновременно с ${labelsConj} в каталоге не нашлось. Показываю по отдельности:`;
+      const blocks = present.map(s => {
+        const heading = `**${noun} — ${s.label}:**`;
+        const cards = s.products.slice(0, 3).map(formatProductCardDeterministic).join('\n\n');
+        return `${heading}\n\n${cards}`;
+      });
+      return `${intro}\n\n${blocks.join('\n\n')}`.trim();
+    }
+    // fallthrough: меньше 2 непустых секций — рендерим обычный путь
+  }
+
   if (!products.length) return '';
 
   const intro = buildIntroBySubIntent({
@@ -6427,6 +6458,13 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     // not the truncated 15. Reset to 0 each turn.
     let totalCollected = 0;
     let totalCollectedBranch = '';
+    // «Комбинации нет, но компоненты есть» (2026-05-25, unfulfilled-split).
+    // Заполняется в jargon-fallback success path когда после перевода жаргона
+    // (например «кукуруза»→«corn lamp») финальная комбинация с critical_modifier
+    // даёт 0, а каждый компонент по отдельности — непустой. Передаётся в
+    // buildDeterministicShortCircuitContent → 2-секционный рендер с шаблонным
+    // дисклеймером (без LLM на тексте → нулевая галлюцинация).
+    let unfulfilledSplit: { noun: string; sections: Array<{ label: string; products: Product[] }> } | null = null;
     // QueryFirstV2 honest-empty context: when final filtered search returns 0,
     // we DO NOT silently show the broader pool (which mixes irrelevant products).
     // Instead, we clear results and pass this context into Soft-404 so the LLM
@@ -9507,10 +9545,62 @@ ${directAnswerBlock}
           if (jargonResult.products.length > 0) {
             // Нашли товары через альтернативу — подставляем и пропускаем Soft-404.
             console.log(`[Chat req=${reqId}] [JargonFallback] Recovered via alternative "${jargonResult.matchedAlternative}": ${jargonResult.products.length} products`);
-            const _r = pickDisplayWithTotal(jargonResult.products);
-            foundProducts = _r.displayed;
-            totalCollected = _r.total;
-            totalCollectedBranch = 'jargon-fallback';
+
+            // ── Unfulfilled-combination probe (2026-05-25).
+            // Если запрос содержал critical_modifiers, не покрытые переводом жаргона
+            // (например «лампа кукуруза е27» → matchedAlt="corn lamp", остаток critical="е27"),
+            // проверяем: даёт ли комбинация AltTerm+critical что-то? Если нет, а каждый
+            // компонент по отдельности — да, это «и то, и то нашли, вместе — нет».
+            // Тогда вместо обычных карточек corn-lamp отдаём split-рендер.
+            try {
+              const matchedAltLc = (jargonResult.matchedAlternative || '').toLowerCase();
+              const allCritical = Array.isArray(classification?.critical_modifiers) ? classification!.critical_modifiers! : [];
+              const extraCritical = allCritical
+                .map((m: string) => (m || '').trim())
+                .filter((m: string) => m.length > 0 && !matchedAltLc.includes(m.toLowerCase()));
+              const noun = (classification?.product_category || '').trim() || extractedIntent.originalQuery.split(/\s+/)[0];
+              if (noun && extraCritical.length >= 1) {
+                const { probeUnfulfilledCombination } = await import('../_shared/unfulfilled-split.ts');
+                const split = await probeUnfulfilledCombination<Product>({
+                  noun,
+                  modifiers: [jargonResult.matchedAlternative!, ...extraCritical],
+                  searchFn: (q) => searchProductsByCandidate(
+                    { query: q, brand: null, category: null, min_price: null, max_price: null },
+                    appSettings.volt220_api_token!,
+                    10,
+                  ),
+                  log: (event, data) => console.log(`[Chat req=${reqId}] [Unfulfilled] ${event}`, data ?? {}),
+                });
+                if (split.hasSplit) {
+                  // Собираем 2 секции: первая — перевод жаргона, остальные — оставшиеся critical.
+                  const sections = split.perModifier
+                    .filter(p => p.sample.length > 0)
+                    .slice(0, 2)
+                    .map(p => ({ label: p.modifier, products: p.sample }));
+                  if (sections.length >= 2) {
+                    unfulfilledSplit = { noun, sections };
+                    // foundProducts = объединение sample'ов: даёт detect для downstream
+                    // shouldUseDeterministicProductRender и страхует от пустого вывода,
+                    // если split-ветка не сработает (fallthrough в обычный рендер).
+                    foundProducts = sections.flatMap(s => s.products).slice(0, 6);
+                    totalCollected = foundProducts.length;
+                    totalCollectedBranch = 'unfulfilled-split';
+                    console.log(`[Chat req=${reqId}] [Unfulfilled] split rendered: noun="${noun}" sections=${sections.map(s => `${s.label}(${s.products.length})`).join(', ')}`);
+                  } else {
+                    console.log(`[Chat req=${reqId}] [Unfulfilled] split skipped: only ${sections.length} non-empty section(s)`);
+                  }
+                }
+              }
+            } catch (splitErr) {
+              console.warn(`[Chat req=${reqId}] [Unfulfilled] split probe silent fail:`, splitErr instanceof Error ? splitErr.message : String(splitErr));
+            }
+
+            if (!unfulfilledSplit) {
+              const _r = pickDisplayWithTotal(jargonResult.products);
+              foundProducts = _r.displayed;
+              totalCollected = _r.total;
+              totalCollectedBranch = 'jargon-fallback';
+            }
             // Пересчитываем productInstructions через стандартную S-CATALOG ветку:
             // выходим из этой ветки, чтобы основной flow подобрал foundProducts.
             // Для этого продолжаем НЕ задавая productInstructions для Soft-404 —
@@ -9952,6 +10042,7 @@ ${productInstructions}`;
             subIntent: classification?.sub_intent,
             totalCollected,
             suppressTail: tailWasOfferedLastTurn,
+            unfulfilledSplit: unfulfilledSplit ?? undefined,
           });
       console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${content.length}`);
       logSetProductsCount(foundProducts.length);
