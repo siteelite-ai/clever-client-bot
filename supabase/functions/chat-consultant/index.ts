@@ -1487,7 +1487,7 @@ export interface ClassifyDiagnostics {
   empty_content: boolean;
   raw_preview: string | null;       // первые 500 символов content (или error message)
   parse_error: string | null;       // exception message при JSON.parse
-  recovery_used: 'truncate_after_json' | 'json_repair' | 'regex_extract' | null;
+  recovery_used: 'json_repair' | 'regex_extract' | null;
   fail_reason: 'no_api_key' | 'http_error' | 'timeout' | 'empty' | 'parse_failed' | 'exception' | null;
   exception: string | null;
 }
@@ -1497,87 +1497,6 @@ let __lastClassifyDiagnostics: ClassifyDiagnostics = {
   recovery_used: null, fail_reason: null, exception: null,
 };
 export function getLastClassifyDiagnostics(): ClassifyDiagnostics { return __lastClassifyDiagnostics; }
-
-/**
- * Парсит content от classifier-LLM с трёхуровневым recovery:
- *   1. truncate_after_json — валидный JSON, за которым идёт мусор/проза.
- *   2. json_repair         — обрезанный JSON (незакрытые кавычки/скобки).
- *   3. regex_extract       — добываем критичные поля регулярками.
- * Возвращает {parsed, recovery} или null если ничего не получилось.
- * Чистая функция: ничего не мутирует, удобна для unit-тестов.
- */
-export function parseClassifierContent(
-  rawContent: string
-): { parsed: Record<string, unknown>; recovery: 'none' | 'truncate_after_json' | 'json_repair' | 'regex_extract' } | null {
-  if (typeof rawContent !== 'string' || rawContent.trim().length === 0) return null;
-  const jsonStr = rawContent.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-  try {
-    return { parsed: JSON.parse(jsonStr), recovery: 'none' };
-  } catch (parseErr) {
-    const errMsg = (parseErr as Error)?.message ?? String(parseErr);
-
-    // Recovery 1: prose after JSON
-    const posMatch = String(errMsg).match(/position\s+(\d+)/i);
-    if (posMatch) {
-      const cutAt = parseInt(posMatch[1], 10);
-      if (Number.isFinite(cutAt) && cutAt > 10 && cutAt <= jsonStr.length) {
-        try { return { parsed: JSON.parse(jsonStr.slice(0, cutAt)), recovery: 'truncate_after_json' }; }
-        catch { /* fall through */ }
-      }
-    }
-
-    // Recovery 2: repair truncated JSON
-    {
-      let repaired = jsonStr;
-      const quotes = (repaired.match(/"/g) || []).length;
-      if (quotes % 2 !== 0) repaired += '"';
-      const openBraces = (repaired.match(/\{/g) || []).length - (repaired.match(/\}/g) || []).length;
-      const openBrackets = (repaired.match(/\[/g) || []).length - (repaired.match(/\]/g) || []).length;
-      for (let i = 0; i < openBrackets; i++) repaired += ']';
-      for (let i = 0; i < openBraces; i++) repaired += '}';
-      repaired = repaired.replace(/,(\s*[}\]])/g, '$1');
-      try { return { parsed: JSON.parse(repaired), recovery: 'json_repair' }; }
-      catch { /* fall through */ }
-    }
-
-    // Recovery 3: regex extract
-    const intentMatch = jsonStr.match(/"intent"\s*:\s*"(\w+)"/);
-    const hasNameMatch = jsonStr.match(/"has_product_name"\s*:\s*(true|false)/);
-    const isReplMatch = jsonStr.match(/"is_replacement"\s*:\s*(true|false)/);
-    const productNameMatch = jsonStr.match(/"product_name"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-    const categoryMatch = jsonStr.match(/"product_category"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-    const subIntentMatch = jsonStr.match(/"sub_intent"\s*:\s*"(\w+)"/);
-    const priceIntentMatch = jsonStr.match(/"price_intent"\s*:\s*"(\w+)"/);
-    const extractStringArray = (key: string): string[] | undefined => {
-      const m = jsonStr.match(new RegExp(`"${key}"\\s*:\\s*\\[([^\\]]*)\\]`));
-      if (!m) return undefined;
-      const items: string[] = [];
-      const itemRe = /"((?:[^"\\]|\\.)*)"/g;
-      let it: RegExpExecArray | null;
-      while ((it = itemRe.exec(m[1])) !== null) items.push(it[1]);
-      return items;
-    };
-    const searchMods = extractStringArray('search_modifiers');
-    const criticalMods = extractStringArray('critical_modifiers');
-    if (intentMatch || hasNameMatch) {
-      return {
-        parsed: {
-          intent: intentMatch?.[1],
-          has_product_name: hasNameMatch?.[1] === 'true',
-          is_replacement: isReplMatch ? isReplMatch[1] === 'true' : undefined,
-          product_name: productNameMatch?.[1],
-          product_category: categoryMatch?.[1],
-          sub_intent: subIntentMatch?.[1],
-          price_intent: priceIntentMatch?.[1],
-          search_modifiers: searchMods ?? [],
-          critical_modifiers: criticalMods ?? [],
-        },
-        recovery: 'regex_extract',
-      };
-    }
-    return null;
-  }
-}
 
 async function classifyProductName(message: string, recentHistory?: Array<{role: string, content: string}>, settings?: CachedSettings | null): Promise<ClassificationResult | null> {
   // Reset diagnostics для нового вызова
@@ -1661,19 +1580,50 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
 
       const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       __lastClassifyDiagnostics.raw_preview = jsonStr.slice(0, 500);
-      const parseResult = parseClassifierContent(content);
-      if (!parseResult) {
-        __lastClassifyDiagnostics.parse_error = __lastClassifyDiagnostics.parse_error || 'unparseable';
-        __lastClassifyDiagnostics.fail_reason = 'parse_failed';
-        console.warn(`[Classify] ${attempt.label} JSON unparseable after all recovery paths`);
-        continue;
+      let parsed: Record<string, unknown>;
+      try {
+        parsed = JSON.parse(jsonStr);
+      } catch (parseErr) {
+        // Recovery: try to repair truncated JSON (closing braces/quotes)
+        __lastClassifyDiagnostics.parse_error = (parseErr as Error)?.message ?? String(parseErr);
+        console.warn(`[Classify] ${attempt.label} JSON parse failed, attempting recovery...`);
+        let repaired = jsonStr;
+        // If last char inside an unterminated string, close it
+        const quotes = (repaired.match(/"/g) || []).length;
+        if (quotes % 2 !== 0) repaired += '"';
+        // Close arrays/objects
+        const openBraces = (repaired.match(/\{/g) || []).length - (repaired.match(/\}/g) || []).length;
+        const openBrackets = (repaired.match(/\[/g) || []).length - (repaired.match(/\]/g) || []).length;
+        for (let i = 0; i < openBrackets; i++) repaired += ']';
+        for (let i = 0; i < openBraces; i++) repaired += '}';
+        // Strip trailing commas before closing
+        repaired = repaired.replace(/,(\s*[}\]])/g, '$1');
+        try {
+          parsed = JSON.parse(repaired);
+          __lastClassifyDiagnostics.recovery_used = 'json_repair';
+          console.log(`[Classify] ${attempt.label} JSON recovered successfully`);
+        } catch {
+          // Last resort: regex-extract critical fields
+          const intentMatch = jsonStr.match(/"intent"\s*:\s*"(\w+)"/);
+          const hasNameMatch = jsonStr.match(/"has_product_name"\s*:\s*(true|false)/);
+          const productNameMatch = jsonStr.match(/"product_name"\s*:\s*"([^"]*)"/);
+          const categoryMatch = jsonStr.match(/"product_category"\s*:\s*"([^"]*)"/);
+          if (intentMatch || hasNameMatch) {
+            __lastClassifyDiagnostics.recovery_used = 'regex_extract';
+            console.log(`[Classify] ${attempt.label} regex-extracted partial result`);
+            parsed = {
+              intent: intentMatch?.[1],
+              has_product_name: hasNameMatch?.[1] === 'true',
+              product_name: productNameMatch?.[1],
+              product_category: categoryMatch?.[1],
+              search_modifiers: [],
+            };
+          } else {
+            __lastClassifyDiagnostics.fail_reason = 'parse_failed';
+            throw parseErr;
+          }
+        }
       }
-      const parsed = parseResult.parsed;
-      if (parseResult.recovery !== 'none') {
-        __lastClassifyDiagnostics.recovery_used = parseResult.recovery;
-        console.log(`[Classify] ${attempt.label} recovered via ${parseResult.recovery}`);
-      }
-
       const validIntents = ['catalog', 'brands', 'info', 'general'];
       const rawIntent = typeof parsed.intent === 'string' ? parsed.intent.toLowerCase().trim() : null;
       const intent = validIntents.includes(rawIntent!) ? rawIntent : undefined;
