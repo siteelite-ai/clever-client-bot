@@ -9556,8 +9556,8 @@ ${directAnswerBlock}
               const matchedAltLc = (jargonResult.matchedAlternative || '').toLowerCase();
               const allCritical = Array.isArray(classification?.critical_modifiers) ? classification!.critical_modifiers! : [];
               const extraCritical = allCritical
-                .map(m => (m || '').trim())
-                .filter(m => m.length > 0 && !matchedAltLc.includes(m.toLowerCase()));
+                .map((m: string) => (m || '').trim())
+                .filter((m: string) => m.length > 0 && !matchedAltLc.includes(m.toLowerCase()));
               const noun = (classification?.product_category || '').trim() || extractedIntent.originalQuery.split(/\s+/)[0];
               if (noun && extraCritical.length >= 1) {
                 const { probeUnfulfilledCombination } = await import('../_shared/unfulfilled-split.ts');
