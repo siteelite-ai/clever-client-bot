@@ -25,8 +25,8 @@ Deno.test('split-рендер: 2 непустые секции → intro «вм�
     unfulfilledSplit: {
       noun: 'лампа',
       sections: [
-        { label: 'corn lamp', products: [mkProduct(1, 'Corn Lamp 15W E40'), mkProduct(2, 'Corn 24W E40')] as never[] },
-        { label: 'е27', products: [mkProduct(3, 'LED A60 7W E27'), mkProduct(4, 'LED A60 12W E27')] as never[] },
+        { label: 'corn lamp', products: [mkProduct(1, 'Corn Lamp 15W E40'), mkProduct(2, 'Corn 24W E40')] },
+        { label: 'е27', products: [mkProduct(3, 'LED A60 7W E27'), mkProduct(4, 'LED A60 12W E27')] },
       ],
     },
   });
@@ -45,13 +45,13 @@ Deno.test('split-рендер: 2 непустые секции → intro «вм�
 
 Deno.test('split-рендер: одна секция пуста → fallthrough в обычный рендер (когда products непуст)', () => {
   const out = buildDeterministicShortCircuitContent({
-    products: [mkProduct(99, 'Fallback Product')] as never[],
+    products: [mkProduct(99, 'Fallback Product')],
     reason: 'jargon-fallback',
     userMessage: 'q',
     unfulfilledSplit: {
       noun: 'лампа',
       sections: [
-        { label: 'corn', products: [mkProduct(1, 'Corn 1')] as never[] },
+        { label: 'corn', products: [mkProduct(1, 'Corn 1')] },
         { label: 'е27', products: [] },
       ],
     },
@@ -61,7 +61,7 @@ Deno.test('split-рендер: одна секция пуста → fallthrough 
 
 Deno.test('split-рендер: без unfulfilledSplit обычный путь не меняется', () => {
   const out = buildDeterministicShortCircuitContent({
-    products: [mkProduct(1, 'Lamp One')] as never[],
+    products: [mkProduct(1, 'Lamp One')],
     reason: 'pass2-shortcircuit',
     userMessage: 'q',
   });
@@ -79,8 +79,8 @@ Deno.test('split-рендер: максимум 3 карточки на секц
     unfulfilledSplit: {
       noun: 'лампа',
       sections: [
-        { label: 'a', products: many as never[] },
-        { label: 'b', products: many as never[] },
+        { label: 'a', products: many },
+        { label: 'b', products: many },
       ],
     },
   });
