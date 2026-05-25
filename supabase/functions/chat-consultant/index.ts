@@ -6458,6 +6458,13 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     // not the truncated 15. Reset to 0 each turn.
     let totalCollected = 0;
     let totalCollectedBranch = '';
+    // «Комбинации нет, но компоненты есть» (2026-05-25, unfulfilled-split).
+    // Заполняется в jargon-fallback success path когда после перевода жаргона
+    // (например «кукуруза»→«corn lamp») финальная комбинация с critical_modifier
+    // даёт 0, а каждый компонент по отдельности — непустой. Передаётся в
+    // buildDeterministicShortCircuitContent → 2-секционный рендер с шаблонным
+    // дисклеймером (без LLM на тексте → нулевая галлюцинация).
+    let unfulfilledSplit: { noun: string; sections: Array<{ label: string; products: Product[] }> } | null = null;
     // QueryFirstV2 honest-empty context: when final filtered search returns 0,
     // we DO NOT silently show the broader pool (which mixes irrelevant products).
     // Instead, we clear results and pass this context into Soft-404 so the LLM
