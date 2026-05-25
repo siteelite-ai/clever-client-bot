@@ -634,6 +634,14 @@
     // Handle bullet lists with asterisks at line start (not sub-items)
     result = result.replace(/^\*\s+(.+)$/gm, '<div class="volt-list-item">• $1</div>');
     
+    // Handle italic *text* (after bullets, so leading "* " bullets are already consumed).
+    // Skip if the asterisk is glued to a word boundary like ** (already handled) — non-greedy, no newlines, no asterisks inside.
+    result = result.replace(/(^|[^\*\w])\*([^\*\n]+?)\*(?!\*)/g, '$1<em>$2</em>');
+    
+    // Unescape backslash-escaped markdown punctuation that LLM may emit in product names
+    // e.g. "\(серия Florence\)" → "(серия Florence)"
+    result = result.replace(/\\([()\[\]_*~`\\])/g, '$1');
+    
     // Line breaks (but not after list items)
     result = result.replace(/\n/g, '<br>');
     
