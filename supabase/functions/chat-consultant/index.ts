@@ -1578,7 +1578,25 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
         continue;
       }
 
-      const jsonStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+      const rawStr = content.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+      // Balanced-brace extraction: вырезаем подстроку от первого { до парной } с учётом строк/escape.
+      // Защищает от случая, когда LLM приписал свободный текст после JSON (например "\nВот варианты...").
+      const extractBalancedJson = (s: string): string => {
+        const start = s.indexOf('{');
+        if (start < 0) return s;
+        let depth = 0, inStr = false, esc = false;
+        for (let i = start; i < s.length; i++) {
+          const ch = s[i];
+          if (esc) { esc = false; continue; }
+          if (ch === '\\') { esc = true; continue; }
+          if (ch === '"') { inStr = !inStr; continue; }
+          if (inStr) continue;
+          if (ch === '{') depth++;
+          else if (ch === '}') { depth--; if (depth === 0) return s.slice(start, i + 1); }
+        }
+        return s.slice(start); // unbalanced — отдаём как есть, recovery починит
+      };
+      const jsonStr = extractBalancedJson(rawStr);
       __lastClassifyDiagnostics.raw_preview = jsonStr.slice(0, 500);
       let parsed: Record<string, unknown>;
       try {
