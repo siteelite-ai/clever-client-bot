@@ -50,3 +50,16 @@ Deno.test("classifier prompt: no real product/category examples (data-agnostic)"
     );
   }
 });
+
+Deno.test("classifier prompt: 'цена за единицу' disambiguated as spec, not price", () => {
+  // Disambiguation rule: "цена ЗА штуку/упаковку/метр/комплект" = spec (unit/packaging), not price.
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "цена ЗА");
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "за штуку");
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "за упаковку");
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "единица измерения");
+});
+
+Deno.test("classifier prompt: spec includes packaging/unit attributes", () => {
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "количество в упаковке");
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "комплектация");
+});
