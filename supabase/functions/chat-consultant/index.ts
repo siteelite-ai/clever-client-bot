@@ -1487,7 +1487,7 @@ export interface ClassifyDiagnostics {
   empty_content: boolean;
   raw_preview: string | null;       // первые 500 символов content (или error message)
   parse_error: string | null;       // exception message при JSON.parse
-  recovery_used: 'json_repair' | 'regex_extract' | null;
+  recovery_used: 'truncate_after_json' | 'json_repair' | 'regex_extract' | null;
   fail_reason: 'no_api_key' | 'http_error' | 'timeout' | 'empty' | 'parse_failed' | 'exception' | null;
   exception: string | null;
 }
