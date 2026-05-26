@@ -4756,7 +4756,7 @@ function formatProductsForAI(products: Product[], includeExtended: boolean = tru
     const p = products[i];
     try {
       let brand = '';
-      let brandLabel = 'Бренд';
+      const brandLabel = 'Бренд';
       if (Array.isArray(p?.options)) {
         const brandOption = p.options.find((o: any) => o && o.key === 'brend__brend');
         if (brandOption) {
@@ -4765,7 +4765,6 @@ function formatProductsForAI(products: Product[], includeExtended: boolean = tru
       }
       if (!brand) {
         brand = (typeof p?.vendor === 'string' ? p.vendor : '') || '';
-        if (brand) brandLabel = 'Производитель';
       }
 
       const safeUrl = typeof p?.url === 'string' ? p.url : '';
