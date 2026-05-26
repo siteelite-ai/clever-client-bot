@@ -4835,14 +4835,13 @@ export function formatProductCardDeterministic(product: Product): string {
     : '';
 
   let brand = '';
-  let brandLabel = 'Бренд';
+  const brandLabel = 'Бренд';
   if (Array.isArray(product?.options)) {
     const brandOption = product.options.find((o: any) => o && o.key === 'brend__brend');
     if (brandOption) brand = cleanOptionValue(brandOption.value);
   }
   if (!brand) {
     brand = (typeof product?.vendor === 'string' ? product.vendor.trim() : '') || '';
-    if (brand) brandLabel = 'Производитель';
   }
 
   const lines = [
