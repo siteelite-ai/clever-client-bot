@@ -4756,6 +4756,7 @@ function formatProductsForAI(products: Product[], includeExtended: boolean = tru
     const p = products[i];
     try {
       let brand = '';
+      let brandLabel = 'Бренд';
       if (Array.isArray(p?.options)) {
         const brandOption = p.options.find((o: any) => o && o.key === 'brend__brend');
         if (brandOption) {
@@ -4764,6 +4765,7 @@ function formatProductsForAI(products: Product[], includeExtended: boolean = tru
       }
       if (!brand) {
         brand = (typeof p?.vendor === 'string' ? p.vendor : '') || '';
+        if (brand) brandLabel = 'Производитель';
       }
 
       const safeUrl = typeof p?.url === 'string' ? p.url : '';
@@ -4778,7 +4780,7 @@ function formatProductsForAI(products: Product[], includeExtended: boolean = tru
       const parts = [
         `${i + 1}. **${nameWithLink}**`,
         `   - Цена: ${priceNum.toLocaleString('ru-KZ')} ₸${oldPriceNum > priceNum ? ` ~~${oldPriceNum.toLocaleString('ru-KZ')} ₸~~` : ''}`,
-        brand ? `   - Бренд: ${brand}` : '',
+        brand ? `   - ${brandLabel}: ${brand}` : '',
         p?.article ? `   - Артикул: ${p.article}` : '',
         (() => {
           const available = (Array.isArray(p?.warehouses) ? p.warehouses : []).filter((w: any) => w && Number(w.amount) > 0);
@@ -4834,16 +4836,20 @@ export function formatProductCardDeterministic(product: Product): string {
     : '';
 
   let brand = '';
+  let brandLabel = 'Бренд';
   if (Array.isArray(product?.options)) {
     const brandOption = product.options.find((o: any) => o && o.key === 'brend__brend');
     if (brandOption) brand = cleanOptionValue(brandOption.value);
   }
-  if (!brand) brand = (typeof product?.vendor === 'string' ? product.vendor.trim() : '') || '';
+  if (!brand) {
+    brand = (typeof product?.vendor === 'string' ? product.vendor.trim() : '') || '';
+    if (brand) brandLabel = 'Производитель';
+  }
 
   const lines = [
     normalizedUrl ? `- **[${safeName}](${normalizedUrl})**` : `- **${safeName}**`,
     `  - Цена: *${(typeof product?.price === 'number' ? product.price : 0).toLocaleString('ru-KZ')} ₸*`,
-    brand ? `  - Бренд: ${brand}` : '',
+    brand ? `  - ${brandLabel}: ${brand}` : '',
     (() => {
       const available = (Array.isArray(product?.warehouses) ? product.warehouses : []).filter((w: any) => w && Number(w.amount) > 0);
       if (available.length > 0) {
