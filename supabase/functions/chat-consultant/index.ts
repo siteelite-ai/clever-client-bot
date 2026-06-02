@@ -7793,8 +7793,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   brand,
                   attempt: attemptLabel,
                   family_guard: {
-                    shared_keys: sharedFamilyKeys,
                     blocked_brand_fallback: blockedByFamily,
+                    family_key: familyKey,
+                    anchor_value: familyAnchorValue,
+                    target_values_sample: familyTargetValuesSample,
                   },
                   target_category: targetNoun,
                   displayed: foundProducts.length,
