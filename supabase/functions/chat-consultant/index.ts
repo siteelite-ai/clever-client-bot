@@ -9686,6 +9686,8 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
     const replacementOriginal = replacementMeta?.original || undefined;
     const replacementOriginalName = replacementMeta?.originalName || undefined;
     const replacementNoResults = !!replacementMeta?.noResults;
+    const replacementWeakened = !!replacementMeta?.weakened;
+    const replacementWeakenedReason = replacementMeta?.weakenedReason;
     
     if (isReplacementIntent && !replacementNoResults && productContext) {
       // Replacement intent with alternatives found
@@ -9693,21 +9695,31 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
         ? `**${replacementOriginal.pagetitle}** (${replacementOriginal.vendor || 'без бренда'}, ${replacementOriginal.price} тг)`
         : `**${replacementOriginalName || 'указанный товар'}**`;
       
+      // Honest disclaimer (вариант "a") при ослабленной выдаче.
+      // marking_mismatch — кандидаты не содержат структурную маркировку оригинала
+      //   (напр. ищем ЩРН-П-12, нашлись только ЩРВ-П-12 — другой тип монтажа).
+      // few_results — формально совпало <3 вариантов, говорим честно.
+      const weakenedPrefix = replacementWeakened
+        ? (replacementWeakenedReason === 'marking_mismatch'
+            ? `\n⚠️ ВАЖНО: точных аналогов «${replacementOriginalName || replacementOriginal?.pagetitle || 'указанному товару'}» в наличии НЕТ. Ниже — ближайшие по характеристикам товары той же категории, но с другой маркировкой (могут отличаться по типу монтажа/исполнения). НАЧНИ ОТВЕТ С ЧЕСТНОГО ПРИЗНАНИЯ: «Точного аналога «${replacementOriginalName || 'этого товара'}» в наличии не нашёл. Показываю ближайшее по характеристикам:» — и далее карточки.\n`
+            : `\n⚠️ ВАЖНО: близких аналогов мало (${productContext ? 'см. ниже' : ''}). НАЧНИ ОТВЕТ С: «Точных аналогов мало. Ближайшее, что нашёл:»\n`)
+        : '';
+      
       productInstructions = `
 🔄 ПОИСК АНАЛОГА / ЗАМЕНЫ
-
+${weakenedPrefix}
 Клиент ищет замену или аналог для: ${origInfo}
 
 НАЙДЕННЫЕ АНАЛОГИ:
 ${productContext}
 
 ТВОЙ ОТВЕТ:
-1. Кратко: "Вот ближайшие аналоги для [товар]:"
-2. Покажи 3-5 товаров, СРАВНИВАЯ их с оригиналом по ключевым характеристикам (мощность, тип, защита, цена)
-3. Укажи отличия: что лучше, что хуже, что совпадает
+1. ${replacementWeakened ? 'СНАЧАЛА — честный disclaimer (см. выше блок ⚠️ ВАЖНО). Затем:' : 'Кратко: "Вот ближайшие аналоги для [товар]:"'}
+2. Покажи ${replacementWeakened ? 'все найденные' : '3-5'} товаров, СРАВНИВАЯ их с оригиналом по ключевым характеристикам (мощность, тип, защита, цена)
+3. Укажи отличия: что лучше, что хуже, что совпадает${replacementWeakened ? '. ОСОБО выдели несовпадения по типу/маркировке — клиент должен понимать, что это не точный аналог.' : ''}
 4. Ссылки копируй как есть в формате [Название](URL) — НЕ МЕНЯЙ URL!
 5. ВАЖНО: если в названии товара есть экранированные скобки \\( и \\) — СОХРАНЯЙ их!
-6. Тон: профессиональный, как опытный консультант. Помоги клиенту выбрать лучшую замену.
+6. Тон: профессиональный, как опытный консультант. ${replacementWeakened ? 'Не приукрашивай — будь честен про различия.' : 'Помоги клиенту выбрать лучшую замену.'}
 7. В конце спроси: "Какой вариант вам больше подходит? Могу уточнить детали по любому из них."`;
     } else if (isReplacementIntent && replacementNoResults) {
       // Replacement intent but no alternatives found
