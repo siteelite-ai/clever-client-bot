@@ -5326,7 +5326,7 @@ async function classifyOfferResponse(params: {
 }
 
 export function isDeterministicShortCircuitReason(reason: string): boolean {
-  return ['price-shortcircuit', 'article-shortcircuit', 'siteid-shortcircuit', 'title-shortcircuit'].includes(reason);
+  return ['price-shortcircuit', 'article-shortcircuit', 'siteid-shortcircuit', 'title-shortcircuit', 'accessory-for', 'accessory-for-anchor-missing'].includes(reason);
 }
 
 function describeAppliedFilters(candidates: SearchCandidate[]): string {
