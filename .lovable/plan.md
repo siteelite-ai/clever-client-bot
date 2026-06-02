@@ -1,86 +1,129 @@
-## Контекст
 
-Сейчас в V1 (`chat-consultant/index.ts`) есть два связанных, но сломанных/отсутствующих сценария:
-
-**B. «Замена по характеристикам»** (`is_replacement=true`, `has_product_name=true`).
-- Ветка ЕСТЬ (строки 8267–8430, `Replacement matcher`), но в логе из последнего сообщения сработал `pass2-shortcircuit` и отрендерился сам исходный товар с `price=0` — нарушение HARD BAN.
-- Корни (3 шт.):
-  1. `articleShortCircuit` поставился где-то выше по common-pipeline (не в name-first — он guard'нут на 6511), и `replacementMeta` не сформировался → `originalProduct=null` → фильтр исключения оригинала (8408) — no-op.
-  2. После replacement-matcher нет double-фильтра `price=0`.
-  3. Из классификатора **не извлекается price-cap из фразы замены** («не дороже 1000 тг») — `price_intent` живёт отдельно и до replacement-ветки не доносится.
-
-**A. «Характеристики раздела»** (нет такой ветки вообще).
-Запросы типа «найди светильники по таким-то характеристикам», «какие IP бывают у уличных светильников» сейчас уходят в обычный catalog-flow → высыпается выдача товаров. Пользователю нужно: показать СПИСОК доступных характеристик/значений раздела (+ мини-сэмпл товаров), чтобы он уточнил.
+# План: Accessory-for pattern (V1)
 
 ## Цель
 
-1. Починить ветку B — чтобы она реально работала как «similar по anchor с учётом price-cap», БЕЗ показа исходного товара и БЕЗ `price=0`.
-2. Добавить ветку A — `sub_intent='facets'` (или `compute.attribute` для одиночной характеристики), которая возвращает facet-summary раздела вместо карточек.
+Корректно отвечать на запросы вида «какие [Y] подходят к [X]» / «лампочки для [X]» / «диск к [X]» — показывать товары категории Y, а не якорь X. Решение системное: новая семантика в классификаторе + отдельная ветка в роутере, без патча pagetitle short-circuit.
 
-Никаких словарей синонимов, никакого хардкода категорий — всё через LLM + live catalog API (соответствует core-правилам spec data-agnostic).
+## Объём (этапы 1+2 одним PR)
 
-## Изменения
+### Этап 1 — Расширение классификатора
 
-### 1. Классификатор (`classifier-prompt.ts` + парсер)
-Расширяем JSON-схему ответа (data-agnostic, без примеров категорий):
-- `sub_intent`: добавить значение `'facets'` — «пользователь спрашивает про характеристики/опции раздела, без интереса к конкретному товару».
-- `price_intent` **должен заполняться и при `is_replacement=true`** (сейчас классификатор это пропускает по дефолту). Добавить в инструкции: «если в запросе на замену есть ценовая граница — обязательно заполняй `price_intent`».
-- `is_replacement=true` уже триггерит ветку B; новых полей не нужно.
+**Файл:** `supabase/functions/_shared/classifier-prompt.ts`
 
-Самопроверка контракта остаётся: `len(modifiers) == N_input − N_cat − N_wrap` (см. mem://classifier/token-preservation).
+Добавить:
+1. Новое значение `sub_intent = "accessory_for"`.
+2. Новое поле в JSON-контракте: `anchor_product: string | null` — товар-якорь, к которому подбираем.
+3. Правило детекции (data-agnostic, без списков категорий):
+   - Маркеры: предлоги «к / для / под / в комплект к / совместим с / подходит к / подходящий к / подходящие к» + следом существительное-товар (или его развёрнутое название).
+   - Структура: `[target_noun] + <маркер> + [anchor_phrase]` ИЛИ `<маркер> + [anchor_phrase]` если target_noun взят из истории (короткий follow-up — Этап 3, сейчас НЕ покрываем).
+4. Семантика заполнения при `sub_intent="accessory_for"`:
+   - `has_product_name = false` (цель — категория, не карточка)
+   - `product_name = null`
+   - `product_category = target_noun` (то, что подбираем — «рамки», «лампочки», «диск»)
+   - `anchor_product = anchor_phrase` (всё, что сказано про якорь, копией)
+   - `search_modifiers` — собираются МЕХАНИЧЕСКИ из target-фрагмента (без anchor-фрагмента) по существующему правилу.
+5. Регрессия в `classifier-prompt_test.ts`: 6-8 фикстур (рамки к розетке, лампа к люстре, диск к болгарке, картридж к принтеру, кронштейн под телевизор, провод для УШМ, насадка к перфоратору, негативы — «розетка для кухни» НЕ accessory_for).
 
-### 2. Роутер (`chat-consultant/index.ts`)
+### Этап 2 — Новая ветка `s-accessory-for` в V1 роутере
 
-Добавить **раннюю проверку sub_intent='facets'** в s3-роутере (до name-first, до replacement, до catalog-flow):
+**Файл:** `supabase/functions/chat-consultant/index.ts`
+
+1. **Guard перед pagetitle short-circuit** (~L6869): если `classification.sub_intent === 'accessory_for'` — пропускаем весь NAME-FIRST блок (не показываем якорь как товар).
+2. **Новая подветка** перед основным catalog-пайплайном:
+   a. **Resolve якорь:** `searchByPagetitle(anchor_product, …, 1)` → `anchorProduct`. Если 0 — silent fallback в обычный catalog-поиск по `product_category` (поведение как сегодня для категорий).
+   b. **Извлечь сигналы совместимости** из `anchorProduct.options[]`: коллекция (`kollekciya`), бренд (`brend`), серия. Whitelist ключей фиксируем как константу.
+   c. **Поиск target_category** через существующий QFv2-путь с инъекцией `options[<key>][]` из шага (b). Порядок попыток (cascade):
+      1. category + коллекция якоря
+      2. category + бренд якоря (если коллекция не дала результата)
+      3. category без фильтров якоря + Soft-Suggest о бренде якоря
+   d. **Soft-404 для accessory-for:** свой текст «не нашёл [target] совместимых с [anchor_product]; вот ближайшие [target] бренда [anchor_brand]» (если хотя бы шаг 3 что-то дал).
+3. **Логирование:** `branchTag='accessory-for'`, в Steps пишем `anchor_id`, `anchor_collection`, `anchor_brand`, какие фильтры пробовали и сколько на каждом шаге.
+4. **Деривация:** рендер карточек идёт через тот же `buildDeterministicShortCircuitContent` (правило deterministic product render).
+5. **disallowCrosssell=true** для accessory-for ветки — пользователь УЖЕ в режиме «подбираю аксессуар», навешивать ещё кросс-сел бессмысленно.
+
+### Тестирование
+
+1. Юнит-тесты классификатора (см. Этап 1).
+2. Интеграционный fixture-test для роутера (моки `searchByPagetitle` + QFv2).
+3. Регрессионный прогон существующих golden-tests чтобы убедиться: pagetitle short-circuit для обычных запросов («Розетка USB Тип С+С NLST» БЕЗ «к чему-то») не сломан.
+
+### Фикстуры
+
+**Файл:** `.lovable/fixtures/accessory-for-cases-2026-06-02.md` — 8-10 кейсов с ожидаемыми classifier-выходами и branchTag.
+
+### Memory
+
+После приёма — обновить `mem://index.md` (Core + новая запись `mem://features/accessory-for`).
+
+## Что НЕ входит
+
+- Этап 3 (slot-state для коротких follow-up «а рамки?» после показа розетки). Отдельным PR.
+- Зеркаление в V2 (`chat-consultant-v2`). Согласно Core Memory, V1 — активный prod, V2 — параллельная edge function; если решим перенести — отдельным PR.
+- Семантическое определение «что считать совместимостью» сверх коллекции/бренда якоря. Если в каталоге для пары категорий нужна более тонкая связка (например, «лампа E27 к патрону E27») — это будущий Этап 4.
+
+## Технические детали
+
+### Точки правки
 
 ```text
-if (classification.sub_intent === 'facets' && effectiveCategory) {
-  → branch s-facets  (см. п.3)
-  return
+supabase/functions/_shared/classifier-prompt.ts          (+~40 строк, новое поле + правило)
+supabase/functions/_shared/classifier-prompt_test.ts     (+6-8 кейсов)
+supabase/functions/chat-consultant/index.ts              (~L6869 guard, ~L7593 новая ветка ~150 строк)
+.lovable/fixtures/accessory-for-cases-2026-06-02.md      (новый)
+mem://index.md, mem://features/accessory-for             (после приёма)
+```
+
+### Контракт нового classifier-выхода (пример)
+
+```json
+{
+  "intent": "catalog",
+  "sub_intent": "accessory_for",
+  "has_product_name": false,
+  "product_name": null,
+  "product_category": "рамки",
+  "anchor_product": "Розетка USB Тип С+C 15 Вт 5 В, белый NLST /863139/",
+  "search_modifiers": [],
+  "critical_modifiers": [],
+  "is_replacement": false,
+  "price_intent": null,
+  "compute": null,
+  "compare": null
 }
 ```
 
-Гард `is_replacement` уже корректно выключает name-first (6511) — оставляем.
+### Псевдокод ветки s-accessory-for
 
-### 3. Новая ветка `runFacetsSummary` (новый файл `_shared/facets-summary.ts`)
-Алгоритм:
-1. Category Resolver → exact `pagetitle` категории (через `matchCategoriesWithLLM`, уже есть).
-2. Параллельно: `/categories/options` (live → bootstrap fallback из probe) + `/products?category=<X>&per_page=3` (мини-сэмпл).
-3. Фильтр facet-ключей через `FACET_BLACKLIST_KEYS` (уже есть в v2, переэкспортировать в `_shared/`).
-4. Композер: bullet-блок по ТОП-5 facet'ам (`caption_ru` + 3-5 наиболее частых `value_ru`), затем «Хотите, подберу с конкретными значениями?». Карточки товаров **не показываем** (или 1-2 как пример, по флагу).
-5. Сохраняем `dialog_slots.facets_offer = {category, schema}` — следующее сообщение пользователя с конкретными значениями уходит уже в обычный catalog-flow с уже резолвнутой категорией.
+```text
+if classification.sub_intent == 'accessory_for' and classification.anchor_product:
+    anchor = searchByPagetitle(classification.anchor_product, limit=1)
+    if not anchor:
+        fall through to obычный catalog (по product_category)
+    else:
+        signals = extractAnchorSignals(anchor.options)  # {collection, brand, series}
+        attempts = [
+            {category: target, options: {collection: signals.collection}},
+            {category: target, options: {brand: signals.brand}},
+            {category: target, options: {}},  # last resort + soft-suggest о бренде
+        ]
+        for attempt in attempts:
+            products = qfv2Search(attempt)
+            if products: 
+                render(products, branchTag='accessory-for', disallowCrosssell=true)
+                return
+        renderAccessoryForSoft404(target, anchor)
+```
 
-### 4. Фикс ветки B (replacement по характеристикам)
-Локально в блоке 8267–8430:
-- (a) **Перенести assignment `replacementMeta`** ДО любого short-circuit, чтобы фильтр исключения оригинала (8408) всегда имел `originalId`. Если `originalProduct=null` после `searchByPagetitle/article` — делаем явный `searchByPagetitle(classification.product_name)` РАЗ, забираем `originalProduct` и продолжаем; иначе ветка считает себя «случай 2» (товара нет в каталоге).
-- (b) **Добавить `excludeZeroPrice`** двойным фильтром перед `pickDisplayWithTotal` (8411): `rFinal = rFinal.filter(p => (p.price ?? 0) > 0)`. Метрика `zero_price_leak` остаётся 0.
-- (c) **Прокинуть `price_intent.cap`** в `searchProductsByCandidate` через `max_price` во всех вызовах внутри блока (8327, 8333, 8364, 8385) — это закроет «не дороже 1000 тг».
-- (d) **Запретить отдачу самого товара через articleShortCircuit без replacement-обработки**: добавить guard «если `is_replacement && articleShortCircuit && !replacementMeta` → НЕ рендерить, передать управление в replacement-блок». Сейчас именно эта ситуация привела к показу price=0 ДКУ-LED-03-100W.
+### Риски
 
-### 5. Детерминистичный рендер
-- Ветка A (`s-facets`) **не** идёт через `buildDeterministicShortCircuitContent` (там нет продуктов) — собственный шаблон facet-bullet.
-- Ветка B продолжает идти через детерминистичный рендер (как сейчас), плюс `replacementMeta.original` подставляется в intro («Вместо «{originalName}» подобрал похожие, не дороже {cap} ₸:»).
+- Классификатор может ошибочно ставить `accessory_for` на запросы типа «диск для болгарки» когда пользователь имел в виду конкретную модель диска без якоря. **Митигация:** правило «anchor_phrase должна содержать ≥1 признак конкретики — бренд/маркировку/слово «эта/эту/этой/такой» или быть длиннее 4 слов». Иначе — обычный catalog по «диск для болгарки».
+- Якорь может не найтись в каталоге (опечатка / снят с продажи). **Митигация:** silent fallback в обычный catalog-поиск по target_category.
+- При смене модели классификатора (Claude → Gemini) семантика поля может «поплыть». **Митигация:** unit-тесты с фикстурами + явная проверка на наличие маркеров в промпте.
 
-### 6. Тесты (Deno)
-Новые файлы:
-- `_shared/facets-summary_test.ts` — bootstrap+live schema, blacklist, фильтр price=0 в сэмпле, top-N выбор.
-- `chat-consultant/replacement-zero-price_test.ts` — фикс (b): на синтетическом pool с `price=0` ни одна карточка не утекает.
-- `chat-consultant/replacement-price-cap_test.ts` — фикс (c): при price_intent.cap=1000 все вызовы `searchProductsByCandidate` получают `max_price=1000`.
-- `chat-consultant/router-facets-intent_test.ts` — sub_intent='facets' уходит в новую ветку до name-first.
+## Acceptance criteria
 
-### 7. Памятки
-Добавить mem://features/facets-summary и mem://features/replacement-fix-2026-05-18; обновить Core-строку про replacement.
-
-## Что НЕ трогаем
-- V2 (`chat-consultant-v2`) — там уже есть s-similar/s-search; перенос идей сделаем отдельным шагом после стабилизации V1.
-- Frontend / widget / SSE-транспорт.
-- Compute (spec_query) — остаётся как сейчас (отдельная надстройка для одиночной характеристики ОДНОГО товара).
-- Cross-sell, jargon-fallback, QFv2 — не задеваем.
-
-## Порядок реализации (по одному шагу с подтверждением)
-1. Расширить классификатор (`sub_intent='facets'` + price_intent при replacement) + тесты.
-2. Фикс B — три подпункта (a/b/c/d) одной правкой + 2 теста.
-3. Новая ветка A (`facets-summary.ts` + роутер + тест).
-4. Памятки + проверка curl-replay двух сценариев из примера.
-
-Жду «ок шаг 1», действую только по нему.
+1. Запрос «какие рамки подходят к этой розетке: Розетка USB Тип С+С NLST /863139/» → показаны рамки коллекции Niloe Step бренда Legrand (если есть), иначе рамки Legrand, иначе все рамки + явный текст «не нашёл совместимых, показываю общий список».
+2. Запрос «Розетка USB Тип С+С NLST /863139/» БЕЗ accessory-маркеров → как сейчас, pagetitle short-circuit, карточка розетки.
+3. Все существующие unit/integration тесты зелёные.
+4. Steps в логах содержат branchTag='accessory-for' и diag по якорю и фильтрам.
