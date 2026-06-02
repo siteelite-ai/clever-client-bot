@@ -1435,9 +1435,11 @@ interface ClassificationResult {
   is_replacement?: boolean;
   search_modifiers?: string[];
   critical_modifiers?: string[];
-  sub_intent?: 'availability' | 'price' | 'location' | 'spec' | 'facets';
+  sub_intent?: 'availability' | 'price' | 'location' | 'spec' | 'facets' | 'compare';
   /** Расчёт характеристики, заполняется только при sub_intent="spec". */
   compute?: ComputeRequest;
+  /** Список якорей-товаров для сравнения, заполняется только при sub_intent="compare". Минимум 2. */
+  compare?: { anchors: string[] };
 }
 
 function detectSubIntentFallback(message: string): ClassificationResult['sub_intent'] {
@@ -1653,7 +1655,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       let rawCritical = Array.isArray(parsed.critical_modifiers) ? parsed.critical_modifiers.filter((m: unknown) => typeof m === 'string' && m.trim().length > 0) : [];
       if (rawCritical.length === 0 && rawSearchMods.length > 0) rawCritical = [...rawSearchMods];
       console.log(`[Chat] Classifier critical_modifiers: [${rawCritical.join(', ')}] (of search_modifiers: [${rawSearchMods.join(', ')}])`);
-      const validSubIntents = ['availability', 'price', 'location', 'spec', 'facets'];
+      const validSubIntents = ['availability', 'price', 'location', 'spec', 'facets', 'compare'];
       const rawSubIntent = typeof parsed.sub_intent === 'string' ? parsed.sub_intent.toLowerCase().trim() : null;
       const llmSubIntent = validSubIntents.includes(rawSubIntent!) ? rawSubIntent as ClassificationResult['sub_intent'] : undefined;
       const subIntent = llmSubIntent ?? detectSubIntentFallback(message);
@@ -1671,6 +1673,33 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
             : null;
           computeField = { attribute: rawAttr.trim(), multiplier };
           console.log(`[Classify] compute extracted: attribute="${computeField.attribute}", multiplier=${multiplier ?? 'null'}`);
+        }
+      }
+      // Compare (sub_intent='compare'): принимаем только при ≥2 непустых якорях. Иначе откатываем sub_intent.
+      let compareField: { anchors: string[] } | undefined;
+      let effectiveSubIntent = subIntent;
+      if (subIntent === 'compare') {
+        const rawCompare = parsed.compare && typeof parsed.compare === 'object'
+          ? (parsed.compare as Record<string, unknown>)
+          : null;
+        const rawAnchors = rawCompare && Array.isArray(rawCompare.anchors) ? rawCompare.anchors : [];
+        const anchors = rawAnchors
+          .filter((a: unknown): a is string => typeof a === 'string' && a.trim().length > 0)
+          .map((a: string) => a.trim());
+        // Дедупликация без потери порядка (case-insensitive)
+        const seen = new Set<string>();
+        const uniqAnchors = anchors.filter((a) => {
+          const k = a.toLowerCase();
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+        if (uniqAnchors.length >= 2) {
+          compareField = { anchors: uniqAnchors };
+          console.log(`[Classify] compare extracted: anchors=[${uniqAnchors.join(' | ')}]`);
+        } else {
+          console.log(`[Classify] compare REJECTED (anchors=${uniqAnchors.length} < 2), fallback sub_intent=null`);
+          effectiveSubIntent = undefined;
         }
       }
       // Price bounds: независимы от price_intent и is_replacement.
@@ -1698,8 +1727,9 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
         is_replacement: !!parsed.is_replacement,
         search_modifiers: rawSearchMods,
         critical_modifiers: rawCritical,
-        sub_intent: subIntent,
+        sub_intent: effectiveSubIntent,
         compute: computeField,
+        compare: compareField,
       };
     } catch (e) {
       __lastClassifyDiagnostics.exception = (e as Error)?.message ?? String(e);

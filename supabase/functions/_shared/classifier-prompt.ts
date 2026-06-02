@@ -114,8 +114,27 @@ export const DEFAULT_CLASSIFIER_PROMPT = `Ты классификатор соо
     «расскажи, чем отличаются X», «какие параметры важны для X», «найди X по таким-то характеристикам»
     (когда пользователь ХОЧЕТ список фильтров раздела, а не сразу карточки).
     Обязательное условие: product_category заполнен, has_product_name=FALSE.
+- "compare" — пользователь просит СРАВНИТЬ ДВЕ ИЛИ БОЛЕЕ конкретные модели/позиции между собой.
+    Лингвистические маркеры (хотя бы один обязателен): «в чём разница», «чем отличается», «отличия», «сравни»,
+    «сравнение», «vs», «или … что лучше», «что выбрать между», «X или Y», «X vs Y», «X против Y».
+    ОБЯЗАТЕЛЬНО: в запросе явно перечислены ≥2 различимых якоря-товара (бренд+модель, маркировка, артикул, либо
+    устойчивое торговое имя). Якоря могут разделяться союзами «и», «или», «vs», запятой, тире.
+    НЕ "compare", если:
+      — упоминается только одна модель (тогда это spec / availability / catalog по контексту);
+      — пользователь спрашивает «чем отличаются X» в смысле «какие бывают X» (=facets, без двух конкретных моделей);
+      — сравнивается товар с категорией («чем отличается кабель от провода») — это knowledge/info, не compare.
 - null — нет явного под-интента, общий запрос «найди / покажи / есть что-то такое».
 Под-интент НЕ исключает intent=catalog: «есть в наличии Х?» = catalog + sub_intent=availability.
+
+СРАВНЕНИЕ (compare) — заполняй ТОЛЬКО если sub_intent="compare"
+- Поле compare = {"anchors": [<строка>, <строка>, ...]} — массив из 2 или более якорей.
+- Каждый якорь — это СТРОКА в том виде, как пользователь её назвал (бренд+модель/маркировка/артикул), достаточная
+  для точечного поиска одной карточки. Сохраняй регистр и пунктуацию из исходного запроса.
+- Если у якорей общий бренд/префикс, который опущен у второго («<Бренд> <модель-1> и <модель-2>») —
+  ВОССТАНОВИ префикс в КАЖДОМ якоре, чтобы каждый был самодостаточен для поиска. Это единственная допустимая нормализация.
+- Слова-маркеры сравнения («разница», «отличия», «vs», «или», «что лучше») в anchors НЕ попадают.
+- Если sub_intent ≠ "compare" — compare = null. Не выдумывай якоря.
+- Если нашёл только 1 явный якорь — НЕ ставь sub_intent="compare" (см. правило выше).
 
 РАСЧЁТ / ХАРАКТЕРИСТИКА (compute) — заполняй ТОЛЬКО если sub_intent="spec"
 - Поле compute = {"attribute": <короткое русское название характеристики>, "multiplier": <целое число | null>}.
@@ -136,4 +155,4 @@ export const DEFAULT_CLASSIFIER_PROMPT = `Ты классификатор соо
 
 ВЫВОД
 Ответь СТРОГО одним JSON-объектом без префиксов, без markdown, без пояснений:
-{"intent":"catalog"|"brands"|"info"|"general","has_product_name":bool,"product_name":string|null,"price_intent":"most_expensive"|"cheapest"|null,"price_max":number|null,"price_min":number|null,"product_category":string|null,"is_replacement":bool,"search_modifiers":string[],"critical_modifiers":string[],"sub_intent":"availability"|"price"|"location"|"spec"|"facets"|null,"compute":{"attribute":string,"multiplier":number|null}|null}`;
+{"intent":"catalog"|"brands"|"info"|"general","has_product_name":bool,"product_name":string|null,"price_intent":"most_expensive"|"cheapest"|null,"price_max":number|null,"price_min":number|null,"product_category":string|null,"is_replacement":bool,"search_modifiers":string[],"critical_modifiers":string[],"sub_intent":"availability"|"price"|"location"|"spec"|"facets"|"compare"|null,"compute":{"attribute":string,"multiplier":number|null}|null,"compare":{"anchors":string[]}|null}`;
