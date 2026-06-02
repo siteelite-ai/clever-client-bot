@@ -1727,8 +1727,9 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
         is_replacement: !!parsed.is_replacement,
         search_modifiers: rawSearchMods,
         critical_modifiers: rawCritical,
-        sub_intent: subIntent,
+        sub_intent: effectiveSubIntent,
         compute: computeField,
+        compare: compareField,
       };
     } catch (e) {
       __lastClassifyDiagnostics.exception = (e as Error)?.message ?? String(e);
