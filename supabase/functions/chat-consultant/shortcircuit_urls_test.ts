@@ -22,6 +22,19 @@ Deno.test('deterministic card keeps exact product URL from API', () => {
   assertFalse(card.includes('/search/'));
 });
 
+Deno.test('deterministic card prefers brand option over vendor manufacturer', () => {
+  const card = formatProductCardDeterministic({
+    ...baseProduct,
+    vendor: 'Guangzhou He Qi Tong Trade Co LTD',
+    options: [
+      { key: 'brend__brend', caption_ru: 'Бренд', value_ru: 'MODE' },
+    ],
+  } as any);
+
+  assertStringIncludes(card, 'Бренд: MODE');
+  assertFalse(card.includes('Guangzhou He Qi Tong Trade Co LTD'));
+});
+
 Deno.test('deterministic content for price-shortcircuit uses only original URLs', () => {
   const content = buildDeterministicShortCircuitContent({
     products: [
