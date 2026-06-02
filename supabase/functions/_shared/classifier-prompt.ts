@@ -123,8 +123,36 @@ export const DEFAULT_CLASSIFIER_PROMPT = `Ты классификатор соо
       — упоминается только одна модель (тогда это spec / availability / catalog по контексту);
       — пользователь спрашивает «чем отличаются X» в смысле «какие бывают X» (=facets, без двух конкретных моделей);
       — сравнивается товар с категорией («чем отличается кабель от провода») — это knowledge/info, не compare.
+- "accessory_for" — пользователь подбирает товары категории Y, СОВМЕСТИМЫЕ с конкретным товаром-якорем X.
+    Лингвистическая структура (обязательная): [target_noun] + <маркер совместимости> + [anchor_phrase].
+    Маркеры совместимости: «к», «для», «под», «в комплект к», «в дополнение к», «совместим с», «совместимый с»,
+    «совместимые с», «подходит к», «подходящий к», «подходящие к», «который подойдёт к», «которая подойдёт к»,
+    «которые подойдут к». Допустимы указательные местоимения перед якорем: «этой», «этому», «этим», «такой», «такому».
+    ОБЯЗАТЕЛЬНОЕ условие конкретики якоря (anchor_phrase): должен содержать ≥1 признак конкретной позиции —
+    бренд, маркировку, артикул, модель, цифровой код, серию ИЛИ длину ≥4 слов товарной части. Иначе это обычный
+    catalog-запрос (например, «диск для болгарки» БЕЗ якоря-конкретики → catalog по «диск для болгарки», sub_intent=null).
+    При sub_intent="accessory_for":
+      — has_product_name = FALSE (цель запроса — категория Y, не карточка X);
+      — product_name = null;
+      — product_category = target_noun (то, что подбираем: «рамки», «лампочки», «диск», «картридж»);
+      — anchor_product = anchor_phrase в том виде, как пользователь её назвал (бренд+маркировка/артикул/полное название);
+      — search_modifiers — собираются МЕХАНИЧЕСКИ из ТОЛЬКО target-фрагмента запроса (часть ДО маркера совместимости),
+        без anchor_phrase, по общему правилу токенизации (см. блок search_modifiers выше).
+    НЕ "accessory_for", если:
+      — anchor_phrase не содержит конкретики (нет бренда/маркировки/артикула и текст короче 4 слов);
+      — это запрос на ЗАМЕНУ якоря (is_replacement=TRUE имеет приоритет — «подбери аналог», «вместо», «похожий на»);
+      — это просто доставка/информация про якорь («как доставить розетку NLST»).
 - null — нет явного под-интента, общий запрос «найди / покажи / есть что-то такое».
 Под-интент НЕ исключает intent=catalog: «есть в наличии Х?» = catalog + sub_intent=availability.
+
+ЯКОРЬ-ТОВАР (anchor_product) — заполняй ТОЛЬКО если sub_intent="accessory_for"
+- anchor_product = строка с названием товара-якоря в том виде, как пользователь её назвал (бренд + модель/маркировка/
+  артикул/полный заголовок карточки). Сохраняй регистр и пунктуацию. Не отрезай артикул/код в косых чертах
+  («/863139/», «арт. 12345») — это часть якоря.
+- Маркеры совместимости («к», «для», «под», «подходит к», ...) в anchor_product НЕ попадают.
+- Указательные местоимения перед якорем («этой розетке», «этому щиту») — местоимение НЕ попадает в anchor_product,
+  попадает только название.
+- Если sub_intent ≠ "accessory_for" — anchor_product = null. Не выдумывай якорь.
 
 СРАВНЕНИЕ (compare) — заполняй ТОЛЬКО если sub_intent="compare"
 - Поле compare = {"anchors": [<строка>, <строка>, ...]} — массив из 2 или более якорей.
@@ -155,4 +183,4 @@ export const DEFAULT_CLASSIFIER_PROMPT = `Ты классификатор соо
 
 ВЫВОД
 Ответь СТРОГО одним JSON-объектом без префиксов, без markdown, без пояснений:
-{"intent":"catalog"|"brands"|"info"|"general","has_product_name":bool,"product_name":string|null,"price_intent":"most_expensive"|"cheapest"|null,"price_max":number|null,"price_min":number|null,"product_category":string|null,"is_replacement":bool,"search_modifiers":string[],"critical_modifiers":string[],"sub_intent":"availability"|"price"|"location"|"spec"|"facets"|"compare"|null,"compute":{"attribute":string,"multiplier":number|null}|null,"compare":{"anchors":string[]}|null}`;
+{"intent":"catalog"|"brands"|"info"|"general","has_product_name":bool,"product_name":string|null,"price_intent":"most_expensive"|"cheapest"|null,"price_max":number|null,"price_min":number|null,"product_category":string|null,"is_replacement":bool,"search_modifiers":string[],"critical_modifiers":string[],"sub_intent":"availability"|"price"|"location"|"spec"|"facets"|"compare"|"accessory_for"|null,"compute":{"attribute":string,"multiplier":number|null}|null,"compare":{"anchors":string[]}|null,"anchor_product":string|null}`;
