@@ -8930,6 +8930,9 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   } catch (e) {
                     console.warn(`[Chat] Replacement L1+L2 prep failed (silent):`, e instanceof Error ? e.message : String(e));
                   }
+                  // Propagate to outer scope so legacy bucket branch also applies marking-guard.
+                  outerOriginalMarkings = originalMarkings;
+                  outerFullSchema = rFullSchema;
                   const traitMust = originalTraits.must;
                   const traitKeysSet = new Set(Object.keys(traitMust));
 
