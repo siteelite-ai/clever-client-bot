@@ -6726,6 +6726,109 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
           }
         }
 
+        // === COMPARE BRANCH (sub_intent='compare') ===
+        // Feature-flag: app_settings.compare_branch_enabled. Default OFF → код не активируется.
+        // Условие срабатывания (даже при флаге ON):
+        //   intent='catalog' AND sub_intent='compare' AND compare.anchors.length >= 2
+        //   AND ещё не зацепили товар (articleShortCircuit=false)
+        //   AND не replacement-сценарий
+        //   AND нет ранее найденного facets-ответа.
+        // Для каждого якоря параллельно:
+        //   1) ?pagetitle=<anchor>&per_page=1   (EXACT, price>0 → берём)
+        //   2) если 0 → ?query=<anchor>&per_page=3  (fuzzy, первый с price>0)
+        // Состояния итога:
+        //   • найдено ≥1 якорь → foundProducts = [...найденные], articleShortCircuit=true,
+        //     responseModelReason='compare-shortcircuit' → детерминистичный рендер карточек
+        //     + intro «для сравнения». Сравнительная таблица — Шаг 3, не здесь.
+        //   • найдено 0 → silent fallback: ничего не трогаем, pipeline идёт обычным путём
+        //     (точно так же, как если бы compare-branch был выключен).
+        // ВАЖНО: ветка self-contained, без новых LLM-вызовов и без модификаций других модулей.
+        if (
+          appSettings.compare_branch_enabled &&
+          classification?.intent === 'catalog' &&
+          classification?.sub_intent === 'compare' &&
+          Array.isArray(classification?.compare?.anchors) &&
+          classification.compare.anchors.length >= 2 &&
+          !articleShortCircuit &&
+          !classification?.is_replacement &&
+          !facetsResponse &&
+          appSettings.volt220_api_token
+        ) {
+          const cmpStart = Date.now();
+          const anchorsRaw = (classification.compare.anchors as unknown[])
+            .filter((a): a is string => typeof a === 'string' && a.trim().length > 0)
+            .map((a) => a.trim())
+            .slice(0, 4); // safety: не больше 4 якорей за раз
+          try {
+            const apiToken = appSettings.volt220_api_token;
+            // Per-anchor lookup: pagetitle → fallback query. Время на якорь ограничено
+            // самим searchProductsByCandidate (10s AbortController). Параллельно.
+            const perAnchor = await Promise.all(anchorsRaw.map(async (anchor) => {
+              try {
+                // STEP 1: exact pagetitle
+                const exact = await searchProductsByCandidate(
+                  { query: null, pagetitle: anchor, brand: null, category: null, min_price: null, max_price: null },
+                  apiToken,
+                  1,
+                );
+                const exactHit = exact.find((p) => Number(p?.price) > 0);
+                if (exactHit) return { anchor, product: exactHit, mode: 'exact' as const };
+                // STEP 2: fuzzy query
+                const fuzzy = await searchProductsByCandidate(
+                  { query: anchor, brand: null, category: null, min_price: null, max_price: null },
+                  apiToken,
+                  3,
+                );
+                const fuzzyHit = fuzzy.find((p) => Number(p?.price) > 0);
+                if (fuzzyHit) return { anchor, product: fuzzyHit, mode: 'fuzzy' as const };
+                return { anchor, product: null, mode: 'miss' as const };
+              } catch (e) {
+                console.log(`[Compare] anchor "${anchor}" lookup failed (silent): ${(e as Error).message}`);
+                return { anchor, product: null, mode: 'error' as const };
+              }
+            }));
+
+            const hits = perAnchor.filter((r) => r.product !== null);
+            const cmpMs = Date.now() - cmpStart;
+            logAddStep({
+              step: 'compare-branch',
+              ms: cmpMs,
+              meta: {
+                anchors: anchorsRaw,
+                per_anchor: perAnchor.map((r) => ({ anchor: r.anchor, mode: r.mode, found: !!r.product })),
+                hits: hits.length,
+                outcome: hits.length === 0
+                  ? 'silent_fallback'
+                  : hits.length < anchorsRaw.length
+                    ? 'partial'
+                    : 'full',
+              },
+            });
+
+            if (hits.length > 0) {
+              // Дедупликация по pagetitle на случай если два якоря резолвнулись в один товар.
+              const seen = new Set<string>();
+              const unique: Product[] = [];
+              for (const r of hits) {
+                const key = (r.product!.pagetitle || '').trim().toLowerCase();
+                if (!key || seen.has(key)) continue;
+                seen.add(key);
+                unique.push(r.product!);
+              }
+              foundProducts = unique;
+              articleShortCircuit = true;
+              responseModel = aiConfig.model;
+              responseModelReason = 'compare-shortcircuit';
+              console.log(`[Chat] COMPARE short-circuit: anchors=${anchorsRaw.length}, hits=${hits.length}, unique=${unique.length}, took=${cmpMs}ms`);
+            } else {
+              console.log(`[Chat] COMPARE: 0 anchors resolved → silent fallback to normal pipeline (took=${cmpMs}ms)`);
+            }
+          } catch (e) {
+            // Любая необработанная ошибка — silent fallback.
+            console.log(`[Chat] COMPARE branch error (silent fallback): ${(e as Error).message}`);
+          }
+        }
+
         // === NAME-FIRST FAST-PATH (single block, two API steps) ===
         // Один short-circuit перед всем pipeline. Две ступени по эскалации точности:
         //   STEP 1: ?pagetitle=<candidate>  — точное совпадение названия (символ-в-символ).
