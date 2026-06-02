@@ -5979,7 +5979,13 @@ export async function handleChatConsultant(req: Request): Promise<Response> {
     } catch (e) {
       logSetError(e);
       const { flushLog } = await import('../_shared/request-logger.ts');
-      flushLog(logCtx).catch(() => {});
+      try {
+        // @ts-ignore — EdgeRuntime есть только в Supabase Edge Functions
+        const er: any = (globalThis as any).EdgeRuntime;
+        const p = flushLog(logCtx);
+        if (er && typeof er.waitUntil === 'function') er.waitUntil(p);
+        await p.catch(() => {});
+      } catch (_) { /* ignore */ }
       throw e;
     }
   });
