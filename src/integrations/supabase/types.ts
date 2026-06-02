@@ -55,6 +55,7 @@ export type Database = {
           classifier_model: string
           classifier_prompt: string | null
           classifier_provider: string
+          compare_branch_enabled: boolean
           google_api_key: string | null
           id: string
           lexicon_json: Json
@@ -73,6 +74,7 @@ export type Database = {
           classifier_model?: string
           classifier_prompt?: string | null
           classifier_provider?: string
+          compare_branch_enabled?: boolean
           google_api_key?: string | null
           id?: string
           lexicon_json?: Json
@@ -91,6 +93,7 @@ export type Database = {
           classifier_model?: string
           classifier_prompt?: string | null
           classifier_provider?: string
+          compare_branch_enabled?: boolean
           google_api_key?: string | null
           id?: string
           lexicon_json?: Json
