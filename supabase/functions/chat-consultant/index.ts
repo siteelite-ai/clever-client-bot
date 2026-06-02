@@ -10392,7 +10392,7 @@ ${productInstructions}`;
       // Старый LLM-cross-sell (generateCrossSellTail + pending_offer) ОТКЛЮЧЁН
       // полностью — функция оставлена в коде как dead code до отдельного refactor PR.
       // ─────────────────────────────────────────────────────────────────────
-      const finalContent = content;
+      const finalContent = contentWithMissing;
       // Step 2 (2026-05-12): убрано single-anchor ограничение. Анкоры берём из
       // первых foundProducts с уникальными категориями (до 3-х). При широкой
       // выдаче это даёт более устойчивую агрегацию /related (категории-победители
