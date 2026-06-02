@@ -8891,18 +8891,57 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 console.log(`[Chat] Replacement matcher merged ${rPool.length} unique`);
 
                 if (rPool.length > 0) {
+                  // ───── LAYER 1+2 PREP: derive trait-spec from REAL original.options ─────
+                  // Когда оригинал резолвлен через article/pagetitle — его реальные
+                  // характеристики из каталога надёжнее тщетной токенизации
+                  // search_modifiers. Считаем upfront, чтобы переиспользовать в matcher
+                  // и в marking-guard.
+                  let rFullSchema: Map<string, { caption: string; values: Set<string> }> = new Map();
+                  let originalTraits: ReturnType<typeof extractOriginalTraits> = { must: {}, droppedServiceKeys: [], droppedNotInSchema: [], droppedOverflow: [] };
+                  let originalMarkings: string[] = [];
+                  if (originalProduct) {
+                    try {
+                      rFullSchema = await getUnionCategoryOptionsSchema(replMatches, appSettings.volt220_api_token!);
+                      originalTraits = extractOriginalTraits(originalProduct, rFullSchema);
+                      originalMarkings = extractMarkingTokens(originalProduct.pagetitle);
+                      console.log(`[Chat] Replacement L1 traits: must=${JSON.stringify(originalTraits.must)} dropped_service=${originalTraits.droppedServiceKeys.length} dropped_not_in_schema=${originalTraits.droppedNotInSchema.length} dropped_overflow=${originalTraits.droppedOverflow.length}`);
+                      console.log(`[Chat] Replacement L2 markings from "${originalProduct.pagetitle}": [${originalMarkings.join(', ')}]`);
+                    } catch (e) {
+                      console.warn(`[Chat] Replacement L1+L2 prep failed (silent):`, e instanceof Error ? e.message : String(e));
+                    }
+                  }
+                  const traitMust = originalTraits.must;
+                  const traitKeysSet = new Set(Object.keys(traitMust));
+
                   let rFinal: Product[] = [];
-                  if (replModifiers.length === 0) {
+                  // rResolved holds combined facet filters; we always seed with traitMust (Layer 1).
+                  let rResolved: Record<string, string> = { ...traitMust };
+                  let rResolvedRaw: Record<string, { value: string; is_critical?: boolean }> = {};
+
+                  if (replModifiers.length === 0 && Object.keys(traitMust).length === 0) {
+                    // Нет ни модификаторов запроса, ни trait-фильтров из оригинала → берём pool как есть.
                     rFinal = rPool;
                   } else {
-                    // Load full category schema for the replacement target categories
-                    const rFullSchema = await getUnionCategoryOptionsSchema(replMatches, appSettings.volt220_api_token!);
-                    const { resolved: rResolvedRaw, unresolved: rUnresolved } = await resolveFiltersWithLLM(
-                      rPool, replModifiers, appSettings, classification?.critical_modifiers, rFullSchema
-                    );
-                    const rResolved = flattenResolvedFilters(rResolvedRaw);
-                    console.log(`[Chat] Replacement matcher resolved=${JSON.stringify(rResolved)}, unresolved=[${rUnresolved.join(', ')}]`);
-                    // Replacement branch: allowEmpty=false (keep literal as fallback signal).
+                    if (replModifiers.length > 0) {
+                      // LLM-matcher только когда у нас есть пользовательские модификаторы.
+                      // Schema уже загружена выше (если был originalProduct); иначе грузим тут.
+                      if (rFullSchema.size === 0) {
+                        rFullSchema = await getUnionCategoryOptionsSchema(replMatches, appSettings.volt220_api_token!);
+                      }
+                      const { resolved: llmResolvedRaw, unresolved: rUnresolved } = await resolveFiltersWithLLM(
+                        rPool, replModifiers, appSettings, classification?.critical_modifiers, rFullSchema
+                      );
+                      rResolvedRaw = llmResolvedRaw;
+                      const llmFlat = flattenResolvedFilters(llmResolvedRaw);
+                      // Merge order: LLM-resolved first, traitMust wins on key collision.
+                      // Обоснование: оригинал — ground truth (реальные options каталога),
+                      // LLM-резолв — догадка по токенам пользователя.
+                      rResolved = { ...llmFlat, ...traitMust };
+                      console.log(`[Chat] Replacement matcher resolved (LLM+trait merged)=${JSON.stringify(rResolved)}, unresolved=[${rUnresolved.join(', ')}], trait_keys=[${[...traitKeysSet].join(', ')}]`);
+                    } else {
+                      console.log(`[Chat] Replacement matcher trait-only=${JSON.stringify(rResolved)} (no user modifiers)`);
+                    }
+
                     const rLiteral = replModifiers.length > 0 ? replModifiers.join(' ') : null;
                     const qText = suppressResolvedFromQuery(
                       rLiteral,
@@ -8921,9 +8960,9 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     for (const arr of rFiltRes) for (const p of arr) {
                       if (!rfSeen.has(p.id)) { rfSeen.add(p.id); rFinal.push(p); }
                     }
-                    // Cascading relaxed
+                    // Cascading relaxed: trait-фильтры от оригинала НЕ дропаем (это ground truth).
                     if (rFinal.length === 0 && Object.keys(rResolved).length > 1) {
-                      const droppable = Object.keys(rResolved).filter(k => !(rResolvedRaw[k]?.is_critical));
+                      const droppable = Object.keys(rResolved).filter(k => !(rResolvedRaw[k]?.is_critical) && !traitKeysSet.has(k));
                       let bestRelaxed: Product[] = [];
                       let droppedKey = '';
                       for (const dropKey of droppable) {
@@ -8947,7 +8986,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       }
                       if (bestRelaxed.length > 0) {
                         rFinal = bestRelaxed;
-                        console.log(`[Chat] Replacement matcher relaxed (dropped ${droppedKey}): ${rFinal.length}`);
+                        console.log(`[Chat] Replacement matcher relaxed (dropped ${droppedKey}, trait-keys preserved): ${rFinal.length}`);
                       }
                     }
                   }
@@ -8962,6 +9001,32 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     console.log(`[Chat] Replacement HARD zero-price filter: ${rBeforeZero} → ${rFinal.length}`);
                   }
 
+                  // ───── LAYER 2: marking guard with rollback ─────
+                  // Если у оригинала есть структурные маркировки (ЩРН-П-12, ВВГнг, IP41…) —
+                  // кандидат должен содержать хотя бы одну из них в pagetitle. Иначе это
+                  // не аналог (классический случай ЩРН vs ЩРВ — разный тип монтажа,
+                  // отдельного фасета в каталоге нет).
+                  let weakened = false;
+                  let weakenedReason: 'marking_mismatch' | 'few_results' | undefined = undefined;
+                  if (rFinal.length > 0 && originalMarkings.length > 0) {
+                    const guarded = applyMarkingGuard(rFinal, originalMarkings);
+                    if (guarded.mismatch) {
+                      // 0 после guard → откатываемся к pre-guard, помечаем weakened.
+                      // Честнее показать «близкие, но не точные», чем Soft-404.
+                      console.log(`[Chat] Replacement L2 marking-guard MISMATCH: pre=${rFinal.length} post=0 → rollback + weakened markings=[${originalMarkings.join(', ')}]`);
+                      weakened = true;
+                      weakenedReason = 'marking_mismatch';
+                    } else {
+                      console.log(`[Chat] Replacement L2 marking-guard kept ${guarded.filtered.length}/${rFinal.length} (markings=[${originalMarkings.join(', ')}])`);
+                      rFinal = guarded.filtered;
+                    }
+                  }
+                  if (rFinal.length > 0 && rFinal.length < 3 && !weakened) {
+                    weakened = true;
+                    weakenedReason = 'few_results';
+                    console.log(`[Chat] Replacement L2 weakened: few_results count=${rFinal.length}`);
+                  }
+
                   if (rFinal.length > 0) {
                     { const _r = pickDisplayWithTotal(rFinal); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_matcher'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_matcher zeroFiltered=${_r.filteredZeroPrice}`); }
                     articleShortCircuit = true;
@@ -8971,8 +9036,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       original: originalProduct,
                       originalName: classification.product_name,
                       noResults: false,
+                      weakened,
+                      weakenedReason,
                     };
-                    console.log(`[Chat] [Path] WIN replacement matched_cats=${replMatches.length} count=${foundProducts.length} elapsed=${Date.now() - replacementStart}ms`);
+                    console.log(`[Chat] [Path] WIN replacement matched_cats=${replMatches.length} count=${foundProducts.length} weakened=${weakened}${weakenedReason ? ' reason=' + weakenedReason : ''} elapsed=${Date.now() - replacementStart}ms`);
                   } else {
                     console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS replacement reason=zero_after_filters matched_cats=${replMatches.length}`);
                   }
