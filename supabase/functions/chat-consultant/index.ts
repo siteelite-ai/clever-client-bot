@@ -3040,7 +3040,7 @@ function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: 
     const qb = queryBrand.toLowerCase();
     const productBrand = (product?.vendor ?? '').toLowerCase();
     const brandOption = product?.options?.find(o => o?.key === 'brend__brend');
-    const brandRaw = brandOption?.value ?? '';
+    const brandRaw = brandOption?.value_ru ?? brandOption?.value ?? '';
     const optBrand = brandRaw.split('//')[0].trim().toLowerCase();
     if (productBrand.includes(qb) || optBrand.includes(qb) || qb.includes(productBrand) || qb.includes(optBrand)) {
       brandScore = 20;
@@ -4745,6 +4745,16 @@ function cleanOptionCaption(caption: unknown): string {
   return (parts[0] || '').trim();
 }
 
+function getBrandFromProduct(product: Product | null | undefined): string {
+  if (Array.isArray(product?.options)) {
+    const brandOption = product.options.find((o: any) => o && o.key === 'brend__brend');
+    const optionBrand = cleanOptionValue(brandOption?.value_ru ?? brandOption?.value);
+    if (optionBrand) return optionBrand;
+  }
+
+  return typeof product?.vendor === 'string' ? product.vendor.trim() : '';
+}
+
 // Форматирование товаров для AI
 function formatProductsForAI(products: Product[], includeExtended: boolean = true): string {
   if (products.length === 0) {
@@ -4755,17 +4765,8 @@ function formatProductsForAI(products: Product[], includeExtended: boolean = tru
   for (let i = 0; i < products.length; i++) {
     const p = products[i];
     try {
-      let brand = '';
       const brandLabel = 'Бренд';
-      if (Array.isArray(p?.options)) {
-        const brandOption = p.options.find((o: any) => o && o.key === 'brend__brend');
-        if (brandOption) {
-          brand = cleanOptionValue(brandOption.value);
-        }
-      }
-      if (!brand) {
-        brand = (typeof p?.vendor === 'string' ? p.vendor : '') || '';
-      }
+      const brand = getBrandFromProduct(p);
 
       const safeUrl = typeof p?.url === 'string' ? p.url : '';
       const productUrl = toProductionUrl(safeUrl).replace(/\(/g, '%28').replace(/\)/g, '%29');
@@ -4834,15 +4835,8 @@ export function formatProductCardDeterministic(product: Product): string {
     ? toProductionUrl(rawUrl).replace(/\(/g, '%28').replace(/\)/g, '%29')
     : '';
 
-  let brand = '';
   const brandLabel = 'Бренд';
-  if (Array.isArray(product?.options)) {
-    const brandOption = product.options.find((o: any) => o && o.key === 'brend__brend');
-    if (brandOption) brand = cleanOptionValue(brandOption.value);
-  }
-  if (!brand) {
-    brand = (typeof product?.vendor === 'string' ? product.vendor.trim() : '') || '';
-  }
+  const brand = getBrandFromProduct(product);
 
   const lines = [
     normalizedUrl ? `- **[${safeName}](${normalizedUrl})**` : `- **${safeName}**`,
@@ -5270,7 +5264,7 @@ function extractBrandsFromProducts(products: Product[]): string[] {
     if (Array.isArray(product?.options)) {
       const brandOption = product.options.find((o: any) => o && o.key === 'brend__brend');
       if (brandOption) {
-        const brandName = cleanOptionValue(brandOption.value);
+        const brandName = cleanOptionValue(brandOption.value_ru ?? brandOption.value);
         if (brandName) {
           brands.add(brandName);
           found = true;
