@@ -7706,22 +7706,68 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 return clean;
               };
 
+              // Family-Guard (data-driven, no hardcoded categories):
+              // Brand-fallback is safe only if the target category does NOT model the same
+              // compatibility axes as the anchor. We compare anchor.options keys with the
+              // target category schema keys discovered from a real probe of target products.
+              // If they share any key (other than brand) — that key is a "family axis" both
+              // sides model (e.g. kollekciya/seriya/posadochn*), and brand alone is not
+              // enough → brand-fallback is blocked → honest incompatible-collection branch.
+              const anchorKeys = new Set(
+                opts.map((o) => (typeof o.key === 'string' ? o.key : '')).filter((k) => k.length > 0)
+              );
+
               let attemptLabel = 'all';
               let products: Product[] = [];
+              let blockedByFamily = false;
+              let sharedFamilyKeys: string[] = [];
+
               if (collection) {
                 products = await tryFetch({ kollekciya__kollekciya: collection }, `collection=${collection}`);
                 if (products.length > 0) attemptLabel = 'collection';
               }
+
               if (products.length === 0 && brand) {
-                products = await tryFetch({ brend__brend: brand }, `brand=${brand}`);
-                if (products.length > 0) attemptLabel = 'brand';
-              }
-              if (products.length === 0) {
+                // Probe target schema before brand-fallback.
+                const probe = await tryFetch(undefined, 'probe-target-schema');
+                const targetKeys = new Set<string>();
+                for (const p of probe) {
+                  const po = (p.options || []) as Array<{ key?: string }>;
+                  for (const o of po) {
+                    if (typeof o.key === 'string' && o.key.length > 0) targetKeys.add(o.key);
+                  }
+                }
+                sharedFamilyKeys = [...anchorKeys].filter(
+                  (k) => targetKeys.has(k) && !/^brend/i.test(k)
+                );
+                if (sharedFamilyKeys.length > 0) {
+                  blockedByFamily = true;
+                  console.log(
+                    `[AccessoryFor] family-guard BLOCKED brand-fallback. shared_keys=${JSON.stringify(sharedFamilyKeys)}`
+                  );
+                  // Use probe results as honest examples for incompatible-collection branch.
+                  const samples = probe.slice(0, 3);
+                  if (samples.length > 0) {
+                    foundProducts = samples;
+                    articleShortCircuit = true;
+                    responseModel = 'anthropic/claude-sonnet-4.5';
+                    responseModelReason = 'accessory-for-incompatible-collection';
+                  }
+                  attemptLabel = 'incompatible-collection';
+                } else {
+                  products = await tryFetch({ brend__brend: brand }, `brand=${brand}`);
+                  if (products.length > 0) attemptLabel = 'brand';
+                  if (products.length === 0) {
+                    products = probe;
+                    if (products.length > 0) attemptLabel = 'all';
+                  }
+                }
+              } else if (products.length === 0) {
                 products = await tryFetch(undefined, 'all');
                 if (products.length > 0) attemptLabel = 'all';
               }
 
-              if (products.length > 0) {
+              if (!blockedByFamily && products.length > 0) {
                 foundProducts = products.slice(0, 15);
                 articleShortCircuit = true;
                 responseModel = 'anthropic/claude-sonnet-4.5';
@@ -7737,6 +7783,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   collection,
                   brand,
                   attempt: attemptLabel,
+                  family_guard: {
+                    shared_keys: sharedFamilyKeys,
+                    blocked_brand_fallback: blockedByFamily,
+                  },
                   target_category: targetNoun,
                   displayed: foundProducts.length,
                 },
