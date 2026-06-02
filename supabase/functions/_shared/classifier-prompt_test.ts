@@ -63,3 +63,51 @@ Deno.test("classifier prompt: spec includes packaging/unit attributes", () => {
   assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "количество в упаковке");
   assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "комплектация");
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// accessory_for pattern (2026-06-02)
+// ─────────────────────────────────────────────────────────────────────────────
+
+Deno.test("classifier prompt: accessory_for sub_intent has narrative description", () => {
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, `"accessory_for"`);
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "СОВМЕСТИМЫЕ с конкретным товаром-якорем");
+});
+
+Deno.test("classifier prompt: accessory_for compatibility markers listed", () => {
+  // Core linguistic markers — без них классификатор не сможет различить accessory_for от обычного catalog.
+  const markers = ["подходит к", "совместим с", "в комплект к", "под", "для"];
+  for (const m of markers) {
+    assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, m);
+  }
+});
+
+Deno.test("classifier prompt: accessory_for requires anchor concreteness", () => {
+  // Защита от ложного срабатывания на «диск для болгарки» без якоря.
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "ОБЯЗАТЕЛЬНОЕ условие конкретики якоря");
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "бренд, маркировку, артикул");
+});
+
+Deno.test("classifier prompt: accessory_for sets has_product_name=FALSE and product_category=target", () => {
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "has_product_name = FALSE (цель запроса — категория Y");
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "product_category = target_noun");
+});
+
+Deno.test("classifier prompt: accessory_for vs replacement disambiguation", () => {
+  // is_replacement имеет приоритет — иначе «подбери аналог к ХХХ» уйдёт не в ту ветку.
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "is_replacement=TRUE имеет приоритет");
+});
+
+Deno.test("classifier prompt: anchor_product field documented", () => {
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "ЯКОРЬ-ТОВАР (anchor_product)");
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "anchor_product = null");
+});
+
+Deno.test("classifier prompt: anchor_product field present in JSON output schema", () => {
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, `"anchor_product":string|null`);
+});
+
+Deno.test("classifier prompt: search_modifiers for accessory_for from target fragment only", () => {
+  // Защита от утечки токенов якоря в search_modifiers целевой категории.
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "ТОЛЬКО target-фрагмента запроса");
+  assertStringIncludes(DEFAULT_CLASSIFIER_PROMPT, "без anchor_phrase");
+});
