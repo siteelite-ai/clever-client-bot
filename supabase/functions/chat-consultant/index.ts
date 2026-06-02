@@ -1675,6 +1675,33 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
           console.log(`[Classify] compute extracted: attribute="${computeField.attribute}", multiplier=${multiplier ?? 'null'}`);
         }
       }
+      // Compare (sub_intent='compare'): принимаем только при ≥2 непустых якорях. Иначе откатываем sub_intent.
+      let compareField: { anchors: string[] } | undefined;
+      let effectiveSubIntent = subIntent;
+      if (subIntent === 'compare') {
+        const rawCompare = parsed.compare && typeof parsed.compare === 'object'
+          ? (parsed.compare as Record<string, unknown>)
+          : null;
+        const rawAnchors = rawCompare && Array.isArray(rawCompare.anchors) ? rawCompare.anchors : [];
+        const anchors = rawAnchors
+          .filter((a: unknown): a is string => typeof a === 'string' && a.trim().length > 0)
+          .map((a: string) => a.trim());
+        // Дедупликация без потери порядка (case-insensitive)
+        const seen = new Set<string>();
+        const uniqAnchors = anchors.filter((a) => {
+          const k = a.toLowerCase();
+          if (seen.has(k)) return false;
+          seen.add(k);
+          return true;
+        });
+        if (uniqAnchors.length >= 2) {
+          compareField = { anchors: uniqAnchors };
+          console.log(`[Classify] compare extracted: anchors=[${uniqAnchors.join(' | ')}]`);
+        } else {
+          console.log(`[Classify] compare REJECTED (anchors=${uniqAnchors.length} < 2), fallback sub_intent=null`);
+          effectiveSubIntent = undefined;
+        }
+      }
       // Price bounds: независимы от price_intent и is_replacement.
       const parsePriceBound = (raw: unknown): number | undefined => {
         if (typeof raw === 'number' && Number.isFinite(raw) && raw > 0) return Math.floor(raw);
