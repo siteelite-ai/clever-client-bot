@@ -3,6 +3,7 @@ import {
   applyMarkingGuard,
   extractMarkingTokens,
   extractOriginalTraits,
+  filterStructuralMarkings,
   type UnionSchema,
 } from './replacement-traits.ts';
 
