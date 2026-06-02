@@ -1397,6 +1397,8 @@ interface Product {
 interface SearchCandidate {
   query: string | null;
   article?: string | null;
+  /** EXACT product name lookup via `?pagetitle=...`. Используется compare-веткой. */
+  pagetitle?: string | null;
   brand: string | null;
   category: string | null;
   min_price: number | null;
