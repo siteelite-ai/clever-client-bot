@@ -619,8 +619,12 @@ async function getAppSettings(): Promise<CachedSettings> {
     // Полная имплементация Branch A/B живёт в V2. Здесь только лог-эхо состояния флагов.
     const qf = (data as { query_first_enabled?: boolean }).query_first_enabled === true;
     const ss = (data as { soft_suggest_enabled?: boolean }).soft_suggest_enabled === true;
+    const cb = (data as { compare_branch_enabled?: boolean }).compare_branch_enabled === true;
     if (qf || ss) {
       console.log(`[Settings] V1 sees experimental flags: query_first=${qf} soft_suggest=${ss} (no-op in V1, switch active_pipeline to v2 to use)`);
+    }
+    if (cb) {
+      console.log(`[Settings] V1 compare_branch_enabled=true — compare sub_intent will trigger dedicated branch`);
     }
 
     // Fallback to env vars if DB values are empty
@@ -636,6 +640,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       classifier_model: data.classifier_model || 'anthropic/claude-sonnet-4.5',
       query_first_enabled: qf,
       soft_suggest_enabled: ss,
+      compare_branch_enabled: cb,
     };
   } catch (e) {
     console.error('[Settings] Failed to load settings:', e);
