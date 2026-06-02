@@ -137,10 +137,26 @@ export async function flushLog(ctx: RequestLogCtx): Promise<void> {
  * Оборачивает Response: для SSE-стримов копит чанки в ctx и flush'ит при close;
  * для обычных JSON/text — читает body, копирует, flush'ит сразу.
  */
+// Запускает promise и одновременно регистрирует его в EdgeRuntime.waitUntil
+// (если доступен), чтобы Supabase Edge Runtime не выгрузил воркер до
+// завершения INSERT'а в chat_request_logs. Это критично для SSE-ответов:
+// после закрытия стрима runtime немедленно тушит instance, и обычный
+// fire-and-forget `flushLog(...).catch(()=>{})` не успевает долететь до БД.
+function keepAlive(p: Promise<unknown>): Promise<unknown> {
+  try {
+    // @ts-ignore — EdgeRuntime есть только в Supabase Edge Functions
+    const er: any = (globalThis as any).EdgeRuntime;
+    if (er && typeof er.waitUntil === 'function') {
+      er.waitUntil(p);
+    }
+  } catch (_) { /* ignore */ }
+  return p.catch(() => {});
+}
+
 export function wrapResponseForLogging(res: Response, ctx: RequestLogCtx): Response {
   // Без body — просто flush
   if (!res.body) {
-    flushLog(ctx).catch(() => {});
+    keepAlive(flushLog(ctx));
     return res;
   }
 
@@ -164,8 +180,10 @@ export function wrapResponseForLogging(res: Response, ctx: RequestLogCtx): Respo
         } catch (_) { /* ignore */ }
         controller.enqueue(chunk);
       },
-      flush() {
-        flushLog(ctx).catch(() => {});
+      // ВАЖНО: await + waitUntil. Без await TransformStream закроется
+      // мгновенно, а Edge Runtime убьёт worker до того, как INSERT уйдёт.
+      async flush() {
+        await keepAlive(flushLog(ctx));
       },
     }),
   );
