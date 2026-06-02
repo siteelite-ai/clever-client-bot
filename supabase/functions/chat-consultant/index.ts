@@ -3040,7 +3040,7 @@ function scoreProductMatch(product: Product, queryTokens: string[], querySpecs: 
     const qb = queryBrand.toLowerCase();
     const productBrand = (product?.vendor ?? '').toLowerCase();
     const brandOption = product?.options?.find(o => o?.key === 'brend__brend');
-    const brandRaw = brandOption?.value ?? '';
+    const brandRaw = brandOption?.value_ru ?? brandOption?.value ?? '';
     const optBrand = brandRaw.split('//')[0].trim().toLowerCase();
     if (productBrand.includes(qb) || optBrand.includes(qb) || qb.includes(productBrand) || qb.includes(optBrand)) {
       brandScore = 20;
@@ -5264,7 +5264,7 @@ function extractBrandsFromProducts(products: Product[]): string[] {
     if (Array.isArray(product?.options)) {
       const brandOption = product.options.find((o: any) => o && o.key === 'brend__brend');
       if (brandOption) {
-        const brandName = cleanOptionValue(brandOption.value);
+        const brandName = cleanOptionValue(brandOption.value_ru ?? brandOption.value);
         if (brandName) {
           brands.add(brandName);
           found = true;
