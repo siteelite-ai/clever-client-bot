@@ -10106,6 +10106,48 @@ ${productInstructions}`;
     // ответа про характеристику + опц. умножение на N — детерминистичный
     // рендерер этого не умеет (он рисует только карточки + intro/followUp).
     const hasComputeRequest = !!(extractedIntent.compute && extractedIntent.compute.attribute);
+
+    // ── REPLACEMENT ANCHOR GUARD (Step A / 2026-06-02) ──────────────────────
+    // Если is_replacement=true, но catalog-pipeline нашёл сам исходный товар
+    // (anchor) — это НЕ «аналоги», это тот же товар. Фильтруем якорь из
+    // foundProducts перед детерминистичным рендером. Если после фильтра пусто
+    // — short-circuit вообще не делаем, отдаём на LLM-flow для honest-ответа
+    // «аналогов под эти параметры не нашёл».
+    // Распознавание якоря:
+    //   1) совпадение по id с replacementOriginalHint (если был article-first hit)
+    //   2) длинные SKU-токены (≥7 цифр) из product_name/search_modifiers
+    //      встречаются в product.article или product.pagetitle
+    //   3) точное совпадение product.pagetitle == classification.product_name
+    if (classification?.is_replacement && foundProducts.length > 0) {
+      const anchorId = replacementOriginalHint?.id ?? null;
+      const skuTokens: string[] = [];
+      const collectSku = (s: string | undefined | null) => {
+        if (!s) return;
+        const matches = s.match(/[A-Za-zА-Яа-я0-9][A-Za-zА-Яа-я0-9\-\/]*\d{7,}[A-Za-zА-Яа-я0-9\-\/]*/g) || [];
+        for (const m of matches) skuTokens.push(m.toLowerCase());
+      };
+      collectSku(classification.product_name);
+      for (const m of (classification.search_modifiers || [])) collectSku(m);
+      const exactName = (classification.product_name || '').trim().toLowerCase();
+
+      const before = foundProducts.length;
+      const filtered = foundProducts.filter(p => {
+        if (anchorId !== null && p.id === anchorId) return false;
+        const pt = (p.pagetitle || '').toLowerCase();
+        const art = ((p as any).article || '').toLowerCase();
+        if (exactName && pt === exactName) return false;
+        for (const tok of skuTokens) {
+          if (tok && (art.includes(tok) || pt.includes(tok))) return false;
+        }
+        return true;
+      });
+      if (filtered.length !== before) {
+        console.log(`[Chat] Replacement anchor-guard: filtered ${before} → ${filtered.length} (dropped anchors), skuTokens=[${skuTokens.join(', ')}], anchorId=${anchorId ?? 'none'}`);
+        foundProducts = filtered;
+        logAddStep({ step: 'replacement-anchor-guard', total: filtered.length, meta: { before, dropped: before - filtered.length, skuTokens, anchorId } });
+      }
+    }
+
     // SYSTEMIC ANTI-HALLUCINATION (2026-05-04): любой ответ с найденными товарами
     // обязан рендериться детерминистично из ProductResource — иначе LLM переписывает
     // URL даже при инструкции «копируй как есть» (см. mem://constraints/deterministic-product-render).
