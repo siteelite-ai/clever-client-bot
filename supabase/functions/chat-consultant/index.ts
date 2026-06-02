@@ -1435,9 +1435,11 @@ interface ClassificationResult {
   is_replacement?: boolean;
   search_modifiers?: string[];
   critical_modifiers?: string[];
-  sub_intent?: 'availability' | 'price' | 'location' | 'spec' | 'facets';
+  sub_intent?: 'availability' | 'price' | 'location' | 'spec' | 'facets' | 'compare';
   /** Расчёт характеристики, заполняется только при sub_intent="spec". */
   compute?: ComputeRequest;
+  /** Список якорей-товаров для сравнения, заполняется только при sub_intent="compare". Минимум 2. */
+  compare?: { anchors: string[] };
 }
 
 function detectSubIntentFallback(message: string): ClassificationResult['sub_intent'] {
