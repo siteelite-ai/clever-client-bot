@@ -7825,6 +7825,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     target_values_sample: familyTargetValuesSample,
                   },
                   target_category: targetNoun,
+                  resolved_category: resolvedTargetCategory,
                   displayed: foundProducts.length,
                 },
               });
