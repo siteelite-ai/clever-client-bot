@@ -8850,6 +8850,9 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             // Otherwise → matcher maps replCategory → exact pagetitle[].
             // On WIN: short-circuits, sets foundProducts + replacementMeta, skips legacy bucket-logic.
             let replacementWinResolved = false;
+            // Hoisted across matcher + legacy branches so marking-guard applies in both.
+            let outerOriginalMarkings: string[] = [];
+            let outerFullSchema: Map<string, { caption: string; values: Set<string> }> = new Map();
             try {
               let replMatches: string[] = [];
               const originalCatPagetitle = originalProduct ? ((originalProduct as any).category?.pagetitle || '') : '';
