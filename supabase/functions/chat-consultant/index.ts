@@ -6541,6 +6541,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     let brandsContext = '';
     let knowledgeContext = '';
     let articleShortCircuit = false;
+    // Compare-branch: якоря, которые НЕ удалось найти (после token-quality check).
+    // Используется в детерминистичном рендере для честного дисклеймера
+    // «Не нашёл в каталоге: «X». Показываю остальное:» (см. рендер ниже).
+    let compareMissingAnchors: string[] = [];
     // Plan V7 — when set, short-circuits AI streaming entirely and returns a clarification
     // question with quick_reply chips. Used when CategoryMatcher returns ≥2 semantically distinct
     // buckets (e.g. household vs industrial sockets). User picks one chip, next turn the
