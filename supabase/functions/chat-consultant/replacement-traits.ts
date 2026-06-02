@@ -142,18 +142,24 @@ export function extractOriginalTraits(
 export function extractMarkingTokens(pagetitle: string | null | undefined): string[] {
   if (!pagetitle || typeof pagetitle !== 'string') return [];
   const tokens = new Set<string>();
-  // Группы: буквенная база (≥2) + опц. цифровая/составная часть.
-  const re = /\b([A-Za-zА-Яа-яЁё]{2,8}(?:[-/][A-Za-zА-Яа-яЁё0-9]{1,8})*(?:[-/]?\d+[A-Za-zА-Яа-яЁё0-9хx*.,/-]*)?)\b/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(pagetitle)) !== null) {
-    const raw = m[1];
-    // Должна быть хотя бы одна цифра ИЛИ дефис (иначе это обычное слово).
-    if (!/[\d-]/.test(raw)) continue;
-    // Отсеиваем чистые числа без буквенной части (год, объём).
-    if (!/[A-Za-zА-Яа-яЁё]{2,}/.test(raw)) continue;
-    // Отсеиваем единицы измерения "12шт", "10А" — слишком короткие хвосты.
-    const upper = raw.toUpperCase();
-    tokens.add(upper);
+  // Сплит по пробелам и пунктуации (кроме `-` `/` `.` `,` `*` `х` `x`, которые
+  // часть маркировок). `\b` в JS regex не работает с кириллицей, поэтому
+  // делаем mechanical split + per-token проверку формы.
+  const parts = pagetitle.split(/[\s()«»"',;:!?]+/u).filter(Boolean);
+  for (const raw of parts) {
+    // Снимаем хвостовую/головную пунктуацию.
+    const cleaned = raw.replace(/^[.\-/]+|[.\-/]+$/g, '');
+    if (cleaned.length < 3) continue;
+    // Должна быть буквенная часть ≥2 символов.
+    const letterRun = cleaned.match(/[A-Za-zА-Яа-яЁё]{2,}/);
+    if (!letterRun) continue;
+    // Должна быть либо цифра, либо внутренний дефис/слеш (структурная маркировка).
+    const hasDigit = /\d/.test(cleaned);
+    const hasInnerSep = /[A-Za-zА-Яа-яЁё][-/][A-Za-zА-Яа-яЁё0-9]/.test(cleaned);
+    if (!hasDigit && !hasInnerSep) continue;
+    // Отсеиваем чистые числа с короткой единицей измерения (12шт, 10А, 220В, 5кг).
+    if (/^\d+[A-Za-zА-Яа-яЁё]{1,3}$/.test(cleaned)) continue;
+    tokens.add(cleaned.toUpperCase());
   }
   return Array.from(tokens);
 }
