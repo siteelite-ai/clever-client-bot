@@ -563,6 +563,8 @@ interface CachedSettings {
   query_first_enabled: boolean;
   /** §22.3 spec — Branch B флаг (Soft-Suggest). Аналогично — пока observability-only в V1. */
   soft_suggest_enabled: boolean;
+  /** Compare-branch (sub_intent='compare'). Default false. Когда off — ветка не активируется. */
+  compare_branch_enabled: boolean;
 }
 
 async function getAppSettings(): Promise<CachedSettings> {
