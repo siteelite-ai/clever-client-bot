@@ -7706,55 +7706,64 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 return clean;
               };
 
-              // Family-Guard (data-driven, no hardcoded categories):
-              // Brand-fallback is safe only if the target category does NOT model the same
-              // compatibility axes as the anchor. We compare anchor.options keys with the
-              // target category schema keys discovered from a real probe of target products.
-              // If they share any key (other than brand) — that key is a "family axis" both
-              // sides model (e.g. kollekciya/seriya/posadochn*), and brand alone is not
-              // enough → brand-fallback is blocked → honest incompatible-collection branch.
-              const anchorKeys = new Set(
-                opts.map((o) => (typeof o.key === 'string' ? o.key : '')).filter((k) => k.length > 0)
-              );
-
+              // Family-Guard (data-driven, no hardcoded keys/categories):
+              // The signal is the SAME filter (key,value) that collection-attempt already
+              // used. If collection-attempt запрашивал options[K]=V and вернул 0, and the
+              // target category schema (from probe) shows that key K is a real partition axis
+              // there (присутствует у товаров) but value V не входит в его набор — это
+              // family-mismatch → brand-fallback blocked → honest incompatible-collection.
+              // Generic attrs (cvet/material/...) and technical meta (kodnomenklatury/...)
+              // физически не попадают в проверку: collection-attempt по ним не фильтрует.
               let attemptLabel = 'all';
               let products: Product[] = [];
               let blockedByFamily = false;
-              let sharedFamilyKeys: string[] = [];
+              let familyKey: string | null = null;
+              let familyAnchorValue: string | null = null;
+              let familyTargetValuesSample: string[] = [];
 
+              const collectionFilterKey = 'kollekciya__kollekciya';
               if (collection) {
-                products = await tryFetch({ kollekciya__kollekciya: collection }, `collection=${collection}`);
+                products = await tryFetch({ [collectionFilterKey]: collection }, `collection=${collection}`);
                 if (products.length > 0) attemptLabel = 'collection';
               }
 
               if (products.length === 0 && brand) {
                 // Probe target schema before brand-fallback.
                 const probe = await tryFetch(undefined, 'probe-target-schema');
-                const targetKeys = new Set<string>();
-                for (const p of probe) {
-                  const po = (p.options || []) as Array<{ key?: string }>;
-                  for (const o of po) {
-                    if (typeof o.key === 'string' && o.key.length > 0) targetKeys.add(o.key);
+
+                if (collection) {
+                  // Collect actual values for the SAME key the collection-attempt used.
+                  const targetValues = new Set<string>();
+                  for (const p of probe) {
+                    const po = (p.options || []) as Array<{ key?: string; value_ru?: string }>;
+                    for (const o of po) {
+                      if (o.key === collectionFilterKey && typeof o.value_ru === 'string' && o.value_ru.trim()) {
+                        targetValues.add(o.value_ru.trim());
+                      }
+                    }
+                  }
+                  const normalized = collection.trim().toLowerCase();
+                  const hasMatch = [...targetValues].some((v) => v.toLowerCase() === normalized);
+                  if (targetValues.size > 0 && !hasMatch) {
+                    blockedByFamily = true;
+                    familyKey = collectionFilterKey;
+                    familyAnchorValue = collection;
+                    familyTargetValuesSample = [...targetValues].slice(0, 5);
+                    console.log(
+                      `[AccessoryFor] family-guard BLOCKED brand-fallback. family_key=${familyKey} anchor_value="${familyAnchorValue}" target_values_sample=${JSON.stringify(familyTargetValuesSample)}`
+                    );
+                    const samples = probe.slice(0, 3);
+                    if (samples.length > 0) {
+                      foundProducts = samples;
+                      articleShortCircuit = true;
+                      responseModel = 'anthropic/claude-sonnet-4.5';
+                      responseModelReason = 'accessory-for-incompatible-collection';
+                    }
+                    attemptLabel = 'incompatible-collection';
                   }
                 }
-                sharedFamilyKeys = [...anchorKeys].filter(
-                  (k) => targetKeys.has(k) && !/^brend/i.test(k)
-                );
-                if (sharedFamilyKeys.length > 0) {
-                  blockedByFamily = true;
-                  console.log(
-                    `[AccessoryFor] family-guard BLOCKED brand-fallback. shared_keys=${JSON.stringify(sharedFamilyKeys)}`
-                  );
-                  // Use probe results as honest examples for incompatible-collection branch.
-                  const samples = probe.slice(0, 3);
-                  if (samples.length > 0) {
-                    foundProducts = samples;
-                    articleShortCircuit = true;
-                    responseModel = 'anthropic/claude-sonnet-4.5';
-                    responseModelReason = 'accessory-for-incompatible-collection';
-                  }
-                  attemptLabel = 'incompatible-collection';
-                } else {
+
+                if (!blockedByFamily) {
                   products = await tryFetch({ brend__brend: brand }, `brand=${brand}`);
                   if (products.length > 0) attemptLabel = 'brand';
                   if (products.length === 0) {
