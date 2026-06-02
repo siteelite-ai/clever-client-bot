@@ -26,6 +26,11 @@ import {
 } from '../_shared/related-followup.ts';
 import { wrapWithHeartbeat } from '../_shared/sse-heartbeat.ts';
 import { buildFacetsSummaryContent } from '../_shared/facets-summary.ts';
+import {
+  applyMarkingGuard,
+  extractMarkingTokens,
+  extractOriginalTraits,
+} from './replacement-traits.ts';
 
 // Per-request async context (carries reqId implicitly through all awaits inside `serve`).
 // Used by Degraded-mode tracker so deeply nested catalog helpers do NOT need to thread
@@ -6555,7 +6560,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     // (article/siteId hit, price-intent hit) where the answer is a simple "yes, in stock, X tg".
     let responseModel = aiConfig.model;
     let responseModelReason = 'default';
-    let replacementMeta: { isReplacement: boolean; original: Product | null; originalName?: string; noResults: boolean } | null = null;
+    let replacementMeta: { isReplacement: boolean; original: Product | null; originalName?: string; noResults: boolean; weakened?: boolean; weakenedReason?: 'marking_mismatch' | 'few_results' } | null = null;
     // Price-Facet-Clarify state (V1 bootstrap-facets clarify) — поднято на верхний scope,
     // чтобы deterministic short-circuit ниже мог построить корректное сообщение.
     let pendingClarifyFacet: BootstrapFacet | null = null;
