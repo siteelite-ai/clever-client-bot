@@ -49,3 +49,20 @@ Deno.test('deterministic content for accessory-for-anchor-missing shows honest i
   if (!okIntro) throw new Error(`anchor-missing intro mismatch: ${content.slice(0, 200)}`);
   assertStringIncludes(content, '[Рамка Legrand Celiane 1-пост белая]');
 });
+
+Deno.test('isDeterministicShortCircuitReason recognises accessory-for-incompatible-collection', () => {
+  if (!isDeterministicShortCircuitReason('accessory-for-incompatible-collection')) {
+    throw new Error('expected accessory-for-incompatible-collection to be deterministic reason');
+  }
+});
+
+Deno.test('deterministic content for accessory-for-incompatible-collection explains incompatibility', () => {
+  const content = buildDeterministicShortCircuitContent({
+    products: [frameProduct as any],
+    reason: 'accessory-for-incompatible-collection',
+    userMessage: 'какие рамки подходят к розетке NLST',
+  });
+  const okIntro = ['совместим', 'серии', 'посадочн'].some((p) => content.toLowerCase().includes(p));
+  if (!okIntro) throw new Error(`incompatible intro mismatch: ${content.slice(0, 200)}`);
+  assertStringIncludes(content, '[Рамка Legrand Celiane 1-пост белая]');
+});
