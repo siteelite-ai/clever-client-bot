@@ -6767,23 +6767,37 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             const apiToken = appSettings.volt220_api_token;
             // Per-anchor lookup: pagetitle → fallback query. Время на якорь ограничено
             // самим searchProductsByCandidate (10s AbortController). Параллельно.
+            // Token-quality check: ВСЕ значимые токены якоря должны присутствовать
+            // в pagetitle товара (case-insensitive, «,»→«.»). Это защищает от случая,
+            // когда `?query=Меркурий 201.5` возвращает «Пластина АВЛГ … Меркурий-201»
+            // (аксессуар) вместо самого счётчика. Если фильтр не пускает товар —
+            // якорь честно считается не найденным и попадает в дисклеймер.
+            const tokenizeAnchor = (s: string): string[] =>
+              s.toLowerCase().replace(/,/g, '.').split(/[\s/]+/).map((t) => t.trim()).filter((t) => t.length >= 2);
+            const verifyAnchorMatch = (anchor: string, product: { pagetitle?: string | null }): boolean => {
+              const title = (product.pagetitle || '').toLowerCase().replace(/,/g, '.');
+              if (!title) return false;
+              const tokens = tokenizeAnchor(anchor);
+              if (!tokens.length) return true;
+              return tokens.every((t) => title.includes(t));
+            };
             const perAnchor = await Promise.all(anchorsRaw.map(async (anchor) => {
               try {
                 // STEP 1: exact pagetitle
                 const exact = await searchProductsByCandidate(
                   { query: null, pagetitle: anchor, brand: null, category: null, min_price: null, max_price: null },
                   apiToken,
-                  1,
+                  3,
                 );
-                const exactHit = exact.find((p) => Number(p?.price) > 0);
+                const exactHit = exact.find((p) => Number(p?.price) > 0 && verifyAnchorMatch(anchor, p));
                 if (exactHit) return { anchor, product: exactHit, mode: 'exact' as const };
-                // STEP 2: fuzzy query
+                // STEP 2: fuzzy query (с token-quality фильтром)
                 const fuzzy = await searchProductsByCandidate(
                   { query: anchor, brand: null, category: null, min_price: null, max_price: null },
                   apiToken,
-                  3,
+                  10,
                 );
-                const fuzzyHit = fuzzy.find((p) => Number(p?.price) > 0);
+                const fuzzyHit = fuzzy.find((p) => Number(p?.price) > 0 && verifyAnchorMatch(anchor, p));
                 if (fuzzyHit) return { anchor, product: fuzzyHit, mode: 'fuzzy' as const };
                 return { anchor, product: null, mode: 'miss' as const };
               } catch (e) {
