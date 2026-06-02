@@ -7694,9 +7694,35 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               const brand = findOpt(/^brend/i);
               console.log(`[AccessoryFor] signals: collection="${collection || ''}", brand="${brand || ''}"`);
 
+              // Resolve target_category noun → exact pagetitle via live /api/categories.
+              // Переводит accessory-for поиск из «полнотекст по слову» в «фильтр по
+              // категории» — как делает сайтовая фасетная страница. Без резолва
+              // ?query=<noun> часто даёт 0 (морфология / название товара не содержит
+              // слова категории), и family-guard считается на мусорной probe-выборке.
+              // Silent fallback на старое поведение (?query=noun), если резолвер не нашёл
+              // или ошибся — это не ломает существующие кейсы.
+              let resolvedTargetCategory: string | null = null;
+              try {
+                const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
+                if (catalog.length > 0) {
+                  const matches = await matchCategoriesWithLLM(targetNoun, catalog, appSettings);
+                  if (matches.length > 0) {
+                    resolvedTargetCategory = matches[0];
+                    console.log(`[AccessoryFor] target category resolved: "${targetNoun}" → "${resolvedTargetCategory}" (of ${matches.length} matches)`);
+                  } else {
+                    console.log(`[AccessoryFor] target category NOT resolved for "${targetNoun}" — fallback to ?query=`);
+                  }
+                }
+              } catch (e) {
+                console.log(`[AccessoryFor] category resolve error: ${(e as Error).message} — fallback to ?query=`);
+              }
+
               const tryFetch = async (filters: Record<string, string> | undefined, label: string): Promise<Product[]> => {
+                const baseCandidate: SearchCandidate = resolvedTargetCategory
+                  ? { query: null, brand: null, category: resolvedTargetCategory, min_price: null, max_price: null }
+                  : { query: targetNoun, brand: null, category: null, min_price: null, max_price: null };
                 const res = await searchProductsByCandidate(
-                  { query: targetNoun, brand: null, category: null, min_price: null, max_price: null },
+                  baseCandidate,
                   appSettings.volt220_api_token!,
                   20,
                   filters
