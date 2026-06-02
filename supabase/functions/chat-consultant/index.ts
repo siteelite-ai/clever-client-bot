@@ -6541,6 +6541,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     let brandsContext = '';
     let knowledgeContext = '';
     let articleShortCircuit = false;
+    // Compare-branch: якоря, которые НЕ удалось найти (после token-quality check).
+    // Используется в детерминистичном рендере для честного дисклеймера
+    // «Не нашёл в каталоге: «X». Показываю остальное:» (см. рендер ниже).
+    let compareMissingAnchors: string[] = [];
     // Plan V7 — when set, short-circuits AI streaming entirely and returns a clarification
     // question with quick_reply chips. Used when CategoryMatcher returns ≥2 semantically distinct
     // buckets (e.g. household vs industrial sockets). User picks one chip, next turn the
@@ -6763,23 +6767,37 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             const apiToken = appSettings.volt220_api_token;
             // Per-anchor lookup: pagetitle → fallback query. Время на якорь ограничено
             // самим searchProductsByCandidate (10s AbortController). Параллельно.
+            // Token-quality check: ВСЕ значимые токены якоря должны присутствовать
+            // в pagetitle товара (case-insensitive, «,»→«.»). Это защищает от случая,
+            // когда `?query=Меркурий 201.5` возвращает «Пластина АВЛГ … Меркурий-201»
+            // (аксессуар) вместо самого счётчика. Если фильтр не пускает товар —
+            // якорь честно считается не найденным и попадает в дисклеймер.
+            const tokenizeAnchor = (s: string): string[] =>
+              s.toLowerCase().replace(/,/g, '.').split(/[\s/]+/).map((t) => t.trim()).filter((t) => t.length >= 2);
+            const verifyAnchorMatch = (anchor: string, product: { pagetitle?: string | null }): boolean => {
+              const title = (product.pagetitle || '').toLowerCase().replace(/,/g, '.');
+              if (!title) return false;
+              const tokens = tokenizeAnchor(anchor);
+              if (!tokens.length) return true;
+              return tokens.every((t) => title.includes(t));
+            };
             const perAnchor = await Promise.all(anchorsRaw.map(async (anchor) => {
               try {
                 // STEP 1: exact pagetitle
                 const exact = await searchProductsByCandidate(
                   { query: null, pagetitle: anchor, brand: null, category: null, min_price: null, max_price: null },
                   apiToken,
-                  1,
+                  3,
                 );
-                const exactHit = exact.find((p) => Number(p?.price) > 0);
+                const exactHit = exact.find((p) => Number(p?.price) > 0 && verifyAnchorMatch(anchor, p));
                 if (exactHit) return { anchor, product: exactHit, mode: 'exact' as const };
-                // STEP 2: fuzzy query
+                // STEP 2: fuzzy query (с token-quality фильтром)
                 const fuzzy = await searchProductsByCandidate(
                   { query: anchor, brand: null, category: null, min_price: null, max_price: null },
                   apiToken,
-                  3,
+                  10,
                 );
-                const fuzzyHit = fuzzy.find((p) => Number(p?.price) > 0);
+                const fuzzyHit = fuzzy.find((p) => Number(p?.price) > 0 && verifyAnchorMatch(anchor, p));
                 if (fuzzyHit) return { anchor, product: fuzzyHit, mode: 'fuzzy' as const };
                 return { anchor, product: null, mode: 'miss' as const };
               } catch (e) {
@@ -6816,10 +6834,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 unique.push(r.product!);
               }
               foundProducts = unique;
+              // Честный список не найденных якорей для дисклеймера в рендере.
+              compareMissingAnchors = perAnchor.filter((r) => r.product === null).map((r) => r.anchor);
               articleShortCircuit = true;
               responseModel = aiConfig.model;
               responseModelReason = 'compare-shortcircuit';
-              console.log(`[Chat] COMPARE short-circuit: anchors=${anchorsRaw.length}, hits=${hits.length}, unique=${unique.length}, took=${cmpMs}ms`);
+              console.log(`[Chat] COMPARE short-circuit: anchors=${anchorsRaw.length}, hits=${hits.length}, unique=${unique.length}, missing=${compareMissingAnchors.length}, took=${cmpMs}ms`);
             } else {
               console.log(`[Chat] COMPARE: 0 anchors resolved → silent fallback to normal pipeline (took=${cmpMs}ms)`);
             }
@@ -10346,9 +10366,14 @@ ${productInstructions}`;
             suppressTail: tailWasOfferedLastTurn,
             unfulfilledSplit: unfulfilledSplit ?? undefined,
           });
-      console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${content.length}`);
+      // Compare-branch: честный дисклеймер про не найденные якоря — перед карточками.
+      // Никаких подстановок-аксессуаров; пользователь видит, что ровно эти модели в каталоге не нашлись.
+      const contentWithMissing = (renderReason === 'compare-shortcircuit' && compareMissingAnchors.length > 0)
+        ? `Не нашёл в каталоге: ${compareMissingAnchors.map((a) => `«${a}»`).join(', ')}.\n\n${content}`
+        : content;
+      console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${contentWithMissing.length}${compareMissingAnchors.length ? ` missingAnchors=${compareMissingAnchors.length}` : ''}`);
       logSetProductsCount(foundProducts.length);
-      logAddStep({ step: 'final-deterministic', total: foundProducts.length, meta: { reason: renderReason } });
+      logAddStep({ step: 'final-deterministic', total: foundProducts.length, meta: { reason: renderReason, missingAnchors: compareMissingAnchors.length || undefined } });
 
       // ─────────────────────────────────────────────────────────────────────
       // RELATED-FOLLOWUP (V1, 2026-05-12).
@@ -10367,7 +10392,7 @@ ${productInstructions}`;
       // Старый LLM-cross-sell (generateCrossSellTail + pending_offer) ОТКЛЮЧЁН
       // полностью — функция оставлена в коде как dead code до отдельного refactor PR.
       // ─────────────────────────────────────────────────────────────────────
-      const finalContent = content;
+      const finalContent = contentWithMissing;
       // Step 2 (2026-05-12): убрано single-anchor ограничение. Анкоры берём из
       // первых foundProducts с уникальными категориями (до 3-х). При широкой
       // выдаче это даёт более устойчивую агрегацию /related (категории-победители
