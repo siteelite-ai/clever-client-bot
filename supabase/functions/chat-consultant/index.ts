@@ -611,6 +611,7 @@ async function getAppSettings(): Promise<CachedSettings> {
         classifier_model: 'anthropic/claude-sonnet-4.5',
         query_first_enabled: false,
         soft_suggest_enabled: false,
+        compare_branch_enabled: false,
       };
     }
 
