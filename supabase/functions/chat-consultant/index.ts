@@ -10366,9 +10366,14 @@ ${productInstructions}`;
             suppressTail: tailWasOfferedLastTurn,
             unfulfilledSplit: unfulfilledSplit ?? undefined,
           });
-      console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${content.length}`);
+      // Compare-branch: честный дисклеймер про не найденные якоря — перед карточками.
+      // Никаких подстановок-аксессуаров; пользователь видит, что ровно эти модели в каталоге не нашлись.
+      const contentWithMissing = (renderReason === 'compare-shortcircuit' && compareMissingAnchors.length > 0)
+        ? `Не нашёл в каталоге: ${compareMissingAnchors.map((a) => `«${a}»`).join(', ')}.\n\n${content}`
+        : content;
+      console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${contentWithMissing.length}${compareMissingAnchors.length ? ` missingAnchors=${compareMissingAnchors.length}` : ''}`);
       logSetProductsCount(foundProducts.length);
-      logAddStep({ step: 'final-deterministic', total: foundProducts.length, meta: { reason: renderReason } });
+      logAddStep({ step: 'final-deterministic', total: foundProducts.length, meta: { reason: renderReason, missingAnchors: compareMissingAnchors.length || undefined } });
 
       // ─────────────────────────────────────────────────────────────────────
       // RELATED-FOLLOWUP (V1, 2026-05-12).
