@@ -141,3 +141,52 @@ Deno.test('traits: drops keys whose value is missing in union schema values', ()
   assertEquals(res.must, {});
   assertEquals(res.droppedNotInSchema.some((k) => k.startsWith('material__material')), true);
 });
+
+// ─── filterStructuralMarkings ───────────────────────────────────────────────
+
+Deno.test('filterStructuralMarkings: drops IP41 when "41" is a facet value', () => {
+  const raw = ['ЩРН-П-12', 'IP41'];
+  const s = schema({
+    'stepeny_zaschity__Қorғau_dәreghesі': ['20', '41', '54', '65'],
+  });
+  const { kept, droppedFacetValues } = filterStructuralMarkings(raw, s);
+  assertEquals(kept, ['ЩРН-П-12']);
+  assertEquals(droppedFacetValues, ['IP41']);
+});
+
+Deno.test('filterStructuralMarkings: drops brand-like token present in facet values', () => {
+  const raw = ['GENERICA', 'ВВГНГ-3Х2.5'];
+  const s = schema({ 'brend__brend': ['GENERICA', 'IEK', 'ABB'] });
+  const { kept } = filterStructuralMarkings(raw, s);
+  assertEquals(kept, ['ВВГНГ-3Х2.5']);
+});
+
+Deno.test('filterStructuralMarkings: keeps SKU when no schema overlap', () => {
+  const { kept } = filterStructuralMarkings(['ЩРН-П-12'], new Map());
+  assertEquals(kept, ['ЩРН-П-12']);
+});
+
+// ─── marking guard ALL-of semantics ─────────────────────────────────────────
+
+Deno.test('marking guard ALL: ЩРВ candidate fails even if shares IP41 with original', () => {
+  // После filterStructuralMarkings IP41 уже отброшен, но проверяем что ALL-of
+  // строго требует наличия КАЖДОГО структурного токена.
+  const candidates = [
+    { pagetitle: 'Бокс ЩРВ-П-12 IP41 GENERICA' }, // нет ЩРН — должен отсеяться
+    { pagetitle: 'TEKFOR ЩРН-П-12 IP41' },        // есть ЩРН — пройти
+  ];
+  const { filtered, mismatch } = applyMarkingGuard(candidates, ['ЩРН-П-12']);
+  assertEquals(mismatch, false);
+  assertEquals(filtered.length, 1);
+  assertEquals(filtered[0].pagetitle.includes('ЩРН-П-12'), true);
+});
+
+Deno.test('marking guard ALL: candidate missing one of two required markings is filtered', () => {
+  const candidates = [
+    { pagetitle: 'ЩРН-П-12 без второй маркировки' },
+    { pagetitle: 'ЩРН-П-12 и ВА47-29 оба здесь' },
+  ];
+  const { filtered } = applyMarkingGuard(candidates, ['ЩРН-П-12', 'ВА47-29']);
+  assertEquals(filtered.length, 1);
+  assertEquals(filtered[0].pagetitle.includes('ВА47-29'), true);
+});
