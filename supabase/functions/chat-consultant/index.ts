@@ -1453,11 +1453,13 @@ interface ClassificationResult {
   is_replacement?: boolean;
   search_modifiers?: string[];
   critical_modifiers?: string[];
-  sub_intent?: 'availability' | 'price' | 'location' | 'spec' | 'facets' | 'compare';
+  sub_intent?: 'availability' | 'price' | 'location' | 'spec' | 'facets' | 'compare' | 'accessory_for';
   /** Расчёт характеристики, заполняется только при sub_intent="spec". */
   compute?: ComputeRequest;
   /** Список якорей-товаров для сравнения, заполняется только при sub_intent="compare". Минимум 2. */
   compare?: { anchors: string[] };
+  /** Фраза товара-якоря для sub_intent="accessory_for" («какие [Y] подходят к [X]»). */
+  anchor_product?: string;
 }
 
 function detectSubIntentFallback(message: string): ClassificationResult['sub_intent'] {
@@ -1673,7 +1675,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       let rawCritical = Array.isArray(parsed.critical_modifiers) ? parsed.critical_modifiers.filter((m: unknown) => typeof m === 'string' && m.trim().length > 0) : [];
       if (rawCritical.length === 0 && rawSearchMods.length > 0) rawCritical = [...rawSearchMods];
       console.log(`[Chat] Classifier critical_modifiers: [${rawCritical.join(', ')}] (of search_modifiers: [${rawSearchMods.join(', ')}])`);
-      const validSubIntents = ['availability', 'price', 'location', 'spec', 'facets', 'compare'];
+      const validSubIntents = ['availability', 'price', 'location', 'spec', 'facets', 'compare', 'accessory_for'];
       const rawSubIntent = typeof parsed.sub_intent === 'string' ? parsed.sub_intent.toLowerCase().trim() : null;
       const llmSubIntent = validSubIntents.includes(rawSubIntent!) ? rawSubIntent as ClassificationResult['sub_intent'] : undefined;
       const subIntent = llmSubIntent ?? detectSubIntentFallback(message);
@@ -1734,6 +1736,18 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       if (priceMax != null || priceMin != null) {
         console.log(`[Classify] price bounds: max=${priceMax ?? 'null'}, min=${priceMin ?? 'null'}`);
       }
+      // anchor_product (accessory_for): принимаем только когда sub_intent='accessory_for'
+      // и значение — непустая строка ≥3 символов. Иначе игнорируем (откат к обычному catalog).
+      let anchorProductField: string | undefined;
+      if (effectiveSubIntent === 'accessory_for') {
+        const rawAnchor = typeof parsed.anchor_product === 'string' ? parsed.anchor_product.trim() : '';
+        if (rawAnchor.length >= 3) {
+          anchorProductField = rawAnchor;
+        } else {
+          console.log(`[Classify] accessory_for REJECTED (anchor_product empty/short), fallback sub_intent=null`);
+          effectiveSubIntent = undefined;
+        }
+      }
       return {
         intent: finalIntent as string | undefined,
         has_product_name: !!parsed.has_product_name,
@@ -1748,6 +1762,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
         sub_intent: effectiveSubIntent,
         compute: computeField,
         compare: compareField,
+        anchor_product: anchorProductField,
       };
     } catch (e) {
       __lastClassifyDiagnostics.exception = (e as Error)?.message ?? String(e);
@@ -4998,6 +5013,19 @@ export function buildIntroBySubIntent(params: {
       'Подобрал, смотрите:',
     ]);
   }
+  if (reason === 'accessory-for') {
+    return pick([
+      'Вот совместимые варианты под ваш товар:',
+      'Подобрал, что подходит к указанному товару:',
+      'Смотрите — вот что совместимо:',
+    ]);
+  }
+  if (reason === 'accessory-for-anchor-missing') {
+    return pick([
+      'Якорный товар в каталоге не нашёл — уточните название или артикул. А пока вот популярные варианты этой категории:',
+      'Не нашёл указанный товар-якорь в каталоге, уточните по артикулу. Для ориентира — несколько популярных позиций:',
+    ]);
+  }
   if (reason === 'compare-shortcircuit') {
     return isOne
       ? pick([
@@ -5298,7 +5326,7 @@ async function classifyOfferResponse(params: {
 }
 
 export function isDeterministicShortCircuitReason(reason: string): boolean {
-  return ['price-shortcircuit', 'article-shortcircuit', 'siteid-shortcircuit', 'title-shortcircuit'].includes(reason);
+  return ['price-shortcircuit', 'article-shortcircuit', 'siteid-shortcircuit', 'title-shortcircuit', 'accessory-for', 'accessory-for-anchor-missing'].includes(reason);
 }
 
 function describeAppliedFilters(candidates: SearchCandidate[]): string {
@@ -7576,6 +7604,150 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
         if (classification?.is_replacement && classification?.has_product_name && classification?.product_name) {
           console.log(`[Chat] Title-first SKIPPED: is_replacement=true, deferring to replacement-pipeline (characteristics-first)`);
         }
+
+        // ═══════════════════════════════════════════════════════════════════
+        // ACCESSORY-FOR BRANCH (sub_intent='accessory_for')
+        // ───────────────────────────────────────────────────────────────────
+        // Запросы вида «какие [Y] подходят к [X]» / «лампы для люстры X».
+        // Classifier выставил: sub_intent='accessory_for', has_product_name=false,
+        // product_category=Y (target), anchor_product=X (фраза якоря).
+        //
+        // Flow:
+        //   1) Резолвим якорь: searchByPagetitle(anchor) → fallback ?query=anchor.
+        //   2) Если найден → читаем options[]: коллекция (kollekciya__*), бренд (brend__*).
+        //   3) Каскад: noun + options[kollekciya][] → noun + options[brend][] → noun.
+        //   4) Если якорь НЕ найден → Soft-404 + top-3 примеров по target_category.
+        //
+        // Решение «Коллекция → Бренд → All» зафиксировано пользователем 2026-06-02.
+        // ═══════════════════════════════════════════════════════════════════
+        if (
+          !articleShortCircuit &&
+          !classification?.is_replacement &&
+          classification?.sub_intent === 'accessory_for' &&
+          typeof classification?.anchor_product === 'string' &&
+          classification.anchor_product.trim().length > 0 &&
+          effectiveCategory &&
+          appSettings.volt220_api_token
+        ) {
+          const anchorPhrase = classification.anchor_product.trim();
+          const targetNoun = effectiveCategory.trim();
+          const afStart = Date.now();
+          console.log(`[AccessoryFor] anchor="${anchorPhrase}" target_category="${targetNoun}"`);
+          try {
+            // 1) Resolve anchor — pagetitle first, ?query= fallback.
+            let anchorCandidate: Product | null = null;
+            const anchorHits = await searchByPagetitle(anchorPhrase, appSettings.volt220_api_token, 5);
+            if (anchorHits.length > 0) {
+              anchorCandidate = anchorHits[0];
+              console.log(`[AccessoryFor] anchor resolved via pagetitle: "${anchorCandidate.pagetitle}"`);
+            } else {
+              const fuzzy = await searchProductsByCandidate(
+                { query: anchorPhrase, brand: null, category: null, min_price: null, max_price: null },
+                appSettings.volt220_api_token,
+                5
+              );
+              if (fuzzy.length > 0) {
+                anchorCandidate = fuzzy[0];
+                console.log(`[AccessoryFor] anchor resolved via ?query: "${anchorCandidate.pagetitle}"`);
+              }
+            }
+
+            if (!anchorCandidate) {
+              // Soft-404 + примеры топ-3 по target_category.
+              const samples = await searchProductsByCandidate(
+                { query: targetNoun, brand: null, category: null, min_price: null, max_price: null },
+                appSettings.volt220_api_token,
+                10
+              );
+              const cleanSamples = samples.filter((p: Product) => p && typeof p.price === 'number' && p.price > 0).slice(0, 3);
+              if (cleanSamples.length > 0) {
+                foundProducts = cleanSamples;
+                articleShortCircuit = true;
+                responseModel = 'anthropic/claude-sonnet-4.5';
+                responseModelReason = 'accessory-for-anchor-missing';
+              }
+              logAddStep({
+                step: 'accessory-for',
+                ms: Date.now() - afStart,
+                meta: {
+                  anchor_phrase: anchorPhrase.substring(0, 120),
+                  anchor_found: false,
+                  target_category: targetNoun,
+                  samples_shown: cleanSamples.length,
+                },
+              });
+            } else {
+              // 2) Extract compatibility signals from anchor.options.
+              const opts = (anchorCandidate.options || []) as Array<{ key?: string; value_ru?: string; caption_ru?: string }>;
+              const findOpt = (keyRegex: RegExp): string | null => {
+                const hit = opts.find((o) => typeof o.key === 'string' && keyRegex.test(o.key));
+                const v = hit && typeof hit.value_ru === 'string' ? hit.value_ru.trim() : '';
+                return v.length > 0 ? v : null;
+              };
+              const collection = findOpt(/^kollekciya/i);
+              const brand = findOpt(/^brend/i);
+              console.log(`[AccessoryFor] signals: collection="${collection || ''}", brand="${brand || ''}"`);
+
+              const tryFetch = async (filters: Record<string, string> | undefined, label: string): Promise<Product[]> => {
+                const res = await searchProductsByCandidate(
+                  { query: targetNoun, brand: null, category: null, min_price: null, max_price: null },
+                  appSettings.volt220_api_token!,
+                  20,
+                  filters
+                );
+                const clean = res.filter((p: Product) => p && typeof p.price === 'number' && p.price > 0);
+                console.log(`[AccessoryFor] attempt=${label} → ${clean.length} priced products`);
+                return clean;
+              };
+
+              let attemptLabel = 'all';
+              let products: Product[] = [];
+              if (collection) {
+                products = await tryFetch({ kollekciya__kollekciya: collection }, `collection=${collection}`);
+                if (products.length > 0) attemptLabel = 'collection';
+              }
+              if (products.length === 0 && brand) {
+                products = await tryFetch({ brend__brend: brand }, `brand=${brand}`);
+                if (products.length > 0) attemptLabel = 'brand';
+              }
+              if (products.length === 0) {
+                products = await tryFetch(undefined, 'all');
+                if (products.length > 0) attemptLabel = 'all';
+              }
+
+              if (products.length > 0) {
+                foundProducts = products.slice(0, 15);
+                articleShortCircuit = true;
+                responseModel = 'anthropic/claude-sonnet-4.5';
+                responseModelReason = 'accessory-for';
+              }
+              logAddStep({
+                step: 'accessory-for',
+                ms: Date.now() - afStart,
+                meta: {
+                  anchor_phrase: anchorPhrase.substring(0, 120),
+                  anchor_found: true,
+                  anchor_pagetitle: anchorCandidate.pagetitle,
+                  collection,
+                  brand,
+                  attempt: attemptLabel,
+                  target_category: targetNoun,
+                  displayed: foundProducts.length,
+                },
+              });
+            }
+          } catch (e) {
+            console.error('[AccessoryFor] error:', e);
+            logAddStep({
+              step: 'accessory-for',
+              ms: Date.now() - afStart,
+              meta: { error: (e as Error)?.message || String(e), silent_fallback: true },
+            });
+            // Silent fallback to обычный catalog/QFv2 flow.
+          }
+        }
+
+        
         
         // === CATEGORY-FIRST (category without specific product name) ===
         // 2026-05-04 (systemic fix for "has_product_name=true bypass"):
