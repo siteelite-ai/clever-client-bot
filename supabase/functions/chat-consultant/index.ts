@@ -30,6 +30,7 @@ import {
   applyMarkingGuard,
   extractMarkingTokens,
   extractOriginalTraits,
+  filterStructuralMarkings,
 } from './replacement-traits.ts';
 
 // Per-request async context (carries reqId implicitly through all awaits inside `serve`).
@@ -8903,9 +8904,11 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     try {
                       rFullSchema = await getUnionCategoryOptionsSchema(replMatches, appSettings.volt220_api_token!);
                       originalTraits = extractOriginalTraits(originalProduct, rFullSchema);
-                      originalMarkings = extractMarkingTokens(originalProduct.pagetitle);
+                      const rawMarkings = extractMarkingTokens(originalProduct.pagetitle);
+                      const { kept, droppedFacetValues } = filterStructuralMarkings(rawMarkings, rFullSchema);
+                      originalMarkings = kept;
                       console.log(`[Chat] Replacement L1 traits: must=${JSON.stringify(originalTraits.must)} dropped_service=${originalTraits.droppedServiceKeys.length} dropped_not_in_schema=${originalTraits.droppedNotInSchema.length} dropped_overflow=${originalTraits.droppedOverflow.length}`);
-                      console.log(`[Chat] Replacement L2 markings from "${originalProduct.pagetitle}": [${originalMarkings.join(', ')}]`);
+                      console.log(`[Chat] Replacement L2 markings from "${originalProduct.pagetitle}": raw=[${rawMarkings.join(', ')}] kept=[${originalMarkings.join(', ')}] dropped_facet=[${droppedFacetValues.join(', ')}]`);
                     } catch (e) {
                       console.warn(`[Chat] Replacement L1+L2 prep failed (silent):`, e instanceof Error ? e.message : String(e));
                     }
