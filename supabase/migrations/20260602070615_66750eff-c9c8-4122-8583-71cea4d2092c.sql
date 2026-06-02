@@ -1,0 +1,1 @@
+UPDATE public.app_settings SET compare_branch_enabled = true;
