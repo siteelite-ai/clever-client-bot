@@ -585,6 +585,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       classifier_prompt: null,
       query_first_enabled: false,
       soft_suggest_enabled: false,
+      compare_branch_enabled: false,
     };
   }
 
