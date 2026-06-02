@@ -1,11 +1,11 @@
 import { assert, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { DEFAULT_CLASSIFIER_PROMPT } from "./classifier-prompt.ts";
 
-Deno.test("classifier prompt: sub_intent enum includes 'facets'", () => {
-  // JSON schema line at the bottom must list 'facets' as a valid sub_intent value
+Deno.test("classifier prompt: sub_intent enum includes 'facets' and 'accessory_for'", () => {
+  // JSON schema line at the bottom must list all valid sub_intent values
   assertStringIncludes(
     DEFAULT_CLASSIFIER_PROMPT,
-    `"sub_intent":"availability"|"price"|"location"|"spec"|"facets"|null`,
+    `"sub_intent":"availability"|"price"|"location"|"spec"|"facets"|"compare"|"accessory_for"|null`,
   );
 });
 
