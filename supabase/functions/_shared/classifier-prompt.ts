@@ -155,4 +155,4 @@ export const DEFAULT_CLASSIFIER_PROMPT = `Ты классификатор соо
 
 ВЫВОД
 Ответь СТРОГО одним JSON-объектом без префиксов, без markdown, без пояснений:
-{"intent":"catalog"|"brands"|"info"|"general","has_product_name":bool,"product_name":string|null,"price_intent":"most_expensive"|"cheapest"|null,"price_max":number|null,"price_min":number|null,"product_category":string|null,"is_replacement":bool,"search_modifiers":string[],"critical_modifiers":string[],"sub_intent":"availability"|"price"|"location"|"spec"|"facets"|null,"compute":{"attribute":string,"multiplier":number|null}|null}`;
+{"intent":"catalog"|"brands"|"info"|"general","has_product_name":bool,"product_name":string|null,"price_intent":"most_expensive"|"cheapest"|null,"price_max":number|null,"price_min":number|null,"product_category":string|null,"is_replacement":bool,"search_modifiers":string[],"critical_modifiers":string[],"sub_intent":"availability"|"price"|"location"|"spec"|"facets"|"compare"|null,"compute":{"attribute":string,"multiplier":number|null}|null,"compare":{"anchors":string[]}|null}`;
