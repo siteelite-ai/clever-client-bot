@@ -5026,6 +5026,12 @@ export function buildIntroBySubIntent(params: {
       'Не нашёл указанный товар-якорь в каталоге, уточните по артикулу. Для ориентира — несколько популярных позиций:',
     ]);
   }
+  if (reason === 'accessory-for-incompatible-collection') {
+    return pick([
+      'Точно совместимых вариантов под этот товар в каталоге не нашёл — у указанной серии/коллекции свои посадочные размеры. Вот несколько позиций этой категории для ориентира, а за точным подбором лучше подключить менеджера:',
+      'Под вашу серию точных совпадений нет — производитель использует собственную посадочную систему. Показываю популярные позиции этой категории, по точной совместимости подскажет менеджер:',
+    ]);
+  }
   if (reason === 'compare-shortcircuit') {
     return isOne
       ? pick([
@@ -5326,7 +5332,7 @@ async function classifyOfferResponse(params: {
 }
 
 export function isDeterministicShortCircuitReason(reason: string): boolean {
-  return ['price-shortcircuit', 'article-shortcircuit', 'siteid-shortcircuit', 'title-shortcircuit', 'accessory-for', 'accessory-for-anchor-missing'].includes(reason);
+  return ['price-shortcircuit', 'article-shortcircuit', 'siteid-shortcircuit', 'title-shortcircuit', 'accessory-for', 'accessory-for-anchor-missing', 'accessory-for-incompatible-collection'].includes(reason);
 }
 
 function describeAppliedFilters(candidates: SearchCandidate[]): string {
@@ -7700,22 +7706,68 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 return clean;
               };
 
+              // Family-Guard (data-driven, no hardcoded categories):
+              // Brand-fallback is safe only if the target category does NOT model the same
+              // compatibility axes as the anchor. We compare anchor.options keys with the
+              // target category schema keys discovered from a real probe of target products.
+              // If they share any key (other than brand) — that key is a "family axis" both
+              // sides model (e.g. kollekciya/seriya/posadochn*), and brand alone is not
+              // enough → brand-fallback is blocked → honest incompatible-collection branch.
+              const anchorKeys = new Set(
+                opts.map((o) => (typeof o.key === 'string' ? o.key : '')).filter((k) => k.length > 0)
+              );
+
               let attemptLabel = 'all';
               let products: Product[] = [];
+              let blockedByFamily = false;
+              let sharedFamilyKeys: string[] = [];
+
               if (collection) {
                 products = await tryFetch({ kollekciya__kollekciya: collection }, `collection=${collection}`);
                 if (products.length > 0) attemptLabel = 'collection';
               }
+
               if (products.length === 0 && brand) {
-                products = await tryFetch({ brend__brend: brand }, `brand=${brand}`);
-                if (products.length > 0) attemptLabel = 'brand';
-              }
-              if (products.length === 0) {
+                // Probe target schema before brand-fallback.
+                const probe = await tryFetch(undefined, 'probe-target-schema');
+                const targetKeys = new Set<string>();
+                for (const p of probe) {
+                  const po = (p.options || []) as Array<{ key?: string }>;
+                  for (const o of po) {
+                    if (typeof o.key === 'string' && o.key.length > 0) targetKeys.add(o.key);
+                  }
+                }
+                sharedFamilyKeys = [...anchorKeys].filter(
+                  (k) => targetKeys.has(k) && !/^brend/i.test(k)
+                );
+                if (sharedFamilyKeys.length > 0) {
+                  blockedByFamily = true;
+                  console.log(
+                    `[AccessoryFor] family-guard BLOCKED brand-fallback. shared_keys=${JSON.stringify(sharedFamilyKeys)}`
+                  );
+                  // Use probe results as honest examples for incompatible-collection branch.
+                  const samples = probe.slice(0, 3);
+                  if (samples.length > 0) {
+                    foundProducts = samples;
+                    articleShortCircuit = true;
+                    responseModel = 'anthropic/claude-sonnet-4.5';
+                    responseModelReason = 'accessory-for-incompatible-collection';
+                  }
+                  attemptLabel = 'incompatible-collection';
+                } else {
+                  products = await tryFetch({ brend__brend: brand }, `brand=${brand}`);
+                  if (products.length > 0) attemptLabel = 'brand';
+                  if (products.length === 0) {
+                    products = probe;
+                    if (products.length > 0) attemptLabel = 'all';
+                  }
+                }
+              } else if (products.length === 0) {
                 products = await tryFetch(undefined, 'all');
                 if (products.length > 0) attemptLabel = 'all';
               }
 
-              if (products.length > 0) {
+              if (!blockedByFamily && products.length > 0) {
                 foundProducts = products.slice(0, 15);
                 articleShortCircuit = true;
                 responseModel = 'anthropic/claude-sonnet-4.5';
@@ -7731,6 +7783,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   collection,
                   brand,
                   attempt: attemptLabel,
+                  family_guard: {
+                    shared_keys: sharedFamilyKeys,
+                    blocked_brand_fallback: blockedByFamily,
+                  },
                   target_category: targetNoun,
                   displayed: foundProducts.length,
                 },
@@ -8229,7 +8285,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                             const resolvedValuesFolded = Object.values(resolvedFilters)
                               .map(v => fold(String(v)))
                               .filter(s => s.length > 0);
-                            const originalMods = (modifiers || []).map(m => (m || '').trim()).filter(m => m.length > 0);
+                            const originalMods = (modifiers || []).map((m: string) => (m || '').trim()).filter((m: string) => m.length > 0);
                             const resolvedOriginals: string[] = [];
                             const droppedOriginals: string[] = [];
                             for (const m of originalMods) {

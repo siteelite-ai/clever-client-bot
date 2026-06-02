@@ -32,9 +32,9 @@
 }
 ```
 
-**Router:** `branchTag='accessory-for'`. Cascade: коллекция Niloe Step → бренд Legrand → все рамки + soft-suggest.
+**Router:** `branchTag='accessory-for'`. Cascade: коллекция Niloe Step (=A) → если 0, **Family-Guard probe** target schema → `kollekciya__kollekciya` есть и в anchor.options, и в target schema рамок → brand-fallback Legrand БЛОКИРОВАН → `accessory-for-incompatible-collection` с честным intro + top-3 рамок для ориентира + предложение менеджера.
 
-**Acceptance:** в карточках только товары категории «рамки», предпочтительно коллекции Niloe Step.
+**Acceptance:** НЕТ карточек рамок Legrand под видом «совместимых». Intro явно говорит про разные посадочные размеры серий. `family_guard.blocked_brand_fallback=true`, `shared_keys` содержит как минимум `kollekciya__kollekciya`.
 
 ---
 
