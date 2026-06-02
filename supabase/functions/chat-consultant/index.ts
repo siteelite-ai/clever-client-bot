@@ -8900,18 +8900,32 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   let rFullSchema: Map<string, { caption: string; values: Set<string> }> = new Map();
                   let originalTraits: ReturnType<typeof extractOriginalTraits> = { must: {}, droppedServiceKeys: [], droppedNotInSchema: [], droppedOverflow: [] };
                   let originalMarkings: string[] = [];
-                  if (originalProduct) {
-                    try {
+                  // Marking-source = ЗАПРОС пользователя (classification.product_name), а
+                  // НЕ originalProduct.pagetitle. Причины:
+                  //   1) originalProduct может быть null (товара буквально нет в каталоге).
+                  //   2) Fuzzy LVL2-резолвер может подменить оригинал на структурно
+                  //      другой SKU (запрос «ЩРН-П-12 GENERICA», у GENERICA в каталоге
+                  //      только ЩРВ-П-12 → fuzzy отдаёт ЩРВ, guard начинает требовать
+                  //      ЩРВ вместо ЩРН — инверсия защиты).
+                  // Запрос = ground truth намерения. Каталог поставляет фасет-схему и,
+                  // опционально, реальные options оригинала для Layer 1.
+                  const markingSource = classification?.product_name || originalProduct?.pagetitle || '';
+                  try {
+                    if (replMatches.length > 0) {
                       rFullSchema = await getUnionCategoryOptionsSchema(replMatches, appSettings.volt220_api_token!);
+                    }
+                    if (originalProduct) {
                       originalTraits = extractOriginalTraits(originalProduct, rFullSchema);
-                      const rawMarkings = extractMarkingTokens(originalProduct.pagetitle);
+                    }
+                    if (markingSource) {
+                      const rawMarkings = extractMarkingTokens(markingSource);
                       const { kept, droppedFacetValues } = filterStructuralMarkings(rawMarkings, rFullSchema);
                       originalMarkings = kept;
-                      console.log(`[Chat] Replacement L1 traits: must=${JSON.stringify(originalTraits.must)} dropped_service=${originalTraits.droppedServiceKeys.length} dropped_not_in_schema=${originalTraits.droppedNotInSchema.length} dropped_overflow=${originalTraits.droppedOverflow.length}`);
-                      console.log(`[Chat] Replacement L2 markings from "${originalProduct.pagetitle}": raw=[${rawMarkings.join(', ')}] kept=[${originalMarkings.join(', ')}] dropped_facet=[${droppedFacetValues.join(', ')}]`);
-                    } catch (e) {
-                      console.warn(`[Chat] Replacement L1+L2 prep failed (silent):`, e instanceof Error ? e.message : String(e));
+                      console.log(`[Chat] Replacement L2 markings from REQUEST "${markingSource}" (anchor="${originalProduct?.pagetitle || 'none'}"): raw=[${rawMarkings.join(', ')}] kept=[${originalMarkings.join(', ')}] dropped_facet=[${droppedFacetValues.join(', ')}]`);
                     }
+                    console.log(`[Chat] Replacement L1 traits: must=${JSON.stringify(originalTraits.must)} dropped_service=${originalTraits.droppedServiceKeys.length} dropped_not_in_schema=${originalTraits.droppedNotInSchema.length} dropped_overflow=${originalTraits.droppedOverflow.length}`);
+                  } catch (e) {
+                    console.warn(`[Chat] Replacement L1+L2 prep failed (silent):`, e instanceof Error ? e.message : String(e));
                   }
                   const traitMust = originalTraits.must;
                   const traitKeysSet = new Set(Object.keys(traitMust));
