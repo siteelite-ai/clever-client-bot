@@ -10368,7 +10368,7 @@ ${productInstructions}`;
           });
       // Compare-branch: честный дисклеймер про не найденные / отсутствующие в наличии якоря — перед карточками.
       // Никаких подстановок-аксессуаров; пользователь видит, что ровно этих моделей в каталоге / в наличии нет.
-      const contentWithMissing = (renderReason === 'compare-shortcircuit' && compareMissingAnchors.length > 0)
+      const contentWithMissing = (responseModelReason === 'compare-shortcircuit' && compareMissingAnchors.length > 0)
         ? (() => {
             const list = compareMissingAnchors.map((a) => `«${a}»`).join(', ');
             const shownCount = foundProducts.length;
