@@ -8850,6 +8850,9 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             // Otherwise → matcher maps replCategory → exact pagetitle[].
             // On WIN: short-circuits, sets foundProducts + replacementMeta, skips legacy bucket-logic.
             let replacementWinResolved = false;
+            // Hoisted across matcher + legacy branches so marking-guard applies in both.
+            let outerOriginalMarkings: string[] = [];
+            let outerFullSchema: Map<string, { caption: string; values: Set<string> }> = new Map();
             try {
               let replMatches: string[] = [];
               const originalCatPagetitle = originalProduct ? ((originalProduct as any).category?.pagetitle || '') : '';
@@ -8927,6 +8930,9 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   } catch (e) {
                     console.warn(`[Chat] Replacement L1+L2 prep failed (silent):`, e instanceof Error ? e.message : String(e));
                   }
+                  // Propagate to outer scope so legacy bucket branch also applies marking-guard.
+                  outerOriginalMarkings = originalMarkings;
+                  outerFullSchema = rFullSchema;
                   const traitMust = originalTraits.must;
                   const traitKeysSet = new Set(Object.keys(traitMust));
 
@@ -9289,6 +9295,41 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   console.log(`[Chat] Replacement (legacy) HARD zero-price filter: ${fBeforeZero} → ${replFiltered.length}`);
                 }
 
+                // ───── LAYER 2 (legacy): marking guard with rollback ─────
+                // Применяем тот же структурный guard, что и в matcher-ветке. Это критично:
+                // legacy bucket-pipeline не знает про ЩРН vs ЩРВ, ВВГнг vs ВВГ и т.п.,
+                // и без guard вернёт визуально похожий, но структурно другой SKU.
+                let legacyWeakened = false;
+                let legacyWeakenedReason: 'marking_mismatch' | 'few_results' | undefined = undefined;
+                try {
+                  // Lazy-init markings/schema если matcher-ветка не отработала.
+                  if (outerOriginalMarkings.length === 0 && pluralRepl) {
+                    if (outerFullSchema.size === 0) {
+                      outerFullSchema = await getUnionCategoryOptionsSchema([pluralRepl], appSettings.volt220_api_token!);
+                    }
+                    const markingSource = classification?.product_name || originalProduct?.pagetitle || '';
+                    if (markingSource) {
+                      const rawMarkings = extractMarkingTokens(markingSource);
+                      const { kept, droppedFacetValues } = filterStructuralMarkings(rawMarkings, outerFullSchema);
+                      outerOriginalMarkings = kept;
+                      console.log(`[Chat] Replacement L2 (legacy) markings from REQUEST "${markingSource}": raw=[${rawMarkings.join(', ')}] kept=[${outerOriginalMarkings.join(', ')}] dropped_facet=[${droppedFacetValues.join(', ')}]`);
+                    }
+                  }
+                  if (replFiltered.length > 0 && outerOriginalMarkings.length > 0) {
+                    const guarded = applyMarkingGuard(replFiltered, outerOriginalMarkings);
+                    if (guarded.mismatch) {
+                      console.log(`[Chat] Replacement L2 (legacy) marking-guard MISMATCH: pre=${replFiltered.length} post=0 → rollback + weakened markings=[${outerOriginalMarkings.join(', ')}]`);
+                      legacyWeakened = true;
+                      legacyWeakenedReason = 'marking_mismatch';
+                    } else {
+                      console.log(`[Chat] Replacement L2 (legacy) marking-guard kept ${guarded.filtered.length}/${replFiltered.length} (markings=[${outerOriginalMarkings.join(', ')}])`);
+                      replFiltered = guarded.filtered;
+                    }
+                  }
+                } catch (e) {
+                  console.warn(`[Chat] Replacement L2 (legacy) guard failed (silent):`, e instanceof Error ? e.message : String(e));
+                }
+
                 if (replFiltered.length > 0) {
                   { const _r = pickDisplayWithTotal(replFiltered); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_filtered'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_filtered zeroFiltered=${_r.filteredZeroPrice}`); }
                   articleShortCircuit = true;
@@ -9297,6 +9338,8 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     original: originalProduct,
                     originalName: classification.product_name,
                     noResults: false,
+                    weakened: legacyWeakened || undefined,
+                    weakenedReason: legacyWeakenedReason,
                   };
                   
                   // Create slot if >7 results for refinement
