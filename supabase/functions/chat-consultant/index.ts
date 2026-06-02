@@ -10366,10 +10366,17 @@ ${productInstructions}`;
             suppressTail: tailWasOfferedLastTurn,
             unfulfilledSplit: unfulfilledSplit ?? undefined,
           });
-      // Compare-branch: честный дисклеймер про не найденные якоря — перед карточками.
-      // Никаких подстановок-аксессуаров; пользователь видит, что ровно эти модели в каталоге не нашлись.
+      // Compare-branch: честный дисклеймер про не найденные / отсутствующие в наличии якоря — перед карточками.
+      // Никаких подстановок-аксессуаров; пользователь видит, что ровно этих моделей в каталоге / в наличии нет.
       const contentWithMissing = (renderReason === 'compare-shortcircuit' && compareMissingAnchors.length > 0)
-        ? `Не нашёл в каталоге: ${compareMissingAnchors.map((a) => `«${a}»`).join(', ')}.\n\n${content}`
+        ? (() => {
+            const list = compareMissingAnchors.map((a) => `«${a}»`).join(', ');
+            const shownCount = foundProducts.length;
+            const head = shownCount > 0
+              ? `К сожалению, ${list} сейчас нет в наличии — в каталоге такую модель найти не удалось. Показываю то, что есть:`
+              : `К сожалению, ${list} сейчас нет в наличии — в каталоге такую модель найти не удалось.`;
+            return `${head}\n\n${content}`;
+          })()
         : content;
       console.log(`[Chat] Deterministic SHORT-CIRCUIT response: reason=${renderReason} (orig=${responseModelReason}, articleSC=${articleShortCircuit}, catalogIntent=${isCatalogIntent}) products=${foundProducts.length} contentLen=${contentWithMissing.length}${compareMissingAnchors.length ? ` missingAnchors=${compareMissingAnchors.length}` : ''}`);
       logSetProductsCount(foundProducts.length);
