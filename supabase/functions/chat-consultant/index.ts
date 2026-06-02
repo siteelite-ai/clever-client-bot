@@ -30,6 +30,7 @@ import {
   applyMarkingGuard,
   extractMarkingTokens,
   extractOriginalTraits,
+  filterStructuralMarkings,
 } from './replacement-traits.ts';
 
 // Per-request async context (carries reqId implicitly through all awaits inside `serve`).
