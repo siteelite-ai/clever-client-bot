@@ -178,9 +178,48 @@ export function applyMarkingGuard<T extends { pagetitle?: string | null }>(
   originalMarkings: string[],
 ): { filtered: T[]; mismatch: boolean } {
   if (originalMarkings.length === 0) return { filtered: candidates, mismatch: false };
+  // ALL-of semantics: кандидат должен содержать КАЖДЫЙ структурный токен оригинала.
+  // ANY-of слишком слабо: общий токен (IP41) пропускает кандидата с другим
+  // SKU (ЩРВ vs ЩРН). Поэтому marking-set нужно предварительно сузить через
+  // filterStructuralMarkings — оставить только токены, не покрытые фасетами.
   const filtered = candidates.filter((c) => {
     const pt = (c.pagetitle || '').toUpperCase();
-    return originalMarkings.some((tok) => pt.includes(tok));
+    return originalMarkings.every((tok) => pt.includes(tok));
   });
   return { filtered, mismatch: filtered.length === 0 };
 }
+
+/**
+ * Сужает список маркировочных токенов до структурных (SKU-подобных), отбрасывая
+ * те, что уже распознаются как значения фасетов union-schema (IP41 →
+ * stepeny_zaschity=41) либо как любые brand/option-значения. Такие токены и так
+ * применяются как `options[]` фильтры через Layer 1 — дублировать их в guard
+ * избыточно и приводит к ложным ANY-совпадениям при общих токенах.
+ *
+ * Data-agnostic: словарей нет, источник истины — live unionSchema из API.
+ */
+export function filterStructuralMarkings(
+  markings: string[],
+  unionSchema: UnionSchema,
+): { kept: string[]; droppedFacetValues: string[] } {
+  if (markings.length === 0) return { kept: [], droppedFacetValues: [] };
+  const facetValuesUC = new Set<string>();
+  for (const entry of unionSchema.values()) {
+    for (const v of entry.values) {
+      const u = v.trim().toUpperCase();
+      if (u.length > 0) facetValuesUC.add(u);
+    }
+  }
+  const kept: string[] = [];
+  const droppedFacetValues: string[] = [];
+  for (const tok of markings) {
+    if (facetValuesUC.has(tok)) { droppedFacetValues.push(tok); continue; }
+    // IP-классы: "IP41" обычно лежит в фасете как "41". Снимаем префикс и
+    // сверяемся (IEC 60529, не привязано к 220volt).
+    const ipMatch = tok.match(/^IP(\d{2,3})$/);
+    if (ipMatch && facetValuesUC.has(ipMatch[1])) { droppedFacetValues.push(tok); continue; }
+    kept.push(tok);
+  }
+  return { kept, droppedFacetValues };
+}
+
