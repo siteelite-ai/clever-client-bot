@@ -1655,7 +1655,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
       let rawCritical = Array.isArray(parsed.critical_modifiers) ? parsed.critical_modifiers.filter((m: unknown) => typeof m === 'string' && m.trim().length > 0) : [];
       if (rawCritical.length === 0 && rawSearchMods.length > 0) rawCritical = [...rawSearchMods];
       console.log(`[Chat] Classifier critical_modifiers: [${rawCritical.join(', ')}] (of search_modifiers: [${rawSearchMods.join(', ')}])`);
-      const validSubIntents = ['availability', 'price', 'location', 'spec', 'facets'];
+      const validSubIntents = ['availability', 'price', 'location', 'spec', 'facets', 'compare'];
       const rawSubIntent = typeof parsed.sub_intent === 'string' ? parsed.sub_intent.toLowerCase().trim() : null;
       const llmSubIntent = validSubIntents.includes(rawSubIntent!) ? rawSubIntent as ClassificationResult['sub_intent'] : undefined;
       const subIntent = llmSubIntent ?? detectSubIntentFallback(message);
