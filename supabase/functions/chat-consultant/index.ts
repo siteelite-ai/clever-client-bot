@@ -6834,10 +6834,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 unique.push(r.product!);
               }
               foundProducts = unique;
+              // Честный список не найденных якорей для дисклеймера в рендере.
+              compareMissingAnchors = perAnchor.filter((r) => r.product === null).map((r) => r.anchor);
               articleShortCircuit = true;
               responseModel = aiConfig.model;
               responseModelReason = 'compare-shortcircuit';
-              console.log(`[Chat] COMPARE short-circuit: anchors=${anchorsRaw.length}, hits=${hits.length}, unique=${unique.length}, took=${cmpMs}ms`);
+              console.log(`[Chat] COMPARE short-circuit: anchors=${anchorsRaw.length}, hits=${hits.length}, unique=${unique.length}, missing=${compareMissingAnchors.length}, took=${cmpMs}ms`);
             } else {
               console.log(`[Chat] COMPARE: 0 anchors resolved → silent fallback to normal pipeline (took=${cmpMs}ms)`);
             }
