@@ -8285,7 +8285,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                             const resolvedValuesFolded = Object.values(resolvedFilters)
                               .map(v => fold(String(v)))
                               .filter(s => s.length > 0);
-                            const originalMods = (modifiers || []).map(m => (m || '').trim()).filter(m => m.length > 0);
+                            const originalMods = (modifiers || []).map((m: string) => (m || '').trim()).filter((m: string) => m.length > 0);
                             const resolvedOriginals: string[] = [];
                             const droppedOriginals: string[] = [];
                             for (const m of originalMods) {
