@@ -4388,6 +4388,10 @@ async function searchProductsByCandidate(
     
     if ((candidate as any).article) {
       params.append('article', (candidate as any).article);
+    } else if ((candidate as any).pagetitle) {
+      // EXACT product-name lookup — символ-в-символ совпадение с Product.pagetitle.
+      // Используется compare-веткой и name-first fast-path.
+      params.append('pagetitle', (candidate as any).pagetitle);
     } else if (candidate.query) {
       params.append('query', candidate.query);
     }
