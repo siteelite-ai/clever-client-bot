@@ -9330,6 +9330,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // rResolved holds combined facet filters; we always seed with traitMust (Layer 1).
                   let rResolved: Record<string, string> = { ...traitMust };
                   let rResolvedRaw: Record<string, { value: string; is_critical?: boolean }> = {};
+                  let qText: string | null = null;
 
                   if (replModifiers.length === 0 && Object.keys(traitMust).length === 0) {
                     // Нет ни модификаторов запроса, ни trait-фильтров из оригинала → берём pool как есть.
