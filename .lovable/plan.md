@@ -1,129 +1,63 @@
+# Jargon-fallback в qfv2_honest_empty_partial
 
-# План: Accessory-for pattern (V1)
+## Проблема
 
-## Цель
+Запрос «есть лампа кукуруза?» уходит в Soft-404 «дропнут фасет Форма колбы», хотя в каталоге есть corn-лампы. Корень: ветка `qfv2_honest_empty_partial` (V1, `supabase/functions/chat-consultant/index.ts:8348-8360`) сдаётся сразу же, как только `resolveFiltersWithLLM` вернул хотя бы один `unresolvedDetails`, и НЕ пробует `tryJargonFallback`. Все остальные точки Soft-404 уже защищены jargon-fallback'ом (early, post-search, unfulfilled-split в `qfv2_win`).
 
-Корректно отвечать на запросы вида «какие [Y] подходят к [X]» / «лампочки для [X]» / «диск к [X]» — показывать товары категории Y, а не якорь X. Решение системное: новая семантика в классификаторе + отдельная ветка в роутере, без патча pagetitle short-circuit.
+## Что меняем
 
-## Объём (этапы 1+2 одним PR)
+ОДНА вставка внутри блока `if (resolverUnresolvedDetails.length > 0)` (строка 8348), ДО присваивания `qfv2HonestEmptyContext` и `branchTag='qfv2_honest_empty_partial'`. Никаких изменений вне этого if'а.
 
-### Этап 1 — Расширение классификатора
+Логика вставки (идентична паттерну `unfulfilled-split` со строки 8425, чтобы не вводить новые подходы):
 
-**Файл:** `supabase/functions/_shared/classifier-prompt.ts`
+1. Динамический импорт `tryJargonFallback` из `_shared/jargon-fallback.ts`.
+2. Вызов с `originalQuery = userMessage || noun`, `searchFn = (alt) => searchProductsByCandidate({ query: alt, ... }, ..., 10)`, тем же `openrouterKey` и `log`-callback'ом.
+3. Sanitize результата (`price>0`, top-N через существующий `pickDisplayWithTotal`).
+4. Если `jr.products.length > 0`:
+   - `displayList = sanitized`, `branchTag = 'qfv2_jargon_recovery'`, метрика `logAddStep('qfv2-jargon-recovery', ...)`.
+   - `totalCollectedBranch = 'jargon-fallback'` (тот же тег, что и downstream — попадёт в существующий deterministic-render-путь).
+   - `qfv2HonestEmptyContext` НЕ ставится → downstream Soft-404 jargon не перезапустится (гейт на 10303 продолжает работать).
+5. Если пусто или исключение — `try/catch` глотает, выполнение проваливается в существующий honest-empty-partial (текущее поведение).
 
-Добавить:
-1. Новое значение `sub_intent = "accessory_for"`.
-2. Новое поле в JSON-контракте: `anchor_product: string | null` — товар-якорь, к которому подбираем.
-3. Правило детекции (data-agnostic, без списков категорий):
-   - Маркеры: предлоги «к / для / под / в комплект к / совместим с / подходит к / подходящий к / подходящие к» + следом существительное-товар (или его развёрнутое название).
-   - Структура: `[target_noun] + <маркер> + [anchor_phrase]` ИЛИ `<маркер> + [anchor_phrase]` если target_noun взят из истории (короткий follow-up — Этап 3, сейчас НЕ покрываем).
-4. Семантика заполнения при `sub_intent="accessory_for"`:
-   - `has_product_name = false` (цель — категория, не карточка)
-   - `product_name = null`
-   - `product_category = target_noun` (то, что подбираем — «рамки», «лампочки», «диск»)
-   - `anchor_product = anchor_phrase` (всё, что сказано про якорь, копией)
-   - `search_modifiers` — собираются МЕХАНИЧЕСКИ из target-фрагмента (без anchor-фрагмента) по существующему правилу.
-5. Регрессия в `classifier-prompt_test.ts`: 6-8 фикстур (рамки к розетке, лампа к люстре, диск к болгарке, картридж к принтеру, кронштейн под телевизор, провод для УШМ, насадка к перфоратору, негативы — «розетка для кухни» НЕ accessory_for).
+## Гарантии безопасности по веткам
 
-### Этап 2 — Новая ветка `s-accessory-for` в V1 роутере
+| Ветка | Затронуто |
+|---|---|
+| `qfv2_win` / `qfv2_unfulfilled_split` (8378-8476) | нет — другая условная ветка |
+| `qfv2_pool_rescue` (8485) | нет |
+| `qfv2_honest_empty` (final=0 с полностью resolved filters, 8491) | нет — другая ветка else |
+| `qfv2-bridge` (has_product_name → QFv2) | косвенно: точно тот же кейс, что чинит патч |
+| `accessory-for` (cascade collection→compat→brand→all) | нет — другой роутер |
+| Early jargon-fallback (10034) | нет |
+| Downstream jargon-fallback (10294-10394) | нет: гейт `!qfv2HonestEmptyContext` сохраняется; при нашем успехе context не ставится → но `foundProducts.length>0` → блок 10303 в любом случае не запустит повторный jargon (там условие `foundProducts==0`) |
+| Soft-404 (10394+) | нет — при успехе у нас есть карточки, в Soft-404 не заходим |
+| Article / pagetitle / name-query / price / similar / replacement | нет — другие top-level пути |
+| Compute (spec_query) | нет — `compute` отключает deterministic-render отдельно |
+| V2 (`chat-consultant-v2`) | физически другой файл, не трогается |
 
-**Файл:** `supabase/functions/chat-consultant/index.ts`
+При исключении внутри `tryJargonFallback` или его searchFn — silent catch → старое поведение honest-empty-partial. Регресс невозможен.
 
-1. **Guard перед pagetitle short-circuit** (~L6869): если `classification.sub_intent === 'accessory_for'` — пропускаем весь NAME-FIRST блок (не показываем якорь как товар).
-2. **Новая подветка** перед основным catalog-пайплайном:
-   a. **Resolve якорь:** `searchByPagetitle(anchor_product, …, 1)` → `anchorProduct`. Если 0 — silent fallback в обычный catalog-поиск по `product_category` (поведение как сегодня для категорий).
-   b. **Извлечь сигналы совместимости** из `anchorProduct.options[]`: коллекция (`kollekciya`), бренд (`brend`), серия. Whitelist ключей фиксируем как константу.
-   c. **Поиск target_category** через существующий QFv2-путь с инъекцией `options[<key>][]` из шага (b). Порядок попыток (cascade):
-      1. category + коллекция якоря
-      2. category + бренд якоря (если коллекция не дала результата)
-      3. category без фильтров якоря + Soft-Suggest о бренде якоря
-   d. **Soft-404 для accessory-for:** свой текст «не нашёл [target] совместимых с [anchor_product]; вот ближайшие [target] бренда [anchor_brand]» (если хотя бы шаг 3 что-то дал).
-3. **Логирование:** `branchTag='accessory-for'`, в Steps пишем `anchor_id`, `anchor_collection`, `anchor_brand`, какие фильтры пробовали и сколько на каждом шаге.
-4. **Деривация:** рендер карточек идёт через тот же `buildDeterministicShortCircuitContent` (правило deterministic product render).
-5. **disallowCrosssell=true** для accessory-for ветки — пользователь УЖЕ в режиме «подбираю аксессуар», навешивать ещё кросс-сел бессмысленно.
+## Метрики и тест-кейс
 
-### Тестирование
-
-1. Юнит-тесты классификатора (см. Этап 1).
-2. Интеграционный fixture-test для роутера (моки `searchByPagetitle` + QFv2).
-3. Регрессионный прогон существующих golden-tests чтобы убедиться: pagetitle short-circuit для обычных запросов («Розетка USB Тип С+С NLST» БЕЗ «к чему-то») не сломан.
-
-### Фикстуры
-
-**Файл:** `.lovable/fixtures/accessory-for-cases-2026-06-02.md` — 8-10 кейсов с ожидаемыми classifier-выходами и branchTag.
-
-### Memory
-
-После приёма — обновить `mem://index.md` (Core + новая запись `mem://features/accessory-for`).
-
-## Что НЕ входит
-
-- Этап 3 (slot-state для коротких follow-up «а рамки?» после показа розетки). Отдельным PR.
-- Зеркаление в V2 (`chat-consultant-v2`). Согласно Core Memory, V1 — активный prod, V2 — параллельная edge function; если решим перенести — отдельным PR.
-- Семантическое определение «что считать совместимостью» сверх коллекции/бренда якоря. Если в каталоге для пары категорий нужна более тонкая связка (например, «лампа E27 к патрону E27») — это будущий Этап 4.
+- `logAddStep({ step: 'qfv2-jargon-recovery', total: N, meta: { noun, originalQuery, matchedAlternative, dropped_facet } })` при успехе.
+- `logAddStep({ step: 'qfv2-jargon-recovery-skip', meta: { reason: 'empty'|'error', noun } })` при неудаче.
+- Кейс в `.lovable/fixtures/`: «есть лампа кукуруза?» → `branchTag='qfv2_jargon_recovery'`, ≥1 corn-лампа, нет Soft-404.
+- Регрессионный кейс: «ВВГнг 3х2.5» (bridge → resolved → не должен попадать в jargon, проверяем что `qfv2_win` остаётся `qfv2_win`).
 
 ## Технические детали
 
-### Точки правки
+Файлы:
+- `supabase/functions/chat-consultant/index.ts` — вставка ~25-30 строк в блок строки 8348.
+- `.lovable/fixtures/qfv2-jargon-cases-2026-06-07.md` — новый файл с двумя кейсами (corn + regression).
+- `mem://index.md` Core: добавить упоминание `qfv2_jargon_recovery` рядом с `qfv2_honest_empty_partial`.
 
-```text
-supabase/functions/_shared/classifier-prompt.ts          (+~40 строк, новое поле + правило)
-supabase/functions/_shared/classifier-prompt_test.ts     (+6-8 кейсов)
-supabase/functions/chat-consultant/index.ts              (~L6869 guard, ~L7593 новая ветка ~150 строк)
-.lovable/fixtures/accessory-for-cases-2026-06-02.md      (новый)
-mem://index.md, mem://features/accessory-for             (после приёма)
-```
+НЕ трогаем: classifier, has_product_name bridge, resolveFiltersWithLLM, jargon-fallback.ts (используется as-is), composer, soft-404 промпт.
 
-### Контракт нового classifier-выхода (пример)
+## Принят критерий
 
-```json
-{
-  "intent": "catalog",
-  "sub_intent": "accessory_for",
-  "has_product_name": false,
-  "product_name": null,
-  "product_category": "рамки",
-  "anchor_product": "Розетка USB Тип С+C 15 Вт 5 В, белый NLST /863139/",
-  "search_modifiers": [],
-  "critical_modifiers": [],
-  "is_replacement": false,
-  "price_intent": null,
-  "compute": null,
-  "compare": null
-}
-```
+На кейсе «есть лампа кукуруза?» в логах:
+- `step: 'qfv2-jargon-recovery'` с `total ≥ 1`;
+- `branchTag = 'qfv2_jargon_recovery'`;
+- Финальный ответ — карточки corn-ламп через deterministic render, БЕЗ Soft-404 «Форма колбы».
 
-### Псевдокод ветки s-accessory-for
-
-```text
-if classification.sub_intent == 'accessory_for' and classification.anchor_product:
-    anchor = searchByPagetitle(classification.anchor_product, limit=1)
-    if not anchor:
-        fall through to obычный catalog (по product_category)
-    else:
-        signals = extractAnchorSignals(anchor.options)  # {collection, brand, series}
-        attempts = [
-            {category: target, options: {collection: signals.collection}},
-            {category: target, options: {brand: signals.brand}},
-            {category: target, options: {}},  # last resort + soft-suggest о бренде
-        ]
-        for attempt in attempts:
-            products = qfv2Search(attempt)
-            if products: 
-                render(products, branchTag='accessory-for', disallowCrosssell=true)
-                return
-        renderAccessoryForSoft404(target, anchor)
-```
-
-### Риски
-
-- Классификатор может ошибочно ставить `accessory_for` на запросы типа «диск для болгарки» когда пользователь имел в виду конкретную модель диска без якоря. **Митигация:** правило «anchor_phrase должна содержать ≥1 признак конкретики — бренд/маркировку/слово «эта/эту/этой/такой» или быть длиннее 4 слов». Иначе — обычный catalog по «диск для болгарки».
-- Якорь может не найтись в каталоге (опечатка / снят с продажи). **Митигация:** silent fallback в обычный catalog-поиск по target_category.
-- При смене модели классификатора (Claude → Gemini) семантика поля может «поплыть». **Митигация:** unit-тесты с фикстурами + явная проверка на наличие маркеров в промпте.
-
-## Acceptance criteria
-
-1. Запрос «какие рамки подходят к этой розетке: Розетка USB Тип С+С NLST /863139/» → показаны рамки коллекции Niloe Step бренда Legrand (если есть), иначе рамки Legrand, иначе все рамки + явный текст «не нашёл совместимых, показываю общий список».
-2. Запрос «Розетка USB Тип С+С NLST /863139/» БЕЗ accessory-маркеров → как сейчас, pagetitle short-circuit, карточка розетки.
-3. Все существующие unit/integration тесты зелёные.
-4. Steps в логах содержат branchTag='accessory-for' и diag по якорю и фильтрам.
+На кейсе «ВВГнг 3х2.5» — `branchTag` остаётся `qfv2_win` (никакого jargon не вызывается, т.к. resolved filters непусты).
