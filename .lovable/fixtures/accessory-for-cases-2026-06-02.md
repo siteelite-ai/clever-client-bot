@@ -212,3 +212,54 @@
 - Кейс №1 — реальный production-инцидент (RequestLogs `/logs`, 2026-06-02).
 - Кейсы №2-7 — конструируются по типовым продуктам каталога 220volt, но в данном файле допустимо: фикстуры лежат вне spec'а (mem://constraints/spec-data-agnostic).
 - Кейсы №8-11 — anti-pattern guards для предотвращения регрессий в смежных ветках.
+
+---
+
+## Кейсы partition-axis фильтра (2026-06-07)
+
+Data-agnostic ось совместимости: ключ K из `anchor.options[]` принимается за ось ⇔
+(1) у probe target-категории K присутствует, (2) |unique values_ru| ≤ max(8, 0.3*probe.length),
+(3) значение анкера V_a встречается в probe по этому K. Иначе skip (silent fallback в brand→all).
+
+### 12. Лампа к светильнику с цоколем GX53 в имени модели
+
+**Запрос:** `Какая лампа подходит к этому светильнику: Светильник NGX-R1-001-GX53 белый 71 277 Navigator`
+
+**Classifier:**
+```json
+{
+  "sub_intent": "accessory_for",
+  "anchor_product": "Светильник NGX-R1-001-GX53 белый 71 277 Navigator",
+  "product_category": "лампа",
+  "search_modifiers": [],
+  "critical_modifiers": []
+}
+```
+
+**Branch:** anchor.options содержит `tsokol_*=GX53`. Probe ламп: ось `tsokol_*` имеет
+≤ 6 уникальных значений (E14, E27, GU10, GX53, G9, G4), GX53 присутствует → ось выбрана.
+`compat-all` (или `compat-strongest`) возвращает только GX53-лампы.
+
+**Acceptance:**
+- `meta.compat.axes_selected` содержит элемент `{key: "tsokol_*", anchor_value: "GX53"}`.
+- `meta.compat.hit === true`.
+- `attemptLabel` ∈ `{"compat-all", "compat-strongest"}`.
+- Все карточки в выдаче — лампы с цоколем GX53.
+
+### 13. Negative: цвет анкера НЕ становится осью совместимости
+
+**Тот же запрос (Кейс 12).** Анкер белый; probe ламп содержит десятки разных значений
+по `cvet_*` (тёплый/холодный/нейтральный/RGB/...) → |values| > threshold → ось отброшена.
+
+**Acceptance:**
+- `meta.compat.keys_considered` содержит `cvet_*` (или его реальное имя).
+- `meta.compat.axes_selected` НЕ содержит `cvet_*`.
+- Выдача не схлопывается в 0 из-за личного цветового предпочтения по якорю.
+
+### Регрессия Кейса 1 (рамки к розетке NLST)
+
+partition-axis шаг исключает `kollekciya__*` и `brend__*` явно — collection-attempt
+и brand-fallback живут в существующем каскаде. Family-Guard остаётся первым гейтом
+после probe → при NLST отсутствующем в значениях коллекций рамок → `blockedByFamily=true`
+→ partition-axis шаг не выполняется (он внутри `if (!blockedByFamily)`) → результат =
+`accessory-for-incompatible-collection`, как раньше.
