@@ -7870,7 +7870,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   } catch (compatErr) {
                     console.log('[AccessoryFor] compat-axis error: ' + (compatErr as Error).message + ' silent-fallback');
                   }
-                  console.log('[AccessoryFor] compat: probe=' + probe.length + ' keys=' + compatKeysConsidered.length + ' axes=' + compatAxesSelected.length + ' attempted=' + compatAttempted + ' hit=' + compatHit);
+                  console.log('[AccessoryFor] compat: probe=' + probe.length + ' keys=' + compatKeysConsidered.length + ' skipped=' + compatKeysSkipped.length + ' axes=' + compatAxesSelected.length + ' attempted=' + compatAttempted + ' hit=' + compatHit + ' skipped_detail=' + JSON.stringify(compatKeysSkipped));
 
                   if (!compatHit) {
                     products = await tryFetch({ brend__brend: brand }, 'brand=' + brand);
@@ -7884,11 +7884,13 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   (anchorCandidate as unknown as { __afCompat?: unknown }).__afCompat = {
                     probe_size: probe.length,
                     keys_considered: compatKeysConsidered,
+                    keys_skipped: compatKeysSkipped,
                     axes_selected: compatAxesSelected,
                     attempted: compatAttempted,
                     hit: compatHit,
                   };
                 }
+
               } else if (products.length === 0) {
                 products = await tryFetch(undefined, 'all');
                 if (products.length > 0) attemptLabel = 'all';
