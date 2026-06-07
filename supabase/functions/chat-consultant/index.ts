@@ -7790,12 +7790,86 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 }
 
                 if (!blockedByFamily) {
-                  products = await tryFetch({ brend__brend: brand }, `brand=${brand}`);
-                  if (products.length > 0) attemptLabel = 'brand';
-                  if (products.length === 0) {
-                    products = probe;
-                    if (products.length > 0) attemptLabel = 'all';
+                  // Partition-Axis Compatibility Filter (data-driven, без словарей).
+                  // K из anchor.options считается осью совместимости, если у probe
+                  // target-категории это partition-axis (мало уникальных значений =
+                  // дискретное разбиение: цоколь, патрон, серия). Шумовые непрерывные
+                  // атрибуты отсеиваются авто. Исключаем kollekciya__*/brend__*.
+                  let compatAttempted = false;
+                  let compatHit = false;
+                  let compatAxesSelected: Array<{ key: string; anchor_value: string; target_uniq_count: number }> = [];
+                  const compatKeysConsidered: string[] = [];
+                  try {
+                    if (probe.length >= 5) {
+                      const anchorOpts = (anchorCandidate.options || []) as Array<{ key?: string; value_ru?: string }>;
+                      const kAnchor = new Map<string, string>();
+                      for (const o of anchorOpts) {
+                        if (typeof o.key === 'string' && typeof o.value_ru === 'string' && o.value_ru.trim().length > 0) {
+                          if (/^kollekciya/i.test(o.key) || /^brend/i.test(o.key)) continue;
+                          if (!kAnchor.has(o.key)) kAnchor.set(o.key, o.value_ru.trim());
+                        }
+                      }
+                      const threshold = Math.max(8, Math.floor(0.3 * probe.length));
+                      for (const [K, V_a] of kAnchor.entries()) {
+                        compatKeysConsidered.push(K);
+                        const values = new Set<string>();
+                        for (const p of probe) {
+                          const po = (p.options || []) as Array<{ key?: string; value_ru?: string }>;
+                          for (const o of po) {
+                            if (o.key === K && typeof o.value_ru === 'string' && o.value_ru.trim()) {
+                              values.add(o.value_ru.trim());
+                            }
+                          }
+                        }
+                        if (values.size === 0) continue;
+                        if (values.size > threshold) continue;
+                        const V_a_lc = V_a.toLowerCase();
+                        const hasMatch = [...values].some((v) => v.toLowerCase() === V_a_lc);
+                        if (!hasMatch) continue;
+                        compatAxesSelected.push({ key: K, anchor_value: V_a, target_uniq_count: values.size });
+                      }
+                      if (compatAxesSelected.length > 0) {
+                        compatAttempted = true;
+                        const allFilters: Record<string, string> = {};
+                        for (const a of compatAxesSelected) allFilters[a.key] = a.anchor_value;
+                        const allLabel = 'compat-all:' + compatAxesSelected.map((a) => a.key).join(',');
+                        let compatResult = await tryFetch(allFilters, allLabel);
+                        if (compatResult.length > 0) {
+                          products = compatResult;
+                          attemptLabel = 'compat-all';
+                          compatHit = true;
+                        } else if (compatAxesSelected.length > 1) {
+                          const strongest = [...compatAxesSelected].sort((a, b) => a.target_uniq_count - b.target_uniq_count)[0];
+                          compatResult = await tryFetch({ [strongest.key]: strongest.anchor_value }, 'compat-strongest:' + strongest.key);
+                          if (compatResult.length > 0) {
+                            products = compatResult;
+                            attemptLabel = 'compat-strongest';
+                            compatHit = true;
+                          }
+                        }
+                      }
+                    }
+                  } catch (compatErr) {
+                    console.log('[AccessoryFor] compat-axis error: ' + (compatErr as Error).message + ' silent-fallback');
                   }
+                  console.log('[AccessoryFor] compat: probe=' + probe.length + ' keys=' + compatKeysConsidered.length + ' axes=' + compatAxesSelected.length + ' attempted=' + compatAttempted + ' hit=' + compatHit);
+
+                  if (!compatHit) {
+                    products = await tryFetch({ brend__brend: brand }, 'brand=' + brand);
+                    if (products.length > 0) attemptLabel = 'brand';
+                    if (products.length === 0) {
+                      products = probe;
+                      if (products.length > 0) attemptLabel = 'all';
+                    }
+                  }
+
+                  (anchorCandidate as unknown as { __afCompat?: unknown }).__afCompat = {
+                    probe_size: probe.length,
+                    keys_considered: compatKeysConsidered,
+                    axes_selected: compatAxesSelected,
+                    attempted: compatAttempted,
+                    hit: compatHit,
+                  };
                 }
               } else if (products.length === 0) {
                 products = await tryFetch(undefined, 'all');
