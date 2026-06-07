@@ -7911,6 +7911,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   }
 
                   (anchorCandidate as unknown as { __afCompat?: unknown }).__afCompat = {
+                    source: compatSource,
                     probe_size: probe.length,
                     keys_considered: compatKeysConsidered,
                     keys_skipped: compatKeysSkipped,
@@ -7919,6 +7920,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     hit: compatHit,
                   };
                 }
+
 
               } else if (products.length === 0) {
                 products = await tryFetch(undefined, 'all');
