@@ -7755,8 +7755,11 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               }
 
               if (products.length === 0 && brand) {
-                // Probe target schema before brand-fallback.
-                const probe = await tryFetch(undefined, 'probe-target-schema');
+                // Probe target schema before brand-fallback. Larger probe (50) → надёжнее
+                // оценка partition-axis: меньше шансов, что уникальная характеристика
+                // (цоколь) случайно попадёт под 8-порог из-за маленькой выборки.
+                const probe = await tryFetch(undefined, 'probe-target-schema', 50);
+
 
                 if (collection) {
                   // Collect actual values for the SAME key the collection-attempt used.
