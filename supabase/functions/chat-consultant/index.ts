@@ -9330,6 +9330,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // rResolved holds combined facet filters; we always seed with traitMust (Layer 1).
                   let rResolved: Record<string, string> = { ...traitMust };
                   let rResolvedRaw: Record<string, { value: string; is_critical?: boolean }> = {};
+                  let qText: string | null = null;
 
                   if (replModifiers.length === 0 && Object.keys(traitMust).length === 0) {
                     // Нет ни модификаторов запроса, ни trait-фильтров из оригинала → берём pool как есть.
@@ -9355,13 +9356,25 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       console.log(`[Chat] Replacement matcher trait-only=${JSON.stringify(rResolved)} (no user modifiers)`);
                     }
 
-                    const rLiteral = replModifiers.length > 0 ? replModifiers.join(' ') : null;
-                    const qText = suppressResolvedFromQuery(
-                      rLiteral,
-                      extractResolvedValues(rResolved),
-                      replModifiers,
-                      { allowEmptyQuery: false, path: 'replacement-matcher' },
-                    );
+                    // RC1 fix: при наличии реальных traitMust от resolved originalProduct
+                    // НЕ пускаем замусоренные SKU-токены классификатора в ?query=.
+                    // Trait-фильтры — ground truth, query=SKU только сужает выдачу до
+                    // самого анчора (или 0). Если traits пустые — старая логика литерала.
+                    const traitOnlyMode = !!originalProduct && Object.keys(traitMust).length > 0;
+                    const rLiteral = traitOnlyMode
+                      ? null
+                      : (replModifiers.length > 0 ? replModifiers.join(' ') : null);
+                    qText = traitOnlyMode
+                      ? null
+                      : suppressResolvedFromQuery(
+                          rLiteral,
+                          extractResolvedValues(rResolved),
+                          replModifiers,
+                          { allowEmptyQuery: false, path: 'replacement-matcher' },
+                        );
+                    if (traitOnlyMode) {
+                      console.log(`[Chat] Replacement matcher trait-only mode: qText=null, traitMust=${JSON.stringify(traitMust)} (SKU-tokens suppressed from query)`);
+                    }
                     const rFiltRes = await Promise.all(replMatches.map(cat =>
                       searchProductsByCandidate(
                         { query: qText, brand: null, category: cat, min_price: null, max_price: replMaxPrice },
@@ -9453,17 +9466,22 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       weakenedReason,
                     };
                     console.log(`[Chat] [Path] WIN replacement matched_cats=${replMatches.length} count=${foundProducts.length} weakened=${weakened}${weakenedReason ? ' reason=' + weakenedReason : ''} elapsed=${Date.now() - replacementStart}ms`);
+                    logAddStep({ step: 'replacement-matcher', total: foundProducts.length, meta: { branch: 'win', matched_cats: replMatches.length, trait_keys: [...traitKeysSet], rResolved, qText, weakened, weakenedReason } });
                   } else {
                     console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS replacement reason=zero_after_filters matched_cats=${replMatches.length}`);
+                    logAddStep({ step: 'replacement-matcher', total: 0, meta: { branch: 'zero_after_filters', matched_cats: replMatches.length, trait_keys: [...traitKeysSet], rResolved, qText, pool_size: rPool.length } });
                   }
                 } else {
                   console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS replacement reason=zero_pool matched_cats=${replMatches.length}`);
+                  logAddStep({ step: 'replacement-matcher', total: 0, meta: { branch: 'zero_pool', matched_cats: replMatches.length, replCategory } });
                 }
               } else {
                 console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS replacement reason=matcher_empty replCategory="${replCategory}"`);
+                logAddStep({ step: 'replacement-matcher', total: 0, meta: { branch: 'matcher_empty', replCategory } });
               }
             } catch (rmErr) {
               console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS replacement reason=${(rmErr as Error).message}`);
+              logAddStep({ step: 'replacement-matcher', total: 0, meta: { branch: 'exception', error: (rmErr as Error).message } });
             }
 
             if (!replacementWinResolved) {
@@ -10834,7 +10852,7 @@ ${productInstructions}`;
     //      встречаются в product.article или product.pagetitle
     //   3) точное совпадение product.pagetitle == classification.product_name
     if (classification?.is_replacement && foundProducts.length > 0) {
-      const anchorId = replacementOriginalHint?.id ?? null;
+      const anchorId = (replacementOriginalHint?.id ?? replacementMeta?.original?.id) ?? null;
       const skuTokens: string[] = [];
       const collectSku = (s: string | undefined | null) => {
         if (!s) return;
@@ -10845,14 +10863,26 @@ ${productInstructions}`;
       for (const m of (classification.search_modifiers || [])) collectSku(m);
       const exactName = (classification.product_name || '').trim().toLowerCase();
 
+      // RC3 fix: precision. article — exact match (после нормализации), pagetitle —
+      // word-boundary regex. `includes` ловит общий префикс линейки (например, Philips
+      // DN027B-... → 929002070XXX серия) и режет легитимные аналоги.
+      const norm = (s: string) => s.toLowerCase().replace(/[\s_]+/g, '');
+      const toWordRegex = (tok: string) => {
+        const esc = tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`(?:^|[^A-Za-zА-Яа-я0-9])${esc}(?:[^A-Za-zА-Яа-я0-9]|$)`, 'i');
+      };
+
       const before = foundProducts.length;
       const filtered = foundProducts.filter(p => {
         if (anchorId !== null && p.id === anchorId) return false;
         const pt = (p.pagetitle || '').toLowerCase();
         const art = ((p as any).article || '').toLowerCase();
+        const artNorm = norm(art);
         if (exactName && pt === exactName) return false;
         for (const tok of skuTokens) {
-          if (tok && (art.includes(tok) || pt.includes(tok))) return false;
+          if (!tok) continue;
+          if (artNorm && artNorm === norm(tok)) return false;
+          if (pt && toWordRegex(tok).test(pt)) return false;
         }
         return true;
       });
@@ -10860,6 +10890,25 @@ ${productInstructions}`;
         console.log(`[Chat] Replacement anchor-guard: filtered ${before} → ${filtered.length} (dropped anchors), skuTokens=[${skuTokens.join(', ')}], anchorId=${anchorId ?? 'none'}`);
         foundProducts = filtered;
         logAddStep({ step: 'replacement-anchor-guard', total: filtered.length, meta: { before, dropped: before - filtered.length, skuTokens, anchorId } });
+
+        // RC2 fix: sync replacementMeta. Если guard зануил выдачу — выставляем
+        // noResults=true, чтобы сработал honest no-alternatives composer
+        // (10135+), а не дефолтный LLM-flow «обратитесь к менеджеру».
+        if (filtered.length === 0) {
+          articleShortCircuit = false;
+          if (replacementMeta) {
+            replacementMeta = { ...replacementMeta, noResults: true };
+          } else {
+            replacementMeta = {
+              isReplacement: true,
+              original: replacementOriginalHint,
+              originalName: classification.product_name,
+              noResults: true,
+            };
+          }
+          console.log(`[Chat] Replacement anchor-guard: zero after filter → replacementMeta.noResults=true (honest no-alternatives path)`);
+          logAddStep({ step: 'replacement-anchor-guard-sync', total: 0, meta: { action: 'mark_no_results' } });
+        }
       }
     }
 
