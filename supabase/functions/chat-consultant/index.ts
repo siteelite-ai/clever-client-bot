@@ -4753,19 +4753,12 @@ function toProductionUrl(url: string): string {
 // Согласовано вручную с продакт-владельцем (2026-04-30, аудит «Розетки»).
 // Эти ключи НЕ попадают ни в Facet Matcher, ни в LLM-промпт, ни в кэш.
 // V2-зеркало: supabase/functions/chat-consultant-v2/catalog/facet-filter.ts
+// Группы A/B/C — общий источник правды (см. _shared/facet-blacklist.ts),
+// синхронизирован между V1 и V2. Расширение — только через явное согласование.
+// Дополнительно — V1-legacy ключи (исторически отфильтровывались только в V1).
 const EXCLUDED_OPTION_PREFIXES = [
-  // Группа A — техническая метаинформация / служебные ID (5)
-  'kodnomenklatury',
-  'identifikator_sayta__sayt_identifikatory',
-  'soputstvuyuschiytovar',
-  'tovar_internet_magazina',
-  'poiskovyy_zapros',
-  // Группа B — казахские дубли (2)
-  'naimenovanie_na_kazahskom_yazyke',
-  'opisanie_na_kazahskom_yazyke',
-  // Группа C — медиа (1)
-  'fayl',
-  // Pre-existing legacy V1 exclusions (оставляем — это V1-специфика):
+  ...Array.from(SHARED_FACET_BLACKLIST_KEYS),
+  // Pre-existing legacy V1 exclusions (оставляем — V1-специфика):
   'kod_tn_ved',
   'ogranichennyy_prosmotr',
   'prodaetsya_to',
