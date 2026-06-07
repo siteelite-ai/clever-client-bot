@@ -207,8 +207,91 @@
 
 ---
 
+## Compat-axes pipeline (patch 2026-06-07)
+
+Эти кейсы покрывают новый детерминированный compat-блок ветки `accessory_for`:
+schema-driven выбор осей совместимости + канонизация значения anchor против
+target-категории. Подробности — в `supabase/functions/chat-consultant/index.ts`
+рядом с `compatMeta`.
+
+### 14. Лампа GX53 к точечному светильнику (production-инцидент)
+
+**Запрос:** `Какая лампа подходит к этому светильнику: Светильник NGX-R1-001-GX53 белый 71 277 Navigator`
+
+**Classifier:**
+```json
+{
+  "sub_intent": "accessory_for",
+  "product_category": "лампа",
+  "anchor_product": "Светильник NGX-R1-001-GX53 белый 71 277 Navigator",
+  "search_modifiers": [],
+  "critical_modifiers": []
+}
+```
+
+**Pipeline:**
+- anchor.options содержит `{key: "tip_cokolya_…", value_ru: "gx 53"}` (написание из 220volt API).
+- target_category "лампа" → resolvedTargetCategory = "Лампы" (категория, проверить актуальное pagetitle в каталоге).
+- live schema лампы содержит `tip_cokolya_…: ["E27", "E14", "GX53", "G4", "G9", "R7s", ...]`.
+- Канонизация: `normCanon("gx 53") === normCanon("GX53") === "gx53"` → canonical = `"GX53"`.
+- `"GX53"` встречается в pagetitle анкера → приоритет 1.
+- API: `?category=Лампы&options[tip_cokolya_…][]=GX53&per_page=20` → товары лампы GX53.
+
+**Acceptance:**
+- `meta.compat.axes_selected[0].key` начинается с `tip_cokolya`;
+- `meta.compat.axes_selected[0].anchor_value_canonical === "GX53"`;
+- `meta.compat.hit.key` тот же; `meta.attempt === "compat"`;
+- Среди карточек ни одной лампы без цоколя GX53 / другого цоколя под видом «совместимой»;
+- `meta.compat.axes_selected` НЕ содержит `opisaniefayla*`, `populyarnyy*`, `kodnomenklatury`, `fayl`, `novinka*`, `garantiynyy*`.
+
+---
+
+### 15. Blacklist режет техническую метаинформацию
+
+**Анкер с options:** `kodnomenklatury="ABC-123"`, `populyarnyy="1"`, `opisaniefayla="..."`, `tip_cokolya_…="GX53"`.
+
+**Schema target:** содержит те же ключи (часто и в bootstrap, и в live).
+
+**Acceptance:**
+- `meta.compat.axes_skipped` содержит записи `{key:"kodnomenklatury", reason:"blacklisted"}`, `{key:"populyarnyy…", reason:"blacklisted"}`, `{key:"opisaniefayla…", reason:"blacklisted"}`;
+- `meta.compat.axes_selected` содержит ТОЛЬКО `tip_cokolya_…`.
+
+---
+
+### 16. Канонизация "gx 53" → "GX53"
+
+**Probe-схема target-категории:** `tip_cokolya_…: ["E27", "GX53", "E14"]`.
+**Анкер:** `tip_cokolya_…` = `"gx 53"` (с пробелом, как часто отдаёт API).
+
+**Acceptance:**
+- `meta.compat.axes_selected` содержит `{key:"tip_cokolya_…", anchor_value_raw:"gx 53", anchor_value_canonical:"GX53"}`;
+- Финальный URL содержит `options[tip_cokolya_…][]=GX53`, а НЕ `gx 53`.
+- Если бы в schema не было ни одного варианта, нормализующегося в `gx53`, ось ушла бы в `axes_skipped` с `reason:"anchor-value-no-canonical-match"`.
+
+---
+
+### 17. Регрессия Кейса 1: рамки NLST → Legrand остаются `incompatible-collection`
+
+Запрос и classifier — как в кейсе 1. Anchor — розетка коллекции Niloe Step, target — рамки.
+
+**Pipeline:**
+- collection-attempt `options[kollekciya__kollekciya][]=Niloe Step` → 0.
+- probe + schema (live или bootstrap) → значения `kollekciya__kollekciya` для рамок не содержат `Niloe Step`.
+- Family-guard блокирует переход в brand-fallback ПЕРЕД compat-блоком.
+- Compat-блок НЕ запускается (`blockedByFamily=true`).
+
+**Acceptance:**
+- `responseModelReason === "accessory-for-incompatible-collection"`;
+- `meta.family_guard.blocked_brand_fallback === true`;
+- `meta.compat.hit === null`, `meta.compat.axes_selected.length === 0`;
+- Никаких Legrand-карточек.
+
+---
+
 ## Источник данных
 
 - Кейс №1 — реальный production-инцидент (RequestLogs `/logs`, 2026-06-02).
-- Кейсы №2-7 — конструируются по типовым продуктам каталога 220volt, но в данном файле допустимо: фикстуры лежат вне spec'а (mem://constraints/spec-data-agnostic).
-- Кейсы №8-11 — anti-pattern guards для предотвращения регрессий в смежных ветках.
+- Кейс №14 — реальный production-инцидент (RequestLogs `/logs`, 2026-06-07).
+- Кейсы №2-7, 15-16 — конструируются по типовым продуктам каталога 220volt, фикстуры вне spec'а (mem://constraints/spec-data-agnostic).
+- Кейсы №8-11, 17 — anti-pattern guards для предотвращения регрессий в смежных ветках.
+
