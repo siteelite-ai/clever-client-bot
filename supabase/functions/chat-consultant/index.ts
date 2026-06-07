@@ -7794,31 +7794,58 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 }
 
                 if (!blockedByFamily) {
-                  // Partition-Axis Compatibility Filter (data-driven, без словарей).
-                  // K из anchor.options считается осью совместимости, если у probe
-                  // target-категории это partition-axis (мало уникальных значений =
-                  // дискретное разбиение: цоколь, патрон, серия). Шумовые непрерывные
-                  // атрибуты отсеиваются авто. Исключаем kollekciya__*/brend__*.
+                  // Compatibility Axis Filter (data-driven, без словарей).
+                  // PRIMARY: facet-schema target-категории из /api/categories/options —
+                  // whitelist user-facing характеристик (то, что сайт показывает как фильтры).
+                  // Meta-поля (opisaniefayla, populyarnyy, kodnomenklatury, fayl,
+                  // poiskovyy_zapros и т.п.) туда не попадают по построению.
+                  // FALLBACK: partition-axis по probe — silent fallback если schema
+                  // недоступна (cold start + facets endpoint down). anchor-value-absent
+                  // НЕ проверяем нигде — probe слишком мал чтобы быть авторитетным по
+                  // значениям. Если API вернёт 0 на compat-all — это и есть честный
+                  // family-mismatch, обрабатываем в каскаде ниже.
                   let compatAttempted = false;
                   let compatHit = false;
-                  let compatAxesSelected: Array<{ key: string; anchor_value: string; target_uniq_count: number; dominant_share: number }> = [];
+                  let compatAxesSelected: Array<{ key: string; anchor_value: string; source: 'facet-schema' | 'partition-axis' }> = [];
                   const compatKeysConsidered: string[] = [];
                   const compatKeysSkipped: Array<{ key: string; reason: string }> = [];
+                  let compatSource: 'facet-schema' | 'partition-axis' | 'none' = 'none';
                   try {
-                    if (probe.length >= 5) {
-                      const anchorOpts = (anchorCandidate.options || []) as Array<{ key?: string; value_ru?: string }>;
-                      const kAnchor = new Map<string, string>();
-                      for (const o of anchorOpts) {
-                        if (typeof o.key === 'string' && typeof o.value_ru === 'string' && o.value_ru.trim().length > 0) {
-                          if (/^kollekciya/i.test(o.key) || /^brend/i.test(o.key)) continue;
-                          if (!kAnchor.has(o.key)) kAnchor.set(o.key, o.value_ru.trim());
-                        }
+                    const anchorOpts = (anchorCandidate.options || []) as Array<{ key?: string; value_ru?: string }>;
+                    const kAnchor = new Map<string, string>();
+                    for (const o of anchorOpts) {
+                      if (typeof o.key === 'string' && typeof o.value_ru === 'string' && o.value_ru.trim().length > 0) {
+                        if (/^kollekciya/i.test(o.key) || /^brend/i.test(o.key)) continue;
+                        if (!kAnchor.has(o.key)) kAnchor.set(o.key, o.value_ru.trim());
                       }
+                    }
+
+                    let schemaKeys: Set<string> | null = null;
+                    if (resolvedTargetCategory && appSettings.volt220_api_token) {
+                      try {
+                        const schemaRes = await getCategoryOptionsSchema(resolvedTargetCategory, appSettings.volt220_api_token);
+                        if (schemaRes.schema.size > 0) {
+                          schemaKeys = new Set(schemaRes.schema.keys());
+                          console.log('[AccessoryFor] compat: facet-schema "' + resolvedTargetCategory + '" keys=' + schemaKeys.size + ' conf=' + schemaRes.confidence + ' src=' + schemaRes.source);
+                        }
+                      } catch (schemaErr) {
+                        console.log('[AccessoryFor] compat: facet-schema fetch error: ' + (schemaErr as Error).message + ' — fallback to partition-axis');
+                      }
+                    }
+
+                    if (schemaKeys && schemaKeys.size > 0) {
+                      compatSource = 'facet-schema';
+                      for (const [K, V_a] of kAnchor.entries()) {
+                        compatKeysConsidered.push(K);
+                        if (!schemaKeys.has(K)) { compatKeysSkipped.push({ key: K, reason: 'not-in-facet-schema' }); continue; }
+                        compatAxesSelected.push({ key: K, anchor_value: V_a, source: 'facet-schema' });
+                      }
+                    } else if (probe.length >= 5) {
+                      compatSource = 'partition-axis';
                       const threshold = Math.max(8, Math.floor(0.3 * probe.length));
                       const DOMINANT_COVERAGE_MAX = 0.9;
                       for (const [K, V_a] of kAnchor.entries()) {
                         compatKeysConsidered.push(K);
-                        // Подсчёт частот значений K по probe.
                         const counts = new Map<string, number>();
                         for (const p of probe) {
                           const po = (p.options || []) as Array<{ key?: string; value_ru?: string }>;
@@ -7830,7 +7857,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                           }
                         }
                         const values = new Set(counts.keys());
-                        if (values.size === 0) { compatKeysSkipped.push({ key: K, reason: 'absent-in-target' }); continue; }
+                        if (values.size === 0) { compatKeysSkipped.push({ key: K, reason: 'absent-in-probe' }); continue; }
                         if (values.size === 1) { compatKeysSkipped.push({ key: K, reason: 'uniq=1' }); continue; }
                         if (values.size > threshold) { compatKeysSkipped.push({ key: K, reason: 'too-many-uniq:' + values.size }); continue; }
                         const totalAnnotated = [...counts.values()].reduce((a, b) => a + b, 0);
@@ -7840,37 +7867,39 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                           compatKeysSkipped.push({ key: K, reason: 'dominant-share:' + dominantShare.toFixed(2) });
                           continue;
                         }
-                        const V_a_lc = V_a.toLowerCase();
-                        const hasMatch = [...values].some((v) => v.toLowerCase() === V_a_lc);
-                        if (!hasMatch) { compatKeysSkipped.push({ key: K, reason: 'anchor-value-absent' }); continue; }
-                        compatAxesSelected.push({ key: K, anchor_value: V_a, target_uniq_count: values.size, dominant_share: dominantShare });
+                        compatAxesSelected.push({ key: K, anchor_value: V_a, source: 'partition-axis' });
                       }
+                    }
 
-                      if (compatAxesSelected.length > 0) {
-                        compatAttempted = true;
-                        const allFilters: Record<string, string> = {};
-                        for (const a of compatAxesSelected) allFilters[a.key] = a.anchor_value;
-                        const allLabel = 'compat-all:' + compatAxesSelected.map((a) => a.key).join(',');
-                        let compatResult = await tryFetch(allFilters, allLabel);
+                    if (compatAxesSelected.length > 0) {
+                      compatAttempted = true;
+                      const allFilters: Record<string, string> = {};
+                      for (const a of compatAxesSelected) allFilters[a.key] = a.anchor_value;
+                      const allLabel = 'compat-all[' + compatSource + ']:' + compatAxesSelected.map((a) => a.key).join(',');
+                      let compatResult = await tryFetch(allFilters, allLabel);
+                      if (compatResult.length > 0) {
+                        products = compatResult;
+                        attemptLabel = 'compat-all';
+                        compatHit = true;
+                      } else if (compatAxesSelected.length > 1) {
+                        // strongest = первая selected ось (детерминистично, без
+                        // вторичных весов — facet-schema порядок ≈ user-visible
+                        // приоритет; partition-axis порядок ≈ Map insertion order
+                        // из anchor.options, который и есть API-порядок).
+                        const strongest = compatAxesSelected[0];
+                        compatResult = await tryFetch({ [strongest.key]: strongest.anchor_value }, 'compat-strongest[' + compatSource + ']:' + strongest.key);
                         if (compatResult.length > 0) {
                           products = compatResult;
-                          attemptLabel = 'compat-all';
+                          attemptLabel = 'compat-strongest';
                           compatHit = true;
-                        } else if (compatAxesSelected.length > 1) {
-                          const strongest = [...compatAxesSelected].sort((a, b) => a.target_uniq_count - b.target_uniq_count)[0];
-                          compatResult = await tryFetch({ [strongest.key]: strongest.anchor_value }, 'compat-strongest:' + strongest.key);
-                          if (compatResult.length > 0) {
-                            products = compatResult;
-                            attemptLabel = 'compat-strongest';
-                            compatHit = true;
-                          }
                         }
                       }
                     }
                   } catch (compatErr) {
                     console.log('[AccessoryFor] compat-axis error: ' + (compatErr as Error).message + ' silent-fallback');
                   }
-                  console.log('[AccessoryFor] compat: probe=' + probe.length + ' keys=' + compatKeysConsidered.length + ' skipped=' + compatKeysSkipped.length + ' axes=' + compatAxesSelected.length + ' attempted=' + compatAttempted + ' hit=' + compatHit + ' skipped_detail=' + JSON.stringify(compatKeysSkipped));
+                  console.log('[AccessoryFor] compat: src=' + compatSource + ' probe=' + probe.length + ' keys=' + compatKeysConsidered.length + ' skipped=' + compatKeysSkipped.length + ' axes=' + compatAxesSelected.length + ' attempted=' + compatAttempted + ' hit=' + compatHit + ' skipped_detail=' + JSON.stringify(compatKeysSkipped));
+
 
                   if (!compatHit) {
                     products = await tryFetch({ brend__brend: brand }, 'brand=' + brand);
@@ -7882,6 +7911,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   }
 
                   (anchorCandidate as unknown as { __afCompat?: unknown }).__afCompat = {
+                    source: compatSource,
                     probe_size: probe.length,
                     keys_considered: compatKeysConsidered,
                     keys_skipped: compatKeysSkipped,
@@ -7890,6 +7920,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     hit: compatHit,
                   };
                 }
+
 
               } else if (products.length === 0) {
                 products = await tryFetch(undefined, 'all');
