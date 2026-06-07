@@ -7845,64 +7845,25 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
 
                 if (!blockedByFamily) {
                   // ── NEW: compat-axes pass (data-driven, без хардкода) ──────────
-                  // Берём ключи из anchor.options, оставляем только те, что:
-                  //   1) НЕ в blacklist (shared) и НЕ в V1-extended (opisaniefayla,
-                  //      populyarnyy, novinka, garantiynyy, edinica_izmereniya);
-                  //   2) присутствуют в target schema (live или bootstrap);
-                  //   3) anchor-значение канонизируется в одно из values схемы.
-                  // Приоритет: ось, чьё canonical-значение встречается в pagetitle
-                  // якоря (например "GX53" в "Светильник NGX-R1-001-GX53") — первая.
-                  // collection/brand из compat-каскада исключаем: они идут по
-                  // отдельным веткам (collection-first / brand-fallback).
-                  const normCanon = (s: string) => s.toLowerCase().replace(/[\s\-_]+/g, '');
-                  const anchorPagetitleNorm = normCanon(anchorCandidate.pagetitle || '');
-                  const axisCandidates: Array<{ key: string; anchorRaw: string; canonical: string; inPagetitle: boolean }> = [];
-
-                  for (const o of opts) {
-                    if (typeof o.key !== 'string') continue;
-                    const k = o.key;
-                    compatMeta.candidates.push(k);
-                    if (isBlacklistedFacetKey(k) || isExcludedOption(k, false)) {
-                      compatMeta.axes_skipped.push({ key: k, reason: 'blacklisted' });
-                      continue;
-                    }
-                    if (k === collectionFilterKey || k.startsWith('brend__')) {
-                      compatMeta.axes_skipped.push({ key: k, reason: 'handled-by-collection-or-brand-cascade' });
-                      continue;
-                    }
-                    const schemaEntry = targetSchema.get(k);
-                    if (!schemaEntry || schemaEntry.values.size === 0) {
-                      compatMeta.axes_skipped.push({ key: k, reason: 'not-in-target-schema' });
-                      continue;
-                    }
-                    const anchorRaw = (o.value_ru || '').toString().trim();
-                    if (!anchorRaw) {
-                      compatMeta.axes_skipped.push({ key: k, reason: 'anchor-value-empty' });
-                      continue;
-                    }
-                    const anchorNorm = normCanon(anchorRaw);
-                    let canonical: string | null = null;
-                    for (const v of schemaEntry.values) {
-                      if (normCanon(v) === anchorNorm) { canonical = v; break; }
-                    }
-                    if (!canonical) {
-                      compatMeta.axes_skipped.push({ key: k, reason: 'anchor-value-no-canonical-match' });
-                      continue;
-                    }
-                    const inPagetitle = anchorPagetitleNorm.includes(normCanon(canonical));
-                    axisCandidates.push({ key: k, anchorRaw, canonical, inPagetitle });
-                  }
-
-                  // Сортировка: in_pagetitle сперва, дальше — стабильный по ключу.
-                  axisCandidates.sort((a, b) => {
-                    if (a.inPagetitle !== b.inPagetitle) return a.inPagetitle ? -1 : 1;
-                    return a.key.localeCompare(b.key);
+                  // Логика вынесена в ./compat-axes.ts (selectCompatAxes) ради
+                  // unit-тестируемости. Контракт: ключ оси проходит, если
+                  //   1) НЕ blacklisted (shared + V1 isExcludedOption(extended));
+                  //   2) присутствует в target schema (live или bootstrap);
+                  //   3) anchor-значение канонизуется в одно из values схемы.
+                  // Приоритет: ось, чьё canonical-значение есть в pagetitle якоря.
+                  const compatRes = selectCompatAxes({
+                    anchorOptions: opts,
+                    targetSchema,
+                    anchorPagetitle: anchorCandidate.pagetitle || '',
+                    extraSkipKeyPredicate: (k) => isExcludedOption(k, false),
                   });
-                  compatMeta.axes_selected = axisCandidates.map((a) => ({
+                  compatMeta.candidates = compatRes.candidates;
+                  compatMeta.axes_skipped = compatRes.skipped;
+                  compatMeta.axes_selected = compatRes.axes.map((a) => ({
                     key: a.key, anchor_value_raw: a.anchorRaw, anchor_value_canonical: a.canonical, in_pagetitle: a.inPagetitle,
                   }));
 
-                  for (const axis of axisCandidates) {
+                  for (const axis of compatRes.axes) {
                     const res = await tryFetch({ [axis.key]: axis.canonical }, `compat=${axis.key}`);
                     if (res.length > 0) {
                       products = res;
@@ -7911,6 +7872,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       break;
                     }
                   }
+
 
                   // Brand-fallback (без изменений).
                   if (products.length === 0 && brand) {
