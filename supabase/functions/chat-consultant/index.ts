@@ -7871,31 +7871,35 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       }
                     }
 
-                      if (compatAxesSelected.length > 0) {
-                        compatAttempted = true;
-                        const allFilters: Record<string, string> = {};
-                        for (const a of compatAxesSelected) allFilters[a.key] = a.anchor_value;
-                        const allLabel = 'compat-all:' + compatAxesSelected.map((a) => a.key).join(',');
-                        let compatResult = await tryFetch(allFilters, allLabel);
+                    if (compatAxesSelected.length > 0) {
+                      compatAttempted = true;
+                      const allFilters: Record<string, string> = {};
+                      for (const a of compatAxesSelected) allFilters[a.key] = a.anchor_value;
+                      const allLabel = 'compat-all[' + compatSource + ']:' + compatAxesSelected.map((a) => a.key).join(',');
+                      let compatResult = await tryFetch(allFilters, allLabel);
+                      if (compatResult.length > 0) {
+                        products = compatResult;
+                        attemptLabel = 'compat-all';
+                        compatHit = true;
+                      } else if (compatAxesSelected.length > 1) {
+                        // strongest = первая selected ось (детерминистично, без
+                        // вторичных весов — facet-schema порядок ≈ user-visible
+                        // приоритет; partition-axis порядок ≈ Map insertion order
+                        // из anchor.options, который и есть API-порядок).
+                        const strongest = compatAxesSelected[0];
+                        compatResult = await tryFetch({ [strongest.key]: strongest.anchor_value }, 'compat-strongest[' + compatSource + ']:' + strongest.key);
                         if (compatResult.length > 0) {
                           products = compatResult;
-                          attemptLabel = 'compat-all';
+                          attemptLabel = 'compat-strongest';
                           compatHit = true;
-                        } else if (compatAxesSelected.length > 1) {
-                          const strongest = [...compatAxesSelected].sort((a, b) => a.target_uniq_count - b.target_uniq_count)[0];
-                          compatResult = await tryFetch({ [strongest.key]: strongest.anchor_value }, 'compat-strongest:' + strongest.key);
-                          if (compatResult.length > 0) {
-                            products = compatResult;
-                            attemptLabel = 'compat-strongest';
-                            compatHit = true;
-                          }
                         }
                       }
                     }
                   } catch (compatErr) {
                     console.log('[AccessoryFor] compat-axis error: ' + (compatErr as Error).message + ' silent-fallback');
                   }
-                  console.log('[AccessoryFor] compat: probe=' + probe.length + ' keys=' + compatKeysConsidered.length + ' skipped=' + compatKeysSkipped.length + ' axes=' + compatAxesSelected.length + ' attempted=' + compatAttempted + ' hit=' + compatHit + ' skipped_detail=' + JSON.stringify(compatKeysSkipped));
+                  console.log('[AccessoryFor] compat: src=' + compatSource + ' probe=' + probe.length + ' keys=' + compatKeysConsidered.length + ' skipped=' + compatKeysSkipped.length + ' axes=' + compatAxesSelected.length + ' attempted=' + compatAttempted + ' hit=' + compatHit + ' skipped_detail=' + JSON.stringify(compatKeysSkipped));
+
 
                   if (!compatHit) {
                     products = await tryFetch({ brend__brend: brand }, 'brand=' + brand);
