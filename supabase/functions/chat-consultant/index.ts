@@ -32,6 +32,10 @@ import {
   extractOriginalTraits,
   filterStructuralMarkings,
 } from './replacement-traits.ts';
+import {
+  FACET_BLACKLIST_KEYS as SHARED_FACET_BLACKLIST_KEYS,
+  isBlacklistedFacetKey,
+} from '../_shared/facet-blacklist.ts';
 
 // Per-request async context (carries reqId implicitly through all awaits inside `serve`).
 // Used by Degraded-mode tracker so deeply nested catalog helpers do NOT need to thread
