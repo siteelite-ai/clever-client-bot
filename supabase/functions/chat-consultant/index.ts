@@ -7744,34 +7744,91 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               let familyAnchorValue: string | null = null;
               let familyTargetValuesSample: string[] = [];
 
+              // Compat-block meta (новый детерминированный пайплайн от 2026-06-07).
+              // Axes выбираются из пересечения anchor.options × target schema
+              // ПОСЛЕ blacklist (исключаем технический мусор и V1-extended поля
+              // типа opisaniefayla / populyarnyy). Значение анкера канонизируется
+              // против реальных значений target-категории (lowercase + удаление
+              // пробелов/дефисов/подчёркиваний). Без канонизации ось пропускается.
+              const compatMeta: {
+                schema_source: 'live' | 'bootstrap' | 'none';
+                schema_keys: number;
+                candidates: string[];
+                axes_selected: Array<{ key: string; anchor_value_raw: string; anchor_value_canonical: string; in_pagetitle: boolean }>;
+                axes_skipped: Array<{ key: string; reason: string }>;
+                hit: { key: string; anchor_value_canonical: string; count: number } | null;
+              } = {
+                schema_source: 'none',
+                schema_keys: 0,
+                candidates: [],
+                axes_selected: [],
+                axes_skipped: [],
+                hit: null,
+              };
+
               const collectionFilterKey = 'kollekciya__kollekciya';
               if (collection) {
                 products = await tryFetch({ [collectionFilterKey]: collection }, `collection=${collection}`);
                 if (products.length > 0) attemptLabel = 'collection';
               }
 
-              if (products.length === 0 && brand) {
-                // Probe target schema before brand-fallback.
+              if (products.length === 0) {
+                // Probe (используется и для family-guard, и для bootstrap-схемы).
                 const probe = await tryFetch(undefined, 'probe-target-schema');
 
-                if (collection) {
-                  // Collect actual values for the SAME key the collection-attempt used.
-                  const targetValues = new Set<string>();
+                // Target schema: live /categories/options (через resolvedTargetCategory),
+                // fallback на bootstrap из probe-товаров. Schema нужна для:
+                //  (a) family-guard: реальные значения kollekciya__kollekciya;
+                //  (b) compat-axes: пересечение ключей + канонизация значений.
+                const targetSchema: Map<string, { caption: string; values: Set<string> }> = new Map();
+                if (resolvedTargetCategory) {
+                  try {
+                    const live = await getCategoryOptionsSchema(resolvedTargetCategory, appSettings.volt220_api_token!);
+                    if (live.schema && live.schema.size > 0) {
+                      for (const [k, v] of live.schema.entries()) targetSchema.set(k, { caption: v.caption, values: new Set(v.values) });
+                      compatMeta.schema_source = 'live';
+                    }
+                  } catch (e) {
+                    console.log(`[AccessoryFor] live schema fetch failed: ${(e as Error).message} — bootstrap fallback`);
+                  }
+                }
+                if (compatMeta.schema_source === 'none' && probe.length > 0) {
+                  // Bootstrap: агрегируем options[] из probe-товаров (как в V2 §4.10.1).
                   for (const p of probe) {
-                    const po = (p.options || []) as Array<{ key?: string; value_ru?: string }>;
-                    for (const o of po) {
+                    for (const o of (p.options || []) as Array<{ key?: string; value_ru?: string; caption_ru?: string }>) {
+                      if (typeof o.key !== 'string') continue;
+                      if (isExcludedOption(o.key, false)) continue;
+                      const val = (o.value_ru || '').toString().trim();
+                      if (!val) continue;
+                      const entry = targetSchema.get(o.key) || { caption: (o.caption_ru || o.key).toString(), values: new Set<string>() };
+                      entry.values.add(val);
+                      targetSchema.set(o.key, entry);
+                    }
+                  }
+                  if (targetSchema.size > 0) compatMeta.schema_source = 'bootstrap';
+                }
+                compatMeta.schema_keys = targetSchema.size;
+
+                // Family-guard: только на оси collection (исторический контракт).
+                if (collection) {
+                  const targetCollectionValues = new Set<string>(targetSchema.get(collectionFilterKey)?.values ?? []);
+                  // Union с probe (если live-схема не содержит коллекцию для этой
+                  // категории, а товары — содержат).
+                  for (const p of probe) {
+                    for (const o of (p.options || []) as Array<{ key?: string; value_ru?: string }>) {
                       if (o.key === collectionFilterKey && typeof o.value_ru === 'string' && o.value_ru.trim()) {
-                        targetValues.add(o.value_ru.trim());
+                        targetCollectionValues.add(o.value_ru.trim());
                       }
                     }
                   }
-                  const normalized = collection.trim().toLowerCase();
-                  const hasMatch = [...targetValues].some((v) => v.toLowerCase() === normalized);
-                  if (targetValues.size > 0 && !hasMatch) {
+                  const normCanon = (s: string) => s.toLowerCase().replace(/[\s\-_]+/g, '');
+                  const collectionNorm = normCanon(collection);
+                  const hasMatch = [...targetCollectionValues].some((v) => normCanon(v) === collectionNorm);
+                  if (targetCollectionValues.size > 0 && !hasMatch) {
                     blockedByFamily = true;
                     familyKey = collectionFilterKey;
                     familyAnchorValue = collection;
-                    familyTargetValuesSample = [...targetValues].slice(0, 5);
+                    familyTargetValuesSample = [...targetCollectionValues].slice(0, 5);
                     console.log(
                       `[AccessoryFor] family-guard BLOCKED brand-fallback. family_key=${familyKey} anchor_value="${familyAnchorValue}" target_values_sample=${JSON.stringify(familyTargetValuesSample)}`
                     );
@@ -7787,16 +7844,86 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 }
 
                 if (!blockedByFamily) {
-                  products = await tryFetch({ brend__brend: brand }, `brand=${brand}`);
-                  if (products.length > 0) attemptLabel = 'brand';
-                  if (products.length === 0) {
+                  // ── NEW: compat-axes pass (data-driven, без хардкода) ──────────
+                  // Берём ключи из anchor.options, оставляем только те, что:
+                  //   1) НЕ в blacklist (shared) и НЕ в V1-extended (opisaniefayla,
+                  //      populyarnyy, novinka, garantiynyy, edinica_izmereniya);
+                  //   2) присутствуют в target schema (live или bootstrap);
+                  //   3) anchor-значение канонизируется в одно из values схемы.
+                  // Приоритет: ось, чьё canonical-значение встречается в pagetitle
+                  // якоря (например "GX53" в "Светильник NGX-R1-001-GX53") — первая.
+                  // collection/brand из compat-каскада исключаем: они идут по
+                  // отдельным веткам (collection-first / brand-fallback).
+                  const normCanon = (s: string) => s.toLowerCase().replace(/[\s\-_]+/g, '');
+                  const anchorPagetitleNorm = normCanon(anchorCandidate.pagetitle || '');
+                  const axisCandidates: Array<{ key: string; anchorRaw: string; canonical: string; inPagetitle: boolean }> = [];
+
+                  for (const o of opts) {
+                    if (typeof o.key !== 'string') continue;
+                    const k = o.key;
+                    compatMeta.candidates.push(k);
+                    if (isBlacklistedFacetKey(k) || isExcludedOption(k, false)) {
+                      compatMeta.axes_skipped.push({ key: k, reason: 'blacklisted' });
+                      continue;
+                    }
+                    if (k === collectionFilterKey || k.startsWith('brend__')) {
+                      compatMeta.axes_skipped.push({ key: k, reason: 'handled-by-collection-or-brand-cascade' });
+                      continue;
+                    }
+                    const schemaEntry = targetSchema.get(k);
+                    if (!schemaEntry || schemaEntry.values.size === 0) {
+                      compatMeta.axes_skipped.push({ key: k, reason: 'not-in-target-schema' });
+                      continue;
+                    }
+                    const anchorRaw = (o.value_ru || '').toString().trim();
+                    if (!anchorRaw) {
+                      compatMeta.axes_skipped.push({ key: k, reason: 'anchor-value-empty' });
+                      continue;
+                    }
+                    const anchorNorm = normCanon(anchorRaw);
+                    let canonical: string | null = null;
+                    for (const v of schemaEntry.values) {
+                      if (normCanon(v) === anchorNorm) { canonical = v; break; }
+                    }
+                    if (!canonical) {
+                      compatMeta.axes_skipped.push({ key: k, reason: 'anchor-value-no-canonical-match' });
+                      continue;
+                    }
+                    const inPagetitle = anchorPagetitleNorm.includes(normCanon(canonical));
+                    axisCandidates.push({ key: k, anchorRaw, canonical, inPagetitle });
+                  }
+
+                  // Сортировка: in_pagetitle сперва, дальше — стабильный по ключу.
+                  axisCandidates.sort((a, b) => {
+                    if (a.inPagetitle !== b.inPagetitle) return a.inPagetitle ? -1 : 1;
+                    return a.key.localeCompare(b.key);
+                  });
+                  compatMeta.axes_selected = axisCandidates.map((a) => ({
+                    key: a.key, anchor_value_raw: a.anchorRaw, anchor_value_canonical: a.canonical, in_pagetitle: a.inPagetitle,
+                  }));
+
+                  for (const axis of axisCandidates) {
+                    const res = await tryFetch({ [axis.key]: axis.canonical }, `compat=${axis.key}`);
+                    if (res.length > 0) {
+                      products = res;
+                      attemptLabel = 'compat';
+                      compatMeta.hit = { key: axis.key, anchor_value_canonical: axis.canonical, count: res.length };
+                      break;
+                    }
+                  }
+
+                  // Brand-fallback (без изменений).
+                  if (products.length === 0 && brand) {
+                    products = await tryFetch({ brend__brend: brand }, `brand=${brand}`);
+                    if (products.length > 0) attemptLabel = 'brand';
+                  }
+
+                  // All — используем probe (без лишнего HTTP).
+                  if (products.length === 0 && probe.length > 0) {
                     products = probe;
-                    if (products.length > 0) attemptLabel = 'all';
+                    attemptLabel = 'all';
                   }
                 }
-              } else if (products.length === 0) {
-                products = await tryFetch(undefined, 'all');
-                if (products.length > 0) attemptLabel = 'all';
               }
 
               if (!blockedByFamily && products.length > 0) {
@@ -7821,6 +7948,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     anchor_value: familyAnchorValue,
                     target_values_sample: familyTargetValuesSample,
                   },
+                  compat: compatMeta,
                   target_category: targetNoun,
                   resolved_category: resolvedTargetCategory,
                   displayed: foundProducts.length,
