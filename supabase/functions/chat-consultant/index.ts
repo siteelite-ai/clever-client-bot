@@ -8346,18 +8346,54 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     // отфильтрованную выдачу без этого значения = обман пользователя.
                     // Сразу уходим в honest-empty с честным контекстом.
                     if (resolverUnresolvedDetails.length > 0) {
-                      const attemptedFacets = buildAttemptedFacets();
-                      qfv2HonestEmptyContext = {
-                        noun,
-                        originalQuery: userMessage || noun,
-                        attemptedFacets,
-                      };
-                      displayList = [];
-                      branchTag = 'qfv2_honest_empty_partial';
-                      const firstUnresolvedKey = resolverUnresolvedDetails[0].key;
-                      qfV2DroppedFacetCaption = bootstrapSchema.get(firstUnresolvedKey)?.caption || firstUnresolvedKey || null;
-                      console.log(`[QueryFirstV2] query_first_v2_honest_empty_partial noun="${noun}" unresolvedDetails=${JSON.stringify(resolverUnresolvedDetails)} attemptedFacets=${JSON.stringify(attemptedFacets)} elapsed=${Date.now() - qfStart}ms`);
-                      logAddStep({ step: 'qfv2-honest-empty-partial', total: 0, meta: { noun, unresolvedDetails: resolverUnresolvedDetails.map(d => ({ modifier: d.modifier, key: d.key, caption: d.caption, requestedValue: d.requestedValue, availableValues: d.availableValues.slice(0, 8) })), attemptedFacets } });
+                      // JARGON-RECOVERY (2026-06-07): прежде чем сдаться в honest-empty-partial,
+                      // даём jargon-fallback шанс перевести жаргонный термин («лампа кукуруза»
+                      // → «corn lamp») и переиграть поиск. Зеркалит паттерн unfulfilled-split
+                      // (см. ниже строку 8425). Silent fallback при пустоте/исключении.
+                      let jargonRecovered = false;
+                      try {
+                        const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
+                        const jr = await tryJargonFallback({
+                          originalQuery: userMessage || noun,
+                          openrouterKey: appSettings.openrouter_api_key!,
+                          searchFn: (alt) => searchProductsByCandidate(
+                            { query: alt, brand: null, category: null, min_price: null, max_price: null },
+                            appSettings.volt220_api_token!,
+                            10,
+                          ),
+                          log: (event, data) => console.log(`[Chat req=${reqId}] [QFv2-JargonRecovery] ${event}`, data ?? {}),
+                        });
+                        const sanitized = ((jr.products || []) as Product[])
+                          .filter(p => typeof p.price === 'number' && (p.price as number) > 0);
+                        if (sanitized.length > 0) {
+                          displayList = sanitized.slice(0, 10);
+                          branchTag = 'qfv2_jargon_recovery';
+                          totalCollectedBranch = 'jargon-fallback';
+                          jargonRecovered = true;
+                          console.log(`[QueryFirstV2] query_first_v2_jargon_recovery noun="${noun}" alt="${jr.matchedAlternative}" count=${sanitized.length} elapsed=${Date.now() - qfStart}ms`);
+                          logAddStep({ step: 'qfv2-jargon-recovery', total: sanitized.length, meta: { noun, originalQuery: userMessage || noun, matchedAlternative: jr.matchedAlternative, dropped_facet: bootstrapSchema.get(resolverUnresolvedDetails[0].key)?.caption || resolverUnresolvedDetails[0].key } });
+                        } else {
+                          logAddStep({ step: 'qfv2-jargon-recovery-skip', meta: { reason: 'empty', noun } });
+                        }
+                      } catch (jrErr) {
+                        console.warn(`[Chat req=${reqId}] [QFv2-JargonRecovery] silent fail:`, jrErr instanceof Error ? jrErr.message : String(jrErr));
+                        logAddStep({ step: 'qfv2-jargon-recovery-skip', meta: { reason: 'error', noun, error: jrErr instanceof Error ? jrErr.message : String(jrErr) } });
+                      }
+
+                      if (!jargonRecovered) {
+                        const attemptedFacets = buildAttemptedFacets();
+                        qfv2HonestEmptyContext = {
+                          noun,
+                          originalQuery: userMessage || noun,
+                          attemptedFacets,
+                        };
+                        displayList = [];
+                        branchTag = 'qfv2_honest_empty_partial';
+                        const firstUnresolvedKey = resolverUnresolvedDetails[0].key;
+                        qfV2DroppedFacetCaption = bootstrapSchema.get(firstUnresolvedKey)?.caption || firstUnresolvedKey || null;
+                        console.log(`[QueryFirstV2] query_first_v2_honest_empty_partial noun="${noun}" unresolvedDetails=${JSON.stringify(resolverUnresolvedDetails)} attemptedFacets=${JSON.stringify(attemptedFacets)} elapsed=${Date.now() - qfStart}ms`);
+                        logAddStep({ step: 'qfv2-honest-empty-partial', total: 0, meta: { noun, unresolvedDetails: resolverUnresolvedDetails.map(d => ({ modifier: d.modifier, key: d.key, caption: d.caption, requestedValue: d.requestedValue, availableValues: d.availableValues.slice(0, 8) })), attemptedFacets } });
+                      }
                     } else if (Object.keys(resolvedFilters).length > 0) {
                       const finalStartMs = Date.now();
                       const final = await searchProductsByCandidate(
