@@ -7801,8 +7801,9 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // атрибуты отсеиваются авто. Исключаем kollekciya__*/brend__*.
                   let compatAttempted = false;
                   let compatHit = false;
-                  let compatAxesSelected: Array<{ key: string; anchor_value: string; target_uniq_count: number }> = [];
+                  let compatAxesSelected: Array<{ key: string; anchor_value: string; target_uniq_count: number; dominant_share: number }> = [];
                   const compatKeysConsidered: string[] = [];
+                  const compatKeysSkipped: Array<{ key: string; reason: string }> = [];
                   try {
                     if (probe.length >= 5) {
                       const anchorOpts = (anchorCandidate.options || []) as Array<{ key?: string; value_ru?: string }>;
@@ -7814,24 +7815,37 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                         }
                       }
                       const threshold = Math.max(8, Math.floor(0.3 * probe.length));
+                      const DOMINANT_COVERAGE_MAX = 0.9;
                       for (const [K, V_a] of kAnchor.entries()) {
                         compatKeysConsidered.push(K);
-                        const values = new Set<string>();
+                        // Подсчёт частот значений K по probe.
+                        const counts = new Map<string, number>();
                         for (const p of probe) {
                           const po = (p.options || []) as Array<{ key?: string; value_ru?: string }>;
                           for (const o of po) {
                             if (o.key === K && typeof o.value_ru === 'string' && o.value_ru.trim()) {
-                              values.add(o.value_ru.trim());
+                              const v = o.value_ru.trim();
+                              counts.set(v, (counts.get(v) || 0) + 1);
                             }
                           }
                         }
-                        if (values.size === 0) continue;
-                        if (values.size > threshold) continue;
+                        const values = new Set(counts.keys());
+                        if (values.size === 0) { compatKeysSkipped.push({ key: K, reason: 'absent-in-target' }); continue; }
+                        if (values.size === 1) { compatKeysSkipped.push({ key: K, reason: 'uniq=1' }); continue; }
+                        if (values.size > threshold) { compatKeysSkipped.push({ key: K, reason: 'too-many-uniq:' + values.size }); continue; }
+                        const totalAnnotated = [...counts.values()].reduce((a, b) => a + b, 0);
+                        const dominantCount = Math.max(...counts.values());
+                        const dominantShare = totalAnnotated > 0 ? dominantCount / totalAnnotated : 0;
+                        if (dominantShare >= DOMINANT_COVERAGE_MAX) {
+                          compatKeysSkipped.push({ key: K, reason: 'dominant-share:' + dominantShare.toFixed(2) });
+                          continue;
+                        }
                         const V_a_lc = V_a.toLowerCase();
                         const hasMatch = [...values].some((v) => v.toLowerCase() === V_a_lc);
-                        if (!hasMatch) continue;
-                        compatAxesSelected.push({ key: K, anchor_value: V_a, target_uniq_count: values.size });
+                        if (!hasMatch) { compatKeysSkipped.push({ key: K, reason: 'anchor-value-absent' }); continue; }
+                        compatAxesSelected.push({ key: K, anchor_value: V_a, target_uniq_count: values.size, dominant_share: dominantShare });
                       }
+
                       if (compatAxesSelected.length > 0) {
                         compatAttempted = true;
                         const allFilters: Record<string, string> = {};
