@@ -7870,6 +7870,11 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     anchor_value: familyAnchorValue,
                     target_values_sample: familyTargetValuesSample,
                   },
+                  compat: {
+                    keys: compatKeys,
+                    attempted: compatAttempted,
+                    hit: compatHit,
+                  },
                   target_category: targetNoun,
                   resolved_category: resolvedTargetCategory,
                   displayed: foundProducts.length,
