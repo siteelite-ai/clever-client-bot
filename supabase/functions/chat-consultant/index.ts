@@ -9355,13 +9355,25 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       console.log(`[Chat] Replacement matcher trait-only=${JSON.stringify(rResolved)} (no user modifiers)`);
                     }
 
-                    const rLiteral = replModifiers.length > 0 ? replModifiers.join(' ') : null;
-                    const qText = suppressResolvedFromQuery(
-                      rLiteral,
-                      extractResolvedValues(rResolved),
-                      replModifiers,
-                      { allowEmptyQuery: false, path: 'replacement-matcher' },
-                    );
+                    // RC1 fix: при наличии реальных traitMust от resolved originalProduct
+                    // НЕ пускаем замусоренные SKU-токены классификатора в ?query=.
+                    // Trait-фильтры — ground truth, query=SKU только сужает выдачу до
+                    // самого анчора (или 0). Если traits пустые — старая логика литерала.
+                    const traitOnlyMode = !!originalProduct && Object.keys(traitMust).length > 0;
+                    const rLiteral = traitOnlyMode
+                      ? null
+                      : (replModifiers.length > 0 ? replModifiers.join(' ') : null);
+                    const qText = traitOnlyMode
+                      ? null
+                      : suppressResolvedFromQuery(
+                          rLiteral,
+                          extractResolvedValues(rResolved),
+                          replModifiers,
+                          { allowEmptyQuery: false, path: 'replacement-matcher' },
+                        );
+                    if (traitOnlyMode) {
+                      console.log(`[Chat] Replacement matcher trait-only mode: qText=null, traitMust=${JSON.stringify(traitMust)} (SKU-tokens suppressed from query)`);
+                    }
                     const rFiltRes = await Promise.all(replMatches.map(cat =>
                       searchProductsByCandidate(
                         { query: qText, brand: null, category: cat, min_price: null, max_price: replMaxPrice },
