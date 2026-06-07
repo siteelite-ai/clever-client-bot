@@ -263,3 +263,39 @@ partition-axis шаг исключает `kollekciya__*` и `brend__*` явно 
 после probe → при NLST отсутствующем в значениях коллекций рамок → `blockedByFamily=true`
 → partition-axis шаг не выполняется (он внутри `if (!blockedByFamily)`) → результат =
 `accessory-for-incompatible-collection`, как раньше.
+
+### 14. Источник истины compat-осей: facet-schema, а не probe
+
+**Запрос:** "Какая лампа подходит к этому светильнику: Светильник NGX-R1-001-GX53 белый 71 277 Navigator"
+
+**Дефект до фикса (2026-06-07):** partition-axis по probe выбирал мусорные оси
+(`opisaniefayla=Сертификат соответствия`, `populyarnyy=1`), а реальную ось
+`tip_cokolya=GX53` отбрасывал с `anchor-value-absent`, потому что в случайных 25
+пробных лампах GX53 не оказалось.
+
+**Фикс:**
+1. PRIMARY-источник compat-осей = `getCategoryOptionsSchema(resolvedTargetCategory)`
+   (live `/api/categories/options`, кэш 30мин, stale-on-error, legacy fallback).
+   Meta-поля (`opisaniefayla`, `populyarnyy`, `kodnomenklatury`, `fayl`,
+   `poiskovyy_zapros`, `novinka`, `ogranichennyy_prosmotr` и т.п.) в schema не
+   попадают — фильтруются автоматически без denylist.
+2. FALLBACK-источник = partition-axis по probe (когда schema пустая/недоступна).
+3. Проверка `anchor-value-absent` УБРАНА из обоих источников — probe слишком мал
+   для авторитетных выводов о значениях. Если фильтр даст 0 — это честный
+   family-mismatch, обрабатывается каскадом ниже (brand-fallback → all).
+
+**Acceptance:**
+- `meta.compat.source === "facet-schema"` (для категорий, где facets endpoint жив).
+- `meta.compat.axes_selected` содержит `tip_cokolya__*` с `anchor_value === "GX53"`.
+- `meta.compat.axes_selected` НЕ содержит `opisaniefayla`, `populyarnyy`,
+  `kodnomenklatury`, `fayl`, `poiskovyy_zapros`.
+- Все карточки — реальные GX53-лампы.
+
+### 15. Silent fallback на partition-axis при недоступности facets endpoint
+
+**Условие:** `getCategoryOptionsSchema` бросает / возвращает пустую schema.
+
+**Acceptance:**
+- `meta.compat.source === "partition-axis"`.
+- Поведение совпадает с Кейсом 12/13 (без `anchor-value-absent` cut'а).
+- Лог содержит `facet-schema fetch error: ... — fallback to partition-axis`.
