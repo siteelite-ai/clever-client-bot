@@ -7900,6 +7900,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   },
                   target_category: targetNoun,
                   resolved_category: resolvedTargetCategory,
+                  compat: (anchorCandidate as unknown as { __afCompat?: unknown }).__afCompat || null,
                   displayed: foundProducts.length,
                 },
               });
