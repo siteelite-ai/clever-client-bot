@@ -9465,17 +9465,22 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       weakenedReason,
                     };
                     console.log(`[Chat] [Path] WIN replacement matched_cats=${replMatches.length} count=${foundProducts.length} weakened=${weakened}${weakenedReason ? ' reason=' + weakenedReason : ''} elapsed=${Date.now() - replacementStart}ms`);
+                    logAddStep({ step: 'replacement-matcher', total: foundProducts.length, meta: { branch: 'win', matched_cats: replMatches.length, trait_keys: [...traitKeysSet], rResolved, qText, weakened, weakenedReason } });
                   } else {
                     console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS replacement reason=zero_after_filters matched_cats=${replMatches.length}`);
+                    logAddStep({ step: 'replacement-matcher', total: 0, meta: { branch: 'zero_after_filters', matched_cats: replMatches.length, trait_keys: [...traitKeysSet], rResolved, qText, pool_size: rPool.length } });
                   }
                 } else {
                   console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS replacement reason=zero_pool matched_cats=${replMatches.length}`);
+                  logAddStep({ step: 'replacement-matcher', total: 0, meta: { branch: 'zero_pool', matched_cats: replMatches.length, replCategory } });
                 }
               } else {
                 console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS replacement reason=matcher_empty replCategory="${replCategory}"`);
+                logAddStep({ step: 'replacement-matcher', total: 0, meta: { branch: 'matcher_empty', replCategory } });
               }
             } catch (rmErr) {
               console.log(`[Chat] [Path] FALLBACK_TO_BUCKETS replacement reason=${(rmErr as Error).message}`);
+              logAddStep({ step: 'replacement-matcher', total: 0, meta: { branch: 'exception', error: (rmErr as Error).message } });
             }
 
             if (!replacementWinResolved) {
