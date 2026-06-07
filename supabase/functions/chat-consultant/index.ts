@@ -7717,20 +7717,21 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 console.log(`[AccessoryFor] category resolve error: ${(e as Error).message} — fallback to ?query=`);
               }
 
-              const tryFetch = async (filters: Record<string, string> | undefined, label: string): Promise<Product[]> => {
+              const tryFetch = async (filters: Record<string, string> | undefined, label: string, limit = 20): Promise<Product[]> => {
                 const baseCandidate: SearchCandidate = resolvedTargetCategory
                   ? { query: null, brand: null, category: resolvedTargetCategory, min_price: null, max_price: null }
                   : { query: targetNoun, brand: null, category: null, min_price: null, max_price: null };
                 const res = await searchProductsByCandidate(
                   baseCandidate,
                   appSettings.volt220_api_token!,
-                  20,
+                  limit,
                   filters
                 );
                 const clean = res.filter((p: Product) => p && typeof p.price === 'number' && p.price > 0);
                 console.log(`[AccessoryFor] attempt=${label} → ${clean.length} priced products`);
                 return clean;
               };
+
 
               // Family-Guard (data-driven, no hardcoded keys/categories):
               // The signal is the SAME filter (key,value) that collection-attempt already
