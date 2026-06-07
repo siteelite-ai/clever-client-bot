@@ -7746,8 +7746,19 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               let familyKey: string | null = null;
               let familyAnchorValue: string | null = null;
               let familyTargetValuesSample: string[] = [];
+              let compatKeys: string[] = [];
+              let compatAttempted = false;
+              let compatHit = false;
 
               const collectionFilterKey = 'kollekciya__kollekciya';
+              const brandFilterKey = 'brend__brend';
+              // Data-agnostic blacklist: явная мета (цена/вес/страна/коды/гарантия/даты/
+              // упаковка/популярность/срок службы). Размеры НЕ блокируем — для аксессуаров
+              // это реальная ось совместимости (рамка↔коробка и т.п.).
+              const META_KEY_RE = /^(cena|ves|strana|kodnomenklatury|garantiya|data_|prodaetsya|populyarn|sredniy_nominal|obem_upakov)/i;
+              const isCompatKey = (k: string): boolean =>
+                k !== collectionFilterKey && k !== brandFilterKey && !META_KEY_RE.test(k);
+
               if (collection) {
                 products = await tryFetch({ [collectionFilterKey]: collection }, `collection=${collection}`);
                 if (products.length > 0) attemptLabel = 'collection';
@@ -7790,8 +7801,43 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 }
 
                 if (!blockedByFamily) {
-                  products = await tryFetch({ brend__brend: brand }, `brand=${brand}`);
-                  if (products.length > 0) attemptLabel = 'brand';
+                  // ── COMPAT-AXIS ATTEMPT (data-driven, no hardcoded keys) ──
+                  // K_compat = (keys(anchor.options) ∩ keys(probe[*].options)) \ meta \ {kollekciya, brend}
+                  // Берём значения из anchor.options. Если хоть один товар нашёлся —
+                  // используем (точнее, чем brand-fallback). 0 → silent fallback на brand.
+                  const targetKeys = new Set<string>();
+                  for (const p of probe) {
+                    const po = (p.options || []) as Array<{ key?: string }>;
+                    for (const o of po) {
+                      if (typeof o.key === 'string' && o.key.trim()) targetKeys.add(o.key);
+                    }
+                  }
+                  const compatFilters: Record<string, string> = {};
+                  for (const o of opts) {
+                    const k = typeof o.key === 'string' ? o.key : '';
+                    const v = typeof o.value_ru === 'string' ? o.value_ru.trim() : '';
+                    if (!k || !v) continue;
+                    if (!isCompatKey(k)) continue;
+                    if (!targetKeys.has(k)) continue;
+                    if (compatFilters[k]) continue; // первое непустое значение
+                    compatFilters[k] = v;
+                  }
+                  compatKeys = Object.keys(compatFilters);
+                  if (compatKeys.length > 0) {
+                    compatAttempted = true;
+                    console.log(`[AccessoryFor] compat-axis attempt keys=${JSON.stringify(compatKeys)}`);
+                    const compatProducts = await tryFetch(compatFilters, `compat=${compatKeys.join(',')}`);
+                    if (compatProducts.length > 0) {
+                      products = compatProducts;
+                      compatHit = true;
+                      attemptLabel = 'compat';
+                    }
+                  }
+
+                  if (products.length === 0) {
+                    products = await tryFetch({ [brandFilterKey]: brand }, `brand=${brand}`);
+                    if (products.length > 0) attemptLabel = 'brand';
+                  }
                   if (products.length === 0) {
                     products = probe;
                     if (products.length > 0) attemptLabel = 'all';
@@ -7823,6 +7869,11 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     family_key: familyKey,
                     anchor_value: familyAnchorValue,
                     target_values_sample: familyTargetValuesSample,
+                  },
+                  compat: {
+                    keys: compatKeys,
+                    attempted: compatAttempted,
+                    hit: compatHit,
                   },
                   target_category: targetNoun,
                   resolved_category: resolvedTargetCategory,
