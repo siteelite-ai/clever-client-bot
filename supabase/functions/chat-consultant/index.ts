@@ -9364,7 +9364,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     const rLiteral = traitOnlyMode
                       ? null
                       : (replModifiers.length > 0 ? replModifiers.join(' ') : null);
-                    const qText = traitOnlyMode
+                    qText = traitOnlyMode
                       ? null
                       : suppressResolvedFromQuery(
                           rLiteral,
