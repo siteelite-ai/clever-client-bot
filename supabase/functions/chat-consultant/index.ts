@@ -8160,7 +8160,6 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 if (pool.length === 0) {
                   console.log(`[QueryFirstV2] pool still empty after jargon → fallback to Category Resolver`);
                 } else {
-                } else {
                   // ── (3) Self-Bootstrap facet schema from the live pool.
                   // Format = exact V1 contract: Map<key, {caption, values: Set<string>}>.
                   // No /categories/options HTTP call. No category assumption.
