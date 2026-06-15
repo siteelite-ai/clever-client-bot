@@ -11163,6 +11163,7 @@ ${directAnswerBlock}
           const jargonResult = await tryJargonFallback({
             originalQuery: extractedIntent.originalQuery,
             openrouterKey: appSettings.openrouter_api_key,
+            productNoun: extractedIntent.candidates[0]?.query ?? null,
             searchFn: async (alt: string) => {
               return await searchProductsByCandidate(
                 { query: alt, brand: null, category: null, min_price: null, max_price: null },
