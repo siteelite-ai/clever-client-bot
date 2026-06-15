@@ -8401,10 +8401,11 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 let qfPreJargonAlt: string | null = null;
                 if (pool.length === 0 && enrichedQuery !== noun) {
                   try {
-                    const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts'); // F2.1 token threshold
+                    const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts'); // F2 productNoun exclusion
                     const jr = await tryJargonFallback({
                       originalQuery: userMessage || enrichedQuery,
                       openrouterKey: appSettings.openrouter_api_key!,
+                      productNoun: noun,
                       searchFn: (alt) => searchProductsByCandidate(
                         { query: alt, brand: null, category: null, min_price: null, max_price: null },
                         appSettings.volt220_api_token!,
