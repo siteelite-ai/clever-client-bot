@@ -8973,13 +8973,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                               const isResolved = resolvedValuesFolded.some(v => v.includes(f) || f.includes(v));
                               (isResolved ? resolvedOriginals : droppedOriginals).push(m);
                             }
+                            let canonicalJargonWon = false;
                             if (droppedOriginals.length >= 1 && resolvedOriginals.length >= 1) {
                               console.log(`[Chat req=${reqId}] [Unfulfilled-QFv2] split candidate: noun="${noun}" resolved=[${resolvedOriginals.join(',')}] dropped=[${droppedOriginals.join(',')}]`);
                               // Волна B2 (2026-06-15): canonical jargon priority over split.
-                              // Если ВЕСЬ исходный запрос имеет каноничный jargon-перевод
-                              // (например «лампа кукуруза» → «corn lamp») и он даёт ≥1 товара,
-                              // показываем канонический результат вместо split-render
-                              // «лампа Е27 + кукуруза». Data-agnostic: решает сама jargon-LLM.
+                              // «лампа кукуруза» → «corn lamp»: целостный канонический результат
+                              // вместо split-render «лампа Е27 + кукуруза». Data-agnostic.
                               try {
                                 const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
                                 const jrWhole = await tryJargonFallback({
@@ -8999,15 +8998,15 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                                   displayList = sanitizedWhole;
                                   branchTag = 'qfv2_jargon_recovery';
                                   totalCollectedBranch = 'jargon-fallback';
+                                  canonicalJargonWon = true;
                                   console.log(`[QueryFirstV2] query_first_v2_jargon_recovery_canonical noun="${noun}" alt="${jrWhole.matchedAlternative}" count=${sanitizedWhole.length} elapsed=${Date.now() - qfStart}ms (preempted split)`);
                                   logAddStep({ step: 'qfv2-jargon-recovery-canonical', total: sanitizedWhole.length, meta: { noun, originalQuery: userMessage || noun, matchedAlternative: jrWhole.matchedAlternative, droppedOriginals } });
-                                  // Skip split — canonical wins.
-                                  throw new Error('__canonical_jargon_wins__');
                                 }
                               } catch (canonErr) {
-                                if ((canonErr as Error)?.message === '__canonical_jargon_wins__') throw canonErr;
-                                // silent fall-through to split logic
+                                console.warn(`[Chat req=${reqId}] [QFv2-CanonicalJargon] silent fail:`, canonErr instanceof Error ? canonErr.message : String(canonErr));
                               }
+                            }
+                            if (!canonicalJargonWon && droppedOriginals.length >= 1 && resolvedOriginals.length >= 1) {
                               const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
                               const sanitize = (xs: Product[]) =>
                                 xs.filter(p => typeof p.price === 'number' && (p.price as number) > 0).slice(0, 3);
