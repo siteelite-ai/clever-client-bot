@@ -240,22 +240,10 @@ export async function tryJargonFallback(input: JargonFallbackInput): Promise<Jar
     return novel.some(tok => hay.includes(tok));
   };
 
-  // Token-кандидат — это одиночное слово, которое LLM выделила как ключевой
-  // jargon-термин (corn, кукуруза, ВВГнг, downlight). Настоящие jargon-слова
-  // редкие — возвращают единицы-десятки матчей. Если одиночный токен даёт
-  // >MAX_TOKEN_RAW результатов, это просто широкая категория (кабель/лампа/
-  // провод), а не специализированный термин. Отбрасываем — иначе подменяем
-  // узкий запрос «медный негорючий» на каталожную свалку «кабель».
-  const MAX_TOKEN_RAW = 25;
-
   for (const cand of candidates) {
     try {
       const products = await input.searchFn(cand.query);
       if (Array.isArray(products) && products.length > 0) {
-        if (cand.source === "token" && products.length > MAX_TOKEN_RAW) {
-          log("jargon.token_too_broad", { alternative: cand.query, parent: cand.parent, rawCount: products.length, threshold: MAX_TOKEN_RAW });
-          continue;
-        }
         const novel = novelTokensOf(cand.query);
         const filtered = products.filter(p => productMatchesNovelTokens(p, novel));
         if (filtered.length === 0) {
