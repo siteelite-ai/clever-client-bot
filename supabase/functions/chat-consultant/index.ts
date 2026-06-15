@@ -5163,6 +5163,16 @@ export function buildDeterministicShortCircuitContent(params: {
     ? `\n\nПодобрано ещё ${remaining} ${pluralizeRu(remaining, ['вариант', 'варианта', 'вариантов'])} — показать остальные?`
     : '';
 
+  // Wave B1: honest brand-unavailable prefix перед стандартным intro.
+  // Не дублирует intro — заменяет его, чтобы один блок текста читался цельно.
+  if (brandUnavailable && brandUnavailable.brand) {
+    const altsPart = brandUnavailable.availableBrands.length > 0
+      ? ` Похожие позиции от других брендов в нашем каталоге (${brandUnavailable.availableBrands.join(', ')}):`
+      : ' Похожие позиции из нашего каталога:';
+    const brandIntro = `Прямого аналога **${brandUnavailable.brand}** в нашем каталоге не нашёл.${altsPart}`;
+    return `${brandIntro}\n\n${cards}${tail}`.trim();
+  }
+
   return `${intro}\n\n${cards}${tail}`.trim();
 }
 
