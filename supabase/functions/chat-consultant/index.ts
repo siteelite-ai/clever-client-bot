@@ -6314,6 +6314,18 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     // userMessage, чтобы pipeline пошёл по нужной ветке.
     // Систематично: data-agnostic, через jargon-clarify shared-хелпер.
     let jargonClarifyApplied: 'jargon' | 'noun' | null = null;
+    // pendingJargonClarify (V1, 2026-06-15): унифицированный capture для всех
+    // jargon-win сайтов pipeline (EARLY, QFv2 pre/pool/last-chance/recovery/
+    // canonical, late legacy). Любой сайт, где tryJargonFallback подобрал
+    // matchedAlternative, СТАВИТ этот объект — единый эмиттер перед
+    // shouldUseDeterministicProductRender отдаст clarify-ответ вместо
+    // молчаливого рендера карточек. См. mem://features/jargon-clarify.
+    let pendingJargonClarify: {
+      matchedAlternative: string;
+      noun: string;
+      originalQuery: string;
+      jargonCount: number;
+    } | null = null;
     const jargonClarifySlot = dialogSlots['jargon_clarify'];
     if (jargonClarifySlot && jargonClarifySlot.intent === 'jargon_clarify' && jargonClarifySlot.jargon_meta) {
       try {
