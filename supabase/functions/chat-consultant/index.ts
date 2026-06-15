@@ -8489,6 +8489,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       pool = sanitized;
                       qfPreJargonWin = true;
                       qfPreJargonAlt = jr.matchedAlternative;
+                      pendingJargonClarify = { matchedAlternative: jr.matchedAlternative!, noun, originalQuery: userMessage || enrichedQuery, jargonCount: sanitized.length };
                       console.log(`[QueryFirstV2] query_first_v2_pre_jargon noun="${noun}" alt="${jr.matchedAlternative}" count=${pool.length}`);
                       logAddStep({ step: 'qfv2-pre-jargon', total: pool.length, meta: { noun, originalQuery: userMessage || enrichedQuery, matchedAlternative: jr.matchedAlternative } });
                     } else {
