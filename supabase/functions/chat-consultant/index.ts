@@ -7387,31 +7387,74 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             });
             if (det.triggered) {
               console.log(`[Metric] c5_broad_detected_total reason=${det.reason} category="${det.category ?? ''}" mods=${det.modifiersCount}`);
-              const { askBroadClarify } = await import('../_shared/c5-broad-clarify.ts');
-              const mods: string[] = Array.isArray(classification.search_modifiers)
-                ? (classification.search_modifiers as unknown[]).filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
-                : [];
-              const clarify = await askBroadClarify({
-                originalQuery: userMessage,
-                category: det.category,
-                modifiers: mods,
-                openrouterKey: appSettings.openrouter_api_key,
-                log: (event, data) => console.log(`[C5] ${event}`, data ?? {}),
-              });
-              if (clarify.llmOk && clarify.question) {
-                broadClarifyResponse = {
-                  content: clarify.question,
-                  quick_replies: clarify.options.map((o) => ({ label: o, value: o })),
-                  meta: { reason: det.reason, modifiers_count: det.modifiersCount, category: det.category },
-                };
-                console.log(`[Metric] c5_broad_clarify_emitted_total reason=${det.reason} options=${clarify.options.length} ms=${clarify.elapsedMs}`);
-                logAddStep({
-                  step: 'c5-clarify-broad',
-                  ms: clarify.elapsedMs,
-                  meta: { reason: det.reason, category: det.category, mods: det.modifiersCount, options: clarify.options.length },
+
+              // === C5 PROBE STEP (Wave C5.1, 2026-06-15) ===
+              // Перед Gate 2 (LLM-clarify) делаем легковесный probe `/products?query=<raw>&per_page=1`,
+              // чтобы знать реальный размер выборки. Если total ≤ C5_PROBE_SKIP_THRESHOLD — silent
+              // fallback на обычный pipeline (запрос узок сам по себе, clarify создаст лишнее трение).
+              // Паттерн: §4.4 Price-ladder / QFv2 pool-rescue. Data-agnostic, не self-narrowing.
+              const C5_PROBE_SKIP_THRESHOLD = 30;
+              let probeSkip = false;
+              if (appSettings.volt220_api_token) {
+                const probeT0 = Date.now();
+                try {
+                  const probeParams = new URLSearchParams();
+                  probeParams.append('query', userMessage);
+                  probeParams.append('per_page', '1');
+                  const probeResp = await fetchCatalogWithRetry(
+                    `${VOLT220_API_URL}?${probeParams}`,
+                    appSettings.volt220_api_token,
+                    'C5Probe',
+                    2500,
+                  );
+                  const probeMs = Date.now() - probeT0;
+                  if (probeResp) {
+                    const probeRaw = await probeResp.json();
+                    const probeData = probeRaw?.data || probeRaw;
+                    const probeTotal: number = Number(probeData?.pagination?.total ?? 0) || 0;
+                    console.log(`[Metric] c5_broad_probe_total total=${probeTotal} ms=${probeMs}`);
+                    if (probeTotal === 0) {
+                      console.log(`[Metric] c5_broad_probe_skip total=0 reason=empty`);
+                      probeSkip = true; // QFv2/jargon-fallback разберутся дальше
+                    } else if (probeTotal <= C5_PROBE_SKIP_THRESHOLD) {
+                      console.log(`[Metric] c5_broad_probe_skip total=${probeTotal} reason=narrow`);
+                      probeSkip = true;
+                    }
+                  } else {
+                    console.log(`[C5] probe no response ms=${probeMs} → continue to Gate 2`);
+                  }
+                } catch (probeErr) {
+                  console.log(`[C5] probe error (continue to Gate 2): ${(probeErr as Error).message}`);
+                }
+              }
+
+              if (!probeSkip) {
+                const { askBroadClarify } = await import('../_shared/c5-broad-clarify.ts');
+                const mods: string[] = Array.isArray(classification.search_modifiers)
+                  ? (classification.search_modifiers as unknown[]).filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
+                  : [];
+                const clarify = await askBroadClarify({
+                  originalQuery: userMessage,
+                  category: det.category,
+                  modifiers: mods,
+                  openrouterKey: appSettings.openrouter_api_key,
+                  log: (event, data) => console.log(`[C5] ${event}`, data ?? {}),
                 });
-              } else {
-                console.log(`[C5] silent fallback: llmOk=${clarify.llmOk} questionLen=${clarify.question.length} ms=${clarify.elapsedMs}`);
+                if (clarify.llmOk && clarify.question) {
+                  broadClarifyResponse = {
+                    content: clarify.question,
+                    quick_replies: clarify.options.map((o) => ({ label: o, value: o })),
+                    meta: { reason: det.reason, modifiers_count: det.modifiersCount, category: det.category },
+                  };
+                  console.log(`[Metric] c5_broad_clarify_emitted_total reason=${det.reason} options=${clarify.options.length} ms=${clarify.elapsedMs}`);
+                  logAddStep({
+                    step: 'c5-clarify-broad',
+                    ms: clarify.elapsedMs,
+                    meta: { reason: det.reason, category: det.category, mods: det.modifiersCount, options: clarify.options.length },
+                  });
+                } else {
+                  console.log(`[C5] silent fallback: llmOk=${clarify.llmOk} questionLen=${clarify.question.length} ms=${clarify.elapsedMs}`);
+                }
               }
             }
           } catch (e) {
