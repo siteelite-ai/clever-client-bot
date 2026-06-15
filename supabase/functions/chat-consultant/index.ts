@@ -181,13 +181,13 @@ function pickDisplayWithTotal<T extends { price?: number }>(
   limit: number = DISPLAY_LIMIT
 ): { displayed: T[]; total: number; filteredZeroPrice: number } {
   const input = all || [];
-  // Filter out "под заказ" items (price <= 0). They confuse users — never show them.
+  // HARD BAN на price<=0 (см. mem://core). НИКАКОГО soft-fallback на input:
+  // если все товары "под заказ" (price=0) — возвращаем пусто, downstream
+  // (Soft-404 + contactManager) обработает корректно. Soft-fallback вёл к
+  // лику CHINT-зарядок и нарушал zero_price_leak=0 invariant (2026-06-15, Волна A1).
   const priced = input.filter(p => ((p as any)?.price ?? 0) > 0);
-  // Soft fallback: if EVERYTHING is zero-price (rare narrow category), keep original
-  // so we don't return an empty list. Better to show "под заказ" than nothing.
-  const working = priced.length > 0 ? priced : input;
-  const total = working.length;
-  const displayed = working.slice(0, limit);
+  const total = priced.length;
+  const displayed = priced.slice(0, limit);
   return { displayed, total, filteredZeroPrice: input.length - priced.length };
 }
 
