@@ -8,16 +8,18 @@ type: feature
 ## Зачем
 Когда классификатор видит `intent='catalog'` + `has_product_name=false` + одно-словную (или пустую) категорию + хотя бы один модификатор-параметр, слепой поиск даёт мусор. Канонический кейс: **«светодиод 25м²»** — это может быть лента, лампа, прожектор, потолочный светильник. Правильный ход — ОДИН точечный вопрос про тип/назначение/мощность, а не «вот 22 случайных товара».
 
-## Архитектура (два gate, data-agnostic)
-1. **Gate 1 — Detector** (`_shared/c5-broad-detector.ts`, pure):
-   - `intent='catalog'` + `has_product_name=false` + `is_replacement≠true`
-   - `sub_intent ∈ {null, 'facets', 'spec'}`
-   - `search_modifiers.length ≥ 1`
-   - И **либо** `category=null` (reason=`no_category`), **либо** одно-словная `category` (reason=`broad_single_word_category` / `…_multi_mods`).
-   - Multi-word category → reason=`category_specific_enough`, НЕ триггерим.
-2. **Gate 2 — LLM helper** (`_shared/c5-broad-clarify.ts`, Claude Sonnet 4.5 tool calling, 6с timeout, silent fallback):
-   - Промпт явно разрешает вернуть `question=""` если запрос УЖЕ достаточно специфичен → silent fallback на обычный pipeline.
-   - Иначе возвращает `{question, options[0..4]}`.
+## Архитектура (три gate, data-agnostic)
+1. **Gate 1 — Detector** (`_shared/c5-broad-detector.ts`, pure): intent='catalog' + has_product_name=false + !is_replacement + sub_intent ∈ {null,facets,spec} + ≥1 modifier + (no category OR single-word category).
+2. **Gate 1.5 — Probe** (Wave C5.1, 2026-06-15, inline в `chat-consultant/index.ts`):
+   - `/products?query=<raw>&per_page=1`, timeout 2500мс, читаем `pagination.total`.
+   - Порог `C5_PROBE_SKIP_THRESHOLD = 30`.
+   - `total = 0` → silent fallback (QFv2/jargon-fallback разберутся).
+   - `1 ≤ total ≤ 30` → silent fallback (узкая выборка, clarify создаст трение).
+   - `total > 30` или probe error/timeout → Gate 2.
+   - Метрики: `c5_broad_probe_total{total,ms}`, `c5_broad_probe_skip{total,reason=empty|narrow}`.
+   - Паттерн §4.4 Price-ladder. Защита от false-positive «бренд+спецы» (кейс «дрель makita 18в» 2026-06-15).
+3. **Gate 2 — LLM helper** (`_shared/c5-broad-clarify.ts`, Claude Sonnet 4.5, 6с timeout, silent fallback): возвращает `{question, options}` или пустой question → silent fallback.
+
 
 ## Интеграция в `chat-consultant/index.ts`
 - Хук между fast-path и PRICE INTENT HANDLING.
