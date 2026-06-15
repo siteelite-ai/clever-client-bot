@@ -8515,6 +8515,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       });
                       if (looksLikeBrandModifier) {
                         qfBrandRequestedMissing = looksLikeBrandModifier;
+                        qfBrandUnavailable = {
+                          brand: looksLikeBrandModifier,
+                          availableBrands: Array.from(brendBucket.values).slice(0, 5),
+                        };
                         console.log(`[QueryFirstV2] brand-requested-missing: "${looksLikeBrandModifier}" not in bootstrap brend__brend (${brendBucket.values.size} values)`);
                         logAddStep({ step: 'qfv2-brand-missing', meta: { brand: looksLikeBrandModifier, available: Array.from(brendBucket.values).slice(0, 10) } });
                       }
