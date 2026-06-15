@@ -48,6 +48,17 @@ const SERVICE_KEY_PREFIXES = [
   'kodnomenklatury',
   'klimaticheskoe_',
   'klass_elektrobezopasnosti',
+  // Brand-like keys: must NEVER be MUST-trait in replacement branch.
+  // Replacement = same characteristics, DIFFERENT brand. Adding original brand
+  // as options[]-filter collapses pool to same-brand → brand-exclude empties
+  // it → relaxation falls back to same-brand → user gets identical brand
+  // instead of alternative. Data-agnostic: covers brend_*, vendor, proizvoditel_*.
+  'brend',
+  'vendor',
+  'brand',
+  'proizvoditel',
+  'manufacturer',
+  'torgovaya_marka',
 ];
 
 /** Макс длина value, после которой считаем поле текстовым описанием, не атрибутом. */

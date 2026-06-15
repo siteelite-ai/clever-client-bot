@@ -130,6 +130,33 @@ Deno.test('traits: cap at MAX_MUST_TRAITS=4, overflow tracked', () => {
   assertEquals(res.droppedOverflow.length, 3);
 });
 
+Deno.test('traits: brand-like keys are dropped as service (replacement ≠ same brand)', () => {
+  // C01 regression: brend__brend=GENERICA must NOT become MUST-filter,
+  // otherwise pool collapses to same-brand and brand-exclude empties it.
+  const original = {
+    options: [
+      { key: 'brend__brend', value_ru: 'GENERICA' },
+      { key: 'vendor', value_ru: 'GENERICA' },
+      { key: 'proizvoditel_strana', value_ru: 'Россия' },
+      { key: 'torgovaya_marka', value_ru: 'GENERICA' },
+      { key: 'nominalnyy_tok', value_ru: '16' },
+    ],
+  };
+  const s = schema({
+    'brend__brend': ['GENERICA', 'IEK', 'ABB'],
+    'vendor': ['GENERICA'],
+    'proizvoditel_strana': ['Россия'],
+    'torgovaya_marka': ['GENERICA'],
+    'nominalnyy_tok': ['16'],
+  });
+  const res = extractOriginalTraits(original, s);
+  assertEquals(res.must, { 'nominalnyy_tok': '16' });
+  assertEquals(res.droppedServiceKeys.includes('brend__brend'), true);
+  assertEquals(res.droppedServiceKeys.includes('vendor'), true);
+  assertEquals(res.droppedServiceKeys.includes('proizvoditel_strana'), true);
+  assertEquals(res.droppedServiceKeys.includes('torgovaya_marka'), true);
+});
+
 Deno.test('traits: empty/null original returns empty must', () => {
   assertEquals(extractOriginalTraits(null, new Map()).must, {});
   assertEquals(extractOriginalTraits({ options: [] }, new Map()).must, {});
