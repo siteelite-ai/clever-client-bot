@@ -6718,7 +6718,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     // (article/siteId hit, price-intent hit) where the answer is a simple "yes, in stock, X tg".
     let responseModel = aiConfig.model;
     let responseModelReason = 'default';
-    let replacementMeta: { isReplacement: boolean; original: Product | null; originalName?: string; noResults: boolean; weakened?: boolean; weakenedReason?: 'marking_mismatch' | 'few_results' | 'brand_dominant' } | null = null;
+    let replacementMeta: { isReplacement: boolean; original: Product | null; originalName?: string; noResults: boolean; weakened?: boolean; weakenedReason?: 'marking_mismatch' | 'few_results' | 'brand_dominant' | 'trait_relaxed' } | null = null;
     // Price-Facet-Clarify state (V1 bootstrap-facets clarify) — поднято на верхний scope,
     // чтобы deterministic short-circuit ниже мог построить корректное сообщение.
     let pendingClarifyFacet: BootstrapFacet | null = null;
@@ -10134,20 +10134,42 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     console.log(`[Chat] Replacement original-leak filter: ${beforeLeak} → ${rFinal.length} (source="${markingSourceLeak}")`);
                   }
                   // Brand-exclude: аналог = другой бренд при тех же характеристиках.
-                  // Graceful relaxation: если категория моно-брендовая и exclude обнулил
-                  // пул — откатываемся к same-brand кандидатам с weakened='brand_dominant'.
+                  // Trait-ladder rescue (E2): если пул mono-brand из-за того, что L1-traits
+                  // оригинала сузили выдачу к его же бренду — пробуем взять raw rPool
+                  // (категория + max_price, БЕЗ traits) и применить brand-exclude к нему.
+                  // Если other-brand кандидаты в категории физически есть — отдаём их с
+                  // weakenedReason='trait_relaxed' (честно: точность по характеристикам
+                  // принесена в жертву разнообразию брендов). Если raw-pool тоже моно-бренд —
+                  // graceful relaxation на same-brand с weakenedReason='brand_dominant'.
+                  // Data-agnostic: 0 сетевых вызовов, нет whitelist'а брендов/категорий.
                   const origBrand = extractOriginalBrand(originalProduct as any);
+                  let trait_relaxed_rescued = false;
                   if (origBrand) {
                     const be = applyBrandExcludeWithRelaxation(rFinal, origBrand);
                     if (be.relaxed) {
-                      console.log(`[Chat] Replacement brand-exclude RELAXED "${origBrand}" (mono-brand category): kept ${rFinal.length} same-brand candidates`);
-                      console.log(`[Metric] replacement_brand_exclude_relaxed_total branch=matcher brand="${origBrand}" pool=${rFinal.length}`);
-                      brandExcludeRelaxed = true;
+                      // rFinal mono-brand → пробуем rescue из raw rPool
+                      const rawLeakFiltered = rPool
+                        .filter(p => !originalId || p.id !== originalId)
+                        .filter(p => !markingSourceLeak || !isOriginalByTitle((p as any).pagetitle, markingSourceLeak));
+                      const beRaw = applyBrandExclude(rawLeakFiltered, origBrand);
+                      if (beRaw.filtered.length > 0) {
+                        console.log(`[Chat] Replacement TRAIT-LADDER rescue: raw-pool brand-exclude yielded ${beRaw.filtered.length} other-brand candidates (traits dropped)`);
+                        console.log(`[Metric] replacement_trait_ladder_rescued_total branch=matcher orig_brand="${origBrand}" rescued=${beRaw.filtered.length} traits_dropped=${Object.keys(traitMust).length}`);
+                        rFinal = beRaw.filtered;
+                        trait_relaxed_rescued = true;
+                      } else {
+                        console.log(`[Chat] Replacement brand-exclude RELAXED "${origBrand}" (mono-brand category, raw-pool also mono): kept ${rFinal.length} same-brand candidates`);
+                        console.log(`[Metric] replacement_brand_exclude_relaxed_total branch=matcher brand="${origBrand}" pool=${rFinal.length}`);
+                        brandExcludeRelaxed = true;
+                      }
                     } else if (be.excluded > 0) {
                       console.log(`[Chat] Replacement brand-exclude "${origBrand}": ${rFinal.length} → ${be.filtered.length} (-${be.excluded})`);
+                      rFinal = be.filtered;
+                    } else {
+                      rFinal = be.filtered;
                     }
-                    rFinal = be.filtered;
                   }
+
                   // HARD price=0 filter (replacement-ветка не имеет soft-fallback на «под заказ»).
                   const rBeforeZero = rFinal.length;
                   rFinal = rFinal.filter(p => ((p as any)?.price ?? 0) > 0);
@@ -10161,7 +10183,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // не аналог (классический случай ЩРН vs ЩРВ — разный тип монтажа,
                   // отдельного фасета в каталоге нет).
                   let weakened = false;
-                  let weakenedReason: 'marking_mismatch' | 'few_results' | 'brand_dominant' | undefined = undefined;
+                  let weakenedReason: 'marking_mismatch' | 'few_results' | 'brand_dominant' | 'trait_relaxed' | undefined = undefined;
                   if (rFinal.length > 0 && originalMarkings.length > 0) {
                     const guarded = applyMarkingGuard(rFinal, originalMarkings);
                     if (guarded.mismatch) {
@@ -10180,12 +10202,17 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     weakenedReason = 'few_results';
                     console.log(`[Chat] Replacement L2 weakened: few_results count=${rFinal.length}`);
                   }
-                  // Brand-dominant flag (set by relaxation above) — приоритет ниже marking_mismatch,
-                  // но выше few_results: if relaxation сработал, обязательно disclaimer-им.
-                  if (brandExcludeRelaxed && !weakened) {
+                  // Brand-dominant / trait-relaxed flags (set above): приоритет ниже marking_mismatch,
+                  // но выше few_results. trait_relaxed имеет приоритет над brand_dominant
+                  // (мы реально дропнули trait-precision, это нужно сообщить честно).
+                  if (trait_relaxed_rescued && !weakened) {
+                    weakened = true;
+                    weakenedReason = 'trait_relaxed';
+                  } else if (brandExcludeRelaxed && !weakened) {
                     weakened = true;
                     weakenedReason = 'brand_dominant';
                   }
+
 
                   if (rFinal.length > 0) {
                     { const _r = pickDisplayWithTotal(rFinal); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_matcher'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_matcher zeroFiltered=${_r.filteredZeroPrice}`); }
@@ -10463,7 +10490,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 // legacy bucket-pipeline не знает про ЩРН vs ЩРВ, ВВГнг vs ВВГ и т.п.,
                 // и без guard вернёт визуально похожий, но структурно другой SKU.
                 let legacyWeakened = false;
-                let legacyWeakenedReason: 'marking_mismatch' | 'few_results' | 'brand_dominant' | undefined = undefined;
+                let legacyWeakenedReason: 'marking_mismatch' | 'few_results' | 'brand_dominant' | 'trait_relaxed' | undefined = undefined;
                 if (legacyBrandExcludeRelaxed) {
                   legacyWeakened = true;
                   legacyWeakenedReason = 'brand_dominant';
@@ -10931,8 +10958,11 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
             ? `\n⚠️ ВАЖНО: точных аналогов «${replacementOriginalName || replacementOriginal?.pagetitle || 'указанному товару'}» в наличии НЕТ. Ниже — ближайшие по характеристикам товары той же категории, но с другой маркировкой (могут отличаться по типу монтажа/исполнения). НАЧНИ ОТВЕТ С ЧЕСТНОГО ПРИЗНАНИЯ: «Точного аналога «${replacementOriginalName || 'этого товара'}» в наличии не нашёл. Показываю ближайшее по характеристикам:» — и далее карточки.\n`
             : replacementWeakenedReason === 'brand_dominant'
             ? `\n⚠️ ВАЖНО: в этой категории у нас представлен преимущественно один бренд — ${replacementOriginal?.vendor || 'тот же, что у оригинала'}. Аналогов от других брендов в наличии НЕТ. Ниже — товары той же категории и того же бренда, но другие модели/серии. НАЧНИ ОТВЕТ С: «Аналогов от других брендов сейчас нет — в этой категории у нас в наличии только ${replacementOriginal?.vendor || 'этот бренд'}. Показываю другие модели:»\n`
+            : replacementWeakenedReason === 'trait_relaxed'
+            ? `\n⚠️ ВАЖНО: точных совпадений по всем характеристикам оригинала среди ДРУГИХ брендов нет. Ниже — аналоги других брендов в той же категории, но они могут отличаться по отдельным характеристикам (цоколь/мощность/цветовая температура/IP и т.п.). НАЧНИ ОТВЕТ С: «Полностью идентичных по характеристикам аналогов от других брендов не нашёл. Показываю близкие варианты — сравни ключевые параметры:» — затем карточки и явное сравнение различий с оригиналом.\n`
             : `\n⚠️ ВАЖНО: близких аналогов мало (${productContext ? 'см. ниже' : ''}). НАЧНИ ОТВЕТ С: «Точных аналогов мало. Ближайшее, что нашёл:»\n`)
         : '';
+
       
       productInstructions = `
 🔄 ПОИСК АНАЛОГА / ЗАМЕНЫ
