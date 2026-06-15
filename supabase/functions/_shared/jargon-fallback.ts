@@ -258,9 +258,17 @@ export async function tryJargonFallback(input: JargonFallbackInput): Promise<Jar
 
   for (const cand of candidates) {
     try {
+      const novel = novelTokensOf(cand.query);
+      if (novel.length === 0) {
+        // Кандидат не вносит ни одного нового слова относительно исходного
+        // запроса (включая productNoun). Это значит LLM просто переставила
+        // слова или восстановила headnoun — никакого jargon-перевода нет.
+        // Поиск по такой alt-фразе вернёт исходный широкий pool → leak.
+        log("jargon.no_novel_tokens", { alternative: cand.query, source: cand.source, parent: cand.parent });
+        continue;
+      }
       const products = await input.searchFn(cand.query);
       if (Array.isArray(products) && products.length > 0) {
-        const novel = novelTokensOf(cand.query);
         const filtered = products.filter(p => productMatchesNovelTokens(p, novel));
         if (filtered.length === 0) {
           log("jargon.post_filter_rejected", { alternative: cand.query, novelTokens: novel, rawCount: products.length });
