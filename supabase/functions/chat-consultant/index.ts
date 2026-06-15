@@ -10042,6 +10042,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   const be = applyBrandExcludeWithRelaxation(replFiltered, origBrandL);
                   if (be.relaxed) {
                     console.log(`[Chat] Replacement (legacy) brand-exclude RELAXED "${origBrandL}" (mono-brand category): kept ${replFiltered.length} same-brand candidates`);
+                    console.log(`[Metric] replacement_brand_exclude_relaxed_total branch=legacy brand="${origBrandL}" pool=${replFiltered.length}`);
                     legacyBrandExcludeRelaxed = true;
                   } else if (be.excluded > 0) {
                     console.log(`[Chat] Replacement (legacy) brand-exclude "${origBrandL}": ${replFiltered.length} → ${be.filtered.length} (-${be.excluded})`);
