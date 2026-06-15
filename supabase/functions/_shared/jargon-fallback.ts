@@ -179,12 +179,17 @@ export async function tryJargonFallback(input: JargonFallbackInput): Promise<Jar
   // Это покрывает кейс, когда LLM выдала «лампа кукуруза», но в каталоге
   // лежат «corn lamp» — отдельный поиск «corn» (если бы LLM его выдала)
   // или «кукуруза» сработает.
+  // Data-agnostic: чисто служебные частицы.
   const STOP_WORDS = new Set([
-    "лампа", "лампы", "лампочка", "лампочки",
-    "светильник", "светильники", "светодиодная", "светодиодный", "led",
-    "для", "под", "и", "или", "с", "без", "от", "до",
-    "the", "a", "an", "of", "for", "and", "or",
+    "для", "под", "и", "или", "с", "без", "от", "до", "на", "в", "по",
+    "the", "a", "an", "of", "for", "and", "or", "with", "to",
   ]);
+  // Токены исходного запроса = head-nouns/контекст, по которым уже искали и
+  // получили 0. Разбиваем самим же сепаратором, что и alt-фразы. Это убирает
+  // «кабель»/«лампа»/«прожектор» автоматически без словаря категорий.
+  const queryTokens = new Set(
+    query.toLowerCase().split(/[\s,;/()\-]+/).map(t => t.trim()).filter(t => t.length > 0)
+  );
   const seen = new Set<string>();
   const candidates: { query: string; source: "phrase" | "token"; parent: string }[] = [];
   for (const alt of alternatives) {
@@ -202,6 +207,7 @@ export async function tryJargonFallback(input: JargonFallbackInput): Promise<Jar
           tok.length >= 3 &&
           !STOP_WORDS.has(tokLower) &&
           !seen.has(tokLower) &&
+          !queryTokens.has(tokLower) &&
           tokLower !== query.toLowerCase()
         ) {
           seen.add(tokLower);
