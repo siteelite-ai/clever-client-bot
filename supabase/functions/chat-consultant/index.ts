@@ -27,10 +27,13 @@ import {
 import { wrapWithHeartbeat } from '../_shared/sse-heartbeat.ts';
 import { buildFacetsSummaryContent } from '../_shared/facets-summary.ts';
 import {
+  applyBrandExclude,
   applyMarkingGuard,
   extractMarkingTokens,
+  extractOriginalBrand,
   extractOriginalTraits,
   filterStructuralMarkings,
+  isOriginalByTitle,
 } from './replacement-traits.ts';
 import {
   FACET_BLACKLIST_KEYS as SHARED_FACET_BLACKLIST_KEYS,
