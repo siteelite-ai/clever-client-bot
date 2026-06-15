@@ -9197,6 +9197,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                                   branchTag = 'qfv2_jargon_recovery';
                                   totalCollectedBranch = 'jargon-fallback';
                                   canonicalJargonWon = true;
+                                  pendingJargonClarify = { matchedAlternative: jrWhole.matchedAlternative!, noun, originalQuery: userMessage || noun, jargonCount: sanitizedWhole.length };
                                   console.log(`[QueryFirstV2] query_first_v2_jargon_recovery_canonical noun="${noun}" alt="${jrWhole.matchedAlternative}" count=${sanitizedWhole.length} elapsed=${Date.now() - qfStart}ms (preempted split)`);
                                   logAddStep({ step: 'qfv2-jargon-recovery-canonical', total: sanitizedWhole.length, meta: { noun, originalQuery: userMessage || noun, matchedAlternative: jrWhole.matchedAlternative, droppedOriginals } });
                                 }
