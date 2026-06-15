@@ -8492,6 +8492,8 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // если нет — честно говорим, что бренда в найденном нет.
                   let qfBrandFiltered: string | null = null;
                   let qfBrandRequestedMissing: string | null = null;
+                  // Reset closure-wide flag at start of each QFv2 run.
+                  qfBrandUnavailable = null;
                   const brendBucket = bootstrapSchema.get('brend__brend');
                   if (brendBucket && Array.isArray(modifiers) && modifiers.length > 0) {
                     const brandValuesLower = new Map<string, string>();
