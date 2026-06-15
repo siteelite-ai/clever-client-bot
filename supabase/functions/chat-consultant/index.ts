@@ -8101,16 +8101,26 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
           if (appSettings.query_first_enabled && appSettings.openrouter_api_key && appSettings.volt220_api_token) {
             const qfStart = Date.now();
             try {
-              const { extractCategoryNoun, createProductionExtractorDeps } = await import("../_shared/category-noun-extractor.ts");
-              const extractorDeps = createProductionExtractorDeps(appSettings.openrouter_api_key);
-              const extractDeadline = new Promise<{ categoryNoun: string }>((_, rej) =>
-                setTimeout(() => rej(new Error('qf_extract_timeout_8s')), 8000)
-              );
+              // Use the noun-extract promise kicked off in parallel with classify (~3-4с win).
+              // Fallback: если promise отсутствует — стартуем здесь как раньше.
               const nounStartMs = Date.now();
-              const extractRes = await Promise.race([
-                extractCategoryNoun({ userQuery: userMessage, locale: 'ru' }, extractorDeps),
-                extractDeadline,
-              ]);
+              let extractRes: { categoryNoun: string; source?: string };
+              if (nounExtractPromise) {
+                extractRes = await nounExtractPromise.catch((e) => {
+                  console.warn(`[QueryFirstV2] noun-extract await err: ${e instanceof Error ? e.message : String(e)}`);
+                  return { categoryNoun: '', source: 'error' };
+                });
+              } else {
+                const { extractCategoryNoun, createProductionExtractorDeps } = await import("../_shared/category-noun-extractor.ts");
+                const extractorDeps = createProductionExtractorDeps(appSettings.openrouter_api_key);
+                const extractDeadline = new Promise<{ categoryNoun: string }>((_, rej) =>
+                  setTimeout(() => rej(new Error('qf_extract_timeout_8s')), 8000)
+                );
+                extractRes = await Promise.race([
+                  extractCategoryNoun({ userQuery: userMessage, locale: 'ru' }, extractorDeps),
+                  extractDeadline,
+                ]);
+              }
               const noun = (extractRes.categoryNoun || '').trim();
               console.log(`[QueryFirstV2] noun="${noun}" (source=${(extractRes as any).source || 'n/a'})`);
               logAddStep({ step: 'qfv2-noun', ms: Date.now() - nounStartMs, meta: { noun, source: (extractRes as any).source || null } });
