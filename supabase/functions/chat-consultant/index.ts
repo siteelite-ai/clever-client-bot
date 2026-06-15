@@ -11893,6 +11893,39 @@ ${productInstructions}`;
       }
     }
 
+    // ─── UNIFIED JARGON-CLARIFY EMIT (V1, 2026-06-15, mem://features/jargon-clarify) ──
+    // Любой upstream-сайт, где tryJargonFallback подобрал matchedAlternative
+    // (QFv2 pre/pool/last-chance/recovery/canonical, legacy late), ставит
+    // pendingJargonClarify. Здесь — единая точка эмита: перед детерминистичным
+    // рендером карточек спрашиваем пользователя, что он имел в виду (узкий
+    // жаргон-перевод или широкий поиск по noun). НЕ срабатывает:
+    //   • если jargonClarifyApplied (юзер уже выбрал на этом ходу),
+    //   • если ветка unfulfilled-split (другой контракт — combo unavailable),
+    //   • если EARLY-ветка уже отдала свой clarify Response (там return).
+    if (pendingJargonClarify && !jargonClarifyApplied && !unfulfilledSplit) {
+      const { buildJargonClarifyContent, buildJargonClarifyResponse } = await import('../_shared/jargon-clarify.ts');
+      const { content: clarifyContent, slot: clarifyMeta } = buildJargonClarifyContent(pendingJargonClarify);
+      console.log(`[Chat req=${reqId}] [JargonClarify] UNIFIED emit: alt="${clarifyMeta.matchedAlternative}" noun="${clarifyMeta.noun}" count=${clarifyMeta.jargonCount}`);
+      logSetBranch('jargon-clarify');
+      logAddStep({ step: 'jargon-clarify-emit-unified', total: clarifyMeta.jargonCount, meta: { matchedAlternative: clarifyMeta.matchedAlternative, noun: clarifyMeta.noun } });
+      dialogSlots['jargon_clarify'] = {
+        intent: 'jargon_clarify',
+        base_category: clarifyMeta.noun.substring(0, 200),
+        status: 'pending',
+        created_turn: 0,
+        turns_since_touched: 0,
+        original_query: clarifyMeta.originalQuery.substring(0, 200),
+        jargon_meta: JSON.stringify({
+          matchedAlternative: clarifyMeta.matchedAlternative,
+          jargonCount: clarifyMeta.jargonCount,
+        }).substring(0, 500),
+      };
+      persistSlotsAsync(conversationId, dialogSlots);
+      return buildJargonClarifyResponse({ content: clarifyContent, dialogSlots, useStreaming, corsHeaders });
+    }
+
+
+
     // SYSTEMIC ANTI-HALLUCINATION (2026-05-04): любой ответ с найденными товарами
     // обязан рендериться детерминистично из ProductResource — иначе LLM переписывает
     // URL даже при инструкции «копируй как есть» (см. mem://constraints/deterministic-product-render).
