@@ -5381,14 +5381,15 @@ function extractBrandsFromProducts(products: Product[]): string[] {
       const brandOption = product.options.find((o: any) => o && o.key === 'brend__brend');
       if (brandOption) {
         const brandName = cleanOptionValue(brandOption.value_ru ?? brandOption.value);
-        if (brandName) {
+        if (brandName && !looksLikeMarking(brandName)) {
           brands.add(brandName);
           found = true;
         }
       }
     }
-    if (!found && typeof product?.vendor === 'string' && product.vendor.trim()) {
-      brands.add(product.vendor.trim());
+    if (!found && typeof product?.vendor === 'string') {
+      const v = product.vendor.trim();
+      if (v && !looksLikeMarking(v)) brands.add(v);
     }
   }
   
