@@ -8483,7 +8483,20 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   }
                 }
 
-                if (pool.length === 0) {
+                if (qfPreJargonWin) {
+                  // C4: short-circuit pre-jargon win. Pool — это уже результат
+                  // jargon-альтернативы (corn lamp). Дальнейшие schema/filter/final
+                  // вернули бы LLM к original "лампа кукуруза" → загрязнение мусором.
+                  const _r = pickDisplayWithTotal(pool);
+                  foundProducts = _r.displayed;
+                  totalCollected = _r.total;
+                  totalCollectedBranch = 'qfv2_pre_jargon_win';
+                  articleShortCircuit = _r.displayed.length > 0;
+                  categoryFirstWinResolved = true;
+                  qfV2Resolved = true;
+                  console.log(`[QueryFirstV2] query_first_v2_pre_jargon_win noun="${noun}" alt="${qfPreJargonAlt}" displayed=${_r.displayed.length} elapsed=${Date.now() - qfStart}ms`);
+                  logAddStep({ step: 'qfv2-branch', total: _r.displayed.length, ms: Date.now() - qfStart, meta: { branch: 'qfv2_pre_jargon_win', collected: _r.total, displayed: _r.displayed.length, matchedAlternative: qfPreJargonAlt } });
+                } else if (pool.length === 0) {
                   console.log(`[QueryFirstV2] pool still empty after jargon → fallback to Category Resolver`);
                 } else {
                   // ── (3) Self-Bootstrap facet schema from the live pool.
