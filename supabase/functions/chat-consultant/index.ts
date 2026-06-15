@@ -8333,9 +8333,24 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   : modifiers).slice(0, QF_MAX_MODIFIERS_IN_QUERY);
                 const enrichedQuery = enrichMods.length > 0 ? `${noun} ${enrichMods.join(' ')}`.trim() : noun;
 
+                // Волна B1 2026-06-15: Brand-Aware QFv2.
+                // Раньше brand:null хардкодился → "дрель makita 18в" фильтровался
+                // по noun, но любой Вихрь/Bosch проходил → бренд пользователя игнорировался.
+                // Теперь brand из classification.candidates[0] прокидывается в pool через
+                // options[brend__brend][]=<brand>. При brand-pool=0 — graceful retry без бренда
+                // (catalog может не иметь именно этого бренда в категории).
+                const qfBrand: string | null = (classification?.candidates?.[0] as any)?.brand || null;
+                let qfBrandDropped = false;
+                let qfBrandWasApplied = false;
+
+                // Волна B1 2026-06-15: Brand-Aware QFv2.
+                // V1 micro-classifier НЕ возвращает отдельное поле `brand` — бренд лежит
+                // внутри critical_modifiers/search_modifiers как обычный токен. Поэтому
+                // brand-фильтрация выполняется ПОСЛЕ pool через bootstrap-schema
+                // (live values key='brend__brend'). См. ниже шаг (3.05).
+
                 const poolStartMs = Date.now();
                 // Волна A2 2026-06-15: pool fetch cap = 4s (was 10s).
-                // QFv2 — горячий путь, 10s сжигают бюджет до jargon-fallback / soft-404.
                 let pool = await searchProductsByCandidate(
                   { query: enrichedQuery, brand: null, category: null, min_price: null, max_price: null },
                   appSettings.volt220_api_token!,
@@ -8349,7 +8364,6 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 if (pool.length === 0 && enrichedQuery !== noun) {
                   console.log(`[QueryFirstV2] enriched pool=0 → retry with bare noun="${noun}"`);
                   const poolRetryStart = Date.now();
-                  // Волна A2: retry cap = 3s.
                   pool = await searchProductsByCandidate(
                     { query: noun, brand: null, category: null, min_price: null, max_price: null },
                     appSettings.volt220_api_token!,
@@ -8442,6 +8456,65 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       sample: Array.from(bootstrapSchema.entries()).slice(0, 8).map(([k, v]) => ({ key: k, caption: v.caption, values: Array.from(v.values).slice(0, 5) })),
                     },
                   });
+
+                  // ── (3.05) Wave B1: Brand-Aware narrowing via bootstrap.
+                  // Если в bootstrap есть ось brend__brend и хоть один модификатор
+                  // совпадает с её значением (case-insensitive, точное равенство) —
+                  // фильтруем pool по этому бренду. Иначе:
+                  //   • если модификатор «выглядит как бренд» (латиница, длина ≥4) и
+                  //     bootstrap содержит ось brend__brend, но в ней нет такого
+                  //     значения → ставим qfBrandRequestedMissing для composer-ноты.
+                  // ВАЖНО: data-agnostic — никаких словарей брендов, только живые
+                  // значения из pool. Если бренд представлен в pool — фильтруем,
+                  // если нет — честно говорим, что бренда в найденном нет.
+                  let qfBrandFiltered: string | null = null;
+                  let qfBrandRequestedMissing: string | null = null;
+                  const brendBucket = bootstrapSchema.get('brend__brend');
+                  if (brendBucket && Array.isArray(modifiers) && modifiers.length > 0) {
+                    const brandValuesLower = new Map<string, string>();
+                    for (const v of brendBucket.values) {
+                      brandValuesLower.set(v.toLowerCase().trim(), v);
+                    }
+                    let matched: string | null = null;
+                    for (const m of modifiers) {
+                      const ml = String(m).toLowerCase().trim();
+                      if (!ml) continue;
+                      if (brandValuesLower.has(ml)) { matched = brandValuesLower.get(ml)!; break; }
+                      // суффиксное совпадение для «makita» vs «Makita Co» и т.п.
+                      for (const [bl, bo] of brandValuesLower) {
+                        if (bl === ml || bl.startsWith(ml + ' ') || ml.startsWith(bl + ' ')) { matched = bo; break; }
+                      }
+                      if (matched) break;
+                    }
+                    if (matched) {
+                      const before = pool.length;
+                      const filtered = pool.filter(p => {
+                        const opts = (p as any).options;
+                        if (!Array.isArray(opts)) return false;
+                        const bo = opts.find((o: any) => o && o.key === 'brend__brend');
+                        const bv = (bo?.value_ru ?? bo?.value ?? '').toString().split('//')[0].trim().toLowerCase();
+                        return bv === matched.toLowerCase();
+                      });
+                      if (filtered.length > 0) {
+                        pool = filtered;
+                        qfBrandFiltered = matched;
+                        console.log(`[QueryFirstV2] brand-narrow: "${matched}" ${before}→${pool.length}`);
+                        logAddStep({ step: 'qfv2-brand-narrow', total: pool.length, meta: { brand: matched, before, after: pool.length } });
+                      }
+                    } else {
+                      // Looks-like-brand эвристика без словаря: латинский токен ≥4 символов,
+                      // не похожий на маркировку/единицу измерения.
+                      const looksLikeBrandModifier = modifiers.find(m => {
+                        const s = String(m).trim();
+                        return /^[A-Za-z][A-Za-z\-]{3,}$/.test(s);
+                      });
+                      if (looksLikeBrandModifier) {
+                        qfBrandRequestedMissing = looksLikeBrandModifier;
+                        console.log(`[QueryFirstV2] brand-requested-missing: "${looksLikeBrandModifier}" not in bootstrap brend__brend (${brendBucket.values.size} values)`);
+                        logAddStep({ step: 'qfv2-brand-missing', meta: { brand: looksLikeBrandModifier, available: Array.from(brendBucket.values).slice(0, 10) } });
+                      }
+                    }
+                  }
 
                   // ── (3.4) Compute dominantCat0 once — used by prefetch + resolved-filters cache.
                   let dominantCat0: string | null = null;
