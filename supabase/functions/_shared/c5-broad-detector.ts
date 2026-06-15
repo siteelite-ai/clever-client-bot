@@ -37,8 +37,8 @@ export interface BroadDetectorResult {
   category: string | null;
 }
 
-const MIN_MODIFIERS = 2;
-const BROAD_MODIFIERS_THRESHOLD = 3;
+const MIN_MODIFIERS = 1;
+const BROAD_MODIFIERS_THRESHOLD = 2;
 const ALLOWED_SUB_INTENTS = new Set([null, undefined, "facets", "spec"]);
 
 function normalizeModifiers(raw: unknown): string[] {
@@ -74,14 +74,21 @@ export function detectUnderspecifiedBroad(input: BroadDetectorInput): BroadDetec
     return { ...base, triggered: false, reason: `sub_intent_${input.sub_intent}` };
   }
   if (modifiers.length < MIN_MODIFIERS) {
-    return { ...base, triggered: false, reason: "few_modifiers" };
+    return { ...base, triggered: false, reason: "no_modifiers" };
   }
 
+  // Gate 1 (detector): triggered = (no category) OR (single-word category).
+  // Gate 2 (LLM helper, askBroadClarify): возвращает пустой question если запрос
+  // уже достаточно специфичен → silent fallback на обычный pipeline.
   if (!category) {
     return { ...base, triggered: true, reason: "no_category" };
   }
-  if (isSingleWord(category) && modifiers.length >= BROAD_MODIFIERS_THRESHOLD) {
+  if (isSingleWord(category)) {
+    if (modifiers.length >= BROAD_MODIFIERS_THRESHOLD) {
+      return { ...base, triggered: true, reason: "broad_single_word_category_multi_mods" };
+    }
     return { ...base, triggered: true, reason: "broad_single_word_category" };
   }
   return { ...base, triggered: false, reason: "category_specific_enough" };
 }
+
