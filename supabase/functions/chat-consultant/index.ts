@@ -11294,9 +11294,18 @@ ${directAnswerBlock}
             },
             log: (event, data) => console.log(`[Chat req=${reqId}] [JargonFallback] ${event}`, data ?? {}),
           });
-          if (jargonResult.products.length > 0) {
+          if (jargonResult.products.length > 0 && jargonResult.matchedAlternative) {
             // Нашли товары через альтернативу — подставляем и пропускаем Soft-404.
             console.log(`[Chat req=${reqId}] [JargonFallback] Recovered via alternative "${jargonResult.matchedAlternative}": ${jargonResult.products.length} products`);
+            // Захватываем для унифицированного clarify-эмиттера (см. pendingJargonClarify).
+            // ВАЖНО: unfulfilled-split НЕ должен срабатывать одновременно с clarify;
+            // если split произойдёт ниже — оставим pendingJargonClarify=null.
+            pendingJargonClarify = {
+              matchedAlternative: jargonResult.matchedAlternative,
+              noun: (classification?.product_category || extractedIntent.candidates[0]?.query || '').trim() || 'товары',
+              originalQuery: extractedIntent.originalQuery,
+              jargonCount: jargonResult.products.length,
+            };
 
             // ── Unfulfilled-combination probe (2026-05-25).
             // Если запрос содержал critical_modifiers, не покрытые переводом жаргона
