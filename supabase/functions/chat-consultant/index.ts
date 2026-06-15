@@ -8313,7 +8313,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                         console.log(`[QueryFirstV2] escalate SKIP: no dominant category in pool`);
                         logAddStep({ step: 'qfv2-escalate-skip', meta: { reason: 'no_dominant_category', unresolved: resolverUnresolved } });
                       } else {
-                        const fullRes = await getCategoryOptionsSchema(dominantCat, appSettings.volt220_api_token!);
+                        const fullRes = await (prefetchedFullSchema ?? getCategoryOptionsSchema(dominantCat, appSettings.volt220_api_token!));
                         if (!fullRes.schema || fullRes.schema.size === 0) {
                           console.log(`[QueryFirstV2] escalate SKIP: full schema empty for "${dominantCat}"`);
                           logAddStep({ step: 'qfv2-escalate-skip', meta: { reason: 'empty_full_schema', dominantCat, unresolved: resolverUnresolved } });
