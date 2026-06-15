@@ -10490,7 +10490,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 // legacy bucket-pipeline не знает про ЩРН vs ЩРВ, ВВГнг vs ВВГ и т.п.,
                 // и без guard вернёт визуально похожий, но структурно другой SKU.
                 let legacyWeakened = false;
-                let legacyWeakenedReason: 'marking_mismatch' | 'few_results' | 'brand_dominant' | undefined = undefined;
+                let legacyWeakenedReason: 'marking_mismatch' | 'few_results' | 'brand_dominant' | 'trait_relaxed' | undefined = undefined;
                 if (legacyBrandExcludeRelaxed) {
                   legacyWeakened = true;
                   legacyWeakenedReason = 'brand_dominant';
