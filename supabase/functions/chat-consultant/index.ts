@@ -11274,6 +11274,56 @@ ${productInstructions}`;
       });
     }
 
+    // === C5 BROAD-CLARIFY SHORT-CIRCUIT ===
+    // Эмитим уточняющий вопрос + опц. quick_replies, без карточек, без LLM-final.
+    // dialog_slots НЕ трогаем — следующий ход пользователя пройдёт обычным catalog-flow
+    // с уже уточнённым параметром в тексте.
+    if (broadClarifyResponse) {
+      const bc = broadClarifyResponse;
+      console.log(`[Chat] C5-BROAD-CLARIFY SHORT-CIRCUIT: reason=${bc.meta.reason} category="${bc.meta.category ?? ''}" mods=${bc.meta.modifiers_count} options=${bc.quick_replies.length}`);
+      logSetProductsCount(0);
+      logAddStep({ step: 'final-c5-clarify', meta: bc.meta });
+      persistSlotsAsync(conversationId, dialogSlots);
+
+      if (!useStreaming) {
+        const body: {
+          content: string;
+          quick_replies: Array<{ label: string; value: string }>;
+          slot_update?: DialogSlots;
+        } = { content: bc.content, quick_replies: bc.quick_replies };
+        if (slotsUpdated) body.slot_update = dialogSlots;
+        return new Response(
+          JSON.stringify(body),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: bc.content }, index: 0 }] })}\n\n`));
+          if (bc.quick_replies.length > 0) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ quick_replies: bc.quick_replies })}\n\n`));
+          }
+          if (slotsUpdated) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`));
+          }
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
+    }
+
+
+
 
     // spec_query (compute) ВСЕГДА требует LLM-обработки: нужна формулировка
     // ответа про характеристику + опц. умножение на N — детерминистичный
