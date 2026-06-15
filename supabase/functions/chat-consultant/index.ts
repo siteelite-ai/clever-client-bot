@@ -11341,6 +11341,7 @@ ${directAnswerBlock}
                     .map(p => ({ label: p.modifier, products: p.sample }));
                   if (sections.length >= 2) {
                     unfulfilledSplit = { noun, sections };
+                    pendingJargonClarify = null;  // split — другой контракт (combo unavailable), clarify не нужен
                     // foundProducts = объединение sample'ов: даёт detect для downstream
                     // shouldUseDeterministicProductRender и страхует от пустого вывода,
                     // если split-ветка не сработает (fallthrough в обычный рендер).
