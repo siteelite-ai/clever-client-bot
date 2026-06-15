@@ -6674,6 +6674,11 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
       originalQuery: string;
       attemptedFacets: Array<{ caption: string; value: string; alternativeValues: string[] }>;
     } | null = null;
+    // Wave B1 2026-06-15: brand-not-in-pool context. Set when QFv2 bootstrap
+    // shows the requested brand (looks-like-brand modifier, latin ≥4) is absent
+    // in pool's brend__brend values. Threaded into deterministic render so the
+    // intro becomes honest: "Прямого аналога {brand} не нашёл, вот похожее".
+    let qfBrandUnavailable: { brand: string; availableBrands: string[] } | null = null;
     let brandsContext = '';
     let knowledgeContext = '';
     let articleShortCircuit = false;
