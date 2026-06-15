@@ -222,13 +222,37 @@ export async function tryJargonFallback(input: JargonFallbackInput): Promise<Jar
   }
   log("jargon.candidates_expanded", { total: candidates.length, list: candidates.map(c => `${c.query}(${c.source})`) });
 
+  // F2 post-filter: каждая alt-фраза/токен содержит «новые» слова, которых не
+  // было в исходном запросе. Хотя бы одно такое слово ОБЯЗАНО встречаться в
+  // pagetitle/article товара — иначе это просто широкая выдача по общему слову
+  // (например phrase «кабель ВВГнг 3x2.5» вернула СИП, потому что СИП тоже
+  // кабель, но «ввгнг»/«3x2.5» в названии нет). Data-agnostic.
+  const normalize = (s: string) =>
+    String(s ?? "").toLowerCase().replace(/[,;/()\-]+/g, " ").replace(/\s+/g, " ").trim();
+  const novelTokensOf = (candQuery: string): string[] => {
+    const toks = normalize(candQuery).split(/\s+/).filter(t => t.length >= 3 && !STOP_WORDS.has(t));
+    return toks.filter(t => !queryTokens.has(t));
+  };
+  // deno-lint-ignore no-explicit-any
+  const productMatchesNovelTokens = (p: any, novel: string[]): boolean => {
+    if (novel.length === 0) return true; // нечего проверять — пропускаем
+    const hay = normalize(`${p?.pagetitle ?? ""} ${p?.name ?? ""} ${p?.article ?? ""}`);
+    return novel.some(tok => hay.includes(tok));
+  };
+
   for (const cand of candidates) {
     try {
       const products = await input.searchFn(cand.query);
       if (Array.isArray(products) && products.length > 0) {
-        log("jargon.match", { alternative: cand.query, source: cand.source, parent: cand.parent, count: products.length });
+        const novel = novelTokensOf(cand.query);
+        const filtered = products.filter(p => productMatchesNovelTokens(p, novel));
+        if (filtered.length === 0) {
+          log("jargon.post_filter_rejected", { alternative: cand.query, novelTokens: novel, rawCount: products.length });
+          continue;
+        }
+        log("jargon.match", { alternative: cand.query, source: cand.source, parent: cand.parent, count: filtered.length, rawCount: products.length, novelTokens: novel });
         return {
-          products,
+          products: filtered,
           matchedAlternative: cand.query,
           alternatives,
           clarifyQuestion,
