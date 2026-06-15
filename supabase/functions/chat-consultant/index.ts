@@ -8401,7 +8401,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 let qfPreJargonAlt: string | null = null;
                 if (pool.length === 0 && enrichedQuery !== noun) {
                   try {
-                    const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts'); // F2 productNoun exclusion
+                    const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts'); // F2 productNoun + no-novel skip
                     const jr = await tryJargonFallback({
                       originalQuery: userMessage || enrichedQuery,
                       openrouterKey: appSettings.openrouter_api_key!,
