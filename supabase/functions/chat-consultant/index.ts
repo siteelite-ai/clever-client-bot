@@ -8092,10 +8092,14 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 const enrichedQuery = enrichMods.length > 0 ? `${noun} ${enrichMods.join(' ')}`.trim() : noun;
 
                 const poolStartMs = Date.now();
+                // Волна A2 2026-06-15: pool fetch cap = 4s (was 10s).
+                // QFv2 — горячий путь, 10s сжигают бюджет до jargon-fallback / soft-404.
                 let pool = await searchProductsByCandidate(
                   { query: enrichedQuery, brand: null, category: null, min_price: null, max_price: null },
                   appSettings.volt220_api_token!,
-                  QF_POOL_SIZE
+                  QF_POOL_SIZE,
+                  undefined,
+                  4000
                 );
                 console.log(`[QueryFirstV2] pool query="${enrichedQuery}" size=${pool.length} (perPage=${QF_POOL_SIZE})`);
                 logAddStep({ step: 'qfv2-pool', total: pool.length, ms: Date.now() - poolStartMs, meta: { query: enrichedQuery.substring(0, 200), perPage: QF_POOL_SIZE, enrichMods: enrichMods.slice(0, 5) } });
@@ -8103,10 +8107,13 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 if (pool.length === 0 && enrichedQuery !== noun) {
                   console.log(`[QueryFirstV2] enriched pool=0 → retry with bare noun="${noun}"`);
                   const poolRetryStart = Date.now();
+                  // Волна A2: retry cap = 3s.
                   pool = await searchProductsByCandidate(
                     { query: noun, brand: null, category: null, min_price: null, max_price: null },
                     appSettings.volt220_api_token!,
-                    QF_POOL_SIZE
+                    QF_POOL_SIZE,
+                    undefined,
+                    3000
                   );
                   console.log(`[QueryFirstV2] pool noun="${noun}" size=${pool.length} (fallback)`);
                   logAddStep({ step: 'qfv2-pool-retry', total: pool.length, ms: Date.now() - poolRetryStart, meta: { query: noun, fallback: true } });
