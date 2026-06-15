@@ -115,8 +115,26 @@ export function tryResolveJargonChoice(
       .filter((t) => t.length >= 3),
   );
 
+  // prefix-match (data-agnostic): русская морфология "лампа"≈"лампы"≈"лампой".
+  // Берём минимум 4 первых символа кириллицы / латиницы — отсекает короткие
+  // случайные совпадения, ловит склонения/мн.число.
+  const PREFIX_LEN = 4;
+  const prefixMatch = (a: string, b: string): boolean => {
+    const la = a.length, lb = b.length;
+    if (la < PREFIX_LEN || lb < PREFIX_LEN) return a === b;
+    return a.slice(0, PREFIX_LEN) === b.slice(0, PREFIX_LEN);
+  };
+  const tokenSetMatches = (set: Set<string>): boolean => {
+    for (const ref of set) {
+      for (const m of msgTokens) {
+        if (prefixMatch(ref, m)) return true;
+      }
+    }
+    return false;
+  };
+
   // jargon-токены — самый сильный сигнал
-  for (const t of jargonTokens) if (msgTokens.has(t)) return "jargon";
+  if (tokenSetMatches(jargonTokens)) return "jargon";
 
   // generic-маркеры «широкого» / «отказа от жаргона»
   const NOUN_MARKERS = [
@@ -128,7 +146,7 @@ export function tryResolveJargonChoice(
   ];
   const hasNounMarker = NOUN_MARKERS.some((m) => msgTokens.has(m));
   // явное упоминание noun ИЛИ noun-маркер
-  for (const t of nounTokens) if (msgTokens.has(t)) return "noun";
+  if (tokenSetMatches(nounTokens)) return "noun";
   if (hasNounMarker) return "noun";
 
   return null;
