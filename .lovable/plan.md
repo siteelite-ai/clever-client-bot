@@ -1,47 +1,62 @@
-# План: Wave C5.1 — Probe-then-Clarify в C5 (устранение false-positive)
+# План: самостоятельный аудит и фикс 23 кейсов
 
-## Контекст
-C5-регрессия (2026-06-15) выявила false-positive: «дрель makita 18в» триггерит clarify, хотя бренд+вольтаж заданы.
-Корень — Gate 2 (LLM) решает «слишком широко?» вслепую, без знания `probe.total`.
+Я веду этот план сам, по шагам, без остановок на «можно?» между техническими подзадачами. Останавливаюсь только если: (а) нужен выбор приоритета от тебя, (б) сломалось что-то непредвиденное, (в) шаг завершён и нужно показать промежуточный отчёт.
 
-## Системное решение
-Probe-then-Clarify (паттерн §4.4 Price-ladder / QFv2 pool-rescue): между Gate 1 (detector) и Gate 2 (LLM) добавить probe `/products?query=<raw>&per_page=1`, читать `pagination.total`. Если ≤ N_SKIP — silent fallback на обычный pipeline.
+## Шаг 0. Подготовка фикстуры
+- Создать `.lovable/fixtures/qa-23-cases-2026-06-15.md` с таблицей: №, запрос, ожидание (из твоих скриншотов), последний наблюдаемый дефект, статус.
+- Залить туда C01–C23 из прошлого прогона как baseline.
 
-## Шаги (выполняю последовательно, без подтверждений)
+## Шаг 1. Baseline-прогон (контроль)
+- Через `supabase--curl_edge_functions` прогнать все 23 кейса батчами по 5, разные sessionId.
+- Для каждого собрать из `chat_request_logs` + `edge_function_logs`: Classifier, Steps (компактно), branchTag, finalProductsCount, latency, первые 200 символов ответа.
+- Сложить в `.lovable/fixtures/qa-23-baseline-2026-06-15.json`.
 
-1. **Добавить probe в C5-хук** (`chat-consultant/index.ts` ~7388-7416):
-   - inline-fetch через существующий `fetchCatalogWithRetry`, URL `${VOLT220_API_URL}?query=<userMessage>&per_page=1`, timeout 2500мс.
-   - Парс `data.pagination.total`.
-   - Константа `C5_PROBE_SKIP_THRESHOLD = 30` (объявить локально перед хуком).
-   - Логика:
-     - `probe.total = 0` → silent fallback (далее QFv2/jargon разберутся).
-     - `1 ≤ probe.total ≤ 30` → silent fallback (узкая выборка, clarify не нужен).
-     - `probe.total > 30` или probe timeout/error → продолжаем в Gate 2 (текущее поведение).
-   - Метрики: `c5_broad_probe_total{total=N,ms=M}`, `c5_broad_probe_skip{total=N,reason=narrow|empty}`.
+## Шаг 2. Сводная таблица дефектов
+- Маркировать каждый кейс: ✅ ok / ⚠️ regression / ❌ defect / 🐢 latency.
+- Сгруппировать по уже названным волнам:
+  - **Wave E** (replacement): C01, C03, C05 (+ всё, что всплывёт похожего)
+  - **Wave F** (pre-jargon / noun-strict): C09, C11
+  - **Wave G** (intent/dialog): C12, C15, C16
+  - **Wave H** (latency): C02, C05, C08
+- Показать тебе сводку и спросить только один вопрос: «начинаем с E?» — дальше иду без переспросов.
 
-2. **Deploy** `chat-consultant`.
+## Шаг 3. Волна E — replacement
+1. Прочитать `replacement-traits.ts` и ветку `s-price` в `index.ts`.
+2. **E1**: пробросить `price_max` из slot в replacement-matcher → пост-фильтр кандидатов.
+3. **E2**: при `price_intent='cheapest'` исключать `anchor.vendor` из кандидатов.
+4. **E3**: гарантировать, что anchor `article` не попадает в выдачу replacement.
+5. `deno check` + точечный прогон C01/C03/C05 + 3 случайных кейса из «зелёных» для регресс-контроля.
+6. Зафиксировать дельту в фикстуре.
 
-3. **Regression-прогон** 8 кейсов:
-   - C5-1 светодиод 25м² → должен остаться clarify
-   - C5-2 лампа для дома → должен остаться clarify
-   - C5-3 лампа е27 led 9вт → silent fallback (как сейчас)
-   - C5-4 дрель makita 18в → **NEW: probe-skip silent fallback** (целевое исправление)
-   - C5-5 кабель 100м → должен остаться clarify
-   - C5-6 ВВГнг 3х2.5 → has_product_name bridge (как сейчас)
-   - C5-7 розетка с заземлением 16а → проверить (вероятно clarify)
-   - C5-8 перфоратор bosch sds-plus 800вт → probe-skip silent fallback (бренд+спецы)
+## Шаг 4. Волна F — pre-jargon / noun-strict
+1. **F1**: при pre-jargon-win сохранять `critical_modifiers` — пост-фильтр пула по material/spec токенам перед short-circuit.
+2. **F2**: noun-strict gate перед `qfv2_pre_jargon_win` — если ≥50% пула не содержит `product_category` ни в `pagetitle` ни в options → пропускать на jargon-fallback по-старому.
+3. `deno check` + прогон C09, C11 + регресс «лампа кукуруза» (C-ref) + 3 зелёных.
 
-4. **Обновить память** `mem://features/c5-clarify-broad`:
-   - Добавить раздел «Probe-step» с порогом и метриками.
-   - Обновить Anti-patterns: запретить хардкод-листы брендов как альтернативу.
-   - Verified live добавить C5-4 / C5-8 case.
+## Шаг 5. Волна G — intent/dialog
+1. **G1**: при `sub_intent='all_positions'` (или явных маркерах «все», «весь ассортимент») не уходить в pagetitle-exact, а форсить QFv2 коллекцию.
+2. **G2**: для underspecified «для X» (мало модификаторов + широкая категория) включать clarify-slot вместо тихого широкого поиска.
+3. Прогон C12, C15, C16 + регресс.
 
-5. **Обновить `mem://index.md` Core** — одна строка про probe-skip в C5.
+## Шаг 6. Волна H — latency replacement
+1. Замерить hot-spot: где именно 90–100с в replacement (LLM traits? schema race? per-candidate fetch?).
+2. **H1**: ограничить N кандидатов и параллелить fetch; **H2**: graceful timeout вместо throw на schema race.
+3. Прогон C02, C05, C08 + замер p50/p95.
 
-## Инварианты (НЕ нарушать)
-- Data-agnostic (никаких whitelist'ов).
-- Не self-narrowing (probe = только счётчик total, фильтров не применяем).
-- Не блокирует QFv2/jargon/replacement при probe.total=0.
-- `dialogSlots` не трогаем.
-- Silent fallback на любую ошибку.
-- Совместимо со всеми текущими ветками (см. mem://index.md Core).
+## Шаг 7. Итоговый прогон 23/23
+- Полный регресс всех 23 кейсов.
+- Финальная таблица: было → стало, latency-дельты, оставшиеся ❌.
+- Обновить `mem://index.md` по принятым волнам.
+- Сводный отчёт тебе.
+
+## Технические детали (для меня, не для UI)
+- Все вызовы — прод-edge `chat-consultant` (V1), без виджета.
+- Параллелить независимые curl и чтения логов в одном tool-блоке.
+- Между правкой и прогоном — `deno check` обязателен.
+- Любая правка вне `supabase/functions/chat-consultant/` и `_shared/` — только если без неё нельзя.
+- Никаких новых memory-правил до окончания волны (чтобы не закрепить полу-фикс).
+
+## Точки остановки (когда я тебя дёргаю)
+- После Шага 2 — подтверди приоритет волн (или «как в плане»).
+- После каждой волны — короткий статус: что починилось, что сломалось.
+- При неожиданной регрессии в зелёных кейсах — стоп и спросить.
