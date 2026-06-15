@@ -8384,8 +8384,44 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 console.log(`[QueryFirstV2] pool query="${enrichedQuery}" size=${pool.length} (perPage=${QF_POOL_SIZE})`);
                 logAddStep({ step: 'qfv2-pool', total: pool.length, ms: Date.now() - poolStartMs, meta: { query: enrichedQuery.substring(0, 200), perPage: QF_POOL_SIZE, enrichMods: enrichMods.slice(0, 5) } });
 
+                // Волна C1 (2026-06-15): pool-jargon ПЕРЕД bare-noun retry.
+                // Раньше: enriched=0 → retry с голым noun → 100 случайных товаров (мусор)
+                // → C2 не срабатывал (pool>0), модификатор не резолвился,
+                // qfv2_pool_no_modifiers молча показывал не-кукурузные лампы.
+                // Теперь: jargon по originalQuery (canonical «лампа кукуруза»→«corn lamp»);
+                // успех → используем как pool и пропускаем bare-noun retry.
                 if (pool.length === 0 && enrichedQuery !== noun) {
-                  console.log(`[QueryFirstV2] enriched pool=0 → retry with bare noun="${noun}"`);
+                  try {
+                    const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
+                    const jr = await tryJargonFallback({
+                      originalQuery: userMessage || enrichedQuery,
+                      openrouterKey: appSettings.openrouter_api_key!,
+                      searchFn: (alt) => searchProductsByCandidate(
+                        { query: alt, brand: null, category: null, min_price: null, max_price: null },
+                        appSettings.volt220_api_token!,
+                        QF_POOL_SIZE,
+                        undefined,
+                        4000,
+                      ),
+                      log: (event, data) => console.log(`[Chat req=${reqId}] [QFv2-PreJargon] ${event}`, data ?? {}),
+                    });
+                    const sanitized = ((jr.products || []) as Product[])
+                      .filter(p => typeof p.price === 'number' && (p.price as number) > 0);
+                    if (sanitized.length > 0) {
+                      pool = sanitized;
+                      console.log(`[QueryFirstV2] query_first_v2_pre_jargon noun="${noun}" alt="${jr.matchedAlternative}" count=${pool.length}`);
+                      logAddStep({ step: 'qfv2-pre-jargon', total: pool.length, meta: { noun, originalQuery: userMessage || enrichedQuery, matchedAlternative: jr.matchedAlternative } });
+                    } else {
+                      logAddStep({ step: 'qfv2-pre-jargon-skip', meta: { reason: 'empty', noun } });
+                    }
+                  } catch (jrErr) {
+                    console.warn(`[Chat req=${reqId}] [QFv2-PreJargon] silent fail:`, jrErr instanceof Error ? jrErr.message : String(jrErr));
+                    logAddStep({ step: 'qfv2-pre-jargon-skip', meta: { reason: 'error', noun, error: jrErr instanceof Error ? jrErr.message : String(jrErr) } });
+                  }
+                }
+
+                if (pool.length === 0 && enrichedQuery !== noun) {
+                  console.log(`[QueryFirstV2] enriched pool=0 & pre-jargon empty → retry with bare noun="${noun}"`);
                   const poolRetryStart = Date.now();
                   pool = await searchProductsByCandidate(
                     { query: noun, brand: null, category: null, min_price: null, max_price: null },
@@ -8714,7 +8750,11 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // ТОЛЬКО когда schemaSource='bootstrap' (prefetch упал/timeout).
                   if (schemaSource === 'bootstrap' && resolverUnresolved.length > 0 && Object.keys(resolvedFilters).length < modifiers.length) {
                     const escStart = Date.now();
-                    try {
+                    // Волна C3 (2026-06-15): hard cap 6с на весь escalate-блок.
+                    // Раньше getCategoryOptionsSchema + resolveFiltersWithLLM могли висеть 33с
+                    // (legacy-sampling без таймаута) → весь pipeline 51с при бесполезном MISS.
+                    const ESCALATE_BUDGET_MS = 6000;
+                    const escalatePromise = (async () => {
                       // Доминирующая категория pool'а.
                       const catCounts = new Map<string, number>();
                       for (const p of pool) {
@@ -8725,65 +8765,73 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       if (!dominantCat) {
                         console.log(`[QueryFirstV2] escalate SKIP: no dominant category in pool`);
                         logAddStep({ step: 'qfv2-escalate-skip', meta: { reason: 'no_dominant_category', unresolved: resolverUnresolved } });
-                      } else {
-                        const fullRes = await (prefetchedFullSchema ?? getCategoryOptionsSchema(dominantCat, appSettings.volt220_api_token!));
-                        if (!fullRes.schema || fullRes.schema.size === 0) {
-                          console.log(`[QueryFirstV2] escalate SKIP: full schema empty for "${dominantCat}"`);
-                          logAddStep({ step: 'qfv2-escalate-skip', meta: { reason: 'empty_full_schema', dominantCat, unresolved: resolverUnresolved } });
-                        } else {
-                          console.log(`[QueryFirstV2] escalate: dominantCat="${dominantCat}" fullSchema=${fullRes.schema.size}keys src=${fullRes.source} → re-resolve unresolved=[${resolverUnresolved.join(', ')}]`);
-                          const { resolved: rRaw2, unresolved: rUnresolved2, unresolvedDetails: rDetails2 } = await resolveFiltersWithLLM(
-                            pool,
-                            resolverUnresolved,
-                            appSettings,
-                            classification?.critical_modifiers,
-                            fullRes.schema,
-                            fullRes.confidence || 'full',
-                            noun
-                          );
-                          const escResolved = flattenResolvedFilters(rRaw2);
-                          if (Object.keys(escResolved).length > 0) {
-                            // Merge: escalated wins over bootstrap (более полный источник).
-                            const merged = { ...resolvedFilters, ...escResolved };
-                            // Replace bootstrapSchema buckets with full ones for keys we resolved
-                            // → buildAttemptedFacets() будет иметь правильные alternativeValues.
-                            for (const k of Object.keys(escResolved)) {
-                              const fullBucket = fullRes.schema.get(k);
-                              if (fullBucket) bootstrapSchema.set(k, fullBucket);
-                            }
-                            resolvedFilters = merged;
-                            // Drop now-resolved modifiers from unresolvedDetails.
-                            const stillUnresolved = new Set((rUnresolved2 || []).map(m => m.toLowerCase().trim()));
-                            const justResolvedMods = new Set(
-                              resolverUnresolved
-                                .filter(m => !stillUnresolved.has(m.toLowerCase().trim()))
-                                .map(m => m.toLowerCase().trim())
-                            );
-                            resolverUnresolvedDetails = (rDetails2 || []).concat(
-                              resolverUnresolvedDetails.filter(d => !justResolvedMods.has(d.modifier.toLowerCase().trim()))
-                            );
-                            resolverUnresolved = rUnresolved2 || [];
-                            console.log(`[QueryFirstV2] escalate WIN: +${Object.keys(escResolved).length} filters merged=${JSON.stringify(merged)} stillUnresolved=[${resolverUnresolved.join(', ')}] elapsed=${Date.now() - escStart}ms`);
-                            logAddStep({ step: 'qfv2-escalate-win', ms: Date.now() - escStart, meta: { dominantCat, src: fullRes.source, escalatedResolved: escResolved, stillUnresolved: resolverUnresolved } });
-                            // Rewrite cache with escalated (richer) result.
-                            if (resolvedFiltersCacheKeyStr) {
-                              storeCachedResolvedFiltersAsync(resolvedFiltersCacheKeyStr, {
-                                resolvedFilters,
-                                resolverUnresolved,
-                                resolverUnresolvedDetails,
-                              });
-                            }
-                          } else {
-                            console.log(`[QueryFirstV2] escalate MISS: full schema didn't resolve any modifier (still unresolved=[${(rUnresolved2 || []).join(', ')}])`);
-                            logAddStep({ step: 'qfv2-escalate-miss', ms: Date.now() - escStart, meta: { dominantCat, src: fullRes.source, stillUnresolved: rUnresolved2 || [] } });
-                          }
-                        }
+                        return;
                       }
+                      const fullRes = await (prefetchedFullSchema ?? getCategoryOptionsSchema(dominantCat, appSettings.volt220_api_token!));
+                      if (!fullRes.schema || fullRes.schema.size === 0) {
+                        console.log(`[QueryFirstV2] escalate SKIP: full schema empty for "${dominantCat}"`);
+                        logAddStep({ step: 'qfv2-escalate-skip', meta: { reason: 'empty_full_schema', dominantCat, unresolved: resolverUnresolved } });
+                        return;
+                      }
+                      console.log(`[QueryFirstV2] escalate: dominantCat="${dominantCat}" fullSchema=${fullRes.schema.size}keys src=${fullRes.source} → re-resolve unresolved=[${resolverUnresolved.join(', ')}]`);
+                      const { resolved: rRaw2, unresolved: rUnresolved2, unresolvedDetails: rDetails2 } = await resolveFiltersWithLLM(
+                        pool,
+                        resolverUnresolved,
+                        appSettings,
+                        classification?.critical_modifiers,
+                        fullRes.schema,
+                        fullRes.confidence || 'full',
+                        noun
+                      );
+                      const escResolved = flattenResolvedFilters(rRaw2);
+                      if (Object.keys(escResolved).length > 0) {
+                        const merged = { ...resolvedFilters, ...escResolved };
+                        for (const k of Object.keys(escResolved)) {
+                          const fullBucket = fullRes.schema.get(k);
+                          if (fullBucket) bootstrapSchema.set(k, fullBucket);
+                        }
+                        resolvedFilters = merged;
+                        const stillUnresolved = new Set((rUnresolved2 || []).map(m => m.toLowerCase().trim()));
+                        const justResolvedMods = new Set(
+                          resolverUnresolved
+                            .filter(m => !stillUnresolved.has(m.toLowerCase().trim()))
+                            .map(m => m.toLowerCase().trim())
+                        );
+                        resolverUnresolvedDetails = (rDetails2 || []).concat(
+                          resolverUnresolvedDetails.filter(d => !justResolvedMods.has(d.modifier.toLowerCase().trim()))
+                        );
+                        resolverUnresolved = rUnresolved2 || [];
+                        console.log(`[QueryFirstV2] escalate WIN: +${Object.keys(escResolved).length} filters merged=${JSON.stringify(merged)} stillUnresolved=[${resolverUnresolved.join(', ')}] elapsed=${Date.now() - escStart}ms`);
+                        logAddStep({ step: 'qfv2-escalate-win', ms: Date.now() - escStart, meta: { dominantCat, src: fullRes.source, escalatedResolved: escResolved, stillUnresolved: resolverUnresolved } });
+                        if (resolvedFiltersCacheKeyStr) {
+                          storeCachedResolvedFiltersAsync(resolvedFiltersCacheKeyStr, {
+                            resolvedFilters,
+                            resolverUnresolved,
+                            resolverUnresolvedDetails,
+                          });
+                        }
+                      } else {
+                        console.log(`[QueryFirstV2] escalate MISS: full schema didn't resolve any modifier (still unresolved=[${(rUnresolved2 || []).join(', ')}])`);
+                        logAddStep({ step: 'qfv2-escalate-miss', ms: Date.now() - escStart, meta: { dominantCat, src: fullRes.source, stillUnresolved: rUnresolved2 || [] } });
+                      }
+                    })();
+                    try {
+                      await Promise.race([
+                        escalatePromise,
+                        new Promise((_, reject) => setTimeout(() => reject(new Error(`escalate_timeout_${ESCALATE_BUDGET_MS}ms`)), ESCALATE_BUDGET_MS)),
+                      ]);
                     } catch (escErr) {
-                      console.log(`[QueryFirstV2] escalate error=${(escErr as Error).message} → silent skip (continue with bootstrap result)`);
-                      logAddStep({ step: 'qfv2-escalate-error', ms: Date.now() - escStart, meta: { error: String((escErr as Error).message), unresolved: resolverUnresolved } });
+                      const msg = (escErr as Error).message;
+                      const isTimeout = msg.startsWith('escalate_timeout_');
+                      console.log(`[QueryFirstV2] escalate ${isTimeout ? 'TIMEOUT' : 'error'}=${msg} elapsed=${Date.now() - escStart}ms → silent skip`);
+                      logAddStep({
+                        step: isTimeout ? 'qfv2-escalate-timeout' : 'qfv2-escalate-error',
+                        ms: Date.now() - escStart,
+                        meta: { error: msg, unresolved: resolverUnresolved, budget_ms: ESCALATE_BUDGET_MS },
+                      });
                     }
                   }
+
 
                   // ── (5/6) Final search.
                   // (5a) modifiers + at least one resolved option → re-query with options.
@@ -8852,7 +8900,56 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     return out;
                   };
 
-                  if (Object.keys(resolvedFilters).length > 0 || resolverUnresolvedDetails.length > 0) {
+                  // Волна C2 (2026-06-15): если модификаторы были, но НИ ОДИН не резолвился
+                  // (resolved={}, unresolvedDetails=[]) — раньше падали в qfv2_pool_no_modifiers
+                  // и молча показывали голову pool. Это нарушение honest-empty:
+                  // пользователь спросил «лампа кукуруза», а получил произвольные лампы.
+                  // Последний шанс: jargon на whole query; если пусто → honest-empty.
+                  if (modifiers.length > 0 && resolverUnresolved.length > 0 && Object.keys(resolvedFilters).length === 0 && resolverUnresolvedDetails.length === 0) {
+                    let lastChanceWon = false;
+                    try {
+                      const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
+                      const jr = await tryJargonFallback({
+                        originalQuery: userMessage || `${noun} ${modifiers.join(' ')}`,
+                        openrouterKey: appSettings.openrouter_api_key!,
+                        searchFn: (alt) => searchProductsByCandidate(
+                          { query: alt, brand: null, category: null, min_price: null, max_price: null },
+                          appSettings.volt220_api_token!,
+                          10,
+                        ),
+                        log: (event, data) => console.log(`[Chat req=${reqId}] [QFv2-LastChanceJargon] ${event}`, data ?? {}),
+                      });
+                      const sanitized = ((jr.products || []) as Product[])
+                        .filter(p => typeof p.price === 'number' && (p.price as number) > 0);
+                      if (sanitized.length > 0) {
+                        displayList = sanitized.slice(0, 10);
+                        branchTag = 'qfv2_jargon_recovery';
+                        totalCollectedBranch = 'jargon-fallback';
+                        lastChanceWon = true;
+                        console.log(`[QueryFirstV2] query_first_v2_last_chance_jargon noun="${noun}" alt="${jr.matchedAlternative}" count=${sanitized.length}`);
+                        logAddStep({ step: 'qfv2-last-chance-jargon', total: sanitized.length, meta: { noun, originalQuery: userMessage || noun, matchedAlternative: jr.matchedAlternative, unresolved: resolverUnresolved } });
+                      }
+                    } catch (jrErr) {
+                      console.warn(`[Chat req=${reqId}] [QFv2-LastChanceJargon] silent fail:`, jrErr instanceof Error ? jrErr.message : String(jrErr));
+                    }
+                    if (!lastChanceWon) {
+                      // Honest-empty с unresolved modifiers как «attempted facets» без values.
+                      qfv2HonestEmptyContext = {
+                        noun,
+                        originalQuery: userMessage || noun,
+                        attemptedFacets: resolverUnresolved.map(m => ({
+                          caption: m,
+                          value: m,
+                          alternativeValues: [],
+                        })),
+                      };
+                      displayList = [];
+                      branchTag = 'qfv2_honest_empty_no_match';
+                      qfV2DroppedFacetCaption = resolverUnresolved[0] || null;
+                      console.log(`[QueryFirstV2] query_first_v2_honest_empty_no_match noun="${noun}" unresolved=${JSON.stringify(resolverUnresolved)}`);
+                      logAddStep({ step: 'qfv2-honest-empty-no-match', total: 0, meta: { noun, unresolved: resolverUnresolved } });
+                    }
+                  } else if (Object.keys(resolvedFilters).length > 0 || resolverUnresolvedDetails.length > 0) {
                     // PARTIAL-UNRESOLVED HONEST-EMPTY (2026-05-07):
                     // если LLM распознал ключ фасета, но значения нет в каталоге
                     // (например «7Вт» при доступных {5.5, 6, 8, 10}) — показывать
