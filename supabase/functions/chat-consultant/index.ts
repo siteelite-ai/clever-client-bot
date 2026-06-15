@@ -11583,6 +11583,7 @@ ${productInstructions}`;
             totalCollected,
             suppressTail: tailWasOfferedLastTurn,
             unfulfilledSplit: unfulfilledSplit ?? undefined,
+            brandUnavailable: qfBrandUnavailable ?? undefined,
           });
       // Compare-branch: честный дисклеймер про не найденные / отсутствующие в наличии якоря — перед карточками.
       // Никаких подстановок-аксессуаров; пользователь видит, что ровно этих моделей в каталоге / в наличии нет.
