@@ -8219,6 +8219,33 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     },
                   });
 
+                  // ── (3.5) PREFETCH full category-options schema в параллель с filter-llm.
+                  // На escalate-пути экономит 3-5s (typical) сетевого round-trip к
+                  // 220volt API + double-wrapping parse, потому что к моменту escalate
+                  // promise уже зарезолвлен / в полёте. Если escalate не нужен — promise
+                  // безвредно резолвится в фоне (результат игнорируется). Идемпотентно
+                  // с in-memory cache в getCategoryOptionsSchema. (2026-06-15)
+                  let prefetchedFullSchema:
+                    | Promise<{ schema: Map<string, { caption: string; values: Set<string> }>; source: string; confidence?: 'full' | 'partial' }>
+                    | null = null;
+                  if (modifiers.length > 0) {
+                    const catCounts0 = new Map<string, number>();
+                    for (const p of pool) {
+                      const cpt = (p as any)?.category?.pagetitle?.trim?.();
+                      if (cpt) catCounts0.set(cpt, (catCounts0.get(cpt) || 0) + 1);
+                    }
+                    const dominantCat0 = [...catCounts0.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+                    if (dominantCat0) {
+                      prefetchedFullSchema = getCategoryOptionsSchema(dominantCat0, appSettings.volt220_api_token!)
+                        .catch((e: unknown) => {
+                          console.warn(`[QueryFirstV2] prefetch schema err: ${e instanceof Error ? e.message : String(e)}`);
+                          return { schema: new Map(), source: 'error' } as any;
+                        });
+                      logAddStep({ step: 'qfv2-schema-prefetch', meta: { dominantCat: dominantCat0 } });
+                    }
+                  }
+
+
                   // ── (4) Resolve modifiers → option filters against the live schema.
                   // If no modifiers: skip resolution, just display pool.
                   let resolvedFilters: Record<string, string> = {};
