@@ -8536,6 +8536,14 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                             resolverUnresolved = rUnresolved2 || [];
                             console.log(`[QueryFirstV2] escalate WIN: +${Object.keys(escResolved).length} filters merged=${JSON.stringify(merged)} stillUnresolved=[${resolverUnresolved.join(', ')}] elapsed=${Date.now() - escStart}ms`);
                             logAddStep({ step: 'qfv2-escalate-win', ms: Date.now() - escStart, meta: { dominantCat, src: fullRes.source, escalatedResolved: escResolved, stillUnresolved: resolverUnresolved } });
+                            // Rewrite cache with escalated (richer) result.
+                            if (resolvedFiltersCacheKeyStr) {
+                              storeCachedResolvedFiltersAsync(resolvedFiltersCacheKeyStr, {
+                                resolvedFilters,
+                                resolverUnresolved,
+                                resolverUnresolvedDetails,
+                              });
+                            }
                           } else {
                             console.log(`[QueryFirstV2] escalate MISS: full schema didn't resolve any modifier (still unresolved=[${(rUnresolved2 || []).join(', ')}])`);
                             logAddStep({ step: 'qfv2-escalate-miss', ms: Date.now() - escStart, meta: { dominantCat, src: fullRes.source, stillUnresolved: rUnresolved2 || [] } });
