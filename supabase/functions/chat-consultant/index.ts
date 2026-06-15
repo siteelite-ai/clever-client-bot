@@ -10466,7 +10466,8 @@ ${directAnswerBlock}
               const allCritical = Array.isArray(classification?.critical_modifiers) ? classification!.critical_modifiers! : [];
               const extraCritical = allCritical
                 .map((m: string) => (m || '').trim())
-                .filter((m: string) => m.length > 0 && !matchedAltLc.includes(m.toLowerCase()));
+                // length>=3 — отсекаем служебные слова (на, и, с, в, у, по), см. defect 2026-06-15.
+                .filter((m: string) => m.length >= 3 && !matchedAltLc.includes(m.toLowerCase()));
               const noun = (classification?.product_category || '').trim() || extractedIntent.originalQuery.split(/\s+/)[0];
               if (noun && extraCritical.length >= 1) {
                 const { probeUnfulfilledCombination } = await import('../_shared/unfulfilled-split.ts');
