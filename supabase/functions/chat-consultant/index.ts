@@ -6075,6 +6075,69 @@ function persistSlotsAsync(sessionId: string, slots: DialogSlots): void {
   })();
 }
 
+// ─── QFv2 Resolved-Filters Cache (V1, 2026-06-15) ──────────────────────────
+// Cache key: (noun, sorted modifiers, dominantCat). TTL = 1h.
+// Hit → пропускаем prefetch+merge+filter-llm+escalate (-9..-11s).
+// Хранится в chat_cache_v2. Silent fail на любой ошибке (cache не блокирует).
+const RESOLVED_FILTERS_TTL_SEC = 60 * 60;
+
+type CachedResolvedFilters = {
+  resolvedFilters: Record<string, string>;
+  resolverUnresolved: string[];
+  resolverUnresolvedDetails: Array<{ modifier: string; key: string; caption: string; requestedValue: string; availableValues: string[] }>;
+  cachedAt: string;
+};
+
+function resolvedFiltersCacheKey(noun: string, modifiers: string[], dominantCat: string): string {
+  const normNoun = noun.toLowerCase().trim();
+  const normMods = [...modifiers].map(m => m.toLowerCase().trim()).filter(Boolean).sort().join('|');
+  const normCat = dominantCat.toLowerCase().trim();
+  return `qfv2:resolved:${normNoun}::${normMods}::${normCat}`;
+}
+
+async function loadCachedResolvedFilters(key: string): Promise<CachedResolvedFilters | null> {
+  const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
+  const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return null;
+  try {
+    const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    const { data, error } = await sb
+      .from('chat_cache_v2')
+      .select('cache_value, expires_at')
+      .eq('cache_key', key)
+      .maybeSingle();
+    if (error || !data) return null;
+    if (new Date(data.expires_at as string).getTime() < Date.now()) return null;
+    return data.cache_value as CachedResolvedFilters;
+  } catch (e) {
+    console.warn('[QFv2-cache] load failed:', e);
+    return null;
+  }
+}
+
+function storeCachedResolvedFiltersAsync(key: string, value: Omit<CachedResolvedFilters, 'cachedAt'>): void {
+  const SUPABASE_URL = Deno.env.get('SUPABASE_URL');
+  const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+  if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) return;
+  const expiresAt = new Date(Date.now() + RESOLVED_FILTERS_TTL_SEC * 1000).toISOString();
+  const payload: CachedResolvedFilters = { ...value, cachedAt: new Date().toISOString() };
+  (async () => {
+    try {
+      const sb = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+      const { error } = await sb
+        .from('chat_cache_v2')
+        .upsert(
+          { cache_key: key, cache_value: payload, expires_at: expiresAt },
+          { onConflict: 'cache_key' },
+        );
+      if (error) console.warn('[QFv2-cache] upsert error:', error.message);
+    } catch (e) {
+      console.warn('[QFv2-cache] upsert exception:', e);
+    }
+  })();
+}
+
+
 export async function handleChatConsultant(req: Request): Promise<Response> {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders });
