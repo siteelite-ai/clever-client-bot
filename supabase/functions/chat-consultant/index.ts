@@ -28,6 +28,7 @@ import { wrapWithHeartbeat } from '../_shared/sse-heartbeat.ts';
 import { buildFacetsSummaryContent } from '../_shared/facets-summary.ts';
 import {
   applyBrandExclude,
+  applyBrandExcludeWithRelaxation,
   applyMarkingGuard,
   extractMarkingTokens,
   extractOriginalBrand,
