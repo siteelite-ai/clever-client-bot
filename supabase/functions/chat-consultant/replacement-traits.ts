@@ -210,6 +210,22 @@ export function applyBrandExclude<T extends { vendor?: string | null; options?: 
   return { filtered, excluded };
 }
 
+/** Graceful обёртка над `applyBrandExclude`: если exclude обнулил пул (категория
+ *  моно-брендовая) — откатываем к исходным кандидатам и помечаем `relaxed=true`.
+ *  Систем­но: «другой бренд» — желаемое, но не обязательное; лучше показать
+ *  same-brand аналоги с честным disclaimer'ом, чем уйти в Soft-404.
+ *  Data-agnostic: нет whitelist'ов брендов/категорий. */
+export function applyBrandExcludeWithRelaxation<T extends { vendor?: string | null; options?: OriginalOption[] | null; pagetitle?: string | null }>(
+  candidates: T[],
+  originalBrand: string | null,
+): { filtered: T[]; excluded: number; relaxed: boolean } {
+  const be = applyBrandExclude(candidates, originalBrand);
+  if (be.filtered.length === 0 && be.excluded > 0 && candidates.length > 0) {
+    return { filtered: candidates, excluded: 0, relaxed: true };
+  }
+  return { filtered: be.filtered, excluded: be.excluded, relaxed: false };
+}
+
 /** Pagetitle-leak guard: когда id оригинала неизвестен, кандидат с exact-совпадением
  *  pagetitle = сам оригинал. Сравнение case-insensitive, trim, collapse spaces. */
 export function isOriginalByTitle(
