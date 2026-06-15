@@ -10183,7 +10183,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // не аналог (классический случай ЩРН vs ЩРВ — разный тип монтажа,
                   // отдельного фасета в каталоге нет).
                   let weakened = false;
-                  let weakenedReason: 'marking_mismatch' | 'few_results' | 'brand_dominant' | undefined = undefined;
+                  let weakenedReason: 'marking_mismatch' | 'few_results' | 'brand_dominant' | 'trait_relaxed' | undefined = undefined;
                   if (rFinal.length > 0 && originalMarkings.length > 0) {
                     const guarded = applyMarkingGuard(rFinal, originalMarkings);
                     if (guarded.mismatch) {
