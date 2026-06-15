@@ -8543,6 +8543,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       .filter(p => typeof p.price === 'number' && (p.price as number) > 0);
                     if (sanitized.length > 0) {
                       pool = sanitized;
+                      pendingJargonClarify = { matchedAlternative: jr.matchedAlternative!, noun, originalQuery: userMessage || noun, jargonCount: sanitized.length };
                       console.log(`[QueryFirstV2] query_first_v2_pool_jargon noun="${noun}" alt="${jr.matchedAlternative}" count=${pool.length}`);
                       logAddStep({ step: 'qfv2-pool-jargon', total: pool.length, meta: { noun, originalQuery: userMessage || noun, matchedAlternative: jr.matchedAlternative } });
                     } else {
