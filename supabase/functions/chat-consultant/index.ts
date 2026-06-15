@@ -9776,6 +9776,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     weakenedReason = 'few_results';
                     console.log(`[Chat] Replacement L2 weakened: few_results count=${rFinal.length}`);
                   }
+                  // Brand-dominant flag (set by relaxation above) — приоритет ниже marking_mismatch,
+                  // но выше few_results: if relaxation сработал, обязательно disclaimer-им.
+                  if (brandExcludeRelaxed && !weakened) {
+                    weakened = true;
+                    weakenedReason = 'brand_dominant';
+                  }
 
                   if (rFinal.length > 0) {
                     { const _r = pickDisplayWithTotal(rFinal); foundProducts = _r.displayed; totalCollected = _r.total; totalCollectedBranch = 'replacement_matcher'; console.log(`[Chat] DisplayLimit: collected=${_r.total} displayed=${_r.displayed.length} branch=replacement_matcher zeroFiltered=${_r.filteredZeroPrice}`); }
