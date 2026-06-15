@@ -10035,9 +10035,13 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   console.log(`[Chat] Replacement (legacy) original-leak filter: ${fBeforeLeak} → ${replFiltered.length}`);
                 }
                 const origBrandL = extractOriginalBrand(originalProduct as any);
+                let legacyBrandExcludeRelaxed = false;
                 if (origBrandL) {
-                  const be = applyBrandExclude(replFiltered, origBrandL);
-                  if (be.excluded > 0) {
+                  const be = applyBrandExcludeWithRelaxation(replFiltered, origBrandL);
+                  if (be.relaxed) {
+                    console.log(`[Chat] Replacement (legacy) brand-exclude RELAXED "${origBrandL}" (mono-brand category): kept ${replFiltered.length} same-brand candidates`);
+                    legacyBrandExcludeRelaxed = true;
+                  } else if (be.excluded > 0) {
                     console.log(`[Chat] Replacement (legacy) brand-exclude "${origBrandL}": ${replFiltered.length} → ${be.filtered.length} (-${be.excluded})`);
                   }
                   replFiltered = be.filtered;
