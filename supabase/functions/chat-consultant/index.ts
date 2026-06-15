@@ -9023,6 +9023,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                         branchTag = 'qfv2_jargon_recovery';
                         totalCollectedBranch = 'jargon-fallback';
                         lastChanceWon = true;
+                        pendingJargonClarify = { matchedAlternative: jr.matchedAlternative!, noun, originalQuery: userMessage || noun, jargonCount: sanitized.length };
                         console.log(`[QueryFirstV2] query_first_v2_last_chance_jargon noun="${noun}" alt="${jr.matchedAlternative}" count=${sanitized.length}`);
                         logAddStep({ step: 'qfv2-last-chance-jargon', total: sanitized.length, meta: { noun, originalQuery: userMessage || noun, matchedAlternative: jr.matchedAlternative, unresolved: resolverUnresolved } });
                       }
