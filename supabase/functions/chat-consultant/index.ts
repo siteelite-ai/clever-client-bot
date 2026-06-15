@@ -9716,9 +9716,28 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     }
                   }
 
-                  // Exclude original product
+                  // Exclude original product (by id, by exact pagetitle, by same brand)
                   const originalId = originalProduct?.id;
+                  const beforeLeak = rFinal.length;
                   if (originalId) rFinal = rFinal.filter(p => p.id !== originalId);
+                  // Title-leak guard: страховка когда id оригинала недоступен (anchor LVL2/LVL3
+                  // через query/category — id может не совпасть с резолвом из replacement-search).
+                  const markingSourceLeak = classification?.product_name || originalProduct?.pagetitle || '';
+                  if (markingSourceLeak) {
+                    rFinal = rFinal.filter(p => !isOriginalByTitle((p as any).pagetitle, markingSourceLeak));
+                  }
+                  if (beforeLeak !== rFinal.length) {
+                    console.log(`[Chat] Replacement original-leak filter: ${beforeLeak} → ${rFinal.length} (source="${markingSourceLeak}")`);
+                  }
+                  // Brand-exclude: аналог = другой бренд при тех же характеристиках.
+                  const origBrand = extractOriginalBrand(originalProduct as any);
+                  if (origBrand) {
+                    const be = applyBrandExclude(rFinal, origBrand);
+                    if (be.excluded > 0) {
+                      console.log(`[Chat] Replacement brand-exclude "${origBrand}": ${rFinal.length} → ${be.filtered.length} (-${be.excluded})`);
+                    }
+                    rFinal = be.filtered;
+                  }
                   // HARD price=0 filter (replacement-ветка не имеет soft-fallback на «под заказ»).
                   const rBeforeZero = rFinal.length;
                   rFinal = rFinal.filter(p => ((p as any)?.price ?? 0) > 0);
