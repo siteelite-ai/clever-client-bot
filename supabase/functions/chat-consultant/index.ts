@@ -8246,6 +8246,49 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   }
 
 
+                  // ── (3.6) MERGE prefetched full schema INTO bootstrap (single-pass).
+                  // Раньше: bootstrap → filter-llm #1 → if unresolved → fetch full → filter-llm #2
+                  //   = два Claude-вызова (~18-20с total) для projector/lamp-кейсов.
+                  // Теперь: ждём prefetch (race 5с), мержим full ∪ bootstrap (full wins —
+                  // более полные value-наборы), один filter-llm против richer схемы.
+                  // Если prefetch не успел / упал → schemaSource='bootstrap' и старый
+                  // escalate-блок ниже доберёт нерешённые модификаторы (graceful degrade).
+                  // (2026-06-15 Single-Pass Schema, см. mem://features/qfv2-single-pass-schema)
+                  let schemaSource: 'bootstrap' | 'merged' = 'bootstrap';
+                  if (prefetchedFullSchema && modifiers.length > 0) {
+                    const mergeStart = Date.now();
+                    const fullResRace = await Promise.race([
+                      prefetchedFullSchema.then(r => ({ ok: true as const, r })),
+                      new Promise<{ ok: false }>(res => setTimeout(() => res({ ok: false }), 5000)),
+                    ]);
+                    if (fullResRace.ok && fullResRace.r?.schema && fullResRace.r.schema.size > 0) {
+                      const fullSchema = fullResRace.r.schema;
+                      let mergedKeysAdded = 0;
+                      let mergedValuesAdded = 0;
+                      for (const [k, fullBucket] of fullSchema.entries()) {
+                        const existing = bootstrapSchema.get(k);
+                        if (!existing) {
+                          // Полностью новый key — копируем bucket.
+                          bootstrapSchema.set(k, { caption: fullBucket.caption, values: new Set(fullBucket.values) });
+                          mergedKeysAdded++;
+                          mergedValuesAdded += fullBucket.values.size;
+                        } else {
+                          // Существующий key — добавляем недостающие values; caption из full win'ит.
+                          const before = existing.values.size;
+                          for (const v of fullBucket.values) existing.values.add(v);
+                          mergedValuesAdded += existing.values.size - before;
+                          if (fullBucket.caption) existing.caption = fullBucket.caption;
+                        }
+                      }
+                      schemaSource = 'merged';
+                      console.log(`[QueryFirstV2] schema merged: +${mergedKeysAdded} keys, +${mergedValuesAdded} values (src=${fullResRace.r.source}) — single-pass filter-llm`);
+                      logAddStep({ step: 'qfv2-schema-merged', ms: Date.now() - mergeStart, meta: { keys_added: mergedKeysAdded, values_added: mergedValuesAdded, src: fullResRace.r.source, total_keys: bootstrapSchema.size } });
+                    } else {
+                      console.log(`[QueryFirstV2] schema prefetch ${fullResRace.ok ? 'empty' : 'timeout(5s)'} → escalate path остаётся как fallback`);
+                      logAddStep({ step: 'qfv2-schema-merged-skip', ms: Date.now() - mergeStart, meta: { reason: fullResRace.ok ? 'empty' : 'timeout' } });
+                    }
+                  }
+
                   // ── (4) Resolve modifiers → option filters against the live schema.
                   // If no modifiers: skip resolution, just display pool.
                   let resolvedFilters: Record<string, string> = {};
