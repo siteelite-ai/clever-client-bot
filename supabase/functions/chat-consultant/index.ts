@@ -5113,8 +5113,16 @@ export function buildDeterministicShortCircuitContent(params: {
     noun: string;
     sections: Array<{ label: string; products: Product[] }>;
   };
+  /**
+   * Wave B1 2026-06-15: brand-not-in-pool prefix.
+   * Когда задан — перед карточками добавляется честная фраза:
+   * «Прямого аналога <brand> в нашем каталоге не нашёл. Похожие позиции от
+   *  других брендов (<availableBrands>):». Принцип «бот никогда не выдумывает
+   * подмену бренда молча»: пользователь явно видит, что бренд отсутствует.
+   */
+  brandUnavailable?: { brand: string; availableBrands: string[] };
 }): string {
-  const { products, reason, userMessage, effectivePriceIntent, subIntent, suppressTail, unfulfilledSplit } = params;
+  const { products, reason, userMessage, effectivePriceIntent, subIntent, suppressTail, unfulfilledSplit, brandUnavailable } = params;
 
   // ── Split-рендер «комбинации нет, но компоненты есть».
   if (unfulfilledSplit && unfulfilledSplit.sections.length >= 2) {
