@@ -8418,7 +8418,11 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   let resolvedFilters: Record<string, string> = {};
                   let resolverUnresolvedDetails: Array<{ modifier: string; key: string; caption: string; requestedValue: string; availableValues: string[] }> = [];
                   let resolverUnresolved: string[] = [];
-                  if (modifiers.length > 0 && bootstrapSchema.size > 0) {
+                  if (resolvedFiltersCacheHit) {
+                    resolvedFilters = cachedResolvedFilters;
+                    resolverUnresolved = cachedResolverUnresolved;
+                    resolverUnresolvedDetails = cachedResolverUnresolvedDetails;
+                  } else if (modifiers.length > 0 && bootstrapSchema.size > 0) {
                     const filterStartMs = Date.now();
                     try {
                       const { resolved: rRaw, unresolved: rUnresolved, unresolvedDetails: rDetails } = await resolveFiltersWithLLM(
@@ -8444,6 +8448,15 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                           unresolvedDetails: resolverUnresolvedDetails.map(d => ({ modifier: d.modifier, key: d.key, caption: d.caption, requestedValue: d.requestedValue, availableValues: d.availableValues.slice(0, 8) })),
                         },
                       });
+                      // Cache write: только при successful LLM call (даже если resolved={} —
+                      // это валидный «нечего матчить» вердикт, экономим повторный вызов).
+                      if (resolvedFiltersCacheKeyStr) {
+                        storeCachedResolvedFiltersAsync(resolvedFiltersCacheKeyStr, {
+                          resolvedFilters,
+                          resolverUnresolved,
+                          resolverUnresolvedDetails,
+                        });
+                      }
                     } catch (rErr) {
                       console.log(`[QueryFirstV2] resolveFilters error=${(rErr as Error).message} → continuing with empty filters`);
                       logAddStep({ step: 'qfv2-filter-llm', ms: Date.now() - filterStartMs, meta: { error: String((rErr as Error).message), modifiers } });
@@ -8452,6 +8465,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     console.log(`[QueryFirstV2] no modifiers → display pool directly`);
                     logAddStep({ step: 'qfv2-filter-llm', meta: { skipped: 'no_modifiers' } });
                   }
+
 
                   // ── (4.5) ESCALATION: bootstrap из pool — это топ-100 товаров по релевантности
                   // запроса. Если модификатор относится к длинному хвосту категории (нишевая
