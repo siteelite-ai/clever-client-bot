@@ -4813,14 +4813,31 @@ function cleanOptionCaption(caption: unknown): string {
   return (parts[0] || '').trim();
 }
 
+/**
+ * Эвристика «бренд = маркировка товара» (2026-06-15, defect B2).
+ * Реальные бренды — латиница (IEK, ABB, Werkel) либо смешанный кейс кириллицы
+ * (Эра, Космос). Маркировки кабелей/проводов (ВВГ, ВВГнг, ПВС, АВВГ, ПУГВВ)
+ * — короткие ALL-CAPS кириллические токены, опц. «нг» + цифры/×/*//.
+ * Data-agnostic: без словарей конкретных серий.
+ */
+function looksLikeMarking(s: string): boolean {
+  const v = (s || '').trim();
+  if (!v) return false;
+  if (v.length > 10) return false;
+  // Чисто кириллица ALL-CAPS (≤6) + опц. «нг» + опц. цифро-маркировка.
+  return /^[А-ЯЁ]{2,6}(нг)?[\s\-\d.,*хХx\/]{0,8}$/u.test(v);
+}
+
 function getBrandFromProduct(product: Product | null | undefined): string {
   if (Array.isArray(product?.options)) {
     const brandOption = product.options.find((o: any) => o && o.key === 'brend__brend');
     const optionBrand = cleanOptionValue(brandOption?.value_ru ?? brandOption?.value);
-    if (optionBrand) return optionBrand;
+    if (optionBrand && !looksLikeMarking(optionBrand)) return optionBrand;
   }
 
-  return typeof product?.vendor === 'string' ? product.vendor.trim() : '';
+  const vendor = typeof product?.vendor === 'string' ? product.vendor.trim() : '';
+  if (vendor && !looksLikeMarking(vendor)) return vendor;
+  return '';
 }
 
 // Форматирование товаров для AI
