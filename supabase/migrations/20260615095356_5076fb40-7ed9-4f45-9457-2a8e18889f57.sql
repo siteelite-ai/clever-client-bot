@@ -1,0 +1,1 @@
+ALTER TABLE public.app_settings ADD COLUMN IF NOT EXISTS c5_clarify_broad_enabled boolean NOT NULL DEFAULT false;

@@ -580,6 +580,8 @@ interface CachedSettings {
   soft_suggest_enabled: boolean;
   /** Compare-branch (sub_intent='compare'). Default false. Когда off — ветка не активируется. */
   compare_branch_enabled: boolean;
+  /** C5 — уточняющий вопрос при размытом каталоговом запросе (см. _shared/c5-broad-detector.ts). Default false. */
+  c5_clarify_broad_enabled: boolean;
 }
 
 async function getAppSettings(): Promise<CachedSettings> {
@@ -601,6 +603,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       query_first_enabled: false,
       soft_suggest_enabled: false,
       compare_branch_enabled: false,
+      c5_clarify_broad_enabled: false,
     };
   }
 
@@ -608,7 +611,7 @@ async function getAppSettings(): Promise<CachedSettings> {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const { data, error } = await supabase
       .from('app_settings')
-      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model, system_prompt, classifier_provider, classifier_model, classifier_prompt, query_first_enabled, soft_suggest_enabled, compare_branch_enabled')
+      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model, system_prompt, classifier_provider, classifier_model, classifier_prompt, query_first_enabled, soft_suggest_enabled, compare_branch_enabled, c5_clarify_broad_enabled')
       .limit(1)
       .single();
 
@@ -627,6 +630,7 @@ async function getAppSettings(): Promise<CachedSettings> {
         query_first_enabled: false,
         soft_suggest_enabled: false,
         compare_branch_enabled: false,
+        c5_clarify_broad_enabled: false,
       };
     }
 
@@ -635,11 +639,15 @@ async function getAppSettings(): Promise<CachedSettings> {
     const qf = (data as { query_first_enabled?: boolean }).query_first_enabled === true;
     const ss = (data as { soft_suggest_enabled?: boolean }).soft_suggest_enabled === true;
     const cb = (data as { compare_branch_enabled?: boolean }).compare_branch_enabled === true;
+    const c5 = (data as { c5_clarify_broad_enabled?: boolean }).c5_clarify_broad_enabled === true;
     if (qf || ss) {
       console.log(`[Settings] V1 sees experimental flags: query_first=${qf} soft_suggest=${ss} (no-op in V1, switch active_pipeline to v2 to use)`);
     }
     if (cb) {
       console.log(`[Settings] V1 compare_branch_enabled=true — compare sub_intent will trigger dedicated branch`);
+    }
+    if (c5) {
+      console.log(`[Settings] V1 c5_clarify_broad_enabled=true — underspecified-broad queries will trigger clarify branch`);
     }
 
     // Fallback to env vars if DB values are empty
@@ -656,6 +664,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       query_first_enabled: qf,
       soft_suggest_enabled: ss,
       compare_branch_enabled: cb,
+      c5_clarify_broad_enabled: c5,
     };
   } catch (e) {
     console.error('[Settings] Failed to load settings:', e);
@@ -672,6 +681,7 @@ async function getAppSettings(): Promise<CachedSettings> {
         query_first_enabled: false,
         soft_suggest_enabled: false,
         compare_branch_enabled: false,
+        c5_clarify_broad_enabled: false,
       };
   }
 }
