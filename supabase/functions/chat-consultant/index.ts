@@ -9079,6 +9079,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                           branchTag = 'qfv2_jargon_recovery';
                           totalCollectedBranch = 'jargon-fallback';
                           jargonRecovered = true;
+                          pendingJargonClarify = { matchedAlternative: jr.matchedAlternative!, noun, originalQuery: userMessage || noun, jargonCount: sanitized.length };
                           console.log(`[QueryFirstV2] query_first_v2_jargon_recovery noun="${noun}" alt="${jr.matchedAlternative}" count=${sanitized.length} elapsed=${Date.now() - qfStart}ms`);
                           logAddStep({ step: 'qfv2-jargon-recovery', total: sanitized.length, meta: { noun, originalQuery: userMessage || noun, matchedAlternative: jr.matchedAlternative, dropped_facet: bootstrapSchema.get(resolverUnresolvedDetails[0].key)?.caption || resolverUnresolvedDetails[0].key } });
                         } else {
