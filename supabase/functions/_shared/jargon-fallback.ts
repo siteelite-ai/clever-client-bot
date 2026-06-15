@@ -199,6 +199,17 @@ export async function tryJargonFallback(input: JargonFallbackInput): Promise<Jar
   const queryTokens = new Set(
     query.toLowerCase().split(/[\s,;/()\-]+/).map(t => t.trim()).filter(t => t.length > 0)
   );
+  // productNoun (classifier.category) тоже исключается — это головное слово
+  // запроса, даже если в исходной строке его не было (классификатор его
+  // восстановил). Иначе LLM-alt типа «кабель ВВГнг 2x1.5» порождает токен
+  // «кабель», который проходит как novel и обнуляет узкоту поиска.
+  const noun = (input.productNoun ?? "").toLowerCase().trim();
+  if (noun.length > 0) {
+    for (const t of noun.split(/[\s,;/()\-]+/)) {
+      const tt = t.trim();
+      if (tt) queryTokens.add(tt);
+    }
+  }
   const seen = new Set<string>();
   const candidates: { query: string; source: "phrase" | "token"; parent: string }[] = [];
   for (const alt of alternatives) {
