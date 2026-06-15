@@ -52,6 +52,7 @@ export type Database = {
           active_pipeline: string
           ai_model: string
           ai_provider: string
+          c5_clarify_broad_enabled: boolean
           classifier_model: string
           classifier_prompt: string | null
           classifier_provider: string
@@ -71,6 +72,7 @@ export type Database = {
           active_pipeline?: string
           ai_model?: string
           ai_provider?: string
+          c5_clarify_broad_enabled?: boolean
           classifier_model?: string
           classifier_prompt?: string | null
           classifier_provider?: string
@@ -90,6 +92,7 @@ export type Database = {
           active_pipeline?: string
           ai_model?: string
           ai_provider?: string
+          c5_clarify_broad_enabled?: boolean
           classifier_model?: string
           classifier_prompt?: string | null
           classifier_provider?: string

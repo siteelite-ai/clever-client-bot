@@ -580,6 +580,8 @@ interface CachedSettings {
   soft_suggest_enabled: boolean;
   /** Compare-branch (sub_intent='compare'). Default false. Когда off — ветка не активируется. */
   compare_branch_enabled: boolean;
+  /** C5 — уточняющий вопрос при размытом каталоговом запросе (см. _shared/c5-broad-detector.ts). Default false. */
+  c5_clarify_broad_enabled: boolean;
 }
 
 async function getAppSettings(): Promise<CachedSettings> {
@@ -601,6 +603,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       query_first_enabled: false,
       soft_suggest_enabled: false,
       compare_branch_enabled: false,
+      c5_clarify_broad_enabled: false,
     };
   }
 
@@ -608,7 +611,7 @@ async function getAppSettings(): Promise<CachedSettings> {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const { data, error } = await supabase
       .from('app_settings')
-      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model, system_prompt, classifier_provider, classifier_model, classifier_prompt, query_first_enabled, soft_suggest_enabled, compare_branch_enabled')
+      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model, system_prompt, classifier_provider, classifier_model, classifier_prompt, query_first_enabled, soft_suggest_enabled, compare_branch_enabled, c5_clarify_broad_enabled')
       .limit(1)
       .single();
 
@@ -627,6 +630,7 @@ async function getAppSettings(): Promise<CachedSettings> {
         query_first_enabled: false,
         soft_suggest_enabled: false,
         compare_branch_enabled: false,
+        c5_clarify_broad_enabled: false,
       };
     }
 
@@ -635,11 +639,15 @@ async function getAppSettings(): Promise<CachedSettings> {
     const qf = (data as { query_first_enabled?: boolean }).query_first_enabled === true;
     const ss = (data as { soft_suggest_enabled?: boolean }).soft_suggest_enabled === true;
     const cb = (data as { compare_branch_enabled?: boolean }).compare_branch_enabled === true;
+    const c5 = (data as { c5_clarify_broad_enabled?: boolean }).c5_clarify_broad_enabled === true;
     if (qf || ss) {
       console.log(`[Settings] V1 sees experimental flags: query_first=${qf} soft_suggest=${ss} (no-op in V1, switch active_pipeline to v2 to use)`);
     }
     if (cb) {
       console.log(`[Settings] V1 compare_branch_enabled=true — compare sub_intent will trigger dedicated branch`);
+    }
+    if (c5) {
+      console.log(`[Settings] V1 c5_clarify_broad_enabled=true — underspecified-broad queries will trigger clarify branch`);
     }
 
     // Fallback to env vars if DB values are empty
@@ -656,6 +664,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       query_first_enabled: qf,
       soft_suggest_enabled: ss,
       compare_branch_enabled: cb,
+      c5_clarify_broad_enabled: c5,
     };
   } catch (e) {
     console.error('[Settings] Failed to load settings:', e);
@@ -672,6 +681,7 @@ async function getAppSettings(): Promise<CachedSettings> {
         query_first_enabled: false,
         soft_suggest_enabled: false,
         compare_branch_enabled: false,
+        c5_clarify_broad_enabled: false,
       };
   }
 }
@@ -6676,6 +6686,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     // buckets (e.g. household vs industrial sockets). User picks one chip, next turn the
     // category_disambiguation slot resolves the choice and runs a precise search.
     let disambiguationResponse: { content: string; quick_replies: Array<{ label: string; value: string }> } | null = null;
+    // C5 — clarify-before-search для underspecified-broad запросов (см. _shared/c5-broad-detector.ts).
+    // Под флагом app_settings.c5_clarify_broad_enabled. Short-circuit рендера: одно сообщение
+    // + опц. quick_replies, БЕЗ карточек и БЕЗ LLM-генерации final-ответа. dialogSlots не трогаем.
+    let broadClarifyResponse: { content: string; quick_replies: Array<{ label: string; value: string }>; meta: { reason: string; modifiers_count: number; category: string | null } } | null = null;
     // Plan V5 — model used for the FINAL streaming answer.
     // Defaults to user's configured model (usually Pro). Switched to Flash for short-circuit branches
     // (article/siteId hit, price-intent hit) where the answer is a simple "yes, in stock, X tg".
@@ -7336,6 +7350,72 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               }
               console.log(`[Chat] Legacy restored pending price intent: ${effectivePriceIntent}, combined category="${effectiveCategory}"`);
             }
+          }
+        }
+
+        // === C5: CLARIFY-BEFORE-SEARCH FOR UNDERSPECIFIED-BROAD QUERIES ===
+        // Feature flag: app_settings.c5_clarify_broad_enabled (default false).
+        // Триггер (data-agnostic, см. _shared/c5-broad-detector.ts):
+        //   intent='catalog' + has_product_name=false + !is_replacement
+        //   + sub_intent ∈ {null, facets, spec}
+        //   + (no category) OR (single-word category + ≥3 modifiers)
+        //   + ≥2 modifiers.
+        // Дополнительные guards на месте вызова:
+        //   • !articleShortCircuit (fast-path не зацепил товар)
+        //   • !facetsResponse (sub_intent='facets' уже отработал)
+        //   • !effectivePriceIntent (price-branch обработает сама)
+        // При успешном LLM-вызове — short-circuit ответа: question + опц. quick_replies,
+        // НИКАКОГО поиска, НИКАКОЙ финальной LLM-генерации. dialogSlots не модифицируем.
+        // Silent fallback на обычный pipeline при любой ошибке/пустом ответе LLM.
+        if (
+          appSettings.c5_clarify_broad_enabled &&
+          !articleShortCircuit &&
+          !facetsResponse &&
+          !effectivePriceIntent &&
+          appSettings.openrouter_api_key &&
+          classification
+        ) {
+          try {
+            const { detectUnderspecifiedBroad } = await import('../_shared/c5-broad-detector.ts');
+            const det = detectUnderspecifiedBroad({
+              intent: classification.intent,
+              has_product_name: classification.has_product_name,
+              is_replacement: classification.is_replacement,
+              sub_intent: classification.sub_intent,
+              product_category: classification.product_category,
+              search_modifiers: classification.search_modifiers,
+            });
+            if (det.triggered) {
+              console.log(`[Metric] c5_broad_detected_total reason=${det.reason} category="${det.category ?? ''}" mods=${det.modifiersCount}`);
+              const { askBroadClarify } = await import('../_shared/c5-broad-clarify.ts');
+              const mods: string[] = Array.isArray(classification.search_modifiers)
+                ? (classification.search_modifiers as unknown[]).filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
+                : [];
+              const clarify = await askBroadClarify({
+                originalQuery: userMessage,
+                category: det.category,
+                modifiers: mods,
+                openrouterKey: appSettings.openrouter_api_key,
+                log: (event, data) => console.log(`[C5] ${event}`, data ?? {}),
+              });
+              if (clarify.llmOk && clarify.question) {
+                broadClarifyResponse = {
+                  content: clarify.question,
+                  quick_replies: clarify.options.map((o) => ({ label: o, value: o })),
+                  meta: { reason: det.reason, modifiers_count: det.modifiersCount, category: det.category },
+                };
+                console.log(`[Metric] c5_broad_clarify_emitted_total reason=${det.reason} options=${clarify.options.length} ms=${clarify.elapsedMs}`);
+                logAddStep({
+                  step: 'c5-clarify-broad',
+                  ms: clarify.elapsedMs,
+                  meta: { reason: det.reason, category: det.category, mods: det.modifiersCount, options: clarify.options.length },
+                });
+              } else {
+                console.log(`[C5] silent fallback: llmOk=${clarify.llmOk} questionLen=${clarify.question.length} ms=${clarify.elapsedMs}`);
+              }
+            }
+          } catch (e) {
+            console.log(`[C5] error (silent fallback): ${(e as Error).message}`);
           }
         }
 
@@ -11193,6 +11273,56 @@ ${productInstructions}`;
         },
       });
     }
+
+    // === C5 BROAD-CLARIFY SHORT-CIRCUIT ===
+    // Эмитим уточняющий вопрос + опц. quick_replies, без карточек, без LLM-final.
+    // dialog_slots НЕ трогаем — следующий ход пользователя пройдёт обычным catalog-flow
+    // с уже уточнённым параметром в тексте.
+    if (broadClarifyResponse) {
+      const bc = broadClarifyResponse;
+      console.log(`[Chat] C5-BROAD-CLARIFY SHORT-CIRCUIT: reason=${bc.meta.reason} category="${bc.meta.category ?? ''}" mods=${bc.meta.modifiers_count} options=${bc.quick_replies.length}`);
+      logSetProductsCount(0);
+      logAddStep({ step: 'final-c5-clarify', meta: bc.meta });
+      persistSlotsAsync(conversationId, dialogSlots);
+
+      if (!useStreaming) {
+        const body: {
+          content: string;
+          quick_replies: Array<{ label: string; value: string }>;
+          slot_update?: DialogSlots;
+        } = { content: bc.content, quick_replies: bc.quick_replies };
+        if (slotsUpdated) body.slot_update = dialogSlots;
+        return new Response(
+          JSON.stringify(body),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: bc.content }, index: 0 }] })}\n\n`));
+          if (bc.quick_replies.length > 0) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ quick_replies: bc.quick_replies })}\n\n`));
+          }
+          if (slotsUpdated) {
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`));
+          }
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      });
+      return new Response(stream, {
+        headers: {
+          ...corsHeaders,
+          'Content-Type': 'text/event-stream; charset=utf-8',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
+    }
+
+
 
 
     // spec_query (compute) ВСЕГДА требует LLM-обработки: нужна формулировка
