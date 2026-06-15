@@ -8316,31 +8316,58 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     },
                   });
 
-                  // ── (3.5) PREFETCH full category-options schema в параллель с filter-llm.
-                  // На escalate-пути экономит 3-5s (typical) сетевого round-trip к
-                  // 220volt API + double-wrapping parse, потому что к моменту escalate
-                  // promise уже зарезолвлен / в полёте. Если escalate не нужен — promise
-                  // безвредно резолвится в фоне (результат игнорируется). Идемпотентно
-                  // с in-memory cache в getCategoryOptionsSchema. (2026-06-15)
-                  let prefetchedFullSchema:
-                    | Promise<{ schema: Map<string, { caption: string; values: Set<string> }>; source: string; confidence?: 'full' | 'partial' }>
-                    | null = null;
+                  // ── (3.4) Compute dominantCat0 once — used by prefetch + resolved-filters cache.
+                  let dominantCat0: string | null = null;
                   if (modifiers.length > 0) {
                     const catCounts0 = new Map<string, number>();
                     for (const p of pool) {
                       const cpt = (p as any)?.category?.pagetitle?.trim?.();
                       if (cpt) catCounts0.set(cpt, (catCounts0.get(cpt) || 0) + 1);
                     }
-                    const dominantCat0 = [...catCounts0.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
-                    if (dominantCat0) {
-                      prefetchedFullSchema = getCategoryOptionsSchema(dominantCat0, appSettings.volt220_api_token!)
-                        .catch((e: unknown) => {
-                          console.warn(`[QueryFirstV2] prefetch schema err: ${e instanceof Error ? e.message : String(e)}`);
-                          return { schema: new Map(), source: 'error' } as any;
-                        });
-                      logAddStep({ step: 'qfv2-schema-prefetch', meta: { dominantCat: dominantCat0 } });
+                    dominantCat0 = [...catCounts0.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+                  }
+
+                  // ── (3.45) Resolved-Filters Cache: try-before-LLM.
+                  // Key: (noun, sorted modifiers, dominantCat). TTL 1ч. Hit → пропускаем
+                  // prefetch+merge+filter-llm+escalate (-9..-11с для projector/lamp-кейсов).
+                  // (2026-06-15, см. mem://features/qfv2-resolved-filters-cache)
+                  let resolvedFiltersCacheHit = false;
+                  let resolvedFiltersCacheKeyStr: string | null = null;
+                  let cachedResolvedFilters: Record<string, string> = {};
+                  let cachedResolverUnresolved: string[] = [];
+                  let cachedResolverUnresolvedDetails: Array<{ modifier: string; key: string; caption: string; requestedValue: string; availableValues: string[] }> = [];
+                  if (modifiers.length > 0 && dominantCat0) {
+                    resolvedFiltersCacheKeyStr = resolvedFiltersCacheKey(noun, modifiers, dominantCat0);
+                    const cacheStart = Date.now();
+                    const cached = await loadCachedResolvedFilters(resolvedFiltersCacheKeyStr);
+                    if (cached) {
+                      resolvedFiltersCacheHit = true;
+                      cachedResolvedFilters = cached.resolvedFilters || {};
+                      cachedResolverUnresolved = cached.resolverUnresolved || [];
+                      cachedResolverUnresolvedDetails = cached.resolverUnresolvedDetails || [];
+                      console.log(`[QueryFirstV2] resolved-filters CACHE HIT key="${resolvedFiltersCacheKeyStr}" resolved=${JSON.stringify(cachedResolvedFilters)} unresolved=[${cachedResolverUnresolved.join(', ')}] elapsed=${Date.now() - cacheStart}ms`);
+                      logAddStep({ step: 'qfv2-resolved-filters-cache-hit', ms: Date.now() - cacheStart, meta: { key: resolvedFiltersCacheKeyStr, resolved: cachedResolvedFilters, unresolved: cachedResolverUnresolved } });
+                    } else {
+                      logAddStep({ step: 'qfv2-resolved-filters-cache-miss', ms: Date.now() - cacheStart, meta: { key: resolvedFiltersCacheKeyStr } });
                     }
                   }
+
+                  // ── (3.5) PREFETCH full category-options schema в параллель с filter-llm.
+                  // На escalate-пути экономит 3-5s сетевого round-trip. Idempotent с
+                  // in-memory cache в getCategoryOptionsSchema. (2026-06-15)
+                  // Skip if resolved-filters cache hit — schema не нужна.
+                  let prefetchedFullSchema:
+                    | Promise<{ schema: Map<string, { caption: string; values: Set<string> }>; source: string; confidence?: 'full' | 'partial' }>
+                    | null = null;
+                  if (!resolvedFiltersCacheHit && modifiers.length > 0 && dominantCat0) {
+                    prefetchedFullSchema = getCategoryOptionsSchema(dominantCat0, appSettings.volt220_api_token!)
+                      .catch((e: unknown) => {
+                        console.warn(`[QueryFirstV2] prefetch schema err: ${e instanceof Error ? e.message : String(e)}`);
+                        return { schema: new Map(), source: 'error' } as any;
+                      });
+                    logAddStep({ step: 'qfv2-schema-prefetch', meta: { dominantCat: dominantCat0 } });
+                  }
+
 
 
                   // ── (3.6) MERGE prefetched full schema INTO bootstrap (single-pass).
