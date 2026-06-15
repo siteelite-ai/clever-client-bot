@@ -6314,6 +6314,18 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     // userMessage, чтобы pipeline пошёл по нужной ветке.
     // Систематично: data-agnostic, через jargon-clarify shared-хелпер.
     let jargonClarifyApplied: 'jargon' | 'noun' | null = null;
+    // pendingJargonClarify (V1, 2026-06-15): унифицированный capture для всех
+    // jargon-win сайтов pipeline (EARLY, QFv2 pre/pool/last-chance/recovery/
+    // canonical, late legacy). Любой сайт, где tryJargonFallback подобрал
+    // matchedAlternative, СТАВИТ этот объект — единый эмиттер перед
+    // shouldUseDeterministicProductRender отдаст clarify-ответ вместо
+    // молчаливого рендера карточек. См. mem://features/jargon-clarify.
+    let pendingJargonClarify: {
+      matchedAlternative: string;
+      noun: string;
+      originalQuery: string;
+      jargonCount: number;
+    } | null = null;
     const jargonClarifySlot = dialogSlots['jargon_clarify'];
     if (jargonClarifySlot && jargonClarifySlot.intent === 'jargon_clarify' && jargonClarifySlot.jargon_meta) {
       try {
@@ -8477,6 +8489,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       pool = sanitized;
                       qfPreJargonWin = true;
                       qfPreJargonAlt = jr.matchedAlternative;
+                      pendingJargonClarify = { matchedAlternative: jr.matchedAlternative!, noun, originalQuery: userMessage || enrichedQuery, jargonCount: sanitized.length };
                       console.log(`[QueryFirstV2] query_first_v2_pre_jargon noun="${noun}" alt="${jr.matchedAlternative}" count=${pool.length}`);
                       logAddStep({ step: 'qfv2-pre-jargon', total: pool.length, meta: { noun, originalQuery: userMessage || enrichedQuery, matchedAlternative: jr.matchedAlternative } });
                     } else {
@@ -8530,6 +8543,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       .filter(p => typeof p.price === 'number' && (p.price as number) > 0);
                     if (sanitized.length > 0) {
                       pool = sanitized;
+                      pendingJargonClarify = { matchedAlternative: jr.matchedAlternative!, noun, originalQuery: userMessage || noun, jargonCount: sanitized.length };
                       console.log(`[QueryFirstV2] query_first_v2_pool_jargon noun="${noun}" alt="${jr.matchedAlternative}" count=${pool.length}`);
                       logAddStep({ step: 'qfv2-pool-jargon', total: pool.length, meta: { noun, originalQuery: userMessage || noun, matchedAlternative: jr.matchedAlternative } });
                     } else {
@@ -9009,6 +9023,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                         branchTag = 'qfv2_jargon_recovery';
                         totalCollectedBranch = 'jargon-fallback';
                         lastChanceWon = true;
+                        pendingJargonClarify = { matchedAlternative: jr.matchedAlternative!, noun, originalQuery: userMessage || noun, jargonCount: sanitized.length };
                         console.log(`[QueryFirstV2] query_first_v2_last_chance_jargon noun="${noun}" alt="${jr.matchedAlternative}" count=${sanitized.length}`);
                         logAddStep({ step: 'qfv2-last-chance-jargon', total: sanitized.length, meta: { noun, originalQuery: userMessage || noun, matchedAlternative: jr.matchedAlternative, unresolved: resolverUnresolved } });
                       }
@@ -9064,6 +9079,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                           branchTag = 'qfv2_jargon_recovery';
                           totalCollectedBranch = 'jargon-fallback';
                           jargonRecovered = true;
+                          pendingJargonClarify = { matchedAlternative: jr.matchedAlternative!, noun, originalQuery: userMessage || noun, jargonCount: sanitized.length };
                           console.log(`[QueryFirstV2] query_first_v2_jargon_recovery noun="${noun}" alt="${jr.matchedAlternative}" count=${sanitized.length} elapsed=${Date.now() - qfStart}ms`);
                           logAddStep({ step: 'qfv2-jargon-recovery', total: sanitized.length, meta: { noun, originalQuery: userMessage || noun, matchedAlternative: jr.matchedAlternative, dropped_facet: bootstrapSchema.get(resolverUnresolvedDetails[0].key)?.caption || resolverUnresolvedDetails[0].key } });
                         } else {
@@ -9181,6 +9197,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                                   branchTag = 'qfv2_jargon_recovery';
                                   totalCollectedBranch = 'jargon-fallback';
                                   canonicalJargonWon = true;
+                                  pendingJargonClarify = { matchedAlternative: jrWhole.matchedAlternative!, noun, originalQuery: userMessage || noun, jargonCount: sanitizedWhole.length };
                                   console.log(`[QueryFirstV2] query_first_v2_jargon_recovery_canonical noun="${noun}" alt="${jrWhole.matchedAlternative}" count=${sanitizedWhole.length} elapsed=${Date.now() - qfStart}ms (preempted split)`);
                                   logAddStep({ step: 'qfv2-jargon-recovery-canonical', total: sanitizedWhole.length, meta: { noun, originalQuery: userMessage || noun, matchedAlternative: jrWhole.matchedAlternative, droppedOriginals } });
                                 }
@@ -11277,9 +11294,18 @@ ${directAnswerBlock}
             },
             log: (event, data) => console.log(`[Chat req=${reqId}] [JargonFallback] ${event}`, data ?? {}),
           });
-          if (jargonResult.products.length > 0) {
+          if (jargonResult.products.length > 0 && jargonResult.matchedAlternative) {
             // Нашли товары через альтернативу — подставляем и пропускаем Soft-404.
             console.log(`[Chat req=${reqId}] [JargonFallback] Recovered via alternative "${jargonResult.matchedAlternative}": ${jargonResult.products.length} products`);
+            // Захватываем для унифицированного clarify-эмиттера (см. pendingJargonClarify).
+            // ВАЖНО: unfulfilled-split НЕ должен срабатывать одновременно с clarify;
+            // если split произойдёт ниже — оставим pendingJargonClarify=null.
+            pendingJargonClarify = {
+              matchedAlternative: jargonResult.matchedAlternative,
+              noun: (classification?.product_category || extractedIntent.candidates[0]?.query || '').trim() || 'товары',
+              originalQuery: extractedIntent.originalQuery,
+              jargonCount: jargonResult.products.length,
+            };
 
             // ── Unfulfilled-combination probe (2026-05-25).
             // Если запрос содержал critical_modifiers, не покрытые переводом жаргона
@@ -11315,6 +11341,7 @@ ${directAnswerBlock}
                     .map(p => ({ label: p.modifier, products: p.sample }));
                   if (sections.length >= 2) {
                     unfulfilledSplit = { noun, sections };
+                    pendingJargonClarify = null;  // split — другой контракт (combo unavailable), clarify не нужен
                     // foundProducts = объединение sample'ов: даёт detect для downstream
                     // shouldUseDeterministicProductRender и страхует от пустого вывода,
                     // если split-ветка не сработает (fallthrough в обычный рендер).
@@ -11865,6 +11892,39 @@ ${productInstructions}`;
         }
       }
     }
+
+    // ─── UNIFIED JARGON-CLARIFY EMIT (V1, 2026-06-15, mem://features/jargon-clarify) ──
+    // Любой upstream-сайт, где tryJargonFallback подобрал matchedAlternative
+    // (QFv2 pre/pool/last-chance/recovery/canonical, legacy late), ставит
+    // pendingJargonClarify. Здесь — единая точка эмита: перед детерминистичным
+    // рендером карточек спрашиваем пользователя, что он имел в виду (узкий
+    // жаргон-перевод или широкий поиск по noun). НЕ срабатывает:
+    //   • если jargonClarifyApplied (юзер уже выбрал на этом ходу),
+    //   • если ветка unfulfilled-split (другой контракт — combo unavailable),
+    //   • если EARLY-ветка уже отдала свой clarify Response (там return).
+    if (pendingJargonClarify && !jargonClarifyApplied && !unfulfilledSplit) {
+      const { buildJargonClarifyContent, buildJargonClarifyResponse } = await import('../_shared/jargon-clarify.ts');
+      const { content: clarifyContent, slot: clarifyMeta } = buildJargonClarifyContent(pendingJargonClarify);
+      console.log(`[Chat req=${reqId}] [JargonClarify] UNIFIED emit: alt="${clarifyMeta.matchedAlternative}" noun="${clarifyMeta.noun}" count=${clarifyMeta.jargonCount}`);
+      logSetBranch('jargon-clarify');
+      logAddStep({ step: 'jargon-clarify-emit-unified', total: clarifyMeta.jargonCount, meta: { matchedAlternative: clarifyMeta.matchedAlternative, noun: clarifyMeta.noun } });
+      dialogSlots['jargon_clarify'] = {
+        intent: 'jargon_clarify',
+        base_category: clarifyMeta.noun.substring(0, 200),
+        status: 'pending',
+        created_turn: 0,
+        turns_since_touched: 0,
+        original_query: clarifyMeta.originalQuery.substring(0, 200),
+        jargon_meta: JSON.stringify({
+          matchedAlternative: clarifyMeta.matchedAlternative,
+          jargonCount: clarifyMeta.jargonCount,
+        }).substring(0, 500),
+      };
+      persistSlotsAsync(conversationId, dialogSlots);
+      return buildJargonClarifyResponse({ content: clarifyContent, dialogSlots, useStreaming, corsHeaders });
+    }
+
+
 
     // SYSTEMIC ANTI-HALLUCINATION (2026-05-04): любой ответ с найденными товарами
     // обязан рендериться детерминистично из ProductResource — иначе LLM переписывает

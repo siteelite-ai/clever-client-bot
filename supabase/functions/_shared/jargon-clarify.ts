@@ -159,3 +159,52 @@ function pluralRu(n: number, one: string, few: string, many: string): string {
   if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few;
   return many;
 }
+
+/**
+ * Унифицированный эмиттер jargon-clarify Response.
+ * Используется во всех местах pipeline (EARLY, QFv2-recovery, late-jargon), где
+ * tryJargonFallback вернул matchedAlternative — вместо молчаливого рендера
+ * карточек отдаём пользователю честный выбор.
+ *
+ * Сторона вызова обязана:
+ *   • до этого записать slot в dialogSlots['jargon_clarify'] и сохранить его
+ *     (persistSlotsAsync) — мы НЕ дёргаем БД отсюда, чтобы оставаться чистой.
+ *   • не звать эмиттер, если jargonClarifyApplied на этом ходу.
+ */
+export function buildJargonClarifyResponse(input: {
+  content: string;
+  dialogSlots: unknown;
+  useStreaming: boolean;
+  corsHeaders: Record<string, string>;
+}): Response {
+  const { content, dialogSlots, useStreaming, corsHeaders } = input;
+  if (!useStreaming) {
+    return new Response(
+      JSON.stringify({ content, slot_update: dialogSlots }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
+  }
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(
+        encoder.encode(
+          `data: ${JSON.stringify({ choices: [{ delta: { content }, index: 0 }] })}\n\n`,
+        ),
+      );
+      controller.enqueue(
+        encoder.encode(`data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`),
+      );
+      controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+      controller.close();
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      ...corsHeaders,
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    },
+  });
+}
