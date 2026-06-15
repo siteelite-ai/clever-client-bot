@@ -8900,7 +8900,56 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     return out;
                   };
 
-                  if (Object.keys(resolvedFilters).length > 0 || resolverUnresolvedDetails.length > 0) {
+                  // Волна C2 (2026-06-15): если модификаторы были, но НИ ОДИН не резолвился
+                  // (resolved={}, unresolvedDetails=[]) — раньше падали в qfv2_pool_no_modifiers
+                  // и молча показывали голову pool. Это нарушение honest-empty:
+                  // пользователь спросил «лампа кукуруза», а получил произвольные лампы.
+                  // Последний шанс: jargon на whole query; если пусто → honest-empty.
+                  if (modifiers.length > 0 && resolverUnresolved.length > 0 && Object.keys(resolvedFilters).length === 0 && resolverUnresolvedDetails.length === 0) {
+                    let lastChanceWon = false;
+                    try {
+                      const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
+                      const jr = await tryJargonFallback({
+                        originalQuery: userMessage || `${noun} ${modifiers.join(' ')}`,
+                        openrouterKey: appSettings.openrouter_api_key!,
+                        searchFn: (alt) => searchProductsByCandidate(
+                          { query: alt, brand: null, category: null, min_price: null, max_price: null },
+                          appSettings.volt220_api_token!,
+                          10,
+                        ),
+                        log: (event, data) => console.log(`[Chat req=${reqId}] [QFv2-LastChanceJargon] ${event}`, data ?? {}),
+                      });
+                      const sanitized = ((jr.products || []) as Product[])
+                        .filter(p => typeof p.price === 'number' && (p.price as number) > 0);
+                      if (sanitized.length > 0) {
+                        displayList = sanitized.slice(0, 10);
+                        branchTag = 'qfv2_jargon_recovery';
+                        totalCollectedBranch = 'jargon-fallback';
+                        lastChanceWon = true;
+                        console.log(`[QueryFirstV2] query_first_v2_last_chance_jargon noun="${noun}" alt="${jr.matchedAlternative}" count=${sanitized.length}`);
+                        logAddStep({ step: 'qfv2-last-chance-jargon', total: sanitized.length, meta: { noun, originalQuery: userMessage || noun, matchedAlternative: jr.matchedAlternative, unresolved: resolverUnresolved } });
+                      }
+                    } catch (jrErr) {
+                      console.warn(`[Chat req=${reqId}] [QFv2-LastChanceJargon] silent fail:`, jrErr instanceof Error ? jrErr.message : String(jrErr));
+                    }
+                    if (!lastChanceWon) {
+                      // Honest-empty с unresolved modifiers как «attempted facets» без values.
+                      qfv2HonestEmptyContext = {
+                        noun,
+                        originalQuery: userMessage || noun,
+                        attemptedFacets: resolverUnresolved.map(m => ({
+                          caption: m,
+                          value: m,
+                          alternativeValues: [],
+                        })),
+                      };
+                      displayList = [];
+                      branchTag = 'qfv2_honest_empty_no_match';
+                      qfV2DroppedFacetCaption = resolverUnresolved[0] || null;
+                      console.log(`[QueryFirstV2] query_first_v2_honest_empty_no_match noun="${noun}" unresolved=${JSON.stringify(resolverUnresolved)}`);
+                      logAddStep({ step: 'qfv2-honest-empty-no-match', total: 0, meta: { noun, unresolved: resolverUnresolved } });
+                    }
+                  } else if (Object.keys(resolvedFilters).length > 0 || resolverUnresolvedDetails.length > 0) {
                     // PARTIAL-UNRESOLVED HONEST-EMPTY (2026-05-07):
                     // если LLM распознал ключ фасета, но значения нет в каталоге
                     // (например «7Вт» при доступных {5.5, 6, 8, 10}) — показывать
