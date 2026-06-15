@@ -6685,6 +6685,30 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     // а возвращаем bullet-summary доступных facet'ов категории и просим выбрать.
     let facetsResponse: { content: string; category: string } | null = null;
 
+    // Parallel kickoff (2026-06-15): noun extractor зависит только от userMessage,
+    // НЕ от classification → запускаем в параллель с classify. Экономит ~3-4с
+    // (min(noun, classify)) на горячем пути QFv2 для проджекторов/ламп.
+    // Если QFv2 не запустится (флаг off / нет ключей) — promise тихо игнорируется.
+    let nounExtractPromise: Promise<{ categoryNoun: string; source?: string }> | null = null;
+    if (appSettings.query_first_enabled && appSettings.openrouter_api_key) {
+      try {
+        const { extractCategoryNoun, createProductionExtractorDeps } = await import("../_shared/category-noun-extractor.ts");
+        const extractorDeps = createProductionExtractorDeps(appSettings.openrouter_api_key);
+        const extractDeadline = new Promise<{ categoryNoun: string }>((_, rej) =>
+          setTimeout(() => rej(new Error('qf_extract_timeout_8s')), 8000)
+        );
+        nounExtractPromise = Promise.race([
+          extractCategoryNoun({ userQuery: userMessage, locale: 'ru' }, extractorDeps),
+          extractDeadline,
+        ]).catch((e) => {
+          console.warn(`[QueryFirstV2] noun-extract parallel kickoff err: ${e instanceof Error ? e.message : String(e)}`);
+          return { categoryNoun: '', source: 'error' };
+        });
+      } catch (impErr) {
+        console.warn(`[QueryFirstV2] noun-extract parallel kickoff import err: ${impErr instanceof Error ? impErr.message : String(impErr)}`);
+      }
+    }
+
     // Классификатор запускаем ВСЕГДА — даже после article-first/siteid hit.
     // Иначе is_replacement остаётся неизвестным и article-hit рендерится сам по себе
     // (нарушение HARD BAN на price=0 и потеря replacement-ветки).
