@@ -6685,6 +6685,30 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     // а возвращаем bullet-summary доступных facet'ов категории и просим выбрать.
     let facetsResponse: { content: string; category: string } | null = null;
 
+    // Parallel kickoff (2026-06-15): noun extractor зависит только от userMessage,
+    // НЕ от classification → запускаем в параллель с classify. Экономит ~3-4с
+    // (min(noun, classify)) на горячем пути QFv2 для проджекторов/ламп.
+    // Если QFv2 не запустится (флаг off / нет ключей) — promise тихо игнорируется.
+    let nounExtractPromise: Promise<{ categoryNoun: string; source?: string }> | null = null;
+    if (appSettings.query_first_enabled && appSettings.openrouter_api_key) {
+      try {
+        const { extractCategoryNoun, createProductionExtractorDeps } = await import("../_shared/category-noun-extractor.ts");
+        const extractorDeps = createProductionExtractorDeps(appSettings.openrouter_api_key);
+        const extractDeadline = new Promise<{ categoryNoun: string }>((_, rej) =>
+          setTimeout(() => rej(new Error('qf_extract_timeout_8s')), 8000)
+        );
+        nounExtractPromise = Promise.race([
+          extractCategoryNoun({ userQuery: userMessage, locale: 'ru' }, extractorDeps),
+          extractDeadline,
+        ]).catch((e) => {
+          console.warn(`[QueryFirstV2] noun-extract parallel kickoff err: ${e instanceof Error ? e.message : String(e)}`);
+          return { categoryNoun: '', source: 'error' };
+        });
+      } catch (impErr) {
+        console.warn(`[QueryFirstV2] noun-extract parallel kickoff import err: ${impErr instanceof Error ? impErr.message : String(impErr)}`);
+      }
+    }
+
     // Классификатор запускаем ВСЕГДА — даже после article-first/siteid hit.
     // Иначе is_replacement остаётся неизвестным и article-hit рендерится сам по себе
     // (нарушение HARD BAN на price=0 и потеря replacement-ветки).
@@ -8077,16 +8101,26 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
           if (appSettings.query_first_enabled && appSettings.openrouter_api_key && appSettings.volt220_api_token) {
             const qfStart = Date.now();
             try {
-              const { extractCategoryNoun, createProductionExtractorDeps } = await import("../_shared/category-noun-extractor.ts");
-              const extractorDeps = createProductionExtractorDeps(appSettings.openrouter_api_key);
-              const extractDeadline = new Promise<{ categoryNoun: string }>((_, rej) =>
-                setTimeout(() => rej(new Error('qf_extract_timeout_8s')), 8000)
-              );
+              // Use the noun-extract promise kicked off in parallel with classify (~3-4с win).
+              // Fallback: если promise отсутствует — стартуем здесь как раньше.
               const nounStartMs = Date.now();
-              const extractRes = await Promise.race([
-                extractCategoryNoun({ userQuery: userMessage, locale: 'ru' }, extractorDeps),
-                extractDeadline,
-              ]);
+              let extractRes: { categoryNoun: string; source?: string };
+              if (nounExtractPromise) {
+                extractRes = await nounExtractPromise.catch((e) => {
+                  console.warn(`[QueryFirstV2] noun-extract await err: ${e instanceof Error ? e.message : String(e)}`);
+                  return { categoryNoun: '', source: 'error' };
+                });
+              } else {
+                const { extractCategoryNoun, createProductionExtractorDeps } = await import("../_shared/category-noun-extractor.ts");
+                const extractorDeps = createProductionExtractorDeps(appSettings.openrouter_api_key);
+                const extractDeadline = new Promise<{ categoryNoun: string }>((_, rej) =>
+                  setTimeout(() => rej(new Error('qf_extract_timeout_8s')), 8000)
+                );
+                extractRes = await Promise.race([
+                  extractCategoryNoun({ userQuery: userMessage, locale: 'ru' }, extractorDeps),
+                  extractDeadline,
+                ]);
+              }
               const noun = (extractRes.categoryNoun || '').trim();
               console.log(`[QueryFirstV2] noun="${noun}" (source=${(extractRes as any).source || 'n/a'})`);
               logAddStep({ step: 'qfv2-noun', ms: Date.now() - nounStartMs, meta: { noun, source: (extractRes as any).source || null } });
@@ -8246,6 +8280,49 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   }
 
 
+                  // ── (3.6) MERGE prefetched full schema INTO bootstrap (single-pass).
+                  // Раньше: bootstrap → filter-llm #1 → if unresolved → fetch full → filter-llm #2
+                  //   = два Claude-вызова (~18-20с total) для projector/lamp-кейсов.
+                  // Теперь: ждём prefetch (race 5с), мержим full ∪ bootstrap (full wins —
+                  // более полные value-наборы), один filter-llm против richer схемы.
+                  // Если prefetch не успел / упал → schemaSource='bootstrap' и старый
+                  // escalate-блок ниже доберёт нерешённые модификаторы (graceful degrade).
+                  // (2026-06-15 Single-Pass Schema, см. mem://features/qfv2-single-pass-schema)
+                  let schemaSource: 'bootstrap' | 'merged' = 'bootstrap';
+                  if (prefetchedFullSchema && modifiers.length > 0) {
+                    const mergeStart = Date.now();
+                    const fullResRace = await Promise.race([
+                      prefetchedFullSchema.then(r => ({ ok: true as const, r })),
+                      new Promise<{ ok: false }>(res => setTimeout(() => res({ ok: false }), 5000)),
+                    ]);
+                    if (fullResRace.ok && fullResRace.r?.schema && fullResRace.r.schema.size > 0) {
+                      const fullSchema = fullResRace.r.schema;
+                      let mergedKeysAdded = 0;
+                      let mergedValuesAdded = 0;
+                      for (const [k, fullBucket] of fullSchema.entries()) {
+                        const existing = bootstrapSchema.get(k);
+                        if (!existing) {
+                          // Полностью новый key — копируем bucket.
+                          bootstrapSchema.set(k, { caption: fullBucket.caption, values: new Set(fullBucket.values) });
+                          mergedKeysAdded++;
+                          mergedValuesAdded += fullBucket.values.size;
+                        } else {
+                          // Существующий key — добавляем недостающие values; caption из full win'ит.
+                          const before = existing.values.size;
+                          for (const v of fullBucket.values) existing.values.add(v);
+                          mergedValuesAdded += existing.values.size - before;
+                          if (fullBucket.caption) existing.caption = fullBucket.caption;
+                        }
+                      }
+                      schemaSource = 'merged';
+                      console.log(`[QueryFirstV2] schema merged: +${mergedKeysAdded} keys, +${mergedValuesAdded} values (src=${fullResRace.r.source}) — single-pass filter-llm`);
+                      logAddStep({ step: 'qfv2-schema-merged', ms: Date.now() - mergeStart, meta: { keys_added: mergedKeysAdded, values_added: mergedValuesAdded, src: fullResRace.r.source, total_keys: bootstrapSchema.size } });
+                    } else {
+                      console.log(`[QueryFirstV2] schema prefetch ${fullResRace.ok ? 'empty' : 'timeout(5s)'} → escalate path остаётся как fallback`);
+                      logAddStep({ step: 'qfv2-schema-merged-skip', ms: Date.now() - mergeStart, meta: { reason: fullResRace.ok ? 'empty' : 'timeout' } });
+                    }
+                  }
+
                   // ── (4) Resolve modifiers → option filters against the live schema.
                   // If no modifiers: skip resolution, just display pool.
                   let resolvedFilters: Record<string, string> = {};
@@ -8299,7 +8376,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   //
                   // Срабатывает ТОЛЬКО при unresolved.length > 0 — для популярных модификаторов
                   // («двухместная», «белая») путь остаётся прежний. Любая ошибка — silent skip.
-                  if (resolverUnresolved.length > 0 && Object.keys(resolvedFilters).length < modifiers.length) {
+                  // Single-Pass Schema (2026-06-15): если merge удался — escalate бесполезен
+                  // (вторая filter-llm против того же schema = шум + 9с). Запускаем escalate
+                  // ТОЛЬКО когда schemaSource='bootstrap' (prefetch упал/timeout).
+                  if (schemaSource === 'bootstrap' && resolverUnresolved.length > 0 && Object.keys(resolvedFilters).length < modifiers.length) {
                     const escStart = Date.now();
                     try {
                       // Доминирующая категория pool'а.
