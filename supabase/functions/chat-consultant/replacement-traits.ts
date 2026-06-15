@@ -142,26 +142,83 @@ export function extractOriginalTraits(
 export function extractMarkingTokens(pagetitle: string | null | undefined): string[] {
   if (!pagetitle || typeof pagetitle !== 'string') return [];
   const tokens = new Set<string>();
-  // Сплит по пробелам и пунктуации (кроме `-` `/` `.` `,` `*` `х` `x`, которые
-  // часть маркировок). `\b` в JS regex не работает с кириллицей, поэтому
-  // делаем mechanical split + per-token проверку формы.
   const parts = pagetitle.split(/[\s()«»"',;:!?]+/u).filter(Boolean);
   for (const raw of parts) {
-    // Снимаем хвостовую/головную пунктуацию.
     const cleaned = raw.replace(/^[.\-/]+|[.\-/]+$/g, '');
-    if (cleaned.length < 3) continue;
-    // Должна быть буквенная часть ≥2 символов.
-    const letterRun = cleaned.match(/[A-Za-zА-Яа-яЁё]{2,}/);
-    if (!letterRun) continue;
-    // Должна быть либо цифра, либо внутренний дефис/слеш (структурная маркировка).
+    if (cleaned.length < 2) continue;
     const hasDigit = /\d/.test(cleaned);
     const hasInnerSep = /[A-Za-zА-Яа-яЁё][-/][A-Za-zА-Яа-яЁё0-9]/.test(cleaned);
     if (!hasDigit && !hasInnerSep) continue;
-    // Отсеиваем чистые числа с короткой единицей измерения (12шт, 10А, 220В, 5кг).
-    if (/^\d+[A-Za-zА-Яа-яЁё]{1,3}$/.test(cleaned)) continue;
+    // Отсекаем чисто-торговые единицы (количество/габариты/масса/объём): 12шт, 10м, 5кг, 1.5л.
+    // Физические единицы (А, Вт, В, кВт, Гц, Ом) С ЦИФРОЙ — КЕЕП: это trait товара,
+    // критичный для подбора аналога (16А автомат ≠ 25А автомат). Универсальный SI-список,
+    // не зависит от ассортимента 220volt.
+    if (/^\d+(?:[.,]\d+)?(?:шт|пар|компл|упак|уп|м|см|мм|км|дм|мг|кг|г|т|л|мл|м[23²³])$/iu.test(cleaned)) continue;
+    // Допускаем токен если: (a) есть буквенная серия ≥2 (артикул ВВГнг, ЩРН), либо
+    // (b) цифра + 1-4 буквы (физединица: 16А, 50Вт, IP65, 2.5мм²).
+    const hasMultiLetter = /[A-Za-zА-Яа-яЁё]{2,}/.test(cleaned);
+    const isPhysical = /^\d+(?:[.,]\d+)?[A-Za-zА-Яа-яЁё²³]{1,4}$/u.test(cleaned)
+      || /^IP\d{2,3}$/i.test(cleaned);
+    if (!hasMultiLetter && !isPhysical) continue;
     tokens.add(cleaned.toUpperCase());
   }
   return Array.from(tokens);
+}
+
+// ─── Layer 3: brand / title leak guards ─────────────────────────────────────
+
+/** Извлекает бренд оригинала: сначала options[] с ключом, начинающимся на `brend`,
+ *  затем поле `vendor`. Возвращает trimmed UPPER-CASE или null.
+ *  Data-agnostic: НЕ словарь, читает рантайм-данные. */
+export function extractOriginalBrand(
+  original: (OriginalLike & { vendor?: string | null }) | null | undefined,
+): string | null {
+  if (!original) return null;
+  if (Array.isArray(original.options)) {
+    for (const opt of original.options) {
+      if (!opt?.key) continue;
+      const k = opt.key.toLowerCase();
+      if (k.startsWith('brend') || k === 'vendor' || k === 'brand') {
+        const v = (opt.value_ru || '').trim();
+        if (v.length > 0 && v.length < 80) return v.toUpperCase();
+      }
+    }
+  }
+  const v = (original.vendor || '').trim();
+  return v.length > 0 ? v.toUpperCase() : null;
+}
+
+/** Отсекает кандидатов того же бренда что и оригинал. Замена = другой бренд при
+ *  тех же характеристиках. Если бренд неизвестен → no-op. */
+export function applyBrandExclude<T extends { vendor?: string | null; options?: OriginalOption[] | null; pagetitle?: string | null }>(
+  candidates: T[],
+  originalBrand: string | null,
+): { filtered: T[]; excluded: number } {
+  if (!originalBrand) return { filtered: candidates, excluded: 0 };
+  const target = originalBrand.toUpperCase();
+  let excluded = 0;
+  const filtered = candidates.filter((c) => {
+    const cBrand = extractOriginalBrand(c as any);
+    if (cBrand && cBrand === target) { excluded++; return false; }
+    // fallback: бренд в pagetitle если options пустые.
+    if (!cBrand && c.pagetitle && c.pagetitle.toUpperCase().includes(target)) {
+      excluded++;
+      return false;
+    }
+    return true;
+  });
+  return { filtered, excluded };
+}
+
+/** Pagetitle-leak guard: когда id оригинала неизвестен, кандидат с exact-совпадением
+ *  pagetitle = сам оригинал. Сравнение case-insensitive, trim, collapse spaces. */
+export function isOriginalByTitle(
+  candidatePagetitle: string | null | undefined,
+  markingSource: string | null | undefined,
+): boolean {
+  if (!candidatePagetitle || !markingSource) return false;
+  const norm = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+  return norm(candidatePagetitle) === norm(markingSource);
 }
 
 /**
