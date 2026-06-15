@@ -8390,6 +8390,15 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 // qfv2_pool_no_modifiers молча показывал не-кукурузные лампы.
                 // Теперь: jargon по originalQuery (canonical «лампа кукуруза»→«corn lamp»);
                 // успех → используем как pool и пропускаем bare-noun retry.
+                // Волна C4 (2026-06-15): если pre-jargon успешен, его pool —
+                // уже семантически точный (jargon-LLM подтвердила альтернативу,
+                // catalog вернул товары). Все дальнейшие шаги (bootstrap →
+                // schema-merged → filter-llm → final-query) только сужают и
+                // загрязняют (LLM применяет модификаторы от original noun, не от
+                // jargon-альтернативы). qfPreJargonWin=true → детерминистичный
+                // короткий рендер pool целиком.
+                let qfPreJargonWin = false;
+                let qfPreJargonAlt: string | null = null;
                 if (pool.length === 0 && enrichedQuery !== noun) {
                   try {
                     const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
@@ -8409,6 +8418,8 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       .filter(p => typeof p.price === 'number' && (p.price as number) > 0);
                     if (sanitized.length > 0) {
                       pool = sanitized;
+                      qfPreJargonWin = true;
+                      qfPreJargonAlt = jr.matchedAlternative;
                       console.log(`[QueryFirstV2] query_first_v2_pre_jargon noun="${noun}" alt="${jr.matchedAlternative}" count=${pool.length}`);
                       logAddStep({ step: 'qfv2-pre-jargon', total: pool.length, meta: { noun, originalQuery: userMessage || enrichedQuery, matchedAlternative: jr.matchedAlternative } });
                     } else {
