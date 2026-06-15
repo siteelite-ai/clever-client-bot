@@ -193,3 +193,78 @@ Deno.test('marking guard ALL: candidate missing one of two required markings is 
   assertEquals(filtered.length, 1);
   assertEquals(filtered[0].pagetitle.includes('ВА47-29'), true);
 });
+
+// ─── numeric recovery (C4 Шаг 1) ────────────────────────────────────────────
+
+Deno.test('marking: physical numeric units kept (16А, 50Вт, 2.5мм², IP65)', () => {
+  const t = extractMarkingTokens('Автомат 16А 230В однополюсный');
+  assertEquals(t.includes('16А'), true, `expected 16А, got ${t.join(',')}`);
+  assertEquals(t.includes('230В'), true, `expected 230В, got ${t.join(',')}`);
+
+  const t2 = extractMarkingTokens('Прожектор 50Вт IP65 6500К');
+  assertEquals(t2.includes('50ВТ'), true);
+  assertEquals(t2.includes('IP65'), true);
+
+  const t3 = extractMarkingTokens('Кабель ВВГнг 3х2.5мм²');
+  assertEquals(t3.some((x) => x.includes('2.5ММ²') || x.includes('2,5ММ²')), true, `got ${t3.join(',')}`);
+});
+
+Deno.test('marking: trade units dropped (10м, 5кг, 12шт, 1.5л, 10упак)', () => {
+  const t = extractMarkingTokens('Бухта кабеля 10м 5кг 12шт 1.5л 10упак');
+  assertEquals(t.length, 0, `expected nothing kept, got: ${t.join(',')}`);
+});
+
+// ─── brand extract / exclude (C4 Шаг 2) ────────────────────────────────────
+
+Deno.test('extractOriginalBrand: from options[brend__*]', () => {
+  const b = extractOriginalBrand({
+    options: [{ key: 'brend__brend', value_ru: 'IEK' }],
+  });
+  assertEquals(b, 'IEK');
+});
+
+Deno.test('extractOriginalBrand: fallback to vendor', () => {
+  const b = extractOriginalBrand({ options: [], vendor: 'Schneider' } as any);
+  assertEquals(b, 'SCHNEIDER');
+});
+
+Deno.test('extractOriginalBrand: null when nothing', () => {
+  assertEquals(extractOriginalBrand(null), null);
+  assertEquals(extractOriginalBrand({ options: [] }), null);
+});
+
+Deno.test('applyBrandExclude: filters candidates of same brand (via options)', () => {
+  const candidates = [
+    { pagetitle: 'A', options: [{ key: 'brend__brend', value_ru: 'IEK' }] },
+    { pagetitle: 'B', options: [{ key: 'brend__brend', value_ru: 'ABB' }] },
+  ];
+  const { filtered, excluded } = applyBrandExclude(candidates as any, 'IEK');
+  assertEquals(filtered.length, 1);
+  assertEquals(excluded, 1);
+  assertEquals(filtered[0].pagetitle, 'B');
+});
+
+Deno.test('applyBrandExclude: filters via pagetitle when options empty', () => {
+  const candidates = [
+    { pagetitle: 'IEK автомат 16А', options: [] },
+    { pagetitle: 'ABB автомат 16А', options: [] },
+  ];
+  const { filtered } = applyBrandExclude(candidates as any, 'IEK');
+  assertEquals(filtered.length, 1);
+  assertEquals(filtered[0].pagetitle, 'ABB автомат 16А');
+});
+
+Deno.test('applyBrandExclude: no-op when brand null', () => {
+  const cs = [{ pagetitle: 'a' }, { pagetitle: 'b' }];
+  const { filtered, excluded } = applyBrandExclude(cs as any, null);
+  assertEquals(filtered.length, 2);
+  assertEquals(excluded, 0);
+});
+
+// ─── isOriginalByTitle (C4 Шаг 3) ──────────────────────────────────────────
+
+Deno.test('isOriginalByTitle: exact match (case + whitespace insensitive)', () => {
+  assertEquals(isOriginalByTitle('ЩРН-П-12  IEK', 'щрн-п-12 iek'), true);
+  assertEquals(isOriginalByTitle('ЩРН-П-12 IEK', 'ЩРВ-П-12 IEK'), false);
+  assertEquals(isOriginalByTitle(null, 'x'), false);
+});
