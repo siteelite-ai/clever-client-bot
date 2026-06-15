@@ -75,6 +75,11 @@ export interface JargonFallbackInput {
   /** Функция поиска товаров — обычно searchProductsByCandidate из chat-consultant. */
   // deno-lint-ignore no-explicit-any
   searchFn: (alternativeQuery: string) => Promise<any[]>;
+  /** Категория/noun из classifier-а. Используется как exclusion-токен наряду
+   *  со словами originalQuery: если LLM добавила в alt-фразу головной noun
+   *  («кабель»/«лампа»/«провод»), этот токен НЕ должен считаться novel,
+   *  иначе кандидат-токен даёт widely-broad outcome (вся категория). */
+  productNoun?: string | null;
   log?: (event: string, data?: Record<string, unknown>) => void;
 }
 
@@ -194,6 +199,17 @@ export async function tryJargonFallback(input: JargonFallbackInput): Promise<Jar
   const queryTokens = new Set(
     query.toLowerCase().split(/[\s,;/()\-]+/).map(t => t.trim()).filter(t => t.length > 0)
   );
+  // productNoun (classifier.category) тоже исключается — это головное слово
+  // запроса, даже если в исходной строке его не было (классификатор его
+  // восстановил). Иначе LLM-alt типа «кабель ВВГнг 2x1.5» порождает токен
+  // «кабель», который проходит как novel и обнуляет узкоту поиска.
+  const noun = (input.productNoun ?? "").toLowerCase().trim();
+  if (noun.length > 0) {
+    for (const t of noun.split(/[\s,;/()\-]+/)) {
+      const tt = t.trim();
+      if (tt) queryTokens.add(tt);
+    }
+  }
   const seen = new Set<string>();
   const candidates: { query: string; source: "phrase" | "token"; parent: string }[] = [];
   for (const alt of alternatives) {
@@ -240,23 +256,19 @@ export async function tryJargonFallback(input: JargonFallbackInput): Promise<Jar
     return novel.some(tok => hay.includes(tok));
   };
 
-  // Token-кандидат — это одиночное слово, которое LLM выделила как ключевой
-  // jargon-термин (corn, кукуруза, ВВГнг, downlight). Настоящие jargon-слова
-  // редкие — возвращают единицы-десятки матчей. Если одиночный токен даёт
-  // >MAX_TOKEN_RAW результатов, это просто широкая категория (кабель/лампа/
-  // провод), а не специализированный термин. Отбрасываем — иначе подменяем
-  // узкий запрос «медный негорючий» на каталожную свалку «кабель».
-  const MAX_TOKEN_RAW = 25;
-
   for (const cand of candidates) {
     try {
+      const novel = novelTokensOf(cand.query);
+      if (novel.length === 0) {
+        // Кандидат не вносит ни одного нового слова относительно исходного
+        // запроса (включая productNoun). Это значит LLM просто переставила
+        // слова или восстановила headnoun — никакого jargon-перевода нет.
+        // Поиск по такой alt-фразе вернёт исходный широкий pool → leak.
+        log("jargon.no_novel_tokens", { alternative: cand.query, source: cand.source, parent: cand.parent });
+        continue;
+      }
       const products = await input.searchFn(cand.query);
       if (Array.isArray(products) && products.length > 0) {
-        if (cand.source === "token" && products.length > MAX_TOKEN_RAW) {
-          log("jargon.token_too_broad", { alternative: cand.query, parent: cand.parent, rawCount: products.length, threshold: MAX_TOKEN_RAW });
-          continue;
-        }
-        const novel = novelTokensOf(cand.query);
         const filtered = products.filter(p => productMatchesNovelTokens(p, novel));
         if (filtered.length === 0) {
           log("jargon.post_filter_rejected", { alternative: cand.query, novelTokens: novel, rawCount: products.length });
