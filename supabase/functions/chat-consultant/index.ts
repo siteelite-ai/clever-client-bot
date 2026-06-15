@@ -10009,10 +10009,26 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   }
                 }
                 
-                // Exclude original product
+                // Exclude original product (id + title-leak + brand-exclude)
                 const originalId = originalProduct?.id;
+                const fBeforeLeak = replFiltered.length;
                 if (originalId) {
                   replFiltered = replFiltered.filter(p => p.id !== originalId);
+                }
+                const markingSourceLeakL = classification?.product_name || originalProduct?.pagetitle || '';
+                if (markingSourceLeakL) {
+                  replFiltered = replFiltered.filter(p => !isOriginalByTitle((p as any).pagetitle, markingSourceLeakL));
+                }
+                if (fBeforeLeak !== replFiltered.length) {
+                  console.log(`[Chat] Replacement (legacy) original-leak filter: ${fBeforeLeak} → ${replFiltered.length}`);
+                }
+                const origBrandL = extractOriginalBrand(originalProduct as any);
+                if (origBrandL) {
+                  const be = applyBrandExclude(replFiltered, origBrandL);
+                  if (be.excluded > 0) {
+                    console.log(`[Chat] Replacement (legacy) brand-exclude "${origBrandL}": ${replFiltered.length} → ${be.filtered.length} (-${be.excluded})`);
+                  }
+                  replFiltered = be.filtered;
                 }
                 // HARD price=0 filter.
                 const fBeforeZero = replFiltered.length;
