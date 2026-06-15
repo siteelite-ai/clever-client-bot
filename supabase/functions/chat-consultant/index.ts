@@ -181,13 +181,13 @@ function pickDisplayWithTotal<T extends { price?: number }>(
   limit: number = DISPLAY_LIMIT
 ): { displayed: T[]; total: number; filteredZeroPrice: number } {
   const input = all || [];
-  // Filter out "под заказ" items (price <= 0). They confuse users — never show them.
+  // HARD BAN на price<=0 (см. mem://core). НИКАКОГО soft-fallback на input:
+  // если все товары "под заказ" (price=0) — возвращаем пусто, downstream
+  // (Soft-404 + contactManager) обработает корректно. Soft-fallback вёл к
+  // лику CHINT-зарядок и нарушал zero_price_leak=0 invariant (2026-06-15, Волна A1).
   const priced = input.filter(p => ((p as any)?.price ?? 0) > 0);
-  // Soft fallback: if EVERYTHING is zero-price (rare narrow category), keep original
-  // so we don't return an empty list. Better to show "под заказ" than nothing.
-  const working = priced.length > 0 ? priced : input;
-  const total = working.length;
-  const displayed = working.slice(0, limit);
+  const total = priced.length;
+  const displayed = priced.slice(0, limit);
   return { displayed, total, filteredZeroPrice: input.length - priced.length };
 }
 
@@ -4397,7 +4397,8 @@ async function searchProductsByCandidate(
   candidate: SearchCandidate,
   apiToken: string,
   perPage: number = 30,
-  resolvedFilters?: Record<string, string>
+  resolvedFilters?: Record<string, string>,
+  timeoutMs: number = 10000
 ): Promise<Product[]> {
   try {
     // Validate params against injection
@@ -4445,11 +4446,13 @@ async function searchProductsByCandidate(
       }
     }
 
-    console.log(`[Search] API call: ${params.toString().substring(0, 150)}`);
-    
-    // AbortController timeout 10s to prevent API hangs
+    console.log(`[Search] API call: ${params.toString().substring(0, 150)} (timeout=${timeoutMs}ms)`);
+
+    // AbortController timeout (caller-controlled, default 10s).
+    // QFv2 pool callsite override → 4s / retry 3s (Волна A2 2026-06-15) чтобы
+    // не сжигать 20с на двойной timeout перед jargon-fallback/soft-404.
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     
     const response = await fetch(`${VOLT220_API_URL}?${params}`, {
       method: 'GET',
@@ -8089,10 +8092,14 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 const enrichedQuery = enrichMods.length > 0 ? `${noun} ${enrichMods.join(' ')}`.trim() : noun;
 
                 const poolStartMs = Date.now();
+                // Волна A2 2026-06-15: pool fetch cap = 4s (was 10s).
+                // QFv2 — горячий путь, 10s сжигают бюджет до jargon-fallback / soft-404.
                 let pool = await searchProductsByCandidate(
                   { query: enrichedQuery, brand: null, category: null, min_price: null, max_price: null },
                   appSettings.volt220_api_token!,
-                  QF_POOL_SIZE
+                  QF_POOL_SIZE,
+                  undefined,
+                  4000
                 );
                 console.log(`[QueryFirstV2] pool query="${enrichedQuery}" size=${pool.length} (perPage=${QF_POOL_SIZE})`);
                 logAddStep({ step: 'qfv2-pool', total: pool.length, ms: Date.now() - poolStartMs, meta: { query: enrichedQuery.substring(0, 200), perPage: QF_POOL_SIZE, enrichMods: enrichMods.slice(0, 5) } });
@@ -8100,18 +8107,58 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 if (pool.length === 0 && enrichedQuery !== noun) {
                   console.log(`[QueryFirstV2] enriched pool=0 → retry with bare noun="${noun}"`);
                   const poolRetryStart = Date.now();
+                  // Волна A2: retry cap = 3s.
                   pool = await searchProductsByCandidate(
                     { query: noun, brand: null, category: null, min_price: null, max_price: null },
                     appSettings.volt220_api_token!,
-                    QF_POOL_SIZE
+                    QF_POOL_SIZE,
+                    undefined,
+                    3000
                   );
                   console.log(`[QueryFirstV2] pool noun="${noun}" size=${pool.length} (fallback)`);
                   logAddStep({ step: 'qfv2-pool-retry', total: pool.length, ms: Date.now() - poolRetryStart, meta: { query: noun, fallback: true } });
                 }
 
                 if (pool.length === 0) {
-                  console.log(`[QueryFirstV2] query_first_v2_pool_empty noun="${noun}" → fallback to Category Resolver`);
+                  console.log(`[QueryFirstV2] query_first_v2_pool_empty noun="${noun}"`);
                   logAddStep({ step: 'qfv2-pool-empty', total: 0, meta: { noun } });
+
+                  // Волна C2 2026-06-15: pool-level jargon-fallback.
+                  // Раньше jargon вызывался только при resolverUnresolvedDetails/unfulfilled-split,
+                  // но canonical-кейс «лампа кукуруза» падал в pool=0 ДО ресолвера и шёл в Soft-404.
+                  // Теперь: pool=0 → tryJargonFallback по originalQuery → если есть → берём как pool,
+                  // ставим branchTag='qfv2_jargon_pool', продолжаем нормальный bootstrap+display.
+                  try {
+                    const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
+                    const jr = await tryJargonFallback({
+                      originalQuery: userMessage || noun,
+                      openrouterKey: appSettings.openrouter_api_key!,
+                      searchFn: (alt) => searchProductsByCandidate(
+                        { query: alt, brand: null, category: null, min_price: null, max_price: null },
+                        appSettings.volt220_api_token!,
+                        QF_POOL_SIZE,
+                        undefined,
+                        4000,
+                      ),
+                      log: (event, data) => console.log(`[Chat req=${reqId}] [QFv2-PoolJargon] ${event}`, data ?? {}),
+                    });
+                    const sanitized = ((jr.products || []) as Product[])
+                      .filter(p => typeof p.price === 'number' && (p.price as number) > 0);
+                    if (sanitized.length > 0) {
+                      pool = sanitized;
+                      console.log(`[QueryFirstV2] query_first_v2_pool_jargon noun="${noun}" alt="${jr.matchedAlternative}" count=${pool.length}`);
+                      logAddStep({ step: 'qfv2-pool-jargon', total: pool.length, meta: { noun, originalQuery: userMessage || noun, matchedAlternative: jr.matchedAlternative } });
+                    } else {
+                      logAddStep({ step: 'qfv2-pool-jargon-skip', meta: { reason: 'empty', noun } });
+                    }
+                  } catch (jrErr) {
+                    console.warn(`[Chat req=${reqId}] [QFv2-PoolJargon] silent fail:`, jrErr instanceof Error ? jrErr.message : String(jrErr));
+                    logAddStep({ step: 'qfv2-pool-jargon-skip', meta: { reason: 'error', noun, error: jrErr instanceof Error ? jrErr.message : String(jrErr) } });
+                  }
+                }
+
+                if (pool.length === 0) {
+                  console.log(`[QueryFirstV2] pool still empty after jargon → fallback to Category Resolver`);
                 } else {
                   // ── (3) Self-Bootstrap facet schema from the live pool.
                   // Format = exact V1 contract: Map<key, {caption, values: Set<string>}>.
@@ -9250,8 +9297,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 replMatches = [originalCatPagetitle];
                 console.log(`[Chat] Replacement: matcher SKIPPED, using original.category.pagetitle="${originalCatPagetitle}"`);
               } else {
-                const replMatcherDeadline = new Promise<{ matches: string[] }>((_, rej) =>
-                  setTimeout(() => rej(new Error('repl_matcher_timeout_10s')), 10000)
+                // Волна A3 2026-06-15: cap 10s → 6s + graceful fallback (без throw наружу).
+                // При timeout не падаем в exception-ветку — используем replCategory как
+                // прямой candidate (?query=...). Категория-резолвер вернёт хотя бы общий пул
+                // anchor-категории, потом traits-matcher отфильтрует. Лучше чем 0 товаров.
+                const replMatcherDeadline = new Promise<{ matches: string[] }>((resolve) =>
+                  setTimeout(() => resolve({ matches: [] }), 6000)
                 );
                 const replMatcherWork = (async () => {
                   const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
@@ -9261,6 +9312,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 })();
                 const r = await Promise.race([replMatcherWork, replMatcherDeadline]);
                 replMatches = r.matches;
+                if (replMatches.length === 0) {
+                  console.log(`[Chat] Replacement matcher: 0 matches or 6s timeout — graceful fallback to query="${replCategory}"`);
+                  logAddStep({ step: 'replacement-matcher-fallback', meta: { reason: 'timeout_or_empty', replCategory } });
+                }
               }
 
               if (replMatches.length > 0) {
