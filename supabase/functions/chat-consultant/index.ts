@@ -4397,7 +4397,8 @@ async function searchProductsByCandidate(
   candidate: SearchCandidate,
   apiToken: string,
   perPage: number = 30,
-  resolvedFilters?: Record<string, string>
+  resolvedFilters?: Record<string, string>,
+  timeoutMs: number = 10000
 ): Promise<Product[]> {
   try {
     // Validate params against injection
@@ -4445,11 +4446,13 @@ async function searchProductsByCandidate(
       }
     }
 
-    console.log(`[Search] API call: ${params.toString().substring(0, 150)}`);
-    
-    // AbortController timeout 10s to prevent API hangs
+    console.log(`[Search] API call: ${params.toString().substring(0, 150)} (timeout=${timeoutMs}ms)`);
+
+    // AbortController timeout (caller-controlled, default 10s).
+    // QFv2 pool callsite override → 4s / retry 3s (Волна A2 2026-06-15) чтобы
+    // не сжигать 20с на двойной timeout перед jargon-fallback/soft-404.
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     
     const response = await fetch(`${VOLT220_API_URL}?${params}`, {
       method: 'GET',
