@@ -75,6 +75,11 @@ export interface JargonFallbackInput {
   /** Функция поиска товаров — обычно searchProductsByCandidate из chat-consultant. */
   // deno-lint-ignore no-explicit-any
   searchFn: (alternativeQuery: string) => Promise<any[]>;
+  /** Категория/noun из classifier-а. Используется как exclusion-токен наряду
+   *  со словами originalQuery: если LLM добавила в alt-фразу головной noun
+   *  («кабель»/«лампа»/«провод»), этот токен НЕ должен считаться novel,
+   *  иначе кандидат-токен даёт widely-broad outcome (вся категория). */
+  productNoun?: string | null;
   log?: (event: string, data?: Record<string, unknown>) => void;
 }
 
