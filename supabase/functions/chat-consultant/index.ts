@@ -7353,6 +7353,72 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
           }
         }
 
+        // === C5: CLARIFY-BEFORE-SEARCH FOR UNDERSPECIFIED-BROAD QUERIES ===
+        // Feature flag: app_settings.c5_clarify_broad_enabled (default false).
+        // Триггер (data-agnostic, см. _shared/c5-broad-detector.ts):
+        //   intent='catalog' + has_product_name=false + !is_replacement
+        //   + sub_intent ∈ {null, facets, spec}
+        //   + (no category) OR (single-word category + ≥3 modifiers)
+        //   + ≥2 modifiers.
+        // Дополнительные guards на месте вызова:
+        //   • !articleShortCircuit (fast-path не зацепил товар)
+        //   • !facetsResponse (sub_intent='facets' уже отработал)
+        //   • !effectivePriceIntent (price-branch обработает сама)
+        // При успешном LLM-вызове — short-circuit ответа: question + опц. quick_replies,
+        // НИКАКОГО поиска, НИКАКОЙ финальной LLM-генерации. dialogSlots не модифицируем.
+        // Silent fallback на обычный pipeline при любой ошибке/пустом ответе LLM.
+        if (
+          appSettings.c5_clarify_broad_enabled &&
+          !articleShortCircuit &&
+          !facetsResponse &&
+          !effectivePriceIntent &&
+          appSettings.openrouter_api_key &&
+          classification
+        ) {
+          try {
+            const { detectUnderspecifiedBroad } = await import('../_shared/c5-broad-detector.ts');
+            const det = detectUnderspecifiedBroad({
+              intent: classification.intent,
+              has_product_name: classification.has_product_name,
+              is_replacement: classification.is_replacement,
+              sub_intent: classification.sub_intent,
+              product_category: classification.product_category,
+              search_modifiers: classification.search_modifiers,
+            });
+            if (det.triggered) {
+              console.log(`[Metric] c5_broad_detected_total reason=${det.reason} category="${det.category ?? ''}" mods=${det.modifiersCount}`);
+              const { askBroadClarify } = await import('../_shared/c5-broad-clarify.ts');
+              const mods: string[] = Array.isArray(classification.search_modifiers)
+                ? (classification.search_modifiers as unknown[]).filter((m): m is string => typeof m === 'string' && m.trim().length > 0)
+                : [];
+              const clarify = await askBroadClarify({
+                originalQuery: userMessage,
+                category: det.category,
+                modifiers: mods,
+                openrouterKey: appSettings.openrouter_api_key,
+                log: (event, data) => console.log(`[C5] ${event}`, data ?? {}),
+              });
+              if (clarify.llmOk && clarify.question) {
+                broadClarifyResponse = {
+                  content: clarify.question,
+                  quick_replies: clarify.options.map((o) => ({ label: o, value: o })),
+                  meta: { reason: det.reason, modifiers_count: det.modifiersCount, category: det.category },
+                };
+                console.log(`[Metric] c5_broad_clarify_emitted_total reason=${det.reason} options=${clarify.options.length} ms=${clarify.elapsedMs}`);
+                logAddStep({
+                  step: 'c5-clarify-broad',
+                  ms: clarify.elapsedMs,
+                  meta: { reason: det.reason, category: det.category, mods: det.modifiersCount, options: clarify.options.length },
+                });
+              } else {
+                console.log(`[C5] silent fallback: llmOk=${clarify.llmOk} questionLen=${clarify.question.length} ms=${clarify.elapsedMs}`);
+              }
+            }
+          } catch (e) {
+            console.log(`[C5] error (silent fallback): ${(e as Error).message}`);
+          }
+        }
+
         // === PRICE INTENT HANDLING ===
         // A) Resume price_facet_clarify slot if user reply matches stored facet value.
         // B) Mods present -> straight handlePriceIntent (Scenario C from spec).
