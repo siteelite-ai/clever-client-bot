@@ -1,0 +1,1 @@
+UPDATE public.app_settings SET c5_clarify_broad_enabled = true;
