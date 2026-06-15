@@ -5113,8 +5113,16 @@ export function buildDeterministicShortCircuitContent(params: {
     noun: string;
     sections: Array<{ label: string; products: Product[] }>;
   };
+  /**
+   * Wave B1 2026-06-15: brand-not-in-pool prefix.
+   * Когда задан — перед карточками добавляется честная фраза:
+   * «Прямого аналога <brand> в нашем каталоге не нашёл. Похожие позиции от
+   *  других брендов (<availableBrands>):». Принцип «бот никогда не выдумывает
+   * подмену бренда молча»: пользователь явно видит, что бренд отсутствует.
+   */
+  brandUnavailable?: { brand: string; availableBrands: string[] };
 }): string {
-  const { products, reason, userMessage, effectivePriceIntent, subIntent, suppressTail, unfulfilledSplit } = params;
+  const { products, reason, userMessage, effectivePriceIntent, subIntent, suppressTail, unfulfilledSplit, brandUnavailable } = params;
 
   // ── Split-рендер «комбинации нет, но компоненты есть».
   if (unfulfilledSplit && unfulfilledSplit.sections.length >= 2) {
@@ -5154,6 +5162,16 @@ export function buildDeterministicShortCircuitContent(params: {
   const tail = (remaining > 0 && !suppressTail)
     ? `\n\nПодобрано ещё ${remaining} ${pluralizeRu(remaining, ['вариант', 'варианта', 'вариантов'])} — показать остальные?`
     : '';
+
+  // Wave B1: honest brand-unavailable prefix перед стандартным intro.
+  // Не дублирует intro — заменяет его, чтобы один блок текста читался цельно.
+  if (brandUnavailable && brandUnavailable.brand) {
+    const altsPart = brandUnavailable.availableBrands.length > 0
+      ? ` Похожие позиции от других брендов в нашем каталоге (${brandUnavailable.availableBrands.join(', ')}):`
+      : ' Похожие позиции из нашего каталога:';
+    const brandIntro = `Прямого аналога **${brandUnavailable.brand}** в нашем каталоге не нашёл.${altsPart}`;
+    return `${brandIntro}\n\n${cards}${tail}`.trim();
+  }
 
   return `${intro}\n\n${cards}${tail}`.trim();
 }
@@ -6674,6 +6692,11 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
       originalQuery: string;
       attemptedFacets: Array<{ caption: string; value: string; alternativeValues: string[] }>;
     } | null = null;
+    // Wave B1 2026-06-15: brand-not-in-pool context. Set when QFv2 bootstrap
+    // shows the requested brand (looks-like-brand modifier, latin ≥4) is absent
+    // in pool's brend__brend values. Threaded into deterministic render so the
+    // intro becomes honest: "Прямого аналога {brand} не нашёл, вот похожее".
+    let qfBrandUnavailable: { brand: string; availableBrands: string[] } | null = null;
     let brandsContext = '';
     let knowledgeContext = '';
     let articleShortCircuit = false;
@@ -8469,6 +8492,8 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // если нет — честно говорим, что бренда в найденном нет.
                   let qfBrandFiltered: string | null = null;
                   let qfBrandRequestedMissing: string | null = null;
+                  // Reset closure-wide flag at start of each QFv2 run.
+                  qfBrandUnavailable = null;
                   const brendBucket = bootstrapSchema.get('brend__brend');
                   if (brendBucket && Array.isArray(modifiers) && modifiers.length > 0) {
                     const brandValuesLower = new Map<string, string>();
@@ -8510,6 +8535,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       });
                       if (looksLikeBrandModifier) {
                         qfBrandRequestedMissing = looksLikeBrandModifier;
+                        qfBrandUnavailable = {
+                          brand: looksLikeBrandModifier,
+                          availableBrands: Array.from(brendBucket.values).slice(0, 5),
+                        };
                         console.log(`[QueryFirstV2] brand-requested-missing: "${looksLikeBrandModifier}" not in bootstrap brend__brend (${brendBucket.values.size} values)`);
                         logAddStep({ step: 'qfv2-brand-missing', meta: { brand: looksLikeBrandModifier, available: Array.from(brendBucket.values).slice(0, 10) } });
                       }
@@ -11554,6 +11583,7 @@ ${productInstructions}`;
             totalCollected,
             suppressTail: tailWasOfferedLastTurn,
             unfulfilledSplit: unfulfilledSplit ?? undefined,
+            brandUnavailable: qfBrandUnavailable ?? undefined,
           });
       // Compare-branch: честный дисклеймер про не найденные / отсутствующие в наличии якоря — перед карточками.
       // Никаких подстановок-аксессуаров; пользователь видит, что ровно этих моделей в каталоге / в наличии нет.
