@@ -2459,6 +2459,13 @@ interface DialogSlot {
   // храним остальные товары + анкоры для cross-sell, чтобы на 2-м сообщении выдать без поиска.
   // remaining_products — JSON массив ProductLite (id,pagetitle,url,price,vendor,warehouses[≤3],brand)
   remaining_products?: string;
+  // jargon_clarify state (V1, 2026-06-15): после успеха tryJargonFallback мы НЕ
+  // рендерим карточки — спрашиваем у пользователя, нужна ли узкая жаргон-
+  // интерпретация (matchedAlternative) или широкий поиск по noun. На следующем
+  // ходу tryResolveJargonChoice читает этот slot и роутит.
+  // jargon_meta — JSON {matchedAlternative, jargonCount}. originalQuery лежит
+  // в original_query (выше), noun — в base_category. См. mem://features/jargon-clarify.
+  jargon_meta?: string;
   // replacement metadata
   isReplacement?: boolean;
   originalName?: string;
