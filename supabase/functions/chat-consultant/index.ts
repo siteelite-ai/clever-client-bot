@@ -9297,8 +9297,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 replMatches = [originalCatPagetitle];
                 console.log(`[Chat] Replacement: matcher SKIPPED, using original.category.pagetitle="${originalCatPagetitle}"`);
               } else {
-                const replMatcherDeadline = new Promise<{ matches: string[] }>((_, rej) =>
-                  setTimeout(() => rej(new Error('repl_matcher_timeout_10s')), 10000)
+                // Волна A3 2026-06-15: cap 10s → 6s + graceful fallback (без throw наружу).
+                // При timeout не падаем в exception-ветку — используем replCategory как
+                // прямой candidate (?query=...). Категория-резолвер вернёт хотя бы общий пул
+                // anchor-категории, потом traits-matcher отфильтрует. Лучше чем 0 товаров.
+                const replMatcherDeadline = new Promise<{ matches: string[] }>((resolve) =>
+                  setTimeout(() => resolve({ matches: [] }), 6000)
                 );
                 const replMatcherWork = (async () => {
                   const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
@@ -9308,6 +9312,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 })();
                 const r = await Promise.race([replMatcherWork, replMatcherDeadline]);
                 replMatches = r.matches;
+                if (replMatches.length === 0) {
+                  console.log(`[Chat] Replacement matcher: 0 matches or 6s timeout — graceful fallback to query="${replCategory}"`);
+                  logAddStep({ step: 'replacement-matcher-fallback', meta: { reason: 'timeout_or_empty', replCategory } });
+                }
               }
 
               if (replMatches.length > 0) {
