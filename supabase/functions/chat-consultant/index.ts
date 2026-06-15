@@ -9730,10 +9730,15 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     console.log(`[Chat] Replacement original-leak filter: ${beforeLeak} → ${rFinal.length} (source="${markingSourceLeak}")`);
                   }
                   // Brand-exclude: аналог = другой бренд при тех же характеристиках.
+                  // Graceful relaxation: если категория моно-брендовая и exclude обнулил
+                  // пул — откатываемся к same-brand кандидатам с weakened='brand_dominant'.
                   const origBrand = extractOriginalBrand(originalProduct as any);
                   if (origBrand) {
-                    const be = applyBrandExclude(rFinal, origBrand);
-                    if (be.excluded > 0) {
+                    const be = applyBrandExcludeWithRelaxation(rFinal, origBrand);
+                    if (be.relaxed) {
+                      console.log(`[Chat] Replacement brand-exclude RELAXED "${origBrand}" (mono-brand category): kept ${rFinal.length} same-brand candidates`);
+                      brandExcludeRelaxed = true;
+                    } else if (be.excluded > 0) {
                       console.log(`[Chat] Replacement brand-exclude "${origBrand}": ${rFinal.length} → ${be.filtered.length} (-${be.excluded})`);
                     }
                     rFinal = be.filtered;
