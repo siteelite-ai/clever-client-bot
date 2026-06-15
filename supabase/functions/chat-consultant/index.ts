@@ -4813,14 +4813,31 @@ function cleanOptionCaption(caption: unknown): string {
   return (parts[0] || '').trim();
 }
 
+/**
+ * Эвристика «бренд = маркировка товара» (2026-06-15, defect B2).
+ * Реальные бренды — латиница (IEK, ABB, Werkel) либо смешанный кейс кириллицы
+ * (Эра, Космос). Маркировки кабелей/проводов (ВВГ, ВВГнг, ПВС, АВВГ, ПУГВВ)
+ * — короткие ALL-CAPS кириллические токены, опц. «нг» + цифры/× /слеш.
+ * Data-agnostic: без словарей конкретных серий.
+ */
+function looksLikeMarking(s: string): boolean {
+  const v = (s || '').trim();
+  if (!v) return false;
+  if (v.length > 10) return false;
+  // Чисто кириллица ALL-CAPS (≤6) + опц. «нг» + опц. цифро-маркировка.
+  return /^[А-ЯЁ]{2,6}(нг)?[\s\-\d.,*хХx\/]{0,8}$/u.test(v);
+}
+
 function getBrandFromProduct(product: Product | null | undefined): string {
   if (Array.isArray(product?.options)) {
     const brandOption = product.options.find((o: any) => o && o.key === 'brend__brend');
     const optionBrand = cleanOptionValue(brandOption?.value_ru ?? brandOption?.value);
-    if (optionBrand) return optionBrand;
+    if (optionBrand && !looksLikeMarking(optionBrand)) return optionBrand;
   }
 
-  return typeof product?.vendor === 'string' ? product.vendor.trim() : '';
+  const vendor = typeof product?.vendor === 'string' ? product.vendor.trim() : '';
+  if (vendor && !looksLikeMarking(vendor)) return vendor;
+  return '';
 }
 
 // Форматирование товаров для AI
@@ -5364,14 +5381,15 @@ function extractBrandsFromProducts(products: Product[]): string[] {
       const brandOption = product.options.find((o: any) => o && o.key === 'brend__brend');
       if (brandOption) {
         const brandName = cleanOptionValue(brandOption.value_ru ?? brandOption.value);
-        if (brandName) {
+        if (brandName && !looksLikeMarking(brandName)) {
           brands.add(brandName);
           found = true;
         }
       }
     }
-    if (!found && typeof product?.vendor === 'string' && product.vendor.trim()) {
-      brands.add(product.vendor.trim());
+    if (!found && typeof product?.vendor === 'string') {
+      const v = product.vendor.trim();
+      if (v && !looksLikeMarking(v)) brands.add(v);
     }
   }
   
@@ -8494,7 +8512,11 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                             const resolvedValuesFolded = Object.values(resolvedFilters)
                               .map(v => fold(String(v)))
                               .filter(s => s.length > 0);
-                            const originalMods = (modifiers || []).map((m: string) => (m || '').trim()).filter((m: string) => m.length > 0);
+                            // Defect 2026-06-15: предлоги/частицы (на, и, с, в, у, к, по)
+                            // случайно попадают в modifiers и формируют мусорные split-секции.
+                            // Фильтр по длине ≥3 — data-agnostic: реальные модификаторы
+                            // (Е27, IP65, белый, 220В) — ≥3 символов; русские служебные — ≤2.
+                            const originalMods = (modifiers || []).map((m: string) => (m || '').trim()).filter((m: string) => m.length >= 3);
                             const resolvedOriginals: string[] = [];
                             const droppedOriginals: string[] = [];
                             for (const m of originalMods) {
@@ -10444,7 +10466,8 @@ ${directAnswerBlock}
               const allCritical = Array.isArray(classification?.critical_modifiers) ? classification!.critical_modifiers! : [];
               const extraCritical = allCritical
                 .map((m: string) => (m || '').trim())
-                .filter((m: string) => m.length > 0 && !matchedAltLc.includes(m.toLowerCase()));
+                // length>=3 — отсекаем служебные слова (на, и, с, в, у, по), см. defect 2026-06-15.
+                .filter((m: string) => m.length >= 3 && !matchedAltLc.includes(m.toLowerCase()));
               const noun = (classification?.product_category || '').trim() || extractedIntent.originalQuery.split(/\s+/)[0];
               if (noun && extraCritical.length >= 1) {
                 const { probeUnfulfilledCombination } = await import('../_shared/unfulfilled-split.ts');
