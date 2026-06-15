@@ -9147,15 +9147,16 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                                 // Жаргон: «лампа кукуруза» → пусто, jargon → «corn lamp» → есть.
                                 try {
                                   const jr = await tryJargonFallback({
-                                    originalQuery: q,
-                                    openrouterKey: appSettings.openrouter_api_key!,
-                                    searchFn: (alt) => searchProductsByCandidate(
-                                      { query: alt, brand: null, category: null, min_price: null, max_price: null },
-                                      appSettings.volt220_api_token!,
-                                      10,
-                                    ),
-                                    log: (event, data) => console.log(`[Chat req=${reqId}] [Unfulfilled-QFv2-Jargon ${mod}] ${event}`, data ?? {}),
-                                  });
+                                     originalQuery: q,
+                                     openrouterKey: appSettings.openrouter_api_key!,
+                                     productNoun: noun,
+                                     searchFn: (alt) => searchProductsByCandidate(
+                                       { query: alt, brand: null, category: null, min_price: null, max_price: null },
+                                       appSettings.volt220_api_token!,
+                                       10,
+                                     ),
+                                     log: (event, data) => console.log(`[Chat req=${reqId}] [Unfulfilled-QFv2-Jargon ${mod}] ${event}`, data ?? {}),
+                                   });
                                   return sanitize((jr.products || []) as Product[]);
                                 } catch (jerr) {
                                   console.warn(`[Chat req=${reqId}] [Unfulfilled-QFv2-Jargon ${mod}] silent fail:`, jerr instanceof Error ? jerr.message : String(jerr));
