@@ -9626,6 +9626,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   const traitKeysSet = new Set(Object.keys(traitMust));
 
                   let rFinal: Product[] = [];
+                  let brandExcludeRelaxed = false;
                   // rResolved holds combined facet filters; we always seed with traitMust (Layer 1).
                   let rResolved: Record<string, string> = { ...traitMust };
                   let rResolvedRaw: Record<string, { value: string; is_critical?: boolean }> = {};
