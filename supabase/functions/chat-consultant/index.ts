@@ -8456,10 +8456,11 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // Теперь: pool=0 → tryJargonFallback по originalQuery → если есть → берём как pool,
                   // ставим branchTag='qfv2_jargon_pool', продолжаем нормальный bootstrap+display.
                   try {
-                    const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
+                    const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts'); // F2 productNoun exclusion
                     const jr = await tryJargonFallback({
                       originalQuery: userMessage || noun,
                       openrouterKey: appSettings.openrouter_api_key!,
+                      productNoun: noun,
                       searchFn: (alt) => searchProductsByCandidate(
                         { query: alt, brand: null, category: null, min_price: null, max_price: null },
                         appSettings.volt220_api_token!,
