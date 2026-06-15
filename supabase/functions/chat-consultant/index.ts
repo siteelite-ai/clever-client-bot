@@ -10134,20 +10134,42 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     console.log(`[Chat] Replacement original-leak filter: ${beforeLeak} → ${rFinal.length} (source="${markingSourceLeak}")`);
                   }
                   // Brand-exclude: аналог = другой бренд при тех же характеристиках.
-                  // Graceful relaxation: если категория моно-брендовая и exclude обнулил
-                  // пул — откатываемся к same-brand кандидатам с weakened='brand_dominant'.
+                  // Trait-ladder rescue (E2): если пул mono-brand из-за того, что L1-traits
+                  // оригинала сузили выдачу к его же бренду — пробуем взять raw rPool
+                  // (категория + max_price, БЕЗ traits) и применить brand-exclude к нему.
+                  // Если other-brand кандидаты в категории физически есть — отдаём их с
+                  // weakenedReason='trait_relaxed' (честно: точность по характеристикам
+                  // принесена в жертву разнообразию брендов). Если raw-pool тоже моно-бренд —
+                  // graceful relaxation на same-brand с weakenedReason='brand_dominant'.
+                  // Data-agnostic: 0 сетевых вызовов, нет whitelist'а брендов/категорий.
                   const origBrand = extractOriginalBrand(originalProduct as any);
+                  let trait_relaxed_rescued = false;
                   if (origBrand) {
                     const be = applyBrandExcludeWithRelaxation(rFinal, origBrand);
                     if (be.relaxed) {
-                      console.log(`[Chat] Replacement brand-exclude RELAXED "${origBrand}" (mono-brand category): kept ${rFinal.length} same-brand candidates`);
-                      console.log(`[Metric] replacement_brand_exclude_relaxed_total branch=matcher brand="${origBrand}" pool=${rFinal.length}`);
-                      brandExcludeRelaxed = true;
+                      // rFinal mono-brand → пробуем rescue из raw rPool
+                      const rawLeakFiltered = rPool
+                        .filter(p => !originalId || p.id !== originalId)
+                        .filter(p => !markingSourceLeak || !isOriginalByTitle((p as any).pagetitle, markingSourceLeak));
+                      const beRaw = applyBrandExclude(rawLeakFiltered, origBrand);
+                      if (beRaw.filtered.length > 0) {
+                        console.log(`[Chat] Replacement TRAIT-LADDER rescue: raw-pool brand-exclude yielded ${beRaw.filtered.length} other-brand candidates (traits dropped)`);
+                        console.log(`[Metric] replacement_trait_ladder_rescued_total branch=matcher orig_brand="${origBrand}" rescued=${beRaw.filtered.length} traits_dropped=${Object.keys(traitMust).length}`);
+                        rFinal = beRaw.filtered;
+                        trait_relaxed_rescued = true;
+                      } else {
+                        console.log(`[Chat] Replacement brand-exclude RELAXED "${origBrand}" (mono-brand category, raw-pool also mono): kept ${rFinal.length} same-brand candidates`);
+                        console.log(`[Metric] replacement_brand_exclude_relaxed_total branch=matcher brand="${origBrand}" pool=${rFinal.length}`);
+                        brandExcludeRelaxed = true;
+                      }
                     } else if (be.excluded > 0) {
                       console.log(`[Chat] Replacement brand-exclude "${origBrand}": ${rFinal.length} → ${be.filtered.length} (-${be.excluded})`);
+                      rFinal = be.filtered;
+                    } else {
+                      rFinal = be.filtered;
                     }
-                    rFinal = be.filtered;
                   }
+
                   // HARD price=0 filter (replacement-ветка не имеет soft-fallback на «под заказ»).
                   const rBeforeZero = rFinal.length;
                   rFinal = rFinal.filter(p => ((p as any)?.price ?? 0) > 0);
