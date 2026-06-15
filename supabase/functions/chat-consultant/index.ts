@@ -6686,6 +6686,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     // buckets (e.g. household vs industrial sockets). User picks one chip, next turn the
     // category_disambiguation slot resolves the choice and runs a precise search.
     let disambiguationResponse: { content: string; quick_replies: Array<{ label: string; value: string }> } | null = null;
+    // C5 — clarify-before-search для underspecified-broad запросов (см. _shared/c5-broad-detector.ts).
+    // Под флагом app_settings.c5_clarify_broad_enabled. Short-circuit рендера: одно сообщение
+    // + опц. quick_replies, БЕЗ карточек и БЕЗ LLM-генерации final-ответа. dialogSlots не трогаем.
+    let broadClarifyResponse: { content: string; quick_replies: Array<{ label: string; value: string }>; meta: { reason: string; modifiers_count: number; category: string | null } } | null = null;
     // Plan V5 — model used for the FINAL streaming answer.
     // Defaults to user's configured model (usually Pro). Switched to Flash for short-circuit branches
     // (article/siteId hit, price-intent hit) where the answer is a simple "yes, in stock, X tg".
