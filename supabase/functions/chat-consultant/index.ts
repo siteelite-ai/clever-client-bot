@@ -8342,7 +8342,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   //
                   // Срабатывает ТОЛЬКО при unresolved.length > 0 — для популярных модификаторов
                   // («двухместная», «белая») путь остаётся прежний. Любая ошибка — silent skip.
-                  if (resolverUnresolved.length > 0 && Object.keys(resolvedFilters).length < modifiers.length) {
+                  // Single-Pass Schema (2026-06-15): если merge удался — escalate бесполезен
+                  // (вторая filter-llm против того же schema = шум + 9с). Запускаем escalate
+                  // ТОЛЬКО когда schemaSource='bootstrap' (prefetch упал/timeout).
+                  if (schemaSource === 'bootstrap' && resolverUnresolved.length > 0 && Object.keys(resolvedFilters).length < modifiers.length) {
                     const escStart = Date.now();
                     try {
                       // Доминирующая категория pool'а.
