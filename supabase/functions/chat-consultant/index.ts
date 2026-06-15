@@ -2421,7 +2421,7 @@ function detectPendingPriceIntent(
 // ============================================================
 
 interface DialogSlot {
-  intent: 'price_extreme' | 'product_search' | 'category_disambiguation' | 'price_facet_clarify' | 'pending_offer' | 'cross_sell_offer' | 'remaining_offer';
+  intent: 'price_extreme' | 'product_search' | 'category_disambiguation' | 'price_facet_clarify' | 'pending_offer' | 'cross_sell_offer' | 'remaining_offer' | 'jargon_clarify';
   price_dir?: 'most_expensive' | 'cheapest';
   base_category: string;
   refinement?: string;
