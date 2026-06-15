@@ -6307,6 +6307,54 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     console.log(`[Chat req=${reqId}] Processing: "${userMessage.substring(0, 100)}"`);
     console.log(`[Chat req=${reqId}] Conversation ID: ${conversationId}`);
 
+    // === JARGON_CLARIFY RESOLVER (V1, 2026-06-15) ===
+    // На прошлом ходу EARLY-jargon-fallback нашёл alt-перевод (например
+    // «кукуруза»→«corn»), но не выдал карточки — задал уточнение «жаргон или
+    // широкий поиск?». Сейчас читаем выбор пользователя и переписываем
+    // userMessage, чтобы pipeline пошёл по нужной ветке.
+    // Систематично: data-agnostic, через jargon-clarify shared-хелпер.
+    let jargonClarifyApplied: 'jargon' | 'noun' | null = null;
+    const jargonClarifySlot = dialogSlots['jargon_clarify'];
+    if (jargonClarifySlot && jargonClarifySlot.intent === 'jargon_clarify' && jargonClarifySlot.jargon_meta) {
+      try {
+        const { tryResolveJargonChoice } = await import('../_shared/jargon-clarify.ts');
+        const meta = JSON.parse(jargonClarifySlot.jargon_meta) as { matchedAlternative: string; jargonCount: number };
+        const slotForResolver = {
+          matchedAlternative: meta.matchedAlternative,
+          noun: jargonClarifySlot.base_category,
+          originalQuery: jargonClarifySlot.original_query || '',
+          jargonCount: meta.jargonCount,
+          ts: 0,
+        };
+        const choice = tryResolveJargonChoice(userMessage, slotForResolver);
+        if (choice === 'jargon') {
+          const newQuery = `${meta.matchedAlternative} ${jargonClarifySlot.base_category}`.trim();
+          console.log(`[Chat req=${reqId}] [JargonClarify] user picked JARGON → rewriting "${userMessage}" → "${newQuery}"`);
+          userMessage = newQuery;
+          messages[messages.length - 1] = { ...messages[messages.length - 1], content: newQuery };
+          jargonClarifyApplied = 'jargon';
+        } else if (choice === 'noun') {
+          const newQuery = jargonClarifySlot.base_category;
+          console.log(`[Chat req=${reqId}] [JargonClarify] user picked NOUN → rewriting "${userMessage}" → "${newQuery}"`);
+          userMessage = newQuery;
+          messages[messages.length - 1] = { ...messages[messages.length - 1], content: newQuery };
+          jargonClarifyApplied = 'noun';
+        } else {
+          console.log(`[Chat req=${reqId}] [JargonClarify] choice=null — leaving slot, pipeline continues with original message`);
+        }
+        // Слот одноразовый: удаляем при любом разрешении (jargon/noun).
+        // При null — оставляем, пусть пользователь переспросит явно.
+        if (choice !== null) {
+          delete dialogSlots['jargon_clarify'];
+          slotsUpdated = true;
+        }
+      } catch (e) {
+        console.warn(`[Chat req=${reqId}] [JargonClarify] resolver error:`, e instanceof Error ? e.message : String(e));
+        delete dialogSlots['jargon_clarify'];
+        slotsUpdated = true;
+      }
+    }
+
     // === REMAINING_OFFER RESOLVER (V1, 2026-05-15) ===
     // На прошлом ходу мы показали 3 карточки + хвост «Подобрано ещё N — показать остальные?»
     // и сохранили `remaining_offer` slot с remaining_products + anchors для cross-sell.
