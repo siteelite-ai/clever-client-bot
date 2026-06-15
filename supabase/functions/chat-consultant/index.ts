@@ -8384,8 +8384,44 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 console.log(`[QueryFirstV2] pool query="${enrichedQuery}" size=${pool.length} (perPage=${QF_POOL_SIZE})`);
                 logAddStep({ step: 'qfv2-pool', total: pool.length, ms: Date.now() - poolStartMs, meta: { query: enrichedQuery.substring(0, 200), perPage: QF_POOL_SIZE, enrichMods: enrichMods.slice(0, 5) } });
 
+                // Волна C1 (2026-06-15): pool-jargon ПЕРЕД bare-noun retry.
+                // Раньше: enriched=0 → retry с голым noun → 100 случайных товаров (мусор)
+                // → C2 не срабатывал (pool>0), модификатор не резолвился,
+                // qfv2_pool_no_modifiers молча показывал не-кукурузные лампы.
+                // Теперь: jargon по originalQuery (canonical «лампа кукуруза»→«corn lamp»);
+                // успех → используем как pool и пропускаем bare-noun retry.
                 if (pool.length === 0 && enrichedQuery !== noun) {
-                  console.log(`[QueryFirstV2] enriched pool=0 → retry with bare noun="${noun}"`);
+                  try {
+                    const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
+                    const jr = await tryJargonFallback({
+                      originalQuery: userMessage || enrichedQuery,
+                      openrouterKey: appSettings.openrouter_api_key!,
+                      searchFn: (alt) => searchProductsByCandidate(
+                        { query: alt, brand: null, category: null, min_price: null, max_price: null },
+                        appSettings.volt220_api_token!,
+                        QF_POOL_SIZE,
+                        undefined,
+                        4000,
+                      ),
+                      log: (event, data) => console.log(`[Chat req=${reqId}] [QFv2-PreJargon] ${event}`, data ?? {}),
+                    });
+                    const sanitized = ((jr.products || []) as Product[])
+                      .filter(p => typeof p.price === 'number' && (p.price as number) > 0);
+                    if (sanitized.length > 0) {
+                      pool = sanitized;
+                      console.log(`[QueryFirstV2] query_first_v2_pre_jargon noun="${noun}" alt="${jr.matchedAlternative}" count=${pool.length}`);
+                      logAddStep({ step: 'qfv2-pre-jargon', total: pool.length, meta: { noun, originalQuery: userMessage || enrichedQuery, matchedAlternative: jr.matchedAlternative } });
+                    } else {
+                      logAddStep({ step: 'qfv2-pre-jargon-skip', meta: { reason: 'empty', noun } });
+                    }
+                  } catch (jrErr) {
+                    console.warn(`[Chat req=${reqId}] [QFv2-PreJargon] silent fail:`, jrErr instanceof Error ? jrErr.message : String(jrErr));
+                    logAddStep({ step: 'qfv2-pre-jargon-skip', meta: { reason: 'error', noun, error: jrErr instanceof Error ? jrErr.message : String(jrErr) } });
+                  }
+                }
+
+                if (pool.length === 0 && enrichedQuery !== noun) {
+                  console.log(`[QueryFirstV2] enriched pool=0 & pre-jargon empty → retry with bare noun="${noun}"`);
                   const poolRetryStart = Date.now();
                   pool = await searchProductsByCandidate(
                     { query: noun, brand: null, category: null, min_price: null, max_price: null },
