@@ -8378,8 +8378,8 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // Если prefetch не успел / упал → schemaSource='bootstrap' и старый
                   // escalate-блок ниже доберёт нерешённые модификаторы (graceful degrade).
                   // (2026-06-15 Single-Pass Schema, см. mem://features/qfv2-single-pass-schema)
-                  let schemaSource: 'bootstrap' | 'merged' = 'bootstrap';
-                  if (prefetchedFullSchema && modifiers.length > 0) {
+                  let schemaSource: 'bootstrap' | 'merged' | 'cached' = resolvedFiltersCacheHit ? 'cached' : 'bootstrap';
+                  if (!resolvedFiltersCacheHit && prefetchedFullSchema && modifiers.length > 0) {
                     const mergeStart = Date.now();
                     const fullResRace = await Promise.race([
                       prefetchedFullSchema.then(r => ({ ok: true as const, r })),
