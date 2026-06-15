@@ -8333,23 +8333,52 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   : modifiers).slice(0, QF_MAX_MODIFIERS_IN_QUERY);
                 const enrichedQuery = enrichMods.length > 0 ? `${noun} ${enrichMods.join(' ')}`.trim() : noun;
 
+                // Волна B1 2026-06-15: Brand-Aware QFv2.
+                // Раньше brand:null хардкодился → "дрель makita 18в" фильтровался
+                // по noun, но любой Вихрь/Bosch проходил → бренд пользователя игнорировался.
+                // Теперь brand из classification.candidates[0] прокидывается в pool через
+                // options[brend__brend][]=<brand>. При brand-pool=0 — graceful retry без бренда
+                // (catalog может не иметь именно этого бренда в категории).
+                const qfBrand: string | null = (classification?.candidates?.[0] as any)?.brand || null;
+                let qfBrandDropped = false;
+                let qfBrandWasApplied = false;
+
                 const poolStartMs = Date.now();
                 // Волна A2 2026-06-15: pool fetch cap = 4s (was 10s).
                 // QFv2 — горячий путь, 10s сжигают бюджет до jargon-fallback / soft-404.
                 let pool = await searchProductsByCandidate(
-                  { query: enrichedQuery, brand: null, category: null, min_price: null, max_price: null },
+                  { query: enrichedQuery, brand: qfBrand, category: null, min_price: null, max_price: null },
                   appSettings.volt220_api_token!,
                   QF_POOL_SIZE,
                   undefined,
                   4000
                 );
-                console.log(`[QueryFirstV2] pool query="${enrichedQuery}" size=${pool.length} (perPage=${QF_POOL_SIZE})`);
-                logAddStep({ step: 'qfv2-pool', total: pool.length, ms: Date.now() - poolStartMs, meta: { query: enrichedQuery.substring(0, 200), perPage: QF_POOL_SIZE, enrichMods: enrichMods.slice(0, 5) } });
+                if (qfBrand) qfBrandWasApplied = true;
+                console.log(`[QueryFirstV2] pool query="${enrichedQuery}" brand=${qfBrand || '∅'} size=${pool.length} (perPage=${QF_POOL_SIZE})`);
+                logAddStep({ step: 'qfv2-pool', total: pool.length, ms: Date.now() - poolStartMs, meta: { query: enrichedQuery.substring(0, 200), perPage: QF_POOL_SIZE, enrichMods: enrichMods.slice(0, 5), brand: qfBrand } });
 
                 if (pool.length === 0 && enrichedQuery !== noun) {
-                  console.log(`[QueryFirstV2] enriched pool=0 → retry with bare noun="${noun}"`);
+                  console.log(`[QueryFirstV2] enriched pool=0 → retry with bare noun="${noun}" brand=${qfBrand || '∅'}`);
                   const poolRetryStart = Date.now();
                   // Волна A2: retry cap = 3s.
+                  pool = await searchProductsByCandidate(
+                    { query: noun, brand: qfBrand, category: null, min_price: null, max_price: null },
+                    appSettings.volt220_api_token!,
+                    QF_POOL_SIZE,
+                    undefined,
+                    3000
+                  );
+                  console.log(`[QueryFirstV2] pool noun="${noun}" brand=${qfBrand || '∅'} size=${pool.length} (fallback)`);
+                  logAddStep({ step: 'qfv2-pool-retry', total: pool.length, ms: Date.now() - poolRetryStart, meta: { query: noun, fallback: true, brand: qfBrand } });
+                }
+
+                // Волна B1: brand-drop graceful retry — если бренд применялся и pool=0,
+                // пробуем без бренда. При успехе ставим флаг → composer добавит note
+                // «бренд <X> в категории <Y> не нашёл, вот что есть».
+                // Это устраняет false Soft-404 при опечатках бренда / отсутствии в каталоге.
+                if (pool.length === 0 && qfBrand) {
+                  console.log(`[QueryFirstV2] brand=${qfBrand} pool=0 → graceful retry without brand`);
+                  const brandDropStart = Date.now();
                   pool = await searchProductsByCandidate(
                     { query: noun, brand: null, category: null, min_price: null, max_price: null },
                     appSettings.volt220_api_token!,
@@ -8357,8 +8386,13 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     undefined,
                     3000
                   );
-                  console.log(`[QueryFirstV2] pool noun="${noun}" size=${pool.length} (fallback)`);
-                  logAddStep({ step: 'qfv2-pool-retry', total: pool.length, ms: Date.now() - poolRetryStart, meta: { query: noun, fallback: true } });
+                  if (pool.length > 0) {
+                    qfBrandDropped = true;
+                    console.log(`[QueryFirstV2] brand-drop pool="${noun}" size=${pool.length} → flag honest brand-note`);
+                    logAddStep({ step: 'qfv2-brand-dropped', total: pool.length, ms: Date.now() - brandDropStart, meta: { brand: qfBrand, noun } });
+                  } else {
+                    logAddStep({ step: 'qfv2-brand-dropped-empty', ms: Date.now() - brandDropStart, meta: { brand: qfBrand, noun } });
+                  }
                 }
 
                 if (pool.length === 0) {
