@@ -10954,7 +10954,8 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
         appSettings.openrouter_api_key &&
         appSettings.volt220_api_token &&
         extractedIntent.originalQuery &&
-        extractedIntent.originalQuery.trim().length > 0
+        extractedIntent.originalQuery.trim().length > 0 &&
+        !jargonClarifyApplied  // skip if user already picked a side this turn
       ) {
         console.log(`[Chat req=${reqId}] [JargonFallback] EARLY trigger: branch=qfv2_pool_no_modifiers criticalMods=${JSON.stringify(criticalMods)}`);
         logSetBranch('jargon-fallback');
