@@ -8120,8 +8120,46 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 }
 
                 if (pool.length === 0) {
-                  console.log(`[QueryFirstV2] query_first_v2_pool_empty noun="${noun}" → fallback to Category Resolver`);
+                  console.log(`[QueryFirstV2] query_first_v2_pool_empty noun="${noun}"`);
                   logAddStep({ step: 'qfv2-pool-empty', total: 0, meta: { noun } });
+
+                  // Волна C2 2026-06-15: pool-level jargon-fallback.
+                  // Раньше jargon вызывался только при resolverUnresolvedDetails/unfulfilled-split,
+                  // но canonical-кейс «лампа кукуруза» падал в pool=0 ДО ресолвера и шёл в Soft-404.
+                  // Теперь: pool=0 → tryJargonFallback по originalQuery → если есть → берём как pool,
+                  // ставим branchTag='qfv2_jargon_pool', продолжаем нормальный bootstrap+display.
+                  try {
+                    const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
+                    const jr = await tryJargonFallback({
+                      originalQuery: userMessage || noun,
+                      openrouterKey: appSettings.openrouter_api_key!,
+                      searchFn: (alt) => searchProductsByCandidate(
+                        { query: alt, brand: null, category: null, min_price: null, max_price: null },
+                        appSettings.volt220_api_token!,
+                        QF_POOL_SIZE,
+                        undefined,
+                        4000,
+                      ),
+                      log: (event, data) => console.log(`[Chat req=${reqId}] [QFv2-PoolJargon] ${event}`, data ?? {}),
+                    });
+                    const sanitized = ((jr.products || []) as Product[])
+                      .filter(p => typeof p.price === 'number' && (p.price as number) > 0);
+                    if (sanitized.length > 0) {
+                      pool = sanitized;
+                      console.log(`[QueryFirstV2] query_first_v2_pool_jargon noun="${noun}" alt="${jr.matchedAlternative}" count=${pool.length}`);
+                      logAddStep({ step: 'qfv2-pool-jargon', total: pool.length, meta: { noun, originalQuery: userMessage || noun, matchedAlternative: jr.matchedAlternative } });
+                    } else {
+                      logAddStep({ step: 'qfv2-pool-jargon-skip', meta: { reason: 'empty', noun } });
+                    }
+                  } catch (jrErr) {
+                    console.warn(`[Chat req=${reqId}] [QFv2-PoolJargon] silent fail:`, jrErr instanceof Error ? jrErr.message : String(jrErr));
+                    logAddStep({ step: 'qfv2-pool-jargon-skip', meta: { reason: 'error', noun, error: jrErr instanceof Error ? jrErr.message : String(jrErr) } });
+                  }
+                }
+
+                if (pool.length === 0) {
+                  console.log(`[QueryFirstV2] pool still empty after jargon → fallback to Category Resolver`);
+                } else {
                 } else {
                   // ── (3) Self-Bootstrap facet schema from the live pool.
                   // Format = exact V1 contract: Map<key, {caption, values: Set<string>}>.
