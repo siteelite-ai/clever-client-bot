@@ -8512,7 +8512,11 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                             const resolvedValuesFolded = Object.values(resolvedFilters)
                               .map(v => fold(String(v)))
                               .filter(s => s.length > 0);
-                            const originalMods = (modifiers || []).map((m: string) => (m || '').trim()).filter((m: string) => m.length > 0);
+                            // Defect 2026-06-15: предлоги/частицы (на, и, с, в, у, к, по)
+                            // случайно попадают в modifiers и формируют мусорные split-секции.
+                            // Фильтр по длине ≥3 — data-agnostic: реальные модификаторы
+                            // (Е27, IP65, белый, 220В) — ≥3 символов; русские служебные — ≤2.
+                            const originalMods = (modifiers || []).map((m: string) => (m || '').trim()).filter((m: string) => m.length >= 3);
                             const resolvedOriginals: string[] = [];
                             const droppedOriginals: string[] = [];
                             for (const m of originalMods) {
