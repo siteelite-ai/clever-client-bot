@@ -1,6 +1,7 @@
 import { assertEquals } from 'https://deno.land/std@0.224.0/assert/mod.ts';
 import {
   applyBrandExclude,
+  applyBrandExcludeWithRelaxation,
   applyMarkingGuard,
   extractMarkingTokens,
   extractOriginalBrand,
@@ -267,4 +268,44 @@ Deno.test('isOriginalByTitle: exact match (case + whitespace insensitive)', () =
   assertEquals(isOriginalByTitle('ЩРН-П-12  IEK', 'щрн-п-12 iek'), true);
   assertEquals(isOriginalByTitle('ЩРН-П-12 IEK', 'ЩРВ-П-12 IEK'), false);
   assertEquals(isOriginalByTitle(null, 'x'), false);
+});
+
+// ─── applyBrandExcludeWithRelaxation (Wave A4) ────────────────────────────
+
+Deno.test('applyBrandExcludeWithRelaxation: relaxes when all candidates same brand', () => {
+  const candidates = [
+    { pagetitle: 'A IEK', options: [{ key: 'brend__brend', value_ru: 'IEK' }] },
+    { pagetitle: 'B IEK', options: [{ key: 'brend__brend', value_ru: 'IEK' }] },
+    { pagetitle: 'C IEK', options: [{ key: 'brend__brend', value_ru: 'IEK' }] },
+  ];
+  const r = applyBrandExcludeWithRelaxation(candidates as any, 'IEK');
+  assertEquals(r.relaxed, true);
+  assertEquals(r.filtered.length, 3);
+  assertEquals(r.excluded, 0);
+});
+
+Deno.test('applyBrandExcludeWithRelaxation: applies exclude when other brands exist', () => {
+  const candidates = [
+    { pagetitle: 'A IEK', options: [{ key: 'brend__brend', value_ru: 'IEK' }] },
+    { pagetitle: 'B Schneider', options: [{ key: 'brend__brend', value_ru: 'Schneider' }] },
+    { pagetitle: 'C ABB', options: [{ key: 'brend__brend', value_ru: 'ABB' }] },
+  ];
+  const r = applyBrandExcludeWithRelaxation(candidates as any, 'IEK');
+  assertEquals(r.relaxed, false);
+  assertEquals(r.filtered.length, 2);
+  assertEquals(r.excluded, 1);
+});
+
+Deno.test('applyBrandExcludeWithRelaxation: no-op when candidates empty', () => {
+  const r = applyBrandExcludeWithRelaxation([] as any, 'IEK');
+  assertEquals(r.relaxed, false);
+  assertEquals(r.filtered.length, 0);
+  assertEquals(r.excluded, 0);
+});
+
+Deno.test('applyBrandExcludeWithRelaxation: no-op when brand null', () => {
+  const candidates = [{ pagetitle: 'A', options: [] }];
+  const r = applyBrandExcludeWithRelaxation(candidates as any, null);
+  assertEquals(r.relaxed, false);
+  assertEquals(r.filtered.length, 1);
 });

@@ -28,6 +28,7 @@ import { wrapWithHeartbeat } from '../_shared/sse-heartbeat.ts';
 import { buildFacetsSummaryContent } from '../_shared/facets-summary.ts';
 import {
   applyBrandExclude,
+  applyBrandExcludeWithRelaxation,
   applyMarkingGuard,
   extractMarkingTokens,
   extractOriginalBrand,
@@ -6680,7 +6681,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     // (article/siteId hit, price-intent hit) where the answer is a simple "yes, in stock, X tg".
     let responseModel = aiConfig.model;
     let responseModelReason = 'default';
-    let replacementMeta: { isReplacement: boolean; original: Product | null; originalName?: string; noResults: boolean; weakened?: boolean; weakenedReason?: 'marking_mismatch' | 'few_results' } | null = null;
+    let replacementMeta: { isReplacement: boolean; original: Product | null; originalName?: string; noResults: boolean; weakened?: boolean; weakenedReason?: 'marking_mismatch' | 'few_results' | 'brand_dominant' } | null = null;
     // Price-Facet-Clarify state (V1 bootstrap-facets clarify) — поднято на верхний scope,
     // чтобы deterministic short-circuit ниже мог построить корректное сообщение.
     let pendingClarifyFacet: BootstrapFacet | null = null;
@@ -9626,6 +9627,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   const traitKeysSet = new Set(Object.keys(traitMust));
 
                   let rFinal: Product[] = [];
+                  let brandExcludeRelaxed = false;
                   // rResolved holds combined facet filters; we always seed with traitMust (Layer 1).
                   let rResolved: Record<string, string> = { ...traitMust };
                   let rResolvedRaw: Record<string, { value: string; is_critical?: boolean }> = {};
@@ -9730,10 +9732,15 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     console.log(`[Chat] Replacement original-leak filter: ${beforeLeak} → ${rFinal.length} (source="${markingSourceLeak}")`);
                   }
                   // Brand-exclude: аналог = другой бренд при тех же характеристиках.
+                  // Graceful relaxation: если категория моно-брендовая и exclude обнулил
+                  // пул — откатываемся к same-brand кандидатам с weakened='brand_dominant'.
                   const origBrand = extractOriginalBrand(originalProduct as any);
                   if (origBrand) {
-                    const be = applyBrandExclude(rFinal, origBrand);
-                    if (be.excluded > 0) {
+                    const be = applyBrandExcludeWithRelaxation(rFinal, origBrand);
+                    if (be.relaxed) {
+                      console.log(`[Chat] Replacement brand-exclude RELAXED "${origBrand}" (mono-brand category): kept ${rFinal.length} same-brand candidates`);
+                      brandExcludeRelaxed = true;
+                    } else if (be.excluded > 0) {
                       console.log(`[Chat] Replacement brand-exclude "${origBrand}": ${rFinal.length} → ${be.filtered.length} (-${be.excluded})`);
                     }
                     rFinal = be.filtered;
@@ -9751,7 +9758,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // не аналог (классический случай ЩРН vs ЩРВ — разный тип монтажа,
                   // отдельного фасета в каталоге нет).
                   let weakened = false;
-                  let weakenedReason: 'marking_mismatch' | 'few_results' | undefined = undefined;
+                  let weakenedReason: 'marking_mismatch' | 'few_results' | 'brand_dominant' | undefined = undefined;
                   if (rFinal.length > 0 && originalMarkings.length > 0) {
                     const guarded = applyMarkingGuard(rFinal, originalMarkings);
                     if (guarded.mismatch) {
@@ -9769,6 +9776,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     weakened = true;
                     weakenedReason = 'few_results';
                     console.log(`[Chat] Replacement L2 weakened: few_results count=${rFinal.length}`);
+                  }
+                  // Brand-dominant flag (set by relaxation above) — приоритет ниже marking_mismatch,
+                  // но выше few_results: if relaxation сработал, обязательно disclaimer-им.
+                  if (brandExcludeRelaxed && !weakened) {
+                    weakened = true;
+                    weakenedReason = 'brand_dominant';
                   }
 
                   if (rFinal.length > 0) {
@@ -10023,9 +10036,13 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   console.log(`[Chat] Replacement (legacy) original-leak filter: ${fBeforeLeak} → ${replFiltered.length}`);
                 }
                 const origBrandL = extractOriginalBrand(originalProduct as any);
+                let legacyBrandExcludeRelaxed = false;
                 if (origBrandL) {
-                  const be = applyBrandExclude(replFiltered, origBrandL);
-                  if (be.excluded > 0) {
+                  const be = applyBrandExcludeWithRelaxation(replFiltered, origBrandL);
+                  if (be.relaxed) {
+                    console.log(`[Chat] Replacement (legacy) brand-exclude RELAXED "${origBrandL}" (mono-brand category): kept ${replFiltered.length} same-brand candidates`);
+                    legacyBrandExcludeRelaxed = true;
+                  } else if (be.excluded > 0) {
                     console.log(`[Chat] Replacement (legacy) brand-exclude "${origBrandL}": ${replFiltered.length} → ${be.filtered.length} (-${be.excluded})`);
                   }
                   replFiltered = be.filtered;
@@ -10042,7 +10059,11 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 // legacy bucket-pipeline не знает про ЩРН vs ЩРВ, ВВГнг vs ВВГ и т.п.,
                 // и без guard вернёт визуально похожий, но структурно другой SKU.
                 let legacyWeakened = false;
-                let legacyWeakenedReason: 'marking_mismatch' | 'few_results' | undefined = undefined;
+                let legacyWeakenedReason: 'marking_mismatch' | 'few_results' | 'brand_dominant' | undefined = undefined;
+                if (legacyBrandExcludeRelaxed) {
+                  legacyWeakened = true;
+                  legacyWeakenedReason = 'brand_dominant';
+                }
                 try {
                   // Lazy-init markings/schema если matcher-ветка не отработала.
                   if (outerOriginalMarkings.length === 0 && pluralRepl) {
@@ -10504,6 +10525,8 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
       const weakenedPrefix = replacementWeakened
         ? (replacementWeakenedReason === 'marking_mismatch'
             ? `\n⚠️ ВАЖНО: точных аналогов «${replacementOriginalName || replacementOriginal?.pagetitle || 'указанному товару'}» в наличии НЕТ. Ниже — ближайшие по характеристикам товары той же категории, но с другой маркировкой (могут отличаться по типу монтажа/исполнения). НАЧНИ ОТВЕТ С ЧЕСТНОГО ПРИЗНАНИЯ: «Точного аналога «${replacementOriginalName || 'этого товара'}» в наличии не нашёл. Показываю ближайшее по характеристикам:» — и далее карточки.\n`
+            : replacementWeakenedReason === 'brand_dominant'
+            ? `\n⚠️ ВАЖНО: в этой категории у нас представлен преимущественно один бренд — ${replacementOriginal?.vendor || 'тот же, что у оригинала'}. Аналогов от других брендов в наличии НЕТ. Ниже — товары той же категории и того же бренда, но другие модели/серии. НАЧНИ ОТВЕТ С: «Аналогов от других брендов сейчас нет — в этой категории у нас в наличии только ${replacementOriginal?.vendor || 'этот бренд'}. Показываю другие модели:»\n`
             : `\n⚠️ ВАЖНО: близких аналогов мало (${productContext ? 'см. ниже' : ''}). НАЧНИ ОТВЕТ С: «Точных аналогов мало. Ближайшее, что нашёл:»\n`)
         : '';
       
