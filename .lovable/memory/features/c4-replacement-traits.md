@@ -14,3 +14,5 @@ type: feature
 Интегрировано в обе ветки `chat-consultant/index.ts`: matcher (~9716) и legacy (~10012). Логи: `Replacement original-leak filter`, `Replacement brand-exclude "<X>"`.
 
 Тесты: 25/25 в replacement-traits_test.ts.
+
+**A4 (2026-06-15) — Graceful brand-exclude relaxation**: `applyBrandExcludeWithRelaxation` обёртка: если exclude обнулил пул (категория моно-брендовая, все кандидаты = бренд оригинала) — откатываемся к same-brand кандидатам и помечаем `weakened='brand_dominant'`. Composer выдаёт честный disclaimer «Аналогов от других брендов нет, показываю другие модели <бренд>». Решает регрессию из C4-кейса #5 (MVA20-1-016-C IEK → brand-exclude IEK: 30→0 → Soft-404). Применяется идентично в matcher + legacy ветках. Тесты: 29/29 (+4 new).
