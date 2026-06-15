@@ -2421,7 +2421,7 @@ function detectPendingPriceIntent(
 // ============================================================
 
 interface DialogSlot {
-  intent: 'price_extreme' | 'product_search' | 'category_disambiguation' | 'price_facet_clarify' | 'pending_offer' | 'cross_sell_offer' | 'remaining_offer';
+  intent: 'price_extreme' | 'product_search' | 'category_disambiguation' | 'price_facet_clarify' | 'pending_offer' | 'cross_sell_offer' | 'remaining_offer' | 'jargon_clarify';
   price_dir?: 'most_expensive' | 'cheapest';
   base_category: string;
   refinement?: string;
@@ -2459,6 +2459,13 @@ interface DialogSlot {
   // храним остальные товары + анкоры для cross-sell, чтобы на 2-м сообщении выдать без поиска.
   // remaining_products — JSON массив ProductLite (id,pagetitle,url,price,vendor,warehouses[≤3],brand)
   remaining_products?: string;
+  // jargon_clarify state (V1, 2026-06-15): после успеха tryJargonFallback мы НЕ
+  // рендерим карточки — спрашиваем у пользователя, нужна ли узкая жаргон-
+  // интерпретация (matchedAlternative) или широкий поиск по noun. На следующем
+  // ходу tryResolveJargonChoice читает этот slot и роутит.
+  // jargon_meta — JSON {matchedAlternative, jargonCount}. originalQuery лежит
+  // в original_query (выше), noun — в base_category. См. mem://features/jargon-clarify.
+  jargon_meta?: string;
   // replacement metadata
   isReplacement?: boolean;
   originalName?: string;
@@ -2483,7 +2490,7 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
     const s = val as Record<string, unknown>;
     
     // Validate intent
-    if (s.intent !== 'price_extreme' && s.intent !== 'product_search' && s.intent !== 'category_disambiguation' && s.intent !== 'price_facet_clarify' && s.intent !== 'pending_offer' && s.intent !== 'cross_sell_offer' && s.intent !== 'remaining_offer') continue;
+    if (s.intent !== 'price_extreme' && s.intent !== 'product_search' && s.intent !== 'category_disambiguation' && s.intent !== 'price_facet_clarify' && s.intent !== 'pending_offer' && s.intent !== 'cross_sell_offer' && s.intent !== 'remaining_offer' && s.intent !== 'jargon_clarify') continue;
     // Validate status
     if (s.status !== 'pending' && s.status !== 'done') continue;
     // Validate base_category
@@ -2517,6 +2524,7 @@ function validateAndSanitizeSlots(raw: unknown): DialogSlots {
       related_categories: typeof s.related_categories === 'string' ? s.related_categories.substring(0, 1000) : undefined,
       anchors: typeof s.anchors === 'string' ? s.anchors.substring(0, 4000) : undefined,
       remaining_products: typeof s.remaining_products === 'string' ? s.remaining_products.substring(0, 12000) : undefined,
+      jargon_meta: typeof s.jargon_meta === 'string' ? s.jargon_meta.substring(0, 500) : undefined,
     };
     count++;
   }
@@ -6298,6 +6306,54 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     
     console.log(`[Chat req=${reqId}] Processing: "${userMessage.substring(0, 100)}"`);
     console.log(`[Chat req=${reqId}] Conversation ID: ${conversationId}`);
+
+    // === JARGON_CLARIFY RESOLVER (V1, 2026-06-15) ===
+    // На прошлом ходу EARLY-jargon-fallback нашёл alt-перевод (например
+    // «кукуруза»→«corn»), но не выдал карточки — задал уточнение «жаргон или
+    // широкий поиск?». Сейчас читаем выбор пользователя и переписываем
+    // userMessage, чтобы pipeline пошёл по нужной ветке.
+    // Систематично: data-agnostic, через jargon-clarify shared-хелпер.
+    let jargonClarifyApplied: 'jargon' | 'noun' | null = null;
+    const jargonClarifySlot = dialogSlots['jargon_clarify'];
+    if (jargonClarifySlot && jargonClarifySlot.intent === 'jargon_clarify' && jargonClarifySlot.jargon_meta) {
+      try {
+        const { tryResolveJargonChoice } = await import('../_shared/jargon-clarify.ts');
+        const meta = JSON.parse(jargonClarifySlot.jargon_meta) as { matchedAlternative: string; jargonCount: number };
+        const slotForResolver = {
+          matchedAlternative: meta.matchedAlternative,
+          noun: jargonClarifySlot.base_category,
+          originalQuery: jargonClarifySlot.original_query || '',
+          jargonCount: meta.jargonCount,
+          ts: 0,
+        };
+        const choice = tryResolveJargonChoice(userMessage, slotForResolver);
+        if (choice === 'jargon') {
+          const newQuery = `${meta.matchedAlternative} ${jargonClarifySlot.base_category}`.trim();
+          console.log(`[Chat req=${reqId}] [JargonClarify] user picked JARGON → rewriting "${userMessage}" → "${newQuery}"`);
+          userMessage = newQuery;
+          messages[messages.length - 1] = { ...messages[messages.length - 1], content: newQuery };
+          jargonClarifyApplied = 'jargon';
+        } else if (choice === 'noun') {
+          const newQuery = jargonClarifySlot.base_category;
+          console.log(`[Chat req=${reqId}] [JargonClarify] user picked NOUN → rewriting "${userMessage}" → "${newQuery}"`);
+          userMessage = newQuery;
+          messages[messages.length - 1] = { ...messages[messages.length - 1], content: newQuery };
+          jargonClarifyApplied = 'noun';
+        } else {
+          console.log(`[Chat req=${reqId}] [JargonClarify] choice=null — leaving slot, pipeline continues with original message`);
+        }
+        // Слот одноразовый: удаляем при любом разрешении (jargon/noun).
+        // При null — оставляем, пусть пользователь переспросит явно.
+        if (choice !== null) {
+          delete dialogSlots['jargon_clarify'];
+          slotsUpdated = true;
+        }
+      } catch (e) {
+        console.warn(`[Chat req=${reqId}] [JargonClarify] resolver error:`, e instanceof Error ? e.message : String(e));
+        delete dialogSlots['jargon_clarify'];
+        slotsUpdated = true;
+      }
+    }
 
     // === REMAINING_OFFER RESOLVER (V1, 2026-05-15) ===
     // На прошлом ходу мы показали 3 карточки + хвост «Подобрано ещё N — показать остальные?»
@@ -10898,7 +10954,8 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
         appSettings.openrouter_api_key &&
         appSettings.volt220_api_token &&
         extractedIntent.originalQuery &&
-        extractedIntent.originalQuery.trim().length > 0
+        extractedIntent.originalQuery.trim().length > 0 &&
+        !jargonClarifyApplied  // skip if user already picked a side this turn
       ) {
         console.log(`[Chat req=${reqId}] [JargonFallback] EARLY trigger: branch=qfv2_pool_no_modifiers criticalMods=${JSON.stringify(criticalMods)}`);
         logSetBranch('jargon-fallback');
@@ -10916,14 +10973,61 @@ ${brands.map((b, i) => `${i + 1}. ${b}`).join('\n')}
           },
           log: (event, data) => console.log(`[Chat req=${reqId}] [JargonFallback] ${event}`, data ?? {}),
         });
-        if (jargonResult.products.length > 0) {
-          console.log(`[Chat req=${reqId}] [JargonFallback] EARLY recovered via "${jargonResult.matchedAlternative}": ${jargonResult.products.length} products (replacing pool)`);
-          const _r = pickDisplayWithTotal(jargonResult.products);
-          foundProducts = _r.displayed;
-          totalCollected = _r.total;
-          totalCollectedBranch = 'jargon-fallback-early';
-          // productContext был сформирован выше из старого pool — пересобираем.
-          productContext = formatProductsForAI(foundProducts, needsExtendedOptions(userMessage) || !!extractedIntent?.compute);
+        if (jargonResult.products.length > 0 && jargonResult.matchedAlternative) {
+          // ─── JARGON CLARIFY (V1, 2026-06-15, mem://features/jargon-clarify) ────
+          // Жаргон-перевод — это ГИПОТЕЗА LLM, не факт. Раньше мы молча
+          // отдавали карточки по этой гипотезе (например, для «лампа кукуруза
+          // E27» возвращали corn G4/G9 без цоколя). Теперь показываем
+          // честный выбор пользователю и сохраняем slot.
+          const noun = (extractedIntent.candidates[0]?.query || '').trim() || 'товары';
+          const originalQ = (extractedIntent.originalQuery || userMessage).trim();
+          const { buildJargonClarifyContent } = await import('../_shared/jargon-clarify.ts');
+          const { content: clarifyContent, slot: clarifyMeta } = buildJargonClarifyContent({
+            matchedAlternative: jargonResult.matchedAlternative,
+            noun,
+            originalQuery: originalQ,
+            jargonCount: jargonResult.products.length,
+          });
+          console.log(`[Chat req=${reqId}] [JargonFallback] EARLY clarify emitted: alt="${clarifyMeta.matchedAlternative}" noun="${clarifyMeta.noun}" count=${clarifyMeta.jargonCount}`);
+          logSetBranch('jargon-clarify');
+          logAddStep({ step: 'jargon-clarify-emit', total: clarifyMeta.jargonCount, meta: { matchedAlternative: clarifyMeta.matchedAlternative, noun: clarifyMeta.noun } });
+
+          // Сохраняем slot для следующего хода
+          dialogSlots['jargon_clarify'] = {
+            intent: 'jargon_clarify',
+            base_category: clarifyMeta.noun.substring(0, 200),
+            status: 'pending',
+            created_turn: 0,
+            turns_since_touched: 0,
+            original_query: clarifyMeta.originalQuery.substring(0, 200),
+            jargon_meta: JSON.stringify({
+              matchedAlternative: clarifyMeta.matchedAlternative,
+              jargonCount: clarifyMeta.jargonCount,
+            }).substring(0, 500),
+          };
+          persistSlotsAsync(conversationId, dialogSlots);
+
+          // Возвращаем clarify-текст немедленно (SSE или JSON).
+          if (!useStreaming) {
+            return new Response(
+              JSON.stringify({ content: clarifyContent, slot_update: dialogSlots }),
+              { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+            );
+          }
+          {
+            const encoder = new TextEncoder();
+            const stream = new ReadableStream({
+              start(controller) {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ choices: [{ delta: { content: clarifyContent }, index: 0 }] })}\n\n`));
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ slot_update: dialogSlots })}\n\n`));
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+                controller.close();
+              },
+            });
+            return new Response(stream, {
+              headers: { ...corsHeaders, 'Content-Type': 'text/event-stream; charset=utf-8', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive' },
+            });
+          }
         } else {
           // Системный фикс (2026-05-04): если critical_modifier не разрешён И
           // jargon-fallback тоже не нашёл альтернатив — НЕЛЬЗЯ показывать
