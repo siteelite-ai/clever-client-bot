@@ -10214,11 +10214,57 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       if (!rfSeen.has(p.id)) { rfSeen.add(p.id); rFinal.push(p); }
                     }
                     // Layer 1.5 post-filter: tolerance ±15% по числовым traits.
+                    const rFinalPreNumeric = rFinal.slice();
+                    let numericRelaxed = false;
+                    let numericRelaxedDropped: string[] = [];
                     if (numericKeys.length > 0 && rFinal.length > 0) {
                       const numBefore = rFinal.length;
                       const numRes = applyNumericToleranceFilter(rFinal, traitMustNumeric);
                       rFinal = numRes.filtered;
                       console.log(`[Chat] Replacement L1.5 numeric post-filter: ${numBefore} → ${rFinal.length} (dropped ${numRes.dropped}, traits=${JSON.stringify(traitMustNumeric)})`);
+                    }
+                    // ──────────────────────────────────────────────────────────────
+                    // Layer 1.5b: gradual NUMERIC relaxation (greedy drop).
+                    // Когда rFinal=0 после numeric post-filter, но pool НЕ пустой —
+                    // постепенно ослабляем числовые оси (по одной, greedy: дропаем
+                    // ту, чьё удаление даёт максимум кандидатов), пока не наберём
+                    // ≥ MIN_RELAXED_RESULTS. В крайнем случае — все numeric сняты,
+                    // остаётся только strict (бренд/цоколь/форма) → честные близкие.
+                    // Это заменяет fallback в legacy bucket-search (который терял
+                    // категорию и выдавал нерелевантные товары).
+                    // Data-agnostic: 0 сетевых вызовов, нет whitelist'ов.
+                    // ──────────────────────────────────────────────────────────────
+                    const MIN_RELAXED_RESULTS = 3;
+                    if (rFinal.length < MIN_RELAXED_RESULTS && numericKeys.length > 0 && rFinalPreNumeric.length > 0) {
+                      const activeNumeric: Record<string, number> = { ...traitMustNumeric };
+                      const droppedAxes: string[] = [];
+                      while (Object.keys(activeNumeric).length > 0 && rFinal.length < MIN_RELAXED_RESULTS) {
+                        // Greedy: пробуем удалить каждую ось, выбираем ту, что
+                        // максимизирует число прошедших кандидатов.
+                        let bestKey = '';
+                        let bestKept: Product[] = [];
+                        for (const k of Object.keys(activeNumeric)) {
+                          const trial = { ...activeNumeric };
+                          delete trial[k];
+                          const kept = Object.keys(trial).length === 0
+                            ? rFinalPreNumeric.slice()
+                            : applyNumericToleranceFilter(rFinalPreNumeric, trial).filtered;
+                          if (kept.length > bestKept.length) {
+                            bestKept = kept;
+                            bestKey = k;
+                          }
+                        }
+                        if (!bestKey) break;
+                        delete activeNumeric[bestKey];
+                        droppedAxes.push(bestKey);
+                        rFinal = bestKept;
+                      }
+                      if (droppedAxes.length > 0) {
+                        numericRelaxed = true;
+                        numericRelaxedDropped = droppedAxes;
+                        console.log(`[Chat] Replacement L1.5b NUMERIC RELAXED: dropped axes=[${droppedAxes.join(', ')}], remaining_numeric=${JSON.stringify(activeNumeric)}, rFinal=${rFinal.length}`);
+                        console.log(`[Metric] replacement_numeric_relaxed_total dropped=${droppedAxes.length}/${numericKeys.length} final=${rFinal.length}`);
+                      }
                     }
                     // Cascading relaxed: trait-фильтры от оригинала НЕ дропаем (это ground truth).
                     if (rFinal.length === 0 && Object.keys(rResolved).length > 1) {
@@ -10239,9 +10285,13 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                         for (const arr of relaxedRes) for (const p of arr) {
                           if (!seenR.has(p.id)) { seenR.add(p.id); merged.push(p); }
                         }
-                        // Apply numeric post-filter и тут.
-                        const mergedNum = numericKeys.length > 0
-                          ? applyNumericToleranceFilter(merged, traitMustNumeric).filtered
+                        // Apply numeric post-filter и тут (с тем же активным набором осей,
+                        // если он был ослаблен на шаге 1.5b — НЕ восстанавливаем).
+                        const numForCascade = numericRelaxed
+                          ? Object.fromEntries(Object.entries(traitMustNumeric).filter(([k]) => !numericRelaxedDropped.includes(k)))
+                          : traitMustNumeric;
+                        const mergedNum = Object.keys(numForCascade).length > 0
+                          ? applyNumericToleranceFilter(merged, numForCascade).filtered
                           : merged;
                         if (mergedNum.length > bestRelaxed.length) {
                           bestRelaxed = mergedNum;
@@ -10252,6 +10302,10 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                         rFinal = bestRelaxed;
                         console.log(`[Chat] Replacement matcher relaxed (dropped ${droppedKey}, trait-keys preserved, numeric post-filter applied): ${rFinal.length}`);
                       }
+                    }
+                    // Propagate numericRelaxed → weakenedReason='trait_relaxed' ниже.
+                    if (numericRelaxed && rFinal.length > 0) {
+                      trait_relaxed_rescued = trait_relaxed_rescued || false; // placeholder, set after declaration
                     }
                   }
 
