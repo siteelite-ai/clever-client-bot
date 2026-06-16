@@ -9165,6 +9165,54 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                          branchTag = 'qfv2_win';
                          console.log(`[QueryFirstV2] query_first_v2_win noun="${noun}" filters=${Object.keys(resolvedFilters).length} count=${finalFiltered.length} elapsed=${Date.now() - qfStart}ms`);
 
+                         // ── NARROW-WIN JARGON RECOVERY (Шаг 2.5, 2026-06-16).
+                         // Если финальная выдача узкая (1-2 товара) — высок риск, что
+                         // noun-extractor дал нестабильный/более узкий термин («выключатель»
+                         // вместо «автоматический выключатель»), и word-boundary post-filter
+                         // отрезал валидные товары с альтернативным написанием pagetitle.
+                         // Дёшево проверить: jargon-fallback на whole query. Если canonical
+                         // alt вернул СТРОГО БОЛЬШЕ (≥ max(5, current*2)) и alt отличается
+                         // от noun по ASCII-fold — замещаем. Иначе оставляем qfv2_win.
+                         // Data-agnostic, без словарей. Триггер ТОЛЬКО для length ∈ {1,2}.
+                         try {
+                           const NARROW_MAX = 2;
+                           if (finalFiltered.length <= NARROW_MAX) {
+                             const foldNoun = (s: string) => (s || '').toLowerCase().normalize('NFKC').replace(/[^a-zа-яё0-9]/g, '');
+                             const nounFolded = foldNoun(noun);
+                             const { tryJargonFallback } = await import('../_shared/jargon-fallback.ts');
+                             const jr = await tryJargonFallback({
+                               originalQuery: userMessage || `${noun} ${(modifiers || []).join(' ')}`,
+                               openrouterKey: appSettings.openrouter_api_key!,
+                               productNoun: noun,
+                               searchFn: (alt) => searchProductsByCandidate(
+                                 { query: alt, brand: null, category: null, min_price: null, max_price: null },
+                                 appSettings.volt220_api_token!,
+                                 10,
+                               ),
+                               log: (event, data) => console.log(`[Chat req=${reqId}] [QFv2-NarrowWinJargon] ${event}`, data ?? {}),
+                             });
+                             const altFolded = foldNoun(jr.matchedAlternative || '');
+                             const altIsNovel = altFolded.length > 0 && altFolded !== nounFolded && !nounFolded.includes(altFolded) && !altFolded.includes(nounFolded);
+                             const sanitized = ((jr.products || []) as Product[])
+                               .filter(p => typeof p.price === 'number' && (p.price as number) > 0);
+                             const threshold = Math.max(5, finalFiltered.length * 2);
+                             if (altIsNovel && sanitized.length >= threshold) {
+                               console.log(`[QueryFirstV2] query_first_v2_jargon_narrow_win noun="${noun}" alt="${jr.matchedAlternative}" old=${finalFiltered.length} new=${sanitized.length} elapsed=${Date.now() - qfStart}ms`);
+                               displayList = sanitized.slice(0, 10);
+                               branchTag = 'qfv2_jargon_narrow_win';
+                               totalCollectedBranch = 'jargon-fallback';
+                               // pendingJargonClarify НЕ выставляем: выдача уже не пустая,
+                               // спрашивать пользователя нет смысла.
+                               logAddStep({ step: 'qfv2-jargon-narrow-win', total: sanitized.length, meta: { noun, originalQuery: userMessage || noun, matchedAlternative: jr.matchedAlternative, oldCount: finalFiltered.length, newCount: sanitized.length, threshold } });
+                             } else {
+                               logAddStep({ step: 'qfv2-jargon-narrow-win-skip', meta: { noun, oldCount: finalFiltered.length, altCount: sanitized.length, threshold, altIsNovel, matchedAlternative: jr.matchedAlternative || null, reason: !altIsNovel ? 'alt_not_novel' : 'below_threshold' } });
+                             }
+                           }
+                         } catch (nwjErr) {
+                           console.warn(`[Chat req=${reqId}] [QFv2-NarrowWinJargon] silent fail:`, nwjErr instanceof Error ? nwjErr.message : String(nwjErr));
+                           logAddStep({ step: 'qfv2-jargon-narrow-win-skip', meta: { noun, reason: 'error', error: nwjErr instanceof Error ? nwjErr.message : String(nwjErr) } });
+                         }
+
                           // ── Unfulfilled-combination split at qfv2_win (2026-05-25, v2).
                           // FilterLLM resolved e.g. {tip_cokolya:"E27"} но «кукуруза» осталась
                           // unresolved — молча показали лампы E27 без кукурузы. Это обман:
