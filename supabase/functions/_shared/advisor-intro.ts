@@ -36,35 +36,40 @@ export function isAdvisorIntent(userMessage: string): boolean {
 
 const SYSTEM_PROMPT = `Ты — эксперт-консультант магазина электротоваров 220volt.kz.
 
-Клиент попросил подобрать товар. Перед списком карточек тебе нужно написать ОДНО короткое предложение: «под какую задачу подобрал».
+Клиент попросил подобрать товар. Перед списком карточек тебе нужно написать ОДНО короткое предложение: «под какую задачу подобрал и по какому ключевому критерию».
 
 ЖЁСТКИЕ ПРАВИЛА:
 - Ровно ОДНО предложение, ≤ 25 слов.
 - Без приветствий, без «вот варианты», без «выберите подходящий», без «надеюсь поможет».
 - БЕЗ названий товаров, БЕЗ брендов, БЕЗ цен, БЕЗ ссылок, БЕЗ артикулов, БЕЗ моделей.
-- АБСОЛЮТНЫЙ ЗАПРЕТ упоминать любые конкретные технические характеристики (сечение, мм², ампераж, материал проводника, количество жил, диаметр, температуру, IP-класс и т.п.), КОТОРЫЕ КЛИЕНТ САМ НЕ НАЗВАЛ в своём запросе. Ты НЕ видишь реальную выдачу — любая придуманная цифра/спецификация = ложь, которая не совпадёт с карточками ниже.
-- Разрешено: тип товара (родовой noun) + задача клиента + только те параметры, которые ЯВНО присутствуют в тексте запроса (например, «мощностью 3 кВт» — только если клиент так написал).
+- АНТИ-ГАЛЛЮЦИНАЦИЯ: если упоминаешь конкретную характеристику (сечение, мм², ампераж, материал проводника, количество жил, диаметр, температуру, IP-класс и т.п.) — её значение ОБЯЗАНО либо присутствовать в запросе клиента, либо быть ОБЩИМ для ВСЕХ перечисленных ниже подобранных товаров (один и тот же value у всех). Если у товаров значения разные — НЕ называй конкретную цифру, говори обобщённо («с подходящим сечением», «нужного сечения») или вовсе не упоминай этот параметр.
+- Лучше короче и без цифры, чем с неверной цифрой.
 - Заканчивай двоеточием — после твоего предложения сразу пойдут карточки.
 
-Пример хорошего intro (клиент написал «кабель для кондиционера 3 кВт»):
-«Под подключение кондиционера мощностью 3 кВт подобрал подходящие варианты кабеля:»
+Пример хорошего intro (клиент: «кабель для кондиционера 3 кВт», все 3 подобранных товара имеют сечение 2.5 мм²):
+«Для подключения кондиционера мощностью 3 кВт подобрал медные кабели с сечением 2.5 мм²:»
 
-Пример ПЛОХОГО intro (НЕ ДЕЛАЙ ТАК):
-«Для кондиционера 3 кВт подойдут медные кабели с сечением 2.5 мм²:»
-(клиент НЕ называл «медный» и «2.5 мм²» — это галлюцинация, реальные карточки могут быть с другим сечением/материалом).
+Пример хорошего intro (значения сечения у подобранных товаров РАЗНЫЕ — 1.5 и 2.5):
+«Под подключение кондиционера мощностью 3 кВт подобрал варианты кабеля с подходящим сечением:»
 
-Ещё ПЛОХОЕ:
-«Вот варианты кабелей ВВГнг 3х2.5 от 1500 тенге — выберите подходящий:»
-(конкретные названия/цены и «выберите»).
+Пример ПЛОХОГО intro (значения у товаров разные, но ты назвал конкретную цифру):
+«Для кондиционера 3 кВт подойдут кабели с сечением 2.5 мм²:» (а в выдаче есть товар с 1,5 мм² — это ложь).
 
 Верни ТОЛЬКО текст intro, без кавычек, без markdown.`;
+
+export interface AdvisorSelectedProduct {
+  pagetitle?: string | null;
+  options?: Array<{ key?: string; caption_ru?: string | null; value_ru?: string | null }> | null;
+}
 
 export interface AdvisorIntroInput {
   userMessage: string;
   productNoun?: string | null;
   openrouterKey: string;
+  selectedProducts?: AdvisorSelectedProduct[];
   log?: (event: string, data: Record<string, unknown>) => void;
 }
+
 
 export async function generateAdvisorIntro(
   input: AdvisorIntroInput,
@@ -76,12 +81,19 @@ export async function generateAdvisorIntro(
   if (!isAdvisorIntent(message)) return null;
 
   const noun = (input.productNoun ?? "").trim();
-  const userBlock = noun
-    ? `Запрос клиента: «${message}»\nРодовой товар (noun): ${noun}`
-    : `Запрос клиента: «${message}»`;
+  const productsBlock = buildSelectedProductsBlock(input.selectedProducts);
+  const lines: string[] = [`Запрос клиента: «${message}»`];
+  if (noun) lines.push(`Родовой товар (noun): ${noun}`);
+  if (productsBlock) {
+    lines.push("");
+    lines.push("Подобранные товары и их характеристики (используй ТОЛЬКО эти значения, если хочешь сослаться на параметр — и только если значение ОДИНАКОВО у всех):");
+    lines.push(productsBlock);
+  }
+  const userBlock = lines.join("\n");
 
   const t0 = Date.now();
   try {
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), INTRO_TIMEOUT_MS);
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
@@ -135,4 +147,29 @@ export async function generateAdvisorIntro(
     log("advisor_intro.error", { error: e instanceof Error ? e.message : String(e), ms: Date.now() - t0 });
     return null;
   }
+}
+
+// Технические поля, которые не несут смысла для intro и засоряют контекст.
+const OPTION_BLACKLIST_RE = /(identifikator|kodnomenklatury|kod_tn_ved|poiskovyy_zapros|naimenovanie_na_kazah|populyarn|novinka|ogranichennyy_prosmotr|prodaetsya_tolyko|edinica_izmereniya|obyem|ves|garantiy|stranauproizvod|strana_proizvod)/i;
+
+function buildSelectedProductsBlock(products?: AdvisorSelectedProduct[] | null): string | null {
+  if (!products || products.length === 0) return null;
+  const blocks: string[] = [];
+  for (let i = 0; i < products.length; i++) {
+    const p = products[i];
+    const title = (p.pagetitle ?? "").trim() || `Товар ${i + 1}`;
+    const opts = Array.isArray(p.options) ? p.options : [];
+    const filtered = opts
+      .filter((o) => o && typeof o.key === "string" && !OPTION_BLACKLIST_RE.test(o.key))
+      .map((o) => {
+        const cap = (o.caption_ru ?? "").trim();
+        const val = (o.value_ru ?? "").trim();
+        if (!cap || !val) return null;
+        return `${cap}: ${val}`;
+      })
+      .filter((s): s is string => !!s)
+      .slice(0, 12);
+    blocks.push(`${i + 1}. ${title}\n   ${filtered.join("; ") || "(нет характеристик)"}`);
+  }
+  return blocks.join("\n");
 }
