@@ -1,0 +1,1 @@
+UPDATE public.app_settings SET expert_interpretation_enabled = true;
