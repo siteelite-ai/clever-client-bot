@@ -663,6 +663,7 @@ async function getAppSettings(): Promise<CachedSettings> {
         soft_suggest_enabled: false,
         compare_branch_enabled: false,
         c5_clarify_broad_enabled: false,
+        expert_interpretation_enabled: false,
       };
     }
 
