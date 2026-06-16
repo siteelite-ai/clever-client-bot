@@ -9987,7 +9987,21 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
         }
         
         // === REPLACEMENT/ALTERNATIVE INTENT (category-first pipeline) ===
-        if (classification?.is_replacement && appSettings.volt220_api_token) {
+        // D2 guard (2026-06-16): если price-ветка уже отработала успешно (≥3 товара),
+        // НЕ запускаем legacy-replacement — он перетирает price-shortcircuit результаты
+        // другим брендом/категорией ("аналоги") и подмешивает товары, более дорогие чем
+        // оригинальный pool, что прямо противоречит price_intent='cheapest'.
+        // Систему: price-ветка — специализированный путь для price_intent, она авторитетна.
+        const _priceBranchSatisfied = (
+          responseModelReason === 'price-shortcircuit' &&
+          articleShortCircuit === true &&
+          Array.isArray(foundProducts) && foundProducts.length >= 3
+        );
+        if (classification?.is_replacement && _priceBranchSatisfied) {
+          console.log(`[Chat] Replacement SKIPPED: price-shortcircuit уже вернул ${foundProducts.length} товаров — legacy-replacement не нужен`);
+          logAddStep({ step: 'replacement-skipped', meta: { reason: 'price_branch_satisfied', price_branch_count: foundProducts.length, branchTag: 'price_shortcircuit_keep' } });
+        }
+        if (classification?.is_replacement && appSettings.volt220_api_token && !_priceBranchSatisfied) {
          try {
           console.log(`[Chat] Replacement intent detected!`);
           const replacementStart = Date.now();
