@@ -8848,7 +8848,42 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // Single-Pass Schema (2026-06-15): если merge удался — escalate бесполезен
                   // (вторая filter-llm против того же schema = шум + 9с). Запускаем escalate
                   // ТОЛЬКО когда schemaSource='bootstrap' (prefetch упал/timeout).
-                  if (schemaSource === 'bootstrap' && resolverUnresolved.length > 0 && Object.keys(resolvedFilters).length < modifiers.length) {
+                  // ── (4.4) ESCALATE SHORT-CIRCUIT (Волна 1, 2026-06-16, mem://features/escalate-short-circuit).
+                  // Если ни один unresolved-модификатор не имеет НИКАКОГО пересечения
+                  // (substring) с captions или values bootstrap'а — escalate бесполезен:
+                  // полная схема категории не содержит этих токенов по определению (это
+                  // контекстные слова типа «квартиры», «для», «красивый»). Экономия 6-14с
+                  // на запросах с unresolved-модификаторами без facet-кандидата.
+                  // Data-agnostic: проверка против live bootstrap, без словарей.
+                  const hasAnyBootstrapOverlap = (mods: string[]): boolean => {
+                    if (mods.length === 0) return false;
+                    const lcMods = mods.map(m => m.toLowerCase().trim()).filter(m => m.length >= 2);
+                    if (lcMods.length === 0) return false;
+                    for (const [, bucket] of bootstrapSchema.entries()) {
+                      const cap = (bucket.caption || '').toLowerCase();
+                      for (const m of lcMods) {
+                        if (cap.includes(m) || m.includes(cap)) return true;
+                      }
+                      for (const v of bucket.values) {
+                        const lv = String(v).toLowerCase();
+                        for (const m of lcMods) {
+                          if (lv.includes(m) || m.includes(lv)) return true;
+                        }
+                      }
+                    }
+                    return false;
+                  };
+                  if (
+                    schemaSource === 'bootstrap' &&
+                    resolverUnresolved.length > 0 &&
+                    !hasAnyBootstrapOverlap(resolverUnresolved)
+                  ) {
+                    console.log(`[QueryFirstV2] escalate SHORT-CIRCUIT: no bootstrap overlap for unresolved=[${resolverUnresolved.join(', ')}] — skip prefetch+filter-llm (saves ~13s)`);
+                    logAddStep({
+                      step: 'qfv2-escalate-skip',
+                      meta: { reason: 'no_bootstrap_overlap', unresolved: resolverUnresolved, bootstrap_keys: bootstrapSchema.size },
+                    });
+                  } else if (schemaSource === 'bootstrap' && resolverUnresolved.length > 0 && Object.keys(resolvedFilters).length < modifiers.length) {
                     const escStart = Date.now();
                     // Волна C3 (2026-06-15): hard cap 6с на весь escalate-блок.
                     // Раньше getCategoryOptionsSchema + resolveFiltersWithLLM могли висеть 33с
