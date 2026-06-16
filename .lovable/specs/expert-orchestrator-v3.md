@@ -195,8 +195,7 @@ output_error = { ok: false, error_code, message }
 ```ts
 input = {
   product_ids: string[],      // максимум 10
-  total_available?: number,   // показать «и ещё N» если > product_ids.length
-  intro_line?: string         // одна короткая строка-подводка от эксперта; опционально
+  total_available?: number    // показать «и ещё N» если > product_ids.length
 }
 output_ok = {
   ok: true,
@@ -210,6 +209,21 @@ output_error = { ok: false, error_code: "no_products" | "all_zero_price", messag
 - Рендер использует **дословные** `pagetitle`, `url`, `price`, `vendor`, `stock` из последнего `ProductRef`-кэша текущей сессии (см. §3.11). Никаких LLM-перезаписей.
 - `price=0` отбрасываются повторно (double-filter).
 - Если после фильтра `rendered_count=0` → возвращает `error_code='all_zero_price'`, эксперт должен перейти в `escalate_to_manager` или объяснить пустоту.
+- Подводящий текст («Вот что нашёл:») эксперт стримит сам до `render_products`; параметра `intro_line` нет.
+
+### §3.6a `lookup_contacts`
+**Назначение:** прямая ветка «инфо о магазине»: реквизиты, график работы, адрес, способы оплаты, доставка. Используется когда пользователь спросил именно об этом — БЕЗ ухода в Soft-404.
+
+```ts
+input = { topic: "phone" | "address" | "hours" | "payment" | "delivery" | "general" }
+output_ok = {
+  ok: true,
+  data: { phone?: string, address?: string, hours?: string, payment?: string, delivery?: string, html_block?: string }
+}
+output_error = { ok: false, error_code, message }
+```
+
+**Эффект:** эмитит SSE `contacts` с готовым html-блоком (как в V1). Эксперт МОЖЕТ дополнить текстом ДО вызова, но цифры/адреса в текст не цитирует — берёт `lookup_contacts`.
 
 ### §3.7 `propose_clarification`
 **Назначение:** когда эксперт хочет задать структурированный уточняющий вопрос с quick-replies (например выбор фасета). Аналог текущего `price_clarify`/`dialogSlot`.
@@ -453,13 +467,14 @@ System-prompt состоит из 5 блоков (порядок жёсткий,
 
 ---
 
-## §11 Открытые вопросы (требуют ответа до коммита #1)
+## §11 Решения (закрыто пользователем 2026-06-16)
 
-1. **Persistent slots между ходами** — V1 хранит slots в `chat_cache_v2`. V3 наследует ту же таблицу или заводит свою? **Предложение:** наследует, ключ `slot:v3:<sessionId>`.
-2. **Cross-sell** — оставляем как в V1 (отдельный followup-SSE после render), или эксперт сам решает добавить text-paragraph? **Предложение:** эксперт сам, в том же ходе после `render_products` (один или два предложения текста). Тогда followup-канал не используется в v3.
-3. **Knowledge ответ + товары в одном ходе** — допустимо? Пример: «как выбрать УЗО?» → эксперт отвечает текстом (knowledge), и в конце предлагает посмотреть наш ассортимент (`search_catalog` → `render_products`). **Предложение:** разрешено, ограничение `stepCount<=8` достаточно.
-4. **Что с `intro_line` у render_products** — нужно ли вообще? Эксперт уже может стримить текст перед `assistant_turn_break`. **Предложение:** убрать `intro_line`, упрощает контракт.
-5. **Confidence-gate перед showing reasoning** — если эксперт не уверен (низкая subj. конфиденс), стоит ли показывать reasoning или сразу задавать `propose_clarification`? **Предложение:** доверяем модели — она и так выберет тул `propose_clarification` если нужно.
+1. **Persistent slots между ходами** — V3 наследует `chat_cache_v2`, ключ `slot:v3:<sessionId>`, TTL 30 мин (как V1).
+2. **Cross-sell** — эксперт сам формирует 1–3 предложения текста в том же ходе после `render_products`. Отдельный `followup`-SSE в V3 не используется.
+3. **Knowledge + товары в одном ходе** — разрешено. Если `lookup_knowledge` вернул пусто, эксперт МОЖЕТ ответить из собственной экспертности (без выдумывания фактов о товарах/ценах), затем при необходимости вызвать `search_catalog`.
+4. **`intro_line` у `render_products`** — убран. Подводку эксперт стримит сам как обычный текст до `assistant_turn_break`.
+5. **Confidence-gate** — не вводим. Доверяем модели: она вызывает `propose_clarification` сама когда не хватает данных.
+6. **(NEW) Прямая ветка инфо/контакты** — добавлен тул `lookup_contacts` (§3.6a). Когда пользователь спросил «какой телефон / адрес / график / условия доставки» — эксперт идёт туда напрямую, БЕЗ Soft-404 и БЕЗ `escalate_to_manager`.
 
 ---
 
