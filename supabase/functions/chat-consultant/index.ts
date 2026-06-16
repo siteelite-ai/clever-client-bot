@@ -10306,7 +10306,8 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       }
                     }
                     // Propagate numericRelaxed → weakenedReason='trait_relaxed' ниже.
-                    // (флаг используется в блоке formирования weakened — см. ниже)
+                    numericRelaxedOuter = numericRelaxed;
+                    numericRelaxedDroppedOuter = numericRelaxedDropped;
                   }
 
 
