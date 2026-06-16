@@ -8575,6 +8575,8 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 );
                 console.log(`[QueryFirstV2] pool query="${enrichedQuery}" size=${pool.length} (perPage=${QF_POOL_SIZE})`);
                 logAddStep({ step: 'qfv2-pool', total: pool.length, ms: Date.now() - poolStartMs, meta: { query: enrichedQuery.substring(0, 200), perPage: QF_POOL_SIZE, enrichMods: enrichMods.slice(0, 5) } });
+                pool = sanitizePoolByNoun(pool, 'enriched');
+
 
                 // Волна C1 (2026-06-15): pool-jargon ПЕРЕД bare-noun retry.
                 // Раньше: enriched=0 → retry с голым noun → 100 случайных товаров (мусор)
