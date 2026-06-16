@@ -8983,6 +8983,93 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     logAddStep({ step: 'qfv2-filter-llm', meta: { skipped: 'no_modifiers' } });
                   }
 
+                  // ── (4.6) EXPERT INTERPRETATION (flag: expert_interpretation_enabled).
+                  // Назначение: классификатор+FacetMatcher работают на уровне токенов
+                  // («3», «кВт», «кондиционер»), но НЕ знают электротехнических норм
+                  // (ПУЭ: P=3 кВт → I≈14 А → сечение медь 2.5 мм²). Без эксперта pool
+                  // ВВГ-кабелей показывается as-is — клиент видит 1.5/2.5/10/25/35 мм²
+                  // вперемешку. Эксперт-LLM получает originalQuery + bootstrap schema
+                  // (реальные опции категории) и возвращает целевые value_ru. Затем
+                  // мерджим в resolvedFilters (additive по новым ключам; на пересечении
+                  // ключей expert wins ТОЛЬКО при confidence='high').
+                  //
+                  // Anti-hallucination: модуль валидирует каждый key/value против schema
+                  // и дропает несуществующие. Любая ошибка/таймаут (8с) → silent skip.
+                  //
+                  // Reasoning сохраняется в expertReasoning для последующего advisor-intro.
+                  let expertReasoning = '';
+                  let expertConfidence: 'high' | 'medium' | 'low' | 'none' = 'none';
+                  let expertTargetFacets: Record<string, string[]> = {};
+                  if (
+                    appSettings.expert_interpretation_enabled &&
+                    appSettings.openrouter_api_key &&
+                    noun &&
+                    bootstrapSchema.size > 0 &&
+                    modifiers.length > 0
+                  ) {
+                    const expertStart = Date.now();
+                    try {
+                      // Преобразуем bootstrapSchema в shape для interpretRequirement.
+                      const optionSchema: ExpertOption[] = Array.from(bootstrapSchema.entries()).map(([key, bucket]) => ({
+                        key,
+                        caption_ru: bucket.caption,
+                        values: Array.from(bucket.values).map(v => ({ value_ru: v })),
+                      }));
+                      const expertRes = await interpretRequirement({
+                        originalQuery: userMessage,
+                        productCategory: noun,
+                        searchModifiers: modifiers,
+                        optionSchema,
+                        openrouterKey: appSettings.openrouter_api_key,
+                        log: (event, data) => console.log(`[Chat req=${reqId}] [QFv2-Expert] ${event}`, data ?? {}),
+                      });
+                      if (expertRes.llmOk) {
+                        expertReasoning = expertRes.reasoning;
+                        expertConfidence = expertRes.confidence;
+                        expertTargetFacets = expertRes.targetFacets;
+                        // Merge: additive по новым ключам; high → перезапись.
+                        let added = 0;
+                        let overwritten = 0;
+                        for (const [k, vs] of Object.entries(expertRes.targetFacets)) {
+                          if (!vs || vs.length === 0) continue;
+                          const firstValue = vs[0]; // resolvedFilters = Record<string,string>
+                          if (!(k in resolvedFilters)) {
+                            resolvedFilters[k] = firstValue;
+                            added++;
+                          } else if (expertRes.confidence === 'high') {
+                            resolvedFilters[k] = firstValue;
+                            overwritten++;
+                          }
+                          // resolverUnresolved: вычёркиваем модификаторы, для которых эксперт дал facet.
+                          // Data-agnostic: эксперт работает поверх toy modifiers — если он нашёл facet,
+                          // конкретный модификатор-источник неизвестен, поэтому не трогаем unresolved.
+                        }
+                        console.log(`[QueryFirstV2] expert OK confidence=${expertRes.confidence} reasoning="${expertReasoning}" facets=${JSON.stringify(expertRes.targetFacets)} merged: +${added} new, ${overwritten} overwritten`);
+                        logAddStep({
+                          step: 'qfv2-expert-interpretation',
+                          ms: Date.now() - expertStart,
+                          meta: {
+                            confidence: expertRes.confidence,
+                            reasoning: expertReasoning,
+                            targetFacets: expertRes.targetFacets,
+                            droppedKeys: expertRes.droppedKeys,
+                            droppedValuesCount: expertRes.droppedValues.length,
+                            mergedAdded: added,
+                            mergedOverwritten: overwritten,
+                          },
+                        });
+                      } else {
+                        console.log(`[QueryFirstV2] expert skip (llmOk=false) ms=${Date.now() - expertStart}`);
+                        logAddStep({ step: 'qfv2-expert-skip', ms: Date.now() - expertStart, meta: { reason: 'llm_not_ok' } });
+                      }
+                    } catch (expertErr) {
+                      console.warn(`[QueryFirstV2] expert silent fail:`, expertErr instanceof Error ? expertErr.message : String(expertErr));
+                      logAddStep({ step: 'qfv2-expert-error', ms: Date.now() - expertStart, meta: { error: String((expertErr as Error).message) } });
+                    }
+                  }
+
+
+
 
                   // ── (4.5) ESCALATION: bootstrap из pool — это топ-100 товаров по релевантности
                   // запроса. Если модификатор относится к длинному хвосту категории (нишевая
