@@ -26,6 +26,7 @@ import {
 } from '../_shared/related-followup.ts';
 import { wrapWithHeartbeat } from '../_shared/sse-heartbeat.ts';
 import { buildFacetsSummaryContent } from '../_shared/facets-summary.ts';
+import { generateAdvisorIntro, isAdvisorIntent } from '../_shared/advisor-intro.ts';
 import {
   applyBrandExclude,
   applyBrandExcludeWithRelaxation,
