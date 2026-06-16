@@ -173,6 +173,32 @@ Deno.test('traits: drops keys whose value is missing in union schema values', ()
   assertEquals(res.droppedNotInSchema.some((k) => k.startsWith('material__material')), true);
 });
 
+Deno.test('traits: drops structural series marking separator-insensitive', () => {
+  const original = {
+    pagetitle: 'Автомат GENERICA ВА 47-29 16А',
+    options: [
+      { key: 'seriya__seriya', value_ru: 'ВА47-29' },
+      { key: 'nominalynyy_tok__nominaldy_toқ', value_ru: '16' },
+      { key: 'kolichestvo_polyusov__polyuster_sany', value_ru: '1' },
+      { key: 'harakteristika_srabatyvaniya__Іske_қosylu_sipattamasy', value_ru: 'C' },
+    ],
+  };
+  const s = schema({
+    'seriya__seriya': ['ВА47-29', 'NXB-63s'],
+    'nominalynyy_tok__nominaldy_toқ': ['16'],
+    'kolichestvo_polyusov__polyuster_sany': ['1'],
+    'harakteristika_srabatyvaniya__Іske_қosylu_sipattamasy': ['B', 'C', 'D'],
+  });
+  const res = extractOriginalTraits(original, s, ['GENERICA', 'ВА', '47-29', '16А']);
+  assertEquals('seriya__seriya' in res.must, false);
+  assertEquals(res.droppedServiceKeys.includes('seriya__seriya:structural_marking'), true);
+  assertEquals(res.must, {
+    'nominalynyy_tok__nominaldy_toқ': '16',
+    'kolichestvo_polyusov__polyuster_sany': '1',
+    'harakteristika_srabatyvaniya__Іske_қosylu_sipattamasy': 'C',
+  });
+});
+
 // ─── filterStructuralMarkings ───────────────────────────────────────────────
 
 Deno.test('filterStructuralMarkings: drops IP41 when "41" is a facet value', () => {
