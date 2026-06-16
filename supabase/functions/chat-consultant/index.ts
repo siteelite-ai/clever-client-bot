@@ -9028,6 +9028,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       });
                       if (expertRes.llmOk) {
                         expertReasoning = expertRes.reasoning;
+                        expertReasoningOut = expertRes.reasoning;
                         expertConfidence = expertRes.confidence;
                         expertTargetFacets = expertRes.targetFacets;
                         // Merge: additive по новым ключам; high → перезапись.
