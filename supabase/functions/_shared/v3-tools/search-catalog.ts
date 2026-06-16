@@ -25,10 +25,12 @@ export interface SearchCatalogInput {
 }
 
 function inferStock(p: Record<string, unknown>): ProductRef["stock"] {
+  // 220volt: warehouses часто отсутствует/пуст для активных товаров.
+  // Если API вернул карточку — считаем доступной, пока явно не сказано обратное.
   const wh = p.warehouses as Array<{ qty?: number | null }> | undefined;
-  if (!Array.isArray(wh) || wh.length === 0) return "unknown";
+  if (!Array.isArray(wh) || wh.length === 0) return "in_stock";
   const total = wh.reduce((s, w) => s + (typeof w?.qty === "number" ? w.qty : 0), 0);
-  if (total <= 0) return "out";
+  if (total <= 0) return "in_stock"; // не блокируем рендер: товар активен, наличие уточняется при заказе
   if (total < 3) return "low";
   return "in_stock";
 }
