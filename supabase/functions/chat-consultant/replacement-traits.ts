@@ -474,13 +474,15 @@ export function filterStructuralMarkings(
 // Data-agnostic: классификация по форме value (parse → number), не по
 // whitelist'у ключей.
 
-/** Парсит ведущее число из value (`"7"`, `"7W"`, `"7 Вт"`, `"2,5"`, `"220-240V"` → 220).
- *  Возвращает null если число не извлекается. Запятая трактуется как точка. */
+/** Парсит первое число из value (`"7"`, `"7W"`, `"7 Вт"`, `"2,5"`, `"220-240V"` → 220,
+ *  `"AC 220"` → 220, `"D90"` → 90). Возвращает null если число не извлекается.
+ *  Запятая трактуется как точка. Tolerant к ведущим единицам/префиксам — иначе
+ *  numeric post-filter дропает кандидатов с реальным форматом каталога. */
 export function parseNumericTraitValue(value: string | null | undefined): number | null {
   if (value === null || value === undefined) return null;
   const s = String(value).trim().replace(',', '.');
   if (!s) return null;
-  const m = s.match(/^-?\d+(?:\.\d+)?/);
+  const m = s.match(/-?\d+(?:\.\d+)?/);
   if (!m) return null;
   const n = parseFloat(m[0]);
   return Number.isFinite(n) ? n : null;
