@@ -294,6 +294,24 @@ export function extractOriginalTraits(
 export function extractMarkingTokens(pagetitle: string | null | undefined): string[] {
   if (!pagetitle || typeof pagetitle !== 'string') return [];
   const tokens = new Set<string>();
+
+  // ── Pass A: составные маркировки через пробел/дефис («ВА 47-29»,
+  // «ВА - 47 - 29», «NXB 63-S»). Без хардкода серий: ловим паттерн
+  // «2-8 букв» + опц.разделители + «цифры [- цифры]+ (опц. буква-суффикс)».
+  // Множественные числовые сегменты или буквенный суффикс гарантируют, что
+  // это маркировка артикула, а не «220В» / «GENERICA 16».
+  // Эмитим в КОМПАКТНОЙ форме (без пробелов между буквами и цифрами), чтобы
+  // separator-insensitive guard ниже матчил любой вариант написания.
+  const compoundRe = /([A-Za-zА-Яа-яЁё]{2,8})[\s\-]{0,3}(\d{1,4}(?:[\s\-]+\d{1,4})+[A-Za-zА-Яа-яЁё]{0,2})/gu;
+  let m: RegExpExecArray | null;
+  while ((m = compoundRe.exec(pagetitle)) !== null) {
+    const letters = m[1];
+    const numericCompact = m[2].replace(/\s+/g, '');
+    tokens.add(`${letters}${numericCompact}`.toUpperCase());
+  }
+
+  // ── Pass B: токен-по-токену. Покрывает слитные маркировки
+  // (ВВГнг, ЩРН-П-12) и физические единицы (16А, IP65).
   const parts = pagetitle.split(/[\s()«»"',;:!?]+/u).filter(Boolean);
   for (const raw of parts) {
     const cleaned = raw.replace(/^[.\-/]+|[.\-/]+$/g, '');
@@ -301,13 +319,7 @@ export function extractMarkingTokens(pagetitle: string | null | undefined): stri
     const hasDigit = /\d/.test(cleaned);
     const hasInnerSep = /[A-Za-zА-Яа-яЁё][-/][A-Za-zА-Яа-яЁё0-9]/.test(cleaned);
     if (!hasDigit && !hasInnerSep) continue;
-    // Отсекаем чисто-торговые единицы (количество/габариты/масса/объём): 12шт, 10м, 5кг, 1.5л.
-    // Физические единицы (А, Вт, В, кВт, Гц, Ом) С ЦИФРОЙ — КЕЕП: это trait товара,
-    // критичный для подбора аналога (16А автомат ≠ 25А автомат). Универсальный SI-список,
-    // не зависит от ассортимента 220volt.
     if (/^\d+(?:[.,]\d+)?(?:шт|пар|компл|упак|уп|м|см|мм|км|дм|мг|кг|г|т|л|мл|м[23²³])$/iu.test(cleaned)) continue;
-    // Допускаем токен если: (a) есть буквенная серия ≥2 (артикул ВВГнг, ЩРН), либо
-    // (b) цифра + 1-4 буквы (физединица: 16А, 50Вт, IP65, 2.5мм²).
     const hasMultiLetter = /[A-Za-zА-Яа-яЁё]{2,}/.test(cleaned);
     const isPhysical = /^\d+(?:[.,]\d+)?[A-Za-zА-Яа-яЁё²³]{1,4}$/u.test(cleaned)
       || /^IP\d{2,3}$/i.test(cleaned);
