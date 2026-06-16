@@ -26,6 +26,7 @@ import {
 } from '../_shared/related-followup.ts';
 import { wrapWithHeartbeat } from '../_shared/sse-heartbeat.ts';
 import { buildFacetsSummaryContent } from '../_shared/facets-summary.ts';
+import { generateAdvisorIntro, isAdvisorIntent } from '../_shared/advisor-intro.ts';
 import {
   applyBrandExclude,
   applyBrandExcludeWithRelaxation,
@@ -12288,7 +12289,29 @@ ${productInstructions}`;
       // Старый LLM-cross-sell (generateCrossSellTail + pending_offer) ОТКЛЮЧЁН
       // полностью — функция оставлена в коде как dead code до отдельного refactor PR.
       // ─────────────────────────────────────────────────────────────────────
-      const finalContent = contentWithMissing;
+      // ─────────────────────────────────────────────────────────────────────
+      // ADVISOR-INTRO (V1, 2026-06-16, mem://features/advisor-intro).
+      // Когда пользователь ЯВНО просит подобрать/посоветовать — перед списком
+      // карточек добавляем одно короткое предложение-обоснование. НЕ применяем
+      // к веткам со своим интро/дисклеймером (price-facet-clarify,
+      // unfulfilled-split, brand-unavailable, compare-missing-anchors).
+      const advisorIntroEligible =
+        renderReason !== 'price-facet-clarify' &&
+        !unfulfilledSplit &&
+        !qfBrandUnavailable &&
+        compareMissingAnchors.length === 0 &&
+        foundProducts.length > 0 &&
+        isAdvisorIntent(rawUserMessage);
+      const introPromise: Promise<string | null> = advisorIntroEligible && appSettings.openrouter_api_key
+        ? generateAdvisorIntro({
+            userMessage: rawUserMessage,
+            productNoun: classification?.product_category ?? null,
+            openrouterKey: appSettings.openrouter_api_key,
+            log: (event, data) => logAddStep({ step: event, meta: data }),
+          })
+        : Promise.resolve(null);
+      const introText = await introPromise;
+      const finalContent = introText ? `${introText}\n\n${contentWithMissing}` : contentWithMissing;
       // Step 2 (2026-05-12): убрано single-anchor ограничение. Анкоры берём из
       // первых foundProducts с уникальными категориями (до 3-х). При широкой
       // выдаче это даёт более устойчивую агрегацию /related (категории-победители
