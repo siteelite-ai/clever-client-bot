@@ -59,41 +59,7 @@ const SERVICE_KEY_PREFIXES = [
   'proizvoditel',
   'manufacturer',
   'torgovaya_marka',
-  // Marketing / sales flags: not product characteristics for replacement selection.
-  // Data-agnostic: covers novinka, hit, recommend, sale, popular, action, etc.
-  'novinka',
-  'hit',
-  'recommend',
-  'rasprodazha',
-  'sale',
-  'populyarnyy',
-  'popular',
-  'aktsiya',
-  'action',
 ];
-
-/**
- * Эвристика «структурный идентификатор линейки» (data-agnostic, без whitelist'ов ключей).
- * Значение опции считаем брендоспецифичной маркировкой модели/серии (не
- * характеристикой товара) если ВСЕ условия выполнены:
- *   1) value встречается в pagetitle оригинала (нормализованно);
- *   2) value содержит И буквы, И цифры (alphanumeric mix);
- *   3) длина value > 4 символов (отсекает функциональные «1P», «16А», «IP20», «C»).
- * Такие значения (напр. «ВА47-29», «NXB-63s», «HDB3w») схлопывают пул до
- * same-brand → brand-exclude обнуляет → relaxation возвращает same-brand.
- * Marking-guard над pagetitle при этом продолжает работать.
- */
-function isStructuralModelMarking(value: string, pagetitle: string | null | undefined): boolean {
-  if (!pagetitle) return false;
-  const v = value.trim();
-  if (v.length <= 4) return false;
-  const hasLetter = /[A-Za-zА-Яа-я]/.test(v);
-  const hasDigit = /\d/.test(v);
-  if (!hasLetter || !hasDigit) return false;
-  const normTitle = pagetitle.toLowerCase().replace(/\s+/g, ' ');
-  const normVal = v.toLowerCase().replace(/\s+/g, ' ');
-  return normTitle.includes(normVal);
-}
 
 /** Макс длина value, после которой считаем поле текстовым описанием, не атрибутом. */
 const MAX_VALUE_LEN = 80;
@@ -125,37 +91,6 @@ export interface ExtractTraitsResult {
 }
 
 /**
- * Нормализатор для матчинга user-token ↔ option value_ru.
- * - lower-case, trim, collapse whitespace.
- * - Никакой семантики/синонимов: data-agnostic.
- */
-function normForMatch(s: string): string {
-  return s.trim().toLowerCase().replace(/\s+/g, ' ');
-}
-
-/**
- * Проверяет, «соответствует» ли user-token значению фасета.
- * Совпадение по любому из:
- *   1) exact CI (после normForMatch);
- *   2) CI substring в любую сторону (token «16А» содержит value «16»);
- *   3) digit-prefix: числовая часть в начале совпадает с числовой частью value
- *      (token «16А» → 16; value «16» → 16; token «2,5мм²» → 2.5; value «2.5» → 2.5).
- * Возвращает true при первом совпадении.
- */
-function tokenMatchesValue(token: string, value: string): boolean {
-  const t = normForMatch(token);
-  const v = normForMatch(value);
-  if (!t || !v) return false;
-  if (t === v) return true;
-  if (t.includes(v) || v.includes(t)) return true;
-  const numRe = /^(\d+(?:[.,]\d+)?)/;
-  const tn = t.match(numRe)?.[1]?.replace(',', '.');
-  const vn = v.match(numRe)?.[1]?.replace(',', '.');
-  if (tn && vn && tn === vn) return true;
-  return false;
-}
-
-/**
  * Слой 1. Из original.options[] формируем MUST-фильтры, оставляя только те
  * ключи, которые присутствуют в union-schema целевых replacement-категорий.
  *
@@ -163,20 +98,10 @@ function tokenMatchesValue(token: string, value: string): boolean {
  * целевых категориях — его нельзя применить как `options[key][]=...` (API
  * вернёт пусто). Например, у оригинала может быть редкая опция, которой нет
  * у альтернативных линеек. Лучше отбросить, чем обнулить выдачу.
- *
- * `userTokens` (опционально) — токены из исходного запроса
- * (critical_modifiers ∪ search_modifiers). Если переданы, опции, чьи значения
- * матчатся хотя бы с одним токеном, получают приоритет при отборе в must
- * (важно при cap=MAX_MUST_TRAITS, чтобы критичные для пользователя оси —
- * например «16А» для автомата — не теснились шумовыми ключами вроде
- * «частота 50Гц» / «единица измерения шт»). Семантики нет: совпадение чисто
- * строковое + digit-prefix. Backward-compat: без userTokens поведение 1:1
- * со старой версией (исходный порядок original.options, cap=MAX_MUST_TRAITS).
  */
 export function extractOriginalTraits(
   original: OriginalLike | null | undefined,
   unionSchema: UnionSchema,
-  userTokens?: string[] | null,
 ): ExtractTraitsResult {
   const result: ExtractTraitsResult = {
     must: {},
@@ -186,9 +111,6 @@ export function extractOriginalTraits(
   };
   if (!original?.options || original.options.length === 0) return result;
 
-  // ── Pass 1: фильтрация без cap, сохраняем исходный порядок ──
-  type Eligible = { opt: OriginalOption; value: string };
-  const eligible: Eligible[] = [];
   for (const opt of original.options) {
     if (!opt?.key) continue;
     if (isServiceKey(opt.key)) {
@@ -200,45 +122,18 @@ export function extractOriginalTraits(
       result.droppedNotInSchema.push(opt.key);
       continue;
     }
+    // Доп. защита: значение оригинала должно реально встречаться в схеме
+    // целевых категорий — иначе options[key][]=value вернёт 0.
     const schemaEntry = unionSchema.get(opt.key)!;
-    const valueTrimmed = opt.value_ru!.trim();
-    if (schemaEntry.values.size > 0 && !schemaEntry.values.has(valueTrimmed)) {
+    if (schemaEntry.values.size > 0 && !schemaEntry.values.has(opt.value_ru!.trim())) {
       result.droppedNotInSchema.push(`${opt.key}:value_missing`);
       continue;
     }
-    // Структурная брендоспецифичная маркировка (data-agnostic, без хардкода ключей).
-    if (isStructuralModelMarking(valueTrimmed, original.pagetitle)) {
-      result.droppedServiceKeys.push(`${opt.key}:structural_marking`);
-      continue;
-    }
-    eligible.push({ opt, value: valueTrimmed });
-  }
-
-  // ── Pass 2: stable-приоритизация по userTokens (если переданы) ──
-  const tokens = Array.isArray(userTokens)
-    ? userTokens.filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
-    : [];
-  let ordered: Eligible[] = eligible;
-  if (tokens.length > 0) {
-    const indexed = eligible.map((e, i) => ({
-      e,
-      i,
-      matched: tokens.some((tok) => tokenMatchesValue(tok, e.value)),
-    }));
-    indexed.sort((a, b) => {
-      if (a.matched !== b.matched) return a.matched ? -1 : 1;
-      return a.i - b.i;
-    });
-    ordered = indexed.map((x) => x.e);
-  }
-
-  // ── Pass 3: cap, лишнее → droppedOverflow ──
-  for (const { opt, value } of ordered) {
     if (Object.keys(result.must).length >= MAX_MUST_TRAITS) {
       result.droppedOverflow.push(opt.key);
       continue;
     }
-    result.must[opt.key] = value;
+    result.must[opt.key] = opt.value_ru!.trim();
   }
 
   return result;
