@@ -25,6 +25,7 @@
 
 const EXPERT_MODEL = "anthropic/claude-sonnet-4.5";
 const EXPERT_TIMEOUT_MS = 6_000;
+const EXPERT_MAX_ATTEMPTS = 2; // 1 retry on transport-failure/timeout/5xx
 const MAX_VALUES_PER_FACET = 3;
 const MAX_FACETS = 8;
 
