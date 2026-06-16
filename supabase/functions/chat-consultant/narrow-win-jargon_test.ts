@@ -33,7 +33,7 @@ function shouldReplaceWithJargonAlt(args: {
 }
 
 Deno.test("narrow-win: final=1 + alt=8 + novel alt → replace", () => {
-  const r = shouldReplaceWithJargonAlt({ finalCount: 1, altCount: 8, noun: "выключатель", alt: "автоматический выключатель" });
+  const r = shouldReplaceWithJargonAlt({ finalCount: 1, altCount: 8, noun: "кукуруза", alt: "corn lamp" });
   assertEquals(r.replace, true);
 });
 
