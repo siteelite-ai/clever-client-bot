@@ -71,6 +71,13 @@ export interface AdvisorIntroInput {
   productNoun?: string | null;
   openrouterKey: string;
   selectedProducts?: AdvisorSelectedProduct[];
+  /**
+   * Reasoning от expert-interpretation модуля (QFv2): «по какому критерию
+   * подобраны товары». Если есть — пробрасывается в user-блок как ПОДСКАЗКА
+   * для intro. Не используется как готовый текст — LLM всё равно проверяет
+   * характеристики через anti-hallucination правила.
+   */
+  expertReasoning?: string | null;
   log?: (event: string, data: Record<string, unknown>) => void;
 }
 
