@@ -10089,7 +10089,15 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       rFullSchema = await getUnionCategoryOptionsSchema(replMatches, appSettings.volt220_api_token!);
                     }
                     if (originalProduct) {
-                      originalTraits = extractOriginalTraits(originalProduct, rFullSchema);
+                      // userTokens = critical_modifiers ∪ search_modifiers.
+                      // Приоритизация в extractOriginalTraits: оси anchor, чьи
+                      // value матчатся с упомянутым в запросе токеном (например
+                      // «16А» ↔ value «16» у nominalynyy_tok), идут первыми и
+                      // не вытесняются шумовыми ключами при cap=MAX_MUST_TRAITS.
+                      const _crit = Array.isArray(classification?.critical_modifiers) ? classification!.critical_modifiers as string[] : [];
+                      const _srch = Array.isArray(classification?.search_modifiers) ? classification!.search_modifiers as string[] : [];
+                      const userTokens = Array.from(new Set([..._crit, ..._srch].filter((t) => typeof t === 'string' && t.trim().length > 0)));
+                      originalTraits = extractOriginalTraits(originalProduct, rFullSchema, userTokens);
                     }
                     if (markingSource) {
                       const rawMarkings = extractMarkingTokens(markingSource);
