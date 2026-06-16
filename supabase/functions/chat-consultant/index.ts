@@ -676,6 +676,7 @@ async function getAppSettings(): Promise<CachedSettings> {
     const ei = (data as { expert_interpretation_enabled?: boolean }).expert_interpretation_enabled === true;
     if (qf || ss) {
       console.log(`[Settings] V1 sees experimental flags: query_first=${qf} soft_suggest=${ss} (no-op in V1, switch active_pipeline to v2 to use)`);
+    }
     if (ei) {
       console.log(`[Settings] V1 expert_interpretation_enabled=true — QFv2 будет применять LLM-эксперта для перевода требований в фасеты`);
     }
