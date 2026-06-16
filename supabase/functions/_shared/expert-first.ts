@@ -229,9 +229,9 @@ export async function expertFirstJudgment(
   const timeoutMs = input.timeoutMs ?? EXPERT_TIMEOUT_MS;
 
   let parsed: Record<string, unknown> | null = null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
     const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -253,7 +253,6 @@ export async function expertFirstJudgment(
       }),
       signal: controller.signal,
     });
-    clearTimeout(timer);
     if (!response.ok) {
       log("expert_first.http_error", { status: response.status, ms: Date.now() - t0 });
       return { ...EMPTY_RESULT, latencyMs: Date.now() - t0 };
@@ -277,6 +276,8 @@ export async function expertFirstJudgment(
       ms: Date.now() - t0,
     });
     return { ...EMPTY_RESULT, latencyMs: Date.now() - t0 };
+  } finally {
+    clearTimeout(timer);
   }
 
   const intentRaw = clampStr(parsed?.intent, 40).toLowerCase();
