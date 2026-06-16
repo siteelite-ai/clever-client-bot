@@ -9211,21 +9211,32 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       console.warn(`[Chat req=${reqId}] [QFv2-LastChanceJargon] silent fail:`, jrErr instanceof Error ? jrErr.message : String(jrErr));
                     }
                     if (!lastChanceWon) {
-                      // Honest-empty с unresolved modifiers как «attempted facets» без values.
-                      qfv2HonestEmptyContext = {
-                        noun,
-                        originalQuery: userMessage || noun,
-                        attemptedFacets: resolverUnresolved.map(m => ({
-                          caption: m,
-                          value: m,
-                          alternativeValues: [],
-                        })),
-                      };
-                      displayList = [];
-                      branchTag = 'qfv2_honest_empty_no_match';
-                      qfV2DroppedFacetCaption = resolverUnresolved[0] || null;
-                      console.log(`[QueryFirstV2] query_first_v2_honest_empty_no_match noun="${noun}" unresolved=${JSON.stringify(resolverUnresolved)}`);
-                      logAddStep({ step: 'qfv2-honest-empty-no-match', total: 0, meta: { noun, unresolved: resolverUnresolved } });
+                      if (isAdvisorIntent(userMessage) && displayList.length > 0) {
+                        // Advisory queries often contain task context that is not a catalog facet
+                        // ("для подключения ...", "мощностью ..."). If no modifier maps to a
+                        // real facet but the noun pool is valid, show real catalog cards instead
+                        // of a text-only Soft-404. Jargon still had its last chance above.
+                        branchTag = 'qfv2_advisor_context_pool';
+                        qfV2DroppedFacetCaption = null;
+                        console.log(`[QueryFirstV2] query_first_v2_advisor_context_pool noun="${noun}" pool=${displayList.length} unresolved=${JSON.stringify(resolverUnresolved)}`);
+                        logAddStep({ step: 'qfv2-advisor-context-pool', total: displayList.length, meta: { noun, unresolved: resolverUnresolved } });
+                      } else {
+                        // Honest-empty с unresolved modifiers как «attempted facets» без values.
+                        qfv2HonestEmptyContext = {
+                          noun,
+                          originalQuery: userMessage || noun,
+                          attemptedFacets: resolverUnresolved.map(m => ({
+                            caption: m,
+                            value: m,
+                            alternativeValues: [],
+                          })),
+                        };
+                        displayList = [];
+                        branchTag = 'qfv2_honest_empty_no_match';
+                        qfV2DroppedFacetCaption = resolverUnresolved[0] || null;
+                        console.log(`[QueryFirstV2] query_first_v2_honest_empty_no_match noun="${noun}" unresolved=${JSON.stringify(resolverUnresolved)}`);
+                        logAddStep({ step: 'qfv2-honest-empty-no-match', total: 0, meta: { noun, unresolved: resolverUnresolved } });
+                      }
                     }
                   } else if (Object.keys(resolvedFilters).length > 0 || resolverUnresolvedDetails.length > 0) {
                     // PARTIAL-UNRESOLVED HONEST-EMPTY (2026-05-07):
