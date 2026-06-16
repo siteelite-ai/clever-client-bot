@@ -148,3 +148,28 @@ export async function generateAdvisorIntro(
     return null;
   }
 }
+
+// Технические поля, которые не несут смысла для intro и засоряют контекст.
+const OPTION_BLACKLIST_RE = /(identifikator|kodnomenklatury|kod_tn_ved|poiskovyy_zapros|naimenovanie_na_kazah|populyarn|novinka|ogranichennyy_prosmotr|prodaetsya_tolyko|edinica_izmereniya|obyem|ves|garantiy|stranauproizvod|strana_proizvod)/i;
+
+function buildSelectedProductsBlock(products?: AdvisorSelectedProduct[] | null): string | null {
+  if (!products || products.length === 0) return null;
+  const blocks: string[] = [];
+  for (let i = 0; i < products.length; i++) {
+    const p = products[i];
+    const title = (p.pagetitle ?? "").trim() || `Товар ${i + 1}`;
+    const opts = Array.isArray(p.options) ? p.options : [];
+    const filtered = opts
+      .filter((o) => o && typeof o.key === "string" && !OPTION_BLACKLIST_RE.test(o.key))
+      .map((o) => {
+        const cap = (o.caption_ru ?? "").trim();
+        const val = (o.value_ru ?? "").trim();
+        if (!cap || !val) return null;
+        return `${cap}: ${val}`;
+      })
+      .filter((s): s is string => !!s)
+      .slice(0, 12);
+    blocks.push(`${i + 1}. ${title}\n   ${filtered.join("; ") || "(нет характеристик)"}`);
+  }
+  return blocks.join("\n");
+}
