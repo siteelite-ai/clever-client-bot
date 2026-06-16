@@ -1,62 +1,129 @@
-# План: самостоятельный аудит и фикс 23 кейсов
 
-Я веду этот план сам, по шагам, без остановок на «можно?» между техническими подзадачами. Останавливаюсь только если: (а) нужен выбор приоритета от тебя, (б) сломалось что-то непредвиденное, (в) шаг завершён и нужно показать промежуточный отчёт.
+# План: системный фикс кейса «автомат 25А для квартиры»
 
-## Шаг 0. Подготовка фикстуры
-- Создать `.lovable/fixtures/qa-23-cases-2026-06-15.md` с таблицей: №, запрос, ожидание (из твоих скриншотов), последний наблюдаемый дефект, статус.
-- Залить туда C01–C23 из прошлого прогона как baseline.
+Цель — устранить два корневых дефекта без нарушения существующих core-правил (mechanical classifier, data-agnostic, no self-narrowing, no semantic dictionaries).
 
-## Шаг 1. Baseline-прогон (контроль)
-- Через `supabase--curl_edge_functions` прогнать все 23 кейса батчами по 5, разные sessionId.
-- Для каждого собрать из `chat_request_logs` + `edge_function_logs`: Classifier, Steps (компактно), branchTag, finalProductsCount, latency, первые 200 символов ответа.
-- Сложить в `.lovable/fixtures/qa-23-baseline-2026-06-15.json`.
+## Дефекты, которые лечим
 
-## Шаг 2. Сводная таблица дефектов
-- Маркировать каждый кейс: ✅ ok / ⚠️ regression / ❌ defect / 🐢 latency.
-- Сгруппировать по уже названным волнам:
-  - **Wave E** (replacement): C01, C03, C05 (+ всё, что всплывёт похожего)
-  - **Wave F** (pre-jargon / noun-strict): C09, C11
-  - **Wave G** (intent/dialog): C12, C15, C16
-  - **Wave H** (latency): C02, C05, C08
-- Показать тебе сводку и спросить только один вопрос: «начинаем с E?» — дальше иду без переспросов.
+1. **Долгий escalate (~18.5с)** при unresolved-модификаторах, которых **нет ни в одном facet** bootstrap (контекстные слова: «квартиры», «дома», «красивый»).
+2. **Узкая выдача без альтернатив**: при `final < 5 && unresolved.length > 0` бот молча отдаёт 1 товар, не предлагая пользователю уточнить ключевые характеристики.
 
-## Шаг 3. Волна E — replacement
-1. Прочитать `replacement-traits.ts` и ветку `s-price` в `index.ts`.
-2. **E1**: пробросить `price_max` из slot в replacement-matcher → пост-фильтр кандидатов.
-3. **E2**: при `price_intent='cheapest'` исключать `anchor.vendor` из кандидатов.
-4. **E3**: гарантировать, что anchor `article` не попадает в выдачу replacement.
-5. `deno check` + точечный прогон C01/C03/C05 + 3 случайных кейса из «зелёных» для регресс-контроля.
-6. Зафиксировать дельту в фикстуре.
+Кейс «automat 25A для квартиры» = композиция обоих.
 
-## Шаг 4. Волна F — pre-jargon / noun-strict
-1. **F1**: при pre-jargon-win сохранять `critical_modifiers` — пост-фильтр пула по material/spec токенам перед short-circuit.
-2. **F2**: noun-strict gate перед `qfv2_pre_jargon_win` — если ≥50% пула не содержит `product_category` ни в `pagetitle` ни в options → пропускать на jargon-fallback по-старому.
-3. `deno check` + прогон C09, C11 + регресс «лампа кукуруза» (C-ref) + 3 зелёных.
+---
 
-## Шаг 5. Волна G — intent/dialog
-1. **G1**: при `sub_intent='all_positions'` (или явных маркерах «все», «весь ассортимент») не уходить в pagetitle-exact, а форсить QFv2 коллекцию.
-2. **G2**: для underspecified «для X» (мало модификаторов + широкая категория) включать clarify-slot вместо тихого широкого поиска.
-3. Прогон C12, C15, C16 + регресс.
+## Шаг 1 — Диагностика noun-фильтра (без кода)
 
-## Шаг 6. Волна H — latency replacement
-1. Замерить hot-spot: где именно 90–100с в replacement (LLM traits? schema race? per-candidate fetch?).
-2. **H1**: ограничить N кандидатов и параллелить fetch; **H2**: graceful timeout вместо throw на schema race.
-3. Прогон C02, C05, C08 + замер p50/p95.
+**Что:** дернуть live catalog API теми же параметрами, что V1 на финальном hop:
+```
+GET /products?query=выключатель&options[nominalynyy_tok][]=25&per_page=30
+```
+Записать 30 `pagetitle` + `category.pagetitle`. Посчитать, сколько содержат стем `выключател`.
 
-## Шаг 7. Итоговый прогон 23/23
-- Полный регресс всех 23 кейсов.
-- Финальная таблица: было → стало, latency-дельты, оставшиеся ❌.
-- Обновить `mem://index.md` по принятым волнам.
-- Сводный отчёт тебе.
+**Зачем:** понять — noun-фильтр (30→3) валидно отсеял УЗО/дифавтоматы или это баг рассинхронизации `classifier.product_category="автоматический выключатель"` vs `noun-extractor="выключатель"`.
 
-## Технические детали (для меня, не для UI)
-- Все вызовы — прод-edge `chat-consultant` (V1), без виджета.
-- Параллелить независимые curl и чтения логов в одном tool-блоке.
-- Между правкой и прогоном — `deno check` обязателен.
-- Любая правка вне `supabase/functions/chat-consultant/` и `_shared/` — только если без неё нельзя.
-- Никаких новых memory-правил до окончания волны (чтобы не закрепить полу-фикс).
+**Решение по результатам:**
+- Если 27 отсеянных — реально другие категории → noun-фильтр работает корректно, идём к Шагу 2.
+- Если среди 27 есть «Автоматический выключатель IEK ВА47…» — открываем отдельный тикет на noun-extractor (Шаг 3a).
 
-## Точки остановки (когда я тебя дёргаю)
-- После Шага 2 — подтверди приоритет волн (или «как в плане»).
-- После каждой волны — короткий статус: что починилось, что сломалось.
-- При неожиданной регрессии в зелёных кейсах — стоп и спросить.
+**Артефакт:** короткий отчёт в чате, без правок кода.
+
+---
+
+## Шаг 2 — Escalate short-circuit (Волна 1)
+
+**Файл:** `supabase/functions/chat-consultant/index.ts`, блок escalate ~строки 8910–8945.
+
+**Что добавить (до запуска `schema-merged` и `escalate-miss`):**
+```
+hasAnyChance = unresolvedModifiers.some(mod =>
+  bootstrapSchema.captions.some(cap => 
+    cap.toLowerCase().includes(mod.toLowerCase()) ||
+    bucketValues(cap).some(v => v.toLowerCase().includes(mod.toLowerCase()))
+  )
+)
+if (!hasAnyChance) {
+  logAddStep({ step: 'qfv2-escalate-skip', meta: { reason: 'no_bootstrap_overlap', unresolved } })
+  // пропускаем schema-merged + escalate-miss
+}
+```
+
+**Гарантии:**
+- Data-agnostic: проверка против live bootstrap, без словарей.
+- Не ломает резолвер: если хоть один модификатор имеет шанс (подстрока в caption или value) — escalate работает как сейчас.
+- Экономия 13–18с на запросах с контекстными словами.
+
+**Тесты:**
+- Unit для функции overlap-checker (3 кейса: full match, partial substring, zero overlap).
+- Smoke на 5 запросах из `.lovable/fixtures/qa-23-cases-2026-06-15.md`, где есть unresolved.
+
+**Метрика:** новый шаг `qfv2-escalate-skip` в логах, защита от регрессии — счётчик `escalate_skipped_total`.
+
+**Память:** добавить в `mem://constraints/volna-a-timeouts` или новый файл `mem://features/escalate-short-circuit`.
+
+---
+
+## Шаг 3 — Soft-Suggest при узкой выдаче (Волна 2, под флагом)
+
+**Триггер:** `branchTag='qfv2_win' && finalProducts.length < 5 && unresolvedModifiers.length > 0`.
+
+**Что делать:**
+1. Из bootstrap взять ТОП-3 фасета с наибольшим cardinality (исключая уже resolved + уже известные blacklist в `_shared/facet-blacklist.ts`).
+2. Сформировать **текстовый followup** через Claude Sonnet 4.5 в constrained prompt:
+   > «Подобрал N товаров. Чтобы сузить выбор — уточните: {caption1} (значения), {caption2} (значения), {caption3} (значения)».
+3. Отдать как `data: {followup: {...}}` события — той же SSE-механикой, что и cross-sell.
+
+**Гарантии:**
+- НЕ сужает воронку — товары уже показаны.
+- НЕ нарушает «no what's-missing» — это не объяснение пустого результата, а offer-to-refine при непустом.
+- Под флагом `app_settings.soft_suggest_enabled` (уже существует, mem://features/query-first-branch).
+- Anti-hallucination: значения берутся ТОЛЬКО из bootstrap, post-validated.
+
+**Тесты:**
+- Unit: при `finalProducts.length >= 5` → suggest не вызывается.
+- Unit: при `unresolved.length === 0` → suggest не вызывается.
+- E2E: «автомат 25А для квартиры» → 1 карточка + followup с фасетами «Количество полюсов», «Характеристика срабатывания», «Номинальное напряжение».
+
+**Память:** обновить `mem://features/query-first-branch` — описать триггер Soft-Suggest для qfv2_win.
+
+---
+
+## Шаг 4 — Опциональное расследование (зависит от Шага 1)
+
+Если Шаг 1 выявил рассинхронизацию classifier ↔ noun-extractor:
+- Обсудить, добавлять ли fallback на full `product_category` при noun-filter=0 (вместо текущего «non-strict → весь pool»).
+- НЕ делать без подтверждения.
+
+---
+
+## Технические детали
+
+### Файлы
+- `supabase/functions/chat-consultant/index.ts` — Шаги 2, 3.
+- `supabase/functions/_shared/facet-blacklist.ts` — Шаг 3 (использование, не правка).
+- Новые тесты: `chat-consultant/escalate-shortcircuit_test.ts`, `chat-consultant/soft-suggest-qfv2_test.ts`.
+
+### Флаги
+- `query_first_enabled` — уже true, не трогаем.
+- `soft_suggest_enabled` — Шаг 3 включается только при true.
+
+### Метрики (логи `chat_request_logs.steps`)
+- `qfv2-escalate-skip` — Шаг 2.
+- `qfv2-soft-suggest-shown` / `qfv2-soft-suggest-skipped` — Шаг 3.
+
+### Что НЕ делаем
+- Словари контекстных слов (запрещено classifier MECHANICAL).
+- Авто-фильтр «квартира → 1P, C, 230V» (запрещено no self-narrowing).
+- Правки hard-ban price=0 (работает корректно).
+- Правки noun-filter без Шага 1.
+
+---
+
+## Последовательность и точки подтверждения
+
+1. **Шаг 1** (диагностика, ~5 мин) → жду подтверждение «идём дальше» + интерпретацию результата.
+2. **Шаг 2** (~30 строк + тесты, deploy) → жду «протестировано».
+3. **Шаг 3** (Soft-Suggest под флагом, deploy с флагом=false) → жду «включаем флаг».
+4. **Шаг 4** (опционально) — только если Шаг 1 показал баг.
+
+Начинаем с Шага 1?
