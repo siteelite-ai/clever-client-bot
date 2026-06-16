@@ -7794,52 +7794,53 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                                  categorySource = 'matcher_first';
                                }
 
-                               ptrace('resolve2_category', {
-                                 unresolvedIn: rUnresolved,
-                                 classifierCategory: classifierCategoryRaw,
-                                 matcherMatches: matcherMatches.slice(0, 5),
-                                 chosen: catTitle || null,
-                                 source: categorySource,
-                               });
+                                ptrace('resolve2_category', {
+                                  unresolvedIn: effectiveUnresolved,
+                                  classifierCategory: classifierCategoryRaw,
+                                  matcherMatches: matcherMatches.slice(0, 5),
+                                  chosen: catTitle || null,
+                                  source: categorySource,
+                                });
 
-                               if (catTitle) {
-                                 console.log(`[Chat] [PriceResolve2] matched category="${catTitle}" for noun="${priceQuery}"`);
-                                 const tWide = Date.now();
-                                 const wideProducts = await searchProductsByCandidate(
-                                   { query: null, brand: null, category: catTitle, min_price: 1, max_price: null },
-                                   appSettings.volt220_api_token!,
-                                   200
-                                 );
-                                 const wideSchema = extractSchemaFromProducts(wideProducts);
-                                 const newKeys = Array.from(wideSchema.keys()).filter(k => !bootstrapSchema.has(k));
-                                 ptrace('resolve2_schema', {
-                                   wideKeys: wideSchema.size,
-                                   wideProducts: wideProducts.length,
-                                   newKeysVsPool: newKeys.length,
-                                   newKeysSample: newKeys.slice(0, 10),
-                                   ms: Date.now() - tWide,
-                                 });
-                                 if (wideSchema.size > 0) {
-                                   console.log(`[Chat] [PriceResolve2] wide schema: ${wideSchema.size} keys (source=category-products-sample, products=${wideProducts.length})`);
-                                   const tR2 = Date.now();
-                                   const { resolved: r2Raw, unresolved: r2Unresolved } = await resolveFiltersWithLLM(
-                                     probePool,
-                                     rUnresolved,
-                                     appSettings,
-                                     criticalMods,
-                                     wideSchema,
-                                     'partial',
-                                     priceQuery
-                                   );
-                                   const resolved2 = flattenResolvedFilters(r2Raw);
-                                   ptrace('resolve2', {
-                                     input: rUnresolved,
-                                     schemaKeys: wideSchema.size,
-                                     resolved: resolved2,
-                                     unresolved: r2Unresolved || [],
-                                     ms: Date.now() - tR2,
-                                   });
-                                   console.log(`[Chat] [PriceResolve2] resolved=${JSON.stringify(resolved2)} unresolved=[${(r2Unresolved || []).join(', ')}] elapsed=${Date.now() - t2}ms`);
+                                if (catTitle) {
+                                  console.log(`[Chat] [PriceResolve2] matched category="${catTitle}" for noun="${priceQuery}"`);
+                                  const tWide = Date.now();
+                                  const wideProducts = await searchProductsByCandidate(
+                                    { query: null, brand: null, category: catTitle, min_price: 1, max_price: null },
+                                    appSettings.volt220_api_token!,
+                                    200
+                                  );
+                                  const wideSchema = extractSchemaFromProducts(wideProducts);
+                                  const newKeys = Array.from(wideSchema.keys()).filter(k => !bootstrapSchema.has(k));
+                                  ptrace('resolve2_schema', {
+                                    wideKeys: wideSchema.size,
+                                    wideProducts: wideProducts.length,
+                                    newKeysVsPool: newKeys.length,
+                                    newKeysSample: newKeys.slice(0, 10),
+                                    ms: Date.now() - tWide,
+                                  });
+                                  if (wideSchema.size > 0) {
+                                    console.log(`[Chat] [PriceResolve2] wide schema: ${wideSchema.size} keys (source=category-products-sample, products=${wideProducts.length})`);
+                                    const tR2 = Date.now();
+                                    const { resolved: r2Raw, unresolved: r2Unresolved } = await resolveFiltersWithLLM(
+                                      probePool,
+                                      effectiveUnresolved,
+                                      appSettings,
+                                      criticalMods,
+                                      wideSchema,
+                                      'partial',
+                                      priceQuery
+                                    );
+                                    const resolved2 = flattenResolvedFilters(r2Raw);
+                                    ptrace('resolve2', {
+                                      input: effectiveUnresolved,
+                                      schemaKeys: wideSchema.size,
+                                      resolved: resolved2,
+                                      unresolved: r2Unresolved || [],
+                                      ms: Date.now() - tR2,
+                                    });
+                                    console.log(`[Chat] [PriceResolve2] resolved=${JSON.stringify(resolved2)} unresolved=[${(r2Unresolved || []).join(', ')}] elapsed=${Date.now() - t2}ms`);
+
                                    for (const [k, v] of Object.entries(resolved2)) {
                                      if (!resolvedFilters[k]) resolvedFilters[k] = v;
                                    }
