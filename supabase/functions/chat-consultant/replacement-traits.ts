@@ -59,6 +59,17 @@ const SERVICE_KEY_PREFIXES = [
   'proizvoditel',
   'manufacturer',
   'torgovaya_marka',
+  // Marketing / sales flags: not product characteristics for replacement selection.
+  // Data-agnostic: covers novinka, hit, recommend, sale, popular, action, etc.
+  'novinka',
+  'hit',
+  'recommend',
+  'rasprodazha',
+  'sale',
+  'populyarnyy',
+  'popular',
+  'aktsiya',
+  'action',
 ];
 
 /** Макс длина value, после которой считаем поле текстовым описанием, не атрибутом. */
