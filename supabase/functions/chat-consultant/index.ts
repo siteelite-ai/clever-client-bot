@@ -5157,8 +5157,10 @@ export function buildDeterministicShortCircuitContent(params: {
    * подмену бренда молча»: пользователь явно видит, что бренд отсутствует.
    */
   brandUnavailable?: { brand: string; availableBrands: string[] };
+  /** Optional one-sentence advisor intro that replaces the generic intro. */
+  introOverride?: string | null;
 }): string {
-  const { products, reason, userMessage, effectivePriceIntent, subIntent, suppressTail, unfulfilledSplit, brandUnavailable } = params;
+  const { products, reason, userMessage, effectivePriceIntent, subIntent, suppressTail, unfulfilledSplit, brandUnavailable, introOverride } = params;
 
   // ── Split-рендер «комбинации нет, но компоненты есть».
   if (unfulfilledSplit && unfulfilledSplit.sections.length >= 2) {
@@ -5179,12 +5181,14 @@ export function buildDeterministicShortCircuitContent(params: {
 
   if (!products.length) return '';
 
-  const intro = buildIntroBySubIntent({
-    productsCount: Math.min(products.length, 3),
-    reason,
-    subIntent,
-    effectivePriceIntent,
-  });
+  const intro = (introOverride && introOverride.trim())
+    ? introOverride.trim()
+    : buildIntroBySubIntent({
+        productsCount: Math.min(products.length, 3),
+        reason,
+        subIntent,
+        effectivePriceIntent,
+      });
 
   // Системный лимит: всегда показываем top-3 карточки в детерминистичном рендере.
   // Если на входе больше — добавляем хвост «подобрано ещё N — показать остальные?».
