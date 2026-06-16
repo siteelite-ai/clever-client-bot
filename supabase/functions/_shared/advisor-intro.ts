@@ -81,11 +81,16 @@ export async function generateAdvisorIntro(
   if (!isAdvisorIntent(message)) return null;
 
   const noun = (input.productNoun ?? "").trim();
-  const userBlock = noun
-    ? `Запрос клиента: «${message}»\nРодовой товар (noun): ${noun}`
-    : `Запрос клиента: «${message}»`;
+  const productsBlock = buildSelectedProductsBlock(input.selectedProducts);
+  const lines: string[] = [`Запрос клиента: «${message}»`];
+  if (noun) lines.push(`Родовой товар (noun): ${noun}`);
+  if (productsBlock) {
+    lines.push("");
+    lines.push("Подобранные товары и их характеристики (используй ТОЛЬКО эти значения, если хочешь сослаться на параметр — и только если значение ОДИНАКОВО у всех):");
+    lines.push(productsBlock);
+  }
+  const userBlock = lines.join("\n");
 
-  const t0 = Date.now();
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), INTRO_TIMEOUT_MS);
