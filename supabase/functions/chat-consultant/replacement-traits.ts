@@ -70,18 +70,30 @@ const SERVICE_KEY_PREFIXES = [
   'popular',
   'aktsiya',
   'action',
-  // Brand-specific model-line identifiers: НЕ характеристика товара, а маркер
-  // конкретной линейки производителя (IEK ВА47-29, Chint NXB-63s, Himel HDB3w).
-  // В must-фильтре схлопывает пул до same-brand → brand-exclude обнуляет → relaxation
-  // возвращает same-brand вместо альтернатив. Marking-guard над pagetitle уже
-  // отрабатывает структурное совпадение и weakened-fallback. Data-agnostic:
-  // covers seriya, seriya_*, model_*, liniya_*.
-  'seriya',
-  'series',
-  'model',
-  'liniya',
-  'line',
 ];
+
+/**
+ * Эвристика «структурный идентификатор линейки» (data-agnostic, без whitelist'ов ключей).
+ * Значение опции считаем брендоспецифичной маркировкой модели/серии (не
+ * характеристикой товара) если ВСЕ условия выполнены:
+ *   1) value встречается в pagetitle оригинала (нормализованно);
+ *   2) value содержит И буквы, И цифры (alphanumeric mix);
+ *   3) длина value > 4 символов (отсекает функциональные «1P», «16А», «IP20», «C»).
+ * Такие значения (напр. «ВА47-29», «NXB-63s», «HDB3w») схлопывают пул до
+ * same-brand → brand-exclude обнуляет → relaxation возвращает same-brand.
+ * Marking-guard над pagetitle при этом продолжает работать.
+ */
+function isStructuralModelMarking(value: string, pagetitle: string | null | undefined): boolean {
+  if (!pagetitle) return false;
+  const v = value.trim();
+  if (v.length <= 4) return false;
+  const hasLetter = /[A-Za-zА-Яа-я]/.test(v);
+  const hasDigit = /\d/.test(v);
+  if (!hasLetter || !hasDigit) return false;
+  const normTitle = pagetitle.toLowerCase().replace(/\s+/g, ' ');
+  const normVal = v.toLowerCase().replace(/\s+/g, ' ');
+  return normTitle.includes(normVal);
+}
 
 /** Макс длина value, после которой считаем поле текстовым описанием, не атрибутом. */
 const MAX_VALUE_LEN = 80;
