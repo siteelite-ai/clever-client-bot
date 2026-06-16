@@ -92,9 +92,14 @@ export async function generateAdvisorIntro(
   if (!isAdvisorIntent(message)) return null;
 
   const noun = (input.productNoun ?? "").trim();
+  const expertHint = (input.expertReasoning ?? "").trim();
   const productsBlock = buildSelectedProductsBlock(input.selectedProducts);
   const lines: string[] = [`Запрос клиента: «${message}»`];
   if (noun) lines.push(`Родовой товар (noun): ${noun}`);
+  if (expertHint) {
+    lines.push("");
+    lines.push(`Подсказка эксперта (по какому критерию подбирались товары — используй как ориентир, но проверяй каждый параметр по правилам ниже): ${expertHint}`);
+  }
   if (productsBlock) {
     lines.push("");
     lines.push("Подобранные товары и их характеристики (используй ТОЛЬКО эти значения, если хочешь сослаться на параметр — и только если значение ОДИНАКОВО у всех):");
