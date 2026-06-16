@@ -12175,26 +12175,13 @@ ${productInstructions}`;
     //   • если jargonClarifyApplied (юзер уже выбрал на этом ходу),
     //   • если ветка unfulfilled-split (другой контракт — combo unavailable),
     //   • если EARLY-ветка уже отдала свой clarify Response (там return).
+    // DISABLED (2026-06-16, по решению владельца): jargon clarify-вопрос убран.
+    // Если jargon-fallback нашёл alt-перевод — сразу рендерим найденные товары
+    // (детерминистично, ниже по коду). Никаких "уточните: corn vs любые лампа".
+    // Слот jargon_clarify больше не выставляем — он одноразовый и не понадобится.
     if (pendingJargonClarify && !jargonClarifyApplied && !unfulfilledSplit) {
-      const { buildJargonClarifyContent, buildJargonClarifyResponse } = await import('../_shared/jargon-clarify.ts');
-      const { content: clarifyContent, slot: clarifyMeta } = buildJargonClarifyContent(pendingJargonClarify);
-      console.log(`[Chat req=${reqId}] [JargonClarify] UNIFIED emit: alt="${clarifyMeta.matchedAlternative}" noun="${clarifyMeta.noun}" count=${clarifyMeta.jargonCount}`);
-      logSetBranch('jargon-clarify');
-      logAddStep({ step: 'jargon-clarify-emit-unified', total: clarifyMeta.jargonCount, meta: { matchedAlternative: clarifyMeta.matchedAlternative, noun: clarifyMeta.noun } });
-      dialogSlots['jargon_clarify'] = {
-        intent: 'jargon_clarify',
-        base_category: clarifyMeta.noun.substring(0, 200),
-        status: 'pending',
-        created_turn: 0,
-        turns_since_touched: 0,
-        original_query: clarifyMeta.originalQuery.substring(0, 200),
-        jargon_meta: JSON.stringify({
-          matchedAlternative: clarifyMeta.matchedAlternative,
-          jargonCount: clarifyMeta.jargonCount,
-        }).substring(0, 500),
-      };
-      persistSlotsAsync(conversationId, dialogSlots);
-      return buildJargonClarifyResponse({ content: clarifyContent, dialogSlots, useStreaming, corsHeaders });
+      logAddStep({ step: 'jargon-clarify-skip-disabled', meta: { matchedAlternative: pendingJargonClarify.matchedAlternative, noun: pendingJargonClarify.noun, jargonCount: pendingJargonClarify.jargonCount } });
+      pendingJargonClarify = null;
     }
 
 
