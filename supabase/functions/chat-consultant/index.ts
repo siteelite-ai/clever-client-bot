@@ -12254,6 +12254,24 @@ ${productInstructions}`;
       const renderReason = (isDeterministicShortCircuitReason(responseModelReason) || responseModelReason === 'price-facet-clarify')
         ? responseModelReason
         : 'pass2-shortcircuit';
+      // Generate advisor intro before deterministic content so it can REPLACE the
+      // generic "Вот подходящие варианты" line rather than add a second intro.
+      const advisorIntroEligible =
+        renderReason !== 'price-facet-clarify' &&
+        !unfulfilledSplit &&
+        !qfBrandUnavailable &&
+        compareMissingAnchors.length === 0 &&
+        foundProducts.length > 0 &&
+        isAdvisorIntent(rawUserMessage);
+      const advisorIntroText = advisorIntroEligible && appSettings.openrouter_api_key
+        ? await generateAdvisorIntro({
+            userMessage: rawUserMessage,
+            productNoun: classification?.product_category ?? null,
+            openrouterKey: appSettings.openrouter_api_key,
+            log: (event, data) => logAddStep({ step: event, meta: data }),
+          })
+        : null;
+
       const content = renderReason === 'price-facet-clarify' && pendingClarifyFacet && pendingClarifyIntent
         ? buildPriceFacetClarifyContent({
             products: foundProducts,
@@ -12270,6 +12288,7 @@ ${productInstructions}`;
             suppressTail: tailWasOfferedLastTurn,
             unfulfilledSplit: unfulfilledSplit ?? undefined,
             brandUnavailable: qfBrandUnavailable ?? undefined,
+            introOverride: advisorIntroText,
           });
       // Compare-branch: честный дисклеймер про не найденные / отсутствующие в наличии якоря — перед карточками.
       // Никаких подстановок-аксессуаров; пользователь видит, что ровно этих моделей в каталоге / в наличии нет.
@@ -12304,29 +12323,7 @@ ${productInstructions}`;
       // Старый LLM-cross-sell (generateCrossSellTail + pending_offer) ОТКЛЮЧЁН
       // полностью — функция оставлена в коде как dead code до отдельного refactor PR.
       // ─────────────────────────────────────────────────────────────────────
-      // ─────────────────────────────────────────────────────────────────────
-      // ADVISOR-INTRO (V1, 2026-06-16, mem://features/advisor-intro).
-      // Когда пользователь ЯВНО просит подобрать/посоветовать — перед списком
-      // карточек добавляем одно короткое предложение-обоснование. НЕ применяем
-      // к веткам со своим интро/дисклеймером (price-facet-clarify,
-      // unfulfilled-split, brand-unavailable, compare-missing-anchors).
-      const advisorIntroEligible =
-        renderReason !== 'price-facet-clarify' &&
-        !unfulfilledSplit &&
-        !qfBrandUnavailable &&
-        compareMissingAnchors.length === 0 &&
-        foundProducts.length > 0 &&
-        isAdvisorIntent(rawUserMessage);
-      const introPromise: Promise<string | null> = advisorIntroEligible && appSettings.openrouter_api_key
-        ? generateAdvisorIntro({
-            userMessage: rawUserMessage,
-            productNoun: classification?.product_category ?? null,
-            openrouterKey: appSettings.openrouter_api_key,
-            log: (event, data) => logAddStep({ step: event, meta: data }),
-          })
-        : Promise.resolve(null);
-      const introText = await introPromise;
-      const finalContent = introText ? `${introText}\n\n${contentWithMissing}` : contentWithMissing;
+      const finalContent = contentWithMissing;
       // Step 2 (2026-05-12): убрано single-anchor ограничение. Анкоры берём из
       // первых foundProducts с уникальными категориями (до 3-х). При широкой
       // выдаче это даёт более устойчивую агрегацию /related (категории-победители
