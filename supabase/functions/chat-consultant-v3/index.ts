@@ -70,23 +70,31 @@ function encodeSse(ev: SseEvent): Uint8Array {
 
 async function logTurn(
   sessionId: string,
-  userMessage: string,
+  userQuery: string,
   steps: StepLog[],
-  durationMs: number,
+  totalMs: number,
+  finalResponse: string,
+  finalProductsCount: number,
+  errorMsg: string | null,
 ) {
   try {
     const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, {
       auth: { persistSession: false },
     });
-    await supabase.from("chat_request_logs").insert({
+    const { error } = await supabase.from("chat_request_logs").insert({
       session_id: sessionId,
+      user_query: userQuery,
       pipeline: "v3",
-      user_message: userMessage,
-      duration_ms: durationMs,
+      branch: "v3_echo",
       steps,
+      final_products_count: finalProductsCount,
+      final_response: finalResponse || null,
+      total_ms: totalMs,
+      error: errorMsg,
     });
+    if (error) console.error("[v3] log insert failed:", error.message);
   } catch (err) {
-    console.error("[v3] log insert failed:", err);
+    console.error("[v3] log exception:", err);
   }
 }
 
