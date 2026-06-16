@@ -673,6 +673,7 @@ async function getAppSettings(): Promise<CachedSettings> {
     const ss = (data as { soft_suggest_enabled?: boolean }).soft_suggest_enabled === true;
     const cb = (data as { compare_branch_enabled?: boolean }).compare_branch_enabled === true;
     const c5 = (data as { c5_clarify_broad_enabled?: boolean }).c5_clarify_broad_enabled === true;
+    const ei = (data as { expert_interpretation_enabled?: boolean }).expert_interpretation_enabled === true;
     if (qf || ss) {
       console.log(`[Settings] V1 sees experimental flags: query_first=${qf} soft_suggest=${ss} (no-op in V1, switch active_pipeline to v2 to use)`);
     }
