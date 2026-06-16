@@ -10304,9 +10304,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       }
                     }
                     // Propagate numericRelaxed → weakenedReason='trait_relaxed' ниже.
-                    if (numericRelaxed && rFinal.length > 0) {
-                      trait_relaxed_rescued = trait_relaxed_rescued || false; // placeholder, set after declaration
-                    }
+                    // (флаг используется в блоке formирования weakened — см. ниже)
                   }
 
 
