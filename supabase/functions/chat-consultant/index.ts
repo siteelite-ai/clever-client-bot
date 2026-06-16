@@ -248,31 +248,54 @@ async function sha256Hex(input: string): Promise<string> {
 }
 
 // Numeric semantic validator: ensures e.g. modifier "100W" doesn't get matched
-// to filter range "13-20". Returns true if value semantically fits modifier.
+// to filter range "13-20", or modifier "3 кВт" to value "7400" Вт.
+// Returns true if value semantically fits modifier (equality ±10% tolerance for
+// point values, ±10% on bounds for ranges). Data-agnostic SI-prefix normalization.
 // If neither side has clear numbers, returns true (let LLM decision stand).
-function semanticNumericFit(modifier: string, value: string): boolean {
-  const modNumMatch = modifier.match(/(\d+(?:[.,]\d+)?)/);
-  if (!modNumMatch) return true;
-  const modNum = parseFloat(modNumMatch[1].replace(',', '.'));
-  if (!isFinite(modNum)) return true;
+function extractNumberWithUnit(s: string): { num: number; unitFactor: number } | null {
+  const m = s.match(/(\d+(?:[.,]\d+)?)\s*([а-яa-zА-ЯA-Z]*)/);
+  if (!m) return null;
+  const num = parseFloat(m[1].replace(',', '.'));
+  if (!isFinite(num)) return null;
+  const unitRaw = (m[2] || '').toLowerCase().replace('ё', 'е');
+  // SI prefix → multiplier to base unit. Recognize только однозначные приставки.
+  // к/k = 1e3, м/m = 1e-3 (НО только если за приставкой идёт буква, иначе "м" = метр),
+  // М/M (мега) распознаём по заглавной только в латинице (kW vs mW).
+  // Чтобы избежать неоднозначности «м» (милли vs метр), нормализуем по типичным юнитам.
+  let factor = 1;
+  if (/^к[втaмгц]/i.test(unitRaw) || /^k[wahvm]/i.test(unitRaw)) factor = 1e3;          // кВт, кА, кГц, kW, kHz
+  else if (/^мa$/i.test(unitRaw) || /^ma$/i.test(unitRaw)) factor = 1e-3;                  // мА, mA (милли)
+  else if (/^м[вгц]/i.test(unitRaw) || /^m[whvz]/i.test(unitRaw)) factor = 1e-3;          // мВт, мГц, mW, mHz
+  else if (/^мг[ц]?$/i.test(unitRaw)) factor = 1e6;                                        // МГц → ambiguous, leave 1
+  return { num, unitFactor: factor };
+}
 
-  // Try range "A-B" or "от A до B"
-  const rangeMatch = value.match(/(\d+(?:[.,]\d+)?)\s*[-–—]\s*(\d+(?:[.,]\d+)?)/);
+function semanticNumericFit(modifier: string, value: string): boolean {
+  const mod = extractNumberWithUnit(modifier);
+  if (!mod) return true;
+  const modBase = mod.num * mod.unitFactor;
+  if (!isFinite(modBase)) return true;
+
+  // Try range "A-B" or "A — B"
+  const rangeMatch = value.match(/(\d+(?:[.,]\d+)?)\s*[-–—]\s*(\d+(?:[.,]\d+)?)\s*([а-яa-zА-ЯA-Z]*)/);
   if (rangeMatch) {
     const a = parseFloat(rangeMatch[1].replace(',', '.'));
     const b = parseFloat(rangeMatch[2].replace(',', '.'));
-    const lo = Math.min(a, b), hi = Math.max(a, b);
-    // Allow 10% tolerance on both ends (e.g. 100W can match 90-110 range)
-    return modNum >= lo * 0.9 && modNum <= hi * 1.1;
+    // assume range uses same unit as the trailing token (if any)
+    const valUnit = extractNumberWithUnit((rangeMatch[2] || '0') + ' ' + (rangeMatch[3] || ''));
+    const factor = valUnit?.unitFactor ?? 1;
+    const lo = Math.min(a, b) * factor, hi = Math.max(a, b) * factor;
+    // ±10% tolerance on bounds
+    return modBase >= lo * 0.9 && modBase <= hi * 1.1;
   }
   // Single number value
-  const valNumMatch = value.match(/(\d+(?:[.,]\d+)?)/);
-  if (valNumMatch) {
-    const valNum = parseFloat(valNumMatch[1].replace(',', '.'));
-    if (!isFinite(valNum)) return true;
-    // Within 15% — same physical magnitude
-    const ratio = Math.max(modNum, valNum) / Math.max(Math.min(modNum, valNum), 0.001);
-    return ratio <= 1.5;
+  const val = extractNumberWithUnit(value);
+  if (val) {
+    const valBase = val.num * val.unitFactor;
+    if (!isFinite(valBase) || valBase === 0) return true;
+    // ±10% equality: same point value within tolerance
+    const ratio = Math.max(modBase, valBase) / Math.max(Math.min(modBase, valBase), 0.001);
+    return ratio <= 1.1;
   }
   // No numbers in value — can't validate, accept
   return true;
