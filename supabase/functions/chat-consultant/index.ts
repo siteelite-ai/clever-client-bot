@@ -10128,6 +10128,8 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
 
                   let rFinal: Product[] = [];
                   let brandExcludeRelaxed = false;
+                  let numericRelaxedOuter = false;
+                  let numericRelaxedDroppedOuter: string[] = [];
                   // rResolved holds combined facet filters; we always seed with traitMustStrict
                   // (Layer 1, не-числовые). Числовые traits в server-filter НЕ уходят.
                   let rResolved: Record<string, string> = { ...traitMustStrict };
