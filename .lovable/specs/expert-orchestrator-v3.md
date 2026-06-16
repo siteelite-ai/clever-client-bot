@@ -195,8 +195,7 @@ output_error = { ok: false, error_code, message }
 ```ts
 input = {
   product_ids: string[],      // максимум 10
-  total_available?: number,   // показать «и ещё N» если > product_ids.length
-  intro_line?: string         // одна короткая строка-подводка от эксперта; опционально
+  total_available?: number    // показать «и ещё N» если > product_ids.length
 }
 output_ok = {
   ok: true,
@@ -210,6 +209,21 @@ output_error = { ok: false, error_code: "no_products" | "all_zero_price", messag
 - Рендер использует **дословные** `pagetitle`, `url`, `price`, `vendor`, `stock` из последнего `ProductRef`-кэша текущей сессии (см. §3.11). Никаких LLM-перезаписей.
 - `price=0` отбрасываются повторно (double-filter).
 - Если после фильтра `rendered_count=0` → возвращает `error_code='all_zero_price'`, эксперт должен перейти в `escalate_to_manager` или объяснить пустоту.
+- Подводящий текст («Вот что нашёл:») эксперт стримит сам до `render_products`; параметра `intro_line` нет.
+
+### §3.6a `lookup_contacts`
+**Назначение:** прямая ветка «инфо о магазине»: реквизиты, график работы, адрес, способы оплаты, доставка. Используется когда пользователь спросил именно об этом — БЕЗ ухода в Soft-404.
+
+```ts
+input = { topic: "phone" | "address" | "hours" | "payment" | "delivery" | "general" }
+output_ok = {
+  ok: true,
+  data: { phone?: string, address?: string, hours?: string, payment?: string, delivery?: string, html_block?: string }
+}
+output_error = { ok: false, error_code, message }
+```
+
+**Эффект:** эмитит SSE `contacts` с готовым html-блоком (как в V1). Эксперт МОЖЕТ дополнить текстом ДО вызова, но цифры/адреса в текст не цитирует — берёт `lookup_contacts`.
 
 ### §3.7 `propose_clarification`
 **Назначение:** когда эксперт хочет задать структурированный уточняющий вопрос с quick-replies (например выбор фасета). Аналог текущего `price_clarify`/`dialogSlot`.
