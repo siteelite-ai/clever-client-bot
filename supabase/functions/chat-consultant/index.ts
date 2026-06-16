@@ -8497,6 +8497,42 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               if (noun.length === 0) {
                 console.log(`[QueryFirstV2] empty noun → fallback to Category Resolver`);
               } else {
+                // ── (1.5) Pool sanitization helper (data-agnostic).
+                // Catalog full-text matches across pagetitle + description + options,
+                // so query "кабель 3 кВт" can return CHINT-розетки (word "кабель"
+                // appears in their описание). This pollutes dominantCat → wrong
+                // schema prefetch → 20s wasted in FilterLLM with foreign schema.
+                //
+                // Rule: keep products whose category.pagetitle OR product.pagetitle
+                // contains the noun-stem (first 5 chars, lowercase). For nouns ≤3
+                // chars (e.g. "ввг") stem-prefix is unsafe → skip filter.
+                //
+                // Logged as `qfv2-pool-sanitize` with kept/dropped/dominantCatBefore.
+                const sanitizePoolByNoun = (rawPool: Product[], label: string): Product[] => {
+                  if (!Array.isArray(rawPool) || rawPool.length === 0) return rawPool;
+                  const lower = noun.toLowerCase().trim();
+                  if (lower.length <= 3) return rawPool;
+                  const stem = lower.slice(0, Math.min(5, lower.length));
+                  const kept: Product[] = [];
+                  const droppedCats = new Map<string, number>();
+                  for (const p of rawPool) {
+                    const catTitle = (p?.category?.pagetitle || '').toLowerCase();
+                    const prodTitle = (p?.pagetitle || '').toLowerCase();
+                    if (catTitle.includes(stem) || prodTitle.includes(stem)) {
+                      kept.push(p);
+                    } else {
+                      const c = p?.category?.pagetitle || '(no-cat)';
+                      droppedCats.set(c, (droppedCats.get(c) || 0) + 1);
+                    }
+                  }
+                  if (kept.length !== rawPool.length) {
+                    const droppedTop = [...droppedCats.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([c, n]) => `${c}:${n}`);
+                    console.log(`[QueryFirstV2] pool-sanitize(${label}) noun="${noun}" stem="${stem}" kept=${kept.length}/${rawPool.length} dropped_cats=[${droppedTop.join(', ')}]`);
+                    logAddStep({ step: 'qfv2-pool-sanitize', total: kept.length, meta: { label, noun, stem, kept: kept.length, dropped: rawPool.length - kept.length, dropped_cats_top: droppedTop } });
+                  }
+                  return kept;
+                };
+
                 // ── (2) Pool: ?query=noun [+ critical_modifiers], perPage=100.
                 // 2026-05-05: pool query enriched with up to 3 critical modifiers so that
                 // the catalog's poiskovyy_zapros + full-text matching does the heavy
@@ -8539,6 +8575,8 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 );
                 console.log(`[QueryFirstV2] pool query="${enrichedQuery}" size=${pool.length} (perPage=${QF_POOL_SIZE})`);
                 logAddStep({ step: 'qfv2-pool', total: pool.length, ms: Date.now() - poolStartMs, meta: { query: enrichedQuery.substring(0, 200), perPage: QF_POOL_SIZE, enrichMods: enrichMods.slice(0, 5) } });
+                pool = sanitizePoolByNoun(pool, 'enriched');
+
 
                 // Волна C1 (2026-06-15): pool-jargon ПЕРЕД bare-noun retry.
                 // Раньше: enriched=0 → retry с голым noun → 100 случайных товаров (мусор)
@@ -8601,6 +8639,8 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   );
                   console.log(`[QueryFirstV2] pool noun="${noun}" size=${pool.length} (fallback)`);
                   logAddStep({ step: 'qfv2-pool-retry', total: pool.length, ms: Date.now() - poolRetryStart, meta: { query: noun, fallback: true } });
+                  pool = sanitizePoolByNoun(pool, 'bare-retry');
+
                 }
 
                 if (pool.length === 0) {
