@@ -236,8 +236,9 @@ export function extractOriginalTraits(
   }
 
   // ── Pass 3: cap, лишнее → droppedOverflow ──
-  for (const { opt, value } of ordered) {
-    if (ordered.some((e) => !e.lowInformation) && ordered.find((e) => e.opt.key === opt.key)?.lowInformation) {
+  const hasDiscriminatingTraits = ordered.some((e) => !e.lowInformation);
+  for (const { opt, value, lowInformation } of ordered) {
+    if (hasDiscriminatingTraits && lowInformation) {
       result.droppedServiceKeys.push(`${opt.key}:low_information_constant`);
       continue;
     }
