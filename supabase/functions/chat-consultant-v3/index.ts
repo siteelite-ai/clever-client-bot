@@ -219,10 +219,16 @@ Deno.serve(async (req) => {
   const t0 = Date.now();
   const steps: StepLog[] = [];
 
+  const finalTextChunks: string[] = [];
+  let finalProductsCount = 0;
+  let errorMsg: string | null = null;
+
   const stream = new ReadableStream({
     async start(controller) {
       const send = (ev: SseEvent) => {
         try {
+          if (ev.type === "delta") finalTextChunks.push(ev.content);
+          if (ev.type === "products_block") finalProductsCount += ev.count;
           controller.enqueue(encodeSse(ev));
         } catch (err) {
           console.error("[v3] enqueue failed:", err);
@@ -232,11 +238,12 @@ Deno.serve(async (req) => {
       try {
         await runEchoExpert(userMessage, send, steps, t0);
       } catch (err) {
+        errorMsg = String(err);
         console.error("[v3] expert error:", err);
         steps.push({
           step: "v3_turn_end",
           ms: Date.now() - t0,
-          meta: { reason: "error", error: String(err) },
+          meta: { reason: "error", error: errorMsg },
         });
         send({
           type: "delta",
@@ -245,7 +252,15 @@ Deno.serve(async (req) => {
       } finally {
         send({ type: "done" });
         controller.close();
-        await logTurn(sessionId, userMessage, steps, Date.now() - t0);
+        await logTurn(
+          sessionId,
+          userMessage,
+          steps,
+          Date.now() - t0,
+          finalTextChunks.join(""),
+          finalProductsCount,
+          errorMsg,
+        );
       }
     },
   });
