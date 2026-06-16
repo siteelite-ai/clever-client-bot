@@ -30,12 +30,16 @@ import {
   applyBrandExclude,
   applyBrandExcludeWithRelaxation,
   applyMarkingGuard,
+  applyNumericToleranceFilter,
   extractMarkingTokens,
   extractOriginalBrand,
   extractOriginalTraits,
   filterStructuralMarkings,
   isOriginalByTitle,
+  NUMERIC_TRAIT_TOLERANCE,
+  splitNumericTraits,
 } from './replacement-traits.ts';
+
 import {
   FACET_BLACKLIST_KEYS as SHARED_FACET_BLACKLIST_KEYS,
   isBlacklistedFacetKey,
