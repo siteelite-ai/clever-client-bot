@@ -7726,16 +7726,45 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                            unresolved: rUnresolved || [],
                            ms: Date.now() - tR1,
                          });
-                         console.log(`[Chat] [PriceResolve] resolved=${JSON.stringify(resolvedFilters)} unresolved=[${(rUnresolved || []).join(', ')}] unresolvedDetails=${(rDetails || []).length}`);
+                          console.log(`[Chat] [PriceResolve] resolved=${JSON.stringify(resolvedFilters)} unresolved=[${(rUnresolved || []).join(', ')}] unresolvedDetails=${(rDetails || []).length}`);
 
-                         // ── Этап 2 (2026-05-12): если первый проход оставил unresolved
-                         // модификаторы — bootstrap-схема pool'а слишком узкая (например,
-                         // в pool «розетки» попали в основном крышки/подрозетники, и ключ
-                         // "kolichestvo_mest" со значениями 1/2/3/4 в schema отсутствует).
-                         // Делаем второй заход: matcher → real category pagetitle →
-                         // getCategoryOptionsSchema (full /categories/options) → resolve
-                         // только нерезолвенных модификаторов на широкой схеме → merge.
-                         if (rUnresolved && rUnresolved.length > 0) {
+                          // ── D1 (2026-06-16): отсеиваем «псевдо-unresolved» — токены,
+                          // которые на самом деле уже стали частью какого-то резолвенного
+                          // значения. Пример: mods=["Schneider","Electric"] → resolved=
+                          // {brend:"Schneider Electric"}, unresolved=["Electric"]. «Electric»
+                          // — фрагмент уже склеенного бренда, второй проход бессмыслен и
+                          // стоит ~10с (resolve2_category + wide schema + resolve2 LLM).
+                          const resolvedValuesLower = Object.values(resolvedFilters)
+                            .map(v => String(v).toLowerCase());
+                          const effectiveUnresolved = (rUnresolved || []).filter(token => {
+                            const t = String(token).toLowerCase().trim();
+                            if (!t) return false;
+                            for (const val of resolvedValuesLower) {
+                              if (!val) continue;
+                              if (val === t) return false;
+                              const words = val.split(/\s+/);
+                              if (words.includes(t)) return false;
+                            }
+                            return true;
+                          });
+                          if ((rUnresolved || []).length !== effectiveUnresolved.length) {
+                            const dropped = (rUnresolved || []).filter(x => !effectiveUnresolved.includes(x));
+                            ptrace('resolve1_filtered', {
+                              before: rUnresolved,
+                              after: effectiveUnresolved,
+                              dropped_as_resolved_fragments: dropped,
+                            });
+                            console.log(`[Chat] [PriceResolve] D1 drop fragments=[${dropped.join(', ')}] → effective unresolved=[${effectiveUnresolved.join(', ')}]`);
+                          }
+
+                          // ── Этап 2 (2026-05-12): если первый проход оставил unresolved
+                          // модификаторы — bootstrap-схема pool'а слишком узкая (например,
+                          // в pool «розетки» попали в основном крышки/подрозетники, и ключ
+                          // "kolichestvo_mest" со значениями 1/2/3/4 в schema отсутствует).
+                          // Делаем второй заход: matcher → real category pagetitle →
+                          // getCategoryOptionsSchema (full /categories/options) → resolve
+                          // только нерезолвенных модификаторов на широкой схеме → merge.
+                          if (effectiveUnresolved.length > 0) {
                            try {
                              const t2 = Date.now();
                              const catalog = await getCategoriesCache(appSettings.volt220_api_token!);
@@ -7765,52 +7794,53 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                                  categorySource = 'matcher_first';
                                }
 
-                               ptrace('resolve2_category', {
-                                 unresolvedIn: rUnresolved,
-                                 classifierCategory: classifierCategoryRaw,
-                                 matcherMatches: matcherMatches.slice(0, 5),
-                                 chosen: catTitle || null,
-                                 source: categorySource,
-                               });
+                                ptrace('resolve2_category', {
+                                  unresolvedIn: effectiveUnresolved,
+                                  classifierCategory: classifierCategoryRaw,
+                                  matcherMatches: matcherMatches.slice(0, 5),
+                                  chosen: catTitle || null,
+                                  source: categorySource,
+                                });
 
-                               if (catTitle) {
-                                 console.log(`[Chat] [PriceResolve2] matched category="${catTitle}" for noun="${priceQuery}"`);
-                                 const tWide = Date.now();
-                                 const wideProducts = await searchProductsByCandidate(
-                                   { query: null, brand: null, category: catTitle, min_price: 1, max_price: null },
-                                   appSettings.volt220_api_token!,
-                                   200
-                                 );
-                                 const wideSchema = extractSchemaFromProducts(wideProducts);
-                                 const newKeys = Array.from(wideSchema.keys()).filter(k => !bootstrapSchema.has(k));
-                                 ptrace('resolve2_schema', {
-                                   wideKeys: wideSchema.size,
-                                   wideProducts: wideProducts.length,
-                                   newKeysVsPool: newKeys.length,
-                                   newKeysSample: newKeys.slice(0, 10),
-                                   ms: Date.now() - tWide,
-                                 });
-                                 if (wideSchema.size > 0) {
-                                   console.log(`[Chat] [PriceResolve2] wide schema: ${wideSchema.size} keys (source=category-products-sample, products=${wideProducts.length})`);
-                                   const tR2 = Date.now();
-                                   const { resolved: r2Raw, unresolved: r2Unresolved } = await resolveFiltersWithLLM(
-                                     probePool,
-                                     rUnresolved,
-                                     appSettings,
-                                     criticalMods,
-                                     wideSchema,
-                                     'partial',
-                                     priceQuery
-                                   );
-                                   const resolved2 = flattenResolvedFilters(r2Raw);
-                                   ptrace('resolve2', {
-                                     input: rUnresolved,
-                                     schemaKeys: wideSchema.size,
-                                     resolved: resolved2,
-                                     unresolved: r2Unresolved || [],
-                                     ms: Date.now() - tR2,
-                                   });
-                                   console.log(`[Chat] [PriceResolve2] resolved=${JSON.stringify(resolved2)} unresolved=[${(r2Unresolved || []).join(', ')}] elapsed=${Date.now() - t2}ms`);
+                                if (catTitle) {
+                                  console.log(`[Chat] [PriceResolve2] matched category="${catTitle}" for noun="${priceQuery}"`);
+                                  const tWide = Date.now();
+                                  const wideProducts = await searchProductsByCandidate(
+                                    { query: null, brand: null, category: catTitle, min_price: 1, max_price: null },
+                                    appSettings.volt220_api_token!,
+                                    200
+                                  );
+                                  const wideSchema = extractSchemaFromProducts(wideProducts);
+                                  const newKeys = Array.from(wideSchema.keys()).filter(k => !bootstrapSchema.has(k));
+                                  ptrace('resolve2_schema', {
+                                    wideKeys: wideSchema.size,
+                                    wideProducts: wideProducts.length,
+                                    newKeysVsPool: newKeys.length,
+                                    newKeysSample: newKeys.slice(0, 10),
+                                    ms: Date.now() - tWide,
+                                  });
+                                  if (wideSchema.size > 0) {
+                                    console.log(`[Chat] [PriceResolve2] wide schema: ${wideSchema.size} keys (source=category-products-sample, products=${wideProducts.length})`);
+                                    const tR2 = Date.now();
+                                    const { resolved: r2Raw, unresolved: r2Unresolved } = await resolveFiltersWithLLM(
+                                      probePool,
+                                      effectiveUnresolved,
+                                      appSettings,
+                                      criticalMods,
+                                      wideSchema,
+                                      'partial',
+                                      priceQuery
+                                    );
+                                    const resolved2 = flattenResolvedFilters(r2Raw);
+                                    ptrace('resolve2', {
+                                      input: effectiveUnresolved,
+                                      schemaKeys: wideSchema.size,
+                                      resolved: resolved2,
+                                      unresolved: r2Unresolved || [],
+                                      ms: Date.now() - tR2,
+                                    });
+                                    console.log(`[Chat] [PriceResolve2] resolved=${JSON.stringify(resolved2)} unresolved=[${(r2Unresolved || []).join(', ')}] elapsed=${Date.now() - t2}ms`);
+
                                    for (const [k, v] of Object.entries(resolved2)) {
                                      if (!resolvedFilters[k]) resolvedFilters[k] = v;
                                    }
