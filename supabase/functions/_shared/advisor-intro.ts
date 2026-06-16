@@ -91,7 +91,9 @@ export async function generateAdvisorIntro(
   }
   const userBlock = lines.join("\n");
 
+  const t0 = Date.now();
   try {
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), INTRO_TIMEOUT_MS);
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
