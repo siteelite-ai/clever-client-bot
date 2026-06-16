@@ -76,7 +76,8 @@ const SERVICE_KEY_PREFIXES = [
  * Эвристика «структурный идентификатор линейки» (data-agnostic, без whitelist'ов ключей).
  * Значение опции считаем брендоспецифичной маркировкой модели/серии (не
  * характеристикой товара) если ВСЕ условия выполнены:
- *   1) value встречается в pagetitle оригинала (нормализованно);
+ *   1) value встречается в pagetitle оригинала separator-insensitive
+ *      (ВА47-29 == ВА 47-29 == ВА-47-29);
  *   2) value содержит И буквы, И цифры (alphanumeric mix);
  *   3) длина value > 4 символов (отсекает функциональные «1P», «16А», «IP20», «C»).
  * Такие значения (напр. «ВА47-29», «NXB-63s», «HDB3w») схлопывают пул до
@@ -90,9 +91,9 @@ function isStructuralModelMarking(value: string, pagetitle: string | null | unde
   const hasLetter = /[A-Za-zА-Яа-я]/.test(v);
   const hasDigit = /\d/.test(v);
   if (!hasLetter || !hasDigit) return false;
-  const normTitle = pagetitle.toLowerCase().replace(/\s+/g, ' ');
-  const normVal = v.toLowerCase().replace(/\s+/g, ' ');
-  return normTitle.includes(normVal);
+  const compactTitle = pagetitle.toLowerCase().replace(/[^0-9a-zа-яё]+/giu, '');
+  const compactVal = v.toLowerCase().replace(/[^0-9a-zа-яё]+/giu, '');
+  return compactVal.length > 4 && compactTitle.includes(compactVal);
 }
 
 /** Макс длина value, после которой считаем поле текстовым описанием, не атрибутом. */
