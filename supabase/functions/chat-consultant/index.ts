@@ -10118,11 +10118,19 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   outerFullSchema = rFullSchema;
                   const traitMust = originalTraits.must;
                   const traitKeysSet = new Set(Object.keys(traitMust));
+                  // Layer 1.5: split traits → strict (server-side options[]) и numeric
+                  // (post-filter ±15%). См. mem://features/c4-replacement-traits.
+                  const { strict: traitMustStrict, numeric: traitMustNumeric } = splitNumericTraits(traitMust);
+                  const numericKeys = Object.keys(traitMustNumeric);
+                  if (numericKeys.length > 0) {
+                    console.log(`[Chat] Replacement L1.5 numeric-soft (±${Math.round(NUMERIC_TRAIT_TOLERANCE * 100)}%): ${JSON.stringify(traitMustNumeric)} (strict: ${JSON.stringify(traitMustStrict)})`);
+                  }
 
                   let rFinal: Product[] = [];
                   let brandExcludeRelaxed = false;
-                  // rResolved holds combined facet filters; we always seed with traitMust (Layer 1).
-                  let rResolved: Record<string, string> = { ...traitMust };
+                  // rResolved holds combined facet filters; we always seed with traitMustStrict
+                  // (Layer 1, не-числовые). Числовые traits в server-filter НЕ уходят.
+                  let rResolved: Record<string, string> = { ...traitMustStrict };
                   let rResolvedRaw: Record<string, { value: string; is_critical?: boolean }> = {};
                   let qText: string | null = null;
 
@@ -10157,14 +10165,22 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                         );
                         rResolvedRaw = llmResolvedRaw;
                         const llmFlat = flattenResolvedFilters(llmResolvedRaw);
-                        // Merge order: LLM-resolved first, traitMust wins on key collision.
-                        // Обоснование: оригинал — ground truth (реальные options каталога),
-                        // LLM-резолв — догадка по токенам пользователя.
-                        rResolved = { ...llmFlat, ...traitMust };
-                        console.log(`[Chat] Replacement matcher resolved (LLM+trait merged)=${JSON.stringify(rResolved)}, unresolved=[${rUnresolved.join(', ')}], trait_keys=[${[...traitKeysSet].join(', ')}]`);
+                        // Merge order: LLM-resolved first, traitMustStrict wins on key collision.
+                        // Numeric trait keys остаются ТОЛЬКО как post-filter (не в server-side).
+                        // Обоснование: оригинал — ground truth, но числовые оси требуют tolerance.
+                        rResolved = { ...llmFlat, ...traitMustStrict };
+                        // Удаляем из server-filter любые LLM-резолвы по numeric trait-ключам,
+                        // иначе strict-equality снова обнулит пул.
+                        for (const numKey of numericKeys) {
+                          if (rResolved[numKey] !== undefined) {
+                            console.log(`[Chat] Replacement L1.5: dropping LLM-resolved "${numKey}=${rResolved[numKey]}" from server-filter (numeric trait, post-filter handles ±${Math.round(NUMERIC_TRAIT_TOLERANCE * 100)}%)`);
+                            delete rResolved[numKey];
+                          }
+                        }
+                        console.log(`[Chat] Replacement matcher resolved (LLM+trait merged)=${JSON.stringify(rResolved)}, numeric_post=${JSON.stringify(traitMustNumeric)}, unresolved=[${rUnresolved.join(', ')}], trait_keys=[${[...traitKeysSet].join(', ')}]`);
                       }
                     } else {
-                      console.log(`[Chat] Replacement matcher trait-only=${JSON.stringify(rResolved)} (no user modifiers)`);
+                      console.log(`[Chat] Replacement matcher trait-only=${JSON.stringify(rResolved)} numeric_post=${JSON.stringify(traitMustNumeric)} (no user modifiers)`);
                     }
 
                     // RC1 fix: при наличии реальных traitMust от resolved originalProduct
@@ -10184,7 +10200,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                           { allowEmptyQuery: false, path: 'replacement-matcher' },
                         );
                     if (traitOnlyMode) {
-                      console.log(`[Chat] Replacement matcher trait-only mode: qText=null, traitMust=${JSON.stringify(traitMust)} (SKU-tokens suppressed from query)`);
+                      console.log(`[Chat] Replacement matcher trait-only mode: qText=null, traitMustStrict=${JSON.stringify(traitMustStrict)} numeric_post=${JSON.stringify(traitMustNumeric)} (SKU-tokens suppressed from query)`);
                     }
                     const rFiltRes = await Promise.all(replMatches.map(cat =>
                       searchProductsByCandidate(
@@ -10196,6 +10212,13 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     const rfSeen = new Set<string | number>();
                     for (const arr of rFiltRes) for (const p of arr) {
                       if (!rfSeen.has(p.id)) { rfSeen.add(p.id); rFinal.push(p); }
+                    }
+                    // Layer 1.5 post-filter: tolerance ±15% по числовым traits.
+                    if (numericKeys.length > 0 && rFinal.length > 0) {
+                      const numBefore = rFinal.length;
+                      const numRes = applyNumericToleranceFilter(rFinal, traitMustNumeric);
+                      rFinal = numRes.filtered;
+                      console.log(`[Chat] Replacement L1.5 numeric post-filter: ${numBefore} → ${rFinal.length} (dropped ${numRes.dropped}, traits=${JSON.stringify(traitMustNumeric)})`);
                     }
                     // Cascading relaxed: trait-фильтры от оригинала НЕ дропаем (это ground truth).
                     if (rFinal.length === 0 && Object.keys(rResolved).length > 1) {
@@ -10216,17 +10239,22 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                         for (const arr of relaxedRes) for (const p of arr) {
                           if (!seenR.has(p.id)) { seenR.add(p.id); merged.push(p); }
                         }
-                        if (merged.length > bestRelaxed.length) {
-                          bestRelaxed = merged;
+                        // Apply numeric post-filter и тут.
+                        const mergedNum = numericKeys.length > 0
+                          ? applyNumericToleranceFilter(merged, traitMustNumeric).filtered
+                          : merged;
+                        if (mergedNum.length > bestRelaxed.length) {
+                          bestRelaxed = mergedNum;
                           droppedKey = dropKey;
                         }
                       }
                       if (bestRelaxed.length > 0) {
                         rFinal = bestRelaxed;
-                        console.log(`[Chat] Replacement matcher relaxed (dropped ${droppedKey}, trait-keys preserved): ${rFinal.length}`);
+                        console.log(`[Chat] Replacement matcher relaxed (dropped ${droppedKey}, trait-keys preserved, numeric post-filter applied): ${rFinal.length}`);
                       }
                     }
                   }
+
 
                   // Exclude original product (by id, by exact pagetitle, by same brand)
                   const originalId = originalProduct?.id;
