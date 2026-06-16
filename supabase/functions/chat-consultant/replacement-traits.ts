@@ -70,6 +70,17 @@ const SERVICE_KEY_PREFIXES = [
   'popular',
   'aktsiya',
   'action',
+  // Brand-specific model-line identifiers: НЕ характеристика товара, а маркер
+  // конкретной линейки производителя (IEK ВА47-29, Chint NXB-63s, Himel HDB3w).
+  // В must-фильтре схлопывает пул до same-brand → brand-exclude обнуляет → relaxation
+  // возвращает same-brand вместо альтернатив. Marking-guard над pagetitle уже
+  // отрабатывает структурное совпадение и weakened-fallback. Data-agnostic:
+  // covers seriya, seriya_*, model_*, liniya_*.
+  'seriya',
+  'series',
+  'model',
+  'liniya',
+  'line',
 ];
 
 /** Макс длина value, после которой считаем поле текстовым описанием, не атрибутом. */
