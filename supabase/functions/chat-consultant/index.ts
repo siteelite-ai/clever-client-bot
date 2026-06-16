@@ -8441,34 +8441,33 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               console.log(`[QueryFirstV2] noun="${noun}" (source=${nounExtractSource || 'n/a'})`);
               logAddStep({ step: 'qfv2-noun', ms: Date.now() - nounStartMs, meta: { noun, source: nounExtractSource } });
 
-              // Волна D 2026-06-16: noun-fallback при extractor-error/timeout.
-              // Раньше: noun="" + source=error → выпадаем в legacy Category Resolver,
-              // который для «лампа кукуруза» отдавал 15 случайных ламп через
-              // pass2-shortcircuit (pre-jargon/pool-jargon не запускались — им нужен noun).
-              // Теперь: при empty noun используем classification.product_category
-              // (или первый смысловой токен product_name) как fallback. QFv2 продолжает
-              // нормально — pool/pre-jargon отработают и canonical jargon-кейсы
-              // («лампа кукуруза» → corn lamp) восстановятся.
+              // Волна D 2026-06-16: noun-fallback ТОЛЬКО для жаргонного сценария.
+              // Условия (все обязательны, чтобы избежать регрессий на обычных запросах):
+              //   1) noun пустой
+              //   2) source ∈ {'error','timeout'} — экстрактор упал, а не вернул честный empty
+              //      (legitimate empty = «расскажи про доставку» — там noun и не должно быть)
+              //   3) classification.has_product_name === true — qfv2-bridge уже сработал,
+              //      synthesised modifiers есть, это реальный товарный запрос
+              //   4) product_category есть и не дублирует ни один из modifiers
+              // Эффект для кейса «лампа кукуруза»: noun="лампа" → pool по «лампа кукуруза» → 0
+              //   → pre-jargon → corn lamp → детерминистичный рендер только corn-ламп.
+              // Для всех остальных кейсов (классификатор без has_product_name, или
+              // extractor честно вернул empty) — старое поведение: fallback в Category Resolver.
               let nounFallbackUsed: string | null = null;
-              if (noun.length === 0) {
-                const catFallback = (classification?.product_category || '').toString().trim();
-                if (catFallback.length > 0) {
-                  noun = catFallback.toLowerCase();
+              if (
+                noun.length === 0 &&
+                (nounExtractSource === 'error' || nounExtractSource === 'timeout') &&
+                classification?.has_product_name === true
+              ) {
+                const catFallback = (classification?.product_category || '').toString().trim().toLowerCase();
+                const modifiersLower = new Set((modifiers || []).map((m: string) => String(m).toLowerCase()));
+                if (catFallback.length > 0 && !modifiersLower.has(catFallback)) {
+                  noun = catFallback;
                   nounFallbackUsed = 'product_category';
+                  console.log(`[QueryFirstV2] noun-fallback applied: source=${nounFallbackUsed} noun="${noun}" (extractSource=${nounExtractSource}, has_product_name=true)`);
+                  logAddStep({ step: 'qfv2-noun-fallback', meta: { source: nounFallbackUsed, noun, extractSource: nounExtractSource } });
                 } else {
-                  const pnFallback = (classification?.product_name || '').toString().trim();
-                  if (pnFallback.length > 0) {
-                    // первый алфа-токен из product_name как минимальный noun
-                    const firstTok = pnFallback.split(/\s+/).find(t => /[\p{L}]/u.test(t));
-                    if (firstTok) {
-                      noun = firstTok.toLowerCase();
-                      nounFallbackUsed = 'product_name_first_token';
-                    }
-                  }
-                }
-                if (nounFallbackUsed) {
-                  console.log(`[QueryFirstV2] noun-fallback applied: source=${nounFallbackUsed} noun="${noun}"`);
-                  logAddStep({ step: 'qfv2-noun-fallback', meta: { source: nounFallbackUsed, noun } });
+                  logAddStep({ step: 'qfv2-noun-fallback-skip', meta: { reason: catFallback.length === 0 ? 'no_category' : 'category_in_modifiers', extractSource: nounExtractSource } });
                 }
               }
 
