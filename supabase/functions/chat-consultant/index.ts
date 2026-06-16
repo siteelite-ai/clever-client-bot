@@ -10396,9 +10396,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   // Brand-dominant / trait-relaxed flags (set above): приоритет ниже marking_mismatch,
                   // но выше few_results. trait_relaxed имеет приоритет над brand_dominant
                   // (мы реально дропнули trait-precision, это нужно сообщить честно).
-                  if (trait_relaxed_rescued && !weakened) {
+                  if ((trait_relaxed_rescued || numericRelaxedOuter) && !weakened) {
                     weakened = true;
                     weakenedReason = 'trait_relaxed';
+                    if (numericRelaxedOuter) {
+                      console.log(`[Chat] Replacement L2 weakened=trait_relaxed reason=numeric_axes_dropped axes=[${numericRelaxedDroppedOuter.join(', ')}]`);
+                    }
                   } else if (brandExcludeRelaxed && !weakened) {
                     weakened = true;
                     weakenedReason = 'brand_dominant';
