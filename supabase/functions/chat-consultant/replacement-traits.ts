@@ -188,7 +188,7 @@ export function extractOriginalTraits(
   if (!original?.options || original.options.length === 0) return result;
 
   // ── Pass 1: фильтрация без cap, сохраняем исходный порядок ──
-  type Eligible = { opt: OriginalOption; value: string };
+  type Eligible = { opt: OriginalOption; value: string; lowInformation: boolean };
   const eligible: Eligible[] = [];
   for (const opt of original.options) {
     if (!opt?.key) continue;
@@ -212,7 +212,8 @@ export function extractOriginalTraits(
       result.droppedServiceKeys.push(`${opt.key}:structural_marking`);
       continue;
     }
-    eligible.push({ opt, value: valueTrimmed });
+    const lowInformation = schemaEntry.values.size === 1;
+    eligible.push({ opt, value: valueTrimmed, lowInformation });
   }
 
   // ── Pass 2: stable-приоритизация по userTokens (если переданы) ──
@@ -228,6 +229,7 @@ export function extractOriginalTraits(
     }));
     indexed.sort((a, b) => {
       if (a.matched !== b.matched) return a.matched ? -1 : 1;
+      if (a.e.lowInformation !== b.e.lowInformation) return a.e.lowInformation ? 1 : -1;
       return a.i - b.i;
     });
     ordered = indexed.map((x) => x.e);
@@ -235,6 +237,10 @@ export function extractOriginalTraits(
 
   // ── Pass 3: cap, лишнее → droppedOverflow ──
   for (const { opt, value } of ordered) {
+    if (ordered.some((e) => !e.lowInformation) && ordered.find((e) => e.opt.key === opt.key)?.lowInformation) {
+      result.droppedServiceKeys.push(`${opt.key}:low_information_constant`);
+      continue;
+    }
     if (Object.keys(result.must).length >= MAX_MUST_TRAITS) {
       result.droppedOverflow.push(opt.key);
       continue;
