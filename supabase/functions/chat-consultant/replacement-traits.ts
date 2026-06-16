@@ -206,6 +206,11 @@ export function extractOriginalTraits(
       result.droppedNotInSchema.push(`${opt.key}:value_missing`);
       continue;
     }
+    // Структурная брендоспецифичная маркировка (data-agnostic, без хардкода ключей).
+    if (isStructuralModelMarking(valueTrimmed, original.pagetitle)) {
+      result.droppedServiceKeys.push(`${opt.key}:structural_marking`);
+      continue;
+    }
     eligible.push({ opt, value: valueTrimmed });
   }
 
