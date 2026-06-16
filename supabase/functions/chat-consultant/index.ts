@@ -28,6 +28,12 @@ import { wrapWithHeartbeat } from '../_shared/sse-heartbeat.ts';
 import { buildFacetsSummaryContent } from '../_shared/facets-summary.ts';
 import { generateAdvisorIntro, isAdvisorIntent } from '../_shared/advisor-intro.ts';
 import { interpretRequirement, type ExpertOption } from '../_shared/expert-interpretation.ts';
+import { expertFirstJudgment } from '../_shared/expert-first.ts';
+
+// SHADOW-FLAG: теневой запуск expert-first параллельно с classifier.
+// Включён по умолчанию для Шага 2 (наблюдение). Результат пишется в steps,
+// НИКАК не влияет на маршрутизацию и ответ. Чтобы отключить — поставить false.
+const EXPERT_FIRST_SHADOW_ENABLED = true;
 import {
   applyBrandExclude,
   applyBrandExcludeWithRelaxation,
