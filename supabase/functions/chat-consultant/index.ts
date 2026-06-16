@@ -702,6 +702,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       soft_suggest_enabled: ss,
       compare_branch_enabled: cb,
       c5_clarify_broad_enabled: c5,
+      expert_interpretation_enabled: ei,
     };
   } catch (e) {
     console.error('[Settings] Failed to load settings:', e);
