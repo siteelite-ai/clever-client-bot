@@ -8508,6 +8508,12 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 // chars (e.g. "ввг") stem-prefix is unsafe → skip filter.
                 //
                 // Logged as `qfv2-pool-sanitize` with kept/dropped/dominantCatBefore.
+                // Правило (ужесточено 2026-06-16): принимаем продукт ТОЛЬКО если
+                // category.pagetitle содержит stem существительного. product.pagetitle
+                // НЕ проверяется — у чужих категорий тоже встречаются упоминания
+                // нашего noun («Розетка кабельная», «Лампа для кабельной разводки»),
+                // что протаскивает мусор и портит dominantCat / bootstrap-schema.
+                // Fallback: если у товара нет category — оставляем (нечем фильтровать).
                 const sanitizePoolByNoun = (rawPool: Product[], label: string): Product[] => {
                   if (!Array.isArray(rawPool) || rawPool.length === 0) return rawPool;
                   const lower = noun.toLowerCase().trim();
@@ -8517,12 +8523,14 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   const droppedCats = new Map<string, number>();
                   for (const p of rawPool) {
                     const catTitle = (p?.category?.pagetitle || '').toLowerCase();
-                    const prodTitle = (p?.pagetitle || '').toLowerCase();
-                    if (catTitle.includes(stem) || prodTitle.includes(stem)) {
+                    if (!catTitle) {
+                      kept.push(p);
+                      continue;
+                    }
+                    if (catTitle.includes(stem)) {
                       kept.push(p);
                     } else {
-                      const c = p?.category?.pagetitle || '(no-cat)';
-                      droppedCats.set(c, (droppedCats.get(c) || 0) + 1);
+                      droppedCats.set(p.category!.pagetitle, (droppedCats.get(p.category!.pagetitle) || 0) + 1);
                     }
                   }
                   if (kept.length !== rawPool.length) {
