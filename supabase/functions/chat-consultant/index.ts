@@ -27,6 +27,7 @@ import {
 import { wrapWithHeartbeat } from '../_shared/sse-heartbeat.ts';
 import { buildFacetsSummaryContent } from '../_shared/facets-summary.ts';
 import { generateAdvisorIntro, isAdvisorIntent } from '../_shared/advisor-intro.ts';
+import { interpretRequirement, type ExpertOption } from '../_shared/expert-interpretation.ts';
 import {
   applyBrandExclude,
   applyBrandExcludeWithRelaxation,
@@ -610,6 +611,8 @@ interface CachedSettings {
   compare_branch_enabled: boolean;
   /** C5 — уточняющий вопрос при размытом каталоговом запросе (см. _shared/c5-broad-detector.ts). Default false. */
   c5_clarify_broad_enabled: boolean;
+  /** Expert Interpretation — LLM-эксперт переводит требование клиента в целевые фасеты до фильтрации QFv2 pool. Default false. */
+  expert_interpretation_enabled: boolean;
 }
 
 async function getAppSettings(): Promise<CachedSettings> {
@@ -632,6 +635,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       soft_suggest_enabled: false,
       compare_branch_enabled: false,
       c5_clarify_broad_enabled: false,
+      expert_interpretation_enabled: false,
     };
   }
 
@@ -639,7 +643,7 @@ async function getAppSettings(): Promise<CachedSettings> {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
     const { data, error } = await supabase
       .from('app_settings')
-      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model, system_prompt, classifier_provider, classifier_model, classifier_prompt, query_first_enabled, soft_suggest_enabled, compare_branch_enabled, c5_clarify_broad_enabled')
+      .select('volt220_api_token, openrouter_api_key, google_api_key, ai_provider, ai_model, system_prompt, classifier_provider, classifier_model, classifier_prompt, query_first_enabled, soft_suggest_enabled, compare_branch_enabled, c5_clarify_broad_enabled, expert_interpretation_enabled')
       .limit(1)
       .single();
 
@@ -659,6 +663,7 @@ async function getAppSettings(): Promise<CachedSettings> {
         soft_suggest_enabled: false,
         compare_branch_enabled: false,
         c5_clarify_broad_enabled: false,
+        expert_interpretation_enabled: false,
       };
     }
 
@@ -668,8 +673,12 @@ async function getAppSettings(): Promise<CachedSettings> {
     const ss = (data as { soft_suggest_enabled?: boolean }).soft_suggest_enabled === true;
     const cb = (data as { compare_branch_enabled?: boolean }).compare_branch_enabled === true;
     const c5 = (data as { c5_clarify_broad_enabled?: boolean }).c5_clarify_broad_enabled === true;
+    const ei = (data as { expert_interpretation_enabled?: boolean }).expert_interpretation_enabled === true;
     if (qf || ss) {
       console.log(`[Settings] V1 sees experimental flags: query_first=${qf} soft_suggest=${ss} (no-op in V1, switch active_pipeline to v2 to use)`);
+    }
+    if (ei) {
+      console.log(`[Settings] V1 expert_interpretation_enabled=true — QFv2 будет применять LLM-эксперта для перевода требований в фасеты`);
     }
     if (cb) {
       console.log(`[Settings] V1 compare_branch_enabled=true — compare sub_intent will trigger dedicated branch`);
@@ -693,6 +702,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       soft_suggest_enabled: ss,
       compare_branch_enabled: cb,
       c5_clarify_broad_enabled: c5,
+      expert_interpretation_enabled: ei,
     };
   } catch (e) {
     console.error('[Settings] Failed to load settings:', e);
@@ -710,6 +720,7 @@ async function getAppSettings(): Promise<CachedSettings> {
         soft_suggest_enabled: false,
         compare_branch_enabled: false,
         c5_clarify_broad_enabled: false,
+        expert_interpretation_enabled: false,
       };
   }
 }
@@ -8971,6 +8982,93 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     console.log(`[QueryFirstV2] no modifiers → display pool directly`);
                     logAddStep({ step: 'qfv2-filter-llm', meta: { skipped: 'no_modifiers' } });
                   }
+
+                  // ── (4.6) EXPERT INTERPRETATION (flag: expert_interpretation_enabled).
+                  // Назначение: классификатор+FacetMatcher работают на уровне токенов
+                  // («3», «кВт», «кондиционер»), но НЕ знают электротехнических норм
+                  // (ПУЭ: P=3 кВт → I≈14 А → сечение медь 2.5 мм²). Без эксперта pool
+                  // ВВГ-кабелей показывается as-is — клиент видит 1.5/2.5/10/25/35 мм²
+                  // вперемешку. Эксперт-LLM получает originalQuery + bootstrap schema
+                  // (реальные опции категории) и возвращает целевые value_ru. Затем
+                  // мерджим в resolvedFilters (additive по новым ключам; на пересечении
+                  // ключей expert wins ТОЛЬКО при confidence='high').
+                  //
+                  // Anti-hallucination: модуль валидирует каждый key/value против schema
+                  // и дропает несуществующие. Любая ошибка/таймаут (8с) → silent skip.
+                  //
+                  // Reasoning сохраняется в expertReasoning для последующего advisor-intro.
+                  let expertReasoning = '';
+                  let expertConfidence: 'high' | 'medium' | 'low' | 'none' = 'none';
+                  let expertTargetFacets: Record<string, string[]> = {};
+                  if (
+                    appSettings.expert_interpretation_enabled &&
+                    appSettings.openrouter_api_key &&
+                    noun &&
+                    bootstrapSchema.size > 0 &&
+                    modifiers.length > 0
+                  ) {
+                    const expertStart = Date.now();
+                    try {
+                      // Преобразуем bootstrapSchema в shape для interpretRequirement.
+                      const optionSchema: ExpertOption[] = Array.from(bootstrapSchema.entries()).map(([key, bucket]) => ({
+                        key,
+                        caption_ru: bucket.caption,
+                        values: Array.from(bucket.values).map(v => ({ value_ru: v })),
+                      }));
+                      const expertRes = await interpretRequirement({
+                        originalQuery: userMessage,
+                        productCategory: noun,
+                        searchModifiers: modifiers,
+                        optionSchema,
+                        openrouterKey: appSettings.openrouter_api_key,
+                        log: (event, data) => console.log(`[Chat req=${reqId}] [QFv2-Expert] ${event}`, data ?? {}),
+                      });
+                      if (expertRes.llmOk) {
+                        expertReasoning = expertRes.reasoning;
+                        expertConfidence = expertRes.confidence;
+                        expertTargetFacets = expertRes.targetFacets;
+                        // Merge: additive по новым ключам; high → перезапись.
+                        let added = 0;
+                        let overwritten = 0;
+                        for (const [k, vs] of Object.entries(expertRes.targetFacets)) {
+                          if (!vs || vs.length === 0) continue;
+                          const firstValue = vs[0]; // resolvedFilters = Record<string,string>
+                          if (!(k in resolvedFilters)) {
+                            resolvedFilters[k] = firstValue;
+                            added++;
+                          } else if (expertRes.confidence === 'high') {
+                            resolvedFilters[k] = firstValue;
+                            overwritten++;
+                          }
+                          // resolverUnresolved: вычёркиваем модификаторы, для которых эксперт дал facet.
+                          // Data-agnostic: эксперт работает поверх toy modifiers — если он нашёл facet,
+                          // конкретный модификатор-источник неизвестен, поэтому не трогаем unresolved.
+                        }
+                        console.log(`[QueryFirstV2] expert OK confidence=${expertRes.confidence} reasoning="${expertReasoning}" facets=${JSON.stringify(expertRes.targetFacets)} merged: +${added} new, ${overwritten} overwritten`);
+                        logAddStep({
+                          step: 'qfv2-expert-interpretation',
+                          ms: Date.now() - expertStart,
+                          meta: {
+                            confidence: expertRes.confidence,
+                            reasoning: expertReasoning,
+                            targetFacets: expertRes.targetFacets,
+                            droppedKeys: expertRes.droppedKeys,
+                            droppedValuesCount: expertRes.droppedValues.length,
+                            mergedAdded: added,
+                            mergedOverwritten: overwritten,
+                          },
+                        });
+                      } else {
+                        console.log(`[QueryFirstV2] expert skip (llmOk=false) ms=${Date.now() - expertStart}`);
+                        logAddStep({ step: 'qfv2-expert-skip', ms: Date.now() - expertStart, meta: { reason: 'llm_not_ok' } });
+                      }
+                    } catch (expertErr) {
+                      console.warn(`[QueryFirstV2] expert silent fail:`, expertErr instanceof Error ? expertErr.message : String(expertErr));
+                      logAddStep({ step: 'qfv2-expert-error', ms: Date.now() - expertStart, meta: { error: String((expertErr as Error).message) } });
+                    }
+                  }
+
+
 
 
                   // ── (4.5) ESCALATION: bootstrap из pool — это топ-100 товаров по релевантности
