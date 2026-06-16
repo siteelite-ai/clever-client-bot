@@ -6940,10 +6940,62 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
       const classifyStart = Date.now();
       try {
         const recentHistoryForClassifier = historyForContext.slice(-4).map(m => ({ role: m.role, content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content) }));
-        classification = await classifyProductName(userMessage, recentHistoryForClassifier, appSettings);
+
+        // SHADOW: expert-first параллельно с classifier. Никак не влияет на маршрут.
+        const shadowKey = appSettings.openrouter_api_key || Deno.env.get('OPENROUTER_API_KEY') || '';
+        const shadowPromise = (EXPERT_FIRST_SHADOW_ENABLED && shadowKey)
+          ? expertFirstJudgment({
+              originalQuery: userMessage,
+              openrouterKey: shadowKey,
+              timeoutMs: 6000,
+              log: (event, data) => console.log(`[ExpertFirst.shadow] ${event}`, data ?? {}),
+            }).catch((e) => {
+              console.warn(`[ExpertFirst.shadow] unexpected error: ${e instanceof Error ? e.message : String(e)}`);
+              return null;
+            })
+          : Promise.resolve(null);
+
+        const [classifyResult, shadowResult] = await Promise.all([
+          classifyProductName(userMessage, recentHistoryForClassifier, appSettings),
+          shadowPromise,
+        ]);
+        classification = classifyResult;
         const classifyElapsed = Date.now() - classifyStart;
         console.log(`[Chat] Micro-LLM classify: ${classifyElapsed}ms → intent=${classification?.intent || 'none'}, sub_intent=${classification?.sub_intent || 'none'}, has_product_name=${classification?.has_product_name}, name="${classification?.product_name || ''}", price_intent=${classification?.price_intent || 'none'}, category="${classification?.product_category || ''}", is_replacement=${classification?.is_replacement || false}`);
         logSetClassifier(classification ?? null);
+
+        // SHADOW step — отдельной записью в steps[], чтобы легко выбирать из chat_request_logs
+        if (shadowResult) {
+          const expertIntentMatch = classification?.intent && shadowResult.intent !== 'unknown'
+            ? (classification.intent === shadowResult.intent ? 'match' : 'diff')
+            : 'na';
+          const expertCategoryMatch = (classification?.product_category && shadowResult.productNoun)
+            ? (classification.product_category.toLowerCase().includes(shadowResult.productNoun.toLowerCase())
+                || shadowResult.productNoun.toLowerCase().includes((classification.product_category || '').toLowerCase())
+                ? 'match' : 'diff')
+            : 'na';
+          logAddStep({
+            step: 'expert_first_shadow',
+            ms: shadowResult.latencyMs,
+            meta: {
+              llmOk: shadowResult.llmOk,
+              intent: shadowResult.intent,
+              productNoun: shadowResult.productNoun,
+              confidence: shadowResult.confidence,
+              facetHints: shadowResult.facetHints,
+              facetCount: Object.keys(shadowResult.facetHints).length,
+              apiHints: shadowResult.apiHints,
+              reasoning: shadowResult.reasoning,
+              // Сравнение «эксперт vs classifier» — что увидим в логах:
+              vs_classifier: {
+                intent: expertIntentMatch,
+                classifier_intent: classification?.intent ?? null,
+                category: expertCategoryMatch,
+                classifier_category: classification?.product_category ?? null,
+              },
+            },
+          });
+        }
         const __classifyDiag = getLastClassifyDiagnostics();
         logAddStep({
           step: 'classify',
