@@ -25,6 +25,7 @@
 
 const EXPERT_MODEL = "anthropic/claude-sonnet-4.5";
 const EXPERT_TIMEOUT_MS = 6_000;
+const EXPERT_MAX_ATTEMPTS = 2; // 1 retry on transport-failure/timeout/5xx
 const MAX_VALUES_PER_FACET = 3;
 const MAX_FACETS = 8;
 
@@ -57,19 +58,43 @@ const SYSTEM_PROMPT = `Ты — опытный продавец-консульт
   5) явный бренд → apiHints.brand;
   6) reasoning — голос продавца, обращённый к клиенту. Правила ниже.
 
-REASONING — как говорит живой консультант (ЭТО ВИДИТ КЛИЕНТ):
-  • На «ты» или «вы» — нейтрально, без «здравствуйте», «уважаемый», «дорогой клиент».
-  • БЕЗ слов «классификатор», «параметры», «фасеты», «фильтры», «база данных», «подбираю по критериям». Говори как у прилавка: «возьму медный 2.5 мм² на 3 жилы — этого хватит для 3 кВт с запасом».
-  • 1–2 коротких предложения. Конкретика: марка/сечение/тип цоколя/ток, а НЕ «подходящие характеристики».
-  • Уровень уверенности отражай В ФОРМЕ:
-      – high  → утверждение: «Беру медь 2.5 мм² 3 жилы — стандарт для 14 А».
-      – medium → утверждение с короткой оговоркой: «Беру 2.5 мм² 3 жилы; если кондиционер с тяжёлым пуском — стоит 4 мм², скажите».
-      – low   → вопрос ИЛИ предложение с уточняющим хвостом: «Уточню — какая длина трассы и тип кондиционера? Пока покажу типовые медные 2.5 мм²».
-  • Для intent = "smalltalk", "out_of_domain", "knowledge" — reasoning ПУСТАЯ строка (там разговор ведут другие модули, не вступай).
-  • Для "price" — reasoning короткий: «Покажу самые доступные …» / «Самый дешёвый из …» — без расчётов.
-  • Для "accessory_for" — назови что ищешь, без характеристик: «Поищу совместимые насадки к …».
-  • Для "spec_query" — НЕ отвечай на сам вопрос (это сделает следующий шаг), просто: «Сейчас посмотрю характеристику».
-  • Никогда: «здравствуйте», «спасибо за вопрос», «я ИИ», «я не могу», «к сожалению», эмодзи, восклицательные знаки.
+REASONING — как говорит живой консультант (ЭТО ВИДИТ КЛИЕНТ).
+Цель: дать клиенту ЧЁТКУЮ опору, чтобы он понял ЧТО ты подбираешь и ПОЧЕМУ, и при необходимости поправил тебя ОДНОЙ фразой. Структура зависит от intent и confidence.
+
+Для intent ∈ {"catalog", "accessory_for"} структура такая (markdown, короткие абзацы, без заголовков-решёток):
+
+  1) **Рекомендация** — 1 предложение, конкретика без «характеристик/параметров».
+     Назови материал/сечение/тип/цоколь/ток/мощность и КОРОТКО ПОЧЕМУ.
+     Пример: «Для 3 кВт беру медный ВВГнг 2.5 мм² 3 жилы — выдерживает 14 А с запасом по ПУЭ.»
+
+  2) **Альтернатива** (только при confidence ∈ {"medium","low"} ИЛИ если есть осмысленный второй вариант) —
+     1 предложение, начинается с «Если …» или «Или …».
+     Пример: «Если трасса длиннее 15 м или кондиционер с тяжёлым пуском — стоит взять 4 мм².»
+
+  3) **Уточнение** (опционально, максимум 1–2 коротких вопроса, только если без ответа подбор будет грубым) —
+     одной строкой, ПОСЛЕ рекомендации, не вместо неё. НЕ задавай вопросы про то, что уже сказано в запросе.
+     Пример: «Подскажи длину трассы и однофазный или трёхфазный — уточню сечение.»
+
+Итого: 2–5 коротких предложений. БЕЗ маркированных списков, БЕЗ нумерации в выводе (внутренняя структура — для тебя).
+
+Для остальных intent — короче:
+  • "price"         → 1 предложение: «Покажу самые доступные …» / «Самый дешёвый из …». Без расчётов и альтернатив.
+  • "accessory_for" → используй структуру catalog, но рекомендация = «Поищу совместимые … к <модель>», альтернатива — только если есть.
+  • "spec_query"    → 1 предложение: «Сейчас посмотрю <характеристику> у <модель>». НЕ отвечай на сам вопрос.
+  • "knowledge"     → ПУСТАЯ строка (отвечает knowledge-модуль).
+  • "smalltalk"     → ПУСТАЯ строка.
+  • "out_of_domain" → ПУСТАЯ строка.
+
+ОБЯЗАТЕЛЬНЫЕ ПРАВИЛА ГОЛОСА:
+  • БЕЗ слов: «классификатор», «параметры», «фасеты», «фильтры», «база данных», «характеристики подходят», «подбираю по критериям», «здравствуйте», «спасибо за вопрос», «к сожалению», «я ИИ», «я не могу».
+  • БЕЗ эмодзи и восклицательных знаков.
+  • На «ты» или «вы» — нейтрально, без обращений «уважаемый/дорогой».
+  • Конкретные цифры и марки (медь, 2.5 мм², ВВГнг, E27, 16 А, 6500K), НЕ абстрактные слова.
+  • Уровень уверенности отражай В ФОРМЕ рекомендации:
+      – high   → утверждение без «возможно/наверное».
+      – medium → утверждение + блок «Если …».
+      – low    → утверждение «пока возьму типовой …» + уточняющий вопрос.
+  • Если уже добавил альтернативу/уточнение — не дублируй ту же мысль в рекомендации.
 
 INTENT:
   • "catalog"       — товар по типу/характеристикам.
@@ -243,55 +268,76 @@ export async function expertFirstJudgment(
   const timeoutMs = input.timeoutMs ?? EXPERT_TIMEOUT_MS;
 
   let parsed: Record<string, unknown> | null = null;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${input.openrouterKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://chat-volt.testdevops.ru",
-        "X-Title": "220volt-chat-consultant-expert-first",
-      },
-      body: JSON.stringify({
-        model: EXPERT_MODEL,
-        temperature: 0.2,
-        max_tokens: 700,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: `Запрос клиента: «${query}»` },
-        ],
-        tools: [TOOL_SCHEMA],
-        tool_choice: TOOL_CHOICE,
-      }),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      log("expert_first.http_error", { status: response.status, ms: Date.now() - t0 });
+  let lastErrTag: string | null = null;
+
+  for (let attempt = 1; attempt <= EXPERT_MAX_ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${input.openrouterKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://chat-volt.testdevops.ru",
+          "X-Title": "220volt-chat-consultant-expert-first",
+        },
+        body: JSON.stringify({
+          model: EXPERT_MODEL,
+          temperature: 0.2,
+          max_tokens: 900,
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: `Запрос клиента: «${query}»` },
+          ],
+          tools: [TOOL_SCHEMA],
+          tool_choice: TOOL_CHOICE,
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        lastErrTag = `http_${response.status}`;
+        log("expert_first.http_error", { status: response.status, attempt, ms: Date.now() - t0 });
+        // retry on 5xx / 429 only
+        if (response.status >= 500 || response.status === 429) {
+          continue;
+        }
+        return { ...EMPTY_RESULT, latencyMs: Date.now() - t0 };
+      }
+      // deno-lint-ignore no-explicit-any
+      const data: any = await response.json();
+      const toolCalls = data?.choices?.[0]?.message?.tool_calls;
+      if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
+        log("expert_first.no_tool_calls", { attempt, ms: Date.now() - t0 });
+        return { ...EMPTY_RESULT, latencyMs: Date.now() - t0 };
+      }
+      const argsRaw = toolCalls[0]?.function?.arguments;
+      if (typeof argsRaw !== "string") {
+        log("expert_first.bad_args", { attempt });
+        return { ...EMPTY_RESULT, latencyMs: Date.now() - t0 };
+      }
+      parsed = JSON.parse(argsRaw);
+      break; // success
+    } catch (e) {
+      lastErrTag = e instanceof Error ? (e.name || "error") : "error";
+      log("expert_first.llm_error", {
+        error: e instanceof Error ? e.message : String(e),
+        attempt,
+        ms: Date.now() - t0,
+      });
+      // retry on transport-failure (AbortError / network)
+      if (attempt < EXPERT_MAX_ATTEMPTS) {
+        continue;
+      }
       return { ...EMPTY_RESULT, latencyMs: Date.now() - t0 };
+    } finally {
+      clearTimeout(timer);
     }
-    // deno-lint-ignore no-explicit-any
-    const data: any = await response.json();
-    const toolCalls = data?.choices?.[0]?.message?.tool_calls;
-    if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
-      log("expert_first.no_tool_calls", { ms: Date.now() - t0 });
-      return { ...EMPTY_RESULT, latencyMs: Date.now() - t0 };
-    }
-    const argsRaw = toolCalls[0]?.function?.arguments;
-    if (typeof argsRaw !== "string") {
-      log("expert_first.bad_args", {});
-      return { ...EMPTY_RESULT, latencyMs: Date.now() - t0 };
-    }
-    parsed = JSON.parse(argsRaw);
-  } catch (e) {
-    log("expert_first.llm_error", {
-      error: e instanceof Error ? e.message : String(e),
-      ms: Date.now() - t0,
-    });
+  }
+
+  if (!parsed) {
+    log("expert_first.exhausted", { lastErrTag, ms: Date.now() - t0 });
     return { ...EMPTY_RESULT, latencyMs: Date.now() - t0 };
-  } finally {
-    clearTimeout(timer);
   }
 
   const intentRaw = clampStr(parsed?.intent, 40).toLowerCase();
@@ -300,7 +346,7 @@ export async function expertFirstJudgment(
   const productNoun = clampStr(parsed?.productNoun, 80);
   const facetHints = sanitizeFacets(parsed?.facetHints);
   const apiHints = sanitizeApiHints(parsed?.apiHints);
-  const reasoning = clampStr(parsed?.reasoning, 400);
+  const reasoning = clampStr(parsed?.reasoning, 800);
   const confRaw = clampStr(parsed?.confidence, 10).toLowerCase();
   const confidence: ExpertFirstResult["confidence"] =
     confRaw === "high" || confRaw === "medium" || confRaw === "low" ? confRaw : "none";
