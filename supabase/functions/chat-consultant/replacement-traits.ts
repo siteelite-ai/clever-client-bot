@@ -415,13 +415,14 @@ export function applyMarkingGuard<T extends { pagetitle?: string | null }>(
   originalMarkings: string[],
 ): { filtered: T[]; mismatch: boolean } {
   if (originalMarkings.length === 0) return { filtered: candidates, mismatch: false };
-  // ALL-of semantics: кандидат должен содержать КАЖДЫЙ структурный токен оригинала.
-  // ANY-of слишком слабо: общий токен (IP41) пропускает кандидата с другим
-  // SKU (ЩРВ vs ЩРН). Поэтому marking-set нужно предварительно сузить через
-  // filterStructuralMarkings — оставить только токены, не покрытые фасетами.
+  // Separator-insensitive: compact обе стороны (убираем не-alphanumeric), чтобы
+  // «ВА47-29» матчил «ВА 47-29» и «ВА-47-29» в pagetitle кандидата. Это
+  // зеркалит compact-логику isStructuralModelMarking и поведение Pass A
+  // extractMarkingTokens (компактная нормализация составных маркировок).
+  const compact = (s: string) => s.toUpperCase().replace(/[^0-9A-ZА-ЯЁ]+/giu, '');
   const filtered = candidates.filter((c) => {
-    const pt = (c.pagetitle || '').toUpperCase();
-    return originalMarkings.every((tok) => pt.includes(tok));
+    const pt = compact(c.pagetitle || '');
+    return originalMarkings.every((tok) => pt.includes(compact(tok)));
   });
   return { filtered, mismatch: filtered.length === 0 };
 }
