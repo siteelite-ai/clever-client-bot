@@ -173,6 +173,32 @@ Deno.test('traits: drops keys whose value is missing in union schema values', ()
   assertEquals(res.droppedNotInSchema.some((k) => k.startsWith('material__material')), true);
 });
 
+Deno.test('traits: drops structural series marking separator-insensitive', () => {
+  const original = {
+    pagetitle: 'Автомат GENERICA ВА 47-29 16А',
+    options: [
+      { key: 'seriya__seriya', value_ru: 'ВА47-29' },
+      { key: 'nominalynyy_tok__nominaldy_toқ', value_ru: '16' },
+      { key: 'kolichestvo_polyusov__polyuster_sany', value_ru: '1' },
+      { key: 'harakteristika_srabatyvaniya__Іske_қosylu_sipattamasy', value_ru: 'C' },
+    ],
+  };
+  const s = schema({
+    'seriya__seriya': ['ВА47-29', 'NXB-63s'],
+    'nominalynyy_tok__nominaldy_toқ': ['6', '10', '16', '25'],
+    'kolichestvo_polyusov__polyuster_sany': ['1', '2', '3'],
+    'harakteristika_srabatyvaniya__Іske_қosylu_sipattamasy': ['B', 'C', 'D'],
+  });
+  const res = extractOriginalTraits(original, s, ['GENERICA', 'ВА', '47-29', '16А']);
+  assertEquals('seriya__seriya' in res.must, false);
+  assertEquals(res.droppedServiceKeys.includes('seriya__seriya:structural_marking'), true);
+  assertEquals(res.must, {
+    'nominalynyy_tok__nominaldy_toқ': '16',
+    'kolichestvo_polyusov__polyuster_sany': '1',
+    'harakteristika_srabatyvaniya__Іske_қosylu_sipattamasy': 'C',
+  });
+});
+
 // ─── filterStructuralMarkings ───────────────────────────────────────────────
 
 Deno.test('filterStructuralMarkings: drops IP41 when "41" is a facet value', () => {
@@ -367,17 +393,15 @@ const fullSchema = schema({
   harakteristika_srabatyvaniya: ['B', 'C', 'D'],
 });
 
-Deno.test('extractOriginalTraits: backward-compat — без userTokens порядок сохранён', () => {
+Deno.test('extractOriginalTraits: low-information constants do not consume cap', () => {
   const r = extractOriginalTraits({ options: noiseFirstOptions }, fullSchema);
-  // cap=4 → первые 4 по исходному порядку, без приоритета.
   assertEquals(Object.keys(r.must), [
-    'chastota__gc',
-    'diapazon_temp',
-    'edinica_izmereniya',
-    'garantiynyy_srok',
+    'nominalynyy_tok',
+    'kolichestvo_polyusov',
+    'harakteristika_srabatyvaniya',
   ]);
-  // nominalynyy_tok и другие — overflow.
-  assertEquals(r.droppedOverflow.includes('nominalynyy_tok'), true);
+  assertEquals(r.droppedServiceKeys.includes('chastota__gc:low_information_constant'), true);
+  assertEquals(r.droppedServiceKeys.includes('edinica_izmereniya:low_information_constant'), true);
 });
 
 Deno.test('extractOriginalTraits: userTokens="16А" поднимает nominalynyy_tok=16 в must', () => {
@@ -433,9 +457,8 @@ Deno.test('extractOriginalTraits: brand-токен НЕ приоритизиру
 Deno.test('extractOriginalTraits: userTokens без матча → исходный порядок (стабильность)', () => {
   const r = extractOriginalTraits({ options: noiseFirstOptions }, fullSchema, ['blablabla', 'xyz999']);
   assertEquals(Object.keys(r.must), [
-    'chastota__gc',
-    'diapazon_temp',
-    'edinica_izmereniya',
-    'garantiynyy_srok',
+    'nominalynyy_tok',
+    'kolichestvo_polyusov',
+    'harakteristika_srabatyvaniya',
   ]);
 });

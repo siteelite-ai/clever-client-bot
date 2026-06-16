@@ -76,7 +76,8 @@ const SERVICE_KEY_PREFIXES = [
  * Эвристика «структурный идентификатор линейки» (data-agnostic, без whitelist'ов ключей).
  * Значение опции считаем брендоспецифичной маркировкой модели/серии (не
  * характеристикой товара) если ВСЕ условия выполнены:
- *   1) value встречается в pagetitle оригинала (нормализованно);
+ *   1) value встречается в pagetitle оригинала separator-insensitive
+ *      (ВА47-29 == ВА 47-29 == ВА-47-29);
  *   2) value содержит И буквы, И цифры (alphanumeric mix);
  *   3) длина value > 4 символов (отсекает функциональные «1P», «16А», «IP20», «C»).
  * Такие значения (напр. «ВА47-29», «NXB-63s», «HDB3w») схлопывают пул до
@@ -90,9 +91,33 @@ function isStructuralModelMarking(value: string, pagetitle: string | null | unde
   const hasLetter = /[A-Za-zА-Яа-я]/.test(v);
   const hasDigit = /\d/.test(v);
   if (!hasLetter || !hasDigit) return false;
-  const normTitle = pagetitle.toLowerCase().replace(/\s+/g, ' ');
-  const normVal = v.toLowerCase().replace(/\s+/g, ' ');
-  return normTitle.includes(normVal);
+  const compactTitle = pagetitle.toLowerCase().replace(/[^0-9a-zа-яё]+/giu, '');
+  const compactVal = v.toLowerCase().replace(/[^0-9a-zа-яё]+/giu, '');
+  return compactVal.length > 4 && compactTitle.includes(compactVal);
+}
+
+function normalizeConfusables(s: string): string {
+  return s.toLowerCase()
+    .replace(/[а]/g, 'a').replace(/[в]/g, 'b').replace(/[с]/g, 'c')
+    .replace(/[е]/g, 'e').replace(/[к]/g, 'k').replace(/[м]/g, 'm')
+    .replace(/[н]/g, 'h').replace(/[о]/g, 'o').replace(/[р]/g, 'p')
+    .replace(/[т]/g, 't').replace(/[х]/g, 'x').replace(/[у]/g, 'y');
+}
+
+function valueAppearsInTitle(value: string, pagetitle: string | null | undefined): boolean {
+  if (!pagetitle) return false;
+  const v = normalizeConfusables(value.trim());
+  const title = normalizeConfusables(pagetitle);
+  if (!v) return false;
+  if (/^\d{1,2}$/.test(v)) {
+    return new RegExp(`(^|\\D)${v}(?!\\d)`, 'u').test(title);
+  }
+  if (/^[a-zа-яё]$/iu.test(v)) {
+    return new RegExp(`(^|[^0-9a-zа-яё])${v}($|[^0-9a-zа-яё])`, 'iu').test(title);
+  }
+  const compactTitle = title.replace(/[^0-9a-zа-яё]+/giu, '');
+  const compactVal = v.replace(/[^0-9a-zа-яё]+/giu, '');
+  return compactVal.length > 0 && compactTitle.includes(compactVal);
 }
 
 /** Макс длина value, после которой считаем поле текстовым описанием, не атрибутом. */
@@ -187,7 +212,7 @@ export function extractOriginalTraits(
   if (!original?.options || original.options.length === 0) return result;
 
   // ── Pass 1: фильтрация без cap, сохраняем исходный порядок ──
-  type Eligible = { opt: OriginalOption; value: string };
+  type Eligible = { opt: OriginalOption; value: string; lowInformation: boolean; titleMatched: boolean };
   const eligible: Eligible[] = [];
   for (const opt of original.options) {
     if (!opt?.key) continue;
@@ -211,29 +236,40 @@ export function extractOriginalTraits(
       result.droppedServiceKeys.push(`${opt.key}:structural_marking`);
       continue;
     }
-    eligible.push({ opt, value: valueTrimmed });
+    const lowInformation = schemaEntry.values.size === 1;
+    const titleMatched = valueAppearsInTitle(valueTrimmed, original.pagetitle);
+    eligible.push({ opt, value: valueTrimmed, lowInformation, titleMatched });
   }
 
   // ── Pass 2: stable-приоритизация по userTokens (если переданы) ──
   const tokens = Array.isArray(userTokens)
     ? userTokens.filter((t): t is string => typeof t === 'string' && t.trim().length > 0)
     : [];
-  let ordered: Eligible[] = eligible;
-  if (tokens.length > 0) {
-    const indexed = eligible.map((e, i) => ({
-      e,
-      i,
-      matched: tokens.some((tok) => tokenMatchesValue(tok, e.value)),
-    }));
-    indexed.sort((a, b) => {
-      if (a.matched !== b.matched) return a.matched ? -1 : 1;
-      return a.i - b.i;
-    });
-    ordered = indexed.map((x) => x.e);
-  }
+  const indexed = eligible.map((e, i) => ({
+    ...e,
+    i,
+    userMatched: tokens.some((tok) => tokenMatchesValue(tok, e.value)),
+  }));
+  indexed.sort((a, b) => {
+    if (a.userMatched !== b.userMatched) return a.userMatched ? -1 : 1;
+    if (a.titleMatched !== b.titleMatched) return a.titleMatched ? -1 : 1;
+    if (a.lowInformation !== b.lowInformation) return a.lowInformation ? 1 : -1;
+    return a.i - b.i;
+  });
+  const ordered = indexed;
 
   // ── Pass 3: cap, лишнее → droppedOverflow ──
-  for (const { opt, value } of ordered) {
+  const hasDiscriminatingTraits = ordered.some((e) => !e.lowInformation);
+  const hasAnchoredTraits = ordered.some((e) => e.userMatched || e.titleMatched);
+  for (const { opt, value, lowInformation, userMatched, titleMatched } of ordered) {
+    if (hasAnchoredTraits && !userMatched && !titleMatched) {
+      result.droppedServiceKeys.push(`${opt.key}:unanchored_trait`);
+      continue;
+    }
+    if (hasDiscriminatingTraits && lowInformation) {
+      result.droppedServiceKeys.push(`${opt.key}:low_information_constant`);
+      continue;
+    }
     if (Object.keys(result.must).length >= MAX_MUST_TRAITS) {
       result.droppedOverflow.push(opt.key);
       continue;
