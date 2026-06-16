@@ -12268,9 +12268,14 @@ ${productInstructions}`;
             userMessage: rawUserMessage,
             productNoun: classification?.product_category ?? null,
             openrouterKey: appSettings.openrouter_api_key,
+            selectedProducts: foundProducts.slice(0, 3).map((p: any) => ({
+              pagetitle: p?.pagetitle ?? p?.name ?? null,
+              options: Array.isArray(p?.options) ? p.options : [],
+            })),
             log: (event, data) => logAddStep({ step: event, meta: data }),
           })
         : null;
+
 
       const content = renderReason === 'price-facet-clarify' && pendingClarifyFacet && pendingClarifyIntent
         ? buildPriceFacetClarifyContent({
