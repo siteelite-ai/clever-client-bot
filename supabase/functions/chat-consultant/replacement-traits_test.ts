@@ -502,3 +502,92 @@ Deno.test('extractOriginalTraits: userTokens без матча → исходн�
     'harakteristika_srabatyvaniya',
   ]);
 });
+
+// ─── Layer 1.5: Numeric trait tolerance ─────────────────────────────────────
+
+import {
+  applyNumericToleranceFilter,
+  NUMERIC_TRAIT_TOLERANCE,
+  parseNumericTraitValue,
+  splitNumericTraits,
+} from './replacement-traits.ts';
+
+Deno.test('parseNumericTraitValue: plain and unit-suffixed values', () => {
+  assertEquals(parseNumericTraitValue('7'), 7);
+  assertEquals(parseNumericTraitValue('7W'), 7);
+  assertEquals(parseNumericTraitValue('7 Вт'), 7);
+  assertEquals(parseNumericTraitValue('2,5'), 2.5);
+  assertEquals(parseNumericTraitValue('2.5мм²'), 2.5);
+  assertEquals(parseNumericTraitValue('220-240V'), 220);
+  assertEquals(parseNumericTraitValue('E27'), null);
+  assertEquals(parseNumericTraitValue(''), null);
+  assertEquals(parseNumericTraitValue(null), null);
+});
+
+Deno.test('splitNumericTraits: numeric vs strict separation', () => {
+  const { strict, numeric } = splitNumericTraits({
+    moschnosty_lamp: '7',
+    diametr: '9',
+    napryazhenie: '220-240V',
+    tsokoly: 'E27',
+    forma: 'круглая',
+  });
+  assertEquals(numeric, { moschnosty_lamp: 7, diametr: 9, napryazhenie: 220 });
+  assertEquals(strict, { tsokoly: 'E27', forma: 'круглая' });
+});
+
+Deno.test('applyNumericToleranceFilter: Meson 6W/8cm passes for DN027B 7W/9cm anchor (±15%)', () => {
+  const meson6w8cm = {
+    pagetitle: 'СВ.К. 59444 MESON 080 6W',
+    options: [
+      { key: 'moschnosty_lamp', value_ru: '6' },
+      { key: 'diametr', value_ru: '8' },
+    ],
+  };
+  const navigator18w33cm = {
+    pagetitle: 'Светильник Navigator 18W 33cm',
+    options: [
+      { key: 'moschnosty_lamp', value_ru: '18' },
+      { key: 'diametr', value_ru: '33' },
+    ],
+  };
+  const exact7w9cm = {
+    pagetitle: 'Аналог 7W 9cm',
+    options: [
+      { key: 'moschnosty_lamp', value_ru: '7' },
+      { key: 'diametr', value_ru: '9' },
+    ],
+  };
+  const { filtered, dropped } = applyNumericToleranceFilter(
+    [meson6w8cm, navigator18w33cm, exact7w9cm],
+    { moschnosty_lamp: 7, diametr: 9 },
+  );
+  // 7W±15% = [5.95, 8.05] → 6W ✓, 18W ✗
+  // 9cm±15% = [7.65, 10.35] → 8cm ✓, 33cm ✗
+  assertEquals(filtered.length, 2);
+  assertEquals(dropped, 1);
+  assertEquals(filtered.map((p) => p.pagetitle).includes('Светильник Navigator 18W 33cm'), false);
+});
+
+Deno.test('applyNumericToleranceFilter: missing trait key fails candidate', () => {
+  const noPower = {
+    pagetitle: 'No power option',
+    options: [{ key: 'diametr', value_ru: '9' }],
+  };
+  const { filtered } = applyNumericToleranceFilter(
+    [noPower],
+    { moschnosty_lamp: 7 },
+  );
+  assertEquals(filtered.length, 0);
+});
+
+Deno.test('applyNumericToleranceFilter: empty numericTraits = passthrough', () => {
+  const cand = [{ pagetitle: 'x', options: [] }];
+  const { filtered, dropped } = applyNumericToleranceFilter(cand, {});
+  assertEquals(filtered.length, 1);
+  assertEquals(dropped, 0);
+});
+
+Deno.test('NUMERIC_TRAIT_TOLERANCE: documented ±15%', () => {
+  assertEquals(NUMERIC_TRAIT_TOLERANCE, 0.15);
+});
