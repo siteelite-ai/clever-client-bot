@@ -51,6 +51,46 @@ Deno.test('marking: empty input returns []', () => {
   assertEquals(extractMarkingTokens('просто текст без маркировок'), []);
 });
 
+// ─── ВА47-29 split-token recognition (regression) ───────────────────────────
+
+Deno.test('marking: ВА 47-29 (split by space) is compacted to ВА47-29', () => {
+  const tokens = extractMarkingTokens('Автомат GENERICA ВА 47-29 16А');
+  assertEquals(tokens.includes('ВА47-29') || tokens.includes('ВА47-29'.toUpperCase()), true,
+    `expected ВА47-29 in tokens, got: ${tokens.join(', ')}`);
+});
+
+Deno.test('marking: ВА-47-29 (split by dashes) is compacted', () => {
+  const tokens = extractMarkingTokens('Автомат ВА-47-29 С16');
+  assertEquals(tokens.some((t) => t === 'ВА47-29' || t === 'ВА-47-29'), true,
+    `expected ВА47-29 marking, got: ${tokens.join(', ')}`);
+});
+
+Deno.test('marking: ВА 47 - 29 (spaces around dashes) is recognized', () => {
+  const tokens = extractMarkingTokens('Автомат ВА 47 - 29 16А ИЭК');
+  assertEquals(tokens.includes('ВА47-29'), true,
+    `expected compacted ВА47-29, got: ${tokens.join(', ')}`);
+});
+
+Deno.test('marking guard: separator-insensitive — token "ВА47-29" matches "ВА 47-29" in title', () => {
+  const { filtered, mismatch } = applyMarkingGuard(
+    [
+      { pagetitle: 'Автомат 1Р ВА 47-29 16 А ИЭК' },     // space-separated marking
+      { pagetitle: 'Автомат ВА-47-29 16А IEK' },         // dash-separated marking
+      { pagetitle: 'Автомат NXB-63s 1P 16A Chint' },     // другая серия — отсеять
+    ],
+    ['ВА47-29'],
+  );
+  assertEquals(mismatch, false);
+  assertEquals(filtered.length, 2, `expected 2 кандидата, got ${filtered.length}: ${filtered.map(c => c.pagetitle).join(' | ')}`);
+});
+
+Deno.test('marking: GENERICA 16 не ложно-срабатывает как маркировка серии', () => {
+  // Buffer-проверка: «слово + одиночное число» НЕ должно эмититься как составная маркировка.
+  const tokens = extractMarkingTokens('Светильник GENERICA 16 Вт');
+  assertEquals(tokens.includes('GENERICA16'), false,
+    `false-positive: GENERICA16 не должен быть маркировкой, got: ${tokens.join(', ')}`);
+});
+
 Deno.test('marking guard: no markings → all candidates pass', () => {
   const { filtered, mismatch } = applyMarkingGuard(
     [{ pagetitle: 'a' }, { pagetitle: 'b' }],
