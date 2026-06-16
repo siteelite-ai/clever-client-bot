@@ -6777,6 +6777,9 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
 
     let productContext = '';
     let foundProducts: Product[] = [];
+    // Expert reasoning (QFv2 expert interpretation) — пробрасывается в advisor-intro
+    // как дополнительный сигнал «по какому критерию подобраны товары».
+    let expertReasoningOut: string = '';
     // Plan V4 — Domain Guard: pagetitles selected by CategoryMatcher for the current query.
     // Passed into rerankProducts to drop products from unrelated categories.
     const allowedCategoryTitles: Set<string> = new Set();
