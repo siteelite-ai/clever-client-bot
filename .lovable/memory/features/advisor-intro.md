@@ -40,3 +40,6 @@ V1, 2026-06-16.
 
 ## Интеграция
 `supabase/functions/chat-consultant/index.ts` — точка вставки прямо перед `const finalContent = contentWithMissing;` в детерминистичном short-circuit (~line 12292). Intro кэширования НЕТ.
+
+## Advisor rescue
+Если явный «подбери/посоветуй» содержит контекст задачи, который не является фасетом каталога (например назначение/мощность нагрузки), и QFv2 нашёл валидный noun-pool, нельзя уходить в text-only Soft-404 только из-за `resolvedFilters={}`. После jargon-last-chance показываем реальные карточки из pool (`qfv2_advisor_context_pool`) с advisor intro. `price=0` всё равно фильтруется через `pickDisplayWithTotal`.

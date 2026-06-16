@@ -5157,8 +5157,10 @@ export function buildDeterministicShortCircuitContent(params: {
    * подмену бренда молча»: пользователь явно видит, что бренд отсутствует.
    */
   brandUnavailable?: { brand: string; availableBrands: string[] };
+  /** Optional one-sentence advisor intro that replaces the generic intro. */
+  introOverride?: string | null;
 }): string {
-  const { products, reason, userMessage, effectivePriceIntent, subIntent, suppressTail, unfulfilledSplit, brandUnavailable } = params;
+  const { products, reason, userMessage, effectivePriceIntent, subIntent, suppressTail, unfulfilledSplit, brandUnavailable, introOverride } = params;
 
   // ── Split-рендер «комбинации нет, но компоненты есть».
   if (unfulfilledSplit && unfulfilledSplit.sections.length >= 2) {
@@ -5179,12 +5181,14 @@ export function buildDeterministicShortCircuitContent(params: {
 
   if (!products.length) return '';
 
-  const intro = buildIntroBySubIntent({
-    productsCount: Math.min(products.length, 3),
-    reason,
-    subIntent,
-    effectivePriceIntent,
-  });
+  const intro = (introOverride && introOverride.trim())
+    ? introOverride.trim()
+    : buildIntroBySubIntent({
+        productsCount: Math.min(products.length, 3),
+        reason,
+        subIntent,
+        effectivePriceIntent,
+      });
 
   // Системный лимит: всегда показываем top-3 карточки в детерминистичном рендере.
   // Если на входе больше — добавляем хвост «подобрано ещё N — показать остальные?».
@@ -9207,21 +9211,32 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       console.warn(`[Chat req=${reqId}] [QFv2-LastChanceJargon] silent fail:`, jrErr instanceof Error ? jrErr.message : String(jrErr));
                     }
                     if (!lastChanceWon) {
-                      // Honest-empty с unresolved modifiers как «attempted facets» без values.
-                      qfv2HonestEmptyContext = {
-                        noun,
-                        originalQuery: userMessage || noun,
-                        attemptedFacets: resolverUnresolved.map(m => ({
-                          caption: m,
-                          value: m,
-                          alternativeValues: [],
-                        })),
-                      };
-                      displayList = [];
-                      branchTag = 'qfv2_honest_empty_no_match';
-                      qfV2DroppedFacetCaption = resolverUnresolved[0] || null;
-                      console.log(`[QueryFirstV2] query_first_v2_honest_empty_no_match noun="${noun}" unresolved=${JSON.stringify(resolverUnresolved)}`);
-                      logAddStep({ step: 'qfv2-honest-empty-no-match', total: 0, meta: { noun, unresolved: resolverUnresolved } });
+                      if (isAdvisorIntent(userMessage) && displayList.length > 0) {
+                        // Advisory queries often contain task context that is not a catalog facet
+                        // ("для подключения ...", "мощностью ..."). If no modifier maps to a
+                        // real facet but the noun pool is valid, show real catalog cards instead
+                        // of a text-only Soft-404. Jargon still had its last chance above.
+                        branchTag = 'qfv2_advisor_context_pool';
+                        qfV2DroppedFacetCaption = null;
+                        console.log(`[QueryFirstV2] query_first_v2_advisor_context_pool noun="${noun}" pool=${displayList.length} unresolved=${JSON.stringify(resolverUnresolved)}`);
+                        logAddStep({ step: 'qfv2-advisor-context-pool', total: displayList.length, meta: { noun, unresolved: resolverUnresolved } });
+                      } else {
+                        // Honest-empty с unresolved modifiers как «attempted facets» без values.
+                        qfv2HonestEmptyContext = {
+                          noun,
+                          originalQuery: userMessage || noun,
+                          attemptedFacets: resolverUnresolved.map(m => ({
+                            caption: m,
+                            value: m,
+                            alternativeValues: [],
+                          })),
+                        };
+                        displayList = [];
+                        branchTag = 'qfv2_honest_empty_no_match';
+                        qfV2DroppedFacetCaption = resolverUnresolved[0] || null;
+                        console.log(`[QueryFirstV2] query_first_v2_honest_empty_no_match noun="${noun}" unresolved=${JSON.stringify(resolverUnresolved)}`);
+                        logAddStep({ step: 'qfv2-honest-empty-no-match', total: 0, meta: { noun, unresolved: resolverUnresolved } });
+                      }
                     }
                   } else if (Object.keys(resolvedFilters).length > 0 || resolverUnresolvedDetails.length > 0) {
                     // PARTIAL-UNRESOLVED HONEST-EMPTY (2026-05-07):
@@ -12239,6 +12254,24 @@ ${productInstructions}`;
       const renderReason = (isDeterministicShortCircuitReason(responseModelReason) || responseModelReason === 'price-facet-clarify')
         ? responseModelReason
         : 'pass2-shortcircuit';
+      // Generate advisor intro before deterministic content so it can REPLACE the
+      // generic "Вот подходящие варианты" line rather than add a second intro.
+      const advisorIntroEligible =
+        renderReason !== 'price-facet-clarify' &&
+        !unfulfilledSplit &&
+        !qfBrandUnavailable &&
+        compareMissingAnchors.length === 0 &&
+        foundProducts.length > 0 &&
+        isAdvisorIntent(rawUserMessage);
+      const advisorIntroText = advisorIntroEligible && appSettings.openrouter_api_key
+        ? await generateAdvisorIntro({
+            userMessage: rawUserMessage,
+            productNoun: classification?.product_category ?? null,
+            openrouterKey: appSettings.openrouter_api_key,
+            log: (event, data) => logAddStep({ step: event, meta: data }),
+          })
+        : null;
+
       const content = renderReason === 'price-facet-clarify' && pendingClarifyFacet && pendingClarifyIntent
         ? buildPriceFacetClarifyContent({
             products: foundProducts,
@@ -12255,6 +12288,7 @@ ${productInstructions}`;
             suppressTail: tailWasOfferedLastTurn,
             unfulfilledSplit: unfulfilledSplit ?? undefined,
             brandUnavailable: qfBrandUnavailable ?? undefined,
+            introOverride: advisorIntroText,
           });
       // Compare-branch: честный дисклеймер про не найденные / отсутствующие в наличии якоря — перед карточками.
       // Никаких подстановок-аксессуаров; пользователь видит, что ровно этих моделей в каталоге / в наличии нет.
@@ -12289,29 +12323,7 @@ ${productInstructions}`;
       // Старый LLM-cross-sell (generateCrossSellTail + pending_offer) ОТКЛЮЧЁН
       // полностью — функция оставлена в коде как dead code до отдельного refactor PR.
       // ─────────────────────────────────────────────────────────────────────
-      // ─────────────────────────────────────────────────────────────────────
-      // ADVISOR-INTRO (V1, 2026-06-16, mem://features/advisor-intro).
-      // Когда пользователь ЯВНО просит подобрать/посоветовать — перед списком
-      // карточек добавляем одно короткое предложение-обоснование. НЕ применяем
-      // к веткам со своим интро/дисклеймером (price-facet-clarify,
-      // unfulfilled-split, brand-unavailable, compare-missing-anchors).
-      const advisorIntroEligible =
-        renderReason !== 'price-facet-clarify' &&
-        !unfulfilledSplit &&
-        !qfBrandUnavailable &&
-        compareMissingAnchors.length === 0 &&
-        foundProducts.length > 0 &&
-        isAdvisorIntent(rawUserMessage);
-      const introPromise: Promise<string | null> = advisorIntroEligible && appSettings.openrouter_api_key
-        ? generateAdvisorIntro({
-            userMessage: rawUserMessage,
-            productNoun: classification?.product_category ?? null,
-            openrouterKey: appSettings.openrouter_api_key,
-            log: (event, data) => logAddStep({ step: event, meta: data }),
-          })
-        : Promise.resolve(null);
-      const introText = await introPromise;
-      const finalContent = introText ? `${introText}\n\n${contentWithMissing}` : contentWithMissing;
+      const finalContent = contentWithMissing;
       // Step 2 (2026-05-12): убрано single-anchor ограничение. Анкоры берём из
       // первых foundProducts с уникальными категориями (до 3-х). При широкой
       // выдаче это даёт более устойчивую агрегацию /related (категории-победители
