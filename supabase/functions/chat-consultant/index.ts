@@ -10127,21 +10127,38 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     rFinal = rPool;
                   } else {
                     if (replModifiers.length > 0) {
-                      // LLM-matcher только когда у нас есть пользовательские модификаторы.
-                      // Schema уже загружена выше (если был originalProduct); иначе грузим тут.
-                      if (rFullSchema.size === 0) {
-                        rFullSchema = await getUnionCategoryOptionsSchema(replMatches, appSettings.volt220_api_token!);
+                      // PERF (2026-06-16): если traitMust УЖЕ достиг cap MAX_MUST_TRAITS,
+                      // skip LLM-matcher. Обоснование:
+                      //   1) merge order `{...llmFlat, ...traitMust}` — traitMust ВСЕГДА
+                      //      выигрывает на пересечении ключей, значит LLM может добавить
+                      //      только НОВЫЕ оси.
+                      //   2) Когда extractOriginalTraits хитнул cap=4 (overflow > 0),
+                      //      это значит реальных options оригинала больше, чем мы можем
+                      //      безопасно требовать. Добавление LLM-осей сверх — только
+                      //      пере-сужение, а не улучшение релевантности.
+                      //   3) Экономит ~20с (resolveFiltersWithLLM = Claude Sonnet + schema).
+                      // Сценарии без trait-cap (нет originalProduct, неполный schema) —
+                      // LLM-matcher работает как раньше.
+                      const traitCapReached = Object.keys(traitMust).length >= 4;
+                      if (traitCapReached) {
+                        console.log(`[Chat] Replacement matcher LLM SKIPPED: traitMust hit cap (${Object.keys(traitMust).length} keys), LLM additions would only over-narrow. trait_keys=[${[...traitKeysSet].join(', ')}]`);
+                      } else {
+                        // LLM-matcher только когда у нас есть пользовательские модификаторы.
+                        // Schema уже загружена выше (если был originalProduct); иначе грузим тут.
+                        if (rFullSchema.size === 0) {
+                          rFullSchema = await getUnionCategoryOptionsSchema(replMatches, appSettings.volt220_api_token!);
+                        }
+                        const { resolved: llmResolvedRaw, unresolved: rUnresolved } = await resolveFiltersWithLLM(
+                          rPool, replModifiers, appSettings, classification?.critical_modifiers, rFullSchema
+                        );
+                        rResolvedRaw = llmResolvedRaw;
+                        const llmFlat = flattenResolvedFilters(llmResolvedRaw);
+                        // Merge order: LLM-resolved first, traitMust wins on key collision.
+                        // Обоснование: оригинал — ground truth (реальные options каталога),
+                        // LLM-резолв — догадка по токенам пользователя.
+                        rResolved = { ...llmFlat, ...traitMust };
+                        console.log(`[Chat] Replacement matcher resolved (LLM+trait merged)=${JSON.stringify(rResolved)}, unresolved=[${rUnresolved.join(', ')}], trait_keys=[${[...traitKeysSet].join(', ')}]`);
                       }
-                      const { resolved: llmResolvedRaw, unresolved: rUnresolved } = await resolveFiltersWithLLM(
-                        rPool, replModifiers, appSettings, classification?.critical_modifiers, rFullSchema
-                      );
-                      rResolvedRaw = llmResolvedRaw;
-                      const llmFlat = flattenResolvedFilters(llmResolvedRaw);
-                      // Merge order: LLM-resolved first, traitMust wins on key collision.
-                      // Обоснование: оригинал — ground truth (реальные options каталога),
-                      // LLM-резолв — догадка по токенам пользователя.
-                      rResolved = { ...llmFlat, ...traitMust };
-                      console.log(`[Chat] Replacement matcher resolved (LLM+trait merged)=${JSON.stringify(rResolved)}, unresolved=[${rUnresolved.join(', ')}], trait_keys=[${[...traitKeysSet].join(', ')}]`);
                     } else {
                       console.log(`[Chat] Replacement matcher trait-only=${JSON.stringify(rResolved)} (no user modifiers)`);
                     }
