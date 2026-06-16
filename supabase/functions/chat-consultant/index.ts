@@ -8639,6 +8639,8 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   );
                   console.log(`[QueryFirstV2] pool noun="${noun}" size=${pool.length} (fallback)`);
                   logAddStep({ step: 'qfv2-pool-retry', total: pool.length, ms: Date.now() - poolRetryStart, meta: { query: noun, fallback: true } });
+                  pool = sanitizePoolByNoun(pool, 'bare-retry');
+
                 }
 
                 if (pool.length === 0) {
