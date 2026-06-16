@@ -268,55 +268,76 @@ export async function expertFirstJudgment(
   const timeoutMs = input.timeoutMs ?? EXPERT_TIMEOUT_MS;
 
   let parsed: Record<string, unknown> | null = null;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${input.openrouterKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://chat-volt.testdevops.ru",
-        "X-Title": "220volt-chat-consultant-expert-first",
-      },
-      body: JSON.stringify({
-        model: EXPERT_MODEL,
-        temperature: 0.2,
-        max_tokens: 700,
-        messages: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: `Запрос клиента: «${query}»` },
-        ],
-        tools: [TOOL_SCHEMA],
-        tool_choice: TOOL_CHOICE,
-      }),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      log("expert_first.http_error", { status: response.status, ms: Date.now() - t0 });
+  let lastErrTag: string | null = null;
+
+  for (let attempt = 1; attempt <= EXPERT_MAX_ATTEMPTS; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${input.openrouterKey}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://chat-volt.testdevops.ru",
+          "X-Title": "220volt-chat-consultant-expert-first",
+        },
+        body: JSON.stringify({
+          model: EXPERT_MODEL,
+          temperature: 0.2,
+          max_tokens: 900,
+          messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: `Запрос клиента: «${query}»` },
+          ],
+          tools: [TOOL_SCHEMA],
+          tool_choice: TOOL_CHOICE,
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        lastErrTag = `http_${response.status}`;
+        log("expert_first.http_error", { status: response.status, attempt, ms: Date.now() - t0 });
+        // retry on 5xx / 429 only
+        if (response.status >= 500 || response.status === 429) {
+          continue;
+        }
+        return { ...EMPTY_RESULT, latencyMs: Date.now() - t0 };
+      }
+      // deno-lint-ignore no-explicit-any
+      const data: any = await response.json();
+      const toolCalls = data?.choices?.[0]?.message?.tool_calls;
+      if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
+        log("expert_first.no_tool_calls", { attempt, ms: Date.now() - t0 });
+        return { ...EMPTY_RESULT, latencyMs: Date.now() - t0 };
+      }
+      const argsRaw = toolCalls[0]?.function?.arguments;
+      if (typeof argsRaw !== "string") {
+        log("expert_first.bad_args", { attempt });
+        return { ...EMPTY_RESULT, latencyMs: Date.now() - t0 };
+      }
+      parsed = JSON.parse(argsRaw);
+      break; // success
+    } catch (e) {
+      lastErrTag = e instanceof Error ? (e.name || "error") : "error";
+      log("expert_first.llm_error", {
+        error: e instanceof Error ? e.message : String(e),
+        attempt,
+        ms: Date.now() - t0,
+      });
+      // retry on transport-failure (AbortError / network)
+      if (attempt < EXPERT_MAX_ATTEMPTS) {
+        continue;
+      }
       return { ...EMPTY_RESULT, latencyMs: Date.now() - t0 };
+    } finally {
+      clearTimeout(timer);
     }
-    // deno-lint-ignore no-explicit-any
-    const data: any = await response.json();
-    const toolCalls = data?.choices?.[0]?.message?.tool_calls;
-    if (!Array.isArray(toolCalls) || toolCalls.length === 0) {
-      log("expert_first.no_tool_calls", { ms: Date.now() - t0 });
-      return { ...EMPTY_RESULT, latencyMs: Date.now() - t0 };
-    }
-    const argsRaw = toolCalls[0]?.function?.arguments;
-    if (typeof argsRaw !== "string") {
-      log("expert_first.bad_args", {});
-      return { ...EMPTY_RESULT, latencyMs: Date.now() - t0 };
-    }
-    parsed = JSON.parse(argsRaw);
-  } catch (e) {
-    log("expert_first.llm_error", {
-      error: e instanceof Error ? e.message : String(e),
-      ms: Date.now() - t0,
-    });
+  }
+
+  if (!parsed) {
+    log("expert_first.exhausted", { lastErrTag, ms: Date.now() - t0 });
     return { ...EMPTY_RESULT, latencyMs: Date.now() - t0 };
-  } finally {
-    clearTimeout(timer);
   }
 
   const intentRaw = clampStr(parsed?.intent, 40).toLowerCase();
@@ -325,7 +346,7 @@ export async function expertFirstJudgment(
   const productNoun = clampStr(parsed?.productNoun, 80);
   const facetHints = sanitizeFacets(parsed?.facetHints);
   const apiHints = sanitizeApiHints(parsed?.apiHints);
-  const reasoning = clampStr(parsed?.reasoning, 400);
+  const reasoning = clampStr(parsed?.reasoning, 800);
   const confRaw = clampStr(parsed?.confidence, 10).toLowerCase();
   const confidence: ExpertFirstResult["confidence"] =
     confRaw === "high" || confRaw === "medium" || confRaw === "low" ? confRaw : "none";
