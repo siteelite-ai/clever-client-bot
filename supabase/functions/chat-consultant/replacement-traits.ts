@@ -302,7 +302,7 @@ export function extractMarkingTokens(pagetitle: string | null | undefined): stri
   // это маркировка артикула, а не «220В» / «GENERICA 16».
   // Эмитим в КОМПАКТНОЙ форме (без пробелов между буквами и цифрами), чтобы
   // separator-insensitive guard ниже матчил любой вариант написания.
-  const compoundRe = /([A-Za-zА-Яа-яЁё]{2,8})[\s\-]{0,3}(\d{1,4}(?:[\s\-]+\d{1,4})+[A-Za-zА-Яа-яЁё]{0,2})/gu;
+  const compoundRe = /([A-Za-zА-Яа-яЁё]{2,8})[\s\-]{0,3}(\d{1,4}(?:\s*-\s*\d{1,4})+[A-Za-zА-Яа-яЁё]{0,2})/gu;
   let m: RegExpExecArray | null;
   while ((m = compoundRe.exec(pagetitle)) !== null) {
     const letters = m[1];
