@@ -12370,6 +12370,7 @@ ${productInstructions}`;
             userMessage: rawUserMessage,
             productNoun: classification?.product_category ?? null,
             openrouterKey: appSettings.openrouter_api_key,
+            expertReasoning: expertReasoningOut || null,
             selectedProducts: foundProducts.slice(0, 3).map((p: any) => ({
               pagetitle: p?.pagetitle ?? p?.name ?? null,
               options: Array.isArray(p?.options) ? p.options : [],
