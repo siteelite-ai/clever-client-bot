@@ -461,3 +461,84 @@ export function filterStructuralMarkings(
   return { kept, droppedFacetValues };
 }
 
+// ─── Layer 1.5: Soft numeric trait comparison ───────────────────────────────
+//
+// Замена ≠ точное равенство по числовым осям (диаметр, мощность, длина,
+// напряжение). Реальные аналоги отличаются на 10–20% — strict
+// `options[<key>][]=<value>` обнуляет пул и триггерит emergency-reset
+// (теряются все traits, выдаются нерелевантные товары).
+//
+// Стратегия: числовые traits НЕ уходят на сервер как options-filter, а
+// применяются post-fetch как tolerance-окно ±NUMERIC_TRAIT_TOLERANCE.
+// Не-числовые (бренд, цоколь, форма, тип монтажа) остаются strict.
+// Data-agnostic: классификация по форме value (parse → number), не по
+// whitelist'у ключей.
+
+/** Парсит ведущее число из value (`"7"`, `"7W"`, `"7 Вт"`, `"2,5"`, `"220-240V"` → 220).
+ *  Возвращает null если число не извлекается. Запятая трактуется как точка. */
+export function parseNumericTraitValue(value: string | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  const s = String(value).trim().replace(',', '.');
+  if (!s) return null;
+  const m = s.match(/^-?\d+(?:\.\d+)?/);
+  if (!m) return null;
+  const n = parseFloat(m[0]);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** Разделяет must-traits на две категории:
+ *   - `numeric`: value парсится как число → применяется post-filter с tolerance;
+ *   - `strict`: остальное (бренд, цоколь "E27", форма "круглый", тип "C") → strict server-side. */
+export function splitNumericTraits(
+  must: Record<string, string>,
+): { strict: Record<string, string>; numeric: Record<string, number> } {
+  const strict: Record<string, string> = {};
+  const numeric: Record<string, number> = {};
+  for (const [k, v] of Object.entries(must)) {
+    const n = parseNumericTraitValue(v);
+    if (n !== null) numeric[k] = n;
+    else strict[k] = v;
+  }
+  return { strict, numeric };
+}
+
+/** ±15% — баланс между релевантностью (Meson 6W/8см ↔ DN027B 7W/9см проходят)
+ *  и точностью (50W лампа не выдаётся вместо 7W). */
+export const NUMERIC_TRAIT_TOLERANCE = 0.15;
+
+/**
+ * Post-filter по числовым traits: кандидат проходит если в его `options[]`
+ * у КАЖДОГО ключа из `numericTraits` найдено числовое value в окне
+ * `target * (1±tolerance)`.
+ *
+ * Кандидат без такого ключа → НЕ проходит (как раньше при strict equality).
+ * Кандидат с не-числовым value на этом ключе → НЕ проходит (mixed-type осей
+ * не существует в реальной схеме каталога).
+ *
+ * Data-agnostic: 0 сетевых вызовов, нет whitelist'ов ключей/категорий.
+ */
+export function applyNumericToleranceFilter<T extends { options?: OriginalOption[] | null }>(
+  candidates: T[],
+  numericTraits: Record<string, number>,
+  tolerance: number = NUMERIC_TRAIT_TOLERANCE,
+): { filtered: T[]; dropped: number } {
+  const keys = Object.keys(numericTraits);
+  if (keys.length === 0) return { filtered: candidates, dropped: 0 };
+  const filtered = candidates.filter((c) => {
+    const opts = Array.isArray(c.options) ? c.options : [];
+    for (const key of keys) {
+      const target = numericTraits[key];
+      const lo = target * (1 - tolerance);
+      const hi = target * (1 + tolerance);
+      const opt = opts.find((o) => o?.key === key);
+      if (!opt) return false;
+      const candVal = parseNumericTraitValue(opt.value_ru);
+      if (candVal === null) return false;
+      if (candVal < lo || candVal > hi) return false;
+    }
+    return true;
+  });
+  return { filtered, dropped: candidates.length - filtered.length };
+}
+
+
