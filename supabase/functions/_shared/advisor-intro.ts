@@ -71,6 +71,13 @@ export interface AdvisorIntroInput {
   productNoun?: string | null;
   openrouterKey: string;
   selectedProducts?: AdvisorSelectedProduct[];
+  /**
+   * Reasoning от expert-interpretation модуля (QFv2): «по какому критерию
+   * подобраны товары». Если есть — пробрасывается в user-блок как ПОДСКАЗКА
+   * для intro. Не используется как готовый текст — LLM всё равно проверяет
+   * характеристики через anti-hallucination правила.
+   */
+  expertReasoning?: string | null;
   log?: (event: string, data: Record<string, unknown>) => void;
 }
 
@@ -85,9 +92,14 @@ export async function generateAdvisorIntro(
   if (!isAdvisorIntent(message)) return null;
 
   const noun = (input.productNoun ?? "").trim();
+  const expertHint = (input.expertReasoning ?? "").trim();
   const productsBlock = buildSelectedProductsBlock(input.selectedProducts);
   const lines: string[] = [`Запрос клиента: «${message}»`];
   if (noun) lines.push(`Родовой товар (noun): ${noun}`);
+  if (expertHint) {
+    lines.push("");
+    lines.push(`Подсказка эксперта (по какому критерию подбирались товары — используй как ориентир, но проверяй каждый параметр по правилам ниже): ${expertHint}`);
+  }
   if (productsBlock) {
     lines.push("");
     lines.push("Подобранные товары и их характеристики (используй ТОЛЬКО эти значения, если хочешь сослаться на параметр — и только если значение ОДИНАКОВО у всех):");

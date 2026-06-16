@@ -6777,6 +6777,9 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
 
     let productContext = '';
     let foundProducts: Product[] = [];
+    // Expert reasoning (QFv2 expert interpretation) — пробрасывается в advisor-intro
+    // как дополнительный сигнал «по какому критерию подобраны товары».
+    let expertReasoningOut: string = '';
     // Plan V4 — Domain Guard: pagetitles selected by CategoryMatcher for the current query.
     // Passed into rerankProducts to drop products from unrelated categories.
     const allowedCategoryTitles: Set<string> = new Set();
@@ -9025,6 +9028,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       });
                       if (expertRes.llmOk) {
                         expertReasoning = expertRes.reasoning;
+                        expertReasoningOut = expertRes.reasoning;
                         expertConfidence = expertRes.confidence;
                         expertTargetFacets = expertRes.targetFacets;
                         // Merge: additive по новым ключам; high → перезапись.
@@ -12366,6 +12370,7 @@ ${productInstructions}`;
             userMessage: rawUserMessage,
             productNoun: classification?.product_category ?? null,
             openrouterKey: appSettings.openrouter_api_key,
+            expertReasoning: expertReasoningOut || null,
             selectedProducts: foundProducts.slice(0, 3).map((p: any) => ({
               pagetitle: p?.pagetitle ?? p?.name ?? null,
               options: Array.isArray(p?.options) ? p.options : [],
