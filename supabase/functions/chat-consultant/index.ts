@@ -611,6 +611,8 @@ interface CachedSettings {
   compare_branch_enabled: boolean;
   /** C5 — уточняющий вопрос при размытом каталоговом запросе (см. _shared/c5-broad-detector.ts). Default false. */
   c5_clarify_broad_enabled: boolean;
+  /** Expert Interpretation — LLM-эксперт переводит требование клиента в целевые фасеты до фильтрации QFv2 pool. Default false. */
+  expert_interpretation_enabled: boolean;
 }
 
 async function getAppSettings(): Promise<CachedSettings> {
