@@ -8945,9 +8945,13 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                           unresolvedDetails: resolverUnresolvedDetails.map(d => ({ modifier: d.modifier, key: d.key, caption: d.caption, requestedValue: d.requestedValue, availableValues: d.availableValues.slice(0, 8) })),
                         },
                       });
-                      // Cache write: только при successful LLM call (даже если resolved={} —
-                      // это валидный «нечего матчить» вердикт, экономим повторный вызов).
-                      if (resolvedFiltersCacheKeyStr) {
+                      // Cache write: НЕ кешируем пустой resolved={} — такой вердикт
+                      // часто возникает из-за временно «грязного» pool (чужая категория,
+                      // нерелевантная schema). Повторный запрос с тем же ключом получит
+                      // hit и закоротит pipeline в honest-empty, не дав санитизации
+                      // или новой schema шанса. Пустой результат дешевле пересчитать.
+                      const hasResolved = resolvedFilters && Object.keys(resolvedFilters).length > 0;
+                      if (resolvedFiltersCacheKeyStr && hasResolved) {
                         storeCachedResolvedFiltersAsync(resolvedFiltersCacheKeyStr, {
                           resolvedFilters,
                           resolverUnresolved,
