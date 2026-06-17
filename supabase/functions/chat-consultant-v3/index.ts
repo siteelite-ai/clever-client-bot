@@ -620,6 +620,65 @@ async function tryPriceDirectionRescue(
   return render.rendered_count;
 }
 
+// ─── Step C: Honest-Split Fallback ──────────────────────────────────────────
+// When `search_catalog by_filter` with ≥2 axes returns total=0, run each axis
+// independently in parallel. If ≥1 axis returns items, we report
+// "intersection empty" honestly and let the LLM render two split blocks
+// instead of capitulating.
+interface SplitAxis {
+  axis: string;
+  value: string;
+  ids: string[];
+  total: number;
+}
+async function trySplitFallback(
+  origArgs: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<{ axes: SplitAxis[]; ms: number } | null> {
+  if (origArgs.mode !== "by_filter") return null;
+  const options = origArgs.options as Record<string, unknown> | undefined;
+  if (!options || typeof options !== "object") return null;
+  const axisEntries: Array<{ axis: string; values: string[] }> = [];
+  for (const [axis, raw] of Object.entries(options)) {
+    const values = Array.isArray(raw) ? raw.map(String).filter((v) => v.length > 0) : [];
+    if (values.length > 0) axisEntries.push({ axis, values });
+  }
+  if (axisEntries.length < 2) return null;
+
+  const t0 = Date.now();
+  const deps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
+  const category = typeof origArgs.category === "string" ? origArgs.category : undefined;
+
+  const results = await Promise.all(axisEntries.map(async ({ axis, values }) => {
+    const input: SearchCatalogInput = {
+      mode: "by_filter",
+      per_page: 5,
+      options: { [axis]: values },
+      min_price: 1,
+      ...(category ? { category } : {}),
+    };
+    try {
+      const r = await executeSearchCatalog(input, deps, ctx.cache);
+      if (!r.ok || r.total === 0) return null;
+      const okRes = r as unknown as { results: Array<{ id: string | number; price?: number }>; total: number };
+      const ids = (okRes.results ?? [])
+        .filter((p) => typeof p.price === "number" && p.price > 0)
+        .map((p) => String(p.id))
+        .slice(0, 4);
+      if (ids.length === 0) return null;
+      return { axis, value: values.join("|"), ids, total: okRes.total } as SplitAxis;
+    } catch {
+      return null;
+    }
+  }));
+
+  const axes = results.filter((x): x is SplitAxis => x !== null);
+  if (axes.length === 0) return null;
+  return { axes, ms: Date.now() - t0 };
+}
+
+
+
 
 
 
