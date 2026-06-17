@@ -811,6 +811,37 @@ async function runExpertLoop(
       // Execute tools sequentially (parallel possible but keep simple).
       for (const tc of resp.toolCalls) {
         const toolStart = Date.now();
+
+        // ── Step 1: Numeric Integrity (block search_catalog with truncated decimals)
+        if (tc.name === "search_catalog") {
+          const truncations = detectNumericTruncationInOptions(tc.args, firstAssistantText);
+          if (truncations) {
+            const hint = truncations
+              .map((t) => `options["${t.key}"]="${t.submitted}" — в первом пузыре назвал "${t.expected}"; передай ровно "${t.expected}"`)
+              .join("; ");
+            const errResult = {
+              tool: "search_catalog",
+              ok: false,
+              error_code: "bad_input",
+              message: `numeric_truncation: ${hint}`,
+            } as ToolResult;
+            send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
+            send({ type: "tool_event", tool: tc.name, phase: "result", duration_ms: 0, summary: "блок: усечение числа" });
+            steps.push({
+              step: "v3_guard_numeric_truncation",
+              ms: now(),
+              meta: { original_args: summariseToolArgs(tc.name, tc.args), truncations },
+            });
+            messages.push({
+              role: "tool",
+              tool_call_id: tc.id,
+              name: tc.name,
+              content: JSON.stringify(toolResultForLlm(errResult, tc.args, userMessage)),
+            });
+            continue;
+          }
+        }
+
         const guardOutcome = tc.name === "search_catalog"
           ? await guardedOutcomeForSearch(tc.args, lastDiscover, userMessage, firstAssistantText, ctx)
           : null;
@@ -857,7 +888,9 @@ async function runExpertLoop(
           return { finalText, productsRendered };
         }
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
-        const result = await runTool(tc.name, tc.args, ctx);
+        let result = await runTool(tc.name, tc.args, ctx);
+        let effectiveArgs: Record<string, unknown> = tc.args;
+        let inferredFallback: Array<{ key: string; value: string }> | null = null;
         const dur = Date.now() - toolStart;
         send({
           type: "tool_event",
@@ -879,6 +912,45 @@ async function runExpertLoop(
           },
         });
 
+        // ── Step 2: Inferred-filter fallback (drop assistant-invented filters on empty)
+        if (tc.name === "search_catalog" && result.ok && (result as { total: number }).total === 0) {
+          const cls = classifyOptionsSource(tc.args, userMessage);
+          if (cls.assistantInferred.length > 0) {
+            const cleaned: Record<string, string[]> = {};
+            for (const f of cls.userExplicit) {
+              (cleaned[f.key] ??= []).push(f.value);
+            }
+            const hasAnyCleaned = Object.keys(cleaned).length > 0;
+            const fallbackInput: SearchCatalogInput = {
+              ...(tc.args as unknown as SearchCatalogInput),
+              options: hasAnyCleaned ? cleaned : undefined,
+            };
+            if (!hasAnyCleaned && fallbackInput.mode === "by_filter" && !fallbackInput.category && !fallbackInput.query) {
+              // нечего искать — оставляем 0 как есть
+            } else {
+              const fbStart = Date.now();
+              const fb = await executeSearchCatalog(fallbackInput, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+              const fbDur = Date.now() - fbStart;
+              if (fb.ok && fb.total > 0) {
+                result = fb as ToolResult;
+                effectiveArgs = fallbackInput as unknown as Record<string, unknown>;
+                inferredFallback = cls.assistantInferred;
+                send({ type: "tool_event", tool: tc.name, phase: "result", duration_ms: fbDur, summary: `fallback: найдено ${fb.total}` });
+                steps.push({
+                  step: "v3_guard_inferred_fallback",
+                  ms: now(),
+                  meta: {
+                    dropped: cls.assistantInferred,
+                    kept: cls.userExplicit,
+                    fallback_total: fb.total,
+                    fallback_ms: fbDur,
+                  },
+                });
+              }
+            }
+          }
+        }
+
         if (tc.name === "discover_category" && result.ok) {
           lastDiscover = result as unknown as DiscoverCategoryOk;
         }
@@ -886,6 +958,20 @@ async function runExpertLoop(
         // If render_products succeeded → emit products_block immediately.
         if (tc.name === "render_products" && result.ok) {
           const r = result as { markdown: string; rendered_count: number };
+          const renderedIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
+
+          // ── Step 3: Promise-Reality Audit
+          const audit = promiseRealityCheck(firstAssistantText, renderedIds, ctx.cache, lastDiscover);
+          if (audit) {
+            send({ type: "delta", content: ` ${audit.corrective}` });
+            finalText += ` ${audit.corrective}`;
+            steps.push({
+              step: "v3_guard_promise_mismatch",
+              ms: now(),
+              meta: { corrective: audit.corrective, mismatches: audit.mismatches },
+            });
+          }
+
           send({
             type: "products_block",
             markdown: r.markdown,
@@ -900,13 +986,29 @@ async function runExpertLoop(
         // Tool-driven SSE side-effects (contacts/quick_replies/slot_update).
         emitSideEffects(result, send);
 
+        // If we dropped inferred filters and got broader results — tell user up front,
+        // and tell LLM in the tool reply so it doesn't claim "by exact parameters".
+        if (inferredFallback && inferredFallback.length > 0) {
+          const note = " По точным параметрам не нашёл — расширил подборку.";
+          send({ type: "delta", content: note });
+          finalText += note;
+        }
+
+        const toolReply = inferredFallback && inferredFallback.length > 0
+          ? {
+              ...((toolResultForLlm(result, effectiveArgs, userMessage) as Record<string, unknown>) ?? {}),
+              _server_note: `Сбросил твои гипотетические фильтры (${inferredFallback.map((f) => `${f.key}=${f.value}`).join(", ")}): клиент их явно не называл, по полному набору 0. Рендери широкую подборку и не утверждай, что искал по конкретным параметрам.`,
+            }
+          : toolResultForLlm(result, effectiveArgs, userMessage);
+
         messages.push({
           role: "tool",
           tool_call_id: tc.id,
           name: tc.name,
-          content: JSON.stringify(toolResultForLlm(result, tc.args, userMessage)),
+          content: JSON.stringify(toolReply),
         });
       }
+
 
       // After tools → loop back, model decides what's next.
     }
