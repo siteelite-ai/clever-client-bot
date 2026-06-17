@@ -91,48 +91,71 @@ function isUsefulDiscovery(x: DiscoverCategoryOk): boolean {
   return x.category.total_products > 0 && x.facets.length > 0;
 }
 
-function collectCategories(nodes: unknown, acc: CategoryCandidate[]): void {
+function collectCategories(
+  nodes: unknown,
+  parentId: number | null,
+  acc: { flat: CategoryCandidate[]; byId: Map<number, CategoryNode>; byPagetitle: Map<string, number> },
+): void {
   if (!Array.isArray(nodes)) return;
   for (const node of nodes as Array<Record<string, unknown>>) {
     const pagetitle = typeof node?.pagetitle === "string" ? node.pagetitle.trim() : "";
-    if (pagetitle) acc.push({ id: typeof node.id === "number" ? node.id : null, pagetitle });
-    collectCategories(node?.children, acc);
+    const id = typeof node.id === "number" ? node.id : null;
+    if (pagetitle) acc.flat.push({ id, pagetitle });
+    if (id !== null && pagetitle) {
+      const children = Array.isArray(node.children) ? node.children as Array<Record<string, unknown>> : [];
+      const childrenIds = children
+        .map((c) => (typeof c.id === "number" ? c.id : null))
+        .filter((x): x is number => x !== null);
+      acc.byId.set(id, { id, pagetitle, parentId, childrenIds });
+      acc.byPagetitle.set(normalize(pagetitle), id);
+    }
+    collectCategories(node?.children, id, acc);
   }
 }
 
-async function fetchCategories(deps: DiscoverCategoryDeps): Promise<CategoryCandidate[]> {
-  if (categoriesCache && Date.now() - categoriesCache.ts < CATEGORIES_TTL_MS) return categoriesCache.value;
+async function fetchCategories(deps: DiscoverCategoryDeps): Promise<CategoriesCache> {
+  if (categoriesCache && Date.now() - categoriesCache.ts < CATEGORIES_TTL_MS) return categoriesCache;
 
   const fetchImpl = deps.fetchImpl ?? fetch;
   const first = await fetchCategoriesPage(fetchImpl, deps, 1);
-  const acc: CategoryCandidate[] = [];
-  collectCategories(first.results, acc);
+  const acc = { flat: [] as CategoryCandidate[], byId: new Map<number, CategoryNode>(), byPagetitle: new Map<string, number>() };
+  collectCategories(first.results, null, acc);
 
   const pages = Math.max(1, Number(first.pagination?.pages) || 1);
   for (let page = 2; page <= pages; page++) {
     const next = await fetchCategoriesPage(fetchImpl, deps, page);
-    collectCategories(next.results, acc);
+    collectCategories(next.results, null, acc);
   }
 
-  const deduped = Array.from(new Map(acc.map((c) => [c.pagetitle, c])).values()).sort((a, b) => a.pagetitle.localeCompare(b.pagetitle));
-  categoriesCache = { value: deduped, ts: Date.now() };
-  return deduped;
+  const flatDeduped = Array.from(new Map(acc.flat.map((c) => [c.pagetitle, c])).values())
+    .sort((a, b) => a.pagetitle.localeCompare(b.pagetitle));
+  categoriesCache = { flat: flatDeduped, byId: acc.byId, byPagetitle: acc.byPagetitle, ts: Date.now() };
+  return categoriesCache;
 }
 
-async function fetchCategoriesPage(
-  fetchImpl: typeof fetch,
-  deps: DiscoverCategoryDeps,
-  page: number,
-): Promise<{ results: unknown[]; pagination?: { pages?: number } }> {
-  const params = new URLSearchParams({ parent: "0", depth: "10", per_page: "200", page: String(page) });
-  const res = await fetchImpl(`${deps.baseUrl}/categories?${params}`, {
-    method: "GET",
-    headers: { Authorization: `Bearer ${deps.apiToken}`, "Content-Type": "application/json" },
-  });
-  if (!res.ok) throw new Error(`categories ${res.status}`);
-  const raw = await res.json() as { data?: { results?: unknown[]; pagination?: { pages?: number } }; results?: unknown[]; pagination?: { pages?: number } };
-  const data = raw.data ?? raw;
-  return { results: Array.isArray(data.results) ? data.results : [], pagination: data.pagination };
+/**
+ * Собирает все листовые pagetitle (children=[]) в поддереве с корнем `rootId`.
+ * Если сам root уже лист — возвращает только его.
+ */
+function collectLeafDescendants(rootId: number, byId: Map<number, CategoryNode>): LeafCategory[] {
+  const root = byId.get(rootId);
+  if (!root) return [];
+  const leaves: LeafCategory[] = [];
+  const visited = new Set<number>();
+  const stack: number[] = [rootId];
+  while (stack.length > 0) {
+    const id = stack.pop()!;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const node = byId.get(id);
+    if (!node) continue;
+    if (node.childrenIds.length === 0) {
+      leaves.push({ id: node.id, pagetitle: node.pagetitle });
+    } else {
+      for (const cid of node.childrenIds) stack.push(cid);
+    }
+  }
+  return leaves;
 }
 
 function parseResolverCandidates(raw: string, valid: Set<string>): Array<{ pagetitle: string; confidence: number }> {
