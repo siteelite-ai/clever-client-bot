@@ -973,6 +973,39 @@ async function runExpertLoop(
           steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "guarded_no_intersection", step_count: step + 1 } });
           return { finalText, productsRendered };
         }
+
+        // ── Step 5: Price Direction Guard (pre-render rewrite)
+        if (tc.name === "render_products") {
+          const dir = detectPriceDirection(userMessage);
+          if (dir) {
+            const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
+            const anchor = findAnchorInCache(ctx.cache, userMessage);
+            const rewrite = rewriteRenderIdsByPriceDirection(origIds, dir, anchor, ctx.cache);
+            let finalIds = rewrite.ids;
+            let usedBroaden = false;
+            if (finalIds.length < 3) {
+              const broaden = await broadenPriceDirectionSearch(dir, anchor, lastDiscover, ctx);
+              if (broaden.length >= 3) { finalIds = broaden; usedBroaden = true; }
+            }
+            if (finalIds.length > 0 && (finalIds.length !== origIds.length || finalIds.join("|") !== origIds.join("|"))) {
+              (tc.args as Record<string, unknown>).product_ids = finalIds;
+              steps.push({
+                step: "v3_guard_price_direction",
+                ms: now(),
+                meta: {
+                  direction: dir,
+                  anchor_id: anchor?.id ?? null,
+                  anchor_price: anchor?.price ?? null,
+                  before: origIds.length,
+                  after: finalIds.length,
+                  filtered_out: rewrite.filteredOut,
+                  broadened: usedBroaden,
+                },
+              });
+            }
+          }
+        }
+
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
         let result = await runTool(tc.name, tc.args, ctx);
         let effectiveArgs: Record<string, unknown> = tc.args;
