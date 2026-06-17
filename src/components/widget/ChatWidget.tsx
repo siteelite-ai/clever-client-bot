@@ -517,11 +517,8 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       // forces updateAssistant into the "append new bubble" branch.
       onTurnBreak: (_reason) => {
         assistantContent = '';
-        streamMsgId = null;
+        bubbleSealed = true;
       },
-      // V3 only: a render_products result — emit as its OWN assistant bubble
-      // (independent of the streaming text bubble). Markdown is rendered
-      // through ReactMarkdown like any other assistant message.
       onProductsBlock: (markdown, _meta) => {
         setMessages(prev => {
           const cleaned = prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-'));
@@ -532,9 +529,8 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
             timestamp: new Date(),
           }];
         });
-        // After a products block, next deltas should open a new bubble too.
         assistantContent = '';
-        streamMsgId = null;
+        bubbleSealed = true;
       },
       onToolEvent: (ev) => {
         if (ev.phase === 'start') console.log(`[Widget v3] tool ${ev.tool}…`);
