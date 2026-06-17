@@ -1253,23 +1253,36 @@ async function runExpertLoop(
           continue;
         }
 
-        // ── Step 4.5: Anchor Exclusion Guard
-        // В режиме "аналог/замена" SKU-источник не должен попасть в карточки.
+        // ── Step 4.5: Anchor + Same-Family Exclusion Guard
+        // В режиме "аналог/замена" из карточек убираем:
+        //   1) сам якорь (это источник, а не аналог);
+        //   2) другие SKU той же модельной серии (это варианты, не аналоги).
+        // Срабатывает ТОЛЬКО при replacementIntent + найденном якоре, поэтому
+        // обычные подборки не затрагиваются.
         if (tc.name === "render_products") {
           const anchorId = getAnchorExcludeId();
-          if (anchorId) {
+          const familyExclude = getFamilyExcludeSet();
+          if (anchorId || familyExclude.size > 0) {
             const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
-            if (origIds.includes(anchorId)) {
-              const filtered = origIds.filter((id) => id !== anchorId);
+            const filtered = origIds.filter((id) => id !== anchorId && !familyExclude.has(id));
+            if (filtered.length !== origIds.length) {
               (tc.args as Record<string, unknown>).product_ids = filtered;
               steps.push({
                 step: "v3_guard_anchor_excluded",
                 ms: now(),
-                meta: { anchor_id: anchorId, before: origIds.length, after: filtered.length },
+                meta: {
+                  anchor_id: anchorId,
+                  family_size: familyExclude.size,
+                  before: origIds.length,
+                  after: filtered.length,
+                  removed: origIds.length - filtered.length,
+                },
               });
             }
           }
         }
+
+
 
         // ── Step 5: Price Direction Guard (pre-render rewrite)
         if (tc.name === "render_products") {
