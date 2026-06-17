@@ -1064,8 +1064,9 @@ async function runExpertLoop(
         }
 
         const guardOutcome = tc.name === "search_catalog"
-          ? await guardedOutcomeForSearch(tc.args, lastDiscover, userMessage, firstAssistantText, ctx)
+          ? await guardedOutcomeForSearch(tc.args, lastDiscover, userMessage, firstAssistantText, ctx, history.slice(-6).map((h) => h.content).join("\n"))
           : null;
+
         if (guardOutcome?.kind === "clarification") {
           const dur = Date.now() - toolStart;
           send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
