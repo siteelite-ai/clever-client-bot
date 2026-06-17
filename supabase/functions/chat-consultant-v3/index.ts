@@ -195,6 +195,11 @@ function normalizeForMatch(s: string): string {
   return s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}.,]+/gu, " ").trim();
 }
 
+function normalizeCodeLike(s: string): string {
+  const map: Record<string, string> = { а: "a", в: "b", е: "e", к: "k", м: "m", н: "h", о: "o", р: "p", с: "c", т: "t", у: "y", х: "x" };
+  return normalizeForMatch(s).replace(/[авекмнорстух]/gu, (ch) => map[ch] ?? ch).replace(/\s+/g, "");
+}
+
 function isRiskyCategoricalFacet(facet: Pick<Facet, "key" | "caption" | "type" | "values">): boolean {
   if (facet.type !== "string") return false;
   const haystack = normalizeForMatch(`${facet.key} ${facet.caption}`);
@@ -206,6 +211,7 @@ function valueIsEvidenced(value: string, evidenceText: string): boolean {
   const evidenceNorm = normalizeForMatch(evidenceText);
   if (!valueNorm || !evidenceNorm) return false;
   if (evidenceNorm.includes(valueNorm)) return true;
+  if (/\d/.test(valueNorm) && normalizeCodeLike(evidenceText).includes(normalizeCodeLike(value))) return true;
   const parts = valueNorm.split(/\s+/).filter((p) => p.length >= 2);
   return parts.length > 1 && parts.every((p) => evidenceNorm.includes(p));
 }
