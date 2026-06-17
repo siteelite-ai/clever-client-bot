@@ -1747,6 +1747,23 @@ async function runExpertLoop(
       const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
       productsRendered += rescued;
     }
+    if (productsRendered === 0) {
+      const pool = pickFreshUnshown(8);
+      if (pool.length > 0) {
+        const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
+        if (render.ok) {
+          send({ type: "tool_event", tool: "render_products", phase: "result", duration_ms: 0, summary: `last-chance ${render.rendered_count}` });
+          send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: freshSearch?.total });
+          for (const id of pool) shownIds.add(id);
+          productsRendered += render.rendered_count;
+          steps.push({
+            step: "v3_guard_last_chance_render",
+            ms: now(),
+            meta: { pool_size: pool.length, fresh_tool: freshSearch?.tool, fresh_total: freshSearch?.total, rendered: render.rendered_count },
+          });
+        }
+      }
+    }
     steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "forced_stepcount", step_count: MAX_STEPS } });
     if (productsRendered === 0) {
       if (replacementIntent && replacementRequiredAxes.length >= 2) {
