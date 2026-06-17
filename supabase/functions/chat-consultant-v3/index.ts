@@ -478,6 +478,7 @@ Deno.serve(async (req) => {
           cache,
           supabase,
           catalogToken: settings.volt220_api_token!,
+          sessionId,
         };
         const out = await runExpertLoop(userMessage, history, settings.openrouter_api_key!, ctx, send, steps, t0);
         productsCount = out.productsRendered;
