@@ -1,7 +1,7 @@
 // V3 tool: search_catalog — minimal 220volt /products wrapper.
 // Data-agnostic: baseUrl + apiToken injected from caller.
 
-import type { ProductCache, ProductFull, ProductRef, SearchCatalogOk, ToolError } from "./types.ts";
+import type { ProductCache, ProductRef, SearchCatalogOk, ToolError } from "./types.ts";
 
 export interface CatalogClientDeps {
   baseUrl: string;
@@ -15,7 +15,19 @@ export interface SearchCatalogInput {
   article?: string;
   pagetitle?: string;
   query?: string;
+  /**
+   * Одна категория. Должна совпадать с pagetitle ЛИСТОВОЙ категории
+   * (из discover_category.leaf_categories[].pagetitle).
+   * Параметр `category=` в API 220volt матчит pagetitle непосредственного родителя
+   * товара, т.е. лист. Зонтичные категории всегда дают 0.
+   */
   category?: string;
+  /**
+   * Массив листовых pagetitle. Используется, когда discover_category вернул несколько
+   * листьев. Выполняется параллельный fan-out (N HTTP-вызовов), результаты мерджатся
+   * с дедупликацией по id.
+   */
+  category_in?: string[];
   min_price?: number;
   max_price?: number;
   options?: Record<string, string[]>;
@@ -53,11 +65,17 @@ function extractTraits(p: Record<string, unknown>): string[] {
   return out;
 }
 
-export async function executeSearchCatalog(
+type SingleSearchResult =
+  | { ok: true; total: number; results: ProductRef[] }
+  | { ok: false; error_code: ToolError["error_code"]; message: string };
+
+/** Один HTTP-вызов /products. Применяет input как есть, плюс опциональный single `category` override. */
+async function singleSearch(
   input: SearchCatalogInput,
   deps: CatalogClientDeps,
   cache: ProductCache,
-): Promise<(SearchCatalogOk & { tool: "search_catalog" }) | (ToolError & { tool: "search_catalog" })> {
+  categoryOverride?: string,
+): Promise<SingleSearchResult> {
   const fetchImpl = deps.fetchImpl ?? fetch;
   const timeoutMs = deps.timeoutMs ?? 8000;
 
@@ -65,21 +83,12 @@ export async function executeSearchCatalog(
   if (input.mode === "by_article" && input.article) params.append("article", input.article);
   else if (input.mode === "by_pagetitle" && input.pagetitle) params.append("pagetitle", input.pagetitle);
   else if (input.mode === "by_query" && input.query) params.append("query", input.query);
-  else if (input.mode === "by_filter") {
-    // by_filter режим: фильтрация исключительно по category + options[].
-    // Требует category ИЛИ хотя бы одну запись в options.
-    if (!input.category && (!input.options || Object.keys(input.options).length === 0)) {
-      return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "by_filter requires category or options" };
-    }
-  } else {
-    return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "missing field for mode" };
-  }
 
-  if (input.category) params.append("category", input.category);
+  const cat = categoryOverride ?? input.category;
+  if (cat) params.append("category", cat);
   if (typeof input.min_price === "number") params.append("min_price", String(input.min_price));
   if (typeof input.max_price === "number") params.append("max_price", String(input.max_price));
   if (input.sort_cheapest) {
-    // 220volt quirk: min_price=1 = server-side ASC sort + filter price=0.
     if (!params.has("min_price")) params.append("min_price", "1");
   }
   const perPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
@@ -99,18 +108,15 @@ export async function executeSearchCatalog(
   try {
     const res = await fetchImpl(url, {
       method: "GET",
-      headers: {
-        Authorization: `Bearer ${deps.apiToken}`,
-        "Content-Type": "application/json",
-      },
+      headers: { Authorization: `Bearer ${deps.apiToken}`, "Content-Type": "application/json" },
       signal: controller.signal,
     });
 
     if (!res.ok) {
       await res.body?.cancel();
-      if (res.status === 429) return { tool: "search_catalog", ok: false, error_code: "rate_limited", message: `429 from catalog` };
-      if (res.status >= 500) return { tool: "search_catalog", ok: false, error_code: "transport_5xx", message: `${res.status}` };
-      return { tool: "search_catalog", ok: false, error_code: "bad_input", message: `${res.status}` };
+      if (res.status === 429) return { ok: false, error_code: "rate_limited", message: `429 from catalog` };
+      if (res.status >= 500) return { ok: false, error_code: "transport_5xx", message: `${res.status}` };
+      return { ok: false, error_code: "bad_input", message: `${res.status}` };
     }
 
     const json = await res.json() as { data?: { results?: unknown[]; pagination?: { total?: number } } };
@@ -120,43 +126,92 @@ export async function executeSearchCatalog(
     const results: ProductRef[] = [];
     for (const raw of rawResults as Array<Record<string, unknown>>) {
       const price = Number(raw.price);
-      if (!Number.isFinite(price) || price <= 0) continue; // HARD BAN price=0
+      if (!Number.isFinite(price) || price <= 0) continue;
       const id = String(raw.id ?? "");
       if (!id) continue;
       const pagetitle = String(raw.pagetitle ?? raw.name ?? "").trim();
       if (!pagetitle) continue;
-      const url = typeof raw.url === "string" ? raw.url : "";
-      if (!url) continue;
+      const u = typeof raw.url === "string" ? raw.url : "";
+      if (!u) continue;
       const vendor = typeof raw.vendor === "string" ? raw.vendor : null;
       const ref: ProductRef = {
-        id,
-        pagetitle,
-        vendor,
-        price,
+        id, pagetitle, vendor, price,
         stock: inferStock(raw),
         short_traits: extractTraits(raw),
       };
-      const full: ProductFull = { ...ref, url };
-      cache.set(id, full);
+      cache.set(id, { ...ref, url: u });
       results.push(ref);
     }
-
-    return {
-      tool: "search_catalog",
-      ok: true,
-      mode: input.mode,
-      total,
-      results,
-    };
+    return { ok: true, total, results };
   } catch (e) {
     const isAbort = (e as { name?: string })?.name === "AbortError";
-    return {
-      tool: "search_catalog",
-      ok: false,
-      error_code: isAbort ? "catalog_timeout" : "transport_5xx",
-      message: (e as Error)?.message ?? "fetch failed",
-    };
+    return { ok: false, error_code: isAbort ? "catalog_timeout" : "transport_5xx", message: (e as Error)?.message ?? "fetch failed" };
   } finally {
     clearTimeout(timer);
   }
+}
+
+export async function executeSearchCatalog(
+  input: SearchCatalogInput,
+  deps: CatalogClientDeps,
+  cache: ProductCache,
+): Promise<(SearchCatalogOk & { tool: "search_catalog" }) | (ToolError & { tool: "search_catalog" })> {
+  // Валидация режима.
+  if (input.mode === "by_article" && !input.article) return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "by_article requires article" };
+  if (input.mode === "by_pagetitle" && !input.pagetitle) return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "by_pagetitle requires pagetitle" };
+  if (input.mode === "by_query" && !input.query) return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "by_query requires query" };
+  if (input.mode === "by_filter") {
+    const hasCat = !!input.category || (Array.isArray(input.category_in) && input.category_in.length > 0);
+    const hasOpts = input.options && Object.keys(input.options).length > 0;
+    if (!hasCat && !hasOpts) {
+      return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "by_filter requires category/category_in or options" };
+    }
+  } else if (input.mode !== "by_article" && input.mode !== "by_pagetitle" && input.mode !== "by_query") {
+    return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "missing field for mode" };
+  }
+
+  // Нормализуем category_in: убираем дубли с input.category и между собой.
+  const categories: string[] = [];
+  const seenCat = new Set<string>();
+  if (input.category) { categories.push(input.category); seenCat.add(input.category); }
+  if (Array.isArray(input.category_in)) {
+    for (const c of input.category_in) {
+      if (typeof c === "string" && c && !seenCat.has(c)) { categories.push(c); seenCat.add(c); }
+    }
+  }
+
+  // Один запрос: либо нет category fan-out, либо ровно одна категория.
+  if (categories.length <= 1) {
+    const r = await singleSearch(input, deps, cache, categories[0]);
+    if (!r.ok) return { tool: "search_catalog", ok: false, error_code: r.error_code, message: r.message };
+    return { tool: "search_catalog", ok: true, mode: input.mode, total: r.total, results: r.results };
+  }
+
+  // Fan-out: параллельные запросы по каждой листовой категории, merge с дедупликацией по id.
+  const settled = await Promise.all(
+    categories.map((cat) => singleSearch(input, deps, cache, cat)),
+  );
+  const okResults = settled.filter((r): r is Extract<SingleSearchResult, { ok: true }> => r.ok);
+  if (okResults.length === 0) {
+    // Все упали — возвращаем первую ошибку.
+    const firstErr = settled.find((r): r is Extract<SingleSearchResult, { ok: false }> => !r.ok)!;
+    return { tool: "search_catalog", ok: false, error_code: firstErr.error_code, message: firstErr.message };
+  }
+  const mergedById = new Map<string, ProductRef>();
+  let totalSum = 0;
+  for (const r of okResults) {
+    totalSum += r.total;
+    for (const p of r.results) {
+      if (!mergedById.has(p.id)) mergedById.set(p.id, p);
+    }
+  }
+  const merged = [...mergedById.values()];
+  const perPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
+  return {
+    tool: "search_catalog",
+    ok: true,
+    mode: input.mode,
+    total: totalSum, // суммарный total по веткам (грубая оценка; дедуп — на уровне results)
+    results: merged.slice(0, perPage),
+  };
 }
