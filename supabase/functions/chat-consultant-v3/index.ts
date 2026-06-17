@@ -199,8 +199,65 @@ function summariseToolResultMeta(name: string, r: ToolResult): Record<string, un
   return {};
 }
 
-function toolResultForLlm(r: ToolResult): unknown {
+function normalizeForMatch(s: string): string {
+  return s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}.,]+/gu, " ").trim();
+}
+
+function compactDiscoverCategoryForLlm(r: ToolResult, args: Record<string, unknown>, userMessage: string): unknown {
+  const x = r as unknown as {
+    ok: true;
+    category: { id: number | null; pagetitle: string; total_products: number };
+    facets: Array<{ key: string; caption: string; type: string; unit: string | null; min?: number | null; max?: number | null; values?: Array<{ value: string; products_count?: number }> }>;
+    resolved_from?: string;
+  };
+  const focus = normalizeForMatch([
+    userMessage,
+    typeof args.noun === "string" ? args.noun : "",
+    typeof args.semantic_query === "string" ? args.semantic_query : "",
+  ].join(" "));
+  const words = new Set(focus.split(/\s+/).filter((t) => t.length >= 3));
+  const numbers = new Set((focus.match(/\d+(?:[.,]\d+)?/g) ?? []).map((n) => n.replace(",", ".")));
+
+  return {
+    ok: true,
+    category: x.category,
+    resolved_from: x.resolved_from,
+    facets: x.facets.map((f) => {
+      const values = Array.isArray(f.values) ? f.values : [];
+      const sorted = [...values].sort((a, b) => (b.products_count ?? 0) - (a.products_count ?? 0));
+      const numericShare = values.length === 0 ? 0 : values.filter((v) => /\d/.test(v.value)).length / values.length;
+      const baseLimit = values.length <= 120 && numericShare >= 0.5 ? 100 : 30;
+      const selected = new Map<string, { value: string; products_count?: number }>();
+
+      for (const v of sorted) {
+        const norm = normalizeForMatch(v.value);
+        const hasWord = [...words].some((w) => norm.includes(w));
+        const valueNumbers = (norm.match(/\d+(?:[.,]\d+)?/g) ?? []).map((n) => n.replace(",", "."));
+        const hasNumber = valueNumbers.some((n) => numbers.has(n));
+        if (hasWord || hasNumber) selected.set(v.value, v);
+      }
+      for (const v of sorted) {
+        if (selected.size >= baseLimit) break;
+        selected.set(v.value, v);
+      }
+
+      return {
+        key: f.key,
+        caption: f.caption,
+        type: f.type,
+        unit: f.unit,
+        min: f.min ?? null,
+        max: f.max ?? null,
+        value_count: values.length,
+        values: [...selected.values()].map((v) => ({ value: v.value, count: v.products_count })),
+      };
+    }),
+  };
+}
+
+function toolResultForLlm(r: ToolResult, args: Record<string, unknown>, userMessage: string): unknown {
   // Strip heavy fields the model doesn't need to see.
+  if (r.ok && r.tool === "discover_category") return compactDiscoverCategoryForLlm(r, args, userMessage);
   if (r.ok && r.tool === "render_products") {
     return {
       ok: true,
@@ -476,7 +533,7 @@ async function runExpertLoop(
           role: "tool",
           tool_call_id: tc.id,
           name: tc.name,
-          content: JSON.stringify(toolResultForLlm(result)),
+          content: JSON.stringify(toolResultForLlm(result, tc.args, userMessage)),
         });
       }
 
