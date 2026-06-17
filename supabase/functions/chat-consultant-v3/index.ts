@@ -102,7 +102,10 @@ async function runTool(
     return executeSearchCatalog(args as unknown as SearchCatalogInput, catalogDeps, ctx.cache);
   }
   if (name === "discover_category") {
-    return executeDiscoverCategory(args as unknown as DiscoverCategoryInput, catalogDeps) as unknown as ToolResult;
+    return executeDiscoverCategory(
+      args as unknown as DiscoverCategoryInput,
+      { ...catalogDeps, openrouterApiKey: ctx.openrouterKey },
+    ) as unknown as ToolResult;
   }
   if (name === "jargon_recover_catalog") {
     return executeJargonRecoverCatalog(
@@ -182,9 +185,10 @@ function summariseToolResultMeta(name: string, r: ToolResult): Record<string, un
     return { total: x.total, branch_tag: x.branch_tag };
   }
   if (name === "discover_category") {
-    const x = r as unknown as { category?: { pagetitle?: string; total_products?: number }; facets?: Array<{ key: string; values?: unknown[] }> };
+    const x = r as unknown as { category?: { pagetitle?: string; total_products?: number }; facets?: Array<{ key: string; values?: unknown[] }>; resolved_from?: string };
     return {
       pagetitle: x.category?.pagetitle,
+      resolved_from: x.resolved_from,
       total_products: x.category?.total_products ?? 0,
       facets_count: x.facets?.length ?? 0,
       facet_keys: (x.facets ?? []).slice(0, 20).map((f) => f.key),
@@ -195,8 +199,70 @@ function summariseToolResultMeta(name: string, r: ToolResult): Record<string, un
   return {};
 }
 
-function toolResultForLlm(r: ToolResult): unknown {
+function normalizeForMatch(s: string): string {
+  return s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}.,]+/gu, " ").trim();
+}
+
+function compactDiscoverCategoryForLlm(r: ToolResult, args: Record<string, unknown>, userMessage: string): unknown {
+  const x = r as unknown as {
+    ok: true;
+    category: { id: number | null; pagetitle: string; total_products: number };
+    facets: Array<{ key: string; caption: string; type: string; unit: string | null; min?: number | null; max?: number | null; values?: Array<{ value: string; products_count?: number }> }>;
+    resolved_from?: string;
+  };
+  const focus = normalizeForMatch([
+    userMessage,
+    typeof args.noun === "string" ? args.noun : "",
+    typeof args.semantic_query === "string" ? args.semantic_query : "",
+  ].join(" "));
+  const words = new Set(focus.split(/\s+/).filter((t) => t.length >= 3));
+  const numbers = new Set((focus.match(/\d+(?:[.,]\d+)?/g) ?? []).map((n) => n.replace(",", ".")));
+
+  return {
+    ok: true,
+    category: x.category,
+    resolved_from: x.resolved_from,
+    facets: x.facets.map((f) => {
+      const values = Array.isArray(f.values) ? f.values : [];
+      const sorted = [...values].sort((a, b) => (b.products_count ?? 0) - (a.products_count ?? 0));
+      const numericShare = values.length === 0 ? 0 : values.filter((v) => /\d/.test(v.value)).length / values.length;
+      const baseLimit = values.length <= 80 && numericShare >= 0.5 ? 40 : 12;
+      const selected = new Map<string, { value: string; products_count?: number }>();
+
+      for (const v of sorted) {
+        if (selected.size >= baseLimit) break;
+        const norm = normalizeForMatch(v.value);
+        const valueNumbers = (norm.match(/\d+(?:[.,]\d+)?/g) ?? []).map((n) => n.replace(",", "."));
+        if (valueNumbers.some((n) => numbers.has(n))) selected.set(v.value, v);
+      }
+      for (const v of sorted) {
+        if (selected.size >= baseLimit) break;
+        const norm = normalizeForMatch(v.value);
+        const hasWord = [...words].some((w) => norm.includes(w));
+        if (hasWord) selected.set(v.value, v);
+      }
+      for (const v of sorted) {
+        if (selected.size >= baseLimit) break;
+        selected.set(v.value, v);
+      }
+
+      return {
+        key: f.key,
+        caption: f.caption,
+        type: f.type,
+        unit: f.unit,
+        min: f.min ?? null,
+        max: f.max ?? null,
+        value_count: values.length,
+        values: [...selected.values()].map((v) => ({ value: v.value, count: v.products_count })),
+      };
+    }),
+  };
+}
+
+function toolResultForLlm(r: ToolResult, args: Record<string, unknown>, userMessage: string): unknown {
   // Strip heavy fields the model doesn't need to see.
+  if (r.ok && r.tool === "discover_category") return compactDiscoverCategoryForLlm(r, args, userMessage);
   if (r.ok && r.tool === "render_products") {
     return {
       ok: true,
@@ -389,8 +455,11 @@ async function runExpertLoop(
         meta: { step_index: step, duration_ms: Date.now() - llmStart, has_text: !!resp.text, tool_calls: resp.toolCalls.length, finish: resp.finishReason },
       });
 
-      // Stream the assistant text as deltas BEFORE running tools.
-      if (resp.text.trim()) {
+      const hasRender = resp.toolCalls.some((tc) => tc.name === "render_products");
+
+      // Stream assistant text before tools, except render_products turns:
+      // product cards are the only allowed surface for names/prices/links.
+      if (resp.text.trim() && !hasRender) {
         if (bubbleHasText) {
           // Already streamed prior text in this turn → break bubble first.
           send({ type: "assistant_turn_break", reason: "tool_pending" });
@@ -409,7 +478,6 @@ async function runExpertLoop(
       }
 
       // Break the bubble before tool execution / products.
-      const hasRender = resp.toolCalls.some((tc) => tc.name === "render_products");
       send({
         type: "assistant_turn_break",
         reason: hasRender ? "after_render" : "tool_pending",
@@ -463,6 +531,8 @@ async function runExpertLoop(
             total_available: typeof tc.args.total_available === "number" ? tc.args.total_available : undefined,
           });
           productsRendered += r.rendered_count;
+          steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "rendered", step_count: step + 1 } });
+          return { finalText, productsRendered };
         }
 
         // Tool-driven SSE side-effects (contacts/quick_replies/slot_update).
@@ -472,7 +542,7 @@ async function runExpertLoop(
           role: "tool",
           tool_call_id: tc.id,
           name: tc.name,
-          content: JSON.stringify(toolResultForLlm(result)),
+          content: JSON.stringify(toolResultForLlm(result, tc.args, userMessage)),
         });
       }
 
