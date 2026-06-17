@@ -7,7 +7,7 @@
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { TOOL_SCHEMAS, SYSTEM_PROMPT } from "../_shared/v3-tools/schemas.ts";
 import { executeSearchCatalog, type SearchCatalogInput } from "../_shared/v3-tools/search-catalog.ts";
-import { executeDiscoverCategory, type DiscoverCategoryInput } from "../_shared/v3-tools/discover-category.ts";
+import { executeDiscoverCategory, type DiscoverCategoryInput, type DiscoverCategoryOk, type Facet } from "../_shared/v3-tools/discover-category.ts";
 import { executeJargonRecoverCatalog, type JargonRecoverCatalogInput } from "../_shared/v3-tools/jargon-recover-catalog.ts";
 
 import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3-tools/lookup-knowledge.ts";
@@ -193,6 +193,69 @@ function summariseToolResultMeta(name: string, r: ToolResult): Record<string, un
 
 function normalizeForMatch(s: string): string {
   return s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}.,]+/gu, " ").trim();
+}
+
+function isRiskyCategoricalFacet(facet: Pick<Facet, "key" | "caption" | "type" | "values">): boolean {
+  if (facet.type !== "string") return false;
+  const haystack = normalizeForMatch(`${facet.key} ${facet.caption}`);
+  return /(^| )(forma|form|shape|tip|type|vid|kind|cvet|color|ispolnen|variant|style|klass|class)( |$)/u.test(haystack);
+}
+
+function valueIsEvidenced(value: string, evidenceText: string): boolean {
+  const valueNorm = normalizeForMatch(value);
+  const evidenceNorm = normalizeForMatch(evidenceText);
+  if (!valueNorm || !evidenceNorm) return false;
+  if (evidenceNorm.includes(valueNorm)) return true;
+  const parts = valueNorm.split(/\s+/).filter((p) => p.length >= 2);
+  return parts.length > 1 && parts.every((p) => evidenceNorm.includes(p));
+}
+
+function extractEchoLabel(firstAssistantText: string, userMessage: string): string {
+  const source = firstAssistantText.trim() || userMessage.trim();
+  const dashIndex = source.search(/[—–-]/u);
+  const raw = dashIndex > 0 ? source.slice(0, dashIndex) : source;
+  return raw.replace(/[?.!,;:]+$/u, "").trim().slice(0, 80) || "запрошенному признаку";
+}
+
+function topFacetOptions(facet: Facet): Array<{ value: string; label: string; count?: number }> {
+  return [...facet.values]
+    .filter((v) => v.value.trim())
+    .sort((a, b) => (b.products_count ?? 0) - (a.products_count ?? 0))
+    .slice(0, 5)
+    .map((v) => ({ value: v.value, label: v.value, count: v.products_count }));
+}
+
+function guardedClarificationForSearch(
+  args: Record<string, unknown>,
+  lastDiscover: DiscoverCategoryOk | null,
+  userMessage: string,
+  firstAssistantText: string,
+): ProposeClarificationInput | null {
+  if (args.mode !== "by_filter" || !args.options || typeof args.options !== "object") return null;
+  if (!lastDiscover) return null;
+
+  const options = args.options as Record<string, unknown>;
+  const evidenceText = `${userMessage}\n${firstAssistantText}`;
+  for (const [key, rawVals] of Object.entries(options)) {
+    const facet = lastDiscover.facets.find((f) => f.key === key);
+    if (!facet || !isRiskyCategoricalFacet(facet)) continue;
+    const vals = Array.isArray(rawVals) ? rawVals.map(String) : [];
+    for (const selectedValue of vals) {
+      const existsInFacet = facet.values.some((v) => normalizeForMatch(v.value) === normalizeForMatch(selectedValue));
+      const evidenced = valueIsEvidenced(selectedValue, evidenceText);
+      if (existsInFacet && evidenced) continue;
+
+      const clarificationOptions = topFacetOptions(facet);
+      if (clarificationOptions.length < 2) continue;
+      const requested = extractEchoLabel(firstAssistantText, userMessage);
+      return {
+        question: `По «${requested}» точного значения в каталожном фасете не вижу. Есть такие варианты — что подойдёт?`,
+        facet_key: facet.key,
+        options: clarificationOptions,
+      };
+    }
+  }
+  return null;
 }
 
 function compactDiscoverCategoryForLlm(r: ToolResult, args: Record<string, unknown>, userMessage: string): unknown {
