@@ -1383,6 +1383,9 @@ async function runExpertLoop(
               const totalSum = split.axes.reduce((s, a) => s + a.total, 0);
               if (allIds.length > 0) {
                 freshSearch = { tool: "search_catalog_split", ids: allIds, total: totalSum };
+                // Persist across subsequent broad searches — render fallback
+                // prefers these axis-aligned ids over later off-target pools.
+                prioritySplitPool = allIds;
               }
             }
           }
