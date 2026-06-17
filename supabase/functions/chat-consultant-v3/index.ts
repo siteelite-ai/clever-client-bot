@@ -142,6 +142,10 @@ async function runTool(
 function summariseToolResult(name: string, r: ToolResult): string {
   if (!r.ok) return `ошибка: ${r.error_code}`;
   if (name === "search_catalog" || name === "expand_search_to_pool" || name === "jargon_recover_catalog") return `найдено ${(r as { total: number }).total}`;
+  if (name === "discover_category") {
+    const x = r as unknown as { category?: { total_products?: number }; facets?: unknown[] };
+    return `категория: ${x.category?.total_products ?? 0} тов., фасетов ${x.facets?.length ?? 0}`;
+  }
   if (name === "lookup_knowledge") return `${(r as { hits: unknown[] }).hits.length} фрагментов`;
   if (name === "lookup_contacts") return `контакты загружены`;
   if (name === "render_products") return `показано ${(r as { rendered_count: number }).rendered_count}`;
