@@ -576,6 +576,51 @@ function isReplacementIntent(msg: string): boolean {
   return /(аналог|альтернатив|похож|замен|вместо|взамен)/u.test(m);
 }
 
+// Extracts the model/series code from an anchor pagetitle: the most
+// distinctive alphanumeric token (mix of letters AND digits, length >= 4),
+// e.g. "DN027B" from "Светильник DN027B G2 LED6/NW 7W 220-240V D90 R".
+// Used to filter out same-series variants from analog results.
+// Data-agnostic: matches any code shape, not specific to lighting.
+function extractModelCode(title: string): string | null {
+  if (!title) return null;
+  // Strip punctuation that splits codes ("/", ".", ",", quotes).
+  const cleaned = title.replace(/[«»"',./()]/g, " ");
+  const tokens = cleaned.split(/\s+/).filter(Boolean);
+  // Candidate = token with BOTH letters and digits, length >= 4, not a pure
+  // measurement like "220-240V" or "7W". Prefer the first such token (model
+  // codes usually appear early in the title after the noun).
+  for (const raw of tokens) {
+    const t = raw.replace(/[^\p{L}\p{N}]/gu, "");
+    if (t.length < 4) continue;
+    const hasLetter = /\p{L}/u.test(t);
+    const hasDigit = /\p{N}/u.test(t);
+    if (!hasLetter || !hasDigit) continue;
+    // Skip obvious unit/voltage tokens (digit-heavy with trailing single letter).
+    if (/^\d+[a-zа-я]$/iu.test(t)) continue;
+    // Skip color-temp markers like "4000K", "3000K".
+    if (/^\d{3,4}[kк]$/iu.test(t)) continue;
+    return t.toUpperCase();
+  }
+  return null;
+}
+
+// Returns IDs of products from the SAME model family as the anchor — i.e.
+// other SKUs whose pagetitle contains the anchor's model code. These are
+// variants (different shape/size/power), not true analogs.
+function findSameFamilyIds(cache: ProductCache, anchorTitle: string, anchorId: string): Set<string> {
+  const code = extractModelCode(anchorTitle);
+  const out = new Set<string>();
+  if (!code) return out;
+  const needle = code.toLowerCase();
+  for (const [id, raw] of cache.entries()) {
+    if (id === anchorId) continue;
+    const p = raw as unknown as { pagetitle?: string; title?: string };
+    const title = (p.pagetitle ?? p.title ?? "").toLowerCase();
+    if (title.includes(needle)) out.add(id);
+  }
+  return out;
+}
+
 function rewriteRenderIdsByPriceDirection(
   productIds: string[],
   direction: PriceDirection,
