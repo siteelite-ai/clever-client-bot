@@ -9,7 +9,7 @@ import { TOOL_SCHEMAS, SYSTEM_PROMPT } from "../_shared/v3-tools/schemas.ts";
 import { executeSearchCatalog, type SearchCatalogInput } from "../_shared/v3-tools/search-catalog.ts";
 import { executeDiscoverCategory, type DiscoverCategoryInput } from "../_shared/v3-tools/discover-category.ts";
 import { executeJargonRecoverCatalog, type JargonRecoverCatalogInput } from "../_shared/v3-tools/jargon-recover-catalog.ts";
-import { executeExpandSearchToPool, type ExpandPoolInput } from "../_shared/v3-tools/expand-search-pool.ts";
+
 import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3-tools/lookup-knowledge.ts";
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
@@ -114,13 +114,6 @@ async function runTool(
       ctx.cache,
     );
   }
-  if (name === "expand_search_to_pool") {
-    return executeExpandSearchToPool(
-      args as unknown as ExpandPoolInput,
-      { ...catalogDeps, openrouterApiKey: ctx.openrouterKey, enableJargonRecovery: true },
-      ctx.cache,
-    );
-  }
   if (name === "lookup_knowledge") {
     return executeLookupKnowledge(args as unknown as LookupKnowledgeInput, ctx.supabase);
   }
@@ -144,7 +137,7 @@ async function runTool(
 
 function summariseToolResult(name: string, r: ToolResult): string {
   if (!r.ok) return `ошибка: ${r.error_code}`;
-  if (name === "search_catalog" || name === "expand_search_to_pool" || name === "jargon_recover_catalog") return `найдено ${(r as { total: number }).total}`;
+  if (name === "search_catalog" || name === "jargon_recover_catalog") return `найдено ${(r as { total: number }).total}`;
   if (name === "discover_category") {
     const x = r as unknown as { category?: { total_products?: number }; facets?: unknown[] };
     return `категория: ${x.category?.total_products ?? 0} тов., фасетов ${x.facets?.length ?? 0}`;
@@ -167,7 +160,6 @@ function summariseToolArgs(name: string, args: Record<string, unknown>): Record<
   };
   if (name === "search_catalog") return pick(["mode", "query", "article", "pagetitle", "category", "min_price", "max_price", "sort_cheapest", "per_page", "page", "options"]);
   if (name === "discover_category") return pick(["noun"]);
-  if (name === "expand_search_to_pool") return pick(["noun", "semantic_query", "modifiers", "category", "min_price", "max_price", "price_intent", "per_page"]);
   if (name === "jargon_recover_catalog") return pick(["noun", "semantic_query", "modifiers", "category"]);
   if (name === "lookup_knowledge") return pick(["query", "type"]);
   if (name === "lookup_contacts") return pick(["fields"]);
@@ -180,7 +172,7 @@ function summariseToolArgs(name: string, args: Record<string, unknown>): Record<
 
 function summariseToolResultMeta(name: string, r: ToolResult): Record<string, unknown> {
   if (!r.ok) return { error_code: r.error_code, message: (r as { message?: string }).message };
-  if (name === "search_catalog" || name === "expand_search_to_pool" || name === "jargon_recover_catalog") {
+  if (name === "search_catalog" || name === "jargon_recover_catalog") {
     const x = r as { total: number; branch_tag?: string; resolved_filters?: unknown };
     return { total: x.total, branch_tag: x.branch_tag };
   }
@@ -422,7 +414,7 @@ function pickSearchLine(toolCalls: Array<{ name: string }>): string {
   if (first === "lookup_knowledge") return "Сейчас посмотрю в базе.";
   if (first === "escalate_to_manager") return "Передаю менеджеру.";
   if (first === "propose_clarification") return "Уточню один момент.";
-  // discover_category / search_catalog / expand_search_to_pool / jargon_recover_catalog
+  // discover_category / search_catalog / jargon_recover_catalog
   return "Сейчас поищу в каталоге.";
 }
 
