@@ -15,7 +15,19 @@ export interface SearchCatalogInput {
   article?: string;
   pagetitle?: string;
   query?: string;
+  /**
+   * Одна категория. Должна совпадать с pagetitle ЛИСТОВОЙ категории
+   * (из discover_category.leaf_categories[].pagetitle).
+   * Параметр `category=` в API 220volt матчит pagetitle непосредственного родителя
+   * товара, т.е. лист. Зонтичные категории всегда дают 0.
+   */
   category?: string;
+  /**
+   * Массив листовых pagetitle. Используется, когда discover_category вернул несколько
+   * листьев. Выполняется параллельный fan-out (N HTTP-вызовов), результаты мерджатся
+   * с дедупликацией по id.
+   */
+  category_in?: string[];
   min_price?: number;
   max_price?: number;
   options?: Record<string, string[]>;
