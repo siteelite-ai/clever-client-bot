@@ -1369,6 +1369,22 @@ async function runExpertLoop(
           }
         }
 
+        // ── Step C: Intersection-empty honesty hint for the LLM.
+        if (splitFallbackResult) {
+          replyObj._intersection_empty = true;
+          replyObj._split_axes = splitFallbackResult.axes;
+          const axisSummary = splitFallbackResult.axes
+            .map((a) => `${a.axis}="${a.value}" (${a.total} шт)`)
+            .join(" и ");
+          replyObj._server_hint =
+            `Точного сочетания фильтров в каталоге нет (total=0), но отдельно по осям есть: ${axisSummary}. ` +
+            `НЕ извиняйся и НЕ вызывай escalate_to_manager. Сначала короткий текст в духе "Точного сочетания нет, ` +
+            `но есть отдельно X и отдельно Y — что ближе?", затем ОДИН вызов render_products с product_ids = ` +
+            `объединением ids из _split_axes (бери все ids из каждой оси по порядку, до 8 штук). Используй ровно эти id.`;
+        }
+
+
+
         messages.push({
           role: "tool",
           tool_call_id: tc.id,
