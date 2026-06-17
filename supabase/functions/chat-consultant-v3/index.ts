@@ -96,28 +96,28 @@ async function runTool(
 ): Promise<ToolResult> {
   const catalogDeps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
   if (name === "search_catalog") {
-    return executeSearchCatalog(args as SearchCatalogInput, catalogDeps, ctx.cache);
+    return executeSearchCatalog(args as unknown as SearchCatalogInput, catalogDeps, ctx.cache);
   }
   if (name === "expand_search_to_pool") {
-    return executeExpandSearchToPool(args as ExpandPoolInput, catalogDeps, ctx.cache);
+    return executeExpandSearchToPool(args as unknown as ExpandPoolInput, catalogDeps, ctx.cache);
   }
   if (name === "lookup_knowledge") {
-    return executeLookupKnowledge(args as LookupKnowledgeInput, ctx.supabase);
+    return executeLookupKnowledge(args as unknown as LookupKnowledgeInput, ctx.supabase);
   }
   if (name === "lookup_contacts") {
-    return executeLookupContacts(args as LookupContactsInput, ctx.supabase);
+    return executeLookupContacts(args as unknown as LookupContactsInput, ctx.supabase);
   }
   if (name === "render_products") {
-    return executeRenderProducts(args as RenderProductsInput, ctx.cache) as ToolResult;
+    return executeRenderProducts(args as unknown as RenderProductsInput, ctx.cache) as ToolResult;
   }
   if (name === "propose_clarification") {
-    return executeProposeClarification(args as ProposeClarificationInput);
+    return executeProposeClarification(args as unknown as ProposeClarificationInput);
   }
   if (name === "escalate_to_manager") {
-    return executeEscalate(args as EscalateInput, ctx.supabase);
+    return executeEscalate(args as unknown as EscalateInput, ctx.supabase);
   }
   if (name === "note_state") {
-    return executeNoteState(args as NoteStateInput, ctx.supabase, ctx.sessionId);
+    return executeNoteState(args as unknown as NoteStateInput, ctx.supabase, ctx.sessionId);
   }
   return { tool: name as never, ok: false, error_code: "bad_input", message: `unknown tool: ${name}` };
 }
