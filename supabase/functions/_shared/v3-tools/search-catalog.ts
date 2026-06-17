@@ -1,7 +1,7 @@
 // V3 tool: search_catalog — minimal 220volt /products wrapper.
 // Data-agnostic: baseUrl + apiToken injected from caller.
 
-import type { ProductCache, ProductFull, ProductRef, SearchCatalogOk, ToolError } from "./types.ts";
+import type { ProductCache, ProductRef, SearchCatalogOk, ToolError } from "./types.ts";
 
 export interface CatalogClientDeps {
   baseUrl: string;
