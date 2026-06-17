@@ -1164,14 +1164,19 @@ async function runExpertLoop(
         // ── Step 5: Price Direction Guard (pre-render rewrite)
         if (tc.name === "render_products") {
           const dir = detectPriceDirection(userMessage);
-          if (dir) {
+          const budgetCap = extractBudgetCap(userMessage);
+          const anchor = findAnchorInCache(ctx.cache, userMessage);
+          // Pre-condition: явный бюджетный потолок несовместим с "подороже относительно якоря".
+          const directionAllowed = dir && !(
+            dir === "more_expensive" && budgetCap !== null && anchor && budgetCap <= anchor.price
+          );
+          if (dir && directionAllowed) {
             const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
-            const anchor = findAnchorInCache(ctx.cache, userMessage);
             const rewrite = rewriteRenderIdsByPriceDirection(origIds, dir, anchor, ctx.cache);
             let finalIds = rewrite.ids;
             let usedBroaden = false;
             if (finalIds.length < 3) {
-              const broaden = await broadenPriceDirectionSearch(dir, anchor, lastDiscover, ctx);
+              const broaden = await broadenPriceDirectionSearch(dir, anchor, lastDiscover, ctx, budgetCap);
               if (broaden.length >= 3) { finalIds = broaden; usedBroaden = true; }
             }
             if (finalIds.length > 0 && (finalIds.length !== origIds.length || finalIds.join("|") !== origIds.join("|"))) {
@@ -1183,6 +1188,7 @@ async function runExpertLoop(
                   direction: dir,
                   anchor_id: anchor?.id ?? null,
                   anchor_price: anchor?.price ?? null,
+                  budget_cap: budgetCap,
                   before: origIds.length,
                   after: finalIds.length,
                   filtered_out: rewrite.filteredOut,
@@ -1190,8 +1196,15 @@ async function runExpertLoop(
                 },
               });
             }
+          } else if (dir && !directionAllowed) {
+            steps.push({
+              step: "v3_guard_price_direction_skipped",
+              ms: now(),
+              meta: { direction: dir, anchor_price: anchor?.price ?? null, budget_cap: budgetCap, reason: "budget_cap_conflicts_with_direction" },
+            });
           }
         }
+
 
         // ── Step 6a: Render Guard — auto-complement ids from fresh search if LLM dropped them.
         if (tc.name === "render_products") {
