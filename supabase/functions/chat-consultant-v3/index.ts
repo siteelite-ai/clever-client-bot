@@ -1548,28 +1548,37 @@ async function runExpertLoop(
           if ((tc.args as { mode?: string }).mode === "by_filter" && axesCount >= 2) {
             const split = await trySplitFallback(tc.args, ctx);
             if (split) {
-              splitFallbackResult = split;
+              const effectiveSplit = replacementIntent && replacementRequiredAxes.length >= 2
+                ? (() => {
+                  const compatible = new Set(filterReplacementCompatibleIds(split.axes.flatMap((a) => a.ids), replacementRequiredAxes, ctx.cache));
+                  return {
+                    ...split,
+                    axes: split.axes
+                      .map((a) => ({ ...a, ids: a.ids.filter((id) => compatible.has(id)) }))
+                      .filter((a) => a.ids.length > 0),
+                  };
+                })()
+                : split;
+              splitFallbackResult = effectiveSplit.axes.length > 0 ? effectiveSplit : null;
               send({
                 type: "tool_event",
                 tool: "search_catalog",
                 phase: "result",
                 duration_ms: split.ms,
-                summary: `split: ${split.axes.map((a) => `${a.axis}=${a.total}`).join(", ")}`,
+                summary: `split: ${effectiveSplit.axes.map((a) => `${a.axis}=${a.total}`).join(", ")}`,
               });
               steps.push({
                 step: "v3_guard_split_fallback",
                 ms: now(),
                 meta: {
-                  axes: split.axes.map((a) => ({ axis: a.axis, value: a.value, total: a.total, ids: a.ids.length })),
+                  axes: effectiveSplit.axes.map((a) => ({ axis: a.axis, value: a.value, total: a.total, ids: a.ids.length })),
+                  replacement_filtered: replacementIntent && replacementRequiredAxes.length >= 2,
                   ms: split.ms,
                 },
               });
               // Feed Step 6a/6b pool so render/escalate guards have ammo too.
-              const rawSplitIds = split.axes.flatMap((a) => a.ids);
-              const allIds = replacementIntent && replacementRequiredAxes.length >= 2
-                ? filterReplacementCompatibleIds(rawSplitIds, replacementRequiredAxes, ctx.cache).slice(0, 8)
-                : rawSplitIds.slice(0, 8);
-              const totalSum = split.axes.reduce((s, a) => s + a.total, 0);
+              const allIds = effectiveSplit.axes.flatMap((a) => a.ids).slice(0, 8);
+              const totalSum = effectiveSplit.axes.reduce((s, a) => s + a.total, 0);
               if (allIds.length > 0) {
                 freshSearch = { tool: "search_catalog_split", ids: allIds, total: totalSum };
                 // Persist across subsequent broad searches — render fallback
