@@ -270,7 +270,7 @@ export const SYSTEM_PROMPT = `<role>
 Шаблон GOOD: «Аналоги Schneider Acti9 C16 подешевле» → search_catalog(by_pagetitle="Schneider Acti9 C16") → price=4800 → search_catalog(by_filter, category="автомат", max_price=4800, sort=price_asc) → render только товары <4800.
 Шаблон BAD: один search_catalog со словом «подешевле» в query, отдача карточек дороже якоря.
 </price_anchoring>
-</reasoning_approach>
+
 
 <spec_query>
 Если клиент спрашивает характеристику/спецификацию конкретного товара (вес, мощность, диаметр, габариты, материал, IP и т.п.) — это spec-вопрос.
