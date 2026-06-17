@@ -471,17 +471,6 @@ async function logTurn(
 
 // ─── Expert loop ────────────────────────────────────────────────────────────
 
-function pickSearchLine(toolCalls: Array<{ name: string }>): string {
-  const first = toolCalls[0]?.name ?? "";
-  if (first === "lookup_contacts") return "Сейчас гляну контакты.";
-  if (first === "lookup_knowledge") return "Сейчас посмотрю в базе.";
-  if (first === "escalate_to_manager") return "Передаю менеджеру.";
-  if (first === "propose_clarification") return "Уточню один момент.";
-  // discover_category / search_catalog / jargon_recover_catalog
-  return "Сейчас поищу в каталоге.";
-}
-
-
 interface RequestBody {
   message?: string;
   sessionId?: string;
