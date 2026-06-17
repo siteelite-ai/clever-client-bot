@@ -16,7 +16,7 @@
 // ВАЖНО: модуль НЕ бросает исключений наружу. При любой ошибке LLM/сети возвращает
 // пустой результат — вызывающий код продолжает по обычному Soft-404 пути.
 
-const JARGON_MODEL = "deepseek/deepseek-chat-v3.1:free";
+const JARGON_MODEL = "google/gemini-2.5-flash";
 const JARGON_TIMEOUT_MS = 8_000;
 const MAX_ALTERNATIVES = 3;
 

@@ -28,7 +28,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const CATALOG_BASE_URL = Deno.env.get("CATALOG_API_BASE_URL") ?? "https://220volt.kz/api";
 
-const MODEL = "deepseek/deepseek-chat-v3.1:free";
+const MODEL = "google/gemini-2.5-flash";
 const MAX_STEPS = 8;
 const TURN_TIMEOUT_MS = 90_000;
 

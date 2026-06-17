@@ -635,7 +635,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       ai_model: 'meta-llama/llama-3.3-70b-instruct:free',
       system_prompt: null,
       classifier_provider: 'auto',
-      classifier_model: 'deepseek/deepseek-chat-v3.1:free',
+      classifier_model: 'google/gemini-2.5-flash',
       classifier_prompt: null,
       query_first_enabled: false,
       soft_suggest_enabled: false,
@@ -664,7 +664,7 @@ async function getAppSettings(): Promise<CachedSettings> {
         system_prompt: null,
         classifier_provider: 'auto',
       classifier_prompt: null,
-        classifier_model: 'deepseek/deepseek-chat-v3.1:free',
+        classifier_model: 'google/gemini-2.5-flash',
         query_first_enabled: false,
         soft_suggest_enabled: false,
         compare_branch_enabled: false,
@@ -703,7 +703,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       ai_model: data.ai_model || 'meta-llama/llama-3.3-70b-instruct:free',
       system_prompt: data.system_prompt || null,
       classifier_provider: data.classifier_provider || 'auto',
-      classifier_model: data.classifier_model || 'deepseek/deepseek-chat-v3.1:free',
+      classifier_model: data.classifier_model || 'google/gemini-2.5-flash',
       query_first_enabled: qf,
       soft_suggest_enabled: ss,
       compare_branch_enabled: cb,
@@ -721,7 +721,7 @@ async function getAppSettings(): Promise<CachedSettings> {
       classifier_prompt: null,
         system_prompt: null,
         classifier_provider: 'auto',
-        classifier_model: 'deepseek/deepseek-chat-v3.1:free',
+        classifier_model: 'google/gemini-2.5-flash',
         query_first_enabled: false,
         soft_suggest_enabled: false,
         compare_branch_enabled: false,
@@ -743,7 +743,7 @@ function getAIConfig(settings: CachedSettings): { url: string; apiKeys: string[]
   // Gemini галлюцинировал в коротких ветках (price/title/article shortcircuit) — выдумывал
   // ссылки и товары, которых нет в переданном списке. Claude Sonnet 4.5 строго цитирует
   // только переданные товары и не дописывает от себя. Стоимость ~2-3x, latency +2-4с.
-  let model = settings.ai_model || 'deepseek/deepseek-chat-v3.1:free';
+  let model = settings.ai_model || 'google/gemini-2.5-flash';
   if (!model.includes('/')) {
     // Bare names like "gemini-2.5-flash" → assume Google. Claude/OpenAI всегда указываются с префиксом.
     model = `google/${model}`;
@@ -1603,7 +1603,7 @@ async function classifyProductName(message: string, recentHistory?: Array<{role:
   // Gemini Flash нестабильно определял price_intent (самый дешёвый/дорогой) и critical_modifiers,
   // что приводило к выбору неправильной ветки (catalog vs price-shortcircuit) и к выдуманным
   // ответам. Claude строже следует JSON-схеме классификатора.
-  const model = 'deepseek/deepseek-chat-v3.1:free';
+  const model = 'google/gemini-2.5-flash';
 
   const url = 'https://openrouter.ai/api/v1/chat/completions';
   const apiKeys = [settings.openrouter_api_key];
@@ -4062,7 +4062,7 @@ ${JSON.stringify(modifiers)}
   // Claude Sonnet 4.5 строже следует структурным ограничениям и проверяет ∈ enum.
   // Эта стадия — единственная, где FilterLLM выбирает key=value из схемы фасетов;
   // остальные стадии (classify, candidates, composer) остаются на Gemini.
-  const model = 'deepseek/deepseek-chat-v3.1:free';
+  const model = 'google/gemini-2.5-flash';
   const url = 'https://openrouter.ai/api/v1/chat/completions';
   const apiKeys = [settings.openrouter_api_key];
   console.log(`[FilterLLM] OpenRouter (strict), model=${model} (Claude — strict schema adherence)`);
@@ -5301,7 +5301,7 @@ ${titles.map(t => `- ${t}`).join('\n')}
       method: 'POST',
       headers: { 'Authorization': `Bearer ${settings.openrouter_api_key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'deepseek/deepseek-chat-v3.1:free',
+        model: 'google/gemini-2.5-flash',
         messages: [{ role: 'user', content: systemPrompt }],
         temperature: 0.3,
         max_tokens: 250,
@@ -6866,7 +6866,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
         foundProducts = Array.from(articleProducts.values());
         articleShortCircuit = true;
         // Plan V5: для article-hit Pro избыточен — берём Flash.
-        responseModel = 'deepseek/deepseek-chat-v3.1:free'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
+        responseModel = 'google/gemini-2.5-flash'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
         responseModelReason = 'article-shortcircuit';
         console.log(`[Chat] Article-first SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
       } else {
@@ -6886,7 +6886,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
           foundProducts = Array.from(articleProducts.values());
           articleShortCircuit = true;
           // Plan V5: siteId-hit — тоже точное попадание, Flash хватает.
-          responseModel = 'deepseek/deepseek-chat-v3.1:free'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
+          responseModel = 'google/gemini-2.5-flash'; // 2026-05-02: Gemini Flash галлюцинировал ссылки на товары — Claude строго цитирует переданный список
           responseModelReason = 'siteid-shortcircuit';
           console.log(`[Chat] SiteId-fallback SUCCESS: found ${foundProducts.length} product(s), skipping LLM 1`);
         } else {
@@ -7241,7 +7241,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               if (ptResults.length > 0) {
                 foundProducts = ptResults.slice(0, 10);
                 articleShortCircuit = true;
-                responseModel = 'deepseek/deepseek-chat-v3.1:free';
+                responseModel = 'google/gemini-2.5-flash';
                 responseModelReason = 'pagetitle-shortcircuit';
                 console.log(`[Chat] NAME-FIRST step=pagetitle SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${pagetitleVariantUsed.substring(0, 80)}"`);
                 logAddStep({ step: 'pagetitle', total: ptResults.length, ms: elapsed, meta: { candidate: pagetitleVariantUsed.substring(0, 120), variantsTried: titleSearchCandidates.exact.length } });
@@ -7273,7 +7273,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
             //     if (ltResults.length > 0) {
             //       foundProducts = ltResults.slice(0, 10);
             //       articleShortCircuit = true;
-            //       responseModel = 'deepseek/deepseek-chat-v3.1:free';
+            //       responseModel = 'google/gemini-2.5-flash';
             //       responseModelReason = 'longtitle-shortcircuit';
             //       console.log(`[Chat] NAME-FIRST step=longtitle SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${longtitleVariantUsed.substring(0, 80)}"`);
             //       logAddStep({ step: 'longtitle', total: ltResults.length, ms: elapsed, meta: { candidate: longtitleVariantUsed.substring(0, 120), variantsTried: titleSearchCandidates.exact.length } });
@@ -7310,7 +7310,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   if (qResults.length > 0) {
                     foundProducts = qResults.slice(0, 10);
                     articleShortCircuit = true;
-                    responseModel = 'deepseek/deepseek-chat-v3.1:free'; // 2026-05-02: Gemini Flash hallucinated URLs
+                    responseModel = 'google/gemini-2.5-flash'; // 2026-05-02: Gemini Flash hallucinated URLs
                     responseModelReason = 'title-shortcircuit';
                     console.log(`[Chat] NAME-FIRST step=query SUCCESS: ${foundProducts.length} products in ${elapsed}ms for "${queryVariantUsed}"`);
                     logAddStep({ step: 'name-query', total: qResults.length, ms: elapsed, meta: { candidate: queryVariantUsed.substring(0, 120), variantsTried: queryCandidates.length } });
@@ -7686,7 +7686,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
                   foundProducts = priceResult.products;
                   articleShortCircuit = true;
-                  responseModel = 'deepseek/deepseek-chat-v3.1:free';
+                  responseModel = 'google/gemini-2.5-flash';
                   responseModelReason = 'price-shortcircuit';
                   dialogSlots[slotKey] = { ...slot, status: 'done', refinement: matched.value_ru };
                   slotsUpdated = true;
@@ -7998,7 +7998,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                 if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
                   foundProducts = priceResult.products;
                   articleShortCircuit = true;
-                  responseModel = 'deepseek/deepseek-chat-v3.1:free';
+                  responseModel = 'google/gemini-2.5-flash';
                   responseModelReason = 'price-shortcircuit';
                   logSetBranch('price-shortcircuit');
                 }
@@ -8023,7 +8023,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                       : probe.products.slice(0, 3);
                     foundProducts = topProducts;
                     articleShortCircuit = true;
-                    responseModel = 'deepseek/deepseek-chat-v3.1:free';
+                    responseModel = 'google/gemini-2.5-flash';
                     responseModelReason = 'price-facet-clarify';
                     // Сохраняем слот: следующее сообщение пользователя будет матчиться против facet.values.
                     const slotKey = `pfc_${Date.now()}`;
@@ -8044,7 +8044,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
                       foundProducts = priceResult.products;
                       articleShortCircuit = true;
-                      responseModel = 'deepseek/deepseek-chat-v3.1:free';
+                      responseModel = 'google/gemini-2.5-flash';
                       responseModelReason = 'price-shortcircuit';
                     }
                   }
@@ -8054,7 +8054,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                   if (priceResult.action === 'answer' && priceResult.products && priceResult.products.length > 0) {
                     foundProducts = priceResult.products;
                     articleShortCircuit = true;
-                    responseModel = 'deepseek/deepseek-chat-v3.1:free';
+                    responseModel = 'google/gemini-2.5-flash';
                     responseModelReason = 'price-shortcircuit';
                   }
                 }
@@ -8127,7 +8127,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               if (cleanSamples.length > 0) {
                 foundProducts = cleanSamples;
                 articleShortCircuit = true;
-                responseModel = 'deepseek/deepseek-chat-v3.1:free';
+                responseModel = 'google/gemini-2.5-flash';
                 responseModelReason = 'accessory-for-anchor-missing';
               }
               logAddStep({
@@ -8297,7 +8297,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
                     if (samples.length > 0) {
                       foundProducts = samples;
                       articleShortCircuit = true;
-                      responseModel = 'deepseek/deepseek-chat-v3.1:free';
+                      responseModel = 'google/gemini-2.5-flash';
                       responseModelReason = 'accessory-for-incompatible-collection';
                     }
                     attemptLabel = 'incompatible-collection';
@@ -8352,7 +8352,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
               if (!blockedByFamily && products.length > 0) {
                 foundProducts = products.slice(0, 15);
                 articleShortCircuit = true;
-                responseModel = 'deepseek/deepseek-chat-v3.1:free';
+                responseModel = 'google/gemini-2.5-flash';
                 responseModelReason = 'accessory-for';
               }
               logAddStep({
@@ -11240,7 +11240,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
     } else if (classification?.intent === 'info' || classification?.intent === 'general') {
       // info/general WITH product_category → fall through to full pipeline
       console.log(`[Chat] Micro-LLM intent="${classification.intent}" but product_category="${classification.product_category}" → forcing catalog pipeline`);
-      const candidatesModel = 'deepseek/deepseek-chat-v3.1:free';
+      const candidatesModel = 'google/gemini-2.5-flash';
       extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
     } else {
       // catalog/brands or no intent — full pipeline
@@ -11249,7 +11249,7 @@ async function _handleChatConsultantInner(req: Request): Promise<Response> {
       // EXPERIMENT 2026-05-04: переключаемся с gemini-3-flash-preview на Claude Sonnet 4.5 —
       // Gemini тоже терял модификаторы для технических артикулов («ВВГнг 3х2.5» → []).
       // Финальный ответ пользователю по-прежнему идёт на aiConfig.model.
-      const candidatesModel = 'deepseek/deepseek-chat-v3.1:free';
+      const candidatesModel = 'google/gemini-2.5-flash';
       extractedIntent = await generateSearchCandidates(userMessage, aiConfig.apiKeys, historyForContext, aiConfig.url, candidatesModel, classification?.product_category);
       // SYSTEMIC GUARD (2026-05-04): Micro-LLM (Claude) уже определил intent — это первичный источник правды.
       // generateSearchCandidates иногда возвращает intent='general' для разговорных формулировок
