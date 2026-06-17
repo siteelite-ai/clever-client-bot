@@ -29,7 +29,7 @@ const CATALOG_BASE_URL = Deno.env.get("CATALOG_API_BASE_URL") ?? "https://220vol
 
 const MODEL = "anthropic/claude-sonnet-4.5";
 const MAX_STEPS = 8;
-const TURN_TIMEOUT_MS = 30_000;
+const TURN_TIMEOUT_MS = 90_000;
 
 // ─── SSE encoding ───────────────────────────────────────────────────────────
 
@@ -145,6 +145,36 @@ function summariseToolResult(name: string, r: ToolResult): string {
   if (name === "escalate_to_manager") return `передано менеджеру`;
   if (name === "note_state") return `состояние сохранено`;
   return "ok";
+}
+
+function summariseToolArgs(name: string, args: Record<string, unknown>): Record<string, unknown> {
+  // Compact, log-friendly view of the call inputs (no PII, no heavy fields).
+  const pick = (keys: string[]) => {
+    const o: Record<string, unknown> = {};
+    for (const k of keys) if (args[k] !== undefined) o[k] = args[k];
+    return o;
+  };
+  if (name === "search_catalog") return pick(["mode", "query", "article", "pagetitle", "category", "min_price", "max_price", "sort_cheapest", "per_page", "page"]);
+  if (name === "expand_search_to_pool") return pick(["noun", "semantic_query", "modifiers", "category", "min_price", "max_price", "price_intent", "per_page"]);
+  if (name === "jargon_recover_catalog") return pick(["noun", "semantic_query", "modifiers", "category"]);
+  if (name === "lookup_knowledge") return pick(["query", "type"]);
+  if (name === "lookup_contacts") return pick(["fields"]);
+  if (name === "render_products") return { ids_count: Array.isArray(args.ids) ? (args.ids as unknown[]).length : 0, total_available: args.total_available };
+  if (name === "propose_clarification") return pick(["facet_key", "question"]);
+  if (name === "escalate_to_manager") return pick(["reason"]);
+  if (name === "note_state") return pick(["key", "ttl_turns"]);
+  return {};
+}
+
+function summariseToolResultMeta(name: string, r: ToolResult): Record<string, unknown> {
+  if (!r.ok) return { error_code: r.error_code, message: (r as { message?: string }).message };
+  if (name === "search_catalog" || name === "expand_search_to_pool" || name === "jargon_recover_catalog") {
+    const x = r as { total: number; branch_tag?: string; resolved_filters?: unknown };
+    return { total: x.total, branch_tag: x.branch_tag };
+  }
+  if (name === "lookup_knowledge") return { hits: (r as { hits: unknown[] }).hits.length };
+  if (name === "render_products") return { rendered_count: (r as { rendered_count: number }).rendered_count, blocked_by_zero_price: (r as { blocked_by_zero_price?: number }).blocked_by_zero_price };
+  return {};
 }
 
 function toolResultForLlm(r: ToolResult): unknown {
@@ -395,7 +425,14 @@ async function runExpertLoop(
         steps.push({
           step: "v3_tool_call",
           ms: now(),
-          meta: { tool: tc.name, ok: result.ok, error_code: !result.ok ? result.error_code : null, duration_ms: dur },
+          meta: {
+            tool: tc.name,
+            ok: result.ok,
+            error_code: !result.ok ? result.error_code : null,
+            duration_ms: dur,
+            args: summariseToolArgs(tc.name, tc.args),
+            result: summariseToolResultMeta(tc.name, result),
+          },
         });
 
         // If render_products succeeded → emit products_block immediately.
