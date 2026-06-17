@@ -11,7 +11,7 @@ export interface CatalogClientDeps {
 }
 
 export interface SearchCatalogInput {
-  mode: "by_article" | "by_pagetitle" | "by_query";
+  mode: "by_article" | "by_pagetitle" | "by_query" | "by_filter";
   article?: string;
   pagetitle?: string;
   query?: string;
