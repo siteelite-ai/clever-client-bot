@@ -975,13 +975,25 @@ async function runExpertLoop(
   let prioritySplitPool: string[] = [];
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
+  // Anchor exclusion: in replacement-intent turns ("аналог/замена/похожее"),
+  // the anchor SKU itself must never appear in the rendered list — it's the
+  // source product, not its analog. Computed lazily because the anchor is only
+  // discoverable in cache after at least one search populated it.
+  const replacementIntent = isReplacementIntent(userMessage);
+  const getAnchorExcludeId = (): string | null => {
+    if (!replacementIntent) return null;
+    const a = findAnchorInCache(ctx.cache, userMessage);
+    return a?.id ?? null;
+  };
   const pickFreshUnshown = (n: number): string[] => {
     const out: string[] = [];
     const seen = new Set<string>();
+    const excludeId = getAnchorExcludeId();
     const consume = (ids: string[]) => {
       for (const id of ids) {
         if (out.length >= n) return;
         if (seen.has(id) || shownIds.has(id)) continue;
+        if (excludeId && id === excludeId) continue;
         const p = ctx.cache.get(id);
         if (!p || !(p.price > 0)) continue;
         seen.add(id);
