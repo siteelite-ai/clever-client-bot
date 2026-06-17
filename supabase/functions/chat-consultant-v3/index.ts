@@ -1030,15 +1030,30 @@ async function runExpertLoop(
     const a = findAnchorInCache(ctx.cache, userMessage);
     return a?.id ?? null;
   };
+  // Same-series family exclusion: in replacement-intent turns, other SKUs from
+  // the same model line as the anchor (e.g. DN027B L100, DN027B L125 vs anchor
+  // DN027B G2) are variants — not true analogs. Identified by anchor's model
+  // code substring in pagetitle. Data-agnostic: works for any category where
+  // the model code is an alphanumeric token in the title.
+  const getFamilyExcludeSet = (): Set<string> => {
+    if (!replacementIntent) return new Set();
+    const a = findAnchorInCache(ctx.cache, userMessage);
+    if (!a) return new Set();
+    const title = (a as unknown as { pagetitle?: string; title?: string }).pagetitle
+      ?? (a as unknown as { title?: string }).title ?? "";
+    return findSameFamilyIds(ctx.cache, title, a.id);
+  };
   const pickFreshUnshown = (n: number): string[] => {
     const out: string[] = [];
     const seen = new Set<string>();
     const excludeId = getAnchorExcludeId();
+    const familyExclude = getFamilyExcludeSet();
     const consume = (ids: string[]) => {
       for (const id of ids) {
         if (out.length >= n) return;
         if (seen.has(id) || shownIds.has(id)) continue;
         if (excludeId && id === excludeId) continue;
+        if (familyExclude.has(id)) continue;
         const p = ctx.cache.get(id);
         if (!p || !(p.price > 0)) continue;
         seen.add(id);
