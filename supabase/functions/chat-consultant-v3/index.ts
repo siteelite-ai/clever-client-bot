@@ -1537,6 +1537,10 @@ async function runExpertLoop(
           (result as { total: number }).total === 0 &&
           !inferredFallback
         ) {
+          if (replacementIntent) {
+            const axes = buildReplacementAxes(tc.args, lastDiscover);
+            if (axes.length >= 2) replacementRequiredAxes = axes;
+          }
           const opts = (tc.args as { options?: Record<string, unknown> }).options;
           const axesCount = opts && typeof opts === "object"
             ? Object.values(opts).filter((v) => Array.isArray(v) && v.length > 0).length
@@ -1561,7 +1565,10 @@ async function runExpertLoop(
                 },
               });
               // Feed Step 6a/6b pool so render/escalate guards have ammo too.
-              const allIds = split.axes.flatMap((a) => a.ids).slice(0, 8);
+              const rawSplitIds = split.axes.flatMap((a) => a.ids);
+              const allIds = replacementIntent && replacementRequiredAxes.length >= 2
+                ? filterReplacementCompatibleIds(rawSplitIds, replacementRequiredAxes, ctx.cache).slice(0, 8)
+                : rawSplitIds.slice(0, 8);
               const totalSum = split.axes.reduce((s, a) => s + a.total, 0);
               if (allIds.length > 0) {
                 freshSearch = { tool: "search_catalog_split", ids: allIds, total: totalSum };
