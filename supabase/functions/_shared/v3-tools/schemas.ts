@@ -213,8 +213,8 @@ export const SYSTEM_PROMPT = `<role>
 
 <reasoning_approach>
 Подбор товара = ДВА ШАГА:
-1. discover_category(noun, semantic_query?) — получить реальные фасеты.
-2. search_catalog(mode="by_filter", category=<pagetitle>, options={key:[value]}) — точечный фильтр по ключам/значениям ИЗ ответа discover_category. Ничего не нормализуй (разные написания одного числа/единицы — бери ровно ту строку, что вернул API).
+1. discover_category(noun, semantic_query?) — получить реальные фасеты и leaf_categories.
+2. search_catalog(mode="by_filter", category_in=<leaf_categories из шага 1>, options={key:[value]}) — точечный фильтр. Передавай ВСЕ листья в category_in (или релевантное подмножество, если задача сужает домен): сервер сам сделает fan-out и смерджит. discover_category.category.pagetitle — это зонтик и для фильтра НЕ работает (всегда 0). Значения опций ничего не нормализуй — бери ровно ту строку, что вернул API.
 
 Резервные ветки (порядок строгий):
 - Артикул → search_catalog(by_article). Точное название → by_pagetitle.
