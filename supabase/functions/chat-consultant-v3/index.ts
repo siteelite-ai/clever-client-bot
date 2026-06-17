@@ -525,8 +525,24 @@ function promiseRealityCheck(
 // ── Step 5: Price Direction Guard ────────────────────────────────────────
 type PriceDirection = "cheaper" | "more_expensive" | "same";
 
+function extractBudgetCap(msg: string): number | null {
+  const m = msg.toLowerCase().replace(/\s+/g, " ");
+  // "до 1000 тг", "не дороже 1000 тенге", "не более 1000 ₸", "в пределах 1000 тг", "максимум 1000 тг"
+  const re = /(?:до|не\s+дороже|не\s+более|в\s+пределах|максимум|макс\.?|бюджет(?:\s+до)?)\s+(\d[\d\s]{0,9})\s*(?:тг|тенге|₸|kzt)\b/u;
+  const m1 = m.match(re);
+  if (m1) {
+    const n = parseInt(m1[1].replace(/\s+/g, ""), 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}
+
 function detectPriceDirection(msg: string): PriceDirection | null {
   const m = msg.toLowerCase();
+  // Если есть явный потолок бюджета ("до X тг", "не дороже X тг") — это max_price constraint, а не direction.
+  if (extractBudgetCap(msg) !== null) return null;
+  // Отрицание: "не дороже", "не дешевле", "не подороже" и т.п. — направление сбрасываем.
+  if (/\bне\s+(под?ороже|дороже|подешевле|дешевле)\b/u.test(m)) return null;
   if (/\b(в том же.*(сегмент|ценов)|таком же.*ценов|той же цене|такого же.*ценов)/u.test(m)) return "same";
   if (/(подешевле|дешевле|самый\s+дешёв|самый\s+дешев|самые\s+дешёв|самые\s+дешев|бюджетн|поэконом|подоступн|поде[шщ]евле)/u.test(m)) return "cheaper";
   if (/(подороже|дороже|самый\s+дорог|самые\s+дорог|премиум|премьюм|топов|подсолидн)/u.test(m)) return "more_expensive";
@@ -583,6 +599,7 @@ async function broadenPriceDirectionSearch(
   anchor: CachedProd | null,
   lastDiscover: DiscoverCategoryOk | null,
   ctx: ToolContext,
+  budgetCap: number | null = null,
 ): Promise<string[]> {
   if (!lastDiscover) return [];
   const input: SearchCatalogInput = {
@@ -596,6 +613,11 @@ async function broadenPriceDirectionSearch(
     if (direction === "cheaper") input.max_price = anchor.price;
     else if (direction === "more_expensive") input.min_price = anchor.price;
     else if (direction === "same") { input.min_price = Math.floor(anchor.price * 0.7); input.max_price = Math.ceil(anchor.price * 1.3); }
+  }
+  // Бюджетный потолок клиента всегда уважается, даже при расширении.
+  if (budgetCap !== null && budgetCap > 0) {
+    input.max_price = Math.min(input.max_price ?? Number.POSITIVE_INFINITY, budgetCap);
+    if (input.min_price && input.min_price > input.max_price) return [];
   }
   const fb = await executeSearchCatalog(input, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
   if (!fb.ok || fb.total === 0) return [];
@@ -617,7 +639,8 @@ async function tryPriceDirectionRescue(
   const dir = detectPriceDirection(userMessage);
   if (!dir) return 0;
   const anchor = findAnchorInCache(ctx.cache, userMessage);
-  const ids = await broadenPriceDirectionSearch(dir, anchor, lastDiscover, ctx);
+  const budgetCap = extractBudgetCap(userMessage);
+  const ids = await broadenPriceDirectionSearch(dir, anchor, lastDiscover, ctx, budgetCap);
   if (ids.length === 0) return 0;
   const render = await executeRenderProducts({ product_ids: ids, total_available: ids.length } as RenderProductsInput, ctx.cache);
   if (!render.ok) return 0;
@@ -1141,14 +1164,19 @@ async function runExpertLoop(
         // ── Step 5: Price Direction Guard (pre-render rewrite)
         if (tc.name === "render_products") {
           const dir = detectPriceDirection(userMessage);
-          if (dir) {
+          const budgetCap = extractBudgetCap(userMessage);
+          const anchor = findAnchorInCache(ctx.cache, userMessage);
+          // Pre-condition: явный бюджетный потолок несовместим с "подороже относительно якоря".
+          const directionAllowed = dir && !(
+            dir === "more_expensive" && budgetCap !== null && anchor && budgetCap <= anchor.price
+          );
+          if (dir && directionAllowed) {
             const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
-            const anchor = findAnchorInCache(ctx.cache, userMessage);
             const rewrite = rewriteRenderIdsByPriceDirection(origIds, dir, anchor, ctx.cache);
             let finalIds = rewrite.ids;
             let usedBroaden = false;
             if (finalIds.length < 3) {
-              const broaden = await broadenPriceDirectionSearch(dir, anchor, lastDiscover, ctx);
+              const broaden = await broadenPriceDirectionSearch(dir, anchor, lastDiscover, ctx, budgetCap);
               if (broaden.length >= 3) { finalIds = broaden; usedBroaden = true; }
             }
             if (finalIds.length > 0 && (finalIds.length !== origIds.length || finalIds.join("|") !== origIds.join("|"))) {
@@ -1160,6 +1188,7 @@ async function runExpertLoop(
                   direction: dir,
                   anchor_id: anchor?.id ?? null,
                   anchor_price: anchor?.price ?? null,
+                  budget_cap: budgetCap,
                   before: origIds.length,
                   after: finalIds.length,
                   filtered_out: rewrite.filteredOut,
@@ -1167,8 +1196,15 @@ async function runExpertLoop(
                 },
               });
             }
+          } else if (dir && !directionAllowed) {
+            steps.push({
+              step: "v3_guard_price_direction_skipped",
+              ms: now(),
+              meta: { direction: dir, anchor_price: anchor?.price ?? null, budget_cap: budgetCap, reason: "budget_cap_conflicts_with_direction" },
+            });
           }
         }
+
 
         // ── Step 6a: Render Guard — auto-complement ids from fresh search if LLM dropped them.
         if (tc.name === "render_products") {
