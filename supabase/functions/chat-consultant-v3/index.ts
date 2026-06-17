@@ -958,18 +958,29 @@ async function runExpertLoop(
 
   // Step 6 state: fresh-but-unshown product pool from latest successful search.
   let freshSearch: { tool: string; ids: string[]; total: number } | null = null;
+  // Priority pool from v3_guard_split_fallback — survives across LLM steps.
+  // Preferred over freshSearch in render fallback, because subsequent broad
+  // by_query calls can overwrite freshSearch with off-target results
+  // (see DN027B аналог-кейс: split_fallback дал 12 релевантных id,
+  // потом by_query "downlight"→309 затёр freshSearch и render выдал мусор).
+  let prioritySplitPool: string[] = [];
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
   const pickFreshUnshown = (n: number): string[] => {
-    if (!freshSearch) return [];
     const out: string[] = [];
-    for (const id of freshSearch.ids) {
-      if (out.length >= n) break;
-      if (shownIds.has(id)) continue;
-      const p = ctx.cache.get(id);
-      if (!p || !(p.price > 0)) continue;
-      out.push(id);
-    }
+    const seen = new Set<string>();
+    const consume = (ids: string[]) => {
+      for (const id of ids) {
+        if (out.length >= n) return;
+        if (seen.has(id) || shownIds.has(id)) continue;
+        const p = ctx.cache.get(id);
+        if (!p || !(p.price > 0)) continue;
+        seen.add(id);
+        out.push(id);
+      }
+    };
+    consume(prioritySplitPool);
+    if (freshSearch) consume(freshSearch.ids);
     return out;
   };
 
