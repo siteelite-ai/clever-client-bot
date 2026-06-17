@@ -455,8 +455,11 @@ async function runExpertLoop(
         meta: { step_index: step, duration_ms: Date.now() - llmStart, has_text: !!resp.text, tool_calls: resp.toolCalls.length, finish: resp.finishReason },
       });
 
-      // Stream the assistant text as deltas BEFORE running tools.
-      if (resp.text.trim()) {
+      const hasRender = resp.toolCalls.some((tc) => tc.name === "render_products");
+
+      // Stream assistant text before tools, except render_products turns:
+      // product cards are the only allowed surface for names/prices/links.
+      if (resp.text.trim() && !hasRender) {
         if (bubbleHasText) {
           // Already streamed prior text in this turn → break bubble first.
           send({ type: "assistant_turn_break", reason: "tool_pending" });
@@ -475,7 +478,6 @@ async function runExpertLoop(
       }
 
       // Break the bubble before tool execution / products.
-      const hasRender = resp.toolCalls.some((tc) => tc.name === "render_products");
       send({
         type: "assistant_turn_break",
         reason: hasRender ? "after_render" : "tool_pending",
@@ -529,6 +531,8 @@ async function runExpertLoop(
             total_available: typeof tc.args.total_available === "number" ? tc.args.total_available : undefined,
           });
           productsRendered += r.rendered_count;
+          steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "rendered", step_count: step + 1 } });
+          return { finalText, productsRendered };
         }
 
         // Tool-driven SSE side-effects (contacts/quick_replies/slot_update).
