@@ -17,3 +17,14 @@ Guards (server-only, no hardcoded dictionaries):
 - **6e Render-empty hint**: on `render_products` error with non-empty fresh pool, inject `_fresh_pool_ids` + `_server_hint` to push LLM toward correct ids.
 
 Prompt hard_rules updated (schemas.ts): added rules 10 (source of id), 11 (catalog_timeout retry), 12 (clarify before ambiguous device queries), 13 (ladder before render/escalate).
+
+## Step C — Honest-Split Fallback (added 2026-06-17)
+**When:** `search_catalog` with `mode=by_filter`, ≥2 axes in `options`, `total=0`, Step 2 (inferred-filter) didn't already rescue.
+**Action:** run each axis independently in parallel (`per_page=5`, same category, `options={axis:[values]}`). If ≥1 axis returns items → inject into tool reply:
+- `_intersection_empty: true`
+- `_split_axes: [{axis, value, ids, total}, ...]`
+- `_server_hint` instructing LLM to admit honestly and render union of ids.
+Also feeds `freshSearch` so Step 6a/6b can auto-render if LLM ignores hint.
+Log step: `v3_guard_split_fallback`.
+**Hard rule 14** in schemas.ts enforces the honest acknowledgement + single render call.
+**Closes:** "кукуруза + E27" intersection case and any "X для Y" with empty intersection.
