@@ -181,6 +181,15 @@ function summariseToolResultMeta(name: string, r: ToolResult): Record<string, un
     const x = r as { total: number; branch_tag?: string; resolved_filters?: unknown };
     return { total: x.total, branch_tag: x.branch_tag };
   }
+  if (name === "discover_category") {
+    const x = r as unknown as { category?: { pagetitle?: string; total_products?: number }; facets?: Array<{ key: string; values?: unknown[] }> };
+    return {
+      pagetitle: x.category?.pagetitle,
+      total_products: x.category?.total_products ?? 0,
+      facets_count: x.facets?.length ?? 0,
+      facet_keys: (x.facets ?? []).slice(0, 20).map((f) => f.key),
+    };
+  }
   if (name === "lookup_knowledge") return { hits: (r as { hits: unknown[] }).hits.length };
   if (name === "render_products") return { rendered_count: (r as { rendered_count: number }).rendered_count, blocked_by_zero_price: (r as { blocked_by_zero_price?: number }).blocked_by_zero_price };
   return {};
