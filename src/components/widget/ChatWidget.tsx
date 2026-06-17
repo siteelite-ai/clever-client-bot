@@ -45,26 +45,6 @@ async function resolvePipelineEndpoint(): Promise<{ pipeline: PipelineVersion; u
 
 type Msg = { role: 'user' | 'assistant'; content: string };
 
-// Thinking phrases for perceived latency reduction
-const PRODUCT_KEYWORDS = /розетк|кабел|автомат|щит|ламп|выключател|провод|удлинител|счётчик|счетчик|реле|контактор|дрел|шуруповёрт|шуруповерт|перфоратор|болгарк|пил[аеу]|насос|генератор|сварочн|компрессор|лобзик|фрез|гайковёрт|гайковерт|стабилизатор|трансформатор|инструмент|электро|плоскогубц|отвёртк|отвертк|рулетк|уровен|мультиметр|тестер|паяльник|фен|краскопульт|нож|диск|бур|свёрл|сверл|коронк|патрон|аккумулятор|зарядн|бензо|цепн|триммер|газонокосилк|мойк|пистолет/i;
-
-const THINKING_CATALOG = [
-  'Сейчас подберу варианты',
-  'Ищу в каталоге',
-  'Секунду, смотрю наличие',
-  'Подбираю подходящие товары',
-  'Сейчас посмотрю, что есть',
-];
-
-/**
- * Возвращает thinking-фразу ТОЛЬКО для каталожных запросов.
- * Для приветствий, общих вопросов и болталки — null (показываем только typing-точки).
- */
-function pickThinkingPhrase(message: string): string | null {
-  if (!PRODUCT_KEYWORDS.test(message)) return null;
-  return THINKING_CATALOG[Math.floor(Math.random() * THINKING_CATALOG.length)];
-}
-
 // Dialog slot types for persistent intent memory
 interface DialogSlot {
   intent: 'price_extreme' | 'product_search';
@@ -422,8 +402,6 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       timestamp: new Date()
     }]);
 
-    const thinkingPhrase = pickThinkingPhrase(text);
-
     // Prepare messages for API (do this BEFORE the delay so we can fire in parallel)
     const apiMessages: Msg[] = messages
       .filter(m => 
@@ -610,31 +588,6 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
         setPendingQuickReply(null);
       }
     });
-
-    // Step 2: Show thinking phrase after longer typing animation (runs in parallel with API)
-    // Только для каталожных запросов. Иначе оставляем крутиться typing-точки.
-    await new Promise(r => setTimeout(r, 3000));
-    if (thinkingPhrase) {
-      const thinkingId = mid('thinking');
-      setMessages(prev => {
-        const withoutTyping = prev.filter(m => m.id !== typingId);
-        // Only add thinking phrase + typing2 if stream hasn't already started delivering
-        if (!typing2Removed) {
-          return [...withoutTyping, {
-            id: thinkingId,
-            role: 'assistant' as const,
-            content: thinkingPhrase,
-            timestamp: new Date()
-          }, {
-            id: mid('typing2'),
-            role: 'assistant' as const,
-            content: '__TYPING__',
-            timestamp: new Date()
-          }];
-        }
-        return withoutTyping;
-      });
-    }
 
     // Wait for stream to complete
     await streamPromise;

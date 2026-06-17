@@ -7,6 +7,7 @@
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { TOOL_SCHEMAS, SYSTEM_PROMPT } from "../_shared/v3-tools/schemas.ts";
 import { executeSearchCatalog, type SearchCatalogInput } from "../_shared/v3-tools/search-catalog.ts";
+import { executeJargonRecoverCatalog, type JargonRecoverCatalogInput } from "../_shared/v3-tools/jargon-recover-catalog.ts";
 import { executeExpandSearchToPool, type ExpandPoolInput } from "../_shared/v3-tools/expand-search-pool.ts";
 import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3-tools/lookup-knowledge.ts";
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
@@ -99,6 +100,13 @@ async function runTool(
   if (name === "search_catalog") {
     return executeSearchCatalog(args as unknown as SearchCatalogInput, catalogDeps, ctx.cache);
   }
+  if (name === "jargon_recover_catalog") {
+    return executeJargonRecoverCatalog(
+      args as unknown as JargonRecoverCatalogInput,
+      { ...catalogDeps, openrouterApiKey: ctx.openrouterKey },
+      ctx.cache,
+    );
+  }
   if (name === "expand_search_to_pool") {
     return executeExpandSearchToPool(
       args as unknown as ExpandPoolInput,
@@ -129,7 +137,7 @@ async function runTool(
 
 function summariseToolResult(name: string, r: ToolResult): string {
   if (!r.ok) return `ошибка: ${r.error_code}`;
-  if (name === "search_catalog" || name === "expand_search_to_pool") return `найдено ${(r as { total: number }).total}`;
+  if (name === "search_catalog" || name === "expand_search_to_pool" || name === "jargon_recover_catalog") return `найдено ${(r as { total: number }).total}`;
   if (name === "lookup_knowledge") return `${(r as { hits: unknown[] }).hits.length} фрагментов`;
   if (name === "lookup_contacts") return `контакты загружены`;
   if (name === "render_products") return `показано ${(r as { rendered_count: number }).rendered_count}`;
