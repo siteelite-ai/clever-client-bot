@@ -218,9 +218,59 @@ function valueIsEvidenced(value: string, evidenceText: string): boolean {
 
 function extractEchoLabel(firstAssistantText: string, userMessage: string): string {
   const source = firstAssistantText.trim() || userMessage.trim();
-  const dashIndex = source.search(/[—–-]/u);
+  const dashIndex = source.search(/\s[—–]\s/u);
   const raw = dashIndex > 0 ? source.slice(0, dashIndex) : source;
   return raw.replace(/[?.!,;:]+$/u, "").trim().slice(0, 80) || "запрошенному признаку";
+}
+
+function stripKnownValues(text: string, values: string[]): string {
+  let out = text;
+  for (const value of values.filter(Boolean)) {
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(escaped, "giu"), " ");
+    const code = normalizeCodeLike(value);
+    out = out
+      .split(/\s+/)
+      .filter((token) => normalizeCodeLike(token) !== code)
+      .join(" ");
+  }
+  return out.replace(/\s+/g, " ").trim();
+}
+
+function traitValuesForFacet(products: Array<{ short_traits?: string[] }>, facet: Facet): string[] {
+  const captionNorm = normalizeForMatch(facet.caption);
+  const values = new Set<string>();
+  for (const p of products) {
+    for (const line of p.short_traits ?? []) {
+      const [rawCaption, ...rawValue] = line.split(":");
+      if (!rawCaption || rawValue.length === 0) continue;
+      if (normalizeForMatch(rawCaption) !== captionNorm) continue;
+      const value = rawValue.join(":").trim();
+      if (value) values.add(value);
+    }
+  }
+  return [...values].slice(0, 4);
+}
+
+function buildNoIntersectionText(input: {
+  requestedLabel: string;
+  confirmedFilters: Array<{ facet: Facet; value: string }>;
+  confirmedTotal: number;
+  semanticTotal: number;
+  semanticFacetValues: Array<{ facet: Facet; values: string[] }>;
+}): string {
+  const filtersText = input.confirmedFilters.map((f) => `${f.facet.caption}: ${f.value}`).join(", ");
+  const parts: string[] = [];
+  parts.push(`По сочетанию «${input.requestedLabel}${filtersText ? `, ${filtersText}` : ""}» точного совпадения не нашёл.`);
+  if (input.confirmedTotal > 0 && filtersText) parts.push(`По ${filtersText} товары есть.`);
+  if (input.semanticTotal > 0) {
+    const withValues = input.semanticFacetValues
+      .filter((x) => x.values.length > 0)
+      .map((x) => `${x.facet.caption}: ${x.values.join(", ")}`)
+      .join("; ");
+    parts.push(withValues ? `По «${input.requestedLabel}» есть отдельно, но с другими значениями: ${withValues}.` : `По «${input.requestedLabel}» есть отдельные варианты без полного совпадения.`);
+  }
+  return parts.join(" ");
 }
 
 function topFacetOptions(facet: Facet): Array<{ value: string; label: string; count?: number }> {
