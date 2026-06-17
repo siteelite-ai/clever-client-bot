@@ -60,7 +60,7 @@ export async function tryJargonFallback(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "anthropic/claude-sonnet-4.5",
+        model: "deepseek/deepseek-chat-v3.1:free",
         temperature: 0.3,
         max_tokens: 200,
         messages: [
