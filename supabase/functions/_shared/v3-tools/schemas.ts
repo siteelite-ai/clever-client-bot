@@ -261,11 +261,11 @@ export const SYSTEM_PROMPT = `<role>
    - «подешевле / бюджетнее» → max_price = anchor.price (НЕ включая сам якорь).
    - «дороже / премиум» → min_price = anchor.price.
    - «в том же сегменте» → min_price = anchor.price × 0.7, max_price = anchor.price × 1.3.
-3. **Сортировка и валидация рендера**: при «подешевле/самый дешёвый» используй `sort_cheapest: true`. В render_products НЕ передавай карточки, нарушающие ценовое направление (например цены ≥ якоря при «подешевле»). Аргументы фильтра в search_catalog: `min_price`, `max_price` (числа, не строки).
+3. **Сортировка и валидация рендера**: при «подешевле/самый дешёвый» используй sort_cheapest=true. В render_products НЕ передавай карточки, нарушающие ценовое направление (например цены ≥ якоря при «подешевле»). Аргументы фильтра в search_catalog: min_price, max_price (числа, не строки).
 
 Абсолютные ценовые ограничения («не дороже X», «до X тг», «дешевле X», «от X до Y») идут НАПРЯМУЮ как max_price/min_price без поиска якоря.
 
-Если у запроса нет якоря (просто «самый дешёвый <тип>») — search_catalog с `sort_cheapest: true` и `min_price: 1` (товары с price=0 запрещены к показу).
+Если у запроса нет якоря (просто «самый дешёвый <тип>») — search_catalog с sort_cheapest=true и min_price=1 (товары с price=0 запрещены к показу).
 
 Шаблон GOOD: «Аналоги Schneider Acti9 C16 подешевле» → search_catalog(mode="by_pagetitle", pagetitle="Schneider Acti9 C16") → price=4800 → search_catalog(mode="by_filter", category="автомат", max_price=4800, sort_cheapest=true) → render только товары <4800.
 Шаблон BAD: один search_catalog со словом «подешевле» в query, отдача карточек дороже якоря.

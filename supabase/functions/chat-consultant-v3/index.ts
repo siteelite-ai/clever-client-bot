@@ -510,6 +510,120 @@ function promiseRealityCheck(
   return { corrective: `Уточнение: ${lines}.`, mismatches };
 }
 
+// ── Step 5: Price Direction Guard ────────────────────────────────────────
+type PriceDirection = "cheaper" | "more_expensive" | "same";
+
+function detectPriceDirection(msg: string): PriceDirection | null {
+  const m = msg.toLowerCase();
+  if (/\b(в том же.*(сегмент|ценов)|таком же.*ценов|той же цене|такого же.*ценов)/u.test(m)) return "same";
+  if (/(подешевле|дешевле|самый\s+дешёв|самый\s+дешев|самые\s+дешёв|самые\s+дешев|бюджетн|поэконом|подоступн|поде[шщ]евле)/u.test(m)) return "cheaper";
+  if (/(подороже|дороже|самый\s+дорог|самые\s+дорог|премиум|премьюм|топов|подсолидн)/u.test(m)) return "more_expensive";
+  return null;
+}
+
+type CachedProd = { id: string; price: number; pagetitle?: string; title?: string };
+
+function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd | null {
+  const msg = userMessage.toLowerCase().replace(/[«»"',.()]/g, " ");
+  let best: { p: CachedProd; score: number } | null = null;
+  for (const raw of cache.values()) {
+    const p = raw as unknown as CachedProd;
+    if (typeof p.price !== "number" || p.price <= 0) continue;
+    const title = (p.pagetitle ?? p.title ?? "").toLowerCase();
+    const tokens = title.split(/[\s\-_/]+/).filter((t) => t.length >= 3 && !/^\d+$/.test(t));
+    if (tokens.length === 0) continue;
+    let score = 0;
+    for (const t of tokens) if (msg.includes(t)) score++;
+    if (score >= 2 && (!best || score > best.score)) best = { p, score };
+  }
+  return best?.p ?? null;
+}
+
+function rewriteRenderIdsByPriceDirection(
+  productIds: string[],
+  direction: PriceDirection,
+  anchor: CachedProd | null,
+  cache: ProductCache,
+): { ids: string[]; filteredOut: number; sorted: boolean } {
+  const products = productIds
+    .map((id) => cache.get(String(id)) as unknown as CachedProd | undefined)
+    .filter((p): p is CachedProd => !!p && typeof p.price === "number" && p.price > 0);
+  if (products.length === 0) return { ids: productIds, filteredOut: 0, sorted: false };
+
+  let filtered = products;
+  if (anchor) {
+    if (direction === "cheaper") filtered = products.filter((p) => p.price < anchor.price && p.id !== anchor.id);
+    else if (direction === "more_expensive") filtered = products.filter((p) => p.price > anchor.price && p.id !== anchor.id);
+    else if (direction === "same") {
+      const lo = anchor.price * 0.7, hi = anchor.price * 1.3;
+      filtered = products.filter((p) => p.price >= lo && p.price <= hi && p.id !== anchor.id);
+    }
+  }
+  if (direction === "cheaper" || direction === "same") filtered = [...filtered].sort((a, b) => a.price - b.price);
+  else if (direction === "more_expensive") filtered = [...filtered].sort((a, b) => b.price - a.price);
+
+  const ids = filtered.slice(0, 8).map((p) => p.id);
+  return { ids, filteredOut: products.length - filtered.length, sorted: true };
+}
+
+async function broadenPriceDirectionSearch(
+  direction: PriceDirection,
+  anchor: CachedProd | null,
+  lastDiscover: DiscoverCategoryOk | null,
+  ctx: ToolContext,
+): Promise<string[]> {
+  if (!lastDiscover) return [];
+  const input: SearchCatalogInput = {
+    mode: "by_filter",
+    category: lastDiscover.category.pagetitle,
+    per_page: 20,
+    sort_cheapest: direction !== "more_expensive",
+    min_price: 1,
+  };
+  if (anchor) {
+    if (direction === "cheaper") input.max_price = anchor.price;
+    else if (direction === "more_expensive") input.min_price = anchor.price;
+    else if (direction === "same") { input.min_price = Math.floor(anchor.price * 0.7); input.max_price = Math.ceil(anchor.price * 1.3); }
+  }
+  const fb = await executeSearchCatalog(input, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+  if (!fb.ok || fb.total === 0) return [];
+  const sorted = [...fb.results]
+    .filter((p) => typeof (p as CachedProd).price === "number" && (p as CachedProd).price > 0)
+    .sort((a, b) => direction === "more_expensive" ? (b as CachedProd).price - (a as CachedProd).price : (a as CachedProd).price - (b as CachedProd).price)
+    .slice(0, 8);
+  return sorted.map((p) => String((p as { id: string | number }).id));
+}
+
+async function tryPriceDirectionRescue(
+  userMessage: string,
+  lastDiscover: DiscoverCategoryOk | null,
+  ctx: ToolContext,
+  send: (ev: SseEvent) => void,
+  steps: StepLog[],
+  now: () => number,
+): Promise<number> {
+  const dir = detectPriceDirection(userMessage);
+  if (!dir) return 0;
+  const anchor = findAnchorInCache(ctx.cache, userMessage);
+  const ids = await broadenPriceDirectionSearch(dir, anchor, lastDiscover, ctx);
+  if (ids.length === 0) return 0;
+  const render = await executeRenderProducts({ product_ids: ids, total_available: ids.length } as RenderProductsInput, ctx.cache);
+  if (!render.ok) return 0;
+  send({ type: "tool_event", tool: "search_catalog", phase: "result", duration_ms: 0, summary: `price-rescue: найдено ${ids.length}` });
+  send({ type: "tool_event", tool: "render_products", phase: "result", duration_ms: 0, summary: `показано ${render.rendered_count}` });
+  send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: ids.length });
+  steps.push({
+    step: "v3_guard_price_rescue",
+    ms: now(),
+    meta: { direction: dir, anchor_id: anchor?.id ?? null, anchor_price: anchor?.price ?? null, rendered: render.rendered_count },
+  });
+  return render.rendered_count;
+}
+
+
+
+
+
 function compactDiscoverCategoryForLlm(r: ToolResult, args: Record<string, unknown>, userMessage: string): unknown {
   const x = r as unknown as {
     ok: true;
@@ -786,7 +900,11 @@ async function runExpertLoop(
 
 
       if (resp.toolCalls.length === 0) {
-        // No tools → turn ends.
+        // No tools → turn ends. Last-chance: if user asked relative-price and we rendered nothing → rescue.
+        if (productsRendered === 0) {
+          const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
+          productsRendered += rescued;
+        }
         steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "ok", step_count: step + 1 } });
         return { finalText, productsRendered };
       }
@@ -884,9 +1002,46 @@ async function runExpertLoop(
               ...guardOutcome.meta,
             },
           });
+          if (productsRendered === 0) {
+            const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
+            productsRendered += rescued;
+          }
           steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "guarded_no_intersection", step_count: step + 1 } });
           return { finalText, productsRendered };
         }
+
+        // ── Step 5: Price Direction Guard (pre-render rewrite)
+        if (tc.name === "render_products") {
+          const dir = detectPriceDirection(userMessage);
+          if (dir) {
+            const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
+            const anchor = findAnchorInCache(ctx.cache, userMessage);
+            const rewrite = rewriteRenderIdsByPriceDirection(origIds, dir, anchor, ctx.cache);
+            let finalIds = rewrite.ids;
+            let usedBroaden = false;
+            if (finalIds.length < 3) {
+              const broaden = await broadenPriceDirectionSearch(dir, anchor, lastDiscover, ctx);
+              if (broaden.length >= 3) { finalIds = broaden; usedBroaden = true; }
+            }
+            if (finalIds.length > 0 && (finalIds.length !== origIds.length || finalIds.join("|") !== origIds.join("|"))) {
+              (tc.args as Record<string, unknown>).product_ids = finalIds;
+              steps.push({
+                step: "v3_guard_price_direction",
+                ms: now(),
+                meta: {
+                  direction: dir,
+                  anchor_id: anchor?.id ?? null,
+                  anchor_price: anchor?.price ?? null,
+                  before: origIds.length,
+                  after: finalIds.length,
+                  filtered_out: rewrite.filteredOut,
+                  broadened: usedBroaden,
+                },
+              });
+            }
+          }
+        }
+
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
         let result = await runTool(tc.name, tc.args, ctx);
         let effectiveArgs: Record<string, unknown> = tc.args;
@@ -1014,8 +1169,14 @@ async function runExpertLoop(
     }
 
     // Step budget exhausted.
+    if (productsRendered === 0) {
+      const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
+      productsRendered += rescued;
+    }
     steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "forced_stepcount", step_count: MAX_STEPS } });
-    send({ type: "delta", content: "\n\nИзвини, не успел до конца разобраться. Если нужно — напиши контактному менеджеру." });
+    if (productsRendered === 0) {
+      send({ type: "delta", content: "\n\nИзвини, не успел до конца разобраться. Если нужно — напиши контактному менеджеру." });
+    }
     return { finalText, productsRendered };
   } finally {
     clearTimeout(turnTimer);
