@@ -268,9 +268,9 @@ export async function executeDiscoverCategory(
   }
 
   try {
-    const direct = await fetchFacetsForPagetitle(noun, deps);
-    if (direct.ok && isUsefulDiscovery(direct.data)) return { tool: "discover_category", ...direct.data };
-
+    // Resolve pagetitle against the LIVE category list first (exact-match, then LLM resolver).
+    // Calling /categories/options with an arbitrary noun (e.g. "кабель") can hang the upstream API,
+    // so we never hit /options without a validated pagetitle from the real catalog.
     const resolved = await resolvePagetitle(input, deps);
     if (!resolved) {
       return { tool: "discover_category", ok: false, error_code: "category_not_found", message: `no category for "${noun}"` };
