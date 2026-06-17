@@ -416,6 +416,17 @@ async function logTurn(
 
 // ─── Expert loop ────────────────────────────────────────────────────────────
 
+function pickSearchLine(toolCalls: Array<{ name: string }>): string {
+  const first = toolCalls[0]?.name ?? "";
+  if (first === "lookup_contacts") return "Сейчас гляну контакты.";
+  if (first === "lookup_knowledge") return "Сейчас посмотрю в базе.";
+  if (first === "escalate_to_manager") return "Передаю менеджеру.";
+  if (first === "propose_clarification") return "Уточню один момент.";
+  // discover_category / search_catalog / expand_search_to_pool / jargon_recover_catalog
+  return "Сейчас поищу в каталоге.";
+}
+
+
 interface RequestBody {
   message?: string;
   sessionId?: string;
@@ -486,6 +497,18 @@ async function runExpertLoop(
         reason: hasRender ? "after_render" : "tool_pending",
       });
       bubbleHasText = false;
+
+      // На первом ходе перед первым тулом — детерминированный второй пузырь
+      // ("сейчас поищу в каталоге"), чтобы UX был стабильным независимо от
+      // модели. Дальше пойдёт tool_event спиннер.
+      if (isFirstTurn && !hasRender) {
+        const searchLine = pickSearchLine(resp.toolCalls);
+        send({ type: "delta", content: searchLine });
+        finalText += searchLine;
+        send({ type: "assistant_turn_break", reason: "tool_pending" });
+        steps.push({ step: "v3_assistant_search_bubble", ms: now(), meta: { text: searchLine } });
+      }
+
 
       // Add the assistant turn (with tool_calls) to the history.
       messages.push({
