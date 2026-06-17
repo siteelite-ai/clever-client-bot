@@ -589,6 +589,8 @@ async function runExpertLoop(
               reason: "categorical_value_not_evidenced",
             },
           });
+          send({ type: "delta", content: guardClarification.question });
+          finalText += guardClarification.question;
           emitSideEffects(result, send);
           steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "guarded_clarification", step_count: step + 1 } });
           return { finalText, productsRendered };
