@@ -1193,6 +1193,24 @@ async function runExpertLoop(
           continue;
         }
 
+        // ── Step 4.5: Anchor Exclusion Guard
+        // В режиме "аналог/замена" SKU-источник не должен попасть в карточки.
+        if (tc.name === "render_products") {
+          const anchorId = getAnchorExcludeId();
+          if (anchorId) {
+            const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
+            if (origIds.includes(anchorId)) {
+              const filtered = origIds.filter((id) => id !== anchorId);
+              (tc.args as Record<string, unknown>).product_ids = filtered;
+              steps.push({
+                step: "v3_guard_anchor_excluded",
+                ms: now(),
+                meta: { anchor_id: anchorId, before: origIds.length, after: filtered.length },
+              });
+            }
+          }
+        }
+
         // ── Step 5: Price Direction Guard (pre-render rewrite)
         if (tc.name === "render_products") {
           const dir = detectPriceDirection(userMessage);
