@@ -425,7 +425,14 @@ async function runExpertLoop(
         steps.push({
           step: "v3_tool_call",
           ms: now(),
-          meta: { tool: tc.name, ok: result.ok, error_code: !result.ok ? result.error_code : null, duration_ms: dur },
+          meta: {
+            tool: tc.name,
+            ok: result.ok,
+            error_code: !result.ok ? result.error_code : null,
+            duration_ms: dur,
+            args: summariseToolArgs(tc.name, tc.args),
+            result: summariseToolResultMeta(tc.name, result),
+          },
         });
 
         // If render_products succeeded → emit products_block immediately.
