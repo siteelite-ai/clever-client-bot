@@ -175,17 +175,34 @@ function parseResolverCandidates(raw: string, valid: Set<string>): Array<{ paget
   }
 }
 
+async function fetchCategoriesPage(
+  fetchImpl: typeof fetch,
+  deps: DiscoverCategoryDeps,
+  page: number,
+): Promise<{ results: unknown[]; pagination?: { pages?: number } }> {
+  const params = new URLSearchParams({ parent: "0", depth: "10", per_page: "200", page: String(page) });
+  const res = await fetchImpl(`${deps.baseUrl}/categories?${params}`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${deps.apiToken}`, "Content-Type": "application/json" },
+  });
+  if (!res.ok) throw new Error(`categories ${res.status}`);
+  const raw = await res.json() as { data?: { results?: unknown[]; pagination?: { pages?: number } }; results?: unknown[]; pagination?: { pages?: number } };
+  const data = raw.data ?? raw;
+  return { results: Array.isArray(data.results) ? data.results : [], pagination: data.pagination };
+}
+
 async function resolvePagetitle(
   input: DiscoverCategoryInput,
   deps: DiscoverCategoryDeps,
-): Promise<{ pagetitle: string; resolvedFrom?: string; candidates: string[] } | null> {
+): Promise<{ pagetitle: string; resolvedFrom?: string; candidates: string[]; cache: CategoriesCache } | null> {
   const noun = input.noun.trim();
-  const categories = await fetchCategories(deps);
-  const exact = categories.find((c) => normalize(c.pagetitle) === normalize(noun));
-  if (exact) return { pagetitle: exact.pagetitle, candidates: [exact.pagetitle] };
+  const cache = await fetchCategories(deps);
+  const flat = cache.flat;
+  const exact = flat.find((c) => normalize(c.pagetitle) === normalize(noun));
+  if (exact) return { pagetitle: exact.pagetitle, candidates: [exact.pagetitle], cache };
   if (!deps.openrouterApiKey) return null;
 
-  const list = categories.map((c, i) => `${i + 1}. ${c.pagetitle}`).join("\n");
+  const list = flat.map((c, i) => `${i + 1}. ${c.pagetitle}`).join("\n");
   const query = [input.semantic_query?.trim(), noun].filter(Boolean).join("\nNOUN: ");
   const res = await (deps.fetchImpl ?? fetch)("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -206,17 +223,17 @@ async function resolvePagetitle(
         },
         {
           role: "user",
-          content: `USER QUERY / NOUN:\n${query}\n\nCATALOG CATEGORIES (${categories.length}, choose exact pagetitle):\n${list}\n\nReturn JSON now.`,
+          content: `USER QUERY / NOUN:\n${query}\n\nCATALOG CATEGORIES (${flat.length}, choose exact pagetitle):\n${list}\n\nReturn JSON now.`,
         },
       ],
     }),
   });
   if (!res.ok) return null;
   const json = await res.json() as { choices?: Array<{ message?: { content?: string | null } }> };
-  const candidates = parseResolverCandidates(json.choices?.[0]?.message?.content ?? "", new Set(categories.map((c) => c.pagetitle)));
+  const candidates = parseResolverCandidates(json.choices?.[0]?.message?.content ?? "", new Set(flat.map((c) => c.pagetitle)));
   const usable = candidates.filter((c) => c.confidence >= 0.45).map((c) => c.pagetitle);
   if (usable.length === 0) return null;
-  return { pagetitle: usable[0], resolvedFrom: noun, candidates: usable };
+  return { pagetitle: usable[0], resolvedFrom: noun, candidates: usable, cache };
 }
 
 async function fetchFacetsForPagetitle(
