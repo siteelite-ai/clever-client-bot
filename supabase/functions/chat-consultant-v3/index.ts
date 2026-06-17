@@ -218,9 +218,60 @@ function valueIsEvidenced(value: string, evidenceText: string): boolean {
 
 function extractEchoLabel(firstAssistantText: string, userMessage: string): string {
   const source = firstAssistantText.trim() || userMessage.trim();
-  const dashIndex = source.search(/[—–-]/u);
+  const dashIndex = source.search(/\s[—–]\s/u);
   const raw = dashIndex > 0 ? source.slice(0, dashIndex) : source;
   return raw.replace(/[?.!,;:]+$/u, "").trim().slice(0, 80) || "запрошенному признаку";
+}
+
+function stripKnownValues(text: string, values: string[]): string {
+  let out = text;
+  for (const value of values.filter(Boolean)) {
+    const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(escaped, "giu"), " ");
+    const code = normalizeCodeLike(value);
+    out = out
+      .split(/\s+/)
+      .filter((token) => normalizeCodeLike(token) !== code)
+      .join(" ");
+  }
+  return out.replace(/\s+/g, " ").trim();
+}
+
+function traitValuesForFacet(products: Array<{ short_traits?: string[] }>, facet: Facet): string[] {
+  const captionNorm = normalizeForMatch(facet.caption);
+  const values = new Set<string>();
+  for (const p of products) {
+    for (const line of p.short_traits ?? []) {
+      const [rawCaption, ...rawValue] = line.split(":");
+      if (!rawCaption || rawValue.length === 0) continue;
+      if (normalizeForMatch(rawCaption) !== captionNorm) continue;
+      const value = rawValue.join(":").trim();
+      if (value) values.add(value);
+    }
+  }
+  return [...values].slice(0, 4);
+}
+
+function buildNoIntersectionText(input: {
+  requestedLabel: string;
+  confirmedFilters: Array<{ facet: Facet; value: string }>;
+  confirmedTotal: number;
+  semanticTotal: number;
+  semanticFacetValues: Array<{ facet: Facet; values: string[] }>;
+}): string {
+  const requestedOnly = stripKnownValues(input.requestedLabel, input.confirmedFilters.map((f) => f.value)) || input.requestedLabel;
+  const filtersText = input.confirmedFilters.map((f) => `${f.facet.caption}: ${f.value}`).join(", ");
+  const parts: string[] = [];
+  parts.push(`По сочетанию «${requestedOnly}»${filtersText ? ` + ${filtersText}` : ""} точного совпадения не нашёл.`);
+  if (input.confirmedTotal > 0 && filtersText) parts.push(`По ${filtersText} товары есть.`);
+  if (input.semanticTotal > 0) {
+    const withValues = input.semanticFacetValues
+      .filter((x) => x.values.length > 0)
+      .map((x) => `${x.facet.caption}: ${x.values.join(", ")}`)
+      .join("; ");
+    parts.push(withValues ? `По «${requestedOnly}» есть отдельно, но с другими значениями: ${withValues}.` : `По «${requestedOnly}» есть отдельные варианты без полного совпадения.`);
+  }
+  return parts.join(" ");
 }
 
 function topFacetOptions(facet: Facet): Array<{ value: string; label: string; count?: number }> {
@@ -231,35 +282,118 @@ function topFacetOptions(facet: Facet): Array<{ value: string; label: string; co
     .map((v) => ({ value: v.value, label: v.value, count: v.products_count }));
 }
 
-function guardedClarificationForSearch(
+function facetValueEquals(a: string, b: string): boolean {
+  if (normalizeForMatch(a) === normalizeForMatch(b)) return true;
+  return /\d/.test(a + b) && normalizeCodeLike(a) === normalizeCodeLike(b);
+}
+
+type GuardedSearchOutcome =
+  | { kind: "clarification"; input: ProposeClarificationInput; reason: string }
+  | { kind: "no_intersection"; text: string; meta: Record<string, unknown> };
+
+async function guardedOutcomeForSearch(
   args: Record<string, unknown>,
   lastDiscover: DiscoverCategoryOk | null,
   userMessage: string,
   firstAssistantText: string,
-): ProposeClarificationInput | null {
+  ctx: ToolContext,
+): Promise<GuardedSearchOutcome | null> {
   if (args.mode !== "by_filter" || !args.options || typeof args.options !== "object") return null;
   if (!lastDiscover) return null;
 
   const options = args.options as Record<string, unknown>;
   const evidenceText = `${userMessage}\n${firstAssistantText}`;
+  const confirmedFilters: Array<{ facet: Facet; key: string; value: string }> = [];
+  const suspiciousFilters: Array<{ facet: Facet; key: string; value: string; existsInFacet: boolean; evidenced: boolean }> = [];
+
   for (const [key, rawVals] of Object.entries(options)) {
     const facet = lastDiscover.facets.find((f) => f.key === key);
-    if (!facet || !isRiskyCategoricalFacet(facet)) continue;
+    if (!facet) continue;
     const vals = Array.isArray(rawVals) ? rawVals.map(String) : [];
     for (const selectedValue of vals) {
-      const existsInFacet = facet.values.some((v) => normalizeForMatch(v.value) === normalizeForMatch(selectedValue));
+      const existsInFacet = facet.values.some((v) => facetValueEquals(v.value, selectedValue));
       const evidenced = valueIsEvidenced(selectedValue, evidenceText);
-      if (existsInFacet && evidenced) continue;
+      if (existsInFacet && evidenced) {
+        confirmedFilters.push({ facet, key, value: selectedValue });
+        continue;
+      }
+      if (!isRiskyCategoricalFacet(facet)) continue;
+      suspiciousFilters.push({ facet, key, value: selectedValue, existsInFacet, evidenced });
+    }
+  }
 
-      const clarificationOptions = topFacetOptions(facet);
-      if (clarificationOptions.length < 2) continue;
-      const requested = extractEchoLabel(firstAssistantText, userMessage);
+  if (suspiciousFilters.length === 0) return null;
+
+  const requested = extractEchoLabel(firstAssistantText, userMessage);
+  const catalogDeps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
+  const confirmedOptions: Record<string, string[]> = {};
+  for (const f of confirmedFilters) {
+    confirmedOptions[f.key] ??= [];
+    confirmedOptions[f.key].push(f.value);
+  }
+
+  if (confirmedFilters.length > 0) {
+    const confirmedSearch = await executeSearchCatalog({
+      mode: "by_filter",
+      category: typeof args.category === "string" ? args.category : lastDiscover.category.pagetitle,
+      options: confirmedOptions,
+      per_page: 5,
+    }, catalogDeps, ctx.cache);
+
+    const semanticQuery = stripKnownValues(requested, confirmedFilters.map((f) => f.value)) || stripKnownValues(userMessage, confirmedFilters.map((f) => f.value));
+    const directSemanticSearch = semanticQuery
+      ? await executeSearchCatalog({
+        mode: "by_query",
+        query: semanticQuery,
+        category: typeof args.category === "string" ? args.category : lastDiscover.category.pagetitle,
+        per_page: 5,
+      }, catalogDeps, ctx.cache)
+      : null;
+    const semanticSearch = directSemanticSearch?.ok && directSemanticSearch.total > 0
+      ? directSemanticSearch
+      : semanticQuery
+        ? await executeJargonRecoverCatalog({ query: semanticQuery, per_page: 5 }, { ...catalogDeps, openrouterApiKey: ctx.openrouterKey }, ctx.cache)
+        : null;
+
+    const confirmedTotal = confirmedSearch.ok ? confirmedSearch.total : 0;
+    const semanticTotal = semanticSearch?.ok ? semanticSearch.total : 0;
+    if (confirmedTotal > 0 || semanticTotal > 0) {
       return {
-        question: `По «${requested}» точного значения в каталожном фасете не вижу. Есть такие варианты — что подойдёт?`,
-        facet_key: facet.key,
-        options: clarificationOptions,
+        kind: "no_intersection",
+        text: buildNoIntersectionText({
+          requestedLabel: requested,
+          confirmedFilters,
+          confirmedTotal,
+          semanticTotal,
+          semanticFacetValues: confirmedFilters.map((f) => ({
+            facet: f.facet,
+            values: semanticSearch?.ok ? traitValuesForFacet(semanticSearch.results, f.facet).filter((v) => !facetValueEquals(v, f.value)) : [],
+          })),
+        }),
+        meta: {
+          reason: "categorical_no_intersection",
+          suspicious: suspiciousFilters.map((f) => ({ facet_key: f.key, value: f.value, existsInFacet: f.existsInFacet, evidenced: f.evidenced })),
+          confirmed_filters: confirmedFilters.map((f) => ({ facet_key: f.key, value: f.value })),
+          confirmed_total: confirmedTotal,
+          semantic_query: semanticQuery,
+          semantic_total: semanticTotal,
+        },
       };
     }
+  }
+
+  for (const s of suspiciousFilters) {
+    const clarificationOptions = topFacetOptions(s.facet);
+    if (clarificationOptions.length < 2) continue;
+    return {
+      kind: "clarification",
+      reason: "categorical_value_not_evidenced",
+      input: {
+        question: `По «${requested}» точного значения в каталожном фасете не вижу. Есть такие варианты — что подойдёт?`,
+        facet_key: s.facet.key,
+        options: clarificationOptions,
+      },
+    };
   }
   return null;
 }
@@ -565,11 +699,11 @@ async function runExpertLoop(
       // Execute tools sequentially (parallel possible but keep simple).
       for (const tc of resp.toolCalls) {
         const toolStart = Date.now();
-        const guardClarification = tc.name === "search_catalog"
-          ? guardedClarificationForSearch(tc.args, lastDiscover, userMessage, firstAssistantText)
+        const guardOutcome = tc.name === "search_catalog"
+          ? await guardedOutcomeForSearch(tc.args, lastDiscover, userMessage, firstAssistantText, ctx)
           : null;
-        if (guardClarification) {
-          const result = executeProposeClarification(guardClarification);
+        if (guardOutcome?.kind === "clarification") {
+          const result = executeProposeClarification(guardOutcome.input);
           const dur = Date.now() - toolStart;
           send({ type: "tool_event", tool: "propose_clarification", phase: "start", summary: "propose_clarification…" });
           send({
@@ -585,14 +719,29 @@ async function runExpertLoop(
             meta: {
               original_tool: tc.name,
               original_args: summariseToolArgs(tc.name, tc.args),
-              facet_key: guardClarification.facet_key,
-              reason: "categorical_value_not_evidenced",
+              facet_key: guardOutcome.input.facet_key,
+              reason: guardOutcome.reason,
             },
           });
-          send({ type: "delta", content: guardClarification.question });
-          finalText += guardClarification.question;
+          send({ type: "delta", content: guardOutcome.input.question });
+          finalText += guardOutcome.input.question;
           emitSideEffects(result, send);
           steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "guarded_clarification", step_count: step + 1 } });
+          return { finalText, productsRendered };
+        }
+        if (guardOutcome?.kind === "no_intersection") {
+          send({ type: "delta", content: guardOutcome.text });
+          finalText += guardOutcome.text;
+          steps.push({
+            step: "v3_guard_no_intersection",
+            ms: now(),
+            meta: {
+              original_tool: tc.name,
+              original_args: summariseToolArgs(tc.name, tc.args),
+              ...guardOutcome.meta,
+            },
+          });
+          steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "guarded_no_intersection", step_count: step + 1 } });
           return { finalText, productsRendered };
         }
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
