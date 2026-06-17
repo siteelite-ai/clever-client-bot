@@ -4,12 +4,17 @@
 // LLM: Claude Sonnet 4.5 via OpenRouter (mem rule: LLM via OpenRouter only).
 // Tools: search_catalog, lookup_knowledge, render_products.
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { TOOL_SCHEMAS, SYSTEM_PROMPT } from "../_shared/v3-tools/schemas.ts";
 import { executeSearchCatalog, type SearchCatalogInput } from "../_shared/v3-tools/search-catalog.ts";
+import { executeExpandSearchToPool, type ExpandPoolInput } from "../_shared/v3-tools/expand-search-pool.ts";
 import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3-tools/lookup-knowledge.ts";
+import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
-import type { ProductCache, ToolResult } from "../_shared/v3-tools/types.ts";
+import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
+import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
+import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
+import type { ProductCache, ToolResult, ToolSideEffect } from "../_shared/v3-tools/types.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -33,6 +38,8 @@ type SseEvent =
   | { type: "tool_event"; tool: string; phase: "start" | "result"; duration_ms?: number; summary?: string }
   | { type: "products_block"; markdown: string; count: number; total_available?: number }
   | { type: "contacts"; html: string }
+  | { type: "quick_replies"; replies: Array<{ value: string; label: string }>; facet_key: string }
+  | { type: "slot_update"; slots: Record<string, unknown> }
   | { type: "done" };
 
 function encodeSse(ev: SseEvent): Uint8Array {
@@ -52,7 +59,7 @@ interface AppSettings {
   volt220_api_token: string | null;
 }
 
-async function loadSettings(supabase: ReturnType<typeof createClient>): Promise<AppSettings> {
+async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
   try {
     const { data } = await supabase
       .from("app_settings")
@@ -77,8 +84,9 @@ async function loadSettings(supabase: ReturnType<typeof createClient>): Promise<
 
 interface ToolContext {
   cache: ProductCache;
-  supabase: ReturnType<typeof createClient>;
+  supabase: SupabaseClient;
   catalogToken: string;
+  sessionId: string;
 }
 
 async function runTool(
@@ -86,32 +94,48 @@ async function runTool(
   args: Record<string, unknown>,
   ctx: ToolContext,
 ): Promise<ToolResult> {
+  const catalogDeps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
   if (name === "search_catalog") {
-    return executeSearchCatalog(args as SearchCatalogInput, {
-      baseUrl: CATALOG_BASE_URL,
-      apiToken: ctx.catalogToken,
-    }, ctx.cache);
+    return executeSearchCatalog(args as unknown as SearchCatalogInput, catalogDeps, ctx.cache);
+  }
+  if (name === "expand_search_to_pool") {
+    return executeExpandSearchToPool(args as unknown as ExpandPoolInput, catalogDeps, ctx.cache);
   }
   if (name === "lookup_knowledge") {
-    return executeLookupKnowledge(args as LookupKnowledgeInput, ctx.supabase);
+    return executeLookupKnowledge(args as unknown as LookupKnowledgeInput, ctx.supabase);
+  }
+  if (name === "lookup_contacts") {
+    return executeLookupContacts(args as unknown as LookupContactsInput, ctx.supabase);
   }
   if (name === "render_products") {
-    return executeRenderProducts(args as RenderProductsInput, ctx.cache) as ToolResult;
+    return executeRenderProducts(args as unknown as RenderProductsInput, ctx.cache) as ToolResult;
+  }
+  if (name === "propose_clarification") {
+    return executeProposeClarification(args as unknown as ProposeClarificationInput);
+  }
+  if (name === "escalate_to_manager") {
+    return executeEscalate(args as unknown as EscalateInput, ctx.supabase);
+  }
+  if (name === "note_state") {
+    return executeNoteState(args as unknown as NoteStateInput, ctx.supabase, ctx.sessionId);
   }
   return { tool: name as never, ok: false, error_code: "bad_input", message: `unknown tool: ${name}` };
 }
 
 function summariseToolResult(name: string, r: ToolResult): string {
   if (!r.ok) return `ошибка: ${r.error_code}`;
-  if (name === "search_catalog") return `найдено ${(r as { total: number }).total}`;
+  if (name === "search_catalog" || name === "expand_search_to_pool") return `найдено ${(r as { total: number }).total}`;
   if (name === "lookup_knowledge") return `${(r as { hits: unknown[] }).hits.length} фрагментов`;
+  if (name === "lookup_contacts") return `контакты загружены`;
   if (name === "render_products") return `показано ${(r as { rendered_count: number }).rendered_count}`;
+  if (name === "propose_clarification") return `уточнение задано`;
+  if (name === "escalate_to_manager") return `передано менеджеру`;
+  if (name === "note_state") return `состояние сохранено`;
   return "ok";
 }
 
 function toolResultForLlm(r: ToolResult): unknown {
-  // Compact payload sent back to the model. Strip markdown from render_products
-  // (the client already received it via SSE).
+  // Strip heavy fields the model doesn't need to see.
   if (r.ok && r.tool === "render_products") {
     return {
       ok: true,
@@ -119,7 +143,40 @@ function toolResultForLlm(r: ToolResult): unknown {
       blocked_by_zero_price: r.blocked_by_zero_price,
     };
   }
+  if (r.ok && r.tool === "lookup_contacts") {
+    // не отдаём html_block в LLM, чтобы не процитировал
+    const { data } = r;
+    return {
+      ok: true,
+      data: {
+        phone: data.phone ? "(в карточке)" : undefined,
+        address: data.address ? "(в карточке)" : undefined,
+        hours: data.hours,
+        payment: data.payment,
+        delivery: data.delivery,
+      },
+    };
+  }
+  if (r.ok && r.tool === "escalate_to_manager") {
+    return { ok: true, contact_card_shown: !!r.contact_card };
+  }
+  // strip side_effects from LLM view
+  if ("side_effects" in r) {
+    const { side_effects: _se, ...rest } = r as ToolResult & { side_effects?: ToolSideEffect[] };
+    return rest;
+  }
   return r;
+}
+
+function emitSideEffects(r: ToolResult, send: (ev: SseEvent) => void) {
+  if (!r.ok) return;
+  const fx = (r as { side_effects?: ToolSideEffect[] }).side_effects;
+  if (!Array.isArray(fx)) return;
+  for (const ev of fx) {
+    if (ev.type === "contacts") send({ type: "contacts", html: ev.html });
+    else if (ev.type === "quick_replies") send({ type: "quick_replies", replies: ev.replies, facet_key: ev.facet_key });
+    else if (ev.type === "slot_update") send({ type: "slot_update", slots: ev.slots });
+  }
 }
 
 // ─── OpenRouter call ────────────────────────────────────────────────────────
@@ -203,7 +260,7 @@ async function callOpenRouter(
 interface StepLog { step: string; ms: number; meta?: Record<string, unknown>; }
 
 async function logTurn(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   sessionId: string,
   userQuery: string,
   steps: StepLog[],
@@ -340,6 +397,9 @@ async function runExpertLoop(
           productsRendered += r.rendered_count;
         }
 
+        // Tool-driven SSE side-effects (contacts/quick_replies/slot_update).
+        emitSideEffects(result, send);
+
         messages.push({
           role: "tool",
           tool_call_id: tc.id,
@@ -418,6 +478,7 @@ Deno.serve(async (req) => {
           cache,
           supabase,
           catalogToken: settings.volt220_api_token!,
+          sessionId,
         };
         const out = await runExpertLoop(userMessage, history, settings.openrouter_api_key!, ctx, send, steps, t0);
         productsCount = out.productsRendered;
