@@ -510,6 +510,92 @@ function promiseRealityCheck(
   return { corrective: `Уточнение: ${lines}.`, mismatches };
 }
 
+// ── Step 5: Price Direction Guard ────────────────────────────────────────
+type PriceDirection = "cheaper" | "more_expensive" | "same";
+
+function detectPriceDirection(msg: string): PriceDirection | null {
+  const m = msg.toLowerCase();
+  if (/\b(в том же.*(сегмент|ценов)|таком же.*ценов|той же цене|такого же.*ценов)/u.test(m)) return "same";
+  if (/(подешевле|дешевле|самый\s+дешёв|самый\s+дешев|самые\s+дешёв|самые\s+дешев|бюджетн|поэконом|подоступн|поде[шщ]евле)/u.test(m)) return "cheaper";
+  if (/(подороже|дороже|самый\s+дорог|самые\s+дорог|премиум|премьюм|топов|подсолидн)/u.test(m)) return "more_expensive";
+  return null;
+}
+
+type CachedProd = { id: string; price: number; pagetitle?: string; title?: string };
+
+function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd | null {
+  const msg = userMessage.toLowerCase().replace(/[«»"',.()]/g, " ");
+  let best: { p: CachedProd; score: number } | null = null;
+  for (const raw of cache.values()) {
+    const p = raw as unknown as CachedProd;
+    if (typeof p.price !== "number" || p.price <= 0) continue;
+    const title = (p.pagetitle ?? p.title ?? "").toLowerCase();
+    const tokens = title.split(/[\s\-_/]+/).filter((t) => t.length >= 3 && !/^\d+$/.test(t));
+    if (tokens.length === 0) continue;
+    let score = 0;
+    for (const t of tokens) if (msg.includes(t)) score++;
+    if (score >= 2 && (!best || score > best.score)) best = { p, score };
+  }
+  return best?.p ?? null;
+}
+
+function rewriteRenderIdsByPriceDirection(
+  productIds: string[],
+  direction: PriceDirection,
+  anchor: CachedProd | null,
+  cache: ProductCache,
+): { ids: string[]; filteredOut: number; sorted: boolean } {
+  const products = productIds
+    .map((id) => cache.get(String(id)) as unknown as CachedProd | undefined)
+    .filter((p): p is CachedProd => !!p && typeof p.price === "number" && p.price > 0);
+  if (products.length === 0) return { ids: productIds, filteredOut: 0, sorted: false };
+
+  let filtered = products;
+  if (anchor) {
+    if (direction === "cheaper") filtered = products.filter((p) => p.price < anchor.price && p.id !== anchor.id);
+    else if (direction === "more_expensive") filtered = products.filter((p) => p.price > anchor.price && p.id !== anchor.id);
+    else if (direction === "same") {
+      const lo = anchor.price * 0.7, hi = anchor.price * 1.3;
+      filtered = products.filter((p) => p.price >= lo && p.price <= hi && p.id !== anchor.id);
+    }
+  }
+  if (direction === "cheaper" || direction === "same") filtered = [...filtered].sort((a, b) => a.price - b.price);
+  else if (direction === "more_expensive") filtered = [...filtered].sort((a, b) => b.price - a.price);
+
+  const ids = filtered.slice(0, 8).map((p) => p.id);
+  return { ids, filteredOut: products.length - filtered.length, sorted: true };
+}
+
+async function broadenPriceDirectionSearch(
+  direction: PriceDirection,
+  anchor: CachedProd | null,
+  lastDiscover: DiscoverCategoryOk | null,
+  ctx: ToolContext,
+): Promise<string[]> {
+  if (!lastDiscover) return [];
+  const input: SearchCatalogInput = {
+    mode: "by_filter",
+    category: lastDiscover.category.pagetitle,
+    per_page: 20,
+    sort_cheapest: direction !== "more_expensive",
+    min_price: 1,
+  };
+  if (anchor) {
+    if (direction === "cheaper") input.max_price = anchor.price;
+    else if (direction === "more_expensive") input.min_price = anchor.price;
+    else if (direction === "same") { input.min_price = Math.floor(anchor.price * 0.7); input.max_price = Math.ceil(anchor.price * 1.3); }
+  }
+  const fb = await executeSearchCatalog(input, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+  if (!fb.ok || fb.total === 0) return [];
+  const sorted = [...fb.products]
+    .filter((p) => typeof (p as CachedProd).price === "number" && (p as CachedProd).price > 0)
+    .sort((a, b) => direction === "more_expensive" ? (b as CachedProd).price - (a as CachedProd).price : (a as CachedProd).price - (b as CachedProd).price)
+    .slice(0, 8);
+  return sorted.map((p) => String((p as { id: string | number }).id));
+}
+
+
+
 function compactDiscoverCategoryForLlm(r: ToolResult, args: Record<string, unknown>, userMessage: string): unknown {
   const x = r as unknown as {
     ok: true;
