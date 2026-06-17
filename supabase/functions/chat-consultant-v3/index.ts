@@ -29,7 +29,7 @@ const CATALOG_BASE_URL = Deno.env.get("CATALOG_API_BASE_URL") ?? "https://220vol
 
 const MODEL = "anthropic/claude-sonnet-4.5";
 const MAX_STEPS = 8;
-const TURN_TIMEOUT_MS = 30_000;
+const TURN_TIMEOUT_MS = 90_000;
 
 // ─── SSE encoding ───────────────────────────────────────────────────────────
 
