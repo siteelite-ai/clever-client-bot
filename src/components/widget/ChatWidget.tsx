@@ -437,6 +437,10 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     let assistantContent = '';
     let typing2Removed = false;
     let streamMsgId: string | null = null;
+    // V3: when true, the next delta opens a NEW assistant bubble instead of
+    // appending to the previous streaming one. Set by onTurnBreak /
+    // onProductsBlock; cleared automatically once a new bubble is created.
+    let bubbleSealed = false;
 
     const upsertAssistant = (
       updater: (prev: ChatMessage[]) => ChatMessage[]
@@ -457,6 +461,19 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
           updated = prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-'));
           const id = mid('stream');
           streamMsgId = id;
+          bubbleSealed = false;
+          return [...updated, {
+            id,
+            role: 'assistant' as const,
+            content: displayContent,
+            timestamp: new Date()
+          }];
+        }
+        if (bubbleSealed) {
+          // Forced new bubble (V3 turn break or after products_block).
+          const id = mid('stream');
+          streamMsgId = id;
+          bubbleSealed = false;
           return [...updated, {
             id,
             role: 'assistant' as const,
@@ -465,11 +482,10 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
           }];
         }
         const last = updated[updated.length - 1];
-        if (last?.role === 'assistant' && last.id.startsWith('stream-')) {
-          streamMsgId = last.id;
-          return updated.map((m, i) => 
-            i === updated.length - 1 
-              ? { ...m, content: displayContent } 
+        if (last?.role === 'assistant' && last.id === streamMsgId) {
+          return updated.map((m, i) =>
+            i === updated.length - 1
+              ? { ...m, content: displayContent }
               : m
           );
         }
