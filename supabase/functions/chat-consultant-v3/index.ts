@@ -1002,6 +1002,10 @@ async function runExpertLoop(
               ...guardOutcome.meta,
             },
           });
+          if (productsRendered === 0) {
+            const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
+            productsRendered += rescued;
+          }
           steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "guarded_no_intersection", step_count: step + 1 } });
           return { finalText, productsRendered };
         }
