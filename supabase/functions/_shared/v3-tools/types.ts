@@ -77,6 +77,15 @@ export interface JargonRecoverOk {
   results: ProductRef[];
   matched_query: string | null;
   total: number;
+  /**
+   * true, если в карточках результата НЕ нашлись все значимые токены исходного запроса
+   * (включая modifiers). Значит инструмент вытащил каталог по родственному, но не точному
+   * соответствию — LLM не имеет права называть результаты той формой/жаргоном, которые
+   * не подтвердились. Должен честно раскрыть unmatched_tokens клиенту.
+   */
+  partial_match: boolean;
+  /** Токены source_query+modifiers, отсутствующие во всех найденных карточках. */
+  unmatched_tokens: string[];
   side_effects?: ToolSideEffect[];
 }
 
