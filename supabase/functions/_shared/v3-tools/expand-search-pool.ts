@@ -27,10 +27,16 @@ export async function executeExpandSearchToPool(
   const first = await runQfV2(input, deps, cache);
   if (!first.ok) return first;
 
-  // Pool > 0 — отдаём результат как есть (final / pool_rescue / honest_empty с применёнными фасетами).
-  if (first.results.length > 0 || first.branch_tag !== "qfv2_honest_empty") return first;
+  // Final hit (qfv2_final c results>0) — отдаём как есть.
+  if (first.branch_tag === "qfv2_final" && first.results.length > 0) return first;
 
-  // Pool=0 (honest_empty без applied_facets) → пробуем Jargon Recovery.
+  // Триггеры Jargon Recovery:
+  //   - qfv2_honest_empty (pool=0 ИЛИ pool>0, но модификаторы не сматчились) → noun сам по себе плох.
+  //   - qfv2_pool_rescue → модификаторы не отфильтровали, выдача не релевантна → noun, возможно, не тот.
+  // Во всех этих случаях пробуем переименовать noun через LLM (жаргон → канонический термин).
+  const shouldRecover =
+    first.branch_tag === "qfv2_honest_empty" || first.branch_tag === "qfv2_pool_rescue";
+  if (!shouldRecover) return first;
   if (!deps.enableJargonRecovery || !deps.openrouterApiKey) return first;
 
   const jargon = await tryJargonFallback(input.noun, { apiKey: deps.openrouterApiKey });
@@ -38,11 +44,11 @@ export async function executeExpandSearchToPool(
 
   for (const candidate of jargon.candidates) {
     const retry = await runQfV2({ ...input, noun: candidate }, deps, cache);
-    if (retry.ok && retry.results.length > 0) {
-      return {
-        ...retry,
-        branch_tag: "qfv2_jargon_recovery",
-      };
+    if (!retry.ok) continue;
+    // Принимаем только настоящий final hit — иначе pool_rescue с другим noun
+    // будет таким же нерелевантным, как и исходный.
+    if (retry.branch_tag === "qfv2_final" && retry.results.length > 0) {
+      return { ...retry, branch_tag: "qfv2_jargon_recovery" };
     }
   }
   return first;
