@@ -43,6 +43,7 @@ export interface SearchCatalogOk {
   mode: string;
   total: number;
   results: ProductRef[];
+  side_effects?: ToolSideEffect[];
 }
 
 export interface ExpandPoolOk {
@@ -55,6 +56,7 @@ export interface ExpandPoolOk {
     | "qfv2_honest_empty"
     | "qfv2_jargon_recovery";
   applied_facets?: Array<{ key: string; values: string[]; alternative_values?: string[] }>;
+  side_effects?: ToolSideEffect[];
 }
 
 export interface LookupKnowledgeOk {
@@ -66,6 +68,7 @@ export interface LookupKnowledgeOk {
     type: string;
     score: number;
   }>;
+  side_effects?: ToolSideEffect[];
 }
 
 export interface LookupContactsOk {
@@ -78,6 +81,7 @@ export interface LookupContactsOk {
     delivery?: string;
     html_block?: string;
   };
+  side_effects?: ToolSideEffect[];
 }
 
 export interface RenderProductsOk {
@@ -85,20 +89,24 @@ export interface RenderProductsOk {
   rendered_count: number;
   blocked_by_zero_price: number;
   markdown: string;
+  side_effects?: ToolSideEffect[];
 }
 
 export interface ProposeClarificationOk {
   ok: true;
   slot_id: string;
+  side_effects?: ToolSideEffect[];
 }
 
 export interface EscalateOk {
   ok: true;
   contact_card: string | null;
+  side_effects?: ToolSideEffect[];
 }
 
 export interface NoteStateOk {
   ok: true;
+  side_effects?: ToolSideEffect[];
 }
 
 /** Side-channel SSE events tools may want the orchestrator to emit. */
