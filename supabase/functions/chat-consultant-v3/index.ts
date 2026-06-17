@@ -36,7 +36,7 @@ const TURN_TIMEOUT_MS = 90_000;
 
 type SseEvent =
   | { type: "delta"; content: string }
-  | { type: "assistant_turn_break"; reason: "tool_pending" | "after_render" }
+  | { type: "assistant_turn_break"; reason: "tool_pending" | "after_render" | "final_text" }
   | { type: "tool_event"; tool: string; phase: "start" | "result"; duration_ms?: number; summary?: string }
   | { type: "products_block"; markdown: string; count: number; total_available?: number }
   | { type: "contacts"; html: string }
