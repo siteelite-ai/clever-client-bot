@@ -858,6 +858,23 @@ async function runExpertLoop(
   let firstAssistantText = "";
   let lastDiscover: DiscoverCategoryOk | null = null;
 
+  // Step 6 state: fresh-but-unshown product pool from latest successful search.
+  let freshSearch: { tool: string; ids: string[]; total: number } | null = null;
+  const shownIds = new Set<string>();
+  const triedLadderQueries = new Set<string>();
+  const pickFreshUnshown = (n: number): string[] => {
+    if (!freshSearch) return [];
+    const out: string[] = [];
+    for (const id of freshSearch.ids) {
+      if (out.length >= n) break;
+      if (shownIds.has(id)) continue;
+      const p = ctx.cache.get(id);
+      if (!p || !(p.price > 0)) continue;
+      out.push(id);
+    }
+    return out;
+  };
+
   const messages: ORMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
     ...history.map((h) => ({ role: h.role, content: h.content })),
