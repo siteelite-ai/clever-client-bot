@@ -371,7 +371,10 @@ export async function executeDiscoverCategory(
 
     for (const pagetitle of resolved.candidates) {
       const facets = await fetchFacetsForPagetitle(pagetitle, deps);
-      if (facets.ok && isUsefulDiscovery(facets.data)) return { tool: "discover_category", ...facets.data, resolved_from: resolved.resolvedFrom };
+      if (facets.ok && isUsefulDiscovery(facets.data)) {
+        const leaves = resolveLeafCategories(facets.data.category.pagetitle, facets.data.category.id, resolved.cache);
+        return { tool: "discover_category", ...facets.data, leaf_categories: leaves, resolved_from: resolved.resolvedFrom };
+      }
     }
     return { tool: "discover_category", ok: false, error_code: "category_not_found", message: `no category facets for "${noun}"` };
   } catch (e) {
