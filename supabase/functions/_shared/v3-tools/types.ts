@@ -53,6 +53,22 @@ export interface SearchCatalogOk {
   side_effects?: ToolSideEffect[];
 }
 
+export interface DiscoverCategoryOk {
+  ok: true;
+  category: { id: number | null; pagetitle: string; total_products: number };
+  facets: Array<{
+    key: string;
+    caption: string;
+    type: string;
+    unit: string | null;
+    min?: number | null;
+    max?: number | null;
+    values: Array<{ value: string; products_count?: number }>;
+  }>;
+  resolved_from?: string;
+  side_effects?: ToolSideEffect[];
+}
+
 
 export interface JargonRecoverOk {
   ok: true;
@@ -120,6 +136,7 @@ interface WithSideEffects {
 
 export type ToolResult =
   | (SearchCatalogOk & { tool: "search_catalog" } & WithSideEffects)
+  | (DiscoverCategoryOk & { tool: "discover_category" } & WithSideEffects)
   | (JargonRecoverOk & { tool: "jargon_recover_catalog" } & WithSideEffects)
   | (LookupKnowledgeOk & { tool: "lookup_knowledge" } & WithSideEffects)
   | (LookupContactsOk & { tool: "lookup_contacts" } & WithSideEffects)
