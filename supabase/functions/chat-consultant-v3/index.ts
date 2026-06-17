@@ -160,7 +160,7 @@ function summariseToolArgs(name: string, args: Record<string, unknown>): Record<
   };
   if (name === "search_catalog") return pick(["mode", "query", "article", "pagetitle", "category", "min_price", "max_price", "sort_cheapest", "per_page", "page", "options"]);
   if (name === "discover_category") return pick(["noun"]);
-  if (name === "jargon_recover_catalog") return pick(["noun", "semantic_query", "modifiers", "category"]);
+  if (name === "jargon_recover_catalog") return pick(["query", "modifiers", "min_price", "max_price", "per_page"]);
   if (name === "lookup_knowledge") return pick(["query", "type"]);
   if (name === "lookup_contacts") return pick(["fields"]);
   if (name === "render_products") return { ids_count: Array.isArray(args.ids) ? (args.ids as unknown[]).length : 0, total_available: args.total_available };
