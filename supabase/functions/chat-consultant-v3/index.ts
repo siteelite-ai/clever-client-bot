@@ -36,7 +36,7 @@ const TURN_TIMEOUT_MS = 90_000;
 
 type SseEvent =
   | { type: "delta"; content: string }
-  | { type: "assistant_turn_break"; reason: "tool_pending" | "after_render" }
+  | { type: "assistant_turn_break"; reason: "tool_pending" | "after_render" | "final_text" }
   | { type: "tool_event"; tool: string; phase: "start" | "result"; duration_ms?: number; summary?: string }
   | { type: "products_block"; markdown: string; count: number; total_available?: number }
   | { type: "contacts"; html: string }
@@ -163,7 +163,7 @@ function summariseToolArgs(name: string, args: Record<string, unknown>): Record<
   if (name === "jargon_recover_catalog") return pick(["query", "modifiers", "min_price", "max_price", "per_page"]);
   if (name === "lookup_knowledge") return pick(["query", "type"]);
   if (name === "lookup_contacts") return pick(["fields"]);
-  if (name === "render_products") return { ids_count: Array.isArray(args.ids) ? (args.ids as unknown[]).length : 0, total_available: args.total_available };
+  if (name === "render_products") return { ids_count: Array.isArray(args.product_ids) ? (args.product_ids as unknown[]).length : 0, total_available: args.total_available };
   if (name === "propose_clarification") return pick(["facet_key", "question"]);
   if (name === "escalate_to_manager") return pick(["reason"]);
   if (name === "note_state") return pick(["key", "ttl_turns"]);
@@ -720,6 +720,68 @@ interface SplitAxis {
   ids: string[];
   total: number;
 }
+
+interface ReplacementAxis {
+  key: string;
+  caption: string;
+  values: string[];
+  isDiameter: boolean;
+}
+
+function isDiameterFacet(facet: Pick<Facet, "key" | "caption">): boolean {
+  const haystack = normalizeForMatch(`${facet.key} ${facet.caption}`);
+  return /(^| )(diametr|diameter|диаметр)( |$)/u.test(haystack);
+}
+
+function buildReplacementAxes(args: Record<string, unknown>, lastDiscover: DiscoverCategoryOk | null): ReplacementAxis[] {
+  if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) return [];
+  const options = (args as { options?: Record<string, unknown> }).options;
+  if (!options || typeof options !== "object") return [];
+  const axes: ReplacementAxis[] = [];
+  for (const [key, raw] of Object.entries(options)) {
+    const values = Array.isArray(raw) ? raw.map(String).filter(Boolean) : [];
+    if (values.length === 0) continue;
+    const facet = lastDiscover.facets.find((f) => f.key === key);
+    if (!facet) continue;
+    axes.push({ key, caption: facet.caption, values, isDiameter: isDiameterFacet(facet) });
+  }
+  return axes;
+}
+
+function productMatchesReplacementAxis(product: { short_traits?: string[] }, axis: ReplacementAxis): boolean {
+  const captionNorm = normalizeForMatch(axis.caption);
+  for (const line of product.short_traits ?? []) {
+    const [rawCaption, ...rawValue] = line.split(":");
+    if (!rawCaption || rawValue.length === 0) continue;
+    if (normalizeForMatch(rawCaption) !== captionNorm) continue;
+    const actual = rawValue.join(":").trim();
+    if (!actual) continue;
+    if (axis.values.some((target) => facetValueEquals(actual, target) || valueIsEvidenced(target, actual))) return true;
+  }
+  return false;
+}
+
+function hasRectangularSizeMarker(title: string): boolean {
+  return /\b\d+(?:[.,]\d+)?\s*(?:x|х|×|\*)\s*\d+(?:[.,]\d+)?\b/iu.test(title);
+}
+
+function filterReplacementCompatibleIds(ids: string[], axes: ReplacementAxis[], cache: ProductCache): string[] {
+  if (axes.length < 2) return ids;
+  const minMatches = Math.max(2, axes.length - 1);
+  const ranked: Array<{ id: string; matches: number; order: number }> = [];
+  ids.forEach((id, order) => {
+    const product = cache.get(id);
+    if (!product) return;
+    const matchedAxes = axes.filter((axis) => productMatchesReplacementAxis(product, axis));
+    const missesDiameter = axes.some((axis) => axis.isDiameter) && !matchedAxes.some((axis) => axis.isDiameter);
+    if (missesDiameter && hasRectangularSizeMarker(product.pagetitle)) return;
+    if (matchedAxes.length >= minMatches) ranked.push({ id, matches: matchedAxes.length, order });
+  });
+  return ranked
+    .sort((a, b) => b.matches - a.matches || a.order - b.order)
+    .map((x) => x.id);
+}
+
 async function trySplitFallback(
   origArgs: Record<string, unknown>,
   ctx: ToolContext,
@@ -737,6 +799,9 @@ async function trySplitFallback(
   const t0 = Date.now();
   const deps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
   const category = typeof origArgs.category === "string" ? origArgs.category : undefined;
+  const categoryIn = Array.isArray(origArgs.category_in)
+    ? origArgs.category_in.map(String).filter(Boolean)
+    : undefined;
 
   const results = await Promise.all(axisEntries.map(async ({ axis, values }) => {
     const input: SearchCatalogInput = {
@@ -744,7 +809,7 @@ async function trySplitFallback(
       per_page: 5,
       options: { [axis]: values },
       min_price: 1,
-      ...(category ? { category } : {}),
+        ...(category ? { category } : categoryIn && categoryIn.length > 0 ? { category_in: categoryIn } : {}),
     };
     try {
       const r = await executeSearchCatalog(input, deps, ctx.cache);
@@ -1018,6 +1083,7 @@ async function runExpertLoop(
   // (see DN027B аналог-кейс: split_fallback дал 12 релевантных id,
   // потом by_query "downlight"→309 затёр freshSearch и render выдал мусор).
   let prioritySplitPool: string[] = [];
+  let replacementRequiredAxes: ReplacementAxis[] = [];
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
   // Anchor exclusion: in replacement-intent turns ("аналог/замена/похожее"),
@@ -1056,6 +1122,7 @@ async function runExpertLoop(
         if (familyExclude.has(id)) continue;
         const p = ctx.cache.get(id);
         if (!p || !(p.price > 0)) continue;
+        if (replacementRequiredAxes.length >= 2 && filterReplacementCompatibleIds([id], replacementRequiredAxes, ctx.cache).length === 0) continue;
         seen.add(id);
         out.push(id);
       }
@@ -1262,9 +1329,13 @@ async function runExpertLoop(
         if (tc.name === "render_products") {
           const anchorId = getAnchorExcludeId();
           const familyExclude = getFamilyExcludeSet();
-          if (anchorId || familyExclude.size > 0) {
+          if (anchorId || familyExclude.size > 0 || (replacementIntent && replacementRequiredAxes.length >= 2)) {
             const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
-            const filtered = origIds.filter((id) => id !== anchorId && !familyExclude.has(id));
+            let filtered = origIds.filter((id) => id !== anchorId && !familyExclude.has(id));
+            const afterFamily = filtered.length;
+            if (replacementIntent && replacementRequiredAxes.length >= 2) {
+              filtered = filterReplacementCompatibleIds(filtered, replacementRequiredAxes, ctx.cache);
+            }
             if (filtered.length !== origIds.length) {
               (tc.args as Record<string, unknown>).product_ids = filtered;
               steps.push({
@@ -1273,7 +1344,9 @@ async function runExpertLoop(
                 meta: {
                   anchor_id: anchorId,
                   family_size: familyExclude.size,
+                  required_axes: replacementRequiredAxes.map((a) => ({ key: a.key, values: a.values })),
                   before: origIds.length,
+                  after_family: afterFamily,
                   after: filtered.length,
                   removed: origIds.length - filtered.length,
                 },
@@ -1467,6 +1540,10 @@ async function runExpertLoop(
           (result as { total: number }).total === 0 &&
           !inferredFallback
         ) {
+          if (replacementIntent) {
+            const axes = buildReplacementAxes(tc.args, lastDiscover);
+            if (axes.length >= 2) replacementRequiredAxes = axes;
+          }
           const opts = (tc.args as { options?: Record<string, unknown> }).options;
           const axesCount = opts && typeof opts === "object"
             ? Object.values(opts).filter((v) => Array.isArray(v) && v.length > 0).length
@@ -1474,25 +1551,37 @@ async function runExpertLoop(
           if ((tc.args as { mode?: string }).mode === "by_filter" && axesCount >= 2) {
             const split = await trySplitFallback(tc.args, ctx);
             if (split) {
-              splitFallbackResult = split;
+              const effectiveSplit = replacementIntent && replacementRequiredAxes.length >= 2
+                ? (() => {
+                  const compatible = new Set(filterReplacementCompatibleIds(split.axes.flatMap((a) => a.ids), replacementRequiredAxes, ctx.cache));
+                  return {
+                    ...split,
+                    axes: split.axes
+                      .map((a) => ({ ...a, ids: a.ids.filter((id) => compatible.has(id)) }))
+                      .filter((a) => a.ids.length > 0),
+                  };
+                })()
+                : split;
+              splitFallbackResult = effectiveSplit.axes.length > 0 ? effectiveSplit : null;
               send({
                 type: "tool_event",
                 tool: "search_catalog",
                 phase: "result",
                 duration_ms: split.ms,
-                summary: `split: ${split.axes.map((a) => `${a.axis}=${a.total}`).join(", ")}`,
+                summary: `split: ${effectiveSplit.axes.map((a) => `${a.axis}=${a.total}`).join(", ")}`,
               });
               steps.push({
                 step: "v3_guard_split_fallback",
                 ms: now(),
                 meta: {
-                  axes: split.axes.map((a) => ({ axis: a.axis, value: a.value, total: a.total, ids: a.ids.length })),
+                  axes: effectiveSplit.axes.map((a) => ({ axis: a.axis, value: a.value, total: a.total, ids: a.ids.length })),
+                  replacement_filtered: replacementIntent && replacementRequiredAxes.length >= 2,
                   ms: split.ms,
                 },
               });
               // Feed Step 6a/6b pool so render/escalate guards have ammo too.
-              const allIds = split.axes.flatMap((a) => a.ids).slice(0, 8);
-              const totalSum = split.axes.reduce((s, a) => s + a.total, 0);
+              const allIds = effectiveSplit.axes.flatMap((a) => a.ids).slice(0, 8);
+              const totalSum = effectiveSplit.axes.reduce((s, a) => s + a.total, 0);
               if (allIds.length > 0) {
                 freshSearch = { tool: "search_catalog_split", ids: allIds, total: totalSum };
                 // Persist across subsequent broad searches — render fallback
@@ -1619,7 +1708,14 @@ async function runExpertLoop(
     }
     steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "forced_stepcount", step_count: MAX_STEPS } });
     if (productsRendered === 0) {
-      send({ type: "delta", content: "\n\nИзвини, не успел до конца разобраться. Если нужно — напиши контактному менеджеру." });
+      if (replacementIntent && replacementRequiredAxes.length >= 2) {
+        const criteria = replacementRequiredAxes
+          .map((a) => `${a.caption}: ${a.values.join("/")}`)
+          .join(", ");
+        send({ type: "delta", content: `\n\nПо каталогу не нашёл полноценный аналог с теми же критичными параметрами (${criteria}). Похожие позиции есть отдельно, но они не проходят как замена по монтажу/габаритам — лучше уточнить замену у менеджера.` });
+      } else {
+        send({ type: "delta", content: "\n\nНе нашёл подходящие товары по этому сочетанию параметров. Могу попробовать расширить поиск или передать вопрос менеджеру." });
+      }
     }
     return { finalText, productsRendered };
   } finally {
