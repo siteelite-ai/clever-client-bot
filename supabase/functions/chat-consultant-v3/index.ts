@@ -694,11 +694,11 @@ async function runExpertLoop(
       // Execute tools sequentially (parallel possible but keep simple).
       for (const tc of resp.toolCalls) {
         const toolStart = Date.now();
-        const guardClarification = tc.name === "search_catalog"
-          ? guardedClarificationForSearch(tc.args, lastDiscover, userMessage, firstAssistantText)
+        const guardOutcome = tc.name === "search_catalog"
+          ? await guardedOutcomeForSearch(tc.args, lastDiscover, userMessage, firstAssistantText, ctx)
           : null;
-        if (guardClarification) {
-          const result = executeProposeClarification(guardClarification);
+        if (guardOutcome?.kind === "clarification") {
+          const result = executeProposeClarification(guardOutcome.input);
           const dur = Date.now() - toolStart;
           send({ type: "tool_event", tool: "propose_clarification", phase: "start", summary: "propose_clarification…" });
           send({
@@ -714,14 +714,29 @@ async function runExpertLoop(
             meta: {
               original_tool: tc.name,
               original_args: summariseToolArgs(tc.name, tc.args),
-              facet_key: guardClarification.facet_key,
-              reason: "categorical_value_not_evidenced",
+              facet_key: guardOutcome.input.facet_key,
+              reason: guardOutcome.reason,
             },
           });
-          send({ type: "delta", content: guardClarification.question });
-          finalText += guardClarification.question;
+          send({ type: "delta", content: guardOutcome.input.question });
+          finalText += guardOutcome.input.question;
           emitSideEffects(result, send);
           steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "guarded_clarification", step_count: step + 1 } });
+          return { finalText, productsRendered };
+        }
+        if (guardOutcome?.kind === "no_intersection") {
+          send({ type: "delta", content: guardOutcome.text });
+          finalText += guardOutcome.text;
+          steps.push({
+            step: "v3_guard_no_intersection",
+            ms: now(),
+            meta: {
+              original_tool: tc.name,
+              original_args: summariseToolArgs(tc.name, tc.args),
+              ...guardOutcome.meta,
+            },
+          });
+          steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "guarded_no_intersection", step_count: step + 1 } });
           return { finalText, productsRendered };
         }
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
