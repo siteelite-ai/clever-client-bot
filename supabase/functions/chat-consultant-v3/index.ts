@@ -954,24 +954,35 @@ async function runExpertLoop(
       });
 
       const hasRender = resp.toolCalls.some((tc) => tc.name === "render_products");
-
-      // UX-правило: пользователь видит ТОЛЬКО первый текстовый пузырёк (intro
-      // эксперта). Любой текст модели на последующих шагах — это «болтовня
-      // между тулами» (рассуждения о фасетах, "попробую ослабить фильтр" и
-      // т.п.), которую пользователь видеть не должен. Текст для LLM-контекста
-      // мы всё равно кладём в messages (см. ниже), но в UI не стримим.
       const isFirstTurn = step === 0;
-      if (resp.text.trim() && !hasRender && isFirstTurn) {
-        send({ type: "delta", content: resp.text });
-        finalText += resp.text;
-        firstAssistantText = resp.text.trim();
-        steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
-      } else if (resp.text.trim() && !hasRender) {
-        // Подавлено для UI, но логируем — пригодится при дебаге.
-        steps.push({ step: "v3_assistant_text_suppressed", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
-      } else if (resp.text.trim() && hasRender) {
-        // Текст рядом с render_products (cross-sell комментарий). Логируем для дебага.
-        steps.push({ step: "v3_assistant_text_with_render", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+      const isFinalTurn = resp.toolCalls.length === 0;
+
+      // UX-правило по роли шага в диалоге:
+      //  • первый шаг с тулами впереди → intro-пузырь эксперта (показываем)
+      //  • финальный шаг без тулов → ответ клиенту (honest-empty / итоговый
+      //    комментарий) — должен дойти вторым пузырём
+      //  • текст рядом с render_products → глушим, карточки говорят сами
+      //  • промежуточная болтовня между тулами → глушим
+      if (resp.text.trim()) {
+        if (isFirstTurn && !hasRender && !isFinalTurn) {
+          send({ type: "delta", content: resp.text });
+          finalText += resp.text;
+          firstAssistantText = resp.text.trim();
+          steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+        } else if (isFinalTurn) {
+          // Финальный ответ модели — отдельный пузырь после тулов/карточек.
+          if (!isFirstTurn) {
+            send({ type: "assistant_turn_break", reason: "final_text" });
+          }
+          send({ type: "delta", content: resp.text });
+          finalText += resp.text;
+          if (isFirstTurn) firstAssistantText = resp.text.trim();
+          steps.push({ step: "v3_assistant_text_final", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+        } else if (hasRender) {
+          steps.push({ step: "v3_assistant_text_with_render", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+        } else {
+          steps.push({ step: "v3_assistant_text_suppressed", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+        }
       }
 
 
