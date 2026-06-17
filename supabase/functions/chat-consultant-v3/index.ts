@@ -1059,6 +1059,67 @@ async function runExpertLoop(
           }
         }
 
+        // ── Step 6a: Render Guard — auto-complement ids from fresh search if LLM dropped them.
+        if (tc.name === "render_products") {
+          const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
+          const validInCache = origIds.filter((id) => {
+            const p = ctx.cache.get(id);
+            return !!p && p.price > 0;
+          });
+          const freshPool = pickFreshUnshown(8);
+          const need = Math.min(5, freshPool.length + validInCache.length);
+          if (validInCache.length < Math.min(3, need) && freshPool.length > 0) {
+            const merged: string[] = [];
+            const seen = new Set<string>();
+            for (const id of validInCache) { if (!seen.has(id)) { merged.push(id); seen.add(id); } }
+            for (const id of freshPool) { if (merged.length >= 8) break; if (!seen.has(id)) { merged.push(id); seen.add(id); } }
+            if (merged.length > validInCache.length) {
+              (tc.args as Record<string, unknown>).product_ids = merged;
+              steps.push({
+                step: "v3_guard_render_autocomplement",
+                ms: now(),
+                meta: {
+                  orig_count: origIds.length,
+                  valid_in_cache: validInCache.length,
+                  fresh_pool: freshPool.length,
+                  after: merged.length,
+                  fresh_tool: freshSearch?.tool,
+                  fresh_total: freshSearch?.total,
+                },
+              });
+            }
+          }
+        }
+
+        // ── Step 6b: Escalate Guard — cancel escalation if fresh unshown pool ≥3.
+        if (tc.name === "escalate_to_manager") {
+          const pool = pickFreshUnshown(8);
+          if (pool.length >= 3) {
+            const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
+            if (render.ok) {
+              send({ type: "tool_event", tool: "escalate_to_manager", phase: "start", summary: "escalate отменён…" });
+              send({ type: "tool_event", tool: "render_products", phase: "result", duration_ms: 0, summary: `auto-render ${render.rendered_count}` });
+              send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: freshSearch?.total });
+              for (const id of pool) shownIds.add(id);
+              productsRendered += render.rendered_count;
+              steps.push({
+                step: "v3_guard_escalate_cancelled",
+                ms: now(),
+                meta: {
+                  reason_attempted: typeof tc.args.reason === "string" ? tc.args.reason : null,
+                  note_attempted: typeof tc.args.note === "string" ? (tc.args.note as string).slice(0, 200) : null,
+                  pool_size: pool.length,
+                  fresh_tool: freshSearch?.tool,
+                  fresh_total: freshSearch?.total,
+                  rendered: render.rendered_count,
+                },
+              });
+              steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "escalate_cancelled_autorender", step_count: step + 1 } });
+              return { finalText, productsRendered };
+            }
+          }
+        }
+
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
         let result = await runTool(tc.name, tc.args, ctx);
         let effectiveArgs: Record<string, unknown> = tc.args;
