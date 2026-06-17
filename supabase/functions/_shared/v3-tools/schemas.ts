@@ -55,7 +55,7 @@ export const TOOL_SCHEMAS = [
     function: {
       name: "jargon_recover_catalog",
       description:
-        "Резерв для бытовой/жаргонной/смешанной RU-EN лексики, когда discover_category вернул category_not_found. Подбирает канонические термины и проверяет в каталоге.",
+        "Резерв для бытовой/жаргонной/смешанной RU-EN лексики, когда discover_category вернул category_not_found. Подбирает канонические термины и проверяет в каталоге. ВНИМАНИЕ: результат может содержать partial_match=true с unmatched_tokens — это значит, что инструмент вытащил товары по родственному термину, но конкретное слово клиента (форма/жаргон/модификатор) в карточках НЕ подтвердилось. В таком случае ЗАПРЕЩЕНО называть карточки тем словом, которого нет в unmatched_tokens — нужен честный ответ см. <hard_rules> 3f.",
       parameters: {
         type: "object",
         properties: {
