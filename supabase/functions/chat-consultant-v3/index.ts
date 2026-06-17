@@ -340,8 +340,8 @@ async function guardedOutcomeForSearch(
       per_page: 5,
     }, catalogDeps, ctx.cache);
 
-    const semanticQuery = stripKnownValues(userMessage, confirmedFilters.map((f) => f.value)) || stripKnownValues(requested, confirmedFilters.map((f) => f.value));
-    const semanticSearch = semanticQuery
+    const semanticQuery = stripKnownValues(requested, confirmedFilters.map((f) => f.value)) || stripKnownValues(userMessage, confirmedFilters.map((f) => f.value));
+    const directSemanticSearch = semanticQuery
       ? await executeSearchCatalog({
         mode: "by_query",
         query: semanticQuery,
@@ -349,6 +349,11 @@ async function guardedOutcomeForSearch(
         per_page: 5,
       }, catalogDeps, ctx.cache)
       : null;
+    const semanticSearch = directSemanticSearch?.ok && directSemanticSearch.total > 0
+      ? directSemanticSearch
+      : semanticQuery
+        ? await executeJargonRecoverCatalog({ query: semanticQuery, per_page: 5 }, { ...catalogDeps, openrouterApiKey: ctx.openrouterKey }, ctx.cache)
+        : null;
 
     const confirmedTotal = confirmedSearch.ok ? confirmedSearch.total : 0;
     const semanticTotal = semanticSearch?.ok ? semanticSearch.total : 0;
