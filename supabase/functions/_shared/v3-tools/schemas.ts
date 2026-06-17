@@ -32,7 +32,7 @@ export const TOOL_SCHEMAS = [
           mode: { type: "string", enum: ["by_article", "by_pagetitle", "by_query", "by_filter"] },
           article: { type: "string" },
           pagetitle: { type: "string" },
-          query: { type: "string" },
+          query: { type: "string", description: "ТОЛЬКО для by_query. Голое существительное/форма/тип/жаргон БЕЗ атрибутов (цоколь, мощность, цвет, IP, ток, сечение). Атрибуты идут отдельно в by_filter через options. Каталог делает AND-fulltext по подстрокам названия — склейка существительного с атрибутом («<жаргон> E27», «провод 2.5») почти всегда даёт 0, даже когда товар есть." },
           category: { type: "string", description: "Pagetitle одной листовой категории (из discover_category.leaf_categories[].pagetitle). НЕ зонтик category.pagetitle — он даст 0." },
           category_in: {
             type: "array",
