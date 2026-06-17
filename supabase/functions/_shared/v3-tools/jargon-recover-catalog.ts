@@ -21,11 +21,42 @@ function normalize(s: string): string {
   return s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+function tokenize(s: string): string[] {
+  return normalize(s).split(/\s+/).filter((t) => t.length >= 3);
+}
+
+function productHaystack(p: ProductRef): string {
+  return normalize(`${p.pagetitle} ${p.vendor ?? ""} ${p.short_traits.join(" ")}`);
+}
+
 function productMatchesModifiers(p: ProductRef, modifiers: string[]): boolean {
   const clean = modifiers.map(normalize).filter(Boolean);
   if (clean.length === 0) return true;
-  const haystack = normalize(`${p.pagetitle} ${p.vendor ?? ""} ${p.short_traits.join(" ")}`);
+  const haystack = productHaystack(p);
   return clean.every((m) => haystack.includes(m));
+}
+
+/**
+ * Считает токены исходного запроса+modifiers, которые не встречаются НИ В ОДНОЙ карточке.
+ * Data-agnostic: никаких словарей форм/типов/категорий, чисто лексическая проверка.
+ */
+function computePartialMatch(
+  sourceQuery: string,
+  modifiers: string[],
+  results: ProductRef[],
+): { partial_match: boolean; unmatched_tokens: string[] } {
+  if (results.length === 0) {
+    return { partial_match: false, unmatched_tokens: [] };
+  }
+  const sourceTokens = tokenize(sourceQuery);
+  const modifierTokens = modifiers.flatMap(tokenize);
+  const allTokens = Array.from(new Set([...sourceTokens, ...modifierTokens]));
+  if (allTokens.length === 0) {
+    return { partial_match: false, unmatched_tokens: [] };
+  }
+  const haystacks = results.map(productHaystack);
+  const unmatched = allTokens.filter((tok) => !haystacks.some((h) => h.includes(tok)));
+  return { partial_match: unmatched.length > 0, unmatched_tokens: unmatched };
 }
 
 export async function executeJargonRecoverCatalog(
@@ -54,14 +85,18 @@ export async function executeJargonRecoverCatalog(
 
     const filtered = result.results.filter((p) => productMatchesModifiers(p, input.modifiers ?? []));
     if (filtered.length > 0) {
+      const sliced = filtered.slice(0, input.per_page ?? 10);
+      const { partial_match, unmatched_tokens } = computePartialMatch(source, input.modifiers ?? [], sliced);
       return {
         tool: "jargon_recover_catalog",
         ok: true,
         source_query: source,
         candidates,
         matched_query: candidate,
-        results: filtered.slice(0, input.per_page ?? 10),
+        results: sliced,
         total: filtered.length,
+        partial_match,
+        unmatched_tokens,
       };
     }
   }
@@ -74,5 +109,7 @@ export async function executeJargonRecoverCatalog(
     matched_query: null,
     results: [],
     total: 0,
+    partial_match: false,
+    unmatched_tokens: [],
   };
 }
