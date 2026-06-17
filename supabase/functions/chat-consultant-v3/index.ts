@@ -289,7 +289,12 @@ function facetValueEquals(a: string, b: string): boolean {
 
 type GuardedSearchOutcome =
   | { kind: "clarification"; input: ProposeClarificationInput; reason: string }
-  | { kind: "no_intersection"; text: string; meta: Record<string, unknown> };
+  | {
+      kind: "no_intersection";
+      debugText: string;
+      semanticProductIds: string[];
+      meta: Record<string, unknown>;
+    };
 
 async function guardedOutcomeForSearch(
   args: Record<string, unknown>,
