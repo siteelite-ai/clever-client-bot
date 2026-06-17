@@ -59,7 +59,7 @@ interface AppSettings {
   volt220_api_token: string | null;
 }
 
-async function loadSettings(supabase: ReturnType<typeof createClient>): Promise<AppSettings> {
+async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
   try {
     const { data } = await supabase
       .from("app_settings")
@@ -84,7 +84,7 @@ async function loadSettings(supabase: ReturnType<typeof createClient>): Promise<
 
 interface ToolContext {
   cache: ProductCache;
-  supabase: ReturnType<typeof createClient>;
+  supabase: SupabaseClient;
   catalogToken: string;
   sessionId: string;
 }
@@ -260,7 +260,7 @@ async function callOpenRouter(
 interface StepLog { step: string; ms: number; meta?: Record<string, unknown>; }
 
 async function logTurn(
-  supabase: ReturnType<typeof createClient>,
+  supabase: SupabaseClient,
   sessionId: string,
   userQuery: string,
   steps: StepLog[],
