@@ -599,6 +599,7 @@ async function broadenPriceDirectionSearch(
   anchor: CachedProd | null,
   lastDiscover: DiscoverCategoryOk | null,
   ctx: ToolContext,
+  budgetCap: number | null = null,
 ): Promise<string[]> {
   if (!lastDiscover) return [];
   const input: SearchCatalogInput = {
@@ -612,6 +613,11 @@ async function broadenPriceDirectionSearch(
     if (direction === "cheaper") input.max_price = anchor.price;
     else if (direction === "more_expensive") input.min_price = anchor.price;
     else if (direction === "same") { input.min_price = Math.floor(anchor.price * 0.7); input.max_price = Math.ceil(anchor.price * 1.3); }
+  }
+  // Бюджетный потолок клиента всегда уважается, даже при расширении.
+  if (budgetCap !== null && budgetCap > 0) {
+    input.max_price = Math.min(input.max_price ?? Number.POSITIVE_INFINITY, budgetCap);
+    if (input.min_price && input.min_price > input.max_price) return [];
   }
   const fb = await executeSearchCatalog(input, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
   if (!fb.ok || fb.total === 0) return [];
@@ -633,7 +639,8 @@ async function tryPriceDirectionRescue(
   const dir = detectPriceDirection(userMessage);
   if (!dir) return 0;
   const anchor = findAnchorInCache(ctx.cache, userMessage);
-  const ids = await broadenPriceDirectionSearch(dir, anchor, lastDiscover, ctx);
+  const budgetCap = extractBudgetCap(userMessage);
+  const ids = await broadenPriceDirectionSearch(dir, anchor, lastDiscover, ctx, budgetCap);
   if (ids.length === 0) return 0;
   const render = await executeRenderProducts({ product_ids: ids, total_available: ids.length } as RenderProductsInput, ctx.cache);
   if (!render.ok) return 0;
