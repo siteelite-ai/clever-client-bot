@@ -56,6 +56,14 @@ function normalize(s: string): string {
   return s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+function cleanText(v: unknown): string {
+  return typeof v === "string" || typeof v === "number" ? String(v).trim() : "";
+}
+
+function isUsefulDiscovery(x: DiscoverCategoryOk): boolean {
+  return x.category.total_products > 0 && x.facets.length > 0;
+}
+
 function collectCategories(nodes: unknown, acc: CategoryCandidate[]): void {
   if (!Array.isArray(nodes)) return;
   for (const node of nodes as Array<Record<string, unknown>>) {
@@ -211,13 +219,13 @@ async function fetchFacetsForPagetitle(
 
     const facets: Facet[] = [];
     for (const o of rawOptions) {
-      const key = (o?.key ?? "").trim();
-      const caption = (o?.caption_ru ?? "").trim();
+      const key = cleanText(o?.key);
+      const caption = cleanText(o?.caption_ru);
       if (!key || !caption) continue;
       const values: FacetValue[] = [];
       if (Array.isArray(o.values)) {
         for (const v of o.values) {
-          const vv = (v?.value_ru ?? "").trim();
+          const vv = cleanText(v?.value_ru);
           if (!vv) continue;
           values.push({ value: vv, products_count: typeof v.products_count === "number" ? v.products_count : undefined });
         }
@@ -239,7 +247,7 @@ async function fetchFacetsForPagetitle(
         ok: true,
         category: {
           id: typeof cat.id === "number" ? cat.id : null,
-          pagetitle: cat.pagetitle ?? pagetitle,
+          pagetitle: cleanText(cat.pagetitle) || pagetitle,
           total_products: typeof cat.total_products === "number" ? cat.total_products : 0,
         },
         facets,
@@ -261,7 +269,7 @@ export async function executeDiscoverCategory(
 
   try {
     const direct = await fetchFacetsForPagetitle(noun, deps);
-    if (direct.ok) return { tool: "discover_category", ...direct.data };
+    if (direct.ok && isUsefulDiscovery(direct.data)) return { tool: "discover_category", ...direct.data };
 
     const resolved = await resolvePagetitle(input, deps);
     if (!resolved) {
@@ -270,7 +278,7 @@ export async function executeDiscoverCategory(
 
     for (const pagetitle of resolved.candidates) {
       const facets = await fetchFacetsForPagetitle(pagetitle, deps);
-      if (facets.ok) return { tool: "discover_category", ...facets.data, resolved_from: resolved.resolvedFrom };
+      if (facets.ok && isUsefulDiscovery(facets.data)) return { tool: "discover_category", ...facets.data, resolved_from: resolved.resolvedFrom };
     }
     return { tool: "discover_category", ok: false, error_code: "category_not_found", message: `no category facets for "${noun}"` };
   } catch (e) {
