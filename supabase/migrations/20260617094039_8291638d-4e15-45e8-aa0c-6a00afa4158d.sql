@@ -1,0 +1,1 @@
+ALTER TABLE public.app_settings DROP CONSTRAINT IF EXISTS app_settings_active_pipeline_check; ALTER TABLE public.app_settings ADD CONSTRAINT app_settings_active_pipeline_check CHECK (active_pipeline = ANY (ARRAY['v1'::text, 'v2'::text, 'v3'::text]));
