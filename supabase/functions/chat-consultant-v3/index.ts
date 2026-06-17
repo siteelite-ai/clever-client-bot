@@ -163,7 +163,7 @@ function summariseToolArgs(name: string, args: Record<string, unknown>): Record<
   if (name === "jargon_recover_catalog") return pick(["query", "modifiers", "min_price", "max_price", "per_page"]);
   if (name === "lookup_knowledge") return pick(["query", "type"]);
   if (name === "lookup_contacts") return pick(["fields"]);
-  if (name === "render_products") return { ids_count: Array.isArray(args.ids) ? (args.ids as unknown[]).length : 0, total_available: args.total_available };
+  if (name === "render_products") return { ids_count: Array.isArray(args.product_ids) ? (args.product_ids as unknown[]).length : 0, total_available: args.total_available };
   if (name === "propose_clarification") return pick(["facet_key", "question"]);
   if (name === "escalate_to_manager") return pick(["reason"]);
   if (name === "note_state") return pick(["key", "ttl_turns"]);
@@ -720,6 +720,68 @@ interface SplitAxis {
   ids: string[];
   total: number;
 }
+
+interface ReplacementAxis {
+  key: string;
+  caption: string;
+  values: string[];
+  isDiameter: boolean;
+}
+
+function isDiameterFacet(facet: Pick<Facet, "key" | "caption">): boolean {
+  const haystack = normalizeForMatch(`${facet.key} ${facet.caption}`);
+  return /(^| )(diametr|diameter|диаметр)( |$)/u.test(haystack);
+}
+
+function buildReplacementAxes(args: Record<string, unknown>, lastDiscover: DiscoverCategoryOk | null): ReplacementAxis[] {
+  if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) return [];
+  const options = (args as { options?: Record<string, unknown> }).options;
+  if (!options || typeof options !== "object") return [];
+  const axes: ReplacementAxis[] = [];
+  for (const [key, raw] of Object.entries(options)) {
+    const values = Array.isArray(raw) ? raw.map(String).filter(Boolean) : [];
+    if (values.length === 0) continue;
+    const facet = lastDiscover.facets.find((f) => f.key === key);
+    if (!facet) continue;
+    axes.push({ key, caption: facet.caption, values, isDiameter: isDiameterFacet(facet) });
+  }
+  return axes;
+}
+
+function productMatchesReplacementAxis(product: { short_traits?: string[] }, axis: ReplacementAxis): boolean {
+  const captionNorm = normalizeForMatch(axis.caption);
+  for (const line of product.short_traits ?? []) {
+    const [rawCaption, ...rawValue] = line.split(":");
+    if (!rawCaption || rawValue.length === 0) continue;
+    if (normalizeForMatch(rawCaption) !== captionNorm) continue;
+    const actual = rawValue.join(":").trim();
+    if (!actual) continue;
+    if (axis.values.some((target) => facetValueEquals(actual, target) || valueIsEvidenced(target, actual))) return true;
+  }
+  return false;
+}
+
+function hasRectangularSizeMarker(title: string): boolean {
+  return /\b\d+(?:[.,]\d+)?\s*(?:x|х|×|\*)\s*\d+(?:[.,]\d+)?\b/iu.test(title);
+}
+
+function filterReplacementCompatibleIds(ids: string[], axes: ReplacementAxis[], cache: ProductCache): string[] {
+  if (axes.length < 2) return ids;
+  const minMatches = Math.max(2, axes.length - 1);
+  const ranked: Array<{ id: string; matches: number; order: number }> = [];
+  ids.forEach((id, order) => {
+    const product = cache.get(id);
+    if (!product) return;
+    const matchedAxes = axes.filter((axis) => productMatchesReplacementAxis(product, axis));
+    const missesDiameter = axes.some((axis) => axis.isDiameter) && !matchedAxes.some((axis) => axis.isDiameter);
+    if (missesDiameter && hasRectangularSizeMarker(product.pagetitle)) return;
+    if (matchedAxes.length >= minMatches) ranked.push({ id, matches: matchedAxes.length, order });
+  });
+  return ranked
+    .sort((a, b) => b.matches - a.matches || a.order - b.order)
+    .map((x) => x.id);
+}
+
 async function trySplitFallback(
   origArgs: Record<string, unknown>,
   ctx: ToolContext,
