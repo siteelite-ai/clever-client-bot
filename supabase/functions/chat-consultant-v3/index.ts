@@ -489,7 +489,6 @@ async function runExpertLoop(
   const now = () => Date.now() - t0;
   let finalText = "";
   let productsRendered = 0;
-  let bubbleHasText = false;
   let firstAssistantText = "";
   let lastDiscover: DiscoverCategoryOk | null = null;
 
@@ -524,7 +523,6 @@ async function runExpertLoop(
         send({ type: "delta", content: resp.text });
         finalText += resp.text;
         firstAssistantText = resp.text.trim();
-        bubbleHasText = true;
         steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
       } else if (resp.text.trim() && !hasRender) {
         // Подавлено для UI, но логируем — пригодится при дебаге.
@@ -546,7 +544,6 @@ async function runExpertLoop(
         type: "assistant_turn_break",
         reason: hasRender ? "after_render" : "tool_pending",
       });
-      bubbleHasText = false;
 
       // Add the assistant turn (with tool_calls) to the history.
       messages.push({
