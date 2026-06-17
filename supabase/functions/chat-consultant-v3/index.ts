@@ -559,18 +559,6 @@ async function runExpertLoop(
       });
       bubbleHasText = false;
 
-      // На первом ходе перед первым тулом — детерминированный второй пузырь
-      // ("сейчас поищу в каталоге"), чтобы UX был стабильным независимо от
-      // модели. Дальше пойдёт tool_event спиннер.
-      if (isFirstTurn && !hasRender) {
-        const searchLine = pickSearchLine(resp.toolCalls);
-        send({ type: "delta", content: searchLine });
-        finalText += searchLine;
-        send({ type: "assistant_turn_break", reason: "tool_pending" });
-        steps.push({ step: "v3_assistant_search_bubble", ms: now(), meta: { text: searchLine } });
-      }
-
-
       // Add the assistant turn (with tool_calls) to the history.
       messages.push({
         role: "assistant",
