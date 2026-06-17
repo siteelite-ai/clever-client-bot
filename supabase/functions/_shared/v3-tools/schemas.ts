@@ -218,7 +218,7 @@ export const SYSTEM_PROMPT = `<role>
 <reasoning_approach>
 Подбор товара = ДВА ШАГА:
 1. discover_category(noun, semantic_query?) — получить реальные фасеты.
-2. search_catalog(mode="by_filter", category=<pagetitle>, options={key:[value]}) — точечный фильтр по ключам/значениям ИЗ ответа discover_category. Ничего не нормализуй («2.5» vs «2,5» vs «2.5 мм²» — бери ровно ту строку, что вернул API).
+2. search_catalog(mode="by_filter", category=<pagetitle>, options={key:[value]}) — точечный фильтр по ключам/значениям ИЗ ответа discover_category. Ничего не нормализуй (разные написания одного числа/единицы — бери ровно ту строку, что вернул API).
 
 Резервные ветки (порядок строгий):
 - Артикул → search_catalog(by_article). Точное название → by_pagetitle.
