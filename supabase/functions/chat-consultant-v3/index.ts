@@ -525,8 +525,24 @@ function promiseRealityCheck(
 // ── Step 5: Price Direction Guard ────────────────────────────────────────
 type PriceDirection = "cheaper" | "more_expensive" | "same";
 
+function extractBudgetCap(msg: string): number | null {
+  const m = msg.toLowerCase().replace(/\s+/g, " ");
+  // "до 1000 тг", "не дороже 1000 тенге", "не более 1000 ₸", "в пределах 1000 тг", "максимум 1000 тг"
+  const re = /(?:до|не\s+дороже|не\s+более|в\s+пределах|максимум|макс\.?|бюджет(?:\s+до)?)\s+(\d[\d\s]{0,9})\s*(?:тг|тенге|₸|kzt)\b/u;
+  const m1 = m.match(re);
+  if (m1) {
+    const n = parseInt(m1[1].replace(/\s+/g, ""), 10);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return null;
+}
+
 function detectPriceDirection(msg: string): PriceDirection | null {
   const m = msg.toLowerCase();
+  // Если есть явный потолок бюджета ("до X тг", "не дороже X тг") — это max_price constraint, а не direction.
+  if (extractBudgetCap(msg) !== null) return null;
+  // Отрицание: "не дороже", "не дешевле", "не подороже" и т.п. — направление сбрасываем.
+  if (/\bне\s+(под?ороже|дороже|подешевле|дешевле)\b/u.test(m)) return null;
   if (/\b(в том же.*(сегмент|ценов)|таком же.*ценов|той же цене|такого же.*ценов)/u.test(m)) return "same";
   if (/(подешевле|дешевле|самый\s+дешёв|самый\s+дешев|самые\s+дешёв|самые\s+дешев|бюджетн|поэконом|подоступн|поде[шщ]евле)/u.test(m)) return "cheaper";
   if (/(подороже|дороже|самый\s+дорог|самые\s+дорог|премиум|премьюм|топов|подсолидн)/u.test(m)) return "more_expensive";
