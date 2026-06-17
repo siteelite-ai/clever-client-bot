@@ -15,6 +15,7 @@ export interface ProductFull extends ProductRef {
 
 export type ToolName =
   | "search_catalog"
+  | "jargon_recover_catalog"
   | "expand_search_to_pool"
   | "lookup_knowledge"
   | "lookup_contacts"
@@ -62,6 +63,16 @@ export interface ExpandPoolOk {
     | "qfv2_honest_empty"
     | "qfv2_jargon_recovery";
   applied_facets?: Array<{ key: string; values: string[]; alternative_values?: string[] }>;
+  side_effects?: ToolSideEffect[];
+}
+
+export interface JargonRecoverOk {
+  ok: true;
+  source_query: string;
+  candidates: string[];
+  results: ProductRef[];
+  matched_query: string | null;
+  total: number;
   side_effects?: ToolSideEffect[];
 }
 
@@ -122,6 +133,7 @@ interface WithSideEffects {
 export type ToolResult =
   | (SearchCatalogOk & { tool: "search_catalog" } & WithSideEffects)
   | (ExpandPoolOk & { tool: "expand_search_to_pool" } & WithSideEffects)
+  | (JargonRecoverOk & { tool: "jargon_recover_catalog" } & WithSideEffects)
   | (LookupKnowledgeOk & { tool: "lookup_knowledge" } & WithSideEffects)
   | (LookupContactsOk & { tool: "lookup_contacts" } & WithSideEffects)
   | (RenderProductsOk & { tool: "render_products" } & WithSideEffects)
