@@ -1080,6 +1080,7 @@ async function runExpertLoop(
   // (see DN027B аналог-кейс: split_fallback дал 12 релевантных id,
   // потом by_query "downlight"→309 затёр freshSearch и render выдал мусор).
   let prioritySplitPool: string[] = [];
+  let replacementRequiredAxes: ReplacementAxis[] = [];
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
   // Anchor exclusion: in replacement-intent turns ("аналог/замена/похожее"),
@@ -1118,6 +1119,7 @@ async function runExpertLoop(
         if (familyExclude.has(id)) continue;
         const p = ctx.cache.get(id);
         if (!p || !(p.price > 0)) continue;
+        if (replacementRequiredAxes.length >= 2 && filterReplacementCompatibleIds([id], replacementRequiredAxes, ctx.cache).length === 0) continue;
         seen.add(id);
         out.push(id);
       }
