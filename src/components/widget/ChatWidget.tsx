@@ -11,13 +11,19 @@ interface ChatWidgetProps {
 const SUPABASE_URL = "https://yngoixmvmxdfxokuafjp.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InluZ29peG12bXhkZnhva3VhZmpwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk2MTg0MzQsImV4cCI6MjA4NTE5NDQzNH0.bJTllxYOlRBqmnKqMAH21OkTBvXjqW4AaBLHz2fK2lQ";
 
-// V1 vs V2 routing — endpoint is resolved once at widget mount via widget-config.
-// V1 (chat-consultant) is the legacy frozen pipeline; V2 (chat-consultant-v2)
-// is the new spec implementation. Switching is admin-only, manual, no auto-fallback.
-type PipelineVersion = 'v1' | 'v2';
+// V1/V2/V3 routing — endpoint is resolved once at widget mount via widget-config.
+// V1 = legacy frozen pipeline (chat-consultant).
+// V2 = spec-based pipeline (chat-consultant-v2).
+// V3 = Expert Orchestrator with Claude tool calling (chat-consultant-v3) —
+//      streams its own SSE envelope `{v3_event: {...}}` for tool events,
+//      bubble breaks, products_block, contacts, quick_replies, slot_update.
+//      `delta` events still travel in the legacy `{choices:[{delta:{content}}]}`
+//      shape, so the streaming parser stays compatible.
+type PipelineVersion = 'v1' | 'v2' | 'v3';
 const ENDPOINT_BY_PIPELINE: Record<PipelineVersion, string> = {
   v1: `${SUPABASE_URL}/functions/v1/chat-consultant`,
   v2: `${SUPABASE_URL}/functions/v1/chat-consultant-v2`,
+  v3: `${SUPABASE_URL}/functions/v1/chat-consultant-v3`,
 };
 
 async function resolvePipelineEndpoint(): Promise<{ pipeline: PipelineVersion; url: string }> {
@@ -27,7 +33,8 @@ async function resolvePipelineEndpoint(): Promise<{ pipeline: PipelineVersion; u
     });
     if (r.ok) {
       const j = await r.json();
-      const pipeline: PipelineVersion = j?.active_pipeline === 'v2' ? 'v2' : 'v1';
+      const raw = j?.active_pipeline;
+      const pipeline: PipelineVersion = raw === 'v3' ? 'v3' : raw === 'v2' ? 'v2' : 'v1';
       return { pipeline, url: ENDPOINT_BY_PIPELINE[pipeline] };
     }
   } catch (e) {
