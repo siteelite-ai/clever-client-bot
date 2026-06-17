@@ -86,6 +86,7 @@ interface ToolContext {
   cache: ProductCache;
   supabase: SupabaseClient;
   catalogToken: string;
+  openrouterKey: string;
   sessionId: string;
 }
 
@@ -99,7 +100,11 @@ async function runTool(
     return executeSearchCatalog(args as unknown as SearchCatalogInput, catalogDeps, ctx.cache);
   }
   if (name === "expand_search_to_pool") {
-    return executeExpandSearchToPool(args as unknown as ExpandPoolInput, catalogDeps, ctx.cache);
+    return executeExpandSearchToPool(
+      args as unknown as ExpandPoolInput,
+      { ...catalogDeps, openrouterApiKey: ctx.openrouterKey, enableJargonRecovery: true },
+      ctx.cache,
+    );
   }
   if (name === "lookup_knowledge") {
     return executeLookupKnowledge(args as unknown as LookupKnowledgeInput, ctx.supabase);
@@ -478,6 +483,7 @@ Deno.serve(async (req) => {
           cache,
           supabase,
           catalogToken: settings.volt220_api_token!,
+          openrouterKey: settings.openrouter_api_key!,
           sessionId,
         };
         const out = await runExpertLoop(userMessage, history, settings.openrouter_api_key!, ctx, send, steps, t0);
