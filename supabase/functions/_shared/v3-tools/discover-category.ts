@@ -318,11 +318,37 @@ async function fetchFacetsForPagetitle(
           total_products: typeof cat.total_products === "number" ? cat.total_products : 0,
         },
         facets,
+        leaf_categories: [], // заполняется в executeDiscoverCategory (нужен cache из resolvePagetitle)
       },
     };
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Резолвит листовые pagetitle для resolved category, используя cache из /categories.
+ * Возвращает {self} если категория уже лист, либо список всех листьев поддерева.
+ */
+function resolveLeafCategories(
+  resolvedPagetitle: string,
+  catId: number | null,
+  cache: CategoriesCache,
+): LeafCategory[] {
+  // Сначала пытаемся найти id по pagetitle (cat.id из /options может отсутствовать).
+  let id = catId;
+  if (id === null) {
+    const fromMap = cache.byPagetitle.get(normalize(resolvedPagetitle));
+    if (typeof fromMap === "number") id = fromMap;
+  }
+  if (id === null) return [{ id: 0, pagetitle: resolvedPagetitle }]; // fallback: используем сам resolved
+  const leaves = collectLeafDescendants(id, cache.byId);
+  if (leaves.length === 0) {
+    const self = cache.byId.get(id);
+    if (self) return [{ id: self.id, pagetitle: self.pagetitle }];
+    return [{ id: 0, pagetitle: resolvedPagetitle }];
+  }
+  return leaves;
 }
 
 export async function executeDiscoverCategory(
