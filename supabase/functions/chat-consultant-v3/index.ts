@@ -1243,20 +1243,39 @@ async function runExpertLoop(
           finalText += note;
         }
 
-        const toolReply = inferredFallback && inferredFallback.length > 0
-          ? {
-              ...((toolResultForLlm(result, effectiveArgs, userMessage) as Record<string, unknown>) ?? {}),
-              _server_note: `Сбросил твои гипотетические фильтры (${inferredFallback.map((f) => `${f.key}=${f.value}`).join(", ")}): клиент их явно не называл, по полному набору 0. Рендери широкую подборку и не утверждай, что искал по конкретным параметрам.`,
-            }
-          : toolResultForLlm(result, effectiveArgs, userMessage);
+        const baseReply = toolResultForLlm(result, effectiveArgs, userMessage) as unknown;
+        const replyObj: Record<string, unknown> = (baseReply && typeof baseReply === "object")
+          ? { ...(baseReply as Record<string, unknown>) }
+          : { value: baseReply };
+
+        if (inferredFallback && inferredFallback.length > 0) {
+          replyObj._server_note = `Сбросил твои гипотетические фильтры (${inferredFallback.map((f) => `${f.key}=${f.value}`).join(", ")}): клиент их явно не называл, по полному набору 0. Рендери широкую подборку и не утверждай, что искал по конкретным параметрам.`;
+        }
+
+        // ── Step 6d: Catalog timeout = retryable, NOT a reason to escalate.
+        if (!result.ok && (result as { error_code?: string }).error_code === "catalog_timeout") {
+          replyObj._retryable = true;
+          replyObj._server_hint = "catalog_timeout — это сетевая ошибка, НЕ исчерпание лестницы. Попробуй СЛЕДУЮЩИЙ кандидат жаргона (RU-синоним → EN → транслит → голое существительное) другим вызовом. Не escalate_to_manager пока не прогнал минимум 3 разных кандидата.";
+          replyObj._tried_queries = [...triedLadderQueries];
+        }
+
+        // ── Step 6e: Fresh pool reminder when render returned empty.
+        if (tc.name === "render_products" && !result.ok) {
+          const pool = pickFreshUnshown(8);
+          if (pool.length > 0) {
+            replyObj._fresh_pool_ids = pool;
+            replyObj._server_hint = `render_products пустой. В кеше есть id: ${pool.join(", ")} (из ${freshSearch?.tool}, total=${freshSearch?.total}). Передай ровно эти id, не выдумывай новые.`;
+          }
+        }
 
         messages.push({
           role: "tool",
           tool_call_id: tc.id,
           name: tc.name,
-          content: JSON.stringify(toolReply),
+          content: JSON.stringify(replyObj),
         });
       }
+
 
 
       // After tools → loop back, model decides what's next.
