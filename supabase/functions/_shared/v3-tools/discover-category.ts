@@ -8,7 +8,21 @@ import type { CatalogClientDeps } from "./search-catalog.ts";
 const CATEGORIES_TTL_MS = 60 * 60 * 1000;
 const MODEL = "google/gemini-2.5-flash";
 
-let categoriesCache: { value: CategoryCandidate[]; ts: number } | null = null;
+interface CategoryNode {
+  id: number;
+  pagetitle: string;
+  parentId: number | null;
+  childrenIds: number[];
+}
+
+interface CategoriesCache {
+  flat: CategoryCandidate[];           // для exact/LLM-резолвера по pagetitle
+  byId: Map<number, CategoryNode>;     // для обхода поддерева (родитель → дети)
+  byPagetitle: Map<string, number>;    // pagetitle (нормализованный) → id
+  ts: number;
+}
+
+let categoriesCache: CategoriesCache | null = null;
 
 export interface DiscoverCategoryInput {
   noun: string; // тип товара из запроса; НЕ обязан быть точным pagetitle каталога
@@ -39,10 +53,23 @@ export interface Facet {
   values: FacetValue[]; // только реально встречающиеся значения
 }
 
+/** Листовая категория из дерева /categories — pagetitle подходит для search_catalog?category=<pagetitle> */
+export interface LeafCategory {
+  id: number;
+  pagetitle: string;
+}
+
 export interface DiscoverCategoryOk {
   ok: true;
   category: { id: number | null; pagetitle: string; total_products: number };
   facets: Facet[];
+  /**
+   * Листовые категории внутри resolved category. Параметр `category=` в /products
+   * матчит ТОЛЬКО pagetitle листа (не зонтика). LLM обязан брать category_in
+   * для search_catalog отсюда, иначе фильтр всегда даст 0.
+   * Если resolved category — сама лист, список содержит её саму.
+   */
+  leaf_categories: LeafCategory[];
   resolved_from?: string;
 }
 
