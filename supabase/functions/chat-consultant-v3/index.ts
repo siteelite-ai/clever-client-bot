@@ -102,7 +102,10 @@ async function runTool(
     return executeSearchCatalog(args as unknown as SearchCatalogInput, catalogDeps, ctx.cache);
   }
   if (name === "discover_category") {
-    return executeDiscoverCategory(args as unknown as DiscoverCategoryInput, catalogDeps) as unknown as ToolResult;
+    return executeDiscoverCategory(
+      args as unknown as DiscoverCategoryInput,
+      { ...catalogDeps, openrouterApiKey: ctx.openrouterKey },
+    ) as unknown as ToolResult;
   }
   if (name === "jargon_recover_catalog") {
     return executeJargonRecoverCatalog(
@@ -182,9 +185,10 @@ function summariseToolResultMeta(name: string, r: ToolResult): Record<string, un
     return { total: x.total, branch_tag: x.branch_tag };
   }
   if (name === "discover_category") {
-    const x = r as unknown as { category?: { pagetitle?: string; total_products?: number }; facets?: Array<{ key: string; values?: unknown[] }> };
+    const x = r as unknown as { category?: { pagetitle?: string; total_products?: number }; facets?: Array<{ key: string; values?: unknown[] }>; resolved_from?: string };
     return {
       pagetitle: x.category?.pagetitle,
+      resolved_from: x.resolved_from,
       total_products: x.category?.total_products ?? 0,
       facets_count: x.facets?.length ?? 0,
       facet_keys: (x.facets ?? []).slice(0, 20).map((f) => f.key),
