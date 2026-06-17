@@ -365,7 +365,7 @@ async function guardedOutcomeForSearch(
     if (confirmedTotal > 0 || semanticTotal > 0) {
       return {
         kind: "no_intersection",
-        text: buildNoIntersectionText({
+        debugText: buildNoIntersectionText({
           requestedLabel: requested,
           confirmedFilters,
           confirmedTotal,
@@ -375,6 +375,7 @@ async function guardedOutcomeForSearch(
             values: semanticSearch?.ok ? traitValuesForFacet(semanticSearch.results, f.facet).filter((v) => !facetValueEquals(v, f.value)) : [],
           })),
         }),
+        semanticProductIds: semanticSearch?.ok ? semanticSearch.results.map((r) => r.id).slice(0, 8) : [],
         meta: {
           reason: "categorical_no_intersection",
           suspicious: suspiciousFilters.map((f) => ({ facet_key: f.key, value: f.value, existsInFacet: f.existsInFacet, evidenced: f.evidenced })),
