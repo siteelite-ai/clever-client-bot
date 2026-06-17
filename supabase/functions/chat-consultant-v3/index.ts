@@ -398,6 +398,118 @@ async function guardedOutcomeForSearch(
   return null;
 }
 
+// ─── Step 1: Numeric Integrity ──────────────────────────────────────────────
+// Защита от молчаливого усечения дробной части ("2,5" → "2") при сериализации
+// числа из текста LLM в options. Без хардкода — чисто арифметическая проверка.
+
+function detectNumericTruncationInOptions(
+  args: Record<string, unknown>,
+  firstAssistantText: string,
+): Array<{ key: string; submitted: string; expected: string }> | null {
+  if (!args.options || typeof args.options !== "object" || !firstAssistantText) return null;
+  const decimalsInText: Array<{ integer: string; decimal: string }> = [];
+  const re = /(\d+)[.,](\d+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(firstAssistantText)) !== null) {
+    decimalsInText.push({ integer: m[1], decimal: m[2] });
+  }
+  if (decimalsInText.length === 0) return null;
+
+  const violations: Array<{ key: string; submitted: string; expected: string }> = [];
+  for (const [key, rawVals] of Object.entries(args.options as Record<string, unknown>)) {
+    if (!Array.isArray(rawVals)) continue;
+    for (const raw of rawVals) {
+      const submitted = String(raw).trim();
+      if (!/^\d+$/.test(submitted)) continue; // bare integer only
+      const match = decimalsInText.find((t) => t.integer === submitted);
+      if (match) violations.push({ key, submitted, expected: `${match.integer}.${match.decimal}` });
+    }
+  }
+  return violations.length > 0 ? violations : null;
+}
+
+// ─── Step 2: Source classification (user_explicit vs assistant_inferred) ────
+// Параметры в options, не упомянутые клиентом, помечаются как inferred — и при
+// пустом поиске сбрасываются автоматическим fallback'ом.
+
+function classifyOptionsSource(
+  args: Record<string, unknown>,
+  userMessage: string,
+): { userExplicit: Array<{ key: string; value: string }>; assistantInferred: Array<{ key: string; value: string }> } {
+  const out = {
+    userExplicit: [] as Array<{ key: string; value: string }>,
+    assistantInferred: [] as Array<{ key: string; value: string }>,
+  };
+  if (!args.options || typeof args.options !== "object") return out;
+  for (const [key, rawVals] of Object.entries(args.options as Record<string, unknown>)) {
+    if (!Array.isArray(rawVals)) continue;
+    for (const raw of rawVals) {
+      const value = String(raw);
+      if (valueIsEvidenced(value, userMessage)) out.userExplicit.push({ key, value });
+      else out.assistantInferred.push({ key, value });
+    }
+  }
+  return out;
+}
+
+// ─── Step 3: Promise-Reality Audit ──────────────────────────────────────────
+// Сверяет числовые обещания первого пузыря с реальными short_traits
+// рендерящихся товаров. Единицы измерения берутся из lastDiscover.facets[].unit
+// (не из словаря) — data-agnostic.
+
+function promiseRealityCheck(
+  firstAssistantText: string,
+  renderedProductIds: string[],
+  cache: ProductCache,
+  lastDiscover: DiscoverCategoryOk | null,
+): { corrective: string; mismatches: Array<{ caption: string; promised: string; actual: string[] }> } | null {
+  if (!lastDiscover || !firstAssistantText) return null;
+  const unitFacets = lastDiscover.facets.filter((f) => f.unit && f.unit.trim());
+  if (unitFacets.length === 0) return null;
+
+  const unitAlt = unitFacets
+    .map((f) => f.unit!.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  const re = new RegExp(`(\\d+(?:[.,]\\d+)?)\\s*(${unitAlt})\\b`, "giu");
+  const promises: Array<{ facet: Facet; value: string }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(firstAssistantText)) !== null) {
+    const num = m[1].replace(",", ".");
+    const unit = m[2].toLowerCase();
+    const facet = unitFacets.find((f) => f.unit!.trim().toLowerCase() === unit);
+    if (facet) promises.push({ facet, value: num });
+  }
+  if (promises.length === 0) return null;
+
+  const products = renderedProductIds
+    .map((id) => cache.get(String(id)))
+    .filter(Boolean) as Array<{ short_traits?: string[] }>;
+  if (products.length === 0) return null;
+
+  const mismatches: Array<{ caption: string; promised: string; actual: string[] }> = [];
+  for (const p of promises) {
+    const actualValues = traitValuesForFacet(products, p.facet);
+    if (actualValues.length === 0) continue;
+    const promisedNum = p.value;
+    const hasMatch = actualValues.some((v) => {
+      const nums = (v.match(/\d+(?:[.,]\d+)?/g) ?? []).map((n) => n.replace(",", "."));
+      return nums.includes(promisedNum);
+    });
+    if (!hasMatch) {
+      mismatches.push({
+        caption: p.facet.caption,
+        promised: `${p.value}${p.facet.unit ? " " + p.facet.unit : ""}`,
+        actual: actualValues,
+      });
+    }
+  }
+  if (mismatches.length === 0) return null;
+  const lines = mismatches
+    .map((mm) => `${mm.caption}: обещал ${mm.promised}, в карточках — ${mm.actual.join(", ")}`)
+    .join("; ");
+  return { corrective: `Уточнение: ${lines}.`, mismatches };
+}
+
 function compactDiscoverCategoryForLlm(r: ToolResult, args: Record<string, unknown>, userMessage: string): unknown {
   const x = r as unknown as {
     ok: true;
