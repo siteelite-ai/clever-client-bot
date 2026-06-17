@@ -36,14 +36,19 @@ function inferStock(p: Record<string, unknown>): ProductRef["stock"] {
 }
 
 function extractTraits(p: Record<string, unknown>): string[] {
+  // Возвращаем ВСЕ характеристики (без лимита 5) — нужны для spec_query/compare,
+  // чтобы LLM мог ответить на любой атрибут карточки. Фильтруем только пустые
+  // и аномально длинные строки (шум/HTML).
   const opts = p.options as Array<{ caption_ru?: string; value_ru?: string }> | undefined;
   if (!Array.isArray(opts)) return [];
   const out: string[] = [];
   for (const o of opts) {
-    if (out.length >= 5) break;
     const cap = o?.caption_ru?.trim();
     const val = o?.value_ru?.trim();
-    if (cap && val) out.push(`${cap}: ${val}`);
+    if (!cap || !val) continue;
+    const line = `${cap}: ${val}`;
+    if (line.length > 160) continue;
+    out.push(line);
   }
   return out;
 }
