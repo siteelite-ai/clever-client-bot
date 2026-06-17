@@ -65,6 +65,8 @@ export interface DiscoverCategoryOk {
     max?: number | null;
     values: Array<{ value: string; products_count?: number }>;
   }>;
+  /** Листовые категории для search_catalog?category=. См. discover-category.ts. */
+  leaf_categories: Array<{ id: number; pagetitle: string }>;
   resolved_from?: string;
   side_effects?: ToolSideEffect[];
 }
