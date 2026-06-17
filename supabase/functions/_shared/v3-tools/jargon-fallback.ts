@@ -60,7 +60,7 @@ export async function tryJargonFallback(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: "deepseek/deepseek-chat-v3.1:free",
+        model: "google/gemini-2.5-flash",
         temperature: 0.3,
         max_tokens: 200,
         messages: [

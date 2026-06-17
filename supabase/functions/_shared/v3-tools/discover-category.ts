@@ -6,7 +6,7 @@
 import type { CatalogClientDeps } from "./search-catalog.ts";
 
 const CATEGORIES_TTL_MS = 60 * 60 * 1000;
-const MODEL = "deepseek/deepseek-chat-v3.1:free";
+const MODEL = "google/gemini-2.5-flash";
 
 let categoriesCache: { value: CategoryCandidate[]; ts: number } | null = null;
 

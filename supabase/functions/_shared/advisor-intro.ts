@@ -21,7 +21,7 @@
 //   | что (лучше|подойдет|подойдёт)
 //   | реком
 
-const INTRO_MODEL = "deepseek/deepseek-chat-v3.1:free";
+const INTRO_MODEL = "google/gemini-2.5-flash";
 const INTRO_TIMEOUT_MS = 4_000;
 const MAX_WORDS = 25;
 

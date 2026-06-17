@@ -19,7 +19,7 @@
 //
 // Модуль НЕ бросает исключений наружу.
 
-const EXPERT_MODEL = "deepseek/deepseek-chat-v3.1:free";
+const EXPERT_MODEL = "google/gemini-2.5-flash";
 const EXPERT_TIMEOUT_MS = 8_000;
 const MAX_VALUES_PER_FACET = 3;
 
