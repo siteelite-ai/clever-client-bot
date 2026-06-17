@@ -594,6 +594,34 @@ async function broadenPriceDirectionSearch(
   return sorted.map((p) => String((p as { id: string | number }).id));
 }
 
+async function tryPriceDirectionRescue(
+  userMessage: string,
+  lastDiscover: DiscoverCategoryOk | null,
+  ctx: ToolContext,
+  send: (ev: SseEvent) => void,
+  steps: StepLog[],
+  now: () => number,
+): Promise<number> {
+  const dir = detectPriceDirection(userMessage);
+  if (!dir) return 0;
+  const anchor = findAnchorInCache(ctx.cache, userMessage);
+  const ids = await broadenPriceDirectionSearch(dir, anchor, lastDiscover, ctx);
+  if (ids.length === 0) return 0;
+  const render = await executeRenderProducts({ product_ids: ids, total_available: ids.length } as RenderProductsInput, ctx.cache);
+  if (!render.ok) return 0;
+  send({ type: "tool_event", tool: "search_catalog", phase: "result", duration_ms: 0, summary: `price-rescue: найдено ${ids.length}` });
+  send({ type: "tool_event", tool: "render_products", phase: "result", duration_ms: 0, summary: `показано ${render.rendered_count}` });
+  send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: ids.length });
+  steps.push({
+    step: "v3_guard_price_rescue",
+    ms: now(),
+    meta: { direction: dir, anchor_id: anchor?.id ?? null, anchor_price: anchor?.price ?? null, rendered: render.rendered_count },
+  });
+  return render.rendered_count;
+}
+
+
+
 
 
 function compactDiscoverCategoryForLlm(r: ToolResult, args: Record<string, unknown>, userMessage: string): unknown {
