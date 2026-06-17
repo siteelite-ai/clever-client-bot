@@ -1326,9 +1326,13 @@ async function runExpertLoop(
         if (tc.name === "render_products") {
           const anchorId = getAnchorExcludeId();
           const familyExclude = getFamilyExcludeSet();
-          if (anchorId || familyExclude.size > 0) {
+          if (anchorId || familyExclude.size > 0 || (replacementIntent && replacementRequiredAxes.length >= 2)) {
             const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
-            const filtered = origIds.filter((id) => id !== anchorId && !familyExclude.has(id));
+            let filtered = origIds.filter((id) => id !== anchorId && !familyExclude.has(id));
+            const afterFamily = filtered.length;
+            if (replacementIntent && replacementRequiredAxes.length >= 2) {
+              filtered = filterReplacementCompatibleIds(filtered, replacementRequiredAxes, ctx.cache);
+            }
             if (filtered.length !== origIds.length) {
               (tc.args as Record<string, unknown>).product_ids = filtered;
               steps.push({
@@ -1337,7 +1341,9 @@ async function runExpertLoop(
                 meta: {
                   anchor_id: anchorId,
                   family_size: familyExclude.size,
+                  required_axes: replacementRequiredAxes.map((a) => ({ key: a.key, values: a.values })),
                   before: origIds.length,
+                  after_family: afterFamily,
                   after: filtered.length,
                   removed: origIds.length - filtered.length,
                 },
