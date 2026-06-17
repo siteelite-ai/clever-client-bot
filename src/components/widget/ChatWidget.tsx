@@ -201,6 +201,36 @@ async function streamChat({
 
         try {
           const parsed = JSON.parse(jsonStr);
+          // V3 SSE envelope: { v3_event: { type, ... } }
+          if (parsed.v3_event) {
+            const ev = parsed.v3_event;
+            switch (ev.type) {
+              case 'delta':
+                if (typeof ev.content === 'string') onDelta(ev.content);
+                break;
+              case 'assistant_turn_break':
+                onTurnBreak?.(ev.reason ?? 'tool_pending');
+                break;
+              case 'tool_event':
+                onToolEvent?.(ev);
+                break;
+              case 'products_block':
+                if (typeof ev.markdown === 'string') {
+                  onProductsBlock?.(ev.markdown, { count: ev.count ?? 0, total_available: ev.total_available });
+                }
+                break;
+              case 'contacts':
+                if (typeof ev.html === 'string') onContacts?.(ev.html);
+                break;
+              case 'quick_replies':
+                if (Array.isArray(ev.replies)) onQuickReplies?.(ev.replies);
+                break;
+              case 'slot_update':
+                if (ev.slots && typeof ev.slots === 'object') onSlotUpdate?.(ev.slots);
+                break;
+            }
+            continue;
+          }
           // Check for contacts event
           if (parsed.contacts && onContacts) {
             onContacts(parsed.contacts);
@@ -240,6 +270,35 @@ async function streamChat({
         if (jsonStr === '[DONE]') continue;
         try {
           const parsed = JSON.parse(jsonStr);
+          if (parsed.v3_event) {
+            const ev = parsed.v3_event;
+            switch (ev.type) {
+              case 'delta':
+                if (typeof ev.content === 'string') onDelta(ev.content);
+                break;
+              case 'assistant_turn_break':
+                onTurnBreak?.(ev.reason ?? 'tool_pending');
+                break;
+              case 'tool_event':
+                onToolEvent?.(ev);
+                break;
+              case 'products_block':
+                if (typeof ev.markdown === 'string') {
+                  onProductsBlock?.(ev.markdown, { count: ev.count ?? 0, total_available: ev.total_available });
+                }
+                break;
+              case 'contacts':
+                if (typeof ev.html === 'string') onContacts?.(ev.html);
+                break;
+              case 'quick_replies':
+                if (Array.isArray(ev.replies)) onQuickReplies?.(ev.replies);
+                break;
+              case 'slot_update':
+                if (ev.slots && typeof ev.slots === 'object') onSlotUpdate?.(ev.slots);
+                break;
+            }
+            continue;
+          }
           if (parsed.contacts && onContacts) {
             onContacts(parsed.contacts);
             continue;
