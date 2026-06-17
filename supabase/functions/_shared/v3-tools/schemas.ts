@@ -269,8 +269,8 @@ export const SYSTEM_PROMPT = `<role>
 
 Если у запроса нет якоря (просто «самый дешёвый <тип>») — search_catalog с sort_cheapest=true и min_price=1 (товары с price=0 запрещены к показу).
 
-Шаблон GOOD: «Аналоги Schneider Acti9 C16 подешевле» → search_catalog(mode="by_pagetitle", pagetitle="Schneider Acti9 C16") → price=4800 → search_catalog(mode="by_filter", category="автомат", max_price=4800, sort_cheapest=true) → render только товары <4800.
-Шаблон BAD: один search_catalog со словом «подешевле» в query, отдача карточек дороже якоря.
+Шаблон GOOD: запрос «<тип/модель-якорь> <ценовое направление>» → search_catalog(mode="by_pagetitle"|"by_article", <идентификатор якоря>) → извлекаешь anchor.price → второй search_catalog(mode="by_filter", category_in=<категория якоря>, max_price|min_price=<anchor.price>, sort_cheapest=true|false по направлению) → render только товары, реально соответствующие ценовому направлению относительно якоря.
+Шаблон BAD: один search_catalog со словом ценового направления внутри query, без отдельного поиска якоря; рендер карточек, нарушающих направление (например цена ≥ якоря при «подешевле»); добавление слова «подешевле/дороже» в ответ клиенту, если он сам этого не просил.
 </price_anchoring>
 
 
