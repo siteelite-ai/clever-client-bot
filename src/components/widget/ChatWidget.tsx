@@ -493,9 +493,22 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       // closure-local streaming state; `typing2Removed` stays true so we don't
       // re-render typing dots, but `streamMsgId=null` + cleared accumulator
       // forces updateAssistant into the "append new bubble" branch.
-      onTurnBreak: (_reason) => {
+      onTurnBreak: (reason) => {
         assistantContent = '';
         bubbleSealed = true;
+        streamMsgId = null;
+        // When a tool is about to run, show typing dots until the next
+        // bubble (delta or products) arrives.
+        if (reason === 'tool_pending') {
+          const tId = mid('typing');
+          setMessages(prev => [
+            ...prev.filter(m => !m.id.startsWith('typing-') && !m.id.startsWith('typing2-')),
+            { id: tId, role: 'assistant' as const, content: '__TYPING__', timestamp: new Date() },
+          ]);
+          // Allow updateAssistant to strip the typing bubble when the next
+          // delta arrives (it only strips when typing2Removed is false).
+          typing2Removed = false;
+        }
       },
       onProductsBlock: (markdown, _meta) => {
         setMessages(prev => {
