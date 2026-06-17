@@ -858,6 +858,23 @@ async function runExpertLoop(
   let firstAssistantText = "";
   let lastDiscover: DiscoverCategoryOk | null = null;
 
+  // Step 6 state: fresh-but-unshown product pool from latest successful search.
+  let freshSearch: { tool: string; ids: string[]; total: number } | null = null;
+  const shownIds = new Set<string>();
+  const triedLadderQueries = new Set<string>();
+  const pickFreshUnshown = (n: number): string[] => {
+    if (!freshSearch) return [];
+    const out: string[] = [];
+    for (const id of freshSearch.ids) {
+      if (out.length >= n) break;
+      if (shownIds.has(id)) continue;
+      const p = ctx.cache.get(id);
+      if (!p || !(p.price > 0)) continue;
+      out.push(id);
+    }
+    return out;
+  };
+
   const messages: ORMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
     ...history.map((h) => ({ role: h.role, content: h.content })),
@@ -1042,6 +1059,67 @@ async function runExpertLoop(
           }
         }
 
+        // ── Step 6a: Render Guard — auto-complement ids from fresh search if LLM dropped them.
+        if (tc.name === "render_products") {
+          const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
+          const validInCache = origIds.filter((id) => {
+            const p = ctx.cache.get(id);
+            return !!p && p.price > 0;
+          });
+          const freshPool = pickFreshUnshown(8);
+          const need = Math.min(5, freshPool.length + validInCache.length);
+          if (validInCache.length < Math.min(3, need) && freshPool.length > 0) {
+            const merged: string[] = [];
+            const seen = new Set<string>();
+            for (const id of validInCache) { if (!seen.has(id)) { merged.push(id); seen.add(id); } }
+            for (const id of freshPool) { if (merged.length >= 8) break; if (!seen.has(id)) { merged.push(id); seen.add(id); } }
+            if (merged.length > validInCache.length) {
+              (tc.args as Record<string, unknown>).product_ids = merged;
+              steps.push({
+                step: "v3_guard_render_autocomplement",
+                ms: now(),
+                meta: {
+                  orig_count: origIds.length,
+                  valid_in_cache: validInCache.length,
+                  fresh_pool: freshPool.length,
+                  after: merged.length,
+                  fresh_tool: freshSearch?.tool,
+                  fresh_total: freshSearch?.total,
+                },
+              });
+            }
+          }
+        }
+
+        // ── Step 6b: Escalate Guard — cancel escalation if fresh unshown pool ≥3.
+        if (tc.name === "escalate_to_manager") {
+          const pool = pickFreshUnshown(8);
+          if (pool.length >= 3) {
+            const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
+            if (render.ok) {
+              send({ type: "tool_event", tool: "escalate_to_manager", phase: "start", summary: "escalate отменён…" });
+              send({ type: "tool_event", tool: "render_products", phase: "result", duration_ms: 0, summary: `auto-render ${render.rendered_count}` });
+              send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: freshSearch?.total });
+              for (const id of pool) shownIds.add(id);
+              productsRendered += render.rendered_count;
+              steps.push({
+                step: "v3_guard_escalate_cancelled",
+                ms: now(),
+                meta: {
+                  reason_attempted: typeof tc.args.reason === "string" ? tc.args.reason : null,
+                  note_attempted: typeof tc.args.note === "string" ? (tc.args.note as string).slice(0, 200) : null,
+                  pool_size: pool.length,
+                  fresh_tool: freshSearch?.tool,
+                  fresh_total: freshSearch?.total,
+                  rendered: render.rendered_count,
+                },
+              });
+              steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "escalate_cancelled_autorender", step_count: step + 1 } });
+              return { finalText, productsRendered };
+            }
+          }
+        }
+
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
         let result = await runTool(tc.name, tc.args, ctx);
         let effectiveArgs: Record<string, unknown> = tc.args;
@@ -1110,10 +1188,25 @@ async function runExpertLoop(
           lastDiscover = result as unknown as DiscoverCategoryOk;
         }
 
+        // ── Step 6c: Track fresh search pool for render/escalate guards.
+        if ((tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") && result.ok) {
+          const r2 = result as unknown as { results: Array<{ id: string; price: number }>; total: number };
+          const ids = (r2.results ?? [])
+            .filter((p) => p && Number.isFinite(p.price) && p.price > 0)
+            .map((p) => String(p.id));
+          if (ids.length > 0) {
+            freshSearch = { tool: tc.name, ids, total: r2.total };
+          }
+          // Track which ladder candidates were already tried (to nudge LLM in tool reply).
+          const q = typeof tc.args.query === "string" ? tc.args.query.trim().toLowerCase() : "";
+          if (q) triedLadderQueries.add(q);
+        }
+
         // If render_products succeeded → emit products_block immediately.
         if (tc.name === "render_products" && result.ok) {
           const r = result as { markdown: string; rendered_count: number };
           const renderedIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
+          for (const id of renderedIds) shownIds.add(id);
 
           // ── Step 3: Promise-Reality Audit
           const audit = promiseRealityCheck(firstAssistantText, renderedIds, ctx.cache, lastDiscover);
@@ -1138,6 +1231,7 @@ async function runExpertLoop(
           return { finalText, productsRendered };
         }
 
+
         // Tool-driven SSE side-effects (contacts/quick_replies/slot_update).
         emitSideEffects(result, send);
 
@@ -1149,20 +1243,39 @@ async function runExpertLoop(
           finalText += note;
         }
 
-        const toolReply = inferredFallback && inferredFallback.length > 0
-          ? {
-              ...((toolResultForLlm(result, effectiveArgs, userMessage) as Record<string, unknown>) ?? {}),
-              _server_note: `Сбросил твои гипотетические фильтры (${inferredFallback.map((f) => `${f.key}=${f.value}`).join(", ")}): клиент их явно не называл, по полному набору 0. Рендери широкую подборку и не утверждай, что искал по конкретным параметрам.`,
-            }
-          : toolResultForLlm(result, effectiveArgs, userMessage);
+        const baseReply = toolResultForLlm(result, effectiveArgs, userMessage) as unknown;
+        const replyObj: Record<string, unknown> = (baseReply && typeof baseReply === "object")
+          ? { ...(baseReply as Record<string, unknown>) }
+          : { value: baseReply };
+
+        if (inferredFallback && inferredFallback.length > 0) {
+          replyObj._server_note = `Сбросил твои гипотетические фильтры (${inferredFallback.map((f) => `${f.key}=${f.value}`).join(", ")}): клиент их явно не называл, по полному набору 0. Рендери широкую подборку и не утверждай, что искал по конкретным параметрам.`;
+        }
+
+        // ── Step 6d: Catalog timeout = retryable, NOT a reason to escalate.
+        if (!result.ok && (result as { error_code?: string }).error_code === "catalog_timeout") {
+          replyObj._retryable = true;
+          replyObj._server_hint = "catalog_timeout — это сетевая ошибка, НЕ исчерпание лестницы. Попробуй СЛЕДУЮЩИЙ кандидат жаргона (RU-синоним → EN → транслит → голое существительное) другим вызовом. Не escalate_to_manager пока не прогнал минимум 3 разных кандидата.";
+          replyObj._tried_queries = [...triedLadderQueries];
+        }
+
+        // ── Step 6e: Fresh pool reminder when render returned empty.
+        if (tc.name === "render_products" && !result.ok) {
+          const pool = pickFreshUnshown(8);
+          if (pool.length > 0) {
+            replyObj._fresh_pool_ids = pool;
+            replyObj._server_hint = `render_products пустой. В кеше есть id: ${pool.join(", ")} (из ${freshSearch?.tool}, total=${freshSearch?.total}). Передай ровно эти id, не выдумывай новые.`;
+          }
+        }
 
         messages.push({
           role: "tool",
           tool_call_id: tc.id,
           name: tc.name,
-          content: JSON.stringify(toolReply),
+          content: JSON.stringify(replyObj),
         });
       }
+
 
 
       // After tools → loop back, model decides what's next.
