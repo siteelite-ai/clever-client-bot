@@ -86,6 +86,7 @@ interface ToolContext {
   cache: ProductCache;
   supabase: SupabaseClient;
   catalogToken: string;
+  openrouterKey: string;
   sessionId: string;
 }
 
@@ -99,7 +100,11 @@ async function runTool(
     return executeSearchCatalog(args as unknown as SearchCatalogInput, catalogDeps, ctx.cache);
   }
   if (name === "expand_search_to_pool") {
-    return executeExpandSearchToPool(args as unknown as ExpandPoolInput, catalogDeps, ctx.cache);
+    return executeExpandSearchToPool(
+      args as unknown as ExpandPoolInput,
+      { ...catalogDeps, openrouterApiKey: ctx.openrouterKey, enableJargonRecovery: true },
+      ctx.cache,
+    );
   }
   if (name === "lookup_knowledge") {
     return executeLookupKnowledge(args as unknown as LookupKnowledgeInput, ctx.supabase);
