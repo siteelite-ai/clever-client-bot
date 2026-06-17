@@ -15,6 +15,7 @@ export interface ProductFull extends ProductRef {
 
 export type ToolName =
   | "search_catalog"
+  | "discover_category"
   | "jargon_recover_catalog"
   | "expand_search_to_pool"
   | "lookup_knowledge"

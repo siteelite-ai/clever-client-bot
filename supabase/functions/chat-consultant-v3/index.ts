@@ -7,6 +7,7 @@
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { TOOL_SCHEMAS, SYSTEM_PROMPT } from "../_shared/v3-tools/schemas.ts";
 import { executeSearchCatalog, type SearchCatalogInput } from "../_shared/v3-tools/search-catalog.ts";
+import { executeDiscoverCategory, type DiscoverCategoryInput } from "../_shared/v3-tools/discover-category.ts";
 import { executeJargonRecoverCatalog, type JargonRecoverCatalogInput } from "../_shared/v3-tools/jargon-recover-catalog.ts";
 import { executeExpandSearchToPool, type ExpandPoolInput } from "../_shared/v3-tools/expand-search-pool.ts";
 import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3-tools/lookup-knowledge.ts";
@@ -100,6 +101,9 @@ async function runTool(
   if (name === "search_catalog") {
     return executeSearchCatalog(args as unknown as SearchCatalogInput, catalogDeps, ctx.cache);
   }
+  if (name === "discover_category") {
+    return executeDiscoverCategory(args as unknown as DiscoverCategoryInput, catalogDeps) as unknown as ToolResult;
+  }
   if (name === "jargon_recover_catalog") {
     return executeJargonRecoverCatalog(
       args as unknown as JargonRecoverCatalogInput,
@@ -138,6 +142,10 @@ async function runTool(
 function summariseToolResult(name: string, r: ToolResult): string {
   if (!r.ok) return `ошибка: ${r.error_code}`;
   if (name === "search_catalog" || name === "expand_search_to_pool" || name === "jargon_recover_catalog") return `найдено ${(r as { total: number }).total}`;
+  if (name === "discover_category") {
+    const x = r as unknown as { category?: { total_products?: number }; facets?: unknown[] };
+    return `категория: ${x.category?.total_products ?? 0} тов., фасетов ${x.facets?.length ?? 0}`;
+  }
   if (name === "lookup_knowledge") return `${(r as { hits: unknown[] }).hits.length} фрагментов`;
   if (name === "lookup_contacts") return `контакты загружены`;
   if (name === "render_products") return `показано ${(r as { rendered_count: number }).rendered_count}`;
@@ -154,7 +162,8 @@ function summariseToolArgs(name: string, args: Record<string, unknown>): Record<
     for (const k of keys) if (args[k] !== undefined) o[k] = args[k];
     return o;
   };
-  if (name === "search_catalog") return pick(["mode", "query", "article", "pagetitle", "category", "min_price", "max_price", "sort_cheapest", "per_page", "page"]);
+  if (name === "search_catalog") return pick(["mode", "query", "article", "pagetitle", "category", "min_price", "max_price", "sort_cheapest", "per_page", "page", "options"]);
+  if (name === "discover_category") return pick(["noun"]);
   if (name === "expand_search_to_pool") return pick(["noun", "semantic_query", "modifiers", "category", "min_price", "max_price", "price_intent", "per_page"]);
   if (name === "jargon_recover_catalog") return pick(["noun", "semantic_query", "modifiers", "category"]);
   if (name === "lookup_knowledge") return pick(["query", "type"]);
@@ -171,6 +180,15 @@ function summariseToolResultMeta(name: string, r: ToolResult): Record<string, un
   if (name === "search_catalog" || name === "expand_search_to_pool" || name === "jargon_recover_catalog") {
     const x = r as { total: number; branch_tag?: string; resolved_filters?: unknown };
     return { total: x.total, branch_tag: x.branch_tag };
+  }
+  if (name === "discover_category") {
+    const x = r as unknown as { category?: { pagetitle?: string; total_products?: number }; facets?: Array<{ key: string; values?: unknown[] }> };
+    return {
+      pagetitle: x.category?.pagetitle,
+      total_products: x.category?.total_products ?? 0,
+      facets_count: x.facets?.length ?? 0,
+      facet_keys: (x.facets ?? []).slice(0, 20).map((f) => f.key),
+    };
   }
   if (name === "lookup_knowledge") return { hits: (r as { hits: unknown[] }).hits.length };
   if (name === "render_products") return { rendered_count: (r as { rendered_count: number }).rendered_count, blocked_by_zero_price: (r as { blocked_by_zero_price?: number }).blocked_by_zero_price };

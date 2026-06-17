@@ -11,7 +11,7 @@ export interface CatalogClientDeps {
 }
 
 export interface SearchCatalogInput {
-  mode: "by_article" | "by_pagetitle" | "by_query";
+  mode: "by_article" | "by_pagetitle" | "by_query" | "by_filter";
   article?: string;
   pagetitle?: string;
   query?: string;
@@ -60,7 +60,13 @@ export async function executeSearchCatalog(
   if (input.mode === "by_article" && input.article) params.append("article", input.article);
   else if (input.mode === "by_pagetitle" && input.pagetitle) params.append("pagetitle", input.pagetitle);
   else if (input.mode === "by_query" && input.query) params.append("query", input.query);
-  else {
+  else if (input.mode === "by_filter") {
+    // by_filter режим: фильтрация исключительно по category + options[].
+    // Требует category ИЛИ хотя бы одну запись в options.
+    if (!input.category && (!input.options || Object.keys(input.options).length === 0)) {
+      return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "by_filter requires category or options" };
+    }
+  } else {
     return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "missing field for mode" };
   }
 
