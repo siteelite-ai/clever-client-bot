@@ -1491,9 +1491,22 @@ async function runExpertLoop(
           }
         }
 
+        let runArgs: Record<string, unknown> = tc.args;
+        const canonicalized = tc.name === "search_catalog"
+          ? canonicalizeSearchOptionsFromDiscover(tc.args, lastDiscover)
+          : null;
+        if (canonicalized) {
+          runArgs = canonicalized.args;
+          steps.push({
+            step: "v3_guard_option_canonicalized",
+            ms: now(),
+            meta: { rewrites: canonicalized.rewrites, original_args: summariseToolArgs(tc.name, tc.args) },
+          });
+        }
+
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
-        let result = await runTool(tc.name, tc.args, ctx);
-        let effectiveArgs: Record<string, unknown> = tc.args;
+        let result = await runTool(tc.name, runArgs, ctx);
+        let effectiveArgs: Record<string, unknown> = runArgs;
         let inferredFallback: Array<{ key: string; value: string }> | null = null;
         let splitFallbackResult: { axes: SplitAxis[]; ms: number } | null = null;
         const dur = Date.now() - toolStart;
@@ -1512,7 +1525,7 @@ async function runExpertLoop(
             ok: result.ok,
             error_code: !result.ok ? result.error_code : null,
             duration_ms: dur,
-            args: summariseToolArgs(tc.name, tc.args),
+            args: summariseToolArgs(tc.name, runArgs),
             result: summariseToolResultMeta(tc.name, result),
           },
         });
