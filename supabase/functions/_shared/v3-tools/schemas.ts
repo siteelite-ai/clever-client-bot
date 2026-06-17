@@ -8,7 +8,7 @@ export const TOOL_SCHEMAS = [
     function: {
       name: "discover_category",
       description:
-        "Получить схему категории каталога: pagetitle, фасеты (ключи, названия, единицы, ФАКТИЧЕСКИЕ значения с products_count). ВСЕГДА вызывай первым для любого подбора товара по типу/характеристикам. ВАЖНО: если в запросе клиента есть жаргон/форма/тип/исполнение — ОБЯЗАТЕЛЬНО просканируй facets[].values на совпадение (нормализация: lowercase, ё=е, EN↔RU транслитерация). Найденное значение используешь в search_catalog.options — НЕ отправляй жаргон в by_query.",
+        "Получить схему категории каталога: pagetitle, leaf_categories (листовые подкатегории, ПРИГОДНЫЕ для search_catalog.category_in), фасеты (ключи, названия, единицы, ФАКТИЧЕСКИЕ значения с products_count). ВСЕГДА вызывай первым для любого подбора товара по типу/характеристикам. ВАЖНО: если в запросе клиента есть жаргон/форма/тип/исполнение — ОБЯЗАТЕЛЬНО просканируй facets[].values на совпадение (нормализация: lowercase, ё=е, EN↔RU транслитерация). Найденное значение используешь в search_catalog.options — НЕ отправляй жаргон в by_query.",
       parameters: {
         type: "object",
         properties: {
@@ -25,7 +25,7 @@ export const TOOL_SCHEMAS = [
     function: {
       name: "search_catalog",
       description:
-        "Поиск товаров. Режимы: by_article (точный SKU), by_pagetitle (точное название), by_filter (category+options из discover_category), by_query (свободный текст — резервный). Возвращает товары с id для render_products.",
+        "Поиск товаров. Режимы: by_article (точный SKU), by_pagetitle (точное название товара), by_filter (category_in+options из discover_category), by_query (свободный текст — резервный). Возвращает товары с id для render_products. КРИТИЧНО для by_filter: параметр category=/category_in принимает ТОЛЬКО pagetitle ЛИСТОВОЙ категории (из discover_category.leaf_categories[].pagetitle). discover_category.category.pagetitle — это зонтик, он НЕ работает как фильтр (всегда даёт 0). Если у resolved category несколько листьев — передавай их все в category_in: сервер сам выполнит параллельный поиск и смерджит.",
       parameters: {
         type: "object",
         properties: {
@@ -33,7 +33,12 @@ export const TOOL_SCHEMAS = [
           article: { type: "string" },
           pagetitle: { type: "string" },
           query: { type: "string" },
-          category: { type: "string", description: "Pagetitle из discover_category.category.pagetitle" },
+          category: { type: "string", description: "Pagetitle одной листовой категории (из discover_category.leaf_categories[].pagetitle). НЕ зонтик category.pagetitle — он даст 0." },
+          category_in: {
+            type: "array",
+            items: { type: "string" },
+            description: "Массив pagetitle листовых категорий (из discover_category.leaf_categories). Используй когда у resolved category несколько листьев — сервер выполнит fan-out и смерджит.",
+          },
           min_price: { type: "number" },
           max_price: { type: "number" },
           options: {
