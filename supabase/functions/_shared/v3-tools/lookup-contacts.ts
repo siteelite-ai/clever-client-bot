@@ -63,7 +63,7 @@ function formatContactsCard(raw: string): string | null {
 
 function extractTopicSnippet(raw: string, topic: LookupContactsInput["topic"]): string | undefined {
   if (topic === "general" || !raw) return undefined;
-  const patterns: Record<typeof topic, RegExp | null> = {
+  const patterns: Partial<Record<LookupContactsInput["topic"], RegExp>> = {
     phone: /(?:\+7|8)[\s\(\)\-]*\d{3}[\s\(\)\-]*\d{3}[\s\-]*\d{2}[\s\-]*\d{2}/,
     address: /(?:адрес|г\.\s*\w+|ул\.\s*[А-Яа-яA-Za-z0-9 .\-]+)/i,
     hours: /(?:график|часы|с\s*\d{1,2}[:\.]?\d{0,2}\s*до\s*\d{1,2}[:\.]?\d{0,2}|пн|пн-пт|пн-вс)/i,
