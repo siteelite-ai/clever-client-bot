@@ -397,6 +397,9 @@ async function runExpertLoop(
           productsRendered += r.rendered_count;
         }
 
+        // Tool-driven SSE side-effects (contacts/quick_replies/slot_update).
+        emitSideEffects(result, send);
+
         messages.push({
           role: "tool",
           tool_call_id: tc.id,
