@@ -302,12 +302,18 @@ async function guardedOutcomeForSearch(
   userMessage: string,
   firstAssistantText: string,
   ctx: ToolContext,
+  conversationEvidence: string = "",
 ): Promise<GuardedSearchOutcome | null> {
   if (args.mode !== "by_filter" || !args.options || typeof args.options !== "object") return null;
   if (!lastDiscover) return null;
 
   const options = args.options as Record<string, unknown>;
-  const evidenceText = `${userMessage}\n${firstAssistantText}`;
+  // Evidence охватывает текущий ход + недавнюю историю диалога: пользователь
+  // часто подтверждает оффер ("давай"), а значение фасета (E27, 16А и т.п.)
+  // было названо в предыдущих ходах. Без истории гард блокирует валидные
+  // фильтры на коротких подтверждениях.
+  const evidenceText = `${conversationEvidence}\n${userMessage}\n${firstAssistantText}`;
+
   const confirmedFilters: Array<{ facet: Facet; key: string; value: string }> = [];
   const suspiciousFilters: Array<{ facet: Facet; key: string; value: string; existsInFacet: boolean; evidenced: boolean }> = [];
 
