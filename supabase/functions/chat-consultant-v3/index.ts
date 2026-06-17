@@ -398,6 +398,118 @@ async function guardedOutcomeForSearch(
   return null;
 }
 
+// ─── Step 1: Numeric Integrity ──────────────────────────────────────────────
+// Защита от молчаливого усечения дробной части ("2,5" → "2") при сериализации
+// числа из текста LLM в options. Без хардкода — чисто арифметическая проверка.
+
+function detectNumericTruncationInOptions(
+  args: Record<string, unknown>,
+  firstAssistantText: string,
+): Array<{ key: string; submitted: string; expected: string }> | null {
+  if (!args.options || typeof args.options !== "object" || !firstAssistantText) return null;
+  const decimalsInText: Array<{ integer: string; decimal: string }> = [];
+  const re = /(\d+)[.,](\d+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(firstAssistantText)) !== null) {
+    decimalsInText.push({ integer: m[1], decimal: m[2] });
+  }
+  if (decimalsInText.length === 0) return null;
+
+  const violations: Array<{ key: string; submitted: string; expected: string }> = [];
+  for (const [key, rawVals] of Object.entries(args.options as Record<string, unknown>)) {
+    if (!Array.isArray(rawVals)) continue;
+    for (const raw of rawVals) {
+      const submitted = String(raw).trim();
+      if (!/^\d+$/.test(submitted)) continue; // bare integer only
+      const match = decimalsInText.find((t) => t.integer === submitted);
+      if (match) violations.push({ key, submitted, expected: `${match.integer}.${match.decimal}` });
+    }
+  }
+  return violations.length > 0 ? violations : null;
+}
+
+// ─── Step 2: Source classification (user_explicit vs assistant_inferred) ────
+// Параметры в options, не упомянутые клиентом, помечаются как inferred — и при
+// пустом поиске сбрасываются автоматическим fallback'ом.
+
+function classifyOptionsSource(
+  args: Record<string, unknown>,
+  userMessage: string,
+): { userExplicit: Array<{ key: string; value: string }>; assistantInferred: Array<{ key: string; value: string }> } {
+  const out = {
+    userExplicit: [] as Array<{ key: string; value: string }>,
+    assistantInferred: [] as Array<{ key: string; value: string }>,
+  };
+  if (!args.options || typeof args.options !== "object") return out;
+  for (const [key, rawVals] of Object.entries(args.options as Record<string, unknown>)) {
+    if (!Array.isArray(rawVals)) continue;
+    for (const raw of rawVals) {
+      const value = String(raw);
+      if (valueIsEvidenced(value, userMessage)) out.userExplicit.push({ key, value });
+      else out.assistantInferred.push({ key, value });
+    }
+  }
+  return out;
+}
+
+// ─── Step 3: Promise-Reality Audit ──────────────────────────────────────────
+// Сверяет числовые обещания первого пузыря с реальными short_traits
+// рендерящихся товаров. Единицы измерения берутся из lastDiscover.facets[].unit
+// (не из словаря) — data-agnostic.
+
+function promiseRealityCheck(
+  firstAssistantText: string,
+  renderedProductIds: string[],
+  cache: ProductCache,
+  lastDiscover: DiscoverCategoryOk | null,
+): { corrective: string; mismatches: Array<{ caption: string; promised: string; actual: string[] }> } | null {
+  if (!lastDiscover || !firstAssistantText) return null;
+  const unitFacets = lastDiscover.facets.filter((f) => f.unit && f.unit.trim());
+  if (unitFacets.length === 0) return null;
+
+  const unitAlt = unitFacets
+    .map((f) => f.unit!.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))
+    .join("|");
+  const re = new RegExp(`(\\d+(?:[.,]\\d+)?)\\s*(${unitAlt})\\b`, "giu");
+  const promises: Array<{ facet: Facet; value: string }> = [];
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(firstAssistantText)) !== null) {
+    const num = m[1].replace(",", ".");
+    const unit = m[2].toLowerCase();
+    const facet = unitFacets.find((f) => f.unit!.trim().toLowerCase() === unit);
+    if (facet) promises.push({ facet, value: num });
+  }
+  if (promises.length === 0) return null;
+
+  const products = renderedProductIds
+    .map((id) => cache.get(String(id)))
+    .filter(Boolean) as Array<{ short_traits?: string[] }>;
+  if (products.length === 0) return null;
+
+  const mismatches: Array<{ caption: string; promised: string; actual: string[] }> = [];
+  for (const p of promises) {
+    const actualValues = traitValuesForFacet(products, p.facet);
+    if (actualValues.length === 0) continue;
+    const promisedNum = p.value;
+    const hasMatch = actualValues.some((v) => {
+      const nums = (v.match(/\d+(?:[.,]\d+)?/g) ?? []).map((n) => n.replace(",", "."));
+      return nums.includes(promisedNum);
+    });
+    if (!hasMatch) {
+      mismatches.push({
+        caption: p.facet.caption,
+        promised: `${p.value}${p.facet.unit ? " " + p.facet.unit : ""}`,
+        actual: actualValues,
+      });
+    }
+  }
+  if (mismatches.length === 0) return null;
+  const lines = mismatches
+    .map((mm) => `${mm.caption}: обещал ${mm.promised}, в карточках — ${mm.actual.join(", ")}`)
+    .join("; ");
+  return { corrective: `Уточнение: ${lines}.`, mismatches };
+}
+
 function compactDiscoverCategoryForLlm(r: ToolResult, args: Record<string, unknown>, userMessage: string): unknown {
   const x = r as unknown as {
     ok: true;
@@ -699,6 +811,37 @@ async function runExpertLoop(
       // Execute tools sequentially (parallel possible but keep simple).
       for (const tc of resp.toolCalls) {
         const toolStart = Date.now();
+
+        // ── Step 1: Numeric Integrity (block search_catalog with truncated decimals)
+        if (tc.name === "search_catalog") {
+          const truncations = detectNumericTruncationInOptions(tc.args, firstAssistantText);
+          if (truncations) {
+            const hint = truncations
+              .map((t) => `options["${t.key}"]="${t.submitted}" — в первом пузыре назвал "${t.expected}"; передай ровно "${t.expected}"`)
+              .join("; ");
+            const errResult = {
+              tool: "search_catalog",
+              ok: false,
+              error_code: "bad_input",
+              message: `numeric_truncation: ${hint}`,
+            } as ToolResult;
+            send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
+            send({ type: "tool_event", tool: tc.name, phase: "result", duration_ms: 0, summary: "блок: усечение числа" });
+            steps.push({
+              step: "v3_guard_numeric_truncation",
+              ms: now(),
+              meta: { original_args: summariseToolArgs(tc.name, tc.args), truncations },
+            });
+            messages.push({
+              role: "tool",
+              tool_call_id: tc.id,
+              name: tc.name,
+              content: JSON.stringify(toolResultForLlm(errResult, tc.args, userMessage)),
+            });
+            continue;
+          }
+        }
+
         const guardOutcome = tc.name === "search_catalog"
           ? await guardedOutcomeForSearch(tc.args, lastDiscover, userMessage, firstAssistantText, ctx)
           : null;
@@ -745,7 +888,9 @@ async function runExpertLoop(
           return { finalText, productsRendered };
         }
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
-        const result = await runTool(tc.name, tc.args, ctx);
+        let result = await runTool(tc.name, tc.args, ctx);
+        let effectiveArgs: Record<string, unknown> = tc.args;
+        let inferredFallback: Array<{ key: string; value: string }> | null = null;
         const dur = Date.now() - toolStart;
         send({
           type: "tool_event",
@@ -767,6 +912,45 @@ async function runExpertLoop(
           },
         });
 
+        // ── Step 2: Inferred-filter fallback (drop assistant-invented filters on empty)
+        if (tc.name === "search_catalog" && result.ok && (result as { total: number }).total === 0) {
+          const cls = classifyOptionsSource(tc.args, userMessage);
+          if (cls.assistantInferred.length > 0) {
+            const cleaned: Record<string, string[]> = {};
+            for (const f of cls.userExplicit) {
+              (cleaned[f.key] ??= []).push(f.value);
+            }
+            const hasAnyCleaned = Object.keys(cleaned).length > 0;
+            const fallbackInput: SearchCatalogInput = {
+              ...(tc.args as unknown as SearchCatalogInput),
+              options: hasAnyCleaned ? cleaned : undefined,
+            };
+            if (!hasAnyCleaned && fallbackInput.mode === "by_filter" && !fallbackInput.category && !fallbackInput.query) {
+              // нечего искать — оставляем 0 как есть
+            } else {
+              const fbStart = Date.now();
+              const fb = await executeSearchCatalog(fallbackInput, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+              const fbDur = Date.now() - fbStart;
+              if (fb.ok && fb.total > 0) {
+                result = fb as ToolResult;
+                effectiveArgs = fallbackInput as unknown as Record<string, unknown>;
+                inferredFallback = cls.assistantInferred;
+                send({ type: "tool_event", tool: tc.name, phase: "result", duration_ms: fbDur, summary: `fallback: найдено ${fb.total}` });
+                steps.push({
+                  step: "v3_guard_inferred_fallback",
+                  ms: now(),
+                  meta: {
+                    dropped: cls.assistantInferred,
+                    kept: cls.userExplicit,
+                    fallback_total: fb.total,
+                    fallback_ms: fbDur,
+                  },
+                });
+              }
+            }
+          }
+        }
+
         if (tc.name === "discover_category" && result.ok) {
           lastDiscover = result as unknown as DiscoverCategoryOk;
         }
@@ -774,6 +958,20 @@ async function runExpertLoop(
         // If render_products succeeded → emit products_block immediately.
         if (tc.name === "render_products" && result.ok) {
           const r = result as { markdown: string; rendered_count: number };
+          const renderedIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
+
+          // ── Step 3: Promise-Reality Audit
+          const audit = promiseRealityCheck(firstAssistantText, renderedIds, ctx.cache, lastDiscover);
+          if (audit) {
+            send({ type: "delta", content: ` ${audit.corrective}` });
+            finalText += ` ${audit.corrective}`;
+            steps.push({
+              step: "v3_guard_promise_mismatch",
+              ms: now(),
+              meta: { corrective: audit.corrective, mismatches: audit.mismatches },
+            });
+          }
+
           send({
             type: "products_block",
             markdown: r.markdown,
@@ -788,13 +986,29 @@ async function runExpertLoop(
         // Tool-driven SSE side-effects (contacts/quick_replies/slot_update).
         emitSideEffects(result, send);
 
+        // If we dropped inferred filters and got broader results — tell user up front,
+        // and tell LLM in the tool reply so it doesn't claim "by exact parameters".
+        if (inferredFallback && inferredFallback.length > 0) {
+          const note = " По точным параметрам не нашёл — расширил подборку.";
+          send({ type: "delta", content: note });
+          finalText += note;
+        }
+
+        const toolReply = inferredFallback && inferredFallback.length > 0
+          ? {
+              ...((toolResultForLlm(result, effectiveArgs, userMessage) as Record<string, unknown>) ?? {}),
+              _server_note: `Сбросил твои гипотетические фильтры (${inferredFallback.map((f) => `${f.key}=${f.value}`).join(", ")}): клиент их явно не называл, по полному набору 0. Рендери широкую подборку и не утверждай, что искал по конкретным параметрам.`,
+            }
+          : toolResultForLlm(result, effectiveArgs, userMessage);
+
         messages.push({
           role: "tool",
           tool_call_id: tc.id,
           name: tc.name,
-          content: JSON.stringify(toolResultForLlm(result, tc.args, userMessage)),
+          content: JSON.stringify(toolReply),
         });
       }
+
 
       // After tools → loop back, model decides what's next.
     }
