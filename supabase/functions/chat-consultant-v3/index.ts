@@ -101,6 +101,9 @@ async function runTool(
   if (name === "search_catalog") {
     return executeSearchCatalog(args as unknown as SearchCatalogInput, catalogDeps, ctx.cache);
   }
+  if (name === "discover_category") {
+    return executeDiscoverCategory(args as unknown as DiscoverCategoryInput, catalogDeps) as unknown as ToolResult;
+  }
   if (name === "jargon_recover_catalog") {
     return executeJargonRecoverCatalog(
       args as unknown as JargonRecoverCatalogInput,
