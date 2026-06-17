@@ -1183,6 +1183,7 @@ async function runExpertLoop(
         let result = await runTool(tc.name, tc.args, ctx);
         let effectiveArgs: Record<string, unknown> = tc.args;
         let inferredFallback: Array<{ key: string; value: string }> | null = null;
+        let splitFallbackResult: { axes: SplitAxis[]; ms: number } | null = null;
         const dur = Date.now() - toolStart;
         send({
           type: "tool_event",
