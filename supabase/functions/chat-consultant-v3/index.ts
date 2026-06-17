@@ -1188,10 +1188,25 @@ async function runExpertLoop(
           lastDiscover = result as unknown as DiscoverCategoryOk;
         }
 
+        // ── Step 6c: Track fresh search pool for render/escalate guards.
+        if ((tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") && result.ok) {
+          const r2 = result as unknown as { results: Array<{ id: string; price: number }>; total: number };
+          const ids = (r2.results ?? [])
+            .filter((p) => p && Number.isFinite(p.price) && p.price > 0)
+            .map((p) => String(p.id));
+          if (ids.length > 0) {
+            freshSearch = { tool: tc.name, ids, total: r2.total };
+          }
+          // Track which ladder candidates were already tried (to nudge LLM in tool reply).
+          const q = typeof tc.args.query === "string" ? tc.args.query.trim().toLowerCase() : "";
+          if (q) triedLadderQueries.add(q);
+        }
+
         // If render_products succeeded → emit products_block immediately.
         if (tc.name === "render_products" && result.ok) {
           const r = result as { markdown: string; rendered_count: number };
           const renderedIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
+          for (const id of renderedIds) shownIds.add(id);
 
           // ── Step 3: Promise-Reality Audit
           const audit = promiseRealityCheck(firstAssistantText, renderedIds, ctx.cache, lastDiscover);
@@ -1215,6 +1230,7 @@ async function runExpertLoop(
           steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "rendered", step_count: step + 1 } });
           return { finalText, productsRendered };
         }
+
 
         // Tool-driven SSE side-effects (contacts/quick_replies/slot_update).
         emitSideEffects(result, send);
