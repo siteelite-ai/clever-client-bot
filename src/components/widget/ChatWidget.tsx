@@ -477,10 +477,8 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       pipeline: endpoint.pipeline,
       onDelta: updateAssistant,
       // V3 only: bubble break — finalize current streaming bubble so the next
-      // delta opens a fresh assistant message. We do this by resetting the
-      // closure-local streaming state; `typing2Removed` stays true so we don't
-      // re-render typing dots, but `streamMsgId=null` + cleared accumulator
-      // forces updateAssistant into the "append new bubble" branch.
+      // delta opens a fresh assistant message. For `tool_pending` we also show
+      // typing dots until the next delta/products block arrives.
       onTurnBreak: (reason) => {
         assistantContent = '';
         bubbleSealed = true;
