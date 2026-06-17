@@ -492,7 +492,38 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       conversationId: conversationIdRef.current,
       dialogSlots,
       endpointUrl: endpoint.url,
+      pipeline: endpoint.pipeline,
       onDelta: updateAssistant,
+      // V3 only: bubble break — finalize current streaming bubble so the next
+      // delta opens a fresh assistant message. We do this by resetting the
+      // closure-local streaming state; `typing2Removed` stays true so we don't
+      // re-render typing dots, but `streamMsgId=null` + cleared accumulator
+      // forces updateAssistant into the "append new bubble" branch.
+      onTurnBreak: (_reason) => {
+        assistantContent = '';
+        streamMsgId = null;
+      },
+      // V3 only: a render_products result — emit as its OWN assistant bubble
+      // (independent of the streaming text bubble). Markdown is rendered
+      // through ReactMarkdown like any other assistant message.
+      onProductsBlock: (markdown, _meta) => {
+        setMessages(prev => {
+          const cleaned = prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-'));
+          return [...cleaned, {
+            id: mid('products'),
+            role: 'assistant' as const,
+            content: markdown,
+            timestamp: new Date(),
+          }];
+        });
+        // After a products block, next deltas should open a new bubble too.
+        assistantContent = '';
+        streamMsgId = null;
+      },
+      onToolEvent: (ev) => {
+        if (ev.phase === 'start') console.log(`[Widget v3] tool ${ev.tool}…`);
+        else console.log(`[Widget v3] tool ${ev.tool} → ${ev.summary} (${ev.duration_ms}ms)`);
+      },
       onSlotUpdate: (updatedSlots) => {
         console.log('[Widget] Received slot_update:', JSON.stringify(updatedSlots));
         setDialogSlots(updatedSlots);
