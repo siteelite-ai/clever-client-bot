@@ -567,6 +567,15 @@ function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd
   return best?.p ?? null;
 }
 
+// Detects intent to find ALTERNATIVES to a referenced product. In such cases
+// the anchor SKU itself MUST NOT appear in the rendered list (it's the source,
+// not an analog). Triggers: "аналог", "замен", "похож", "альтернатив", "вместо",
+// "взамен", "замена".
+function isReplacementIntent(msg: string): boolean {
+  const m = msg.toLowerCase();
+  return /(аналог|альтернатив|похож|замен|вместо|взамен)/u.test(m);
+}
+
 function rewriteRenderIdsByPriceDirection(
   productIds: string[],
   direction: PriceDirection,
