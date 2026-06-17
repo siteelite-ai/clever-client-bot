@@ -23,6 +23,12 @@ export type ToolName =
   | "escalate_to_manager"
   | "note_state";
 
+/** Side-channel SSE events tools may want the orchestrator to emit. */
+export type ToolSideEffect =
+  | { type: "contacts"; html: string }
+  | { type: "quick_replies"; replies: Array<{ value: string; label: string }>; facet_key: string }
+  | { type: "slot_update"; slots: Record<string, unknown> };
+
 export interface ToolError {
   ok: false;
   error_code:
@@ -108,12 +114,6 @@ export interface NoteStateOk {
   ok: true;
   side_effects?: ToolSideEffect[];
 }
-
-/** Side-channel SSE events tools may want the orchestrator to emit. */
-export type ToolSideEffect =
-  | { type: "contacts"; html: string }
-  | { type: "quick_replies"; replies: Array<{ value: string; label: string }>; facet_key: string }
-  | { type: "slot_update"; slots: Record<string, unknown> };
 
 interface WithSideEffects {
   side_effects?: ToolSideEffect[];
