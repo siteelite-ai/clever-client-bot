@@ -620,6 +620,65 @@ async function tryPriceDirectionRescue(
   return render.rendered_count;
 }
 
+// ─── Step C: Honest-Split Fallback ──────────────────────────────────────────
+// When `search_catalog by_filter` with ≥2 axes returns total=0, run each axis
+// independently in parallel. If ≥1 axis returns items, we report
+// "intersection empty" honestly and let the LLM render two split blocks
+// instead of capitulating.
+interface SplitAxis {
+  axis: string;
+  value: string;
+  ids: string[];
+  total: number;
+}
+async function trySplitFallback(
+  origArgs: Record<string, unknown>,
+  ctx: ToolContext,
+): Promise<{ axes: SplitAxis[]; ms: number } | null> {
+  if (origArgs.mode !== "by_filter") return null;
+  const options = origArgs.options as Record<string, unknown> | undefined;
+  if (!options || typeof options !== "object") return null;
+  const axisEntries: Array<{ axis: string; values: string[] }> = [];
+  for (const [axis, raw] of Object.entries(options)) {
+    const values = Array.isArray(raw) ? raw.map(String).filter((v) => v.length > 0) : [];
+    if (values.length > 0) axisEntries.push({ axis, values });
+  }
+  if (axisEntries.length < 2) return null;
+
+  const t0 = Date.now();
+  const deps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
+  const category = typeof origArgs.category === "string" ? origArgs.category : undefined;
+
+  const results = await Promise.all(axisEntries.map(async ({ axis, values }) => {
+    const input: SearchCatalogInput = {
+      mode: "by_filter",
+      per_page: 5,
+      options: { [axis]: values },
+      min_price: 1,
+      ...(category ? { category } : {}),
+    };
+    try {
+      const r = await executeSearchCatalog(input, deps, ctx.cache);
+      if (!r.ok || r.total === 0) return null;
+      const okRes = r as unknown as { results: Array<{ id: string | number; price?: number }>; total: number };
+      const ids = (okRes.results ?? [])
+        .filter((p) => typeof p.price === "number" && p.price > 0)
+        .map((p) => String(p.id))
+        .slice(0, 4);
+      if (ids.length === 0) return null;
+      return { axis, value: values.join("|"), ids, total: okRes.total } as SplitAxis;
+    } catch {
+      return null;
+    }
+  }));
+
+  const axes = results.filter((x): x is SplitAxis => x !== null);
+  if (axes.length === 0) return null;
+  return { axes, ms: Date.now() - t0 };
+}
+
+
+
 
 
 
@@ -1124,6 +1183,7 @@ async function runExpertLoop(
         let result = await runTool(tc.name, tc.args, ctx);
         let effectiveArgs: Record<string, unknown> = tc.args;
         let inferredFallback: Array<{ key: string; value: string }> | null = null;
+        let splitFallbackResult: { axes: SplitAxis[]; ms: number } | null = null;
         const dur = Date.now() - toolStart;
         send({
           type: "tool_event",
@@ -1188,7 +1248,48 @@ async function runExpertLoop(
           lastDiscover = result as unknown as DiscoverCategoryOk;
         }
 
-        // ── Step 6c: Track fresh search pool for render/escalate guards.
+
+        // ── Step C: Honest-split fallback for empty intersection (≥2 axes, total=0).
+        if (
+          tc.name === "search_catalog" &&
+          result.ok &&
+          (result as { total: number }).total === 0 &&
+          !inferredFallback
+        ) {
+          const opts = (tc.args as { options?: Record<string, unknown> }).options;
+          const axesCount = opts && typeof opts === "object"
+            ? Object.values(opts).filter((v) => Array.isArray(v) && v.length > 0).length
+            : 0;
+          if ((tc.args as { mode?: string }).mode === "by_filter" && axesCount >= 2) {
+            const split = await trySplitFallback(tc.args, ctx);
+            if (split) {
+              splitFallbackResult = split;
+              send({
+                type: "tool_event",
+                tool: "search_catalog",
+                phase: "result",
+                duration_ms: split.ms,
+                summary: `split: ${split.axes.map((a) => `${a.axis}=${a.total}`).join(", ")}`,
+              });
+              steps.push({
+                step: "v3_guard_split_fallback",
+                ms: now(),
+                meta: {
+                  axes: split.axes.map((a) => ({ axis: a.axis, value: a.value, total: a.total, ids: a.ids.length })),
+                  ms: split.ms,
+                },
+              });
+              // Feed Step 6a/6b pool so render/escalate guards have ammo too.
+              const allIds = split.axes.flatMap((a) => a.ids).slice(0, 8);
+              const totalSum = split.axes.reduce((s, a) => s + a.total, 0);
+              if (allIds.length > 0) {
+                freshSearch = { tool: "search_catalog_split", ids: allIds, total: totalSum };
+              }
+            }
+          }
+        }
+
+
         if ((tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") && result.ok) {
           const r2 = result as unknown as { results: Array<{ id: string; price: number }>; total: number };
           const ids = (r2.results ?? [])
@@ -1267,6 +1368,22 @@ async function runExpertLoop(
             replyObj._server_hint = `render_products пустой. В кеше есть id: ${pool.join(", ")} (из ${freshSearch?.tool}, total=${freshSearch?.total}). Передай ровно эти id, не выдумывай новые.`;
           }
         }
+
+        // ── Step C: Intersection-empty honesty hint for the LLM.
+        if (splitFallbackResult) {
+          replyObj._intersection_empty = true;
+          replyObj._split_axes = splitFallbackResult.axes;
+          const axisSummary = splitFallbackResult.axes
+            .map((a) => `${a.axis}="${a.value}" (${a.total} шт)`)
+            .join(" и ");
+          replyObj._server_hint =
+            `Точного сочетания фильтров в каталоге нет (total=0), но отдельно по осям есть: ${axisSummary}. ` +
+            `НЕ извиняйся и НЕ вызывай escalate_to_manager. Сначала короткий текст в духе "Точного сочетания нет, ` +
+            `но есть отдельно X и отдельно Y — что ближе?", затем ОДИН вызов render_products с product_ids = ` +
+            `объединением ids из _split_axes (бери все ids из каждой оси по порядку, до 8 штук). Используй ровно эти id.`;
+        }
+
+
 
         messages.push({
           role: "tool",
