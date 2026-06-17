@@ -694,6 +694,7 @@ function compactDiscoverCategoryForLlm(r: ToolResult, args: Record<string, unkno
     ok: true;
     category: { id: number | null; pagetitle: string; total_products: number };
     facets: Array<{ key: string; caption: string; type: string; unit: string | null; min?: number | null; max?: number | null; values?: Array<{ value: string; products_count?: number }> }>;
+    leaf_categories?: Array<{ id: number; pagetitle: string }>;
     resolved_from?: string;
   };
   const focus = normalizeForMatch([
@@ -708,6 +709,9 @@ function compactDiscoverCategoryForLlm(r: ToolResult, args: Record<string, unkno
     ok: true,
     category: x.category,
     resolved_from: x.resolved_from,
+    // Листовые категории — это РАЗРЕШЁННЫЕ значения для search_catalog.category_in.
+    // category.pagetitle (зонтик) для фильтра НЕ работает — match идёт по pagetitle листа.
+    leaf_categories: (x.leaf_categories ?? []).map((l) => ({ pagetitle: l.pagetitle })),
     facets: x.facets.map((f) => {
       const values = Array.isArray(f.values) ? f.values : [];
       const sorted = [...values].sort((a, b) => (b.products_count ?? 0) - (a.products_count ?? 0));
