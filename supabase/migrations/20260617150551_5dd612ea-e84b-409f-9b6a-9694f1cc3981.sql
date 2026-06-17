@@ -1,0 +1,1 @@
+UPDATE public.app_settings SET ai_model = 'google/gemini-2.5-flash', classifier_model = 'google/gemini-2.5-flash';
