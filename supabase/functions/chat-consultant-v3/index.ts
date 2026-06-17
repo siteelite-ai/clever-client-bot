@@ -281,35 +281,113 @@ function topFacetOptions(facet: Facet): Array<{ value: string; label: string; co
     .map((v) => ({ value: v.value, label: v.value, count: v.products_count }));
 }
 
-function guardedClarificationForSearch(
+function facetValueEquals(a: string, b: string): boolean {
+  if (normalizeForMatch(a) === normalizeForMatch(b)) return true;
+  return /\d/.test(a + b) && normalizeCodeLike(a) === normalizeCodeLike(b);
+}
+
+type GuardedSearchOutcome =
+  | { kind: "clarification"; input: ProposeClarificationInput; reason: string }
+  | { kind: "no_intersection"; text: string; meta: Record<string, unknown> };
+
+async function guardedOutcomeForSearch(
   args: Record<string, unknown>,
   lastDiscover: DiscoverCategoryOk | null,
   userMessage: string,
   firstAssistantText: string,
-): ProposeClarificationInput | null {
+  ctx: ToolContext,
+): Promise<GuardedSearchOutcome | null> {
   if (args.mode !== "by_filter" || !args.options || typeof args.options !== "object") return null;
   if (!lastDiscover) return null;
 
   const options = args.options as Record<string, unknown>;
   const evidenceText = `${userMessage}\n${firstAssistantText}`;
+  const confirmedFilters: Array<{ facet: Facet; key: string; value: string }> = [];
+  const suspiciousFilters: Array<{ facet: Facet; key: string; value: string; existsInFacet: boolean; evidenced: boolean }> = [];
+
   for (const [key, rawVals] of Object.entries(options)) {
     const facet = lastDiscover.facets.find((f) => f.key === key);
-    if (!facet || !isRiskyCategoricalFacet(facet)) continue;
+    if (!facet) continue;
     const vals = Array.isArray(rawVals) ? rawVals.map(String) : [];
     for (const selectedValue of vals) {
-      const existsInFacet = facet.values.some((v) => normalizeForMatch(v.value) === normalizeForMatch(selectedValue));
+      const existsInFacet = facet.values.some((v) => facetValueEquals(v.value, selectedValue));
       const evidenced = valueIsEvidenced(selectedValue, evidenceText);
-      if (existsInFacet && evidenced) continue;
+      if (existsInFacet && evidenced) {
+        confirmedFilters.push({ facet, key, value: selectedValue });
+        continue;
+      }
+      if (!isRiskyCategoricalFacet(facet)) continue;
+      suspiciousFilters.push({ facet, key, value: selectedValue, existsInFacet, evidenced });
+    }
+  }
 
-      const clarificationOptions = topFacetOptions(facet);
-      if (clarificationOptions.length < 2) continue;
-      const requested = extractEchoLabel(firstAssistantText, userMessage);
+  if (suspiciousFilters.length === 0) return null;
+
+  const requested = extractEchoLabel(firstAssistantText, userMessage);
+  const catalogDeps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
+  const confirmedOptions: Record<string, string[]> = {};
+  for (const f of confirmedFilters) {
+    confirmedOptions[f.key] ??= [];
+    confirmedOptions[f.key].push(f.value);
+  }
+
+  if (confirmedFilters.length > 0) {
+    const confirmedSearch = await executeSearchCatalog({
+      mode: "by_filter",
+      category: typeof args.category === "string" ? args.category : lastDiscover.category.pagetitle,
+      options: confirmedOptions,
+      per_page: 5,
+    }, catalogDeps, ctx.cache);
+
+    const semanticQuery = stripKnownValues(requested, confirmedFilters.map((f) => f.value)) || stripKnownValues(userMessage, confirmedFilters.map((f) => f.value));
+    const semanticSearch = semanticQuery
+      ? await executeSearchCatalog({
+        mode: "by_query",
+        query: semanticQuery,
+        category: typeof args.category === "string" ? args.category : lastDiscover.category.pagetitle,
+        per_page: 5,
+      }, catalogDeps, ctx.cache)
+      : null;
+
+    const confirmedTotal = confirmedSearch.ok ? confirmedSearch.total : 0;
+    const semanticTotal = semanticSearch?.ok ? semanticSearch.total : 0;
+    if (confirmedTotal > 0 || semanticTotal > 0) {
       return {
-        question: `По «${requested}» точного значения в каталожном фасете не вижу. Есть такие варианты — что подойдёт?`,
-        facet_key: facet.key,
-        options: clarificationOptions,
+        kind: "no_intersection",
+        text: buildNoIntersectionText({
+          requestedLabel: requested,
+          confirmedFilters,
+          confirmedTotal,
+          semanticTotal,
+          semanticFacetValues: confirmedFilters.map((f) => ({
+            facet: f.facet,
+            values: semanticSearch?.ok ? traitValuesForFacet(semanticSearch.results, f.facet).filter((v) => !facetValueEquals(v, f.value)) : [],
+          })),
+        }),
+        meta: {
+          reason: "categorical_no_intersection",
+          suspicious: suspiciousFilters.map((f) => ({ facet_key: f.key, value: f.value, existsInFacet: f.existsInFacet, evidenced: f.evidenced })),
+          confirmed_filters: confirmedFilters.map((f) => ({ facet_key: f.key, value: f.value })),
+          confirmed_total: confirmedTotal,
+          semantic_query: semanticQuery,
+          semantic_total: semanticTotal,
+        },
       };
     }
+  }
+
+  for (const s of suspiciousFilters) {
+      const clarificationOptions = topFacetOptions(s.facet);
+      if (clarificationOptions.length < 2) continue;
+      return {
+        kind: "clarification",
+        reason: "categorical_value_not_evidenced",
+        input: {
+        question: `По «${requested}» точного значения в каталожном фасете не вижу. Есть такие варианты — что подойдёт?`,
+        facet_key: s.facet.key,
+        options: clarificationOptions,
+        },
+      };
   }
   return null;
 }
