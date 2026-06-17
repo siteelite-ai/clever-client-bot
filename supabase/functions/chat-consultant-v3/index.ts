@@ -457,19 +457,22 @@ async function runExpertLoop(
 
       const hasRender = resp.toolCalls.some((tc) => tc.name === "render_products");
 
-      // Stream assistant text before tools, except render_products turns:
-      // product cards are the only allowed surface for names/prices/links.
-      if (resp.text.trim() && !hasRender) {
-        if (bubbleHasText) {
-          // Already streamed prior text in this turn → break bubble first.
-          send({ type: "assistant_turn_break", reason: "tool_pending" });
-          bubbleHasText = false;
-        }
+      // UX-правило: пользователь видит ТОЛЬКО первый текстовый пузырёк (intro
+      // эксперта). Любой текст модели на последующих шагах — это «болтовня
+      // между тулами» (рассуждения о фасетах, "попробую ослабить фильтр" и
+      // т.п.), которую пользователь видеть не должен. Текст для LLM-контекста
+      // мы всё равно кладём в messages (см. ниже), но в UI не стримим.
+      const isFirstTurn = step === 0;
+      if (resp.text.trim() && !hasRender && isFirstTurn) {
         send({ type: "delta", content: resp.text });
         finalText += resp.text;
         bubbleHasText = true;
         steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: resp.text.length, fragment_index: step } });
+      } else if (resp.text.trim() && !hasRender) {
+        // Подавлено для UI, но логируем — пригодится при дебаге.
+        steps.push({ step: "v3_assistant_text_suppressed", ms: now(), meta: { chars: resp.text.length, fragment_index: step } });
       }
+
 
       if (resp.toolCalls.length === 0) {
         // No tools → turn ends.
