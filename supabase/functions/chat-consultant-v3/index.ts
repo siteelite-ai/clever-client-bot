@@ -478,10 +478,13 @@ async function runExpertLoop(
         send({ type: "delta", content: resp.text });
         finalText += resp.text;
         bubbleHasText = true;
-        steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: resp.text.length, fragment_index: step } });
+        steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
       } else if (resp.text.trim() && !hasRender) {
         // Подавлено для UI, но логируем — пригодится при дебаге.
-        steps.push({ step: "v3_assistant_text_suppressed", ms: now(), meta: { chars: resp.text.length, fragment_index: step } });
+        steps.push({ step: "v3_assistant_text_suppressed", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+      } else if (resp.text.trim() && hasRender) {
+        // Текст рядом с render_products (cross-sell комментарий). Логируем для дебага.
+        steps.push({ step: "v3_assistant_text_with_render", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
       }
 
 
