@@ -748,6 +748,34 @@ function buildReplacementAxes(args: Record<string, unknown>, lastDiscover: Disco
   return axes;
 }
 
+function canonicalizeSearchOptionsFromDiscover(
+  args: Record<string, unknown>,
+  lastDiscover: DiscoverCategoryOk | null,
+): { args: Record<string, unknown>; rewrites: Array<{ key: string; from: string; to: string }> } | null {
+  if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) return null;
+  const options = (args as { options?: Record<string, unknown> }).options;
+  if (!options || typeof options !== "object") return null;
+  const nextOptions: Record<string, string[]> = {};
+  const rewrites: Array<{ key: string; from: string; to: string }> = [];
+  let changed = false;
+  for (const [key, raw] of Object.entries(options)) {
+    const vals = Array.isArray(raw) ? raw.map(String).filter(Boolean) : [];
+    if (vals.length === 0) continue;
+    const facet = lastDiscover.facets.find((f) => f.key === key);
+    nextOptions[key] = vals.map((value) => {
+      const canonical = facet?.values.find((v) => facetValueEquals(v.value, value))?.value;
+      if (canonical && canonical !== value) {
+        changed = true;
+        rewrites.push({ key, from: value, to: canonical });
+        return canonical;
+      }
+      return value;
+    });
+  }
+  if (!changed) return null;
+  return { args: { ...args, options: nextOptions }, rewrites };
+}
+
 function productMatchesReplacementAxis(product: { short_traits?: string[] }, axis: ReplacementAxis): boolean {
   const captionNorm = normalizeForMatch(axis.caption);
   for (const line of product.short_traits ?? []) {
