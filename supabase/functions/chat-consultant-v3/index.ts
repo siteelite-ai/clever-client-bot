@@ -259,16 +259,17 @@ function buildNoIntersectionText(input: {
   semanticTotal: number;
   semanticFacetValues: Array<{ facet: Facet; values: string[] }>;
 }): string {
+  const requestedOnly = stripKnownValues(input.requestedLabel, input.confirmedFilters.map((f) => f.value)) || input.requestedLabel;
   const filtersText = input.confirmedFilters.map((f) => `${f.facet.caption}: ${f.value}`).join(", ");
   const parts: string[] = [];
-  parts.push(`По сочетанию «${input.requestedLabel}${filtersText ? `, ${filtersText}` : ""}» точного совпадения не нашёл.`);
+  parts.push(`По сочетанию «${requestedOnly}»${filtersText ? ` + ${filtersText}` : ""} точного совпадения не нашёл.`);
   if (input.confirmedTotal > 0 && filtersText) parts.push(`По ${filtersText} товары есть.`);
   if (input.semanticTotal > 0) {
     const withValues = input.semanticFacetValues
       .filter((x) => x.values.length > 0)
       .map((x) => `${x.facet.caption}: ${x.values.join(", ")}`)
       .join("; ");
-    parts.push(withValues ? `По «${input.requestedLabel}» есть отдельно, но с другими значениями: ${withValues}.` : `По «${input.requestedLabel}» есть отдельные варианты без полного совпадения.`);
+    parts.push(withValues ? `По «${requestedOnly}» есть отдельно, но с другими значениями: ${withValues}.` : `По «${requestedOnly}» есть отдельные варианты без полного совпадения.`);
   }
   return parts.join(" ");
 }
@@ -339,7 +340,7 @@ async function guardedOutcomeForSearch(
       per_page: 5,
     }, catalogDeps, ctx.cache);
 
-    const semanticQuery = stripKnownValues(requested, confirmedFilters.map((f) => f.value)) || stripKnownValues(userMessage, confirmedFilters.map((f) => f.value));
+    const semanticQuery = stripKnownValues(userMessage, confirmedFilters.map((f) => f.value)) || stripKnownValues(requested, confirmedFilters.map((f) => f.value));
     const semanticSearch = semanticQuery
       ? await executeSearchCatalog({
         mode: "by_query",
@@ -377,17 +378,17 @@ async function guardedOutcomeForSearch(
   }
 
   for (const s of suspiciousFilters) {
-      const clarificationOptions = topFacetOptions(s.facet);
-      if (clarificationOptions.length < 2) continue;
-      return {
-        kind: "clarification",
-        reason: "categorical_value_not_evidenced",
-        input: {
+    const clarificationOptions = topFacetOptions(s.facet);
+    if (clarificationOptions.length < 2) continue;
+    return {
+      kind: "clarification",
+      reason: "categorical_value_not_evidenced",
+      input: {
         question: `По «${requested}» точного значения в каталожном фасете не вижу. Есть такие варианты — что подойдёт?`,
         facet_key: s.facet.key,
         options: clarificationOptions,
-        },
-      };
+      },
+    };
   }
   return null;
 }
