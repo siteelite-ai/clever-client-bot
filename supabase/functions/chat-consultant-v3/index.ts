@@ -587,7 +587,7 @@ async function broadenPriceDirectionSearch(
   }
   const fb = await executeSearchCatalog(input, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
   if (!fb.ok || fb.total === 0) return [];
-  const sorted = [...fb.products]
+  const sorted = [...fb.results]
     .filter((p) => typeof (p as CachedProd).price === "number" && (p as CachedProd).price > 0)
     .sort((a, b) => direction === "more_expensive" ? (b as CachedProd).price - (a as CachedProd).price : (a as CachedProd).price - (b as CachedProd).price)
     .slice(0, 8);
