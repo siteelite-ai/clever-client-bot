@@ -5,22 +5,38 @@ export const TOOL_SCHEMAS = [
   {
     type: "function",
     function: {
-      name: "search_catalog",
+      name: "discover_category",
       description:
-        "Поиск товаров в каталоге магазина. Используй ОДИН из трёх режимов: by_article (точный SKU), by_pagetitle (точное название товара), by_query (полнотекстовый поиск). Можно ограничить по category (pagetitle категории), цене (min_price/max_price) и фасетам (options). Возвращает массив товаров с id — эти id потом передавай в render_products. price=0 уже отфильтрованы.",
+        "Шаг 1 любого товарного запроса. Получить реальную схему категории каталога по её названию (noun): список фасетов с их машинными ключами, человекочитаемыми названиями, единицами измерения и фактически встречающимися значениями. Это твой инструмент «осмотреться в каталоге» — посмотреть, какие оси выбора там вообще есть и какие значения доступны, прежде чем фильтровать. НЕ изобретай ключи фасетов и значения — бери их из ответа этого инструмента.",
       parameters: {
         type: "object",
         properties: {
-          mode: { type: "string", enum: ["by_article", "by_pagetitle", "by_query"] },
+          noun: { type: "string", description: "Название категории каталога (pagetitle): главный тип товара, которым ты определил запрос клиента." },
+        },
+        required: ["noun"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "search_catalog",
+      description:
+        "Поиск товаров. Режимы: by_article (точный SKU), by_pagetitle (точное название товара), by_query (полнотекстовый поиск свободной строкой — резервный), by_filter (структурированный фильтр по category + options БЕЗ свободного текста; используй ПОСЛЕ discover_category, передавая ключи и значения фасетов ОТТУДА). Возвращает товары с id для render_products. price=0 уже отфильтрованы.",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: { type: "string", enum: ["by_article", "by_pagetitle", "by_query", "by_filter"] },
           article: { type: "string" },
           pagetitle: { type: "string" },
           query: { type: "string" },
-          category: { type: "string", description: "Pagetitle категории каталога (НЕ название товара)" },
+          category: { type: "string", description: "Pagetitle категории каталога (тот же noun, что ты передавал в discover_category)" },
           min_price: { type: "number" },
           max_price: { type: "number" },
           options: {
             type: "object",
-            description: "Фасеты вида { \"<facet_key>\": [\"value1\", \"value2\"] }",
+            description: "Структурированные фасеты вида { \"<facet_key>\": [\"<value_ru>\", ...] }. Ключи и значения берутся ИСКЛЮЧИТЕЛЬНО из ответа discover_category по той же категории. Не выдумывай ключи и не нормализуй значения.",
             additionalProperties: { type: "array", items: { type: "string" } },
           },
           page: { type: "integer", minimum: 1 },
