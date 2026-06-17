@@ -1169,8 +1169,14 @@ async function runExpertLoop(
     }
 
     // Step budget exhausted.
+    if (productsRendered === 0) {
+      const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
+      productsRendered += rescued;
+    }
     steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "forced_stepcount", step_count: MAX_STEPS } });
-    send({ type: "delta", content: "\n\nИзвини, не успел до конца разобраться. Если нужно — напиши контактному менеджеру." });
+    if (productsRendered === 0) {
+      send({ type: "delta", content: "\n\nИзвини, не успел до конца разобраться. Если нужно — напиши контактному менеджеру." });
+    }
     return { finalText, productsRendered };
   } finally {
     clearTimeout(turnTimer);
