@@ -69,7 +69,6 @@ function extractTopicSnippet(raw: string, topic: LookupContactsInput["topic"]): 
     hours: /(?:график|часы|с\s*\d{1,2}[:\.]?\d{0,2}\s*до\s*\d{1,2}[:\.]?\d{0,2}|пн|пн-пт|пн-вс)/i,
     payment: /(?:оплат\w*|карт\w*|kaspi|каспи|наличн\w*)/i,
     delivery: /(?:доставк\w*|курьер\w*|самовывоз|kazpost|казпочт\w*)/i,
-    general: null,
   };
   const re = patterns[topic];
   if (!re) return undefined;
