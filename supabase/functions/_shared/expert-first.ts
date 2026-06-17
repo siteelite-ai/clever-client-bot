@@ -23,7 +23,7 @@
 // Спецификация intent enum синхронизирована с s2-intent-classifier:
 //   catalog | price | knowledge | accessory_for | spec_query | out_of_domain | smalltalk
 
-const EXPERT_MODEL = "anthropic/claude-sonnet-4.5";
+const EXPERT_MODEL = "deepseek/deepseek-chat-v3.1:free";
 const EXPERT_TIMEOUT_MS = 6_000;
 const EXPERT_MAX_ATTEMPTS = 2; // 1 retry on transport-failure/timeout/5xx
 const MAX_VALUES_PER_FACET = 3;

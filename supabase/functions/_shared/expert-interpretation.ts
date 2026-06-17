@@ -19,7 +19,7 @@
 //
 // Модуль НЕ бросает исключений наружу.
 
-const EXPERT_MODEL = "anthropic/claude-sonnet-4.5";
+const EXPERT_MODEL = "deepseek/deepseek-chat-v3.1:free";
 const EXPERT_TIMEOUT_MS = 8_000;
 const MAX_VALUES_PER_FACET = 3;
 

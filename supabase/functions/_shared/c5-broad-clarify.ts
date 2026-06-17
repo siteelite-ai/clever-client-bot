@@ -8,7 +8,7 @@
 // возвращает пустой результат — вызывающий код продолжает по обычному пути
 // (например, обычный поиск).
 
-const CLARIFY_MODEL = "anthropic/claude-sonnet-4.5";
+const CLARIFY_MODEL = "deepseek/deepseek-chat-v3.1:free";
 const CLARIFY_TIMEOUT_MS = 6_000;
 
 const SYSTEM_PROMPT = `Ты — эксперт-консультант казахстанского интернет-магазина электротоваров 220volt.kz.

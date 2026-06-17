@@ -362,7 +362,7 @@ ${topCategories.map((c) => `- ${c}`).join('\n')}
       method: 'POST',
       headers: { 'Authorization': `Bearer ${deps.openrouterApiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'anthropic/claude-sonnet-4.5',
+        model: 'deepseek/deepseek-chat-v3.1:free',
         messages: [{ role: 'user', content: systemPrompt }],
         temperature: 0.4,
         max_tokens: 250,
