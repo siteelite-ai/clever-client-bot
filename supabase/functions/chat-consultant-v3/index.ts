@@ -799,6 +799,9 @@ async function trySplitFallback(
   const t0 = Date.now();
   const deps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
   const category = typeof origArgs.category === "string" ? origArgs.category : undefined;
+  const categoryIn = Array.isArray(origArgs.category_in)
+    ? origArgs.category_in.map(String).filter(Boolean)
+    : undefined;
 
   const results = await Promise.all(axisEntries.map(async ({ axis, values }) => {
     const input: SearchCatalogInput = {
@@ -806,7 +809,7 @@ async function trySplitFallback(
       per_page: 5,
       options: { [axis]: values },
       min_price: 1,
-      ...(category ? { category } : {}),
+        ...(category ? { category } : categoryIn && categoryIn.length > 0 ? { category_in: categoryIn } : {}),
     };
     try {
       const r = await executeSearchCatalog(input, deps, ctx.cache);
