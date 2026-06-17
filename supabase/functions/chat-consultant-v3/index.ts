@@ -1708,7 +1708,14 @@ async function runExpertLoop(
     }
     steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "forced_stepcount", step_count: MAX_STEPS } });
     if (productsRendered === 0) {
-      send({ type: "delta", content: "\n\nИзвини, не успел до конца разобраться. Если нужно — напиши контактному менеджеру." });
+      if (replacementIntent && replacementRequiredAxes.length >= 2) {
+        const criteria = replacementRequiredAxes
+          .map((a) => `${a.caption}: ${a.values.join("/")}`)
+          .join(", ");
+        send({ type: "delta", content: `\n\nПо каталогу не нашёл полноценный аналог с теми же критичными параметрами (${criteria}). Похожие позиции есть отдельно, но они не проходят как замена по монтажу/габаритам — лучше уточнить замену у менеджера.` });
+      } else {
+        send({ type: "delta", content: "\n\nНе нашёл подходящие товары по этому сочетанию параметров. Могу попробовать расширить поиск или передать вопрос менеджеру." });
+      }
     }
     return { finalText, productsRendered };
   } finally {
