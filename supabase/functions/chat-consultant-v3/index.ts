@@ -7,7 +7,7 @@
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { TOOL_SCHEMAS, SYSTEM_PROMPT } from "../_shared/v3-tools/schemas.ts";
 import { executeSearchCatalog, type SearchCatalogInput } from "../_shared/v3-tools/search-catalog.ts";
-import { executeDiscoverCategory, type DiscoverCategoryInput } from "../_shared/v3-tools/discover-category.ts";
+import { executeDiscoverCategory, type DiscoverCategoryInput, type DiscoverCategoryOk, type Facet } from "../_shared/v3-tools/discover-category.ts";
 import { executeJargonRecoverCatalog, type JargonRecoverCatalogInput } from "../_shared/v3-tools/jargon-recover-catalog.ts";
 
 import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3-tools/lookup-knowledge.ts";
@@ -193,6 +193,75 @@ function summariseToolResultMeta(name: string, r: ToolResult): Record<string, un
 
 function normalizeForMatch(s: string): string {
   return s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}.,]+/gu, " ").trim();
+}
+
+function normalizeCodeLike(s: string): string {
+  const map: Record<string, string> = { а: "a", в: "b", е: "e", к: "k", м: "m", н: "h", о: "o", р: "p", с: "c", т: "t", у: "y", х: "x" };
+  return normalizeForMatch(s).replace(/[авекмнорстух]/gu, (ch) => map[ch] ?? ch).replace(/\s+/g, "");
+}
+
+function isRiskyCategoricalFacet(facet: Pick<Facet, "key" | "caption" | "type" | "values">): boolean {
+  if (facet.type !== "string") return false;
+  const haystack = normalizeForMatch(`${facet.key} ${facet.caption}`);
+  return /(^| )(forma|form|shape|tip|type|vid|kind|cvet|color|ispolnen|variant|style|klass|class)( |$)/u.test(haystack);
+}
+
+function valueIsEvidenced(value: string, evidenceText: string): boolean {
+  const valueNorm = normalizeForMatch(value);
+  const evidenceNorm = normalizeForMatch(evidenceText);
+  if (!valueNorm || !evidenceNorm) return false;
+  if (evidenceNorm.includes(valueNorm)) return true;
+  if (/\d/.test(valueNorm) && normalizeCodeLike(evidenceText).includes(normalizeCodeLike(value))) return true;
+  const parts = valueNorm.split(/\s+/).filter((p) => p.length >= 2);
+  return parts.length > 1 && parts.every((p) => evidenceNorm.includes(p));
+}
+
+function extractEchoLabel(firstAssistantText: string, userMessage: string): string {
+  const source = firstAssistantText.trim() || userMessage.trim();
+  const dashIndex = source.search(/[—–-]/u);
+  const raw = dashIndex > 0 ? source.slice(0, dashIndex) : source;
+  return raw.replace(/[?.!,;:]+$/u, "").trim().slice(0, 80) || "запрошенному признаку";
+}
+
+function topFacetOptions(facet: Facet): Array<{ value: string; label: string; count?: number }> {
+  return [...facet.values]
+    .filter((v) => v.value.trim())
+    .sort((a, b) => (b.products_count ?? 0) - (a.products_count ?? 0))
+    .slice(0, 5)
+    .map((v) => ({ value: v.value, label: v.value, count: v.products_count }));
+}
+
+function guardedClarificationForSearch(
+  args: Record<string, unknown>,
+  lastDiscover: DiscoverCategoryOk | null,
+  userMessage: string,
+  firstAssistantText: string,
+): ProposeClarificationInput | null {
+  if (args.mode !== "by_filter" || !args.options || typeof args.options !== "object") return null;
+  if (!lastDiscover) return null;
+
+  const options = args.options as Record<string, unknown>;
+  const evidenceText = `${userMessage}\n${firstAssistantText}`;
+  for (const [key, rawVals] of Object.entries(options)) {
+    const facet = lastDiscover.facets.find((f) => f.key === key);
+    if (!facet || !isRiskyCategoricalFacet(facet)) continue;
+    const vals = Array.isArray(rawVals) ? rawVals.map(String) : [];
+    for (const selectedValue of vals) {
+      const existsInFacet = facet.values.some((v) => normalizeForMatch(v.value) === normalizeForMatch(selectedValue));
+      const evidenced = valueIsEvidenced(selectedValue, evidenceText);
+      if (existsInFacet && evidenced) continue;
+
+      const clarificationOptions = topFacetOptions(facet);
+      if (clarificationOptions.length < 2) continue;
+      const requested = extractEchoLabel(firstAssistantText, userMessage);
+      return {
+        question: `По «${requested}» точного значения в каталожном фасете не вижу. Есть такие варианты — что подойдёт?`,
+        facet_key: facet.key,
+        options: clarificationOptions,
+      };
+    }
+  }
+  return null;
 }
 
 function compactDiscoverCategoryForLlm(r: ToolResult, args: Record<string, unknown>, userMessage: string): unknown {
@@ -408,17 +477,6 @@ async function logTurn(
 
 // ─── Expert loop ────────────────────────────────────────────────────────────
 
-function pickSearchLine(toolCalls: Array<{ name: string }>): string {
-  const first = toolCalls[0]?.name ?? "";
-  if (first === "lookup_contacts") return "Сейчас гляну контакты.";
-  if (first === "lookup_knowledge") return "Сейчас посмотрю в базе.";
-  if (first === "escalate_to_manager") return "Передаю менеджеру.";
-  if (first === "propose_clarification") return "Уточню один момент.";
-  // discover_category / search_catalog / jargon_recover_catalog
-  return "Сейчас поищу в каталоге.";
-}
-
-
 interface RequestBody {
   message?: string;
   sessionId?: string;
@@ -437,7 +495,8 @@ async function runExpertLoop(
   const now = () => Date.now() - t0;
   let finalText = "";
   let productsRendered = 0;
-  let bubbleHasText = false;
+  let firstAssistantText = "";
+  let lastDiscover: DiscoverCategoryOk | null = null;
 
   const messages: ORMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
@@ -469,7 +528,7 @@ async function runExpertLoop(
       if (resp.text.trim() && !hasRender && isFirstTurn) {
         send({ type: "delta", content: resp.text });
         finalText += resp.text;
-        bubbleHasText = true;
+        firstAssistantText = resp.text.trim();
         steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
       } else if (resp.text.trim() && !hasRender) {
         // Подавлено для UI, но логируем — пригодится при дебаге.
@@ -491,19 +550,6 @@ async function runExpertLoop(
         type: "assistant_turn_break",
         reason: hasRender ? "after_render" : "tool_pending",
       });
-      bubbleHasText = false;
-
-      // На первом ходе перед первым тулом — детерминированный второй пузырь
-      // ("сейчас поищу в каталоге"), чтобы UX был стабильным независимо от
-      // модели. Дальше пойдёт tool_event спиннер.
-      if (isFirstTurn && !hasRender) {
-        const searchLine = pickSearchLine(resp.toolCalls);
-        send({ type: "delta", content: searchLine });
-        finalText += searchLine;
-        send({ type: "assistant_turn_break", reason: "tool_pending" });
-        steps.push({ step: "v3_assistant_search_bubble", ms: now(), meta: { text: searchLine } });
-      }
-
 
       // Add the assistant turn (with tool_calls) to the history.
       messages.push({
@@ -519,6 +565,36 @@ async function runExpertLoop(
       // Execute tools sequentially (parallel possible but keep simple).
       for (const tc of resp.toolCalls) {
         const toolStart = Date.now();
+        const guardClarification = tc.name === "search_catalog"
+          ? guardedClarificationForSearch(tc.args, lastDiscover, userMessage, firstAssistantText)
+          : null;
+        if (guardClarification) {
+          const result = executeProposeClarification(guardClarification);
+          const dur = Date.now() - toolStart;
+          send({ type: "tool_event", tool: "propose_clarification", phase: "start", summary: "propose_clarification…" });
+          send({
+            type: "tool_event",
+            tool: "propose_clarification",
+            phase: "result",
+            duration_ms: dur,
+            summary: summariseToolResult("propose_clarification", result),
+          });
+          steps.push({
+            step: "v3_guard_blocked_search",
+            ms: now(),
+            meta: {
+              original_tool: tc.name,
+              original_args: summariseToolArgs(tc.name, tc.args),
+              facet_key: guardClarification.facet_key,
+              reason: "categorical_value_not_evidenced",
+            },
+          });
+          send({ type: "delta", content: guardClarification.question });
+          finalText += guardClarification.question;
+          emitSideEffects(result, send);
+          steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "guarded_clarification", step_count: step + 1 } });
+          return { finalText, productsRendered };
+        }
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
         const result = await runTool(tc.name, tc.args, ctx);
         const dur = Date.now() - toolStart;
@@ -541,6 +617,10 @@ async function runExpertLoop(
             result: summariseToolResultMeta(tc.name, result),
           },
         });
+
+        if (tc.name === "discover_category" && result.ok) {
+          lastDiscover = result as unknown as DiscoverCategoryOk;
+        }
 
         // If render_products succeeded → emit products_block immediately.
         if (tc.name === "render_products" && result.ok) {
