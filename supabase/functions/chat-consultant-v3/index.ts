@@ -501,6 +501,8 @@ async function runExpertLoop(
   let finalText = "";
   let productsRendered = 0;
   let bubbleHasText = false;
+  let firstAssistantText = "";
+  let lastDiscover: DiscoverCategoryOk | null = null;
 
   const messages: ORMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
@@ -532,6 +534,7 @@ async function runExpertLoop(
       if (resp.text.trim() && !hasRender && isFirstTurn) {
         send({ type: "delta", content: resp.text });
         finalText += resp.text;
+        firstAssistantText = resp.text.trim();
         bubbleHasText = true;
         steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
       } else if (resp.text.trim() && !hasRender) {
@@ -582,6 +585,34 @@ async function runExpertLoop(
       // Execute tools sequentially (parallel possible but keep simple).
       for (const tc of resp.toolCalls) {
         const toolStart = Date.now();
+        const guardClarification = tc.name === "search_catalog"
+          ? guardedClarificationForSearch(tc.args, lastDiscover, userMessage, firstAssistantText)
+          : null;
+        if (guardClarification) {
+          const result = executeProposeClarification(guardClarification);
+          const dur = Date.now() - toolStart;
+          send({ type: "tool_event", tool: "propose_clarification", phase: "start", summary: "propose_clarification…" });
+          send({
+            type: "tool_event",
+            tool: "propose_clarification",
+            phase: "result",
+            duration_ms: dur,
+            summary: summariseToolResult("propose_clarification", result),
+          });
+          steps.push({
+            step: "v3_guard_blocked_search",
+            ms: now(),
+            meta: {
+              original_tool: tc.name,
+              original_args: summariseToolArgs(tc.name, tc.args),
+              facet_key: guardClarification.facet_key,
+              reason: "categorical_value_not_evidenced",
+            },
+          });
+          emitSideEffects(result, send);
+          steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "guarded_clarification", step_count: step + 1 } });
+          return { finalText, productsRendered };
+        }
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
         const result = await runTool(tc.name, tc.args, ctx);
         const dur = Date.now() - toolStart;
@@ -604,6 +635,10 @@ async function runExpertLoop(
             result: summariseToolResultMeta(tc.name, result),
           },
         });
+
+        if (tc.name === "discover_category" && result.ok) {
+          lastDiscover = result as unknown as DiscoverCategoryOk;
+        }
 
         // If render_products succeeded → emit products_block immediately.
         if (tc.name === "render_products" && result.ok) {
