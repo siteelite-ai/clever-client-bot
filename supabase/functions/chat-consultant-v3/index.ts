@@ -1057,16 +1057,9 @@ async function runExpertLoop(
           ? await guardedOutcomeForSearch(tc.args, lastDiscover, userMessage, firstAssistantText, ctx)
           : null;
         if (guardOutcome?.kind === "clarification") {
-          const result = executeProposeClarification(guardOutcome.input);
           const dur = Date.now() - toolStart;
-          send({ type: "tool_event", tool: "propose_clarification", phase: "start", summary: "propose_clarification…" });
-          send({
-            type: "tool_event",
-            tool: "propose_clarification",
-            phase: "result",
-            duration_ms: dur,
-            summary: summariseToolResult("propose_clarification", result),
-          });
+          send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
+          send({ type: "tool_event", tool: tc.name, phase: "result", duration_ms: dur, summary: "guard: уточнение" });
           steps.push({
             step: "v3_guard_blocked_search",
             ms: now(),
@@ -1077,30 +1070,61 @@ async function runExpertLoop(
               reason: guardOutcome.reason,
             },
           });
-          send({ type: "delta", content: guardOutcome.input.question });
-          finalText += guardOutcome.input.question;
-          emitSideEffects(result, send);
-          steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "guarded_clarification", step_count: step + 1 } });
-          return { finalText, productsRendered };
+          const synthetic = {
+            tool: tc.name,
+            ok: true,
+            total: 0,
+            guard: "ambiguous_filter",
+            clarification_needed: {
+              facet_key: guardOutcome.input.facet_key,
+              available_options: guardOutcome.input.options.map((o) => o.value),
+            },
+            hint: "Значение фасета не подтверждено клиентом и не из каталога. Не зови search_catalog с этим значением. Финальным пузырём переспроси клиента (предложи 2–3 значения из available_options) либо предложи альтернативу своими словами.",
+          };
+          messages.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            name: tc.name,
+            content: JSON.stringify(synthetic),
+          });
+          continue;
         }
         if (guardOutcome?.kind === "no_intersection") {
-          send({ type: "delta", content: guardOutcome.text });
-          finalText += guardOutcome.text;
+          const dur = Date.now() - toolStart;
+          send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
+          send({ type: "tool_event", tool: tc.name, phase: "result", duration_ms: dur, summary: "guard: нет пересечения" });
           steps.push({
             step: "v3_guard_no_intersection",
             ms: now(),
             meta: {
               original_tool: tc.name,
               original_args: summariseToolArgs(tc.name, tc.args),
+              debug_text: guardOutcome.debugText,
+              semantic_product_ids: guardOutcome.semanticProductIds,
               ...guardOutcome.meta,
             },
           });
-          if (productsRendered === 0) {
-            const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
-            productsRendered += rescued;
-          }
-          steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "guarded_no_intersection", step_count: step + 1 } });
-          return { finalText, productsRendered };
+          const synthetic = {
+            tool: tc.name,
+            ok: true,
+            total: 0,
+            guard: "no_intersection",
+            confirmed_filters: guardOutcome.meta.confirmed_filters ?? [],
+            confirmed_total: guardOutcome.meta.confirmed_total ?? 0,
+            semantic_alternatives: {
+              query: guardOutcome.meta.semantic_query ?? null,
+              total: guardOutcome.meta.semantic_total ?? 0,
+              product_ids: guardOutcome.semanticProductIds,
+            },
+            hint: "Точного пересечения нет. Если semantic_alternatives.product_ids непуст — позови render_products с этими ID и кратко скажи клиенту, что нашёл близкие, но не строго по запрошенной комбинации. Если пусто — финальным пузырём честно объясни клиенту, чего нет, и предложи альтернативу.",
+          };
+          messages.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            name: tc.name,
+            content: JSON.stringify(synthetic),
+          });
+          continue;
         }
 
         // ── Step 5: Price Direction Guard (pre-render rewrite)
