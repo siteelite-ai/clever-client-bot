@@ -162,7 +162,8 @@ function summariseToolArgs(name: string, args: Record<string, unknown>): Record<
     for (const k of keys) if (args[k] !== undefined) o[k] = args[k];
     return o;
   };
-  if (name === "search_catalog") return pick(["mode", "query", "article", "pagetitle", "category", "min_price", "max_price", "sort_cheapest", "per_page", "page"]);
+  if (name === "search_catalog") return pick(["mode", "query", "article", "pagetitle", "category", "min_price", "max_price", "sort_cheapest", "per_page", "page", "options"]);
+  if (name === "discover_category") return pick(["noun"]);
   if (name === "expand_search_to_pool") return pick(["noun", "semantic_query", "modifiers", "category", "min_price", "max_price", "price_intent", "per_page"]);
   if (name === "jargon_recover_catalog") return pick(["noun", "semantic_query", "modifiers", "category"]);
   if (name === "lookup_knowledge") return pick(["query", "type"]);
