@@ -11,13 +11,19 @@ interface ChatWidgetProps {
 const SUPABASE_URL = "https://yngoixmvmxdfxokuafjp.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InluZ29peG12bXhkZnhva3VhZmpwIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk2MTg0MzQsImV4cCI6MjA4NTE5NDQzNH0.bJTllxYOlRBqmnKqMAH21OkTBvXjqW4AaBLHz2fK2lQ";
 
-// V1 vs V2 routing — endpoint is resolved once at widget mount via widget-config.
-// V1 (chat-consultant) is the legacy frozen pipeline; V2 (chat-consultant-v2)
-// is the new spec implementation. Switching is admin-only, manual, no auto-fallback.
-type PipelineVersion = 'v1' | 'v2';
+// V1/V2/V3 routing — endpoint is resolved once at widget mount via widget-config.
+// V1 = legacy frozen pipeline (chat-consultant).
+// V2 = spec-based pipeline (chat-consultant-v2).
+// V3 = Expert Orchestrator with Claude tool calling (chat-consultant-v3) —
+//      streams its own SSE envelope `{v3_event: {...}}` for tool events,
+//      bubble breaks, products_block, contacts, quick_replies, slot_update.
+//      `delta` events still travel in the legacy `{choices:[{delta:{content}}]}`
+//      shape, so the streaming parser stays compatible.
+type PipelineVersion = 'v1' | 'v2' | 'v3';
 const ENDPOINT_BY_PIPELINE: Record<PipelineVersion, string> = {
   v1: `${SUPABASE_URL}/functions/v1/chat-consultant`,
   v2: `${SUPABASE_URL}/functions/v1/chat-consultant-v2`,
+  v3: `${SUPABASE_URL}/functions/v1/chat-consultant-v3`,
 };
 
 async function resolvePipelineEndpoint(): Promise<{ pipeline: PipelineVersion; url: string }> {
@@ -27,7 +33,8 @@ async function resolvePipelineEndpoint(): Promise<{ pipeline: PipelineVersion; u
     });
     if (r.ok) {
       const j = await r.json();
-      const pipeline: PipelineVersion = j?.active_pipeline === 'v2' ? 'v2' : 'v1';
+      const raw = j?.active_pipeline;
+      const pipeline: PipelineVersion = raw === 'v3' ? 'v3' : raw === 'v2' ? 'v2' : 'v1';
       return { pipeline, url: ENDPOINT_BY_PIPELINE[pipeline] };
     }
   } catch (e) {
@@ -81,12 +88,16 @@ async function streamChat({
   onSlotUpdate,
   onQuickReplies,
   onFollowup,
+  onTurnBreak,
+  onProductsBlock,
+  onToolEvent,
   conversationId,
   dialogSlots,
   endpointUrl,
+  pipeline,
 }: {
   messages: Msg[];
-  /** Явный текст последнего user-сообщения. V2 контракт требует поле `query`. */
+  /** Явный текст последнего user-сообщения. V2/V3 контракт требует поле `query`/`message`. */
   query: string;
   onDelta: (deltaText: string) => void;
   onDone: () => void;
@@ -95,9 +106,16 @@ async function streamChat({
   onSlotUpdate?: (slots: DialogSlots) => void;
   onQuickReplies?: (replies: QuickReply[]) => void;
   onFollowup?: (text: string) => void;
+  /** V3: bubble boundary — finalize current assistant message, next delta opens a new one. */
+  onTurnBreak?: (reason: string) => void;
+  /** V3: render_products result — emit as its own assistant bubble. */
+  onProductsBlock?: (markdown: string, meta: { count: number; total_available?: number }) => void;
+  /** V3: tool start/result events — used for debug/telemetry, not rendered by default. */
+  onToolEvent?: (ev: { tool: string; phase: 'start' | 'result'; summary?: string; duration_ms?: number }) => void;
   conversationId: string;
   dialogSlots: DialogSlots;
   endpointUrl: string;
+  pipeline: PipelineVersion;
 }) {
   try {
     // Clean: only send pending slots, max 3
@@ -110,25 +128,33 @@ async function streamChat({
       }
     }
 
+    // Body shape depends on pipeline.
+    // V3 contract: { message, sessionId, history:[{role,content}] }.
+    // V1/V2: backward-compat { conversationId, query, messages, dialogSlots, messageId }.
+    const body = pipeline === 'v3'
+      ? {
+          message: query,
+          sessionId: conversationId,
+          history: messages
+            .filter(m => m.role === 'user' || m.role === 'assistant')
+            .slice(0, -1) // last user turn is in `message`
+            .map(m => ({ role: m.role, content: m.content })),
+        }
+      : {
+          conversationId,
+          query,
+          messages: messages.map(m => ({ role: m.role, content: m.content })),
+          dialogSlots: activeSlots,
+          messageId: (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`),
+        };
+
     const resp = await fetch(endpointUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
       },
-      body: JSON.stringify({
-        // V2 контракт (chat-consultant-v2): явный `query` — единственный
-        // источник истины для последнего пользовательского сообщения.
-        // `messages` оставлен как backward-compat для V1.
-        conversationId,
-        query,
-        messages: messages.map(m => ({ role: m.role, content: m.content })),
-        dialogSlots: activeSlots,
-        // Idempotency: уникальный id для каждого отправляемого сообщения,
-        // чтобы серверный idempotency-guard блокировал случайные дубль-POST'ы
-        // (React StrictMode / повтор клика) и не плодил двойные log-rows.
-        messageId: (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`),
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!resp.ok) {
@@ -175,6 +201,36 @@ async function streamChat({
 
         try {
           const parsed = JSON.parse(jsonStr);
+          // V3 SSE envelope: { v3_event: { type, ... } }
+          if (parsed.v3_event) {
+            const ev = parsed.v3_event;
+            switch (ev.type) {
+              case 'delta':
+                if (typeof ev.content === 'string') onDelta(ev.content);
+                break;
+              case 'assistant_turn_break':
+                onTurnBreak?.(ev.reason ?? 'tool_pending');
+                break;
+              case 'tool_event':
+                onToolEvent?.(ev);
+                break;
+              case 'products_block':
+                if (typeof ev.markdown === 'string') {
+                  onProductsBlock?.(ev.markdown, { count: ev.count ?? 0, total_available: ev.total_available });
+                }
+                break;
+              case 'contacts':
+                if (typeof ev.html === 'string') onContacts?.(ev.html);
+                break;
+              case 'quick_replies':
+                if (Array.isArray(ev.replies)) onQuickReplies?.(ev.replies);
+                break;
+              case 'slot_update':
+                if (ev.slots && typeof ev.slots === 'object') onSlotUpdate?.(ev.slots);
+                break;
+            }
+            continue;
+          }
           // Check for contacts event
           if (parsed.contacts && onContacts) {
             onContacts(parsed.contacts);
@@ -214,6 +270,35 @@ async function streamChat({
         if (jsonStr === '[DONE]') continue;
         try {
           const parsed = JSON.parse(jsonStr);
+          if (parsed.v3_event) {
+            const ev = parsed.v3_event;
+            switch (ev.type) {
+              case 'delta':
+                if (typeof ev.content === 'string') onDelta(ev.content);
+                break;
+              case 'assistant_turn_break':
+                onTurnBreak?.(ev.reason ?? 'tool_pending');
+                break;
+              case 'tool_event':
+                onToolEvent?.(ev);
+                break;
+              case 'products_block':
+                if (typeof ev.markdown === 'string') {
+                  onProductsBlock?.(ev.markdown, { count: ev.count ?? 0, total_available: ev.total_available });
+                }
+                break;
+              case 'contacts':
+                if (typeof ev.html === 'string') onContacts?.(ev.html);
+                break;
+              case 'quick_replies':
+                if (Array.isArray(ev.replies)) onQuickReplies?.(ev.replies);
+                break;
+              case 'slot_update':
+                if (ev.slots && typeof ev.slots === 'object') onSlotUpdate?.(ev.slots);
+                break;
+            }
+            continue;
+          }
           if (parsed.contacts && onContacts) {
             onContacts(parsed.contacts);
             continue;
@@ -352,6 +437,10 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     let assistantContent = '';
     let typing2Removed = false;
     let streamMsgId: string | null = null;
+    // V3: when true, the next delta opens a NEW assistant bubble instead of
+    // appending to the previous streaming one. Set by onTurnBreak /
+    // onProductsBlock; cleared automatically once a new bubble is created.
+    let bubbleSealed = false;
 
     const upsertAssistant = (
       updater: (prev: ChatMessage[]) => ChatMessage[]
@@ -372,6 +461,19 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
           updated = prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-'));
           const id = mid('stream');
           streamMsgId = id;
+          bubbleSealed = false;
+          return [...updated, {
+            id,
+            role: 'assistant' as const,
+            content: displayContent,
+            timestamp: new Date()
+          }];
+        }
+        if (bubbleSealed) {
+          // Forced new bubble (V3 turn break or after products_block).
+          const id = mid('stream');
+          streamMsgId = id;
+          bubbleSealed = false;
           return [...updated, {
             id,
             role: 'assistant' as const,
@@ -380,11 +482,10 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
           }];
         }
         const last = updated[updated.length - 1];
-        if (last?.role === 'assistant' && last.id.startsWith('stream-')) {
-          streamMsgId = last.id;
-          return updated.map((m, i) => 
-            i === updated.length - 1 
-              ? { ...m, content: displayContent } 
+        if (last?.role === 'assistant' && last.id === streamMsgId) {
+          return updated.map((m, i) =>
+            i === updated.length - 1
+              ? { ...m, content: displayContent }
               : m
           );
         }
@@ -407,7 +508,34 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       conversationId: conversationIdRef.current,
       dialogSlots,
       endpointUrl: endpoint.url,
+      pipeline: endpoint.pipeline,
       onDelta: updateAssistant,
+      // V3 only: bubble break — finalize current streaming bubble so the next
+      // delta opens a fresh assistant message. We do this by resetting the
+      // closure-local streaming state; `typing2Removed` stays true so we don't
+      // re-render typing dots, but `streamMsgId=null` + cleared accumulator
+      // forces updateAssistant into the "append new bubble" branch.
+      onTurnBreak: (_reason) => {
+        assistantContent = '';
+        bubbleSealed = true;
+      },
+      onProductsBlock: (markdown, _meta) => {
+        setMessages(prev => {
+          const cleaned = prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-'));
+          return [...cleaned, {
+            id: mid('products'),
+            role: 'assistant' as const,
+            content: markdown,
+            timestamp: new Date(),
+          }];
+        });
+        assistantContent = '';
+        bubbleSealed = true;
+      },
+      onToolEvent: (ev) => {
+        if (ev.phase === 'start') console.log(`[Widget v3] tool ${ev.tool}…`);
+        else console.log(`[Widget v3] tool ${ev.tool} → ${ev.summary} (${ev.duration_ms}ms)`);
+      },
       onSlotUpdate: (updatedSlots) => {
         console.log('[Widget] Received slot_update:', JSON.stringify(updatedSlots));
         setDialogSlots(updatedSlots);

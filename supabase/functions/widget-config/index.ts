@@ -20,7 +20,7 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-type Pipeline = "v1" | "v2";
+type Pipeline = "v1" | "v2" | "v3";
 
 async function readActivePipeline(): Promise<Pipeline> {
   try {
@@ -36,7 +36,9 @@ async function readActivePipeline(): Promise<Pipeline> {
       return "v1";
     }
     const v = (data as { active_pipeline?: string }).active_pipeline;
-    return v === "v2" ? "v2" : "v1";
+    if (v === "v3") return "v3";
+    if (v === "v2") return "v2";
+    return "v1";
   } catch (e) {
     console.error("[widget-config] exception, defaulting to v1:", e);
     return "v1";

@@ -10,7 +10,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { supabase } from '@/integrations/supabase/client';
 
-type PipelineVersion = 'v1' | 'v2';
+type PipelineVersion = 'v1' | 'v2' | 'v3';
 
 interface AppSettings {
   id: string;
@@ -135,7 +135,7 @@ export default function Settings() {
         setClassifierProvider((d.classifier_provider as ClassifierProvider) || 'auto');
         setClassifierModel(d.classifier_model || 'gemini-2.5-flash-lite');
         setClassifierPrompt(d.classifier_prompt || '');
-        setActivePipeline((d.active_pipeline === 'v2' ? 'v2' : 'v1') as PipelineVersion);
+        setActivePipeline((d.active_pipeline === 'v3' ? 'v3' : d.active_pipeline === 'v2' ? 'v2' : 'v1') as PipelineVersion);
       }
     } catch (error) {
       console.error('Error fetching settings:', error);
@@ -187,7 +187,9 @@ export default function Settings() {
       if (error) throw error;
       setActivePipeline(next);
       toast.success(
-        next === 'v2'
+        next === 'v3'
+          ? 'Активирован пайплайн V3 (Expert Orchestrator)'
+          : next === 'v2'
           ? 'Активирован пайплайн V2 (новая спецификация)'
           : 'Активирован пайплайн V1 (стабильная версия)',
       );
@@ -440,21 +442,43 @@ export default function Settings() {
                     <Badge variant="default" className="text-[10px] px-1.5 py-0">beta</Badge>
                   </div>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    Новая ветка <code className="font-mono">chat-consultant-v2</code>:
+                    Ветка <code className="font-mono">chat-consultant-v2</code>:
                     Category Resolver, Query Expansion, Strict Search Multi-Attempt,
-                    Word-Boundary Filter. Реализуется поэтапно.
+                    Word-Boundary Filter.
+                  </p>
+                </div>
+              </label>
+
+              <label
+                className={`flex items-start gap-3 p-3 rounded-lg border cursor-pointer transition-all ${
+                  activePipeline === 'v3'
+                    ? 'border-primary bg-primary/5'
+                    : 'border-border hover:border-primary/30'
+                } ${pipelineSaving ? 'opacity-60 pointer-events-none' : ''}`}
+              >
+                <RadioGroupItem value="v3" className="mt-0.5" disabled={pipelineSaving} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium text-sm">V3 — Expert Orchestrator</span>
+                    <Badge variant="default" className="text-[10px] px-1.5 py-0">alpha</Badge>
+                  </div>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Агентная ветка <code className="font-mono">chat-consultant-v3</code>:
+                    Claude Sonnet 4.5 + tool calling (search_catalog, render_products,
+                    lookup_knowledge, lookup_contacts, expand_search_to_pool, …).
+                    Спека: <code className="font-mono">.lovable/specs/expert-orchestrator-v3.md</code>.
                   </p>
                 </div>
               </label>
             </RadioGroup>
 
-            {activePipeline === 'v2' && (
+            {activePipeline === 'v3' && (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30">
                 <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
                 <p className="text-xs text-amber-200">
-                  V2 сейчас в разработке (этап A — каркас). Виджет будет отвечать
-                  заглушкой, пока не подключены этапы B–E. Для боевого использования
-                  переключитесь на V1.
+                  V3 в alpha — агентный цикл со своим SSE-контрактом
+                  (delta / assistant_turn_break / tool_event / products_block).
+                  Если что-то идёт не так — переключите обратно на V1.
                 </p>
               </div>
             )}
