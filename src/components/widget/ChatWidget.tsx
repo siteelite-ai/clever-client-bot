@@ -88,12 +88,16 @@ async function streamChat({
   onSlotUpdate,
   onQuickReplies,
   onFollowup,
+  onTurnBreak,
+  onProductsBlock,
+  onToolEvent,
   conversationId,
   dialogSlots,
   endpointUrl,
+  pipeline,
 }: {
   messages: Msg[];
-  /** Явный текст последнего user-сообщения. V2 контракт требует поле `query`. */
+  /** Явный текст последнего user-сообщения. V2/V3 контракт требует поле `query`/`message`. */
   query: string;
   onDelta: (deltaText: string) => void;
   onDone: () => void;
@@ -102,9 +106,16 @@ async function streamChat({
   onSlotUpdate?: (slots: DialogSlots) => void;
   onQuickReplies?: (replies: QuickReply[]) => void;
   onFollowup?: (text: string) => void;
+  /** V3: bubble boundary — finalize current assistant message, next delta opens a new one. */
+  onTurnBreak?: (reason: string) => void;
+  /** V3: render_products result — emit as its own assistant bubble. */
+  onProductsBlock?: (markdown: string, meta: { count: number; total_available?: number }) => void;
+  /** V3: tool start/result events — used for debug/telemetry, not rendered by default. */
+  onToolEvent?: (ev: { tool: string; phase: 'start' | 'result'; summary?: string; duration_ms?: number }) => void;
   conversationId: string;
   dialogSlots: DialogSlots;
   endpointUrl: string;
+  pipeline: PipelineVersion;
 }) {
   try {
     // Clean: only send pending slots, max 3
@@ -117,25 +128,33 @@ async function streamChat({
       }
     }
 
+    // Body shape depends on pipeline.
+    // V3 contract: { message, sessionId, history:[{role,content}] }.
+    // V1/V2: backward-compat { conversationId, query, messages, dialogSlots, messageId }.
+    const body = pipeline === 'v3'
+      ? {
+          message: query,
+          sessionId: conversationId,
+          history: messages
+            .filter(m => m.role === 'user' || m.role === 'assistant')
+            .slice(0, -1) // last user turn is in `message`
+            .map(m => ({ role: m.role, content: m.content })),
+        }
+      : {
+          conversationId,
+          query,
+          messages: messages.map(m => ({ role: m.role, content: m.content })),
+          dialogSlots: activeSlots,
+          messageId: (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`),
+        };
+
     const resp = await fetch(endpointUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${SUPABASE_ANON_KEY}`,
       },
-      body: JSON.stringify({
-        // V2 контракт (chat-consultant-v2): явный `query` — единственный
-        // источник истины для последнего пользовательского сообщения.
-        // `messages` оставлен как backward-compat для V1.
-        conversationId,
-        query,
-        messages: messages.map(m => ({ role: m.role, content: m.content })),
-        dialogSlots: activeSlots,
-        // Idempotency: уникальный id для каждого отправляемого сообщения,
-        // чтобы серверный idempotency-guard блокировал случайные дубль-POST'ы
-        // (React StrictMode / повтор клика) и не плодил двойные log-rows.
-        messageId: (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`),
-      }),
+      body: JSON.stringify(body),
     });
 
     if (!resp.ok) {
