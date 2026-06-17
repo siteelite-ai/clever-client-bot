@@ -1030,15 +1030,30 @@ async function runExpertLoop(
     const a = findAnchorInCache(ctx.cache, userMessage);
     return a?.id ?? null;
   };
+  // Same-series family exclusion: in replacement-intent turns, other SKUs from
+  // the same model line as the anchor (e.g. DN027B L100, DN027B L125 vs anchor
+  // DN027B G2) are variants — not true analogs. Identified by anchor's model
+  // code substring in pagetitle. Data-agnostic: works for any category where
+  // the model code is an alphanumeric token in the title.
+  const getFamilyExcludeSet = (): Set<string> => {
+    if (!replacementIntent) return new Set();
+    const a = findAnchorInCache(ctx.cache, userMessage);
+    if (!a) return new Set();
+    const title = (a as unknown as { pagetitle?: string; title?: string }).pagetitle
+      ?? (a as unknown as { title?: string }).title ?? "";
+    return findSameFamilyIds(ctx.cache, title, a.id);
+  };
   const pickFreshUnshown = (n: number): string[] => {
     const out: string[] = [];
     const seen = new Set<string>();
     const excludeId = getAnchorExcludeId();
+    const familyExclude = getFamilyExcludeSet();
     const consume = (ids: string[]) => {
       for (const id of ids) {
         if (out.length >= n) return;
         if (seen.has(id) || shownIds.has(id)) continue;
         if (excludeId && id === excludeId) continue;
+        if (familyExclude.has(id)) continue;
         const p = ctx.cache.get(id);
         if (!p || !(p.price > 0)) continue;
         seen.add(id);
@@ -1238,23 +1253,36 @@ async function runExpertLoop(
           continue;
         }
 
-        // ── Step 4.5: Anchor Exclusion Guard
-        // В режиме "аналог/замена" SKU-источник не должен попасть в карточки.
+        // ── Step 4.5: Anchor + Same-Family Exclusion Guard
+        // В режиме "аналог/замена" из карточек убираем:
+        //   1) сам якорь (это источник, а не аналог);
+        //   2) другие SKU той же модельной серии (это варианты, не аналоги).
+        // Срабатывает ТОЛЬКО при replacementIntent + найденном якоре, поэтому
+        // обычные подборки не затрагиваются.
         if (tc.name === "render_products") {
           const anchorId = getAnchorExcludeId();
-          if (anchorId) {
+          const familyExclude = getFamilyExcludeSet();
+          if (anchorId || familyExclude.size > 0) {
             const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
-            if (origIds.includes(anchorId)) {
-              const filtered = origIds.filter((id) => id !== anchorId);
+            const filtered = origIds.filter((id) => id !== anchorId && !familyExclude.has(id));
+            if (filtered.length !== origIds.length) {
               (tc.args as Record<string, unknown>).product_ids = filtered;
               steps.push({
                 step: "v3_guard_anchor_excluded",
                 ms: now(),
-                meta: { anchor_id: anchorId, before: origIds.length, after: filtered.length },
+                meta: {
+                  anchor_id: anchorId,
+                  family_size: familyExclude.size,
+                  before: origIds.length,
+                  after: filtered.length,
+                  removed: origIds.length - filtered.length,
+                },
               });
             }
           }
         }
+
+
 
         // ── Step 5: Price Direction Guard (pre-render rewrite)
         if (tc.name === "render_products") {
