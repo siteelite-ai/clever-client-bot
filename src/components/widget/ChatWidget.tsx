@@ -432,45 +432,33 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       // Remove repeated greetings from the response
       displayContent = displayContent.replace(/^(?:Здравствуйте[.!]?\s*|Добрый\s+(?:день|вечер|утро)[.!,]?\s*|Привет[.!,]?\s*|Приветствую[.!,]?\s*)/i, '');
       displayContent = displayContent.trim();
+      if (!displayContent) return;
+
+      // Keep streaming control state synchronous. React may batch several SSE
+      // events from one network chunk; mutating these flags inside setState
+      // updaters makes the first expert bubble race with the deterministic
+      // "Сейчас поищу" bubble and can hide the expert text in the UI.
+      const shouldRemoveTyping = !typing2Removed;
+      const shouldOpenNewBubble = shouldRemoveTyping || bubbleSealed || !streamMsgId;
+      const targetId = shouldOpenNewBubble ? mid('stream') : streamMsgId;
+
+      typing2Removed = true;
+      bubbleSealed = false;
+      streamMsgId = targetId;
+
       upsertAssistant(prev => {
-        let updated = prev;
-        if (!typing2Removed) {
-          typing2Removed = true;
-          updated = prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-'));
-          const id = mid('stream');
-          streamMsgId = id;
-          bubbleSealed = false;
-          return [...updated, {
-            id,
-            role: 'assistant' as const,
-            content: displayContent,
-            timestamp: new Date()
-          }];
-        }
-        if (bubbleSealed) {
-          // Forced new bubble (V3 turn break or after products_block).
-          const id = mid('stream');
-          streamMsgId = id;
-          bubbleSealed = false;
-          return [...updated, {
-            id,
-            role: 'assistant' as const,
-            content: displayContent,
-            timestamp: new Date()
-          }];
-        }
-        const last = updated[updated.length - 1];
-        if (last?.role === 'assistant' && last.id === streamMsgId) {
-          return updated.map((m, i) =>
-            i === updated.length - 1
-              ? { ...m, content: displayContent }
-              : m
+        const updated = shouldRemoveTyping
+          ? prev.filter(m => !m.id.startsWith('typing2-') && !m.id.startsWith('typing-'))
+          : prev;
+
+        if (!shouldOpenNewBubble) {
+          return updated.map((m) =>
+            m.id === targetId ? { ...m, content: displayContent } : m
           );
         }
-        const id = mid('stream');
-        streamMsgId = id;
+
         return [...updated, {
-          id,
+          id: targetId,
           role: 'assistant' as const,
           content: displayContent,
           timestamp: new Date()
