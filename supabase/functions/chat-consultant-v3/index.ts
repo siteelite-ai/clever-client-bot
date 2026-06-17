@@ -1248,7 +1248,48 @@ async function runExpertLoop(
           lastDiscover = result as unknown as DiscoverCategoryOk;
         }
 
-        // ── Step 6c: Track fresh search pool for render/escalate guards.
+
+        // ── Step C: Honest-split fallback for empty intersection (≥2 axes, total=0).
+        if (
+          tc.name === "search_catalog" &&
+          result.ok &&
+          (result as { total: number }).total === 0 &&
+          !inferredFallback
+        ) {
+          const opts = (tc.args as { options?: Record<string, unknown> }).options;
+          const axesCount = opts && typeof opts === "object"
+            ? Object.values(opts).filter((v) => Array.isArray(v) && v.length > 0).length
+            : 0;
+          if ((tc.args as { mode?: string }).mode === "by_filter" && axesCount >= 2) {
+            const split = await trySplitFallback(tc.args, ctx);
+            if (split) {
+              splitFallbackResult = split;
+              send({
+                type: "tool_event",
+                tool: "search_catalog",
+                phase: "result",
+                duration_ms: split.ms,
+                summary: `split: ${split.axes.map((a) => `${a.axis}=${a.total}`).join(", ")}`,
+              });
+              steps.push({
+                step: "v3_guard_split_fallback",
+                ms: now(),
+                meta: {
+                  axes: split.axes.map((a) => ({ axis: a.axis, value: a.value, total: a.total, ids: a.ids.length })),
+                  ms: split.ms,
+                },
+              });
+              // Feed Step 6a/6b pool so render/escalate guards have ammo too.
+              const allIds = split.axes.flatMap((a) => a.ids).slice(0, 8);
+              const totalSum = split.axes.reduce((s, a) => s + a.total, 0);
+              if (allIds.length > 0) {
+                freshSearch = { tool: "search_catalog_split", ids: allIds, total: totalSum };
+              }
+            }
+          }
+        }
+
+
         if ((tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") && result.ok) {
           const r2 = result as unknown as { results: Array<{ id: string; price: number }>; total: number };
           const ids = (r2.results ?? [])
