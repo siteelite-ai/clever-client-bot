@@ -900,7 +900,11 @@ async function runExpertLoop(
 
 
       if (resp.toolCalls.length === 0) {
-        // No tools → turn ends.
+        // No tools → turn ends. Last-chance: if user asked relative-price and we rendered nothing → rescue.
+        if (productsRendered === 0) {
+          const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
+          productsRendered += rescued;
+        }
         steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "ok", step_count: step + 1 } });
         return { finalText, productsRendered };
       }
