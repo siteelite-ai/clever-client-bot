@@ -226,15 +226,20 @@ function compactDiscoverCategoryForLlm(r: ToolResult, args: Record<string, unkno
       const values = Array.isArray(f.values) ? f.values : [];
       const sorted = [...values].sort((a, b) => (b.products_count ?? 0) - (a.products_count ?? 0));
       const numericShare = values.length === 0 ? 0 : values.filter((v) => /\d/.test(v.value)).length / values.length;
-      const baseLimit = values.length <= 120 && numericShare >= 0.5 ? 100 : 30;
+      const baseLimit = values.length <= 80 && numericShare >= 0.5 ? 40 : 12;
       const selected = new Map<string, { value: string; products_count?: number }>();
 
       for (const v of sorted) {
+        if (selected.size >= baseLimit) break;
+        const norm = normalizeForMatch(v.value);
+        const valueNumbers = (norm.match(/\d+(?:[.,]\d+)?/g) ?? []).map((n) => n.replace(",", "."));
+        if (valueNumbers.some((n) => numbers.has(n))) selected.set(v.value, v);
+      }
+      for (const v of sorted) {
+        if (selected.size >= baseLimit) break;
         const norm = normalizeForMatch(v.value);
         const hasWord = [...words].some((w) => norm.includes(w));
-        const valueNumbers = (norm.match(/\d+(?:[.,]\d+)?/g) ?? []).map((n) => n.replace(",", "."));
-        const hasNumber = valueNumbers.some((n) => numbers.has(n));
-        if (hasWord || hasNumber) selected.set(v.value, v);
+        if (hasWord) selected.set(v.value, v);
       }
       for (const v of sorted) {
         if (selected.size >= baseLimit) break;
