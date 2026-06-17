@@ -17,7 +17,6 @@ export type ToolName =
   | "search_catalog"
   | "discover_category"
   | "jargon_recover_catalog"
-  | "expand_search_to_pool"
   | "lookup_knowledge"
   | "lookup_contacts"
   | "render_products"
@@ -54,18 +53,6 @@ export interface SearchCatalogOk {
   side_effects?: ToolSideEffect[];
 }
 
-export interface ExpandPoolOk {
-  ok: true;
-  total: number;
-  results: ProductRef[];
-  branch_tag:
-    | "qfv2_final"
-    | "qfv2_pool_rescue"
-    | "qfv2_honest_empty"
-    | "qfv2_jargon_recovery";
-  applied_facets?: Array<{ key: string; values: string[]; alternative_values?: string[] }>;
-  side_effects?: ToolSideEffect[];
-}
 
 export interface JargonRecoverOk {
   ok: true;
@@ -133,7 +120,6 @@ interface WithSideEffects {
 
 export type ToolResult =
   | (SearchCatalogOk & { tool: "search_catalog" } & WithSideEffects)
-  | (ExpandPoolOk & { tool: "expand_search_to_pool" } & WithSideEffects)
   | (JargonRecoverOk & { tool: "jargon_recover_catalog" } & WithSideEffects)
   | (LookupKnowledgeOk & { tool: "lookup_knowledge" } & WithSideEffects)
   | (LookupContactsOk & { tool: "lookup_contacts" } & WithSideEffects)
@@ -144,7 +130,7 @@ export type ToolResult =
   | (ToolError & { tool: ToolName } & WithSideEffects);
 
 /**
- * Per-turn cache: id → full product. Filled by search_catalog / expand_search_to_pool,
+ * Per-turn cache: id → full product. Filled by search_catalog / jargon_recover_catalog,
  * read by render_products. Ensures anti-hallucination invariant.
  */
 export type ProductCache = Map<string, ProductFull>;

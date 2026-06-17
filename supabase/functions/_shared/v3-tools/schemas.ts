@@ -90,28 +90,6 @@ export const TOOL_SCHEMAS = [
   {
     type: "function",
     function: {
-      name: "expand_search_to_pool",
-      description:
-        "Резерв: широкий пул по типу+ограничителям, когда нужен лексический recovery бытовых формулировок. Возвращает branch_tag.",
-      parameters: {
-        type: "object",
-        properties: {
-          noun: { type: "string" },
-          modifiers: { type: "array", items: { type: "string" } },
-          semantic_query: { type: "string" },
-          price_intent: { type: "string", enum: ["cheapest", "most_expensive"] },
-          min_price: { type: "number" },
-          max_price: { type: "number" },
-          brand: { type: "string" },
-        },
-        required: ["noun"],
-        additionalProperties: false,
-      },
-    },
-  },
-  {
-    type: "function",
-    function: {
       name: "lookup_contacts",
       description:
         "Контакты магазина: телефон, адрес, график, оплата, доставка как факт. Эмитит карточку — НЕ дублируй цифры в тексте.",
@@ -130,7 +108,7 @@ export const TOOL_SCHEMAS = [
     function: {
       name: "render_products",
       description:
-        "ЕДИНСТВЕННЫЙ способ показать товары клиенту. Принимает id из search_catalog/expand_search_to_pool ЭТОГО хода. После render опционально 1-3 предложения cross-sell (без артикулов/цен/ссылок).",
+        "ЕДИНСТВЕННЫЙ способ показать товары клиенту. Принимает id из search_catalog/jargon_recover_catalog ЭТОГО хода. После render опционально 1-3 предложения cross-sell (без артикулов/цен/ссылок).",
       parameters: {
         type: "object",
         properties: {
