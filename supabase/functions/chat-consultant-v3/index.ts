@@ -1350,9 +1350,17 @@ async function runExpertLoop(
           tc.args = scoped.args;
         }
 
-        const guardOutcome = tc.name === "search_catalog"
+        let guardOutcome = tc.name === "search_catalog"
           ? await guardedOutcomeForSearch(tc.args, lastDiscover, userMessage, firstAssistantText, ctx, history.slice(-6).map((h) => h.content).join("\n"))
           : null;
+        if (replacementIntent && guardOutcome?.kind === "no_intersection") {
+          steps.push({
+            step: "v3_guard_no_intersection_deferred",
+            ms: now(),
+            meta: { reason: "replacement_needs_split_fallback", original_args: summariseToolArgs(tc.name, tc.args), debug_text: guardOutcome.debugText },
+          });
+          guardOutcome = null;
+        }
 
         if (guardOutcome?.kind === "clarification") {
           const dur = Date.now() - toolStart;
