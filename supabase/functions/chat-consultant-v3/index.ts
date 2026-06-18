@@ -811,6 +811,7 @@ async function broadenPriceDirectionSearch(
     category: lastDiscover.category.pagetitle,
     per_page: 20,
     sort_cheapest: direction !== "more_expensive",
+    sort_expensive: direction === "more_expensive",
     min_price: 1,
   };
   if (anchor) {
