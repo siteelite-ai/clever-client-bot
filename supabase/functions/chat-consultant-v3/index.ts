@@ -1935,14 +1935,7 @@ Deno.serve(async (req) => {
         errorMsg = (e as Error)?.message ?? String(e);
         console.error("[v3] expert error:", e);
         steps.push({ step: "v3_turn_end", ms: Date.now() - t0, meta: { reason: "error", error: errorMsg } });
-        if (isOpenRouterQuotaError(errorMsg) && isReplacementIntent(userMessage)) {
-          const recovered = await runCatalogOnlyReplacementFallback(userMessage, ctx, send, steps, () => Date.now() - t0);
-          productsCount = recovered.rendered;
-          if (recovered.handled) return;
-        }
-        send({ type: "delta", content: isOpenRouterQuotaError(errorMsg)
-          ? "\n\nСейчас недоступен AI-баланс для расширенной обработки. Попробуй позже или свяжись с менеджером."
-          : "\n\nНе получилось обработать запрос. Попробуй переформулировать или связаться с менеджером." });
+        send({ type: "delta", content: "\n\nНе получилось обработать запрос. Попробуй переформулировать или связаться с менеджером." });
       } finally {
         send({ type: "done" });
         controller.close();
