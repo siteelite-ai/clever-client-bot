@@ -762,7 +762,7 @@ function productKindFromTitle(title: string): string {
   return words.join(" ") || "товар";
 }
 
-function replacementSearchProfile(anchor: ProductCache extends Map<string, infer P> ? P : never, anchorText: string) {
+function replacementSearchProfile(anchor: { pagetitle: string; short_traits?: string[] }, anchorText: string) {
   const title = anchor.pagetitle || anchorText;
   const kind = productKindFromTitle(title);
   const baseRaw = traitValue(anchor, /(^| )(cokol|цокол|base|patron)( |$)/u);
@@ -2087,7 +2087,14 @@ Deno.serve(async (req) => {
         errorMsg = (e as Error)?.message ?? String(e);
         console.error("[v3] expert error:", e);
         steps.push({ step: "v3_turn_end", ms: Date.now() - t0, meta: { reason: "error", error: errorMsg } });
-        send({ type: "delta", content: "\n\nНе получилось обработать запрос. Попробуй переформулировать или связаться с менеджером." });
+        if (isOpenRouterQuotaError(errorMsg) && isReplacementIntent(userMessage)) {
+          const recovered = await runCatalogOnlyReplacementFallback(userMessage, ctx, send, steps, () => Date.now() - t0);
+          productsCount = recovered;
+          if (recovered > 0) return;
+        }
+        send({ type: "delta", content: isOpenRouterQuotaError(errorMsg)
+          ? "\n\nСейчас недоступен AI-баланс для расширенной обработки. Попробуй позже или свяжись с менеджером."
+          : "\n\nНе получилось обработать запрос. Попробуй переформулировать или связаться с менеджером." });
       } finally {
         send({ type: "done" });
         controller.close();
