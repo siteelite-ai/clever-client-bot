@@ -346,11 +346,13 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
     pipeline: 'v1',
     url: ENDPOINT_BY_PIPELINE.v1,
   });
+  const [endpointReady, setEndpointReady] = useState(false);
   useEffect(() => {
     let cancelled = false;
     resolvePipelineEndpoint().then((resolved) => {
       if (!cancelled) {
         setEndpoint(resolved);
+        setEndpointReady(true);
         console.log(`[Widget] active pipeline = ${resolved.pipeline}`);
       }
     });
@@ -359,7 +361,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
   const handleSend = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
-    if (!text || isLoading || sendingRef.current) return;
+    if (!text || !endpointReady || isLoading || sendingRef.current) return;
     sendingRef.current = true;
 
     const userMessage: ChatMessage = {
@@ -590,7 +592,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
 
     // Wait for stream to complete
     await streamPromise;
-  }, [input, isLoading, messages, dialogSlots, endpoint]);
+  }, [input, endpointReady, isLoading, messages, dialogSlots, endpoint]);
 
   const handleQuickReply = useCallback((value: string) => {
     // Re-entrancy guard: ignore clicks while a request is in flight. The ref

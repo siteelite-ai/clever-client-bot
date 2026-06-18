@@ -2839,9 +2839,12 @@ async function handlePriceIntent(
   category?: string,
 ): Promise<PriceIntentResult> {
   const overallStart = Date.now();
-  const PER_PAGE = 10;
+  const DISPLAY_LIMIT = 10;
+  const PROBE_PAGE_SIZE = 10;
+  const SORT_PAGE_SIZE = 50;
+  const MAX_LOCAL_SORT_FETCH = 200;
 
-  const buildParams = (q: string, page: number): URLSearchParams => {
+  const buildParams = (q: string, page: number, perPage: number = PROBE_PAGE_SIZE): URLSearchParams => {
     const p = new URLSearchParams();
     // Если есть подтверждённая категория каталога — используем ?category=<pagetitle>
     // (строгий фильтр по категории), а не ?query=<noun> (full-text по описанию,
@@ -2852,7 +2855,7 @@ async function handlePriceIntent(
       p.append('query', q);
     }
     p.append('min_price', '1');
-    p.append('per_page', String(PER_PAGE));
+    p.append('per_page', String(perPage));
     p.append('page', String(page));
     for (const [k, v] of extraParams) p.append(k, v);
     return p;
@@ -2886,11 +2889,11 @@ async function handlePriceIntent(
   };
 
   let activeQuery = queries[0];
-  let probe = await fetchPage(buildParams(activeQuery, 1), 15000);
+  let probe = await fetchPage(buildParams(activeQuery, 1, PROBE_PAGE_SIZE), 15000);
 
   if (!probe || probe.total === 0) {
     for (const altQuery of queries.slice(1, 4)) {
-      const altResult = await fetchPage(buildParams(altQuery, 1), 8000);
+      const altResult = await fetchPage(buildParams(altQuery, 1, PROBE_PAGE_SIZE), 8000);
       if (altResult && altResult.total > 0) {
         activeQuery = altQuery;
         probe = altResult;
@@ -2901,21 +2904,25 @@ async function handlePriceIntent(
 
   if (!probe || probe.total === 0) return { action: 'not_found' };
 
-  let products = probe.results.filter(p => p.price > 0);
-
-  // most_expensive: jump to last page (server sort ASC via min_price=1, then reverse)
-  if (priceIntent === 'most_expensive' && probe.total > PER_PAGE) {
-    const lastPage = Math.ceil(probe.total / PER_PAGE);
-    const lastResult = await fetchPage(buildParams(activeQuery, lastPage), 15000);
-    if (lastResult) {
-      products = lastResult.results.filter(p => p.price > 0).reverse();
-    } else {
-      products = products.reverse();
+  const totalToFetch = Math.min(probe.total, MAX_LOCAL_SORT_FETCH);
+  const pagesNeeded = Math.max(1, Math.ceil(totalToFetch / SORT_PAGE_SIZE));
+  const pages = await Promise.all(
+    Array.from({ length: pagesNeeded }, (_, i) => fetchPage(buildParams(activeQuery, i + 1, SORT_PAGE_SIZE), 15000)),
+  );
+  const byId = new Map<number, Product>();
+  for (const page of pages) {
+    for (const p of page?.results || []) {
+      if (p && typeof p.id === 'number' && typeof p.price === 'number' && p.price > 0 && !byId.has(p.id)) {
+        byId.set(p.id, p);
+      }
     }
   }
+  const products = Array.from(byId.values()).sort((a, b) => (
+    priceIntent === 'most_expensive' ? b.price - a.price : a.price - b.price
+  ));
 
-  console.log(`[PriceIntent] simplified: ${category ? `category="${category}"` : `query="${activeQuery}"`} extra=${JSON.stringify(extraParams)} intent=${priceIntent} total=${probe.total} returned=${products.length} ${Date.now() - overallStart}ms`);
-  return { action: 'answer', products: products.slice(0, PER_PAGE), total: probe.total };
+  console.log(`[PriceIntent] local-sort: ${category ? `category="${category}"` : `query="${activeQuery}"`} extra=${JSON.stringify(extraParams)} intent=${priceIntent} total=${probe.total} fetched=${byId.size}/${totalToFetch} returned=${products.length} truncated=${probe.total > MAX_LOCAL_SORT_FETCH} ${Date.now() - overallStart}ms`);
+  return { action: 'answer', products: products.slice(0, DISPLAY_LIMIT), total: probe.total };
 }
 
 // ============================================================
