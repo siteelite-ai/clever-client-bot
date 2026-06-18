@@ -1291,6 +1291,7 @@ async function runExpertLoop(
   // source product, not its analog. Computed lazily because the anchor is only
   // discoverable in cache after at least one search populated it.
   const replacementIntent = isReplacementIntent(userMessage);
+  const intentMode = detectUserIntentMode(userMessage);
   const getAnchorExcludeId = (): string | null => {
     if (!replacementIntent) return null;
     const a = findAnchorInCache(ctx.cache, userMessage);
