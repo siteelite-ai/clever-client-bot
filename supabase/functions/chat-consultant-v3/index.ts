@@ -643,17 +643,36 @@ function detectPriceDirection(msg: string): PriceIntent | null {
 type CachedProd = { id: string; price: number; pagetitle?: string; title?: string; vendor?: string | null; short_traits?: string[] };
 
 function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd | null {
-  const msg = userMessage.toLowerCase().replace(/[«»"',.()]/g, " ");
+  const msgRaw = userMessage.toLowerCase().replace(/[«»"',.()]/g, " ");
+  // Якорь срабатывает только если в реплике клиента есть хотя бы один
+  // «отличительный» токен — то, что не может случайно совпасть с любым
+  // товаром категории (артикул, арифметика сечений, модель с цифрами,
+  // длинный числовой код, или текст в кавычках). Общие существительные
+  // («кабель», «розетка», «лампа») сами по себе якорь не дают.
+  const distinctive: string[] = [];
+  // Арифметика типа "3*1,5", "2x10", "16/25" (количество ≥ одной цифры с разделителем).
+  for (const t of userMessage.matchAll(/\b\d+\s*[x×*\/]\s*\d+(?:[.,]\d+)?\b/giu)) distinctive.push(t[0].toLowerCase());
+  // Alphanumeric-код длиной ≥4: буквы и цифры в одном токене (модель, артикул).
+  for (const t of msgRaw.split(/\s+/)) {
+    const cleaned = t.replace(/[^\p{L}\p{N}-]/gu, "");
+    if (cleaned.length < 4) continue;
+    if (/\p{L}/u.test(cleaned) && /\p{N}/u.test(cleaned)) distinctive.push(cleaned);
+  }
+  // Чистое число ≥4 цифр (артикул-номер).
+  for (const t of userMessage.matchAll(/\b\d{4,}\b/g)) distinctive.push(t[0]);
+  // Текст в кавычках.
+  for (const t of userMessage.matchAll(/[«"]([^»"]{2,})[»"]/gu)) distinctive.push(t[1].toLowerCase());
+
+  if (distinctive.length === 0) return null;
+
   let best: { p: CachedProd; score: number } | null = null;
   for (const raw of cache.values()) {
     const p = raw as unknown as CachedProd;
     if (typeof p.price !== "number" || p.price <= 0) continue;
     const title = (p.pagetitle ?? p.title ?? "").toLowerCase();
-    const tokens = title.split(/[\s\-_/]+/).filter((t) => t.length >= 3 && !/^\d+$/.test(t));
-    if (tokens.length === 0) continue;
     let score = 0;
-    for (const t of tokens) if (msg.includes(t)) score++;
-    if (score >= 2 && (!best || score > best.score)) best = { p, score };
+    for (const d of distinctive) if (title.includes(d)) score++;
+    if (score >= 1 && (!best || score > best.score)) best = { p, score };
   }
   return best?.p ?? null;
 }
