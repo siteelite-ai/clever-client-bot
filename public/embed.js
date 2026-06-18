@@ -31,6 +31,7 @@
   // Resolved once at widget init via /functions/v1/widget-config.
   // Manual admin toggle in /settings; no auto/canary/fallback.
   var activePipeline = 'v1';
+  var activePipelineReady = false;
   var PIPELINE_PATHS = {
     v1: '/functions/v1/chat-consultant',
     v2: '/functions/v1/chat-consultant-v2',
@@ -49,11 +50,13 @@
           if (raw === 'v3') activePipeline = 'v3';
           else if (raw === 'v2') activePipeline = 'v2';
           else activePipeline = 'v1';
+          activePipelineReady = true;
           try { console.info('[Widget] active pipeline = ' + activePipeline); } catch(e) {}
         })
-        .catch(function() { activePipeline = 'v1'; });
+        .catch(function() { activePipeline = 'v1'; activePipelineReady = true; });
     } catch(e) {
       activePipeline = 'v1';
+      activePipelineReady = true;
       return Promise.resolve();
     }
   }
@@ -723,6 +726,7 @@
   // Try streaming from a single endpoint, updating msgEl progressively
   // onFirstToken is called when the first token arrives (to hide typing indicator)
   async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken) {
+    if (!activePipelineReady) await fetchActivePipeline();
     var url = baseUrl + pipelinePath();
     var controller = new AbortController();
     var timer = setTimeout(function() { controller.abort(); }, 90000);
@@ -884,6 +888,7 @@
 
   // Fallback: non-streaming fetch
   async function tryNonStreamEndpoint(baseUrl, message, label) {
+    if (!activePipelineReady) await fetchActivePipeline();
     var url = baseUrl + pipelinePath();
     var controller = new AbortController();
     var timer = setTimeout(function() { controller.abort(); }, 60000);
