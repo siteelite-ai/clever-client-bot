@@ -284,9 +284,9 @@ export const SYSTEM_PROMPT = `<role>
 
 **Числа, не строки** — `min_price` и `max_price` всегда числа.
 
-Шаблон GOOD (режим A): «найди ВВГ 3×1,5 самый дешёвый» → `discover_category("кабель ВВГ")` → `search_catalog(by_filter, category_in=[…], options={kolichestvo_ghil:[3], sechenie:[1.5]}, sort_cheapest=true)` → render найденного без отбраковки.
-Шаблон GOOD (режим B): «дешевле, чем NBT-CR2025» → `search_catalog(by_article, "NBT-CR2025")` → `anchor.price=262` → `search_catalog(by_filter, category_in=<категория якоря>, options=<те же структурные признаки>, max_price=262, sort_cheapest=true)` → render.
-Шаблон BAD: один `search_catalog` со словом «дешевле» внутри `query`; во втором поиске сохранена только цена, а структурные фильтры (число жил, сечение, цвет) потеряны.
+Шаблон GOOD (режим A): запрос «<тип-товара> <два структурных признака> самый дешёвый» → `discover_category(<тип>)` → `search_catalog(by_filter, category_in=[…], options={<признак1>:[…], <признак2>:[…]}, sort_cheapest=true)` → render найденного без отбраковки.
+Шаблон GOOD (режим B): запрос «дешевле, чем <идентификатор якоря>» → `search_catalog(by_article, <идентификатор>)` → извлекаешь `anchor.price` и категорию якоря → `search_catalog(by_filter, category_in=<категория якоря>, options=<те же структурные признаки>, max_price=anchor.price, sort_cheapest=true)` → render.
+Шаблон BAD: один `search_catalog` со словом «дешевле» внутри `query`; во втором поиске сохранена только цена, а структурные фильтры (опции, которые клиент назвал) потеряны.
 </price_anchoring>
 
 <replacement_anchoring>
