@@ -1487,7 +1487,7 @@ async function runExpertLoop(
 
         // ── Step 1: Numeric Integrity (block search_catalog with truncated decimals)
         if (tc.name === "search_catalog") {
-          const truncations = detectNumericTruncationInOptions(tc.args, firstAssistantText);
+          const truncations = detectNumericTruncationInOptions(tc.args, firstAssistantText, lastDiscover);
           if (truncations) {
             const hint = truncations
               .map((t) => `options["${t.key}"]="${t.submitted}" — в первом пузыре назвал "${t.expected}"; передай ровно "${t.expected}"`)
