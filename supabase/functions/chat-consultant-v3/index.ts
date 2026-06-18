@@ -716,6 +716,119 @@ function detectUserIntentMode(msg: string): "select" | "inquire" {
   return "select";
 }
 
+interface DialogueChoiceResolution {
+  question: string;
+  chosen: string;
+  relaxed: string[];
+  score: number;
+}
+
+const DIALOGUE_OPTION_STOPWORDS = new Set([
+  "а", "и", "или", "что", "для", "вас", "вам", "в", "на", "по", "с", "со", "без",
+  "именно", "вариант", "варианты", "если", "есть", "нужно", "нужен", "нужна",
+  "важнее", "подойдет", "подходит", "выбрать", "давай", "давайте",
+]);
+
+function cleanDialogueOptionLabel(raw: string): string {
+  return raw
+    .replace(/^\s*(?:\d+[.)]|[-–—•])\s*/u, "")
+    .replace(/^[,:;\s]+|[,:;\s]+$/gu, "")
+    .trim()
+    .slice(0, 120);
+}
+
+function extractAlternativeOptionsFromAssistant(text: string): { question: string; options: string[] } | null {
+  const questions = text.match(/[^?？]{3,260}[?？]/gu) ?? [];
+  for (let i = questions.length - 1; i >= 0; i--) {
+    const question = questions[i].trim();
+    if (!/\sили\s/iu.test(normalizeForMatch(question))) continue;
+    let body = question.replace(/[?？]+$/u, "").trim();
+    const dashParts = body.split(/\s[—–-]\s/u).map((p) => p.trim()).filter(Boolean);
+    if (dashParts.length > 1) body = dashParts[dashParts.length - 1];
+    body = body.replace(/^.*?\b(?:важнее|выбрать|подойд[её]т|нужно|нужен|нужна)\b\s*[:—–-]?\s*/iu, "").trim() || body;
+    const options = body
+      .split(/\s+или\s+/iu)
+      .map(cleanDialogueOptionLabel)
+      .filter((p) => p.length >= 2 && p.length <= 120);
+    if (options.length >= 2 && options.length <= 4) return { question, options };
+  }
+  return null;
+}
+
+function optionMatchScore(option: string, userMessage: string): number {
+  const userNorm = normalizeForMatch(userMessage);
+  const userTokens = userNorm.split(/\s+/).filter(Boolean);
+  const optionTokens = normalizeForMatch(option)
+    .split(/\s+/)
+    .filter((t) => t.length >= 2 && !DIALOGUE_OPTION_STOPWORDS.has(t));
+  let score = 0;
+  for (const token of optionTokens) {
+    if (/\d/.test(token) && normalizeCodeLike(userMessage).includes(normalizeCodeLike(token))) score += 2;
+    else if (userNorm.includes(token)) score += 1;
+    else if (tokenMatchesEvidenceByStem(token, userTokens)) score += 1;
+  }
+  for (const quoted of option.matchAll(/[«"]([^»"]{2,})[»"]/gu)) {
+    const q = quoted[1];
+    if (valueIsEvidenced(q, userMessage) || optionMatchScore(q, userMessage) > 0) score += 2;
+  }
+  return score;
+}
+
+function resolveDialogueChoice(
+  history: Array<{ role: "user" | "assistant"; content: string }>,
+  userMessage: string,
+): DialogueChoiceResolution | null {
+  const lastAssistant = [...history].reverse().find((h) => h.role === "assistant" && h.content.trim());
+  if (!lastAssistant) return null;
+  const parsed = extractAlternativeOptionsFromAssistant(lastAssistant.content);
+  if (!parsed) return null;
+  const scored = parsed.options
+    .map((option) => ({ option, score: optionMatchScore(option, userMessage) }))
+    .sort((a, b) => b.score - a.score);
+  const best = scored[0];
+  const second = scored[1];
+  if (!best || best.score <= 0 || (second && best.score <= second.score)) return null;
+  return {
+    question: parsed.question,
+    chosen: best.option,
+    relaxed: scored.slice(1).map((s) => s.option),
+    score: best.score,
+  };
+}
+
+function dialogueChoiceSystemHint(choice: DialogueChoiceResolution): string {
+  return `<dialogue_resolution>В прошлом ходе ассистент задал альтернативный вопрос: "${choice.question}". Текущая реплика клиента выбрала: "${choice.chosen}". Не выбранные альтернативы считаются ослабленными/неактивными, если клиент не повторил их в текущей реплике: ${choice.relaxed.map((x) => `"${x}"`).join(", ") || "нет"}. Не требуй ослабленные признаки и не задавай тот же выбор заново.</dialogue_resolution>`;
+}
+
+function relaxSearchOptionsFromDialogueChoice(
+  args: Record<string, unknown>,
+  choice: DialogueChoiceResolution | null,
+  userMessage: string,
+): { args: Record<string, unknown>; removed: Array<{ key: string; value: string; relaxed_by: string }> } | null {
+  if (!choice || args.mode !== "by_filter" || !args.options || typeof args.options !== "object") return null;
+  const relaxedText = choice.relaxed.join("\n");
+  if (!relaxedText.trim()) return null;
+  const nextOptions: Record<string, string[]> = {};
+  const removed: Array<{ key: string; value: string; relaxed_by: string }> = [];
+  for (const [key, rawVals] of Object.entries(args.options as Record<string, unknown>)) {
+    const vals = Array.isArray(rawVals) ? rawVals.map(String).filter(Boolean) : [];
+    for (const value of vals) {
+      const relaxedBy = choice.relaxed.find((label) => valueIsEvidenced(value, label) || optionMatchScore(label, value) > 0);
+      const repeatedNow = valueIsEvidenced(value, userMessage) || optionMatchScore(value, userMessage) > 0;
+      if (relaxedBy && !repeatedNow) {
+        removed.push({ key, value, relaxed_by: relaxedBy });
+        continue;
+      }
+      (nextOptions[key] ??= []).push(value);
+    }
+  }
+  if (removed.length === 0) return null;
+  const nextArgs = { ...args };
+  if (Object.keys(nextOptions).length > 0) nextArgs.options = nextOptions;
+  else delete nextArgs.options;
+  return { args: nextArgs, removed };
+}
+
 // Extracts the model/series code from an anchor pagetitle: the most
 // distinctive alphanumeric token (mix of letters AND digits, length >= 4),
 // e.g. "DN027B" from "Светильник DN027B G2 LED6/NW 7W 220-240V D90 R".
