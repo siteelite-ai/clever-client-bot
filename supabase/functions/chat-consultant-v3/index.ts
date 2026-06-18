@@ -709,6 +709,159 @@ async function tryPriceDirectionRescue(
   return render.rendered_count;
 }
 
+// ─── Catalog-only recovery ─────────────────────────────────────────────────
+// If OpenRouter is out of credits, V3 cannot run the agent loop. For replacement
+// requests we can still make a conservative, deterministic catalog pass instead
+// of returning the generic "could not process" bubble. This path is deliberately
+// data-agnostic: it uses only the requested text, the anchor card returned by the
+// catalog, and generic trait captions (power/base/mount/diameter/temp).
+
+function isOpenRouterQuotaError(message: string | null): boolean {
+  return !!message && /OpenRouter\s+402|Insufficient credits/i.test(message);
+}
+
+function extractReplacementAnchorText(msg: string): string {
+  const cleaned = msg
+    .replace(/^.*?(?:аналог\w*|замен\w*|альтернатив\w*|похож\w*|вместо|взамен)\s*/iu, "")
+    .replace(/^(?:для|на|к|этой|этого|эту|этот|товар\w*|ламп\w*|светильник\w*|:|\s)+/iu, "")
+    .replace(/^[:\-–—\s]+/u, "")
+    .trim();
+  return cleaned || msg.trim();
+}
+
+function compactValue(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function codeCompact(value: string): string {
+  return normalizeCodeLike(value).replace(/\s+/g, "").toUpperCase();
+}
+
+function traitValue(product: { short_traits?: string[] }, pattern: RegExp): string | null {
+  for (const line of product.short_traits ?? []) {
+    const [rawCaption, ...rawValue] = line.split(":");
+    if (!rawCaption || rawValue.length === 0) continue;
+    if (!pattern.test(normalizeForMatch(rawCaption))) continue;
+    const value = rawValue.join(":").trim();
+    if (value) return value;
+  }
+  return null;
+}
+
+function firstNumericToken(value: string | null): string | null {
+  const n = value?.match(/\d+(?:[.,]\d+)?/u)?.[0];
+  return n ? n.replace(",", ".") : null;
+}
+
+function productKindFromTitle(title: string): string {
+  const words = title
+    .replace(/[«»"',.()/]/g, " ")
+    .split(/\s+/)
+    .filter((w) => /^\p{L}{4,}$/u.test(w))
+    .slice(0, 2);
+  return words.join(" ") || "товар";
+}
+
+function replacementSearchProfile(anchor: ProductCache extends Map<string, infer P> ? P : never, anchorText: string) {
+  const title = anchor.pagetitle || anchorText;
+  const kind = productKindFromTitle(title);
+  const baseRaw = traitValue(anchor, /(^| )(cokol|цокол|base|patron)( |$)/u);
+  const powerRaw = traitValue(anchor, /(^| )(moschn|мощн|power|watt|ватт)( |$)/u);
+  const tempRaw = traitValue(anchor, /(^| )(temperatur|температур|kelvin|кельвин)( |$)/u);
+  const diameterRaw = traitValue(anchor, /(^| )(diametr|diameter|диаметр)( |$)/u);
+  const mountRaw = traitValue(anchor, /(^| )(montazh|монтаж|ustanov|установ|kreplen|креплен)( |$)/u);
+
+  const base = baseRaw ? codeCompact(baseRaw) : (anchorText.match(/\b[\p{L}]{1,4}\s*\d{1,4}\b/iu)?.[0] ? codeCompact(anchorText.match(/\b[\p{L}]{1,4}\s*\d{1,4}\b/iu)![0]) : null);
+  const power = firstNumericToken(powerRaw) ?? anchorText.match(/\b\d+(?:[.,]\d+)?\s*(?:w|вт|ватт)\b/iu)?.[0]?.replace(/\s+/g, "");
+  const temp = firstNumericToken(tempRaw) ?? anchorText.match(/\b\d{3,5}\s*(?:k|к)\b/iu)?.[0]?.replace(/\s+/g, "");
+  const diameter = firstNumericToken(diameterRaw) ?? anchorText.match(/\bD\s*\d{2,4}\b/iu)?.[0]?.replace(/^D\s*/iu, "");
+  const mount = mountRaw ? compactValue(mountRaw) : null;
+
+  const pieces = [mount, kind, base, power ? `${power}Вт` : null, temp ? `${temp}К` : null, diameter ? `D${diameter}` : null]
+    .filter((x): x is string => !!x && x.length > 0);
+  const queries = [
+    pieces.join(" "),
+    [kind, base, power ? `${power}Вт` : null, temp ? `${temp}К` : null].filter(Boolean).join(" "),
+    [base, power ? `${power}Вт` : null, temp ? `${temp}К` : null].filter(Boolean).join(" "),
+    [kind, power ? `${power}Вт` : null, diameter ? `D${diameter}` : null].filter(Boolean).join(" "),
+    [kind, power ? `${power}Вт` : null].filter(Boolean).join(" "),
+  ].map((q) => q.trim()).filter((q, i, arr) => q.length > 0 && arr.indexOf(q) === i);
+
+  return { kind, base, power, temp, diameter, mount, queries };
+}
+
+function productText(cache: ProductCache, id: string): string {
+  const p = cache.get(id);
+  if (!p) return "";
+  return `${p.pagetitle} ${(p.short_traits ?? []).join(" ")}`;
+}
+
+function textContainsProfileValue(text: string, value: string | null, numeric = false): boolean {
+  if (!value) return true;
+  if (numeric) return extractNumbers(text).some((n) => Math.abs(n - Number(value)) < 0.0001);
+  return normalizeCodeLike(text).includes(normalizeCodeLike(value)) || valueIsEvidenced(value, text);
+}
+
+async function runCatalogOnlyReplacementFallback(
+  userMessage: string,
+  ctx: ToolContext,
+  send: (ev: SseEvent) => void,
+  steps: StepLog[],
+  now: () => number,
+): Promise<number> {
+  const deps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
+  const anchorText = extractReplacementAnchorText(userMessage);
+  send({ type: "tool_event", tool: "search_catalog", phase: "start", summary: "резервный поиск якорного товара" });
+
+  let anchorSearch = await executeSearchCatalog({ mode: "by_pagetitle", pagetitle: anchorText, per_page: 5 }, deps, ctx.cache);
+  if (!anchorSearch.ok || anchorSearch.results.length === 0) {
+    anchorSearch = await executeSearchCatalog({ mode: "by_query", query: anchorText, per_page: 5 }, deps, ctx.cache);
+  }
+  if (!anchorSearch.ok || anchorSearch.results.length === 0) {
+    steps.push({ step: "v3_catalog_only_recovery", ms: now(), meta: { status: "anchor_not_found" } });
+    return 0;
+  }
+
+  const anchor = anchorSearch.results[0];
+  const profile = replacementSearchProfile(ctx.cache.get(anchor.id) ?? anchor, anchorText);
+  const familyExclude = findSameFamilyIds(ctx.cache, anchor.pagetitle, anchor.id);
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+
+  for (const query of profile.queries.slice(0, 5)) {
+    const r = await executeSearchCatalog({ mode: "by_query", query, min_price: 1, per_page: 20 }, deps, ctx.cache);
+    if (!r.ok) continue;
+    for (const p of r.results) {
+      const id = String(p.id);
+      if (id === anchor.id || familyExclude.has(id) || seen.has(id)) continue;
+      const text = productText(ctx.cache, id);
+      const requiredOk = [
+        textContainsProfileValue(text, profile.base, false),
+        textContainsProfileValue(text, profile.power, true),
+        textContainsProfileValue(text, profile.mount, false),
+      ].every(Boolean);
+      if (!requiredOk) continue;
+      seen.add(id);
+      candidates.push(id);
+      if (candidates.length >= 8) break;
+    }
+    if (candidates.length >= 3) break;
+  }
+
+  if (candidates.length === 0) {
+    steps.push({ step: "v3_catalog_only_recovery", ms: now(), meta: { status: "no_compatible_candidates", anchor_id: anchor.id, profile } });
+    return 0;
+  }
+
+  const render = executeRenderProducts({ product_ids: candidates, total_available: candidates.length }, ctx.cache);
+  if (!render.ok) return 0;
+  send({ type: "tool_event", tool: "search_catalog", phase: "result", duration_ms: 0, summary: `резервно найдено ${candidates.length}` });
+  send({ type: "tool_event", tool: "render_products", phase: "result", duration_ms: 0, summary: `показано ${render.rendered_count}` });
+  send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: candidates.length });
+  steps.push({ step: "v3_catalog_only_recovery", ms: now(), meta: { status: "rendered", anchor_id: anchor.id, rendered: render.rendered_count, profile } });
+  return render.rendered_count;
+}
+
 // ─── Step C: Honest-Split Fallback ──────────────────────────────────────────
 // When `search_catalog by_filter` with ≥2 axes returns total=0, run each axis
 // independently in parallel. If ≥1 axis returns items, we report
