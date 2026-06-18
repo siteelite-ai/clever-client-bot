@@ -120,7 +120,8 @@ async function singleSearch(
   if (cat) params.append("category", cat);
   if (typeof input.min_price === "number") params.append("min_price", String(input.min_price));
   if (typeof input.max_price === "number") params.append("max_price", String(input.max_price));
-  if (input.sort_cheapest) {
+  if (input.sort_cheapest || input.sort_expensive) {
+    // min_price=1 отсекает мусорные карточки price=0, которые ломают сортировку с обоих концов.
     if (!params.has("min_price")) params.append("min_price", "1");
   }
   const perPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
