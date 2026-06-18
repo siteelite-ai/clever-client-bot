@@ -1474,11 +1474,14 @@ interface RequestBody {
   message?: string;
   sessionId?: string;
   history?: Array<{ role: "user" | "assistant"; content: string }>;
+  slots?: Record<string, unknown>;
+  dialogSlots?: Record<string, unknown>;
 }
 
 async function runExpertLoop(
   userMessage: string,
   history: NonNullable<RequestBody["history"]>,
+  slots: Record<string, unknown>,
   apiKey: string,
   ctx: ToolContext,
   send: (ev: SseEvent) => void,
@@ -1554,7 +1557,7 @@ async function runExpertLoop(
     if (axes.length >= 2) replacementRequiredAxes = axes;
   };
 
-  const dialogueChoice = resolveDialogueChoice(history, userMessage);
+  const dialogueChoice = resolvePendingClarificationChoice(slots, userMessage) ?? resolveDialogueChoice(history, userMessage);
   const systemContent = dialogueChoice
     ? `${SYSTEM_PROMPT}\n\n${dialogueChoiceSystemHint(dialogueChoice)}`
     : SYSTEM_PROMPT;
