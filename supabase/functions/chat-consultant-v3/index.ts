@@ -1807,7 +1807,12 @@ async function runExpertLoop(
         if (tc.name === "render_products") {
           const anchorId = getAnchorExcludeId();
           const familyExclude = getFamilyExcludeSet();
-          if (anchorId || familyExclude.size > 0 || (replacementIntent && replacementRequiredAxes.length >= 2)) {
+          // Strict axis-based filtering применяется ТОЛЬКО когда есть конкретный
+          // якорь (replace this specific SKU). Для category-level замены
+          // ("заменить освещение в гостиной") — без якоря — гвард пропускается:
+          // LLM сам выбирает релевантные товары из пула по обычной семантике.
+          const hasAnchor = Boolean(anchorId) || familyExclude.size > 0;
+          if (hasAnchor) {
             const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
             let filtered = origIds.filter((id) => id !== anchorId && !familyExclude.has(id));
             const afterFamily = filtered.length;
@@ -1827,6 +1832,7 @@ async function runExpertLoop(
                   after_family: afterFamily,
                   after: filtered.length,
                   removed: origIds.length - filtered.length,
+                  anchor_gated: true,
                 },
               });
             }
