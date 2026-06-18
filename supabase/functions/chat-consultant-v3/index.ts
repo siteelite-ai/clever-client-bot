@@ -663,7 +663,7 @@ function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd
   // («кабель», «розетка», «лампа») сами по себе якорь не дают.
   const distinctive: string[] = [];
   // Арифметика типа "3*1,5", "2x10", "16/25" (количество ≥ одной цифры с разделителем).
-  for (const t of userMessage.matchAll(/\b\d+\s*[x×*\/]\s*\d+(?:[.,]\d+)?\b/giu)) distinctive.push(t[0].toLowerCase());
+  for (const t of userMessage.matchAll(/\b\d+\s*[x×*/]\s*\d+(?:[.,]\d+)?\b/giu)) distinctive.push(t[0].toLowerCase());
   // Alphanumeric-код длиной ≥4: буквы и цифры в одном токене (модель, артикул).
   for (const t of msgRaw.split(/\s+/)) {
     const cleaned = t.replace(/[^\p{L}\p{N}-]/gu, "");
