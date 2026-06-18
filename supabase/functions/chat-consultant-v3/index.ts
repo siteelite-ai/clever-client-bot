@@ -1506,11 +1506,22 @@ async function runExpertLoop(
     if (axes.length >= 2) replacementRequiredAxes = axes;
   };
 
+  const dialogueChoice = resolveDialogueChoice(history, userMessage);
+
   const messages: ORMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
     ...history.map((h) => ({ role: h.role, content: h.content })),
+    ...(dialogueChoice ? [{ role: "system" as const, content: dialogueChoiceSystemHint(dialogueChoice) }] : []),
     { role: "user", content: userMessage },
   ];
+
+  if (dialogueChoice) {
+    steps.push({
+      step: "v3_dialogue_choice_resolved",
+      ms: now(),
+      meta: { chosen: dialogueChoice.chosen, relaxed: dialogueChoice.relaxed, score: dialogueChoice.score },
+    });
+  }
 
   const turnController = new AbortController();
   const turnTimer = setTimeout(() => turnController.abort(), TURN_TIMEOUT_MS);
@@ -1637,6 +1648,18 @@ async function runExpertLoop(
             meta: { reason: scoped.reason, original_args: summariseToolArgs(tc.name, tc.args), scoped_args: summariseToolArgs(tc.name, scoped.args) },
           });
           tc.args = scoped.args;
+        }
+
+        const dialogueRelaxed = tc.name === "search_catalog"
+          ? relaxSearchOptionsFromDialogueChoice(tc.args, dialogueChoice, userMessage)
+          : null;
+        if (dialogueRelaxed) {
+          steps.push({
+            step: "v3_guard_dialogue_choice_relaxed",
+            ms: now(),
+            meta: { removed: dialogueRelaxed.removed, original_args: summariseToolArgs(tc.name, tc.args), relaxed_args: summariseToolArgs(tc.name, dialogueRelaxed.args) },
+          });
+          tc.args = dialogueRelaxed.args;
         }
 
         let guardOutcome = tc.name === "search_catalog"
