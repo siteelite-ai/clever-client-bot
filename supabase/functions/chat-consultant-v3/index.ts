@@ -721,8 +721,11 @@ function isOpenRouterQuotaError(message: string | null): boolean {
 }
 
 function extractReplacementAnchorText(msg: string): string {
-  const cleaned = msg
+  const afterIntent = msg
     .replace(/^.*?(?:аналог\w*|замен\w*|альтернатив\w*|похож\w*|вместо|взамен)\s*/iu, "")
+    .trim();
+  const candidate = afterIntent.includes(":") ? afterIntent.slice(afterIntent.indexOf(":") + 1) : afterIntent;
+  const cleaned = candidate
     .replace(/^(?:для|на|к|этой|этого|эту|этот|товар\w*|:|\s)+/iu, "")
     .replace(/^[:\-–—\s]+/u, "")
     .trim();
