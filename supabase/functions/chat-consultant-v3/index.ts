@@ -158,7 +158,7 @@ function summariseToolArgs(name: string, args: Record<string, unknown>): Record<
     for (const k of keys) if (args[k] !== undefined) o[k] = args[k];
     return o;
   };
-  if (name === "search_catalog") return pick(["mode", "query", "article", "pagetitle", "category", "min_price", "max_price", "sort_cheapest", "per_page", "page", "options"]);
+  if (name === "search_catalog") return pick(["mode", "query", "article", "pagetitle", "category", "category_in", "min_price", "max_price", "sort_cheapest", "per_page", "page", "options"]);
   if (name === "discover_category") return pick(["noun"]);
   if (name === "jargon_recover_catalog") return pick(["query", "modifiers", "min_price", "max_price", "per_page"]);
   if (name === "lookup_knowledge") return pick(["query", "type"]);
@@ -725,6 +725,7 @@ interface ReplacementAxis {
   key: string;
   caption: string;
   values: string[];
+  unit: string | null;
   isDiameter: boolean;
 }
 
@@ -733,19 +734,54 @@ function isDiameterFacet(facet: Pick<Facet, "key" | "caption">): boolean {
   return /(^| )(diametr|diameter|диаметр)( |$)/u.test(haystack);
 }
 
-function buildReplacementAxes(args: Record<string, unknown>, lastDiscover: DiscoverCategoryOk | null): ReplacementAxis[] {
+function extractNumbers(text: string): number[] {
+  return (text.match(/\d+(?:[.,]\d+)?/g) ?? [])
+    .map((n) => Number(n.replace(",", ".")))
+    .filter((n) => Number.isFinite(n));
+}
+
+function replacementValueIsEvidenced(value: string, evidenceText: string, facet: Facet): boolean {
+  if (valueIsEvidenced(value, evidenceText)) return true;
+  if (isDiameterFacet(facet)) {
+    const values = extractNumbers(value);
+    const evidenceNums = extractNumbers(evidenceText);
+    return values.some((v) => evidenceNums.some((n) => Math.abs(n - v * 10) < 0.0001 || Math.abs(n * 10 - v) < 0.0001));
+  }
+  return false;
+}
+
+function buildReplacementAxes(args: Record<string, unknown>, lastDiscover: DiscoverCategoryOk | null, evidenceText: string): ReplacementAxis[] {
   if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) return [];
   const options = (args as { options?: Record<string, unknown> }).options;
   if (!options || typeof options !== "object") return [];
   const axes: ReplacementAxis[] = [];
   for (const [key, raw] of Object.entries(options)) {
-    const values = Array.isArray(raw) ? raw.map(String).filter(Boolean) : [];
-    if (values.length === 0) continue;
     const facet = lastDiscover.facets.find((f) => f.key === key);
     if (!facet) continue;
-    axes.push({ key, caption: facet.caption, values, isDiameter: isDiameterFacet(facet) });
+    const values = Array.isArray(raw)
+      ? raw.map(String).filter((v) => v.length > 0 && replacementValueIsEvidenced(v, evidenceText, facet))
+      : [];
+    if (values.length === 0) continue;
+    axes.push({ key, caption: facet.caption, values, unit: facet.unit ?? null, isDiameter: isDiameterFacet(facet) });
   }
   return axes;
+}
+
+function leafScopeSearchArgs(
+  args: Record<string, unknown>,
+  lastDiscover: DiscoverCategoryOk | null,
+): { args: Record<string, unknown>; scoped: boolean; reason: string | null } {
+  if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) return { args, scoped: false, reason: null };
+  const leaves = (lastDiscover.leaf_categories ?? []).map((l) => l.pagetitle).filter(Boolean);
+  if (leaves.length === 0) return { args, scoped: false, reason: null };
+  const category = typeof args.category === "string" ? args.category : null;
+  const categoryIn = Array.isArray(args.category_in) ? args.category_in.map(String).filter(Boolean) : [];
+  if (categoryIn.length > 0 || (category && leaves.includes(category))) return { args, scoped: false, reason: null };
+  if (!category || category === lastDiscover.category.pagetitle) {
+    const { category: _category, ...rest } = args;
+    return { args: { ...rest, category_in: leaves }, scoped: true, reason: category ? "umbrella_category_rewritten" : "missing_category_injected" };
+  }
+  return { args, scoped: false, reason: null };
 }
 
 function canonicalizeSearchOptionsFromDiscover(
@@ -776,7 +812,24 @@ function canonicalizeSearchOptionsFromDiscover(
   return { args: { ...args, options: nextOptions }, rewrites };
 }
 
-function productMatchesReplacementAxis(product: { short_traits?: string[] }, axis: ReplacementAxis): boolean {
+function numericAxisValueMatches(target: string, text: string, axis: ReplacementAxis): boolean {
+  const targets = extractNumbers(target);
+  if (targets.length === 0) return false;
+  const actual = extractNumbers(text);
+  if (actual.some((n) => targets.some((t) => Math.abs(n - t) < 0.0001))) return true;
+  if (axis.isDiameter) {
+    return actual.some((n) => targets.some((t) => Math.abs(n - t * 10) < 0.0001 || Math.abs(n * 10 - t) < 0.0001));
+  }
+  return false;
+}
+
+function axisValueMatchesText(target: string, text: string, axis: ReplacementAxis): boolean {
+  if (!target || !text) return false;
+  if (/\d/.test(target)) return numericAxisValueMatches(target, text, axis);
+  return facetValueEquals(text, target) || valueIsEvidenced(target, text);
+}
+
+function productMatchesReplacementAxis(product: { pagetitle?: string; short_traits?: string[] }, axis: ReplacementAxis): boolean {
   const captionNorm = normalizeForMatch(axis.caption);
   for (const line of product.short_traits ?? []) {
     const [rawCaption, ...rawValue] = line.split(":");
@@ -784,8 +837,10 @@ function productMatchesReplacementAxis(product: { short_traits?: string[] }, axi
     if (normalizeForMatch(rawCaption) !== captionNorm) continue;
     const actual = rawValue.join(":").trim();
     if (!actual) continue;
-    if (axis.values.some((target) => facetValueEquals(actual, target) || valueIsEvidenced(target, actual))) return true;
+    if (axis.values.some((target) => axisValueMatchesText(target, actual, axis))) return true;
   }
+  const haystack = `${product.pagetitle ?? ""} ${(product.short_traits ?? []).join(" ")}`;
+  if (axis.values.some((target) => axisValueMatchesText(target, haystack, axis))) return true;
   return false;
 }
 
@@ -793,14 +848,19 @@ function hasRectangularSizeMarker(title: string): boolean {
   return /\b\d+(?:[.,]\d+)?\s*(?:x|х|×|\*)\s*\d+(?:[.,]\d+)?\b/iu.test(title);
 }
 
-function filterReplacementCompatibleIds(ids: string[], axes: ReplacementAxis[], cache: ProductCache): string[] {
+function filterReplacementCompatibleIds(
+  ids: string[],
+  axes: ReplacementAxis[],
+  cache: ProductCache,
+  axisIdSets: Map<string, Set<string>> | null = null,
+): string[] {
   if (axes.length < 2) return ids;
   const minMatches = Math.max(2, axes.length - 1);
   const ranked: Array<{ id: string; matches: number; order: number }> = [];
   ids.forEach((id, order) => {
     const product = cache.get(id);
     if (!product) return;
-    const matchedAxes = axes.filter((axis) => productMatchesReplacementAxis(product, axis));
+    const matchedAxes = axes.filter((axis) => axisIdSets?.get(axis.key)?.has(id) || productMatchesReplacementAxis(product, axis));
     const missesDiameter = axes.some((axis) => axis.isDiameter) && !matchedAxes.some((axis) => axis.isDiameter);
     if (missesDiameter && hasRectangularSizeMarker(product.pagetitle)) return;
     if (matchedAxes.length >= minMatches) ranked.push({ id, matches: matchedAxes.length, order });
@@ -1111,6 +1171,7 @@ async function runExpertLoop(
   // (see DN027B аналог-кейс: split_fallback дал 12 релевантных id,
   // потом by_query "downlight"→309 затёр freshSearch и render выдал мусор).
   let prioritySplitPool: string[] = [];
+  let prioritySplitAxisIdSets: Map<string, Set<string>> | null = null;
   let replacementRequiredAxes: ReplacementAxis[] = [];
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
@@ -1150,7 +1211,7 @@ async function runExpertLoop(
         if (familyExclude.has(id)) continue;
         const p = ctx.cache.get(id);
         if (!p || !(p.price > 0)) continue;
-        if (replacementRequiredAxes.length >= 2 && filterReplacementCompatibleIds([id], replacementRequiredAxes, ctx.cache).length === 0) continue;
+        if (replacementRequiredAxes.length >= 2 && filterReplacementCompatibleIds([id], replacementRequiredAxes, ctx.cache, prioritySplitAxisIdSets).length === 0) continue;
         seen.add(id);
         out.push(id);
       }
@@ -1158,6 +1219,12 @@ async function runExpertLoop(
     consume(prioritySplitPool);
     if (freshSearch) consume(freshSearch.ids);
     return out;
+  };
+
+  const rememberReplacementAxes = (args: Record<string, unknown>) => {
+    if (!replacementIntent) return;
+    const axes = buildReplacementAxes(args, lastDiscover, `${history.slice(-6).map((h) => h.content).join("\n")}\n${userMessage}\n${firstAssistantText}`);
+    if (axes.length >= 2) replacementRequiredAxes = axes;
   };
 
   const messages: ORMessage[] = [
@@ -1273,9 +1340,27 @@ async function runExpertLoop(
           }
         }
 
-        const guardOutcome = tc.name === "search_catalog"
+        const scoped = tc.name === "search_catalog" ? leafScopeSearchArgs(tc.args, lastDiscover) : null;
+        if (scoped?.scoped) {
+          steps.push({
+            step: "v3_guard_leaf_scope",
+            ms: now(),
+            meta: { reason: scoped.reason, original_args: summariseToolArgs(tc.name, tc.args), scoped_args: summariseToolArgs(tc.name, scoped.args) },
+          });
+          tc.args = scoped.args;
+        }
+
+        let guardOutcome = tc.name === "search_catalog"
           ? await guardedOutcomeForSearch(tc.args, lastDiscover, userMessage, firstAssistantText, ctx, history.slice(-6).map((h) => h.content).join("\n"))
           : null;
+        if (replacementIntent && guardOutcome?.kind === "no_intersection") {
+          steps.push({
+            step: "v3_guard_no_intersection_deferred",
+            ms: now(),
+            meta: { reason: "replacement_needs_split_fallback", original_args: summariseToolArgs(tc.name, tc.args), debug_text: guardOutcome.debugText },
+          });
+          guardOutcome = null;
+        }
 
         if (guardOutcome?.kind === "clarification") {
           const dur = Date.now() - toolStart;
@@ -1362,7 +1447,7 @@ async function runExpertLoop(
             let filtered = origIds.filter((id) => id !== anchorId && !familyExclude.has(id));
             const afterFamily = filtered.length;
             if (replacementIntent && replacementRequiredAxes.length >= 2) {
-              filtered = filterReplacementCompatibleIds(filtered, replacementRequiredAxes, ctx.cache);
+              filtered = filterReplacementCompatibleIds(filtered, replacementRequiredAxes, ctx.cache, prioritySplitAxisIdSets);
             }
             if (filtered.length !== origIds.length) {
               (tc.args as Record<string, unknown>).product_ids = filtered;
@@ -1582,8 +1667,7 @@ async function runExpertLoop(
           !inferredFallback
         ) {
           if (replacementIntent) {
-            const axes = buildReplacementAxes(tc.args, lastDiscover);
-            if (axes.length >= 2) replacementRequiredAxes = axes;
+            rememberReplacementAxes(tc.args);
           }
           const opts = (tc.args as { options?: Record<string, unknown> }).options;
           const axesCount = opts && typeof opts === "object"
@@ -1592,9 +1676,10 @@ async function runExpertLoop(
           if ((tc.args as { mode?: string }).mode === "by_filter" && axesCount >= 2) {
             const split = await trySplitFallback(tc.args, ctx);
             if (split) {
+              const splitAxisIdSets = new Map(split.axes.map((a) => [a.axis, new Set(a.ids)]));
               const effectiveSplit = replacementIntent && replacementRequiredAxes.length >= 2
                 ? (() => {
-                  const compatible = new Set(filterReplacementCompatibleIds(split.axes.flatMap((a) => a.ids), replacementRequiredAxes, ctx.cache));
+                  const compatible = new Set(filterReplacementCompatibleIds(split.axes.flatMap((a) => a.ids), replacementRequiredAxes, ctx.cache, splitAxisIdSets));
                   return {
                     ...split,
                     axes: split.axes
@@ -1628,6 +1713,7 @@ async function runExpertLoop(
                 // Persist across subsequent broad searches — render fallback
                 // prefers these axis-aligned ids over later off-target pools.
                 prioritySplitPool = allIds;
+                prioritySplitAxisIdSets = splitAxisIdSets;
               }
             }
           }
