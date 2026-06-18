@@ -206,6 +206,44 @@ function isRiskyCategoricalFacet(facet: Pick<Facet, "key" | "caption" | "type" |
   return /(^| )(forma|form|shape|tip|type|vid|kind|cvet|color|ispolnen|variant|style|klass|class)( |$)/u.test(haystack);
 }
 
+// Стемминг для русских/казахских словоформ. Срезаем характерные окончания
+// прилагательных/существительных, чтобы "чёрный" совпадал с "чёрная/чёрном",
+// "двухместная" с "двухместный" и т.д. Data-agnostic: работает на любом
+// слове ≥ 5 букв, окончание удаляется только если остаётся стем ≥ 3 символов.
+const RU_SUFFIXES = [
+  "ыми", "ими", "ого", "его", "ому", "ему", "ыми", "ими",
+  "ая", "яя", "ое", "ее", "ой", "ей", "ом", "ем", "ую", "юю",
+  "ый", "ий", "ых", "их", "ам", "ям", "ах", "ях", "ов", "ев",
+  "у", "ю", "а", "я", "о", "е", "ы", "и",
+];
+function stemRu(word: string): string {
+  if (word.length < 5) return word;
+  for (const suf of RU_SUFFIXES) {
+    if (word.length - suf.length >= 3 && word.endsWith(suf)) {
+      return word.slice(0, -suf.length);
+    }
+  }
+  return word;
+}
+
+function tokenMatchesEvidenceByStem(token: string, evidenceTokens: string[]): boolean {
+  if (token.length < 3) return false;
+  const stem = stemRu(token);
+  if (stem.length < 3) return false;
+  for (const et of evidenceTokens) {
+    if (et.length < 3) continue;
+    const eStem = stemRu(et);
+    // Совпадение по общему префиксу длиной ≥ min(stem,eStem) — обе формы
+    // одного корня. Защищает от ложных срабатываний на коротких словах.
+    const minLen = Math.min(stem.length, eStem.length);
+    if (minLen >= 4 && stem.slice(0, minLen) === eStem.slice(0, minLen)) return true;
+    // На случай, если стем токена сам является префиксом формы из текста
+    if (stem.length >= 4 && et.startsWith(stem)) return true;
+    if (eStem.length >= 4 && token.startsWith(eStem)) return true;
+  }
+  return false;
+}
+
 function valueIsEvidenced(value: string, evidenceText: string): boolean {
   const valueNorm = normalizeForMatch(value);
   const evidenceNorm = normalizeForMatch(evidenceText);
@@ -213,14 +251,45 @@ function valueIsEvidenced(value: string, evidenceText: string): boolean {
   if (evidenceNorm.includes(valueNorm)) return true;
   if (/\d/.test(valueNorm) && normalizeCodeLike(evidenceText).includes(normalizeCodeLike(value))) return true;
   const parts = valueNorm.split(/\s+/).filter((p) => p.length >= 2);
-  return parts.length > 1 && parts.every((p) => evidenceNorm.includes(p));
+  const evidenceTokens = evidenceNorm.split(/\s+/).filter((p) => p.length >= 2);
+  if (parts.length > 1 && parts.every((p) => evidenceNorm.includes(p))) return true;
+  // Морфологический матч: хотя бы один значимый токен значения совпадает по
+  // стему с токеном в тексте (черный↔черная, двухместный↔двухместная).
+  // Для многословных значений требуем, чтобы все значимые токены имели стем-матч.
+  const significant = parts.filter((p) => p.length >= 4);
+  if (significant.length === 0) return false;
+  return significant.every((p) => tokenMatchesEvidenceByStem(p, evidenceTokens));
+}
+
+// Слова-преамбулы, с которых LLM любит начинать ответ. Если первый сегмент
+// до тире/дефиса состоит только из таких слов — это не "эхо запроса", а
+// разговорная вставка. В этом случае берём userMessage напрямую.
+const ACKNOWLEDGEMENT_TOKENS = new Set([
+  "понял", "поняла", "понятно", "хорошо", "ок", "окей", "ясно", "конечно",
+  "отлично", "supper", "супер", "да", "ага", "понимаю", "разумеется", "сейчас",
+]);
+
+function isAcknowledgementOnly(text: string): boolean {
+  const tokens = normalizeForMatch(text).split(/\s+/).filter(Boolean);
+  if (tokens.length === 0 || tokens.length > 3) return false;
+  return tokens.every((t) => ACKNOWLEDGEMENT_TOKENS.has(t));
 }
 
 function extractEchoLabel(firstAssistantText: string, userMessage: string): string {
-  const source = firstAssistantText.trim() || userMessage.trim();
-  const dashIndex = source.search(/\s[—–]\s/u);
-  const raw = dashIndex > 0 ? source.slice(0, dashIndex) : source;
-  return raw.replace(/[?.!,;:]+$/u, "").trim().slice(0, 80) || "запрошенному признаку";
+  // Приоритет — userMessage: это исходный запрос, а не риторическая обёртка LLM.
+  // Ассистентский текст используем только если юзер промолчал.
+  const userTrim = userMessage.trim();
+  const assistantTrim = firstAssistantText.trim();
+  let source = userTrim || assistantTrim;
+  if (source === userTrim && !userTrim) source = assistantTrim;
+  if (!source) return "запрошенному признаку";
+  // Если есть тире — берём сегмент после первого тире, ТОЛЬКО если префикс
+  // до тире — короткая преамбула ("Понял —", "Хорошо —"). Иначе оставляем всё.
+  const dashMatch = source.match(/^(.+?)\s[—–-]\s(.+)$/u);
+  if (dashMatch && isAcknowledgementOnly(dashMatch[1])) {
+    source = dashMatch[2];
+  }
+  return source.replace(/[?.!,;:]+$/u, "").trim().slice(0, 120) || "запрошенному признаку";
 }
 
 function stripKnownValues(text: string, values: string[]): string {
