@@ -734,18 +734,34 @@ function isDiameterFacet(facet: Pick<Facet, "key" | "caption">): boolean {
   return /(^| )(diametr|diameter|диаметр)( |$)/u.test(haystack);
 }
 
+function extractNumbers(text: string): number[] {
+  return (text.match(/\d+(?:[.,]\d+)?/g) ?? [])
+    .map((n) => Number(n.replace(",", ".")))
+    .filter((n) => Number.isFinite(n));
+}
+
+function replacementValueIsEvidenced(value: string, evidenceText: string, facet: Facet): boolean {
+  if (valueIsEvidenced(value, evidenceText)) return true;
+  if (isDiameterFacet(facet)) {
+    const values = extractNumbers(value);
+    const evidenceNums = extractNumbers(evidenceText);
+    return values.some((v) => evidenceNums.some((n) => Math.abs(n - v * 10) < 0.0001 || Math.abs(n * 10 - v) < 0.0001));
+  }
+  return false;
+}
+
 function buildReplacementAxes(args: Record<string, unknown>, lastDiscover: DiscoverCategoryOk | null, evidenceText: string): ReplacementAxis[] {
   if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) return [];
   const options = (args as { options?: Record<string, unknown> }).options;
   if (!options || typeof options !== "object") return [];
   const axes: ReplacementAxis[] = [];
   for (const [key, raw] of Object.entries(options)) {
-    const values = Array.isArray(raw)
-      ? raw.map(String).filter((v) => v.length > 0 && valueIsEvidenced(v, evidenceText))
-      : [];
-    if (values.length === 0) continue;
     const facet = lastDiscover.facets.find((f) => f.key === key);
     if (!facet) continue;
+    const values = Array.isArray(raw)
+      ? raw.map(String).filter((v) => v.length > 0 && replacementValueIsEvidenced(v, evidenceText, facet))
+      : [];
+    if (values.length === 0) continue;
     axes.push({ key, caption: facet.caption, values, unit: facet.unit ?? null, isDiameter: isDiameterFacet(facet) });
   }
   return axes;
@@ -794,12 +810,6 @@ function canonicalizeSearchOptionsFromDiscover(
   }
   if (!changed) return null;
   return { args: { ...args, options: nextOptions }, rewrites };
-}
-
-function extractNumbers(text: string): number[] {
-  return (text.match(/\d+(?:[.,]\d+)?/g) ?? [])
-    .map((n) => Number(n.replace(",", ".")))
-    .filter((n) => Number.isFinite(n));
 }
 
 function numericAxisValueMatches(target: string, text: string, axis: ReplacementAxis): boolean {
