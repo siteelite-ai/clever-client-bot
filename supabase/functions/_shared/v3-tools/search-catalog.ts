@@ -34,6 +34,7 @@ export interface SearchCatalogInput {
   page?: number;
   per_page?: number;
   sort_cheapest?: boolean;
+  sort_expensive?: boolean;
   /**
    * L₀ — листовая категория ЯКОРЯ для режима «аналог» (берётся из anchor.leaf_category).
    * Если задана и отсутствует в category/category_in — сервер автоматически инжектирует её
@@ -119,7 +120,8 @@ async function singleSearch(
   if (cat) params.append("category", cat);
   if (typeof input.min_price === "number") params.append("min_price", String(input.min_price));
   if (typeof input.max_price === "number") params.append("max_price", String(input.max_price));
-  if (input.sort_cheapest) {
+  if (input.sort_cheapest || input.sort_expensive) {
+    // min_price=1 отсекает мусорные карточки price=0, которые ломают сортировку с обоих концов.
     if (!params.has("min_price")) params.append("min_price", "1");
   }
   const perPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
@@ -185,10 +187,10 @@ async function singleSearch(
 
 /**
  * Sort-aware fetch: API 220volt не поддерживает sort. Когда нужна сортировка по цене
- * (sort_cheapest=true), тянем до MAX_SORT_FETCH товаров (fan-out по страницам с per_page=50),
- * сортируем на нашей стороне и обрезаем до запрошенного per_page. `total` сохраняем честный —
- * из первого ответа API. Если в категории больше MAX_SORT_FETCH товаров — добавляем warning
- * sort_truncated, чтобы вызывающая сторона знала, что "самый дешёвый" мог быть пропущен.
+ * (sort_cheapest=true или sort_expensive=true), тянем до MAX_SORT_FETCH товаров
+ * (fan-out по страницам с per_page=50), сортируем на нашей стороне и обрезаем до
+ * запрошенного per_page. `total` сохраняем честный — из первого ответа API. Если в
+ * категории больше MAX_SORT_FETCH товаров — добавляем warning sort_truncated.
  */
 const SORT_PAGE_SIZE = 50;
 const MAX_SORT_FETCH = 200; // 4 страницы × 50 — потолок защиты от тяжёлых категорий
@@ -200,7 +202,7 @@ async function singleSearchSorted(
   categoryOverride: string | undefined,
   warnings: string[],
 ): Promise<SingleSearchResult> {
-  if (!input.sort_cheapest) {
+  if (!input.sort_cheapest && !input.sort_expensive) {
     return singleSearch(input, deps, cache, categoryOverride);
   }
   const requestedPerPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
@@ -229,7 +231,10 @@ async function singleSearchSorted(
   // Дедуп по id (на случай если API повторит товар на стыке страниц).
   const byId = new Map<string, ProductRef>();
   for (const p of all) if (!byId.has(p.id)) byId.set(p.id, p);
-  const sorted = [...byId.values()].sort((a, b) => a.price - b.price);
+  const cmp = input.sort_expensive
+    ? (a: ProductRef, b: ProductRef) => b.price - a.price
+    : (a: ProductRef, b: ProductRef) => a.price - b.price;
+  const sorted = [...byId.values()].sort(cmp);
   if (totalApi > MAX_SORT_FETCH) {
     warnings.push(`sort_truncated:${totalApi}>${MAX_SORT_FETCH}`);
   }
@@ -306,6 +311,7 @@ export async function executeSearchCatalog(
   // После fan-out пересортируем мердж, если запрошена сортировка по цене,
   // т.к. слияние нескольких листьев нарушает порядок.
   if (input.sort_cheapest) merged.sort((a, b) => a.price - b.price);
+  else if (input.sort_expensive) merged.sort((a, b) => b.price - a.price);
   const perPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
   return {
     tool: "search_catalog",
