@@ -486,19 +486,31 @@ async function guardedOutcomeForSearch(
 function detectNumericTruncationInOptions(
   args: Record<string, unknown>,
   firstAssistantText: string,
+  lastDiscover: DiscoverCategoryOk | null,
 ): Array<{ key: string; submitted: string; expected: string }> | null {
   if (!args.options || typeof args.options !== "object" || !firstAssistantText) return null;
-  const decimalsInText: Array<{ integer: string; decimal: string }> = [];
-  const re = /(\d+)[.,](\d+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(firstAssistantText)) !== null) {
-    decimalsInText.push({ integer: m[1], decimal: m[2] });
-  }
-  if (decimalsInText.length === 0) return null;
+  if (!lastDiscover || !Array.isArray(lastDiscover.facets)) return null;
 
+  // Data-agnostic: гард срабатывает только для фасетов с единицей измерения
+  // (мм², кВт, м, А…), где «1» vs «1.5» — реальное усечение. Безразмерные счётные
+  // фасеты (количество жил, число модулей и т.п.) намеренно пропускаем — там
+  // целое число это валидное значение, а не truncated decimal. Дополнительно
+  // требуем, чтобы decimal в тексте стоял рядом с unit фасета — это исключает
+  // ложные срабатывания на посторонние числа типа «до 3,5 кВт» при поиске жил.
   const violations: Array<{ key: string; submitted: string; expected: string }> = [];
   for (const [key, rawVals] of Object.entries(args.options as Record<string, unknown>)) {
     if (!Array.isArray(rawVals)) continue;
+    const facet = lastDiscover.facets.find((f) => f.key === key);
+    const unit = facet?.unit?.trim();
+    if (!unit) continue; // unitless facet → бессмысленно проверять truncation
+    const unitEsc = unit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(\\d+)[.,](\\d+)\\s*${unitEsc}\\b`, "giu");
+    const decimalsInText: Array<{ integer: string; decimal: string }> = [];
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(firstAssistantText)) !== null) {
+      decimalsInText.push({ integer: m[1], decimal: m[2] });
+    }
+    if (decimalsInText.length === 0) continue;
     for (const raw of rawVals) {
       const submitted = String(raw).trim();
       if (!/^\d+$/.test(submitted)) continue; // bare integer only
@@ -1475,7 +1487,7 @@ async function runExpertLoop(
 
         // ── Step 1: Numeric Integrity (block search_catalog with truncated decimals)
         if (tc.name === "search_catalog") {
-          const truncations = detectNumericTruncationInOptions(tc.args, firstAssistantText);
+          const truncations = detectNumericTruncationInOptions(tc.args, firstAssistantText, lastDiscover);
           if (truncations) {
             const hint = truncations
               .map((t) => `options["${t.key}"]="${t.submitted}" — в первом пузыре назвал "${t.expected}"; передай ровно "${t.expected}"`)
