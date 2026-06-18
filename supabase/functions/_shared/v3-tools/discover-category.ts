@@ -19,6 +19,7 @@ interface CategoriesCache {
   flat: CategoryCandidate[];           // для exact/LLM-резолвера по pagetitle
   byId: Map<number, CategoryNode>;     // для обхода поддерева (родитель → дети)
   byPagetitle: Map<string, number>;    // pagetitle (нормализованный) → id
+  isLeaf: Map<string, boolean>;        // нормализованный pagetitle → лист ли (childrenIds.length === 0)
   ts: number;
 }
 
