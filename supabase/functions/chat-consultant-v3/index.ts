@@ -817,6 +817,19 @@ function textContainsProfileValue(text: string, value: string | null, numeric = 
   return normalizeCodeLike(text).includes(normalizeCodeLike(value)) || valueIsEvidenced(value, text);
 }
 
+function replacementFamilyTokens(title: string, base: string | null): Set<string> {
+  const out = new Set<string>();
+  for (const raw of title.replace(/[«»"',./()]/g, " ").split(/\s+/)) {
+    const token = raw.replace(/[^\p{L}\p{N}]/gu, "");
+    if (token.length < 3 || !/\p{L}/u.test(token) || !/\d/u.test(token)) continue;
+    const compact = codeCompact(token);
+    if (base && compact === codeCompact(base)) continue;
+    if (/^\d+(?:W|ВТ|V|В|K|К|LM|ЛМ)$/iu.test(compact)) continue;
+    out.add(compact);
+  }
+  return out;
+}
+
 async function runCatalogOnlyReplacementFallback(
   userMessage: string,
   ctx: ToolContext,
@@ -840,6 +853,7 @@ async function runCatalogOnlyReplacementFallback(
   const anchor = anchorSearch.results[0];
   const profile = replacementSearchProfile(ctx.cache.get(anchor.id) ?? anchor, anchorText);
   const familyExclude = findSameFamilyIds(ctx.cache, anchor.pagetitle, anchor.id);
+  const familyTokens = replacementFamilyTokens(anchor.pagetitle, profile.base);
   const candidates: string[] = [];
   const seen = new Set<string>();
 
@@ -850,6 +864,8 @@ async function runCatalogOnlyReplacementFallback(
       const id = String(p.id);
       if (id === anchor.id || familyExclude.has(id) || seen.has(id)) continue;
       const text = productText(ctx.cache, id);
+      const sameFamily = [...familyTokens].some((token) => codeCompact(text).includes(token));
+      if (sameFamily) continue;
       const requiredOk = [
         textContainsProfileValue(text, profile.base, false),
         textContainsProfileValue(text, profile.power, true),
