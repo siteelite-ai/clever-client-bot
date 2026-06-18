@@ -549,7 +549,7 @@ function detectPriceDirection(msg: string): PriceDirection | null {
   return null;
 }
 
-type CachedProd = { id: string; price: number; pagetitle?: string; title?: string; vendor?: string | null };
+type CachedProd = { id: string; price: number; pagetitle?: string; title?: string; vendor?: string | null; short_traits?: string[] };
 
 function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd | null {
   const msg = userMessage.toLowerCase().replace(/[«»"',.()]/g, " ");
@@ -612,6 +612,7 @@ function findSameFamilyIds(cache: ProductCache, anchor: CachedProd): Set<string>
   const code = extractModelCode(anchorTitle);
   const out = new Set<string>();
   if (!code) return out;
+  if ((anchor.short_traits ?? []).some((line) => valueIsEvidenced(code, line))) return out;
   const needle = code.toLowerCase();
   const anchorVendor = normalizeForMatch(anchor.vendor ?? "");
   if (!anchorVendor) return out;
