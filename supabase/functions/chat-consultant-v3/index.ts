@@ -1688,12 +1688,13 @@ async function runExpertLoop(
             } else {
               const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
               const rewrite = rewriteRenderIdsByPriceDirection(origIds, intent.direction, anchor, ctx.cache);
-              let finalIds = rewrite.ids;
-              let usedBroaden = false;
-              if (finalIds.length < 3) {
-                const broaden = await broadenPriceDirectionSearch(intent.direction, anchor, lastDiscover, ctx, budgetCap);
-                if (broaden.length >= 3) { finalIds = broaden; usedBroaden = true; }
-              }
+              const finalIds = rewrite.ids;
+              // Не зовём broadenPriceDirectionSearch: расширение по чистой цене
+              // теряет структурные фильтры исходного поиска (опции, категория)
+              // и приводит к подмене пула. Если LLM правильно отправил
+              // second-stage search_catalog с max_price/min_price + теми же
+              // options — пул валиден; если нет, лучше показать честный
+              // короткий пул, чем подменить тип товара.
               if (finalIds.length > 0 && (finalIds.length !== origIds.length || finalIds.join("|") !== origIds.join("|"))) {
                 (tc.args as Record<string, unknown>).product_ids = finalIds;
                 steps.push({
@@ -1708,10 +1709,39 @@ async function runExpertLoop(
                     before: origIds.length,
                     after: finalIds.length,
                     filtered_out: rewrite.filteredOut,
-                    broadened: usedBroaden,
+                    broadened: false,
                   },
                 });
               }
+            }
+          }
+        }
+
+        // ── Step 5b: Budget Cap Hard Post-Filter ─────────────────────────────
+        // Клиент назвал жёсткий ценовой потолок ("до X тг", "не дороже X ₸").
+        // Это самый сильный инвариант диалога: товары дороже потолка не должны
+        // попасть в render ни при каких обстоятельствах, даже если LLM забыл
+        // передать max_price в search_catalog или ценовой гард выше пропустил.
+        // Это страховка, а не основной механизм — основная работа в промпте.
+        if (tc.name === "render_products") {
+          const budgetCap = extractBudgetCap(userMessage);
+          if (budgetCap !== null && budgetCap > 0) {
+            const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
+            const kept: string[] = [];
+            let dropped = 0;
+            for (const id of origIds) {
+              const p = ctx.cache.get(id) as unknown as CachedProd | undefined;
+              if (!p || typeof p.price !== "number" || p.price <= 0) { kept.push(id); continue; }
+              if (p.price <= budgetCap) kept.push(id);
+              else dropped++;
+            }
+            if (dropped > 0) {
+              (tc.args as Record<string, unknown>).product_ids = kept;
+              steps.push({
+                step: "v3_guard_budget_cap",
+                ms: now(),
+                meta: { budget_cap: budgetCap, before: origIds.length, after: kept.length, dropped },
+              });
             }
           }
         }
