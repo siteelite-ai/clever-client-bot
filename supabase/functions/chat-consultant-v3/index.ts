@@ -1615,46 +1615,85 @@ async function runExpertLoop(
 
 
         // ── Step 5: Price Direction Guard (pre-render rewrite)
+        // Superlative ("самый дешёвый/дорогой") — просто сортируем уже
+        // выбранный LLM-ом пул по цене, ничего не выбрасываем и не расширяем.
+        // Comparative ("дешевле/дороже/в том же сегменте") — требует якоря;
+        // без якоря гард молчит и ответ остаётся за LLM.
         if (tc.name === "render_products") {
-          const dir = detectPriceDirection(userMessage);
+          const intent = detectPriceDirection(userMessage);
           const budgetCap = extractBudgetCap(userMessage);
-          const anchor = findAnchorInCache(ctx.cache, userMessage);
-          // Pre-condition: явный бюджетный потолок несовместим с "подороже относительно якоря".
-          const directionAllowed = dir && !(
-            dir === "more_expensive" && budgetCap !== null && anchor && budgetCap <= anchor.price
-          );
-          if (dir && directionAllowed) {
+          if (intent && intent.kind === "superlative") {
             const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
-            const rewrite = rewriteRenderIdsByPriceDirection(origIds, dir, anchor, ctx.cache);
-            let finalIds = rewrite.ids;
-            let usedBroaden = false;
-            if (finalIds.length < 3) {
-              const broaden = await broadenPriceDirectionSearch(dir, anchor, lastDiscover, ctx, budgetCap);
-              if (broaden.length >= 3) { finalIds = broaden; usedBroaden = true; }
+            const withPrice = origIds
+              .map((id) => ({ id, p: ctx.cache.get(id) as unknown as CachedProd | undefined }))
+              .filter((x): x is { id: string; p: CachedProd } => !!x.p && typeof x.p.price === "number" && x.p.price > 0);
+            if (withPrice.length >= 2) {
+              const sorted = [...withPrice].sort((a, b) =>
+                intent.direction === "more_expensive" ? b.p.price - a.p.price : a.p.price - b.p.price,
+              );
+              const finalIds = sorted.map((x) => x.id);
+              if (finalIds.join("|") !== origIds.join("|")) {
+                (tc.args as Record<string, unknown>).product_ids = finalIds;
+                steps.push({
+                  step: "v3_guard_price_direction",
+                  ms: now(),
+                  meta: {
+                    kind: "superlative",
+                    direction: intent.direction,
+                    before: origIds.length,
+                    after: finalIds.length,
+                    filtered_out: 0,
+                    broadened: false,
+                  },
+                });
+              }
             }
-            if (finalIds.length > 0 && (finalIds.length !== origIds.length || finalIds.join("|") !== origIds.join("|"))) {
-              (tc.args as Record<string, unknown>).product_ids = finalIds;
+          } else if (intent && intent.kind === "comparative") {
+            const anchor = findAnchorInCache(ctx.cache, userMessage);
+            // Pre-condition: явный бюджетный потолок несовместим с "подороже относительно якоря".
+            const directionAllowed = !(
+              intent.direction === "more_expensive" && budgetCap !== null && anchor && budgetCap <= anchor.price
+            );
+            if (!anchor) {
               steps.push({
-                step: "v3_guard_price_direction",
+                step: "v3_guard_price_direction_skipped",
                 ms: now(),
-                meta: {
-                  direction: dir,
-                  anchor_id: anchor?.id ?? null,
-                  anchor_price: anchor?.price ?? null,
-                  budget_cap: budgetCap,
-                  before: origIds.length,
-                  after: finalIds.length,
-                  filtered_out: rewrite.filteredOut,
-                  broadened: usedBroaden,
-                },
+                meta: { kind: "comparative", direction: intent.direction, reason: "no_anchor_in_cache" },
               });
+            } else if (!directionAllowed) {
+              steps.push({
+                step: "v3_guard_price_direction_skipped",
+                ms: now(),
+                meta: { kind: "comparative", direction: intent.direction, anchor_price: anchor.price, budget_cap: budgetCap, reason: "budget_cap_conflicts_with_direction" },
+              });
+            } else {
+              const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
+              const rewrite = rewriteRenderIdsByPriceDirection(origIds, intent.direction, anchor, ctx.cache);
+              let finalIds = rewrite.ids;
+              let usedBroaden = false;
+              if (finalIds.length < 3) {
+                const broaden = await broadenPriceDirectionSearch(intent.direction, anchor, lastDiscover, ctx, budgetCap);
+                if (broaden.length >= 3) { finalIds = broaden; usedBroaden = true; }
+              }
+              if (finalIds.length > 0 && (finalIds.length !== origIds.length || finalIds.join("|") !== origIds.join("|"))) {
+                (tc.args as Record<string, unknown>).product_ids = finalIds;
+                steps.push({
+                  step: "v3_guard_price_direction",
+                  ms: now(),
+                  meta: {
+                    kind: "comparative",
+                    direction: intent.direction,
+                    anchor_id: anchor.id,
+                    anchor_price: anchor.price,
+                    budget_cap: budgetCap,
+                    before: origIds.length,
+                    after: finalIds.length,
+                    filtered_out: rewrite.filteredOut,
+                    broadened: usedBroaden,
+                  },
+                });
+              }
             }
-          } else if (dir && !directionAllowed) {
-            steps.push({
-              step: "v3_guard_price_direction_skipped",
-              ms: now(),
-              meta: { direction: dir, anchor_price: anchor?.price ?? null, budget_cap: budgetCap, reason: "budget_cap_conflicts_with_direction" },
-            });
           }
         }
 
