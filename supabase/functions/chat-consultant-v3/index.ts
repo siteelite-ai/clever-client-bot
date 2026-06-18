@@ -848,14 +848,19 @@ function hasRectangularSizeMarker(title: string): boolean {
   return /\b\d+(?:[.,]\d+)?\s*(?:x|х|×|\*)\s*\d+(?:[.,]\d+)?\b/iu.test(title);
 }
 
-function filterReplacementCompatibleIds(ids: string[], axes: ReplacementAxis[], cache: ProductCache): string[] {
+function filterReplacementCompatibleIds(
+  ids: string[],
+  axes: ReplacementAxis[],
+  cache: ProductCache,
+  axisIdSets: Map<string, Set<string>> | null = null,
+): string[] {
   if (axes.length < 2) return ids;
   const minMatches = Math.max(2, axes.length - 1);
   const ranked: Array<{ id: string; matches: number; order: number }> = [];
   ids.forEach((id, order) => {
     const product = cache.get(id);
     if (!product) return;
-    const matchedAxes = axes.filter((axis) => productMatchesReplacementAxis(product, axis));
+    const matchedAxes = axes.filter((axis) => axisIdSets?.get(axis.key)?.has(id) || productMatchesReplacementAxis(product, axis));
     const missesDiameter = axes.some((axis) => axis.isDiameter) && !matchedAxes.some((axis) => axis.isDiameter);
     if (missesDiameter && hasRectangularSizeMarker(product.pagetitle)) return;
     if (matchedAxes.length >= minMatches) ranked.push({ id, matches: matchedAxes.length, order });
