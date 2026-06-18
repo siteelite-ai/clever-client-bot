@@ -643,17 +643,36 @@ function detectPriceDirection(msg: string): PriceIntent | null {
 type CachedProd = { id: string; price: number; pagetitle?: string; title?: string; vendor?: string | null; short_traits?: string[] };
 
 function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd | null {
-  const msg = userMessage.toLowerCase().replace(/[«»"',.()]/g, " ");
+  const msgRaw = userMessage.toLowerCase().replace(/[«»"',.()]/g, " ");
+  // Якорь срабатывает только если в реплике клиента есть хотя бы один
+  // «отличительный» токен — то, что не может случайно совпасть с любым
+  // товаром категории (артикул, арифметика сечений, модель с цифрами,
+  // длинный числовой код, или текст в кавычках). Общие существительные
+  // («кабель», «розетка», «лампа») сами по себе якорь не дают.
+  const distinctive: string[] = [];
+  // Арифметика типа "3*1,5", "2x10", "16/25" (количество ≥ одной цифры с разделителем).
+  for (const t of userMessage.matchAll(/\b\d+\s*[x×*\/]\s*\d+(?:[.,]\d+)?\b/giu)) distinctive.push(t[0].toLowerCase());
+  // Alphanumeric-код длиной ≥4: буквы и цифры в одном токене (модель, артикул).
+  for (const t of msgRaw.split(/\s+/)) {
+    const cleaned = t.replace(/[^\p{L}\p{N}-]/gu, "");
+    if (cleaned.length < 4) continue;
+    if (/\p{L}/u.test(cleaned) && /\p{N}/u.test(cleaned)) distinctive.push(cleaned);
+  }
+  // Чистое число ≥4 цифр (артикул-номер).
+  for (const t of userMessage.matchAll(/\b\d{4,}\b/g)) distinctive.push(t[0]);
+  // Текст в кавычках.
+  for (const t of userMessage.matchAll(/[«"]([^»"]{2,})[»"]/gu)) distinctive.push(t[1].toLowerCase());
+
+  if (distinctive.length === 0) return null;
+
   let best: { p: CachedProd; score: number } | null = null;
   for (const raw of cache.values()) {
     const p = raw as unknown as CachedProd;
     if (typeof p.price !== "number" || p.price <= 0) continue;
     const title = (p.pagetitle ?? p.title ?? "").toLowerCase();
-    const tokens = title.split(/[\s\-_/]+/).filter((t) => t.length >= 3 && !/^\d+$/.test(t));
-    if (tokens.length === 0) continue;
     let score = 0;
-    for (const t of tokens) if (msg.includes(t)) score++;
-    if (score >= 2 && (!best || score > best.score)) best = { p, score };
+    for (const d of distinctive) if (title.includes(d)) score++;
+    if (score >= 1 && (!best || score > best.score)) best = { p, score };
   }
   return best?.p ?? null;
 }
@@ -1669,12 +1688,13 @@ async function runExpertLoop(
             } else {
               const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
               const rewrite = rewriteRenderIdsByPriceDirection(origIds, intent.direction, anchor, ctx.cache);
-              let finalIds = rewrite.ids;
-              let usedBroaden = false;
-              if (finalIds.length < 3) {
-                const broaden = await broadenPriceDirectionSearch(intent.direction, anchor, lastDiscover, ctx, budgetCap);
-                if (broaden.length >= 3) { finalIds = broaden; usedBroaden = true; }
-              }
+              const finalIds = rewrite.ids;
+              // Не зовём broadenPriceDirectionSearch: расширение по чистой цене
+              // теряет структурные фильтры исходного поиска (опции, категория)
+              // и приводит к подмене пула. Если LLM правильно отправил
+              // second-stage search_catalog с max_price/min_price + теми же
+              // options — пул валиден; если нет, лучше показать честный
+              // короткий пул, чем подменить тип товара.
               if (finalIds.length > 0 && (finalIds.length !== origIds.length || finalIds.join("|") !== origIds.join("|"))) {
                 (tc.args as Record<string, unknown>).product_ids = finalIds;
                 steps.push({
@@ -1689,10 +1709,39 @@ async function runExpertLoop(
                     before: origIds.length,
                     after: finalIds.length,
                     filtered_out: rewrite.filteredOut,
-                    broadened: usedBroaden,
+                    broadened: false,
                   },
                 });
               }
+            }
+          }
+        }
+
+        // ── Step 5b: Budget Cap Hard Post-Filter ─────────────────────────────
+        // Клиент назвал жёсткий ценовой потолок ("до X тг", "не дороже X ₸").
+        // Это самый сильный инвариант диалога: товары дороже потолка не должны
+        // попасть в render ни при каких обстоятельствах, даже если LLM забыл
+        // передать max_price в search_catalog или ценовой гард выше пропустил.
+        // Это страховка, а не основной механизм — основная работа в промпте.
+        if (tc.name === "render_products") {
+          const budgetCap = extractBudgetCap(userMessage);
+          if (budgetCap !== null && budgetCap > 0) {
+            const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
+            const kept: string[] = [];
+            let dropped = 0;
+            for (const id of origIds) {
+              const p = ctx.cache.get(id) as unknown as CachedProd | undefined;
+              if (!p || typeof p.price !== "number" || p.price <= 0) { kept.push(id); continue; }
+              if (p.price <= budgetCap) kept.push(id);
+              else dropped++;
+            }
+            if (dropped > 0) {
+              (tc.args as Record<string, unknown>).product_ids = kept;
+              steps.push({
+                step: "v3_guard_budget_cap",
+                ms: now(),
+                meta: { budget_cap: budgetCap, before: origIds.length, after: kept.length, dropped },
+              });
             }
           }
         }
