@@ -2111,6 +2111,10 @@ async function runExpertLoop(
 
         if (tc.name === "discover_category" && result.ok) {
           lastDiscover = result as unknown as DiscoverCategoryOk;
+          addToWhitelist(lastDiscover.category?.pagetitle);
+          for (const leaf of lastDiscover.leaf_categories ?? []) {
+            addToWhitelist(leaf.pagetitle);
+          }
         }
 
 
