@@ -7,6 +7,8 @@ export interface ProductRef {
   price: number;
   stock: "in_stock" | "low" | "out" | "unknown";
   short_traits: string[];
+  /** Pagetitle листовой категории товара (если API его вернул). Источник L₀ для режима «аналог». */
+  leaf_category?: string | null;
 }
 
 export interface ProductFull extends ProductRef {
@@ -50,6 +52,8 @@ export interface SearchCatalogOk {
   mode: string;
   total: number;
   results: ProductRef[];
+  /** Серверные предупреждения (например, anchor_leaf_category_injected:<L₀>). */
+  warnings?: string[];
   side_effects?: ToolSideEffect[];
 }
 

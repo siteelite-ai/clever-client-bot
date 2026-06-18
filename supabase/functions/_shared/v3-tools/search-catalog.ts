@@ -34,6 +34,13 @@ export interface SearchCatalogInput {
   page?: number;
   per_page?: number;
   sort_cheapest?: boolean;
+  /**
+   * L₀ — листовая категория ЯКОРЯ для режима «аналог» (берётся из anchor.leaf_category).
+   * Если задана и отсутствует в category/category_in — сервер автоматически инжектирует её
+   * и возвращает warning. Защита от случая, когда LLM «забыл» L₀ или discover_category
+   * не вернул L₀ среди leaf_categories.
+   */
+  anchor_leaf_category?: string;
 }
 
 function inferStock(p: Record<string, unknown>): ProductRef["stock"] {
@@ -63,6 +70,30 @@ function extractTraits(p: Record<string, unknown>): string[] {
     out.push(line);
   }
   return out;
+}
+
+/**
+ * Достаём pagetitle листовой категории товара из любого варианта формы ответа /products.
+ * Поддерживаем: raw.category (строка), raw.category.pagetitle, raw.categories[0].pagetitle.
+ * Data-agnostic — никаких хардкодов.
+ */
+function extractLeafCategory(p: Record<string, unknown>): string | null {
+  const c = p.category;
+  if (typeof c === "string" && c.trim()) return c.trim();
+  if (c && typeof c === "object") {
+    const pt = (c as Record<string, unknown>).pagetitle;
+    if (typeof pt === "string" && pt.trim()) return pt.trim();
+  }
+  const cs = p.categories;
+  if (Array.isArray(cs) && cs.length > 0) {
+    const first = cs[0] as Record<string, unknown> | string | undefined;
+    if (typeof first === "string" && first.trim()) return first.trim();
+    if (first && typeof first === "object") {
+      const pt = (first as Record<string, unknown>).pagetitle;
+      if (typeof pt === "string" && pt.trim()) return pt.trim();
+    }
+  }
+  return null;
 }
 
 type SingleSearchResult =
@@ -138,6 +169,7 @@ async function singleSearch(
         id, pagetitle, vendor, price,
         stock: inferStock(raw),
         short_traits: extractTraits(raw),
+        leaf_category: extractLeafCategory(raw),
       };
       cache.set(id, { ...ref, url: u });
       results.push(ref);
@@ -180,11 +212,23 @@ export async function executeSearchCatalog(
     }
   }
 
+  // ANCHOR-L₀ INCONSISTENCY GUARD: если задан anchor_leaf_category и его нет в category_in —
+  // инжектируем (как ПЕРВУЮ категорию) и помечаем warning'ом. Без хардкодов: работает на любую категорию.
+  const warnings: string[] = [];
+  if (input.mode === "by_filter" && typeof input.anchor_leaf_category === "string" && input.anchor_leaf_category.trim()) {
+    const anchorCat = input.anchor_leaf_category.trim();
+    if (!seenCat.has(anchorCat)) {
+      categories.unshift(anchorCat);
+      seenCat.add(anchorCat);
+      warnings.push(`anchor_leaf_category_injected:${anchorCat}`);
+    }
+  }
+
   // Один запрос: либо нет category fan-out, либо ровно одна категория.
   if (categories.length <= 1) {
     const r = await singleSearch(input, deps, cache, categories[0]);
     if (!r.ok) return { tool: "search_catalog", ok: false, error_code: r.error_code, message: r.message };
-    return { tool: "search_catalog", ok: true, mode: input.mode, total: r.total, results: r.results };
+    return { tool: "search_catalog", ok: true, mode: input.mode, total: r.total, results: r.results, ...(warnings.length ? { warnings } : {}) };
   }
 
   // Fan-out: параллельные запросы по каждой листовой категории, merge с дедупликацией по id.
@@ -213,5 +257,6 @@ export async function executeSearchCatalog(
     mode: input.mode,
     total: totalSum, // суммарный total по веткам (грубая оценка; дедуп — на уровне results)
     results: merged.slice(0, perPage),
+    ...(warnings.length ? { warnings } : {}),
   };
 }
