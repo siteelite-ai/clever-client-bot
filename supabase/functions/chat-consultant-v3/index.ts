@@ -800,22 +800,43 @@ function dialogueChoiceSystemHint(choice: DialogueChoiceResolution): string {
   return `<dialogue_resolution>В прошлом ходе ассистент задал альтернативный вопрос: "${choice.question}". Текущая реплика клиента выбрала: "${choice.chosen}". Не выбранные альтернативы считаются ослабленными/неактивными, если клиент не повторил их в текущей реплике: ${choice.relaxed.map((x) => `"${x}"`).join(", ") || "нет"}. Не требуй ослабленные признаки и не задавай тот же выбор заново.</dialogue_resolution>`;
 }
 
-function relaxSearchOptionsFromDialogueChoice(
+function relaxToolArgsFromDialogueChoice(
   args: Record<string, unknown>,
   choice: DialogueChoiceResolution | null,
   userMessage: string,
 ): { args: Record<string, unknown>; removed: Array<{ key: string; value: string; relaxed_by: string }> } | null {
-  if (!choice || args.mode !== "by_filter" || !args.options || typeof args.options !== "object") return null;
+  if (!choice) return null;
   const relaxedText = choice.relaxed.join("\n");
   if (!relaxedText.trim()) return null;
-  const nextOptions: Record<string, string[]> = {};
+  const nextArgs = { ...args };
   const removed: Array<{ key: string; value: string; relaxed_by: string }> = [];
+
+  const shouldRelax = (value: string) => {
+    const relaxedBy = choice.relaxed.find((label) => valueIsEvidenced(value, label) || optionMatchScore(label, value) > 0);
+    const repeatedNow = valueIsEvidenced(value, userMessage) || optionMatchScore(value, userMessage) > 0;
+    return relaxedBy && !repeatedNow ? relaxedBy : null;
+  };
+
+  if (Array.isArray(args.modifiers)) {
+    const kept: string[] = [];
+    for (const value of args.modifiers.map(String).filter(Boolean)) {
+      const relaxedBy = shouldRelax(value);
+      if (relaxedBy) removed.push({ key: "modifiers", value, relaxed_by: relaxedBy });
+      else kept.push(value);
+    }
+    if (kept.length !== args.modifiers.length) nextArgs.modifiers = kept;
+  }
+
+  if (args.mode !== "by_filter" || !args.options || typeof args.options !== "object") {
+    return removed.length > 0 ? { args: nextArgs, removed } : null;
+  }
+
+  const nextOptions: Record<string, string[]> = {};
   for (const [key, rawVals] of Object.entries(args.options as Record<string, unknown>)) {
     const vals = Array.isArray(rawVals) ? rawVals.map(String).filter(Boolean) : [];
     for (const value of vals) {
-      const relaxedBy = choice.relaxed.find((label) => valueIsEvidenced(value, label) || optionMatchScore(label, value) > 0);
-      const repeatedNow = valueIsEvidenced(value, userMessage) || optionMatchScore(value, userMessage) > 0;
-      if (relaxedBy && !repeatedNow) {
+      const relaxedBy = shouldRelax(value);
+      if (relaxedBy) {
         removed.push({ key, value, relaxed_by: relaxedBy });
         continue;
       }
@@ -823,7 +844,6 @@ function relaxSearchOptionsFromDialogueChoice(
     }
   }
   if (removed.length === 0) return null;
-  const nextArgs = { ...args };
   if (Object.keys(nextOptions).length > 0) nextArgs.options = nextOptions;
   else delete nextArgs.options;
   return { args: nextArgs, removed };
