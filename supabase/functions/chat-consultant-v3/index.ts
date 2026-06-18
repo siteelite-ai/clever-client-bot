@@ -772,8 +772,8 @@ function replacementSearchProfile(anchor: { pagetitle: string; short_traits?: st
   const mountRaw = traitValue(anchor, /(^| )(montazh|монтаж|ustanov|установ|kreplen|креплен)( |$)/u);
 
   const base = baseRaw ? codeCompact(baseRaw) : (anchorText.match(/\b[\p{L}]{1,4}\s*\d{1,4}\b/iu)?.[0] ? codeCompact(anchorText.match(/\b[\p{L}]{1,4}\s*\d{1,4}\b/iu)![0]) : null);
-  const power = firstNumericToken(powerRaw) ?? anchorText.match(/\b\d+(?:[.,]\d+)?\s*(?:w|вт|ватт)\b/iu)?.[0]?.replace(/\s+/g, "");
-  const temp = firstNumericToken(tempRaw) ?? anchorText.match(/\b\d{3,5}\s*(?:k|к)\b/iu)?.[0]?.replace(/\s+/g, "");
+  const power = firstNumericToken(powerRaw) ?? firstNumericToken(anchorText.match(/\b\d+(?:[.,]\d+)?\s*(?:w|вт|ватт)\b/iu)?.[0] ?? null);
+  const temp = firstNumericToken(tempRaw) ?? firstNumericToken(anchorText.match(/\b\d{3,5}\s*(?:k|к)\b/iu)?.[0] ?? null);
   const diameter = firstNumericToken(diameterRaw) ?? anchorText.match(/\bD\s*\d{2,4}\b/iu)?.[0]?.replace(/^D\s*/iu, "");
   const mount = mountRaw ? compactValue(mountRaw) : null;
 
