@@ -836,7 +836,7 @@ async function runCatalogOnlyReplacementFallback(
   send: (ev: SseEvent) => void,
   steps: StepLog[],
   now: () => number,
-): Promise<number> {
+): Promise<{ handled: boolean; rendered: number }> {
   const deps = { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken };
   const anchorText = extractReplacementAnchorText(userMessage);
   send({ type: "tool_event", tool: "search_catalog", phase: "start", summary: "резервный поиск якорного товара" });
@@ -847,7 +847,7 @@ async function runCatalogOnlyReplacementFallback(
   }
   if (!anchorSearch.ok || anchorSearch.results.length === 0) {
     steps.push({ step: "v3_catalog_only_recovery", ms: now(), meta: { status: "anchor_not_found" } });
-    return 0;
+    return { handled: false, rendered: 0 };
   }
 
   const anchor = anchorSearch.results[0];
@@ -881,16 +881,17 @@ async function runCatalogOnlyReplacementFallback(
 
   if (candidates.length === 0) {
     steps.push({ step: "v3_catalog_only_recovery", ms: now(), meta: { status: "no_compatible_candidates", anchor_id: anchor.id, profile } });
-    return 0;
+    send({ type: "delta", content: `\n\nНашёл исходный товар, но резервный поиск по каталогу не нашёл полноценный аналог другой серии с теми же ключевыми параметрами${profile.base ? ` (цоколь ${profile.base}` : ""}${profile.power ? `${profile.base ? ", " : " ("}мощность ${profile.power}Вт` : ""}${profile.base || profile.power ? ")" : ""}. Сейчас ещё недоступен AI-баланс для расширенной проверки — лучше уточнить замену у менеджера.` });
+    return { handled: true, rendered: 0 };
   }
 
   const render = executeRenderProducts({ product_ids: candidates, total_available: candidates.length }, ctx.cache);
-  if (!render.ok) return 0;
+  if (!render.ok) return { handled: false, rendered: 0 };
   send({ type: "tool_event", tool: "search_catalog", phase: "result", duration_ms: 0, summary: `резервно найдено ${candidates.length}` });
   send({ type: "tool_event", tool: "render_products", phase: "result", duration_ms: 0, summary: `показано ${render.rendered_count}` });
   send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: candidates.length });
   steps.push({ step: "v3_catalog_only_recovery", ms: now(), meta: { status: "rendered", anchor_id: anchor.id, rendered: render.rendered_count, profile } });
-  return render.rendered_count;
+  return { handled: true, rendered: render.rendered_count };
 }
 
 // ─── Step C: Honest-Split Fallback ──────────────────────────────────────────
