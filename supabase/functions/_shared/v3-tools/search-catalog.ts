@@ -162,6 +162,7 @@ async function singleSearch(
         id, pagetitle, vendor, price,
         stock: inferStock(raw),
         short_traits: extractTraits(raw),
+        leaf_category: extractLeafCategory(raw),
       };
       cache.set(id, { ...ref, url: u });
       results.push(ref);
