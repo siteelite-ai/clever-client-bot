@@ -1493,6 +1493,21 @@ async function runExpertLoop(
   let productsRendered = 0;
   let firstAssistantText = "";
   let lastDiscover: DiscoverCategoryOk | null = null;
+  // Session-wide whitelist of category pagetitles discovered via discover_category.
+  // Source of truth for `category` / `category_in` in search_catalog calls.
+  // Prevents LLM hallucinating category names (e.g. "Уличные светильники" вместо
+  // discovered "Светильники") which would cause filtered search to return 0
+  // and force a noisy by_query fallback.
+  const categoryWhitelist = new Set<string>();
+  const normCat = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+  const whitelistNorm = new Set<string>();
+  const addToWhitelist = (pt: string | undefined | null) => {
+    if (!pt) return;
+    const v = String(pt).trim();
+    if (!v) return;
+    categoryWhitelist.add(v);
+    whitelistNorm.add(normCat(v));
+  };
 
   // Step 6 state: fresh-but-unshown product pool from latest successful search.
   let freshSearch: { tool: string; ids: string[]; total: number } | null = null;
