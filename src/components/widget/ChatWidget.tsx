@@ -321,24 +321,12 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
   // can show a pressed state while all others are visibly disabled.
   const [pendingQuickReply, setPendingQuickReply] = useState<string | null>(null);
 
-  // Active pipeline endpoint, resolved at mount via widget-config.
-  // Default to v1 so the widget works even if the config call is delayed.
-  const [endpoint, setEndpoint] = useState<{ pipeline: PipelineVersion; url: string }>({
-    pipeline: 'v1',
-    url: ENDPOINT_BY_PIPELINE.v1,
+  // Active pipeline endpoint — V3 only, no resolution needed.
+  const [endpoint] = useState<{ pipeline: PipelineVersion; url: string }>({
+    pipeline: 'v3',
+    url: V3_ENDPOINT,
   });
-  const [endpointReady, setEndpointReady] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    resolvePipelineEndpoint().then((resolved) => {
-      if (!cancelled) {
-        setEndpoint(resolved);
-        setEndpointReady(true);
-        console.log(`[Widget] active pipeline = ${resolved.pipeline}`);
-      }
-    });
-    return () => { cancelled = true; };
-  }, []);
+  const endpointReady = true;
 
   const handleSend = useCallback(async (overrideText?: string) => {
     const text = (overrideText ?? input).trim();
