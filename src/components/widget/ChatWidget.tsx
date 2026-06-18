@@ -100,6 +100,7 @@ async function streamChat({
             .filter(m => m.role === 'user' || m.role === 'assistant')
             .slice(0, -1) // last user turn is in `message`
             .map(m => ({ role: m.role, content: m.content })),
+          slots: activeSlots,
         }
       : {
           conversationId,
