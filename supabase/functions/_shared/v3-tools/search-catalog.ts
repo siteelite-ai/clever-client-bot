@@ -279,14 +279,14 @@ export async function executeSearchCatalog(
 
   // Один запрос: либо нет category fan-out, либо ровно одна категория.
   if (categories.length <= 1) {
-    const r = await singleSearch(input, deps, cache, categories[0]);
+    const r = await singleSearchSorted(input, deps, cache, categories[0], warnings);
     if (!r.ok) return { tool: "search_catalog", ok: false, error_code: r.error_code, message: r.message };
     return { tool: "search_catalog", ok: true, mode: input.mode, total: r.total, results: r.results, ...(warnings.length ? { warnings } : {}) };
   }
 
   // Fan-out: параллельные запросы по каждой листовой категории, merge с дедупликацией по id.
   const settled = await Promise.all(
-    categories.map((cat) => singleSearch(input, deps, cache, cat)),
+    categories.map((cat) => singleSearchSorted(input, deps, cache, cat, warnings)),
   );
   const okResults = settled.filter((r): r is Extract<SingleSearchResult, { ok: true }> => r.ok);
   if (okResults.length === 0) {
@@ -303,6 +303,9 @@ export async function executeSearchCatalog(
     }
   }
   const merged = [...mergedById.values()];
+  // После fan-out пересортируем мердж, если запрошена сортировка по цене,
+  // т.к. слияние нескольких листьев нарушает порядок.
+  if (input.sort_cheapest) merged.sort((a, b) => a.price - b.price);
   const perPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
   return {
     tool: "search_catalog",
