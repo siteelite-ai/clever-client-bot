@@ -725,6 +725,7 @@ interface ReplacementAxis {
   key: string;
   caption: string;
   values: string[];
+  unit: string | null;
   isDiameter: boolean;
 }
 
@@ -733,19 +734,38 @@ function isDiameterFacet(facet: Pick<Facet, "key" | "caption">): boolean {
   return /(^| )(diametr|diameter|диаметр)( |$)/u.test(haystack);
 }
 
-function buildReplacementAxes(args: Record<string, unknown>, lastDiscover: DiscoverCategoryOk | null): ReplacementAxis[] {
+function buildReplacementAxes(args: Record<string, unknown>, lastDiscover: DiscoverCategoryOk | null, evidenceText: string): ReplacementAxis[] {
   if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) return [];
   const options = (args as { options?: Record<string, unknown> }).options;
   if (!options || typeof options !== "object") return [];
   const axes: ReplacementAxis[] = [];
   for (const [key, raw] of Object.entries(options)) {
-    const values = Array.isArray(raw) ? raw.map(String).filter(Boolean) : [];
+    const values = Array.isArray(raw)
+      ? raw.map(String).filter((v) => v.length > 0 && valueIsEvidenced(v, evidenceText))
+      : [];
     if (values.length === 0) continue;
     const facet = lastDiscover.facets.find((f) => f.key === key);
     if (!facet) continue;
-    axes.push({ key, caption: facet.caption, values, isDiameter: isDiameterFacet(facet) });
+    axes.push({ key, caption: facet.caption, values, unit: facet.unit ?? null, isDiameter: isDiameterFacet(facet) });
   }
   return axes;
+}
+
+function leafScopeSearchArgs(
+  args: Record<string, unknown>,
+  lastDiscover: DiscoverCategoryOk | null,
+): { args: Record<string, unknown>; scoped: boolean; reason: string | null } {
+  if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) return { args, scoped: false, reason: null };
+  const leaves = (lastDiscover.leaf_categories ?? []).map((l) => l.pagetitle).filter(Boolean);
+  if (leaves.length === 0) return { args, scoped: false, reason: null };
+  const category = typeof args.category === "string" ? args.category : null;
+  const categoryIn = Array.isArray(args.category_in) ? args.category_in.map(String).filter(Boolean) : [];
+  if (categoryIn.length > 0 || (category && leaves.includes(category))) return { args, scoped: false, reason: null };
+  if (!category || category === lastDiscover.category.pagetitle) {
+    const { category: _category, ...rest } = args;
+    return { args: { ...rest, category_in: leaves }, scoped: true, reason: category ? "umbrella_category_rewritten" : "missing_category_injected" };
+  }
+  return { args, scoped: false, reason: null };
 }
 
 function canonicalizeSearchOptionsFromDiscover(
@@ -776,7 +796,30 @@ function canonicalizeSearchOptionsFromDiscover(
   return { args: { ...args, options: nextOptions }, rewrites };
 }
 
-function productMatchesReplacementAxis(product: { short_traits?: string[] }, axis: ReplacementAxis): boolean {
+function extractNumbers(text: string): number[] {
+  return (text.match(/\d+(?:[.,]\d+)?/g) ?? [])
+    .map((n) => Number(n.replace(",", ".")))
+    .filter((n) => Number.isFinite(n));
+}
+
+function numericAxisValueMatches(target: string, text: string, axis: ReplacementAxis): boolean {
+  const targets = extractNumbers(target);
+  if (targets.length === 0) return false;
+  const actual = extractNumbers(text);
+  if (actual.some((n) => targets.some((t) => Math.abs(n - t) < 0.0001))) return true;
+  if (axis.isDiameter) {
+    return actual.some((n) => targets.some((t) => Math.abs(n - t * 10) < 0.0001 || Math.abs(n * 10 - t) < 0.0001));
+  }
+  return false;
+}
+
+function axisValueMatchesText(target: string, text: string, axis: ReplacementAxis): boolean {
+  if (!target || !text) return false;
+  if (/\d/.test(target)) return numericAxisValueMatches(target, text, axis);
+  return facetValueEquals(text, target) || valueIsEvidenced(target, text);
+}
+
+function productMatchesReplacementAxis(product: { pagetitle?: string; short_traits?: string[] }, axis: ReplacementAxis): boolean {
   const captionNorm = normalizeForMatch(axis.caption);
   for (const line of product.short_traits ?? []) {
     const [rawCaption, ...rawValue] = line.split(":");
@@ -784,8 +827,10 @@ function productMatchesReplacementAxis(product: { short_traits?: string[] }, axi
     if (normalizeForMatch(rawCaption) !== captionNorm) continue;
     const actual = rawValue.join(":").trim();
     if (!actual) continue;
-    if (axis.values.some((target) => facetValueEquals(actual, target) || valueIsEvidenced(target, actual))) return true;
+    if (axis.values.some((target) => axisValueMatchesText(target, actual, axis))) return true;
   }
+  const haystack = `${product.pagetitle ?? ""} ${(product.short_traits ?? []).join(" ")}`;
+  if (axis.values.some((target) => axisValueMatchesText(target, haystack, axis))) return true;
   return false;
 }
 
