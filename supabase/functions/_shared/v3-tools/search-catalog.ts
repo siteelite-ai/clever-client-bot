@@ -183,6 +183,59 @@ async function singleSearch(
   }
 }
 
+/**
+ * Sort-aware fetch: API 220volt не поддерживает sort. Когда нужна сортировка по цене
+ * (sort_cheapest=true), тянем до MAX_SORT_FETCH товаров (fan-out по страницам с per_page=50),
+ * сортируем на нашей стороне и обрезаем до запрошенного per_page. `total` сохраняем честный —
+ * из первого ответа API. Если в категории больше MAX_SORT_FETCH товаров — добавляем warning
+ * sort_truncated, чтобы вызывающая сторона знала, что "самый дешёвый" мог быть пропущен.
+ */
+const SORT_PAGE_SIZE = 50;
+const MAX_SORT_FETCH = 200; // 4 страницы × 50 — потолок защиты от тяжёлых категорий
+
+async function singleSearchSorted(
+  input: SearchCatalogInput,
+  deps: CatalogClientDeps,
+  cache: ProductCache,
+  categoryOverride: string | undefined,
+  warnings: string[],
+): Promise<SingleSearchResult> {
+  if (!input.sort_cheapest) {
+    return singleSearch(input, deps, cache, categoryOverride);
+  }
+  const requestedPerPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
+  // Первая страница — узнаём total.
+  const first = await singleSearch(
+    { ...input, per_page: SORT_PAGE_SIZE, page: 1 },
+    deps,
+    cache,
+    categoryOverride,
+  );
+  if (!first.ok) return first;
+  const all: ProductRef[] = [...first.results];
+  const totalApi = first.total;
+  const cap = Math.min(totalApi, MAX_SORT_FETCH);
+  const pagesNeeded = Math.ceil(cap / SORT_PAGE_SIZE);
+  if (pagesNeeded > 1) {
+    const extra = await Promise.all(
+      Array.from({ length: pagesNeeded - 1 }, (_, i) =>
+        singleSearch({ ...input, per_page: SORT_PAGE_SIZE, page: i + 2 }, deps, cache, categoryOverride),
+      ),
+    );
+    for (const r of extra) {
+      if (r.ok) all.push(...r.results);
+    }
+  }
+  // Дедуп по id (на случай если API повторит товар на стыке страниц).
+  const byId = new Map<string, ProductRef>();
+  for (const p of all) if (!byId.has(p.id)) byId.set(p.id, p);
+  const sorted = [...byId.values()].sort((a, b) => a.price - b.price);
+  if (totalApi > MAX_SORT_FETCH) {
+    warnings.push(`sort_truncated:${totalApi}>${MAX_SORT_FETCH}`);
+  }
+  return { ok: true, total: totalApi, results: sorted.slice(0, requestedPerPage) };
+}
+
 export async function executeSearchCatalog(
   input: SearchCatalogInput,
   deps: CatalogClientDeps,
