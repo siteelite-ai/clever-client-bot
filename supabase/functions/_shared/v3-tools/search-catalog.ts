@@ -34,6 +34,13 @@ export interface SearchCatalogInput {
   page?: number;
   per_page?: number;
   sort_cheapest?: boolean;
+  /**
+   * L₀ — листовая категория ЯКОРЯ для режима «аналог» (берётся из anchor.leaf_category).
+   * Если задана и отсутствует в category/category_in — сервер автоматически инжектирует её
+   * и возвращает warning. Защита от случая, когда LLM «забыл» L₀ или discover_category
+   * не вернул L₀ среди leaf_categories.
+   */
+  anchor_leaf_category?: string;
 }
 
 function inferStock(p: Record<string, unknown>): ProductRef["stock"] {
