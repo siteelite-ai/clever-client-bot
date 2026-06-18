@@ -2072,15 +2072,16 @@ Deno.serve(async (req) => {
 
       steps.push({ step: "v3_turn_start", ms: 0, meta: { user_message: userMessage, session_id: sessionId } });
 
+      const cache: ProductCache = new Map();
+      const ctx: ToolContext = {
+        cache,
+        supabase,
+        catalogToken: settings.volt220_api_token!,
+        openrouterKey: settings.openrouter_api_key!,
+        sessionId,
+      };
+
       try {
-        const cache: ProductCache = new Map();
-        const ctx: ToolContext = {
-          cache,
-          supabase,
-          catalogToken: settings.volt220_api_token!,
-          openrouterKey: settings.openrouter_api_key!,
-          sessionId,
-        };
         const out = await runExpertLoop(userMessage, history, settings.openrouter_api_key!, ctx, send, steps, t0);
         productsCount = out.productsRendered;
       } catch (e) {
