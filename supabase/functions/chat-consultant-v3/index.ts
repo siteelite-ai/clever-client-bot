@@ -756,6 +756,18 @@ function firstNumericToken(value: string | null): string | null {
   return n ? n.replace(",", ".") : null;
 }
 
+function unitNumber(text: string, unit: RegExp): string | null {
+  const re = new RegExp(`(?:^|[^\\p{L}\\p{N}])(\\d+(?:[.,]\\d+)?)\\s*(?:${unit.source})(?=$|[^\\p{L}\\p{N}])`, "iu");
+  return text.match(re)?.[1]?.replace(",", ".") ?? null;
+}
+
+function lastSocketLikeToken(text: string): string | null {
+  const matches = [...text.matchAll(/\b[\p{L}]{1,4}\s*\d{1,4}\b/giu)]
+    .map((m) => codeCompact(m[0]))
+    .filter((v) => /\p{L}/u.test(v) && /\d/u.test(v));
+  return matches.length > 0 ? matches[matches.length - 1] : null;
+}
+
 function productKindFromTitle(title: string): string {
   const words = title
     .replace(/[«»"',.()/]/g, " ")
@@ -768,15 +780,15 @@ function productKindFromTitle(title: string): string {
 function replacementSearchProfile(anchor: { pagetitle: string; short_traits?: string[] }, anchorText: string) {
   const title = anchor.pagetitle || anchorText;
   const kind = productKindFromTitle(title);
-  const baseRaw = traitValue(anchor, /(^| )(cokol|цокол|base|patron)( |$)/u);
+  const baseRaw = traitValue(anchor, /(^| )(cokol|цокол|base|patron|патрон)( |$)/u);
   const powerRaw = traitValue(anchor, /(^| )(moschn|мощн|power|watt|ватт)( |$)/u);
-  const tempRaw = traitValue(anchor, /(^| )(temperatur|температур|kelvin|кельвин)( |$)/u);
+  const tempRaw = traitValue(anchor, /(cvetovaya\s+temperatur|цветовая\s+температур|kelvin|кельвин)/u);
   const diameterRaw = traitValue(anchor, /(^| )(diametr|diameter|диаметр)( |$)/u);
   const mountRaw = traitValue(anchor, /(^| )(montazh|монтаж|ustanov|установ|kreplen|креплен)( |$)/u);
 
-  const base = baseRaw ? codeCompact(baseRaw) : (anchorText.match(/\b[\p{L}]{1,4}\s*\d{1,4}\b/iu)?.[0] ? codeCompact(anchorText.match(/\b[\p{L}]{1,4}\s*\d{1,4}\b/iu)![0]) : null);
-  const power = firstNumericToken(powerRaw) ?? firstNumericToken(anchorText.match(/\b\d+(?:[.,]\d+)?\s*(?:w|вт|ватт)\b/iu)?.[0] ?? null);
-  const temp = firstNumericToken(tempRaw) ?? firstNumericToken(anchorText.match(/\b\d{3,5}\s*(?:k|к)\b/iu)?.[0] ?? null);
+  const base = baseRaw ? codeCompact(baseRaw) : lastSocketLikeToken(anchorText);
+  const power = firstNumericToken(powerRaw) ?? unitNumber(anchorText, /w|вт|ватт/u);
+  const temp = firstNumericToken(tempRaw) ?? unitNumber(anchorText, /k|к/u);
   const diameter = firstNumericToken(diameterRaw) ?? anchorText.match(/\bD\s*\d{2,4}\b/iu)?.[0]?.replace(/^D\s*/iu, "");
   const mount = mountRaw ? compactValue(mountRaw) : null;
 
