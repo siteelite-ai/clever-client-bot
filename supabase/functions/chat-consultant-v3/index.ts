@@ -809,11 +809,13 @@ async function tryPriceDirectionRescue(
   steps: StepLog[],
   now: () => number,
 ): Promise<number> {
-  const dir = detectPriceDirection(userMessage);
-  if (!dir) return 0;
-  const anchor = findAnchorInCache(ctx.cache, userMessage);
+  const intent = detectPriceDirection(userMessage);
+  if (!intent) return 0;
+  const anchor = intent.kind === "comparative" ? findAnchorInCache(ctx.cache, userMessage) : null;
+  // Comparative-rescue без якоря бессмыслен — гард молчит, отвечает LLM.
+  if (intent.kind === "comparative" && !anchor) return 0;
   const budgetCap = extractBudgetCap(userMessage);
-  const ids = await broadenPriceDirectionSearch(dir, anchor, lastDiscover, ctx, budgetCap);
+  const ids = await broadenPriceDirectionSearch(intent.direction, anchor, lastDiscover, ctx, budgetCap);
   if (ids.length === 0) return 0;
   const render = await executeRenderProducts({ product_ids: ids, total_available: ids.length } as RenderProductsInput, ctx.cache);
   if (!render.ok) return 0;
@@ -823,7 +825,7 @@ async function tryPriceDirectionRescue(
   steps.push({
     step: "v3_guard_price_rescue",
     ms: now(),
-    meta: { direction: dir, anchor_id: anchor?.id ?? null, anchor_price: anchor?.price ?? null, rendered: render.rendered_count },
+    meta: { kind: intent.kind, direction: intent.direction, anchor_id: anchor?.id ?? null, anchor_price: anchor?.price ?? null, rendered: render.rendered_count },
   });
   return render.rendered_count;
 }
