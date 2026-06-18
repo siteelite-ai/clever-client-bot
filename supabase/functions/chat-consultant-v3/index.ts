@@ -1708,6 +1708,51 @@ async function runExpertLoop(
           }
         }
 
+        // ── Category Whitelist Guard
+        // Если LLM передал в search_catalog `category` / `category_in`, которые
+        // не встречались ни в одном discover_category этого диалога — это
+        // галлюцинация имени категории. Мягко подменяем на pagetitle последнего
+        // discover_category (если он есть) и логируем. Если discover_category
+        // ещё не вызывался — passthrough с логом `v3_category_unverified`
+        // (не блокируем, чтобы не сломать legacy-сценарии).
+        if (tc.name === "search_catalog") {
+          const a = tc.args as Record<string, unknown>;
+          const rawCategory = typeof a.category === "string" ? a.category : null;
+          const rawCategoryIn = Array.isArray(a.category_in) ? a.category_in.map(String).filter(Boolean) : [];
+          const allRequested = [...(rawCategory ? [rawCategory] : []), ...rawCategoryIn];
+          if (allRequested.length > 0) {
+            if (whitelistNorm.size === 0) {
+              steps.push({
+                step: "v3_category_unverified",
+                ms: now(),
+                meta: { requested: allRequested, reason: "no_discover_category_yet" },
+              });
+            } else {
+              const bad = allRequested.filter((c) => !whitelistNorm.has(normCat(c)));
+              if (bad.length > 0) {
+                const fallbackCategory = lastDiscover?.category?.pagetitle ?? null;
+                const fallbackLeaves = (lastDiscover?.leaf_categories ?? []).map((l) => l.pagetitle).filter(Boolean);
+                const replacement = fallbackLeaves.length > 0 ? fallbackLeaves : (fallbackCategory ? [fallbackCategory] : []);
+                if (replacement.length > 0) {
+                  const { category: _c, category_in: _ci, ...rest } = a;
+                  tc.args = replacement.length === 1
+                    ? { ...rest, category: replacement[0] }
+                    : { ...rest, category_in: replacement };
+                  steps.push({
+                    step: "v3_category_whitelist_corrected",
+                    ms: now(),
+                    meta: {
+                      hallucinated: bad,
+                      replaced_with: replacement,
+                      whitelist_size: whitelistNorm.size,
+                    },
+                  });
+                }
+              }
+            }
+          }
+        }
+
         const scoped = tc.name === "search_catalog" ? leafScopeSearchArgs(tc.args, lastDiscover, replacementIntent) : null;
         if (scoped?.scoped) {
           steps.push({
