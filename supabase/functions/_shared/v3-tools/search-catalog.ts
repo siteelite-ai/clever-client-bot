@@ -257,5 +257,6 @@ export async function executeSearchCatalog(
     mode: input.mode,
     total: totalSum, // суммарный total по веткам (грубая оценка; дедуп — на уровне results)
     results: merged.slice(0, perPage),
+    ...(warnings.length ? { warnings } : {}),
   };
 }
