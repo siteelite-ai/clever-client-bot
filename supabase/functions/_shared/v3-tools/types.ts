@@ -52,6 +52,8 @@ export interface SearchCatalogOk {
   mode: string;
   total: number;
   results: ProductRef[];
+  /** Серверные предупреждения (например, anchor_leaf_category_injected:<L₀>). */
+  warnings?: string[];
   side_effects?: ToolSideEffect[];
 }
 
