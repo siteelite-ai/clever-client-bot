@@ -796,6 +796,34 @@ function resolveDialogueChoice(
   };
 }
 
+function resolvePendingClarificationChoice(
+  slots: Record<string, unknown>,
+  userMessage: string,
+): DialogueChoiceResolution | null {
+  const pending = slots.pending_clarification;
+  if (!pending || typeof pending !== "object") return null;
+  const p = pending as { question?: unknown; options?: unknown };
+  const options = Array.isArray(p.options)
+    ? p.options
+      .map((o) => typeof o === "string" ? o : o && typeof o === "object" ? String((o as Record<string, unknown>).value ?? (o as Record<string, unknown>).label ?? "") : "")
+      .map(cleanDialogueOptionLabel)
+      .filter((x) => x.length > 0)
+    : [];
+  if (options.length < 2) return null;
+  const scored = options
+    .map((option) => ({ option, score: optionMatchScore(option, userMessage) }))
+    .sort((a, b) => b.score - a.score);
+  const best = scored[0];
+  const second = scored[1];
+  if (!best || best.score <= 0 || (second && best.score <= second.score)) return null;
+  return {
+    question: typeof p.question === "string" ? p.question : "уточнение",
+    chosen: best.option,
+    relaxed: scored.slice(1).map((s) => s.option),
+    score: best.score,
+  };
+}
+
 function dialogueChoiceSystemHint(choice: DialogueChoiceResolution): string {
   return `<dialogue_resolution>В прошлом ходе ассистент задал альтернативный вопрос: "${choice.question}". Текущая реплика клиента выбрала: "${choice.chosen}". Не выбранные альтернативы считаются ослабленными/неактивными, если клиент не повторил их в текущей реплике: ${choice.relaxed.map((x) => `"${x}"`).join(", ") || "нет"}. Не требуй ослабленные признаки и не задавай тот же выбор заново.</dialogue_resolution>`;
 }
