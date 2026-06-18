@@ -608,15 +608,35 @@ function extractBudgetCap(msg: string): number | null {
   return null;
 }
 
-function detectPriceDirection(msg: string): PriceDirection | null {
+// Возвращает намерение клиента про цену:
+//   - "superlative" — абсолютная сортировка по уже найденному пулу
+//     ("самый дешёвый", "самый дорогой", "бюджетный", "премиум"). Якорь
+//     не требуется, ничего из найденного выбрасывать нельзя — только
+//     отсортировать по цене.
+//   - "comparative" — относительное сравнение с конкретным якорем
+//     ("дешевле этой", "подороже того", "в том же сегменте"). Без якоря
+//     гард молчит и оставляет ответ LLM-у.
+function detectPriceDirection(msg: string): PriceIntent | null {
   const m = msg.toLowerCase();
-  // Если есть явный потолок бюджета ("до X тг", "не дороже X тг") — это max_price constraint, а не direction.
+  // Явный потолок бюджета ("до X тг") — это max_price constraint, не direction.
   if (extractBudgetCap(msg) !== null) return null;
-  // Отрицание: "не дороже", "не дешевле", "не подороже" и т.п. — направление сбрасываем.
+  // Отрицание ("не дороже", "не дешевле") — направление сбрасываем.
   if (/\bне\s+(под?ороже|дороже|подешевле|дешевле)\b/u.test(m)) return null;
-  if (/\b(в том же.*(сегмент|ценов)|таком же.*ценов|той же цене|такого же.*ценов)/u.test(m)) return "same";
-  if (/(подешевле|дешевле|самый\s+дешёв|самый\s+дешев|самые\s+дешёв|самые\s+дешев|бюджетн|поэконом|подоступн|поде[шщ]евле)/u.test(m)) return "cheaper";
-  if (/(подороже|дороже|самый\s+дорог|самые\s+дорог|премиум|премьюм|топов|подсолидн)/u.test(m)) return "more_expensive";
+
+  // Comparative: явное сравнение с подразумеваемым/упомянутым якорем.
+  if (/\b(в том же.*(сегмент|ценов)|таком же.*ценов|той же цене|такого же.*ценов)/u.test(m)) {
+    return { kind: "comparative", direction: "same" };
+  }
+  if (/(подешевле|дешевле)/u.test(m)) return { kind: "comparative", direction: "cheaper" };
+  if (/(подороже|дороже)/u.test(m)) return { kind: "comparative", direction: "more_expensive" };
+
+  // Superlative: абсолютная сортировка по найденному пулу, без якоря.
+  if (/(самый\s+дешёв|самый\s+дешев|самые\s+дешёв|самые\s+дешев|самый\s+недорог|бюджетн|поэконом|подоступн|самый\s+доступн)/u.test(m)) {
+    return { kind: "superlative", direction: "cheaper" };
+  }
+  if (/(самый\s+дорог|самые\s+дорог|премиум|премьюм|топов|подсолидн|флагман)/u.test(m)) {
+    return { kind: "superlative", direction: "more_expensive" };
+  }
   return null;
 }
 
