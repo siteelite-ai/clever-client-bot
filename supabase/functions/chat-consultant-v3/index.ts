@@ -549,7 +549,7 @@ function detectPriceDirection(msg: string): PriceDirection | null {
   return null;
 }
 
-type CachedProd = { id: string; price: number; pagetitle?: string; title?: string };
+type CachedProd = { id: string; price: number; pagetitle?: string; title?: string; vendor?: string | null; short_traits?: string[] };
 
 function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd | null {
   const msg = userMessage.toLowerCase().replace(/[«»"',.()]/g, " ");
@@ -607,16 +607,26 @@ function extractModelCode(title: string): string | null {
 // Returns IDs of products from the SAME model family as the anchor — i.e.
 // other SKUs whose pagetitle contains the anchor's model code. These are
 // variants (different shape/size/power), not true analogs.
-function findSameFamilyIds(cache: ProductCache, anchorTitle: string, anchorId: string): Set<string> {
+function findSameFamilyIds(cache: ProductCache, anchor: CachedProd): Set<string> {
+  const anchorTitle = anchor.pagetitle ?? anchor.title ?? "";
   const code = extractModelCode(anchorTitle);
   const out = new Set<string>();
   if (!code) return out;
+  if ((anchor.short_traits ?? []).some((line) => valueIsEvidenced(code, line))) return out;
   const needle = code.toLowerCase();
+  const anchorVendor = normalizeForMatch(anchor.vendor ?? "");
+  if (!anchorVendor) return out;
   for (const [id, raw] of cache.entries()) {
-    if (id === anchorId) continue;
-    const p = raw as unknown as { pagetitle?: string; title?: string };
+    if (id === anchor.id) continue;
+    const p = raw as unknown as CachedProd;
     const title = (p.pagetitle ?? p.title ?? "").toLowerCase();
-    if (title.includes(needle)) out.add(id);
+    if (!title.includes(needle)) continue;
+    const vendor = normalizeForMatch(p.vendor ?? "");
+    // A functional token such as a socket/platform code can legitimately occur
+    // across brands. Treat it as same-family only inside the anchor vendor;
+    // otherwise valid cross-brand analogs get filtered out.
+    if (!vendor || vendor !== anchorVendor) continue;
+    out.add(id);
   }
   return out;
 }
@@ -770,6 +780,7 @@ function buildReplacementAxes(args: Record<string, unknown>, lastDiscover: Disco
 function leafScopeSearchArgs(
   args: Record<string, unknown>,
   lastDiscover: DiscoverCategoryOk | null,
+  replacementIntent = false,
 ): { args: Record<string, unknown>; scoped: boolean; reason: string | null } {
   if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) return { args, scoped: false, reason: null };
   const leaves = (lastDiscover.leaf_categories ?? []).map((l) => l.pagetitle).filter(Boolean);
@@ -779,6 +790,19 @@ function leafScopeSearchArgs(
   if (categoryIn.length > 0 || (category && leaves.includes(category))) return { args, scoped: false, reason: null };
   if (!category || category === lastDiscover.category.pagetitle) {
     const { category: _category, ...rest } = args;
+    if (replacementIntent) {
+      // In analog mode the anchor leaf category is authoritative. If the latest
+      // discover_category resolved only a broad umbrella whose leaves do not
+      // include the anchor leaf, injecting those leaves falsely forces the
+      // search into sibling categories and creates a fake empty result. Keep the
+      // LLM's facet filters and search catalog-wide instead of narrowing to the
+      // wrong leaves.
+      return {
+        args: rest,
+        scoped: !!category,
+        reason: category ? "replacement_umbrella_category_removed" : "replacement_missing_category_not_injected",
+      };
+    }
     return { args: { ...rest, category_in: leaves }, scoped: true, reason: category ? "umbrella_category_rewritten" : "missing_category_injected" };
   }
   return { args, scoped: false, reason: null };
@@ -1194,9 +1218,7 @@ async function runExpertLoop(
     if (!replacementIntent) return new Set();
     const a = findAnchorInCache(ctx.cache, userMessage);
     if (!a) return new Set();
-    const title = (a as unknown as { pagetitle?: string; title?: string }).pagetitle
-      ?? (a as unknown as { title?: string }).title ?? "";
-    return findSameFamilyIds(ctx.cache, title, a.id);
+    return findSameFamilyIds(ctx.cache, a);
   };
   const pickFreshUnshown = (n: number): string[] => {
     const out: string[] = [];
@@ -1340,7 +1362,7 @@ async function runExpertLoop(
           }
         }
 
-        const scoped = tc.name === "search_catalog" ? leafScopeSearchArgs(tc.args, lastDiscover) : null;
+        const scoped = tc.name === "search_catalog" ? leafScopeSearchArgs(tc.args, lastDiscover, replacementIntent) : null;
         if (scoped?.scoped) {
           steps.push({
             step: "v3_guard_leaf_scope",
