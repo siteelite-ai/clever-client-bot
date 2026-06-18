@@ -130,7 +130,12 @@ async function fetchCategories(deps: DiscoverCategoryDeps): Promise<CategoriesCa
 
   const flatDeduped = Array.from(new Map(acc.flat.map((c) => [c.pagetitle, c])).values())
     .sort((a, b) => a.pagetitle.localeCompare(b.pagetitle));
-  categoriesCache = { flat: flatDeduped, byId: acc.byId, byPagetitle: acc.byPagetitle, ts: Date.now() };
+  // Build isLeaf map: листом считается узел без детей в дереве /categories.
+  const isLeaf = new Map<string, boolean>();
+  for (const node of acc.byId.values()) {
+    isLeaf.set(normalize(node.pagetitle), node.childrenIds.length === 0);
+  }
+  categoriesCache = { flat: flatDeduped, byId: acc.byId, byPagetitle: acc.byPagetitle, isLeaf, ts: Date.now() };
   return categoriesCache;
 }
 
