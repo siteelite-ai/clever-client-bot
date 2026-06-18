@@ -2321,6 +2321,8 @@ Deno.serve(async (req) => {
   }
   const sessionId = body.sessionId ?? crypto.randomUUID();
   const history = Array.isArray(body.history) ? body.history.slice(-20) : [];
+  const rawSlots = body.slots ?? body.dialogSlots;
+  const slots = rawSlots && typeof rawSlots === "object" ? rawSlots : {};
 
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
   const settings = await loadSettings(supabase);
@@ -2363,7 +2365,7 @@ Deno.serve(async (req) => {
       };
 
       try {
-        const out = await runExpertLoop(userMessage, history, settings.openrouter_api_key!, ctx, send, steps, t0);
+        const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0);
         productsCount = out.productsRendered;
       } catch (e) {
         errorMsg = (e as Error)?.message ?? String(e);
