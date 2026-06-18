@@ -770,6 +770,7 @@ function buildReplacementAxes(args: Record<string, unknown>, lastDiscover: Disco
 function leafScopeSearchArgs(
   args: Record<string, unknown>,
   lastDiscover: DiscoverCategoryOk | null,
+  replacementIntent = false,
 ): { args: Record<string, unknown>; scoped: boolean; reason: string | null } {
   if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) return { args, scoped: false, reason: null };
   const leaves = (lastDiscover.leaf_categories ?? []).map((l) => l.pagetitle).filter(Boolean);
@@ -779,6 +780,19 @@ function leafScopeSearchArgs(
   if (categoryIn.length > 0 || (category && leaves.includes(category))) return { args, scoped: false, reason: null };
   if (!category || category === lastDiscover.category.pagetitle) {
     const { category: _category, ...rest } = args;
+    if (replacementIntent) {
+      // In analog mode the anchor leaf category is authoritative. If the latest
+      // discover_category resolved only a broad umbrella whose leaves do not
+      // include the anchor leaf, injecting those leaves falsely forces the
+      // search into sibling categories and creates a fake empty result. Keep the
+      // LLM's facet filters and search catalog-wide instead of narrowing to the
+      // wrong leaves.
+      return {
+        args: rest,
+        scoped: !!category,
+        reason: category ? "replacement_umbrella_category_removed" : "replacement_missing_category_not_injected",
+      };
+    }
     return { args: { ...rest, category_in: leaves }, scoped: true, reason: category ? "umbrella_category_rewritten" : "missing_category_injected" };
   }
   return { args, scoped: false, reason: null };
@@ -1340,7 +1354,7 @@ async function runExpertLoop(
           }
         }
 
-        const scoped = tc.name === "search_catalog" ? leafScopeSearchArgs(tc.args, lastDiscover) : null;
+        const scoped = tc.name === "search_catalog" ? leafScopeSearchArgs(tc.args, lastDiscover, replacementIntent) : null;
         if (scoped?.scoped) {
           steps.push({
             step: "v3_guard_leaf_scope",
