@@ -49,6 +49,7 @@ export const TOOL_SCHEMAS = [
           page: { type: "integer", minimum: 1 },
           per_page: { type: "integer", minimum: 1, maximum: 50 },
           sort_cheapest: { type: "boolean" },
+          anchor_leaf_category: { type: "string", description: "ТОЛЬКО для режима «аналог»: pagetitle листовой категории ЯКОРЯ (anchor.leaf_category из карточки by_pagetitle/by_article). Сервер гарантирует, что эта категория войдёт в поиск, даже если она не попала в discover_category.leaf_categories. Если сервер инжектировал её — вернёт warnings:[\"anchor_leaf_category_injected:<L₀>\"]." },
         },
         required: ["mode"],
         additionalProperties: false,
