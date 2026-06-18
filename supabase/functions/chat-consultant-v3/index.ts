@@ -1382,7 +1382,17 @@ async function runExpertLoop(
           if (isFirstTurn) firstAssistantText = resp.text.trim();
           steps.push({ step: "v3_assistant_text_final", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
         } else if (hasRender) {
-          steps.push({ step: "v3_assistant_text_with_render", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+          if (intentMode === "inquire") {
+            // Inquire-режим: вопрос про конкретный товар. Текст модели — это
+            // ОТВЕТ клиенту, render_products — пруф/источник. Не глушим.
+            if (!isFirstTurn) send({ type: "assistant_turn_break", reason: "inquire_answer" });
+            send({ type: "delta", content: resp.text });
+            finalText += resp.text;
+            if (isFirstTurn) firstAssistantText = resp.text.trim();
+            steps.push({ step: "v3_assistant_text_inquire", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+          } else {
+            steps.push({ step: "v3_assistant_text_with_render", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+          }
         } else {
           steps.push({ step: "v3_assistant_text_suppressed", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
         }
