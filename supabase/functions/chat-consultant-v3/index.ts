@@ -1668,9 +1668,10 @@ async function runExpertLoop(
           if ((tc.args as { mode?: string }).mode === "by_filter" && axesCount >= 2) {
             const split = await trySplitFallback(tc.args, ctx);
             if (split) {
+              const splitAxisIdSets = new Map(split.axes.map((a) => [a.axis, new Set(a.ids)]));
               const effectiveSplit = replacementIntent && replacementRequiredAxes.length >= 2
                 ? (() => {
-                  const compatible = new Set(filterReplacementCompatibleIds(split.axes.flatMap((a) => a.ids), replacementRequiredAxes, ctx.cache));
+                  const compatible = new Set(filterReplacementCompatibleIds(split.axes.flatMap((a) => a.ids), replacementRequiredAxes, ctx.cache, splitAxisIdSets));
                   return {
                     ...split,
                     axes: split.axes
@@ -1704,6 +1705,7 @@ async function runExpertLoop(
                 // Persist across subsequent broad searches — render fallback
                 // prefers these axis-aligned ids over later off-target pools.
                 prioritySplitPool = allIds;
+                prioritySplitAxisIdSets = splitAxisIdSets;
               }
             }
           }
