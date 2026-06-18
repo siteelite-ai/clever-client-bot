@@ -549,7 +549,7 @@ function detectPriceDirection(msg: string): PriceDirection | null {
   return null;
 }
 
-type CachedProd = { id: string; price: number; pagetitle?: string; title?: string };
+type CachedProd = { id: string; price: number; pagetitle?: string; title?: string; vendor?: string | null };
 
 function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd | null {
   const msg = userMessage.toLowerCase().replace(/[«»"',.()]/g, " ");
@@ -607,16 +607,24 @@ function extractModelCode(title: string): string | null {
 // Returns IDs of products from the SAME model family as the anchor — i.e.
 // other SKUs whose pagetitle contains the anchor's model code. These are
 // variants (different shape/size/power), not true analogs.
-function findSameFamilyIds(cache: ProductCache, anchorTitle: string, anchorId: string): Set<string> {
+function findSameFamilyIds(cache: ProductCache, anchor: CachedProd): Set<string> {
+  const anchorTitle = anchor.pagetitle ?? anchor.title ?? "";
   const code = extractModelCode(anchorTitle);
   const out = new Set<string>();
   if (!code) return out;
   const needle = code.toLowerCase();
+  const anchorVendor = normalizeForMatch(anchor.vendor ?? "");
   for (const [id, raw] of cache.entries()) {
-    if (id === anchorId) continue;
-    const p = raw as unknown as { pagetitle?: string; title?: string };
+    if (id === anchor.id) continue;
+    const p = raw as unknown as CachedProd;
     const title = (p.pagetitle ?? p.title ?? "").toLowerCase();
-    if (title.includes(needle)) out.add(id);
+    if (!title.includes(needle)) continue;
+    const vendor = normalizeForMatch(p.vendor ?? "");
+    // A functional token such as a socket/platform code can legitimately occur
+    // across brands. Treat it as same-family only inside the anchor vendor;
+    // otherwise valid cross-brand analogs get filtered out.
+    if (anchorVendor && vendor && anchorVendor !== vendor) continue;
+    out.add(id);
   }
   return out;
 }
@@ -1208,9 +1216,7 @@ async function runExpertLoop(
     if (!replacementIntent) return new Set();
     const a = findAnchorInCache(ctx.cache, userMessage);
     if (!a) return new Set();
-    const title = (a as unknown as { pagetitle?: string; title?: string }).pagetitle
-      ?? (a as unknown as { title?: string }).title ?? "";
-    return findSameFamilyIds(ctx.cache, title, a.id);
+    return findSameFamilyIds(ctx.cache, a);
   };
   const pickFreshUnshown = (n: number): string[] => {
     const out: string[] = [];
