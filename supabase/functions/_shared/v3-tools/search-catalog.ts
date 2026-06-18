@@ -212,11 +212,23 @@ export async function executeSearchCatalog(
     }
   }
 
+  // ANCHOR-L₀ INCONSISTENCY GUARD: если задан anchor_leaf_category и его нет в category_in —
+  // инжектируем (как ПЕРВУЮ категорию) и помечаем warning'ом. Без хардкодов: работает на любую категорию.
+  const warnings: string[] = [];
+  if (input.mode === "by_filter" && typeof input.anchor_leaf_category === "string" && input.anchor_leaf_category.trim()) {
+    const anchorCat = input.anchor_leaf_category.trim();
+    if (!seenCat.has(anchorCat)) {
+      categories.unshift(anchorCat);
+      seenCat.add(anchorCat);
+      warnings.push(`anchor_leaf_category_injected:${anchorCat}`);
+    }
+  }
+
   // Один запрос: либо нет category fan-out, либо ровно одна категория.
   if (categories.length <= 1) {
     const r = await singleSearch(input, deps, cache, categories[0]);
     if (!r.ok) return { tool: "search_catalog", ok: false, error_code: r.error_code, message: r.message };
-    return { tool: "search_catalog", ok: true, mode: input.mode, total: r.total, results: r.results };
+    return { tool: "search_catalog", ok: true, mode: input.mode, total: r.total, results: r.results, ...(warnings.length ? { warnings } : {}) };
   }
 
   // Fan-out: параллельные запросы по каждой листовой категории, merge с дедупликацией по id.
