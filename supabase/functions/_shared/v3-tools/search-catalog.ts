@@ -65,6 +65,30 @@ function extractTraits(p: Record<string, unknown>): string[] {
   return out;
 }
 
+/**
+ * Достаём pagetitle листовой категории товара из любого варианта формы ответа /products.
+ * Поддерживаем: raw.category (строка), raw.category.pagetitle, raw.categories[0].pagetitle.
+ * Data-agnostic — никаких хардкодов.
+ */
+function extractLeafCategory(p: Record<string, unknown>): string | null {
+  const c = p.category;
+  if (typeof c === "string" && c.trim()) return c.trim();
+  if (c && typeof c === "object") {
+    const pt = (c as Record<string, unknown>).pagetitle;
+    if (typeof pt === "string" && pt.trim()) return pt.trim();
+  }
+  const cs = p.categories;
+  if (Array.isArray(cs) && cs.length > 0) {
+    const first = cs[0] as Record<string, unknown> | string | undefined;
+    if (typeof first === "string" && first.trim()) return first.trim();
+    if (first && typeof first === "object") {
+      const pt = (first as Record<string, unknown>).pagetitle;
+      if (typeof pt === "string" && pt.trim()) return pt.trim();
+    }
+  }
+  return null;
+}
+
 type SingleSearchResult =
   | { ok: true; total: number; results: ProductRef[] }
   | { ok: false; error_code: ToolError["error_code"]; message: string };
