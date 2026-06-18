@@ -1205,6 +1205,12 @@ async function runExpertLoop(
     return out;
   };
 
+  const rememberReplacementAxes = (args: Record<string, unknown>) => {
+    if (!replacementIntent) return;
+    const axes = buildReplacementAxes(args, lastDiscover, `${history.slice(-6).map((h) => h.content).join("\n")}\n${userMessage}\n${firstAssistantText}`);
+    if (axes.length >= 2) replacementRequiredAxes = axes;
+  };
+
   const messages: ORMessage[] = [
     { role: "system", content: SYSTEM_PROMPT },
     ...history.map((h) => ({ role: h.role, content: h.content })),
@@ -1316,6 +1322,16 @@ async function runExpertLoop(
             });
             continue;
           }
+        }
+
+        const scoped = tc.name === "search_catalog" ? leafScopeSearchArgs(tc.args, lastDiscover) : null;
+        if (scoped?.scoped) {
+          steps.push({
+            step: "v3_guard_leaf_scope",
+            ms: now(),
+            meta: { reason: scoped.reason, original_args: summariseToolArgs(tc.name, tc.args), scoped_args: summariseToolArgs(tc.name, scoped.args) },
+          });
+          tc.args = scoped.args;
         }
 
         const guardOutcome = tc.name === "search_catalog"
@@ -1627,8 +1643,7 @@ async function runExpertLoop(
           !inferredFallback
         ) {
           if (replacementIntent) {
-            const axes = buildReplacementAxes(tc.args, lastDiscover);
-            if (axes.length >= 2) replacementRequiredAxes = axes;
+            rememberReplacementAxes(tc.args);
           }
           const opts = (tc.args as { options?: Record<string, unknown> }).options;
           const axesCount = opts && typeof opts === "object"
