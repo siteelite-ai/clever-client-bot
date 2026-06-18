@@ -782,6 +782,22 @@
 
         try {
           var obj = JSON.parse(jsonStr);
+          if (obj.v3_event) {
+            var ev = obj.v3_event;
+            if (ev.type === 'contacts') { contacts = ev.html; continue; }
+            if (ev.type === 'slot_update') { dialogSlots = ev.slots || {}; saveState(); continue; }
+            if (ev.type === 'products_block' && ev.markdown) {
+              if (!firstTokenReceived) {
+                firstTokenReceived = true;
+                onFirstToken();
+              }
+              fullContent += (fullContent ? '\n\n' : '') + ev.markdown;
+              msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
+              messagesContainer.scrollTop = messagesContainer.scrollHeight;
+              continue;
+            }
+            if (ev.type === 'assistant_turn_break' || ev.type === 'tool_event' || ev.type === 'quick_replies') continue;
+          }
           // Check for contacts event
           if (obj.contacts) {
             contacts = obj.contacts;
@@ -831,6 +847,17 @@
           if (js2 === '[DONE]') continue;
           try {
             var o2 = JSON.parse(js2);
+            if (o2.v3_event) {
+              var ev2 = o2.v3_event;
+              if (ev2.type === 'contacts') { contacts = ev2.html; continue; }
+              if (ev2.type === 'slot_update') { dialogSlots = ev2.slots || {}; saveState(); continue; }
+              if (ev2.type === 'products_block' && ev2.markdown) {
+                fullContent += (fullContent ? '\n\n' : '') + ev2.markdown;
+                msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
+                continue;
+              }
+              if (ev2.type === 'assistant_turn_break' || ev2.type === 'tool_event' || ev2.type === 'quick_replies') continue;
+            }
             if (o2.contacts) { contacts = o2.contacts; continue; }
             if (o2.slot_update) { dialogSlots = o2.slot_update; saveState(); continue; }
             var d2 = o2.choices && o2.choices[0] && o2.choices[0].delta && o2.choices[0].delta.content;
