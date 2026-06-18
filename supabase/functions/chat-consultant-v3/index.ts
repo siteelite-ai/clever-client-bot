@@ -614,6 +614,7 @@ function findSameFamilyIds(cache: ProductCache, anchor: CachedProd): Set<string>
   if (!code) return out;
   const needle = code.toLowerCase();
   const anchorVendor = normalizeForMatch(anchor.vendor ?? "");
+  if (!anchorVendor) return out;
   for (const [id, raw] of cache.entries()) {
     if (id === anchor.id) continue;
     const p = raw as unknown as CachedProd;
@@ -623,7 +624,7 @@ function findSameFamilyIds(cache: ProductCache, anchor: CachedProd): Set<string>
     // A functional token such as a socket/platform code can legitimately occur
     // across brands. Treat it as same-family only inside the anchor vendor;
     // otherwise valid cross-brand analogs get filtered out.
-    if (anchorVendor && vendor && anchorVendor !== vendor) continue;
+    if (!vendor || vendor !== anchorVendor) continue;
     out.add(id);
   }
   return out;
