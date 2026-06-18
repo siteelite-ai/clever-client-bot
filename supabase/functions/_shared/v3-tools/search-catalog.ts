@@ -311,6 +311,7 @@ export async function executeSearchCatalog(
   // После fan-out пересортируем мердж, если запрошена сортировка по цене,
   // т.к. слияние нескольких листьев нарушает порядок.
   if (input.sort_cheapest) merged.sort((a, b) => a.price - b.price);
+  else if (input.sort_expensive) merged.sort((a, b) => b.price - a.price);
   const perPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
   return {
     tool: "search_catalog",
