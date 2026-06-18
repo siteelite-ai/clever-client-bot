@@ -593,6 +593,8 @@ function promiseRealityCheck(
 
 // ── Step 5: Price Direction Guard ────────────────────────────────────────
 type PriceDirection = "cheaper" | "more_expensive" | "same";
+type PriceIntentKind = "superlative" | "comparative";
+interface PriceIntent { kind: PriceIntentKind; direction: PriceDirection; }
 
 function extractBudgetCap(msg: string): number | null {
   const m = msg.toLowerCase().replace(/\s+/g, " ");
@@ -606,15 +608,35 @@ function extractBudgetCap(msg: string): number | null {
   return null;
 }
 
-function detectPriceDirection(msg: string): PriceDirection | null {
+// Возвращает намерение клиента про цену:
+//   - "superlative" — абсолютная сортировка по уже найденному пулу
+//     ("самый дешёвый", "самый дорогой", "бюджетный", "премиум"). Якорь
+//     не требуется, ничего из найденного выбрасывать нельзя — только
+//     отсортировать по цене.
+//   - "comparative" — относительное сравнение с конкретным якорем
+//     ("дешевле этой", "подороже того", "в том же сегменте"). Без якоря
+//     гард молчит и оставляет ответ LLM-у.
+function detectPriceDirection(msg: string): PriceIntent | null {
   const m = msg.toLowerCase();
-  // Если есть явный потолок бюджета ("до X тг", "не дороже X тг") — это max_price constraint, а не direction.
+  // Явный потолок бюджета ("до X тг") — это max_price constraint, не direction.
   if (extractBudgetCap(msg) !== null) return null;
-  // Отрицание: "не дороже", "не дешевле", "не подороже" и т.п. — направление сбрасываем.
+  // Отрицание ("не дороже", "не дешевле") — направление сбрасываем.
   if (/\bне\s+(под?ороже|дороже|подешевле|дешевле)\b/u.test(m)) return null;
-  if (/\b(в том же.*(сегмент|ценов)|таком же.*ценов|той же цене|такого же.*ценов)/u.test(m)) return "same";
-  if (/(подешевле|дешевле|самый\s+дешёв|самый\s+дешев|самые\s+дешёв|самые\s+дешев|бюджетн|поэконом|подоступн|поде[шщ]евле)/u.test(m)) return "cheaper";
-  if (/(подороже|дороже|самый\s+дорог|самые\s+дорог|премиум|премьюм|топов|подсолидн)/u.test(m)) return "more_expensive";
+
+  // Comparative: явное сравнение с подразумеваемым/упомянутым якорем.
+  if (/\b(в том же.*(сегмент|ценов)|таком же.*ценов|той же цене|такого же.*ценов)/u.test(m)) {
+    return { kind: "comparative", direction: "same" };
+  }
+  if (/(подешевле|дешевле)/u.test(m)) return { kind: "comparative", direction: "cheaper" };
+  if (/(подороже|дороже)/u.test(m)) return { kind: "comparative", direction: "more_expensive" };
+
+  // Superlative: абсолютная сортировка по найденному пулу, без якоря.
+  if (/(самый\s+дешёв|самый\s+дешев|самые\s+дешёв|самые\s+дешев|самый\s+недорог|бюджетн|поэконом|подоступн|самый\s+доступн)/u.test(m)) {
+    return { kind: "superlative", direction: "cheaper" };
+  }
+  if (/(самый\s+дорог|самые\s+дорог|премиум|премьюм|топов|подсолидн|флагман)/u.test(m)) {
+    return { kind: "superlative", direction: "more_expensive" };
+  }
   return null;
 }
 
@@ -787,11 +809,13 @@ async function tryPriceDirectionRescue(
   steps: StepLog[],
   now: () => number,
 ): Promise<number> {
-  const dir = detectPriceDirection(userMessage);
-  if (!dir) return 0;
-  const anchor = findAnchorInCache(ctx.cache, userMessage);
+  const intent = detectPriceDirection(userMessage);
+  if (!intent) return 0;
+  const anchor = intent.kind === "comparative" ? findAnchorInCache(ctx.cache, userMessage) : null;
+  // Comparative-rescue без якоря бессмыслен — гард молчит, отвечает LLM.
+  if (intent.kind === "comparative" && !anchor) return 0;
   const budgetCap = extractBudgetCap(userMessage);
-  const ids = await broadenPriceDirectionSearch(dir, anchor, lastDiscover, ctx, budgetCap);
+  const ids = await broadenPriceDirectionSearch(intent.direction, anchor, lastDiscover, ctx, budgetCap);
   if (ids.length === 0) return 0;
   const render = await executeRenderProducts({ product_ids: ids, total_available: ids.length } as RenderProductsInput, ctx.cache);
   if (!render.ok) return 0;
@@ -801,7 +825,7 @@ async function tryPriceDirectionRescue(
   steps.push({
     step: "v3_guard_price_rescue",
     ms: now(),
-    meta: { direction: dir, anchor_id: anchor?.id ?? null, anchor_price: anchor?.price ?? null, rendered: render.rendered_count },
+    meta: { kind: intent.kind, direction: intent.direction, anchor_id: anchor?.id ?? null, anchor_price: anchor?.price ?? null, rendered: render.rendered_count },
   });
   return render.rendered_count;
 }
@@ -1591,46 +1615,85 @@ async function runExpertLoop(
 
 
         // ── Step 5: Price Direction Guard (pre-render rewrite)
+        // Superlative ("самый дешёвый/дорогой") — просто сортируем уже
+        // выбранный LLM-ом пул по цене, ничего не выбрасываем и не расширяем.
+        // Comparative ("дешевле/дороже/в том же сегменте") — требует якоря;
+        // без якоря гард молчит и ответ остаётся за LLM.
         if (tc.name === "render_products") {
-          const dir = detectPriceDirection(userMessage);
+          const intent = detectPriceDirection(userMessage);
           const budgetCap = extractBudgetCap(userMessage);
-          const anchor = findAnchorInCache(ctx.cache, userMessage);
-          // Pre-condition: явный бюджетный потолок несовместим с "подороже относительно якоря".
-          const directionAllowed = dir && !(
-            dir === "more_expensive" && budgetCap !== null && anchor && budgetCap <= anchor.price
-          );
-          if (dir && directionAllowed) {
+          if (intent && intent.kind === "superlative") {
             const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
-            const rewrite = rewriteRenderIdsByPriceDirection(origIds, dir, anchor, ctx.cache);
-            let finalIds = rewrite.ids;
-            let usedBroaden = false;
-            if (finalIds.length < 3) {
-              const broaden = await broadenPriceDirectionSearch(dir, anchor, lastDiscover, ctx, budgetCap);
-              if (broaden.length >= 3) { finalIds = broaden; usedBroaden = true; }
+            const withPrice = origIds
+              .map((id) => ({ id, p: ctx.cache.get(id) as unknown as CachedProd | undefined }))
+              .filter((x): x is { id: string; p: CachedProd } => !!x.p && typeof x.p.price === "number" && x.p.price > 0);
+            if (withPrice.length >= 2) {
+              const sorted = [...withPrice].sort((a, b) =>
+                intent.direction === "more_expensive" ? b.p.price - a.p.price : a.p.price - b.p.price,
+              );
+              const finalIds = sorted.map((x) => x.id);
+              if (finalIds.join("|") !== origIds.join("|")) {
+                (tc.args as Record<string, unknown>).product_ids = finalIds;
+                steps.push({
+                  step: "v3_guard_price_direction",
+                  ms: now(),
+                  meta: {
+                    kind: "superlative",
+                    direction: intent.direction,
+                    before: origIds.length,
+                    after: finalIds.length,
+                    filtered_out: 0,
+                    broadened: false,
+                  },
+                });
+              }
             }
-            if (finalIds.length > 0 && (finalIds.length !== origIds.length || finalIds.join("|") !== origIds.join("|"))) {
-              (tc.args as Record<string, unknown>).product_ids = finalIds;
+          } else if (intent && intent.kind === "comparative") {
+            const anchor = findAnchorInCache(ctx.cache, userMessage);
+            // Pre-condition: явный бюджетный потолок несовместим с "подороже относительно якоря".
+            const directionAllowed = !(
+              intent.direction === "more_expensive" && budgetCap !== null && anchor && budgetCap <= anchor.price
+            );
+            if (!anchor) {
               steps.push({
-                step: "v3_guard_price_direction",
+                step: "v3_guard_price_direction_skipped",
                 ms: now(),
-                meta: {
-                  direction: dir,
-                  anchor_id: anchor?.id ?? null,
-                  anchor_price: anchor?.price ?? null,
-                  budget_cap: budgetCap,
-                  before: origIds.length,
-                  after: finalIds.length,
-                  filtered_out: rewrite.filteredOut,
-                  broadened: usedBroaden,
-                },
+                meta: { kind: "comparative", direction: intent.direction, reason: "no_anchor_in_cache" },
               });
+            } else if (!directionAllowed) {
+              steps.push({
+                step: "v3_guard_price_direction_skipped",
+                ms: now(),
+                meta: { kind: "comparative", direction: intent.direction, anchor_price: anchor.price, budget_cap: budgetCap, reason: "budget_cap_conflicts_with_direction" },
+              });
+            } else {
+              const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
+              const rewrite = rewriteRenderIdsByPriceDirection(origIds, intent.direction, anchor, ctx.cache);
+              let finalIds = rewrite.ids;
+              let usedBroaden = false;
+              if (finalIds.length < 3) {
+                const broaden = await broadenPriceDirectionSearch(intent.direction, anchor, lastDiscover, ctx, budgetCap);
+                if (broaden.length >= 3) { finalIds = broaden; usedBroaden = true; }
+              }
+              if (finalIds.length > 0 && (finalIds.length !== origIds.length || finalIds.join("|") !== origIds.join("|"))) {
+                (tc.args as Record<string, unknown>).product_ids = finalIds;
+                steps.push({
+                  step: "v3_guard_price_direction",
+                  ms: now(),
+                  meta: {
+                    kind: "comparative",
+                    direction: intent.direction,
+                    anchor_id: anchor.id,
+                    anchor_price: anchor.price,
+                    budget_cap: budgetCap,
+                    before: origIds.length,
+                    after: finalIds.length,
+                    filtered_out: rewrite.filteredOut,
+                    broadened: usedBroaden,
+                  },
+                });
+              }
             }
-          } else if (dir && !directionAllowed) {
-            steps.push({
-              step: "v3_guard_price_direction_skipped",
-              ms: now(),
-              meta: { direction: dir, anchor_price: anchor?.price ?? null, budget_cap: budgetCap, reason: "budget_cap_conflicts_with_direction" },
-            });
           }
         }
 
