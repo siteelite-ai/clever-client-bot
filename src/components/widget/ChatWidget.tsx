@@ -19,29 +19,10 @@ const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 //      bubble breaks, products_block, contacts, quick_replies, slot_update.
 //      `delta` events still travel in the legacy `{choices:[{delta:{content}}]}`
 //      shape, so the streaming parser stays compatible.
-type PipelineVersion = 'v1' | 'v2' | 'v3';
-const ENDPOINT_BY_PIPELINE: Record<PipelineVersion, string> = {
-  v1: `${SUPABASE_URL}/functions/v1/chat-consultant`,
-  v2: `${SUPABASE_URL}/functions/v1/chat-consultant-v2`,
-  v3: `${SUPABASE_URL}/functions/v1/chat-consultant-v3`,
-};
-
-async function resolvePipelineEndpoint(): Promise<{ pipeline: PipelineVersion; url: string }> {
-  try {
-    const r = await fetch(`${SUPABASE_URL}/functions/v1/widget-config`, {
-      headers: { 'apikey': SUPABASE_ANON_KEY },
-    });
-    if (r.ok) {
-      const j = await r.json();
-      const raw = j?.active_pipeline;
-      const pipeline: PipelineVersion = raw === 'v3' ? 'v3' : raw === 'v2' ? 'v2' : 'v1';
-      return { pipeline, url: ENDPOINT_BY_PIPELINE[pipeline] };
-    }
-  } catch (e) {
-    console.warn('[Widget] widget-config fetch failed, defaulting to v1', e);
-  }
-  return { pipeline: 'v1', url: ENDPOINT_BY_PIPELINE.v1 };
-}
+// V3-only routing. All requests go to chat-consultant-v3 unconditionally.
+// V1/V2 pipelines are deprecated for the widget — no fallback, no race.
+type PipelineVersion = 'v3';
+const V3_ENDPOINT = `${SUPABASE_URL}/functions/v1/chat-consultant-v3`;
 
 type Msg = { role: 'user' | 'assistant'; content: string };
 
