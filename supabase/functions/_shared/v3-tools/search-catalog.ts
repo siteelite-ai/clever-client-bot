@@ -187,10 +187,10 @@ async function singleSearch(
 
 /**
  * Sort-aware fetch: API 220volt не поддерживает sort. Когда нужна сортировка по цене
- * (sort_cheapest=true), тянем до MAX_SORT_FETCH товаров (fan-out по страницам с per_page=50),
- * сортируем на нашей стороне и обрезаем до запрошенного per_page. `total` сохраняем честный —
- * из первого ответа API. Если в категории больше MAX_SORT_FETCH товаров — добавляем warning
- * sort_truncated, чтобы вызывающая сторона знала, что "самый дешёвый" мог быть пропущен.
+ * (sort_cheapest=true или sort_expensive=true), тянем до MAX_SORT_FETCH товаров
+ * (fan-out по страницам с per_page=50), сортируем на нашей стороне и обрезаем до
+ * запрошенного per_page. `total` сохраняем честный — из первого ответа API. Если в
+ * категории больше MAX_SORT_FETCH товаров — добавляем warning sort_truncated.
  */
 const SORT_PAGE_SIZE = 50;
 const MAX_SORT_FETCH = 200; // 4 страницы × 50 — потолок защиты от тяжёлых категорий
@@ -202,7 +202,7 @@ async function singleSearchSorted(
   categoryOverride: string | undefined,
   warnings: string[],
 ): Promise<SingleSearchResult> {
-  if (!input.sort_cheapest) {
+  if (!input.sort_cheapest && !input.sort_expensive) {
     return singleSearch(input, deps, cache, categoryOverride);
   }
   const requestedPerPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
@@ -231,7 +231,10 @@ async function singleSearchSorted(
   // Дедуп по id (на случай если API повторит товар на стыке страниц).
   const byId = new Map<string, ProductRef>();
   for (const p of all) if (!byId.has(p.id)) byId.set(p.id, p);
-  const sorted = [...byId.values()].sort((a, b) => a.price - b.price);
+  const cmp = input.sort_expensive
+    ? (a: ProductRef, b: ProductRef) => b.price - a.price
+    : (a: ProductRef, b: ProductRef) => a.price - b.price;
+  const sorted = [...byId.values()].sort(cmp);
   if (totalApi > MAX_SORT_FETCH) {
     warnings.push(`sort_truncated:${totalApi}>${MAX_SORT_FETCH}`);
   }
