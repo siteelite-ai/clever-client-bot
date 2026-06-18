@@ -100,6 +100,7 @@ async function streamChat({
             .filter(m => m.role === 'user' || m.role === 'assistant')
             .slice(0, -1) // last user turn is in `message`
             .map(m => ({ role: m.role, content: m.content })),
+          slots: activeSlots,
         }
       : {
           conversationId,
@@ -663,7 +664,7 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
                           strong: ({ node, ...props }) => <strong {...props} className="font-bold text-widget-text" />,
                         }}
                       >
-                        {message.content.replace(/\\([()\[\]_*~`])/g, '$1')}
+                        {message.content.replace(new RegExp('\\\\([()\\[\\]_*~`])', 'g'), '$1')}
                       </ReactMarkdown>
                     </div>
                   ) : (

@@ -663,7 +663,7 @@ function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd
   // («кабель», «розетка», «лампа») сами по себе якорь не дают.
   const distinctive: string[] = [];
   // Арифметика типа "3*1,5", "2x10", "16/25" (количество ≥ одной цифры с разделителем).
-  for (const t of userMessage.matchAll(/\b\d+\s*[x×*\/]\s*\d+(?:[.,]\d+)?\b/giu)) distinctive.push(t[0].toLowerCase());
+  for (const t of userMessage.matchAll(/\b\d+\s*[x×*/]\s*\d+(?:[.,]\d+)?\b/giu)) distinctive.push(t[0].toLowerCase());
   // Alphanumeric-код длиной ≥4: буквы и цифры в одном токене (модель, артикул).
   for (const t of msgRaw.split(/\s+/)) {
     const cleaned = t.replace(/[^\p{L}\p{N}-]/gu, "");
@@ -714,6 +714,167 @@ function detectUserIntentMode(msg: string): "select" | "inquire" {
   const hasSkuLike = /(\b\d{4,}\b|\b[a-zа-я]+[-\s]?\d{2,}[a-zа-я0-9-]*\b|«[^»]+»|"[^"]+")/iu.test(m);
   if (hasQuestion && hasSkuLike) return "inquire";
   return "select";
+}
+
+interface DialogueChoiceResolution {
+  question: string;
+  chosen: string;
+  relaxed: string[];
+  score: number;
+}
+
+const DIALOGUE_OPTION_STOPWORDS = new Set([
+  "а", "и", "или", "что", "для", "вас", "вам", "в", "на", "по", "с", "со", "без",
+  "именно", "вариант", "варианты", "если", "есть", "нужно", "нужен", "нужна",
+  "важнее", "подойдет", "подходит", "выбрать", "давай", "давайте",
+]);
+
+function cleanDialogueOptionLabel(raw: string): string {
+  return raw
+    .replace(/^\s*(?:\d+[.)]|[-–—•])\s*/u, "")
+    .replace(/^[,:;\s]+|[,:;\s]+$/gu, "")
+    .trim()
+    .slice(0, 120);
+}
+
+function extractAlternativeOptionsFromAssistant(text: string): { question: string; options: string[] } | null {
+  const questions = text.match(/[^?？]{3,260}[?？]/gu) ?? [];
+  for (let i = questions.length - 1; i >= 0; i--) {
+    const question = questions[i].trim();
+    if (!/\sили\s/iu.test(normalizeForMatch(question))) continue;
+    let body = question.replace(/[?？]+$/u, "").trim();
+    const dashParts = body.split(/\s[—–-]\s/u).map((p) => p.trim()).filter(Boolean);
+    if (dashParts.length > 1) body = dashParts[dashParts.length - 1];
+    body = body.replace(/^.*?\b(?:важнее|выбрать|подойд[её]т|нужно|нужен|нужна)\b\s*[:—–-]?\s*/iu, "").trim() || body;
+    const options = body
+      .split(/\s+или\s+/iu)
+      .map(cleanDialogueOptionLabel)
+      .filter((p) => p.length >= 2 && p.length <= 120);
+    if (options.length >= 2 && options.length <= 4) return { question, options };
+  }
+  return null;
+}
+
+function optionMatchScore(option: string, userMessage: string): number {
+  const userNorm = normalizeForMatch(userMessage);
+  const userTokens = userNorm.split(/\s+/).filter(Boolean);
+  const optionTokens = normalizeForMatch(option)
+    .split(/\s+/)
+    .filter((t) => t.length >= 2 && !DIALOGUE_OPTION_STOPWORDS.has(t));
+  let score = 0;
+  for (const token of optionTokens) {
+    if (/\d/.test(token) && normalizeCodeLike(userMessage).includes(normalizeCodeLike(token))) score += 2;
+    else if (userNorm.includes(token)) score += 1;
+    else if (tokenMatchesEvidenceByStem(token, userTokens)) score += 1;
+  }
+  for (const quoted of option.matchAll(/[«"]([^»"]{2,})[»"]/gu)) {
+    const q = quoted[1];
+    if (valueIsEvidenced(q, userMessage) || optionMatchScore(q, userMessage) > 0) score += 2;
+  }
+  return score;
+}
+
+function resolveDialogueChoice(
+  history: Array<{ role: "user" | "assistant"; content: string }>,
+  userMessage: string,
+): DialogueChoiceResolution | null {
+  const lastAssistant = [...history].reverse().find((h) => h.role === "assistant" && h.content.trim());
+  if (!lastAssistant) return null;
+  const parsed = extractAlternativeOptionsFromAssistant(lastAssistant.content);
+  if (!parsed) return null;
+  const scored = parsed.options
+    .map((option) => ({ option, score: optionMatchScore(option, userMessage) }))
+    .sort((a, b) => b.score - a.score);
+  const best = scored[0];
+  const second = scored[1];
+  if (!best || best.score <= 0 || (second && best.score <= second.score)) return null;
+  return {
+    question: parsed.question,
+    chosen: best.option,
+    relaxed: scored.slice(1).map((s) => s.option),
+    score: best.score,
+  };
+}
+
+function resolvePendingClarificationChoice(
+  slots: Record<string, unknown>,
+  userMessage: string,
+): DialogueChoiceResolution | null {
+  const pending = slots.pending_clarification;
+  if (!pending || typeof pending !== "object") return null;
+  const p = pending as { question?: unknown; options?: unknown };
+  const options = Array.isArray(p.options)
+    ? p.options
+      .map((o) => typeof o === "string" ? o : o && typeof o === "object" ? String((o as Record<string, unknown>).value ?? (o as Record<string, unknown>).label ?? "") : "")
+      .map(cleanDialogueOptionLabel)
+      .filter((x) => x.length > 0)
+    : [];
+  if (options.length < 2) return null;
+  const scored = options
+    .map((option) => ({ option, score: optionMatchScore(option, userMessage) }))
+    .sort((a, b) => b.score - a.score);
+  const best = scored[0];
+  const second = scored[1];
+  if (!best || best.score <= 0 || (second && best.score <= second.score)) return null;
+  return {
+    question: typeof p.question === "string" ? p.question : "уточнение",
+    chosen: best.option,
+    relaxed: scored.slice(1).map((s) => s.option),
+    score: best.score,
+  };
+}
+
+function dialogueChoiceSystemHint(choice: DialogueChoiceResolution): string {
+  return `<dialogue_resolution>В прошлом ходе ассистент задал альтернативный вопрос: "${choice.question}". Текущая реплика клиента выбрала: "${choice.chosen}". Не выбранные альтернативы считаются ослабленными/неактивными, если клиент не повторил их в текущей реплике: ${choice.relaxed.map((x) => `"${x}"`).join(", ") || "нет"}. Не требуй ослабленные признаки и не задавай тот же выбор заново.</dialogue_resolution>`;
+}
+
+function relaxToolArgsFromDialogueChoice(
+  args: Record<string, unknown>,
+  choice: DialogueChoiceResolution | null,
+  userMessage: string,
+): { args: Record<string, unknown>; removed: Array<{ key: string; value: string; relaxed_by: string }> } | null {
+  if (!choice) return null;
+  const relaxedText = choice.relaxed.join("\n");
+  if (!relaxedText.trim()) return null;
+  const nextArgs = { ...args };
+  const removed: Array<{ key: string; value: string; relaxed_by: string }> = [];
+
+  const shouldRelax = (value: string) => {
+    const relaxedBy = choice.relaxed.find((label) => valueIsEvidenced(value, label) || optionMatchScore(label, value) > 0);
+    const repeatedNow = valueIsEvidenced(value, userMessage) || optionMatchScore(value, userMessage) > 0;
+    return relaxedBy && !repeatedNow ? relaxedBy : null;
+  };
+
+  if (Array.isArray(args.modifiers)) {
+    const kept: string[] = [];
+    for (const value of args.modifiers.map(String).filter(Boolean)) {
+      const relaxedBy = shouldRelax(value);
+      if (relaxedBy) removed.push({ key: "modifiers", value, relaxed_by: relaxedBy });
+      else kept.push(value);
+    }
+    if (kept.length !== args.modifiers.length) nextArgs.modifiers = kept;
+  }
+
+  if (args.mode !== "by_filter" || !args.options || typeof args.options !== "object") {
+    return removed.length > 0 ? { args: nextArgs, removed } : null;
+  }
+
+  const nextOptions: Record<string, string[]> = {};
+  for (const [key, rawVals] of Object.entries(args.options as Record<string, unknown>)) {
+    const vals = Array.isArray(rawVals) ? rawVals.map(String).filter(Boolean) : [];
+    for (const value of vals) {
+      const relaxedBy = shouldRelax(value);
+      if (relaxedBy) {
+        removed.push({ key, value, relaxed_by: relaxedBy });
+        continue;
+      }
+      (nextOptions[key] ??= []).push(value);
+    }
+  }
+  if (removed.length === 0) return null;
+  if (Object.keys(nextOptions).length > 0) nextArgs.options = nextOptions;
+  else delete nextArgs.options;
+  return { args: nextArgs, removed };
 }
 
 // Extracts the model/series code from an anchor pagetitle: the most
@@ -1313,11 +1474,14 @@ interface RequestBody {
   message?: string;
   sessionId?: string;
   history?: Array<{ role: "user" | "assistant"; content: string }>;
+  slots?: Record<string, unknown>;
+  dialogSlots?: Record<string, unknown>;
 }
 
 async function runExpertLoop(
   userMessage: string,
   history: NonNullable<RequestBody["history"]>,
+  slots: Record<string, unknown>,
   apiKey: string,
   ctx: ToolContext,
   send: (ev: SseEvent) => void,
@@ -1393,11 +1557,24 @@ async function runExpertLoop(
     if (axes.length >= 2) replacementRequiredAxes = axes;
   };
 
+  const dialogueChoice = resolvePendingClarificationChoice(slots, userMessage) ?? resolveDialogueChoice(history, userMessage);
+  const systemContent = dialogueChoice
+    ? `${SYSTEM_PROMPT}\n\n${dialogueChoiceSystemHint(dialogueChoice)}`
+    : SYSTEM_PROMPT;
+
   const messages: ORMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: systemContent },
     ...history.map((h) => ({ role: h.role, content: h.content })),
     { role: "user", content: userMessage },
   ];
+
+  if (dialogueChoice) {
+    steps.push({
+      step: "v3_dialogue_choice_resolved",
+      ms: now(),
+      meta: { chosen: dialogueChoice.chosen, relaxed: dialogueChoice.relaxed, score: dialogueChoice.score },
+    });
+  }
 
   const turnController = new AbortController();
   const turnTimer = setTimeout(() => turnController.abort(), TURN_TIMEOUT_MS);
@@ -1524,6 +1701,18 @@ async function runExpertLoop(
             meta: { reason: scoped.reason, original_args: summariseToolArgs(tc.name, tc.args), scoped_args: summariseToolArgs(tc.name, scoped.args) },
           });
           tc.args = scoped.args;
+        }
+
+        const dialogueRelaxed = (tc.name === "search_catalog" || tc.name === "jargon_recover_catalog")
+          ? relaxToolArgsFromDialogueChoice(tc.args, dialogueChoice, userMessage)
+          : null;
+        if (dialogueRelaxed) {
+          steps.push({
+            step: "v3_guard_dialogue_choice_relaxed",
+            ms: now(),
+            meta: { removed: dialogueRelaxed.removed, original_args: summariseToolArgs(tc.name, tc.args), relaxed_args: summariseToolArgs(tc.name, dialogueRelaxed.args) },
+          });
+          tc.args = dialogueRelaxed.args;
         }
 
         let guardOutcome = tc.name === "search_catalog"
@@ -2132,6 +2321,8 @@ Deno.serve(async (req) => {
   }
   const sessionId = body.sessionId ?? crypto.randomUUID();
   const history = Array.isArray(body.history) ? body.history.slice(-20) : [];
+  const rawSlots = body.slots ?? body.dialogSlots;
+  const slots = rawSlots && typeof rawSlots === "object" ? rawSlots : {};
 
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
   const settings = await loadSettings(supabase);
@@ -2174,7 +2365,7 @@ Deno.serve(async (req) => {
       };
 
       try {
-        const out = await runExpertLoop(userMessage, history, settings.openrouter_api_key!, ctx, send, steps, t0);
+        const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0);
         productsCount = out.productsRendered;
       } catch (e) {
         errorMsg = (e as Error)?.message ?? String(e);
