@@ -1507,11 +1507,13 @@ async function runExpertLoop(
   };
 
   const dialogueChoice = resolveDialogueChoice(history, userMessage);
+  const systemContent = dialogueChoice
+    ? `${SYSTEM_PROMPT}\n\n${dialogueChoiceSystemHint(dialogueChoice)}`
+    : SYSTEM_PROMPT;
 
   const messages: ORMessage[] = [
-    { role: "system", content: SYSTEM_PROMPT },
+    { role: "system", content: systemContent },
     ...history.map((h) => ({ role: h.role, content: h.content })),
-    ...(dialogueChoice ? [{ role: "system" as const, content: dialogueChoiceSystemHint(dialogueChoice) }] : []),
     { role: "user", content: userMessage },
   ];
 
