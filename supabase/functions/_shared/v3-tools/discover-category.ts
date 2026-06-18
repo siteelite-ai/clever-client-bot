@@ -197,6 +197,40 @@ async function fetchCategoriesPage(
   return { results: Array.isArray(data.results) ? data.results : [], pagination: data.pagination };
 }
 
+/** Токены строки для overlap-сравнения (lowercase, ё→е, без пунктуации, длиннее 1 символа). */
+function tokensOf(s: string): Set<string> {
+  return new Set(normalize(s).split(" ").filter((t) => t.length > 1));
+}
+
+/**
+ * Если LLM выбрал GROUP (зонтик), пытаемся заменить его на более конкретный лист
+ * этого же поддерева, чьи токены лучше пересекаются с запросом. Полностью data-agnostic:
+ * никаких доменных списков — работает на любом каталоге, у которого есть дерево /categories.
+ */
+function preferLeafWithinGroup(
+  winnerPagetitle: string,
+  queryTokens: Set<string>,
+  cache: CategoriesCache,
+): string {
+  const isWinnerLeaf = cache.isLeaf.get(normalize(winnerPagetitle)) === true;
+  if (isWinnerLeaf) return winnerPagetitle;
+  const id = cache.byPagetitle.get(normalize(winnerPagetitle));
+  if (typeof id !== "number") return winnerPagetitle;
+  const leaves = collectLeafDescendants(id, cache.byId);
+  if (leaves.length === 0) return winnerPagetitle;
+  const winnerTokens = tokensOf(winnerPagetitle);
+  // Очки = (токены листа ∩ query) − (токены листа ∩ winner), чтобы не плюсовать общие "лампы".
+  let best: { pagetitle: string; score: number } | null = null;
+  for (const leaf of leaves) {
+    const lt = tokensOf(leaf.pagetitle);
+    let extra = 0;
+    for (const t of lt) if (queryTokens.has(t) && !winnerTokens.has(t)) extra++;
+    if (extra <= 0) continue;
+    if (!best || extra > best.score) best = { pagetitle: leaf.pagetitle, score: extra };
+  }
+  return best ? best.pagetitle : winnerPagetitle;
+}
+
 async function resolvePagetitle(
   input: DiscoverCategoryInput,
   deps: DiscoverCategoryDeps,
@@ -208,7 +242,12 @@ async function resolvePagetitle(
   if (exact) return { pagetitle: exact.pagetitle, candidates: [exact.pagetitle], cache };
   if (!deps.openrouterApiKey) return null;
 
-  const list = flat.map((c, i) => `${i + 1}. ${c.pagetitle}`).join("\n");
+  const list = flat
+    .map((c, i) => {
+      const tag = cache.isLeaf.get(normalize(c.pagetitle)) ? "[LEAF]" : "[GROUP]";
+      return `${i + 1}. ${tag} ${c.pagetitle}`;
+    })
+    .join("\n");
   const query = [input.semantic_query?.trim(), noun].filter(Boolean).join("\nNOUN: ");
   const res = await (deps.fetchImpl ?? fetch)("https://openrouter.ai/api/v1/chat/completions", {
     method: "POST",
@@ -225,7 +264,7 @@ async function resolvePagetitle(
       messages: [
         {
           role: "system",
-          content: `You are a CATEGORY MATCHER for an e-commerce catalog. Pick exact pagetitle values only from the provided live list. If nothing is related, return {"candidates":[]}. Output strict JSON: {"candidates":[{"pagetitle":"<exact list item>","confidence":0.0}]}. No prose.`,
+          content: `You are a CATEGORY MATCHER for an e-commerce catalog. Pick exact pagetitle values only from the provided live list. Each item is tagged [LEAF] (no children) or [GROUP] (umbrella with children). PREFER [LEAF] when the query specifies a subtype (e.g. modifier like material/form/technology); pick [GROUP] only when the query is generic and no leaf matches the subtype. If nothing is related, return {"candidates":[]}. Output strict JSON: {"candidates":[{"pagetitle":"<exact list item>","confidence":0.0}]}. No prose.`,
         },
         {
           role: "user",
@@ -239,7 +278,14 @@ async function resolvePagetitle(
   const candidates = parseResolverCandidates(json.choices?.[0]?.message?.content ?? "", new Set(flat.map((c) => c.pagetitle)));
   const usable = candidates.filter((c) => c.confidence >= 0.45).map((c) => c.pagetitle);
   if (usable.length === 0) return null;
-  return { pagetitle: usable[0], resolvedFrom: noun, candidates: usable, cache };
+  // Страховка: если победитель — GROUP, и среди его листьев есть более конкретный по токенам запроса — берём лист.
+  const qTokens = tokensOf([input.semantic_query ?? "", noun].join(" "));
+  const refined = usable.map((p) => preferLeafWithinGroup(p, qTokens, cache));
+  // Дедупликация с сохранением порядка.
+  const seen = new Set<string>();
+  const finalList: string[] = [];
+  for (const p of refined) if (!seen.has(p)) { seen.add(p); finalList.push(p); }
+  return { pagetitle: finalList[0], resolvedFrom: noun, candidates: finalList, cache };
 }
 
 async function fetchFacetsForPagetitle(
