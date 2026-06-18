@@ -2122,8 +2122,8 @@ Deno.serve(async (req) => {
         steps.push({ step: "v3_turn_end", ms: Date.now() - t0, meta: { reason: "error", error: errorMsg } });
         if (isOpenRouterQuotaError(errorMsg) && isReplacementIntent(userMessage)) {
           const recovered = await runCatalogOnlyReplacementFallback(userMessage, ctx, send, steps, () => Date.now() - t0);
-          productsCount = recovered;
-          if (recovered > 0) return;
+          productsCount = recovered.rendered;
+          if (recovered.handled) return;
         }
         send({ type: "delta", content: isOpenRouterQuotaError(errorMsg)
           ? "\n\nСейчас недоступен AI-баланс для расширенной обработки. Попробуй позже или свяжись с менеджером."
