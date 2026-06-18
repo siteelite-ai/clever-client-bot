@@ -1672,8 +1672,8 @@ async function runExpertLoop(
           tc.args = scoped.args;
         }
 
-        const dialogueRelaxed = tc.name === "search_catalog"
-          ? relaxSearchOptionsFromDialogueChoice(tc.args, dialogueChoice, userMessage)
+        const dialogueRelaxed = (tc.name === "search_catalog" || tc.name === "jargon_recover_catalog")
+          ? relaxToolArgsFromDialogueChoice(tc.args, dialogueChoice, userMessage)
           : null;
         if (dialogueRelaxed) {
           steps.push({
