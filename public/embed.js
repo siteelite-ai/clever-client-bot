@@ -24,44 +24,12 @@
     directOrigin: 'https://yngoixmvmxdfxokuafjp.supabase.co'
   };
 
-  // V1 / V2 / V3 pipeline routing.
-  // - 'v1' → POST /functions/v1/chat-consultant      (legacy, frozen)
-  // - 'v2' → POST /functions/v1/chat-consultant-v2   (spec impl)
-  // - 'v3' → POST /functions/v1/chat-consultant-v3   (Expert Orchestrator, Claude tools)
-  // Resolved once at widget init via /functions/v1/widget-config.
-  // Manual admin toggle in /settings; no auto/canary/fallback.
-  var activePipeline = 'v1';
-  var activePipelineReady = false;
-  var PIPELINE_PATHS = {
-    v1: '/functions/v1/chat-consultant',
-    v2: '/functions/v1/chat-consultant-v2',
-    v3: '/functions/v1/chat-consultant-v3'
-  };
-  function pipelinePath() {
-    return PIPELINE_PATHS[activePipeline] || PIPELINE_PATHS.v1;
-  }
-  function fetchActivePipeline() {
-    try {
-      return fetch(CONFIG.directOrigin + '/functions/v1/widget-config', {
-        headers: { 'apikey': CONFIG.supabaseKey }
-      }).then(function(r) { return r.ok ? r.json() : null; })
-        .then(function(j) {
-          var raw = j && j.active_pipeline;
-          if (raw === 'v3') activePipeline = 'v3';
-          else if (raw === 'v2') activePipeline = 'v2';
-          else activePipeline = 'v1';
-          activePipelineReady = true;
-          try { console.info('[Widget] active pipeline = ' + activePipeline); } catch(e) {}
-        })
-        .catch(function() { activePipeline = 'v1'; activePipelineReady = true; });
-    } catch(e) {
-      activePipeline = 'v1';
-      activePipelineReady = true;
-      return Promise.resolve();
-    }
-  }
-  // Fire on load; widget can already accept clicks while this resolves (defaults to v1).
-  fetchActivePipeline();
+  // V3-only routing. All widget traffic goes to chat-consultant-v3 unconditionally.
+  // V1/V2 are deprecated for the widget — no widget-config call, no fallback, no race.
+  var activePipeline = 'v3';
+  var activePipelineReady = true;
+  function pipelinePath() { return '/functions/v1/chat-consultant-v3'; }
+  function fetchActivePipeline() { return Promise.resolve(); }
 
   // Initial greeting message
   const initialGreeting = 'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?';
