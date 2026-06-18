@@ -1493,6 +1493,21 @@ async function runExpertLoop(
   let productsRendered = 0;
   let firstAssistantText = "";
   let lastDiscover: DiscoverCategoryOk | null = null;
+  // Session-wide whitelist of category pagetitles discovered via discover_category.
+  // Source of truth for `category` / `category_in` in search_catalog calls.
+  // Prevents LLM hallucinating category names (e.g. "Уличные светильники" вместо
+  // discovered "Светильники") which would cause filtered search to return 0
+  // and force a noisy by_query fallback.
+  const categoryWhitelist = new Set<string>();
+  const normCat = (s: string) => s.trim().toLowerCase().replace(/\s+/g, " ");
+  const whitelistNorm = new Set<string>();
+  const addToWhitelist = (pt: string | undefined | null) => {
+    if (!pt) return;
+    const v = String(pt).trim();
+    if (!v) return;
+    categoryWhitelist.add(v);
+    whitelistNorm.add(normCat(v));
+  };
 
   // Step 6 state: fresh-but-unshown product pool from latest successful search.
   let freshSearch: { tool: string; ids: string[]; total: number } | null = null;
@@ -1690,6 +1705,51 @@ async function runExpertLoop(
               content: JSON.stringify(toolResultForLlm(errResult, tc.args, userMessage)),
             });
             continue;
+          }
+        }
+
+        // ── Category Whitelist Guard
+        // Если LLM передал в search_catalog `category` / `category_in`, которые
+        // не встречались ни в одном discover_category этого диалога — это
+        // галлюцинация имени категории. Мягко подменяем на pagetitle последнего
+        // discover_category (если он есть) и логируем. Если discover_category
+        // ещё не вызывался — passthrough с логом `v3_category_unverified`
+        // (не блокируем, чтобы не сломать legacy-сценарии).
+        if (tc.name === "search_catalog") {
+          const a = tc.args as Record<string, unknown>;
+          const rawCategory = typeof a.category === "string" ? a.category : null;
+          const rawCategoryIn = Array.isArray(a.category_in) ? a.category_in.map(String).filter(Boolean) : [];
+          const allRequested = [...(rawCategory ? [rawCategory] : []), ...rawCategoryIn];
+          if (allRequested.length > 0) {
+            if (whitelistNorm.size === 0) {
+              steps.push({
+                step: "v3_category_unverified",
+                ms: now(),
+                meta: { requested: allRequested, reason: "no_discover_category_yet" },
+              });
+            } else {
+              const bad = allRequested.filter((c) => !whitelistNorm.has(normCat(c)));
+              if (bad.length > 0) {
+                const fallbackCategory = lastDiscover?.category?.pagetitle ?? null;
+                const fallbackLeaves = (lastDiscover?.leaf_categories ?? []).map((l) => l.pagetitle).filter(Boolean);
+                const replacement = fallbackLeaves.length > 0 ? fallbackLeaves : (fallbackCategory ? [fallbackCategory] : []);
+                if (replacement.length > 0) {
+                  const { category: _c, category_in: _ci, ...rest } = a;
+                  tc.args = replacement.length === 1
+                    ? { ...rest, category: replacement[0] }
+                    : { ...rest, category_in: replacement };
+                  steps.push({
+                    step: "v3_category_whitelist_corrected",
+                    ms: now(),
+                    meta: {
+                      hallucinated: bad,
+                      replaced_with: replacement,
+                      whitelist_size: whitelistNorm.size,
+                    },
+                  });
+                }
+              }
+            }
           }
         }
 
@@ -2096,6 +2156,10 @@ async function runExpertLoop(
 
         if (tc.name === "discover_category" && result.ok) {
           lastDiscover = result as unknown as DiscoverCategoryOk;
+          addToWhitelist(lastDiscover.category?.pagetitle);
+          for (const leaf of lastDiscover.leaf_categories ?? []) {
+            addToWhitelist(leaf.pagetitle);
+          }
         }
 
 
