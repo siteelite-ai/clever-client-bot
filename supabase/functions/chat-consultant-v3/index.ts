@@ -748,6 +748,34 @@ function buildReplacementAxes(args: Record<string, unknown>, lastDiscover: Disco
   return axes;
 }
 
+function canonicalizeSearchOptionsFromDiscover(
+  args: Record<string, unknown>,
+  lastDiscover: DiscoverCategoryOk | null,
+): { args: Record<string, unknown>; rewrites: Array<{ key: string; from: string; to: string }> } | null {
+  if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) return null;
+  const options = (args as { options?: Record<string, unknown> }).options;
+  if (!options || typeof options !== "object") return null;
+  const nextOptions: Record<string, string[]> = {};
+  const rewrites: Array<{ key: string; from: string; to: string }> = [];
+  let changed = false;
+  for (const [key, raw] of Object.entries(options)) {
+    const vals = Array.isArray(raw) ? raw.map(String).filter(Boolean) : [];
+    if (vals.length === 0) continue;
+    const facet = lastDiscover.facets.find((f) => f.key === key);
+    nextOptions[key] = vals.map((value) => {
+      const canonical = facet?.values.find((v) => facetValueEquals(v.value, value))?.value;
+      if (canonical && canonical !== value) {
+        changed = true;
+        rewrites.push({ key, from: value, to: canonical });
+        return canonical;
+      }
+      return value;
+    });
+  }
+  if (!changed) return null;
+  return { args: { ...args, options: nextOptions }, rewrites };
+}
+
 function productMatchesReplacementAxis(product: { short_traits?: string[] }, axis: ReplacementAxis): boolean {
   const captionNorm = normalizeForMatch(axis.caption);
   for (const line of product.short_traits ?? []) {
@@ -1463,9 +1491,22 @@ async function runExpertLoop(
           }
         }
 
+        let runArgs: Record<string, unknown> = tc.args;
+        const canonicalized = tc.name === "search_catalog"
+          ? canonicalizeSearchOptionsFromDiscover(tc.args, lastDiscover)
+          : null;
+        if (canonicalized) {
+          runArgs = canonicalized.args;
+          steps.push({
+            step: "v3_guard_option_canonicalized",
+            ms: now(),
+            meta: { rewrites: canonicalized.rewrites, original_args: summariseToolArgs(tc.name, tc.args) },
+          });
+        }
+
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
-        let result = await runTool(tc.name, tc.args, ctx);
-        let effectiveArgs: Record<string, unknown> = tc.args;
+        let result = await runTool(tc.name, runArgs, ctx);
+        let effectiveArgs: Record<string, unknown> = runArgs;
         let inferredFallback: Array<{ key: string; value: string }> | null = null;
         let splitFallbackResult: { axes: SplitAxis[]; ms: number } | null = null;
         const dur = Date.now() - toolStart;
@@ -1484,7 +1525,7 @@ async function runExpertLoop(
             ok: result.ok,
             error_code: !result.ok ? result.error_code : null,
             duration_ms: dur,
-            args: summariseToolArgs(tc.name, tc.args),
+            args: summariseToolArgs(tc.name, runArgs),
             result: summariseToolResultMeta(tc.name, result),
           },
         });
@@ -1706,13 +1747,30 @@ async function runExpertLoop(
       const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
       productsRendered += rescued;
     }
+    if (productsRendered === 0) {
+      const pool = pickFreshUnshown(8);
+      if (pool.length > 0) {
+        const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
+        if (render.ok) {
+          send({ type: "tool_event", tool: "render_products", phase: "result", duration_ms: 0, summary: `last-chance ${render.rendered_count}` });
+          send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: freshSearch?.total });
+          for (const id of pool) shownIds.add(id);
+          productsRendered += render.rendered_count;
+          steps.push({
+            step: "v3_guard_last_chance_render",
+            ms: now(),
+            meta: { pool_size: pool.length, fresh_tool: freshSearch?.tool, fresh_total: freshSearch?.total, rendered: render.rendered_count },
+          });
+        }
+      }
+    }
     steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "forced_stepcount", step_count: MAX_STEPS } });
     if (productsRendered === 0) {
       if (replacementIntent && replacementRequiredAxes.length >= 2) {
         const criteria = replacementRequiredAxes
           .map((a) => `${a.caption}: ${a.values.join("/")}`)
           .join(", ");
-        send({ type: "delta", content: `\n\nПо каталогу не нашёл полноценный аналог с теми же критичными параметрами (${criteria}). Похожие позиции есть отдельно, но они не проходят как замена по монтажу/габаритам — лучше уточнить замену у менеджера.` });
+        send({ type: "delta", content: `\n\nПо каталогу не нашёл полноценный аналог с теми же критичными параметрами (${criteria}). Похожие позиции есть отдельно, но они не проходят как полноценная замена по этим параметрам — лучше уточнить замену у менеджера.` });
       } else {
         send({ type: "delta", content: "\n\nНе нашёл подходящие товары по этому сочетанию параметров. Могу попробовать расширить поиск или передать вопрос менеджеру." });
       }
