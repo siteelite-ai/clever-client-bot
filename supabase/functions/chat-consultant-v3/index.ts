@@ -593,6 +593,8 @@ function promiseRealityCheck(
 
 // ── Step 5: Price Direction Guard ────────────────────────────────────────
 type PriceDirection = "cheaper" | "more_expensive" | "same";
+type PriceIntentKind = "superlative" | "comparative";
+interface PriceIntent { kind: PriceIntentKind; direction: PriceDirection; }
 
 function extractBudgetCap(msg: string): number | null {
   const m = msg.toLowerCase().replace(/\s+/g, " ");
