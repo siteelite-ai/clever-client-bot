@@ -34,6 +34,7 @@ export interface SearchCatalogInput {
   page?: number;
   per_page?: number;
   sort_cheapest?: boolean;
+  sort_expensive?: boolean;
   /**
    * L₀ — листовая категория ЯКОРЯ для режима «аналог» (берётся из anchor.leaf_category).
    * Если задана и отсутствует в category/category_in — сервер автоматически инжектирует её
