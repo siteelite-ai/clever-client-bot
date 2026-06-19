@@ -35,30 +35,64 @@ export async function executeLookupKnowledge(
 
   try {
     // Hybrid search WITHOUT embedding (FTS-only path).
-    // Embeddings could be added later via Gemini Embedding 001 if needed.
-    const { data, error } = await supabase.rpc("search_knowledge_chunks_hybrid", {
+    // 1) Try chunk-level RPC (preferred — gives focused snippets).
+    const { data: chunkData, error: chunkErr } = await supabase.rpc("search_knowledge_chunks_hybrid", {
       search_query: q,
       query_embedding: null,
       match_count: topK,
       max_chunks_per_entry: 2,
     });
 
-    if (error) {
+    if (chunkErr) {
       return {
         tool: "lookup_knowledge",
         ok: false,
         error_code: "knowledge_unavailable",
-        message: error.message,
+        message: chunkErr.message,
       };
     }
 
-    const rows = (data ?? []) as HybridRow[];
+    let rows = (chunkData ?? []) as HybridRow[];
+
+    // 2) Fallback: most entries don't have chunks generated. Search entries directly.
+    if (rows.length === 0) {
+      const { data: entryData, error: entryErr } = await supabase.rpc("search_knowledge_hybrid", {
+        search_query: q,
+        query_embedding: null,
+        match_count: topK,
+      });
+      if (entryErr) {
+        return {
+          tool: "lookup_knowledge",
+          ok: false,
+          error_code: "knowledge_unavailable",
+          message: entryErr.message,
+        };
+      }
+      rows = ((entryData ?? []) as Array<{
+        id: string;
+        title: string | null;
+        content: string | null;
+        type: string | null;
+        source_url: string | null;
+        score: number | null;
+      }>).map((r) => ({
+        entry_id: r.id,
+        chunk_id: r.id,
+        title: r.title,
+        content: r.content,
+        type: r.type,
+        source_url: r.source_url,
+        score: r.score,
+      }));
+    }
+
     return {
       tool: "lookup_knowledge",
       ok: true,
       hits: rows.map((r) => ({
         title: r.title ?? "",
-        snippet: snippetOf(r.content ?? ""),
+        snippet: snippetOf(r.content ?? "", 600),
         source_url: r.source_url,
         type: r.type ?? "general",
         score: Number(r.score ?? 0),
