@@ -1403,7 +1403,7 @@ async function callOpenRouter(
     body: JSON.stringify({
       model: MODEL,
       temperature: 0.2,
-      max_tokens: 1500,
+      max_tokens: 4000,
       messages,
       tools: TOOL_SCHEMAS,
       tool_choice: "auto",
