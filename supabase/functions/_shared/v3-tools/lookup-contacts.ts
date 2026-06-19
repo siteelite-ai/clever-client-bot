@@ -118,36 +118,66 @@ function parseHq(records: Array<{ title: string; content: string }>): HqContacts
 // ────────────────────────────────────────────────────────────────────────────
 // Парсер филиалов
 // Формат строки (структурированная KB-запись):
-//   "Филиал: г. Астана | ул. Сембинова, 20/1, ... | Филиал г. Астана | +7 (701) 026-23-67 | пн.-пт. 9:00-19:00, сб.-вс. 10:00-19:00"
-// Также поддерживаем плоские блоки из первой записи:
-//   "Адрес: ... Корпоративный отдел: ... Наименование организации: ... Время работы: ..."
+//   "Филиал: г. <CITY> | <address> | <name?> | <phone?> | <hours?>"
+// Поля после города идут в произвольном порядке (имя/телефон/часы могут
+// отсутствовать или меняться местами), поэтому разбираем по pipe-разделителю
+// и классифицируем каждый фрагмент эвристиками.
+// Также: префикс города может быть "г. г. Алматы" — схлопываем все "г.".
+// Дополнительно поддерживаем плоские блоки HQ-портянки про Караганду.
 // ────────────────────────────────────────────────────────────────────────────
 
-const BRANCH_LINE_RE = /Филиал:\s*г\.\s*([А-ЯЁа-яё\-]+)\s*\|\s*([^|]+?)\s*\|\s*([^|]*?)\s*(?:\|\s*([^|]*))?(?:\|\s*([^|\n]*))?/g;
+const BRANCH_PREFIX_RE = /^Филиал:\s*/i;
+const CITY_PREFIX_RE = /^(?:г\.?\s*)+/i;
+const HOURS_RE = /(пн|вт|ср|чт|пт|сб|вс|выход|обед|\d{1,2}[:\.]\d{2})/i;
+const NAME_RE = /(магазин|филиал|отдел|пункт|volt|220)/i;
+
+function parseBranchLine(line: string): Branch | null {
+  const trimmed = line.trim();
+  if (!BRANCH_PREFIX_RE.test(trimmed)) return null;
+  const body = trimmed.replace(BRANCH_PREFIX_RE, "");
+  const parts = body.split("|").map((s) => s.trim()).filter(Boolean);
+  if (parts.length < 2) return null;
+  const city = parts[0].replace(CITY_PREFIX_RE, "").trim();
+  if (!city) return null;
+  const address = parts[1];
+  let name = "";
+  const phones: string[] = [];
+  let hours = "";
+  for (let i = 2; i < parts.length; i++) {
+    const seg = parts[i];
+    const phoneMatch = seg.match(PHONE_RE);
+    if (phoneMatch && phoneMatch.length > 0) {
+      for (const p of phoneMatch) phones.push(prettyPhone(p));
+      const remainder = seg.replace(PHONE_RE, "").trim();
+      if (remainder && HOURS_RE.test(remainder)) {
+        hours = hours ? `${hours}; ${remainder}` : remainder;
+      }
+      continue;
+    }
+    if (HOURS_RE.test(seg)) {
+      hours = hours ? `${hours}; ${seg}` : seg;
+      continue;
+    }
+    if (!name && NAME_RE.test(seg)) {
+      name = seg;
+      continue;
+    }
+    if (!name) name = seg;
+  }
+  return { city, address, name, phones, hours };
+}
 
 function parseBranches(records: Array<{ title: string; content: string }>): Branch[] {
   const branches: Branch[] = [];
   const combined = records.map((r) => r.content).join("\n\n");
 
   // 1) Структурированные строки "Филиал: г. X | ..."
-  let m: RegExpExecArray | null;
-  BRANCH_LINE_RE.lastIndex = 0;
-  while ((m = BRANCH_LINE_RE.exec(combined)) !== null) {
-    const city = m[1].trim();
-    const address = (m[2] ?? "").trim();
-    const name = (m[3] ?? "").trim();
-    const rest1 = (m[4] ?? "").trim();
-    const rest2 = (m[5] ?? "").trim();
-    const tail = `${rest1} ${rest2}`.trim();
-    const phones = (tail.match(PHONE_RE) ?? []).map(prettyPhone);
-    const hours = tail.replace(PHONE_RE, "").replace(/\s+/g, " ").trim();
-    branches.push({ city, address, name, phones, hours });
+  for (const rawLine of combined.split(/\r?\n/)) {
+    const b = parseBranchLine(rawLine);
+    if (b) branches.push(b);
   }
 
-  // 2) Плоские блоки из первой записи (HQ-портянка с филиалами в Караганде)
-  //    "Адрес: <addr> ... Корпоративный отдел: <phone> ... Наименование организации: <name> ... Время работы: <hours>"
-  const flatBlockRe = /Адрес:\s*([^А-Я]+?Караганд[а-я]*[^.]*?)(?=\s*(?:Корпоративный|Наименование|Время|E-mail|Адрес:|$))/gi;
-  // Менее формальный, но рабочий подход — раскалываем по "Адрес:" и парсим каждый кусок.
+  // 2) Плоские блоки из HQ-портянки про Караганду
   const chunks = combined.split(/(?=Адрес:\s+)/g);
   for (const chunk of chunks) {
     if (!/Караганд/i.test(chunk)) continue;
@@ -158,7 +188,6 @@ function parseBranches(records: Array<{ title: string; content: string }>): Bran
     const hoursM = chunk.match(/Время работы:\s*([^\n]+?)(?=\s+E-mail|\s+Адрес|\s+Наименование|$)/i);
     if (!addrM) continue;
     const address = addrM[1].trim();
-    // Не дублируем то, что уже распознано структурированным парсером.
     const norm = address.toLowerCase().replace(/\s+/g, " ");
     if (branches.some((b) => b.address.toLowerCase().replace(/\s+/g, " ") === norm)) continue;
     branches.push({
