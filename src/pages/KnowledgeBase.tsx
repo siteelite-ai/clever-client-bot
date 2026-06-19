@@ -420,8 +420,33 @@ export default function KnowledgeBase() {
           </div>
         </div>
 
+        {/* Индексация: прогресс фоновой обработки orphan-записей */}
+        {indexProgress && indexProgress.orphan > 0 && (
+          <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <Loader2 className="w-4 h-4 animate-spin text-primary" />
+                Идёт фоновая индексация базы знаний
+              </div>
+              <span className="text-sm text-muted-foreground tabular-nums">
+                {indexProgress.indexed} / {indexProgress.total}
+              </span>
+            </div>
+            <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+              <div
+                className="h-full bg-primary transition-all duration-500"
+                style={{ width: `${Math.round((indexProgress.indexed / Math.max(1, indexProgress.total)) * 100)}%` }}
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Осталось обработать: {indexProgress.orphan}. Страница автоматически обновляется каждые 8 секунд — можно закрыть, процесс продолжится в фоне.
+            </p>
+          </div>
+        )}
+
         {/* Contacts Card */}
         <ContactsCard onContactsSaved={loadEntries} />
+
 
         {/* Search & Filter */}
         <div className="flex items-center gap-3 flex-wrap">
