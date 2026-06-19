@@ -287,6 +287,27 @@ export async function executeLookupContacts(
     const branches = parseBranches(records);
     const cities = [...new Set(branches.map((b) => b.city))].sort();
 
+    // Сценарий 0: вопрос про оплату/доставку — это политики магазина, а не контакты.
+    //             Карточку филиалов НЕ показываем (она вводит клиента в заблуждение —
+    //             выглядит как ответ на вопрос). Возвращаем сигнал «вызови lookup_knowledge».
+    if (topic === "payment" || topic === "delivery") {
+      return {
+        tool: "lookup_contacts",
+        ok: true,
+        data: {
+          html_block: undefined,
+          cities,
+          branches_count: branches.length,
+          route_to_knowledge: true,
+          hint:
+            topic === "delivery"
+              ? "Условия доставки описаны в базе знаний. Вызови lookup_knowledge с query='доставка' и ответь по фактам из её содержимого. Карточку контактов НЕ показывай — она про филиалы, а не про доставку."
+              : "Условия оплаты описаны в базе знаний. Вызови lookup_knowledge с query='оплата' и ответь по фактам. Карточку контактов НЕ показывай.",
+        },
+        side_effects: [],
+      };
+    }
+
     // Сценарий 1: клиент указал город → отдаём именно его филиалы.
     if (cityFilter) {
       const norm = normCity(cityFilter);
@@ -318,14 +339,6 @@ export async function executeLookupContacts(
       };
     }
 
-    // Сценарий 2: вопрос про оплату/доставку — не привязан к филиалу,
-    //             отдаём HQ-карточку.
-    if (topic === "payment" || topic === "delivery") {
-      const html_block = renderHqCard(hq);
-      const data: LookupContactsOk["data"] = { html_block, cities, branches_count: branches.length };
-      const side_effects: ToolSideEffect[] = html_block ? [{ type: "contacts", html: html_block }] : [];
-      return { tool: "lookup_contacts", ok: true, data, side_effects };
-    }
 
     // Сценарий 3: филиалов больше одного города и topic про адрес/часы/телефон/общий —
     //             ход требует уточнения города, карточку НЕ показываем.
