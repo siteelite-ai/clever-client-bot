@@ -279,7 +279,6 @@ export default function KnowledgeBase() {
           <div className="flex gap-2">
             <SitemapImportDialog onImportComplete={loadEntries} />
 
-            </Button>
             <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
               <DialogTrigger asChild>
                 <Button>
