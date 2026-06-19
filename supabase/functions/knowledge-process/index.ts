@@ -687,22 +687,30 @@ serve(async (req) => {
 
       console.log(`[Knowledge] Listed ${entries.length} entries`);
 
+      // Лимит размера для self-heal: записи больше — нужно чанковать вручную
+      const SELF_HEAL_MAX_LEN = 80_000;
+
       // Подсчёт orphan-записей (без чанков) для прогресса на фронте
       let totalEntries = entries.length;
       let orphanEntries = 0;
+      let oversizedEntries = 0;
       let indexedEntries = totalEntries;
       try {
         const { data: chunkedRows } = await supabase
           .from('knowledge_chunks')
           .select('knowledge_entry_id');
         const chunkedSet = new Set((chunkedRows || []).map((r: any) => r.knowledge_entry_id));
-        orphanEntries = (data || []).filter((e: any) => !chunkedSet.has(e.id)).length;
-        indexedEntries = totalEntries - orphanEntries;
+        const allOrphans = (data || []).filter((e: any) => !chunkedSet.has(e.id));
+        oversizedEntries = allOrphans.filter((e: any) => (e.content?.length || 0) > SELF_HEAL_MAX_LEN).length;
+        orphanEntries = allOrphans.length - oversizedEntries;
+        indexedEntries = totalEntries - allOrphans.length;
       } catch (e) {
         console.error('[Knowledge] Orphan count failed:', (e as Error).message);
       }
 
-      // Self-healing: в фоне дочанковываем легаси-записи без чанков (по 2 за вызов).
+      // Self-healing: в фоне дочанковываем легаси-записи без чанков.
+      // Сортируем по длине ASC → маленькие записи индексируются первыми и не блокируются гигантами.
+      // Записи >SELF_HEAL_MAX_LEN пропускаем (для них нужна ручная порционная обработка).
       // @ts-ignore EdgeRuntime доступен в Supabase Edge runtime
       EdgeRuntime.waitUntil((async () => {
         try {
@@ -716,8 +724,14 @@ serve(async (req) => {
             .select('knowledge_entry_id');
           const chunkedSet = new Set((chunkedRows || []).map((r: any) => r.knowledge_entry_id));
 
-          const orphans = allIds.filter((e: any) => !chunkedSet.has(e.id)).slice(0, 2);
-          if (orphans.length === 0) return;
+          const orphans = allIds
+            .filter((e: any) => !chunkedSet.has(e.id) && (e.content?.length || 0) <= SELF_HEAL_MAX_LEN)
+            .sort((a: any, b: any) => (a.content?.length || 0) - (b.content?.length || 0))
+            .slice(0, 2);
+          if (orphans.length === 0) {
+            console.log('[Knowledge] Self-heal: no eligible orphans (oversized entries are skipped)');
+            return;
+          }
 
           console.log(`[Knowledge] Self-heal: chunking ${orphans.length} orphan entries`);
           for (const entry of orphans) {
@@ -734,10 +748,11 @@ serve(async (req) => {
       })());
 
       return new Response(
-        JSON.stringify({ success: true, entries, totalEntries, indexedEntries, orphanEntries }),
+        JSON.stringify({ success: true, entries, totalEntries, indexedEntries, orphanEntries, oversizedEntries }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
+
 
 
 
