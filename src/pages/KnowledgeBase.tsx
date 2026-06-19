@@ -43,7 +43,7 @@ export default function KnowledgeBase() {
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [viewEntry, setViewEntry] = useState<KnowledgeEntry | null>(null);
-  const [indexProgress, setIndexProgress] = useState<{ total: number; indexed: number; orphan: number } | null>(null);
+  const [indexProgress, setIndexProgress] = useState<{ total: number; indexed: number; orphan: number; oversized: number } | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
