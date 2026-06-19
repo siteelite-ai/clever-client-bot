@@ -693,9 +693,25 @@ function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd
 // the anchor SKU itself MUST NOT appear in the rendered list (it's the source,
 // not an analog). Triggers: "аналог", "замен", "похож", "альтернатив", "вместо",
 // "взамен", "замена".
+// Replacement-режим требует ДВУХ условий одновременно:
+// 1) триггер-слово (аналог/замен/вместо/похож/альтернатив/взамен);
+// 2) признак якоря в той же фразе — конкретная модель/артикул/имя в кавычках.
+// Без якоря «заменить люстру на светодиодное освещение» — это смена ТИПА товара,
+// а не подбор аналога конкретной модели. По контракту <replacement_anchoring>
+// весь алгоритм требует anchor (leaf_category, price, traits), которого без
+// этих сигналов взять неоткуда → LLM застревает. Такие запросы должны идти
+// обычным select-маршрутом: discover_category → нужный leaf → by_filter → render.
 function isReplacementIntent(msg: string): boolean {
-  const m = msg.toLowerCase();
-  return /(аналог|альтернатив|похож|замен|вместо|взамен)/u.test(m);
+  const m = msg.toLowerCase().replace(/ё/g, "е");
+  const trigger = /(аналог|альтернатив|похож|замен|вместо|взамен)/u.test(m);
+  if (!trigger) return false;
+  // Признаки якоря: длинное число (артикул), бренд-модель с цифрами
+  // (например «ва47-29», «mad22-2-080», «cl001»), либо имя в кавычках.
+  const hasAnchor =
+    /\b\d{4,}\b/.test(m) ||
+    /\b[a-zа-я]{2,}[-\s]?\d{2,}[a-zа-я0-9-]*\b/iu.test(m) ||
+    /«[^»]{2,}»|"[^"]{2,}"/u.test(m);
+  return hasAnchor;
 }
 
 // Семантический детектор намерения клиента: "select" — подбор товара
