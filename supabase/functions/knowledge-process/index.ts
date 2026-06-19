@@ -687,12 +687,25 @@ serve(async (req) => {
 
       console.log(`[Knowledge] Listed ${entries.length} entries`);
 
+      // Подсчёт orphan-записей (без чанков) для прогресса на фронте
+      let totalEntries = entries.length;
+      let orphanEntries = 0;
+      let indexedEntries = totalEntries;
+      try {
+        const { data: chunkedRows } = await supabase
+          .from('knowledge_chunks')
+          .select('knowledge_entry_id');
+        const chunkedSet = new Set((chunkedRows || []).map((r: any) => r.knowledge_entry_id));
+        orphanEntries = (data || []).filter((e: any) => !chunkedSet.has(e.id)).length;
+        indexedEntries = totalEntries - orphanEntries;
+      } catch (e) {
+        console.error('[Knowledge] Orphan count failed:', (e as Error).message);
+      }
+
       // Self-healing: в фоне дочанковываем легаси-записи без чанков (по 2 за вызов).
-      // Так старые записи постепенно индексируются без участия пользователя.
       // @ts-ignore EdgeRuntime доступен в Supabase Edge runtime
       EdgeRuntime.waitUntil((async () => {
         try {
-          // Берём все id, у которых нет чанков
           const { data: allIds } = await supabase
             .from('knowledge_entries')
             .select('id, title, content');
@@ -721,10 +734,11 @@ serve(async (req) => {
       })());
 
       return new Response(
-        JSON.stringify({ success: true, entries }),
+        JSON.stringify({ success: true, entries, totalEntries, indexedEntries, orphanEntries }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
+
 
 
     if (action === 'search') {
