@@ -75,6 +75,7 @@ export default function KnowledgeBase() {
           total: data.totalEntries,
           indexed: data.indexedEntries ?? 0,
           orphan: data.orphanEntries ?? 0,
+          oversized: data.oversizedEntries ?? 0,
         });
       }
     } catch (error) {
