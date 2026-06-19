@@ -1325,7 +1325,8 @@ function toolResultForLlm(r: ToolResult, args: Record<string, unknown>, userMess
     };
   }
   if (r.ok && r.tool === "lookup_contacts") {
-    // не отдаём html_block в LLM, чтобы не процитировал
+    // не отдаём html_block в LLM, чтобы не процитировал;
+    // зато requires_city/cities — критичны для решения «спросить или показать».
     const { data } = r;
     return {
       ok: true,
@@ -1335,6 +1336,10 @@ function toolResultForLlm(r: ToolResult, args: Record<string, unknown>, userMess
         hours: data.hours,
         payment: data.payment,
         delivery: data.delivery,
+        cities: data.cities,
+        branches_count: data.branches_count,
+        requires_city: data.requires_city,
+        matched_city: data.matched_city,
       },
     };
   }
@@ -1521,6 +1526,9 @@ async function runExpertLoop(
   let replacementRequiredAxes: ReplacementAxis[] = [];
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
+  // Turn-level guard: рендерим карточку контактов максимум один раз,
+  // даже если LLM по ошибке вызвал lookup_contacts повторно (топик-дубль).
+  const contactsEmitted = { value: false };
   // Anchor exclusion: in replacement-intent turns ("аналог/замена/похожее"),
   // the anchor SKU itself must never appear in the rendered list — it's the
   // source product, not its analog. Computed lazily because the anchor is only
@@ -2268,7 +2276,23 @@ async function runExpertLoop(
 
 
         // Tool-driven SSE side-effects (contacts/quick_replies/slot_update).
-        emitSideEffects(result, send);
+        // Контактную карточку рендерим максимум один раз за ход.
+        if (result.ok) {
+          const fx = (result as { side_effects?: ToolSideEffect[] }).side_effects;
+          if (Array.isArray(fx) && fx.length > 0) {
+            const filtered = fx.filter((ev) => {
+              if (ev.type === "contacts") {
+                if (contactsEmitted.value) return false;
+                contactsEmitted.value = true;
+              }
+              return true;
+            });
+            if (filtered.length > 0) {
+              const clone = { ...(result as unknown as Record<string, unknown>), side_effects: filtered } as unknown as ToolResult;
+              emitSideEffects(clone, send);
+            }
+          }
+        }
 
         // If we dropped inferred filters and got broader results — tell user up front,
         // and tell LLM in the tool reply so it doesn't claim "by exact parameters".
