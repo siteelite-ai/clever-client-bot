@@ -1671,6 +1671,16 @@ async function runExpertLoop(
             ms: now(),
             meta: { chars: resp.text.length, fragment_index: step, text: resp.text },
           });
+        } else if (!firstAssistantText) {
+          // Intro-пузырь ещё не показывали (на шаге 0 LLM ушёл сразу в тул без
+          // текста), а сейчас наконец появилось «размышление» перед следующим
+          // тулом — поднимаем его как intro bubble, чтобы пользователь видел,
+          // что эксперт рассуждает, а не молча «думает».
+          send({ type: "assistant_turn_break", reason: "intro_late" });
+          send({ type: "delta", content: resp.text });
+          finalText += resp.text;
+          firstAssistantText = resp.text.trim();
+          steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text, late: true } });
         } else {
           steps.push({ step: "v3_assistant_text_suppressed", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
         }
