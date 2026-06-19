@@ -50,7 +50,7 @@ async function loadContactsRaw(supabase: SupabaseClient): Promise<Array<{ title:
   const { data, error } = await supabase
     .from("knowledge_entries")
     .select("title, content")
-    .or("title.ilike.%контакт%,title.ilike.%филиал%,title.ilike.%адрес%,title.ilike.%график%,title.ilike.%доставк%,title.ilike.%оплат%")
+    .or("title.ilike.%контакт%,title.ilike.%филиал%,title.ilike.%адрес%,title.ilike.%график%,title.ilike.%телефон%,title.ilike.%режим работы%")
     .limit(20);
   if (error) throw new Error(error.message);
   return data ?? [];
