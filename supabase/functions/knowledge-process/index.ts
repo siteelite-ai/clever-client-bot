@@ -80,7 +80,7 @@ function chunkText(text: string, targetSize = 700, overlap = 100): string[] {
       else if (sent > targetSize * 0.5) end = pos + sent + 1;
     }
     const piece = clean.slice(pos, end).trim();
-    if (piece.length > 30) chunks.push(piece);
+    if (piece.length > 0) chunks.push(piece);
     if (end >= clean.length) break;
     pos = Math.max(end - overlap, pos + 1);
   }
@@ -687,11 +687,45 @@ serve(async (req) => {
 
       console.log(`[Knowledge] Listed ${entries.length} entries`);
 
+      // Self-healing: в фоне дочанковываем легаси-записи без чанков (по 2 за вызов).
+      // Так старые записи постепенно индексируются без участия пользователя.
+      // @ts-ignore EdgeRuntime доступен в Supabase Edge runtime
+      EdgeRuntime.waitUntil((async () => {
+
+          // Берём все id, у которых нет чанков
+          const { data: allIds } = await supabase
+            .from('knowledge_entries')
+            .select('id, title, content');
+          if (!allIds || allIds.length === 0) return;
+
+          const { data: chunkedRows } = await supabase
+            .from('knowledge_chunks')
+            .select('knowledge_entry_id');
+          const chunkedSet = new Set((chunkedRows || []).map((r: any) => r.knowledge_entry_id));
+
+          const orphans = allIds.filter((e: any) => !chunkedSet.has(e.id)).slice(0, 2);
+          if (orphans.length === 0) return;
+
+          console.log(`[Knowledge] Self-heal: chunking ${orphans.length} orphan entries`);
+          for (const entry of orphans) {
+            try {
+              const res = await chunkAndStore(supabase, entry.id, entry.title, entry.content);
+              console.log(`[Knowledge] Self-heal: "${entry.title.substring(0, 40)}" → ${res.inserted} chunks`);
+            } catch (e) {
+              console.error(`[Knowledge] Self-heal error for ${entry.id}:`, (e as Error).message);
+            }
+          }
+        } catch (e) {
+          console.error('[Knowledge] Self-heal failed:', (e as Error).message);
+        }
+      })());
+
       return new Response(
         JSON.stringify({ success: true, entries }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
+
 
     if (action === 'search') {
       // Semantic search in knowledge base
