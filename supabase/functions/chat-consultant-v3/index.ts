@@ -2276,7 +2276,23 @@ async function runExpertLoop(
 
 
         // Tool-driven SSE side-effects (contacts/quick_replies/slot_update).
-        emitSideEffects(result, send);
+        // Контактную карточку рендерим максимум один раз за ход.
+        if (result.ok) {
+          const fx = (result as { side_effects?: ToolSideEffect[] }).side_effects;
+          if (Array.isArray(fx) && fx.length > 0) {
+            const filtered = fx.filter((ev) => {
+              if (ev.type === "contacts") {
+                if (contactsEmitted.value) return false;
+                contactsEmitted.value = true;
+              }
+              return true;
+            });
+            if (filtered.length > 0) {
+              const clone = { ...(result as Record<string, unknown>), side_effects: filtered } as ToolResult;
+              emitSideEffects(clone, send);
+            }
+          }
+        }
 
         // If we dropped inferred filters and got broader results — tell user up front,
         // and tell LLM in the tool reply so it doesn't claim "by exact parameters".
