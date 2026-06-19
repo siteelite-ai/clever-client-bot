@@ -80,7 +80,7 @@ function chunkText(text: string, targetSize = 700, overlap = 100): string[] {
       else if (sent > targetSize * 0.5) end = pos + sent + 1;
     }
     const piece = clean.slice(pos, end).trim();
-    if (piece.length > 30) chunks.push(piece);
+    if (piece.length > 0) chunks.push(piece);
     if (end >= clean.length) break;
     pos = Math.max(end - overlap, pos + 1);
   }
