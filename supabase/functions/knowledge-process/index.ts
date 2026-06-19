@@ -691,16 +691,7 @@ serve(async (req) => {
       // Так старые записи постепенно индексируются без участия пользователя.
       // @ts-ignore EdgeRuntime доступен в Supabase Edge runtime
       EdgeRuntime.waitUntil((async () => {
-        try {
-          const { data: orphans } = await supabase
-            .from('knowledge_entries')
-            .select('id, title, content')
-            .not('id', 'in', `(${'SELECT knowledge_entry_id FROM knowledge_chunks'})`)
-            .limit(2);
-          // ^ supabase-js не поддерживает подзапросы — используем raw rpc-like подход ниже
-        } catch {}
 
-        try {
           // Берём все id, у которых нет чанков
           const { data: allIds } = await supabase
             .from('knowledge_entries')
