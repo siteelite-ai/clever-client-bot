@@ -87,6 +87,26 @@ function chunkText(text: string, targetSize = 700, overlap = 100): string[] {
   return chunks;
 }
 
+// Fetch all distinct knowledge_entry_id from knowledge_chunks bypassing the 1000-row default limit.
+async function fetchChunkedEntryIds(supabase: any): Promise<Set<string>> {
+  const set = new Set<string>();
+  const pageSize = 1000;
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from('knowledge_chunks')
+      .select('knowledge_entry_id')
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    for (const r of data) set.add(r.knowledge_entry_id);
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+  return set;
+}
+
+
 async function chunkAndStore(
   supabase: any,
   entryId: string,
@@ -696,10 +716,7 @@ serve(async (req) => {
       let oversizedEntries = 0;
       let indexedEntries = totalEntries;
       try {
-        const { data: chunkedRows } = await supabase
-          .from('knowledge_chunks')
-          .select('knowledge_entry_id');
-        const chunkedSet = new Set((chunkedRows || []).map((r: any) => r.knowledge_entry_id));
+        const chunkedSet = await fetchChunkedEntryIds(supabase);
         const allOrphans = (data || []).filter((e: any) => !chunkedSet.has(e.id));
         oversizedEntries = allOrphans.filter((e: any) => (e.content?.length || 0) > SELF_HEAL_MAX_LEN).length;
         orphanEntries = allOrphans.length - oversizedEntries;
@@ -719,10 +736,7 @@ serve(async (req) => {
             .select('id, title, content');
           if (!allIds || allIds.length === 0) return;
 
-          const { data: chunkedRows } = await supabase
-            .from('knowledge_chunks')
-            .select('knowledge_entry_id');
-          const chunkedSet = new Set((chunkedRows || []).map((r: any) => r.knowledge_entry_id));
+          const chunkedSet = await fetchChunkedEntryIds(supabase);
 
           const orphans = allIds
             .filter((e: any) => !chunkedSet.has(e.id) && (e.content?.length || 0) <= SELF_HEAL_MAX_LEN)
