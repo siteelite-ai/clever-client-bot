@@ -716,10 +716,7 @@ serve(async (req) => {
             .select('id, title, content');
           if (!allIds || allIds.length === 0) return;
 
-          const { data: chunkedRows } = await supabase
-            .from('knowledge_chunks')
-            .select('knowledge_entry_id');
-          const chunkedSet = new Set((chunkedRows || []).map((r: any) => r.knowledge_entry_id));
+          const chunkedSet = await fetchChunkedEntryIds(supabase);
 
           const orphans = allIds
             .filter((e: any) => !chunkedSet.has(e.id) && (e.content?.length || 0) <= SELF_HEAL_MAX_LEN)
