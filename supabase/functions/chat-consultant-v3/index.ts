@@ -1526,6 +1526,9 @@ async function runExpertLoop(
   let replacementRequiredAxes: ReplacementAxis[] = [];
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
+  // Turn-level guard: рендерим карточку контактов максимум один раз,
+  // даже если LLM по ошибке вызвал lookup_contacts повторно (топик-дубль).
+  const contactsEmitted = { value: false };
   // Anchor exclusion: in replacement-intent turns ("аналог/замена/похожее"),
   // the anchor SKU itself must never appear in the rendered list — it's the
   // source product, not its analog. Computed lazily because the anchor is only
