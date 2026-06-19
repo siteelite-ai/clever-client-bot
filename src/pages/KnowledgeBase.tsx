@@ -445,6 +445,19 @@ export default function KnowledgeBase() {
           </div>
         )}
 
+        {/* Слишком большие записи — self-heal их пропускает */}
+        {indexProgress && indexProgress.oversized > 0 && (
+          <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-4 space-y-1">
+            <div className="text-sm font-medium text-amber-700 dark:text-amber-400">
+              ⚠️ Слишком большие записи: {indexProgress.oversized}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Эти записи превышают 80 000 символов и не могут быть проиндексированы автоматически (один вызов не успевает за лимит времени). Откройте такую запись и нажмите «Переиндексировать» вручную, либо разбейте контент на несколько меньших записей.
+            </p>
+          </div>
+        )}
+
+
         {/* Contacts Card */}
         <ContactsCard onContactsSaved={loadEntries} />
 
