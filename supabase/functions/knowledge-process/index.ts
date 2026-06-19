@@ -780,6 +780,62 @@ serve(async (req) => {
       );
     }
 
+    if (action === 'rechunk_all') {
+      // Backfill: regenerate chunks (and their embeddings) for all entries.
+      // Paginated like regenerate_embeddings to avoid edge function timeouts.
+      const batchOffset = offset || 0;
+      const batchSize = batch_size || 5;
+      console.log(`[Knowledge] Rechunk batch: offset=${batchOffset}, batch_size=${batchSize}`);
+
+      const { data: entries, error: listError } = await supabase
+        .from('knowledge_entries')
+        .select('id, title, content')
+        .order('created_at', { ascending: true })
+        .range(batchOffset, batchOffset + batchSize - 1);
+
+      if (listError) throw new Error(`Ошибка загрузки записей: ${listError.message}`);
+      if (!entries || entries.length === 0) {
+        return new Response(
+          JSON.stringify({ success: true, message: 'Все записи обработаны', processed: 0, done: true }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      let processed = 0;
+      let totalChunks = 0;
+      let errors = 0;
+
+      for (const entry of entries) {
+        try {
+          const res = await chunkAndStore(supabase, entry.id, entry.title, entry.content);
+          processed++;
+          totalChunks += res.inserted;
+          errors += res.failed;
+        } catch (e) {
+          console.error(`[Knowledge] Rechunk error for ${entry.id}:`, e);
+          errors++;
+        }
+      }
+
+      const nextOffset = batchOffset + batchSize;
+      const done = entries.length < batchSize;
+      console.log(`[Knowledge] Rechunk batch complete: ${processed} entries, ${totalChunks} chunks, ${errors} errors. Done: ${done}`);
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          processed,
+          chunks: totalChunks,
+          errors,
+          batch_size: batchSize,
+          offset: batchOffset,
+          next_offset: done ? null : nextOffset,
+          done,
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     throw new Error(`Unknown action: ${action}`);
 
   } catch (error) {
