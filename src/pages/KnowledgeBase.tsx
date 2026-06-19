@@ -312,6 +312,10 @@ export default function KnowledgeBase() {
           </div>
           <div className="flex gap-2">
             <SitemapImportDialog onImportComplete={loadEntries} />
+            <Button variant="outline" onClick={handleRechunkAll} disabled={isRechunking}>
+              {isRechunking ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+              Перечанковать всё
+            </Button>
             <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
               <DialogTrigger asChild>
                 <Button>
