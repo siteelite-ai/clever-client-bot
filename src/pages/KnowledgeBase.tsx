@@ -40,6 +40,7 @@ export default function KnowledgeBase() {
   const [newText, setNewText] = useState('');
   const [newTextTitle, setNewTextTitle] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isRechunking, setIsRechunking] = useState(false);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [viewEntry, setViewEntry] = useState<KnowledgeEntry | null>(null);
@@ -69,6 +70,44 @@ export default function KnowledgeBase() {
       setIsLoading(false);
     }
   };
+
+  const handleRechunkAll = async () => {
+    if (isRechunking) return;
+    if (!confirm('Перечанковать все записи? Это создаст чанки и эмбеддинги для всей базы (может занять несколько минут).')) return;
+
+    setIsRechunking(true);
+    let offset = 0;
+    const batchSize = 5;
+    let totalEntries = 0;
+    let totalChunks = 0;
+    let totalErrors = 0;
+    const toastId = toast.loading('Перечанковка: запуск...');
+
+    try {
+      while (true) {
+        const { data, error } = await supabase.functions.invoke('knowledge-process', {
+          body: { action: 'rechunk_all', offset, batch_size: batchSize },
+        });
+        if (error) throw error;
+        if (!data.success) throw new Error(data.error);
+
+        totalEntries += data.processed || 0;
+        totalChunks += data.chunks || 0;
+        totalErrors += data.errors || 0;
+        toast.loading(`Перечанковка: ${totalEntries} записей, ${totalChunks} чанков...`, { id: toastId });
+
+        if (data.done || data.next_offset == null) break;
+        offset = data.next_offset;
+      }
+      toast.success(`Готово: ${totalEntries} записей, ${totalChunks} чанков, ${totalErrors} ошибок`, { id: toastId });
+    } catch (e) {
+      console.error('Rechunk error:', e);
+      toast.error(e instanceof Error ? e.message : 'Ошибка перечанковки', { id: toastId });
+    } finally {
+      setIsRechunking(false);
+    }
+  };
+
 
   const handleAddUrl = async () => {
     if (!newUrl.trim()) return;
@@ -273,6 +312,10 @@ export default function KnowledgeBase() {
           </div>
           <div className="flex gap-2">
             <SitemapImportDialog onImportComplete={loadEntries} />
+            <Button variant="outline" onClick={handleRechunkAll} disabled={isRechunking}>
+              {isRechunking ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}
+              Перечанковать всё
+            </Button>
             <Dialog open={isAddDialogOpen} onOpenChange={setIsAddDialogOpen}>
               <DialogTrigger asChild>
                 <Button>
