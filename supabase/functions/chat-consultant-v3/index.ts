@@ -1325,7 +1325,8 @@ function toolResultForLlm(r: ToolResult, args: Record<string, unknown>, userMess
     };
   }
   if (r.ok && r.tool === "lookup_contacts") {
-    // не отдаём html_block в LLM, чтобы не процитировал
+    // не отдаём html_block в LLM, чтобы не процитировал;
+    // зато requires_city/cities — критичны для решения «спросить или показать».
     const { data } = r;
     return {
       ok: true,
@@ -1335,6 +1336,10 @@ function toolResultForLlm(r: ToolResult, args: Record<string, unknown>, userMess
         hours: data.hours,
         payment: data.payment,
         delivery: data.delivery,
+        cities: data.cities,
+        branches_count: data.branches_count,
+        requires_city: data.requires_city,
+        matched_city: data.matched_city,
       },
     };
   }
