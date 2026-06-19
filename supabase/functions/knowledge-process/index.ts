@@ -417,6 +417,9 @@ serve(async (req) => {
 
       console.log(`[Knowledge] Added URL entry: ${data.id}`);
 
+      // Generate chunks for hybrid retrieval
+      await chunkAndStore(supabase, data.id, data.title, data.content);
+
       return new Response(
         JSON.stringify({ 
           success: true, 
