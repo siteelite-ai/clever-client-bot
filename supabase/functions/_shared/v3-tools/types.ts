@@ -120,6 +120,9 @@ export interface LookupContactsOk {
     branches_count?: number;
     requires_city?: boolean;
     matched_city?: string;
+    /** Сигнал оркестратору/LLM: тема (доставка/оплата) описана в KB, надо вызвать lookup_knowledge. */
+    route_to_knowledge?: boolean;
+    hint?: string;
   };
   side_effects?: ToolSideEffect[];
 }
