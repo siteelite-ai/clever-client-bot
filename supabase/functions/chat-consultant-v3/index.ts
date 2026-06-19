@@ -2288,7 +2288,7 @@ async function runExpertLoop(
               return true;
             });
             if (filtered.length > 0) {
-              const clone = { ...(result as Record<string, unknown>), side_effects: filtered } as ToolResult;
+              const clone = { ...(result as unknown as Record<string, unknown>), side_effects: filtered } as unknown as ToolResult;
               emitSideEffects(clone, send);
             }
           }
