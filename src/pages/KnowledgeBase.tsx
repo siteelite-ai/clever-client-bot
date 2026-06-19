@@ -43,6 +43,7 @@ export default function KnowledgeBase() {
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [viewEntry, setViewEntry] = useState<KnowledgeEntry | null>(null);
+  const [indexProgress, setIndexProgress] = useState<{ total: number; indexed: number; orphan: number } | null>(null);
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -51,8 +52,15 @@ export default function KnowledgeBase() {
     loadEntries();
   }, []);
 
-  const loadEntries = async () => {
-    setIsLoading(true);
+  // Auto-poll каждые 8с пока есть неиндексированные записи (это же триггерит self-heal)
+  useEffect(() => {
+    if (!indexProgress || indexProgress.orphan === 0) return;
+    const t = setInterval(() => { loadEntries(true); }, 8000);
+    return () => clearInterval(t);
+  }, [indexProgress?.orphan]);
+
+  const loadEntries = async (silent = false) => {
+    if (!silent) setIsLoading(true);
     try {
       const { data, error } = await supabase.functions.invoke('knowledge-process', {
         body: { action: 'list' }
@@ -62,11 +70,18 @@ export default function KnowledgeBase() {
       if (!data.success) throw new Error(data.error);
 
       setEntries(data.entries || []);
+      if (typeof data.totalEntries === 'number') {
+        setIndexProgress({
+          total: data.totalEntries,
+          indexed: data.indexedEntries ?? 0,
+          orphan: data.orphanEntries ?? 0,
+        });
+      }
     } catch (error) {
       console.error('Error loading entries:', error);
-      toast.error('Ошибка загрузки базы знаний');
+      if (!silent) toast.error('Ошибка загрузки базы знаний');
     } finally {
-      setIsLoading(false);
+      if (!silent) setIsLoading(false);
     }
   };
 
