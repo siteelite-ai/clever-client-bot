@@ -1620,7 +1620,8 @@ async function runExpertLoop(
       //  • первый шаг с тулами впереди → intro-пузырь эксперта (показываем)
       //  • финальный шаг без тулов → ответ клиенту (honest-empty / итоговый
       //    комментарий) — должен дойти вторым пузырём
-      //  • текст рядом с render_products → глушим, карточки говорят сами
+      //  • текст рядом с render_products → ОТДЕЛЬНЫЙ caption-пузырь ПЕРЕД карточками
+      //    (важно для предупреждений о несоответствии параметров: цоколь, мощность и т.п.)
       //  • промежуточная болтовня между тулами → глушим
       if (resp.text.trim()) {
         if (isFirstTurn && !hasRender && !isFinalTurn) {
@@ -1638,21 +1639,27 @@ async function runExpertLoop(
           if (isFirstTurn) firstAssistantText = resp.text.trim();
           steps.push({ step: "v3_assistant_text_final", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
         } else if (hasRender) {
-          if (intentMode === "inquire") {
-            // Inquire-режим: вопрос про конкретный товар. Текст модели — это
-            // ОТВЕТ клиенту, render_products — пруф/источник. Не глушим.
-            if (!isFirstTurn) send({ type: "assistant_turn_break", reason: "inquire_answer" });
-            send({ type: "delta", content: resp.text });
-            finalText += resp.text;
-            if (isFirstTurn) firstAssistantText = resp.text.trim();
-            steps.push({ step: "v3_assistant_text_inquire", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
-          } else {
-            steps.push({ step: "v3_assistant_text_with_render", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+          // Текст рядом с render_products → отдельный caption-пузырь ПЕРЕД карточками.
+          // Раньше для не-inquire режима текст глушился ("карточки говорят сами"),
+          // но это ломало кейсы, где LLM предупреждает о несоответствии (например,
+          // запрошен цоколь E27, а в наличии только G4/G9/E14). Теперь предупреждение
+          // всегда долетает до UI как отдельный bubble перед products_block.
+          if (!isFirstTurn) {
+            send({ type: "assistant_turn_break", reason: "text_before_render" });
           }
+          send({ type: "delta", content: resp.text });
+          finalText += resp.text;
+          if (isFirstTurn) firstAssistantText = resp.text.trim();
+          steps.push({
+            step: intentMode === "inquire" ? "v3_assistant_text_inquire" : "v3_assistant_text_with_render",
+            ms: now(),
+            meta: { chars: resp.text.length, fragment_index: step, text: resp.text },
+          });
         } else {
           steps.push({ step: "v3_assistant_text_suppressed", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
         }
       }
+
 
 
       if (resp.toolCalls.length === 0) {
