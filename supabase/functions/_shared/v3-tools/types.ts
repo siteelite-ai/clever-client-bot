@@ -116,6 +116,10 @@ export interface LookupContactsOk {
     payment?: string;
     delivery?: string;
     html_block?: string;
+    cities?: string[];
+    branches_count?: number;
+    requires_city?: boolean;
+    matched_city?: string;
   };
   side_effects?: ToolSideEffect[];
 }
