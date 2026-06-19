@@ -511,6 +511,8 @@ serve(async (req) => {
 
       console.log(`[Knowledge] Updated entry: ${data.id}`);
 
+      await chunkAndStore(supabase, data.id, data.title, data.content);
+
       return new Response(
         JSON.stringify({
           success: true,
