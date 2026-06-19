@@ -40,6 +40,7 @@ export default function KnowledgeBase() {
   const [newText, setNewText] = useState('');
   const [newTextTitle, setNewTextTitle] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isRechunking, setIsRechunking] = useState(false);
   const [refreshingId, setRefreshingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [viewEntry, setViewEntry] = useState<KnowledgeEntry | null>(null);
