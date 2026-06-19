@@ -696,10 +696,7 @@ serve(async (req) => {
       let oversizedEntries = 0;
       let indexedEntries = totalEntries;
       try {
-        const { data: chunkedRows } = await supabase
-          .from('knowledge_chunks')
-          .select('knowledge_entry_id');
-        const chunkedSet = new Set((chunkedRows || []).map((r: any) => r.knowledge_entry_id));
+        const chunkedSet = await fetchChunkedEntryIds(supabase);
         const allOrphans = (data || []).filter((e: any) => !chunkedSet.has(e.id));
         oversizedEntries = allOrphans.filter((e: any) => (e.content?.length || 0) > SELF_HEAL_MAX_LEN).length;
         orphanEntries = allOrphans.length - oversizedEntries;
