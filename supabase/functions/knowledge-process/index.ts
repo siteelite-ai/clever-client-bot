@@ -87,6 +87,26 @@ function chunkText(text: string, targetSize = 700, overlap = 100): string[] {
   return chunks;
 }
 
+// Fetch all distinct knowledge_entry_id from knowledge_chunks bypassing the 1000-row default limit.
+async function fetchChunkedEntryIds(supabase: any): Promise<Set<string>> {
+  const set = new Set<string>();
+  const pageSize = 1000;
+  let from = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from('knowledge_chunks')
+      .select('knowledge_entry_id')
+      .range(from, from + pageSize - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    for (const r of data) set.add(r.knowledge_entry_id);
+    if (data.length < pageSize) break;
+    from += pageSize;
+  }
+  return set;
+}
+
+
 async function chunkAndStore(
   supabase: any,
   entryId: string,
