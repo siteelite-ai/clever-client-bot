@@ -59,6 +59,79 @@ async function generateEmbedding(text: string, supabase: any): Promise<number[]>
   throw new Error('Не удалось сгенерировать эмбеддинг через OpenRouter. Проверьте API ключ и баланс.');
 }
 
+// ─── Chunking ────────────────────────────────────────────────────────────────
+// Split long text into overlapping chunks (~500-800 chars, 100 overlap),
+// trying to break at paragraph then sentence boundaries.
+function chunkText(text: string, targetSize = 700, overlap = 100): string[] {
+  const clean = (text || "").replace(/\r\n/g, "\n").trim();
+  if (!clean) return [];
+  if (clean.length <= targetSize) return [clean];
+
+  const chunks: string[] = [];
+  let pos = 0;
+  while (pos < clean.length) {
+    let end = Math.min(pos + targetSize, clean.length);
+    if (end < clean.length) {
+      // try paragraph boundary, then sentence, then space
+      const slice = clean.slice(pos, end + 200);
+      const para = slice.lastIndexOf("\n\n");
+      const sent = Math.max(slice.lastIndexOf(". "), slice.lastIndexOf("! "), slice.lastIndexOf("? "), slice.lastIndexOf("\n"));
+      if (para > targetSize * 0.5) end = pos + para;
+      else if (sent > targetSize * 0.5) end = pos + sent + 1;
+    }
+    const piece = clean.slice(pos, end).trim();
+    if (piece.length > 30) chunks.push(piece);
+    if (end >= clean.length) break;
+    pos = Math.max(end - overlap, pos + 1);
+  }
+  return chunks;
+}
+
+async function chunkAndStore(
+  supabase: any,
+  entryId: string,
+  title: string,
+  content: string,
+): Promise<{ inserted: number; failed: number }> {
+  // Wipe existing chunks for this entry first
+  await supabase.from("knowledge_chunks").delete().eq("knowledge_entry_id", entryId);
+
+  const pieces = chunkText(content);
+  if (pieces.length === 0) {
+    console.log(`[Chunks] No chunks for entry ${entryId}`);
+    return { inserted: 0, failed: 0 };
+  }
+  console.log(`[Chunks] Splitting entry ${entryId} into ${pieces.length} chunks`);
+
+  let inserted = 0;
+  let failed = 0;
+  for (let i = 0; i < pieces.length; i++) {
+    const piece = pieces[i];
+    let embedding: number[] | null = null;
+    try {
+      embedding = await generateEmbedding(piece, supabase);
+    } catch (e) {
+      console.warn(`[Chunks] Embedding failed for chunk ${i} of ${entryId}:`, (e as Error).message);
+      // continue without embedding — FTS still works
+    }
+    const { error } = await supabase.from("knowledge_chunks").insert({
+      knowledge_entry_id: entryId,
+      chunk_index: i,
+      title,
+      content: piece,
+      embedding,
+    });
+    if (error) {
+      console.error(`[Chunks] Insert error chunk ${i} of ${entryId}:`, error.message);
+      failed++;
+    } else {
+      inserted++;
+    }
+  }
+  console.log(`[Chunks] Entry ${entryId}: ${inserted} inserted, ${failed} failed`);
+  return { inserted, failed };
+}
+
 // Extract validity dates from content (e.g. "с 01.05.2021 по 30.06.2023")
 function extractValidityDates(content: string): { valid_from: string | null; valid_until: string | null } {
   // Pattern: с DD.MM.YYYY по DD.MM.YYYY (various separators)
@@ -344,6 +417,9 @@ serve(async (req) => {
 
       console.log(`[Knowledge] Added URL entry: ${data.id}`);
 
+      // Generate chunks for hybrid retrieval
+      await chunkAndStore(supabase, data.id, data.title, data.content);
+
       return new Response(
         JSON.stringify({ 
           success: true, 
@@ -387,6 +463,8 @@ serve(async (req) => {
       }
 
       console.log(`[Knowledge] Added text entry: ${data.id}`);
+
+      await chunkAndStore(supabase, data.id, data.title, data.content);
 
       return new Response(
         JSON.stringify({ 
@@ -432,6 +510,8 @@ serve(async (req) => {
       }
 
       console.log(`[Knowledge] Updated entry: ${data.id}`);
+
+      await chunkAndStore(supabase, data.id, data.title, data.content);
 
       return new Response(
         JSON.stringify({
@@ -481,6 +561,8 @@ serve(async (req) => {
       }
 
       console.log(`[Knowledge] Added PDF entry: ${data.id}`);
+
+      await chunkAndStore(supabase, data.id, data.title, data.content);
 
       return new Response(
         JSON.stringify({ 
@@ -542,6 +624,8 @@ serve(async (req) => {
       }
 
       console.log(`[Knowledge] Refreshed URL entry: ${data.id}`);
+
+      await chunkAndStore(supabase, data.id, data.title, data.content);
 
       return new Response(
         JSON.stringify({ 
@@ -692,6 +776,62 @@ serve(async (req) => {
 
       return new Response(
         JSON.stringify({ success: true, processed, errors, batch_size: batchSize, offset: batchOffset, next_offset: done ? null : nextOffset, done }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    if (action === 'rechunk_all') {
+      // Backfill: regenerate chunks (and their embeddings) for all entries.
+      // Paginated like regenerate_embeddings to avoid edge function timeouts.
+      const batchOffset = offset || 0;
+      const batchSize = batch_size || 5;
+      console.log(`[Knowledge] Rechunk batch: offset=${batchOffset}, batch_size=${batchSize}`);
+
+      const { data: entries, error: listError } = await supabase
+        .from('knowledge_entries')
+        .select('id, title, content')
+        .order('created_at', { ascending: true })
+        .range(batchOffset, batchOffset + batchSize - 1);
+
+      if (listError) throw new Error(`Ошибка загрузки записей: ${listError.message}`);
+      if (!entries || entries.length === 0) {
+        return new Response(
+          JSON.stringify({ success: true, message: 'Все записи обработаны', processed: 0, done: true }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
+      let processed = 0;
+      let totalChunks = 0;
+      let errors = 0;
+
+      for (const entry of entries) {
+        try {
+          const res = await chunkAndStore(supabase, entry.id, entry.title, entry.content);
+          processed++;
+          totalChunks += res.inserted;
+          errors += res.failed;
+        } catch (e) {
+          console.error(`[Knowledge] Rechunk error for ${entry.id}:`, e);
+          errors++;
+        }
+      }
+
+      const nextOffset = batchOffset + batchSize;
+      const done = entries.length < batchSize;
+      console.log(`[Knowledge] Rechunk batch complete: ${processed} entries, ${totalChunks} chunks, ${errors} errors. Done: ${done}`);
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          processed,
+          chunks: totalChunks,
+          errors,
+          batch_size: batchSize,
+          offset: batchOffset,
+          next_offset: done ? null : nextOffset,
+          done,
+        }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
