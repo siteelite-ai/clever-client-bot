@@ -300,6 +300,7 @@ export default function KnowledgeBase() {
                 Добавить
               </Button>
             </DialogTrigger>
+
             <DialogContent className="sm:max-w-lg">
               <DialogHeader>
                 <DialogTitle>Добавить в базу знаний</DialogTitle>
