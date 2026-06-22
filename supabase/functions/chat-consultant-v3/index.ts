@@ -1691,15 +1691,26 @@ async function runExpertLoop(
   const intentMode = detectUserIntentMode(userMessage);
   const codeConstraints = extractCodeConstraints(userMessage);
   const filterByCompoundConstraints = (ids: string[]): { ids: string[]; rejected: number } => {
-    const semanticConstraints = semanticTokensFromQuery(userMessage, buildGenericConstraintTokens(lastDiscover), codeConstraints);
-    const compoundConstraintActive = codeConstraints.length > 0 && semanticConstraints.length > 0;
-    if (!compoundConstraintActive) return { ids, rejected: 0 };
-    const kept = ids.filter((id) => {
+    if (codeConstraints.length === 0) return { ids, rejected: 0 };
+    // Step 1: hard-enforce code constraints (E27, 16А, 4.5кА — reliably present
+    // in product titles/traits, so a miss here is a true mismatch).
+    const codeKept = ids.filter((id) => {
       const p = ctx.cache.get(id);
       if (!p) return false;
-      return codeConstraints.every((code) => productMatchesCodeConstraint(p, code)) && productMatchesAnySemanticToken(p, semanticConstraints);
+      return codeConstraints.every((code) => productMatchesCodeConstraint(p, code));
     });
-    return { ids: kept, rejected: ids.length - kept.length };
+    // Step 2: optional semantic narrowing — but only if it doesn't empty the pool.
+    // Colloquial tokens ("кукуруза", "груша", "шарик") rarely appear verbatim in
+    // catalog titles; if narrowing wipes everything, trust the LLM's jargon
+    // expansion (it already searched "SMD"/"corn"/etc.) and keep the code-filtered pool.
+    const semanticConstraints = semanticTokensFromQuery(userMessage, buildGenericConstraintTokens(lastDiscover), codeConstraints);
+    if (semanticConstraints.length === 0) return { ids: codeKept, rejected: ids.length - codeKept.length };
+    const narrowed = codeKept.filter((id) => {
+      const p = ctx.cache.get(id);
+      return p ? productMatchesAnySemanticToken(p, semanticConstraints) : false;
+    });
+    const final = narrowed.length > 0 ? narrowed : codeKept;
+    return { ids: final, rejected: ids.length - final.length };
   };
   const getAnchorExcludeId = (): string | null => {
     if (!replacementIntent) return null;
