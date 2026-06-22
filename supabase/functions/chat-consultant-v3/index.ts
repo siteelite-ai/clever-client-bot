@@ -1785,7 +1785,7 @@ async function runExpertLoop(
     return out.slice(0, 3);
   };
 
-  const tryCodeFacetRescue = async (): Promise<number> => {
+  const tryCodeFacetRescue = async (allowBroadFallback = true): Promise<number> => {
     if (!lastDiscover || codeConstraints.length === 0 || replacementIntent) return 0;
     const options: Record<string, string[]> = {};
     const matched: Array<{ code: string; facet_key: string; value: string }> = [];
@@ -1831,6 +1831,7 @@ async function runExpertLoop(
       result = { ...bridge, results: bridge.results.filter((p) => bridgeFiltered.ids.includes(String(p.id))), total: bridgeFiltered.ids.length };
       break;
     }
+    if (!result && !allowBroadFallback) return 0;
     result ??= await executeSearchCatalog(searchInput, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
     if (result.ok && result.results.length === 0 && leaves.length > 0) {
       result = await executeSearchCatalog({ ...searchInput, category_in: undefined }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
@@ -2521,7 +2522,7 @@ async function runExpertLoop(
           for (const leaf of lastDiscover.leaf_categories ?? []) {
             addToWhitelist(leaf.pagetitle);
           }
-          const rescued = await tryCodeFacetRescue();
+          const rescued = await tryCodeFacetRescue(false);
           if (rescued > 0) {
             productsRendered += rescued;
             steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "code_facet_rescue_after_discover", step_count: step + 1 } });
