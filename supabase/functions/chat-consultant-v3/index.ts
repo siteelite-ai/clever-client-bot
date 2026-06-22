@@ -990,6 +990,30 @@ function extractModelCode(title: string): string | null {
   return null;
 }
 
+function replacementSourceNeedles(userMessage: string, anchor: CachedProd): string[] {
+  const out: string[] = [];
+  const add = (s: string | null | undefined) => {
+    const v = (s ?? "").trim();
+    if (v.length >= 3 && !out.some((x) => normalizeCodeLike(x) === normalizeCodeLike(v))) out.push(v);
+  };
+  const source = `${userMessage}\n${anchor.pagetitle ?? anchor.title ?? ""}`;
+  add(extractModelCode(anchor.pagetitle ?? anchor.title ?? ""));
+  for (const m of source.matchAll(/(?:^|\s)([a-zа-я]{1,4})\s+(\d{2,}(?:-\d+)+)(?=$|\s)/giu)) add(`${m[1]} ${m[2]}`);
+  for (const m of source.matchAll(/\b[A-ZА-ЯЁІЇҰҚӨӘҒҺ]{3,}\b/gu)) {
+    const token = m[0];
+    if (!/^(KZT|LED|IP)$/u.test(token)) add(token);
+  }
+  return out.slice(0, 8);
+}
+
+function isSameReplacementSource(product: CachedProd, needles: string[]): boolean {
+  if (needles.length === 0) return false;
+  const title = product.pagetitle ?? product.title ?? "";
+  const normTitle = normalizeForMatch(title);
+  const codeTitle = normalizeCodeLike(title);
+  return needles.some((needle) => normTitle.includes(normalizeForMatch(needle)) || codeTitle.includes(normalizeCodeLike(needle)));
+}
+
 // Returns IDs of products from the SAME model family as the anchor — i.e.
 // other SKUs whose pagetitle contains the anchor's model code. These are
 // variants (different shape/size/power), not true analogs.
