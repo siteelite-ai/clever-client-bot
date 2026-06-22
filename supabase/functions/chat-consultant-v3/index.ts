@@ -191,6 +191,21 @@ function summariseToolResultMeta(name: string, r: ToolResult): Record<string, un
   return {};
 }
 
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map((v) => stableStringify(v)).join(",")}]`;
+  const obj = value as Record<string, unknown>;
+  return `{${Object.keys(obj).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
+}
+
+function toolMemoKey(name: string, args: Record<string, unknown>): string {
+  return `${name}:${stableStringify(args)}`;
+}
+
+function isMemoizedTool(name: string): boolean {
+  return name !== "render_products" && name !== "note_state" && name !== "escalate_to_manager";
+}
+
 function normalizeForMatch(s: string): string {
   return s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}.,]+/gu, " ").trim();
 }
@@ -652,7 +667,7 @@ function detectPriceDirection(msg: string): PriceIntent | null {
   return null;
 }
 
-type CachedProd = { id: string; price: number; pagetitle?: string; title?: string; vendor?: string | null; short_traits?: string[] };
+type CachedProd = { id: string; price: number; pagetitle?: string; title?: string; vendor?: string | null; short_traits?: string[]; leaf_category?: string | null };
 
 function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd | null {
   const msgRaw = userMessage.toLowerCase().replace(/[«»"',.()]/g, " ");
@@ -1068,6 +1083,32 @@ function isDiameterFacet(facet: Pick<Facet, "key" | "caption">): boolean {
   return /(^| )(diametr|diameter|диаметр)( |$)/u.test(haystack);
 }
 
+function isReplacementAutoFacet(facet: Pick<Facet, "key" | "caption" | "values">): boolean {
+  const haystack = normalizeForMatch(`${facet.key} ${facet.caption}`);
+  if (/(^| )(brend|brand|vendor|proizvod|manufacturer|бренд|марка|производ|kollekci|collection|seriya|series|линейк|серия|garanti|гарант|fayl|file|kod|код|identifikator|site|сайт|opisani|описан|poisk|поиск|novink|новин|popular|попул|edinica|единиц|өлшеу)( |$)/u.test(haystack)) return false;
+  return Array.isArray(facet.values) && facet.values.length > 0;
+}
+
+function extractAnchorTraitCriteria(anchor: CachedProd, userMessage: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const line of anchor.short_traits ?? []) {
+    const [, ...rawValue] = line.split(":");
+    const value = rawValue.join(":").trim();
+    if (!value) continue;
+    const norm = normalizeForMatch(value);
+    const single = norm.length === 1 && /\p{L}/u.test(norm);
+    const evidenced = valueIsEvidenced(value, userMessage) || (single && new RegExp(`(^|\\s)${norm}($|\\s)`, "u").test(normalizeForMatch(userMessage)));
+    if (evidenced && !seen.has(norm)) { seen.add(norm); out.push(value); }
+  }
+  return out.slice(0, 8);
+}
+
+function countAnchorTraitMatches(product: CachedProd, criteria: string[]): number {
+  const haystack = `${product.pagetitle ?? product.title ?? ""}\n${(product.short_traits ?? []).join("\n")}`;
+  return criteria.filter((value) => valueIsEvidenced(value, haystack) || normalizeForMatch(haystack).includes(normalizeForMatch(value))).length;
+}
+
 function extractNumbers(text: string): number[] {
   return (text.match(/\d+(?:[.,]\d+)?/g) ?? [])
     .map((n) => Number(n.replace(",", ".")))
@@ -1216,6 +1257,74 @@ function filterReplacementCompatibleIds(
   return ranked
     .sort((a, b) => b.matches - a.matches || a.order - b.order)
     .map((x) => x.id);
+}
+
+async function tryReplacementBudgetAutoRender(
+  userMessage: string,
+  lastDiscover: DiscoverCategoryOk | null,
+  ctx: ToolContext,
+  send: (ev: SseEvent) => void,
+  steps: StepLog[],
+  now: () => number,
+): Promise<number> {
+  if (!isReplacementIntent(userMessage)) return 0;
+  const budgetCap = extractBudgetCap(userMessage);
+  if (budgetCap === null || budgetCap <= 0) return 0;
+  const anchor = findAnchorInCache(ctx.cache, userMessage);
+  if (!anchor) return 0;
+  const anchorLeaf = anchor.leaf_category ?? null;
+  const axes = lastDiscover ? buildReplacementAxes(
+    { mode: "by_filter", options: Object.fromEntries(lastDiscover.facets.filter(isReplacementAutoFacet).map((f) => [f.key, f.values.map((v) => v.value)])) },
+    lastDiscover,
+    `${userMessage}\n${anchor.pagetitle ?? anchor.title ?? ""}\n${(anchor.short_traits ?? []).join("\n")}`,
+  )
+    .sort((a, b) => {
+      const aUser = a.values.some((v) => valueIsEvidenced(v, userMessage)) ? 1 : 0;
+      const bUser = b.values.some((v) => valueIsEvidenced(v, userMessage)) ? 1 : 0;
+      return bUser - aUser;
+    })
+    .slice(0, 6) : [];
+  const options: Record<string, string[]> = {};
+  for (const axis of axes) options[axis.key] = axis.values;
+  const input: SearchCatalogInput = {
+    mode: "by_filter",
+    ...(anchorLeaf ? { category_in: [anchorLeaf], anchor_leaf_category: anchorLeaf } : {}),
+    ...(axes.length > 0 ? { options } : {}),
+    max_price: budgetCap,
+    sort_cheapest: true,
+    per_page: axes.length > 0 ? 8 : 50,
+  };
+  if (!anchorLeaf && axes.length === 0) return 0;
+  const started = Date.now();
+  send({ type: "tool_event", tool: "search_catalog", phase: "start", summary: "auto replacement…" });
+  const search = await executeSearchCatalog(input, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+  const searchMs = Date.now() - started;
+  send({ type: "tool_event", tool: "search_catalog", phase: "result", duration_ms: searchMs, summary: summariseToolResult("search_catalog", search as ToolResult) });
+  steps.push({
+    step: "v3_guard_replacement_budget_autosearch",
+    ms: now(),
+    meta: { budget_cap: budgetCap, anchor_id: anchor.id, anchor_leaf: anchorLeaf, axes: axes.map((a) => ({ key: a.key, values: a.values })), duration_ms: searchMs, result: summariseToolResultMeta("search_catalog", search as ToolResult) },
+  });
+  if (!search.ok || search.total === 0) return 0;
+  const familyExclude = findSameFamilyIds(ctx.cache, anchor);
+  const criteria = extractAnchorTraitCriteria(anchor, userMessage);
+  const minMatches = Math.min(2, Math.max(1, criteria.length));
+  const ids = search.results
+    .map((p) => p.id)
+    .filter((id) => {
+      const p = ctx.cache.get(id) as unknown as CachedProd | undefined;
+      if (!p || id === anchor.id || familyExclude.has(id) || p.price > budgetCap) return false;
+      if (criteria.length === 0) return true;
+      return countAnchorTraitMatches(p, criteria) >= minMatches;
+    })
+    .slice(0, 5);
+  if (ids.length === 0) return 0;
+  const render = executeRenderProducts({ product_ids: ids, total_available: search.total }, ctx.cache);
+  if (!render.ok) return 0;
+  send({ type: "tool_event", tool: "render_products", phase: "result", duration_ms: 0, summary: `auto-render ${render.rendered_count}` });
+  send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: search.total });
+  steps.push({ step: "v3_guard_replacement_budget_autorender", ms: now(), meta: { rendered: render.rendered_count, ids } });
+  return render.rendered_count;
 }
 
 async function trySplitFallback(
@@ -1518,6 +1627,7 @@ async function runExpertLoop(
   let productsRendered = 0;
   let firstAssistantText = "";
   let lastDiscover: DiscoverCategoryOk | null = null;
+  const toolMemo = new Map<string, { reply: unknown; result: ToolResult; effectiveArgs: Record<string, unknown>; total?: number }>();
   // Session-wide whitelist of category pagetitles discovered via discover_category.
   // Source of truth for `category` / `category_in` in search_catalog calls.
   // Prevents LLM hallucinating category names (e.g. "Уличные светильники" вместо
@@ -1675,6 +1785,12 @@ async function runExpertLoop(
       // получить AbortError на полпути.
       const elapsedTurn = Date.now() - t0;
       if (elapsedTurn > TURN_TIMEOUT_MS - 20_000 && productsRendered === 0) {
+        const autoRendered = await tryReplacementBudgetAutoRender(userMessage, lastDiscover, ctx, send, steps, now);
+        if (autoRendered > 0) {
+          productsRendered += autoRendered;
+          steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "replacement_budget_autorender_before_timeout", step_count: step } });
+          return { finalText, productsRendered };
+        }
         if (honestEmptyLocked) {
           finalText += emitHonestEmptyFinalizer();
           steps.push({ step: "v3_time_budget_short_circuit", ms: now(), meta: { elapsed_ms: elapsedTurn, branch: "honest_empty" } });
@@ -2221,6 +2337,31 @@ async function runExpertLoop(
           });
         }
 
+        const memoKey = isMemoizedTool(tc.name) ? toolMemoKey(tc.name, runArgs) : null;
+        if (memoKey && toolMemo.has(memoKey)) {
+          const memo = toolMemo.get(memoKey)!;
+          steps.push({
+            step: "v3_guard_duplicate_tool_call",
+            ms: now(),
+            meta: {
+              tool: tc.name,
+              args: summariseToolArgs(tc.name, runArgs),
+              previous_total: memo.total ?? null,
+            },
+          });
+          messages.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            name: tc.name,
+            content: JSON.stringify({
+              ...(memo.reply && typeof memo.reply === "object" ? memo.reply as Record<string, unknown> : { value: memo.reply }),
+              _server_guard: "duplicate_tool_call",
+              _server_hint: "Этот же tool с теми же args уже вызывался в текущем ходе. Используй previous_result: если есть product_ids — render_products; если total=0 — измени стратегию/ослабь один фильтр/перейди к следующему разрешённому шагу. Не повторяй тот же вызов.",
+            }),
+          });
+          continue;
+        }
+
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
         let result = await runTool(tc.name, runArgs, ctx);
         let effectiveArgs: Record<string, unknown> = runArgs;
@@ -2291,6 +2432,12 @@ async function runExpertLoop(
           addToWhitelist(lastDiscover.category?.pagetitle);
           for (const leaf of lastDiscover.leaf_categories ?? []) {
             addToWhitelist(leaf.pagetitle);
+          }
+          const autoRendered = await tryReplacementBudgetAutoRender(userMessage, lastDiscover, ctx, send, steps, now);
+          if (autoRendered > 0) {
+            productsRendered += autoRendered;
+            steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "replacement_budget_autorender_after_discover", step_count: step + 1 } });
+            return { finalText, productsRendered };
           }
         }
 
@@ -2500,6 +2647,21 @@ async function runExpertLoop(
             `НЕ извиняйся и НЕ вызывай escalate_to_manager. Сначала короткий текст в духе "Точного сочетания нет, ` +
             `но есть отдельно X и отдельно Y — что ближе?", затем ОДИН вызов render_products с product_ids = ` +
             `объединением ids из _split_axes (бери все ids из каждой оси по порядку, до 8 штук). Используй ровно эти id.`;
+        }
+
+        const memoStoreKey = isMemoizedTool(tc.name) ? toolMemoKey(tc.name, effectiveArgs) : null;
+        if (memoStoreKey) {
+          const total = result.ok && "total" in (result as unknown as Record<string, unknown>)
+            ? Number((result as unknown as { total?: unknown }).total)
+            : undefined;
+          const memoEntry = {
+            reply: replyObj,
+            result,
+            effectiveArgs,
+            total: Number.isFinite(total) ? total : undefined,
+          };
+          toolMemo.set(memoStoreKey, memoEntry);
+          if (memoKey && memoKey !== memoStoreKey) toolMemo.set(memoKey, memoEntry);
         }
 
 
