@@ -2576,6 +2576,11 @@ Deno.serve(async (req) => {
 
       steps.push({ step: "v3_turn_start", ms: 0, meta: { user_message: userMessage, session_id: sessionId } });
 
+      // Two-phase logging: вставляем row сразу (видим запрос даже при abort/timeout/crash),
+      // в finally апдейтим финальные поля. Update оборачиваем в EdgeRuntime.waitUntil,
+      // чтобы воркер не убили до завершения insert/update при abort стрима.
+      const logId = await insertTurnLogStart(supabase, sessionId, userMessage, [...steps]);
+
       const cache: ProductCache = new Map();
       const ctx: ToolContext = {
         cache,
@@ -2590,23 +2595,30 @@ Deno.serve(async (req) => {
         productsCount = out.productsRendered;
       } catch (e) {
         errorMsg = (e as Error)?.message ?? String(e);
+        const isAbort = errorMsg?.toLowerCase().includes("abort") || (e as Error)?.name === "AbortError";
+        if (isAbort) errorMsg = `aborted: ${errorMsg}`;
         console.error("[v3] expert error:", e);
-        steps.push({ step: "v3_turn_end", ms: Date.now() - t0, meta: { reason: "error", error: errorMsg } });
-        send({ type: "delta", content: "\n\nНе получилось обработать запрос. Попробуй переформулировать или связаться с менеджером." });
+        steps.push({ step: "v3_turn_end", ms: Date.now() - t0, meta: { reason: isAbort ? "aborted" : "error", error: errorMsg } });
+        try {
+          send({ type: "delta", content: "\n\nНе получилось обработать запрос. Попробуй переформулировать или связаться с менеджером." });
+        } catch { /* stream may be closed */ }
       } finally {
-        send({ type: "done" });
-        controller.close();
-        await logTurn(
-          supabase,
-          sessionId,
-          userMessage,
-          steps,
-          Date.now() - t0,
-          finalTextAccum,
-          productsCount,
-          errorMsg,
-        );
+        try { send({ type: "done" }); } catch { /* ignore */ }
+        try { controller.close(); } catch { /* already closed */ }
+        if (logId) {
+          const finalSteps = steps;
+          const totalMs = Date.now() - t0;
+          const finalText = finalTextAccum;
+          const finalCount = productsCount;
+          const finalErr = errorMsg;
+          const persist = updateTurnLogEnd(supabase, logId, finalSteps, totalMs, finalText, finalCount, finalErr);
+          // EdgeRuntime.waitUntil переживёт shutdown воркера (abort/timeout).
+          const rt = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
+          if (rt?.waitUntil) rt.waitUntil(persist);
+          else await persist;
+        }
       }
+
     },
   });
 
