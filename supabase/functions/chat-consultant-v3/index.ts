@@ -1373,6 +1373,7 @@ async function tryReplacementBudgetAutoRender(
   if (!anchor) return 0;
   const anchorLeaf = anchor.leaf_category ?? null;
   const criteria = extractAnchorTraitCriteria(anchor, userMessage);
+  const criticalCriteria = extractUserCriticalReplacementCriteria(userMessage);
   const axes = lastDiscover ? buildReplacementAxes(
     { mode: "by_filter", options: Object.fromEntries(lastDiscover.facets.filter(isReplacementAutoFacet).map((f) => [f.key, f.values.map((v) => v.value)])) },
     lastDiscover,
@@ -1386,7 +1387,7 @@ async function tryReplacementBudgetAutoRender(
     .slice(0, 6) : [];
   const options: Record<string, string[]> = {};
   for (const axis of axes) options[axis.key] = axis.values;
-  if (!lastDiscover) return 0;
+  if (!lastDiscover && criticalCriteria.length < 2) return 0;
   const input: SearchCatalogInput = {
     mode: "by_filter",
     ...(anchorLeaf ? { category_in: [anchorLeaf], anchor_leaf_category: anchorLeaf } : {}),
@@ -1404,7 +1405,7 @@ async function tryReplacementBudgetAutoRender(
   steps.push({
     step: "v3_guard_replacement_budget_autosearch",
     ms: now(),
-    meta: { budget_cap: budgetCap, anchor_id: anchor.id, anchor_leaf: anchorLeaf, axes: axes.map((a) => ({ key: a.key, values: a.values })), criteria, duration_ms: searchMs, result: summariseToolResultMeta("search_catalog", search as ToolResult) },
+    meta: { budget_cap: budgetCap, anchor_id: anchor.id, anchor_leaf: anchorLeaf, axes: axes.map((a) => ({ key: a.key, values: a.values })), criteria, critical_criteria: criticalCriteria.map((c) => c.label), duration_ms: searchMs, result: summariseToolResultMeta("search_catalog", search as ToolResult) },
   });
   if (!search.ok || search.total === 0) return 0;
   const familyExclude = findSameFamilyIds(ctx.cache, anchor);
@@ -1414,6 +1415,7 @@ async function tryReplacementBudgetAutoRender(
     .filter((id) => {
       const p = ctx.cache.get(id) as unknown as CachedProd | undefined;
       if (!p || id === anchor.id || familyExclude.has(id) || p.price > budgetCap) return false;
+      if (criticalCriteria.length > 0 && !criticalCriteria.every((c) => c.matches(p))) return false;
       if (criteria.length === 0) return true;
       return countAnchorTraitMatches(p, criteria) >= minMatches;
     })
