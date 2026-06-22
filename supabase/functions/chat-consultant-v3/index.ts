@@ -28,7 +28,7 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const CATALOG_BASE_URL = Deno.env.get("CATALOG_API_BASE_URL") ?? "https://220volt.kz/api";
 
-const MODEL = "google/gemini-2.5-flash"; // via OpenRouter; rollback: "deepseek/deepseek-v4-pro" | "anthropic/claude-haiku-4.5" | "anthropic/claude-sonnet-4.5"
+const MODEL = "deepseek/deepseek-v4-pro"; // via OpenRouter; rollback: "google/gemini-2.5-flash" | "anthropic/claude-haiku-4.5" | "anthropic/claude-sonnet-4.5"
 const MAX_STEPS = 8;
 const TURN_TIMEOUT_MS = 90_000;
 
