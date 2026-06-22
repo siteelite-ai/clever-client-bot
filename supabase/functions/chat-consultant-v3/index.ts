@@ -1300,7 +1300,7 @@ async function tryReplacementBudgetAutoRender(
   if (!isReplacementIntent(userMessage)) return 0;
   const budgetCap = extractBudgetCap(userMessage);
   if (budgetCap === null || budgetCap <= 0) return 0;
-  const anchor = findAnchorInCache(ctx.cache, userMessage);
+  const anchor = inferReplacementAnchorFromCache(ctx.cache, userMessage, budgetCap);
   if (!anchor) return 0;
   const anchorLeaf = anchor.leaf_category ?? null;
   const axes = lastDiscover ? buildReplacementAxes(
@@ -1811,11 +1811,11 @@ async function runExpertLoop(
         return { finalText, productsRendered };
       }
       // ── Time-Budget Guard ──────────────────────────────────────────────
-      // Если до 90с-таймаута осталось < 20с — пропускаем следующий LLM-вызов
+      // Если до 90с-таймаута осталось мало времени — пропускаем следующий LLM-вызов
       // (p90 OpenRouter сегодня ~23с). Лучше отдать честную заглушку, чем
       // получить AbortError на полпути.
       const elapsedTurn = Date.now() - t0;
-      if (elapsedTurn > TURN_TIMEOUT_MS - 20_000 && productsRendered === 0) {
+      if (elapsedTurn > TURN_TIMEOUT_MS - MIN_REMAINING_MS_FOR_LLM && productsRendered === 0) {
         const autoRendered = await tryReplacementBudgetAutoRender(userMessage, lastDiscover, ctx, send, steps, now);
         if (autoRendered > 0) {
           productsRendered += autoRendered;
