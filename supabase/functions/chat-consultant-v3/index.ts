@@ -1218,6 +1218,62 @@ function filterReplacementCompatibleIds(
     .map((x) => x.id);
 }
 
+function extractCodeConstraints(text: string): string[] {
+  const out = new Map<string, string>();
+  const add = (raw: string) => {
+    const clean = raw.replace(/\s+/g, "").replace(/,/g, ".").trim();
+    const key = normalizeCodeLike(clean);
+    if (key.length >= 2 && /\d/.test(key) && /[a-z]/i.test(key)) out.set(key, clean);
+  };
+  for (const m of text.matchAll(/(?<![\p{L}\p{N}])[\p{L}]{1,5}\s*\d{1,5}[\p{L}\d.-]*(?![\p{L}\p{N}])/giu)) add(m[0]);
+  for (const m of text.matchAll(/(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?\s*(?:[\p{L}]{1,5}|мм²|мм2)(?![\p{L}\p{N}])/giu)) {
+    const unit = normalizeForMatch(m[0]).split(/\s+/).pop() ?? "";
+    if (/^(тг|тенге|kzt)$/iu.test(unit)) continue;
+    add(m[0]);
+  }
+  return [...out.values()];
+}
+
+function semanticTokensFromQuery(query: string, genericTokens: Set<string>, codeConstraints: string[]): string[] {
+  const withoutCodes = stripKnownValues(query, codeConstraints);
+  const tokens = normalizeForMatch(withoutCodes)
+    .split(/\s+/)
+    .filter((t) => t.length >= 3 && !/^\d/.test(t));
+  return [...new Set(tokens.filter((t) => {
+    if (genericTokens.has(t)) return false;
+    if (tokenMatchesEvidenceByStem(t, [...genericTokens])) return false;
+    return true;
+  }))];
+}
+
+function productMatchesCodeConstraint(product: { pagetitle?: string; short_traits?: string[] }, code: string): boolean {
+  const haystack = `${product.pagetitle ?? ""} ${(product.short_traits ?? []).join(" ")}`;
+  return normalizeCodeLike(haystack).includes(normalizeCodeLike(code));
+}
+
+function productMatchesAnySemanticToken(product: { pagetitle?: string; short_traits?: string[] }, tokens: string[]): boolean {
+  if (tokens.length === 0) return true;
+  const haystack = normalizeForMatch(`${product.pagetitle ?? ""} ${(product.short_traits ?? []).join(" ")}`);
+  const evidenceTokens = haystack.split(/\s+/).filter(Boolean);
+  return tokens.some((token) => haystack.includes(token) || tokenMatchesEvidenceByStem(token, evidenceTokens));
+}
+
+function addNormalizedWords(target: Set<string>, text: string): void {
+  for (const token of normalizeForMatch(text).split(/\s+/)) {
+    if (token.length >= 3) target.add(token);
+  }
+}
+
+function buildGenericConstraintTokens(lastDiscover: DiscoverCategoryOk | null): Set<string> {
+  const generic = new Set(["есть", "каталог", "каталоге", "подбери", "подобрать", "найди", "найти", "товар", "товары"]);
+  if (!lastDiscover) return generic;
+  addNormalizedWords(generic, lastDiscover.category?.pagetitle ?? "");
+  addNormalizedWords(generic, lastDiscover.resolved_from ?? "");
+  for (const leaf of lastDiscover.leaf_categories ?? []) addNormalizedWords(generic, leaf.pagetitle);
+  for (const facet of lastDiscover.facets ?? []) addNormalizedWords(generic, `${facet.key} ${facet.caption}`);
+  return generic;
+}
+
 async function trySplitFallback(
   origArgs: Record<string, unknown>,
   ctx: ToolContext,
@@ -1633,6 +1689,18 @@ async function runExpertLoop(
   // discoverable in cache after at least one search populated it.
   const replacementIntent = isReplacementIntent(userMessage);
   const intentMode = detectUserIntentMode(userMessage);
+  const codeConstraints = extractCodeConstraints(userMessage);
+  const filterByCompoundConstraints = (ids: string[]): { ids: string[]; rejected: number } => {
+    const semanticConstraints = semanticTokensFromQuery(userMessage, buildGenericConstraintTokens(lastDiscover), codeConstraints);
+    const compoundConstraintActive = codeConstraints.length > 0 && semanticConstraints.length > 0;
+    if (!compoundConstraintActive) return { ids, rejected: 0 };
+    const kept = ids.filter((id) => {
+      const p = ctx.cache.get(id);
+      if (!p) return false;
+      return codeConstraints.every((code) => productMatchesCodeConstraint(p, code)) && productMatchesAnySemanticToken(p, semanticConstraints);
+    });
+    return { ids: kept, rejected: ids.length - kept.length };
+  };
   const getAnchorExcludeId = (): string | null => {
     if (!replacementIntent) return null;
     const a = findAnchorInCache(ctx.cache, userMessage);
@@ -2163,10 +2231,20 @@ async function runExpertLoop(
         // ── Step 6a: Render Guard — auto-complement ids from fresh search if LLM dropped them.
         if (tc.name === "render_products") {
           const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
-          const validInCache = origIds.filter((id) => {
+          let validInCache = origIds.filter((id) => {
             const p = ctx.cache.get(id);
             return !!p && p.price > 0;
           });
+          const renderCompoundFiltered = filterByCompoundConstraints(validInCache);
+          if (renderCompoundFiltered.rejected > 0) {
+            validInCache = renderCompoundFiltered.ids;
+            (tc.args as Record<string, unknown>).product_ids = validInCache;
+            steps.push({
+              step: "v3_guard_compound_render_filter",
+              ms: now(),
+              meta: { before: origIds.length, after: validInCache.length, rejected: renderCompoundFiltered.rejected, code_constraints: codeConstraints },
+            });
+          }
           const freshPool = pickFreshUnshown(8);
           const need = Math.min(5, freshPool.length + validInCache.length);
           if (validInCache.length < Math.min(3, need) && freshPool.length > 0) {
@@ -2375,7 +2453,19 @@ async function runExpertLoop(
             .filter((p) => p && Number.isFinite(p.price) && p.price > 0)
             .map((p) => String(p.id));
           if (ids.length > 0) {
-            freshSearch = { tool: tc.name, ids, total: r2.total };
+            const filtered = filterByCompoundConstraints(ids);
+            if (filtered.ids.length > 0) {
+              freshSearch = { tool: tc.name, ids: filtered.ids, total: r2.total };
+            } else if (codeConstraints.length === 0) {
+              freshSearch = { tool: tc.name, ids, total: r2.total };
+            }
+            if (filtered.rejected > 0) {
+              steps.push({
+                step: "v3_guard_compound_pool_filter",
+                ms: now(),
+                meta: { tool: tc.name, rejected: filtered.rejected, kept: filtered.ids.length, code_constraints: codeConstraints },
+              });
+            }
           }
           // Track which ladder candidates were already tried (to nudge LLM in tool reply).
           const q = typeof tc.args.query === "string" ? tc.args.query.trim().toLowerCase() : "";
