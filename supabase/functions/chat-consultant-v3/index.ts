@@ -2519,7 +2519,7 @@ async function runExpertLoop(
       const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
       productsRendered += rescued;
     }
-    if (productsRendered === 0) {
+    if (productsRendered === 0 && !honestEmptyLocked) {
       const pool = pickFreshUnshown(8);
       if (pool.length > 0) {
         const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
@@ -2535,6 +2535,11 @@ async function runExpertLoop(
           });
         }
       }
+    }
+    // Honest-empty финализатор после исчерпания бюджета шагов.
+    if (productsRendered === 0 && honestEmptyLocked) {
+      finalText += emitHonestEmptyFinalizer();
+      steps.push({ step: "v3_honest_empty_final_after_budget", ms: now(), meta: { ...honestEmptyLocked } });
     }
     steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "forced_stepcount", step_count: MAX_STEPS } });
     if (productsRendered === 0) {
