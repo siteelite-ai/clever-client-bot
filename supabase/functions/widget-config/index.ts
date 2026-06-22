@@ -1,14 +1,12 @@
 // widget-config — публичный конфиг для виджета.
-// Возвращает значение `app_settings.active_pipeline` ('v1' | 'v2'),
-// чтобы клиент знал, в какую edge-функцию слать сабмиты:
-//   v1 → /chat-consultant     (legacy, frozen)
-//   v2 → /chat-consultant-v2  (new spec impl)
+// Раньше читал `app_settings.active_pipeline` (v1/v2/v3) — теперь жёстко
+// возвращает 'v3', т.к. боевой пайплайн только один (chat-consultant-v3).
+// Поле в БД и V1/V2 edge-функции оставлены как dead code на случай отката,
+// но виджет к ним больше не маршрутизируется.
 //
 // Без авторизации (verify_jwt = false по умолчанию). Никаких секретов не возвращает.
-// Если БД недоступна — fail-safe возвращает 'v1'.
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -17,35 +15,7 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "GET, OPTIONS",
 };
 
-const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
-const SUPABASE_SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-
-type Pipeline = "v1" | "v2" | "v3";
-
-async function readActivePipeline(): Promise<Pipeline> {
-  try {
-    const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-    const { data, error } = await supabase
-      .from("app_settings")
-      .select("active_pipeline")
-      .limit(1)
-      .single();
-
-    if (error || !data) {
-      console.warn("[widget-config] read failed, defaulting to v1:", error);
-      return "v1";
-    }
-    const v = (data as { active_pipeline?: string }).active_pipeline;
-    if (v === "v3") return "v3";
-    if (v === "v2") return "v2";
-    return "v1";
-  } catch (e) {
-    console.error("[widget-config] exception, defaulting to v1:", e);
-    return "v1";
-  }
-}
-
-serve(async (req) => {
+serve((req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -56,12 +26,9 @@ serve(async (req) => {
     });
   }
 
-  const active_pipeline = await readActivePipeline();
   return new Response(
     JSON.stringify({
-      active_pipeline,
-      // 60 секунд кеша на CDN-уровне; клиент тоже кеширует на сессию.
-      // Этого достаточно: переключение в админке не критично к секунде.
+      active_pipeline: "v3",
       ts: Date.now(),
     }),
     {
