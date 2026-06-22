@@ -1751,6 +1751,97 @@ async function runExpertLoop(
     return out;
   };
 
+  const findFacetMatchForCode = (code: string): { facet: Facet; value: string; count: number } | null => {
+    if (!lastDiscover) return null;
+    const codeNorm = normalizeCodeLike(code);
+    const matches: Array<{ facet: Facet; value: string; count: number; exact: boolean }> = [];
+    for (const facet of lastDiscover.facets ?? []) {
+      for (const v of facet.values ?? []) {
+        const value = String(v.value ?? "").trim();
+        if (!value) continue;
+        const valueNorm = normalizeCodeLike(value);
+        const exact = valueNorm === codeNorm;
+        if (!exact && !valueIsEvidenced(value, code) && !valueIsEvidenced(code, value)) continue;
+        matches.push({ facet, value, count: v.products_count ?? 0, exact });
+      }
+    }
+    return matches
+      .sort((a, b) => Number(b.exact) - Number(a.exact) || b.count - a.count || a.value.length - b.value.length)[0]
+      ?? null;
+  };
+
+  const tryCodeFacetRescue = async (): Promise<number> => {
+    if (!lastDiscover || codeConstraints.length === 0 || replacementIntent) return 0;
+    const options: Record<string, string[]> = {};
+    const matched: Array<{ code: string; facet_key: string; value: string }> = [];
+    for (const code of codeConstraints) {
+      const match = findFacetMatchForCode(code);
+      if (!match) continue;
+      (options[match.facet.key] ??= []).push(match.value);
+      matched.push({ code, facet_key: match.facet.key, value: match.value });
+    }
+    if (matched.length === 0 || Object.keys(options).length === 0) return 0;
+
+    const leaves = (lastDiscover.leaf_categories ?? []).map((l) => l.pagetitle).filter(Boolean);
+    const searchInput: SearchCatalogInput = {
+      mode: "by_filter",
+      ...(leaves.length > 0 ? { category_in: leaves.slice(0, 50) } : {}),
+      options,
+      min_price: 1,
+      per_page: 8,
+    };
+    const budgetCap = extractBudgetCap(userMessage);
+    if (budgetCap !== null && budgetCap > 0) searchInput.max_price = budgetCap;
+    const priceIntent = detectPriceDirection(userMessage);
+    if (priceIntent?.kind === "superlative") {
+      if (priceIntent.direction === "cheaper") searchInput.sort_cheapest = true;
+      if (priceIntent.direction === "more_expensive") searchInput.sort_expensive = true;
+    }
+
+    const start = Date.now();
+    let result = await executeSearchCatalog(searchInput, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+    if (result.ok && result.results.length === 0) {
+      const queryFallback: SearchCatalogInput = {
+        mode: "by_query",
+        query: matched.map((m) => m.value).join(" "),
+        ...(leaves.length > 0 ? { category_in: leaves.slice(0, 50) } : {}),
+        min_price: searchInput.min_price,
+        max_price: searchInput.max_price,
+        per_page: searchInput.per_page,
+      };
+      result = await executeSearchCatalog(queryFallback, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+    }
+    const duration = Date.now() - start;
+    if (!result.ok || result.results.length === 0) {
+      steps.push({ step: "v3_guard_code_facet_rescue_empty", ms: now(), meta: { matched, total: result.ok ? result.total : 0, duration_ms: duration } });
+      return 0;
+    }
+
+    const ids = result.results.map((p) => String(p.id));
+    const filtered = filterByCompoundConstraints(ids);
+    const pool = filtered.ids.length > 0 ? filtered.ids : ids;
+    const semanticTokens = semanticTokensFromQuery(userMessage, buildGenericConstraintTokens(lastDiscover), codeConstraints);
+    const hasSemanticEvidence = semanticTokens.length === 0 || pool.some((id) => {
+      const p = ctx.cache.get(id);
+      return p ? productMatchesAnySemanticToken(p, semanticTokens) : false;
+    });
+    if (!hasSemanticEvidence) {
+      send({ type: "delta", content: `\n\nПо слову «${semanticTokens.join(" ")}» точного признака в каталоге не вижу — показываю товары по подтверждённым параметрам: ${matched.map((m) => m.value).join(", ")}.` });
+    }
+    const render = executeRenderProducts({ product_ids: pool, total_available: result.total } as RenderProductsInput, ctx.cache);
+    if (!render.ok) return 0;
+    send({ type: "tool_event", tool: "search_catalog", phase: "result", duration_ms: duration, summary: `code-rescue: найдено ${result.total}` });
+    send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: result.total });
+    for (const id of pool) shownIds.add(id);
+    freshSearch = { tool: "code_facet_rescue", ids: pool, total: result.total };
+    steps.push({
+      step: "v3_guard_code_facet_rescue",
+      ms: now(),
+      meta: { matched, total: result.total, rendered: render.rendered_count, duration_ms: duration, semantic_tokens: semanticTokens, semantic_evidence: hasSemanticEvidence },
+    });
+    return render.rendered_count;
+  };
+
   const rememberReplacementAxes = (args: Record<string, unknown>) => {
     if (!replacementIntent) return;
     const axes = buildReplacementAxes(args, lastDiscover, `${history.slice(-6).map((h) => h.content).join("\n")}\n${userMessage}\n${firstAssistantText}`);
@@ -2394,6 +2485,12 @@ async function runExpertLoop(
           for (const leaf of lastDiscover.leaf_categories ?? []) {
             addToWhitelist(leaf.pagetitle);
           }
+          const rescued = await tryCodeFacetRescue();
+          if (rescued > 0) {
+            productsRendered += rescued;
+            steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "code_facet_rescue_after_discover", step_count: step + 1 } });
+            return { finalText, productsRendered };
+          }
         }
 
 
@@ -2467,6 +2564,17 @@ async function runExpertLoop(
             const filtered = filterByCompoundConstraints(ids);
             if (filtered.ids.length > 0) {
               freshSearch = { tool: tc.name, ids: filtered.ids, total: r2.total };
+              if (tc.name === "jargon_recover_catalog" && productsRendered === 0) {
+                const render = executeRenderProducts({ product_ids: filtered.ids, total_available: r2.total } as RenderProductsInput, ctx.cache);
+                if (render.ok) {
+                  send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: r2.total });
+                  for (const id of filtered.ids) shownIds.add(id);
+                  productsRendered += render.rendered_count;
+                  steps.push({ step: "v3_guard_jargon_auto_render", ms: now(), meta: { tool: tc.name, total: r2.total, rendered: render.rendered_count, ids: filtered.ids.slice(0, 8) } });
+                  steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "jargon_auto_render", step_count: step + 1 } });
+                  return { finalText, productsRendered };
+                }
+              }
             } else if (codeConstraints.length === 0) {
               freshSearch = { tool: tc.name, ids, total: r2.total };
             }
@@ -2476,6 +2584,14 @@ async function runExpertLoop(
                 ms: now(),
                 meta: { tool: tc.name, rejected: filtered.rejected, kept: filtered.ids.length, code_constraints: codeConstraints },
               });
+            }
+            if (filtered.ids.length === 0 && codeConstraints.length > 0 && productsRendered === 0) {
+              const rescued = await tryCodeFacetRescue();
+              if (rescued > 0) {
+                productsRendered += rescued;
+                steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "code_facet_rescue", step_count: step + 1 } });
+                return { finalText, productsRendered };
+              }
             }
           }
           // Track which ladder candidates were already tried (to nudge LLM in tool reply).
@@ -2625,6 +2741,10 @@ async function runExpertLoop(
     // Step budget exhausted.
     if (productsRendered === 0) {
       const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
+      productsRendered += rescued;
+    }
+    if (productsRendered === 0) {
+      const rescued = await tryCodeFacetRescue();
       productsRendered += rescued;
     }
     if (productsRendered === 0) {
