@@ -2354,7 +2354,7 @@ async function runExpertLoop(
 
 
         if ((tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") && result.ok) {
-          const r2 = result as unknown as { results: Array<{ id: string; price: number }>; total: number };
+          const r2 = result as unknown as { results: Array<{ id: string; price: number; pagetitle?: string; title?: string }>; total: number };
           const ids = (r2.results ?? [])
             .filter((p) => p && Number.isFinite(p.price) && p.price > 0)
             .map((p) => String(p.id));
@@ -2364,7 +2364,44 @@ async function runExpertLoop(
           // Track which ladder candidates were already tried (to nudge LLM in tool reply).
           const q = typeof tc.args.query === "string" ? tc.args.query.trim().toLowerCase() : "";
           if (q) triedLadderQueries.add(q);
+
+          // ── Honest-Empty Lock detector ─────────────────────────────────
+          // jargon_recover_catalog с непустыми modifiers вернул total=0,
+          // а ранее по этому же query (без модификатора) уже что-то нашлось
+          // (freshSearch или triedLadderQueries дали хиты) → доказано, что
+          // точного сочетания нет. Лочим, чтобы дальше не рендерить мусор.
+          if (
+            tc.name === "jargon_recover_catalog" &&
+            r2.total === 0 &&
+            !honestEmptyLocked
+          ) {
+            const modifiers = Array.isArray(tc.args.modifiers)
+              ? (tc.args.modifiers as unknown[]).map((m) => String(m).trim()).filter(Boolean)
+              : [];
+            const queryArg = typeof tc.args.query === "string" ? tc.args.query.trim() : "";
+            if (modifiers.length > 0 && queryArg) {
+              // Соберём 2-3 названия близких товаров из кэша (по предыдущим
+              // вызовам ladder без модификатора), чтобы финализатор был
+              // содержательным, а не голым «не нашли».
+              const altTitles: string[] = [];
+              if (freshSearch) {
+                for (const id of freshSearch.ids.slice(0, 4)) {
+                  const p = ctx.cache.get(id) as unknown as { pagetitle?: string; title?: string } | undefined;
+                  const t = (p?.pagetitle ?? p?.title ?? "").trim();
+                  if (t && !altTitles.includes(t)) altTitles.push(t);
+                  if (altTitles.length >= 3) break;
+                }
+              }
+              honestEmptyLocked = { query: queryArg, modifiers, altTitles };
+              steps.push({
+                step: "v3_honest_empty_locked",
+                ms: now(),
+                meta: { query: queryArg, modifiers, alt_titles_count: altTitles.length, tried_ladder: [...triedLadderQueries] },
+              });
+            }
+          }
         }
+
 
         // If render_products succeeded → emit products_block immediately.
         if (tc.name === "render_products" && result.ok) {
