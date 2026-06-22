@@ -1485,10 +1485,42 @@ async function callOpenRouter(
 
 interface StepLog { step: string; ms: number; meta?: Record<string, unknown>; }
 
-async function logTurn(
+async function insertTurnLogStart(
   supabase: SupabaseClient,
   sessionId: string,
   userQuery: string,
+  initialSteps: StepLog[],
+): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from("chat_request_logs")
+      .insert({
+        session_id: sessionId,
+        user_query: userQuery,
+        pipeline: "v3",
+        branch: "v3_expert",
+        steps: initialSteps,
+        final_products_count: 0,
+        final_response: null,
+        total_ms: 0,
+        error: "in_progress",
+      })
+      .select("id")
+      .single();
+    if (error) {
+      console.error("[v3] log start insert failed:", error.message);
+      return null;
+    }
+    return (data as { id: string } | null)?.id ?? null;
+  } catch (e) {
+    console.error("[v3] log start exception:", e);
+    return null;
+  }
+}
+
+async function updateTurnLogEnd(
+  supabase: SupabaseClient,
+  logId: string,
   steps: StepLog[],
   totalMs: number,
   finalResponse: string,
@@ -1496,22 +1528,22 @@ async function logTurn(
   errorMsg: string | null,
 ) {
   try {
-    const { error } = await supabase.from("chat_request_logs").insert({
-      session_id: sessionId,
-      user_query: userQuery,
-      pipeline: "v3",
-      branch: "v3_expert",
-      steps,
-      final_products_count: finalProductsCount,
-      final_response: finalResponse || null,
-      total_ms: totalMs,
-      error: errorMsg,
-    });
-    if (error) console.error("[v3] log insert failed:", error.message);
+    const { error } = await supabase
+      .from("chat_request_logs")
+      .update({
+        steps,
+        final_products_count: finalProductsCount,
+        final_response: finalResponse || null,
+        total_ms: totalMs,
+        error: errorMsg,
+      })
+      .eq("id", logId);
+    if (error) console.error("[v3] log update failed:", error.message);
   } catch (e) {
-    console.error("[v3] log exception:", e);
+    console.error("[v3] log update exception:", e);
   }
 }
+
 
 // ─── Expert loop ────────────────────────────────────────────────────────────
 
