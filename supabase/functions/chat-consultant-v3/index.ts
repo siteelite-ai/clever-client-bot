@@ -1653,6 +1653,37 @@ async function runExpertLoop(
 
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
+      // ── Honest-Empty Short-Circuit ──────────────────────────────────────
+      // Если ladder уже доказал, что точного сочетания нет, и карточки не
+      // показаны — НЕ ждём ещё один LLM-вызов (он может зависнуть на 20-30с
+      // и упереться в TURN_TIMEOUT_MS=90с → AbortError). Финализируем сразу.
+      if (honestEmptyLocked && productsRendered === 0) {
+        finalText += emitHonestEmptyFinalizer();
+        steps.push({
+          step: "v3_honest_empty_short_circuit",
+          ms: now(),
+          meta: { ...honestEmptyLocked, before_step: step },
+        });
+        return { finalText, productsRendered };
+      }
+      // ── Time-Budget Guard ──────────────────────────────────────────────
+      // Если до 90с-таймаута осталось < 20с — пропускаем следующий LLM-вызов
+      // (p90 OpenRouter сегодня ~23с). Лучше отдать честную заглушку, чем
+      // получить AbortError на полпути.
+      const elapsedTurn = Date.now() - t0;
+      if (elapsedTurn > TURN_TIMEOUT_MS - 20_000 && productsRendered === 0) {
+        if (honestEmptyLocked) {
+          finalText += emitHonestEmptyFinalizer();
+          steps.push({ step: "v3_time_budget_short_circuit", ms: now(), meta: { elapsed_ms: elapsedTurn, branch: "honest_empty" } });
+        } else {
+          const msg = "\n\nЗапрос обрабатывается дольше обычного. Уточните, пожалуйста, что важнее — параметры или бюджет, и я подберу точечно.";
+          send({ type: "delta", content: msg });
+          finalText += msg;
+          steps.push({ step: "v3_time_budget_short_circuit", ms: now(), meta: { elapsed_ms: elapsedTurn, branch: "generic" } });
+        }
+        return { finalText, productsRendered };
+      }
+
       const llmStart = Date.now();
       const resp = await callOpenRouter(apiKey, messages, turnController.signal);
       steps.push({
