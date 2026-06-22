@@ -2152,8 +2152,32 @@ async function runExpertLoop(
           }
         }
 
+        // ── Honest-Empty Render Block ──────────────────────────────────────
+        // Когда lock уже стоит — никакой fallback-пул показывать НЕЛЬЗЯ:
+        // он по определению off-target (синонимы без жёсткого модификатора).
+        // Отдаём LLM явный отказ — пусть финализирует текстом, либо нас
+        // подхватит short-circuit на следующей итерации.
+        if (tc.name === "render_products" && honestEmptyLocked) {
+          steps.push({
+            step: "v3_render_blocked_honest_empty",
+            ms: now(),
+            meta: { ...honestEmptyLocked, ids_attempted: Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).length : 0 },
+          });
+          messages.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            name: tc.name,
+            content: JSON.stringify({
+              ok: false,
+              error_code: "honest_empty_locked",
+              _server_hint: `Карточки показывать НЕЛЬЗЯ: точное сочетание «${honestEmptyLocked.query}» × ${honestEmptyLocked.modifiers.join("/")} доказано пустое (jargon_recover_catalog → 0). Любой "близкий" пул — это не на тех параметрах. Финализируй коротким честным текстом: чего нет и что предложить взамен. НЕ зови render_products повторно.`,
+            }),
+          });
+          continue;
+        }
+
         // ── Step 6b: Escalate Guard — cancel escalation if fresh unshown pool ≥3.
-        if (tc.name === "escalate_to_manager") {
+        if (tc.name === "escalate_to_manager" && !honestEmptyLocked) {
           const pool = pickFreshUnshown(8);
           if (pool.length >= 3) {
             const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
