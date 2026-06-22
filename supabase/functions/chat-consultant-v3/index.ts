@@ -705,11 +705,15 @@ function isReplacementIntent(msg: string): boolean {
   const m = msg.toLowerCase().replace(/ё/g, "е");
   const trigger = /(аналог|альтернатив|похож|замен|вместо|взамен)/u.test(m);
   if (!trigger) return false;
-  // Признаки якоря: длинное число (артикул), бренд-модель с цифрами
-  // (например «ва47-29», «mad22-2-080», «cl001»), либо имя в кавычках.
+  // Признаки якоря: любой токен длиной ≥3, содержащий И букву И цифру
+  // (Acti9, C16, D32, ВА47-29, MAD22-2-080, IP65, E27, dn027b),
+  // ИЛИ длинное число (артикул ≥4 цифр), ИЛИ имя в кавычках.
+  // Data-agnostic: ловим коды моделей без хардкода брендов/серий.
+  const tokens = m.match(/[a-zа-я0-9][a-zа-я0-9-]{2,}/giu) ?? [];
+  const hasAlphaNumAnchor = tokens.some((t) => /[a-zа-я]/iu.test(t) && /\d/.test(t));
   const hasAnchor =
+    hasAlphaNumAnchor ||
     /\b\d{4,}\b/.test(m) ||
-    /\b[a-zа-я]{2,}[-\s]?\d{2,}[a-zа-я0-9-]*\b/iu.test(m) ||
     /«[^»]{2,}»|"[^"]{2,}"/u.test(m);
   return hasAnchor;
 }
