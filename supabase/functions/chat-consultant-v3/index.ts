@@ -1349,7 +1349,7 @@ async function tryReplacementBudgetAutoRender(
     .slice(0, 6) : [];
   const options: Record<string, string[]> = {};
   for (const axis of axes) options[axis.key] = axis.values;
-  if (!lastDiscover && axes.length === 0 && criteria.length < 2) return 0;
+  if (!lastDiscover) return 0;
   const input: SearchCatalogInput = {
     mode: "by_filter",
     ...(anchorLeaf ? { category_in: [anchorLeaf], anchor_leaf_category: anchorLeaf } : {}),
