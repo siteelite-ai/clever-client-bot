@@ -1800,11 +1800,13 @@ async function runExpertLoop(
 
     const start = Date.now();
     let result = await executeSearchCatalog(searchInput, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+    if (result.ok && result.results.length === 0 && leaves.length > 0) {
+      result = await executeSearchCatalog({ ...searchInput, category_in: undefined }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+    }
     if (result.ok && result.results.length === 0) {
       const queryFallback: SearchCatalogInput = {
         mode: "by_query",
         query: matched.map((m) => m.value).join(" "),
-        ...(leaves.length > 0 ? { category_in: leaves.slice(0, 50) } : {}),
         min_price: searchInput.min_price,
         max_price: searchInput.max_price,
         per_page: searchInput.per_page,
