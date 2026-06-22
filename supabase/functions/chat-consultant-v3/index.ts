@@ -1222,7 +1222,10 @@ function extractUserCriticalReplacementCriteria(userMessage: string): CriticalRe
   }
   const ch = text.match(/(?:характеристик\S*|хар\S*|х-ка)\s*([abcdeавсдек])/u)?.[1]
     ?.replace(/[ав]/u, "a").replace(/с/u, "c").replace(/д/u, "d").replace(/е/u, "e").replace(/к/u, "k");
-  if (ch) add(`хар-${ch.toUpperCase()}`, (p) => new RegExp(`(?:^|[^a-zа-я])${ch}(?=$|[^a-zа-я])`, "iu").test(normalizeCodeLike(productEvidenceText(p))));
+  if (ch) {
+    const alt = ch === "c" ? "[cс]" : ch;
+    add(`хар-${ch.toUpperCase()}`, (p) => new RegExp(`(?:характеристик\\S*|хар\\S*|х-ка)\\s*${alt}(?=$|[^\\p{L}\\p{N}])`, "iu").test(productEvidenceText(p)));
+  }
   return out;
 }
 
