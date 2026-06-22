@@ -31,6 +31,7 @@ const CATALOG_BASE_URL = Deno.env.get("CATALOG_API_BASE_URL") ?? "https://220vol
 const MODEL = "deepseek/deepseek-v4-pro"; // via OpenRouter; rollback: "google/gemini-2.5-flash" | "anthropic/claude-haiku-4.5" | "anthropic/claude-sonnet-4.5"
 const MAX_STEPS = 8;
 const TURN_TIMEOUT_MS = 90_000;
+const MIN_REMAINING_MS_FOR_LLM = 30_000;
 
 // ─── SSE encoding ───────────────────────────────────────────────────────────
 
@@ -626,7 +627,7 @@ interface PriceIntent { kind: PriceIntentKind; direction: PriceDirection; }
 function extractBudgetCap(msg: string): number | null {
   const m = msg.toLowerCase().replace(/\s+/g, " ");
   // "до 1000 тг", "не дороже 1000 тенге", "не более 1000 ₸", "в пределах 1000 тг", "максимум 1000 тг"
-  const re = /(?:до|не\s+дороже|не\s+более|в\s+пределах|максимум|макс\.?|бюджет(?:\s+до)?)\s+(\d[\d\s]{0,9})\s*(?:тг|тенге|₸|kzt)\b/u;
+  const re = /(?:до|не\s+дороже|не\s+более|в\s+пределах|максимум|макс\.?|бюджет(?:\s+до)?)\s+(\d[\d\s]{0,9})\s*(?:тг|тенге|₸|kzt)(?=$|[^\p{L}\p{N}_])/u;
   const m1 = m.match(re);
   if (m1) {
     const n = parseInt(m1[1].replace(/\s+/g, ""), 10);
@@ -702,6 +703,55 @@ function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd
     if (score >= 1 && (!best || score > best.score)) best = { p, score };
   }
   return best?.p ?? null;
+}
+
+function inferReplacementAnchorFromCache(cache: ProductCache, userMessage: string): CachedProd | null {
+  const direct = findAnchorInCache(cache, userMessage);
+  if (direct) return direct;
+  if (!isReplacementIntent(userMessage)) return null;
+  const msg = normalizeForMatch(userMessage);
+  const candidates: Array<{ p: CachedProd; score: number }> = [];
+  for (const raw of cache.values()) {
+    const p = raw as unknown as CachedProd;
+    if (typeof p.price !== "number" || p.price <= 0) continue;
+    const title = normalizeForMatch(p.pagetitle ?? p.title ?? "");
+    const traits = normalizeForMatch((p.short_traits ?? []).join(" "));
+    if (!title) continue;
+    let score = 0;
+    const codeTokens = title.split(/\s+/).filter((t) => /\d/.test(t) && t.length >= 2);
+    for (const token of codeTokens) {
+      const tokenRe = new RegExp(`(^|\\s)${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|\\s)`, "u");
+      if (tokenRe.test(msg)) score += token.length >= 4 ? 3 : 1;
+    }
+    for (const token of title.split(/\s+/).filter((t) => /\p{L}/u.test(t) && t.length >= 4)) {
+      if (msg.includes(token)) score += 2;
+    }
+    const traitValues = (p.short_traits ?? [])
+      .map((line) => line.split(":").slice(1).join(":").trim())
+      .filter(Boolean);
+    for (const value of traitValues) if (valueIsEvidenced(value, userMessage)) score += /\d/.test(value) ? 2 : 1;
+    if (traits && msg.split(/\s+/).some((t) => t.length >= 4 && traits.includes(t))) score += 1;
+    if (score >= 4) candidates.push({ p, score });
+  }
+  return candidates.sort((a, b) => b.score - a.score || b.p.price - a.p.price)[0]?.p ?? null;
+}
+
+function replacementAnchorQueryCandidates(userMessage: string): string[] {
+  const cleaned = userMessage.replace(/[«»"',.()]/g, " ").replace(/\s+/g, " ").trim();
+  const tokens = cleaned.split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  const add = (s: string) => {
+    const v = s.replace(/\s+/g, " ").trim();
+    if (v.length >= 3 && !out.some((x) => normalizeCodeLike(x) === normalizeCodeLike(v))) out.push(v);
+  };
+  for (let i = 0; i < tokens.length; i++) {
+    for (let len = Math.min(4, tokens.length - i); len >= 1; len--) {
+      const phrase = tokens.slice(i, i + len).join(" ");
+      if (/\d/.test(phrase) && /\p{L}/u.test(phrase) && /(?:-|\s)\d/u.test(phrase)) add(phrase);
+    }
+  }
+  for (const t of tokens) if (/\d/.test(t) && /\p{L}/u.test(t) && t.length >= 3) add(t);
+  return out.sort((a, b) => b.length - a.length).slice(0, 4);
 }
 
 // Detects intent to find ALTERNATIVES to a referenced product. In such cases
@@ -940,6 +990,30 @@ function extractModelCode(title: string): string | null {
   return null;
 }
 
+function replacementSourceNeedles(userMessage: string, anchor: CachedProd): string[] {
+  const out: string[] = [];
+  const add = (s: string | null | undefined) => {
+    const v = (s ?? "").trim();
+    if (v.length >= 3 && !out.some((x) => normalizeCodeLike(x) === normalizeCodeLike(v))) out.push(v);
+  };
+  const source = `${userMessage}\n${anchor.pagetitle ?? anchor.title ?? ""}`;
+  add(extractModelCode(anchor.pagetitle ?? anchor.title ?? ""));
+  for (const m of source.matchAll(/(?:^|\s)([a-zа-я]{1,4})\s+(\d{2,}(?:-\d+)+)(?=$|\s)/giu)) add(`${m[1]} ${m[2]}`);
+  for (const m of source.matchAll(/\b[A-ZА-ЯЁІЇҰҚӨӘҒҺ]{3,}\b/gu)) {
+    const token = m[0];
+    if (!/^(KZT|LED|IP)$/u.test(token)) add(token);
+  }
+  return out.slice(0, 8);
+}
+
+function isSameReplacementSource(product: CachedProd, needles: string[]): boolean {
+  if (needles.length === 0) return false;
+  const title = product.pagetitle ?? product.title ?? "";
+  const normTitle = normalizeForMatch(title);
+  const codeTitle = normalizeCodeLike(title);
+  return needles.some((needle) => normTitle.includes(normalizeForMatch(needle)) || codeTitle.includes(normalizeCodeLike(needle)));
+}
+
 // Returns IDs of products from the SAME model family as the anchor — i.e.
 // other SKUs whose pagetitle contains the anchor's model code. These are
 // variants (different shape/size/power), not true analogs.
@@ -1115,6 +1189,46 @@ function extractNumbers(text: string): number[] {
     .filter((n) => Number.isFinite(n));
 }
 
+interface CriticalReplacementCriterion { label: string; matches: (product: CachedProd) => boolean }
+
+function productEvidenceText(product: CachedProd): string {
+  return `${product.pagetitle ?? product.title ?? ""}\n${(product.short_traits ?? []).join("\n")}`;
+}
+
+function extractUserCriticalReplacementCriteria(userMessage: string): CriticalReplacementCriterion[] {
+  const text = userMessage.toLowerCase().replace(/ё/g, "е");
+  const out: CriticalReplacementCriterion[] = [];
+  const add = (label: string, matches: (product: CachedProd) => boolean) => {
+    if (!out.some((c) => c.label === label)) out.push({ label, matches });
+  };
+  const current = text.match(/(?:^|[^\p{L}\p{N}])0*(\d{1,3})\s*(?:а|a)(?=$|[^\p{L}\p{N}])/u);
+  if (current) {
+    const n = current[1];
+    add(`${n}A`, (p) => new RegExp(`(?:^|[^\\d])0*${n}\\s*(?:а|a)(?=$|[^\\p{L}\\p{N}])`, "iu").test(productEvidenceText(p)));
+  }
+  const breaking = text.match(/(\d+(?:[.,]\d+)?)\s*(?:к\s*а|ka|kа|кa)(?=$|[^\p{L}\p{N}])/u);
+  if (breaking) {
+    const n = Number(breaking[1].replace(",", "."));
+    if (Number.isFinite(n)) add(`${n}кА`, (p) => {
+      const nums = [...productEvidenceText(p).matchAll(/(\d+(?:[.,]\d+)?)\s*(?:к\s*а|ka|kа|кa)(?=$|[^\p{L}\p{N}])/giu)]
+        .map((m) => Number(m[1].replace(",", ".")));
+      return nums.some((x) => Math.abs(x - n) < 0.0001);
+    });
+  }
+  const poles = text.match(/(?:^|[^\p{L}\p{N}])(\d)\s*(?:p|р)(?=$|[^\p{L}\p{N}])/u);
+  if (poles) {
+    const n = poles[1];
+    add(`${n}P`, (p) => new RegExp(`(?:^|[^\\p{L}\\p{N}])${n}\\s*(?:p|р|полюс)`, "iu").test(productEvidenceText(p)));
+  }
+  const ch = text.match(/(?:характеристик\S*|хар\S*|х-ка)\s*([abcdeавсдек])/u)?.[1]
+    ?.replace(/[ав]/u, "a").replace(/с/u, "c").replace(/д/u, "d").replace(/е/u, "e").replace(/к/u, "k");
+  if (ch) {
+    const alt = ch === "c" ? "[cс]" : ch;
+    add(`хар-${ch.toUpperCase()}`, (p) => new RegExp(`(?:характеристик\\S*|хар\\S*|х-ка)\\s*${alt}(?=$|[^\\p{L}\\p{N}])`, "iu").test(productEvidenceText(p)));
+  }
+  return out;
+}
+
 function replacementValueIsEvidenced(value: string, evidenceText: string, facet: Facet): boolean {
   if (valueIsEvidenced(value, evidenceText)) return true;
   if (isDiameterFacet(facet)) {
@@ -1270,9 +1384,23 @@ async function tryReplacementBudgetAutoRender(
   if (!isReplacementIntent(userMessage)) return 0;
   const budgetCap = extractBudgetCap(userMessage);
   if (budgetCap === null || budgetCap <= 0) return 0;
-  const anchor = findAnchorInCache(ctx.cache, userMessage);
+  let anchor = inferReplacementAnchorFromCache(ctx.cache, userMessage);
+  if (!anchor) {
+    const candidates = replacementAnchorQueryCandidates(userMessage);
+    for (const query of candidates) {
+      const started = Date.now();
+      const r = await executeSearchCatalog({ mode: "by_query", query, per_page: 8 }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+      steps.push({ step: "v3_guard_replacement_anchor_probe", ms: now(), meta: { query, duration_ms: Date.now() - started, result: summariseToolResultMeta("search_catalog", r as ToolResult) } });
+      if (r.ok && r.total > 0) {
+        anchor = inferReplacementAnchorFromCache(ctx.cache, userMessage);
+        if (anchor) break;
+      }
+    }
+  }
   if (!anchor) return 0;
   const anchorLeaf = anchor.leaf_category ?? null;
+  const criteria = extractAnchorTraitCriteria(anchor, userMessage);
+  const criticalCriteria = extractUserCriticalReplacementCriteria(userMessage);
   const axes = lastDiscover ? buildReplacementAxes(
     { mode: "by_filter", options: Object.fromEntries(lastDiscover.facets.filter(isReplacementAutoFacet).map((f) => [f.key, f.values.map((v) => v.value)])) },
     lastDiscover,
@@ -1286,6 +1414,7 @@ async function tryReplacementBudgetAutoRender(
     .slice(0, 6) : [];
   const options: Record<string, string[]> = {};
   for (const axis of axes) options[axis.key] = axis.values;
+  if (!lastDiscover && criticalCriteria.length < 2) return 0;
   const input: SearchCatalogInput = {
     mode: "by_filter",
     ...(anchorLeaf ? { category_in: [anchorLeaf], anchor_leaf_category: anchorLeaf } : {}),
@@ -1303,17 +1432,19 @@ async function tryReplacementBudgetAutoRender(
   steps.push({
     step: "v3_guard_replacement_budget_autosearch",
     ms: now(),
-    meta: { budget_cap: budgetCap, anchor_id: anchor.id, anchor_leaf: anchorLeaf, axes: axes.map((a) => ({ key: a.key, values: a.values })), duration_ms: searchMs, result: summariseToolResultMeta("search_catalog", search as ToolResult) },
+    meta: { budget_cap: budgetCap, anchor_id: anchor.id, anchor_leaf: anchorLeaf, axes: axes.map((a) => ({ key: a.key, values: a.values })), criteria, critical_criteria: criticalCriteria.map((c) => c.label), duration_ms: searchMs, result: summariseToolResultMeta("search_catalog", search as ToolResult) },
   });
   if (!search.ok || search.total === 0) return 0;
   const familyExclude = findSameFamilyIds(ctx.cache, anchor);
-  const criteria = extractAnchorTraitCriteria(anchor, userMessage);
+  const sourceNeedles = replacementSourceNeedles(userMessage, anchor);
   const minMatches = Math.min(2, Math.max(1, criteria.length));
   const ids = search.results
     .map((p) => p.id)
     .filter((id) => {
       const p = ctx.cache.get(id) as unknown as CachedProd | undefined;
       if (!p || id === anchor.id || familyExclude.has(id) || p.price > budgetCap) return false;
+      if (isSameReplacementSource(p, sourceNeedles)) return false;
+      if (criticalCriteria.length > 0 && !criticalCriteria.every((c) => c.matches(p))) return false;
       if (criteria.length === 0) return true;
       return countAnchorTraitMatches(p, criteria) >= minMatches;
     })
@@ -1781,11 +1912,11 @@ async function runExpertLoop(
         return { finalText, productsRendered };
       }
       // ── Time-Budget Guard ──────────────────────────────────────────────
-      // Если до 90с-таймаута осталось < 20с — пропускаем следующий LLM-вызов
+      // Если до 90с-таймаута осталось мало времени — пропускаем следующий LLM-вызов
       // (p90 OpenRouter сегодня ~23с). Лучше отдать честную заглушку, чем
       // получить AbortError на полпути.
       const elapsedTurn = Date.now() - t0;
-      if (elapsedTurn > TURN_TIMEOUT_MS - 20_000 && productsRendered === 0) {
+      if (elapsedTurn > TURN_TIMEOUT_MS - MIN_REMAINING_MS_FOR_LLM && productsRendered === 0) {
         const autoRendered = await tryReplacementBudgetAutoRender(userMessage, lastDiscover, ctx, send, steps, now);
         if (autoRendered > 0) {
           productsRendered += autoRendered;
