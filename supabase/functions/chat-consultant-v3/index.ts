@@ -36,7 +36,7 @@ const TURN_TIMEOUT_MS = 90_000;
 
 type SseEvent =
   | { type: "delta"; content: string }
-  | { type: "assistant_turn_break"; reason: "tool_pending" | "after_render" | "final_text" }
+  | { type: "assistant_turn_break"; reason: "tool_pending" | "after_render" | "final_text" | "text_before_render" | "intro_late" | "honest_empty_finalizer" }
   | { type: "tool_event"; tool: string; phase: "start" | "result"; duration_ms?: number; summary?: string }
   | { type: "products_block"; markdown: string; count: number; total_available?: number }
   | { type: "contacts"; html: string }
@@ -1544,6 +1544,38 @@ async function runExpertLoop(
   let prioritySplitPool: string[] = [];
   let prioritySplitAxisIdSets: Map<string, Set<string>> | null = null;
   let replacementRequiredAxes: ReplacementAxis[] = [];
+  // ── Honest-Empty Lock ──────────────────────────────────────────────────────
+  // Set when jargon_recover_catalog(query, modifiers=[…]) returns total=0
+  // while earlier synonym/ladder searches DID find candidates. That's hard
+  // proof: "exact combo (form-factor × hard-constraint) is not in the catalog".
+  // Once locked:
+  //   • render_products is refused (no off-target fallback cards)
+  //   • last-chance auto-render is skipped
+  //   • the loop short-circuits with a deterministic honest-empty message
+  //     instead of waiting for another (potentially slow / aborted) LLM call.
+  let honestEmptyLocked: null | {
+    query: string;
+    modifiers: string[];
+    altTitles: string[];
+  } = null;
+  let honestEmptyEmitted = false;
+  const emitHonestEmptyFinalizer = (): string => {
+    if (honestEmptyEmitted || !honestEmptyLocked) return "";
+    honestEmptyEmitted = true;
+    const lock = honestEmptyLocked;
+    const modStr = lock.modifiers.join(" / ");
+    const head = `\n\nПо каталогу «${lock.query}» в сочетании с ${modStr} — точного совпадения нет.`;
+    const alts = lock.altTitles.length > 0
+      ? ` Близкие позиции по слову «${lock.query}» есть, но они на других параметрах: ${lock.altTitles.slice(0, 2).join("; ")}.`
+      : "";
+    const tail = ` Подсказать альтернативу на ${modStr} с похожими характеристиками или нужен переходник?`;
+    const text = `${head}${alts}${tail}`;
+    if (finalText.trim()) {
+      send({ type: "assistant_turn_break", reason: "honest_empty_finalizer" });
+    }
+    send({ type: "delta", content: text });
+    return text;
+  };
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
   // Turn-level guard: рендерим карточку контактов максимум один раз,
@@ -1624,6 +1656,37 @@ async function runExpertLoop(
 
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
+      // ── Honest-Empty Short-Circuit ──────────────────────────────────────
+      // Если ladder уже доказал, что точного сочетания нет, и карточки не
+      // показаны — НЕ ждём ещё один LLM-вызов (он может зависнуть на 20-30с
+      // и упереться в TURN_TIMEOUT_MS=90с → AbortError). Финализируем сразу.
+      if (honestEmptyLocked && productsRendered === 0) {
+        finalText += emitHonestEmptyFinalizer();
+        steps.push({
+          step: "v3_honest_empty_short_circuit",
+          ms: now(),
+          meta: { ...honestEmptyLocked, before_step: step },
+        });
+        return { finalText, productsRendered };
+      }
+      // ── Time-Budget Guard ──────────────────────────────────────────────
+      // Если до 90с-таймаута осталось < 20с — пропускаем следующий LLM-вызов
+      // (p90 OpenRouter сегодня ~23с). Лучше отдать честную заглушку, чем
+      // получить AbortError на полпути.
+      const elapsedTurn = Date.now() - t0;
+      if (elapsedTurn > TURN_TIMEOUT_MS - 20_000 && productsRendered === 0) {
+        if (honestEmptyLocked) {
+          finalText += emitHonestEmptyFinalizer();
+          steps.push({ step: "v3_time_budget_short_circuit", ms: now(), meta: { elapsed_ms: elapsedTurn, branch: "honest_empty" } });
+        } else {
+          const msg = "\n\nЗапрос обрабатывается дольше обычного. Уточните, пожалуйста, что важнее — параметры или бюджет, и я подберу точечно.";
+          send({ type: "delta", content: msg });
+          finalText += msg;
+          steps.push({ step: "v3_time_budget_short_circuit", ms: now(), meta: { elapsed_ms: elapsedTurn, branch: "generic" } });
+        }
+        return { finalText, productsRendered };
+      }
+
       const llmStart = Date.now();
       const resp = await callOpenRouter(apiKey, messages, turnController.signal);
       steps.push({
@@ -2092,8 +2155,32 @@ async function runExpertLoop(
           }
         }
 
+        // ── Honest-Empty Render Block ──────────────────────────────────────
+        // Когда lock уже стоит — никакой fallback-пул показывать НЕЛЬЗЯ:
+        // он по определению off-target (синонимы без жёсткого модификатора).
+        // Отдаём LLM явный отказ — пусть финализирует текстом, либо нас
+        // подхватит short-circuit на следующей итерации.
+        if (tc.name === "render_products" && honestEmptyLocked) {
+          steps.push({
+            step: "v3_render_blocked_honest_empty",
+            ms: now(),
+            meta: { ...honestEmptyLocked, ids_attempted: Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).length : 0 },
+          });
+          messages.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            name: tc.name,
+            content: JSON.stringify({
+              ok: false,
+              error_code: "honest_empty_locked",
+              _server_hint: `Карточки показывать НЕЛЬЗЯ: точное сочетание «${honestEmptyLocked.query}» × ${honestEmptyLocked.modifiers.join("/")} доказано пустое (jargon_recover_catalog → 0). Любой "близкий" пул — это не на тех параметрах. Финализируй коротким честным текстом: чего нет и что предложить взамен. НЕ зови render_products повторно.`,
+            }),
+          });
+          continue;
+        }
+
         // ── Step 6b: Escalate Guard — cancel escalation if fresh unshown pool ≥3.
-        if (tc.name === "escalate_to_manager") {
+        if (tc.name === "escalate_to_manager" && !honestEmptyLocked) {
           const pool = pickFreshUnshown(8);
           if (pool.length >= 3) {
             const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
@@ -2270,7 +2357,7 @@ async function runExpertLoop(
 
 
         if ((tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") && result.ok) {
-          const r2 = result as unknown as { results: Array<{ id: string; price: number }>; total: number };
+          const r2 = result as unknown as { results: Array<{ id: string; price: number; pagetitle?: string; title?: string }>; total: number };
           const ids = (r2.results ?? [])
             .filter((p) => p && Number.isFinite(p.price) && p.price > 0)
             .map((p) => String(p.id));
@@ -2280,7 +2367,44 @@ async function runExpertLoop(
           // Track which ladder candidates were already tried (to nudge LLM in tool reply).
           const q = typeof tc.args.query === "string" ? tc.args.query.trim().toLowerCase() : "";
           if (q) triedLadderQueries.add(q);
+
+          // ── Honest-Empty Lock detector ─────────────────────────────────
+          // jargon_recover_catalog с непустыми modifiers вернул total=0,
+          // а ранее по этому же query (без модификатора) уже что-то нашлось
+          // (freshSearch или triedLadderQueries дали хиты) → доказано, что
+          // точного сочетания нет. Лочим, чтобы дальше не рендерить мусор.
+          if (
+            tc.name === "jargon_recover_catalog" &&
+            r2.total === 0 &&
+            !honestEmptyLocked
+          ) {
+            const modifiers = Array.isArray(tc.args.modifiers)
+              ? (tc.args.modifiers as unknown[]).map((m) => String(m).trim()).filter(Boolean)
+              : [];
+            const queryArg = typeof tc.args.query === "string" ? tc.args.query.trim() : "";
+            if (modifiers.length > 0 && queryArg) {
+              // Соберём 2-3 названия близких товаров из кэша (по предыдущим
+              // вызовам ladder без модификатора), чтобы финализатор был
+              // содержательным, а не голым «не нашли».
+              const altTitles: string[] = [];
+              if (freshSearch) {
+                for (const id of freshSearch.ids.slice(0, 4)) {
+                  const p = ctx.cache.get(id) as unknown as { pagetitle?: string; title?: string } | undefined;
+                  const t = (p?.pagetitle ?? p?.title ?? "").trim();
+                  if (t && !altTitles.includes(t)) altTitles.push(t);
+                  if (altTitles.length >= 3) break;
+                }
+              }
+              honestEmptyLocked = { query: queryArg, modifiers, altTitles };
+              steps.push({
+                step: "v3_honest_empty_locked",
+                ms: now(),
+                meta: { query: queryArg, modifiers, alt_titles_count: altTitles.length, tried_ladder: [...triedLadderQueries] },
+              });
+            }
+          }
         }
+
 
         // If render_products succeeded → emit products_block immediately.
         if (tc.name === "render_products" && result.ok) {
@@ -2398,7 +2522,7 @@ async function runExpertLoop(
       const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
       productsRendered += rescued;
     }
-    if (productsRendered === 0) {
+    if (productsRendered === 0 && !honestEmptyLocked) {
       const pool = pickFreshUnshown(8);
       if (pool.length > 0) {
         const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
@@ -2414,6 +2538,11 @@ async function runExpertLoop(
           });
         }
       }
+    }
+    // Honest-empty финализатор после исчерпания бюджета шагов.
+    if (productsRendered === 0 && honestEmptyLocked) {
+      finalText += emitHonestEmptyFinalizer();
+      steps.push({ step: "v3_honest_empty_final_after_budget", ms: now(), meta: { ...honestEmptyLocked } });
     }
     steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "forced_stepcount", step_count: MAX_STEPS } });
     if (productsRendered === 0) {
