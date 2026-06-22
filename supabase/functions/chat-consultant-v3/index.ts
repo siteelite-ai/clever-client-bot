@@ -1702,12 +1702,34 @@ async function runExpertLoop(
 
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
+      // Классификация фазы для выбора таймаута. Эвристика:
+      //  • step 0 — всегда intro (LLM ещё не видел tool_results).
+      //  • последний msg = tool_result И контекст «тяжёлый» (>15KB JSON) —
+      //    финальный рендеринг карточек поверх большой выдачи каталога.
+      //  • иначе — промежуточное решение о следующем туле.
+      const lastMsg = messages[messages.length - 1];
+      const lastIsToolResult = lastMsg?.role === "tool";
+      const ctxBytes = JSON.stringify(messages).length;
+      const HEAVY_CTX_BYTES = 15_000;
+      let phase: LLMPhase;
+      let phaseTimeoutMs: number;
+      if (step === 0) {
+        phase = "intro";
+        phaseTimeoutMs = LLM_TIMEOUT_INTRO_MS;
+      } else if (lastIsToolResult && ctxBytes > HEAVY_CTX_BYTES) {
+        phase = "final_render";
+        phaseTimeoutMs = LLM_TIMEOUT_FINAL_RENDER_MS;
+      } else {
+        phase = "tool_decision";
+        phaseTimeoutMs = LLM_TIMEOUT_TOOL_DECISION_MS;
+      }
+
       const llmStart = Date.now();
-      const resp = await callOpenRouter(apiKey, messages, turnController.signal);
+      const resp = await callOpenRouter(apiKey, messages, turnController.signal, phaseTimeoutMs, phase);
       steps.push({
         step: "v3_llm_call",
         ms: now(),
-        meta: { step_index: step, duration_ms: Date.now() - llmStart, has_text: !!resp.text, tool_calls: resp.toolCalls.length, finish: resp.finishReason },
+        meta: { step_index: step, duration_ms: Date.now() - llmStart, has_text: !!resp.text, tool_calls: resp.toolCalls.length, finish: resp.finishReason, phase, timeout_ms: phaseTimeoutMs, ctx_bytes: ctxBytes },
       });
 
       const hasRender = resp.toolCalls.some((tc) => tc.name === "render_products");
