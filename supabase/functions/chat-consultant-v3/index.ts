@@ -705,7 +705,7 @@ function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd
   return best?.p ?? null;
 }
 
-function inferReplacementAnchorFromCache(cache: ProductCache, userMessage: string, budgetCap: number | null = null): CachedProd | null {
+function inferReplacementAnchorFromCache(cache: ProductCache, userMessage: string): CachedProd | null {
   const direct = findAnchorInCache(cache, userMessage);
   if (direct) return direct;
   if (!isReplacementIntent(userMessage)) return null;
@@ -714,7 +714,6 @@ function inferReplacementAnchorFromCache(cache: ProductCache, userMessage: strin
   for (const raw of cache.values()) {
     const p = raw as unknown as CachedProd;
     if (typeof p.price !== "number" || p.price <= 0) continue;
-    if (budgetCap !== null && p.price <= budgetCap) continue;
     const title = normalizeForMatch(p.pagetitle ?? p.title ?? "");
     const traits = normalizeForMatch((p.short_traits ?? []).join(" "));
     if (!title) continue;
@@ -723,6 +722,9 @@ function inferReplacementAnchorFromCache(cache: ProductCache, userMessage: strin
     for (const token of codeTokens) {
       const tokenRe = new RegExp(`(^|\\s)${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|\\s)`, "u");
       if (tokenRe.test(msg)) score += token.length >= 4 ? 3 : 1;
+    }
+    for (const token of title.split(/\s+/).filter((t) => /\p{L}/u.test(t) && t.length >= 4)) {
+      if (msg.includes(token)) score += 2;
     }
     const traitValues = (p.short_traits ?? [])
       .map((line) => line.split(":").slice(1).join(":").trim())
@@ -1300,7 +1302,7 @@ async function tryReplacementBudgetAutoRender(
   if (!isReplacementIntent(userMessage)) return 0;
   const budgetCap = extractBudgetCap(userMessage);
   if (budgetCap === null || budgetCap <= 0) return 0;
-  const anchor = inferReplacementAnchorFromCache(ctx.cache, userMessage, budgetCap);
+  const anchor = inferReplacementAnchorFromCache(ctx.cache, userMessage);
   if (!anchor) return 0;
   const anchorLeaf = anchor.leaf_category ?? null;
   const axes = lastDiscover ? buildReplacementAxes(
