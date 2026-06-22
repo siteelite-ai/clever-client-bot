@@ -2513,7 +2513,7 @@ async function runExpertLoop(
             freshSearch = { tool: tc.name, ids, total: r2.total };
             if (!replacementBudgetAutoTried && replacementIntent && productsRendered === 0 && extractBudgetCap(userMessage) !== null) {
               const autoRendered = await tryReplacementBudgetAutoRender(userMessage, lastDiscover, ctx, send, steps, now);
-              replacementBudgetAutoTried = autoRendered > 0 || !!findAnchorInCache(ctx.cache, userMessage);
+              replacementBudgetAutoTried = autoRendered > 0;
               if (autoRendered > 0) {
                 productsRendered += autoRendered;
                 steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "replacement_budget_autorender_after_search", step_count: step + 1 } });
