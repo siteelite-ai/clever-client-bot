@@ -30,7 +30,7 @@ const CATALOG_BASE_URL = Deno.env.get("CATALOG_API_BASE_URL") ?? "https://220vol
 
 const MODEL = "deepseek/deepseek-v4-flash"; // MoE 284B/13B-active, 1M ctx, optimized for agent workflows. rollback: "deepseek/deepseek-v4-pro"
 const MAX_STEPS = 8;
-const TURN_TIMEOUT_MS = 90_000;
+const TURN_TIMEOUT_MS = 140_000;
 
 // ─── SSE encoding ───────────────────────────────────────────────────────────
 
