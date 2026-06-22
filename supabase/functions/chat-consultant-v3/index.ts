@@ -2586,6 +2586,38 @@ Deno.serve(async (req) => {
       // чтобы воркер не убили до завершения insert/update при abort стрима.
       const logId = await insertTurnLogStart(supabase, sessionId, userMessage, [...steps]);
 
+      // Systemic protection against hard worker kills (Edge Runtime SIGKILL via req.signal).
+      // try/catch/finally может НЕ выполниться, если рантайм убивает воркер до return.
+      // Поэтому регистрируем abort-listener сразу и заворачиваем финализацию в EdgeRuntime.waitUntil,
+      // чтобы UPDATE chat_request_logs гарантированно ушёл в БД.
+      let logFinalized = false;
+      const rt = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
+      const finalizeLog = (reason: "ok" | "error" | "aborted_by_runtime", errOverride?: string | null) => {
+        if (!logId || logFinalized) return;
+        logFinalized = true;
+        const snapshotSteps = [...steps];
+        if (reason === "aborted_by_runtime") {
+          snapshotSteps.push({
+            step: "v3_turn_end",
+            ms: Date.now() - t0,
+            meta: { reason: "aborted_by_runtime", error: "worker killed by edge runtime (req.signal abort)" },
+          });
+        }
+        const finalErr = errOverride !== undefined ? errOverride : (reason === "aborted_by_runtime" ? "aborted_by_runtime" : errorMsg);
+        const persist = updateTurnLogEnd(supabase, logId, snapshotSteps, Date.now() - t0, finalTextAccum, productsCount, finalErr);
+        if (rt?.waitUntil) rt.waitUntil(persist);
+        else void persist;
+      };
+
+      const onRuntimeAbort = () => {
+        console.error("[v3] req.signal aborted by runtime — finalizing log");
+        finalizeLog("aborted_by_runtime");
+        try { send({ type: "done" }); } catch { /* ignore */ }
+        try { controller.close(); } catch { /* ignore */ }
+      };
+      if (req.signal.aborted) onRuntimeAbort();
+      else req.signal.addEventListener("abort", onRuntimeAbort, { once: true });
+
       const cache: ProductCache = new Map();
       const ctx: ToolContext = {
         cache,
@@ -2608,21 +2640,12 @@ Deno.serve(async (req) => {
           send({ type: "delta", content: "\n\nНе получилось обработать запрос. Попробуй переформулировать или связаться с менеджером." });
         } catch { /* stream may be closed */ }
       } finally {
+        try { req.signal.removeEventListener("abort", onRuntimeAbort); } catch { /* ignore */ }
         try { send({ type: "done" }); } catch { /* ignore */ }
         try { controller.close(); } catch { /* already closed */ }
-        if (logId) {
-          const finalSteps = steps;
-          const totalMs = Date.now() - t0;
-          const finalText = finalTextAccum;
-          const finalCount = productsCount;
-          const finalErr = errorMsg;
-          const persist = updateTurnLogEnd(supabase, logId, finalSteps, totalMs, finalText, finalCount, finalErr);
-          // EdgeRuntime.waitUntil переживёт shutdown воркера (abort/timeout).
-          const rt = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
-          if (rt?.waitUntil) rt.waitUntil(persist);
-          else await persist;
-        }
+        finalizeLog(errorMsg ? "error" : "ok");
       }
+
 
     },
   });
