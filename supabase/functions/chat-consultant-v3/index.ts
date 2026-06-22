@@ -1407,7 +1407,7 @@ interface ORResponse {
   finishReason: string;
 }
 
-const LLM_CALL_TIMEOUT_MS = 25_000;
+const LLM_CALL_TIMEOUT_MS = 60_000;
 
 async function callOpenRouter(
   apiKey: string,
