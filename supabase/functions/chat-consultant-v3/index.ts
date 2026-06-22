@@ -1566,6 +1566,13 @@ async function runExpertLoop(
   let replacementRequiredAxes: ReplacementAxis[] = [];
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
+  // No-progress detector: подряд два search_catalog с тем же сигнатурным
+  // набором id (или пусто) → дальнейшие итерации не дадут нового сигнала,
+  // выходим из цикла и идём в forced-finalize. Это страховка от LLM-loop,
+  // когда модель циклит на одном и том же запросе вместо изменения стратегии.
+  let lastSearchSignature: string | null = null;
+  let noProgressStreak = 0;
+  let noProgressBreak = false;
   // Turn-level guard: рендерим карточку контактов максимум один раз,
   // даже если LLM по ошибке вызвал lookup_contacts повторно (топик-дубль).
   const contactsEmitted = { value: false };
