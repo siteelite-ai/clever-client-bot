@@ -2466,7 +2466,14 @@ async function runExpertLoop(
         }
       }
     }
-    steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "forced_stepcount", step_count: MAX_STEPS } });
+    steps.push({
+      step: "v3_turn_end",
+      ms: now(),
+      meta: {
+        reason: noProgressBreak ? "no_progress" : "forced_stepcount",
+        step_count: MAX_STEPS,
+      },
+    });
     if (productsRendered === 0) {
       if (replacementIntent && replacementRequiredAxes.length >= 2) {
         const criteria = replacementRequiredAxes
