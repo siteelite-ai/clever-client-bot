@@ -705,11 +705,15 @@ function isReplacementIntent(msg: string): boolean {
   const m = msg.toLowerCase().replace(/ё/g, "е");
   const trigger = /(аналог|альтернатив|похож|замен|вместо|взамен)/u.test(m);
   if (!trigger) return false;
-  // Признаки якоря: длинное число (артикул), бренд-модель с цифрами
-  // (например «ва47-29», «mad22-2-080», «cl001»), либо имя в кавычках.
+  // Признаки якоря: любой токен длиной ≥3, содержащий И букву И цифру
+  // (Acti9, C16, D32, ВА47-29, MAD22-2-080, IP65, E27, dn027b),
+  // ИЛИ длинное число (артикул ≥4 цифр), ИЛИ имя в кавычках.
+  // Data-agnostic: ловим коды моделей без хардкода брендов/серий.
+  const tokens = m.match(/[a-zа-я0-9][a-zа-я0-9-]{2,}/giu) ?? [];
+  const hasAlphaNumAnchor = tokens.some((t) => /[a-zа-я]/iu.test(t) && /\d/.test(t));
   const hasAnchor =
+    hasAlphaNumAnchor ||
     /\b\d{4,}\b/.test(m) ||
-    /\b[a-zа-я]{2,}[-\s]?\d{2,}[a-zа-я0-9-]*\b/iu.test(m) ||
     /«[^»]{2,}»|"[^"]{2,}"/u.test(m);
   return hasAnchor;
 }
@@ -1403,29 +1407,49 @@ interface ORResponse {
   finishReason: string;
 }
 
+const LLM_CALL_TIMEOUT_MS = 25_000;
+
 async function callOpenRouter(
   apiKey: string,
   messages: ORMessage[],
   signal: AbortSignal,
 ): Promise<ORResponse> {
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://chat-volt.testdevops.ru",
-      "X-Title": "220volt-chat-consultant-v3",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      temperature: 0.2,
-      max_tokens: 4000,
-      messages,
-      tools: TOOL_SCHEMAS,
-      tool_choice: "auto",
-    }),
-    signal,
-  });
+  // Per-call timeout combined with turn-level signal: если один LLM-вызов
+  // подвис на >25s — рвём именно его, а не весь ход целиком. Так у бюджета
+  // хода остаётся шанс собрать finalize / honest-empty следующим шагом.
+  const localCtrl = new AbortController();
+  const localTimer = setTimeout(
+    () => localCtrl.abort(new DOMException("llm_call_timeout", "TimeoutError")),
+    LLM_CALL_TIMEOUT_MS,
+  );
+  const onOuterAbort = () => localCtrl.abort((signal as { reason?: unknown }).reason);
+  if (signal.aborted) localCtrl.abort((signal as { reason?: unknown }).reason);
+  else signal.addEventListener("abort", onOuterAbort, { once: true });
+
+  let res: Response;
+  try {
+    res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://chat-volt.testdevops.ru",
+        "X-Title": "220volt-chat-consultant-v3",
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        temperature: 0.2,
+        max_tokens: 4000,
+        messages,
+        tools: TOOL_SCHEMAS,
+        tool_choice: "auto",
+      }),
+      signal: localCtrl.signal,
+    });
+  } finally {
+    clearTimeout(localTimer);
+    signal.removeEventListener("abort", onOuterAbort);
+  }
 
   if (!res.ok) {
     const errText = await res.text();
@@ -1461,10 +1485,42 @@ async function callOpenRouter(
 
 interface StepLog { step: string; ms: number; meta?: Record<string, unknown>; }
 
-async function logTurn(
+async function insertTurnLogStart(
   supabase: SupabaseClient,
   sessionId: string,
   userQuery: string,
+  initialSteps: StepLog[],
+): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from("chat_request_logs")
+      .insert({
+        session_id: sessionId,
+        user_query: userQuery,
+        pipeline: "v3",
+        branch: "v3_expert",
+        steps: initialSteps,
+        final_products_count: 0,
+        final_response: null,
+        total_ms: 0,
+        error: "in_progress",
+      })
+      .select("id")
+      .single();
+    if (error) {
+      console.error("[v3] log start insert failed:", error.message);
+      return null;
+    }
+    return (data as { id: string } | null)?.id ?? null;
+  } catch (e) {
+    console.error("[v3] log start exception:", e);
+    return null;
+  }
+}
+
+async function updateTurnLogEnd(
+  supabase: SupabaseClient,
+  logId: string,
   steps: StepLog[],
   totalMs: number,
   finalResponse: string,
@@ -1472,22 +1528,22 @@ async function logTurn(
   errorMsg: string | null,
 ) {
   try {
-    const { error } = await supabase.from("chat_request_logs").insert({
-      session_id: sessionId,
-      user_query: userQuery,
-      pipeline: "v3",
-      branch: "v3_expert",
-      steps,
-      final_products_count: finalProductsCount,
-      final_response: finalResponse || null,
-      total_ms: totalMs,
-      error: errorMsg,
-    });
-    if (error) console.error("[v3] log insert failed:", error.message);
+    const { error } = await supabase
+      .from("chat_request_logs")
+      .update({
+        steps,
+        final_products_count: finalProductsCount,
+        final_response: finalResponse || null,
+        total_ms: totalMs,
+        error: errorMsg,
+      })
+      .eq("id", logId);
+    if (error) console.error("[v3] log update failed:", error.message);
   } catch (e) {
-    console.error("[v3] log exception:", e);
+    console.error("[v3] log update exception:", e);
   }
 }
+
 
 // ─── Expert loop ────────────────────────────────────────────────────────────
 
@@ -1542,6 +1598,13 @@ async function runExpertLoop(
   let replacementRequiredAxes: ReplacementAxis[] = [];
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
+  // No-progress detector: подряд два search_catalog с тем же сигнатурным
+  // набором id (или пусто) → дальнейшие итерации не дадут нового сигнала,
+  // выходим из цикла и идём в forced-finalize. Это страховка от LLM-loop,
+  // когда модель циклит на одном и том же запросе вместо изменения стратегии.
+  let lastSearchSignature: string | null = null;
+  let noProgressStreak = 0;
+  let noProgressBreak = false;
   // Turn-level guard: рендерим карточку контактов максимум один раз,
   // даже если LLM по ошибке вызвал lookup_contacts повторно (топик-дубль).
   const contactsEmitted = { value: false };
@@ -2276,7 +2339,28 @@ async function runExpertLoop(
           // Track which ladder candidates were already tried (to nudge LLM in tool reply).
           const q = typeof tc.args.query === "string" ? tc.args.query.trim().toLowerCase() : "";
           if (q) triedLadderQueries.add(q);
+
+          // No-progress detector: подпись = первые 10 отсортированных id (или "empty").
+          const signature = ids.length === 0
+            ? "empty"
+            : [...ids].sort().slice(0, 10).join(",");
+          if (signature === lastSearchSignature) {
+            noProgressStreak += 1;
+          } else {
+            noProgressStreak = 0;
+            lastSearchSignature = signature;
+          }
+          if (noProgressStreak >= 1 && productsRendered === 0) {
+            // 2 одинаковых исхода подряд (streak=1 = 2-й повтор) → LLM зациклился.
+            noProgressBreak = true;
+            steps.push({
+              step: "v3_no_progress_break",
+              ms: now(),
+              meta: { signature, streak: noProgressStreak + 1, step_index: step },
+            });
+          }
         }
+
 
         // If render_products succeeded → emit products_block immediately.
         if (tc.name === "render_products" && result.ok) {
@@ -2386,8 +2470,11 @@ async function runExpertLoop(
 
 
 
+      // No-progress detector — выходим в forced-finalize, не сжигая остаток бюджета.
+      if (noProgressBreak) break;
       // After tools → loop back, model decides what's next.
     }
+
 
     // Step budget exhausted.
     if (productsRendered === 0) {
@@ -2411,7 +2498,14 @@ async function runExpertLoop(
         }
       }
     }
-    steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "forced_stepcount", step_count: MAX_STEPS } });
+    steps.push({
+      step: "v3_turn_end",
+      ms: now(),
+      meta: {
+        reason: noProgressBreak ? "no_progress" : "forced_stepcount",
+        step_count: MAX_STEPS,
+      },
+    });
     if (productsRendered === 0) {
       if (replacementIntent && replacementRequiredAxes.length >= 2) {
         const criteria = replacementRequiredAxes
@@ -2482,6 +2576,11 @@ Deno.serve(async (req) => {
 
       steps.push({ step: "v3_turn_start", ms: 0, meta: { user_message: userMessage, session_id: sessionId } });
 
+      // Two-phase logging: вставляем row сразу (видим запрос даже при abort/timeout/crash),
+      // в finally апдейтим финальные поля. Update оборачиваем в EdgeRuntime.waitUntil,
+      // чтобы воркер не убили до завершения insert/update при abort стрима.
+      const logId = await insertTurnLogStart(supabase, sessionId, userMessage, [...steps]);
+
       const cache: ProductCache = new Map();
       const ctx: ToolContext = {
         cache,
@@ -2496,23 +2595,30 @@ Deno.serve(async (req) => {
         productsCount = out.productsRendered;
       } catch (e) {
         errorMsg = (e as Error)?.message ?? String(e);
+        const isAbort = errorMsg?.toLowerCase().includes("abort") || (e as Error)?.name === "AbortError";
+        if (isAbort) errorMsg = `aborted: ${errorMsg}`;
         console.error("[v3] expert error:", e);
-        steps.push({ step: "v3_turn_end", ms: Date.now() - t0, meta: { reason: "error", error: errorMsg } });
-        send({ type: "delta", content: "\n\nНе получилось обработать запрос. Попробуй переформулировать или связаться с менеджером." });
+        steps.push({ step: "v3_turn_end", ms: Date.now() - t0, meta: { reason: isAbort ? "aborted" : "error", error: errorMsg } });
+        try {
+          send({ type: "delta", content: "\n\nНе получилось обработать запрос. Попробуй переформулировать или связаться с менеджером." });
+        } catch { /* stream may be closed */ }
       } finally {
-        send({ type: "done" });
-        controller.close();
-        await logTurn(
-          supabase,
-          sessionId,
-          userMessage,
-          steps,
-          Date.now() - t0,
-          finalTextAccum,
-          productsCount,
-          errorMsg,
-        );
+        try { send({ type: "done" }); } catch { /* ignore */ }
+        try { controller.close(); } catch { /* already closed */ }
+        if (logId) {
+          const finalSteps = steps;
+          const totalMs = Date.now() - t0;
+          const finalText = finalTextAccum;
+          const finalCount = productsCount;
+          const finalErr = errorMsg;
+          const persist = updateTurnLogEnd(supabase, logId, finalSteps, totalMs, finalText, finalCount, finalErr);
+          // EdgeRuntime.waitUntil переживёт shutdown воркера (abort/timeout).
+          const rt = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
+          if (rt?.waitUntil) rt.waitUntil(persist);
+          else await persist;
+        }
       }
+
     },
   });
 
