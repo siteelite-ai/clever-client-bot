@@ -31,6 +31,7 @@ const CATALOG_BASE_URL = Deno.env.get("CATALOG_API_BASE_URL") ?? "https://220vol
 const MODEL = "deepseek/deepseek-v4-pro"; // via OpenRouter; rollback: "google/gemini-2.5-flash" | "anthropic/claude-haiku-4.5" | "anthropic/claude-sonnet-4.5"
 const MAX_STEPS = 8;
 const TURN_TIMEOUT_MS = 90_000;
+const MIN_REMAINING_MS_FOR_LLM = 30_000;
 
 // ─── SSE encoding ───────────────────────────────────────────────────────────
 
