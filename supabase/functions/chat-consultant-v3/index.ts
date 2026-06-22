@@ -1407,20 +1407,34 @@ interface ORResponse {
   finishReason: string;
 }
 
-const LLM_CALL_TIMEOUT_MS = 60_000;
+// Per-phase LLM timeouts. Каждый шаг агента имеет свой профиль нагрузки:
+//  • intro       — короткий стрим reasoning перед первым тулом (мало вход, мало выход)
+//  • tool_decision — выбор следующего инструмента (мало выход, контекст может быть любой)
+//  • final_render — финальный шаг: большой контекст (tool_results с десятками товаров)
+//                   + длинный JSON-вывод с карточками. Самый тяжёлый шаг.
+// Раньше был один общий LLM_CALL_TIMEOUT_MS=60s — flash-модель на MoE-архитектуре
+// не успевала отрендерить карточки из 30+ товаров за это время, и весь ход падал
+// с "не удалось обработать запрос". Разнесение по фазам убирает этот класс багов.
+const LLM_TIMEOUT_INTRO_MS = 20_000;
+const LLM_TIMEOUT_TOOL_DECISION_MS = 30_000;
+const LLM_TIMEOUT_FINAL_RENDER_MS = 110_000;
+
+type LLMPhase = "intro" | "tool_decision" | "final_render";
 
 async function callOpenRouter(
   apiKey: string,
   messages: ORMessage[],
   signal: AbortSignal,
+  timeoutMs: number,
+  phase: LLMPhase,
 ): Promise<ORResponse> {
   // Per-call timeout combined with turn-level signal: если один LLM-вызов
-  // подвис на >25s — рвём именно его, а не весь ход целиком. Так у бюджета
+  // подвис на >timeoutMs — рвём именно его, а не весь ход целиком. Так у бюджета
   // хода остаётся шанс собрать finalize / honest-empty следующим шагом.
   const localCtrl = new AbortController();
   const localTimer = setTimeout(
-    () => localCtrl.abort(new DOMException("llm_call_timeout", "TimeoutError")),
-    LLM_CALL_TIMEOUT_MS,
+    () => localCtrl.abort(new DOMException(`llm_call_timeout:${phase}`, "TimeoutError")),
+    timeoutMs,
   );
   const onOuterAbort = () => localCtrl.abort((signal as { reason?: unknown }).reason);
   if (signal.aborted) localCtrl.abort((signal as { reason?: unknown }).reason);
