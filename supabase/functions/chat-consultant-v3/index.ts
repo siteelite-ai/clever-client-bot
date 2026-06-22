@@ -1654,6 +1654,7 @@ async function runExpertLoop(
   let prioritySplitPool: string[] = [];
   let prioritySplitAxisIdSets: Map<string, Set<string>> | null = null;
   let replacementRequiredAxes: ReplacementAxis[] = [];
+  let replacementBudgetAutoTried = false;
   // ── Honest-Empty Lock ──────────────────────────────────────────────────────
   // Set when jargon_recover_catalog(query, modifiers=[…]) returns total=0
   // while earlier synonym/ladder searches DID find candidates. That's hard
@@ -2510,6 +2511,15 @@ async function runExpertLoop(
             .map((p) => String(p.id));
           if (ids.length > 0) {
             freshSearch = { tool: tc.name, ids, total: r2.total };
+            if (!replacementBudgetAutoTried && replacementIntent && productsRendered === 0 && extractBudgetCap(userMessage) !== null) {
+              const autoRendered = await tryReplacementBudgetAutoRender(userMessage, lastDiscover, ctx, send, steps, now);
+              replacementBudgetAutoTried = autoRendered > 0 || !!findAnchorInCache(ctx.cache, userMessage);
+              if (autoRendered > 0) {
+                productsRendered += autoRendered;
+                steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "replacement_budget_autorender_after_search", step_count: step + 1 } });
+                return { finalText, productsRendered };
+              }
+            }
           }
           // Track which ladder candidates were already tried (to nudge LLM in tool reply).
           const q = typeof tc.args.query === "string" ? tc.args.query.trim().toLowerCase() : "";
