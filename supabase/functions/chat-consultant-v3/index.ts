@@ -1335,6 +1335,7 @@ async function tryReplacementBudgetAutoRender(
   }
   if (!anchor) return 0;
   const anchorLeaf = anchor.leaf_category ?? null;
+  const criteria = extractAnchorTraitCriteria(anchor, userMessage);
   const axes = lastDiscover ? buildReplacementAxes(
     { mode: "by_filter", options: Object.fromEntries(lastDiscover.facets.filter(isReplacementAutoFacet).map((f) => [f.key, f.values.map((v) => v.value)])) },
     lastDiscover,
@@ -1348,6 +1349,7 @@ async function tryReplacementBudgetAutoRender(
     .slice(0, 6) : [];
   const options: Record<string, string[]> = {};
   for (const axis of axes) options[axis.key] = axis.values;
+  if (!lastDiscover && axes.length === 0 && criteria.length < 2) return 0;
   const input: SearchCatalogInput = {
     mode: "by_filter",
     ...(anchorLeaf ? { category_in: [anchorLeaf], anchor_leaf_category: anchorLeaf } : {}),
@@ -1365,11 +1367,10 @@ async function tryReplacementBudgetAutoRender(
   steps.push({
     step: "v3_guard_replacement_budget_autosearch",
     ms: now(),
-    meta: { budget_cap: budgetCap, anchor_id: anchor.id, anchor_leaf: anchorLeaf, axes: axes.map((a) => ({ key: a.key, values: a.values })), duration_ms: searchMs, result: summariseToolResultMeta("search_catalog", search as ToolResult) },
+    meta: { budget_cap: budgetCap, anchor_id: anchor.id, anchor_leaf: anchorLeaf, axes: axes.map((a) => ({ key: a.key, values: a.values })), criteria, duration_ms: searchMs, result: summariseToolResultMeta("search_catalog", search as ToolResult) },
   });
   if (!search.ok || search.total === 0) return 0;
   const familyExclude = findSameFamilyIds(ctx.cache, anchor);
-  const criteria = extractAnchorTraitCriteria(anchor, userMessage);
   const minMatches = Math.min(2, Math.max(1, criteria.length));
   const ids = search.results
     .map((p) => p.id)
