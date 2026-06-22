@@ -2391,13 +2391,17 @@ async function runExpertLoop(
             noProgressStreak = 0;
             lastSearchSignature = signature;
           }
-          if (noProgressStreak >= 1 && productsRendered === 0) {
-            // 2 одинаковых исхода подряд (streak=1 = 2-й повтор) → LLM зациклился.
+          // Разный порог по типу сигнатуры:
+          //  • "empty" — пустые ответы часто отличаются стратегией (by_query vs by_pagetitle vs by_facets),
+          //    LLM имеет право пройти лестницу жаргона и фасеты → break только на 4-м пустом подряд (streak>=3).
+          //  • любой непустой повтор — реальный цикл с тем же пулом → break на 2-м повторе (streak>=1).
+          const breakThreshold = signature === "empty" ? 3 : 1;
+          if (noProgressStreak >= breakThreshold && productsRendered === 0) {
             noProgressBreak = true;
             steps.push({
               step: "v3_no_progress_break",
               ms: now(),
-              meta: { signature, streak: noProgressStreak + 1, step_index: step },
+              meta: { signature, streak: noProgressStreak + 1, threshold: breakThreshold + 1, step_index: step },
             });
           }
         }
