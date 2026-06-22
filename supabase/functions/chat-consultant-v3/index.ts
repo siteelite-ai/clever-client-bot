@@ -1770,6 +1770,21 @@ async function runExpertLoop(
       ?? null;
   };
 
+  const semanticBridgeQueries = (): string[] => {
+    const generic = buildGenericConstraintTokens(lastDiscover);
+    const userNorm = new Set(normalizeForMatch(userMessage).split(/\s+/).filter(Boolean));
+    const codeNorms = new Set(codeConstraints.map(normalizeCodeLike));
+    const out: string[] = [];
+    for (const token of normalizeForMatch(firstAssistantText).split(/\s+/)) {
+      if (token.length < 3 || userNorm.has(token) || generic.has(token) || codeNorms.has(normalizeCodeLike(token))) continue;
+      // Prefer technical acronym/Latin expansions produced by the expert intro
+      // (e.g. SMD/LED), not Russian explanatory prose. This stays data-agnostic:
+      // terms are derived from the current reasoning text, not from a dictionary.
+      if (/^[a-z]{3,8}$/i.test(token) && !out.includes(token)) out.push(token);
+    }
+    return out.slice(0, 3);
+  };
+
   const tryCodeFacetRescue = async (): Promise<number> => {
     if (!lastDiscover || codeConstraints.length === 0 || replacementIntent) return 0;
     const options: Record<string, string[]> = {};
@@ -1799,7 +1814,24 @@ async function runExpertLoop(
     }
 
     const start = Date.now();
-    let result = await executeSearchCatalog(searchInput, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+    let bridgeUsed: string | null = null;
+    let result = null as Awaited<ReturnType<typeof executeSearchCatalog>> | null;
+    for (const query of semanticBridgeQueries()) {
+      const bridge = await executeSearchCatalog({
+        mode: "by_query",
+        query,
+        min_price: searchInput.min_price,
+        max_price: searchInput.max_price,
+        per_page: searchInput.per_page,
+      }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+      if (!bridge.ok || bridge.results.length === 0) continue;
+      const bridgeFiltered = filterByCompoundConstraints(bridge.results.map((p) => String(p.id)));
+      if (bridgeFiltered.ids.length === 0) continue;
+      bridgeUsed = query;
+      result = { ...bridge, results: bridge.results.filter((p) => bridgeFiltered.ids.includes(String(p.id))), total: bridgeFiltered.ids.length };
+      break;
+    }
+    result ??= await executeSearchCatalog(searchInput, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
     if (result.ok && result.results.length === 0 && leaves.length > 0) {
       result = await executeSearchCatalog({ ...searchInput, category_in: undefined }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
     }
@@ -1827,7 +1859,9 @@ async function runExpertLoop(
       const p = ctx.cache.get(id);
       return p ? productMatchesAnySemanticToken(p, semanticTokens) : false;
     });
-    if (!hasSemanticEvidence) {
+    if (bridgeUsed) {
+      send({ type: "delta", content: `\n\nТрактую «${semanticTokens.join(" ") || userMessage}» через технический термин «${bridgeUsed}» и цоколь ${matched.map((m) => m.value).join(", ")}.` });
+    } else if (!hasSemanticEvidence) {
       send({ type: "delta", content: `\n\nПо слову «${semanticTokens.join(" ")}» точного признака в каталоге не вижу — показываю товары по подтверждённым параметрам: ${matched.map((m) => m.value).join(", ")}.` });
     }
     const render = executeRenderProducts({ product_ids: pool, total_available: result.total } as RenderProductsInput, ctx.cache);
@@ -1839,7 +1873,7 @@ async function runExpertLoop(
     steps.push({
       step: "v3_guard_code_facet_rescue",
       ms: now(),
-      meta: { matched, total: result.total, rendered: render.rendered_count, duration_ms: duration, semantic_tokens: semanticTokens, semantic_evidence: hasSemanticEvidence },
+      meta: { matched, total: result.total, rendered: render.rendered_count, duration_ms: duration, semantic_tokens: semanticTokens, semantic_evidence: hasSemanticEvidence, bridge_query: bridgeUsed },
     });
     return render.rendered_count;
   };
