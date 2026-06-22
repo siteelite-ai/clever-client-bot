@@ -313,6 +313,30 @@ export async function executeSearchCatalog(
   if (input.sort_cheapest) merged.sort((a, b) => a.price - b.price);
   else if (input.sort_expensive) merged.sort((a, b) => b.price - a.price);
   const perPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
+
+  // ZERO-TOTAL RESCUE GUARD (data-agnostic, см. категорийный конфликт vs options):
+  // Срабатывает ТОЛЬКО когда fan-out по category_in дал суммарно 0 И есть фильтрующие
+  // options. Делаем ровно один ретрай без category_in — options сами по себе несут
+  // структурные ограничения (cокoль/тип/форма/мощность). Спасает кейс, когда LLM
+  // выбрал зонт категорий, противоречащий ключевой опции (типа category_in=[Лампы
+  // галогенные|люминесцентные|накаливания] + options.tip_lampy=LED). Если и без
+  // category_in пусто — возвращаем честный 0, ничего не выдумываем.
+  const hasFilteringOptions = input.options && Object.keys(input.options).length > 0;
+  if (merged.length === 0 && totalSum === 0 && hasFilteringOptions) {
+    const rescue = await singleSearchSorted(input, deps, cache, undefined, warnings);
+    if (rescue.ok && rescue.results.length > 0) {
+      warnings.push(`category_in_dropped_zero_total:${categories.join("|")}`);
+      return {
+        tool: "search_catalog",
+        ok: true,
+        mode: input.mode,
+        total: rescue.total,
+        results: rescue.results.slice(0, perPage),
+        warnings,
+      };
+    }
+  }
+
   return {
     tool: "search_catalog",
     ok: true,
