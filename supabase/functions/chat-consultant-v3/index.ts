@@ -1544,6 +1544,35 @@ async function runExpertLoop(
   let prioritySplitPool: string[] = [];
   let prioritySplitAxisIdSets: Map<string, Set<string>> | null = null;
   let replacementRequiredAxes: ReplacementAxis[] = [];
+  // ── Honest-Empty Lock ──────────────────────────────────────────────────────
+  // Set when jargon_recover_catalog(query, modifiers=[…]) returns total=0
+  // while earlier synonym/ladder searches DID find candidates. That's hard
+  // proof: "exact combo (form-factor × hard-constraint) is not in the catalog".
+  // Once locked:
+  //   • render_products is refused (no off-target fallback cards)
+  //   • last-chance auto-render is skipped
+  //   • the loop short-circuits with a deterministic honest-empty message
+  //     instead of waiting for another (potentially slow / aborted) LLM call.
+  let honestEmptyLocked: null | {
+    query: string;
+    modifiers: string[];
+    altTitles: string[];
+  } = null;
+  const emitHonestEmptyFinalizer = (): string => {
+    const lock = honestEmptyLocked!;
+    const modStr = lock.modifiers.join(" / ");
+    const head = `\n\nПо каталогу «${lock.query}» в сочетании с ${modStr} — точного совпадения нет.`;
+    const alts = lock.altTitles.length > 0
+      ? ` Близкие позиции по слову «${lock.query}» есть, но они на других параметрах: ${lock.altTitles.slice(0, 2).join("; ")}.`
+      : "";
+    const tail = ` Подсказать альтернативу на ${modStr} с похожими характеристиками или нужен переходник?`;
+    const text = `${head}${alts}${tail}`;
+    if (finalText.trim()) {
+      send({ type: "assistant_turn_break", reason: "honest_empty_finalizer" });
+    }
+    send({ type: "delta", content: text });
+    return text;
+  };
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
   // Turn-level guard: рендерим карточку контактов максимум один раз,
