@@ -736,6 +736,24 @@ function inferReplacementAnchorFromCache(cache: ProductCache, userMessage: strin
   return candidates.sort((a, b) => b.score - a.score || b.p.price - a.p.price)[0]?.p ?? null;
 }
 
+function replacementAnchorQueryCandidates(userMessage: string): string[] {
+  const cleaned = userMessage.replace(/[«»"',.()]/g, " ").replace(/\s+/g, " ").trim();
+  const tokens = cleaned.split(/\s+/).filter(Boolean);
+  const out: string[] = [];
+  const add = (s: string) => {
+    const v = s.replace(/\s+/g, " ").trim();
+    if (v.length >= 3 && !out.some((x) => normalizeCodeLike(x) === normalizeCodeLike(v))) out.push(v);
+  };
+  for (let i = 0; i < tokens.length; i++) {
+    for (let len = Math.min(4, tokens.length - i); len >= 1; len--) {
+      const phrase = tokens.slice(i, i + len).join(" ");
+      if (/\d/.test(phrase) && /\p{L}/u.test(phrase) && /(?:-|\s)\d/u.test(phrase)) add(phrase);
+    }
+  }
+  for (const t of tokens) if (/\d/.test(t) && /\p{L}/u.test(t) && t.length >= 3) add(t);
+  return out.sort((a, b) => b.length - a.length).slice(0, 4);
+}
+
 // Detects intent to find ALTERNATIVES to a referenced product. In such cases
 // the anchor SKU itself MUST NOT appear in the rendered list (it's the source,
 // not an analog). Triggers: "аналог", "замен", "похож", "альтернатив", "вместо",
