@@ -627,7 +627,7 @@ interface PriceIntent { kind: PriceIntentKind; direction: PriceDirection; }
 function extractBudgetCap(msg: string): number | null {
   const m = msg.toLowerCase().replace(/\s+/g, " ");
   // "до 1000 тг", "не дороже 1000 тенге", "не более 1000 ₸", "в пределах 1000 тг", "максимум 1000 тг"
-  const re = /(?:до|не\s+дороже|не\s+более|в\s+пределах|максимум|макс\.?|бюджет(?:\s+до)?)\s+(\d[\d\s]{0,9})\s*(?:тг|тенге|₸|kzt)\b/u;
+  const re = /(?:до|не\s+дороже|не\s+более|в\s+пределах|максимум|макс\.?|бюджет(?:\s+до)?)\s+(\d[\d\s]{0,9})\s*(?:тг|тенге|₸|kzt)(?=$|[^\p{L}\p{N}_])/u;
   const m1 = m.match(re);
   if (m1) {
     const n = parseInt(m1[1].replace(/\s+/g, ""), 10);
