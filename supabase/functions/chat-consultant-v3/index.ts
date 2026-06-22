@@ -1407,29 +1407,49 @@ interface ORResponse {
   finishReason: string;
 }
 
+const LLM_CALL_TIMEOUT_MS = 25_000;
+
 async function callOpenRouter(
   apiKey: string,
   messages: ORMessage[],
   signal: AbortSignal,
 ): Promise<ORResponse> {
-  const res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      "HTTP-Referer": "https://chat-volt.testdevops.ru",
-      "X-Title": "220volt-chat-consultant-v3",
-    },
-    body: JSON.stringify({
-      model: MODEL,
-      temperature: 0.2,
-      max_tokens: 4000,
-      messages,
-      tools: TOOL_SCHEMAS,
-      tool_choice: "auto",
-    }),
-    signal,
-  });
+  // Per-call timeout combined with turn-level signal: если один LLM-вызов
+  // подвис на >25s — рвём именно его, а не весь ход целиком. Так у бюджета
+  // хода остаётся шанс собрать finalize / honest-empty следующим шагом.
+  const localCtrl = new AbortController();
+  const localTimer = setTimeout(
+    () => localCtrl.abort(new DOMException("llm_call_timeout", "TimeoutError")),
+    LLM_CALL_TIMEOUT_MS,
+  );
+  const onOuterAbort = () => localCtrl.abort((signal as { reason?: unknown }).reason);
+  if (signal.aborted) localCtrl.abort((signal as { reason?: unknown }).reason);
+  else signal.addEventListener("abort", onOuterAbort, { once: true });
+
+  let res: Response;
+  try {
+    res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://chat-volt.testdevops.ru",
+        "X-Title": "220volt-chat-consultant-v3",
+      },
+      body: JSON.stringify({
+        model: MODEL,
+        temperature: 0.2,
+        max_tokens: 4000,
+        messages,
+        tools: TOOL_SCHEMAS,
+        tool_choice: "auto",
+      }),
+      signal: localCtrl.signal,
+    });
+  } finally {
+    clearTimeout(localTimer);
+    signal.removeEventListener("abort", onOuterAbort);
+  }
 
   if (!res.ok) {
     const errText = await res.text();
