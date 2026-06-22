@@ -1558,8 +1558,11 @@ async function runExpertLoop(
     modifiers: string[];
     altTitles: string[];
   } = null;
+  let honestEmptyEmitted = false;
   const emitHonestEmptyFinalizer = (): string => {
-    const lock = honestEmptyLocked!;
+    if (honestEmptyEmitted || !honestEmptyLocked) return "";
+    honestEmptyEmitted = true;
+    const lock = honestEmptyLocked;
     const modStr = lock.modifiers.join(" / ");
     const head = `\n\nПо каталогу «${lock.query}» в сочетании с ${modStr} — точного совпадения нет.`;
     const alts = lock.altTitles.length > 0
