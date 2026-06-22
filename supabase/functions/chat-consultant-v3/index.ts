@@ -1433,12 +1433,14 @@ async function tryReplacementBudgetAutoRender(
   });
   if (!search.ok || search.total === 0) return 0;
   const familyExclude = findSameFamilyIds(ctx.cache, anchor);
+  const sourceNeedles = replacementSourceNeedles(userMessage, anchor);
   const minMatches = Math.min(2, Math.max(1, criteria.length));
   const ids = search.results
     .map((p) => p.id)
     .filter((id) => {
       const p = ctx.cache.get(id) as unknown as CachedProd | undefined;
       if (!p || id === anchor.id || familyExclude.has(id) || p.price > budgetCap) return false;
+      if (isSameReplacementSource(p, sourceNeedles)) return false;
       if (criticalCriteria.length > 0 && !criticalCriteria.every((c) => c.matches(p))) return false;
       if (criteria.length === 0) return true;
       return countAnchorTraitMatches(p, criteria) >= minMatches;
