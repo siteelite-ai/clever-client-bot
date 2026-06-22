@@ -707,9 +707,13 @@ function isReplacementIntent(msg: string): boolean {
   if (!trigger) return false;
   // Признаки якоря: длинное число (артикул), бренд-модель с цифрами
   // (например «ва47-29», «mad22-2-080», «cl001»), либо имя в кавычках.
+  // Якоря: длинный артикул (≥4 цифр), бренд/серия+цифры (≥2 букв + ≥2 цифр),
+  // короткие модельные коды letter+digit ≥3 символов (Acti9, C16, D32, iC60,
+  // ВА47, IP20), либо имя в кавычках.
   const hasAnchor =
     /\b\d{4,}\b/.test(m) ||
     /\b[a-zа-я]{2,}[-\s]?\d{2,}[a-zа-я0-9-]*\b/iu.test(m) ||
+    /\b(?=[a-zа-я0-9-]*[a-zа-я])(?=[a-zа-я0-9-]*\d)[a-zа-я0-9-]{3,}\b/iu.test(m) ||
     /«[^»]{2,}»|"[^"]{2,}"/u.test(m);
   return hasAnchor;
 }
@@ -2500,9 +2504,11 @@ Deno.serve(async (req) => {
         steps.push({ step: "v3_turn_end", ms: Date.now() - t0, meta: { reason: "error", error: errorMsg } });
         send({ type: "delta", content: "\n\nНе получилось обработать запрос. Попробуй переформулировать или связаться с менеджером." });
       } finally {
-        send({ type: "done" });
-        controller.close();
-        await logTurn(
+        try { send({ type: "done" }); } catch (_) { /* stream may be closed on abort */ }
+        try { controller.close(); } catch (_) { /* already closed */ }
+        // Дожимаем запись в chat_request_logs даже после abort/таймаута,
+        // иначе worker умирает до завершения INSERT и мы слепы к падениям.
+        const logPromise = logTurn(
           supabase,
           sessionId,
           userMessage,
@@ -2511,7 +2517,14 @@ Deno.serve(async (req) => {
           finalTextAccum,
           productsCount,
           errorMsg,
-        );
+        ).catch((e) => console.error("[v3] logTurn failed:", e));
+        // @ts-ignore — EdgeRuntime доступен в Supabase Edge Runtime
+        if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) {
+          // @ts-ignore
+          EdgeRuntime.waitUntil(logPromise);
+        } else {
+          await logPromise;
+        }
       }
     },
   });
