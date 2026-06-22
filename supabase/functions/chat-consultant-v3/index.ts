@@ -2307,7 +2307,28 @@ async function runExpertLoop(
           // Track which ladder candidates were already tried (to nudge LLM in tool reply).
           const q = typeof tc.args.query === "string" ? tc.args.query.trim().toLowerCase() : "";
           if (q) triedLadderQueries.add(q);
+
+          // No-progress detector: подпись = первые 10 отсортированных id (или "empty").
+          const signature = ids.length === 0
+            ? "empty"
+            : [...ids].sort().slice(0, 10).join(",");
+          if (signature === lastSearchSignature) {
+            noProgressStreak += 1;
+          } else {
+            noProgressStreak = 0;
+            lastSearchSignature = signature;
+          }
+          if (noProgressStreak >= 1 && productsRendered === 0) {
+            // 2 одинаковых исхода подряд (streak=1 = 2-й повтор) → LLM зациклился.
+            noProgressBreak = true;
+            steps.push({
+              step: "v3_no_progress_break",
+              ms: now(),
+              meta: { signature, streak: noProgressStreak + 1, step_index: step },
+            });
+          }
         }
+
 
         // If render_products succeeded → emit products_block immediately.
         if (tc.name === "render_products" && result.ok) {
