@@ -2592,28 +2592,40 @@ Deno.serve(async (req) => {
       // чтобы UPDATE chat_request_logs гарантированно ушёл в БД.
       let logFinalized = false;
       const rt = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
-      const finalizeLog = (reason: "ok" | "error" | "aborted_by_runtime", errOverride?: string | null) => {
+
+      // Async-версия для штатного finally: дожидаемся UPDATE до закрытия стрима,
+      // чтобы воркер не уехал в idle/shutdown до завершения запроса к PostgREST.
+      const finalizeLogAwait = async (reason: "ok" | "error", errOverride?: string | null) => {
         if (!logId || logFinalized) return;
         logFinalized = true;
         const snapshotSteps = [...steps];
-        if (reason === "aborted_by_runtime") {
-          snapshotSteps.push({
-            step: "v3_turn_end",
-            ms: Date.now() - t0,
-            meta: { reason: "aborted_by_runtime", error: "worker killed by edge runtime (req.signal abort)" },
-          });
+        const finalErr = errOverride !== undefined ? errOverride : errorMsg;
+        try {
+          await updateTurnLogEnd(supabase, logId, snapshotSteps, Date.now() - t0, finalTextAccum, productsCount, finalErr);
+        } catch (e) {
+          console.error("[v3] finalizeLogAwait failed:", e);
         }
-        const finalErr = errOverride !== undefined ? errOverride : (reason === "aborted_by_runtime" ? "aborted_by_runtime" : errorMsg);
-        const persist = updateTurnLogEnd(supabase, logId, snapshotSteps, Date.now() - t0, finalTextAccum, productsCount, finalErr);
+      };
+
+      // Fire-and-forget версия для abort-листенера: стрим уже закрыт runtime'ом,
+      // ждать нельзя — пробуем через waitUntil как best-effort.
+      const finalizeLogAbort = () => {
+        if (!logId || logFinalized) return;
+        logFinalized = true;
+        const snapshotSteps = [...steps];
+        snapshotSteps.push({
+          step: "v3_turn_end",
+          ms: Date.now() - t0,
+          meta: { reason: "aborted_by_runtime", error: "worker killed by edge runtime (req.signal abort)" },
+        });
+        const persist = updateTurnLogEnd(supabase, logId, snapshotSteps, Date.now() - t0, finalTextAccum, productsCount, "aborted_by_runtime");
         if (rt?.waitUntil) rt.waitUntil(persist);
         else void persist;
       };
 
       const onRuntimeAbort = () => {
-        console.error("[v3] req.signal aborted by runtime — finalizing log");
-        finalizeLog("aborted_by_runtime");
-        try { send({ type: "done" }); } catch { /* ignore */ }
-        try { controller.close(); } catch { /* ignore */ }
+        console.error("[v3] req.signal aborted by runtime — finalizing log (best-effort)");
+        finalizeLogAbort();
       };
       if (req.signal.aborted) onRuntimeAbort();
       else req.signal.addEventListener("abort", onRuntimeAbort, { once: true });
@@ -2641,9 +2653,13 @@ Deno.serve(async (req) => {
         } catch { /* stream may be closed */ }
       } finally {
         try { req.signal.removeEventListener("abort", onRuntimeAbort); } catch { /* ignore */ }
+        // КРИТИЧНО: сначала дожидаемся UPDATE'а лога, пока стрим ещё открыт и воркер жив.
+        // После controller.close() Supabase Edge Runtime может убить воркера, не дождавшись
+        // никаких pending-промисов (в т.ч. EdgeRuntime.waitUntil после закрытия стрима).
+        await finalizeLogAwait(errorMsg ? "error" : "ok");
+        // Только теперь безопасно закрывать стрим — UPDATE уже долетел до БД.
         try { send({ type: "done" }); } catch { /* ignore */ }
         try { controller.close(); } catch { /* already closed */ }
-        finalizeLog(errorMsg ? "error" : "ok");
       }
 
 
