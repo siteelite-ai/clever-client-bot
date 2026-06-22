@@ -1165,6 +1165,43 @@ function extractNumbers(text: string): number[] {
     .filter((n) => Number.isFinite(n));
 }
 
+interface CriticalReplacementCriterion { label: string; matches: (product: CachedProd) => boolean }
+
+function productEvidenceText(product: CachedProd): string {
+  return `${product.pagetitle ?? product.title ?? ""}\n${(product.short_traits ?? []).join("\n")}`;
+}
+
+function extractUserCriticalReplacementCriteria(userMessage: string): CriticalReplacementCriterion[] {
+  const text = userMessage.toLowerCase().replace(/ё/g, "е");
+  const out: CriticalReplacementCriterion[] = [];
+  const add = (label: string, matches: (product: CachedProd) => boolean) => {
+    if (!out.some((c) => c.label === label)) out.push({ label, matches });
+  };
+  const current = text.match(/(?:^|[^\p{L}\p{N}])0*(\d{1,3})\s*(?:а|a)(?=$|[^\p{L}\p{N}])/u);
+  if (current) {
+    const n = current[1];
+    add(`${n}A`, (p) => new RegExp(`(?:^|[^\\d])0*${n}\\s*(?:а|a)(?=$|[^\\p{L}\\p{N}])`, "iu").test(productEvidenceText(p)));
+  }
+  const breaking = text.match(/(\d+(?:[.,]\d+)?)\s*(?:к\s*а|ka|kа|кa)(?=$|[^\p{L}\p{N}])/u);
+  if (breaking) {
+    const n = Number(breaking[1].replace(",", "."));
+    if (Number.isFinite(n)) add(`${n}кА`, (p) => {
+      const nums = [...productEvidenceText(p).matchAll(/(\d+(?:[.,]\d+)?)\s*(?:к\s*а|ka|kа|кa)(?=$|[^\p{L}\p{N}])/giu)]
+        .map((m) => Number(m[1].replace(",", ".")));
+      return nums.some((x) => Math.abs(x - n) < 0.0001);
+    });
+  }
+  const poles = text.match(/(?:^|[^\p{L}\p{N}])(\d)\s*(?:p|р)(?=$|[^\p{L}\p{N}])/u);
+  if (poles) {
+    const n = poles[1];
+    add(`${n}P`, (p) => new RegExp(`(?:^|[^\\p{L}\\p{N}])${n}\\s*(?:p|р|полюс)`, "iu").test(productEvidenceText(p)));
+  }
+  const ch = text.match(/(?:характеристик\S*|хар\S*|х-ка)\s*([abcdeавсдек])/u)?.[1]
+    ?.replace(/[ав]/u, "a").replace(/с/u, "c").replace(/д/u, "d").replace(/е/u, "e").replace(/к/u, "k");
+  if (ch) add(`хар-${ch.toUpperCase()}`, (p) => new RegExp(`(?:^|[^a-zа-я])${ch}(?=$|[^a-zа-я])`, "iu").test(normalizeCodeLike(productEvidenceText(p))));
+  return out;
+}
+
 function replacementValueIsEvidenced(value: string, evidenceText: string, facet: Facet): boolean {
   if (valueIsEvidenced(value, evidenceText)) return true;
   if (isDiameterFacet(facet)) {
