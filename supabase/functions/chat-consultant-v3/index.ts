@@ -28,16 +28,15 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const CATALOG_BASE_URL = Deno.env.get("CATALOG_API_BASE_URL") ?? "https://220volt.kz/api";
 
-const MODEL = "deepseek/deepseek-v4-pro"; // via OpenRouter; rollback: "google/gemini-2.5-flash" | "anthropic/claude-haiku-4.5" | "anthropic/claude-sonnet-4.5"
+const MODEL = "deepseek/deepseek-v4-pro"; // testing; rollback: "anthropic/claude-haiku-4.5" or "anthropic/claude-sonnet-4.5"
 const MAX_STEPS = 8;
 const TURN_TIMEOUT_MS = 90_000;
-const MIN_REMAINING_MS_FOR_LLM = 30_000;
 
 // ─── SSE encoding ───────────────────────────────────────────────────────────
 
 type SseEvent =
   | { type: "delta"; content: string }
-  | { type: "assistant_turn_break"; reason: "tool_pending" | "after_render" | "final_text" | "text_before_render" | "intro_late" | "honest_empty_finalizer" }
+  | { type: "assistant_turn_break"; reason: "tool_pending" | "after_render" | "final_text" }
   | { type: "tool_event"; tool: string; phase: "start" | "result"; duration_ms?: number; summary?: string }
   | { type: "products_block"; markdown: string; count: number; total_available?: number }
   | { type: "contacts"; html: string }
@@ -190,21 +189,6 @@ function summariseToolResultMeta(name: string, r: ToolResult): Record<string, un
   if (name === "lookup_knowledge") return { hits: (r as { hits: unknown[] }).hits.length };
   if (name === "render_products") return { rendered_count: (r as { rendered_count: number }).rendered_count, blocked_by_zero_price: (r as { blocked_by_zero_price?: number }).blocked_by_zero_price };
   return {};
-}
-
-function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== "object") return JSON.stringify(value);
-  if (Array.isArray(value)) return `[${value.map((v) => stableStringify(v)).join(",")}]`;
-  const obj = value as Record<string, unknown>;
-  return `{${Object.keys(obj).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(",")}}`;
-}
-
-function toolMemoKey(name: string, args: Record<string, unknown>): string {
-  return `${name}:${stableStringify(args)}`;
-}
-
-function isMemoizedTool(name: string): boolean {
-  return name !== "render_products" && name !== "note_state" && name !== "escalate_to_manager";
 }
 
 function normalizeForMatch(s: string): string {
@@ -627,7 +611,7 @@ interface PriceIntent { kind: PriceIntentKind; direction: PriceDirection; }
 function extractBudgetCap(msg: string): number | null {
   const m = msg.toLowerCase().replace(/\s+/g, " ");
   // "до 1000 тг", "не дороже 1000 тенге", "не более 1000 ₸", "в пределах 1000 тг", "максимум 1000 тг"
-  const re = /(?:до|не\s+дороже|не\s+более|в\s+пределах|максимум|макс\.?|бюджет(?:\s+до)?)\s+(\d[\d\s]{0,9})\s*(?:тг|тенге|₸|kzt)(?=$|[^\p{L}\p{N}_])/u;
+  const re = /(?:до|не\s+дороже|не\s+более|в\s+пределах|максимум|макс\.?|бюджет(?:\s+до)?)\s+(\d[\d\s]{0,9})\s*(?:тг|тенге|₸|kzt)\b/u;
   const m1 = m.match(re);
   if (m1) {
     const n = parseInt(m1[1].replace(/\s+/g, ""), 10);
@@ -668,7 +652,7 @@ function detectPriceDirection(msg: string): PriceIntent | null {
   return null;
 }
 
-type CachedProd = { id: string; price: number; pagetitle?: string; title?: string; vendor?: string | null; short_traits?: string[]; leaf_category?: string | null };
+type CachedProd = { id: string; price: number; pagetitle?: string; title?: string; vendor?: string | null; short_traits?: string[] };
 
 function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd | null {
   const msgRaw = userMessage.toLowerCase().replace(/[«»"',.()]/g, " ");
@@ -705,55 +689,6 @@ function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd
   return best?.p ?? null;
 }
 
-function inferReplacementAnchorFromCache(cache: ProductCache, userMessage: string): CachedProd | null {
-  const direct = findAnchorInCache(cache, userMessage);
-  if (direct) return direct;
-  if (!isReplacementIntent(userMessage)) return null;
-  const msg = normalizeForMatch(userMessage);
-  const candidates: Array<{ p: CachedProd; score: number }> = [];
-  for (const raw of cache.values()) {
-    const p = raw as unknown as CachedProd;
-    if (typeof p.price !== "number" || p.price <= 0) continue;
-    const title = normalizeForMatch(p.pagetitle ?? p.title ?? "");
-    const traits = normalizeForMatch((p.short_traits ?? []).join(" "));
-    if (!title) continue;
-    let score = 0;
-    const codeTokens = title.split(/\s+/).filter((t) => /\d/.test(t) && t.length >= 2);
-    for (const token of codeTokens) {
-      const tokenRe = new RegExp(`(^|\\s)${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|\\s)`, "u");
-      if (tokenRe.test(msg)) score += token.length >= 4 ? 3 : 1;
-    }
-    for (const token of title.split(/\s+/).filter((t) => /\p{L}/u.test(t) && t.length >= 4)) {
-      if (msg.includes(token)) score += 2;
-    }
-    const traitValues = (p.short_traits ?? [])
-      .map((line) => line.split(":").slice(1).join(":").trim())
-      .filter(Boolean);
-    for (const value of traitValues) if (valueIsEvidenced(value, userMessage)) score += /\d/.test(value) ? 2 : 1;
-    if (traits && msg.split(/\s+/).some((t) => t.length >= 4 && traits.includes(t))) score += 1;
-    if (score >= 4) candidates.push({ p, score });
-  }
-  return candidates.sort((a, b) => b.score - a.score || b.p.price - a.p.price)[0]?.p ?? null;
-}
-
-function replacementAnchorQueryCandidates(userMessage: string): string[] {
-  const cleaned = userMessage.replace(/[«»"',.()]/g, " ").replace(/\s+/g, " ").trim();
-  const tokens = cleaned.split(/\s+/).filter(Boolean);
-  const out: string[] = [];
-  const add = (s: string) => {
-    const v = s.replace(/\s+/g, " ").trim();
-    if (v.length >= 3 && !out.some((x) => normalizeCodeLike(x) === normalizeCodeLike(v))) out.push(v);
-  };
-  for (let i = 0; i < tokens.length; i++) {
-    for (let len = Math.min(4, tokens.length - i); len >= 1; len--) {
-      const phrase = tokens.slice(i, i + len).join(" ");
-      if (/\d/.test(phrase) && /\p{L}/u.test(phrase) && /(?:-|\s)\d/u.test(phrase)) add(phrase);
-    }
-  }
-  for (const t of tokens) if (/\d/.test(t) && /\p{L}/u.test(t) && t.length >= 3) add(t);
-  return out.sort((a, b) => b.length - a.length).slice(0, 4);
-}
-
 // Detects intent to find ALTERNATIVES to a referenced product. In such cases
 // the anchor SKU itself MUST NOT appear in the rendered list (it's the source,
 // not an analog). Triggers: "аналог", "замен", "похож", "альтернатив", "вместо",
@@ -772,13 +707,9 @@ function isReplacementIntent(msg: string): boolean {
   if (!trigger) return false;
   // Признаки якоря: длинное число (артикул), бренд-модель с цифрами
   // (например «ва47-29», «mad22-2-080», «cl001»), либо имя в кавычках.
-  // Якоря: длинный артикул (≥4 цифр), бренд/серия+цифры (≥2 букв + ≥2 цифр),
-  // короткие модельные коды letter+digit ≥3 символов (Acti9, C16, D32, iC60,
-  // ВА47, IP20), либо имя в кавычках.
   const hasAnchor =
     /\b\d{4,}\b/.test(m) ||
     /\b[a-zа-я]{2,}[-\s]?\d{2,}[a-zа-я0-9-]*\b/iu.test(m) ||
-    /\b(?=[a-zа-я0-9-]*[a-zа-я])(?=[a-zа-я0-9-]*\d)[a-zа-я0-9-]{3,}\b/iu.test(m) ||
     /«[^»]{2,}»|"[^"]{2,}"/u.test(m);
   return hasAnchor;
 }
@@ -990,30 +921,6 @@ function extractModelCode(title: string): string | null {
   return null;
 }
 
-function replacementSourceNeedles(userMessage: string, anchor: CachedProd): string[] {
-  const out: string[] = [];
-  const add = (s: string | null | undefined) => {
-    const v = (s ?? "").trim();
-    if (v.length >= 3 && !out.some((x) => normalizeCodeLike(x) === normalizeCodeLike(v))) out.push(v);
-  };
-  const source = `${userMessage}\n${anchor.pagetitle ?? anchor.title ?? ""}`;
-  add(extractModelCode(anchor.pagetitle ?? anchor.title ?? ""));
-  for (const m of source.matchAll(/(?:^|\s)([a-zа-я]{1,4})\s+(\d{2,}(?:-\d+)+)(?=$|\s)/giu)) add(`${m[1]} ${m[2]}`);
-  for (const m of source.matchAll(/\b[A-ZА-ЯЁІЇҰҚӨӘҒҺ]{3,}\b/gu)) {
-    const token = m[0];
-    if (!/^(KZT|LED|IP)$/u.test(token)) add(token);
-  }
-  return out.slice(0, 8);
-}
-
-function isSameReplacementSource(product: CachedProd, needles: string[]): boolean {
-  if (needles.length === 0) return false;
-  const title = product.pagetitle ?? product.title ?? "";
-  const normTitle = normalizeForMatch(title);
-  const codeTitle = normalizeCodeLike(title);
-  return needles.some((needle) => normTitle.includes(normalizeForMatch(needle)) || codeTitle.includes(normalizeCodeLike(needle)));
-}
-
 // Returns IDs of products from the SAME model family as the anchor — i.e.
 // other SKUs whose pagetitle contains the anchor's model code. These are
 // variants (different shape/size/power), not true analogs.
@@ -1157,76 +1064,10 @@ function isDiameterFacet(facet: Pick<Facet, "key" | "caption">): boolean {
   return /(^| )(diametr|diameter|диаметр)( |$)/u.test(haystack);
 }
 
-function isReplacementAutoFacet(facet: Pick<Facet, "key" | "caption" | "values">): boolean {
-  const haystack = normalizeForMatch(`${facet.key} ${facet.caption}`);
-  if (/(^| )(brend|brand|vendor|proizvod|manufacturer|бренд|марка|производ|kollekci|collection|seriya|series|линейк|серия|garanti|гарант|fayl|file|kod|код|identifikator|site|сайт|opisani|описан|poisk|поиск|novink|новин|popular|попул|edinica|единиц|өлшеу)( |$)/u.test(haystack)) return false;
-  return Array.isArray(facet.values) && facet.values.length > 0;
-}
-
-function extractAnchorTraitCriteria(anchor: CachedProd, userMessage: string): string[] {
-  const out: string[] = [];
-  const seen = new Set<string>();
-  for (const line of anchor.short_traits ?? []) {
-    const [, ...rawValue] = line.split(":");
-    const value = rawValue.join(":").trim();
-    if (!value) continue;
-    const norm = normalizeForMatch(value);
-    const single = norm.length === 1 && /\p{L}/u.test(norm);
-    const evidenced = valueIsEvidenced(value, userMessage) || (single && new RegExp(`(^|\\s)${norm}($|\\s)`, "u").test(normalizeForMatch(userMessage)));
-    if (evidenced && !seen.has(norm)) { seen.add(norm); out.push(value); }
-  }
-  return out.slice(0, 8);
-}
-
-function countAnchorTraitMatches(product: CachedProd, criteria: string[]): number {
-  const haystack = `${product.pagetitle ?? product.title ?? ""}\n${(product.short_traits ?? []).join("\n")}`;
-  return criteria.filter((value) => valueIsEvidenced(value, haystack) || normalizeForMatch(haystack).includes(normalizeForMatch(value))).length;
-}
-
 function extractNumbers(text: string): number[] {
   return (text.match(/\d+(?:[.,]\d+)?/g) ?? [])
     .map((n) => Number(n.replace(",", ".")))
     .filter((n) => Number.isFinite(n));
-}
-
-interface CriticalReplacementCriterion { label: string; matches: (product: CachedProd) => boolean }
-
-function productEvidenceText(product: CachedProd): string {
-  return `${product.pagetitle ?? product.title ?? ""}\n${(product.short_traits ?? []).join("\n")}`;
-}
-
-function extractUserCriticalReplacementCriteria(userMessage: string): CriticalReplacementCriterion[] {
-  const text = userMessage.toLowerCase().replace(/ё/g, "е");
-  const out: CriticalReplacementCriterion[] = [];
-  const add = (label: string, matches: (product: CachedProd) => boolean) => {
-    if (!out.some((c) => c.label === label)) out.push({ label, matches });
-  };
-  const current = text.match(/(?:^|[^\p{L}\p{N}])0*(\d{1,3})\s*(?:а|a)(?=$|[^\p{L}\p{N}])/u);
-  if (current) {
-    const n = current[1];
-    add(`${n}A`, (p) => new RegExp(`(?:^|[^\\d])0*${n}\\s*(?:а|a)(?=$|[^\\p{L}\\p{N}])`, "iu").test(productEvidenceText(p)));
-  }
-  const breaking = text.match(/(\d+(?:[.,]\d+)?)\s*(?:к\s*а|ka|kа|кa)(?=$|[^\p{L}\p{N}])/u);
-  if (breaking) {
-    const n = Number(breaking[1].replace(",", "."));
-    if (Number.isFinite(n)) add(`${n}кА`, (p) => {
-      const nums = [...productEvidenceText(p).matchAll(/(\d+(?:[.,]\d+)?)\s*(?:к\s*а|ka|kа|кa)(?=$|[^\p{L}\p{N}])/giu)]
-        .map((m) => Number(m[1].replace(",", ".")));
-      return nums.some((x) => Math.abs(x - n) < 0.0001);
-    });
-  }
-  const poles = text.match(/(?:^|[^\p{L}\p{N}])(\d)\s*(?:p|р)(?=$|[^\p{L}\p{N}])/u);
-  if (poles) {
-    const n = poles[1];
-    add(`${n}P`, (p) => new RegExp(`(?:^|[^\\p{L}\\p{N}])${n}\\s*(?:p|р|полюс)`, "iu").test(productEvidenceText(p)));
-  }
-  const ch = text.match(/(?:характеристик\S*|хар\S*|х-ка)\s*([abcdeавсдек])/u)?.[1]
-    ?.replace(/[ав]/u, "a").replace(/с/u, "c").replace(/д/u, "d").replace(/е/u, "e").replace(/к/u, "k");
-  if (ch) {
-    const alt = ch === "c" ? "[cс]" : ch;
-    add(`хар-${ch.toUpperCase()}`, (p) => new RegExp(`(?:характеристик\\S*|хар\\S*|х-ка)\\s*${alt}(?=$|[^\\p{L}\\p{N}])`, "iu").test(productEvidenceText(p)));
-  }
-  return out;
 }
 
 function replacementValueIsEvidenced(value: string, evidenceText: string, facet: Facet): boolean {
@@ -1371,91 +1212,6 @@ function filterReplacementCompatibleIds(
   return ranked
     .sort((a, b) => b.matches - a.matches || a.order - b.order)
     .map((x) => x.id);
-}
-
-async function tryReplacementBudgetAutoRender(
-  userMessage: string,
-  lastDiscover: DiscoverCategoryOk | null,
-  ctx: ToolContext,
-  send: (ev: SseEvent) => void,
-  steps: StepLog[],
-  now: () => number,
-): Promise<number> {
-  if (!isReplacementIntent(userMessage)) return 0;
-  const budgetCap = extractBudgetCap(userMessage);
-  if (budgetCap === null || budgetCap <= 0) return 0;
-  let anchor = inferReplacementAnchorFromCache(ctx.cache, userMessage);
-  if (!anchor) {
-    const candidates = replacementAnchorQueryCandidates(userMessage);
-    for (const query of candidates) {
-      const started = Date.now();
-      const r = await executeSearchCatalog({ mode: "by_query", query, per_page: 8 }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
-      steps.push({ step: "v3_guard_replacement_anchor_probe", ms: now(), meta: { query, duration_ms: Date.now() - started, result: summariseToolResultMeta("search_catalog", r as ToolResult) } });
-      if (r.ok && r.total > 0) {
-        anchor = inferReplacementAnchorFromCache(ctx.cache, userMessage);
-        if (anchor) break;
-      }
-    }
-  }
-  if (!anchor) return 0;
-  const anchorLeaf = anchor.leaf_category ?? null;
-  const criteria = extractAnchorTraitCriteria(anchor, userMessage);
-  const criticalCriteria = extractUserCriticalReplacementCriteria(userMessage);
-  const axes = lastDiscover ? buildReplacementAxes(
-    { mode: "by_filter", options: Object.fromEntries(lastDiscover.facets.filter(isReplacementAutoFacet).map((f) => [f.key, f.values.map((v) => v.value)])) },
-    lastDiscover,
-    `${userMessage}\n${anchor.pagetitle ?? anchor.title ?? ""}\n${(anchor.short_traits ?? []).join("\n")}`,
-  )
-    .sort((a, b) => {
-      const aUser = a.values.some((v) => valueIsEvidenced(v, userMessage)) ? 1 : 0;
-      const bUser = b.values.some((v) => valueIsEvidenced(v, userMessage)) ? 1 : 0;
-      return bUser - aUser;
-    })
-    .slice(0, 6) : [];
-  const options: Record<string, string[]> = {};
-  for (const axis of axes) options[axis.key] = axis.values;
-  if (!lastDiscover && criticalCriteria.length < 2) return 0;
-  const input: SearchCatalogInput = {
-    mode: "by_filter",
-    ...(anchorLeaf ? { category_in: [anchorLeaf], anchor_leaf_category: anchorLeaf } : {}),
-    ...(axes.length > 0 ? { options } : {}),
-    max_price: budgetCap,
-    sort_cheapest: true,
-    per_page: axes.length > 0 ? 8 : 50,
-  };
-  if (!anchorLeaf && axes.length === 0) return 0;
-  const started = Date.now();
-  send({ type: "tool_event", tool: "search_catalog", phase: "start", summary: "auto replacement…" });
-  const search = await executeSearchCatalog(input, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
-  const searchMs = Date.now() - started;
-  send({ type: "tool_event", tool: "search_catalog", phase: "result", duration_ms: searchMs, summary: summariseToolResult("search_catalog", search as ToolResult) });
-  steps.push({
-    step: "v3_guard_replacement_budget_autosearch",
-    ms: now(),
-    meta: { budget_cap: budgetCap, anchor_id: anchor.id, anchor_leaf: anchorLeaf, axes: axes.map((a) => ({ key: a.key, values: a.values })), criteria, critical_criteria: criticalCriteria.map((c) => c.label), duration_ms: searchMs, result: summariseToolResultMeta("search_catalog", search as ToolResult) },
-  });
-  if (!search.ok || search.total === 0) return 0;
-  const familyExclude = findSameFamilyIds(ctx.cache, anchor);
-  const sourceNeedles = replacementSourceNeedles(userMessage, anchor);
-  const minMatches = Math.min(2, Math.max(1, criteria.length));
-  const ids = search.results
-    .map((p) => p.id)
-    .filter((id) => {
-      const p = ctx.cache.get(id) as unknown as CachedProd | undefined;
-      if (!p || id === anchor.id || familyExclude.has(id) || p.price > budgetCap) return false;
-      if (isSameReplacementSource(p, sourceNeedles)) return false;
-      if (criticalCriteria.length > 0 && !criticalCriteria.every((c) => c.matches(p))) return false;
-      if (criteria.length === 0) return true;
-      return countAnchorTraitMatches(p, criteria) >= minMatches;
-    })
-    .slice(0, 5);
-  if (ids.length === 0) return 0;
-  const render = executeRenderProducts({ product_ids: ids, total_available: search.total }, ctx.cache);
-  if (!render.ok) return 0;
-  send({ type: "tool_event", tool: "render_products", phase: "result", duration_ms: 0, summary: `auto-render ${render.rendered_count}` });
-  send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: search.total });
-  steps.push({ step: "v3_guard_replacement_budget_autorender", ms: now(), meta: { rendered: render.rendered_count, ids } });
-  return render.rendered_count;
 }
 
 async function trySplitFallback(
@@ -1758,7 +1514,6 @@ async function runExpertLoop(
   let productsRendered = 0;
   let firstAssistantText = "";
   let lastDiscover: DiscoverCategoryOk | null = null;
-  const toolMemo = new Map<string, { reply: unknown; result: ToolResult; effectiveArgs: Record<string, unknown>; total?: number }>();
   // Session-wide whitelist of category pagetitles discovered via discover_category.
   // Source of truth for `category` / `category_in` in search_catalog calls.
   // Prevents LLM hallucinating category names (e.g. "Уличные светильники" вместо
@@ -1785,39 +1540,6 @@ async function runExpertLoop(
   let prioritySplitPool: string[] = [];
   let prioritySplitAxisIdSets: Map<string, Set<string>> | null = null;
   let replacementRequiredAxes: ReplacementAxis[] = [];
-  let replacementBudgetAutoTried = false;
-  // ── Honest-Empty Lock ──────────────────────────────────────────────────────
-  // Set when jargon_recover_catalog(query, modifiers=[…]) returns total=0
-  // while earlier synonym/ladder searches DID find candidates. That's hard
-  // proof: "exact combo (form-factor × hard-constraint) is not in the catalog".
-  // Once locked:
-  //   • render_products is refused (no off-target fallback cards)
-  //   • last-chance auto-render is skipped
-  //   • the loop short-circuits with a deterministic honest-empty message
-  //     instead of waiting for another (potentially slow / aborted) LLM call.
-  let honestEmptyLocked: null | {
-    query: string;
-    modifiers: string[];
-    altTitles: string[];
-  } = null;
-  let honestEmptyEmitted = false;
-  const emitHonestEmptyFinalizer = (): string => {
-    if (honestEmptyEmitted || !honestEmptyLocked) return "";
-    honestEmptyEmitted = true;
-    const lock = honestEmptyLocked;
-    const modStr = lock.modifiers.join(" / ");
-    const head = `\n\nПо каталогу «${lock.query}» в сочетании с ${modStr} — точного совпадения нет.`;
-    const alts = lock.altTitles.length > 0
-      ? ` Близкие позиции по слову «${lock.query}» есть, но они на других параметрах: ${lock.altTitles.slice(0, 2).join("; ")}.`
-      : "";
-    const tail = ` Подсказать альтернативу на ${modStr} с похожими характеристиками или нужен переходник?`;
-    const text = `${head}${alts}${tail}`;
-    if (finalText.trim()) {
-      send({ type: "assistant_turn_break", reason: "honest_empty_finalizer" });
-    }
-    send({ type: "delta", content: text });
-    return text;
-  };
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
   // Turn-level guard: рендерим карточку контактов максимум один раз,
@@ -1898,43 +1620,6 @@ async function runExpertLoop(
 
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
-      // ── Honest-Empty Short-Circuit ──────────────────────────────────────
-      // Если ladder уже доказал, что точного сочетания нет, и карточки не
-      // показаны — НЕ ждём ещё один LLM-вызов (он может зависнуть на 20-30с
-      // и упереться в TURN_TIMEOUT_MS=90с → AbortError). Финализируем сразу.
-      if (honestEmptyLocked && productsRendered === 0) {
-        finalText += emitHonestEmptyFinalizer();
-        steps.push({
-          step: "v3_honest_empty_short_circuit",
-          ms: now(),
-          meta: { ...honestEmptyLocked, before_step: step },
-        });
-        return { finalText, productsRendered };
-      }
-      // ── Time-Budget Guard ──────────────────────────────────────────────
-      // Если до 90с-таймаута осталось мало времени — пропускаем следующий LLM-вызов
-      // (p90 OpenRouter сегодня ~23с). Лучше отдать честную заглушку, чем
-      // получить AbortError на полпути.
-      const elapsedTurn = Date.now() - t0;
-      if (elapsedTurn > TURN_TIMEOUT_MS - MIN_REMAINING_MS_FOR_LLM && productsRendered === 0) {
-        const autoRendered = await tryReplacementBudgetAutoRender(userMessage, lastDiscover, ctx, send, steps, now);
-        if (autoRendered > 0) {
-          productsRendered += autoRendered;
-          steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "replacement_budget_autorender_before_timeout", step_count: step } });
-          return { finalText, productsRendered };
-        }
-        if (honestEmptyLocked) {
-          finalText += emitHonestEmptyFinalizer();
-          steps.push({ step: "v3_time_budget_short_circuit", ms: now(), meta: { elapsed_ms: elapsedTurn, branch: "honest_empty" } });
-        } else {
-          const msg = "\n\nЗапрос обрабатывается дольше обычного. Уточните, пожалуйста, что важнее — параметры или бюджет, и я подберу точечно.";
-          send({ type: "delta", content: msg });
-          finalText += msg;
-          steps.push({ step: "v3_time_budget_short_circuit", ms: now(), meta: { elapsed_ms: elapsedTurn, branch: "generic" } });
-        }
-        return { finalText, productsRendered };
-      }
-
       const llmStart = Date.now();
       const resp = await callOpenRouter(apiKey, messages, turnController.signal);
       steps.push({
@@ -2403,32 +2088,8 @@ async function runExpertLoop(
           }
         }
 
-        // ── Honest-Empty Render Block ──────────────────────────────────────
-        // Когда lock уже стоит — никакой fallback-пул показывать НЕЛЬЗЯ:
-        // он по определению off-target (синонимы без жёсткого модификатора).
-        // Отдаём LLM явный отказ — пусть финализирует текстом, либо нас
-        // подхватит short-circuit на следующей итерации.
-        if (tc.name === "render_products" && honestEmptyLocked) {
-          steps.push({
-            step: "v3_render_blocked_honest_empty",
-            ms: now(),
-            meta: { ...honestEmptyLocked, ids_attempted: Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).length : 0 },
-          });
-          messages.push({
-            role: "tool",
-            tool_call_id: tc.id,
-            name: tc.name,
-            content: JSON.stringify({
-              ok: false,
-              error_code: "honest_empty_locked",
-              _server_hint: `Карточки показывать НЕЛЬЗЯ: точное сочетание «${honestEmptyLocked.query}» × ${honestEmptyLocked.modifiers.join("/")} доказано пустое (jargon_recover_catalog → 0). Любой "близкий" пул — это не на тех параметрах. Финализируй коротким честным текстом: чего нет и что предложить взамен. НЕ зови render_products повторно.`,
-            }),
-          });
-          continue;
-        }
-
         // ── Step 6b: Escalate Guard — cancel escalation if fresh unshown pool ≥3.
-        if (tc.name === "escalate_to_manager" && !honestEmptyLocked) {
+        if (tc.name === "escalate_to_manager") {
           const pool = pickFreshUnshown(8);
           if (pool.length >= 3) {
             const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
@@ -2467,31 +2128,6 @@ async function runExpertLoop(
             ms: now(),
             meta: { rewrites: canonicalized.rewrites, original_args: summariseToolArgs(tc.name, tc.args) },
           });
-        }
-
-        const memoKey = isMemoizedTool(tc.name) ? toolMemoKey(tc.name, runArgs) : null;
-        if (memoKey && toolMemo.has(memoKey)) {
-          const memo = toolMemo.get(memoKey)!;
-          steps.push({
-            step: "v3_guard_duplicate_tool_call",
-            ms: now(),
-            meta: {
-              tool: tc.name,
-              args: summariseToolArgs(tc.name, runArgs),
-              previous_total: memo.total ?? null,
-            },
-          });
-          messages.push({
-            role: "tool",
-            tool_call_id: tc.id,
-            name: tc.name,
-            content: JSON.stringify({
-              ...(memo.reply && typeof memo.reply === "object" ? memo.reply as Record<string, unknown> : { value: memo.reply }),
-              _server_guard: "duplicate_tool_call",
-              _server_hint: "Этот же tool с теми же args уже вызывался в текущем ходе. Используй previous_result: если есть product_ids — render_products; если total=0 — измени стратегию/ослабь один фильтр/перейди к следующему разрешённому шагу. Не повторяй тот же вызов.",
-            }),
-          });
-          continue;
         }
 
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
@@ -2565,12 +2201,6 @@ async function runExpertLoop(
           for (const leaf of lastDiscover.leaf_categories ?? []) {
             addToWhitelist(leaf.pagetitle);
           }
-          const autoRendered = await tryReplacementBudgetAutoRender(userMessage, lastDiscover, ctx, send, steps, now);
-          if (autoRendered > 0) {
-            productsRendered += autoRendered;
-            steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "replacement_budget_autorender_after_discover", step_count: step + 1 } });
-            return { finalText, productsRendered };
-          }
         }
 
 
@@ -2636,63 +2266,17 @@ async function runExpertLoop(
 
 
         if ((tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") && result.ok) {
-          const r2 = result as unknown as { results: Array<{ id: string; price: number; pagetitle?: string; title?: string }>; total: number };
+          const r2 = result as unknown as { results: Array<{ id: string; price: number }>; total: number };
           const ids = (r2.results ?? [])
             .filter((p) => p && Number.isFinite(p.price) && p.price > 0)
             .map((p) => String(p.id));
           if (ids.length > 0) {
             freshSearch = { tool: tc.name, ids, total: r2.total };
-            if (!replacementBudgetAutoTried && replacementIntent && productsRendered === 0 && extractBudgetCap(userMessage) !== null) {
-              const autoRendered = await tryReplacementBudgetAutoRender(userMessage, lastDiscover, ctx, send, steps, now);
-              replacementBudgetAutoTried = autoRendered > 0;
-              if (autoRendered > 0) {
-                productsRendered += autoRendered;
-                steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "replacement_budget_autorender_after_search", step_count: step + 1 } });
-                return { finalText, productsRendered };
-              }
-            }
           }
           // Track which ladder candidates were already tried (to nudge LLM in tool reply).
           const q = typeof tc.args.query === "string" ? tc.args.query.trim().toLowerCase() : "";
           if (q) triedLadderQueries.add(q);
-
-          // ── Honest-Empty Lock detector ─────────────────────────────────
-          // jargon_recover_catalog с непустыми modifiers вернул total=0,
-          // а ранее по этому же query (без модификатора) уже что-то нашлось
-          // (freshSearch или triedLadderQueries дали хиты) → доказано, что
-          // точного сочетания нет. Лочим, чтобы дальше не рендерить мусор.
-          if (
-            tc.name === "jargon_recover_catalog" &&
-            r2.total === 0 &&
-            !honestEmptyLocked
-          ) {
-            const modifiers = Array.isArray(tc.args.modifiers)
-              ? (tc.args.modifiers as unknown[]).map((m) => String(m).trim()).filter(Boolean)
-              : [];
-            const queryArg = typeof tc.args.query === "string" ? tc.args.query.trim() : "";
-            if (modifiers.length > 0 && queryArg) {
-              // Соберём 2-3 названия близких товаров из кэша (по предыдущим
-              // вызовам ladder без модификатора), чтобы финализатор был
-              // содержательным, а не голым «не нашли».
-              const altTitles: string[] = [];
-              if (freshSearch) {
-                for (const id of freshSearch.ids.slice(0, 4)) {
-                  const p = ctx.cache.get(id) as unknown as { pagetitle?: string; title?: string } | undefined;
-                  const t = (p?.pagetitle ?? p?.title ?? "").trim();
-                  if (t && !altTitles.includes(t)) altTitles.push(t);
-                  if (altTitles.length >= 3) break;
-                }
-              }
-              honestEmptyLocked = { query: queryArg, modifiers, altTitles };
-              steps.push({
-                step: "v3_honest_empty_locked",
-                ms: now(),
-                meta: { query: queryArg, modifiers, alt_titles_count: altTitles.length, tried_ladder: [...triedLadderQueries] },
-              });
-            }
-          }
         }
-
 
         // If render_products succeeded → emit products_block immediately.
         if (tc.name === "render_products" && result.ok) {
@@ -2790,21 +2374,6 @@ async function runExpertLoop(
             `объединением ids из _split_axes (бери все ids из каждой оси по порядку, до 8 штук). Используй ровно эти id.`;
         }
 
-        const memoStoreKey = isMemoizedTool(tc.name) ? toolMemoKey(tc.name, effectiveArgs) : null;
-        if (memoStoreKey) {
-          const total = result.ok && "total" in (result as unknown as Record<string, unknown>)
-            ? Number((result as unknown as { total?: unknown }).total)
-            : undefined;
-          const memoEntry = {
-            reply: replyObj,
-            result,
-            effectiveArgs,
-            total: Number.isFinite(total) ? total : undefined,
-          };
-          toolMemo.set(memoStoreKey, memoEntry);
-          if (memoKey && memoKey !== memoStoreKey) toolMemo.set(memoKey, memoEntry);
-        }
-
 
 
         messages.push({
@@ -2825,7 +2394,7 @@ async function runExpertLoop(
       const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
       productsRendered += rescued;
     }
-    if (productsRendered === 0 && !honestEmptyLocked) {
+    if (productsRendered === 0) {
       const pool = pickFreshUnshown(8);
       if (pool.length > 0) {
         const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
@@ -2841,11 +2410,6 @@ async function runExpertLoop(
           });
         }
       }
-    }
-    // Honest-empty финализатор после исчерпания бюджета шагов.
-    if (productsRendered === 0 && honestEmptyLocked) {
-      finalText += emitHonestEmptyFinalizer();
-      steps.push({ step: "v3_honest_empty_final_after_budget", ms: now(), meta: { ...honestEmptyLocked } });
     }
     steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "forced_stepcount", step_count: MAX_STEPS } });
     if (productsRendered === 0) {
@@ -2936,11 +2500,9 @@ Deno.serve(async (req) => {
         steps.push({ step: "v3_turn_end", ms: Date.now() - t0, meta: { reason: "error", error: errorMsg } });
         send({ type: "delta", content: "\n\nНе получилось обработать запрос. Попробуй переформулировать или связаться с менеджером." });
       } finally {
-        try { send({ type: "done" }); } catch (_) { /* stream may be closed on abort */ }
-        try { controller.close(); } catch (_) { /* already closed */ }
-        // Дожимаем запись в chat_request_logs даже после abort/таймаута,
-        // иначе worker умирает до завершения INSERT и мы слепы к падениям.
-        const logPromise = logTurn(
+        send({ type: "done" });
+        controller.close();
+        await logTurn(
           supabase,
           sessionId,
           userMessage,
@@ -2949,14 +2511,7 @@ Deno.serve(async (req) => {
           finalTextAccum,
           productsCount,
           errorMsg,
-        ).catch((e) => console.error("[v3] logTurn failed:", e));
-        // @ts-ignore — EdgeRuntime доступен в Supabase Edge Runtime
-        if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) {
-          // @ts-ignore
-          EdgeRuntime.waitUntil(logPromise);
-        } else {
-          await logPromise;
-        }
+        );
       }
     },
   });
