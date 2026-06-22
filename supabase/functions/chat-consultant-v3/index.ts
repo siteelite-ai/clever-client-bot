@@ -705,6 +705,35 @@ function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd
   return best?.p ?? null;
 }
 
+function inferReplacementAnchorFromCache(cache: ProductCache, userMessage: string, budgetCap: number | null = null): CachedProd | null {
+  const direct = findAnchorInCache(cache, userMessage);
+  if (direct) return direct;
+  if (!isReplacementIntent(userMessage)) return null;
+  const msg = normalizeForMatch(userMessage);
+  const candidates: Array<{ p: CachedProd; score: number }> = [];
+  for (const raw of cache.values()) {
+    const p = raw as unknown as CachedProd;
+    if (typeof p.price !== "number" || p.price <= 0) continue;
+    if (budgetCap !== null && p.price <= budgetCap) continue;
+    const title = normalizeForMatch(p.pagetitle ?? p.title ?? "");
+    const traits = normalizeForMatch((p.short_traits ?? []).join(" "));
+    if (!title) continue;
+    let score = 0;
+    const codeTokens = title.split(/\s+/).filter((t) => /\d/.test(t) && t.length >= 2);
+    for (const token of codeTokens) {
+      const tokenRe = new RegExp(`(^|\\s)${token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}($|\\s)`, "u");
+      if (tokenRe.test(msg)) score += token.length >= 4 ? 3 : 1;
+    }
+    const traitValues = (p.short_traits ?? [])
+      .map((line) => line.split(":").slice(1).join(":").trim())
+      .filter(Boolean);
+    for (const value of traitValues) if (valueIsEvidenced(value, userMessage)) score += /\d/.test(value) ? 2 : 1;
+    if (traits && msg.split(/\s+/).some((t) => t.length >= 4 && traits.includes(t))) score += 1;
+    if (score >= 4) candidates.push({ p, score });
+  }
+  return candidates.sort((a, b) => b.score - a.score || b.p.price - a.p.price)[0]?.p ?? null;
+}
+
 // Detects intent to find ALTERNATIVES to a referenced product. In such cases
 // the anchor SKU itself MUST NOT appear in the rendered list (it's the source,
 // not an analog). Triggers: "аналог", "замен", "похож", "альтернатив", "вместо",
