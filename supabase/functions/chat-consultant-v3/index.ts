@@ -1427,6 +1427,12 @@ async function callOpenRouter(
   else signal.addEventListener("abort", onOuterAbort, { once: true });
 
   let res: Response;
+  let data: {
+    choices?: Array<{
+      message?: { content?: string | null; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> };
+      finish_reason?: string;
+    }>;
+  };
   try {
     res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
@@ -1446,22 +1452,21 @@ async function callOpenRouter(
       }),
       signal: localCtrl.signal,
     });
+
+    if (!res.ok) {
+      const errText = await res.text();
+      throw new Error(`OpenRouter ${res.status}: ${errText.slice(0, 200)}`);
+    }
+
+    // КРИТИЧНО: res.json() стримит body и может висеть дольше, чем сам fetch.
+    // Таймер держим живым до полного парсинга, иначе один медленный ответ
+    // (типичный для reasoning-моделей) съедает весь бюджет хода.
+    data = await res.json() as typeof data;
   } finally {
     clearTimeout(localTimer);
     signal.removeEventListener("abort", onOuterAbort);
   }
 
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(`OpenRouter ${res.status}: ${errText.slice(0, 200)}`);
-  }
-
-  const data = await res.json() as {
-    choices?: Array<{
-      message?: { content?: string | null; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> };
-      finish_reason?: string;
-    }>;
-  };
 
   const msg = data?.choices?.[0]?.message ?? {};
   const text = typeof msg.content === "string" ? msg.content : "";
