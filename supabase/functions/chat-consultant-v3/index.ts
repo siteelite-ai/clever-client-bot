@@ -1320,7 +1320,19 @@ async function tryReplacementBudgetAutoRender(
   if (!isReplacementIntent(userMessage)) return 0;
   const budgetCap = extractBudgetCap(userMessage);
   if (budgetCap === null || budgetCap <= 0) return 0;
-  const anchor = inferReplacementAnchorFromCache(ctx.cache, userMessage);
+  let anchor = inferReplacementAnchorFromCache(ctx.cache, userMessage);
+  if (!anchor) {
+    const candidates = replacementAnchorQueryCandidates(userMessage);
+    for (const query of candidates) {
+      const started = Date.now();
+      const r = await executeSearchCatalog({ mode: "by_query", query, per_page: 8 }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+      steps.push({ step: "v3_guard_replacement_anchor_probe", ms: now(), meta: { query, duration_ms: Date.now() - started, result: summariseToolResultMeta("search_catalog", r as ToolResult) } });
+      if (r.ok && r.total > 0) {
+        anchor = inferReplacementAnchorFromCache(ctx.cache, userMessage);
+        if (anchor) break;
+      }
+    }
+  }
   if (!anchor) return 0;
   const anchorLeaf = anchor.leaf_category ?? null;
   const axes = lastDiscover ? buildReplacementAxes(
