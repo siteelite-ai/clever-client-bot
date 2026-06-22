@@ -2438,8 +2438,11 @@ async function runExpertLoop(
 
 
 
+      // No-progress detector — выходим в forced-finalize, не сжигая остаток бюджета.
+      if (noProgressBreak) break;
       // After tools → loop back, model decides what's next.
     }
+
 
     // Step budget exhausted.
     if (productsRendered === 0) {
