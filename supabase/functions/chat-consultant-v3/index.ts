@@ -1871,25 +1871,19 @@ async function runExpertLoop(
       const p = ctx.cache.get(id);
       return p ? productMatchesAnySemanticToken(p, semanticTokens) : false;
     });
-    if (bridgeUsed) {
-      const matchedLabel = matched.map((m) => m.value).join(", ");
-      send({ type: "delta", content: `\n\nТрактую «${semanticTokens.join(" ") || userMessage}» через технический термин «${bridgeUsed}» с параметрами ${matchedLabel}.` });
-    } else if (!hasSemanticEvidence) {
-      // Fix 1 (strict honesty): in strict mode (guaranteed by replacementIntent=false
-      // guard at top of function) — if we couldn't find ANY evidence of the user's
-      // semantic token (e.g. «кукуруза») and no jargon bridge worked, do NOT render
-      // unrelated products. Be honest: name what we couldn't find and stop.
+    if (!hasSemanticEvidence) {
+      // Fix 1 (strict honesty): in strict mode — если не нашли ни одного подтверждения
+      // семантического признака пользователя (напр. «кукуруза»), НЕ рендерим
+      // нерелевантные товары. Сообщаем честно — без эха технических параметров,
+      // которые пользователь не спрашивал.
       if (semanticTokens.length > 0) {
-        const codeLabel = matched.map((m) => m.value).join(", ");
-        const content = semanticEvidenceSeen
-          ? `\n\nПо близкому поиску${semanticEvidenceSeen.label ? ` через «${semanticEvidenceSeen.label}»` : ""} товары находятся, но подтверждения признака «${semanticTokens.join(" ")}» с параметрами${codeLabel ? ` (${codeLabel})` : ""} нет. Не буду подменять его обычными товарами. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?`
-          : `\n\nПо признаку «${semanticTokens.join(" ")}» в каталоге ничего не нашлось${matched.length > 0 ? ` (даже с подтверждёнными параметрами: ${codeLabel})` : ""}. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?`;
+        const content = `\n\nПо признаку «${semanticTokens.join(" ")}» в каталоге ничего подходящего не нашлось. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?`;
         send({ type: "delta", content });
         strictHonestyBlocked = true;
         steps.push({
           step: "v3_guard_code_facet_rescue_blocked_strict",
           ms: now(),
-          meta: { matched, semantic_tokens: semanticTokens, reason: "no_semantic_evidence" },
+          meta: { matched, semantic_tokens: semanticTokens, bridge_used: bridgeUsed, reason: "no_semantic_evidence" },
         });
         return 0;
       }
