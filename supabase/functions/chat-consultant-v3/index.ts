@@ -2000,6 +2000,9 @@ async function runExpertLoop(
           // но это ломало кейсы, где LLM предупреждает о несоответствии (например,
           // запрошен цоколь E27, а в наличии только G4/G9/E14). Теперь предупреждение
           // всегда долетает до UI как отдельный bubble перед products_block.
+          if (intentMode === "select" && !replacementIntent) {
+            steps.push({ step: "v3_assistant_text_suppressed_render_caption", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+          } else {
           if (!isFirstTurn) {
             send({ type: "assistant_turn_break", reason: "text_before_render" });
           }
@@ -2011,6 +2014,7 @@ async function runExpertLoop(
             ms: now(),
             meta: { chars: resp.text.length, fragment_index: step, text: resp.text },
           });
+          }
         } else if (!firstAssistantText) {
           // Intro-пузырь ещё не показывали (на шаге 0 LLM ушёл сразу в тул без
           // текста), а сейчас наконец появилось «размышление» перед следующим
