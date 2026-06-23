@@ -1868,7 +1868,22 @@ async function runExpertLoop(
     if (bridgeUsed) {
       send({ type: "delta", content: `\n\nТрактую «${semanticTokens.join(" ") || userMessage}» через технический термин «${bridgeUsed}» и цоколь ${matched.map((m) => m.value).join(", ")}.` });
     } else if (!hasSemanticEvidence) {
-      send({ type: "delta", content: `\n\nПо слову «${semanticTokens.join(" ")}» точного признака в каталоге не вижу — показываю товары по подтверждённым параметрам: ${matched.map((m) => m.value).join(", ")}.` });
+      // Fix 1 (strict honesty): in strict mode (guaranteed by replacementIntent=false
+      // guard at top of function) — if we couldn't find ANY evidence of the user's
+      // semantic token (e.g. «кукуруза») and no jargon bridge worked, do NOT render
+      // unrelated products. Be honest: name what we couldn't find and stop.
+      if (semanticTokens.length > 0) {
+        send({
+          type: "delta",
+          content: `\n\nПо признаку «${semanticTokens.join(" ")}» в каталоге ничего не нашлось${matched.length > 0 ? ` (даже с подтверждёнными параметрами: ${matched.map((m) => m.value).join(", ")})` : ""}. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?`,
+        });
+        steps.push({
+          step: "v3_guard_code_facet_rescue_blocked_strict",
+          ms: now(),
+          meta: { matched, semantic_tokens: semanticTokens, reason: "no_semantic_evidence" },
+        });
+        return 0;
+      }
     }
     const render = executeRenderProducts({ product_ids: pool, total_available: result.total } as RenderProductsInput, ctx.cache);
     if (!render.ok) return 0;
