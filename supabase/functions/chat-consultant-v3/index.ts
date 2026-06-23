@@ -2431,7 +2431,14 @@ async function runExpertLoop(
 
         // ── Step 6b: Escalate Guard — cancel escalation if fresh unshown pool ≥3.
         if (tc.name === "escalate_to_manager") {
-          const pool = pickFreshUnshown(8);
+          let pool = pickFreshUnshown(8);
+          // Fix 2 (strict constraint enforcement): never auto-render off-target
+          // products on escalation. In strict mode honour code constraints; in
+          // analog mode keep current behaviour (constraints are allowed to weaken).
+          if (!replacementIntent && codeConstraints.length > 0) {
+            const f = filterByCompoundConstraints(pool);
+            pool = f.ids;
+          }
           if (pool.length >= 3) {
             const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
             if (render.ok) {
