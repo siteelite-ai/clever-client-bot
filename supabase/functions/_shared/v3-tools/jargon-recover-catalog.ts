@@ -21,6 +21,11 @@ function normalize(s: string): string {
   return s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+function normalizeCodeLike(s: string): string {
+  const map: Record<string, string> = { а: "a", в: "b", е: "e", к: "k", м: "m", н: "h", о: "o", р: "p", с: "c", т: "t", у: "y", х: "x" };
+  return normalize(s).replace(/[авекмнорстух]/gu, (ch) => map[ch] ?? ch).replace(/\s+/g, "");
+}
+
 function tokenize(s: string): string[] {
   return normalize(s).split(/\s+/).filter((t) => t.length >= 3);
 }
@@ -32,8 +37,13 @@ function productHaystack(p: ProductRef): string {
 function productMatchesModifiers(p: ProductRef, modifiers: string[]): boolean {
   const clean = modifiers.map(normalize).filter(Boolean);
   if (clean.length === 0) return true;
-  const haystack = productHaystack(p);
-  return clean.every((m) => haystack.includes(m));
+  const rawHaystack = `${p.pagetitle} ${p.vendor ?? ""} ${p.short_traits.join(" ")}`;
+  const haystack = normalize(rawHaystack);
+  const codeHaystack = normalizeCodeLike(rawHaystack);
+  return clean.every((m) => {
+    if (/\d/.test(m) && /\p{L}/u.test(m)) return codeHaystack.includes(normalizeCodeLike(m));
+    return haystack.includes(m);
+  });
 }
 
 /**
