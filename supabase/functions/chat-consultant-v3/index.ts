@@ -2573,7 +2573,17 @@ async function runExpertLoop(
             ? Object.values(opts).filter((v) => Array.isArray(v) && v.length > 0).length
             : 0;
           if ((tc.args as { mode?: string }).mode === "by_filter" && axesCount >= 2) {
-            const split = await trySplitFallback(tc.args, ctx);
+            // Fix 5 (axis-safe splits): pass confirmed strict code-constraints
+            // (e.g. цоколь E27) as sticky base options so each axis search keeps
+            // them. Skipped in replacement mode — analogs are allowed to weaken.
+            const stickyOptions: Record<string, string[]> = {};
+            if (!replacementIntent && codeConstraints.length > 0) {
+              for (const code of codeConstraints) {
+                const m = findFacetMatchForCode(code);
+                if (m) (stickyOptions[m.facet.key] ??= []).push(m.value);
+              }
+            }
+            const split = await trySplitFallback(tc.args, ctx, stickyOptions);
             if (split) {
               const splitAxisIdSets = new Map(split.axes.map((a) => [a.axis, new Set(a.ids)]));
               const effectiveSplit = replacementIntent && replacementRequiredAxes.length >= 2
@@ -2601,9 +2611,23 @@ async function runExpertLoop(
                 meta: {
                   axes: effectiveSplit.axes.map((a) => ({ axis: a.axis, value: a.value, total: a.total, ids: a.ids.length })),
                   replacement_filtered: replacementIntent && replacementRequiredAxes.length >= 2,
+                  sticky_options: stickyOptions,
                   ms: split.ms,
                 },
               });
+              // Fix 4 (deterministic honesty): in strict mode emit an explicit
+              // server-side delta describing the empty intersection BEFORE giving
+              // control back to the LLM. Guarantees the user sees the breakdown
+              // even if the model later misbehaves.
+              if (!replacementIntent && splitFallbackResult && effectiveSplit.axes.length >= 2) {
+                const breakdown = effectiveSplit.axes
+                  .map((a) => `${a.axis}=${a.value} → ${a.total}`)
+                  .join("; ");
+                send({
+                  type: "delta",
+                  content: `\n\nТочного сочетания всех ваших параметров в каталоге нет. По отдельности: ${breakdown}. Какую ось ослабить, чтобы подобрать?`,
+                });
+              }
               // Feed Step 6a/6b pool so render/escalate guards have ammo too.
               const allIds = effectiveSplit.axes.flatMap((a) => a.ids).slice(0, 8);
               const totalSum = effectiveSplit.axes.reduce((s, a) => s + a.total, 0);
