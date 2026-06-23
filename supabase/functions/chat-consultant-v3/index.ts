@@ -2656,8 +2656,15 @@ async function runExpertLoop(
             .map((p) => String(p.id));
           if (ids.length > 0) {
             const filtered = filterByCompoundConstraints(ids);
+            // Fix 3 (sticky split-pools): once a split fallback established an
+            // axis-aligned priority pool, do NOT overwrite freshSearch with a
+            // broader follow-up search — that would let render guards pick
+            // off-target ids. In analog mode keep prior behaviour.
+            const stickySplitActive = !replacementIntent && prioritySplitPool.length > 0;
             if (filtered.ids.length > 0) {
-              freshSearch = { tool: tc.name, ids: filtered.ids, total: r2.total };
+              if (!stickySplitActive) {
+                freshSearch = { tool: tc.name, ids: filtered.ids, total: r2.total };
+              }
               if (tc.name === "jargon_recover_catalog" && productsRendered === 0) {
                 const render = executeRenderProducts({ product_ids: filtered.ids, total_available: r2.total } as RenderProductsInput, ctx.cache);
                 if (render.ok) {
@@ -2688,7 +2695,7 @@ async function runExpertLoop(
                   return { finalText, productsRendered };
                 }
               }
-            } else if (codeConstraints.length === 0) {
+            } else if (codeConstraints.length === 0 && !stickySplitActive) {
               freshSearch = { tool: tc.name, ids, total: r2.total };
             }
             if (filtered.rejected > 0) {
