@@ -2705,11 +2705,10 @@ async function runExpertLoop(
                   const sourceWord = (r2.source_query ?? (typeof tc.args.query === "string" ? tc.args.query : "")).trim();
                   if (partialMatch && unmatched.length > 0) {
                     const wordForUser = sourceWord || unmatched[0];
-                    const codeHint = codeConstraints.length > 0 ? ` по подтверждённым параметрам: ${codeConstraints.join(", ")}` : "";
                     if (!replacementIntent) {
                       strictHonestyBlocked = true;
                       send({ type: "assistant_turn_break", reason: "jargon_partial_disclaimer" });
-                      send({ type: "delta", content: `Точного признака «${wordForUser}» в каталоге не нашлось${codeHint}. Не буду подменять его похожими товарами. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?` });
+                      send({ type: "delta", content: `Точного признака «${wordForUser}» в каталоге не нашлось. Не буду подменять его похожими товарами. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?` });
                       steps.push({ step: "v3_guard_jargon_partial_blocked_strict", ms: now(), meta: { source_query: sourceWord, unmatched_tokens: unmatched, code_constraints: codeConstraints } });
                       steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_jargon_partial_blocked", step_count: step + 1 } });
                       return { finalText, productsRendered };
@@ -2717,7 +2716,7 @@ async function runExpertLoop(
                     send({ type: "assistant_turn_break", reason: "jargon_partial_disclaimer" });
                     send({
                       type: "delta",
-                      content: `Точного признака «${wordForUser}» в каталоге не нашлось${codeHint ? "," : "."} ${codeHint ? `показываю близкие варианты${codeHint}. ` : ""}Если нужна именно «${wordForUser}» — могу передать запрос менеджеру.`.trim(),
+                      content: `Точного признака «${wordForUser}» в каталоге не нашлось — показываю близкие варианты. Если нужна именно «${wordForUser}» — могу передать запрос менеджеру.`,
                     });
                     send({ type: "assistant_turn_break", reason: "text_before_render" });
                   }
