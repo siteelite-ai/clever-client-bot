@@ -2408,8 +2408,7 @@ async function runExpertLoop(
               return p ? productMatchesAnySemanticToken(p, semanticTokens) : false;
             });
             if (!hasSemanticEvidence) {
-              const codeLabel = codeConstraints.length > 0 ? ` с параметрами (${codeConstraints.join(", ")})` : "";
-              send({ type: "delta", content: `\n\nВ найденных товарах не подтвердился признак «${semanticTokens.join(" ")}»${codeLabel}. Не буду подменять его обычными товарами. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?` });
+              send({ type: "delta", content: `\n\nВ найденных товарах не подтвердился признак «${semanticTokens.join(" ")}». Не буду подменять его обычными товарами. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?` });
               steps.push({ step: "v3_guard_render_blocked_strict_semantic", ms: now(), meta: { semantic_tokens: semanticTokens, code_constraints: codeConstraints, attempted_ids: origIds } });
               steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_render_semantic_blocked", step_count: step + 1 } });
               return { finalText, productsRendered };
