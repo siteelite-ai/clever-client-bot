@@ -1277,6 +1277,7 @@ function buildGenericConstraintTokens(lastDiscover: DiscoverCategoryOk | null): 
 async function trySplitFallback(
   origArgs: Record<string, unknown>,
   ctx: ToolContext,
+  stickyOptions: Record<string, string[]> = {},
 ): Promise<{ axes: SplitAxis[]; ms: number } | null> {
   if (origArgs.mode !== "by_filter") return null;
   const options = origArgs.options as Record<string, unknown> | undefined;
@@ -1296,10 +1297,14 @@ async function trySplitFallback(
     : undefined;
 
   const results = await Promise.all(axisEntries.map(async ({ axis, values }) => {
+    // Fix 5 (axis-safe splits): preserve confirmed strict filters (e.g. цоколь E27)
+    // as a base for every split axis so we don't drop a parameter the user typed
+    // verbatim. Sticky entries are overridden when the current axis is the same key.
+    const mergedOptions: Record<string, string[]> = { ...stickyOptions, [axis]: values };
     const input: SearchCatalogInput = {
       mode: "by_filter",
       per_page: 5,
-      options: { [axis]: values },
+      options: mergedOptions,
       min_price: 1,
         ...(category ? { category } : categoryIn && categoryIn.length > 0 ? { category_in: categoryIn } : {}),
     };
@@ -1863,7 +1868,22 @@ async function runExpertLoop(
     if (bridgeUsed) {
       send({ type: "delta", content: `\n\nТрактую «${semanticTokens.join(" ") || userMessage}» через технический термин «${bridgeUsed}» и цоколь ${matched.map((m) => m.value).join(", ")}.` });
     } else if (!hasSemanticEvidence) {
-      send({ type: "delta", content: `\n\nПо слову «${semanticTokens.join(" ")}» точного признака в каталоге не вижу — показываю товары по подтверждённым параметрам: ${matched.map((m) => m.value).join(", ")}.` });
+      // Fix 1 (strict honesty): in strict mode (guaranteed by replacementIntent=false
+      // guard at top of function) — if we couldn't find ANY evidence of the user's
+      // semantic token (e.g. «кукуруза») and no jargon bridge worked, do NOT render
+      // unrelated products. Be honest: name what we couldn't find and stop.
+      if (semanticTokens.length > 0) {
+        send({
+          type: "delta",
+          content: `\n\nПо признаку «${semanticTokens.join(" ")}» в каталоге ничего не нашлось${matched.length > 0 ? ` (даже с подтверждёнными параметрами: ${matched.map((m) => m.value).join(", ")})` : ""}. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?`,
+        });
+        steps.push({
+          step: "v3_guard_code_facet_rescue_blocked_strict",
+          ms: now(),
+          meta: { matched, semantic_tokens: semanticTokens, reason: "no_semantic_evidence" },
+        });
+        return 0;
+      }
     }
     const render = executeRenderProducts({ product_ids: pool, total_available: result.total } as RenderProductsInput, ctx.cache);
     if (!render.ok) return 0;
@@ -2411,7 +2431,14 @@ async function runExpertLoop(
 
         // ── Step 6b: Escalate Guard — cancel escalation if fresh unshown pool ≥3.
         if (tc.name === "escalate_to_manager") {
-          const pool = pickFreshUnshown(8);
+          let pool = pickFreshUnshown(8);
+          // Fix 2 (strict constraint enforcement): never auto-render off-target
+          // products on escalation. In strict mode honour code constraints; in
+          // analog mode keep current behaviour (constraints are allowed to weaken).
+          if (!replacementIntent && codeConstraints.length > 0) {
+            const f = filterByCompoundConstraints(pool);
+            pool = f.ids;
+          }
           if (pool.length >= 3) {
             const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
             if (render.ok) {
@@ -2546,7 +2573,17 @@ async function runExpertLoop(
             ? Object.values(opts).filter((v) => Array.isArray(v) && v.length > 0).length
             : 0;
           if ((tc.args as { mode?: string }).mode === "by_filter" && axesCount >= 2) {
-            const split = await trySplitFallback(tc.args, ctx);
+            // Fix 5 (axis-safe splits): pass confirmed strict code-constraints
+            // (e.g. цоколь E27) as sticky base options so each axis search keeps
+            // them. Skipped in replacement mode — analogs are allowed to weaken.
+            const stickyOptions: Record<string, string[]> = {};
+            if (!replacementIntent && codeConstraints.length > 0) {
+              for (const code of codeConstraints) {
+                const m = findFacetMatchForCode(code);
+                if (m) (stickyOptions[m.facet.key] ??= []).push(m.value);
+              }
+            }
+            const split = await trySplitFallback(tc.args, ctx, stickyOptions);
             if (split) {
               const splitAxisIdSets = new Map(split.axes.map((a) => [a.axis, new Set(a.ids)]));
               const effectiveSplit = replacementIntent && replacementRequiredAxes.length >= 2
@@ -2574,9 +2611,23 @@ async function runExpertLoop(
                 meta: {
                   axes: effectiveSplit.axes.map((a) => ({ axis: a.axis, value: a.value, total: a.total, ids: a.ids.length })),
                   replacement_filtered: replacementIntent && replacementRequiredAxes.length >= 2,
+                  sticky_options: stickyOptions,
                   ms: split.ms,
                 },
               });
+              // Fix 4 (deterministic honesty): in strict mode emit an explicit
+              // server-side delta describing the empty intersection BEFORE giving
+              // control back to the LLM. Guarantees the user sees the breakdown
+              // even if the model later misbehaves.
+              if (!replacementIntent && splitFallbackResult && effectiveSplit.axes.length >= 2) {
+                const breakdown = effectiveSplit.axes
+                  .map((a) => `${a.axis}=${a.value} → ${a.total}`)
+                  .join("; ");
+                send({
+                  type: "delta",
+                  content: `\n\nТочного сочетания всех ваших параметров в каталоге нет. По отдельности: ${breakdown}. Какую ось ослабить, чтобы подобрать?`,
+                });
+              }
               // Feed Step 6a/6b pool so render/escalate guards have ammo too.
               const allIds = effectiveSplit.axes.flatMap((a) => a.ids).slice(0, 8);
               const totalSum = effectiveSplit.axes.reduce((s, a) => s + a.total, 0);
@@ -2605,8 +2656,15 @@ async function runExpertLoop(
             .map((p) => String(p.id));
           if (ids.length > 0) {
             const filtered = filterByCompoundConstraints(ids);
+            // Fix 3 (sticky split-pools): once a split fallback established an
+            // axis-aligned priority pool, do NOT overwrite freshSearch with a
+            // broader follow-up search — that would let render guards pick
+            // off-target ids. In analog mode keep prior behaviour.
+            const stickySplitActive = !replacementIntent && prioritySplitPool.length > 0;
             if (filtered.ids.length > 0) {
-              freshSearch = { tool: tc.name, ids: filtered.ids, total: r2.total };
+              if (!stickySplitActive) {
+                freshSearch = { tool: tc.name, ids: filtered.ids, total: r2.total };
+              }
               if (tc.name === "jargon_recover_catalog" && productsRendered === 0) {
                 const render = executeRenderProducts({ product_ids: filtered.ids, total_available: r2.total } as RenderProductsInput, ctx.cache);
                 if (render.ok) {
@@ -2637,7 +2695,7 @@ async function runExpertLoop(
                   return { finalText, productsRendered };
                 }
               }
-            } else if (codeConstraints.length === 0) {
+            } else if (codeConstraints.length === 0 && !stickySplitActive) {
               freshSearch = { tool: tc.name, ids, total: r2.total };
             }
             if (filtered.rejected > 0) {
@@ -2810,7 +2868,16 @@ async function runExpertLoop(
       productsRendered += rescued;
     }
     if (productsRendered === 0) {
-      const pool = pickFreshUnshown(8);
+      let pool = pickFreshUnshown(8);
+      // Fix 2 (strict constraint enforcement): last-chance render must respect
+      // user's hard code constraints (E27, 16А и т.п.). In analog/replacement
+      // mode we keep current behaviour and let the pool through unfiltered.
+      let lastChanceFilteredOut = 0;
+      if (!replacementIntent && codeConstraints.length > 0) {
+        const f = filterByCompoundConstraints(pool);
+        lastChanceFilteredOut = pool.length - f.ids.length;
+        pool = f.ids;
+      }
       if (pool.length > 0) {
         const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
         if (render.ok) {
@@ -2821,9 +2888,15 @@ async function runExpertLoop(
           steps.push({
             step: "v3_guard_last_chance_render",
             ms: now(),
-            meta: { pool_size: pool.length, fresh_tool: freshSearch?.tool, fresh_total: freshSearch?.total, rendered: render.rendered_count },
+            meta: { pool_size: pool.length, fresh_tool: freshSearch?.tool, fresh_total: freshSearch?.total, rendered: render.rendered_count, compound_filtered_out: lastChanceFilteredOut },
           });
         }
+      } else if (lastChanceFilteredOut > 0) {
+        steps.push({
+          step: "v3_guard_last_chance_blocked_strict",
+          ms: now(),
+          meta: { filtered_out: lastChanceFilteredOut, code_constraints: codeConstraints },
+        });
       }
     }
     steps.push({
