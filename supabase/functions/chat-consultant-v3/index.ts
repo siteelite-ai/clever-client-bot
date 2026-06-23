@@ -1476,7 +1476,7 @@ interface ORResponse {
 // Раньше был один общий LLM_CALL_TIMEOUT_MS=60s — flash-модель на MoE-архитектуре
 // не успевала отрендерить карточки из 30+ товаров за это время, и весь ход падал
 // с "не удалось обработать запрос". Разнесение по фазам убирает этот класс багов.
-const LLM_TIMEOUT_INTRO_MS = 20_000;
+const LLM_TIMEOUT_INTRO_MS = 30_000;
 const LLM_TIMEOUT_TOOL_DECISION_MS = 30_000;
 const LLM_TIMEOUT_FINAL_RENDER_MS = 110_000;
 
@@ -1688,6 +1688,12 @@ async function runExpertLoop(
   // Turn-level guard: рендерим карточку контактов максимум один раз,
   // даже если LLM по ошибке вызвал lookup_contacts повторно (топик-дубль).
   const contactsEmitted = { value: false };
+  // Server-side stop flag: when a strict honesty guard has already explained
+  // that an explicit user attribute is absent, the turn must end immediately.
+  // Otherwise the LLM can continue with broader searches and append a generic
+  // fallback/error after the honest answer.
+  let strictHonestyBlocked = false;
+  let semanticEvidenceSeen: { label: string; total: number } | null = null;
   // Anchor exclusion: in replacement-intent turns ("аналог/замена/похожее"),
   // the anchor SKU itself must never appear in the rendered list — it's the
   // source product, not its analog. Computed lazily because the anchor is only
@@ -1866,17 +1872,20 @@ async function runExpertLoop(
       return p ? productMatchesAnySemanticToken(p, semanticTokens) : false;
     });
     if (bridgeUsed) {
-      send({ type: "delta", content: `\n\nТрактую «${semanticTokens.join(" ") || userMessage}» через технический термин «${bridgeUsed}» и цоколь ${matched.map((m) => m.value).join(", ")}.` });
+      const matchedLabel = matched.map((m) => m.value).join(", ");
+      send({ type: "delta", content: `\n\nТрактую «${semanticTokens.join(" ") || userMessage}» через технический термин «${bridgeUsed}» с параметрами ${matchedLabel}.` });
     } else if (!hasSemanticEvidence) {
       // Fix 1 (strict honesty): in strict mode (guaranteed by replacementIntent=false
       // guard at top of function) — if we couldn't find ANY evidence of the user's
       // semantic token (e.g. «кукуруза») and no jargon bridge worked, do NOT render
       // unrelated products. Be honest: name what we couldn't find and stop.
       if (semanticTokens.length > 0) {
-        send({
-          type: "delta",
-          content: `\n\nПо признаку «${semanticTokens.join(" ")}» в каталоге ничего не нашлось${matched.length > 0 ? ` (даже с подтверждёнными параметрами: ${matched.map((m) => m.value).join(", ")})` : ""}. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?`,
-        });
+        const codeLabel = matched.map((m) => m.value).join(", ");
+        const content = semanticEvidenceSeen
+          ? `\n\nПо близкому поиску${semanticEvidenceSeen.label ? ` через «${semanticEvidenceSeen.label}»` : ""} товары находятся, но подтверждения признака «${semanticTokens.join(" ")}» с параметрами${codeLabel ? ` (${codeLabel})` : ""} нет. Не буду подменять его обычными товарами. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?`
+          : `\n\nПо признаку «${semanticTokens.join(" ")}» в каталоге ничего не нашлось${matched.length > 0 ? ` (даже с подтверждёнными параметрами: ${codeLabel})` : ""}. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?`;
+        send({ type: "delta", content });
+        strictHonestyBlocked = true;
         steps.push({
           step: "v3_guard_code_facet_rescue_blocked_strict",
           ms: now(),
@@ -2555,6 +2564,10 @@ async function runExpertLoop(
             steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "code_facet_rescue_after_discover", step_count: step + 1 } });
             return { finalText, productsRendered };
           }
+          if (strictHonestyBlocked) {
+            steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_honesty_blocked_after_discover", step_count: step + 1 } });
+            return { finalText, productsRendered };
+          }
         }
 
 
@@ -2655,6 +2668,10 @@ async function runExpertLoop(
             .filter((p) => p && Number.isFinite(p.price) && p.price > 0)
             .map((p) => String(p.id));
           if (ids.length > 0) {
+            const sourceLabel = typeof (r2 as { matched_query?: unknown }).matched_query === "string" && (r2 as { matched_query?: string }).matched_query
+              ? (r2 as { matched_query: string }).matched_query
+              : (typeof r2.source_query === "string" && r2.source_query ? r2.source_query : typeof tc.args.query === "string" ? tc.args.query : "");
+            semanticEvidenceSeen ??= { label: sourceLabel, total: r2.total };
             const filtered = filterByCompoundConstraints(ids);
             // Fix 3 (sticky split-pools): once a split fallback established an
             // axis-aligned priority pool, do NOT overwrite freshSearch with a
@@ -2677,9 +2694,15 @@ async function runExpertLoop(
                   const sourceWord = (r2.source_query ?? (typeof tc.args.query === "string" ? tc.args.query : "")).trim();
                   if (partialMatch && unmatched.length > 0) {
                     const wordForUser = sourceWord || unmatched[0];
-                    const codeHint = codeConstraints.length > 0
-                      ? ` по подтверждённым параметрам: ${codeConstraints.map((c) => c.value).join(", ")}`
-                      : "";
+                    const codeHint = codeConstraints.length > 0 ? ` по подтверждённым параметрам: ${codeConstraints.join(", ")}` : "";
+                    if (!replacementIntent) {
+                      strictHonestyBlocked = true;
+                      send({ type: "assistant_turn_break", reason: "jargon_partial_disclaimer" });
+                      send({ type: "delta", content: `Точного признака «${wordForUser}» в каталоге не нашлось${codeHint}. Не буду подменять его похожими товарами. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?` });
+                      steps.push({ step: "v3_guard_jargon_partial_blocked_strict", ms: now(), meta: { source_query: sourceWord, unmatched_tokens: unmatched, code_constraints: codeConstraints } });
+                      steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_jargon_partial_blocked", step_count: step + 1 } });
+                      return { finalText, productsRendered };
+                    }
                     send({ type: "assistant_turn_break", reason: "jargon_partial_disclaimer" });
                     send({
                       type: "delta",
@@ -2710,6 +2733,10 @@ async function runExpertLoop(
               if (rescued > 0) {
                 productsRendered += rescued;
                 steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "code_facet_rescue", step_count: step + 1 } });
+                return { finalText, productsRendered };
+              }
+              if (strictHonestyBlocked) {
+                steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_honesty_blocked", step_count: step + 1 } });
                 return { finalText, productsRendered };
               }
             }
@@ -2866,6 +2893,10 @@ async function runExpertLoop(
     if (productsRendered === 0) {
       const rescued = await tryCodeFacetRescue();
       productsRendered += rescued;
+      if (strictHonestyBlocked) {
+        steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_honesty_blocked_forced_finalize", step_count: MAX_STEPS } });
+        return { finalText, productsRendered };
+      }
     }
     if (productsRendered === 0) {
       let pool = pickFreshUnshown(8);
