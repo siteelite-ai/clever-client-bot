@@ -2837,7 +2837,16 @@ async function runExpertLoop(
       productsRendered += rescued;
     }
     if (productsRendered === 0) {
-      const pool = pickFreshUnshown(8);
+      let pool = pickFreshUnshown(8);
+      // Fix 2 (strict constraint enforcement): last-chance render must respect
+      // user's hard code constraints (E27, 16А и т.п.). In analog/replacement
+      // mode we keep current behaviour and let the pool through unfiltered.
+      let lastChanceFilteredOut = 0;
+      if (!replacementIntent && codeConstraints.length > 0) {
+        const f = filterByCompoundConstraints(pool);
+        lastChanceFilteredOut = pool.length - f.ids.length;
+        pool = f.ids;
+      }
       if (pool.length > 0) {
         const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
         if (render.ok) {
@@ -2848,9 +2857,15 @@ async function runExpertLoop(
           steps.push({
             step: "v3_guard_last_chance_render",
             ms: now(),
-            meta: { pool_size: pool.length, fresh_tool: freshSearch?.tool, fresh_total: freshSearch?.total, rendered: render.rendered_count },
+            meta: { pool_size: pool.length, fresh_tool: freshSearch?.tool, fresh_total: freshSearch?.total, rendered: render.rendered_count, compound_filtered_out: lastChanceFilteredOut },
           });
         }
+      } else if (lastChanceFilteredOut > 0) {
+        steps.push({
+          step: "v3_guard_last_chance_blocked_strict",
+          ms: now(),
+          meta: { filtered_out: lastChanceFilteredOut, code_constraints: codeConstraints },
+        });
       }
     }
     steps.push({
