@@ -2593,7 +2593,13 @@ async function runExpertLoop(
 
 
         if ((tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") && result.ok) {
-          const r2 = result as unknown as { results: Array<{ id: string; price: number }>; total: number };
+          const r2 = result as unknown as {
+            results: Array<{ id: string; price: number }>;
+            total: number;
+            partial_match?: boolean;
+            unmatched_tokens?: string[];
+            source_query?: string;
+          };
           const ids = (r2.results ?? [])
             .filter((p) => p && Number.isFinite(p.price) && p.price > 0)
             .map((p) => String(p.id));
@@ -2604,10 +2610,29 @@ async function runExpertLoop(
               if (tc.name === "jargon_recover_catalog" && productsRendered === 0) {
                 const render = executeRenderProducts({ product_ids: filtered.ids, total_available: r2.total } as RenderProductsInput, ctx.cache);
                 if (render.ok) {
+                  // Honesty guard: jargon_recover_catalog uses fuzzy fallback; if the user's
+                  // original word (e.g. «кукуруза») is not present in any returned title, we
+                  // MUST tell the user the literal term wasn't matched — silently rendering
+                  // unrelated lamps is the exact hallucination the user is complaining about.
+                  const partialMatch = r2.partial_match === true;
+                  const unmatched = Array.isArray(r2.unmatched_tokens) ? r2.unmatched_tokens.filter((t) => typeof t === "string" && t.length > 0) : [];
+                  const sourceWord = (r2.source_query ?? (typeof tc.args.query === "string" ? tc.args.query : "")).trim();
+                  if (partialMatch && unmatched.length > 0) {
+                    const wordForUser = sourceWord || unmatched[0];
+                    const codeHint = codeConstraints.length > 0
+                      ? ` по подтверждённым параметрам: ${codeConstraints.map((c) => c.value).join(", ")}`
+                      : "";
+                    send({ type: "assistant_turn_break", reason: "jargon_partial_disclaimer" });
+                    send({
+                      type: "delta",
+                      content: `Точного признака «${wordForUser}» в каталоге не нашлось${codeHint ? "," : "."} ${codeHint ? `показываю близкие варианты${codeHint}. ` : ""}Если нужна именно «${wordForUser}» — могу передать запрос менеджеру.`.trim(),
+                    });
+                    send({ type: "assistant_turn_break", reason: "text_before_render" });
+                  }
                   send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: r2.total });
                   for (const id of filtered.ids) shownIds.add(id);
                   productsRendered += render.rendered_count;
-                  steps.push({ step: "v3_guard_jargon_auto_render", ms: now(), meta: { tool: tc.name, total: r2.total, rendered: render.rendered_count, ids: filtered.ids.slice(0, 8) } });
+                  steps.push({ step: "v3_guard_jargon_auto_render", ms: now(), meta: { tool: tc.name, total: r2.total, rendered: render.rendered_count, ids: filtered.ids.slice(0, 8), partial_match: partialMatch, unmatched_tokens: unmatched } });
                   steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "jargon_auto_render", step_count: step + 1 } });
                   return { finalText, productsRendered };
                 }
