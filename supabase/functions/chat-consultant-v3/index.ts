@@ -1871,25 +1871,19 @@ async function runExpertLoop(
       const p = ctx.cache.get(id);
       return p ? productMatchesAnySemanticToken(p, semanticTokens) : false;
     });
-    if (bridgeUsed) {
-      const matchedLabel = matched.map((m) => m.value).join(", ");
-      send({ type: "delta", content: `\n\nТрактую «${semanticTokens.join(" ") || userMessage}» через технический термин «${bridgeUsed}» с параметрами ${matchedLabel}.` });
-    } else if (!hasSemanticEvidence) {
-      // Fix 1 (strict honesty): in strict mode (guaranteed by replacementIntent=false
-      // guard at top of function) — if we couldn't find ANY evidence of the user's
-      // semantic token (e.g. «кукуруза») and no jargon bridge worked, do NOT render
-      // unrelated products. Be honest: name what we couldn't find and stop.
+    if (!hasSemanticEvidence) {
+      // Fix 1 (strict honesty): in strict mode — если не нашли ни одного подтверждения
+      // семантического признака пользователя (напр. «кукуруза»), НЕ рендерим
+      // нерелевантные товары. Сообщаем честно — без эха технических параметров,
+      // которые пользователь не спрашивал.
       if (semanticTokens.length > 0) {
-        const codeLabel = matched.map((m) => m.value).join(", ");
-        const content = semanticEvidenceSeen
-          ? `\n\nПо близкому поиску${semanticEvidenceSeen.label ? ` через «${semanticEvidenceSeen.label}»` : ""} товары находятся, но подтверждения признака «${semanticTokens.join(" ")}» с параметрами${codeLabel ? ` (${codeLabel})` : ""} нет. Не буду подменять его обычными товарами. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?`
-          : `\n\nПо признаку «${semanticTokens.join(" ")}» в каталоге ничего не нашлось${matched.length > 0 ? ` (даже с подтверждёнными параметрами: ${codeLabel})` : ""}. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?`;
+        const content = `\n\nПо признаку «${semanticTokens.join(" ")}» в каталоге ничего подходящего не нашлось. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?`;
         send({ type: "delta", content });
         strictHonestyBlocked = true;
         steps.push({
           step: "v3_guard_code_facet_rescue_blocked_strict",
           ms: now(),
-          meta: { matched, semantic_tokens: semanticTokens, reason: "no_semantic_evidence" },
+          meta: { matched, semantic_tokens: semanticTokens, bridge_used: bridgeUsed, reason: "no_semantic_evidence" },
         });
         return 0;
       }
@@ -2414,8 +2408,7 @@ async function runExpertLoop(
               return p ? productMatchesAnySemanticToken(p, semanticTokens) : false;
             });
             if (!hasSemanticEvidence) {
-              const codeLabel = codeConstraints.length > 0 ? ` с параметрами (${codeConstraints.join(", ")})` : "";
-              send({ type: "delta", content: `\n\nВ найденных товарах не подтвердился признак «${semanticTokens.join(" ")}»${codeLabel}. Не буду подменять его обычными товарами. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?` });
+              send({ type: "delta", content: `\n\nВ найденных товарах не подтвердился признак «${semanticTokens.join(" ")}». Не буду подменять его обычными товарами. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?` });
               steps.push({ step: "v3_guard_render_blocked_strict_semantic", ms: now(), meta: { semantic_tokens: semanticTokens, code_constraints: codeConstraints, attempted_ids: origIds } });
               steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_render_semantic_blocked", step_count: step + 1 } });
               return { finalText, productsRendered };
@@ -2712,11 +2705,10 @@ async function runExpertLoop(
                   const sourceWord = (r2.source_query ?? (typeof tc.args.query === "string" ? tc.args.query : "")).trim();
                   if (partialMatch && unmatched.length > 0) {
                     const wordForUser = sourceWord || unmatched[0];
-                    const codeHint = codeConstraints.length > 0 ? ` по подтверждённым параметрам: ${codeConstraints.join(", ")}` : "";
                     if (!replacementIntent) {
                       strictHonestyBlocked = true;
                       send({ type: "assistant_turn_break", reason: "jargon_partial_disclaimer" });
-                      send({ type: "delta", content: `Точного признака «${wordForUser}» в каталоге не нашлось${codeHint}. Не буду подменять его похожими товарами. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?` });
+                      send({ type: "delta", content: `Точного признака «${wordForUser}» в каталоге не нашлось. Не буду подменять его похожими товарами. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?` });
                       steps.push({ step: "v3_guard_jargon_partial_blocked_strict", ms: now(), meta: { source_query: sourceWord, unmatched_tokens: unmatched, code_constraints: codeConstraints } });
                       steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_jargon_partial_blocked", step_count: step + 1 } });
                       return { finalText, productsRendered };
@@ -2724,7 +2716,7 @@ async function runExpertLoop(
                     send({ type: "assistant_turn_break", reason: "jargon_partial_disclaimer" });
                     send({
                       type: "delta",
-                      content: `Точного признака «${wordForUser}» в каталоге не нашлось${codeHint ? "," : "."} ${codeHint ? `показываю близкие варианты${codeHint}. ` : ""}Если нужна именно «${wordForUser}» — могу передать запрос менеджеру.`.trim(),
+                      content: `Точного признака «${wordForUser}» в каталоге не нашлось — показываю близкие варианты. Если нужна именно «${wordForUser}» — могу передать запрос менеджеру.`,
                     });
                     send({ type: "assistant_turn_break", reason: "text_before_render" });
                   }
