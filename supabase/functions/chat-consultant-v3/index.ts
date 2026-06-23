@@ -1277,6 +1277,7 @@ function buildGenericConstraintTokens(lastDiscover: DiscoverCategoryOk | null): 
 async function trySplitFallback(
   origArgs: Record<string, unknown>,
   ctx: ToolContext,
+  stickyOptions: Record<string, string[]> = {},
 ): Promise<{ axes: SplitAxis[]; ms: number } | null> {
   if (origArgs.mode !== "by_filter") return null;
   const options = origArgs.options as Record<string, unknown> | undefined;
@@ -1296,10 +1297,14 @@ async function trySplitFallback(
     : undefined;
 
   const results = await Promise.all(axisEntries.map(async ({ axis, values }) => {
+    // Fix 5 (axis-safe splits): preserve confirmed strict filters (e.g. цоколь E27)
+    // as a base for every split axis so we don't drop a parameter the user typed
+    // verbatim. Sticky entries are overridden when the current axis is the same key.
+    const mergedOptions: Record<string, string[]> = { ...stickyOptions, [axis]: values };
     const input: SearchCatalogInput = {
       mode: "by_filter",
       per_page: 5,
-      options: { [axis]: values },
+      options: mergedOptions,
       min_price: 1,
         ...(category ? { category } : categoryIn && categoryIn.length > 0 ? { category_in: categoryIn } : {}),
     };
