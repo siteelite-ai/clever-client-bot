@@ -2630,6 +2630,42 @@ async function runExpertLoop(
           }
         }
 
+        // ── Step 2b: Jargon-recover retry without modifiers when total=0.
+        // jargon_recover_catalog with inherited modifiers (e.g. «E27» from
+        // history) often returns 0 even though the literal jargon ("кукуруза")
+        // does exist in the catalog. Retry once without modifiers so we surface
+        // the literal jargon — partial-match guard downstream still warns the
+        // user that the strict modifier wasn't intersected.
+        if (
+          tc.name === "jargon_recover_catalog" &&
+          result.ok &&
+          (result as { total: number }).total === 0 &&
+          Array.isArray((runArgs as { modifiers?: unknown }).modifiers) &&
+          ((runArgs as { modifiers: unknown[] }).modifiers).length > 0
+        ) {
+          const retryArgs = { ...runArgs };
+          delete (retryArgs as { modifiers?: unknown }).modifiers;
+          const retryStart = Date.now();
+          const retry = await runTool(tc.name, retryArgs, ctx);
+          const retryDur = Date.now() - retryStart;
+          if (retry.ok && (retry as { total: number }).total > 0) {
+            result = retry;
+            effectiveArgs = retryArgs;
+            send({ type: "tool_event", tool: tc.name, phase: "result", duration_ms: retryDur, summary: `retry без modifiers: найдено ${(retry as { total: number }).total}` });
+            steps.push({
+              step: "v3_guard_jargon_retry_no_modifiers",
+              ms: now(),
+              meta: {
+                dropped_modifiers: (runArgs as { modifiers: string[] }).modifiers,
+                retry_total: (retry as { total: number }).total,
+                retry_ms: retryDur,
+              },
+            });
+          }
+        }
+
+
+
         if (tc.name === "discover_category" && result.ok) {
           lastDiscover = result as unknown as DiscoverCategoryOk;
           addToWhitelist(lastDiscover.category?.pagetitle);
