@@ -897,6 +897,59 @@ function relaxToolArgsFromDialogueChoice(
   return { args: nextArgs, removed };
 }
 
+// Detects "relax intent" — phrases like «просто X», «только X», «без …»,
+// «не важно», «любые/любой», «всё равно» — and strips modifiers/options that
+// are NOT explicitly repeated in the current user message. This prevents
+// the LLM from inheriting constraints from history (e.g. «E27») when the
+// user has clearly asked to relax them.
+const RELAX_INTENT_RE = /(^|[\s,;.!?])(прост[оа]|тольк[оа]|лишь|без\s|не\s*важно|неважно|люб(ые|ой|ая|ое|ых|ым)|вс[её]\s*равно|пофиг|похуй|неважен)\b/iu;
+function detectRelaxIntent(userMessage: string): boolean {
+  if (!userMessage) return false;
+  return RELAX_INTENT_RE.test(userMessage.toLowerCase());
+}
+
+function relaxToolArgsFromUserIntent(
+  args: Record<string, unknown>,
+  userMessage: string,
+): { args: Record<string, unknown>; removed: Array<{ key: string; value: string; reason: string }> } | null {
+  if (!detectRelaxIntent(userMessage)) return null;
+  const nextArgs = { ...args };
+  const removed: Array<{ key: string; value: string; reason: string }> = [];
+  const repeatedNow = (value: string) =>
+    valueIsEvidenced(value, userMessage) || optionMatchScore(value, userMessage) > 0;
+
+  if (Array.isArray(args.modifiers)) {
+    const kept: string[] = [];
+    for (const value of args.modifiers.map(String).filter(Boolean)) {
+      if (repeatedNow(value)) kept.push(value);
+      else removed.push({ key: "modifiers", value, reason: "relax_intent_not_repeated" });
+    }
+    if (kept.length !== args.modifiers.length) {
+      if (kept.length > 0) nextArgs.modifiers = kept;
+      else delete nextArgs.modifiers;
+    }
+  }
+
+  if (args.mode === "by_filter" && args.options && typeof args.options === "object") {
+    const nextOptions: Record<string, string[]> = {};
+    for (const [key, rawVals] of Object.entries(args.options as Record<string, unknown>)) {
+      const vals = Array.isArray(rawVals) ? rawVals.map(String).filter(Boolean) : [];
+      for (const value of vals) {
+        if (repeatedNow(value)) (nextOptions[key] ??= []).push(value);
+        else removed.push({ key, value, reason: "relax_intent_not_repeated" });
+      }
+    }
+    if (removed.some((r) => r.key !== "modifiers")) {
+      if (Object.keys(nextOptions).length > 0) nextArgs.options = nextOptions;
+      else delete nextArgs.options;
+    }
+  }
+
+  return removed.length > 0 ? { args: nextArgs, removed } : null;
+}
+
+
+
 // Extracts the model/series code from an anchor pagetitle: the most
 // distinctive alphanumeric token (mix of letters AND digits, length >= 4),
 // e.g. "DN027B" from "Светильник DN027B G2 LED6/NW 7W 220-240V D90 R".
@@ -2154,6 +2207,20 @@ async function runExpertLoop(
           tc.args = dialogueRelaxed.args;
         }
 
+        const userIntentRelaxed = (tc.name === "search_catalog" || tc.name === "jargon_recover_catalog")
+          ? relaxToolArgsFromUserIntent(tc.args, userMessage)
+          : null;
+        if (userIntentRelaxed) {
+          steps.push({
+            step: "v3_guard_user_intent_relaxed",
+            ms: now(),
+            meta: { removed: userIntentRelaxed.removed, original_args: summariseToolArgs(tc.name, tc.args), relaxed_args: summariseToolArgs(tc.name, userIntentRelaxed.args) },
+          });
+          tc.args = userIntentRelaxed.args;
+        }
+
+
+
         let guardOutcome = tc.name === "search_catalog"
           ? await guardedOutcomeForSearch(tc.args, lastDiscover, userMessage, firstAssistantText, ctx, history.slice(-6).map((h) => h.content).join("\n"))
           : null;
@@ -2562,6 +2629,42 @@ async function runExpertLoop(
             }
           }
         }
+
+        // ── Step 2b: Jargon-recover retry without modifiers when total=0.
+        // jargon_recover_catalog with inherited modifiers (e.g. «E27» from
+        // history) often returns 0 even though the literal jargon ("кукуруза")
+        // does exist in the catalog. Retry once without modifiers so we surface
+        // the literal jargon — partial-match guard downstream still warns the
+        // user that the strict modifier wasn't intersected.
+        if (
+          tc.name === "jargon_recover_catalog" &&
+          result.ok &&
+          (result as { total: number }).total === 0 &&
+          Array.isArray((runArgs as { modifiers?: unknown }).modifiers) &&
+          ((runArgs as { modifiers: unknown[] }).modifiers).length > 0
+        ) {
+          const retryArgs = { ...runArgs };
+          delete (retryArgs as { modifiers?: unknown }).modifiers;
+          const retryStart = Date.now();
+          const retry = await runTool(tc.name, retryArgs, ctx);
+          const retryDur = Date.now() - retryStart;
+          if (retry.ok && (retry as { total: number }).total > 0) {
+            result = retry;
+            effectiveArgs = retryArgs;
+            send({ type: "tool_event", tool: tc.name, phase: "result", duration_ms: retryDur, summary: `retry без modifiers: найдено ${(retry as { total: number }).total}` });
+            steps.push({
+              step: "v3_guard_jargon_retry_no_modifiers",
+              ms: now(),
+              meta: {
+                dropped_modifiers: (runArgs as { modifiers: string[] }).modifiers,
+                retry_total: (retry as { total: number }).total,
+                retry_ms: retryDur,
+              },
+            });
+          }
+        }
+
+
 
         if (tc.name === "discover_category" && result.ok) {
           lastDiscover = result as unknown as DiscoverCategoryOk;
