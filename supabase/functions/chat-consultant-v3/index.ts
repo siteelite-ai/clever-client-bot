@@ -897,6 +897,59 @@ function relaxToolArgsFromDialogueChoice(
   return { args: nextArgs, removed };
 }
 
+// Detects "relax intent" — phrases like «просто X», «только X», «без …»,
+// «не важно», «любые/любой», «всё равно» — and strips modifiers/options that
+// are NOT explicitly repeated in the current user message. This prevents
+// the LLM from inheriting constraints from history (e.g. «E27») when the
+// user has clearly asked to relax them.
+const RELAX_INTENT_RE = /(^|[\s,;.!?])(прост[оа]|тольк[оа]|лишь|без\s|не\s*важно|неважно|люб(ые|ой|ая|ое|ых|ым)|вс[её]\s*равно|пофиг|похуй|неважен)\b/iu;
+function detectRelaxIntent(userMessage: string): boolean {
+  if (!userMessage) return false;
+  return RELAX_INTENT_RE.test(userMessage.toLowerCase());
+}
+
+function relaxToolArgsFromUserIntent(
+  args: Record<string, unknown>,
+  userMessage: string,
+): { args: Record<string, unknown>; removed: Array<{ key: string; value: string; reason: string }> } | null {
+  if (!detectRelaxIntent(userMessage)) return null;
+  const nextArgs = { ...args };
+  const removed: Array<{ key: string; value: string; reason: string }> = [];
+  const repeatedNow = (value: string) =>
+    valueIsEvidenced(value, userMessage) || optionMatchScore(value, userMessage) > 0;
+
+  if (Array.isArray(args.modifiers)) {
+    const kept: string[] = [];
+    for (const value of args.modifiers.map(String).filter(Boolean)) {
+      if (repeatedNow(value)) kept.push(value);
+      else removed.push({ key: "modifiers", value, reason: "relax_intent_not_repeated" });
+    }
+    if (kept.length !== args.modifiers.length) {
+      if (kept.length > 0) nextArgs.modifiers = kept;
+      else delete nextArgs.modifiers;
+    }
+  }
+
+  if (args.mode === "by_filter" && args.options && typeof args.options === "object") {
+    const nextOptions: Record<string, string[]> = {};
+    for (const [key, rawVals] of Object.entries(args.options as Record<string, unknown>)) {
+      const vals = Array.isArray(rawVals) ? rawVals.map(String).filter(Boolean) : [];
+      for (const value of vals) {
+        if (repeatedNow(value)) (nextOptions[key] ??= []).push(value);
+        else removed.push({ key, value, reason: "relax_intent_not_repeated" });
+      }
+    }
+    if (removed.some((r) => r.key !== "modifiers")) {
+      if (Object.keys(nextOptions).length > 0) nextArgs.options = nextOptions;
+      else delete nextArgs.options;
+    }
+  }
+
+  return removed.length > 0 ? { args: nextArgs, removed } : null;
+}
+
+
+
 // Extracts the model/series code from an anchor pagetitle: the most
 // distinctive alphanumeric token (mix of letters AND digits, length >= 4),
 // e.g. "DN027B" from "Светильник DN027B G2 LED6/NW 7W 220-240V D90 R".
