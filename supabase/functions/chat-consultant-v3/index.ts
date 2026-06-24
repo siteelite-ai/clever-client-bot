@@ -1754,19 +1754,34 @@ async function runExpertLoop(
   const replacementIntent = isReplacementIntent(userMessage);
   const intentMode = detectUserIntentMode(userMessage);
   const codeConstraints = extractCodeConstraints(userMessage);
+  // In replacement-intent turns ("аналог/замена этому …"), the user's message
+  // includes the anchor's own model/series name (e.g. "ВА 47-29", "А4") — that
+  // is the source product's identity, NOT a spec the candidate analog must
+  // share. Restrict compound enforcement to "pure spec" tokens (numeric value
+  // + short unit suffix: 16а, 4.5ка, 1р, 220в, 50гц). Drop model/series tokens
+  // (start with a letter, contain hyphen, or mix letters+digits in a way that
+  // doesn't match a clean numeric spec).
+  const isPureSpecToken = (code: string): boolean => /^\d+(?:\.\d+)?[a-z]{1,4}$/.test(normalizeCodeLike(code));
+  const effectiveCodeConstraints = replacementIntent
+    ? codeConstraints.filter(isPureSpecToken)
+    : codeConstraints;
   const filterByCompoundConstraints = (ids: string[]): { ids: string[]; rejected: number } => {
-    if (codeConstraints.length === 0) return { ids, rejected: 0 };
+    if (effectiveCodeConstraints.length === 0) return { ids, rejected: 0 };
     // Step 1: hard-enforce code constraints (E27, 16А, 4.5кА — reliably present
     // in product titles/traits, so a miss here is a true mismatch).
     const codeKept = ids.filter((id) => {
       const p = ctx.cache.get(id);
       if (!p) return false;
-      return codeConstraints.every((code) => productMatchesCodeConstraint(p, code));
+      return effectiveCodeConstraints.every((code) => productMatchesCodeConstraint(p, code));
     });
     // Step 2: optional semantic narrowing — but only if it doesn't empty the pool.
     // Colloquial tokens ("кукуруза", "груша", "шарик") rarely appear verbatim in
     // catalog titles; if narrowing wipes everything, trust the LLM's jargon
     // expansion (it already searched "SMD"/"corn"/etc.) and keep the code-filtered pool.
+    // Skip semantic narrowing entirely in replacement mode — the user's free
+    // text describes the anchor, not the analog, so narrowing by it would
+    // incorrectly demand the anchor's brand/series words on candidates.
+    if (replacementIntent) return { ids: codeKept, rejected: ids.length - codeKept.length };
     const semanticConstraints = semanticTokensFromQuery(userMessage, buildGenericConstraintTokens(lastDiscover), codeConstraints);
     if (semanticConstraints.length === 0) return { ids: codeKept, rejected: ids.length - codeKept.length };
     const narrowed = codeKept.filter((id) => {
