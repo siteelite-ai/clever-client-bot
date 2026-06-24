@@ -1754,16 +1754,29 @@ async function runExpertLoop(
   const replacementIntent = isReplacementIntent(userMessage);
   const intentMode = detectUserIntentMode(userMessage);
   const codeConstraints = extractCodeConstraints(userMessage);
-  // In replacement-intent turns ("аналог/замена этому …"), the user's message
-  // includes the anchor's own model/series name (e.g. "ВА 47-29", "А4") — that
-  // is the source product's identity, NOT a spec the candidate analog must
-  // share. Restrict compound enforcement to "pure spec" tokens (numeric value
-  // + short unit suffix: 16а, 4.5ка, 1р, 220в, 50гц). Drop model/series tokens
-  // (start with a letter, contain hyphen, or mix letters+digits in a way that
-  // doesn't match a clean numeric spec).
-  const isPureSpecToken = (code: string): boolean => /^\d+(?:\.\d+)?[a-z]{1,4}$/.test(normalizeCodeLike(code));
+  // Replacement-intent guardrail (§9.9 "Замены и аналоги"): the user's message
+  // names the ANCHOR product (its brand + model/series + specs). The compound
+  // guard must enforce only those tokens that a legitimate analog is expected
+  // to share — i.e. canonical category tokens (E27, IP65, A60, GU10) and
+  // numeric specs (16А, 4.5кА, 1Р, 220В, 50Гц) — and must NOT enforce the
+  // anchor's model/series identifier (ВА47-29, DN027B, etc.), otherwise every
+  // cross-brand candidate is rejected because no other brand carries the
+  // anchor's model name. Heuristic is structural and data-agnostic (no
+  // hardcoded categories / brands / values per §0.D1):
+  //   - drop tokens containing a hyphen → model SKU shape (ВА47-29, AD-22DS);
+  //   - keep "pure numeric spec" tokens: <digits>[.<digits>]<unit≤4> (16а, 4.5ка, 1р);
+  //   - keep short canonical tokens (normalized length ≤ 4): e27, ip65, a60, gu10;
+  //   - drop longer mixed letter+digit tokens (length ≥ 5) → treated as
+  //     model/series codes (DN027B, BA4729).
+  const isAnalogPortableToken = (code: string): boolean => {
+    const n = normalizeCodeLike(code);
+    if (n.includes("-")) return false;
+    if (/^\d+(?:\.\d+)?[a-z]{1,4}$/.test(n)) return true;
+    if (n.length <= 4) return true;
+    return false;
+  };
   const effectiveCodeConstraints = replacementIntent
-    ? codeConstraints.filter(isPureSpecToken)
+    ? codeConstraints.filter(isAnalogPortableToken)
     : codeConstraints;
   const filterByCompoundConstraints = (ids: string[]): { ids: string[]; rejected: number } => {
     if (effectiveCodeConstraints.length === 0) return { ids, rejected: 0 };
