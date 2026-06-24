@@ -2207,6 +2207,20 @@ async function runExpertLoop(
           tc.args = dialogueRelaxed.args;
         }
 
+        const userIntentRelaxed = (tc.name === "search_catalog" || tc.name === "jargon_recover_catalog")
+          ? relaxToolArgsFromUserIntent(tc.args, userMessage)
+          : null;
+        if (userIntentRelaxed) {
+          steps.push({
+            step: "v3_guard_user_intent_relaxed",
+            ms: now(),
+            meta: { removed: userIntentRelaxed.removed, original_args: summariseToolArgs(tc.name, tc.args), relaxed_args: summariseToolArgs(tc.name, userIntentRelaxed.args) },
+          });
+          tc.args = userIntentRelaxed.args;
+        }
+
+
+
         let guardOutcome = tc.name === "search_catalog"
           ? await guardedOutcomeForSearch(tc.args, lastDiscover, userMessage, firstAssistantText, ctx, history.slice(-6).map((h) => h.content).join("\n"))
           : null;
