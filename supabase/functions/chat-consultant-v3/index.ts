@@ -1287,12 +1287,40 @@ function extractCodeConstraints(text: string): string[] {
   return [...out.values()];
 }
 
+// Lingvistic intent vocabulary (imperatives, superlatives, price-sort signals,
+// politeness markers). These are NOT product attributes — they map to tool args
+// like `sort_cheapest`, not to literal tokens in product titles. Excluding them
+// prevents the semantic guard from rejecting valid results just because the
+// user phrased the request with "покажи самую дешевую" instead of bare nouns.
+// Data-agnostic: pure language, no catalog values.
+const INTENT_STOPWORDS = new Set([
+  // imperatives / requests
+  "покажи", "показать", "покажите", "найди", "найти", "найдите", "ищи", "искать",
+  "подбери", "подобрать", "подберите", "дай", "дайте", "хочу", "хотел", "хотела",
+  "нужно", "нужен", "нужна", "нужны", "посоветуй", "посоветуйте", "порекомендуй",
+  "помоги", "помогите", "скажи", "скажите", "расскажи", "расскажите",
+  // superlatives / quantifiers
+  "самый", "самая", "самое", "самые", "самую", "самого", "самой",
+  "лучший", "лучшая", "лучшее", "лучшие", "лучшую",
+  "дешевый", "дешёвый", "дешевая", "дешёвая", "дешевую", "дешёвую",
+  "дешевле", "дешевейший", "недорогой", "недорогая", "недорогую", "недорого",
+  "дорогой", "дорогая", "дорогую", "дороже",
+  "минимальный", "минимальная", "максимальный", "максимальная",
+  "побольше", "поменьше", "больше", "меньше", "много", "мало",
+  // sort / order
+  "сначала", "сперва", "потом", "затем", "первый", "первую",
+  // generic prose
+  "пожалуйста", "просто", "только", "именно", "вообще", "какой", "какая", "какие",
+  "что", "что-нибудь", "что-то", "какой-нибудь",
+]);
+
 function semanticTokensFromQuery(query: string, genericTokens: Set<string>, codeConstraints: string[]): string[] {
   const withoutCodes = stripKnownValues(query, codeConstraints);
   const tokens = normalizeForMatch(withoutCodes)
     .split(/\s+/)
     .filter((t) => t.length >= 3 && !/^\d/.test(t));
   return [...new Set(tokens.filter((t) => {
+    if (INTENT_STOPWORDS.has(t)) return false;
     if (genericTokens.has(t)) return false;
     if (tokenMatchesEvidenceByStem(t, [...genericTokens])) return false;
     return true;
