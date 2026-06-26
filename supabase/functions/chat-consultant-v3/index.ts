@@ -2062,13 +2062,46 @@ async function runExpertLoop(
           steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
         } else if (isFinalTurn) {
           // Финальный ответ модели — отдельный пузырь после тулов/карточек.
+          // GUARD v3_guard_text_facts_leak (§221 anti-hallucination):
+          // если LLM в ФИНАЛЬНОМ тексте без render_products в этом turn И при
+          // productsRendered === 0 пытается выдать каталог-факты (ссылки на
+          // 220volt, цены в ₸/тг, markdown-ссылки на товары) — это значит,
+          // модель пересказывает старые tool_results из истории как «карточки».
+          // По спеке факты о товарах должны идти ТОЛЬКО через render_products,
+          // поэтому такой текст подменяем на честный honest-empty.
+          // Data-agnostic: никаких brand/category хардкодов, только структурные
+          // регэкспы (URL host, валютные единицы, [..](..) синтаксис).
+          let outText = resp.text;
+          if (!hasRender && productsRendered === 0) {
+            const rawText = resp.text;
+            const hasCatalogUrl = /https?:\/\/(?:www\.)?220volt\.kz\/[^\s)]+/i.test(rawText);
+            const hasPrice = /\d[\d\s.,]{1,}\s*(₸|тг|тенге)\b/iu.test(rawText);
+            const hasMdLink = /\[[^\]]+\]\(https?:\/\/[^\s)]+\)/.test(rawText);
+            if (hasCatalogUrl || hasPrice || hasMdLink) {
+              const replaced = "К сожалению, свежих карточек по этому запросу сейчас нет. Уточните, что именно нужно — категория, ключевые параметры или бюджет, — и я подберу заново.";
+              steps.push({
+                step: "v3_guard_text_facts_leak",
+                ms: now(),
+                meta: {
+                  fragment_index: step,
+                  chars_in: rawText.length,
+                  has_catalog_url: hasCatalogUrl,
+                  has_price: hasPrice,
+                  has_md_link: hasMdLink,
+                  original_text: rawText,
+                  reason: "final_text_without_render_products_with_catalog_facts",
+                },
+              });
+              outText = replaced;
+            }
+          }
           if (!isFirstTurn) {
             send({ type: "assistant_turn_break", reason: "final_text" });
           }
-          send({ type: "delta", content: resp.text });
-          finalText += resp.text;
-          if (isFirstTurn) firstAssistantText = resp.text.trim();
-          steps.push({ step: "v3_assistant_text_final", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+          send({ type: "delta", content: outText });
+          finalText += outText;
+          if (isFirstTurn) firstAssistantText = outText.trim();
+          steps.push({ step: "v3_assistant_text_final", ms: now(), meta: { chars: outText.length, fragment_index: step, text: outText } });
         } else if (hasRender) {
           // Текст рядом с render_products → отдельный caption-пузырь ПЕРЕД карточками.
           // Раньше для не-inquire режима текст глушился ("карточки говорят сами"),
