@@ -1,130 +1,90 @@
+# M1 — Аудит V3 (2026-06-29)
 
-# Step C: Honest-Split Fallback (intersection_empty → two-axis render)
+Цель аудита: разделить весь код `chat-consultant-v3/index.ts` (3307 строк) на две группы — **«мышление LLM»** (надо удалить, перенести в промпт) и **«контракт системы»** (надо оставить, это не догадки про намерение).
 
-## Цель
-Когда `search_catalog by_filter` с ≥2 разными фасетами возвращает `total=0`, не сдаваться, а честно сказать «такого сочетания нет» и показать **два параллельных блока** — по одной оси каждый.
+Принцип разделения (от пользователя): мышление = в нейронке. Серверный код = только то, без чего нельзя гарантировать инвариант контракта (anti-hallucination, price=0, бюджет клиента, корректное логирование).
 
-Закрывает кейс «кукуруза + E27» и любой другой «X для Y».
+## Карта index.ts
 
-## Архитектура
+| Блок | Строки | Что делает | Категория | Решение |
+|---|---|---|---|---|
+| Bootstrap (imports, CORS, settings, dispatch) | 1–192 | SSE-кодер, runTool, summarisers, loadSettings | **контракт** | оставить |
+| `normalizeForMatch` / `normalizeCodeLike` | 194–201 | строковая утилита | утилита | оставить (нужна для facts-leak гарда) |
+| `isRiskyCategoricalFacet` | 203–207 | словарь "forma/tip/cvet…" — список жанров фасета | **мышление** | **удалить** |
+| `stemRu` + `tokenMatchesEvidenceByStem` + `valueIsEvidenced` | 209–262 | стеммер + лексическое доказательство | **мышление** (только для compound-гарда) | **удалить** |
+| `ACKNOWLEDGEMENT_TOKENS` + `extractEchoLabel` + `stripKnownValues` + `buildNoIntersectionText` | 267–344 | сервер пишет фразу за LLM | **мышление** (хуже — за LLM пишет UI-текст) | **удалить** |
+| `topFacetOptions` + `facetValueEquals` + `traitValuesForFacet` | 309–357 | вспомогательные для гардов ниже | **мышление** | **удалить вместе с гардами** |
+| `guardedOutcomeForSearch` | 359–480 | главный compound-constraint guard | **мышление** (это и есть "5 системных фиксов") | **удалить** |
+| `detectNumericTruncationInOptions` | 486–522 | "ты сказал 2.5, передал 2" | пограничное — **механика**, не догадка про смысл | **оставить как валидатор tool-input** (но вернуть LLM как `bad_input` без подстановки фразы) |
+| `classifyOptionsSource` (user_explicit / inferred) | 528–546 | угадывает, откуда взялась опция | **мышление** | **удалить** |
+| `promiseRealityCheck` | 553–604 | сверяет числа в первом пузыре с карточками | **мышление** (LLM не должен обещать до тула — это правило промпта) | **удалить** |
+| `detectPriceDirection` + `extractBudgetCap` + `findAnchorInCache` + price-rewrites | 607–~1100 | переписывает product_ids под "дешевле/дороже/самый" | **мышление** (есть `sort_cheapest`/`sort_expensive` + by_article якорь) | **удалить guard, оставить только `extractBudgetCap` как safety-валидатор max_price в render** |
+| `ReplacementAxis`, `filterReplacementCompatibleIds`, `isAnalogPortableToken`, family-exclude | ~1100–1290 | пост-фильтр аналогов по осям | **мышление** (replacement_anchoring в промпте уже описан) | **удалить** |
+| `extractCodeConstraints` + `INTENT_STOPWORDS` + `semanticTokensFromQuery` | 1274–1340 | feed для compound-гарда | **мышление** | **удалить вместе с guardedOutcomeForSearch** |
+| `relaxToolArgsFromDialogueChoice` + `relaxToolArgsFromUserIntent` | строки выше 2300 | "клиент сказал «просто» → выкидываем modifier" | **мышление** | **удалить, заменить инвариантом в промпте** |
+| `trySplitFallback` + sticky options | 1358–1410 | разбивка осей при 0 | **мышление** | **удалить — LLM сам сделает второй tool-call** |
+| `compactDiscoverCategoryForLlm` + `toolResultForLlm` + `emitSideEffects` | 1418–1528 | компактирование данных для LLM, маскировка side-effects | **контракт** (защита от facts-leak: html_block не уходит в LLM) | **оставить** |
+| `callOpenRouter` + per-phase timeouts | 1530–~1800 | транспорт | **контракт** | **оставить** |
+| Anchor tracker / family-exclude state | разбросано | трекинг якоря из истории | **мышление** | **удалить** |
+| Category Whitelist Guard | 2239–2275 | если LLM передал category, которой не было в discover — подменить | **мышление** (это всё про "угадать намерение"; лучше — discover_category возвращает чёткий список, и в промпте инвариант) | **удалить, перенести в tool description** |
+| Render-time facts-leak / Anti-hallucination | где-то после 2400 | блок текста с URL/ценой, если render не сделан | **контракт** (anti-hallucination invariant §1) | **оставить** |
+| Budget Cap Hard Post-Filter | 2523+ | срезает товары дороже потолка из render | **контракт** (бюджет = жёсткий инвариант от клиента, §price_anchoring C) | **оставить как safety, не основной механизм** |
+| Главный turn-loop, persistence в `chat_request_logs` | вокруг | оркестрация | **контракт** | **оставить** |
 
-Серверный страж в `chat-consultant-v3/index.ts`, сразу после уже существующего Step 2 (inferred-filter fallback), но ДО Step 6c (fresh pool tracking).
+## Итог по категориям
 
-```text
-search_catalog by_filter (≥2 axes) → total=0
-        │
-        ▼
-[Step C guard]
-   ├─ извлечь axes = Object.entries(options)  (например: Тип=[LED CORN], Цоколь=[E27])
-   ├─ если axes.length < 2 → пропустить (это не пересечение)
-   ├─ параллельно: для каждой axis сделать search_catalog по одной оси (тот же category, per_page=5)
-   │       axisA: options = {Тип:[LED CORN]}
-   │       axisB: options = {Цоколь:[E27]}
-   ├─ если оба total=0 → пропустить (полный miss, дальше Step 7 в будущем)
-   ├─ если ≥1 ось дала total>0:
-   │       inject в tool reply:
-   │         {
-   │           total: 0,
-   │           _intersection_empty: true,
-   │           _split_axes: [
-   │             { axis: "Тип", value: "LED CORN", ids: [...], total: N },
-   │             { axis: "Цоколь", value: "E27", ids: [...], total: M }
-   │           ],
-   │           _server_hint: "Точного сочетания нет. Скажи это честно и вызови
-   │                          render_products ОДИН раз с двумя группами:
-   │                          сначала ids оси A, потом ids оси B. В тексте перед
-   │                          render_products предложи пользователю выбрать,
-   │                          какой осью пожертвовать."
-   │         }
-   └─ записать step `v3_guard_split_fallback` с метой axes, totals, ms
-```
+**Контракт (оставляем):** ~600–800 строк.
+- Транспорт (SSE, OpenRouter call, timeouts).
+- Tool dispatch + ProductCache.
+- `toolResultForLlm` (маскирование html_block, чисел в карточках от LLM).
+- Anti-hallucination text-facts-leak guard (post-render проверка URL/цен в тексте).
+- HARD BAN price=0 (уже в `executeSearchCatalog` + render).
+- Budget cap hard-filter (safety, не «мышление»).
+- Numeric truncation как tool-input валидатор → возвращает `ok:false bad_input "вы написали 2.5, передали 2"`, LLM сам исправляет.
+- Логирование `chat_request_logs.steps[]`.
 
-## Изменения в коде
+**Мышление (удаляем):** ~1500–1700 строк.
+- Все compound-constraint / semantic-token / intent-stopword / evidence-stem гарды.
+- Price-direction rewriting (LLM использует sort_* + by_article).
+- ReplacementAxis post-filter (LLM ведёт ось в промпте через `<replacement_anchoring>`).
+- Relax-from-user-intent (заменяется правилом в промпте: «не наследуй modifier между ходами, если клиент не повторил»).
+- Split fallback (LLM сам делает второй tool-call).
+- No-intersection text builder (LLM формулирует сам).
+- Category whitelist guard (переносим в tool description).
+- Anchor tracker (LLM держит контекст сам — он у него в history).
+- Promise-reality check (правило промпта: не обещай числами до тула).
 
-### 1. `supabase/functions/chat-consultant-v3/index.ts`
+После чистки `index.ts` ужмётся с **3307 → ~1300 строк**.
 
-**Новая функция-хелпер** (рядом с другими guards, ~line 575):
-```ts
-async function trySplitFallback(
-  origArgs: Record<string, unknown>,
-  ctx: { catalogToken: string; cache: ProductCache },
-): Promise<null | { axes: Array<{ axis: string; value: string; ids: string[]; total: number }>; ms: number }>
-```
-- Проверяет `mode === "by_filter"` и `Object.keys(options).length >= 2`.
-- Для каждой оси делает `executeSearchCatalog` с `options = {[axis]: values}`, `per_page = 5`, тот же `category`, без `query`.
-- Параллельно через `Promise.all`.
-- Возвращает массив только тех осей, где `total > 0`.
-- Кладёт найденные товары в общий `ProductCache` (executeSearchCatalog это делает сам).
+## Что усиляем в промпте (`schemas.ts`)
 
-**Интеграция** (в основном цикле, после строки 1185, до Step 6c):
-```ts
-// ── Step C: Honest-split fallback for empty intersection
-if (
-  tc.name === "search_catalog" &&
-  result.ok &&
-  (result as { total: number }).total === 0 &&
-  !inferredFallback &&  // не дублируем работу Step 2
-  tc.args.mode === "by_filter" &&
-  tc.args.options && Object.keys(tc.args.options).length >= 2
-) {
-  const split = await trySplitFallback(tc.args, ctx);
-  if (split && split.axes.length >= 1) {
-    splitFallbackResult = split;  // сохраняем для inject ниже
-    send({ type: "tool_event", tool: "search_catalog", phase: "result",
-           duration_ms: split.ms,
-           summary: `split: ${split.axes.map(a => `${a.axis}=${a.total}`).join(", ")}` });
-    steps.push({ step: "v3_guard_split_fallback", ms: now(),
-                 meta: { axes: split.axes.map(a => ({...a, ids: a.ids.length})) }});
-  }
-}
-```
+Промпт сейчас (406 строк) — уже принципиально хороший: data-agnostic, секционированный (`<role>`, `<tone>`, `<dialog_protocol>`, `<reasoning_approach>`, `<jargon_translation_ladder>`, `<price_anchoring>`, `<replacement_anchoring>`). Менять структуру не надо. Нужно **прицельно добавить 3 инварианта**, которые сейчас держатся серверными гардами:
 
-**Inject в `replyObj`** (около строки 1253, рядом с другими `_server_*` хинтами):
-```ts
-if (splitFallbackResult) {
-  replyObj._intersection_empty = true;
-  replyObj._split_axes = splitFallbackResult.axes;
-  replyObj._server_hint =
-    "Точного сочетания фильтров в каталоге нет (total=0). НЕ извиняйся и НЕ эскалируй. " +
-    "Сделай короткий текст: «Точного сочетания нет, но есть отдельно X и отдельно Y — что ближе?», " +
-    "затем ОДИН вызов render_products с product_ids = объединением ids всех осей из _split_axes " +
-    "(до 8 шт, сначала по 4 из каждой оси).";
-}
-```
-И сбросить `splitFallbackResult = null` в начале каждой итерации шагов.
+1. **History-relax инвариант** (заменяет `relaxToolArgsFromUserIntent`):
+   > Между ходами не наследуй modifier из предыдущего хода, если клиент его НЕ повторил. Триггер сброса — слова вроде «просто/только/без/любую/всё равно какую» в текущей реплике.
 
-**Также добавить ids из split в `freshSearch`**, чтобы render-guard (6a) тоже мог их подставить, если LLM забудет:
-```ts
-if (splitFallbackResult) {
-  const allIds = splitFallbackResult.axes.flatMap(a => a.ids).slice(0, 8);
-  if (allIds.length > 0) freshSearch = { tool: "search_catalog_split", ids: allIds,
-                                          total: splitFallbackResult.axes.reduce((s,a)=>s+a.total,0) };
-}
-```
+2. **Promise-after-tool инвариант** (заменяет `promiseRealityCheck`):
+   > В первом пузыре до тула называй только тип, цоколь, форму, IP и т.п. — но не конкретное числовое значение, которого ты ещё не подтвердил тулом. Числа — после ответа `search_catalog`.
 
-### 2. `supabase/functions/_shared/v3-tools/schemas.ts`
+3. **Compound-honesty инвариант** (заменяет `guardedOutcomeForSearch`):
+   > Если клиент назвал несколько признаков (тип + код/значение), и `search_catalog` по их сочетанию вернул 0 — не показывай результат по одному из них как «вот что нашёл». Сделай второй `search_catalog` по каждому признаку отдельно, и финальным пузырём честно: «по сочетанию нет; по A есть; по B есть отдельно».
 
-Добавить hard_rule 14:
-> **14. Intersection-empty honesty.** Если tool_result содержит `_intersection_empty: true` и `_split_axes`, НЕ эскалируй и НЕ говори «нет в каталоге» сухо. Сделай короткое признание + предложение выбрать ось, и вызови `render_products` с объединёнными ids из `_split_axes`. Используй ровно эти ids — не выдумывай новые.
+## Что обновится в спеке
 
-## Что НЕ меняем
-- API `search_catalog`, `render_products`, формат SSE-событий — без изменений.
-- Существующие стражи 2, 6a–e — без изменений, Step C встаёт между ними.
-- БД, миграции — не нужны.
+Копия `.lovable/specs/expert-orchestrator-v3.v2-2026-06-29.md`:
+- §1 принципы: добавить «**LLM-first thinking**: серверный код не угадывает намерение. Серверный код = только anti-hallucination, price=0 ban, budget cap, numeric integrity, transport».
+- §3 Tool catalog: оставить как есть.
+- §4 State Machine: упростить — убрать упоминания серверных гардов.
+- §6 Промпт-контракт: вписать три новых инварианта.
+- §7 Логирование: удалить метрики гардов (`v3_guard_*`); оставить только `v3_turn_*`, `v3_tool_call`, `v3_render`, `v3_hallucinated_url_total`, `v3_zero_price_leak_total`, `v3_budget_violation_total`.
 
-## Тестирование
+## Master-список кейсов (для M3)
 
-1. **Регресс-кейс «кукуруза+E27»** (`6d94c0c0...`): новый прогон через `curl_edge_functions`, ожидаем `v3_guard_split_fallback` в `steps`, `final_products_count > 0`, два блока в render.
-2. **C02–C23 батч**: убедиться что для уже работающих кейсов ничего не сломалось (split срабатывает только на `total=0` с ≥2 фасетами).
-3. **Negative-кейс**: запрос с одним фасетом → split НЕ должен сработать.
+Берётся из текущего сообщения пользователя (25 кейсов), фиксируется в `.lovable/fixtures/qa-25-cases-2026-06-29.md`.
 
-## Файлы
+## Риски / открытые вопросы
 
-- `supabase/functions/chat-consultant-v3/index.ts` — новая функция `trySplitFallback` + интеграция в цикл (~40 строк).
-- `supabase/functions/_shared/v3-tools/schemas.ts` — hard_rule 14 (1 пункт).
-- `.lovable/memory/features/expert-v3-render-escalate-guard.md` — дописать секцию Step C.
-
-## Риски
-- **Доп. латентность**: +1 параллельный батч search_catalog (~500–1500 мс) только когда `total=0`. На успешных запросах оверхед = 0.
-- **Шум для LLM**: hard_rule 14 короткое, не ломает существующие правила 10–13.
-- **Двойной счёт со Step 2**: защищаемся через `!inferredFallback` — Step C запускается только если Step 2 не сработал.
+- **Numeric truncation** — оставляю как tool-валидатор (механика, не мышление). OK?
+- **Budget cap hard-filter** — оставляю как safety-сетку, потому что бюджет = явный контракт от клиента, не догадка. OK?
+- **Category whitelist** — переношу в tool description `search_catalog` («передавай `category_in` только из `leaf_categories` последнего `discover_category` этого хода»). Серверной защиты не оставляю.
+- **Family-exclude в режиме «аналог»** (исключить сам якорь + другие SKU той же серии) — это **контракт**, не мышление: клиент эксплицитно сказал «аналог» = «другой бренд/серия». Оставить? Или тоже инвариант в промпте?
