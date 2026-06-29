@@ -1806,32 +1806,15 @@ async function runExpertLoop(
   const effectiveCodeConstraints = replacementIntent
     ? codeConstraints.filter(isAnalogPortableToken)
     : codeConstraints;
+  // NOTE (2026-06-29): compound-filter нейтрализован — это было «мышление сервера»,
+  // которое выбрасывало валидные карточки по эвристическим токенам из текста запроса
+  // (например, «ввг 3*1,5» → токены "3" и "1.5" отвергали 100% реальных кабелей).
+  // Решение, релевантна ли карточка, принимает LLM по правилам промпта (3a/3f).
+  // Сервер сохраняет только жёсткие контракты: price>0 и id-в-кэше.
   const filterByCompoundConstraints = (ids: string[]): { ids: string[]; rejected: number } => {
-    if (effectiveCodeConstraints.length === 0) return { ids, rejected: 0 };
-    // Step 1: hard-enforce code constraints (E27, 16А, 4.5кА — reliably present
-    // in product titles/traits, so a miss here is a true mismatch).
-    const codeKept = ids.filter((id) => {
-      const p = ctx.cache.get(id);
-      if (!p) return false;
-      return effectiveCodeConstraints.every((code) => productMatchesCodeConstraint(p, code));
-    });
-    // Step 2: optional semantic narrowing — but only if it doesn't empty the pool.
-    // Colloquial tokens ("кукуруза", "груша", "шарик") rarely appear verbatim in
-    // catalog titles; if narrowing wipes everything, trust the LLM's jargon
-    // expansion (it already searched "SMD"/"corn"/etc.) and keep the code-filtered pool.
-    // Skip semantic narrowing entirely in replacement mode — the user's free
-    // text describes the anchor, not the analog, so narrowing by it would
-    // incorrectly demand the anchor's brand/series words on candidates.
-    if (replacementIntent) return { ids: codeKept, rejected: ids.length - codeKept.length };
-    const semanticConstraints = semanticTokensFromQuery(userMessage, buildGenericConstraintTokens(lastDiscover), codeConstraints);
-    if (semanticConstraints.length === 0) return { ids: codeKept, rejected: ids.length - codeKept.length };
-    const narrowed = codeKept.filter((id) => {
-      const p = ctx.cache.get(id);
-      return p ? productMatchesAnySemanticToken(p, semanticConstraints) : false;
-    });
-    const final = narrowed.length > 0 ? narrowed : codeKept;
-    return { ids: final, rejected: ids.length - final.length };
+    return { ids, rejected: 0 };
   };
+  // (compound-filter удалён выше; этот блок был хвостом старой реализации)
   const getAnchorExcludeId = (): string | null => {
     if (!replacementIntent) return null;
     const a = findAnchorInCache(ctx.cache, userMessage);
@@ -1975,28 +1958,8 @@ async function runExpertLoop(
     const ids = result.results.map((p) => String(p.id));
     const filtered = filterByCompoundConstraints(ids);
     const pool = filtered.ids.length > 0 ? filtered.ids : ids;
-    const semanticTokens = semanticTokensFromQuery(userMessage, buildGenericConstraintTokens(lastDiscover), codeConstraints);
-    const hasSemanticEvidence = semanticTokens.length === 0 || pool.some((id) => {
-      const p = ctx.cache.get(id);
-      return p ? productMatchesAnySemanticToken(p, semanticTokens) : false;
-    });
-    if (!hasSemanticEvidence) {
-      // Fix 1 (strict honesty): in strict mode — если не нашли ни одного подтверждения
-      // семантического признака пользователя (напр. «кукуруза»), НЕ рендерим
-      // нерелевантные товары. Сообщаем честно — без эха технических параметров,
-      // которые пользователь не спрашивал.
-      if (semanticTokens.length > 0) {
-        const content = `\n\nПо признаку «${semanticTokens.join(" ")}» в каталоге ничего подходящего не нашлось. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?`;
-        send({ type: "delta", content });
-        strictHonestyBlocked = true;
-        steps.push({
-          step: "v3_guard_code_facet_rescue_blocked_strict",
-          ms: now(),
-          meta: { matched, semantic_tokens: semanticTokens, bridge_used: bridgeUsed, reason: "no_semantic_evidence" },
-        });
-        return 0;
-      }
-    }
+    // NOTE: «strict semantic» fast-path удалён (2026-06-29) — LLM сам решает по rule 3a/3f.
+    // Рендерим всё, что нашёл tryCodeFacetRescue; решение «честный отказ vs показать» — на LLM.
     const render = executeRenderProducts({ product_ids: pool, total_available: result.total } as RenderProductsInput, ctx.cache);
     if (!render.ok) return 0;
     send({ type: "tool_event", tool: "search_catalog", phase: "result", duration_ms: duration, summary: `code-rescue: найдено ${result.total}` });
@@ -2006,7 +1969,7 @@ async function runExpertLoop(
     steps.push({
       step: "v3_guard_code_facet_rescue",
       ms: now(),
-      meta: { matched, total: result.total, rendered: render.rendered_count, duration_ms: duration, semantic_tokens: semanticTokens, semantic_evidence: hasSemanticEvidence, bridge_query: bridgeUsed },
+      meta: { matched, total: result.total, rendered: render.rendered_count, duration_ms: duration, bridge_query: bridgeUsed },
     });
     return render.rendered_count;
   };
@@ -2170,10 +2133,8 @@ async function runExpertLoop(
 
       if (resp.toolCalls.length === 0) {
         // No tools → turn ends. Last-chance: if user asked relative-price and we rendered nothing → rescue.
-        if (productsRendered === 0) {
-          const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
-          productsRendered += rescued;
-        }
+        // NOTE (2026-06-29): tryPriceDirectionRescue удалён — LLM сам должен сделать
+        // правильный search_catalog по правилам <price_anchoring>.
         steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "ok", step_count: step + 1 } });
         return { finalText, productsRendered };
       }
@@ -2557,19 +2518,8 @@ async function runExpertLoop(
             const p = ctx.cache.get(id);
             return !!p && p.price > 0;
           });
-          if (!replacementIntent) {
-            const semanticTokens = semanticTokensFromQuery(userMessage, buildGenericConstraintTokens(lastDiscover), codeConstraints);
-            const hasSemanticEvidence = semanticTokens.length === 0 || validInCache.some((id) => {
-              const p = ctx.cache.get(id);
-              return p ? productMatchesAnySemanticToken(p, semanticTokens) : false;
-            });
-            if (!hasSemanticEvidence) {
-              send({ type: "delta", content: `\n\nВ найденных товарах не подтвердился признак «${semanticTokens.join(" ")}». Не буду подменять его обычными товарами. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?` });
-              steps.push({ step: "v3_guard_render_blocked_strict_semantic", ms: now(), meta: { semantic_tokens: semanticTokens, code_constraints: codeConstraints, attempted_ids: origIds } });
-              steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_render_semantic_blocked", step_count: step + 1 } });
-              return { finalText, productsRendered };
-            }
-          }
+          // NOTE: «strict semantic» гард удалён (2026-06-29) — LLM сам решает по rule 3a/3f промпта.
+          // Сервер больше не блокирует render по лексическому отсутствию признака.
           const renderCompoundFiltered = filterByCompoundConstraints(validInCache);
           if (renderCompoundFiltered.rejected > 0) {
             validInCache = renderCompoundFiltered.ids;
@@ -2725,33 +2675,10 @@ async function runExpertLoop(
         // does exist in the catalog. Retry once without modifiers so we surface
         // the literal jargon — partial-match guard downstream still warns the
         // user that the strict modifier wasn't intersected.
-        if (
-          tc.name === "jargon_recover_catalog" &&
-          result.ok &&
-          (result as { total: number }).total === 0 &&
-          Array.isArray((runArgs as { modifiers?: unknown }).modifiers) &&
-          ((runArgs as { modifiers: unknown[] }).modifiers).length > 0
-        ) {
-          const retryArgs = { ...runArgs };
-          delete (retryArgs as { modifiers?: unknown }).modifiers;
-          const retryStart = Date.now();
-          const retry = await runTool(tc.name, retryArgs, ctx);
-          const retryDur = Date.now() - retryStart;
-          if (retry.ok && (retry as { total: number }).total > 0) {
-            result = retry;
-            effectiveArgs = retryArgs;
-            send({ type: "tool_event", tool: tc.name, phase: "result", duration_ms: retryDur, summary: `retry без modifiers: найдено ${(retry as { total: number }).total}` });
-            steps.push({
-              step: "v3_guard_jargon_retry_no_modifiers",
-              ms: now(),
-              meta: {
-                dropped_modifiers: (runArgs as { modifiers: string[] }).modifiers,
-                retry_total: (retry as { total: number }).total,
-                retry_ms: retryDur,
-              },
-            });
-          }
-        }
+        // NOTE (2026-06-29): jargon_retry_no_modifiers удалён.
+        // Серверный авто-retry без modifiers выкидывал важный признак клиента
+        // (напр. «E27») молча и подменял результат — нарушение rule 3a/3f.
+        // LLM сам решит, как продолжить лестницу, увидев total=0.
 
 
 
@@ -2761,16 +2688,11 @@ async function runExpertLoop(
           for (const leaf of lastDiscover.leaf_categories ?? []) {
             addToWhitelist(leaf.pagetitle);
           }
-          const rescued = await tryCodeFacetRescue(false);
-          if (rescued > 0) {
-            productsRendered += rescued;
-            steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "code_facet_rescue_after_discover", step_count: step + 1 } });
-            return { finalText, productsRendered };
-          }
-          if (strictHonestyBlocked) {
-            steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_honesty_blocked_after_discover", step_count: step + 1 } });
-            return { finalText, productsRendered };
-          }
+          // NOTE (2026-06-29): tryCodeFacetRescue после discover удалён — LLM сам решает,
+          // что искать после получения фасетов. Серверный авто-rescue по техническим кодам
+          // (E27/16А/IP65 и т.п.) часто возвращал товары БЕЗ остальных признаков клиента
+          // ("кукуруза" игнорировалась, оставалось E27) — это и есть алгоритмическая
+          // замена мышления LLM, которая нарушает rule 3a/3f промпта.
         }
 
 
@@ -2888,30 +2810,10 @@ async function runExpertLoop(
               if (tc.name === "jargon_recover_catalog" && productsRendered === 0) {
                 const render = executeRenderProducts({ product_ids: filtered.ids, total_available: r2.total } as RenderProductsInput, ctx.cache);
                 if (render.ok) {
-                  // Honesty guard: jargon_recover_catalog uses fuzzy fallback; if the user's
-                  // original word (e.g. «кукуруза») is not present in any returned title, we
-                  // MUST tell the user the literal term wasn't matched — silently rendering
-                  // unrelated lamps is the exact hallucination the user is complaining about.
+                  // NOTE: strict «jargon_partial» гард удалён (2026-06-29) — LLM сам обрабатывает
+                  // partial_match/unmatched_tokens по правилу 3f промпта. Сервер просто рендерит.
                   const partialMatch = r2.partial_match === true;
                   const unmatched = Array.isArray(r2.unmatched_tokens) ? r2.unmatched_tokens.filter((t) => typeof t === "string" && t.length > 0) : [];
-                  const sourceWord = (r2.source_query ?? (typeof tc.args.query === "string" ? tc.args.query : "")).trim();
-                  if (partialMatch && unmatched.length > 0) {
-                    const wordForUser = sourceWord || unmatched[0];
-                    if (!replacementIntent) {
-                      strictHonestyBlocked = true;
-                      send({ type: "assistant_turn_break", reason: "jargon_partial_disclaimer" });
-                      send({ type: "delta", content: `Точного признака «${wordForUser}» в каталоге не нашлось. Не буду подменять его похожими товарами. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?` });
-                      steps.push({ step: "v3_guard_jargon_partial_blocked_strict", ms: now(), meta: { source_query: sourceWord, unmatched_tokens: unmatched, code_constraints: codeConstraints } });
-                      steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_jargon_partial_blocked", step_count: step + 1 } });
-                      return { finalText, productsRendered };
-                    }
-                    send({ type: "assistant_turn_break", reason: "jargon_partial_disclaimer" });
-                    send({
-                      type: "delta",
-                      content: `Точного признака «${wordForUser}» в каталоге не нашлось — показываю близкие варианты. Если нужна именно «${wordForUser}» — могу передать запрос менеджеру.`,
-                    });
-                    send({ type: "assistant_turn_break", reason: "text_before_render" });
-                  }
                   send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: r2.total });
                   for (const id of filtered.ids) shownIds.add(id);
                   productsRendered += render.rendered_count;
@@ -2930,18 +2832,9 @@ async function runExpertLoop(
                 meta: { tool: tc.name, rejected: filtered.rejected, kept: filtered.ids.length, code_constraints: codeConstraints },
               });
             }
-            if (filtered.ids.length === 0 && codeConstraints.length > 0 && productsRendered === 0) {
-              const rescued = await tryCodeFacetRescue();
-              if (rescued > 0) {
-                productsRendered += rescued;
-                steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "code_facet_rescue", step_count: step + 1 } });
-                return { finalText, productsRendered };
-              }
-              if (strictHonestyBlocked) {
-                steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_honesty_blocked", step_count: step + 1 } });
-                return { finalText, productsRendered };
-              }
-            }
+            // NOTE (2026-06-29): code-facet rescue после empty-jargon удалён.
+            // Если jargon пуст с modifiers — LLM сам сделает следующий шаг лестницы
+            // (rule 3e промпта), без серверной подмены товарами по голым кодам.
           }
           // Track which ladder candidates were already tried (to nudge LLM in tool reply).
           const q = typeof tc.args.query === "string" ? tc.args.query.trim().toLowerCase() : "";
@@ -3087,51 +2980,9 @@ async function runExpertLoop(
     }
 
 
-    // Step budget exhausted.
-    if (productsRendered === 0) {
-      const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
-      productsRendered += rescued;
-    }
-    if (productsRendered === 0) {
-      const rescued = await tryCodeFacetRescue();
-      productsRendered += rescued;
-      if (strictHonestyBlocked) {
-        steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_honesty_blocked_forced_finalize", step_count: MAX_STEPS } });
-        return { finalText, productsRendered };
-      }
-    }
-    if (productsRendered === 0) {
-      let pool = pickFreshUnshown(8);
-      // Fix 2 (strict constraint enforcement): last-chance render must respect
-      // user's hard code constraints (E27, 16А и т.п.). In analog/replacement
-      // mode we keep current behaviour and let the pool through unfiltered.
-      let lastChanceFilteredOut = 0;
-      if (!replacementIntent && codeConstraints.length > 0) {
-        const f = filterByCompoundConstraints(pool);
-        lastChanceFilteredOut = pool.length - f.ids.length;
-        pool = f.ids;
-      }
-      if (pool.length > 0) {
-        const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
-        if (render.ok) {
-          send({ type: "tool_event", tool: "render_products", phase: "result", duration_ms: 0, summary: `last-chance ${render.rendered_count}` });
-          send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: freshSearch?.total });
-          for (const id of pool) shownIds.add(id);
-          productsRendered += render.rendered_count;
-          steps.push({
-            step: "v3_guard_last_chance_render",
-            ms: now(),
-            meta: { pool_size: pool.length, fresh_tool: freshSearch?.tool, fresh_total: freshSearch?.total, rendered: render.rendered_count, compound_filtered_out: lastChanceFilteredOut },
-          });
-        }
-      } else if (lastChanceFilteredOut > 0) {
-        steps.push({
-          step: "v3_guard_last_chance_blocked_strict",
-          ms: now(),
-          meta: { filtered_out: lastChanceFilteredOut, code_constraints: codeConstraints },
-        });
-      }
-    }
+    // NOTE (2026-06-29): tryPriceDirectionRescue + last-chance render удалены.
+    // Если шаги исчерпаны без render — это честный honest-empty (см. блок ниже),
+    // а не серверная подмена «fresh pool из последнего поиска».
     steps.push({
       step: "v3_turn_end",
       ms: now(),
