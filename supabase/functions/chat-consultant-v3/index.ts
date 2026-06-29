@@ -2730,16 +2730,11 @@ async function runExpertLoop(
           for (const leaf of lastDiscover.leaf_categories ?? []) {
             addToWhitelist(leaf.pagetitle);
           }
-          const rescued = await tryCodeFacetRescue(false);
-          if (rescued > 0) {
-            productsRendered += rescued;
-            steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "code_facet_rescue_after_discover", step_count: step + 1 } });
-            return { finalText, productsRendered };
-          }
-          if (strictHonestyBlocked) {
-            steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_honesty_blocked_after_discover", step_count: step + 1 } });
-            return { finalText, productsRendered };
-          }
+          // NOTE (2026-06-29): tryCodeFacetRescue после discover удалён — LLM сам решает,
+          // что искать после получения фасетов. Серверный авто-rescue по техническим кодам
+          // (E27/16А/IP65 и т.п.) часто возвращал товары БЕЗ остальных признаков клиента
+          // ("кукуруза" игнорировалась, оставалось E27) — это и есть алгоритмическая
+          // замена мышления LLM, которая нарушает rule 3a/3f промпта.
         }
 
 
@@ -2879,18 +2874,9 @@ async function runExpertLoop(
                 meta: { tool: tc.name, rejected: filtered.rejected, kept: filtered.ids.length, code_constraints: codeConstraints },
               });
             }
-            if (filtered.ids.length === 0 && codeConstraints.length > 0 && productsRendered === 0) {
-              const rescued = await tryCodeFacetRescue();
-              if (rescued > 0) {
-                productsRendered += rescued;
-                steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "code_facet_rescue", step_count: step + 1 } });
-                return { finalText, productsRendered };
-              }
-              if (strictHonestyBlocked) {
-                steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_honesty_blocked", step_count: step + 1 } });
-                return { finalText, productsRendered };
-              }
-            }
+            // NOTE (2026-06-29): code-facet rescue после empty-jargon удалён.
+            // Если jargon пуст с modifiers — LLM сам сделает следующий шаг лестницы
+            // (rule 3e промпта), без серверной подмены товарами по голым кодам.
           }
           // Track which ladder candidates were already tried (to nudge LLM in tool reply).
           const q = typeof tc.args.query === "string" ? tc.args.query.trim().toLowerCase() : "";
@@ -3041,14 +3027,9 @@ async function runExpertLoop(
       const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
       productsRendered += rescued;
     }
-    if (productsRendered === 0) {
-      const rescued = await tryCodeFacetRescue();
-      productsRendered += rescued;
-      if (strictHonestyBlocked) {
-        steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_honesty_blocked_forced_finalize", step_count: MAX_STEPS } });
-        return { finalText, productsRendered };
-      }
-    }
+    // NOTE (2026-06-29): финальный tryCodeFacetRescue удалён — пустая выдача после
+    // исчерпания шагов должна быть честным honest-empty, а не подмешиванием товаров
+    // по голым техническим кодам без остальных признаков клиента.
     if (productsRendered === 0) {
       let pool = pickFreshUnshown(8);
       // Fix 2 (strict constraint enforcement): last-chance render must respect
