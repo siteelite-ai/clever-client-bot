@@ -1814,10 +1814,7 @@ async function runExpertLoop(
   const filterByCompoundConstraints = (ids: string[]): { ids: string[]; rejected: number } => {
     return { ids, rejected: 0 };
   };
-    });
-    const final = narrowed.length > 0 ? narrowed : codeKept;
-    return { ids: final, rejected: ids.length - final.length };
-  };
+  // (compound-filter удалён выше; этот блок был хвостом старой реализации)
   const getAnchorExcludeId = (): string | null => {
     if (!replacementIntent) return null;
     const a = findAnchorInCache(ctx.cache, userMessage);
