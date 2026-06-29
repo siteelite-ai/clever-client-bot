@@ -29,7 +29,7 @@ const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const CATALOG_BASE_URL = Deno.env.get("CATALOG_API_BASE_URL") ?? "https://220volt.kz/api";
 
 const MODEL = "deepseek/deepseek-v4-flash"; // MoE 284B/13B-active, 1M ctx, optimized for agent workflows. rollback: "deepseek/deepseek-v4-pro"
-const MAX_STEPS = 8;
+const MAX_STEPS = 12;
 const TURN_TIMEOUT_MS = 140_000;
 
 // ─── SSE encoding ───────────────────────────────────────────────────────────
