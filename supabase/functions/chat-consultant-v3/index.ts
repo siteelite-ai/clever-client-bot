@@ -3022,46 +3022,9 @@ async function runExpertLoop(
     }
 
 
-    // Step budget exhausted.
-    if (productsRendered === 0) {
-      const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
-      productsRendered += rescued;
-    }
-    // NOTE (2026-06-29): финальный tryCodeFacetRescue удалён — пустая выдача после
-    // исчерпания шагов должна быть честным honest-empty, а не подмешиванием товаров
-    // по голым техническим кодам без остальных признаков клиента.
-    if (productsRendered === 0) {
-      let pool = pickFreshUnshown(8);
-      // Fix 2 (strict constraint enforcement): last-chance render must respect
-      // user's hard code constraints (E27, 16А и т.п.). In analog/replacement
-      // mode we keep current behaviour and let the pool through unfiltered.
-      let lastChanceFilteredOut = 0;
-      if (!replacementIntent && codeConstraints.length > 0) {
-        const f = filterByCompoundConstraints(pool);
-        lastChanceFilteredOut = pool.length - f.ids.length;
-        pool = f.ids;
-      }
-      if (pool.length > 0) {
-        const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
-        if (render.ok) {
-          send({ type: "tool_event", tool: "render_products", phase: "result", duration_ms: 0, summary: `last-chance ${render.rendered_count}` });
-          send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: freshSearch?.total });
-          for (const id of pool) shownIds.add(id);
-          productsRendered += render.rendered_count;
-          steps.push({
-            step: "v3_guard_last_chance_render",
-            ms: now(),
-            meta: { pool_size: pool.length, fresh_tool: freshSearch?.tool, fresh_total: freshSearch?.total, rendered: render.rendered_count, compound_filtered_out: lastChanceFilteredOut },
-          });
-        }
-      } else if (lastChanceFilteredOut > 0) {
-        steps.push({
-          step: "v3_guard_last_chance_blocked_strict",
-          ms: now(),
-          meta: { filtered_out: lastChanceFilteredOut, code_constraints: codeConstraints },
-        });
-      }
-    }
+    // NOTE (2026-06-29): tryPriceDirectionRescue + last-chance render удалены.
+    // Если шаги исчерпаны без render — это честный honest-empty (см. блок ниже),
+    // а не серверная подмена «fresh pool из последнего поиска».
     steps.push({
       step: "v3_turn_end",
       ms: now(),
