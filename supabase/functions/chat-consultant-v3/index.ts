@@ -2150,10 +2150,8 @@ async function runExpertLoop(
 
       if (resp.toolCalls.length === 0) {
         // No tools → turn ends. Last-chance: if user asked relative-price and we rendered nothing → rescue.
-        if (productsRendered === 0) {
-          const rescued = await tryPriceDirectionRescue(userMessage, lastDiscover, ctx, send, steps, now);
-          productsRendered += rescued;
-        }
+        // NOTE (2026-06-29): tryPriceDirectionRescue удалён — LLM сам должен сделать
+        // правильный search_catalog по правилам <price_anchoring>.
         steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "ok", step_count: step + 1 } });
         return { finalText, productsRendered };
       }
@@ -2694,33 +2692,10 @@ async function runExpertLoop(
         // does exist in the catalog. Retry once without modifiers so we surface
         // the literal jargon — partial-match guard downstream still warns the
         // user that the strict modifier wasn't intersected.
-        if (
-          tc.name === "jargon_recover_catalog" &&
-          result.ok &&
-          (result as { total: number }).total === 0 &&
-          Array.isArray((runArgs as { modifiers?: unknown }).modifiers) &&
-          ((runArgs as { modifiers: unknown[] }).modifiers).length > 0
-        ) {
-          const retryArgs = { ...runArgs };
-          delete (retryArgs as { modifiers?: unknown }).modifiers;
-          const retryStart = Date.now();
-          const retry = await runTool(tc.name, retryArgs, ctx);
-          const retryDur = Date.now() - retryStart;
-          if (retry.ok && (retry as { total: number }).total > 0) {
-            result = retry;
-            effectiveArgs = retryArgs;
-            send({ type: "tool_event", tool: tc.name, phase: "result", duration_ms: retryDur, summary: `retry без modifiers: найдено ${(retry as { total: number }).total}` });
-            steps.push({
-              step: "v3_guard_jargon_retry_no_modifiers",
-              ms: now(),
-              meta: {
-                dropped_modifiers: (runArgs as { modifiers: string[] }).modifiers,
-                retry_total: (retry as { total: number }).total,
-                retry_ms: retryDur,
-              },
-            });
-          }
-        }
+        // NOTE (2026-06-29): jargon_retry_no_modifiers удалён.
+        // Серверный авто-retry без modifiers выкидывал важный признак клиента
+        // (напр. «E27») молча и подменял результат — нарушение rule 3a/3f.
+        // LLM сам решит, как продолжить лестницу, увидев total=0.
 
 
 
