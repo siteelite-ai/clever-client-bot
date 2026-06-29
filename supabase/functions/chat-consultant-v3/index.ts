@@ -1806,28 +1806,14 @@ async function runExpertLoop(
   const effectiveCodeConstraints = replacementIntent
     ? codeConstraints.filter(isAnalogPortableToken)
     : codeConstraints;
+  // NOTE (2026-06-29): compound-filter нейтрализован — это было «мышление сервера»,
+  // которое выбрасывало валидные карточки по эвристическим токенам из текста запроса
+  // (например, «ввг 3*1,5» → токены "3" и "1.5" отвергали 100% реальных кабелей).
+  // Решение, релевантна ли карточка, принимает LLM по правилам промпта (3a/3f).
+  // Сервер сохраняет только жёсткие контракты: price>0 и id-в-кэше.
   const filterByCompoundConstraints = (ids: string[]): { ids: string[]; rejected: number } => {
-    if (effectiveCodeConstraints.length === 0) return { ids, rejected: 0 };
-    // Step 1: hard-enforce code constraints (E27, 16А, 4.5кА — reliably present
-    // in product titles/traits, so a miss here is a true mismatch).
-    const codeKept = ids.filter((id) => {
-      const p = ctx.cache.get(id);
-      if (!p) return false;
-      return effectiveCodeConstraints.every((code) => productMatchesCodeConstraint(p, code));
-    });
-    // Step 2: optional semantic narrowing — but only if it doesn't empty the pool.
-    // Colloquial tokens ("кукуруза", "груша", "шарик") rarely appear verbatim in
-    // catalog titles; if narrowing wipes everything, trust the LLM's jargon
-    // expansion (it already searched "SMD"/"corn"/etc.) and keep the code-filtered pool.
-    // Skip semantic narrowing entirely in replacement mode — the user's free
-    // text describes the anchor, not the analog, so narrowing by it would
-    // incorrectly demand the anchor's brand/series words on candidates.
-    if (replacementIntent) return { ids: codeKept, rejected: ids.length - codeKept.length };
-    const semanticConstraints = semanticTokensFromQuery(userMessage, buildGenericConstraintTokens(lastDiscover), codeConstraints);
-    if (semanticConstraints.length === 0) return { ids: codeKept, rejected: ids.length - codeKept.length };
-    const narrowed = codeKept.filter((id) => {
-      const p = ctx.cache.get(id);
-      return p ? productMatchesAnySemanticToken(p, semanticConstraints) : false;
+    return { ids, rejected: 0 };
+  };
     });
     const final = narrowed.length > 0 ? narrowed : codeKept;
     return { ids: final, rejected: ids.length - final.length };
