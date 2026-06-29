@@ -1975,28 +1975,8 @@ async function runExpertLoop(
     const ids = result.results.map((p) => String(p.id));
     const filtered = filterByCompoundConstraints(ids);
     const pool = filtered.ids.length > 0 ? filtered.ids : ids;
-    const semanticTokens = semanticTokensFromQuery(userMessage, buildGenericConstraintTokens(lastDiscover), codeConstraints);
-    const hasSemanticEvidence = semanticTokens.length === 0 || pool.some((id) => {
-      const p = ctx.cache.get(id);
-      return p ? productMatchesAnySemanticToken(p, semanticTokens) : false;
-    });
-    if (!hasSemanticEvidence) {
-      // Fix 1 (strict honesty): in strict mode — если не нашли ни одного подтверждения
-      // семантического признака пользователя (напр. «кукуруза»), НЕ рендерим
-      // нерелевантные товары. Сообщаем честно — без эха технических параметров,
-      // которые пользователь не спрашивал.
-      if (semanticTokens.length > 0) {
-        const content = `\n\nПо признаку «${semanticTokens.join(" ")}» в каталоге ничего подходящего не нашлось. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?`;
-        send({ type: "delta", content });
-        strictHonestyBlocked = true;
-        steps.push({
-          step: "v3_guard_code_facet_rescue_blocked_strict",
-          ms: now(),
-          meta: { matched, semantic_tokens: semanticTokens, bridge_used: bridgeUsed, reason: "no_semantic_evidence" },
-        });
-        return 0;
-      }
-    }
+    // NOTE: «strict semantic» fast-path удалён (2026-06-29) — LLM сам решает по rule 3a/3f.
+    // Рендерим всё, что нашёл tryCodeFacetRescue; решение «честный отказ vs показать» — на LLM.
     const render = executeRenderProducts({ product_ids: pool, total_available: result.total } as RenderProductsInput, ctx.cache);
     if (!render.ok) return 0;
     send({ type: "tool_event", tool: "search_catalog", phase: "result", duration_ms: duration, summary: `code-rescue: найдено ${result.total}` });
@@ -2557,19 +2537,8 @@ async function runExpertLoop(
             const p = ctx.cache.get(id);
             return !!p && p.price > 0;
           });
-          if (!replacementIntent) {
-            const semanticTokens = semanticTokensFromQuery(userMessage, buildGenericConstraintTokens(lastDiscover), codeConstraints);
-            const hasSemanticEvidence = semanticTokens.length === 0 || validInCache.some((id) => {
-              const p = ctx.cache.get(id);
-              return p ? productMatchesAnySemanticToken(p, semanticTokens) : false;
-            });
-            if (!hasSemanticEvidence) {
-              send({ type: "delta", content: `\n\nВ найденных товарах не подтвердился признак «${semanticTokens.join(" ")}». Не буду подменять его обычными товарами. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?` });
-              steps.push({ step: "v3_guard_render_blocked_strict_semantic", ms: now(), meta: { semantic_tokens: semanticTokens, code_constraints: codeConstraints, attempted_ids: origIds } });
-              steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_render_semantic_blocked", step_count: step + 1 } });
-              return { finalText, productsRendered };
-            }
-          }
+          // NOTE: «strict semantic» гард удалён (2026-06-29) — LLM сам решает по rule 3a/3f промпта.
+          // Сервер больше не блокирует render по лексическому отсутствию признака.
           const renderCompoundFiltered = filterByCompoundConstraints(validInCache);
           if (renderCompoundFiltered.rejected > 0) {
             validInCache = renderCompoundFiltered.ids;
@@ -2888,30 +2857,10 @@ async function runExpertLoop(
               if (tc.name === "jargon_recover_catalog" && productsRendered === 0) {
                 const render = executeRenderProducts({ product_ids: filtered.ids, total_available: r2.total } as RenderProductsInput, ctx.cache);
                 if (render.ok) {
-                  // Honesty guard: jargon_recover_catalog uses fuzzy fallback; if the user's
-                  // original word (e.g. «кукуруза») is not present in any returned title, we
-                  // MUST tell the user the literal term wasn't matched — silently rendering
-                  // unrelated lamps is the exact hallucination the user is complaining about.
+                  // NOTE: strict «jargon_partial» гард удалён (2026-06-29) — LLM сам обрабатывает
+                  // partial_match/unmatched_tokens по правилу 3f промпта. Сервер просто рендерит.
                   const partialMatch = r2.partial_match === true;
                   const unmatched = Array.isArray(r2.unmatched_tokens) ? r2.unmatched_tokens.filter((t) => typeof t === "string" && t.length > 0) : [];
-                  const sourceWord = (r2.source_query ?? (typeof tc.args.query === "string" ? tc.args.query : "")).trim();
-                  if (partialMatch && unmatched.length > 0) {
-                    const wordForUser = sourceWord || unmatched[0];
-                    if (!replacementIntent) {
-                      strictHonestyBlocked = true;
-                      send({ type: "assistant_turn_break", reason: "jargon_partial_disclaimer" });
-                      send({ type: "delta", content: `Точного признака «${wordForUser}» в каталоге не нашлось. Не буду подменять его похожими товарами. Могу подобрать без этого признака или передать вопрос менеджеру — как удобнее?` });
-                      steps.push({ step: "v3_guard_jargon_partial_blocked_strict", ms: now(), meta: { source_query: sourceWord, unmatched_tokens: unmatched, code_constraints: codeConstraints } });
-                      steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "strict_jargon_partial_blocked", step_count: step + 1 } });
-                      return { finalText, productsRendered };
-                    }
-                    send({ type: "assistant_turn_break", reason: "jargon_partial_disclaimer" });
-                    send({
-                      type: "delta",
-                      content: `Точного признака «${wordForUser}» в каталоге не нашлось — показываю близкие варианты. Если нужна именно «${wordForUser}» — могу передать запрос менеджеру.`,
-                    });
-                    send({ type: "assistant_turn_break", reason: "text_before_render" });
-                  }
                   send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: r2.total });
                   for (const id of filtered.ids) shownIds.add(id);
                   productsRendered += render.rendered_count;
