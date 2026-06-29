@@ -2160,35 +2160,9 @@ async function runExpertLoop(
       for (const tc of resp.toolCalls) {
         const toolStart = Date.now();
 
-        // ── Step 1: Numeric Integrity (block search_catalog with truncated decimals)
-        if (tc.name === "search_catalog") {
-          const truncations = detectNumericTruncationInOptions(tc.args, firstAssistantText, lastDiscover);
-          if (truncations) {
-            const hint = truncations
-              .map((t) => `options["${t.key}"]="${t.submitted}" — в первом пузыре назвал "${t.expected}"; передай ровно "${t.expected}"`)
-              .join("; ");
-            const errResult = {
-              tool: "search_catalog",
-              ok: false,
-              error_code: "bad_input",
-              message: `numeric_truncation: ${hint}`,
-            } as ToolResult;
-            send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
-            send({ type: "tool_event", tool: tc.name, phase: "result", duration_ms: 0, summary: "блок: усечение числа" });
-            steps.push({
-              step: "v3_guard_numeric_truncation",
-              ms: now(),
-              meta: { original_args: summariseToolArgs(tc.name, tc.args), truncations },
-            });
-            messages.push({
-              role: "tool",
-              tool_call_id: tc.id,
-              name: tc.name,
-              content: JSON.stringify(toolResultForLlm(errResult, tc.args, userMessage)),
-            });
-            continue;
-          }
-        }
+        // [removed per spec v2 2026-06-29] v3_guard_numeric_truncation:
+        // дробные значения LLM передаёт сам (rule 3b в промпте).
+
 
         // ── Category Whitelist Guard
         // Если LLM передал в search_catalog `category` / `category_in`, которые
@@ -2235,48 +2209,20 @@ async function runExpertLoop(
           }
         }
 
-        const scoped = tc.name === "search_catalog" ? leafScopeSearchArgs(tc.args, lastDiscover, replacementIntent) : null;
-        if (scoped?.scoped) {
-          steps.push({
-            step: "v3_guard_leaf_scope",
-            ms: now(),
-            meta: { reason: scoped.reason, original_args: summariseToolArgs(tc.name, tc.args), scoped_args: summariseToolArgs(tc.name, scoped.args) },
-          });
-          tc.args = scoped.args;
-        }
+        // [removed per spec v2 2026-06-29] v3_guard_leaf_scope,
+        // v3_guard_dialogue_choice_relaxed, v3_guard_user_intent_relaxed:
+        // LLM сам формирует category_in и options по правилам промпта
+        // (reasoning_approach + rule 3c). Сервер аргументы не переписывает.
 
-        const dialogueRelaxed = (tc.name === "search_catalog" || tc.name === "jargon_recover_catalog")
-          ? relaxToolArgsFromDialogueChoice(tc.args, dialogueChoice, userMessage)
-          : null;
-        if (dialogueRelaxed) {
-          steps.push({
-            step: "v3_guard_dialogue_choice_relaxed",
-            ms: now(),
-            meta: { removed: dialogueRelaxed.removed, original_args: summariseToolArgs(tc.name, tc.args), relaxed_args: summariseToolArgs(tc.name, dialogueRelaxed.args) },
-          });
-          tc.args = dialogueRelaxed.args;
-        }
+        // [removed per spec v2 2026-06-29] guardedOutcomeForSearch
+        // (no_intersection / ambiguous_filter): LLM видит сырые total и
+        // решает следующий шаг по rule 3a + lookup honest-empty.
+        void guardedOutcomeForSearch;
+        void relaxToolArgsFromDialogueChoice;
+        void relaxToolArgsFromUserIntent;
+        void leafScopeSearchArgs;
+        void detectNumericTruncationInOptions;
 
-        const userIntentRelaxed = (tc.name === "search_catalog" || tc.name === "jargon_recover_catalog")
-          ? relaxToolArgsFromUserIntent(tc.args, userMessage)
-          : null;
-        if (userIntentRelaxed) {
-          steps.push({
-            step: "v3_guard_user_intent_relaxed",
-            ms: now(),
-            meta: { removed: userIntentRelaxed.removed, original_args: summariseToolArgs(tc.name, tc.args), relaxed_args: summariseToolArgs(tc.name, userIntentRelaxed.args) },
-          });
-          tc.args = userIntentRelaxed.args;
-        }
-
-
-
-        // Algorithmic "no_intersection" / "ambiguous_filter" guards removed per spec v2:
-        // server does not second-guess LLM filters. LLM sees raw search totals
-        // (incl. total=0) and decides next step itself.
-        const guardOutcome: GuardedSearchOutcome | null = null;
-        void guardedOutcomeForSearch; // keep reference to avoid unused import error
-        if (false && guardOutcome) { /* disabled */ }
 
 
 
@@ -2323,89 +2269,13 @@ async function runExpertLoop(
 
 
 
-        // ── Step 5: Price Direction Guard (pre-render rewrite)
-        // Superlative ("самый дешёвый/дорогой") — просто сортируем уже
-        // выбранный LLM-ом пул по цене, ничего не выбрасываем и не расширяем.
-        // Comparative ("дешевле/дороже/в том же сегменте") — требует якоря;
-        // без якоря гард молчит и ответ остаётся за LLM.
-        if (tc.name === "render_products") {
-          const intent = detectPriceDirection(userMessage);
-          const budgetCap = extractBudgetCap(userMessage);
-          if (intent && intent.kind === "superlative") {
-            const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
-            const withPrice = origIds
-              .map((id) => ({ id, p: ctx.cache.get(id) as unknown as CachedProd | undefined }))
-              .filter((x): x is { id: string; p: CachedProd } => !!x.p && typeof x.p.price === "number" && x.p.price > 0);
-            if (withPrice.length >= 2) {
-              const sorted = [...withPrice].sort((a, b) =>
-                intent.direction === "more_expensive" ? b.p.price - a.p.price : a.p.price - b.p.price,
-              );
-              const finalIds = sorted.map((x) => x.id);
-              if (finalIds.join("|") !== origIds.join("|")) {
-                (tc.args as Record<string, unknown>).product_ids = finalIds;
-                steps.push({
-                  step: "v3_guard_price_direction",
-                  ms: now(),
-                  meta: {
-                    kind: "superlative",
-                    direction: intent.direction,
-                    before: origIds.length,
-                    after: finalIds.length,
-                    filtered_out: 0,
-                    broadened: false,
-                  },
-                });
-              }
-            }
-          } else if (intent && intent.kind === "comparative") {
-            const anchor = findAnchorInCache(ctx.cache, userMessage);
-            // Pre-condition: явный бюджетный потолок несовместим с "подороже относительно якоря".
-            const directionAllowed = !(
-              intent.direction === "more_expensive" && budgetCap !== null && anchor && budgetCap <= anchor.price
-            );
-            if (!anchor) {
-              steps.push({
-                step: "v3_guard_price_direction_skipped",
-                ms: now(),
-                meta: { kind: "comparative", direction: intent.direction, reason: "no_anchor_in_cache" },
-              });
-            } else if (!directionAllowed) {
-              steps.push({
-                step: "v3_guard_price_direction_skipped",
-                ms: now(),
-                meta: { kind: "comparative", direction: intent.direction, anchor_price: anchor.price, budget_cap: budgetCap, reason: "budget_cap_conflicts_with_direction" },
-              });
-            } else {
-              const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
-              const rewrite = rewriteRenderIdsByPriceDirection(origIds, intent.direction, anchor, ctx.cache);
-              const finalIds = rewrite.ids;
-              // Не зовём broadenPriceDirectionSearch: расширение по чистой цене
-              // теряет структурные фильтры исходного поиска (опции, категория)
-              // и приводит к подмене пула. Если LLM правильно отправил
-              // second-stage search_catalog с max_price/min_price + теми же
-              // options — пул валиден; если нет, лучше показать честный
-              // короткий пул, чем подменить тип товара.
-              if (finalIds.length > 0 && (finalIds.length !== origIds.length || finalIds.join("|") !== origIds.join("|"))) {
-                (tc.args as Record<string, unknown>).product_ids = finalIds;
-                steps.push({
-                  step: "v3_guard_price_direction",
-                  ms: now(),
-                  meta: {
-                    kind: "comparative",
-                    direction: intent.direction,
-                    anchor_id: anchor.id,
-                    anchor_price: anchor.price,
-                    budget_cap: budgetCap,
-                    before: origIds.length,
-                    after: finalIds.length,
-                    filtered_out: rewrite.filteredOut,
-                    broadened: false,
-                  },
-                });
-              }
-            }
-          }
-        }
+        // [removed per spec v2 2026-06-29] v3_guard_price_direction:
+        // сортировка/выбор пула под "дешевле/дороже/премиум/бюджет" —
+        // ответственность LLM по правилам <price_anchoring> + rule 3d.
+        void detectPriceDirection;
+        void findAnchorInCache;
+        void rewriteRenderIdsByPriceDirection;
+
 
         // ── Step 5b: Budget Cap Hard Post-Filter ─────────────────────────────
         // Клиент назвал жёсткий ценовой потолок ("до X тг", "не дороже X ₸").
@@ -2437,104 +2307,22 @@ async function runExpertLoop(
         }
 
 
-        // ── Step 6a: Render Guard — auto-complement ids from fresh search if LLM dropped them.
-        if (tc.name === "render_products") {
-          const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
-          let validInCache = origIds.filter((id) => {
-            const p = ctx.cache.get(id);
-            return !!p && p.price > 0;
-          });
-          // NOTE: «strict semantic» гард удалён (2026-06-29) — LLM сам решает по rule 3a/3f промпта.
-          // Сервер больше не блокирует render по лексическому отсутствию признака.
-          const renderCompoundFiltered = filterByCompoundConstraints(validInCache);
-          if (renderCompoundFiltered.rejected > 0) {
-            validInCache = renderCompoundFiltered.ids;
-            (tc.args as Record<string, unknown>).product_ids = validInCache;
-            steps.push({
-              step: "v3_guard_compound_render_filter",
-              ms: now(),
-              meta: { before: origIds.length, after: validInCache.length, rejected: renderCompoundFiltered.rejected, code_constraints: codeConstraints },
-            });
-          }
-          const freshPool = pickFreshUnshown(8);
-          const need = Math.min(5, freshPool.length + validInCache.length);
-          if (validInCache.length < Math.min(3, need) && freshPool.length > 0) {
-            const merged: string[] = [];
-            const seen = new Set<string>();
-            for (const id of validInCache) { if (!seen.has(id)) { merged.push(id); seen.add(id); } }
-            for (const id of freshPool) { if (merged.length >= 8) break; if (!seen.has(id)) { merged.push(id); seen.add(id); } }
-            if (merged.length > validInCache.length) {
-              (tc.args as Record<string, unknown>).product_ids = merged;
-              steps.push({
-                step: "v3_guard_render_autocomplement",
-                ms: now(),
-                meta: {
-                  orig_count: origIds.length,
-                  valid_in_cache: validInCache.length,
-                  fresh_pool: freshPool.length,
-                  after: merged.length,
-                  fresh_tool: freshSearch?.tool,
-                  fresh_total: freshSearch?.total,
-                },
-              });
-            }
-          }
-        }
+        // [removed per spec v2 2026-06-29] v3_guard_compound_render_filter,
+        // v3_guard_render_autocomplement, v3_guard_escalate_cancelled,
+        // v3_guard_option_canonicalized: LLM сам подбирает product_ids и
+        // решает escalate по правилам промпта (rule 1, 10, 13).
+        void filterByCompoundConstraints;
+        void canonicalizeSearchOptionsFromDiscover;
 
-        // ── Step 6b: Escalate Guard — cancel escalation if fresh unshown pool ≥3.
-        if (tc.name === "escalate_to_manager") {
-          let pool = pickFreshUnshown(8);
-          // Fix 2 (strict constraint enforcement): never auto-render off-target
-          // products on escalation. In strict mode honour code constraints; in
-          // analog mode keep current behaviour (constraints are allowed to weaken).
-          if (!replacementIntent && codeConstraints.length > 0) {
-            const f = filterByCompoundConstraints(pool);
-            pool = f.ids;
-          }
-          if (pool.length >= 3) {
-            const render = await executeRenderProducts({ product_ids: pool, total_available: freshSearch?.total } as RenderProductsInput, ctx.cache);
-            if (render.ok) {
-              send({ type: "tool_event", tool: "escalate_to_manager", phase: "start", summary: "escalate отменён…" });
-              send({ type: "tool_event", tool: "render_products", phase: "result", duration_ms: 0, summary: `auto-render ${render.rendered_count}` });
-              send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: freshSearch?.total });
-              for (const id of pool) shownIds.add(id);
-              productsRendered += render.rendered_count;
-              steps.push({
-                step: "v3_guard_escalate_cancelled",
-                ms: now(),
-                meta: {
-                  reason_attempted: typeof tc.args.reason === "string" ? tc.args.reason : null,
-                  note_attempted: typeof tc.args.note === "string" ? (tc.args.note as string).slice(0, 200) : null,
-                  pool_size: pool.length,
-                  fresh_tool: freshSearch?.tool,
-                  fresh_total: freshSearch?.total,
-                  rendered: render.rendered_count,
-                },
-              });
-              steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "escalate_cancelled_autorender", step_count: step + 1 } });
-              return { finalText, productsRendered };
-            }
-          }
-        }
+        const runArgs: Record<string, unknown> = tc.args;
 
-        let runArgs: Record<string, unknown> = tc.args;
-        const canonicalized = tc.name === "search_catalog"
-          ? canonicalizeSearchOptionsFromDiscover(tc.args, lastDiscover)
-          : null;
-        if (canonicalized) {
-          runArgs = canonicalized.args;
-          steps.push({
-            step: "v3_guard_option_canonicalized",
-            ms: now(),
-            meta: { rewrites: canonicalized.rewrites, original_args: summariseToolArgs(tc.name, tc.args) },
-          });
-        }
 
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
-        let result = await runTool(tc.name, runArgs, ctx);
-        let effectiveArgs: Record<string, unknown> = runArgs;
-        let inferredFallback: Array<{ key: string; value: string }> | null = null;
-        let splitFallbackResult: { axes: SplitAxis[]; ms: number } | null = null;
+        const result = await runTool(tc.name, runArgs, ctx);
+        const effectiveArgs: Record<string, unknown> = runArgs;
+        const inferredFallback: Array<{ key: string; value: string }> | null = null;
+        const splitFallbackResult: { axes: SplitAxis[]; ms: number } | null = null;
+
         const dur = Date.now() - toolStart;
         send({
           type: "tool_event",
@@ -2556,57 +2344,9 @@ async function runExpertLoop(
           },
         });
 
-        // ── Step 2: Inferred-filter fallback (drop assistant-invented filters on empty)
-        if (tc.name === "search_catalog" && result.ok && (result as { total: number }).total === 0) {
-          const cls = classifyOptionsSource(tc.args, userMessage);
-          if (cls.assistantInferred.length > 0) {
-            const cleaned: Record<string, string[]> = {};
-            for (const f of cls.userExplicit) {
-              (cleaned[f.key] ??= []).push(f.value);
-            }
-            const hasAnyCleaned = Object.keys(cleaned).length > 0;
-            const fallbackInput: SearchCatalogInput = {
-              ...(tc.args as unknown as SearchCatalogInput),
-              options: hasAnyCleaned ? cleaned : undefined,
-            };
-            if (!hasAnyCleaned && fallbackInput.mode === "by_filter" && !fallbackInput.category && !fallbackInput.query) {
-              // нечего искать — оставляем 0 как есть
-            } else {
-              const fbStart = Date.now();
-              const fb = await executeSearchCatalog(fallbackInput, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
-              const fbDur = Date.now() - fbStart;
-              if (fb.ok && fb.total > 0) {
-                result = fb as ToolResult;
-                effectiveArgs = fallbackInput as unknown as Record<string, unknown>;
-                inferredFallback = cls.assistantInferred;
-                send({ type: "tool_event", tool: tc.name, phase: "result", duration_ms: fbDur, summary: `fallback: найдено ${fb.total}` });
-                steps.push({
-                  step: "v3_guard_inferred_fallback",
-                  ms: now(),
-                  meta: {
-                    dropped: cls.assistantInferred,
-                    kept: cls.userExplicit,
-                    fallback_total: fb.total,
-                    fallback_ms: fbDur,
-                  },
-                });
-              }
-            }
-          }
-        }
-
-        // ── Step 2b: Jargon-recover retry without modifiers when total=0.
-        // jargon_recover_catalog with inherited modifiers (e.g. «E27» from
-        // history) often returns 0 even though the literal jargon ("кукуруза")
-        // does exist in the catalog. Retry once without modifiers so we surface
-        // the literal jargon — partial-match guard downstream still warns the
-        // user that the strict modifier wasn't intersected.
-        // NOTE (2026-06-29): jargon_retry_no_modifiers удалён.
-        // Серверный авто-retry без modifiers выкидывал важный признак клиента
-        // (напр. «E27») молча и подменял результат — нарушение rule 3a/3f.
-        // LLM сам решит, как продолжить лестницу, увидев total=0.
-
-
+        // [removed per spec v2 2026-06-29] v3_guard_inferred_fallback:
+        // LLM сам решает (rule 3c), какие фасеты передавать и что делать при 0.
+        void classifyOptionsSource;
 
         if (tc.name === "discover_category" && result.ok) {
           lastDiscover = result as unknown as DiscoverCategoryOk;
@@ -2614,99 +2354,24 @@ async function runExpertLoop(
           for (const leaf of lastDiscover.leaf_categories ?? []) {
             addToWhitelist(leaf.pagetitle);
           }
-          // NOTE (2026-06-29): tryCodeFacetRescue после discover удалён — LLM сам решает,
-          // что искать после получения фасетов. Серверный авто-rescue по техническим кодам
-          // (E27/16А/IP65 и т.п.) часто возвращал товары БЕЗ остальных признаков клиента
-          // ("кукуруза" игнорировалась, оставалось E27) — это и есть алгоритмическая
-          // замена мышления LLM, которая нарушает rule 3a/3f промпта.
         }
 
 
-        // ── Step C: Honest-split fallback for empty intersection (≥2 axes, total=0).
-        if (
-          tc.name === "search_catalog" &&
-          result.ok &&
-          (result as { total: number }).total === 0 &&
-          !inferredFallback
-        ) {
-          if (replacementIntent) {
-            rememberReplacementAxes(tc.args);
-          }
-          const opts = (tc.args as { options?: Record<string, unknown> }).options;
-          const axesCount = opts && typeof opts === "object"
-            ? Object.values(opts).filter((v) => Array.isArray(v) && v.length > 0).length
-            : 0;
-          if ((tc.args as { mode?: string }).mode === "by_filter" && axesCount >= 2) {
-            // Fix 5 (axis-safe splits): pass confirmed strict code-constraints
-            // (e.g. цоколь E27) as sticky base options so each axis search keeps
-            // them. Skipped in replacement mode — analogs are allowed to weaken.
-            const stickyOptions: Record<string, string[]> = {};
-            if (!replacementIntent && codeConstraints.length > 0) {
-              for (const code of codeConstraints) {
-                const m = findFacetMatchForCode(code);
-                if (m) (stickyOptions[m.facet.key] ??= []).push(m.value);
-              }
-            }
-            const split = await trySplitFallback(tc.args, ctx, stickyOptions);
-            if (split) {
-              const splitAxisIdSets = new Map(split.axes.map((a) => [a.axis, new Set(a.ids)]));
-              const effectiveSplit = replacementIntent && replacementRequiredAxes.length >= 2
-                ? (() => {
-                  const compatible = new Set(filterReplacementCompatibleIds(split.axes.flatMap((a) => a.ids), replacementRequiredAxes, ctx.cache, splitAxisIdSets));
-                  return {
-                    ...split,
-                    axes: split.axes
-                      .map((a) => ({ ...a, ids: a.ids.filter((id) => compatible.has(id)) }))
-                      .filter((a) => a.ids.length > 0),
-                  };
-                })()
-                : split;
-              splitFallbackResult = effectiveSplit.axes.length > 0 ? effectiveSplit : null;
-              send({
-                type: "tool_event",
-                tool: "search_catalog",
-                phase: "result",
-                duration_ms: split.ms,
-                summary: `split: ${effectiveSplit.axes.map((a) => `${a.axis}=${a.total}`).join(", ")}`,
-              });
-              steps.push({
-                step: "v3_guard_split_fallback",
-                ms: now(),
-                meta: {
-                  axes: effectiveSplit.axes.map((a) => ({ axis: a.axis, value: a.value, total: a.total, ids: a.ids.length })),
-                  replacement_filtered: replacementIntent && replacementRequiredAxes.length >= 2,
-                  sticky_options: stickyOptions,
-                  ms: split.ms,
-                },
-              });
-              // Fix 4 (deterministic honesty): in strict mode emit an explicit
-              // server-side delta describing the empty intersection BEFORE giving
-              // control back to the LLM. Guarantees the user sees the breakdown
-              // even if the model later misbehaves.
-              if (!replacementIntent && splitFallbackResult && effectiveSplit.axes.length >= 2) {
-                const breakdown = effectiveSplit.axes
-                  .map((a) => `${a.axis}=${a.value} → ${a.total}`)
-                  .join("; ");
-                send({
-                  type: "delta",
-                  content: `\n\nТочного сочетания всех ваших параметров в каталоге нет. По отдельности: ${breakdown}. Какую ось ослабить, чтобы подобрать?`,
-                });
-              }
-              // Feed Step 6a/6b pool so render/escalate guards have ammo too.
-              const allIds = effectiveSplit.axes.flatMap((a) => a.ids).slice(0, 8);
-              const totalSum = effectiveSplit.axes.reduce((s, a) => s + a.total, 0);
-              if (allIds.length > 0) {
-                freshSearch = { tool: "search_catalog_split", ids: allIds, total: totalSum };
-                // Persist across subsequent broad searches — render fallback
-                // prefers these axis-aligned ids over later off-target pools.
-                prioritySplitPool = allIds;
-                prioritySplitAxisIdSets = splitAxisIdSets;
-              }
-            }
-          }
+
+        // [removed per spec v2 2026-06-29] v3_guard_split_fallback:
+        // LLM сам признаёт пустое пересечение и предлагает альтернативу
+        // (rule 14 в промпте будет переформулировано — без серверного hint).
+        if (tc.name === "search_catalog" && result.ok && replacementIntent && (result as { total: number }).total === 0) {
+          rememberReplacementAxes(tc.args);
         }
+        void trySplitFallback;
+        void findFacetMatchForCode;
+        void filterReplacementCompatibleIds;
 
-
+        // [removed per spec v2 2026-06-29] v3_guard_jargon_auto_render,
+        // v3_guard_compound_pool_filter: серверный авто-рендер после
+        // jargon_recover_catalog и эвристический отсев по «составным
+        // токенам» убраны. LLM сам зовёт render_products по rule 1/3f/10.
         if ((tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") && result.ok) {
           const r2 = result as unknown as {
             results: Array<{ id: string; price: number }>;
@@ -2723,50 +2388,13 @@ async function runExpertLoop(
               ? (r2 as { matched_query: string }).matched_query
               : (typeof r2.source_query === "string" && r2.source_query ? r2.source_query : typeof tc.args.query === "string" ? tc.args.query : "");
             semanticEvidenceSeen ??= { label: sourceLabel, total: r2.total };
-            const filtered = filterByCompoundConstraints(ids);
-            // Fix 3 (sticky split-pools): once a split fallback established an
-            // axis-aligned priority pool, do NOT overwrite freshSearch with a
-            // broader follow-up search — that would let render guards pick
-            // off-target ids. In analog mode keep prior behaviour.
-            const stickySplitActive = !replacementIntent && prioritySplitPool.length > 0;
-            if (filtered.ids.length > 0) {
-              if (!stickySplitActive) {
-                freshSearch = { tool: tc.name, ids: filtered.ids, total: r2.total };
-              }
-              if (tc.name === "jargon_recover_catalog" && productsRendered === 0) {
-                const render = executeRenderProducts({ product_ids: filtered.ids, total_available: r2.total } as RenderProductsInput, ctx.cache);
-                if (render.ok) {
-                  // NOTE: strict «jargon_partial» гард удалён (2026-06-29) — LLM сам обрабатывает
-                  // partial_match/unmatched_tokens по правилу 3f промпта. Сервер просто рендерит.
-                  const partialMatch = r2.partial_match === true;
-                  const unmatched = Array.isArray(r2.unmatched_tokens) ? r2.unmatched_tokens.filter((t) => typeof t === "string" && t.length > 0) : [];
-                  send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: r2.total });
-                  for (const id of filtered.ids) shownIds.add(id);
-                  productsRendered += render.rendered_count;
-                  steps.push({ step: "v3_guard_jargon_auto_render", ms: now(), meta: { tool: tc.name, total: r2.total, rendered: render.rendered_count, ids: filtered.ids.slice(0, 8), partial_match: partialMatch, unmatched_tokens: unmatched } });
-                  steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "jargon_auto_render", step_count: step + 1 } });
-                  return { finalText, productsRendered };
-                }
-              }
-            } else if (codeConstraints.length === 0 && !stickySplitActive) {
-              freshSearch = { tool: tc.name, ids, total: r2.total };
-            }
-            if (filtered.rejected > 0) {
-              steps.push({
-                step: "v3_guard_compound_pool_filter",
-                ms: now(),
-                meta: { tool: tc.name, rejected: filtered.rejected, kept: filtered.ids.length, code_constraints: codeConstraints },
-              });
-            }
-            // NOTE (2026-06-29): code-facet rescue после empty-jargon удалён.
-            // Если jargon пуст с modifiers — LLM сам сделает следующий шаг лестницы
-            // (rule 3e промпта), без серверной подмены товарами по голым кодам.
+            freshSearch = { tool: tc.name, ids, total: r2.total };
           }
-          // Track which ladder candidates were already tried (to nudge LLM in tool reply).
+          // Track which ladder candidates were already tried (to nudge LLM in tool reply on timeout).
           const q = typeof tc.args.query === "string" ? tc.args.query.trim().toLowerCase() : "";
           if (q) triedLadderQueries.add(q);
 
-          // No-progress detector: подпись = первые 10 отсортированных id (или "empty").
+          // No-progress detector — safety против бесконечных пустых циклов.
           const signature = ids.length === 0
             ? "empty"
             : [...ids].sort().slice(0, 10).join(",");
@@ -2776,10 +2404,6 @@ async function runExpertLoop(
             noProgressStreak = 0;
             lastSearchSignature = signature;
           }
-          // Разный порог по типу сигнатуры:
-          //  • "empty" — пустые ответы часто отличаются стратегией (by_query vs by_pagetitle vs by_facets),
-          //    LLM имеет право пройти лестницу жаргона и фасеты → break только на 4-м пустом подряд (streak>=3).
-          //  • любой непустой повтор — реальный цикл с тем же пулом → break на 2-м повторе (streak>=1).
           const breakThreshold = signature === "empty" ? 3 : 1;
           if (noProgressStreak >= breakThreshold && productsRendered === 0) {
             noProgressBreak = true;
@@ -2790,6 +2414,7 @@ async function runExpertLoop(
             });
           }
         }
+
 
 
         // If render_products succeeded → emit products_block immediately.
@@ -2841,52 +2466,26 @@ async function runExpertLoop(
           }
         }
 
-        // If we dropped inferred filters and got broader results — tell user up front,
-        // and tell LLM in the tool reply so it doesn't claim "by exact parameters".
-        if (inferredFallback && inferredFallback.length > 0) {
-          const note = " По точным параметрам не нашёл — расширил подборку.";
-          send({ type: "delta", content: note });
-          finalText += note;
-        }
+        // [removed per spec v2 2026-06-29] inferred_fallback delta/note,
+        // _fresh_pool_ids hint, _intersection_empty/_split_axes hint —
+        // соответствующие гарды снесены, текст и решения генерирует LLM.
+        void inferredFallback;
+        void splitFallbackResult;
 
         const baseReply = toolResultForLlm(result, effectiveArgs, userMessage) as unknown;
         const replyObj: Record<string, unknown> = (baseReply && typeof baseReply === "object")
           ? { ...(baseReply as Record<string, unknown>) }
           : { value: baseReply };
 
-        if (inferredFallback && inferredFallback.length > 0) {
-          replyObj._server_note = `Сбросил твои гипотетические фильтры (${inferredFallback.map((f) => `${f.key}=${f.value}`).join(", ")}): клиент их явно не называл, по полному набору 0. Рендери широкую подборку и не утверждай, что искал по конкретным параметрам.`;
-        }
-
-        // ── Step 6d: Catalog timeout = retryable, NOT a reason to escalate.
+        // Catalog timeout = retryable network error, not exhausted ladder.
+        // System contract: дать LLM понять, что это сетевая, и подсказать,
+        // какие query уже пробовали — это не «мышление», а protocol info.
         if (!result.ok && (result as { error_code?: string }).error_code === "catalog_timeout") {
           replyObj._retryable = true;
-          replyObj._server_hint = "catalog_timeout — это сетевая ошибка, НЕ исчерпание лестницы. Попробуй СЛЕДУЮЩИЙ кандидат жаргона (RU-синоним → EN → транслит → голое существительное) другим вызовом. Не escalate_to_manager пока не прогнал минимум 3 разных кандидата.";
+          replyObj._server_hint = "catalog_timeout — сетевая ошибка. Попробуй СЛЕДУЮЩИЙ кандидат лестницы (см. rule 11).";
           replyObj._tried_queries = [...triedLadderQueries];
         }
 
-        // ── Step 6e: Fresh pool reminder when render returned empty.
-        if (tc.name === "render_products" && !result.ok) {
-          const pool = pickFreshUnshown(8);
-          if (pool.length > 0) {
-            replyObj._fresh_pool_ids = pool;
-            replyObj._server_hint = `render_products пустой. В кеше есть id: ${pool.join(", ")} (из ${freshSearch?.tool}, total=${freshSearch?.total}). Передай ровно эти id, не выдумывай новые.`;
-          }
-        }
-
-        // ── Step C: Intersection-empty honesty hint for the LLM.
-        if (splitFallbackResult) {
-          replyObj._intersection_empty = true;
-          replyObj._split_axes = splitFallbackResult.axes;
-          const axisSummary = splitFallbackResult.axes
-            .map((a) => `${a.axis}="${a.value}" (${a.total} шт)`)
-            .join(" и ");
-          replyObj._server_hint =
-            `Точного сочетания фильтров в каталоге нет (total=0), но отдельно по осям есть: ${axisSummary}. ` +
-            `НЕ извиняйся и НЕ вызывай escalate_to_manager. Сначала короткий текст в духе "Точного сочетания нет, ` +
-            `но есть отдельно X и отдельно Y — что ближе?", затем ОДИН вызов render_products с product_ids = ` +
-            `объединением ids из _split_axes (бери все ids из каждой оси по порядку, до 8 штук). Используй ровно эти id.`;
-        }
 
 
 
