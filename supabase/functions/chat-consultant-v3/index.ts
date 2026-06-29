@@ -1986,7 +1986,7 @@ async function runExpertLoop(
     steps.push({
       step: "v3_guard_code_facet_rescue",
       ms: now(),
-      meta: { matched, total: result.total, rendered: render.rendered_count, duration_ms: duration, semantic_tokens: semanticTokens, semantic_evidence: hasSemanticEvidence, bridge_query: bridgeUsed },
+      meta: { matched, total: result.total, rendered: render.rendered_count, duration_ms: duration, bridge_query: bridgeUsed },
     });
     return render.rendered_count;
   };
