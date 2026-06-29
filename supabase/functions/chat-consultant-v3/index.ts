@@ -2271,88 +2271,14 @@ async function runExpertLoop(
 
 
 
-        let guardOutcome = tc.name === "search_catalog"
-          ? await guardedOutcomeForSearch(tc.args, lastDiscover, userMessage, firstAssistantText, ctx, history.slice(-6).map((h) => h.content).join("\n"))
-          : null;
-        if (replacementIntent && guardOutcome?.kind === "no_intersection") {
-          steps.push({
-            step: "v3_guard_no_intersection_deferred",
-            ms: now(),
-            meta: { reason: "replacement_needs_split_fallback", original_args: summariseToolArgs(tc.name, tc.args), debug_text: guardOutcome.debugText },
-          });
-          guardOutcome = null;
-        }
+        // Algorithmic "no_intersection" / "ambiguous_filter" guards removed per spec v2:
+        // server does not second-guess LLM filters. LLM sees raw search totals
+        // (incl. total=0) and decides next step itself.
+        const guardOutcome: GuardedSearchOutcome | null = null;
+        void guardedOutcomeForSearch; // keep reference to avoid unused import error
+        if (false && guardOutcome) { /* disabled */ }
 
-        if (guardOutcome?.kind === "clarification") {
-          const dur = Date.now() - toolStart;
-          send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
-          send({ type: "tool_event", tool: tc.name, phase: "result", duration_ms: dur, summary: "guard: уточнение" });
-          steps.push({
-            step: "v3_guard_blocked_search",
-            ms: now(),
-            meta: {
-              original_tool: tc.name,
-              original_args: summariseToolArgs(tc.name, tc.args),
-              facet_key: guardOutcome.input.facet_key,
-              reason: guardOutcome.reason,
-            },
-          });
-          const synthetic = {
-            tool: tc.name,
-            ok: true,
-            total: 0,
-            guard: "ambiguous_filter",
-            clarification_needed: {
-              facet_key: guardOutcome.input.facet_key,
-              available_options: guardOutcome.input.options.map((o) => o.value),
-            },
-            hint: "Значение фасета не подтверждено клиентом и не из каталога. Не зови search_catalog с этим значением. Финальным пузырём переспроси клиента (предложи 2–3 значения из available_options) либо предложи альтернативу своими словами.",
-          };
-          messages.push({
-            role: "tool",
-            tool_call_id: tc.id,
-            name: tc.name,
-            content: JSON.stringify(synthetic),
-          });
-          continue;
-        }
-        if (guardOutcome?.kind === "no_intersection") {
-          const dur = Date.now() - toolStart;
-          send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
-          send({ type: "tool_event", tool: tc.name, phase: "result", duration_ms: dur, summary: "guard: нет пересечения" });
-          steps.push({
-            step: "v3_guard_no_intersection",
-            ms: now(),
-            meta: {
-              original_tool: tc.name,
-              original_args: summariseToolArgs(tc.name, tc.args),
-              debug_text: guardOutcome.debugText,
-              semantic_product_ids: guardOutcome.semanticProductIds,
-              ...guardOutcome.meta,
-            },
-          });
-          const synthetic = {
-            tool: tc.name,
-            ok: true,
-            total: 0,
-            guard: "no_intersection",
-            confirmed_filters: guardOutcome.meta.confirmed_filters ?? [],
-            confirmed_total: guardOutcome.meta.confirmed_total ?? 0,
-            semantic_alternatives: {
-              query: guardOutcome.meta.semantic_query ?? null,
-              total: guardOutcome.meta.semantic_total ?? 0,
-              product_ids: guardOutcome.semanticProductIds,
-            },
-            hint: "Точного пересечения нет. Если semantic_alternatives.product_ids непуст — позови render_products с этими ID и кратко скажи клиенту, что нашёл близкие, но не строго по запрошенной комбинации. Если пусто — финальным пузырём честно объясни клиенту, чего нет, и предложи альтернативу.",
-          };
-          messages.push({
-            role: "tool",
-            tool_call_id: tc.id,
-            name: tc.name,
-            content: JSON.stringify(synthetic),
-          });
-          continue;
-        }
+
 
         // ── Step 4.5: Anchor + Same-Family Exclusion Guard
         // В режиме "аналог/замена" из карточек убираем:
