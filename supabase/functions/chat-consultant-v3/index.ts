@@ -1600,7 +1600,7 @@ async function callOpenRouter(
       },
       body: JSON.stringify({
         model: MODEL,
-        temperature: 0.3,
+        temperature: 0.2,
         max_tokens: 4000,
         messages,
         tools: TOOL_SCHEMAS,
@@ -2095,11 +2095,13 @@ async function runExpertLoop(
           steps.push({ step: "v3_assistant_text_final", ms: now(), meta: { chars: outText.length, fragment_index: step, text: outText } });
         } else if (hasRender) {
           // Текст рядом с render_products → отдельный caption-пузырь ПЕРЕД карточками.
-          // Раньше для select-режима caption глушился ("карточки говорят сами"),
-          // но это ломало split-кейсы (Rule 14): модель объясняет, что
-          // пересечение пустое, и показывает оси отдельно — без caption
-          // пользователь видит только карточки без контекста, какой из них
-          // что. Теперь caption всегда долетает до UI отдельным bubble.
+          // Раньше для не-inquire режима текст глушился ("карточки говорят сами"),
+          // но это ломало кейсы, где LLM предупреждает о несоответствии (например,
+          // запрошен цоколь E27, а в наличии только G4/G9/E14). Теперь предупреждение
+          // всегда долетает до UI как отдельный bubble перед products_block.
+          if (intentMode === "select" && !replacementIntent) {
+            steps.push({ step: "v3_assistant_text_suppressed_render_caption", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+          } else {
           if (!isFirstTurn) {
             send({ type: "assistant_turn_break", reason: "text_before_render" });
           }
@@ -2111,7 +2113,7 @@ async function runExpertLoop(
             ms: now(),
             meta: { chars: resp.text.length, fragment_index: step, text: resp.text },
           });
-
+          }
         } else if (!firstAssistantText) {
           // Intro-пузырь ещё не показывали (на шаге 0 LLM ушёл сразу в тул без
           // текста), а сейчас наконец появилось «размышление» перед следующим
@@ -2130,29 +2132,9 @@ async function runExpertLoop(
 
 
       if (resp.toolCalls.length === 0) {
-        // Runtime safety net: модель завершила ход без render_products при
-        // наличии непустого fresh-пула (≥1 валидный товар после последнего
-        // search/jargon в этом же ходу). Это «silent stop» — поведение,
-        // которое промптом не лечится: модель просто отдала finish=stop
-        // с пустым content. Авто-рендерим до 8 свежих неотображённых id,
-        // чтобы клиент увидел хотя бы доказательную ось, а не пустой пузырь.
-        if (productsRendered === 0 && freshSearch && freshSearch.total >= 1) {
-          const ids = pickFreshUnshown(8);
-          if (ids.length > 0) {
-            const render = await executeRenderProducts({ product_ids: ids, total_available: freshSearch.total } as RenderProductsInput, ctx.cache);
-            if (render.ok && render.rendered_count > 0) {
-              send({ type: "tool_event", tool: "render_products", phase: "result", duration_ms: 0, summary: `показано ${render.rendered_count}` });
-              send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: freshSearch.total });
-              for (const id of ids) shownIds.add(id);
-              productsRendered += render.rendered_count;
-              steps.push({
-                step: "v3_guard_silent_stop_autorender",
-                ms: now(),
-                meta: { fresh_tool: freshSearch.tool, fresh_total: freshSearch.total, rendered: render.rendered_count, step_index: step },
-              });
-            }
-          }
-        }
+        // No tools → turn ends. Last-chance: if user asked relative-price and we rendered nothing → rescue.
+        // NOTE (2026-06-29): tryPriceDirectionRescue удалён — LLM сам должен сделать
+        // правильный search_catalog по правилам <price_anchoring>.
         steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "ok", step_count: step + 1 } });
         return { finalText, productsRendered };
       }
