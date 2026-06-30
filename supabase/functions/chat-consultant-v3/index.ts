@@ -2130,9 +2130,29 @@ async function runExpertLoop(
 
 
       if (resp.toolCalls.length === 0) {
-        // No tools → turn ends. Last-chance: if user asked relative-price and we rendered nothing → rescue.
-        // NOTE (2026-06-29): tryPriceDirectionRescue удалён — LLM сам должен сделать
-        // правильный search_catalog по правилам <price_anchoring>.
+        // Runtime safety net: модель завершила ход без render_products при
+        // наличии непустого fresh-пула (≥1 валидный товар после последнего
+        // search/jargon в этом же ходу). Это «silent stop» — поведение,
+        // которое промптом не лечится: модель просто отдала finish=stop
+        // с пустым content. Авто-рендерим до 8 свежих неотображённых id,
+        // чтобы клиент увидел хотя бы доказательную ось, а не пустой пузырь.
+        if (productsRendered === 0 && freshSearch && freshSearch.total >= 1) {
+          const ids = pickFreshUnshown(8);
+          if (ids.length > 0) {
+            const render = await executeRenderProducts({ product_ids: ids, total_available: freshSearch.total } as RenderProductsInput, ctx.cache);
+            if (render.ok && render.rendered_count > 0) {
+              send({ type: "tool_event", tool: "render_products", phase: "result", duration_ms: 0, summary: `показано ${render.rendered_count}` });
+              send({ type: "products_block", markdown: render.markdown, count: render.rendered_count, total_available: freshSearch.total });
+              for (const id of ids) shownIds.add(id);
+              productsRendered += render.rendered_count;
+              steps.push({
+                step: "v3_guard_silent_stop_autorender",
+                ms: now(),
+                meta: { fresh_tool: freshSearch.tool, fresh_total: freshSearch.total, rendered: render.rendered_count, step_index: step },
+              });
+            }
+          }
+        }
         steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "ok", step_count: step + 1 } });
         return { finalText, productsRendered };
       }
