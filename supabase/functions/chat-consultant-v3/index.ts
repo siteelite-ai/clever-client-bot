@@ -2095,13 +2095,11 @@ async function runExpertLoop(
           steps.push({ step: "v3_assistant_text_final", ms: now(), meta: { chars: outText.length, fragment_index: step, text: outText } });
         } else if (hasRender) {
           // Текст рядом с render_products → отдельный caption-пузырь ПЕРЕД карточками.
-          // Раньше для не-inquire режима текст глушился ("карточки говорят сами"),
-          // но это ломало кейсы, где LLM предупреждает о несоответствии (например,
-          // запрошен цоколь E27, а в наличии только G4/G9/E14). Теперь предупреждение
-          // всегда долетает до UI как отдельный bubble перед products_block.
-          if (intentMode === "select" && !replacementIntent) {
-            steps.push({ step: "v3_assistant_text_suppressed_render_caption", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
-          } else {
+          // Раньше для select-режима caption глушился ("карточки говорят сами"),
+          // но это ломало split-кейсы (Rule 14): модель объясняет, что
+          // пересечение пустое, и показывает оси отдельно — без caption
+          // пользователь видит только карточки без контекста, какой из них
+          // что. Теперь caption всегда долетает до UI отдельным bubble.
           if (!isFirstTurn) {
             send({ type: "assistant_turn_break", reason: "text_before_render" });
           }
@@ -2113,7 +2111,7 @@ async function runExpertLoop(
             ms: now(),
             meta: { chars: resp.text.length, fragment_index: step, text: resp.text },
           });
-          }
+
         } else if (!firstAssistantText) {
           // Intro-пузырь ещё не показывали (на шаге 0 LLM ушёл сразу в тул без
           // текста), а сейчас наконец появилось «размышление» перед следующим
