@@ -98,10 +98,13 @@ function extractLeafCategory(p: Record<string, unknown>): string | null {
 }
 
 /**
- * Бренд карточки. Каскад: options[brend__brend] → vendor. Отбрасываем
- * значения, которые выглядят как маркировка серии/кабеля (ВВГ, ПВС, ...).
+ * Бренд карточки. Источник — ТОЛЬКО options[brend__brend].
+ * Топ-левел поле `vendor` из 220volt API — это производитель (например,
+ * "Ningbo Innovation Electronic Company Limited" у ламп IEK), а не бренд,
+ * поэтому fallback на него давал неверные данные. Если бренд в options не
+ * пришёл — возвращаем null и просто не показываем строку «Бренд».
+ * Отбрасываем значения, похожие на маркировку серии/кабеля (ВВГ, ПВС, ...).
  * Data-agnostic: без словарей брендов/серий.
- * Sync с V1 `getBrandFromProduct` в chat-consultant/index.ts.
  */
 function looksLikeMarking(s: string): boolean {
   const v = (s || "").trim();
@@ -120,8 +123,6 @@ function extractBrand(p: Record<string, unknown>): string | null {
       }
     }
   }
-  const vendor = typeof p.vendor === "string" ? p.vendor.trim() : "";
-  if (vendor && !looksLikeMarking(vendor)) return vendor;
   return null;
 }
 
