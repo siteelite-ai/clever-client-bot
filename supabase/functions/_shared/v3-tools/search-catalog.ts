@@ -166,7 +166,7 @@ async function singleSearch(
       if (!pagetitle) continue;
       const u = typeof raw.url === "string" ? raw.url : "";
       if (!u) continue;
-      const vendor = typeof raw.vendor === "string" ? raw.vendor : null;
+      const vendor = extractBrand(raw);
       const ref: ProductRef = {
         id, pagetitle, vendor, price,
         stock: inferStock(raw),
