@@ -97,6 +97,34 @@ function extractLeafCategory(p: Record<string, unknown>): string | null {
   return null;
 }
 
+/**
+ * Бренд карточки. Каскад: options[brend__brend] → vendor. Отбрасываем
+ * значения, которые выглядят как маркировка серии/кабеля (ВВГ, ПВС, ...).
+ * Data-agnostic: без словарей брендов/серий.
+ * Sync с V1 `getBrandFromProduct` в chat-consultant/index.ts.
+ */
+function looksLikeMarking(s: string): boolean {
+  const v = (s || "").trim();
+  if (!v || v.length > 10) return false;
+  return /^[А-ЯЁ]{2,6}(нг)?[\s\-\d.,*хХx\/]{0,8}$/u.test(v);
+}
+
+function extractBrand(p: Record<string, unknown>): string | null {
+  const opts = p.options;
+  if (Array.isArray(opts)) {
+    for (const o of opts as Array<Record<string, unknown>>) {
+      if (o && (o.key === "brend__brend" || (typeof o.key === "string" && o.key.startsWith("brend__")))) {
+        const raw = o.value_ru ?? o.value;
+        const v = typeof raw === "string" ? raw.trim() : "";
+        if (v && !looksLikeMarking(v)) return v;
+      }
+    }
+  }
+  const vendor = typeof p.vendor === "string" ? p.vendor.trim() : "";
+  if (vendor && !looksLikeMarking(vendor)) return vendor;
+  return null;
+}
+
 type SingleSearchResult =
   | { ok: true; total: number; results: ProductRef[] }
   | { ok: false; error_code: ToolError["error_code"]; message: string };
@@ -166,7 +194,7 @@ async function singleSearch(
       if (!pagetitle) continue;
       const u = typeof raw.url === "string" ? raw.url : "";
       if (!u) continue;
-      const vendor = typeof raw.vendor === "string" ? raw.vendor : null;
+      const vendor = extractBrand(raw);
       const ref: ProductRef = {
         id, pagetitle, vendor, price,
         stock: inferStock(raw),
