@@ -1089,9 +1089,13 @@
       }
     }
 
-    // Убираем возможный оставшийся typing между пузырями
+    // Стрим завершён — снимаем и live-typing под пузырём, и промежуточные индикаторы
+    var liveDone = document.getElementById('volt-live-typing');
+    if (liveDone) liveDone.remove();
     var stalePt = document.getElementById('volt-products-typing');
     if (stalePt) stalePt.remove();
+    var stale1 = document.getElementById('volt-typing-indicator');
+    if (stale1) stale1.remove();
 
     if (result) {
       var cleanContent = stripGreeting(result.content);
