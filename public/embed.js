@@ -297,10 +297,11 @@
     }
     
     .volt-list-product {
-      margin-top: 10px;
-      margin-bottom: 2px;
+      margin-top: 14px;
+      margin-bottom: 4px;
       padding-left: 16px;
       text-indent: -10px;
+      font-weight: 500;
     }
 
     .volt-list-sub {
@@ -309,6 +310,19 @@
       text-indent: -10px;
       color: #bbb;
       font-size: 13px;
+    }
+
+    .volt-card-detail {
+      display: block;
+      margin: 2px 0 2px 16px;
+      padding-left: 0;
+      color: #bbb;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .volt-card-detail .volt-card-label {
+      color: #999;
+      margin-right: 4px;
     }
     
     .volt-list-item:first-child {
@@ -617,7 +631,12 @@
     // Handle numbered lists (1. 2. 3.) - main product items
     result = result.replace(/^(\d+)\.\s+(.+)$/gm, '<div class="volt-list-item volt-list-main">$1. $2</div>');
 
-    // Nested sub-items (≥2 leading spaces or tab) — детали карточки (Цена/Бренд/Наличие)
+    // Card detail lines: indented "Цена: ...", "Бренд: ...", "Наличие: ...", "Артикул: ..."
+    // рендер вставляет их с 2-пробельным отступом под пунктом карточки
+    result = result.replace(/^(?:[ ]{2,}|\t+)(Цена|Бренд|Наличие|Артикул|Мощность|Цвет|Модель|Гарантия|Производитель)\s*:\s*(.+)$/gm,
+      '<div class="volt-card-detail"><span class="volt-card-label">$1:</span>$2</div>');
+
+    // Nested sub-items (≥2 leading spaces or tab) — прочие детали через дефис
     result = result.replace(/^(?:[ ]{2,}|\t+)[\-•]\s+(.+)$/gm, '<div class="volt-list-item volt-list-sub">• $1</div>');
     // Root-level dash items — карточка товара (название с ссылкой)
     result = result.replace(/^[\-•]\s+(.+)$/gm, '<div class="volt-list-item volt-list-product">• $1</div>');
@@ -640,8 +659,8 @@
     // Line breaks (but not after list items)
     result = result.replace(/\n/g, '<br>');
     
-    // Clean up breaks around list items
-    result = result.replace(/<br>(<div class="volt-list-item)/g, '$1');
+    // Clean up breaks around list items и card-detail блоков
+    result = result.replace(/<br>(<div class="(?:volt-list-item|volt-card-detail))/g, '$1');
     result = result.replace(/(<\/div>)<br>/g, '$1');
     
     // Clean up multiple consecutive breaks
@@ -699,8 +718,9 @@
   }
 
   // Try streaming from a single endpoint, updating msgEl progressively
-  // onFirstToken is called when the first token arrives (to hide typing indicator)
-  async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken) {
+  // onFirstToken — вызывается при первом токене (убрать typing).
+  // onProductsBlock — возвращает НОВЫЙ пузырь для карточек (разделение intro и списка).
+  async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken, onProductsBlock) {
     if (!activePipelineReady) await fetchActivePipeline();
     var url = baseUrl + pipelinePath();
     var controller = new AbortController();
@@ -756,11 +776,38 @@
     var reader = response.body.getReader();
     var decoder = new TextDecoder();
     var textBuffer = '';
-    var fullContent = '';
+    var introContent = '';
+    var productsContent = '';
+    var currentEl = msgEl;
+    var mode = 'intro'; // 'intro' → 'products' после первого products_block
     var contacts = null;
     var done = false;
     var lastScrollTime = 0;
     var firstTokenReceived = false;
+
+    function appendDelta(delta) {
+      if (mode === 'intro') {
+        introContent += delta;
+        currentEl.innerHTML = formatMessage(stripGreeting(introContent));
+      } else {
+        productsContent += delta;
+        currentEl.innerHTML = formatMessage(stripGreeting(productsContent));
+      }
+    }
+
+    function handleProductsBlock(md) {
+      // Первый products_block — если есть intro-текст, открываем НОВЫЙ пузырь для карточек
+      if (mode === 'intro') {
+        mode = 'products';
+        if (introContent.trim() && typeof onProductsBlock === 'function') {
+          var newEl = onProductsBlock();
+          if (newEl) currentEl = newEl;
+        }
+      }
+      productsContent += (productsContent ? '\n\n' : '') + md;
+      currentEl.innerHTML = formatMessage(stripGreeting(productsContent));
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
 
     while (!done) {
       var chunk = await reader.read();
@@ -778,7 +825,6 @@
         var jsonStr = line.slice(6).trim();
         if (jsonStr === '[DONE]') {
           done = true;
-          // Drain remaining data from reader (slot_update may come after [DONE])
           while (true) {
             var extra = await reader.read();
             if (extra.done) break;
@@ -794,36 +840,18 @@
             if (ev.type === 'contacts') { contacts = ev.html; continue; }
             if (ev.type === 'slot_update') { dialogSlots = ev.slots || {}; saveState(); continue; }
             if (ev.type === 'products_block' && ev.markdown) {
-              if (!firstTokenReceived) {
-                firstTokenReceived = true;
-                onFirstToken();
-              }
-              fullContent += (fullContent ? '\n\n' : '') + ev.markdown;
-              msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
-              messagesContainer.scrollTop = messagesContainer.scrollHeight;
+              if (!firstTokenReceived) { firstTokenReceived = true; onFirstToken(); }
+              handleProductsBlock(ev.markdown);
               continue;
             }
             if (ev.type === 'assistant_turn_break' || ev.type === 'tool_event' || ev.type === 'quick_replies') continue;
           }
-          // Check for contacts event
-          if (obj.contacts) {
-            contacts = obj.contacts;
-            continue;
-          }
-          // Handle slot_update event
-          if (obj.slot_update) {
-            dialogSlots = obj.slot_update;
-            saveState();
-            continue;
-          }
+          if (obj.contacts) { contacts = obj.contacts; continue; }
+          if (obj.slot_update) { dialogSlots = obj.slot_update; saveState(); continue; }
           var delta = obj.choices && obj.choices[0] && obj.choices[0].delta && obj.choices[0].delta.content;
           if (delta) {
-            if (!firstTokenReceived) {
-              firstTokenReceived = true;
-              onFirstToken();
-            }
-            fullContent += delta;
-            msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
+            if (!firstTokenReceived) { firstTokenReceived = true; onFirstToken(); }
+            appendDelta(delta);
             var now = Date.now();
             if (now - lastScrollTime > 300) {
               lastScrollTime = now;
@@ -831,7 +859,6 @@
             }
           }
         } catch (e) {
-          // If JSON parse fails, put this line AND all remaining unparsed lines back into buffer
           var remainingLines = parsed.lines.slice(i).join('\n');
           textBuffer = remainingLines + (textBuffer ? '\n' + textBuffer : '');
           break;
@@ -839,8 +866,7 @@
       }
     }
 
-    // Final flush — обёрнут в try/catch: если уже получили хоть один токен,
-    // вернём частичный ответ вместо throw, чтобы не запускать дублирующий fallback.
+    // Final flush
     try {
       if (textBuffer.trim()) {
         var leftover = textBuffer.split('\n');
@@ -859,8 +885,7 @@
               if (ev2.type === 'contacts') { contacts = ev2.html; continue; }
               if (ev2.type === 'slot_update') { dialogSlots = ev2.slots || {}; saveState(); continue; }
               if (ev2.type === 'products_block' && ev2.markdown) {
-                fullContent += (fullContent ? '\n\n' : '') + ev2.markdown;
-                msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
+                handleProductsBlock(ev2.markdown);
                 continue;
               }
               if (ev2.type === 'assistant_turn_break' || ev2.type === 'tool_event' || ev2.type === 'quick_replies') continue;
@@ -868,10 +893,7 @@
             if (o2.contacts) { contacts = o2.contacts; continue; }
             if (o2.slot_update) { dialogSlots = o2.slot_update; saveState(); continue; }
             var d2 = o2.choices && o2.choices[0] && o2.choices[0].delta && o2.choices[0].delta.content;
-            if (d2) {
-              fullContent += d2;
-              msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
-            }
+            if (d2) appendDelta(d2);
           } catch(e) {}
         }
       }
@@ -879,14 +901,14 @@
       try { console.warn('[Widget] stream flush error: ' + (flushErr && flushErr.message)); } catch(e) {}
     }
 
-    if (!fullContent) {
-      // Ни одного токена — пробрасываем, чтобы fallback штатно сработал
+    var combined = [introContent, productsContent].filter(function(s){ return s && s.trim(); }).join('\n\n');
+    if (!combined) {
       if (!firstTokenReceived) throw new Error(label + ': empty streaming content');
-      // Иначе — возвращаем то что есть (не должно случаться, но защита)
-      return { content: '', contacts: contacts, partial: true };
+      return { content: '', contacts: contacts, partial: true, split: true };
     }
-    return { content: fullContent, contacts: contacts, partial: !done };
+    return { content: combined, contacts: contacts, partial: !done, split: true, introContent: introContent, productsContent: productsContent };
   }
+
 
   // Fallback: non-streaming fetch
   async function tryNonStreamEndpoint(baseUrl, message, label) {
@@ -951,8 +973,7 @@
     conversationHistory.push({ role: 'user', content: message });
     saveState();
 
-    // Step 1: Show typing animation (dots only)
-    var thinkingPhrase = pickThinkingPhrase(message);
+    // Показываем typing-точки. Никаких «Сейчас подберу варианты» — LLM сама пишет вступление.
     var typingIndicator = document.createElement('div');
     typingIndicator.className = 'volt-message assistant';
     typingIndicator.id = 'volt-typing-indicator';
@@ -970,39 +991,67 @@
       { url: 'https://yngoixmvmxdfxokuafjp.supabase.co', label: 'direct' }
     ];
 
-    // Create assistant message element for streaming
+    // Create assistant message element for streaming (intro-пузырь)
     var assistantMsg = document.createElement('div');
     assistantMsg.className = 'volt-message assistant';
     assistantMsg.innerHTML = '';
     var msgInserted = false;
     var firstTokenArrived = false;
+    var productsMsg = null; // второй пузырь — только когда пришёл products_block
+
+    // Callback: интро закончилось, пришли карточки — открываем НОВЫЙ пузырь
+    function openProductsBubble() {
+      // Убираем прежние typing-индикаторы
+      var t1 = document.getElementById('volt-typing-indicator');
+      if (t1) t1.remove();
+
+      // Короткая пауза-typing между пузырями
+      var pauseTyping = document.createElement('div');
+      pauseTyping.className = 'volt-message assistant';
+      pauseTyping.id = 'volt-products-typing';
+      pauseTyping.innerHTML = '<div class="volt-typing" style="background:transparent;padding:4px 0;"><span></span><span></span><span></span></div>';
+      messagesContainer.appendChild(pauseTyping);
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+      // И сразу же — новый пузырь для карточек (typing останется над ним и пропадёт при первом рендере)
+      productsMsg = document.createElement('div');
+      productsMsg.className = 'volt-message assistant';
+      productsMsg.innerHTML = '';
+      // Используем requestAnimationFrame, чтобы пользователь успел заметить typing-точки
+      setTimeout(function() {
+        var pt = document.getElementById('volt-products-typing');
+        if (pt) pt.remove();
+        messagesContainer.appendChild(productsMsg);
+        productsMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 350);
+      return productsMsg;
+    }
 
     var result = null;
     var lastError = null;
 
-    // Fire API request immediately (in parallel with animation)
+    // Fire API request immediately (typing-точки уже крутятся)
     var streamPromise = (async function() {
       for (var i = 0; i < streamEndpoints.length; i++) {
         try {
-          result = await tryStreamEndpoint(streamEndpoints[i].url, message, streamEndpoints[i].label, assistantMsg, function() {
-            firstTokenArrived = true;
-            // Called on first token — remove typing indicators, show real message
-            var typingEl1 = document.getElementById('volt-typing-indicator');
-            if (typingEl1) typingEl1.remove();
-            var typingEl2 = document.getElementById('volt-typing-indicator-2');
-            if (typingEl2) typingEl2.remove();
-            if (!msgInserted) {
-              messagesContainer.appendChild(assistantMsg);
-              assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              msgInserted = true;
-            }
-          });
+          result = await tryStreamEndpoint(
+            streamEndpoints[i].url, message, streamEndpoints[i].label, assistantMsg,
+            function() {
+              firstTokenArrived = true;
+              var typingEl1 = document.getElementById('volt-typing-indicator');
+              if (typingEl1) typingEl1.remove();
+              if (!msgInserted) {
+                messagesContainer.appendChild(assistantMsg);
+                assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                msgInserted = true;
+              }
+            },
+            openProductsBubble
+          );
           return;
         } catch (err) {
           lastError = err;
           try { console.warn('[Widget] stream ' + streamEndpoints[i].label + ' failed: ' + (err && err.message)); } catch(e) {}
-          // Если успели получить токены — больше не пробуем другие стрим-эндпоинты,
-          // иначе на экране может появиться частичный ответ + новая попытка поверх.
           if (firstTokenArrived) break;
           if (assistantMsg.parentNode && !assistantMsg.innerHTML) assistantMsg.remove();
           msgInserted = false;
@@ -1010,36 +1059,10 @@
       }
     })();
 
-    // Step 2: After longer delay, show thinking phrase (runs in parallel with API call)
-    // Только для каталожных запросов. Иначе оставляем крутиться typing-точки.
-    await new Promise(function(r) { setTimeout(r, 3000); });
-
-    if (thinkingPhrase && !firstTokenArrived) {
-      var typingEl1 = document.getElementById('volt-typing-indicator');
-      if (typingEl1) typingEl1.remove();
-
-      // Insert thinking phrase as permanent message
-      var thinkingMsg = document.createElement('div');
-      thinkingMsg.className = 'volt-message assistant';
-      thinkingMsg.id = 'volt-thinking-phrase';
-      thinkingMsg.innerHTML = formatMessage(thinkingPhrase);
-      messagesContainer.appendChild(thinkingMsg);
-
-      // Show new typing animation below for the real response
-      var typingIndicator2 = document.createElement('div');
-      typingIndicator2.className = 'volt-message assistant';
-      typingIndicator2.id = 'volt-typing-indicator-2';
-      typingIndicator2.innerHTML = '<div class="volt-typing" style="background:transparent;padding:4px 0;"><span></span><span></span><span></span></div>';
-      messagesContainer.appendChild(typingIndicator2);
-      messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    }
-
     // Wait for stream to complete
     await streamPromise;
 
-    // Fallback to non-streaming — ТОЛЬКО если стрим вообще ничего не отдал.
-    // Если firstTokenArrived=true → пользователь уже видит ответ (полный или частичный),
-    // повторный вызов edge только сожжёт токены и может перезатереть UI.
+    // Fallback to non-streaming — только если стрим вообще ничего не отдал
     if (!result && !firstTokenArrived) {
       for (var k = 0; k < fallbackEndpoints.length; k++) {
         try {
@@ -1052,17 +1075,22 @@
       }
     }
 
-    var typingEl2 = document.getElementById('volt-typing-indicator-2');
-    if (typingEl2) typingEl2.remove();
+    // Убираем возможный оставшийся typing между пузырями
+    var stalePt = document.getElementById('volt-products-typing');
+    if (stalePt) stalePt.remove();
 
     if (result) {
-      if (!msgInserted) {
-        messagesContainer.appendChild(assistantMsg);
-        msgInserted = true;
-      }
       var cleanContent = stripGreeting(result.content);
-      assistantMsg.innerHTML = formatMessage(cleanContent);
-      assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      // Если стрим НЕ дал split (non-stream fallback) — рендерим всё в один пузырь.
+      if (!result.split || !firstTokenArrived) {
+        if (!msgInserted) {
+          messagesContainer.appendChild(assistantMsg);
+          msgInserted = true;
+        }
+        assistantMsg.innerHTML = formatMessage(cleanContent);
+        assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      // Если split уже произошёл — пузыри уже отрисованы прогрессивно, не перерисовываем.
       conversationHistory.push({ role: 'assistant', content: cleanContent });
       saveState();
 
