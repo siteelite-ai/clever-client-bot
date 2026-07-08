@@ -58,7 +58,8 @@ export function executeRenderProducts(
     block += `\n  Цена: *${formatPrice(p.price)}* ₸`;
     if (p.vendor) block += `\n  Бренд: ${p.vendor}`;
     const stockLabel = STOCK_LABEL[p.stock];
-    if (stockLabel) block += `\n  Наличие: ${stockLabel}`;
+    const stockLine = formatStockLine(p.warehouses, stockLabel);
+    if (stockLine) block += `\n  Наличие: ${stockLine}`;
     lines.push(block);
     rendered++;
   }
