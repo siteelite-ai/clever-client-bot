@@ -9,6 +9,12 @@ export interface ProductRef {
   short_traits: string[];
   /** Pagetitle листовой категории товара (если API его вернул). Источник L₀ для режима «аналог». */
   leaf_category?: string | null;
+  /**
+   * Складские остатки по городам (из /products.warehouses). Только записи с qty>0,
+   * отсортированные по убыванию qty. Пусто/undefined — данных нет (не путать с «нет в наличии»).
+   * Используется LLM для ответов «в каком городе / сколько в городе X», и render_products для строки «Наличие».
+   */
+  warehouses?: Array<{ city: string; qty: number }>;
 }
 
 export interface ProductFull extends ProductRef {

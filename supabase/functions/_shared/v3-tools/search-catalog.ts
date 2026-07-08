@@ -44,12 +44,32 @@ export interface SearchCatalogInput {
   anchor_leaf_category?: string;
 }
 
+function extractWarehouses(p: Record<string, unknown>): Array<{ city: string; qty: number }> {
+  const wh = p.warehouses as Array<{ city?: unknown; amount?: unknown; qty?: unknown }> | undefined;
+  if (!Array.isArray(wh)) return [];
+  const out: Array<{ city: string; qty: number }> = [];
+  for (const w of wh) {
+    const city = typeof w?.city === "string" ? w.city.trim() : "";
+    // API 220volt отдаёт `amount`; на всякий случай поддерживаем и `qty`.
+    const qtyRaw = typeof w?.amount === "number" ? w.amount
+      : typeof w?.qty === "number" ? w.qty
+      : 0;
+    if (!city || !Number.isFinite(qtyRaw) || qtyRaw <= 0) continue;
+    out.push({ city, qty: qtyRaw });
+  }
+  out.sort((a, b) => b.qty - a.qty);
+  return out;
+}
+
 function inferStock(p: Record<string, unknown>): ProductRef["stock"] {
   // 220volt: warehouses часто отсутствует/пуст для активных товаров.
   // Если API вернул карточку — считаем доступной, пока явно не сказано обратное.
-  const wh = p.warehouses as Array<{ qty?: number | null }> | undefined;
+  const wh = p.warehouses as Array<{ qty?: number | null; amount?: number | null }> | undefined;
   if (!Array.isArray(wh) || wh.length === 0) return "in_stock";
-  const total = wh.reduce((s, w) => s + (typeof w?.qty === "number" ? w.qty : 0), 0);
+  const total = wh.reduce((s, w) => {
+    const q = typeof w?.amount === "number" ? w.amount : (typeof w?.qty === "number" ? w.qty : 0);
+    return s + (Number.isFinite(q) ? q : 0);
+  }, 0);
   if (total <= 0) return "in_stock"; // не блокируем рендер: товар активен, наличие уточняется при заказе
   if (total < 3) return "low";
   return "in_stock";
@@ -196,11 +216,13 @@ async function singleSearch(
       const u = typeof raw.url === "string" ? raw.url : "";
       if (!u) continue;
       const vendor = extractBrand(raw);
+      const warehouses = extractWarehouses(raw);
       const ref: ProductRef = {
         id, pagetitle, vendor, price,
         stock: inferStock(raw),
         short_traits: extractTraits(raw),
         leaf_category: extractLeafCategory(raw),
+        ...(warehouses.length > 0 ? { warehouses } : {}),
       };
       cache.set(id, { ...ref, url: u });
       results.push(ref);
