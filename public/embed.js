@@ -1115,7 +1115,19 @@
 
     // Стрим завершён — блокируем отложенное появление live-typing и снимаем все индикаторы
     streamEnded = true;
-    if (pendingProductsTimer) { clearTimeout(pendingProductsTimer); pendingProductsTimer = null; }
+    if (pendingProductsTimer) {
+      clearTimeout(pendingProductsTimer);
+      pendingProductsTimer = null;
+      // Стрим завершился раньше, чем сработал 350ms-таймер вставки products-пузыря.
+      // Если карточки уже пришли (productsMsg наполнен) — вставляем СРАЗУ,
+      // иначе они молча потеряются и юзер увидит только intro.
+      if (productsMsg && !productsMsg.parentNode && productsMsg.innerHTML) {
+        var ptEarly = document.getElementById('volt-products-typing');
+        if (ptEarly) ptEarly.remove();
+        messagesContainer.appendChild(productsMsg);
+        productsMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+    }
     var liveDone = document.getElementById('volt-live-typing');
     if (liveDone) liveDone.remove();
     var stalePt = document.getElementById('volt-products-typing');
