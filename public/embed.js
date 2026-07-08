@@ -1001,9 +1001,9 @@
 
     // Callback: интро закончилось, пришли карточки — открываем НОВЫЙ пузырь
     function openProductsBubble() {
-      // Убираем прежние typing-индикаторы
-      var t1 = document.getElementById('volt-typing-indicator');
-      if (t1) t1.remove();
+      // Убираем live-typing из-под intro-пузыря — сейчас покажем «переходную» паузу
+      var live = document.getElementById('volt-live-typing');
+      if (live) live.remove();
 
       // Короткая пауза-typing между пузырями
       var pauseTyping = document.createElement('div');
@@ -1013,16 +1013,20 @@
       messagesContainer.appendChild(pauseTyping);
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
-      // И сразу же — новый пузырь для карточек (typing останется над ним и пропадёт при первом рендере)
       productsMsg = document.createElement('div');
       productsMsg.className = 'volt-message assistant';
       productsMsg.innerHTML = '';
-      // Используем requestAnimationFrame, чтобы пользователь успел заметить typing-точки
       setTimeout(function() {
         var pt = document.getElementById('volt-products-typing');
         if (pt) pt.remove();
         messagesContainer.appendChild(productsMsg);
         productsMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        // Live-typing снова под текущим (products) пузырём, пока стрим не кончился
+        var live2 = document.createElement('div');
+        live2.className = 'volt-message assistant';
+        live2.id = 'volt-live-typing';
+        live2.innerHTML = '<div class="volt-typing" style="background:transparent;padding:4px 0;"><span></span><span></span><span></span></div>';
+        messagesContainer.appendChild(live2);
       }, 350);
       return productsMsg;
     }
