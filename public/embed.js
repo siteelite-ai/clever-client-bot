@@ -1113,13 +1113,22 @@
       }
     }
 
-    // Стрим завершён — снимаем и live-typing под пузырём, и промежуточные индикаторы
+    // Стрим завершён — блокируем отложенное появление live-typing и снимаем все индикаторы
+    streamEnded = true;
+    if (pendingProductsTimer) { clearTimeout(pendingProductsTimer); pendingProductsTimer = null; }
     var liveDone = document.getElementById('volt-live-typing');
     if (liveDone) liveDone.remove();
     var stalePt = document.getElementById('volt-products-typing');
     if (stalePt) stalePt.remove();
     var stale1 = document.getElementById('volt-typing-indicator');
     if (stale1) stale1.remove();
+    // Двойная страховка: если какой-то таймер всё же успел вставить live-typing позже — снять на следующем тике
+    setTimeout(function() {
+      var late = document.getElementById('volt-live-typing');
+      if (late) late.remove();
+      var lateProducts = document.getElementById('volt-products-typing');
+      if (lateProducts) lateProducts.remove();
+    }, 400);
 
     if (result) {
       var cleanContent = stripGreeting(result.content);
