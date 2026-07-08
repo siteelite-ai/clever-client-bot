@@ -631,7 +631,12 @@
     // Handle numbered lists (1. 2. 3.) - main product items
     result = result.replace(/^(\d+)\.\s+(.+)$/gm, '<div class="volt-list-item volt-list-main">$1. $2</div>');
 
-    // Nested sub-items (≥2 leading spaces or tab) — детали карточки (Цена/Бренд/Наличие)
+    // Card detail lines: indented "Цена: ...", "Бренд: ...", "Наличие: ...", "Артикул: ..."
+    // рендер вставляет их с 2-пробельным отступом под пунктом карточки
+    result = result.replace(/^(?:[ ]{2,}|\t+)(Цена|Бренд|Наличие|Артикул|Мощность|Цвет|Модель|Гарантия|Производитель)\s*:\s*(.+)$/gm,
+      '<div class="volt-card-detail"><span class="volt-card-label">$1:</span>$2</div>');
+
+    // Nested sub-items (≥2 leading spaces or tab) — прочие детали через дефис
     result = result.replace(/^(?:[ ]{2,}|\t+)[\-•]\s+(.+)$/gm, '<div class="volt-list-item volt-list-sub">• $1</div>');
     // Root-level dash items — карточка товара (название с ссылкой)
     result = result.replace(/^[\-•]\s+(.+)$/gm, '<div class="volt-list-item volt-list-product">• $1</div>');
