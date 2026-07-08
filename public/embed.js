@@ -992,39 +992,67 @@
       { url: 'https://yngoixmvmxdfxokuafjp.supabase.co', label: 'direct' }
     ];
 
-    // Create assistant message element for streaming
+    // Create assistant message element for streaming (intro-пузырь)
     var assistantMsg = document.createElement('div');
     assistantMsg.className = 'volt-message assistant';
     assistantMsg.innerHTML = '';
     var msgInserted = false;
     var firstTokenArrived = false;
+    var productsMsg = null; // второй пузырь — только когда пришёл products_block
+
+    // Callback: интро закончилось, пришли карточки — открываем НОВЫЙ пузырь
+    function openProductsBubble() {
+      // Убираем прежние typing-индикаторы
+      var t1 = document.getElementById('volt-typing-indicator');
+      if (t1) t1.remove();
+
+      // Короткая пауза-typing между пузырями
+      var pauseTyping = document.createElement('div');
+      pauseTyping.className = 'volt-message assistant';
+      pauseTyping.id = 'volt-products-typing';
+      pauseTyping.innerHTML = '<div class="volt-typing" style="background:transparent;padding:4px 0;"><span></span><span></span><span></span></div>';
+      messagesContainer.appendChild(pauseTyping);
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+
+      // И сразу же — новый пузырь для карточек (typing останется над ним и пропадёт при первом рендере)
+      productsMsg = document.createElement('div');
+      productsMsg.className = 'volt-message assistant';
+      productsMsg.innerHTML = '';
+      // Используем requestAnimationFrame, чтобы пользователь успел заметить typing-точки
+      setTimeout(function() {
+        var pt = document.getElementById('volt-products-typing');
+        if (pt) pt.remove();
+        messagesContainer.appendChild(productsMsg);
+        productsMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 350);
+      return productsMsg;
+    }
 
     var result = null;
     var lastError = null;
 
-    // Fire API request immediately (in parallel with animation)
+    // Fire API request immediately (typing-точки уже крутятся)
     var streamPromise = (async function() {
       for (var i = 0; i < streamEndpoints.length; i++) {
         try {
-          result = await tryStreamEndpoint(streamEndpoints[i].url, message, streamEndpoints[i].label, assistantMsg, function() {
-            firstTokenArrived = true;
-            // Called on first token — remove typing indicators, show real message
-            var typingEl1 = document.getElementById('volt-typing-indicator');
-            if (typingEl1) typingEl1.remove();
-            var typingEl2 = document.getElementById('volt-typing-indicator-2');
-            if (typingEl2) typingEl2.remove();
-            if (!msgInserted) {
-              messagesContainer.appendChild(assistantMsg);
-              assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              msgInserted = true;
-            }
-          });
+          result = await tryStreamEndpoint(
+            streamEndpoints[i].url, message, streamEndpoints[i].label, assistantMsg,
+            function() {
+              firstTokenArrived = true;
+              var typingEl1 = document.getElementById('volt-typing-indicator');
+              if (typingEl1) typingEl1.remove();
+              if (!msgInserted) {
+                messagesContainer.appendChild(assistantMsg);
+                assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                msgInserted = true;
+              }
+            },
+            openProductsBubble
+          );
           return;
         } catch (err) {
           lastError = err;
           try { console.warn('[Widget] stream ' + streamEndpoints[i].label + ' failed: ' + (err && err.message)); } catch(e) {}
-          // Если успели получить токены — больше не пробуем другие стрим-эндпоинты,
-          // иначе на экране может появиться частичный ответ + новая попытка поверх.
           if (firstTokenArrived) break;
           if (assistantMsg.parentNode && !assistantMsg.innerHTML) assistantMsg.remove();
           msgInserted = false;
@@ -1032,36 +1060,10 @@
       }
     })();
 
-    // Step 2: After longer delay, show thinking phrase (runs in parallel with API call)
-    // Только для каталожных запросов. Иначе оставляем крутиться typing-точки.
-    await new Promise(function(r) { setTimeout(r, 3000); });
-
-    if (thinkingPhrase && !firstTokenArrived) {
-      var typingEl1 = document.getElementById('volt-typing-indicator');
-      if (typingEl1) typingEl1.remove();
-
-      // Insert thinking phrase as permanent message
-      var thinkingMsg = document.createElement('div');
-      thinkingMsg.className = 'volt-message assistant';
-      thinkingMsg.id = 'volt-thinking-phrase';
-      thinkingMsg.innerHTML = formatMessage(thinkingPhrase);
-      messagesContainer.appendChild(thinkingMsg);
-
-      // Show new typing animation below for the real response
-      var typingIndicator2 = document.createElement('div');
-      typingIndicator2.className = 'volt-message assistant';
-      typingIndicator2.id = 'volt-typing-indicator-2';
-      typingIndicator2.innerHTML = '<div class="volt-typing" style="background:transparent;padding:4px 0;"><span></span><span></span><span></span></div>';
-      messagesContainer.appendChild(typingIndicator2);
-      messagesContainer.scrollTop = messagesContainer.scrollHeight;
-    }
-
     // Wait for stream to complete
     await streamPromise;
 
-    // Fallback to non-streaming — ТОЛЬКО если стрим вообще ничего не отдал.
-    // Если firstTokenArrived=true → пользователь уже видит ответ (полный или частичный),
-    // повторный вызов edge только сожжёт токены и может перезатереть UI.
+    // Fallback to non-streaming — только если стрим вообще ничего не отдал
     if (!result && !firstTokenArrived) {
       for (var k = 0; k < fallbackEndpoints.length; k++) {
         try {
@@ -1074,17 +1076,22 @@
       }
     }
 
-    var typingEl2 = document.getElementById('volt-typing-indicator-2');
-    if (typingEl2) typingEl2.remove();
+    // Убираем возможный оставшийся typing между пузырями
+    var stalePt = document.getElementById('volt-products-typing');
+    if (stalePt) stalePt.remove();
 
     if (result) {
-      if (!msgInserted) {
-        messagesContainer.appendChild(assistantMsg);
-        msgInserted = true;
-      }
       var cleanContent = stripGreeting(result.content);
-      assistantMsg.innerHTML = formatMessage(cleanContent);
-      assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      // Если стрим НЕ дал split (non-stream fallback) — рендерим всё в один пузырь.
+      if (!result.split || !firstTokenArrived) {
+        if (!msgInserted) {
+          messagesContainer.appendChild(assistantMsg);
+          msgInserted = true;
+        }
+        assistantMsg.innerHTML = formatMessage(cleanContent);
+        assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+      // Если split уже произошёл — пузыри уже отрисованы прогрессивно, не перерисовываем.
       conversationHistory.push({ role: 'assistant', content: cleanContent });
       saveState();
 
