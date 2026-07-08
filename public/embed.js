@@ -718,8 +718,9 @@
   }
 
   // Try streaming from a single endpoint, updating msgEl progressively
-  // onFirstToken is called when the first token arrives (to hide typing indicator)
-  async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken) {
+  // onFirstToken — вызывается при первом токене (убрать typing).
+  // onProductsBlock — возвращает НОВЫЙ пузырь для карточек (разделение intro и списка).
+  async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken, onProductsBlock) {
     if (!activePipelineReady) await fetchActivePipeline();
     var url = baseUrl + pipelinePath();
     var controller = new AbortController();
