@@ -973,8 +973,7 @@
     conversationHistory.push({ role: 'user', content: message });
     saveState();
 
-    // Step 1: Show typing animation (dots only)
-    var thinkingPhrase = pickThinkingPhrase(message);
+    // Показываем typing-точки. Никаких «Сейчас подберу варианты» — LLM сама пишет вступление.
     var typingIndicator = document.createElement('div');
     typingIndicator.className = 'volt-message assistant';
     typingIndicator.id = 'volt-typing-indicator';
