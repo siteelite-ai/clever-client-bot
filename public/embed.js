@@ -659,8 +659,8 @@
     // Line breaks (but not after list items)
     result = result.replace(/\n/g, '<br>');
     
-    // Clean up breaks around list items
-    result = result.replace(/<br>(<div class="volt-list-item)/g, '$1');
+    // Clean up breaks around list items и card-detail блоков
+    result = result.replace(/<br>(<div class="(?:volt-list-item|volt-card-detail))/g, '$1');
     result = result.replace(/(<\/div>)<br>/g, '$1');
     
     // Clean up multiple consecutive breaks
