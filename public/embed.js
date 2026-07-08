@@ -297,19 +297,40 @@
     }
     
     .volt-list-product {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
       margin-top: 14px;
       margin-bottom: 4px;
-      padding-left: 16px;
-      text-indent: -10px;
+      padding-left: 0;
+      text-indent: 0;
       font-weight: 500;
+      overflow-wrap: anywhere;
+    }
+    .volt-list-product::before {
+      content: "•";
+      flex: 0 0 auto;
+      color: ${CONFIG.primaryColor};
+      font-weight: 700;
+      line-height: 1.2;
     }
 
     .volt-list-sub {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
       margin: 2px 0 2px 16px;
-      padding-left: 16px;
-      text-indent: -10px;
+      padding-left: 0;
+      text-indent: 0;
       color: #bbb;
       font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    .volt-list-sub::before {
+      content: "•";
+      flex: 0 0 auto;
+      color: #888;
+      line-height: 1.2;
     }
 
     .volt-card-detail {
@@ -636,10 +657,10 @@
     result = result.replace(/^(?:[ ]{2,}|\t+)(Цена|Бренд|Наличие|Артикул|Мощность|Цвет|Модель|Гарантия|Производитель)\s*:\s*(.+)$/gm,
       '<div class="volt-card-detail"><span class="volt-card-label">$1:</span>$2</div>');
 
-    // Nested sub-items (≥2 leading spaces or tab) — прочие детали через дефис
-    result = result.replace(/^(?:[ ]{2,}|\t+)[\-•]\s+(.+)$/gm, '<div class="volt-list-item volt-list-sub">• $1</div>');
-    // Root-level dash items — карточка товара (название с ссылкой)
-    result = result.replace(/^[\-•]\s+(.+)$/gm, '<div class="volt-list-item volt-list-product">• $1</div>');
+    // Nested sub-items (≥2 leading spaces or tab). Точка добавляется CSS ::before.
+    result = result.replace(/^(?:[ ]{2,}|\t+)[\-•]\s+(.+)$/gm, '<div class="volt-list-item volt-list-sub">$1</div>');
+    // Root-level dash items — карточка товара. Точка добавляется CSS ::before.
+    result = result.replace(/^[\-•]\s+(.+)$/gm, '<div class="volt-list-item volt-list-product">$1</div>');
 
     // Handle bullet lists with asterisks at line start (not sub-items)
     result = result.replace(/^\*\s+(.+)$/gm, '<div class="volt-list-item">• $1</div>');
