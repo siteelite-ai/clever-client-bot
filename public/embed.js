@@ -297,19 +297,40 @@
     }
     
     .volt-list-product {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
       margin-top: 14px;
       margin-bottom: 4px;
-      padding-left: 16px;
-      text-indent: -10px;
+      padding-left: 0;
+      text-indent: 0;
       font-weight: 500;
+      overflow-wrap: anywhere;
+    }
+    .volt-list-product::before {
+      content: "•";
+      flex: 0 0 auto;
+      color: ${CONFIG.primaryColor};
+      font-weight: 700;
+      line-height: 1.2;
     }
 
     .volt-list-sub {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
       margin: 2px 0 2px 16px;
-      padding-left: 16px;
-      text-indent: -10px;
+      padding-left: 0;
+      text-indent: 0;
       color: #bbb;
       font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+    .volt-list-sub::before {
+      content: "•";
+      flex: 0 0 auto;
+      color: #888;
+      line-height: 1.2;
     }
 
     .volt-card-detail {
