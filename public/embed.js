@@ -776,11 +776,38 @@
     var reader = response.body.getReader();
     var decoder = new TextDecoder();
     var textBuffer = '';
-    var fullContent = '';
+    var introContent = '';
+    var productsContent = '';
+    var currentEl = msgEl;
+    var mode = 'intro'; // 'intro' → 'products' после первого products_block
     var contacts = null;
     var done = false;
     var lastScrollTime = 0;
     var firstTokenReceived = false;
+
+    function appendDelta(delta) {
+      if (mode === 'intro') {
+        introContent += delta;
+        currentEl.innerHTML = formatMessage(stripGreeting(introContent));
+      } else {
+        productsContent += delta;
+        currentEl.innerHTML = formatMessage(stripGreeting(productsContent));
+      }
+    }
+
+    function handleProductsBlock(md) {
+      // Первый products_block — если есть intro-текст, открываем НОВЫЙ пузырь для карточек
+      if (mode === 'intro') {
+        mode = 'products';
+        if (introContent.trim() && typeof onProductsBlock === 'function') {
+          var newEl = onProductsBlock();
+          if (newEl) currentEl = newEl;
+        }
+      }
+      productsContent += (productsContent ? '\n\n' : '') + md;
+      currentEl.innerHTML = formatMessage(stripGreeting(productsContent));
+      messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
 
     while (!done) {
       var chunk = await reader.read();
@@ -798,7 +825,6 @@
         var jsonStr = line.slice(6).trim();
         if (jsonStr === '[DONE]') {
           done = true;
-          // Drain remaining data from reader (slot_update may come after [DONE])
           while (true) {
             var extra = await reader.read();
             if (extra.done) break;
@@ -814,36 +840,18 @@
             if (ev.type === 'contacts') { contacts = ev.html; continue; }
             if (ev.type === 'slot_update') { dialogSlots = ev.slots || {}; saveState(); continue; }
             if (ev.type === 'products_block' && ev.markdown) {
-              if (!firstTokenReceived) {
-                firstTokenReceived = true;
-                onFirstToken();
-              }
-              fullContent += (fullContent ? '\n\n' : '') + ev.markdown;
-              msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
-              messagesContainer.scrollTop = messagesContainer.scrollHeight;
+              if (!firstTokenReceived) { firstTokenReceived = true; onFirstToken(); }
+              handleProductsBlock(ev.markdown);
               continue;
             }
             if (ev.type === 'assistant_turn_break' || ev.type === 'tool_event' || ev.type === 'quick_replies') continue;
           }
-          // Check for contacts event
-          if (obj.contacts) {
-            contacts = obj.contacts;
-            continue;
-          }
-          // Handle slot_update event
-          if (obj.slot_update) {
-            dialogSlots = obj.slot_update;
-            saveState();
-            continue;
-          }
+          if (obj.contacts) { contacts = obj.contacts; continue; }
+          if (obj.slot_update) { dialogSlots = obj.slot_update; saveState(); continue; }
           var delta = obj.choices && obj.choices[0] && obj.choices[0].delta && obj.choices[0].delta.content;
           if (delta) {
-            if (!firstTokenReceived) {
-              firstTokenReceived = true;
-              onFirstToken();
-            }
-            fullContent += delta;
-            msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
+            if (!firstTokenReceived) { firstTokenReceived = true; onFirstToken(); }
+            appendDelta(delta);
             var now = Date.now();
             if (now - lastScrollTime > 300) {
               lastScrollTime = now;
@@ -851,7 +859,6 @@
             }
           }
         } catch (e) {
-          // If JSON parse fails, put this line AND all remaining unparsed lines back into buffer
           var remainingLines = parsed.lines.slice(i).join('\n');
           textBuffer = remainingLines + (textBuffer ? '\n' + textBuffer : '');
           break;
@@ -859,8 +866,7 @@
       }
     }
 
-    // Final flush — обёрнут в try/catch: если уже получили хоть один токен,
-    // вернём частичный ответ вместо throw, чтобы не запускать дублирующий fallback.
+    // Final flush
     try {
       if (textBuffer.trim()) {
         var leftover = textBuffer.split('\n');
@@ -879,8 +885,7 @@
               if (ev2.type === 'contacts') { contacts = ev2.html; continue; }
               if (ev2.type === 'slot_update') { dialogSlots = ev2.slots || {}; saveState(); continue; }
               if (ev2.type === 'products_block' && ev2.markdown) {
-                fullContent += (fullContent ? '\n\n' : '') + ev2.markdown;
-                msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
+                handleProductsBlock(ev2.markdown);
                 continue;
               }
               if (ev2.type === 'assistant_turn_break' || ev2.type === 'tool_event' || ev2.type === 'quick_replies') continue;
@@ -888,10 +893,7 @@
             if (o2.contacts) { contacts = o2.contacts; continue; }
             if (o2.slot_update) { dialogSlots = o2.slot_update; saveState(); continue; }
             var d2 = o2.choices && o2.choices[0] && o2.choices[0].delta && o2.choices[0].delta.content;
-            if (d2) {
-              fullContent += d2;
-              msgEl.innerHTML = formatMessage(stripGreeting(fullContent));
-            }
+            if (d2) appendDelta(d2);
           } catch(e) {}
         }
       }
@@ -899,14 +901,14 @@
       try { console.warn('[Widget] stream flush error: ' + (flushErr && flushErr.message)); } catch(e) {}
     }
 
-    if (!fullContent) {
-      // Ни одного токена — пробрасываем, чтобы fallback штатно сработал
+    var combined = [introContent, productsContent].filter(function(s){ return s && s.trim(); }).join('\n\n');
+    if (!combined) {
       if (!firstTokenReceived) throw new Error(label + ': empty streaming content');
-      // Иначе — возвращаем то что есть (не должно случаться, но защита)
-      return { content: '', contacts: contacts, partial: true };
+      return { content: '', contacts: contacts, partial: true, split: true };
     }
-    return { content: fullContent, contacts: contacts, partial: !done };
+    return { content: combined, contacts: contacts, partial: !done, split: true, introContent: introContent, productsContent: productsContent };
   }
+
 
   // Fallback: non-streaming fetch
   async function tryNonStreamEndpoint(baseUrl, message, label) {
