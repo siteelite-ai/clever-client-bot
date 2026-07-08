@@ -1045,6 +1045,16 @@
                 assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
                 msgInserted = true;
               }
+              // Live typing-точки ПОД пузырём: пока стрим идёт — юзер видит, что бот ещё печатает.
+              var live = document.getElementById('volt-live-typing');
+              if (!live) {
+                live = document.createElement('div');
+                live.className = 'volt-message assistant';
+                live.id = 'volt-live-typing';
+                live.innerHTML = '<div class="volt-typing" style="background:transparent;padding:4px 0;"><span></span><span></span><span></span></div>';
+                messagesContainer.appendChild(live);
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+              }
             },
             openProductsBubble
           );
