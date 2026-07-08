@@ -297,10 +297,11 @@
     }
     
     .volt-list-product {
-      margin-top: 10px;
-      margin-bottom: 2px;
+      margin-top: 14px;
+      margin-bottom: 4px;
       padding-left: 16px;
       text-indent: -10px;
+      font-weight: 500;
     }
 
     .volt-list-sub {
@@ -309,6 +310,19 @@
       text-indent: -10px;
       color: #bbb;
       font-size: 13px;
+    }
+
+    .volt-card-detail {
+      display: block;
+      margin: 2px 0 2px 16px;
+      padding-left: 0;
+      color: #bbb;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .volt-card-detail .volt-card-label {
+      color: #999;
+      margin-right: 4px;
     }
     
     .volt-list-item:first-child {
