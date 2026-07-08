@@ -607,24 +607,31 @@
     
     // Handle bold **text**
     result = result.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
-    
+
+    // Handle bold __text__ (underscore variant)
+    result = result.replace(/__([^_\n]+?)__/g, '<strong>$1</strong>');
+
     // Handle strikethrough ~~text~~
     result = result.replace(/~~(.*?)~~/g, '<s style="color:#888">$1</s>');
-    
+
     // Handle numbered lists (1. 2. 3.) - main product items
     result = result.replace(/^(\d+)\.\s+(.+)$/gm, '<div class="volt-list-item volt-list-main">$1. $2</div>');
-    
+
     // Nested sub-items (≥2 leading spaces or tab) — детали карточки (Цена/Бренд/Наличие)
     result = result.replace(/^(?:[ ]{2,}|\t+)[\-•]\s+(.+)$/gm, '<div class="volt-list-item volt-list-sub">• $1</div>');
     // Root-level dash items — карточка товара (название с ссылкой)
     result = result.replace(/^[\-•]\s+(.+)$/gm, '<div class="volt-list-item volt-list-product">• $1</div>');
-    
+
     // Handle bullet lists with asterisks at line start (not sub-items)
     result = result.replace(/^\*\s+(.+)$/gm, '<div class="volt-list-item">• $1</div>');
-    
+
     // Handle italic *text* (after bullets, so leading "* " bullets are already consumed).
     // Skip if the asterisk is glued to a word boundary like ** (already handled) — non-greedy, no newlines, no asterisks inside.
     result = result.replace(/(^|[^\*\w])\*([^\*\n]+?)\*(?!\*)/g, '$1<em>$2</em>');
+
+    // Handle italic _text_ (underscore variant) — LLM/ReactMarkdown-style.
+    // Match только на не-word границах, чтобы не портить URL/идентификаторы (foo_bar).
+    result = result.replace(/(^|[^\w])_([^_\n]+?)_(?!\w)/g, '$1<em>$2</em>');
     
     // Unescape backslash-escaped markdown punctuation that LLM may emit in product names
     // e.g. "\(серия Florence\)" → "(серия Florence)"
