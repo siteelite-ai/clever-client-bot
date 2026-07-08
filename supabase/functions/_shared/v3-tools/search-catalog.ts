@@ -216,11 +216,13 @@ async function singleSearch(
       const u = typeof raw.url === "string" ? raw.url : "";
       if (!u) continue;
       const vendor = extractBrand(raw);
+      const warehouses = extractWarehouses(raw);
       const ref: ProductRef = {
         id, pagetitle, vendor, price,
         stock: inferStock(raw),
         short_traits: extractTraits(raw),
         leaf_category: extractLeafCategory(raw),
+        ...(warehouses.length > 0 ? { warehouses } : {}),
       };
       cache.set(id, { ...ref, url: u });
       results.push(ref);
