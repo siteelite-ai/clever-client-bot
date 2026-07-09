@@ -335,15 +335,15 @@
 
     .volt-card-detail {
       display: block;
-      margin: 2px 0 2px 16px;
+      margin: 4px 0 4px 16px;
       padding-left: 0;
-      color: #bbb;
-      font-size: 13px;
-      line-height: 1.5;
+      color: #d8d8d8;
+      font-size: 15px;
+      line-height: 1.55;
     }
     .volt-card-detail .volt-card-label {
-      color: #999;
-      margin-right: 4px;
+      color: #a8a8a8;
+      margin-right: 6px;
     }
     
     .volt-list-item:first-child {
