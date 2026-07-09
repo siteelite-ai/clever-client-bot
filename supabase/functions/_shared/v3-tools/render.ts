@@ -24,11 +24,11 @@ function formatStockLine(
   warehouses: Array<{ city: string; qty: number }> | undefined,
   fallbackLabel: string,
 ): string {
-  // Приоритет — реальные остатки по городам. Показываем до 3 городов с наибольшим qty.
+  // Формат: "Город (N шт), Город (N шт)". Показываем до 3 городов с наибольшим qty.
   if (Array.isArray(warehouses) && warehouses.length > 0) {
-    const top = warehouses.slice(0, 3).map((w) => `${w.city} ${w.qty} шт`);
+    const top = warehouses.slice(0, 3).map((w) => `${w.city} (${w.qty} шт)`);
     const extra = warehouses.length > 3 ? ` и ещё ${warehouses.length - 3} городов` : "";
-    return `в наличии — ${top.join(", ")}${extra}`;
+    return `${top.join(", ")}${extra}`;
   }
   return fallbackLabel;
 }
