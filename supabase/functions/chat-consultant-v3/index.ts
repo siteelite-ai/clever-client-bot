@@ -2420,13 +2420,14 @@ async function runExpertLoop(
             partial_match?: boolean;
             unmatched_tokens?: string[];
             source_query?: string;
+            matched_query?: string;
           };
           const ids = (r2.results ?? [])
             .filter((p) => p && Number.isFinite(p.price) && p.price > 0)
             .map((p) => String(p.id));
           if (ids.length > 0) {
-            const sourceLabel = typeof (r2 as { matched_query?: unknown }).matched_query === "string" && (r2 as { matched_query?: string }).matched_query
-              ? (r2 as { matched_query: string }).matched_query
+            const sourceLabel = typeof r2.matched_query === "string" && r2.matched_query
+              ? r2.matched_query
               : (typeof r2.source_query === "string" && r2.source_query ? r2.source_query : typeof tc.args.query === "string" ? tc.args.query : "");
             semanticEvidenceSeen ??= { label: sourceLabel, total: r2.total };
             freshSearch = { tool: tc.name, ids, total: r2.total };
