@@ -1838,6 +1838,27 @@ async function runExpertLoop(
     if (!a) return new Set();
     return findSameFamilyIds(ctx.cache, a);
   };
+  // Feature-flag v3_anchor_filter_enabled: серверная фильтрация якоря из
+  // результатов search_catalog. Работает только в режиме «аналог/замена»,
+  // когда якорь уже найден. Позволяет LLM увидеть total=0 вместо «только
+  // якорь» и корректно пойти по fallback/ослаблению фильтров.
+  const filterAnchorFromSearchResult = (
+    result: ToolResult,
+    anchorId: string | null,
+  ): { result: ToolResult; excluded: boolean } => {
+    if (!anchorId) return { result, excluded: false };
+    if (result.tool !== "search_catalog" || !result.ok) return { result, excluded: false };
+    const r = result as SearchCatalogOk & { tool: "search_catalog" };
+    const hasAnchor = r.results.some((p) => p.id === anchorId);
+    if (!hasAnchor) return { result, excluded: false };
+    const filtered = r.results.filter((p) => p.id !== anchorId);
+    const newTotal = Math.max(0, r.total - 1);
+    const warnings = [...(r.warnings ?? []), `anchor_excluded:${anchorId}`];
+    return {
+      result: { ...r, results: filtered, total: newTotal, warnings } as ToolResult,
+      excluded: true,
+    };
+  };
   const pickFreshUnshown = (n: number): string[] => {
     const out: string[] = [];
     const seen = new Set<string>();
