@@ -9,6 +9,8 @@ interface JargonFallbackDeps {
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /** Активная категория каталога (например «Лампы»). Помогает помощнику давать релевантные кандидаты. */
+  category?: string;
 }
 
 export interface JargonFallbackResult {
@@ -65,7 +67,7 @@ export async function tryJargonFallback(
         max_tokens: 200,
         messages: [
           { role: "system", content: SYSTEM },
-          { role: "user", content: `Запрос: «${query}». Предложи альтернативные термины.` },
+          { role: "user", content: deps.category ? `Категория каталога: «${deps.category}». Запрос клиента: «${query}». Предложи 1–3 канонических термина ИМЕННО В КОНТЕКСТЕ этой категории (форма/тип/подтип товара внутри категории). Кандидаты, не относящиеся к этой категории, НЕ предлагай.` : `Запрос: «${query}». Предложи альтернативные термины.` },
         ],
         tools: [TOOL],
         tool_choice: { type: "function", function: { name: "propose_candidates" } },

@@ -11,10 +11,15 @@ export interface JargonRecoverCatalogInput {
   min_price?: number;
   max_price?: number;
   per_page?: number;
+  category?: string;
 }
 
 export interface JargonRecoverCatalogDeps extends CatalogClientDeps {
   openrouterApiKey: string;
+  /** Флаг: передавать ли активную категорию в jargon-помощник для более точных кандидатов. */
+  categoryContextEnabled?: boolean;
+  /** Флаг: при пустом пересечении с modifiers возвращать базовые товары и класть модификаторы в unmatched_tokens (не «резать в 0»). */
+  axialModifiersEnabled?: boolean;
 }
 
 function normalize(s: string): string {
@@ -77,11 +82,26 @@ export async function executeJargonRecoverCatalog(
   const source = (input.query ?? "").trim();
   if (!source) return { tool: "jargon_recover_catalog", ok: false, error_code: "bad_input", message: "query required" };
 
-  const jargon = await tryJargonFallback(source, { apiKey: deps.openrouterApiKey });
+  const modifiers = input.modifiers ?? [];
+  const perPage = input.per_page ?? 10;
+  const categoryHint = deps.categoryContextEnabled && input.category ? input.category.trim() : undefined;
+
+  const jargon = await tryJargonFallback(source, {
+    apiKey: deps.openrouterApiKey,
+    category: categoryHint,
+  });
   const candidates = [
     ...(jargon.ok ? jargon.candidates : []),
     source,
   ].map((c) => c.trim()).filter(Boolean).filter((c, i, arr) => arr.findIndex((x) => normalize(x) === normalize(c)) === i);
+
+  // Флаг axialModifiersEnabled: помним базовые (неотфильтрованные) результаты
+  // на случай, когда пересечение с modifiers пустое — тогда честно отдаём базу
+  // и кладём модификаторы в unmatched_tokens, вместо того чтобы вернуть 0.
+  let axialFallback: {
+    candidate: string;
+    baseResults: ProductRef[];
+  } | null = null;
 
   for (const candidate of candidates.slice(0, 4)) {
     const result = await executeSearchCatalog({
@@ -89,14 +109,14 @@ export async function executeJargonRecoverCatalog(
       query: candidate,
       min_price: input.min_price,
       max_price: input.max_price,
-      per_page: input.per_page ?? 10,
+      per_page: perPage,
     }, deps, cache);
     if (!result.ok) continue;
 
-    const filtered = result.results.filter((p) => productMatchesModifiers(p, input.modifiers ?? []));
+    const filtered = result.results.filter((p) => productMatchesModifiers(p, modifiers));
     if (filtered.length > 0) {
-      const sliced = filtered.slice(0, input.per_page ?? 10);
-      const { partial_match, unmatched_tokens } = computePartialMatch(source, input.modifiers ?? [], sliced);
+      const sliced = filtered.slice(0, perPage);
+      const { partial_match, unmatched_tokens } = computePartialMatch(source, modifiers, sliced);
       return {
         tool: "jargon_recover_catalog",
         ok: true,
@@ -109,6 +129,34 @@ export async function executeJargonRecoverCatalog(
         unmatched_tokens,
       };
     }
+
+    // Есть база, но пересечение с modifiers пусто → фиксируем как «осевой» fallback.
+    if (deps.axialModifiersEnabled && axialFallback === null && result.results.length > 0 && modifiers.length > 0) {
+      axialFallback = { candidate, baseResults: result.results };
+    }
+  }
+
+  // Флаг v3_jargon_axial_modifiers_enabled: возвращаем базовые карточки без
+  // модификаторов и честно сообщаем модели, что именно не совпало.
+  if (deps.axialModifiersEnabled && axialFallback) {
+    const sliced = axialFallback.baseResults.slice(0, perPage);
+    // Явно объявляем ВСЕ токены модификаторов как unmatched — это ключевой сигнал
+    // для модели: карточки существуют по noun, но конкретный модификатор клиента
+    // (например «E27» при CORN-лампах с G4/G9/E14) в этих карточках отсутствует.
+    const modifierTokens = Array.from(new Set(modifiers.flatMap(tokenize)));
+    const { unmatched_tokens: computed } = computePartialMatch(source, modifiers, sliced);
+    const unmatched_tokens = Array.from(new Set([...modifierTokens, ...computed]));
+    return {
+      tool: "jargon_recover_catalog",
+      ok: true,
+      source_query: source,
+      candidates,
+      matched_query: axialFallback.candidate,
+      results: sliced,
+      total: sliced.length,
+      partial_match: true,
+      unmatched_tokens,
+    };
   }
 
   return {

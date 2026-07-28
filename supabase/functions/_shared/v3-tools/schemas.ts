@@ -71,6 +71,7 @@ export const TOOL_SCHEMAS = [
           min_price: { type: "number" },
           max_price: { type: "number" },
           per_page: { type: "integer", minimum: 1, maximum: 10 },
+          category: { type: "string", description: "Опциональный контекст категории каталога (например «Лампы», «Кабель»), чтобы жаргон-помощник подбирал канонические термины ИМЕННО в этой категории. Передавай, если знаешь категорию из предыдущего discover_category или из формулировки клиента." },
         },
         required: ["query"],
         additionalProperties: false,

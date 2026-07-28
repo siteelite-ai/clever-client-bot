@@ -68,6 +68,8 @@ export type Database = {
           system_prompt: string | null
           updated_at: string
           v3_anchor_filter_enabled: boolean
+          v3_jargon_axial_modifiers_enabled: boolean
+          v3_jargon_category_context_enabled: boolean
           v3_relaxation_hints_enabled: boolean
           volt220_api_token: string | null
         }
@@ -91,6 +93,8 @@ export type Database = {
           system_prompt?: string | null
           updated_at?: string
           v3_anchor_filter_enabled?: boolean
+          v3_jargon_axial_modifiers_enabled?: boolean
+          v3_jargon_category_context_enabled?: boolean
           v3_relaxation_hints_enabled?: boolean
           volt220_api_token?: string | null
         }
@@ -114,6 +118,8 @@ export type Database = {
           system_prompt?: string | null
           updated_at?: string
           v3_anchor_filter_enabled?: boolean
+          v3_jargon_axial_modifiers_enabled?: boolean
+          v3_jargon_category_context_enabled?: boolean
           v3_relaxation_hints_enabled?: boolean
           volt220_api_token?: string | null
         }
