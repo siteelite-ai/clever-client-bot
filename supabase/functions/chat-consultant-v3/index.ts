@@ -108,6 +108,8 @@ interface ToolContext {
   catalogToken: string;
   openrouterKey: string;
   sessionId: string;
+  jargonCategoryContextEnabled: boolean;
+  jargonAxialModifiersEnabled: boolean;
 }
 
 async function runTool(
@@ -128,7 +130,12 @@ async function runTool(
   if (name === "jargon_recover_catalog") {
     return executeJargonRecoverCatalog(
       args as unknown as JargonRecoverCatalogInput,
-      { ...catalogDeps, openrouterApiKey: ctx.openrouterKey },
+      {
+        ...catalogDeps,
+        openrouterApiKey: ctx.openrouterKey,
+        categoryContextEnabled: ctx.jargonCategoryContextEnabled,
+        axialModifiersEnabled: ctx.jargonAxialModifiersEnabled,
+      },
       ctx.cache,
     );
   }
