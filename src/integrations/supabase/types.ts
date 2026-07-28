@@ -67,6 +67,8 @@ export type Database = {
           soft_suggest_enabled: boolean
           system_prompt: string | null
           updated_at: string
+          v3_anchor_filter_enabled: boolean
+          v3_relaxation_hints_enabled: boolean
           volt220_api_token: string | null
         }
         Insert: {
@@ -88,6 +90,8 @@ export type Database = {
           soft_suggest_enabled?: boolean
           system_prompt?: string | null
           updated_at?: string
+          v3_anchor_filter_enabled?: boolean
+          v3_relaxation_hints_enabled?: boolean
           volt220_api_token?: string | null
         }
         Update: {
@@ -109,6 +113,8 @@ export type Database = {
           soft_suggest_enabled?: boolean
           system_prompt?: string | null
           updated_at?: string
+          v3_anchor_filter_enabled?: boolean
+          v3_relaxation_hints_enabled?: boolean
           volt220_api_token?: string | null
         }
         Relationships: []

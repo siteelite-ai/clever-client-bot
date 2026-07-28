@@ -5,7 +5,7 @@
 // Tools: search_catalog, lookup_knowledge, render_products.
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-import { TOOL_SCHEMAS, SYSTEM_PROMPT } from "../_shared/v3-tools/schemas.ts";
+import { TOOL_SCHEMAS, buildSystemPrompt } from "../_shared/v3-tools/schemas.ts";
 import { executeSearchCatalog, type SearchCatalogInput } from "../_shared/v3-tools/search-catalog.ts";
 import { executeDiscoverCategory, type DiscoverCategoryInput, type DiscoverCategoryOk, type Facet } from "../_shared/v3-tools/discover-category.ts";
 import { executeJargonRecoverCatalog, type JargonRecoverCatalogInput } from "../_shared/v3-tools/jargon-recover-catalog.ts";
@@ -16,7 +16,7 @@ import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-t
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
-import type { ProductCache, ToolResult, ToolSideEffect } from "../_shared/v3-tools/types.ts";
+import type { ProductCache, SearchCatalogOk, ToolResult, ToolSideEffect } from "../_shared/v3-tools/types.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -36,7 +36,7 @@ const TURN_TIMEOUT_MS = 140_000;
 
 type SseEvent =
   | { type: "delta"; content: string }
-  | { type: "assistant_turn_break"; reason: "tool_pending" | "after_render" | "final_text" }
+  | { type: "assistant_turn_break"; reason: "tool_pending" | "after_render" | "final_text" | "text_before_render" | "intro_late" }
   | { type: "tool_event"; tool: string; phase: "start" | "result"; duration_ms?: number; summary?: string }
   | { type: "products_block"; markdown: string; count: number; total_available?: number }
   | { type: "contacts"; html: string }
@@ -59,13 +59,15 @@ function encodeSse(ev: SseEvent): Uint8Array {
 interface AppSettings {
   openrouter_api_key: string | null;
   volt220_api_token: string | null;
+  v3_anchor_filter_enabled: boolean;
+  v3_relaxation_hints_enabled: boolean;
 }
 
 async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
   try {
     const { data } = await supabase
       .from("app_settings")
-      .select("openrouter_api_key, volt220_api_token")
+      .select("openrouter_api_key, volt220_api_token, v3_anchor_filter_enabled, v3_relaxation_hints_enabled")
       .limit(1)
       .single();
     return {
@@ -73,11 +75,15 @@ async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
         ?? Deno.env.get("OPENROUTER_API_KEY") ?? null,
       volt220_api_token: (data as { volt220_api_token?: string } | null)?.volt220_api_token
         ?? Deno.env.get("VOLT220_API_TOKEN") ?? null,
+      v3_anchor_filter_enabled: Boolean((data as { v3_anchor_filter_enabled?: boolean } | null)?.v3_anchor_filter_enabled),
+      v3_relaxation_hints_enabled: Boolean((data as { v3_relaxation_hints_enabled?: boolean } | null)?.v3_relaxation_hints_enabled),
     };
   } catch {
     return {
       openrouter_api_key: Deno.env.get("OPENROUTER_API_KEY") ?? null,
       volt220_api_token: Deno.env.get("VOLT220_API_TOKEN") ?? null,
+      v3_anchor_filter_enabled: false,
+      v3_relaxation_hints_enabled: false,
     };
   }
 }
@@ -1725,6 +1731,7 @@ async function runExpertLoop(
   send: (ev: SseEvent) => void,
   steps: StepLog[],
   t0: number,
+  flags: { anchorFilterEnabled: boolean; relaxationHintsEnabled: boolean },
 ): Promise<{ finalText: string; productsRendered: number }> {
   const now = () => Date.now() - t0;
   let finalText = "";
@@ -1830,6 +1837,27 @@ async function runExpertLoop(
     const a = findAnchorInCache(ctx.cache, userMessage);
     if (!a) return new Set();
     return findSameFamilyIds(ctx.cache, a);
+  };
+  // Feature-flag v3_anchor_filter_enabled: серверная фильтрация якоря из
+  // результатов search_catalog. Работает только в режиме «аналог/замена»,
+  // когда якорь уже найден. Позволяет LLM увидеть total=0 вместо «только
+  // якорь» и корректно пойти по fallback/ослаблению фильтров.
+  const filterAnchorFromSearchResult = (
+    result: ToolResult,
+    anchorId: string | null,
+  ): { result: ToolResult; excluded: boolean } => {
+    if (!anchorId) return { result, excluded: false };
+    if (result.tool !== "search_catalog" || !result.ok) return { result, excluded: false };
+    const r = result as SearchCatalogOk & { tool: "search_catalog" };
+    const hasAnchor = r.results.some((p) => p.id === anchorId);
+    if (!hasAnchor) return { result, excluded: false };
+    const filtered = r.results.filter((p) => p.id !== anchorId);
+    const newTotal = Math.max(0, r.total - 1);
+    const warnings = [...(r.warnings ?? []), `anchor_excluded:${anchorId}`];
+    return {
+      result: { ...r, results: filtered, total: newTotal, warnings } as ToolResult,
+      excluded: true,
+    };
   };
   const pickFreshUnshown = (n: number): string[] => {
     const out: string[] = [];
@@ -1981,9 +2009,10 @@ async function runExpertLoop(
   };
 
   const dialogueChoice = resolvePendingClarificationChoice(slots, userMessage) ?? resolveDialogueChoice(history, userMessage);
+  const baseSystemPrompt = buildSystemPrompt(flags.relaxationHintsEnabled);
   const systemContent = dialogueChoice
-    ? `${SYSTEM_PROMPT}\n\n${dialogueChoiceSystemHint(dialogueChoice)}`
-    : SYSTEM_PROMPT;
+    ? `${baseSystemPrompt}\n\n${dialogueChoiceSystemHint(dialogueChoice)}`
+    : baseSystemPrompt;
 
   const messages: ORMessage[] = [
     { role: "system", content: systemContent },
@@ -2318,7 +2347,19 @@ async function runExpertLoop(
 
 
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
-        const result = await runTool(tc.name, runArgs, ctx);
+        let result = await runTool(tc.name, runArgs, ctx);
+        if (flags.anchorFilterEnabled && tc.name === "search_catalog" && replacementIntent) {
+          const anchorId = getAnchorExcludeId();
+          const filtered = filterAnchorFromSearchResult(result, anchorId);
+          if (filtered.excluded) {
+            result = filtered.result;
+            steps.push({
+              step: "v3_anchor_filtered",
+              ms: now(),
+              meta: { anchor_id: anchorId, new_total: (result as SearchCatalogOk).total },
+            });
+          }
+        }
         const effectiveArgs: Record<string, unknown> = runArgs;
         const inferredFallback: Array<{ key: string; value: string }> | null = null;
         const splitFallbackResult: { axes: SplitAxis[]; ms: number } | null = null;
@@ -2379,13 +2420,14 @@ async function runExpertLoop(
             partial_match?: boolean;
             unmatched_tokens?: string[];
             source_query?: string;
+            matched_query?: string;
           };
           const ids = (r2.results ?? [])
             .filter((p) => p && Number.isFinite(p.price) && p.price > 0)
             .map((p) => String(p.id));
           if (ids.length > 0) {
-            const sourceLabel = typeof (r2 as { matched_query?: unknown }).matched_query === "string" && (r2 as { matched_query?: string }).matched_query
-              ? (r2 as { matched_query: string }).matched_query
+            const sourceLabel = typeof r2.matched_query === "string" && r2.matched_query
+              ? r2.matched_query
               : (typeof r2.source_query === "string" && r2.source_query ? r2.source_query : typeof tc.args.query === "string" ? tc.args.query : "");
             semanticEvidenceSeen ??= { label: sourceLabel, total: r2.total };
             freshSearch = { tool: tc.name, ids, total: r2.total };
@@ -2645,7 +2687,10 @@ Deno.serve(async (req) => {
       };
 
       try {
-        const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0);
+        const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0, {
+          anchorFilterEnabled: settings.v3_anchor_filter_enabled,
+          relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
+        });
         productsCount = out.productsRendered;
       } catch (e) {
         errorMsg = (e as Error)?.message ?? String(e);
