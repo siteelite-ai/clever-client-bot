@@ -2437,15 +2437,23 @@ async function runExpertLoop(
           if (q) triedLadderQueries.add(q);
 
           // No-progress detector — safety против бесконечных пустых циклов.
-          const signature = ids.length === 0
+          // Anchor-фильтр или ненулевой pagination-total = прогресс (мы нашли что-то
+          // релевантное, даже если на текущей странице все элементы отфильтрованы).
+          const warnings = (result as { warnings?: string[] }).warnings ?? [];
+          const anchorExcluded = warnings.some((w) => typeof w === "string" && w.startsWith("anchor_excluded:"));
+          const hasProgressSignal = ids.length > 0 || anchorExcluded || (Number.isFinite(r2.total) && r2.total > 0);
+          const signature = !hasProgressSignal
             ? "empty"
-            : [...ids].sort().slice(0, 10).join(",");
+            : ids.length > 0
+              ? [...ids].sort().slice(0, 10).join(",")
+              : `progress:${anchorExcluded ? "anchor" : "total"}:${step}`;
           if (signature === lastSearchSignature) {
             noProgressStreak += 1;
           } else {
             noProgressStreak = 0;
             lastSearchSignature = signature;
           }
+
           const breakThreshold = signature === "empty" ? 3 : 1;
           if (noProgressStreak >= breakThreshold && productsRendered === 0) {
             noProgressBreak = true;
