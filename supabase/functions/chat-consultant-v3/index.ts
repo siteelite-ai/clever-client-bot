@@ -2347,7 +2347,19 @@ async function runExpertLoop(
 
 
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
-        const result = await runTool(tc.name, runArgs, ctx);
+        let result = await runTool(tc.name, runArgs, ctx);
+        if (flags.anchorFilterEnabled && tc.name === "search_catalog" && replacementIntent) {
+          const anchorId = getAnchorExcludeId();
+          const filtered = filterAnchorFromSearchResult(result, anchorId);
+          if (filtered.excluded) {
+            result = filtered.result;
+            steps.push({
+              step: "v3_anchor_filtered",
+              ms: now(),
+              meta: { anchor_id: anchorId, new_total: (result as SearchCatalogOk).total },
+            });
+          }
+        }
         const effectiveArgs: Record<string, unknown> = runArgs;
         const inferredFallback: Array<{ key: string; value: string }> | null = null;
         const splitFallbackResult: { axes: SplitAxis[]; ms: number } | null = null;
