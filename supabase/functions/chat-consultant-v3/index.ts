@@ -6,7 +6,7 @@
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { TOOL_SCHEMAS, buildSystemPrompt } from "../_shared/v3-tools/schemas.ts";
-import { executeSearchCatalog, type SearchCatalogInput, type SearchCatalogOk } from "../_shared/v3-tools/search-catalog.ts";
+import { executeSearchCatalog, type SearchCatalogInput } from "../_shared/v3-tools/search-catalog.ts";
 import { executeDiscoverCategory, type DiscoverCategoryInput, type DiscoverCategoryOk, type Facet } from "../_shared/v3-tools/discover-category.ts";
 import { executeJargonRecoverCatalog, type JargonRecoverCatalogInput } from "../_shared/v3-tools/jargon-recover-catalog.ts";
 
@@ -16,7 +16,7 @@ import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-t
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
-import type { ProductCache, ToolResult, ToolSideEffect } from "../_shared/v3-tools/types.ts";
+import type { ProductCache, SearchCatalogOk, ToolResult, ToolSideEffect } from "../_shared/v3-tools/types.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
