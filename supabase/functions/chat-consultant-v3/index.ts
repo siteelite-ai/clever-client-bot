@@ -2718,6 +2718,8 @@ Deno.serve(async (req) => {
         catalogToken: settings.volt220_api_token!,
         openrouterKey: settings.openrouter_api_key!,
         sessionId,
+        jargonCategoryContextEnabled: settings.v3_jargon_category_context_enabled,
+        jargonAxialModifiersEnabled: settings.v3_jargon_axial_modifiers_enabled,
       };
 
       try {
