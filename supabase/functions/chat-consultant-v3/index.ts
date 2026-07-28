@@ -6,7 +6,7 @@
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { TOOL_SCHEMAS, buildSystemPrompt } from "../_shared/v3-tools/schemas.ts";
-import { executeSearchCatalog, type SearchCatalogInput } from "../_shared/v3-tools/search-catalog.ts";
+import { executeSearchCatalog, type SearchCatalogInput, type SearchCatalogOk } from "../_shared/v3-tools/search-catalog.ts";
 import { executeDiscoverCategory, type DiscoverCategoryInput, type DiscoverCategoryOk, type Facet } from "../_shared/v3-tools/discover-category.ts";
 import { executeJargonRecoverCatalog, type JargonRecoverCatalogInput } from "../_shared/v3-tools/jargon-recover-catalog.ts";
 
