@@ -2653,7 +2653,10 @@ Deno.serve(async (req) => {
       };
 
       try {
-        const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0);
+        const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0, {
+          anchorFilterEnabled: settings.v3_anchor_filter_enabled,
+          relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
+        });
         productsCount = out.productsRendered;
       } catch (e) {
         errorMsg = (e as Error)?.message ?? String(e);
