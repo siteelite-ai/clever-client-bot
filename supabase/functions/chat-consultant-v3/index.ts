@@ -61,22 +61,32 @@ interface AppSettings {
   volt220_api_token: string | null;
   v3_anchor_filter_enabled: boolean;
   v3_relaxation_hints_enabled: boolean;
+  v3_jargon_category_context_enabled: boolean;
+  v3_jargon_axial_modifiers_enabled: boolean;
 }
 
 async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
   try {
     const { data } = await supabase
       .from("app_settings")
-      .select("openrouter_api_key, volt220_api_token, v3_anchor_filter_enabled, v3_relaxation_hints_enabled")
+      .select("openrouter_api_key, volt220_api_token, v3_anchor_filter_enabled, v3_relaxation_hints_enabled, v3_jargon_category_context_enabled, v3_jargon_axial_modifiers_enabled")
       .limit(1)
       .single();
+    const row = data as {
+      openrouter_api_key?: string;
+      volt220_api_token?: string;
+      v3_anchor_filter_enabled?: boolean;
+      v3_relaxation_hints_enabled?: boolean;
+      v3_jargon_category_context_enabled?: boolean;
+      v3_jargon_axial_modifiers_enabled?: boolean;
+    } | null;
     return {
-      openrouter_api_key: (data as { openrouter_api_key?: string } | null)?.openrouter_api_key
-        ?? Deno.env.get("OPENROUTER_API_KEY") ?? null,
-      volt220_api_token: (data as { volt220_api_token?: string } | null)?.volt220_api_token
-        ?? Deno.env.get("VOLT220_API_TOKEN") ?? null,
-      v3_anchor_filter_enabled: Boolean((data as { v3_anchor_filter_enabled?: boolean } | null)?.v3_anchor_filter_enabled),
-      v3_relaxation_hints_enabled: Boolean((data as { v3_relaxation_hints_enabled?: boolean } | null)?.v3_relaxation_hints_enabled),
+      openrouter_api_key: row?.openrouter_api_key ?? Deno.env.get("OPENROUTER_API_KEY") ?? null,
+      volt220_api_token: row?.volt220_api_token ?? Deno.env.get("VOLT220_API_TOKEN") ?? null,
+      v3_anchor_filter_enabled: Boolean(row?.v3_anchor_filter_enabled),
+      v3_relaxation_hints_enabled: Boolean(row?.v3_relaxation_hints_enabled),
+      v3_jargon_category_context_enabled: Boolean(row?.v3_jargon_category_context_enabled),
+      v3_jargon_axial_modifiers_enabled: Boolean(row?.v3_jargon_axial_modifiers_enabled),
     };
   } catch {
     return {
@@ -84,6 +94,8 @@ async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
       volt220_api_token: Deno.env.get("VOLT220_API_TOKEN") ?? null,
       v3_anchor_filter_enabled: false,
       v3_relaxation_hints_enabled: false,
+      v3_jargon_category_context_enabled: false,
+      v3_jargon_axial_modifiers_enabled: false,
     };
   }
 }
