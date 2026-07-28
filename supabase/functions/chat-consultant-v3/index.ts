@@ -1988,9 +1988,10 @@ async function runExpertLoop(
   };
 
   const dialogueChoice = resolvePendingClarificationChoice(slots, userMessage) ?? resolveDialogueChoice(history, userMessage);
+  const baseSystemPrompt = buildSystemPrompt(flags.relaxationHintsEnabled);
   const systemContent = dialogueChoice
-    ? `${SYSTEM_PROMPT}\n\n${dialogueChoiceSystemHint(dialogueChoice)}`
-    : SYSTEM_PROMPT;
+    ? `${baseSystemPrompt}\n\n${dialogueChoiceSystemHint(dialogueChoice)}`
+    : baseSystemPrompt;
 
   const messages: ORMessage[] = [
     { role: "system", content: systemContent },
