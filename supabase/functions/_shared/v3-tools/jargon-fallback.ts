@@ -9,6 +9,8 @@ interface JargonFallbackDeps {
   signal?: AbortSignal;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /** Активная категория каталога (например «Лампы»). Помогает помощнику давать релевантные кандидаты. */
+  category?: string;
 }
 
 export interface JargonFallbackResult {
