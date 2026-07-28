@@ -59,13 +59,15 @@ function encodeSse(ev: SseEvent): Uint8Array {
 interface AppSettings {
   openrouter_api_key: string | null;
   volt220_api_token: string | null;
+  v3_anchor_filter_enabled: boolean;
+  v3_relaxation_hints_enabled: boolean;
 }
 
 async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
   try {
     const { data } = await supabase
       .from("app_settings")
-      .select("openrouter_api_key, volt220_api_token")
+      .select("openrouter_api_key, volt220_api_token, v3_anchor_filter_enabled, v3_relaxation_hints_enabled")
       .limit(1)
       .single();
     return {
@@ -73,11 +75,15 @@ async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
         ?? Deno.env.get("OPENROUTER_API_KEY") ?? null,
       volt220_api_token: (data as { volt220_api_token?: string } | null)?.volt220_api_token
         ?? Deno.env.get("VOLT220_API_TOKEN") ?? null,
+      v3_anchor_filter_enabled: Boolean((data as { v3_anchor_filter_enabled?: boolean } | null)?.v3_anchor_filter_enabled),
+      v3_relaxation_hints_enabled: Boolean((data as { v3_relaxation_hints_enabled?: boolean } | null)?.v3_relaxation_hints_enabled),
     };
   } catch {
     return {
       openrouter_api_key: Deno.env.get("OPENROUTER_API_KEY") ?? null,
       volt220_api_token: Deno.env.get("VOLT220_API_TOKEN") ?? null,
+      v3_anchor_filter_enabled: false,
+      v3_relaxation_hints_enabled: false,
     };
   }
 }
