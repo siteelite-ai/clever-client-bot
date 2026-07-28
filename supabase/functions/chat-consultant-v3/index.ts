@@ -464,7 +464,7 @@ async function guardedOutcomeForSearch(
     const semanticSearch = directSemanticSearch?.ok && directSemanticSearch.total > 0
       ? directSemanticSearch
       : semanticQuery
-        ? await executeJargonRecoverCatalog({ query: semanticQuery, per_page: 5 }, { ...catalogDeps, openrouterApiKey: ctx.openrouterKey }, ctx.cache)
+        ? await executeJargonRecoverCatalog({ query: semanticQuery, per_page: 5, category: typeof args.category === "string" ? args.category : lastDiscover.category.pagetitle }, { ...catalogDeps, openrouterApiKey: ctx.openrouterKey, categoryContextEnabled: ctx.jargonCategoryContextEnabled, axialModifiersEnabled: ctx.jargonAxialModifiersEnabled }, ctx.cache)
         : null;
 
     const confirmedTotal = confirmedSearch.ok ? confirmedSearch.total : 0;
