@@ -179,8 +179,15 @@ function summariseToolArgs(name: string, args: Record<string, unknown>): Record<
 function summariseToolResultMeta(name: string, r: ToolResult): Record<string, unknown> {
   if (!r.ok) return { error_code: r.error_code, message: (r as { message?: string }).message };
   if (name === "search_catalog" || name === "jargon_recover_catalog") {
-    const x = r as { total: number; branch_tag?: string; resolved_filters?: unknown };
-    return { total: x.total, branch_tag: x.branch_tag };
+    const x = r as { total: number; branch_tag?: string; resolved_filters?: unknown; partial_match?: boolean; unmatched_tokens?: string[]; matched_query?: string | null; candidates?: string[] };
+    const meta: Record<string, unknown> = { total: x.total, branch_tag: x.branch_tag };
+    if (name === "jargon_recover_catalog") {
+      if (typeof x.partial_match === "boolean") meta.partial_match = x.partial_match;
+      if (Array.isArray(x.unmatched_tokens)) meta.unmatched_tokens = x.unmatched_tokens;
+      if (x.matched_query !== undefined) meta.matched_query = x.matched_query;
+      if (Array.isArray(x.candidates)) meta.candidates = x.candidates;
+    }
+    return meta;
   }
   if (name === "discover_category") {
     const x = r as unknown as { category?: { pagetitle?: string; total_products?: number }; facets?: Array<{ key: string; values?: unknown[] }>; resolved_from?: string };
