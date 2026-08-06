@@ -1868,16 +1868,37 @@ async function runExpertLoop(
   // результатов search_catalog. Работает только в режиме «аналог/замена»,
   // когда якорь уже найден. Позволяет LLM увидеть total=0 вместо «только
   // якорь» и корректно пойти по fallback/ослаблению фильтров.
+  //
+  // ВАЖНО (fix 2026-08-06): фильтр применяется ТОЛЬКО к «широким» подборам
+  // (by_query / by_filter). Вызовы by_article / by_pagetitle — это
+  // ИДЕНТИФИКАЦИЯ якоря: если вырезать якорь оттуда, LLM никогда не получит
+  // его характеристики и уходит в цикл повторных поисков до таймаута.
+  // Дополнительно: если после фильтрации не осталось НИЧЕГО, возвращаем якорь
+  // как есть с пометкой anchor_only — пустой ответ бесполезен, а карточка
+  // якоря даёт модели параметры для подбора аналогов.
   const filterAnchorFromSearchResult = (
     result: ToolResult,
     anchorId: string | null,
-  ): { result: ToolResult; excluded: boolean } => {
+    mode?: unknown,
+  ): { result: ToolResult; excluded: boolean; skipped?: "identification" | "anchor_only" } => {
     if (!anchorId) return { result, excluded: false };
     if (result.tool !== "search_catalog" || !result.ok) return { result, excluded: false };
+    const m = typeof mode === "string" ? mode : "";
+    if (m === "by_article" || m === "by_pagetitle") {
+      return { result, excluded: false, skipped: "identification" };
+    }
     const r = result as SearchCatalogOk & { tool: "search_catalog" };
     const hasAnchor = r.results.some((p) => p.id === anchorId);
     if (!hasAnchor) return { result, excluded: false };
     const filtered = r.results.filter((p) => p.id !== anchorId);
+    if (filtered.length === 0) {
+      const warnings = [...(r.warnings ?? []), `anchor_only:${anchorId}`];
+      return {
+        result: { ...r, warnings } as ToolResult,
+        excluded: false,
+        skipped: "anchor_only",
+      };
+    }
     const newTotal = Math.max(0, r.total - 1);
     const warnings = [...(r.warnings ?? []), `anchor_excluded:${anchorId}`];
     return {
@@ -1885,6 +1906,7 @@ async function runExpertLoop(
       excluded: true,
     };
   };
+
   const pickFreshUnshown = (n: number): string[] => {
     const out: string[] = [];
     const seen = new Set<string>();
