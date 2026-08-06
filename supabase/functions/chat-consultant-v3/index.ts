@@ -2398,7 +2398,7 @@ async function runExpertLoop(
         let result = await runTool(tc.name, runArgs, ctx);
         if (flags.anchorFilterEnabled && tc.name === "search_catalog" && replacementIntent) {
           const anchorId = getAnchorExcludeId();
-          const filtered = filterAnchorFromSearchResult(result, anchorId);
+          const filtered = filterAnchorFromSearchResult(result, anchorId, (runArgs as Record<string, unknown>).mode);
           if (filtered.excluded) {
             result = filtered.result;
             steps.push({
@@ -2406,7 +2406,20 @@ async function runExpertLoop(
               ms: now(),
               meta: { anchor_id: anchorId, new_total: (result as SearchCatalogOk).total },
             });
+          } else if (filtered.skipped) {
+            result = filtered.result;
+            steps.push({
+              step: "v3_anchor_filter_skipped",
+              ms: now(),
+              meta: {
+                anchor_id: anchorId,
+                reason: filtered.skipped,
+                mode: (runArgs as Record<string, unknown>).mode ?? null,
+                total: (result as SearchCatalogOk).total,
+              },
+            });
           }
+
         }
         const effectiveArgs: Record<string, unknown> = runArgs;
         const inferredFallback: Array<{ key: string; value: string }> | null = null;
