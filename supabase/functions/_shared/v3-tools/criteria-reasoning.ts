@@ -60,7 +60,9 @@ export function extractReasoningBounds(text: string): ReasoningBound[] {
   const out: ReasoningBound[] = [];
   for (const dir of DIRECTIONS) {
     const re = new RegExp(
-      String.raw`(?:^|[^a-zа-я])(?:${dir.re})\s*(?:чем\s+)?(${NUM})\s*(${UNIT})(?![a-zа-я])`,
+      // Отрицательные формы («не более», «не больше») ловятся своим правилом
+      // выше; сюда они попадать не должны — иначе направление перевернётся.
+      String.raw`(?:^|[^a-zа-я])(?<!не\s)(?:${dir.re})\s*(?:чем\s+)?(${NUM})\s*(${UNIT})(?![a-zа-я])`,
       "gu",
     );
     let m: RegExpExecArray | null;
