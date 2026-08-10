@@ -2445,7 +2445,7 @@ async function runExpertLoop(
               // Формулировка модели — такой же запрос, как реплика клиента.
               // Сервер сам отправляет её в каталог по-текстовому (by_query),
               // вместо того чтобы ждать очередной фасетный перебор от LLM.
-              const noun = lastSearchNoun || (typeof ctx.lastUserMessage === "string" ? ctx.lastUserMessage : "");
+              const noun = lastSearchNoun || userMessage;
               const rq = buildCriteriaQuery(noun, criteria);
               const rqKey = rq.toLowerCase();
               if (rq && !triedSelfRequeries.has(rqKey)) {
