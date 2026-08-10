@@ -122,3 +122,9 @@ Deno.test("buildCriteriaQuery: формулировка модели превр�
   ]);
   assertEquals(q, "термоусаживаемая трубка Внутренний диаметр до термоусадки от 40 мм");
 });
+
+Deno.test("op=min со строковым value сохраняет открытый интервал", () => {
+  const p = { id: "1", pagetitle: "x", url: "u", price: 1, stock: "unknown", short_traits: ["Внутр диаметр: 14"] } as never;
+  const check = checkCriterion(p, { key: "Внутр диаметр", op: "min", value: "12", unit: "мм", level: "A" });
+  assertEquals(check.verdict, "pass");
+});
