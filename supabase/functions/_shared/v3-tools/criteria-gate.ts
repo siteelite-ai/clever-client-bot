@@ -267,6 +267,18 @@ export function applyCriteriaGate(
 // Функция чистая и data-agnostic: берёт предмет поиска (noun) и критерии,
 // возвращает человеческую строку запроса без доменных словарей.
 
+/**
+ * Многословные строковые значения (описания назначения, категории, длинные
+ * формулировки) в текстовый запрос НЕ попадают: каталог ищет по словам, и такая
+ * фраза сужает выдачу до нуля. Правило чисто формальное (длина/число слов),
+ * без доменных словарей.
+ */
+function isVerboseValue(v: unknown): boolean {
+  if (typeof v !== "string") return false;
+  const s = v.trim();
+  return s.length > 24 || s.split(/\s+/).length > 3;
+}
+
 export function buildCriteriaQuery(noun: string, criteria: Criterion[]): string {
   const parts: string[] = [];
   const base = String(noun ?? "").trim();
@@ -274,6 +286,7 @@ export function buildCriteriaQuery(noun: string, criteria: Criterion[]): string 
 
   for (const c of Array.isArray(criteria) ? criteria : []) {
     if (!c || !c.key || (c.level ?? "A") !== "A") continue;
+    if (isVerboseValue(c.value)) continue;
     const unit = c.unit ? ` ${c.unit}` : "";
     let value: string;
     if (c.op === "range" && Array.isArray(c.value)) value = `${c.value[0]}-${c.value[1]}${unit}`;
@@ -284,3 +297,4 @@ export function buildCriteriaQuery(noun: string, criteria: Criterion[]): string 
   }
   return parts.join(" ").replace(/\s+/g, " ").trim();
 }
+
