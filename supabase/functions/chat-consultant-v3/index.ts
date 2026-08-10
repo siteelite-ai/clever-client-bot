@@ -13,7 +13,7 @@ import { executeJargonRecoverCatalog, type JargonRecoverCatalogInput } from "../
 import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3-tools/lookup-knowledge.ts";
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
-import { applyCriteriaGate, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
+import { applyCriteriaGate, buildCriteriaQuery, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
@@ -1797,6 +1797,11 @@ async function runExpertLoop(
   let replacementRequiredAxes: ReplacementAxis[] = [];
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
+  // Последний осмысленный поисковый запрос — нужен как «существительное» для
+  // self-requery: критерии сами по себе («не менее 40 мм») не запрос, они
+  // обретают смысл только вместе с предметом текущего поиска.
+  let lastSearchNoun = "";
+  const triedSelfRequeries = new Set<string>();
   // No-progress detector: подряд два search_catalog с тем же сигнатурным
   // набором id (или пусто) → дальнейшие итерации не дадут нового сигнала,
   // выходим из цикла и идём в forced-finalize. Это страховка от LLM-loop,
@@ -2404,6 +2409,7 @@ async function runExpertLoop(
         // Гейт сверяет их с short_traits карточек: fail → карточку не рендерим,
         // unknown (характеристики нет) → карточку оставляем.
         let gateShortCircuit: ToolResult | null = null;
+        let selfRequery: { query: string; ids: string[]; total: number } | null = null;
         if (flags.criteriaGateEnabled && tc.name === "render_products") {
           const rawCriteria = Array.isArray((tc.args as Record<string, unknown>).criteria)
             ? ((tc.args as Record<string, unknown>).criteria as Criterion[])
@@ -2434,6 +2440,40 @@ async function runExpertLoop(
                 report,
               } as unknown as ToolResult;
               steps.push({ step: "v3_guard_criteria_gate_blocked", ms: now(), meta });
+
+              // ── Слой 3: self-requery ────────────────────────────────────────
+              // Формулировка модели — такой же запрос, как реплика клиента.
+              // Сервер сам отправляет её в каталог по-текстовому (by_query),
+              // вместо того чтобы ждать очередной фасетный перебор от LLM.
+              const noun = lastSearchNoun || userMessage;
+              const rq = buildCriteriaQuery(noun, criteria);
+              const rqKey = rq.toLowerCase();
+              if (rq && !triedSelfRequeries.has(rqKey)) {
+                triedSelfRequeries.add(rqKey);
+                try {
+                  const rqResult = await runTool("search_catalog", { mode: "by_query", query: rq, per_page: 10 }, ctx);
+                  if (rqResult.ok) {
+                    const r3 = rqResult as unknown as { results: Array<{ id: string; price: number }>; total: number };
+                    const rqProducts = (r3.results ?? []).filter((p) => p && Number.isFinite(p.price) && p.price > 0);
+                    const gated = applyCriteriaGate(
+                      rqProducts.map((p) => ctx.cache.get(String(p.id))).filter((p): p is NonNullable<typeof p> => Boolean(p)),
+                      criteria,
+                    );
+                    const rqIds = gated.passed_ids;
+                    selfRequery = { query: rq, ids: rqIds, total: Number(r3.total) || rqProducts.length };
+                    if (rqIds.length > 0) freshSearch = { tool: "criteria_self_requery", ids: rqIds, total: selfRequery.total };
+                  } else {
+                    selfRequery = { query: rq, ids: [], total: 0 };
+                  }
+                } catch (_e) {
+                  selfRequery = { query: rq, ids: [], total: 0 };
+                }
+                steps.push({
+                  step: "v3_criteria_self_requery",
+                  ms: now(),
+                  meta: { query: rq, found: selfRequery?.ids.length ?? 0, total: selfRequery?.total ?? 0 },
+                });
+              }
             } else {
               if (passed.length !== ids.length) {
                 (tc.args as Record<string, unknown>).product_ids = passed;
@@ -2549,7 +2589,10 @@ async function runExpertLoop(
           }
           // Track which ladder candidates were already tried (to nudge LLM in tool reply on timeout).
           const q = typeof tc.args.query === "string" ? tc.args.query.trim().toLowerCase() : "";
-          if (q) triedLadderQueries.add(q);
+          if (q) {
+            triedLadderQueries.add(q);
+            lastSearchNoun = typeof tc.args.query === "string" ? tc.args.query.trim() : lastSearchNoun;
+          }
 
           // No-progress detector — safety против бесконечных пустых циклов.
           // Anchor-фильтр или ненулевой pagination-total = прогресс (мы нашли что-то
@@ -2649,6 +2692,17 @@ async function runExpertLoop(
           replyObj._retryable = true;
           replyObj._server_hint = "catalog_timeout — сетевая ошибка. Попробуй СЛЕДУЮЩИЙ кандидат лестницы (см. rule 11).";
           replyObj._tried_queries = [...triedLadderQueries];
+        }
+
+        // Слой 3: сервер уже отправил формулировку модели в каталог как запрос.
+        // Модели остаётся только отрендерить найденное или честно признать пустоту.
+        if (selfRequery) {
+          replyObj._self_requery_query = selfRequery.query;
+          replyObj._self_requery_ids = selfRequery.ids;
+          replyObj._self_requery_total = selfRequery.total;
+          replyObj._server_hint = selfRequery.ids.length > 0
+            ? "Сервер уже выполнил поиск по твоей же формулировке критериев и проверил результаты гейтом. Вызови render_products с _self_requery_ids и теми же criteria — новые поиски не нужны."
+            : "Сервер выполнил поиск по твоей же формулировке критериев — подходящих позиций в каталоге нет. Скажи клиенту это честно и дай контакты менеджера, не подставляй заведомо не подходящие карточки.";
         }
 
 

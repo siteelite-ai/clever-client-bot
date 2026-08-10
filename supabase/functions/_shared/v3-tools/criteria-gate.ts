@@ -248,3 +248,32 @@ export function applyCriteriaGate(
 
   return report;
 }
+
+// ─── Слой 3: критерии как поисковый запрос (self-requery) ─────────────────────
+//
+// Ключевая идея (системная, а не кейсовая): рассуждение модели — это такой же
+// запрос, как реплика клиента. Если модель вслух сформулировала «нужен внутренний
+// диаметр не менее 40 мм», сервер обязан обработать эту формулировку ровно так,
+// как обработал бы её, придя она из чата: собрать из неё текстовый запрос и
+// отправить в каталог. Фасеты со строгим равенством этого не делают.
+//
+// Функция чистая и data-agnostic: берёт предмет поиска (noun) и критерии,
+// возвращает человеческую строку запроса без доменных словарей.
+
+export function buildCriteriaQuery(noun: string, criteria: Criterion[]): string {
+  const parts: string[] = [];
+  const base = String(noun ?? "").trim();
+  if (base) parts.push(base);
+
+  for (const c of Array.isArray(criteria) ? criteria : []) {
+    if (!c || !c.key || (c.level ?? "A") !== "A") continue;
+    const unit = c.unit ? ` ${c.unit}` : "";
+    let value: string;
+    if (c.op === "range" && Array.isArray(c.value)) value = `${c.value[0]}-${c.value[1]}${unit}`;
+    else if (c.op === "min") value = `от ${c.value}${unit}`;
+    else if (c.op === "max") value = `до ${c.value}${unit}`;
+    else value = `${c.value}${unit}`;
+    parts.push(`${String(c.key).trim()} ${value}`.trim());
+  }
+  return parts.join(" ").replace(/\s+/g, " ").trim();
+}
