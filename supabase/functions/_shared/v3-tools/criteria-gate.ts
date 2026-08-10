@@ -32,7 +32,13 @@ export interface Criterion {
   unit?: string | null;
   /** A — критический (отсев), B — вторичный (только отчёт). По умолчанию A. */
   level?: "A" | "B";
+  /**
+   * Строгое неравенство для min/max: «больше 12» (а не «не менее 12»).
+   * Ставится Слоем 5 по прозе модели (criteria-reasoning.ts).
+   */
+  exclusive?: boolean;
 }
+
 
 export type CriterionVerdict = "pass" | "fail" | "unknown";
 
@@ -144,8 +150,8 @@ export function findTrait(product: ProductRef, key: string): { label: string; va
 function expectedLabel(c: Criterion): string {
   const unit = c.unit ? ` ${c.unit}` : "";
   if (c.op === "range" && Array.isArray(c.value)) return `${c.value[0]}–${c.value[1]}${unit}`;
-  if (c.op === "min") return `≥ ${c.value}${unit}`;
-  if (c.op === "max") return `≤ ${c.value}${unit}`;
+  if (c.op === "min") return `${c.exclusive ? ">" : "≥"} ${c.value}${unit}`;
+  if (c.op === "max") return `${c.exclusive ? "<" : "≤"} ${c.value}${unit}`;
   return `${c.value}${unit}`;
 }
 
@@ -202,7 +208,14 @@ export function checkCriterion(product: ProductRef, c: Criterion): CriterionChec
   }
   if (!want) return { key: c.key, verdict: "unknown", expected, actual };
 
-  return { key: c.key, verdict: spansOverlap(got, want) ? "pass" : "fail", expected, actual };
+  // Строгое неравенство (Слой 5, «больше X» вместо «не менее X»): граница не
+  // засчитывается, поэтому проверяем пересечение строго.
+  let ok: boolean;
+  if (c.exclusive && c.op === "min") ok = got.max > want.min;
+  else if (c.exclusive && c.op === "max") ok = got.min < want.max;
+  else ok = spansOverlap(got, want);
+
+  return { key: c.key, verdict: ok ? "pass" : "fail", expected, actual };
 }
 
 /**
@@ -290,8 +303,8 @@ export function buildCriteriaQuery(noun: string, criteria: Criterion[]): string 
     const unit = c.unit ? ` ${c.unit}` : "";
     let value: string;
     if (c.op === "range" && Array.isArray(c.value)) value = `${c.value[0]}-${c.value[1]}${unit}`;
-    else if (c.op === "min") value = `от ${c.value}${unit}`;
-    else if (c.op === "max") value = `до ${c.value}${unit}`;
+    else if (c.op === "min") value = `${c.exclusive ? "больше" : "от"} ${c.value}${unit}`;
+    else if (c.op === "max") value = `${c.exclusive ? "меньше" : "до"} ${c.value}${unit}`;
     else value = `${c.value}${unit}`;
     parts.push(`${String(c.key).trim()} ${value}`.trim());
   }

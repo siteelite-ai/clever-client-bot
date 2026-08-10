@@ -15,6 +15,7 @@ import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-t
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
 import { applyCriteriaGate, buildCriteriaQuery, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
+import { alignCriteriaWithReasoning } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
@@ -1769,6 +1770,10 @@ async function runExpertLoop(
   let finalText = "";
   let productsRendered = 0;
   let firstAssistantText = "";
+  // Вся проза модели за ход (включая заглушённые фрагменты) — источник истины
+  // для Слоя 5: направление подбора берём из рассуждения, а не из сырого числа
+  // в реплике клиента.
+  let assistantReasoning = "";
   let lastDiscover: DiscoverCategoryOk | null = null;
   // Session-wide whitelist of category pagetitles discovered via discover_category.
   // Source of truth for `category` / `category_in` in search_catalog calls.
@@ -2140,6 +2145,7 @@ async function runExpertLoop(
       //    (важно для предупреждений о несоответствии параметров: цоколь, мощность и т.п.)
       //  • промежуточная болтовня между тулами → глушим
       if (resp.text.trim()) {
+        assistantReasoning += `\n${resp.text}`;
         if (isFirstTurn && !hasRender && !isFinalTurn) {
           send({ type: "delta", content: resp.text });
           finalText += resp.text;
@@ -2428,6 +2434,23 @@ async function runExpertLoop(
             // каталоге. Если критерий уровня A слабее числа, названного клиентом
             // (та же единица), сервер поднимает порог до клиентского и гейт
             // считает уже по нему.
+            // ── Слой 5: рассуждение модели — истина ────────────────────────
+            // Модель могла проговорить клиенту направление («нужен больше 12 мм»),
+            // а в criteria[] прислать `eq 12`, потому что 12 — это число из
+            // реплики клиента. Оператор выравниваем по прозе модели.
+            const aligned = alignCriteriaWithReasoning(
+              criteria,
+              `${firstAssistantText}\n${assistantReasoning}\n${resp.text}`,
+            );
+            if (aligned.alignments.length > 0) {
+              criteria = aligned.criteria;
+              (tc.args as Record<string, unknown>).criteria = criteria;
+              steps.push({
+                step: "v3_guard_criteria_reasoning_aligned",
+                ms: now(),
+                meta: { alignments: aligned.alignments },
+              });
+            }
             const understated = findUnderstatedCriteria(criteria, userMessage);
             if (understated.length > 0) {
               criteria = correctCriteria(criteria, understated);
