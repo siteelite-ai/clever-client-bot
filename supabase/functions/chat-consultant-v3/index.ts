@@ -1757,7 +1757,7 @@ async function runExpertLoop(
   send: (ev: SseEvent) => void,
   steps: StepLog[],
   t0: number,
-  flags: { anchorFilterEnabled: boolean; relaxationHintsEnabled: boolean },
+  flags: { anchorFilterEnabled: boolean; relaxationHintsEnabled: boolean; criteriaGateEnabled: boolean },
 ): Promise<{ finalText: string; productsRendered: number }> {
   const now = () => Date.now() - t0;
   let finalText = "";
