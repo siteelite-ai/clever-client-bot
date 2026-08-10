@@ -2694,6 +2694,17 @@ async function runExpertLoop(
           replyObj._tried_queries = [...triedLadderQueries];
         }
 
+        // Слой 3: сервер уже отправил формулировку модели в каталог как запрос.
+        // Модели остаётся только отрендерить найденное или честно признать пустоту.
+        if (selfRequery) {
+          replyObj._self_requery_query = selfRequery.query;
+          replyObj._self_requery_ids = selfRequery.ids;
+          replyObj._self_requery_total = selfRequery.total;
+          replyObj._server_hint = selfRequery.ids.length > 0
+            ? "Сервер уже выполнил поиск по твоей же формулировке критериев и проверил результаты гейтом. Вызови render_products с _self_requery_ids и теми же criteria — новые поиски не нужны."
+            : "Сервер выполнил поиск по твоей же формулировке критериев — подходящих позиций в каталоге нет. Скажи клиенту это честно и дай контакты менеджера, не подставляй заведомо не подходящие карточки.";
+        }
+
 
 
 
