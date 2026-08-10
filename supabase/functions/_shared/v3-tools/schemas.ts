@@ -117,12 +117,30 @@ export const TOOL_SCHEMAS = [
     function: {
       name: "render_products",
       description:
-        "ЕДИНСТВЕННЫЙ способ показать товары клиенту. Принимает id из search_catalog/jargon_recover_catalog ЭТОГО хода. После render опционально 1-3 предложения cross-sell (без артикулов/цен/ссылок).",
+        "ЕДИНСТВЕННЫЙ способ показать товары клиенту. Принимает id из search_catalog/jargon_recover_catalog ЭТОГО хода. После render опционально 1-3 предложения cross-sell (без артикулов/цен/ссылок). Если в тексте ты назвал клиенту измеримое требование (любой числовой параметр, порог или диапазон) — продублируй его машинно в criteria[]: сервер сверит его с характеристиками карточек и вернёт criteria_mismatch, если показывать нечего.",
       parameters: {
         type: "object",
         properties: {
           product_ids: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 10 },
           total_available: { type: "integer", minimum: 0 },
+          criteria: {
+            type: "array",
+            maxItems: 6,
+            description:
+              "Машинно-читаемая копия требований, которые ты озвучил клиенту. key — имя параметра как в характеристиках карточки (или бытовыми словами), op — eq | min | max | range, value — число, строка или [min,max] для range. level: A (критичное, сервер отсеет несоответствия) или B (только отчёт).",
+            items: {
+              type: "object",
+              properties: {
+                key: { type: "string" },
+                op: { type: "string", enum: ["eq", "min", "max", "range"] },
+                value: {},
+                unit: { type: "string" },
+                level: { type: "string", enum: ["A", "B"] },
+              },
+              required: ["key", "op", "value"],
+              additionalProperties: false,
+            },
+          },
         },
         required: ["product_ids"],
         additionalProperties: false,
