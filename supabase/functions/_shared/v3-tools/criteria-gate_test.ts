@@ -113,3 +113,11 @@ Deno.test("applyCriteriaGate: все карточки провалились →
   assertEquals(r.passed_ids, []);
   assertEquals(r.rejected.length, 2);
 });
+
+Deno.test("buildCriteriaQuery: формулировка модели превращается в текстовый запрос", () => {
+  const q = buildCriteriaQuery("термоусаживаемая трубка", [
+    { key: "Внутренний диаметр до термоусадки", op: "min", value: 40, unit: "мм" },
+    { key: "Цвет", op: "eq", value: "черный", level: "B" },
+  ]);
+  assertEquals(q, "термоусаживаемая трубка Внутренний диаметр до термоусадки от 40 мм");
+});
