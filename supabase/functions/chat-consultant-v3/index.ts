@@ -2554,7 +2554,10 @@ async function runExpertLoop(
           }
           // Track which ladder candidates were already tried (to nudge LLM in tool reply on timeout).
           const q = typeof tc.args.query === "string" ? tc.args.query.trim().toLowerCase() : "";
-          if (q) triedLadderQueries.add(q);
+          if (q) {
+            triedLadderQueries.add(q);
+            lastSearchNoun = typeof tc.args.query === "string" ? tc.args.query.trim() : lastSearchNoun;
+          }
 
           // No-progress detector — safety против бесконечных пустых циклов.
           // Anchor-фильтр или ненулевой pagination-total = прогресс (мы нашли что-то
