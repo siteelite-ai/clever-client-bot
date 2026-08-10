@@ -2057,7 +2057,7 @@ async function runExpertLoop(
   };
 
   const dialogueChoice = resolvePendingClarificationChoice(slots, userMessage) ?? resolveDialogueChoice(history, userMessage);
-  const baseSystemPrompt = buildSystemPrompt(flags.relaxationHintsEnabled);
+  const baseSystemPrompt = buildSystemPrompt(flags.relaxationHintsEnabled, flags.criteriaGateEnabled);
   const systemContent = dialogueChoice
     ? `${baseSystemPrompt}\n\n${dialogueChoiceSystemHint(dialogueChoice)}`
     : baseSystemPrompt;
