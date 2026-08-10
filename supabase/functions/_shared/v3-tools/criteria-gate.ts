@@ -32,7 +32,13 @@ export interface Criterion {
   unit?: string | null;
   /** A — критический (отсев), B — вторичный (только отчёт). По умолчанию A. */
   level?: "A" | "B";
+  /**
+   * Строгое неравенство для min/max: «больше 12» (а не «не менее 12»).
+   * Ставится Слоем 5 по прозе модели (criteria-reasoning.ts).
+   */
+  exclusive?: boolean;
 }
+
 
 export type CriterionVerdict = "pass" | "fail" | "unknown";
 
