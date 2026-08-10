@@ -13,6 +13,7 @@ import { executeJargonRecoverCatalog, type JargonRecoverCatalogInput } from "../
 import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3-tools/lookup-knowledge.ts";
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
+import { applyCriteriaGate, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
@@ -63,13 +64,14 @@ interface AppSettings {
   v3_relaxation_hints_enabled: boolean;
   v3_jargon_category_context_enabled: boolean;
   v3_jargon_axial_modifiers_enabled: boolean;
+  v3_criteria_gate_enabled: boolean;
 }
 
 async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
   try {
     const { data } = await supabase
       .from("app_settings")
-      .select("openrouter_api_key, volt220_api_token, v3_anchor_filter_enabled, v3_relaxation_hints_enabled, v3_jargon_category_context_enabled, v3_jargon_axial_modifiers_enabled")
+      .select("openrouter_api_key, volt220_api_token, v3_anchor_filter_enabled, v3_relaxation_hints_enabled, v3_jargon_category_context_enabled, v3_jargon_axial_modifiers_enabled, v3_criteria_gate_enabled")
       .limit(1)
       .single();
     const row = data as {
@@ -79,6 +81,7 @@ async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
       v3_relaxation_hints_enabled?: boolean;
       v3_jargon_category_context_enabled?: boolean;
       v3_jargon_axial_modifiers_enabled?: boolean;
+      v3_criteria_gate_enabled?: boolean;
     } | null;
     return {
       openrouter_api_key: row?.openrouter_api_key ?? Deno.env.get("OPENROUTER_API_KEY") ?? null,
@@ -87,6 +90,7 @@ async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
       v3_relaxation_hints_enabled: Boolean(row?.v3_relaxation_hints_enabled),
       v3_jargon_category_context_enabled: Boolean(row?.v3_jargon_category_context_enabled),
       v3_jargon_axial_modifiers_enabled: Boolean(row?.v3_jargon_axial_modifiers_enabled),
+      v3_criteria_gate_enabled: Boolean(row?.v3_criteria_gate_enabled),
     };
   } catch {
     return {
@@ -96,6 +100,7 @@ async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
       v3_relaxation_hints_enabled: false,
       v3_jargon_category_context_enabled: false,
       v3_jargon_axial_modifiers_enabled: false,
+      v3_criteria_gate_enabled: false,
     };
   }
 }
@@ -1757,7 +1762,7 @@ async function runExpertLoop(
   send: (ev: SseEvent) => void,
   steps: StepLog[],
   t0: number,
-  flags: { anchorFilterEnabled: boolean; relaxationHintsEnabled: boolean },
+  flags: { anchorFilterEnabled: boolean; relaxationHintsEnabled: boolean; criteriaGateEnabled: boolean },
 ): Promise<{ finalText: string; productsRendered: number }> {
   const now = () => Date.now() - t0;
   let finalText = "";
@@ -2057,7 +2062,7 @@ async function runExpertLoop(
   };
 
   const dialogueChoice = resolvePendingClarificationChoice(slots, userMessage) ?? resolveDialogueChoice(history, userMessage);
-  const baseSystemPrompt = buildSystemPrompt(flags.relaxationHintsEnabled);
+  const baseSystemPrompt = buildSystemPrompt(flags.relaxationHintsEnabled, flags.criteriaGateEnabled);
   const systemContent = dialogueChoice
     ? `${baseSystemPrompt}\n\n${dialogueChoiceSystemHint(dialogueChoice)}`
     : baseSystemPrompt;
@@ -2391,11 +2396,60 @@ async function runExpertLoop(
         void filterByCompoundConstraints;
         void canonicalizeSearchOptionsFromDiscover;
 
+        // ── Criteria Gate (flag v3_criteria_gate_enabled) ────────────────────
+        // Слой 2 контракта «обещал = показал»: числовые/диапазонные требования,
+        // которые LLM проговорил клиенту, приходят машинно в render_products.criteria[].
+        // Фасеты каталога сравнивают строки строго по равенству, поэтому неравенства
+        // («не менее», «с запасом», «больше диаметра кабеля») фасетом не проверяются.
+        // Гейт сверяет их с short_traits карточек: fail → карточку не рендерим,
+        // unknown (характеристики нет) → карточку оставляем.
+        let gateShortCircuit: ToolResult | null = null;
+        if (flags.criteriaGateEnabled && tc.name === "render_products") {
+          const rawCriteria = Array.isArray((tc.args as Record<string, unknown>).criteria)
+            ? ((tc.args as Record<string, unknown>).criteria as Criterion[])
+            : [];
+          const criteria = rawCriteria.filter((c) => c && typeof c.key === "string" && c.value !== undefined);
+          if (criteria.length > 0) {
+            const ids = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
+            const products = ids
+              .map((id) => ctx.cache.get(id))
+              .filter((p): p is NonNullable<typeof p> => Boolean(p));
+            const report = applyCriteriaGate(products, criteria);
+            const passed = ids.filter((id) => report.passed_ids.includes(id));
+            const meta = {
+              criteria: criteria.map((c) => ({ key: c.key, op: c.op, value: c.value, level: c.level ?? "A" })),
+              before: ids.length,
+              after: passed.length,
+              rejected: report.rejected,
+              unverifiable_keys: report.unverifiable_keys,
+            };
+            if (passed.length === 0 && report.rejected.length > 0) {
+              // Всё отсеяно данными карточек → возвращаем модели явную ошибку с отчётом,
+              // чтобы она переискала или честно сказала клиенту (см. <criteria_contract>).
+              gateShortCircuit = {
+                tool: "render_products",
+                ok: false,
+                error_code: "criteria_mismatch",
+                message: "ни одна карточка не удовлетворяет заявленным критериям уровня A",
+                report,
+              } as unknown as ToolResult;
+              steps.push({ step: "v3_guard_criteria_gate_blocked", ms: now(), meta });
+            } else {
+              if (passed.length !== ids.length) {
+                (tc.args as Record<string, unknown>).product_ids = passed;
+                steps.push({ step: "v3_guard_criteria_gate", ms: now(), meta });
+              } else if (report.rejected.length > 0 || report.unverifiable_keys.length > 0) {
+                steps.push({ step: "v3_guard_criteria_gate", ms: now(), meta });
+              }
+            }
+          }
+        }
+
         const runArgs: Record<string, unknown> = tc.args;
 
 
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
-        let result = await runTool(tc.name, runArgs, ctx);
+        let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
         if (flags.anchorFilterEnabled && tc.name === "search_catalog" && replacementIntent) {
           const anchorId = getAnchorExcludeId();
           const filtered = filterAnchorFromSearchResult(result, anchorId, (runArgs as Record<string, unknown>).mode);
@@ -2761,6 +2815,7 @@ Deno.serve(async (req) => {
         const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0, {
           anchorFilterEnabled: settings.v3_anchor_filter_enabled,
           relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
+          criteriaGateEnabled: settings.v3_criteria_gate_enabled,
         });
         productsCount = out.productsRendered;
       } catch (e) {

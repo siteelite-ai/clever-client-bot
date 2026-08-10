@@ -117,12 +117,30 @@ export const TOOL_SCHEMAS = [
     function: {
       name: "render_products",
       description:
-        "ЕДИНСТВЕННЫЙ способ показать товары клиенту. Принимает id из search_catalog/jargon_recover_catalog ЭТОГО хода. После render опционально 1-3 предложения cross-sell (без артикулов/цен/ссылок).",
+        "ЕДИНСТВЕННЫЙ способ показать товары клиенту. Принимает id из search_catalog/jargon_recover_catalog ЭТОГО хода. После render опционально 1-3 предложения cross-sell (без артикулов/цен/ссылок). Если в тексте ты назвал клиенту измеримое требование (любой числовой параметр, порог или диапазон) — продублируй его машинно в criteria[]: сервер сверит его с характеристиками карточек и вернёт criteria_mismatch, если показывать нечего.",
       parameters: {
         type: "object",
         properties: {
           product_ids: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 10 },
           total_available: { type: "integer", minimum: 0 },
+          criteria: {
+            type: "array",
+            maxItems: 6,
+            description:
+              "Машинно-читаемая копия требований, которые ты озвучил клиенту. key — имя параметра как в характеристиках карточки (или бытовыми словами), op — eq | min | max | range, value — число, строка или [min,max] для range. level: A (критичное, сервер отсеет несоответствия) или B (только отчёт).",
+            items: {
+              type: "object",
+              properties: {
+                key: { type: "string" },
+                op: { type: "string", enum: ["eq", "min", "max", "range"] },
+                value: {},
+                unit: { type: "string" },
+                level: { type: "string", enum: ["A", "B"] },
+              },
+              required: ["key", "op", "value"],
+              additionalProperties: false,
+            },
+          },
         },
         required: ["product_ids"],
         additionalProperties: false,
@@ -419,8 +437,22 @@ const RELAXATION_HINTS = `
 - Не удаляй несколько фильтров за один вызов и не возвращайся к by_query с длинной строкой из нескольких слов/атрибутов.
 </filter_relaxation_hints>`;
 
-export function buildSystemPrompt(relaxationHintsEnabled = false): string {
-  return relaxationHintsEnabled ? `${SYSTEM_PROMPT}${RELAXATION_HINTS}` : SYSTEM_PROMPT;
+const CRITERIA_CONTRACT = `
+<criteria_contract>
+Инвариант «обещал = показал». Любое измеримое требование, которое ты проговариваешь клиенту в тексте (порог, минимум, максимум, диапазон, точное значение любого числового параметра), ОБЯЗАНО быть продублировано машинно в render_products.criteria[].
+- Формат: { key: "<имя параметра как в характеристиках карточки или бытовыми словами>", op: "eq" | "min" | "max" | "range", value: <число | строка | [min,max]>, unit?: "<единица>", level?: "A" | "B" }.
+- level "A" — требование критично для работоспособности/совместимости (сервер отсеет карточки, чьи характеристики ему прямо противоречат). level "B" — пожелание, влияет только на честность текста.
+- Каталожные фасеты сравнивают строки строго по равенству, поэтому фильтр по одному значению НЕ гарантирует выполнение неравенства («не менее», «больше чем», «с запасом»). Если требование — неравенство или диапазон, оно живёт ТОЛЬКО в criteria[]; фасет — лишь способ сузить пул.
+- Сервер может вернуть render_products с error_code="criteria_mismatch" и полем report: это значит, что ни одна карточка не удовлетворяет требованию уровня A. В этом случае ЗАПРЕЩЕНО повторять тот же render с тем же пулом: либо сделай новый поиск с корректным значением/диапазоном (при total=0 — ослабь ровно один параметр), либо честно скажи клиенту, что под названное требование в каталоге ничего нет, и предложи escalate_to_manager.
+- Если сервер отсеял часть карточек (поле rejected в отчёте), в caption-тексте не приписывай показанным карточкам отсеянные значения — говори только то, что подтверждено характеристиками.
+- Требование, названное словами, но отсутствующее в criteria[], = баг: клиент увидит карточки, противоречащие твоей же логике.
+</criteria_contract>`;
+
+export function buildSystemPrompt(relaxationHintsEnabled = false, criteriaGateEnabled = false): string {
+  let prompt = SYSTEM_PROMPT;
+  if (relaxationHintsEnabled) prompt += RELAXATION_HINTS;
+  if (criteriaGateEnabled) prompt += CRITERIA_CONTRACT;
+  return prompt;
 }
 
 

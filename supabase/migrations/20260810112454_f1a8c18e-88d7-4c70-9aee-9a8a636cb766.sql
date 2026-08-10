@@ -1,0 +1,1 @@
+ALTER TABLE public.app_settings ADD COLUMN IF NOT EXISTS v3_criteria_gate_enabled boolean NOT NULL DEFAULT false;
