@@ -1,0 +1,1 @@
+UPDATE public.app_settings SET v3_criteria_gate_enabled = true, updated_at = now();

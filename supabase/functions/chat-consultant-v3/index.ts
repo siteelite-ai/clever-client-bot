@@ -193,7 +193,7 @@ function summariseToolArgs(name: string, args: Record<string, unknown>): Record<
   if (name === "jargon_recover_catalog") return pick(["query", "modifiers", "min_price", "max_price", "per_page"]);
   if (name === "lookup_knowledge") return pick(["query", "type"]);
   if (name === "lookup_contacts") return pick(["fields"]);
-  if (name === "render_products") return { ids_count: Array.isArray(args.product_ids) ? (args.product_ids as unknown[]).length : 0, total_available: args.total_available };
+  if (name === "render_products") return { ids_count: Array.isArray(args.product_ids) ? (args.product_ids as unknown[]).length : 0, total_available: args.total_available, criteria: Array.isArray(args.criteria) ? args.criteria : [] };
   if (name === "propose_clarification") return pick(["facet_key", "question"]);
   if (name === "escalate_to_manager") return pick(["reason"]);
   if (name === "note_state") return pick(["key", "ttl_turns"]);
