@@ -128,3 +128,13 @@ Deno.test("op=min со строковым value сохраняет открыт�
   const check = checkCriterion(p, { key: "Внутр диаметр", op: "min", value: "12", unit: "мм", level: "A" });
   assertEquals(check.verdict, "pass");
 });
+
+Deno.test("buildCriteriaQuery: многословное описание не попадает в запрос", () => {
+  const q = buildCriteriaQuery("КГ 3*6", [
+    { key: "Количество жил", op: "eq", value: "3", level: "A" },
+    { key: "Сечение кабеля, мм2", op: "eq", value: "6", level: "A" },
+    { key: "Назначение", op: "eq", value: "Кабели силовые для нестационарной прокладки", level: "A" },
+  ]);
+  if (q.includes("нестационарной")) throw new Error("verbose value leaked: " + q);
+  if (!q.includes("Количество жил 3")) throw new Error("compact criterion lost: " + q);
+});
