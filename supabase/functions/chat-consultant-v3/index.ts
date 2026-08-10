@@ -14,6 +14,7 @@ import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
 import { applyCriteriaGate, buildCriteriaQuery, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
+import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
@@ -2414,8 +2415,23 @@ async function runExpertLoop(
           const rawCriteria = Array.isArray((tc.args as Record<string, unknown>).criteria)
             ? ((tc.args as Record<string, unknown>).criteria as Criterion[])
             : [];
-          const criteria = rawCriteria.filter((c) => c && typeof c.key === "string" && c.value !== undefined);
+          let criteria = rawCriteria.filter((c) => c && typeof c.key === "string" && c.value !== undefined);
           if (criteria.length > 0) {
+            // ── Слой 4: числа клиента — тоже инвариант ─────────────────────────
+            // Модель не имеет права тихо ослабить порог до того, что нашлось в
+            // каталоге. Если критерий уровня A слабее числа, названного клиентом
+            // (та же единица), сервер поднимает порог до клиентского и гейт
+            // считает уже по нему.
+            const understated = findUnderstatedCriteria(criteria, userMessage);
+            if (understated.length > 0) {
+              criteria = correctCriteria(criteria, understated);
+              (tc.args as Record<string, unknown>).criteria = criteria;
+              steps.push({
+                step: "v3_guard_criteria_understated",
+                ms: now(),
+                meta: { violations: understated },
+              });
+            }
             const ids = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
             const products = ids
               .map((id) => ctx.cache.get(id))
@@ -2879,7 +2895,15 @@ Deno.serve(async (req) => {
         console.error("[v3] expert error:", e);
         steps.push({ step: "v3_turn_end", ms: Date.now() - t0, meta: { reason: isAbort ? "aborted" : "error", error: errorMsg } });
         try {
-          send({ type: "delta", content: "\n\nНе получилось обработать запрос. Попробуй переформулировать или связаться с менеджером." });
+          // Честный выход вместо «переформулируйте»: если подбор упёрся в лимит
+          // времени, значит под названные требования подходящих позиций найти не
+          // удалось. Признаём это прямо и отправляем клиента к менеджеру.
+          send({
+            type: "delta",
+            content: isAbort
+              ? "\n\nПод названные вами требования подобрать позицию в каталоге не удалось — не хочу предлагать то, что им не соответствует. Напишите или позвоните менеджеру: он проверит наличие под заказ и подскажет альтернативу."
+              : "\n\nНе получилось обработать запрос. Попробуйте переформулировать или свяжитесь с менеджером.",
+          });
         } catch { /* stream may be closed */ }
       } finally {
         try { req.signal.removeEventListener("abort", onRuntimeAbort); } catch { /* ignore */ }

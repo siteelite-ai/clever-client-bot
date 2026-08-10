@@ -191,7 +191,14 @@ export function checkCriterion(product: ProductRef, c: Criterion): CriterionChec
     else if (c.op === "max") want = { min: Number.NEGATIVE_INFINITY, max: c.value };
     else want = { min: c.value, max: c.value };
   } else if (typeof c.value === "string") {
-    want = parseNumSpan(c.value);
+    // Число могло прийти строкой ("12") — оператор всё равно определяет открытость
+    // интервала, иначе min/max деградируют в строгое равенство.
+    const parsed = parseNumSpan(c.value);
+    if (parsed) {
+      if (c.op === "min") want = { min: parsed.min, max: Number.POSITIVE_INFINITY };
+      else if (c.op === "max") want = { min: Number.NEGATIVE_INFINITY, max: parsed.max };
+      else want = parsed;
+    }
   }
   if (!want) return { key: c.key, verdict: "unknown", expected, actual };
 
