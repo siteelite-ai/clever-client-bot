@@ -13,6 +13,7 @@ import { executeJargonRecoverCatalog, type JargonRecoverCatalogInput } from "../
 import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3-tools/lookup-knowledge.ts";
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
+import { applyCriteriaGate, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
@@ -63,13 +64,14 @@ interface AppSettings {
   v3_relaxation_hints_enabled: boolean;
   v3_jargon_category_context_enabled: boolean;
   v3_jargon_axial_modifiers_enabled: boolean;
+  v3_criteria_gate_enabled: boolean;
 }
 
 async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
   try {
     const { data } = await supabase
       .from("app_settings")
-      .select("openrouter_api_key, volt220_api_token, v3_anchor_filter_enabled, v3_relaxation_hints_enabled, v3_jargon_category_context_enabled, v3_jargon_axial_modifiers_enabled")
+      .select("openrouter_api_key, volt220_api_token, v3_anchor_filter_enabled, v3_relaxation_hints_enabled, v3_jargon_category_context_enabled, v3_jargon_axial_modifiers_enabled, v3_criteria_gate_enabled")
       .limit(1)
       .single();
     const row = data as {
@@ -79,6 +81,7 @@ async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
       v3_relaxation_hints_enabled?: boolean;
       v3_jargon_category_context_enabled?: boolean;
       v3_jargon_axial_modifiers_enabled?: boolean;
+      v3_criteria_gate_enabled?: boolean;
     } | null;
     return {
       openrouter_api_key: row?.openrouter_api_key ?? Deno.env.get("OPENROUTER_API_KEY") ?? null,
@@ -87,6 +90,7 @@ async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
       v3_relaxation_hints_enabled: Boolean(row?.v3_relaxation_hints_enabled),
       v3_jargon_category_context_enabled: Boolean(row?.v3_jargon_category_context_enabled),
       v3_jargon_axial_modifiers_enabled: Boolean(row?.v3_jargon_axial_modifiers_enabled),
+      v3_criteria_gate_enabled: Boolean(row?.v3_criteria_gate_enabled),
     };
   } catch {
     return {
@@ -96,6 +100,7 @@ async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
       v3_relaxation_hints_enabled: false,
       v3_jargon_category_context_enabled: false,
       v3_jargon_axial_modifiers_enabled: false,
+      v3_criteria_gate_enabled: false,
     };
   }
 }
@@ -2761,6 +2766,7 @@ Deno.serve(async (req) => {
         const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0, {
           anchorFilterEnabled: settings.v3_anchor_filter_enabled,
           relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
+          criteriaGateEnabled: settings.v3_criteria_gate_enabled,
         });
         productsCount = out.productsRendered;
       } catch (e) {
