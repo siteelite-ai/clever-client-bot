@@ -2396,11 +2396,60 @@ async function runExpertLoop(
         void filterByCompoundConstraints;
         void canonicalizeSearchOptionsFromDiscover;
 
+        // ── Criteria Gate (flag v3_criteria_gate_enabled) ────────────────────
+        // Слой 2 контракта «обещал = показал»: числовые/диапазонные требования,
+        // которые LLM проговорил клиенту, приходят машинно в render_products.criteria[].
+        // Фасеты каталога сравнивают строки строго по равенству, поэтому неравенства
+        // («не менее», «с запасом», «больше диаметра кабеля») фасетом не проверяются.
+        // Гейт сверяет их с short_traits карточек: fail → карточку не рендерим,
+        // unknown (характеристики нет) → карточку оставляем.
+        let gateShortCircuit: ToolResult | null = null;
+        if (flags.criteriaGateEnabled && tc.name === "render_products") {
+          const rawCriteria = Array.isArray((tc.args as Record<string, unknown>).criteria)
+            ? ((tc.args as Record<string, unknown>).criteria as Criterion[])
+            : [];
+          const criteria = rawCriteria.filter((c) => c && typeof c.key === "string" && c.value !== undefined);
+          if (criteria.length > 0) {
+            const ids = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
+            const products = ids
+              .map((id) => ctx.cache.get(id))
+              .filter((p): p is NonNullable<typeof p> => Boolean(p));
+            const report = applyCriteriaGate(products, criteria);
+            const passed = ids.filter((id) => report.passed_ids.includes(id));
+            const meta = {
+              criteria: criteria.map((c) => ({ key: c.key, op: c.op, value: c.value, level: c.level ?? "A" })),
+              before: ids.length,
+              after: passed.length,
+              rejected: report.rejected,
+              unverifiable_keys: report.unverifiable_keys,
+            };
+            if (passed.length === 0 && report.rejected.length > 0) {
+              // Всё отсеяно данными карточек → возвращаем модели явную ошибку с отчётом,
+              // чтобы она переискала или честно сказала клиенту (см. <criteria_contract>).
+              gateShortCircuit = {
+                tool: "render_products",
+                ok: false,
+                error_code: "criteria_mismatch",
+                message: "ни одна карточка не удовлетворяет заявленным критериям уровня A",
+                report,
+              } as unknown as ToolResult;
+              steps.push({ step: "v3_guard_criteria_gate_blocked", ms: now(), meta });
+            } else {
+              if (passed.length !== ids.length) {
+                (tc.args as Record<string, unknown>).product_ids = passed;
+                steps.push({ step: "v3_guard_criteria_gate", ms: now(), meta });
+              } else if (report.rejected.length > 0 || report.unverifiable_keys.length > 0) {
+                steps.push({ step: "v3_guard_criteria_gate", ms: now(), meta });
+              }
+            }
+          }
+        }
+
         const runArgs: Record<string, unknown> = tc.args;
 
 
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
-        let result = await runTool(tc.name, runArgs, ctx);
+        let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
         if (flags.anchorFilterEnabled && tc.name === "search_catalog" && replacementIntent) {
           const anchorId = getAnchorExcludeId();
           const filtered = filterAnchorFromSearchResult(result, anchorId, (runArgs as Record<string, unknown>).mode);
