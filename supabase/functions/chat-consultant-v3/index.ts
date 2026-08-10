@@ -2495,7 +2495,15 @@ async function runExpertLoop(
                   ms: now(),
                   meta: { query: rq, found: selfRequery?.ids.length ?? 0, total: selfRequery?.total ?? 0 },
                 });
+                if ((selfRequery?.ids.length ?? 0) === 0) {
+                  criteriaDeadEnds += 1;
+                  if (criteriaDeadEnds >= 2) {
+                    criteriaDeadEndBreak = true;
+                    steps.push({ step: "v3_criteria_dead_end", ms: now(), meta: { attempts: criteriaDeadEnds } });
+                  }
+                }
               }
+
             } else {
               if (passed.length !== ids.length) {
                 (tc.args as Record<string, unknown>).product_ids = passed;
