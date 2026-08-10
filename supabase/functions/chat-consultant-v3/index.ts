@@ -2409,6 +2409,7 @@ async function runExpertLoop(
         // Гейт сверяет их с short_traits карточек: fail → карточку не рендерим,
         // unknown (характеристики нет) → карточку оставляем.
         let gateShortCircuit: ToolResult | null = null;
+        let selfRequery: { query: string; ids: string[]; total: number } | null = null;
         if (flags.criteriaGateEnabled && tc.name === "render_products") {
           const rawCriteria = Array.isArray((tc.args as Record<string, unknown>).criteria)
             ? ((tc.args as Record<string, unknown>).criteria as Criterion[])
@@ -2439,6 +2440,40 @@ async function runExpertLoop(
                 report,
               } as unknown as ToolResult;
               steps.push({ step: "v3_guard_criteria_gate_blocked", ms: now(), meta });
+
+              // ── Слой 3: self-requery ────────────────────────────────────────
+              // Формулировка модели — такой же запрос, как реплика клиента.
+              // Сервер сам отправляет её в каталог по-текстовому (by_query),
+              // вместо того чтобы ждать очередной фасетный перебор от LLM.
+              const noun = lastSearchNoun || (typeof ctx.lastUserMessage === "string" ? ctx.lastUserMessage : "");
+              const rq = buildCriteriaQuery(noun, criteria);
+              const rqKey = rq.toLowerCase();
+              if (rq && !triedSelfRequeries.has(rqKey)) {
+                triedSelfRequeries.add(rqKey);
+                try {
+                  const rqResult = await runTool("search_catalog", { mode: "by_query", query: rq, per_page: 10 }, ctx);
+                  if (rqResult.ok) {
+                    const r3 = rqResult as unknown as { results: Array<{ id: string; price: number }>; total: number };
+                    const rqProducts = (r3.results ?? []).filter((p) => p && Number.isFinite(p.price) && p.price > 0);
+                    const gated = applyCriteriaGate(
+                      rqProducts.map((p) => ctx.cache.get(String(p.id))).filter((p): p is NonNullable<typeof p> => Boolean(p)),
+                      criteria,
+                    );
+                    const rqIds = gated.passed_ids;
+                    selfRequery = { query: rq, ids: rqIds, total: Number(r3.total) || rqProducts.length };
+                    if (rqIds.length > 0) freshSearch = { tool: "criteria_self_requery", ids: rqIds, total: selfRequery.total };
+                  } else {
+                    selfRequery = { query: rq, ids: [], total: 0 };
+                  }
+                } catch (_e) {
+                  selfRequery = { query: rq, ids: [], total: 0 };
+                }
+                steps.push({
+                  step: "v3_criteria_self_requery",
+                  ms: now(),
+                  meta: { query: rq, found: selfRequery?.ids.length ?? 0, total: selfRequery?.total ?? 0 },
+                });
+              }
             } else {
               if (passed.length !== ids.length) {
                 (tc.args as Record<string, unknown>).product_ids = passed;
