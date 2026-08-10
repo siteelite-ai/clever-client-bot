@@ -2750,6 +2750,9 @@ async function runExpertLoop(
 
       // No-progress detector — выходим в forced-finalize, не сжигая остаток бюджета.
       if (noProgressBreak) break;
+      // Тупик по критериям: сервер сам дважды сходил в каталог по формулировке
+      // модели и не нашёл ничего — новых сигналов не будет, честно завершаем.
+      if (criteriaDeadEndBreak) break;
       // After tools → loop back, model decides what's next.
     }
 
@@ -2761,12 +2764,14 @@ async function runExpertLoop(
       step: "v3_turn_end",
       ms: now(),
       meta: {
-        reason: noProgressBreak ? "no_progress" : "forced_stepcount",
+        reason: criteriaDeadEndBreak ? "criteria_dead_end" : noProgressBreak ? "no_progress" : "forced_stepcount",
         step_count: MAX_STEPS,
       },
     });
     if (productsRendered === 0) {
-      if (replacementIntent && replacementRequiredAxes.length >= 2) {
+      if (criteriaDeadEndBreak) {
+        send({ type: "delta", content: "\n\nПод названные требования подходящей позиции в каталоге не нашлось — предлагать то, что им не соответствует, не буду. Напишите или позвоните менеджеру: он проверит поставку и подберёт замену." });
+      } else if (replacementIntent && replacementRequiredAxes.length >= 2) {
         const criteria = replacementRequiredAxes
           .map((a) => `${a.caption}: ${a.values.join("/")}`)
           .join(", ");
@@ -2775,6 +2780,7 @@ async function runExpertLoop(
         send({ type: "delta", content: "\n\nНе нашёл подходящие товары по этому сочетанию параметров. Могу попробовать расширить поиск или уточните детали у менеджера." });
       }
     }
+
     return { finalText, productsRendered };
   } finally {
     clearTimeout(turnTimer);
