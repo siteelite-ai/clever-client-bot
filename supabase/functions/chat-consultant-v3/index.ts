@@ -1797,6 +1797,11 @@ async function runExpertLoop(
   let replacementRequiredAxes: ReplacementAxis[] = [];
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
+  // Последний осмысленный поисковый запрос — нужен как «существительное» для
+  // self-requery: критерии сами по себе («не менее 40 мм») не запрос, они
+  // обретают смысл только вместе с предметом текущего поиска.
+  let lastSearchNoun = "";
+  const triedSelfRequeries = new Set<string>();
   // No-progress detector: подряд два search_catalog с тем же сигнатурным
   // набором id (или пусто) → дальнейшие итерации не дадут нового сигнала,
   // выходим из цикла и идём в forced-finalize. Это страховка от LLM-loop,
