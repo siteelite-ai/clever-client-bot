@@ -1803,6 +1803,12 @@ async function runExpertLoop(
   // обретают смысл только вместе с предметом текущего поиска.
   let lastSearchNoun = "";
   const triedSelfRequeries = new Set<string>();
+  // Бюджет тупика по критериям: если сервер уже сам сходил в каталог по
+  // формулировке модели и не нашёл ничего дважды — дальше искать нечем.
+  // Прерываем ход и отвечаем честно, вместо выжигания 140 с до таймаута.
+  let criteriaDeadEnds = 0;
+  let criteriaDeadEndBreak = false;
+
   // No-progress detector: подряд два search_catalog с тем же сигнатурным
   // набором id (или пусто) → дальнейшие итерации не дадут нового сигнала,
   // выходим из цикла и идём в forced-finalize. Это страховка от LLM-loop,
