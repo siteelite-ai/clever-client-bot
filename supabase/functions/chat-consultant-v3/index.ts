@@ -1804,7 +1804,7 @@ async function runExpertLoop(
   let lastSearchNoun = "";
   const triedSelfRequeries = new Set<string>();
   // Бюджет тупика по критериям: если сервер уже сам сходил в каталог по
-  // формулировке модели и не нашёл ничего дважды — дальше искать нечем.
+  // формулировке модели и не нашёл ничего — дальше искать нечем.
   // Прерываем ход и отвечаем честно, вместо выжигания 140 с до таймаута.
   let criteriaDeadEnds = 0;
   let criteriaDeadEndBreak = false;
@@ -2497,7 +2497,7 @@ async function runExpertLoop(
                 });
                 if ((selfRequery?.ids.length ?? 0) === 0) {
                   criteriaDeadEnds += 1;
-                  if (criteriaDeadEnds >= 2) {
+                  if (criteriaDeadEnds >= 1) {
                     criteriaDeadEndBreak = true;
                     steps.push({ step: "v3_criteria_dead_end", ms: now(), meta: { attempts: criteriaDeadEnds } });
                   }
