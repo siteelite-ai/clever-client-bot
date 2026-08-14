@@ -20,6 +20,18 @@ function formatPrice(price: number): string {
   return price.toLocaleString("ru-RU").replace(/\u00a0/g, " ");
 }
 
+/**
+ * Суффикс единицы к цене. Значение приходит ТОЛЬКО из кэша каталога.
+ * «шт» не показываем — цена за штуку это дефолтное чтение, суффикс был бы шумом.
+ */
+export function formatPriceUnitSuffix(unit: string | null | undefined): string {
+  const u = String(unit ?? "").trim();
+  if (!u) return "";
+  const norm = u.toLowerCase().replace(/ё/g, "е").replace(/[.\s]/g, "");
+  if (norm === "шт" || norm === "штука" || norm === "штук" || norm === "ед") return "";
+  return `/${u.replace(/\.$/, "")}`;
+}
+
 function formatStockLine(
   warehouses: Array<{ city: string; qty: number }> | undefined,
   fallbackLabel: string,
@@ -55,7 +67,7 @@ export function executeRenderProducts(
     }
 
     let block = `- **[${p.pagetitle}](${p.url})**`;
-    block += `\n  Цена: *${formatPrice(p.price)}* ₸`;
+    block += `\n  Цена: *${formatPrice(p.price)}* ₸${formatPriceUnitSuffix(p.unit)}`;
     if (p.vendor) block += `\n  Бренд: ${p.vendor}`;
     const stockLabel = STOCK_LABEL[p.stock];
     const stockLine = formatStockLine(p.warehouses, stockLabel);

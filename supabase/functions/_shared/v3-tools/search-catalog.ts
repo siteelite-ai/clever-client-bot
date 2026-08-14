@@ -94,6 +94,26 @@ function extractTraits(p: Record<string, unknown>): string[] {
 }
 
 /**
+ * Единица измерения товара — обычная характеристика каталога («Единица измерения»).
+ * Сопоставление нормализованное, по подписи ИЛИ ключу характеристики: никаких словарей
+ * товаров/категорий, работает одинаково для любой категории. Нет характеристики → null.
+ */
+export function extractUnit(p: Record<string, unknown>): string | null {
+  const opts = p.options as Array<{ key?: unknown; caption_ru?: unknown; value_ru?: unknown }> | undefined;
+  if (!Array.isArray(opts)) return null;
+  for (const o of opts) {
+    const cap = String(o?.caption_ru ?? "").toLowerCase().replace(/ё/g, "е").trim();
+    const key = String(o?.key ?? "").toLowerCase();
+    const isUnit = cap.startsWith("единица измерения") || key.startsWith("edinica_izmereniya");
+    if (!isUnit) continue;
+    const val = typeof o?.value_ru === "string" ? o.value_ru.trim() : String(o?.value_ru ?? "").trim();
+    if (!val || val.length > 12) continue;
+    return val;
+  }
+  return null;
+}
+
+/**
  * Достаём pagetitle листовой категории товара из любого варианта формы ответа /products.
  * Поддерживаем: raw.category (строка), raw.category.pagetitle, raw.categories[0].pagetitle.
  * Data-agnostic — никаких хардкодов.
@@ -219,6 +239,7 @@ async function singleSearch(
       const warehouses = extractWarehouses(raw);
       const ref: ProductRef = {
         id, pagetitle, vendor, price,
+        unit: extractUnit(raw),
         stock: inferStock(raw),
         short_traits: extractTraits(raw),
         leaf_category: extractLeafCategory(raw),
