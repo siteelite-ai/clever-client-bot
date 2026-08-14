@@ -239,6 +239,7 @@ async function singleSearch(
       const warehouses = extractWarehouses(raw);
       const ref: ProductRef = {
         id, pagetitle, vendor, price,
+        unit: extractUnit(raw),
         stock: inferStock(raw),
         short_traits: extractTraits(raw),
         leaf_category: extractLeafCategory(raw),
