@@ -6,6 +6,12 @@ export interface ProductRef {
   vendor: string | null;
   price: number;
   stock: "in_stock" | "low" | "out" | "unknown";
+  /**
+   * Единица измерения товара ИЗ КАТАЛОГА (характеристика «Единица измерения»): «м», «шт», «компл».
+   * Никогда не выдумывается: если API её не отдал — undefined/null.
+   * Используется render_products для строки цены (`₸/м`).
+   */
+  unit?: string | null;
   short_traits: string[];
   /** Pagetitle листовой категории товара (если API его вернул). Источник L₀ для режима «аналог». */
   leaf_category?: string | null;
