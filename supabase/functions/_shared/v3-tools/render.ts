@@ -67,7 +67,7 @@ export function executeRenderProducts(
     }
 
     let block = `- **[${p.pagetitle}](${p.url})**`;
-    block += `\n  Цена: *${formatPrice(p.price)}* ₸`;
+    block += `\n  Цена: *${formatPrice(p.price)}* ₸${formatPriceUnitSuffix(p.unit)}`;
     if (p.vendor) block += `\n  Бренд: ${p.vendor}`;
     const stockLabel = STOCK_LABEL[p.stock];
     const stockLine = formatStockLine(p.warehouses, stockLabel);
