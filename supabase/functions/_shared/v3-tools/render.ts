@@ -35,10 +35,14 @@ export function formatPriceUnitSuffix(unit: string | null | undefined): string {
 function formatStockLine(
   warehouses: Array<{ city: string; qty: number }> | undefined,
   fallbackLabel: string,
+  unit: string | null | undefined,
 ): string {
-  // Формат: "Город (N шт), Город (N шт)". Показываем до 3 городов с наибольшим qty.
+  // Формат: "Город (N м), Город (N м)". Единица — только из кэша каталога.
+  // Если API единицу не отдал, не выдумываем «шт», показываем только количество.
   if (Array.isArray(warehouses) && warehouses.length > 0) {
-    const top = warehouses.slice(0, 3).map((w) => `${w.city} (${w.qty} шт)`);
+    const safeUnit = String(unit ?? "").trim().replace(/[()\r\n]/g, "").slice(0, 12);
+    const quantitySuffix = safeUnit ? ` ${safeUnit}` : "";
+    const top = warehouses.slice(0, 3).map((w) => `${w.city} (${w.qty}${quantitySuffix})`);
     const extra = warehouses.length > 3 ? ` и ещё ${warehouses.length - 3} городов` : "";
     return `${top.join(", ")}${extra}`;
   }
@@ -70,7 +74,7 @@ export function executeRenderProducts(
     block += `\n  Цена: *${formatPrice(p.price)}* ₸${formatPriceUnitSuffix(p.unit)}`;
     if (p.vendor) block += `\n  Бренд: ${p.vendor}`;
     const stockLabel = STOCK_LABEL[p.stock];
-    const stockLine = formatStockLine(p.warehouses, stockLabel);
+    const stockLine = formatStockLine(p.warehouses, stockLabel, p.unit);
     if (stockLine) block += `\n  Наличие: ${stockLine}`;
     lines.push(block);
     rendered++;

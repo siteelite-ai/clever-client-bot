@@ -30,11 +30,11 @@ Deno.test("суффикс: метры показываем, штуки нет", 
   assertEquals(formatPriceUnitSuffix(null), "");
 });
 
-function cacheWith(unit: string | null): ProductCache {
+function cacheWith(unit: string | null, warehouses?: Array<{ city: string; qty: number }>): ProductCache {
   const m = new Map();
   m.set("1", {
     id: "1", pagetitle: "Кабель", vendor: "X", price: 309, unit,
-    stock: "in_stock" as const, short_traits: [], url: "https://e.x/1",
+    stock: "in_stock" as const, short_traits: [], url: "https://e.x/1", warehouses,
   });
   return m as unknown as ProductCache;
 }
@@ -49,4 +49,42 @@ Deno.test("render: штучный товар без суффикса", () => {
   const r = executeRenderProducts({ product_ids: ["1"] }, cacheWith("шт"));
   if (!r.ok) throw new Error("expected ok");
   assertStringIncludes(r.markdown, "Цена: *309* ₸\n");
+});
+
+Deno.test("render: остатки используют метры из API", () => {
+  const r = executeRenderProducts(
+    { product_ids: ["1"] },
+    cacheWith("м", [{ city: "Караганда", qty: 4648 }]),
+  );
+  if (!r.ok) throw new Error("expected ok");
+  assertStringIncludes(r.markdown, "Цена: *309* ₸/м");
+  assertStringIncludes(r.markdown, "Наличие: Караганда (4648 м)");
+});
+
+Deno.test("render: остатки штучного товара используют штуки из API", () => {
+  const r = executeRenderProducts(
+    { product_ids: ["1"] },
+    cacheWith("шт", [{ city: "Алматы", qty: 12 }]),
+  );
+  if (!r.ok) throw new Error("expected ok");
+  assertStringIncludes(r.markdown, "Наличие: Алматы (12 шт)");
+});
+
+Deno.test("render: остатки используют другую единицу буквально", () => {
+  const r = executeRenderProducts(
+    { product_ids: ["1"] },
+    cacheWith("компл", [{ city: "Астана", qty: 3 }]),
+  );
+  if (!r.ok) throw new Error("expected ok");
+  assertStringIncludes(r.markdown, "Цена: *309* ₸/компл");
+  assertStringIncludes(r.markdown, "Наличие: Астана (3 компл)");
+});
+
+Deno.test("render: при неизвестной единице остатки не выдумывают штуки", () => {
+  const r = executeRenderProducts(
+    { product_ids: ["1"] },
+    cacheWith(null, [{ city: "Шымкент", qty: 7 }]),
+  );
+  if (!r.ok) throw new Error("expected ok");
+  assertStringIncludes(r.markdown, "Наличие: Шымкент (7)");
 });
