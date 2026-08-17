@@ -94,21 +94,44 @@ function criterionNumber(c: Criterion): number | null {
 }
 
 /**
+ * Схлопывает границы по (единица, число, направление).
+ * Внутри группы строгость — по САМОЙ ЖЁСТКОЙ формулировке: если модель хоть раз
+ * сказала «больше/меньше», требование строгое, а последующие «≥ / от» его не
+ * размывают. Без этого побеждала та формулировка, что раньше попалась парсеру.
+ */
+export function collapseBounds(bounds: ReasoningBound[]): ReasoningBound[] {
+  const byKey = new Map<string, ReasoningBound>();
+  for (const b of bounds) {
+    const k = `${b.unit}|${b.value}|${b.op}`;
+    const prev = byKey.get(k);
+    if (!prev) byKey.set(k, { ...b });
+    else if (b.strict) prev.strict = true;
+  }
+  return [...byKey.values()];
+}
+
+/**
  * Выравнивает критерии по рассуждению модели.
  * Правило: если модель ВСЛУХ задала направление для числа X в единице U
  * («больше X U»), а в criteria[] по этой же единице пришёл `eq X` (или
- * противоположное направление) — оператор переписывается по прозе.
+ * противоположное/нестрогое направление) — оператор переписывается по прозе.
  * Порог остаётся тем, который назвала сама модель.
+ *
+ * Конфликт направлений по одному и тому же числу («до усадки больше 12»,
+ * «после усадки меньше 12») сервер не угадывает: если ни одно направление не
+ * совпадает с тем, что прислала модель машинно, критерий остаётся как есть, а
+ * границы возвращаются в `ambiguities` для лога.
  */
 export function alignCriteriaWithReasoning(
   criteria: Criterion[],
   reasoningText: string,
-): { criteria: Criterion[]; alignments: ReasoningAlignment[] } {
-  const bounds = extractReasoningBounds(reasoningText);
+): { criteria: Criterion[]; alignments: ReasoningAlignment[]; ambiguities: ReasoningBound[] } {
+  const bounds = collapseBounds(extractReasoningBounds(reasoningText));
   const list = Array.isArray(criteria) ? criteria : [];
-  if (bounds.length === 0 || list.length === 0) return { criteria: list, alignments: [] };
+  if (bounds.length === 0 || list.length === 0) return { criteria: list, alignments: [], ambiguities: [] };
 
   const alignments: ReasoningAlignment[] = [];
+  const ambiguities: ReasoningBound[] = [];
   const next = list.map((c) => {
     if (!c || !c.key || (c.level ?? "A") !== "A") return c;
     const unit = normalizeUnit(c.unit ?? "");
@@ -119,8 +142,21 @@ export function alignCriteriaWithReasoning(
     // Совпадение по единице И по числу: это то же самое требование, о котором
     // модель говорила прозой. Без совпадения числа порог не трогаем — иначе
     // сервер начал бы выдумывать величины.
-    const bound = bounds.find((b) => b.unit === unit && b.value === num);
-    if (!bound) return c;
+    const candidates = bounds.filter((b) => b.unit === unit && b.value === num);
+    if (candidates.length === 0) return c;
+    let bound: ReasoningBound;
+    if (candidates.length === 1) {
+      bound = candidates[0];
+    } else {
+      // Направлений несколько → доверяем направлению, которое модель прислала
+      // машинно, и берём от прозы только строгость.
+      const same = candidates.find((b) => b.op === c.op);
+      if (!same) {
+        ambiguities.push(...candidates);
+        return c;
+      }
+      bound = same;
+    }
     if (c.op === bound.op && Boolean(c.exclusive) === bound.strict) return c;
 
     alignments.push({
@@ -134,5 +170,6 @@ export function alignCriteriaWithReasoning(
     return { ...c, op: bound.op, value: bound.value, exclusive: bound.strict };
   });
 
-  return { criteria: next, alignments };
+  return { criteria: next, alignments, ambiguities };
 }
+

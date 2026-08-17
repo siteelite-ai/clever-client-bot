@@ -2452,6 +2452,15 @@ async function runExpertLoop(
                 meta: { alignments: aligned.alignments },
               });
             }
+            if (aligned.ambiguities.length > 0) {
+              // Модель проговорила по одному числу оба направления и машинно не
+              // совпала ни с одним — сервер не угадывает, но случай виден в логах.
+              steps.push({
+                step: "v3_guard_criteria_reasoning_ambiguous",
+                ms: now(),
+                meta: { bounds: aligned.ambiguities },
+              });
+            }
             const understated = findUnderstatedCriteria(criteria, userMessage);
             if (understated.length > 0) {
               criteria = correctCriteria(criteria, understated);
