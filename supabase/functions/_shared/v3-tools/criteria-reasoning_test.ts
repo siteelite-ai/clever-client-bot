@@ -122,3 +122,39 @@ Deno.test("регресс fd817c18: трубка 12/6 не проходит по
   const p = product("1", ["Внутр диаметр до термоусадки, мм: 12"]);
   assertEquals(checkCriterion(p, r.criteria[0]).verdict, "fail");
 });
+
+Deno.test("регресс 3f72aef8: направление max не переворачивается прозой «больше 10 мм»", () => {
+  // Проза модели: «до усадки чуть больше 10 мм … после усадки — меньше 10
+  // (чтобы обжать)». Второе число без единицы, парсер его отбрасывает —
+  // остаётся одна граница min:10 strict. Она НЕ должна перевернуть критерий
+  // «после усадки max 10», иначе требование становится невыполнимым.
+  const reasoning =
+    "внутренний диаметр до усадки чуть больше 10 мм (чтобы надеть), а после усадки — меньше 10 (чтобы плотно обжать)";
+  const criteria: Criterion[] = [
+    { key: "Внутр диаметр до термоусадки", op: "min", value: 10, unit: "мм", level: "A" },
+    { key: "Внутр диаметр после термоусадки", op: "max", value: 10, unit: "мм", level: "A" },
+  ];
+  const r = alignCriteriaWithReasoning(criteria, reasoning);
+  assertEquals(r.criteria[0].op, "min");
+  assertEquals(r.criteria[0].exclusive, true);
+  assertEquals(r.criteria[1].op, "max");
+  assertEquals(r.criteria[1].exclusive, undefined);
+  assertEquals(r.alignments.length, 1);
+  assertEquals(r.ambiguities.length, 1);
+  // Трубка 12/6 проходит оба критерия.
+  const p = product("1", [
+    "Внутр диаметр до термоусадки: 12",
+    "Внутр диаметр после термоусадки: 6",
+  ]);
+  assertEquals(checkCriterion(p, r.criteria[0]).verdict, "pass");
+  assertEquals(checkCriterion(p, r.criteria[1]).verdict, "pass");
+});
+
+Deno.test("«не менее» не сбивает уже строгий min", () => {
+  const criteria: Criterion[] = [
+    { key: "Параметр альфа", op: "min", value: 10, unit: "мм", level: "A", exclusive: true },
+  ];
+  const r = alignCriteriaWithReasoning(criteria, "нужен размер не менее 10 мм");
+  assertEquals(r.criteria[0].exclusive, true);
+  assertEquals(r.alignments.length, 0);
+});
