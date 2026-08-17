@@ -41,35 +41,31 @@
     } catch (e) {}
   }
 
-  // Фолбэк: 5-минутные бакеты — гарантируют обновление максимум через 5 минут,
-  // даже если манифест недоступен.
+  // Фолбэк: 5-минутные бакеты — обновление максимум через 5 минут,
+  // даже если манифест версии недоступен.
   function fallbackVersion() {
     return 't' + Math.floor(Date.now() / 300000);
   }
 
   var done = false;
-  var timer = setTimeout(function () {
+  function finish(version, source) {
     if (done) return;
     done = true;
-    inject(fallbackVersion(), 'timeout-fallback');
-  }, 2500);
-
-  try {
-    fetch(base + '/widget-version.json?ts=' + Date.now(), { cache: 'no-store', credentials: 'omit' })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (data) {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        inject((data && data.version) ? String(data.version) : fallbackVersion(), data && data.version ? 'manifest' : 'manifest-empty');
-      })
-      .catch(function () {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        inject(fallbackVersion(), 'manifest-error');
-      });
-  } catch (e) {
-    if (!done) { done = true; clearTimeout(timer); inject(fallbackVersion(), 'no-fetch'); }
+    clearTimeout(timer);
+    inject(version, source);
   }
+  var timer = setTimeout(function () { finish(fallbackVersion(), 'timeout-fallback'); }, 2500);
+
+  // Манифест грузим тегом <script> с ?ts= — это работает кросс-доменно (CORS не нужен)
+  // и никогда не берётся из кэша.
+  var m = document.createElement('script');
+  m.src = base + '/widget-version.js?ts=' + Date.now();
+  m.async = true;
+  m.onload = function () {
+    var v = window.__voltWidgetVersion;
+    finish(v ? String(v) : fallbackVersion(), v ? 'manifest' : 'manifest-empty');
+  };
+  m.onerror = function () { finish(fallbackVersion(), 'manifest-error'); };
+  (document.head || document.documentElement).appendChild(m);
 })();
+
