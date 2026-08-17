@@ -25,6 +25,7 @@ function parseSse(body) {
   let logId = null;
   let completed = false;
   let serverProductsCount = null;
+  let diagnosticError = null;
   for (const line of body.split(/\r?\n/)) {
     if (!line.startsWith('data: ')) continue;
     const payload = line.slice(6).trim();
@@ -40,6 +41,7 @@ function parseSse(body) {
     }
     if (event?.type === 'diagnostic') {
       logId = event.log_id || logId;
+      diagnosticError = event.error || diagnosticError;
       if (event.phase === 'complete' && typeof event.products_count === 'number') {
         serverProductsCount = event.products_count;
       }
@@ -52,7 +54,7 @@ function parseSse(body) {
   for (let match; (match = re.exec(productsMarkdown)) !== null;) {
     links.push({ title: match[1], url: match[2] });
   }
-  return { text, productsMarkdown, links, logId, completed, serverProductsCount };
+  return { text, productsMarkdown, links, logId, completed, serverProductsCount, diagnosticError };
 }
 
 function includesAny(haystack, needles) {
@@ -83,6 +85,14 @@ function evaluate(expect = {}, response) {
     failures.push(`none of required product-title fragments found: ${expect.require_product_title.join(', ')}`);
   }
   if (!response.completed) failures.push('SSE did not complete');
+  if (response.diagnosticError) failures.push(`diagnostic error: ${response.diagnosticError}`);
+  const genericFailureText = [
+    'Не получилось обработать запрос',
+    'Попробуйте переформулировать',
+  ];
+  for (const phrase of genericFailureText) {
+    if (includesAny(allOutput, [phrase])) failures.push(`generic failure fallback: ${phrase}`);
+  }
   return failures;
 }
 
@@ -114,6 +124,7 @@ async function runTurn({ message, expect }, state) {
     status: response.status,
     duration_ms: Date.now() - startedAt,
     log_id: parsed.logId,
+    diagnostic_error: parsed.diagnosticError,
     products_count: parsed.links.length,
     products: parsed.links,
     text: parsed.text,
