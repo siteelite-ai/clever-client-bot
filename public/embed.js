@@ -11,7 +11,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = '2026-04-28-pipeline-router';
+  var WIDGET_VERSION = '2026-08-17-stream-trace';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -708,6 +708,18 @@
     return msg;
   }
 
+  function addDiagnosticLabel(target, logId, isPartial) {
+    if (!target || (!logId && !isPartial)) return;
+    var label = document.createElement('div');
+    label.style.cssText = 'margin-top:8px;padding-top:6px;border-top:1px solid rgba(0,0,0,.08);font-size:10px;line-height:1.3;color:#777;user-select:text;';
+    var parts = [];
+    if (isPartial) parts.push('Ответ получен не полностью');
+    parts.push('Версия: ' + WIDGET_VERSION);
+    if (logId) parts.push('Код запроса: ' + logId);
+    label.textContent = parts.join(' · ');
+    target.appendChild(label);
+  }
+
   // Show typing indicator
   function showTyping() {
     const typing = document.createElement('div');
@@ -805,6 +817,9 @@
     var done = false;
     var lastScrollTime = 0;
     var firstTokenReceived = false;
+    var diagnosticLogId = null;
+    var diagnosticComplete = false;
+    var diagnosticProductsCount = null;
 
     function appendDelta(delta) {
       if (mode === 'intro') {
@@ -858,6 +873,15 @@
           var obj = JSON.parse(jsonStr);
           if (obj.v3_event) {
             var ev = obj.v3_event;
+            if (ev.type === 'diagnostic') {
+              diagnosticLogId = ev.log_id || diagnosticLogId;
+              if (ev.phase === 'complete') {
+                diagnosticComplete = true;
+                diagnosticProductsCount = typeof ev.products_count === 'number' ? ev.products_count : null;
+              }
+              try { console.info('[Widget] request=' + (diagnosticLogId || 'unavailable') + ' phase=' + ev.phase + ' products=' + (diagnosticProductsCount == null ? '?' : diagnosticProductsCount)); } catch(e) {}
+              continue;
+            }
             if (ev.type === 'contacts') { contacts = ev.html; continue; }
             if (ev.type === 'slot_update') { dialogSlots = ev.slots || {}; saveState(); continue; }
             if (ev.type === 'products_block' && ev.markdown) {
@@ -903,6 +927,14 @@
             var o2 = JSON.parse(js2);
             if (o2.v3_event) {
               var ev2 = o2.v3_event;
+              if (ev2.type === 'diagnostic') {
+                diagnosticLogId = ev2.log_id || diagnosticLogId;
+                if (ev2.phase === 'complete') {
+                  diagnosticComplete = true;
+                  diagnosticProductsCount = typeof ev2.products_count === 'number' ? ev2.products_count : null;
+                }
+                continue;
+              }
               if (ev2.type === 'contacts') { contacts = ev2.html; continue; }
               if (ev2.type === 'slot_update') { dialogSlots = ev2.slots || {}; saveState(); continue; }
               if (ev2.type === 'products_block' && ev2.markdown) {
@@ -927,7 +959,16 @@
       if (!firstTokenReceived) throw new Error(label + ': empty streaming content');
       return { content: '', contacts: contacts, partial: true, split: true };
     }
-    return { content: combined, contacts: contacts, partial: !done, split: true, introContent: introContent, productsContent: productsContent };
+    return {
+      content: combined,
+      contacts: contacts,
+      partial: !done || !diagnosticComplete,
+      split: true,
+      introContent: introContent,
+      productsContent: productsContent,
+      logId: diagnosticLogId,
+      serverProductsCount: diagnosticProductsCount
+    };
   }
 
 
@@ -1159,6 +1200,13 @@
 
       if (result.contacts) {
         addMessage(result.contacts, 'assistant');
+      }
+      var diagnosticTarget = (productsMsg && productsMsg.parentNode) ? productsMsg : assistantMsg;
+      addDiagnosticLabel(diagnosticTarget, result.logId, result.partial);
+      if (result.partial) {
+        addMessage('Соединение прервалось до завершения ответа. Повторите запрос и сообщите менеджеру код запроса, указанный выше.', 'assistant');
+      } else if (typeof result.serverProductsCount === 'number' && result.serverProductsCount > 0 && !result.productsContent) {
+        addMessage('Сервер нашёл товары, но карточки не отобразились. Повторите запрос и сообщите менеджеру код запроса, указанный выше.', 'assistant');
       }
     } else if (firstTokenArrived && assistantMsg.textContent && assistantMsg.textContent.trim()) {
       // Стрим оборвался посреди ответа, но в UI уже есть текст — сохраняем его в историю

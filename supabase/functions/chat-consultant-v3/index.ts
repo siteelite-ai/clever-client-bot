@@ -39,6 +39,7 @@ const TURN_TIMEOUT_MS = 140_000;
 
 type SseEvent =
   | { type: "delta"; content: string }
+  | { type: "diagnostic"; log_id: string | null; phase: "start" | "complete"; products_count?: number; error?: string | null }
   | { type: "assistant_turn_break"; reason: "tool_pending" | "after_render" | "final_text" | "text_before_render" | "intro_late" }
   | { type: "tool_event"; tool: string; phase: "start" | "result"; duration_ms?: number; summary?: string }
   | { type: "products_block"; markdown: string; count: number; total_available?: number }
@@ -2868,6 +2869,7 @@ Deno.serve(async (req) => {
       // в finally апдейтим финальные поля. Update оборачиваем в EdgeRuntime.waitUntil,
       // чтобы воркер не убили до завершения insert/update при abort стрима.
       const logId = await insertTurnLogStart(supabase, sessionId, userMessage, [...steps]);
+      send({ type: "diagnostic", log_id: logId, phase: "start" });
 
       // Systemic protection against hard worker kills (Edge Runtime SIGKILL via req.signal).
       // try/catch/finally может НЕ выполниться, если рантайм убивает воркер до return.
@@ -2954,6 +2956,15 @@ Deno.serve(async (req) => {
         // После controller.close() Supabase Edge Runtime может убить воркера, не дождавшись
         // никаких pending-промисов (в т.ч. EdgeRuntime.waitUntil после закрытия стрима).
         await finalizeLogAwait(errorMsg ? "error" : "ok");
+        try {
+          send({
+            type: "diagnostic",
+            log_id: logId,
+            phase: "complete",
+            products_count: productsCount,
+            error: errorMsg,
+          });
+        } catch { /* stream may be closed */ }
         // Только теперь безопасно закрывать стрим — UPDATE уже долетел до БД.
         try { send({ type: "done" }); } catch { /* ignore */ }
         try { controller.close(); } catch { /* already closed */ }

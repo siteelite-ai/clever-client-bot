@@ -113,8 +113,16 @@ export default function RequestLogs() {
             const isOpen = expanded === r.id;
             return (
               <div key={r.id} className="border border-border rounded-lg bg-card">
-                <button
+                <div
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setExpanded(isOpen ? null : r.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setExpanded(isOpen ? null : r.id);
+                    }
+                  }}
                   className="w-full text-left p-3 flex items-start gap-3 hover:bg-accent/30 transition-colors"
                 >
                   {isOpen ? <ChevronDown className="w-4 h-4 mt-1 flex-shrink-0" /> : <ChevronRight className="w-4 h-4 mt-1 flex-shrink-0" />}
@@ -132,6 +140,21 @@ export default function RequestLogs() {
                       <span className="text-[10px] text-muted-foreground">
                         {r.final_products_count} карточек · {r.total_ms}ms
                       </span>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 px-1.5 font-mono text-[10px] text-muted-foreground"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          void handleCopy(r.id, `log:${r.id}`, 'Код запроса');
+                        }}
+                        title="Скопировать код запроса"
+                      >
+                        {isCopied(`log:${r.id}`) ? <Check className="mr-1 h-3 w-3" /> : <Copy className="mr-1 h-3 w-3" />}
+                        {r.id.slice(0, 8)}
+                      </Button>
                       {r.error && <Badge variant="destructive" className="text-[10px]">error</Badge>}
                     </div>
                     <div className="mt-1 flex items-start gap-2">
@@ -173,7 +196,7 @@ export default function RequestLogs() {
                       )}
                     </div>
                   </div>
-                </button>
+                </div>
 
                 {isOpen && (
                   <div className="border-t border-border p-3 space-y-3 bg-muted/30">

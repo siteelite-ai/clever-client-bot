@@ -52,6 +52,7 @@ async function streamChat({
   onTurnBreak,
   onProductsBlock,
   onToolEvent,
+  onDiagnostic,
   conversationId,
   dialogSlots,
   endpointUrl,
@@ -73,6 +74,8 @@ async function streamChat({
   onProductsBlock?: (markdown: string, meta: { count: number; total_available?: number }) => void;
   /** V3: tool start/result events — used for debug/telemetry, not rendered by default. */
   onToolEvent?: (ev: { tool: string; phase: 'start' | 'result'; summary?: string; duration_ms?: number }) => void;
+  /** V3: correlation with the persisted request log. */
+  onDiagnostic?: (ev: { log_id: string | null; phase: 'start' | 'complete'; products_count?: number; error?: string | null }) => void;
   conversationId: string;
   dialogSlots: DialogSlots;
   endpointUrl: string;
@@ -176,6 +179,9 @@ async function streamChat({
               case 'tool_event':
                 onToolEvent?.(ev);
                 break;
+              case 'diagnostic':
+                onDiagnostic?.(ev);
+                break;
               case 'products_block':
                 if (typeof ev.markdown === 'string') {
                   onProductsBlock?.(ev.markdown, { count: ev.count ?? 0, total_available: ev.total_available });
@@ -243,6 +249,9 @@ async function streamChat({
                 break;
               case 'tool_event':
                 onToolEvent?.(ev);
+                break;
+              case 'diagnostic':
+                onDiagnostic?.(ev);
                 break;
               case 'products_block':
                 if (typeof ev.markdown === 'string') {
@@ -484,6 +493,9 @@ export function ChatWidget({ isPreview = false }: ChatWidgetProps) {
       onToolEvent: (ev) => {
         if (ev.phase === 'start') console.log(`[Widget v3] tool ${ev.tool}…`);
         else console.log(`[Widget v3] tool ${ev.tool} → ${ev.summary} (${ev.duration_ms}ms)`);
+      },
+      onDiagnostic: (ev) => {
+        console.info(`[Widget v3] request=${ev.log_id ?? 'unavailable'} phase=${ev.phase} products=${ev.products_count ?? '?'}`);
       },
       onSlotUpdate: (updatedSlots) => {
         console.log('[Widget] Received slot_update:', JSON.stringify(updatedSlots));
