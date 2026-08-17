@@ -131,3 +131,51 @@ export function correctCriteria(criteria: Criterion[], violations: CriterionViol
     return { ...c, value: v.client };
   });
 }
+
+// ---------------------------------------------------------------------------
+// Layer 4b: ПОРОГ, РАВНЫЙ ЧИСЛУ КЛИЕНТА, — СТРОГИЙ.
+//
+// ПРОБЛЕМА (системная): когда модель сама формулирует требование как «≥ X»
+// (нестрого), где X — размер объекта КЛИЕНТА, граница физически бессмысленна:
+// параметр товара, который должен ОХВАТИТЬ (или ПРОЙТИ В) объект размера X,
+// не может быть равен X — нужен зазор. Слой 5 ловит это только если модель
+// вслух сказала «больше X»; если она сказала «≥ X», строгость взять негде.
+//
+// РЕШЕНИЕ (data-agnostic): op="min"/"max" означает, что число — ПОРОГ, а не
+// значение параметра товара (см. <criteria_contract>). Если такой порог уровня A
+// совпадает с числом, названным клиентом в той же единице, неравенство
+// становится строгим: граница исключается. Числа-характеристики товара сюда не
+// попадают — они приходят с op="eq" и не трогаются.
+// ---------------------------------------------------------------------------
+
+export interface StrictTightening {
+  key: string;
+  op: string;
+  value: number;
+  unit: string;
+}
+
+export function enforceStrictClientThresholds(
+  criteria: Criterion[],
+  clientText: string,
+): { criteria: Criterion[]; tightened: StrictTightening[] } {
+  const list = Array.isArray(criteria) ? criteria : [];
+  const quantities = extractClientQuantities(clientText);
+  if (list.length === 0 || quantities.length === 0) return { criteria: list, tightened: [] };
+
+  const tightened: StrictTightening[] = [];
+  const next = list.map((c) => {
+    if (!c || !c.key || (c.level ?? "A") !== "A") return c;
+    if (c.op !== "min" && c.op !== "max") return c;
+    if (c.exclusive) return c;
+    if (typeof c.value !== "number") return c;
+    const unit = normalizeUnit(c.unit ?? "");
+    if (!unit) return c;
+    const match = quantities.some((q) => q.unit === unit && q.value === c.value);
+    if (!match) return c;
+    tightened.push({ key: c.key, op: c.op, value: c.value, unit: c.unit ?? unit });
+    return { ...c, exclusive: true };
+  });
+
+  return { criteria: next, tightened };
+}
