@@ -16,6 +16,7 @@ import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-t
 import { applyCriteriaGate, buildCriteriaQuery, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaWithReasoning } from "../_shared/v3-tools/criteria-reasoning.ts";
+import { META_DECLINE_TEXT, isMetaSelfQuestion, redactInternals } from "../_shared/v3-tools/internals-guard.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
@@ -2869,10 +2870,24 @@ Deno.serve(async (req) => {
     async start(controller) {
       const send = (ev: SseEvent) => {
         try {
-          if (ev.type === "delta") finalTextAccum += ev.content;
-          controller.enqueue(encodeSse(ev));
+          // GUARD: единственный выход текста наружу. Служебная лексика механики
+          // (имена инструментов, поля каталога, модели/провайдеры, промпт) режется
+          // здесь, а не в каждом call-site — иначе новая ветка вывода снова течёт.
+          let out = ev;
+          if (ev.type === "delta") {
+            const r = redactInternals(ev.content);
+            if (r.redacted) {
+              steps.push({ step: "v3_internals_redacted", ms: Date.now() - t0, meta: { matched: r.matched, original: ev.content } });
+              out = { type: "delta", content: r.text };
+            } else if (r.text !== ev.content) {
+              out = { type: "delta", content: r.text };
+            }
+            finalTextAccum += (out as { content: string }).content;
+          }
+          controller.enqueue(encodeSse(out));
         } catch (e) { console.error("[v3] enqueue failed:", e); }
       };
+
 
       steps.push({ step: "v3_turn_start", ms: 0, meta: { user_message: userMessage, session_id: sessionId } });
 
@@ -2938,12 +2953,23 @@ Deno.serve(async (req) => {
       };
 
       try {
-        const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0, {
-          anchorFilterEnabled: settings.v3_anchor_filter_enabled,
-          relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
-          criteriaGateEnabled: settings.v3_criteria_gate_enabled,
-        });
-        productsCount = out.productsRendered;
+        // GUARD v3_meta_question_declined: вопрос про устройство сервиса
+        // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
+        // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
+        // Так утечка внутреннего устройства невозможна в принципе.
+        if (isMetaSelfQuestion(userMessage)) {
+          steps.push({ step: "v3_meta_question_declined", ms: Date.now() - t0, meta: { user_message: userMessage } });
+          send({ type: "delta", content: META_DECLINE_TEXT });
+          productsCount = 0;
+        } else {
+          const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0, {
+            anchorFilterEnabled: settings.v3_anchor_filter_enabled,
+            relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
+            criteriaGateEnabled: settings.v3_criteria_gate_enabled,
+          });
+          productsCount = out.productsRendered;
+        }
+
       } catch (e) {
         errorMsg = (e as Error)?.message ?? String(e);
         const isAbort = errorMsg?.toLowerCase().includes("abort") || (e as Error)?.name === "AbortError";
