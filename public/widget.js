@@ -30,8 +30,35 @@
   let sessionId;
   let conversationHistory;
   let dialogSlots = {};
-  // Per-message id для серверной idempotency (защита от дубль-вызовов edge)
+  // Стабильный UUID одного сообщения для валидации, журналирования и будущей дедупликации.
   let currentMessageId = '';
+  function generateMessageId() {
+    try {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return window.crypto.randomUUID();
+      }
+      var bytes = new Uint8Array(16);
+      if (window.crypto && typeof window.crypto.getRandomValues === 'function') {
+        window.crypto.getRandomValues(bytes);
+      } else {
+        for (var i = 0; i < bytes.length; i++) bytes[i] = Math.floor(Math.random() * 256);
+      }
+      bytes[6] = (bytes[6] & 15) | 64;
+      bytes[8] = (bytes[8] & 63) | 128;
+      var hex = Array.prototype.map.call(bytes, function(byte) {
+        return byte.toString(16).padStart(2, '0');
+      }).join('');
+      return hex.slice(0, 8) + '-' + hex.slice(8, 12) + '-' + hex.slice(12, 16) + '-' +
+        hex.slice(16, 20) + '-' + hex.slice(20);
+    } catch(e) {
+      // messageId is an idempotency key, not an authentication secret.
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(char) {
+        var random = Math.floor(Math.random() * 16);
+        var value = char === 'x' ? random : ((random & 3) | 8);
+        return value.toString(16);
+      });
+    }
+  }
   // Try to restore from sessionStorage
   try {
     const saved = sessionStorage.getItem(STORAGE_KEY);
@@ -1012,15 +1039,8 @@
     input.value = '';
     sendBtn.disabled = true;
 
-    // Уникальный id для этого user-message — сервер использует его для idempotency.
-    // При любом ретрае/дубле в рамках одного sendMessage — id тот же → второй вызов отбит.
-    try {
-      currentMessageId = (window.crypto && window.crypto.randomUUID)
-        ? window.crypto.randomUUID()
-        : ('msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10));
-    } catch(e) {
-      currentMessageId = 'msg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10);
-    }
+    // При любом ретрае в рамках одного sendMessage отправляется тот же UUID.
+    currentMessageId = generateMessageId();
 
     addMessage(message, 'user');
     conversationHistory.push({ role: 'user', content: message });

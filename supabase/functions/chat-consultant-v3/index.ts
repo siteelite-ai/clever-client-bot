@@ -21,6 +21,11 @@ import { executeProposeClarification, type ProposeClarificationInput } from "../
 import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
 import type { ProductCache, SearchCatalogOk, ToolResult, ToolSideEffect } from "../_shared/v3-tools/types.ts";
+import {
+  MAX_REQUEST_BODY_BYTES,
+  validateChatRequestBody,
+  type ChatHistoryMessage,
+} from "../_shared/v3-tools/request-validation.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -1749,17 +1754,9 @@ async function updateTurnLogEnd(
 
 // ─── Expert loop ────────────────────────────────────────────────────────────
 
-interface RequestBody {
-  message?: string;
-  sessionId?: string;
-  history?: Array<{ role: "user" | "assistant"; content: string }>;
-  slots?: Record<string, unknown>;
-  dialogSlots?: Record<string, unknown>;
-}
-
 async function runExpertLoop(
   userMessage: string,
-  history: NonNullable<RequestBody["history"]>,
+  history: ChatHistoryMessage[],
   slots: Record<string, unknown>,
   apiKey: string,
   ctx: ToolContext,
@@ -2827,24 +2824,52 @@ async function runExpertLoop(
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
-  if (req.method !== "POST") return new Response("Method not allowed", { status: 405, headers: corsHeaders });
+  if (req.method !== "POST") {
+    return new Response("Method not allowed", {
+      status: 405,
+      headers: { ...corsHeaders, Allow: "POST, OPTIONS" },
+    });
+  }
 
-  let body: RequestBody;
-  try { body = await req.json(); } catch {
+  const contentLength = Number(req.headers.get("content-length"));
+  if (Number.isFinite(contentLength) && contentLength > MAX_REQUEST_BODY_BYTES) {
+    return new Response(JSON.stringify({ error: "payload_too_large" }), {
+      status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  let rawText: string;
+  try { rawText = await req.text(); } catch {
     return new Response(JSON.stringify({ error: "invalid_json" }), {
       status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
-  const userMessage = (body.message ?? "").trim();
-  if (!userMessage) {
-    return new Response(JSON.stringify({ error: "empty_message" }), {
+  if (new TextEncoder().encode(rawText).byteLength > MAX_REQUEST_BODY_BYTES) {
+    return new Response(JSON.stringify({ error: "payload_too_large" }), {
+      status: 413, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  let rawBody: unknown;
+  try { rawBody = JSON.parse(rawText); } catch {
+    return new Response(JSON.stringify({ error: "invalid_json" }), {
       status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
+
+  const validation = validateChatRequestBody(rawBody);
+  if (!validation.ok) {
+    return new Response(JSON.stringify({ error: "invalid_request", issues: validation.issues }), {
+      status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  const body = validation.value;
+  const userMessage = body.message;
   const sessionId = body.sessionId ?? crypto.randomUUID();
-  const history = Array.isArray(body.history) ? body.history.slice(-20) : [];
+  const history = body.history;
   const rawSlots = body.slots ?? body.dialogSlots;
-  const slots = rawSlots && typeof rawSlots === "object" ? rawSlots : {};
+  const slots = rawSlots ?? {};
 
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
   const settings = await loadSettings(supabase);
@@ -2889,7 +2914,7 @@ Deno.serve(async (req) => {
       };
 
 
-      steps.push({ step: "v3_turn_start", ms: 0, meta: { user_message: userMessage, session_id: sessionId } });
+      steps.push({ step: "v3_turn_start", ms: 0, meta: { user_message: userMessage, session_id: sessionId, message_id: body.messageId } });
 
       // Two-phase logging: вставляем row сразу (видим запрос даже при abort/timeout/crash),
       // в finally апдейтим финальные поля. Update оборачиваем в EdgeRuntime.waitUntil,
