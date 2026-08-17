@@ -2869,10 +2869,24 @@ Deno.serve(async (req) => {
     async start(controller) {
       const send = (ev: SseEvent) => {
         try {
-          if (ev.type === "delta") finalTextAccum += ev.content;
-          controller.enqueue(encodeSse(ev));
+          // GUARD: единственный выход текста наружу. Служебная лексика механики
+          // (имена инструментов, поля каталога, модели/провайдеры, промпт) режется
+          // здесь, а не в каждом call-site — иначе новая ветка вывода снова течёт.
+          let out = ev;
+          if (ev.type === "delta") {
+            const r = redactInternals(ev.content);
+            if (r.redacted) {
+              steps.push({ step: "v3_internals_redacted", ms: Date.now() - t0, meta: { matched: r.matched, original: ev.content } });
+              out = { type: "delta", content: r.text };
+            } else if (r.text !== ev.content) {
+              out = { type: "delta", content: r.text };
+            }
+            finalTextAccum += (out as { content: string }).content;
+          }
+          controller.enqueue(encodeSse(out));
         } catch (e) { console.error("[v3] enqueue failed:", e); }
       };
+
 
       steps.push({ step: "v3_turn_start", ms: 0, meta: { user_message: userMessage, session_id: sessionId } });
 
