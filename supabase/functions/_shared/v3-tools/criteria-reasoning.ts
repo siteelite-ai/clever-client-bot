@@ -164,7 +164,10 @@ export function alignCriteriaWithReasoning(
       return c;
     }
 
-    if (c.op === bound.op && Boolean(c.exclusive) === bound.strict) return c;
+    // Строгость только ужесточается: если критерий уже строгий, нестрогая
+    // формулировка («не менее») его не размывает.
+    const strict = bound.strict || (c.op === bound.op && Boolean(c.exclusive));
+    if (c.op === bound.op && Boolean(c.exclusive) === strict) return c;
 
     alignments.push({
       key: c.key,
@@ -172,9 +175,10 @@ export function alignCriteriaWithReasoning(
       to: bound.op,
       value: bound.value,
       unit: c.unit ?? unit,
-      strict: bound.strict,
+      strict,
     });
-    return { ...c, op: bound.op, value: bound.value, exclusive: bound.strict };
+    return { ...c, op: bound.op, value: bound.value, exclusive: strict };
+
   });
 
   return { criteria: next, alignments, ambiguities };
