@@ -112,16 +112,23 @@ export function collapseBounds(bounds: ReasoningBound[]): ReasoningBound[] {
 
 /**
  * Выравнивает критерии по рассуждению модели.
- * Правило: если модель ВСЛУХ задала направление для числа X в единице U
- * («больше X U»), а в criteria[] по этой же единице пришёл `eq X` (или
- * противоположное/нестрогое направление) — оператор переписывается по прозе.
- * Порог остаётся тем, который назвала сама модель.
  *
- * Конфликт направлений по одному и тому же числу («до усадки больше 12»,
- * «после усадки меньше 12») сервер не угадывает: если ни одно направление не
- * совпадает с тем, что прислала модель машинно, критерий остаётся как есть, а
- * границы возвращаются в `ambiguities` для лога.
+ * Полномочия слоя строго ограничены:
+ * 1. Направление меняется ТОЛЬКО для `op:"eq"` — это исходная задача слоя:
+ *    клиент назвал число, модель прислала «ровно X», а прозой сказала
+ *    «больше X» → `> X`. Если по этому числу проза дала несколько направлений,
+ *    сервер не угадывает (границы уходят в `ambiguities`).
+ * 2. Для `min` / `max` / `range` направление модели НЕПРИКОСНОВЕННО: из прозы
+ *    берётся только строгость, и только у границы того же направления.
+ *    Иначе одна распарсенная граница («больше 10 мм») переворачивала бы
+ *    противоположный критерий («после усадки ≤ 10 мм») — и требование
+ *    становилось физически невыполнимым.
+ * 3. Строгость только ужесточается: нестрогая формулировка не размывает
+ *    уже строгий критерий.
+ *
+ * Порог никогда не выдумывается — используется число, названное вслух.
  */
+
 export function alignCriteriaWithReasoning(
   criteria: Criterion[],
   reasoningText: string,
@@ -144,20 +151,30 @@ export function alignCriteriaWithReasoning(
     // сервер начал бы выдумывать величины.
     const candidates = bounds.filter((b) => b.unit === unit && b.value === num);
     if (candidates.length === 0) return c;
-    let bound: ReasoningBound;
-    if (candidates.length === 1) {
-      bound = candidates[0];
+
+    let bound: ReasoningBound | undefined;
+    if (c.op === "eq") {
+      // Исходная задача слоя: клиент назвал число, модель прислала «ровно X»,
+      // а прозой сказала «больше X» → направление берём из прозы.
+      // Несколько направлений по одному числу — сервер не угадывает.
+      if (candidates.length === 1) bound = candidates[0];
     } else {
-      // Направлений несколько → доверяем направлению, которое модель прислала
-      // машинно, и берём от прозы только строгость.
-      const same = candidates.find((b) => b.op === c.op);
-      if (!same) {
-        ambiguities.push(...candidates);
-        return c;
-      }
-      bound = same;
+      // Направление модель задала осознанно (min / max / range) — сервер его
+      // НИКОГДА не переворачивает: из прозы берём только строгость, и только
+      // у границы того же направления. Иначе одна распарсенная граница
+      // («больше 10 мм») переворачивала бы противоположный критерий
+      // («после усадки ≤ 10 мм») и требование становилось невыполнимым.
+      bound = candidates.find((b) => b.op === c.op);
     }
-    if (c.op === bound.op && Boolean(c.exclusive) === bound.strict) return c;
+    if (!bound) {
+      ambiguities.push(...candidates);
+      return c;
+    }
+
+    // Строгость только ужесточается: если критерий уже строгий, нестрогая
+    // формулировка («не менее») его не размывает.
+    const strict = bound.strict || (c.op === bound.op && Boolean(c.exclusive));
+    if (c.op === bound.op && Boolean(c.exclusive) === strict) return c;
 
     alignments.push({
       key: c.key,
@@ -165,9 +182,10 @@ export function alignCriteriaWithReasoning(
       to: bound.op,
       value: bound.value,
       unit: c.unit ?? unit,
-      strict: bound.strict,
+      strict,
     });
-    return { ...c, op: bound.op, value: bound.value, exclusive: bound.strict };
+    return { ...c, op: bound.op, value: bound.value, exclusive: strict };
+
   });
 
   return { criteria: next, alignments, ambiguities };
