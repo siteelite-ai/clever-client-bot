@@ -1,6 +1,5 @@
 (function() {
   'use strict';
-  'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
   var WIDGET_VERSION = '2026-08-17-stream-trace';
