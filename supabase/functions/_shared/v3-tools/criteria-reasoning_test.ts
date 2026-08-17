@@ -33,6 +33,16 @@ Deno.test("alignCriteriaWithReasoning: eq на числе клиента → min
   assertEquals(r.criteria[0].exclusive, true);
 });
 
+Deno.test("строгость задаёт только проза системы, а не совпадение с числом клиента", () => {
+  const criteria: Criterion[] = [
+    { key: "Параметр альфа", op: "min", value: 12, unit: "мм", level: "A" },
+  ];
+  const strict = alignCriteriaWithReasoning(criteria, "нужен размер больше 12 мм");
+  const inclusive = alignCriteriaWithReasoning(criteria, "нужен размер не менее 12 мм");
+  assertEquals(strict.criteria[0].exclusive, true);
+  assertEquals(inclusive.criteria[0].exclusive === true, false);
+});
+
 Deno.test("alignCriteriaWithReasoning: порог не выдумывается без совпадения числа", () => {
   const criteria: Criterion[] = [
     { key: "Параметр альфа", op: "eq", value: 12, unit: "мм", level: "A" },
