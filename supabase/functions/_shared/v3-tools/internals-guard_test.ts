@@ -72,3 +72,23 @@ Deno.test("redact: самобичевание вычищается без под
   assert(r.text.includes("Сейчас догружу остаток."));
   assert(r.matched.includes("self_flagellation"));
 });
+
+Deno.test("redact: исправляет опечатку в фразе о кассовых чеках", () => {
+  const upper = redactInternals(
+    "Кассовые челы приходят на электронную почту.",
+  );
+  assertEquals(upper.redacted, false);
+  assertEquals(upper.text, "Кассовые чеки приходят на электронную почту.");
+  assert(upper.matched.includes("customer_text_typo:cash_receipt"));
+
+  const lower = redactInternals(
+    "После оплаты кассовые челы приходят на электронную почту.",
+  );
+  assertEquals(
+    lower.text,
+    "После оплаты кассовые чеки приходят на электронную почту.",
+  );
+
+  const correct = "Кассовые чеки приходят на электронную почту.";
+  assertEquals(redactInternals(correct).text, correct);
+});
