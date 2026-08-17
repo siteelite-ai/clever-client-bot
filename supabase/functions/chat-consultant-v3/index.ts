@@ -2938,12 +2938,23 @@ Deno.serve(async (req) => {
       };
 
       try {
-        const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0, {
-          anchorFilterEnabled: settings.v3_anchor_filter_enabled,
-          relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
-          criteriaGateEnabled: settings.v3_criteria_gate_enabled,
-        });
-        productsCount = out.productsRendered;
+        // GUARD v3_meta_question_declined: вопрос про устройство сервиса
+        // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
+        // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
+        // Так утечка внутреннего устройства невозможна в принципе.
+        if (isMetaSelfQuestion(userMessage)) {
+          steps.push({ step: "v3_meta_question_declined", ms: Date.now() - t0, meta: { user_message: userMessage } });
+          send({ type: "delta", content: META_DECLINE_TEXT });
+          productsCount = 0;
+        } else {
+          const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0, {
+            anchorFilterEnabled: settings.v3_anchor_filter_enabled,
+            relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
+            criteriaGateEnabled: settings.v3_criteria_gate_enabled,
+          });
+          productsCount = out.productsRendered;
+        }
+
       } catch (e) {
         errorMsg = (e as Error)?.message ?? String(e);
         const isAbort = errorMsg?.toLowerCase().includes("abort") || (e as Error)?.name === "AbortError";
