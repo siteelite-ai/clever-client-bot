@@ -1,4 +1,4 @@
-import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   INTERNALS_REDACTED_TEXT,
   isMetaSelfQuestion,
@@ -37,6 +37,17 @@ Deno.test("redact: служебная лексика механики подме
     assert(r.redacted, `не сработало: ${c}`);
     assertEquals(r.text, INTERNALS_REDACTED_TEXT);
   }
+});
+
+Deno.test("redact: страховочная замена остаётся ответом продавца", () => {
+  const r = redactInternals("Я умею искать только по структурированным полям, поэтому не смог проверить параметр.");
+  const answer = r.text.toLowerCase();
+
+  assert(r.redacted);
+  assert(!answer.includes("внутренн"));
+  assert(!answer.includes("механик"));
+  assertStringIncludes(answer, "не удалось подтвердить");
+  assertStringIncludes(answer, "уточните");
 });
 
 Deno.test("redact: нормальные товарные ответы не трогаем", () => {
