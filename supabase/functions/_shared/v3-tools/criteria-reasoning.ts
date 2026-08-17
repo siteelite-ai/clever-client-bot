@@ -144,19 +144,26 @@ export function alignCriteriaWithReasoning(
     // сервер начал бы выдумывать величины.
     const candidates = bounds.filter((b) => b.unit === unit && b.value === num);
     if (candidates.length === 0) return c;
-    let bound: ReasoningBound;
-    if (candidates.length === 1) {
-      bound = candidates[0];
+
+    let bound: ReasoningBound | undefined;
+    if (c.op === "eq") {
+      // Исходная задача слоя: клиент назвал число, модель прислала «ровно X»,
+      // а прозой сказала «больше X» → направление берём из прозы.
+      // Несколько направлений по одному числу — сервер не угадывает.
+      if (candidates.length === 1) bound = candidates[0];
     } else {
-      // Направлений несколько → доверяем направлению, которое модель прислала
-      // машинно, и берём от прозы только строгость.
-      const same = candidates.find((b) => b.op === c.op);
-      if (!same) {
-        ambiguities.push(...candidates);
-        return c;
-      }
-      bound = same;
+      // Направление модель задала осознанно (min / max / range) — сервер его
+      // НИКОГДА не переворачивает: из прозы берём только строгость, и только
+      // у границы того же направления. Иначе одна распарсенная граница
+      // («больше 10 мм») переворачивала бы противоположный критерий
+      // («после усадки ≤ 10 мм») и требование становилось невыполнимым.
+      bound = candidates.find((b) => b.op === c.op);
     }
+    if (!bound) {
+      ambiguities.push(...candidates);
+      return c;
+    }
+
     if (c.op === bound.op && Boolean(c.exclusive) === bound.strict) return c;
 
     alignments.push({
