@@ -38,3 +38,5 @@ type: feature
   `v3_guard_criteria_reasoning_ambiguous` (meta.bounds).
 
 Флаг: тот же `app_settings.v3_criteria_gate_enabled`. Тесты: `criteria-reasoning_test.ts` (9), всего 47.
+
+- Источник прозы для выравнивания — И рассуждение модели, И реплика клиента: если «больше/меньше» сказал клиент, равенство так же недопустимо (`op` + `exclusive` берутся из слов).
