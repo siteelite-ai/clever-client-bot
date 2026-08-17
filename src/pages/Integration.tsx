@@ -7,8 +7,8 @@ import { toast } from 'sonner';
 export default function Integration() {
   const [copied, setCopied] = useState(false);
 
-  const embedCode = `<!-- 220volt AI Консультант -->
-<script src="https://clever-client-bot.lovable.app/embed.js?v=2" async></script>`;
+  const embedCode = `<!-- 220volt AI Консультант (обновляется автоматически, ?v= не нужен) -->
+<script src="https://clever-client-bot.lovable.app/embed.js" async></script>`;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(embedCode);
