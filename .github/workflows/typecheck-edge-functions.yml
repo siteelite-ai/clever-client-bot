@@ -7,6 +7,7 @@ on:
       - 'supabase/functions/chat-consultant-v2/**'
       - 'supabase/functions/chat-consultant-v3/**'
       - 'supabase/functions/_shared/**'
+      - 'public/widget.js'
       - '.github/workflows/typecheck-edge-functions.yml'
   pull_request:
     paths:
@@ -14,6 +15,7 @@ on:
       - 'supabase/functions/chat-consultant-v2/**'
       - 'supabase/functions/chat-consultant-v3/**'
       - 'supabase/functions/_shared/**'
+      - 'public/widget.js'
       - '.github/workflows/typecheck-edge-functions.yml'
 
 jobs:
@@ -37,6 +39,9 @@ jobs:
 
       - name: Type-check chat-consultant-v3
         run: deno check supabase/functions/chat-consultant-v3/index.ts
+
+      - name: Type-check widget
+        run: deno check public/widget.js
 
       - name: Test shared v3 safeguards
         run: deno test supabase/functions/_shared/v3-tools/*_test.ts
