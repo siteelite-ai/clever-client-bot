@@ -48,11 +48,12 @@ Deno.test("request validation: trims message and history content", () => {
   assertEquals(result.value.history[0].content, "Нужна лампа");
 });
 
-Deno.test("request validation: accepts the legacy ID of the published widget", () => {
-  const result = validateChatRequestBody(validRequest({
-    messageId: "msg_1786968314008_0bo58djt",
-  }));
-  assert(result.ok);
+Deno.test("request validation: rejects the retired legacy widget ID", () => {
+  assert(
+    issueCodes(validRequest({
+      messageId: "msg_1786968314008_0bo58djt",
+    })).includes("messageId:invalid_format"),
+  );
 });
 
 Deno.test("request validation: rejects a missing or malformed message ID", () => {
