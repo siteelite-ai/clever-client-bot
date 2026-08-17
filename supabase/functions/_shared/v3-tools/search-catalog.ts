@@ -3,6 +3,53 @@
 
 import type { ProductCache, ProductRef, SearchCatalogOk, ToolError } from "./types.ts";
 
+const PRODUCT_DESCRIPTION_MAX_CHARS = 1_200;
+
+/**
+ * Каталожное описание приходит как HTML. В модель передаём только короткий
+ * плоский текст: без тегов, скриптов, управляющих символов и невидимого мусора.
+ */
+export function sanitizeCatalogDescription(raw: unknown): string | null {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  const decoded = raw
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/giu, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/giu, " ")
+    .replace(/<[^>]+>/gu, " ")
+    .replace(/&nbsp;|&#160;/giu, " ")
+    .replace(/&amp;/giu, "&")
+    .replace(/&quot;|&#34;/giu, '"')
+    .replace(/&lt;/giu, "<")
+    .replace(/&gt;/giu, ">")
+    .replace(/\p{Cc}+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .replace(/\s+([.,;:!?])/gu, "$1")
+    .trim();
+  return decoded ? decoded.slice(0, PRODUCT_DESCRIPTION_MAX_CHARS) : null;
+}
+
+/**
+ * Товарная ссылка должна вести на глубокую карточку контролируемого домена.
+ * Категории (/catalog/<section>/<category>/) и внешние URL отбрасываются.
+ */
+export function normalizeProductUrl(raw: unknown): string | null {
+  if (typeof raw !== "string" || !raw.trim()) return null;
+  try {
+    const parsed = new URL(raw.trim(), "https://220volt.kz");
+    if (parsed.protocol !== "https:") return null;
+    const host = parsed.hostname.toLowerCase().replace(/^www\./u, "");
+    if (host !== "220volt.kz") return null;
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    if (segments[0] !== "catalog" || segments.length < 4) return null;
+    parsed.hostname = "220volt.kz";
+    parsed.search = "";
+    parsed.hash = "";
+    if (!parsed.pathname.endsWith("/")) parsed.pathname += "/";
+    return parsed.toString();
+  } catch {
+    return null;
+  }
+}
+
 export interface CatalogClientDeps {
   baseUrl: string;
   apiToken: string;
@@ -149,7 +196,7 @@ function extractLeafCategory(p: Record<string, unknown>): string | null {
 function looksLikeMarking(s: string): boolean {
   const v = (s || "").trim();
   if (!v || v.length > 10) return false;
-  return /^[А-ЯЁ]{2,6}(нг)?[\s\-\d.,*хХx\/]{0,8}$/u.test(v);
+  return /^[А-ЯЁ]{2,6}(нг)?[\s\d.,*хХx/-]{0,8}$/u.test(v);
 }
 
 function extractBrand(p: Record<string, unknown>): string | null {
@@ -233,15 +280,21 @@ async function singleSearch(
       if (!id) continue;
       const pagetitle = String(raw.pagetitle ?? raw.name ?? "").trim();
       if (!pagetitle) continue;
-      const u = typeof raw.url === "string" ? raw.url : "";
+      const u = normalizeProductUrl(raw.url);
       if (!u) continue;
       const vendor = extractBrand(raw);
       const warehouses = extractWarehouses(raw);
+      const descriptionExcerpt = sanitizeCatalogDescription(raw.content);
+      const article = typeof raw.article === "string" && raw.article.trim()
+        ? raw.article.trim().slice(0, 120)
+        : null;
       const ref: ProductRef = {
         id, pagetitle, vendor, price,
+        article,
         unit: extractUnit(raw),
         stock: inferStock(raw),
         short_traits: extractTraits(raw),
+        description_excerpt: descriptionExcerpt,
         leaf_category: extractLeafCategory(raw),
         ...(warehouses.length > 0 ? { warehouses } : {}),
       };

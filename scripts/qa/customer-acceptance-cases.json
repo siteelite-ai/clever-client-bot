@@ -1,0 +1,122 @@
+{
+  "schema_version": 1,
+  "source": "тестированиебота130826.docx, актуальная версия 2026-08-17",
+  "cases": [
+    {
+      "id": "customer-dn027b-analogs",
+      "title": "Аналоги точной модели DN027B",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "предложи аналоги на Светильник DN027B G2 LED6/NW 7W 220-240V D90 R; 929002070102/871869967897500",
+          "expect": {
+            "min_products": 1,
+            "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"],
+            "forbid_product_title": ["DN027B"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-chandelier-30m2",
+      "title": "Люстра для зала 30 м² и продолжение диалога",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "хочу поменять дома люстру в зале 30 квадратов. Что предложишь из современного?",
+          "expect": {
+            "min_products": 1,
+            "forbid_text": ["свежих карточек", "И ещё", "search_catalog", "render_products"]
+          }
+        },
+        {
+          "message": "Они точно подходят для освещения 30 квадратных метров?",
+          "expect": {
+            "forbid_text": ["свежих карточек", "погорячился", "search_catalog", "render_products"]
+          }
+        },
+        {
+          "message": "Почему варианты отличаются по цене? Сравни подтверждённые характеристики.",
+          "expect": {
+            "forbid_text": ["свежих карточек", "не довёл", "search_catalog", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-household-motion-sensor",
+      "title": "Бытовой накладной светильник с датчиком до 4 000 ₸",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "мне нужен бытовой накладной светильник с датчиком движения с ценой не более 4000 тенге",
+          "expect": {
+            "min_products": 1,
+            "require_product_title": ["Gauss", "HALL", "сенсор"],
+            "forbid_product_title": ["для ЖКХ"],
+            "forbid_text": ["свежих карточек", "внутренняя механика", "search_catalog", "discover_category", "render_products"]
+          }
+        },
+        {
+          "message": "Почему этот товар подходит под мои критерии?",
+          "expect": {
+            "require_any_text": ["наклад", "бытов", "сенсор", "датчик"],
+            "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-generator-clean-power",
+      "title": "Генератор 900 Вт, котёл и чистая синусоида",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "В частном коттедже иногда отключают электроэнергию. Я подключаю бензиновый генератор на 900 Вт, но у него грязная энергия. Для газового котла и циркуляционного насоса нужна чистая энергия. Подбери подходящее решение.",
+          "expect": {
+            "max_products": 0,
+            "require_any_text": ["чист", "синус", "инвертор", "двойн"],
+            "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-poe-outdoor-100m",
+      "title": "Уличная PoE-камера на 100 м и выбор кабеля",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "Я нашёл дешёвый кабель для камеры на охраняемой парковке: Кабель витая пара U/UTP кат. 5 CCA 4 пары, GENERICA. Подойдёт или нет?",
+          "expect": {
+            "require_any_text": ["PoE", "дистанц", "улиц", "помещен"],
+            "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
+          }
+        },
+        {
+          "message": "Да, PoE-камера, расстояние почти 100 метров, кабель будет идти на улице. Почему этот кабель нельзя использовать?",
+          "expect": {
+            "require_any_text": ["CCA", "алюмин", "просад", "PVC", "ПВХ"],
+            "forbid_text": ["свежих карточек", "не получилось обработать", "search_catalog", "discover_category", "render_products"]
+          }
+        },
+        {
+          "message": "Тогда подбери подходящий кабель.",
+          "expect": {
+            "min_products": 1,
+            "require_product_title": ["LDPE", "Cat.5E", "кат.5E"],
+            "forbid_product_title": ["CCA", "PVC", "LSZH"],
+            "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
+          }
+        },
+        {
+          "message": "В каких единицах указаны цена и остатки?",
+          "expect": {
+            "require_any_text": ["уп", "упаков", "бухт", "метр"],
+            "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    }
+  ]
+}

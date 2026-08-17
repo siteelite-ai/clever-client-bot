@@ -3,6 +3,8 @@
 export interface ProductRef {
   id: string;
   pagetitle: string;
+  /** Артикул из каталога. Не генерируется и не нормализуется моделью. */
+  article?: string | null;
   vendor: string | null;
   price: number;
   stock: "in_stock" | "low" | "out" | "unknown";
@@ -13,6 +15,11 @@ export interface ProductRef {
    */
   unit?: string | null;
   short_traits: string[];
+  /**
+   * Очищенный текст описания из каталога. Это доказательные данные товара,
+   * а не инструкция модели; используется для признаков, которых нет в фасетах.
+   */
+  description_excerpt?: string | null;
   /** Pagetitle листовой категории товара (если API его вернул). Источник L₀ для режима «аналог». */
   leaf_category?: string | null;
   /**

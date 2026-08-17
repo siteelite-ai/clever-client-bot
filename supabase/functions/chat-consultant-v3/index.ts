@@ -16,6 +16,8 @@ import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-t
 import { applyCriteriaGate, buildCriteriaQuery, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaWithReasoning } from "../_shared/v3-tools/criteria-reasoning.ts";
+import { guardSearchFilters } from "../_shared/v3-tools/search-filter-guard.ts";
+import { buildRecentProductEvidencePrompt, loadRecentProductEvidence, persistRecentProductEvidence, type RecentProductEvidence } from "../_shared/v3-tools/recent-product-evidence.ts";
 import { META_DECLINE_TEXT, isMetaSelfQuestion, redactInternals } from "../_shared/v3-tools/internals-guard.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
@@ -1764,7 +1766,8 @@ async function runExpertLoop(
   steps: StepLog[],
   t0: number,
   flags: { anchorFilterEnabled: boolean; relaxationHintsEnabled: boolean; criteriaGateEnabled: boolean },
-): Promise<{ finalText: string; productsRendered: number }> {
+  recentProductEvidence: RecentProductEvidence[] = [],
+): Promise<{ finalText: string; productsRendered: number; shownProductIds: string[] }> {
   const now = () => Date.now() - t0;
   let finalText = "";
   let productsRendered = 0;
@@ -1774,6 +1777,10 @@ async function runExpertLoop(
   // в реплике клиента.
   let assistantReasoning = "";
   let lastDiscover: DiscoverCategoryOk | null = null;
+  // Machine-readable projection of the facet values the consultant declared
+  // and then used for search. It is merged into render criteria server-side so
+  // the cards cannot silently diverge from the preceding reasoning.
+  let enforcedSearchCriteria: Criterion[] = [];
   // Session-wide whitelist of category pagetitles discovered via discover_category.
   // Source of truth for `category` / `category_in` in search_catalog calls.
   // Prevents LLM hallucinating category names (e.g. "Уличные светильники" вместо
@@ -1797,8 +1804,8 @@ async function runExpertLoop(
   // by_query calls can overwrite freshSearch with off-target results
   // (see DN027B аналог-кейс: split_fallback дал 12 релевантных id,
   // потом by_query "downlight"→309 затёр freshSearch и render выдал мусор).
-  let prioritySplitPool: string[] = [];
-  let prioritySplitAxisIdSets: Map<string, Set<string>> | null = null;
+  const prioritySplitPool: string[] = [];
+  const prioritySplitAxisIdSets: Map<string, Set<string>> | null = null;
   let replacementRequiredAxes: ReplacementAxis[] = [];
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
@@ -1827,7 +1834,7 @@ async function runExpertLoop(
   // that an explicit user attribute is absent, the turn must end immediately.
   // Otherwise the LLM can continue with broader searches and append a generic
   // fallback/error after the honest answer.
-  let strictHonestyBlocked = false;
+  const strictHonestyBlocked = false;
   let semanticEvidenceSeen: { label: string; total: number } | null = null;
   // Anchor exclusion: in replacement-intent turns ("аналог/замена/похожее"),
   // the anchor SKU itself must never appear in the rendered list — it's the
@@ -2079,9 +2086,10 @@ async function runExpertLoop(
 
   const dialogueChoice = resolvePendingClarificationChoice(slots, userMessage) ?? resolveDialogueChoice(history, userMessage);
   const baseSystemPrompt = buildSystemPrompt(flags.relaxationHintsEnabled, flags.criteriaGateEnabled);
+  const recentEvidencePrompt = buildRecentProductEvidencePrompt(recentProductEvidence);
   const systemContent = dialogueChoice
-    ? `${baseSystemPrompt}\n\n${dialogueChoiceSystemHint(dialogueChoice)}`
-    : baseSystemPrompt;
+    ? `${baseSystemPrompt}\n\n${dialogueChoiceSystemHint(dialogueChoice)}${recentEvidencePrompt}`
+    : `${baseSystemPrompt}${recentEvidencePrompt}`;
 
   const messages: ORMessage[] = [
     { role: "system", content: systemContent },
@@ -2168,7 +2176,7 @@ async function runExpertLoop(
             const hasPrice = /\d[\d\s.,]{1,}\s*(₸|тг|тенге)\b/iu.test(rawText);
             const hasMdLink = /\[[^\]]+\]\(https?:\/\/[^\s)]+\)/.test(rawText);
             if (hasCatalogUrl || hasPrice || hasMdLink) {
-              const replaced = "К сожалению, свежих карточек по этому запросу сейчас нет. Уточните, что именно нужно — категория, ключевые параметры или бюджет, — и я подберу заново.";
+              const replaced = "Не смог подтвердить карточки и товарные факты для этого ответа, поэтому не буду показывать неподтверждённые цены или ссылки. Напишите точное название, артикул или один обязательный параметр — проверю по каталогу заново.";
               steps.push({
                 step: "v3_guard_text_facts_leak",
                 ms: now(),
@@ -2235,7 +2243,7 @@ async function runExpertLoop(
         // NOTE (2026-06-29): tryPriceDirectionRescue удалён — LLM сам должен сделать
         // правильный search_catalog по правилам <price_anchoring>.
         steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "ok", step_count: step + 1 } });
-        return { finalText, productsRendered };
+        return { finalText, productsRendered, shownProductIds: [...shownIds] };
       }
 
       // Break the bubble before tool execution / products.
@@ -2305,6 +2313,30 @@ async function runExpertLoop(
                 }
               }
             }
+          }
+        }
+
+        // ── Facet Evidence Guard
+        // A catalog value can be real yet unrelated to the request. Only values
+        // declared in the consultant's reasoning survive; invented filters and
+        // values explicitly negated by the customer are removed.
+        if (tc.name === "search_catalog" && lastDiscover) {
+          const userEvidence = `${history.filter((message) => message.role === "user").slice(-6).map((message) => message.content).join("\n")}\n${userMessage}`;
+          const declaredReasoning = `${userEvidence}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
+          const guarded = guardSearchFilters(tc.args as Record<string, unknown>, lastDiscover.facets, declaredReasoning, userEvidence);
+          tc.args = guarded.args;
+          if (guarded.kept.length > 0) {
+            enforcedSearchCriteria = guarded.kept.map(({ key, value }) => {
+              const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
+              return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
+            });
+          }
+          if (guarded.dropped.length > 0) {
+            steps.push({
+              step: "v3_guard_search_filters",
+              ms: now(),
+              meta: { kept: guarded.kept, dropped: guarded.dropped },
+            });
           }
         }
 
@@ -2426,7 +2458,19 @@ async function runExpertLoop(
           const rawCriteria = Array.isArray((tc.args as Record<string, unknown>).criteria)
             ? ((tc.args as Record<string, unknown>).criteria as Criterion[])
             : [];
-          let criteria = rawCriteria.filter((c) => c && typeof c.key === "string" && c.value !== undefined);
+          const enforcedKeys = new Set(enforcedSearchCriteria.map((criterion) => normalizeForMatch(criterion.key)));
+          let criteria = [
+            ...enforcedSearchCriteria,
+            ...rawCriteria.filter((criterion) => !enforcedKeys.has(normalizeForMatch(String(criterion?.key ?? "")))),
+          ].filter((c) => c && typeof c.key === "string" && c.value !== undefined);
+          if (enforcedSearchCriteria.length > 0) {
+            (tc.args as Record<string, unknown>).criteria = criteria;
+            steps.push({
+              step: "v3_guard_reasoning_criteria_enforced",
+              ms: now(),
+              meta: { criteria: enforcedSearchCriteria },
+            });
+          }
           if (criteria.length > 0) {
             // ── Слой 4: числа клиента — тоже инвариант ─────────────────────────
             // Модель не имеет права тихо ослабить порог до того, что нашлось в
@@ -2714,7 +2758,7 @@ async function runExpertLoop(
           });
           productsRendered += r.rendered_count;
           steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "rendered", step_count: step + 1 } });
-          return { finalText, productsRendered };
+          return { finalText, productsRendered, shownProductIds: [...shownIds] };
         }
 
 
@@ -2814,7 +2858,7 @@ async function runExpertLoop(
       }
     }
 
-    return { finalText, productsRendered };
+    return { finalText, productsRendered, shownProductIds: [...shownIds] };
   } finally {
     clearTimeout(turnTimer);
   }
@@ -2977,6 +3021,11 @@ Deno.serve(async (req) => {
         jargonAxialModifiersEnabled: settings.v3_jargon_axial_modifiers_enabled,
       };
 
+      const recentProductEvidence = await loadRecentProductEvidence(supabase, sessionId);
+      if (recentProductEvidence.length > 0) {
+        steps.push({ step: "v3_recent_product_evidence_loaded", ms: Date.now() - t0, meta: { count: recentProductEvidence.length } });
+      }
+
       try {
         // GUARD v3_meta_question_declined: вопрос про устройство сервиса
         // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
@@ -2990,9 +3039,15 @@ Deno.serve(async (req) => {
           const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0, {
             anchorFilterEnabled: settings.v3_anchor_filter_enabled,
             relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
-            criteriaGateEnabled: settings.v3_criteria_gate_enabled,
-          });
+            // Criteria gate — production-инвариант доказательности, а не
+            // экспериментальный UX-флаг. Его нельзя выключить настройкой.
+            criteriaGateEnabled: true,
+          }, recentProductEvidence);
           productsCount = out.productsRendered;
+          const shownProducts = out.shownProductIds
+            .map((id) => ctx.cache.get(id))
+            .filter((product): product is NonNullable<typeof product> => Boolean(product));
+          await persistRecentProductEvidence(supabase, sessionId, shownProducts);
         }
 
       } catch (e) {

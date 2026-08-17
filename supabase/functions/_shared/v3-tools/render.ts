@@ -89,13 +89,9 @@ export function executeRenderProducts(
     };
   }
 
-  let markdown = lines.join("\n\n");
-  if (
-    typeof input.total_available === "number" &&
-    input.total_available > rendered
-  ) {
-    markdown += `\n\n_И ещё ${input.total_available - rendered} вариантов в каталоге._`;
-  }
+  // Не обещаем «ещё N»: pagination.total относится к широкой поисковой
+  // выборке, а не к товарам, прошедшим те же критерии и render-гейт.
+  const markdown = lines.join("\n\n");
 
   return {
     tool: "render_products",
