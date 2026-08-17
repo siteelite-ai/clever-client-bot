@@ -48,11 +48,18 @@ Deno.test("request validation: trims message and history content", () => {
   assertEquals(result.value.history[0].content, "Нужна лампа");
 });
 
-Deno.test("request validation: rejects a missing or malformed message UUID", () => {
-  assert(issueCodes({ message: "test" }).includes("messageId:expected_uuid"));
+Deno.test("request validation: accepts the legacy ID of the published widget", () => {
+  const result = validateChatRequestBody(validRequest({
+    messageId: "msg_1786968314008_0bo58djt",
+  }));
+  assert(result.ok);
+});
+
+Deno.test("request validation: rejects a missing or malformed message ID", () => {
+  assert(issueCodes({ message: "test" }).includes("messageId:expected_string"));
   assert(
     issueCodes(validRequest({ messageId: "msg_123" })).includes(
-      "messageId:invalid_uuid",
+      "messageId:invalid_format",
     ),
   );
 });
