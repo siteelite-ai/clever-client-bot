@@ -13,6 +13,9 @@ const MAX_OBJECT_KEYS = 100;
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// Compatibility window for the currently published Lovable asset. Remove this
+// after production traffic confirms that public/widget.js emits UUID v4 IDs.
+const LEGACY_MESSAGE_ID_RE = /^msg_\d{13}_[a-z0-9]{6,12}$/;
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const TOP_LEVEL_FIELDS = new Set([
@@ -157,9 +160,11 @@ export function validateChatRequestBody(
 
   const messageId = input.messageId;
   if (typeof messageId !== "string") {
-    addIssue(issues, "messageId", "expected_uuid");
-  } else if (!UUID_RE.test(messageId)) {
-    addIssue(issues, "messageId", "invalid_uuid");
+    addIssue(issues, "messageId", "expected_string");
+  } else if (
+    !UUID_RE.test(messageId) && !LEGACY_MESSAGE_ID_RE.test(messageId)
+  ) {
+    addIssue(issues, "messageId", "invalid_format");
   }
 
   const sessionId = input.sessionId;
