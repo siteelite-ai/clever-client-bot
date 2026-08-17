@@ -40,7 +40,7 @@ Deno.test("строгость задаёт только проза систем�
   const strict = alignCriteriaWithReasoning(criteria, "нужен размер больше 12 мм");
   const inclusive = alignCriteriaWithReasoning(criteria, "нужен размер не менее 12 мм");
   assertEquals(strict.criteria[0].exclusive, true);
-  assertEquals(inclusive.criteria[0].exclusive, false);
+  assertEquals(inclusive.criteria[0].exclusive === true, false);
 });
 
 Deno.test("alignCriteriaWithReasoning: порог не выдумывается без совпадения числа", () => {
