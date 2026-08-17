@@ -35,23 +35,23 @@ function norm(s: string): string {
  * границы слов, чтобы «опции товара» не путать с параметром `options`.
  */
 const INTERNALS_PATTERNS: RegExp[] = [
-  /\bфасет\w*/u,
-  /\bfulltext\b|\bфултекст\w*/u,
+  /(?<![а-яa-z])фасет[а-я]*/u,
+  /\bfulltext\b|(?<![а-яa-z])фултекст[а-я]*/u,
   /function[\s-]?calling|tool[\s_-]?call\w*|вызов\w*\s+инструмент\w*/u,
-  /\bэндпоинт\w*|\bendpoint\w*/u,
-  /систем\w+\s+промпт\w*|\bпромпт\w*\b/u,
+  /(?<![а-яa-z])эндпоинт[а-я]*|\bendpoint\w*/u,
+  /систем[а-я]+\s+промпт[а-я]*|(?<![а-яa-z])промпт[а-я]*/u,
   /json[\s-]?schema|\bjson-схем\w*/u,
-  /\bfts\b|вектор\w+\s+поиск\w*|гибридн\w+\s+поиск\w*/u,
-  /\bllm\b|языков\w+\s+модел\w*|нейросет\w*/u,
-  /\bопенроутер\w*|openrouter|deepseek|\bgpt-?\d|\bgpt-4\w*|\bclaude\b|\bsonnet\b|\bopus\b|\bqwen\b|\bllama\b|\bgemini\b|\bvllm\b/u,
-  /\bрендер[\s-]?гейт\w*|render[\s_-]?gate\w*/u,
+  /\bfts\b|вектор[а-я]+\s+поиск[а-я]*|гибридн[а-я]+\s+поиск[а-я]*/u,
+  /\bllm\b|языков[а-я]+\s+модел[а-я]*|(?<![а-яa-z])нейросет[а-я]*/u,
+  /(?<![а-яa-z])опенроутер[а-я]*|openrouter|deepseek|\bgpt-?\d|\bgpt-4\w*|\bclaude\b|\bsonnet\b|\bopus\b|\bqwen\b|\bllama\b|\bgemini\b|\bvllm\b/u,
+  /(?<![а-яa-z])рендер[\s-]?гейт[а-я]*|render[\s_-]?gate\w*/u,
   /\bshort_traits\b|\bpagetitle\b|\bby_query\b|\bby_filter\b|\bby_article\b|\bby_pagetitle\b|\bcategory_in\b|\bper_page\b|\bmin_price\b|\bmax_price\b|\bcriteria\b|\bproduct_ids\b|\bunmatched_tokens\b|\bpartial_match\b|\bleaf_categories\b/u,
   /\bsearch_catalog\b|\bdiscover_category\b|\bjargon_recover_catalog\b|\brender_products\b|\blookup_knowledge\b|\blookup_contacts\b|\bpropose_clarification\b|\bescalate_to_manager\b|\bnote_state\b/u,
-  /\bинвариант\w*/u,
-  /\bоркестратор\w*|\bпайплайн\w*|\bpipeline\b/u,
-  /\bапи[\s-]?инструмент\w*|\bапи-эндпоинт\w*/u,
-  /умею\s+искать\s+только|не\s+чита\w+\s+(?:полнотекст\w*|текстов\w*\s+)?описани\w*/u,
-  /\bтехническое\s+задание\b|\bтз\s+(?:по|на)\b/u,
+  /(?<![а-яa-z])инвариант[а-я]*/u,
+  /(?<![а-яa-z])оркестратор[а-я]*|(?<![а-яa-z])пайплайн[а-я]*|\bpipeline\b/u,
+  /(?<![а-яa-z])апи[\s-]?инструмент[а-я]*|(?<![а-яa-z])апи-эндпоинт[а-я]*/u,
+  /умею\s+искать\s+только|не\s+чита[а-я]+\s+(?:полнотекст[а-я]*|текстов[а-я]*\s+)?описани[а-я]*/u,
+  /техническое\s+задание|(?<![а-яa-z])тз\s+(?:по|на)(?![а-яa-z])/u,
 ];
 
 /**
@@ -59,7 +59,7 @@ const INTERNALS_PATTERNS: RegExp[] = [
  * Вырезаются точечно, весь текст из-за них не подменяется.
  */
 const SELF_FLAGELLATION_RE =
-  /\b(?:облажал\w*|косяк\s+мой|мой\s+косяк|погорячил\w*|стопорнул\w*|тк?нули\s+носом|исправлюсь)\b[\s,.!—-]*/giu;
+  /(?<![а-яa-z])(?:облажал[а-я]*|косяк\s+мой|мой\s+косяк|погорячил[а-я]*|стопорнул[а-я]*|тк?нули\s+носом|исправлюсь)(?![а-яa-z])[\s,.!—-]*/giu;
 
 export interface RedactResult {
   text: string;
@@ -101,6 +101,7 @@ const COMMERCE_SIGNAL_RE =
 
 /** Маркеры вопроса про устройство ассистента / просьбы выдать спецификацию. */
 const META_PATTERNS: RegExp[] = [
+  /(?:^|\s)на\s+чем(?![а-я])/u,
   /на\s+(?:как\w+|чем)\s+(?:платформ\w*|модел\w*|стек\w*|движк\w*|технолог\w*)/u,
   /(?:как|что)\s+(?:ты|вы)\s+(?:устроен\w*|работа\w+|написан\w*|сделан\w*|ищ\w+\s+внутри)/u,
   /(?:ты|вы)\s+(?:на\s+)?(?:какой|чем)\s+модел\w*/u,
