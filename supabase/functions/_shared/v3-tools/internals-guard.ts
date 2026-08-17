@@ -62,6 +62,16 @@ const INTERNALS_PATTERNS: RegExp[] = [
 const SELF_FLAGELLATION_RE =
   /(?<![а-яa-z])(?:облажал[а-я]*|косяк\s+мой|мой\s+косяк|погорячил[а-я]*|стопорнул[а-я]*|тк?нули\s+носом|исправлюсь)(?![а-яa-z])[\s,.!—-]*/giu;
 
+/** Точечная коррекция подтверждённой опечатки в клиентском ответе. */
+const CASH_RECEIPT_TYPO_RE = /(?<![а-я])кассовые\s+челы(?![а-я])/giu;
+
+function correctCustomerTextTypos(text: string): string {
+  return text.replace(
+    CASH_RECEIPT_TYPO_RE,
+    (match) => /^[А-ЯЁ]/u.test(match) ? "Кассовые чеки" : "кассовые чеки",
+  );
+}
+
 export interface RedactResult {
   text: string;
   redacted: boolean;
@@ -89,9 +99,18 @@ export function redactInternals(text: string): RedactResult {
   if (matched.length > 0) {
     return { text: INTERNALS_REDACTED_TEXT, redacted: true, matched };
   }
-  const cleaned = raw.replace(SELF_FLAGELLATION_RE, "").replace(/[ \t]{2,}/g, " ").trim();
+  const withoutSelfFlagellation = raw.replace(SELF_FLAGELLATION_RE, "")
+    .replace(/[ \t]{2,}/g, " ").trim();
+  const cleaned = correctCustomerTextTypos(withoutSelfFlagellation);
   if (cleaned !== raw.trim()) {
-    return { text: cleaned, redacted: false, matched: ["self_flagellation"] };
+    const softMatches: string[] = [];
+    if (withoutSelfFlagellation !== raw.trim()) {
+      softMatches.push("self_flagellation");
+    }
+    if (cleaned !== withoutSelfFlagellation) {
+      softMatches.push("customer_text_typo:cash_receipt");
+    }
+    return { text: cleaned, redacted: false, matched: softMatches };
   }
   return { text: raw, redacted: false, matched: [] };
 }
