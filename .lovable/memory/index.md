@@ -26,3 +26,4 @@ HARD BAN на товары с `price=0`.
 - [Knowledge Base](mem://features/knowledge-base) — RAG и обработка больших файлов.
 - [Единица измерения цены](mem://features/price-unit) — `unit` из каталога, «Цена: X ₸/м», для «шт» без суффикса.
 - [Widget Features](mem://features/widget) — Настройки и SSE транспорт.
+- [Widget Cache Loader](mem://constraints/widget-cache-loader) — embed.js = загрузчик, widget.js = код, версия в widget-version.js (обновлять при каждом изменении).
