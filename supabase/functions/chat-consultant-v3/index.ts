@@ -14,7 +14,7 @@ import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
 import { applyCriteriaGate, buildCriteriaQuery, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
-import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
+import { correctCriteria, enforceStrictClientThresholds, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaWithReasoning } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
@@ -2471,6 +2471,20 @@ async function runExpertLoop(
                 meta: { violations: understated },
               });
             }
+            // ── Слой 4b: порог, равный числу клиента, — строгий ────────────
+            // «≥ X», где X — размер объекта клиента, физически бессмысленно:
+            // параметр товара должен охватить/пройти с зазором, а не совпасть.
+            const strict = enforceStrictClientThresholds(criteria, userMessage);
+            if (strict.tightened.length > 0) {
+              criteria = strict.criteria;
+              (tc.args as Record<string, unknown>).criteria = criteria;
+              steps.push({
+                step: "v3_guard_criteria_strict_threshold",
+                ms: now(),
+                meta: { tightened: strict.tightened },
+              });
+            }
+
             const ids = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
             const products = ids
               .map((id) => ctx.cache.get(id))
