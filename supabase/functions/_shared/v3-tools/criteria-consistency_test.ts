@@ -68,3 +68,29 @@ Deno.test("correctCriteria не трогает валидные критерии
   const criteria: Criterion[] = [{ key: "A", op: "min", value: 300, unit: "мм", level: "A" }];
   assertEquals(correctCriteria(criteria, []), criteria);
 });
+
+Deno.test("Слой 4b: порог, равный числу клиента, становится строгим", () => {
+  const { criteria, tightened } = enforceStrictClientThresholds(
+    [{ key: "Внутренний диаметр до усадки", op: "min", value: 12, unit: "мм", level: "A" }],
+    "подбери термоусадочную трубку для кабеля диаметром 12 мм",
+  );
+  assertEquals(tightened.length, 1);
+  assertEquals(criteria[0].exclusive, true);
+});
+
+Deno.test("Слой 4b: порог с запасом (не равный числу клиента) не трогаем", () => {
+  const { criteria, tightened } = enforceStrictClientThresholds(
+    [{ key: "Диаметр", op: "min", value: 14, unit: "мм", level: "A" }],
+    "кабель диаметром 12 мм",
+  );
+  assertEquals(tightened.length, 0);
+  assertEquals(criteria[0].exclusive, undefined);
+});
+
+Deno.test("Слой 4b: op=eq (характеристика товара) не трогаем", () => {
+  const { tightened } = enforceStrictClientThresholds(
+    [{ key: "Сечение", op: "eq", value: 2.5, unit: "мм2", level: "A" }],
+    "кабель 2.5 мм2",
+  );
+  assertEquals(tightened.length, 0);
+});
