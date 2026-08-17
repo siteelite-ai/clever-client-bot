@@ -76,13 +76,32 @@ Deno.test("checkCriterion: отсутствие характеристики = u
   assertEquals(ch.actual, null);
 });
 
+Deno.test("checkCriterion: строковый признак подтверждается описанием товара", () => {
+  const p = {
+    ...product("1", ["Вид: Бытовой светильник накладной"]),
+    description_excerpt: "Данная модель оборудована микроволновым сенсором движения.",
+  };
+  assertEquals(
+    checkCriterion(p, { key: "датчик движения", op: "eq", value: "микроволновый сенсор" }).verdict,
+    "pass",
+  );
+});
+
+Deno.test("checkCriterion: строковое противоречие в одноимённом фасете = fail", () => {
+  const p = product("1", ["Вид светильника: Светильники для ЖКХ"]);
+  assertEquals(
+    checkCriterion(p, { key: "Вид светильника", op: "eq", value: "Бытовые светильники накладные" }).verdict,
+    "fail",
+  );
+});
+
 Deno.test("applyCriteriaGate: без критериев пропускает всё", () => {
   const r = applyCriteriaGate([product("1", []), product("2", [])], []);
   assertEquals(r.passed_ids, ["1", "2"]);
   assertEquals(r.rejected.length, 0);
 });
 
-Deno.test("applyCriteriaGate: отсев только по уровню A", () => {
+Deno.test("applyCriteriaGate: уровень A требует доказательства", () => {
   const items = [
     product("1", ["Параметр альфа: 12-15 ед"]),
     product("2", ["Параметр альфа: 4-6 ед"]),
@@ -90,8 +109,11 @@ Deno.test("applyCriteriaGate: отсев только по уровню A", () =
   ];
   const crit: Criterion[] = [{ key: "параметр альфа", op: "range", value: [12, 15], level: "A" }];
   const r = applyCriteriaGate(items, crit);
-  assertEquals(r.passed_ids, ["1", "3"]); // 3 — unknown, не отсеиваем
-  assertEquals(r.rejected, [{ id: "2", key: "параметр альфа", expected: "12–15", actual: "4-6 ед" }]);
+  assertEquals(r.passed_ids, ["1"]);
+  assertEquals(r.rejected, [
+    { id: "2", key: "параметр альфа", expected: "12–15", actual: "4-6 ед" },
+    { id: "3", key: "параметр альфа", expected: "12–15", actual: "нет данных" },
+  ]);
 });
 
 Deno.test("applyCriteriaGate: уровень B не отсеивает", () => {
@@ -105,7 +127,7 @@ Deno.test("applyCriteriaGate: unverifiable_keys когда данных нет �
   const items = [product("1", ["Иной параметр: 1 ед"]), product("2", [])];
   const r = applyCriteriaGate(items, [{ key: "параметр альфа", op: "min", value: 5 }]);
   assertEquals(r.unverifiable_keys, ["параметр альфа"]);
-  assertEquals(r.passed_ids, ["1", "2"]);
+  assertEquals(r.passed_ids, []);
 });
 
 Deno.test("applyCriteriaGate: все карточки провалились → honest-empty", () => {

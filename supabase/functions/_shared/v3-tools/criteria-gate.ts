@@ -16,8 +16,9 @@
 // Политика вердиктов:
 //   pass    — характеристика найдена и удовлетворяет оператору критерия.
 //   fail    — характеристика найдена и ПРОТИВОРЕЧИТ критерию → карточку не рендерим.
-//   unknown — характеристики нет в карточке → НЕ повод отсеивать (данных нет,
-//             а не «не подходит»), но факт попадает в отчёт для честного текста.
+//   unknown — характеристики нет в карточке. Для обязательного уровня A это
+//             означает «пригодность не доказана» и карточка не рендерится;
+//             для рекомендательного уровня B остаётся только в отчёте.
 
 import type { ProductRef } from "./types.ts";
 
@@ -56,7 +57,7 @@ export interface ProductGateResult {
 }
 
 export interface CriteriaGateReport {
-  /** id, прошедшие гейт (pass или unknown по всем критериям уровня A). */
+  /** id, доказательно прошедшие все критерии уровня A. */
   passed_ids: string[];
   /** Отсеянные карточки с причинами. */
   rejected: Array<{ id: string; key: string; expected: string; actual: string }>;
@@ -147,6 +148,30 @@ export function findTrait(product: ProductRef, key: string): { label: string; va
   return fallback;
 }
 
+function productEvidenceText(product: ProductRef): string {
+  return normalizeKey([
+    product.pagetitle,
+    product.article ?? "",
+    ...(Array.isArray(product.short_traits) ? product.short_traits : []),
+    product.description_excerpt ?? "",
+  ].join(" "));
+}
+
+function looseStem(token: string): string {
+  if (token.length < 5) return token;
+  return token.replace(/(?:ыми|ими|ого|его|ому|ему|ами|ями|ая|яя|ое|ее|ой|ей|ом|ем|ую|юю|ый|ий|ых|их|ов|ев|ам|ям|ах|ях|а|я|о|е|ы|и|у|ю)$/u, "");
+}
+
+function stringEvidenceMatches(wanted: string, evidence: string): boolean {
+  const want = normalizeKey(wanted);
+  const got = normalizeKey(evidence);
+  if (!want || !got) return false;
+  if (got.includes(want) || want.includes(got)) return true;
+  const gotStems = got.split(/\s+/u).filter((x) => x.length >= 3).map(looseStem);
+  const wantStems = want.split(/\s+/u).filter((x) => x.length >= 3).map(looseStem);
+  return wantStems.length > 0 && wantStems.every((stem) => gotStems.some((actual) => actual === stem || actual.startsWith(stem) || stem.startsWith(actual)));
+}
+
 function expectedLabel(c: Criterion): string {
   const unit = c.unit ? ` ${c.unit}` : "";
   if (c.op === "range" && Array.isArray(c.value)) return `${c.value[0]}–${c.value[1]}${unit}`;
@@ -169,6 +194,16 @@ export function checkCriterion(product: ProductRef, c: Criterion): CriterionChec
   const expected = expectedLabel(c);
   const trait = findTrait(product, c.key);
   if (!trait) {
+    // Часть доказательных признаков живёт только в названии/описании товара,
+    // а не в отдельном фасете. Строковое требование можно подтвердить по всему
+    // каталожному evidence, но отсутствие слова остаётся unknown, а не fail.
+    if (c.op === "eq" && typeof c.value === "string") {
+      const want = normalizeKey(c.value);
+      const evidence = productEvidenceText(product);
+      if (want && stringEvidenceMatches(want, evidence)) {
+        return { key: c.key, verdict: "pass", expected, actual: c.value };
+      }
+    }
     return { key: c.key, verdict: "unknown", expected, actual: null };
   }
   const actual = trait.value;
@@ -180,7 +215,7 @@ export function checkCriterion(product: ProductRef, c: Criterion): CriterionChec
     if (!want) return { key: c.key, verdict: "unknown", expected, actual };
     return {
       key: c.key,
-      verdict: got.includes(want) || want.includes(got) ? "pass" : "fail",
+      verdict: stringEvidenceMatches(want, got) ? "pass" : "fail",
       expected,
       actual,
     };
@@ -219,8 +254,9 @@ export function checkCriterion(product: ProductRef, c: Criterion): CriterionChec
 }
 
 /**
- * Главная функция гейта. Отсеивает только по критериям уровня A и только при
- * вердикте fail (данные есть и противоречат). unknown никогда не отсеивает.
+ * Главная функция гейта. Критерий уровня A — обязательное утверждение о
+ * пригодности, поэтому и явное противоречие, и отсутствие доказательства
+ * исключают карточку. Уровень B остаётся рекомендательным и не отсеивает.
  */
 export function applyCriteriaGate(
   products: ProductRef[],
@@ -246,13 +282,13 @@ export function applyCriteriaGate(
       if (ch.verdict !== "unknown" && (active[i].level ?? "A") === "A") verifiedKeys.add(ch.key);
     });
 
-    const hardFail = checks.find((ch, i) => ch.verdict === "fail" && (active[i].level ?? "A") === "A");
+    const hardFail = checks.find((ch, i) => ch.verdict !== "pass" && (active[i].level ?? "A") === "A");
     if (hardFail) {
       report.rejected.push({
         id: String(p.id),
         key: hardFail.key,
         expected: hardFail.expected,
-        actual: hardFail.actual ?? "",
+        actual: hardFail.actual ?? "нет данных",
       });
       report.per_product.push({ id: String(p.id), verdict: "fail", checks });
       continue;
@@ -310,4 +346,3 @@ export function buildCriteriaQuery(noun: string, criteria: Criterion[]): string 
   }
   return parts.join(" ").replace(/\s+/g, " ").trim();
 }
-

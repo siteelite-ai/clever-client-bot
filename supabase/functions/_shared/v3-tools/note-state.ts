@@ -28,10 +28,10 @@ export async function executeNoteState(
     // read-modify-write
     const { data: existing } = await supabase
       .from("chat_cache_v2")
-      .select("value")
+      .select("cache_value")
       .eq("cache_key", cacheKey)
       .maybeSingle();
-    const current = (existing?.value as Record<string, unknown> | null) ?? {};
+    const current = (existing?.cache_value as Record<string, unknown> | null) ?? {};
     const next = {
       ...current,
       [key]: {
@@ -43,7 +43,7 @@ export async function executeNoteState(
     const expiresAt = new Date(Date.now() + SLOT_TTL_SEC * 1000).toISOString();
     const { error } = await supabase
       .from("chat_cache_v2")
-      .upsert({ cache_key: cacheKey, value: next, expires_at: expiresAt }, { onConflict: "cache_key" });
+      .upsert({ cache_key: cacheKey, cache_value: next, expires_at: expiresAt }, { onConflict: "cache_key" });
     if (error) {
       return { tool: "note_state", ok: false, error_code: "internal", message: error.message };
     }

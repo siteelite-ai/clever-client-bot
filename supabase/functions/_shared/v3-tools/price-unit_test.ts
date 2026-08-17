@@ -88,3 +88,12 @@ Deno.test("render: при неизвестной единице остатки �
   if (!r.ok) throw new Error("expected ok");
   assertStringIncludes(r.markdown, "Наличие: Шымкент (7)");
 });
+
+Deno.test("render: не обещает непроверенные дополнительные варианты", () => {
+  const r = executeRenderProducts(
+    { product_ids: ["1"], total_available: 25 },
+    cacheWith("шт"),
+  );
+  if (!r.ok) throw new Error("expected ok");
+  if (r.markdown.includes("И ещё")) throw new Error(r.markdown);
+});
