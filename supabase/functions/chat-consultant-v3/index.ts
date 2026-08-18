@@ -26,6 +26,7 @@ import {
   groundedCategoryRecoveryQueries,
   groundedTokenRecoveryQueries,
   guardCategoryScopeByReasoning,
+  selectGroundedTokenRecoveryCandidate,
 } from "../_shared/v3-tools/category-reasoning-guard.ts";
 import { detectUserIntentMode, shouldSuppressNegativeSuitabilityCard } from "../_shared/v3-tools/intent-mode.ts";
 import {
@@ -3136,6 +3137,67 @@ async function runExpertLoop(
 
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
         let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
+
+        // The catalog applies AND semantics to multiword full-text queries.
+        // When the consultant has already generated a canonical phrase, a
+        // query such as "<distinctive form> <generic noun>" can therefore be
+        // empty even though the distinctive token is present literally in
+        // product titles. Retry the model's own tokens, require that exact
+        // token in title evidence, and accept only a selective pool. This keeps
+        // the reasoning intact without a server-side synonym dictionary and
+        // prevents a later broad facet from replacing the requested form.
+        if (
+          tc.name === "search_catalog" &&
+          result.ok &&
+          Number((result as { total?: number }).total ?? 0) === 0 &&
+          runArgs.mode === "by_query" &&
+          typeof runArgs.query === "string"
+        ) {
+          const originalQuery = runArgs.query.trim();
+          const tokenQueries = groundedTokenRecoveryQueries(originalQuery, 4);
+          if (tokenQueries.length >= 2) {
+            const tokenAttempts: Array<{
+              query: string;
+              total: number;
+              result: SearchCatalogOk & { tool: "search_catalog" };
+            }> = [];
+            for (const query of tokenQueries) {
+              const recovered = await runTool("search_catalog", { ...runArgs, query }, ctx);
+              if (!recovered.ok || recovered.tool !== "search_catalog") continue;
+              const titleBacked = recovered.results.filter((product) => valueIsEvidenced(query, product.pagetitle));
+              if (titleBacked.length === 0) continue;
+              tokenAttempts.push({
+                query,
+                total: recovered.total,
+                result: { ...recovered, results: titleBacked },
+              });
+            }
+            const selected = selectGroundedTokenRecoveryCandidate(
+              tokenAttempts,
+              lastDiscover?.category?.total_products ?? 0,
+            );
+            if (selected) {
+              runArgs.query = selected.query;
+              result = {
+                ...selected.result,
+                warnings: [
+                  ...(selected.result.warnings ?? []),
+                  `model_query_token_recovered:${selected.query}`,
+                ],
+              };
+            }
+            steps.push({
+              step: "v3_model_query_token_recovery",
+              ms: now(),
+              meta: {
+                original_query: originalQuery,
+                attempts: tokenAttempts.map(({ query, total }) => ({ query, total })),
+                selected: selected?.query ?? null,
+                category_total: lastDiscover?.category?.total_products ?? null,
+              },
+            });
+          }
+        }
 
         // Live catalogs commonly omit a boolean facet even when the feature is
         // explicit in the product title/description. If a strict by-filter

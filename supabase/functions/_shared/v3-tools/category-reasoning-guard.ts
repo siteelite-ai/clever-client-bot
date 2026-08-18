@@ -106,6 +106,28 @@ export function groundedTokenRecoveryQueries(searchQuery: string, limit = 8): st
   return [...new Set(tokens)].slice(0, Math.max(1, limit));
 }
 
+export interface TokenRecoveryCandidate {
+  query: string;
+  total: number;
+}
+
+/**
+ * Select a literal title-token retry only when it is materially narrower than
+ * the discovered category. This lets the consultant's own multiword canonical
+ * query recover from catalog AND semantics without turning a generic token
+ * into a broad substitution. No domain terms or translations live here.
+ */
+export function selectGroundedTokenRecoveryCandidate<T extends TokenRecoveryCandidate>(
+  candidates: T[],
+  categoryTotal: number,
+): T | null {
+  const normalizedCategoryTotal = Number.isFinite(categoryTotal) && categoryTotal > 0 ? categoryTotal : 0;
+  const selectiveLimit = Math.max(50, Math.ceil(normalizedCategoryTotal * 0.1));
+  return candidates
+    .filter((candidate) => Number.isFinite(candidate.total) && candidate.total > 0 && candidate.total <= selectiveLimit)
+    .sort((left, right) => left.total - right.total || right.query.length - left.query.length)[0] ?? null;
+}
+
 export function guardCategoryScopeByReasoning(
   args: Record<string, unknown>,
   discovered: DiscoveredCategoryScope | null,
