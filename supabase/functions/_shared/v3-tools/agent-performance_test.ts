@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertLess } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   compactCatalogResultForLlm,
+  isToolAllowedInAgentPhase,
   nextAgentPhase,
   toolNamesForAgentPhase,
 } from "./agent-performance.ts";
@@ -18,6 +19,19 @@ Deno.test("agent phase: successful discovery requires search and blocks rediscov
   assert(toolNamesForAgentPhase(phase).includes("search_catalog"));
 });
 
+Deno.test("agent phase: clarification is available only after discovery and before a non-empty search", () => {
+  assert(!toolNamesForAgentPhase("open").includes("propose_clarification"));
+  assert(toolNamesForAgentPhase("search_after_discovery").includes("propose_clarification"));
+  assert(!toolNamesForAgentPhase("terminal_after_search").includes("propose_clarification"));
+});
+
+Deno.test("agent phase: server rejects model-emitted tools outside the advertised phase", () => {
+  assert(!isToolAllowedInAgentPhase("search_after_discovery", "discover_category"));
+  assert(!isToolAllowedInAgentPhase("terminal_after_search", "search_catalog"));
+  assert(!isToolAllowedInAgentPhase("terminal_after_search", "unknown_tool"));
+  assert(isToolAllowedInAgentPhase("terminal_after_search", "render_products"));
+});
+
 Deno.test("agent phase: non-empty ordinary selection search becomes terminal", () => {
   const phase = nextAgentPhase("search_after_discovery", {
     tool: "search_catalog",
@@ -29,7 +43,6 @@ Deno.test("agent phase: non-empty ordinary selection search becomes terminal", (
   assertEquals(phase, "terminal_after_search");
   assertEquals(toolNamesForAgentPhase(phase), [
     "render_products",
-    "propose_clarification",
     "escalate_to_manager",
     "note_state",
   ]);
