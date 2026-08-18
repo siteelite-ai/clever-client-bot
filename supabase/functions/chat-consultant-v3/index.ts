@@ -41,6 +41,7 @@ import {
 import { META_DECLINE_TEXT, isMetaSelfQuestion, redactInternals } from "../_shared/v3-tools/internals-guard.ts";
 import {
   compactCatalogResultForLlm,
+  hasActionableSelectionReasoning,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
   toolNamesForAgentPhase,
@@ -2375,7 +2376,12 @@ async function runExpertLoop(
       }
 
       const llmStart = Date.now();
-      const availableToolNames = toolNamesForAgentPhase(agentPhase);
+      const agentToolPolicy = {
+        reasoningRequiresCatalog: intentMode === "select" && hasActionableSelectionReasoning(
+          `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
+        ),
+      };
+      const availableToolNames = toolNamesForAgentPhase(agentPhase, agentToolPolicy);
       let resp: ORResponse;
       try {
         resp = await callOpenRouter(apiKey, messages, turnController.signal, phaseTimeoutMs, phase, availableToolNames);
@@ -2442,9 +2448,20 @@ async function runExpertLoop(
         meta: { step_index: step, duration_ms: Date.now() - llmStart, has_text: !!resp.text, tool_calls: resp.toolCalls.length, finish: resp.finishReason, phase, timeout_ms: phaseTimeoutMs, ctx_bytes: ctxBytes, agent_phase: agentPhase, available_tools: availableToolNames },
       });
 
-      const hasRender = resp.toolCalls.some((tc) => tc.name === "render_products");
+      const responseHasActionableReasoning = intentMode === "select" && hasActionableSelectionReasoning(
+        `${userMessage}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`,
+      );
+      const enforcementToolPolicy = {
+        reasoningRequiresCatalog: agentToolPolicy.reasoningRequiresCatalog || responseHasActionableReasoning,
+      };
+      const enforcedToolNames = toolNamesForAgentPhase(agentPhase, enforcementToolPolicy);
+      const requiresToolContinuation = resp.toolCalls.length === 0 && intentMode === "select" && (
+        agentPhase === "terminal_after_search" ||
+        responseHasActionableReasoning
+      );
+      const hasRender = resp.toolCalls.some((tc) => tc.name === "render_products" && isToolAllowedInAgentPhase(agentPhase, tc.name, enforcementToolPolicy));
       const isFirstTurn = step === 0;
-      const isFinalTurn = resp.toolCalls.length === 0;
+      const isFinalTurn = resp.toolCalls.length === 0 && !requiresToolContinuation;
 
       // UX-правило по роли шага в диалоге:
       //  • первый шаг с тулами впереди → intro-пузырь эксперта (показываем)
@@ -2541,6 +2558,21 @@ async function runExpertLoop(
 
 
       if (resp.toolCalls.length === 0) {
+        if (requiresToolContinuation) {
+          messages.push({ role: "assistant", content: resp.text || null });
+          messages.push({
+            role: "system",
+            content: agentPhase === "terminal_after_search"
+              ? "Фазовый контракт: ненулевой пул уже найден. Не заканчивай ход текстом. Вызови render_products, перенеся в criteria требования из своего рассуждения, либо escalate_to_manager, если ни один кандидат нельзя подтвердить."
+              : "Фазовый контракт: ты уже сформулировал несколько измеримых критериев подбора. Не заканчивай ход текстом и не спрашивай предпочтения, которые можешь выбрать как эксперт. Выполни discover_category/search_catalog и доведи найденный пул до render_products.",
+          });
+          steps.push({
+            step: "v3_agent_premature_final_blocked",
+            ms: now(),
+            meta: { phase: agentPhase, reasoning_requires_catalog: responseHasActionableReasoning },
+          });
+          continue;
+        }
         // No tools → turn ends. Last-chance: if user asked relative-price and we rendered nothing → rescue.
         // NOTE (2026-06-29): tryPriceDirectionRescue удалён — LLM сам должен сделать
         // правильный search_catalog по правилам <price_anchoring>.
@@ -2575,7 +2607,7 @@ async function runExpertLoop(
         // discovery/search is never executed merely because the model ignored
         // the advertised tool set. Every assistant tool_call still receives a
         // matching tool result, keeping the conversation protocol valid.
-        if (!isToolAllowedInAgentPhase(agentPhase, tc.name)) {
+        if (!isToolAllowedInAgentPhase(agentPhase, tc.name, enforcementToolPolicy)) {
           const phaseHint = agentPhase === "open"
             ? "Сначала выполни discovery/search. Уточнение допустимо после discovery, только если без него поиск объективно невозможен."
             : agentPhase === "search_after_discovery"
@@ -2589,14 +2621,14 @@ async function runExpertLoop(
               ok: false,
               error_code: "agent_phase_violation",
               current_phase: agentPhase,
-              allowed_tools: availableToolNames,
+              allowed_tools: enforcedToolNames,
               _server_hint: phaseHint,
             }),
           });
           steps.push({
             step: "v3_agent_phase_violation",
             ms: now(),
-            meta: { phase: agentPhase, blocked_tool: tc.name, allowed_tools: availableToolNames },
+            meta: { phase: agentPhase, blocked_tool: tc.name, allowed_tools: enforcedToolNames },
           });
           continue;
         }

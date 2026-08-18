@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertLess } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   compactCatalogResultForLlm,
+  hasActionableSelectionReasoning,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
   toolNamesForAgentPhase,
@@ -25,11 +26,20 @@ Deno.test("agent phase: clarification is available only after discovery and befo
   assert(!toolNamesForAgentPhase("terminal_after_search").includes("propose_clarification"));
 });
 
+Deno.test("agent phase: quantified model reasoning removes optional clarification", () => {
+  const reasoning = "Для комнаты 25 м² нужен поток 3000–4000 люмен и около 30–40 Вт";
+  assert(hasActionableSelectionReasoning(reasoning));
+  assert(!toolNamesForAgentPhase("search_after_discovery", { reasoningRequiresCatalog: true }).includes("propose_clarification"));
+  assert(!hasActionableSelectionReasoning("Нужен кабель длиной 100 м, остальных данных пока нет"));
+  assert(toolNamesForAgentPhase("search_after_discovery", { reasoningRequiresCatalog: false }).includes("propose_clarification"));
+});
+
 Deno.test("agent phase: server rejects model-emitted tools outside the advertised phase", () => {
   assert(!isToolAllowedInAgentPhase("search_after_discovery", "discover_category"));
   assert(!isToolAllowedInAgentPhase("terminal_after_search", "search_catalog"));
   assert(!isToolAllowedInAgentPhase("terminal_after_search", "unknown_tool"));
   assert(isToolAllowedInAgentPhase("terminal_after_search", "render_products"));
+  assert(!isToolAllowedInAgentPhase("search_after_discovery", "propose_clarification", { reasoningRequiresCatalog: true }));
 });
 
 Deno.test("agent phase: non-empty ordinary selection search becomes terminal", () => {
