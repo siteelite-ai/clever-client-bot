@@ -28,7 +28,13 @@ export interface SearchFilterGuardResult {
   args: Record<string, unknown>;
   kept: Array<{ key: string; value: string }>;
   inferred: Array<{ key: string; value: string }>;
+  subsumed: Array<{ key: string; value: string; by_key: string; by_value: string }>;
   dropped: DroppedSearchFilter[];
+}
+
+export interface BooleanFilterFallbackResult {
+  args: Record<string, unknown>;
+  removed: Array<{ key: string; value: string }>;
 }
 
 function norm(value: string): string {
@@ -146,6 +152,64 @@ function explicitlyAffirmedByUser(value: string, userEvidence: string): boolean 
   )));
 }
 
+function significantValueTokens(value: string): string[] {
+  return norm(value)
+    .split(" ")
+    .filter((token) => token.length >= 3 || /\d/.test(token))
+    .map(stemRu);
+}
+
+function valueSubsumes(compound: string, narrower: string): boolean {
+  const compoundTokens = significantValueTokens(compound);
+  const narrowerTokens = significantValueTokens(narrower);
+  if (compoundTokens.length <= narrowerTokens.length || narrowerTokens.length === 0) return false;
+  return narrowerTokens.every((token) => compoundTokens.some((candidate) => (
+    token === candidate || tokensMatchByStem(token, candidate)
+  )));
+}
+
+const AFFIRMATIVE_VALUES = new Set(["да", "есть", "имеется", "присутствует", "yes", "true"]);
+const NEGATIVE_VALUES = new Set(["нет", "отсутствует", "no", "false"]);
+
+/**
+ * Remove only affirmative filters from facets whose live vocabulary is
+ * genuinely boolean. This is used after an empty strict search so products
+ * with sparse boolean metadata can still be retrieved and then proven by the
+ * criteria gate from their title/description. Negative requirements stay
+ * strict: absence of evidence is not evidence of absence.
+ */
+export function dropAffirmativeBooleanFilters(
+  args: Record<string, unknown>,
+  facets: SearchFacet[],
+): BooleanFilterFallbackResult {
+  if (args.mode !== "by_filter" || !args.options || typeof args.options !== "object") {
+    return { args, removed: [] };
+  }
+  const options = args.options as Record<string, unknown>;
+  const nextOptions: Record<string, string[]> = {};
+  const removed: Array<{ key: string; value: string }> = [];
+
+  for (const [key, rawValues] of Object.entries(options)) {
+    const values = Array.isArray(rawValues) ? rawValues.map(String).filter(Boolean) : [];
+    const facet = facets.find((candidate) => candidate.key === key);
+    const vocabulary = new Set((facet?.values ?? []).map((candidate) => norm(candidate.value)));
+    const isBooleanFacet = [...vocabulary].some((value) => AFFIRMATIVE_VALUES.has(value)) &&
+      [...vocabulary].some((value) => NEGATIVE_VALUES.has(value));
+    const removable = isBooleanFacet && values.length > 0 && values.every((value) => AFFIRMATIVE_VALUES.has(norm(value)));
+    if (removable) {
+      removed.push(...values.map((value) => ({ key, value })));
+      continue;
+    }
+    if (values.length > 0) nextOptions[key] = values;
+  }
+
+  if (removed.length === 0) return { args, removed };
+  const nextArgs = { ...args };
+  if (Object.keys(nextOptions).length > 0) nextArgs.options = nextOptions;
+  else delete nextArgs.options;
+  return { args: nextArgs, removed };
+}
+
 export function guardSearchFilters(
   args: Record<string, unknown>,
   facets: SearchFacet[],
@@ -153,12 +217,13 @@ export function guardSearchFilters(
   userEvidence: string = declaredReasoning,
 ): SearchFilterGuardResult {
   if (args.mode !== "by_filter") {
-    return { args, kept: [], inferred: [], dropped: [] };
+    return { args, kept: [], inferred: [], subsumed: [], dropped: [] };
   }
 
   const nextOptions: Record<string, string[]> = {};
   const kept: Array<{ key: string; value: string }> = [];
   const inferred: Array<{ key: string; value: string }> = [];
+  const subsumed: Array<{ key: string; value: string; by_key: string; by_value: string }> = [];
   const dropped: DroppedSearchFilter[] = [];
   const requestedOptions = args.options && typeof args.options === "object"
     ? args.options as Record<string, unknown>
@@ -224,8 +289,33 @@ export function guardSearchFilters(
     inferred.push(item);
   }
 
+  // A compound canonical value can already encode another explicit filter
+  // ("Бытовые светильники накладные" includes mounting="накладной"). Sending
+  // both to an inconsistent legacy catalog turns a valid request into an empty
+  // intersection. Keep the richer value and remove only a strictly subsumed
+  // option; the richer value remains an enforced render criterion.
+  for (const [key, values] of Object.entries({ ...nextOptions })) {
+    if (values.length === 0) continue;
+    const covering = Object.entries(nextOptions).find(([otherKey, otherValues]) => (
+      otherKey !== key && values.every((value) => otherValues.some((otherValue) => valueSubsumes(otherValue, value)))
+    ));
+    if (!covering) continue;
+    const [byKey, byValues] = covering;
+    for (const value of values) {
+      const byValue = byValues.find((candidate) => valueSubsumes(candidate, value));
+      if (byValue) subsumed.push({ key, value, by_key: byKey, by_value: byValue });
+    }
+    delete nextOptions[key];
+    for (let index = kept.length - 1; index >= 0; index--) {
+      if (kept[index].key === key) kept.splice(index, 1);
+    }
+    for (let index = inferred.length - 1; index >= 0; index--) {
+      if (inferred[index].key === key) inferred.splice(index, 1);
+    }
+  }
+
   const nextArgs = { ...args };
   if (Object.keys(nextOptions).length > 0) nextArgs.options = nextOptions;
   else delete nextArgs.options;
-  return { args: nextArgs, kept, inferred, dropped };
+  return { args: nextArgs, kept, inferred, subsumed, dropped };
 }

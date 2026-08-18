@@ -16,7 +16,7 @@ import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-t
 import { applyCriteriaGate, buildCriteriaQuery, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaWithReasoning } from "../_shared/v3-tools/criteria-reasoning.ts";
-import { guardSearchFilters } from "../_shared/v3-tools/search-filter-guard.ts";
+import { dropAffirmativeBooleanFilters, guardSearchFilters } from "../_shared/v3-tools/search-filter-guard.ts";
 import { guardCategoryScopeByReasoning } from "../_shared/v3-tools/category-reasoning-guard.ts";
 import { detectUserIntentMode, shouldSuppressNegativeSuitabilityCard } from "../_shared/v3-tools/intent-mode.ts";
 import {
@@ -2455,13 +2455,13 @@ async function runExpertLoop(
             steps.push({
               step: "v3_guard_search_filters",
               ms: now(),
-              meta: { kept: guarded.kept, inferred: guarded.inferred, dropped: guarded.dropped },
+              meta: { kept: guarded.kept, inferred: guarded.inferred, subsumed: guarded.subsumed, dropped: guarded.dropped },
             });
-          } else if (guarded.inferred.length > 0) {
+          } else if (guarded.inferred.length > 0 || guarded.subsumed.length > 0) {
             steps.push({
               step: "v3_guard_search_filters",
               ms: now(),
-              meta: { kept: guarded.kept, inferred: guarded.inferred, dropped: [] },
+              meta: { kept: guarded.kept, inferred: guarded.inferred, subsumed: guarded.subsumed, dropped: [] },
             });
           }
         }
@@ -2723,6 +2723,48 @@ async function runExpertLoop(
 
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
         let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
+
+        // Live catalogs commonly omit a boolean facet even when the feature is
+        // explicit in the product title/description. If a strict by-filter
+        // intersection is empty, broaden only affirmative boolean filters and
+        // keep every structural/price constraint. The removed feature remains
+        // in enforcedSearchCriteria, so render still requires catalog evidence.
+        if (
+          tc.name === "search_catalog" &&
+          result.ok &&
+          Number((result as { total?: number }).total ?? 0) === 0 &&
+          lastDiscover
+        ) {
+          const relaxed = dropAffirmativeBooleanFilters(runArgs, lastDiscover.facets);
+          if (relaxed.removed.length > 0) {
+            const originalPerPage = Number(relaxed.args.per_page);
+            const fallbackArgs: Record<string, unknown> = {
+              ...relaxed.args,
+              per_page: Number.isFinite(originalPerPage) ? Math.max(20, originalPerPage) : 20,
+              ...(
+                typeof relaxed.args.max_price === "number" &&
+                relaxed.args.sort_cheapest !== true &&
+                relaxed.args.sort_expensive !== true
+                  ? { sort_expensive: true }
+                  : {}
+              ),
+            };
+            const fallbackResult = await runTool("search_catalog", fallbackArgs, ctx);
+            steps.push({
+              step: "v3_boolean_facet_evidence_fallback",
+              ms: now(),
+              meta: {
+                removed: relaxed.removed,
+                strict_total: 0,
+                fallback_total: fallbackResult.ok ? Number((fallbackResult as { total?: number }).total ?? 0) : 0,
+                fallback_ok: fallbackResult.ok,
+              },
+            });
+            if (fallbackResult.ok && Number((fallbackResult as { total?: number }).total ?? 0) > 0) {
+              result = fallbackResult;
+            }
+          }
+        }
         if (flags.anchorFilterEnabled && tc.name === "search_catalog" && replacementIntent) {
           const anchorId = getAnchorExcludeId();
           const filtered = filterAnchorFromSearchResult(result, anchorId, (runArgs as Record<string, unknown>).mode);

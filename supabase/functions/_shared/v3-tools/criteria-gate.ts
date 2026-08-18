@@ -175,14 +175,34 @@ function looseStem(token: string): string {
   return token.replace(/(?:ыми|ими|ого|его|ому|ему|ами|ями|ая|яя|ое|ее|ой|ей|ом|ем|ую|юю|ый|ий|ых|их|ов|ев|ам|ям|ах|ях|а|я|о|е|ы|и|у|ю)$/u, "");
 }
 
+function semanticStem(token: string): string {
+  const stem = looseStem(token);
+  if (["датчик", "сенсор", "sensor", "detector"].includes(stem)) return "__sensor__";
+  return stem;
+}
+
 function stringEvidenceMatches(wanted: string, evidence: string): boolean {
   const want = normalizeKey(wanted);
   const got = normalizeKey(evidence);
   if (!want || !got) return false;
   if (got.includes(want) || want.includes(got)) return true;
-  const gotStems = got.split(/\s+/u).filter((x) => x.length >= 3).map(looseStem);
-  const wantStems = want.split(/\s+/u).filter((x) => x.length >= 3).map(looseStem);
-  return wantStems.length > 0 && wantStems.every((stem) => gotStems.some((actual) => actual === stem || actual.startsWith(stem) || stem.startsWith(actual)));
+  const gotStems = got.split(/\s+/u).filter((x) => x.length >= 3).map(semanticStem);
+  const wantStems = want.split(/\s+/u).filter((x) => x.length >= 3).map(semanticStem);
+  return wantStems.length > 0 && wantStems.every((stem) => gotStems.some((actual) => {
+    if (actual === stem || actual.startsWith(stem) || stem.startsWith(actual)) return true;
+    // Russian derivations can change the suffix after a short stable root:
+    // "движения" ↔ "движущихся". Accept that only for long words with a
+    // shared root of at least four letters; short unrelated tokens remain
+    // exact-only.
+    if (actual.length < 6 || stem.length < 6) return false;
+    let shared = 0;
+    while (shared < actual.length && shared < stem.length && actual[shared] === stem[shared]) shared++;
+    return shared >= 4;
+  }));
+}
+
+function isAffirmativeValue(value: string): boolean {
+  return ["да", "есть", "имеется", "присутствует", "yes", "true"].includes(normalizeKey(value));
 }
 
 function expectedLabel(c: Criterion): string {
@@ -213,6 +233,14 @@ export function checkCriterion(product: ProductRef, c: Criterion): CriterionChec
     if (c.op === "eq" && typeof c.value === "string") {
       const want = normalizeKey(c.value);
       const evidence = productEvidenceText(product);
+      // Boolean facets are often sparse in the source catalog even when the
+      // feature is explicitly described in the product title or description.
+      // For an affirmative value, the criterion key carries the feature name
+      // (e.g. "С датчиком движения"); require that full key to be evidenced
+      // instead of looking for the uninformative word "да".
+      if (isAffirmativeValue(c.value) && stringEvidenceMatches(c.key, evidence)) {
+        return { key: c.key, verdict: "pass", expected, actual: c.key };
+      }
       if (want && stringEvidenceMatches(want, evidence)) {
         return { key: c.key, verdict: "pass", expected, actual: c.value };
       }
