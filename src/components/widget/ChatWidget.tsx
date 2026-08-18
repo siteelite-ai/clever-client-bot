@@ -92,12 +92,17 @@ async function streamChat({
       }
     }
 
+    // Idempotency key required by both pipelines.
+    const messageId = globalThis.crypto?.randomUUID?.() ??
+      `${Date.now()}-${Math.random()}`;
+
     // Body shape depends on pipeline.
-    // V3 contract: { message, sessionId, history:[{role,content}] }.
+    // V3 contract: { message, messageId, sessionId, history:[{role,content}] }.
     // V1/V2: backward-compat { conversationId, query, messages, dialogSlots, messageId }.
     const body = pipeline === 'v3'
       ? {
           message: query,
+          messageId,
           sessionId: conversationId,
           history: messages
             .filter(m => m.role === 'user' || m.role === 'assistant')
@@ -110,8 +115,9 @@ async function streamChat({
           query,
           messages: messages.map(m => ({ role: m.role, content: m.content })),
           dialogSlots: activeSlots,
-          messageId: (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`),
+          messageId,
         };
+
 
     const resp = await fetch(endpointUrl, {
       method: 'POST',
