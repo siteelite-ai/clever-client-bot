@@ -28,6 +28,7 @@ export interface DroppedSearchFilter {
 export interface SearchFilterGuardResult {
   args: Record<string, unknown>;
   kept: Array<{ key: string; value: string }>;
+  user_backed: Array<{ key: string; value: string }>;
   inferred: Array<{ key: string; value: string }>;
   subsumed: Array<{ key: string; value: string; by_key: string; by_value: string }>;
   dropped: DroppedSearchFilter[];
@@ -278,11 +279,12 @@ export function guardSearchFilters(
   userEvidence: string = declaredReasoning,
 ): SearchFilterGuardResult {
   if (args.mode !== "by_filter") {
-    return { args, kept: [], inferred: [], subsumed: [], dropped: [] };
+    return { args, kept: [], user_backed: [], inferred: [], subsumed: [], dropped: [] };
   }
 
   const nextOptions: Record<string, string[]> = {};
   const kept: Array<{ key: string; value: string }> = [];
+  const userBacked: Array<{ key: string; value: string }> = [];
   const inferred: Array<{ key: string; value: string }> = [];
   const subsumed: Array<{ key: string; value: string; by_key: string; by_value: string }> = [];
   const dropped: DroppedSearchFilter[] = [];
@@ -320,6 +322,7 @@ export function guardSearchFilters(
       nextOptions[key] ??= [];
       if (!nextOptions[key].includes(canonical)) nextOptions[key].push(canonical);
       kept.push({ key, value: canonical });
+      if (explicitlyAffirmedByUser(canonical, userEvidence)) userBacked.push({ key, value: canonical });
     }
   }
 
@@ -347,6 +350,7 @@ export function guardSearchFilters(
     nextOptions[facet.key] = [value];
     const item = { key: facet.key, value };
     kept.push(item);
+    userBacked.push(item);
     inferred.push(item);
   }
 
@@ -373,10 +377,13 @@ export function guardSearchFilters(
     for (let index = inferred.length - 1; index >= 0; index--) {
       if (inferred[index].key === key) inferred.splice(index, 1);
     }
+    for (let index = userBacked.length - 1; index >= 0; index--) {
+      if (userBacked[index].key === key) userBacked.splice(index, 1);
+    }
   }
 
   const nextArgs = { ...args };
   if (Object.keys(nextOptions).length > 0) nextArgs.options = nextOptions;
   else delete nextArgs.options;
-  return { args: nextArgs, kept, inferred, subsumed, dropped };
+  return { args: nextArgs, kept, user_backed: userBacked, inferred, subsumed, dropped };
 }

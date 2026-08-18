@@ -1841,6 +1841,7 @@ async function runExpertLoop(
   // and then used for search. It is merged into render criteria server-side so
   // the cards cannot silently diverge from the preceding reasoning.
   let enforcedSearchCriteria: Criterion[] = [];
+  let userBackedSearchCriteria: Criterion[] = [];
   let reasoningBackedSearch: { ids: string[]; total: number; criteria: Criterion[] } | null = null;
   // Session-wide whitelist of category pagetitles discovered via discover_category.
   // Source of truth for `category` / `category_in` in search_catalog calls.
@@ -2478,9 +2479,14 @@ async function runExpertLoop(
             : { args: guarded.args, removed: [] };
           const removedIdentityKeys = new Set(identityGuard.removed.map((item) => item.key));
           const effectiveKept = guarded.kept.filter((item) => !removedIdentityKeys.has(item.key));
+          const effectiveUserBacked = guarded.user_backed.filter((item) => !removedIdentityKeys.has(item.key));
           const effectiveInferred = guarded.inferred.filter((item) => !removedIdentityKeys.has(item.key));
           tc.args = identityGuard.args;
           enforcedSearchCriteria = effectiveKept.map(({ key, value }) => {
+            const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
+            return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
+          });
+          userBackedSearchCriteria = effectiveUserBacked.map(({ key, value }) => {
             const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
             return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
           });
@@ -2905,7 +2911,7 @@ async function runExpertLoop(
               semanticBackedSearch = {
                 ids: [...ids],
                 total: r2.total,
-                criteria: enforcedSearchCriteria.map((criterion) => ({ ...criterion })),
+                criteria: userBackedSearchCriteria.map((criterion) => ({ ...criterion })),
                 label: sourceLabel,
               };
             }
@@ -3124,7 +3130,7 @@ async function runExpertLoop(
         semanticBackedSearch = {
           ids,
           total: recovered.total,
-          criteria: enforcedSearchCriteria.map((criterion) => ({ ...criterion })),
+          criteria: userBackedSearchCriteria.map((criterion) => ({ ...criterion })),
           label: query,
         };
         steps.push({

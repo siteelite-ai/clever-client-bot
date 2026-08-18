@@ -58,6 +58,23 @@ Deno.test("filter guard accepts a criterion declared by the consultant", () => {
   assertEquals(result.args.options, { kind: ["Бытовые светильники накладные"] });
 });
 
+Deno.test("filter guard distinguishes user-backed constraints from model guidance", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { brand: ["Gauss"], style: ["Современный"] } },
+    [
+      { key: "brand", values: [{ value: "Gauss" }] },
+      { key: "style", values: [{ value: "Современный" }] },
+    ],
+    "Клиент просит Gauss. Для него я дополнительно ищу современный стиль.",
+    "Нужен товар Gauss.",
+  );
+  assertEquals(result.kept, [
+    { key: "brand", value: "Gauss" },
+    { key: "style", value: "Современный" },
+  ]);
+  assertEquals(result.user_backed, [{ key: "brand", value: "Gauss" }]);
+});
+
 Deno.test("filter guard accepts canonical value when reasoning uses inflected forms", () => {
   const result = guardSearchFilters(
     { mode: "by_filter", options: { kind: ["Бытовые светильники накладные"] } },
