@@ -1,5 +1,9 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { groundedCategoryRecoveryQueries, guardCategoryScopeByReasoning } from "./category-reasoning-guard.ts";
+import {
+  groundedCategoryRecoveryQueries,
+  groundedTokenRecoveryQueries,
+  guardCategoryScopeByReasoning,
+} from "./category-reasoning-guard.ts";
 
 const discovered = {
   category: { pagetitle: "Светильники" },
@@ -60,4 +64,8 @@ Deno.test("terminal category retry uses only leaves grounded in the reasoning", 
     ],
   }, "Ищу современную люстру для зала.");
   assertEquals(queries, ["Люстры"]);
+});
+
+Deno.test("terminal token ladder decomposes a failed semantic phrase", () => {
+  assertEquals(groundedTokenRecoveryQueries("современные люстры"), ["современные", "люстры"]);
 });

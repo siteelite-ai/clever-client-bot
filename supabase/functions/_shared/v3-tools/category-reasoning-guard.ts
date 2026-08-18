@@ -97,6 +97,15 @@ export function groundedCategoryRecoveryQueries(
   return umbrellaGrounded ? [umbrella] : [];
 }
 
+/**
+ * Last-resort query ladder for a failed multiword semantic query. Each token is
+ * still only a hint; callers must require the same token in catalog evidence.
+ */
+export function groundedTokenRecoveryQueries(searchQuery: string, limit = 8): string[] {
+  const tokens = significantTokens(searchQuery);
+  return [...new Set(tokens)].slice(0, Math.max(1, limit));
+}
+
 export function guardCategoryScopeByReasoning(
   args: Record<string, unknown>,
   discovered: DiscoveredCategoryScope | null,
