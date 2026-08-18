@@ -135,6 +135,21 @@ Deno.test("filter guard can build options from unambiguous user evidence", () =>
   assertEquals(result.inferred, [{ key: "kind", value: "Бытовые светильники накладные" }]);
 });
 
+Deno.test("filter guard never infers a brand from an ordinary word in free prose", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", category: "Светильники" },
+    [
+      { key: "brend__brend", caption: "Бренд", values: [{ value: "Свет" }, { value: "Gauss" }] },
+      { key: "mount", caption: "Способ монтажа", values: [{ value: "потолочный" }] },
+    ],
+    "Для гостиной 25 м² нужно 3750–5000 люмен общего света; ищу потолочный светильник.",
+    "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?",
+  );
+
+  assertEquals(result.args, { mode: "by_filter", category: "Светильники" });
+  assertEquals(result.inferred, []);
+});
+
 Deno.test("filter guard does not guess when several values are explicit", () => {
   const result = guardSearchFilters(
     { mode: "by_filter" },
