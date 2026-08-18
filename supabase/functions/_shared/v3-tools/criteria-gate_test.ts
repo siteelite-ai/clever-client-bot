@@ -47,6 +47,28 @@ Deno.test("findTrait: exact and partial label match, миссинг", () => {
   assertEquals(findTrait(p, "параметр гамма"), null);
 });
 
+Deno.test("findTrait: first-class catalog price is evidence for budget criteria", () => {
+  const p = { ...product("1", []), price: 2800 };
+  assertEquals(findTrait(p, "Цена")?.value, "2800");
+  assertEquals(findTrait(p, "Стоимость товара")?.value, "2800");
+});
+
+Deno.test("checkCriterion: price max uses ProductRef.price without a short trait", () => {
+  const withinBudget = { ...product("1", []), price: 2800 };
+  const overBudget = { ...product("2", []), price: 4300 };
+  const criterion: Criterion = { key: "Цена", op: "max", value: 4000, unit: "тенге", level: "A" };
+
+  assertEquals(checkCriterion(withinBudget, criterion).verdict, "pass");
+  assertEquals(checkCriterion(overBudget, criterion).verdict, "fail");
+
+  const report = applyCriteriaGate([withinBudget, overBudget], [criterion]);
+  assertEquals(report.passed_ids, ["1"]);
+  assertEquals(report.unverifiable_keys, []);
+  assertEquals(report.rejected, [
+    { id: "2", key: "Цена", expected: "≤ 4000 тенге", actual: "4300" },
+  ]);
+});
+
 Deno.test("checkCriterion: range overlap → pass, disjoint → fail", () => {
   const p = product("1", ["Параметр альфа: 12-15 ед"]);
   const pass: Criterion = { key: "параметр альфа", op: "range", value: [12, 15], unit: "ед" };
