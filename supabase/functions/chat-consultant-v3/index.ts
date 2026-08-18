@@ -22,6 +22,8 @@ import { detectUserIntentMode, shouldSuppressNegativeSuitabilityCard } from "../
 import {
   buildDeterministicEvidenceAnswer,
   buildRecentProductEvidencePrompt,
+  compactRecentProducts,
+  extractRenderedProductTitles,
   isEvidenceOnlyFollowup,
   loadRecentProductEvidence,
   persistRecentProductEvidence,
@@ -31,7 +33,7 @@ import { META_DECLINE_TEXT, isMetaSelfQuestion, redactInternals } from "../_shar
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
-import type { ProductCache, SearchCatalogOk, ToolResult, ToolSideEffect } from "../_shared/v3-tools/types.ts";
+import type { ProductCache, ProductFull, SearchCatalogOk, ToolResult, ToolSideEffect } from "../_shared/v3-tools/types.ts";
 import {
   MAX_REQUEST_BODY_BYTES,
   validateChatRequestBody,
@@ -3012,11 +3014,13 @@ async function runExpertLoop(
     }
 
 
-    // If the model loops on the same non-empty, reasoning-guarded by_filter
-    // result, render only the IDs that still pass the server evidence gate.
+    // If the model ends without rendering a non-empty, reasoning-guarded
+    // by_filter result, render only the IDs that still pass the server evidence
+    // gate. This applies to every terminal path (no-progress, criteria dead-end,
+    // or step budget): the terminal label must not discard a proven candidate.
     // This is not a broad last-chance pool: every ID came from canonical facet
     // values declared in the consultant's reasoning.
-    if (productsRendered === 0 && noProgressBreak && reasoningBackedSearch) {
+    if (productsRendered === 0 && reasoningBackedSearch) {
       const candidateProducts = reasoningBackedSearch.ids
         .map((id) => ctx.cache.get(id))
         .filter((product): product is NonNullable<typeof product> => Boolean(product));
@@ -3241,7 +3245,35 @@ Deno.serve(async (req) => {
         jargonAxialModifiersEnabled: settings.v3_jargon_axial_modifiers_enabled,
       };
 
-      const recentProductEvidence = await loadRecentProductEvidence(supabase, sessionId);
+      let recentProductEvidence = await loadRecentProductEvidence(supabase, sessionId);
+      if (recentProductEvidence.length === 0 && isEvidenceOnlyFollowup(userMessage)) {
+        const lookupTitles = extractRenderedProductTitles(history);
+        const recoveredProducts: ProductFull[] = [];
+        for (const pagetitle of lookupTitles) {
+          const recovered = await runTool("search_catalog", {
+            mode: "by_pagetitle",
+            pagetitle,
+            per_page: 3,
+          }, ctx);
+          if (!recovered.ok || recovered.tool !== "search_catalog") continue;
+          const wanted = pagetitle.toLowerCase().replace(/ё/g, "е").trim();
+          const exact = recovered.results.find((product) =>
+            product.pagetitle.toLowerCase().replace(/ё/g, "е").trim() === wanted
+          );
+          if (!exact) continue;
+          const full = ctx.cache.get(String(exact.id));
+          if (full) recoveredProducts.push(full);
+        }
+        recentProductEvidence = compactRecentProducts(recoveredProducts);
+        if (recentProductEvidence.length > 0) {
+          steps.push({
+            step: "v3_recent_product_evidence_recovered",
+            ms: Date.now() - t0,
+            meta: { count: recentProductEvidence.length, lookup_titles: lookupTitles.length },
+          });
+          await persistRecentProductEvidence(supabase, sessionId, recoveredProducts);
+        }
+      }
       if (recentProductEvidence.length > 0) {
         steps.push({ step: "v3_recent_product_evidence_loaded", ms: Date.now() - t0, meta: { count: recentProductEvidence.length } });
       }
@@ -3254,6 +3286,15 @@ Deno.serve(async (req) => {
         if (isMetaSelfQuestion(userMessage)) {
           steps.push({ step: "v3_meta_question_declined", ms: Date.now() - t0, meta: { user_message: userMessage } });
           send({ type: "delta", content: META_DECLINE_TEXT });
+          productsCount = 0;
+        } else if (recentProductEvidence.length > 0 && isEvidenceOnlyFollowup(userMessage)) {
+          const answer = buildDeterministicEvidenceAnswer(recentProductEvidence);
+          steps.push({
+            step: "v3_deterministic_evidence_followup",
+            ms: Date.now() - t0,
+            meta: { count: recentProductEvidence.length },
+          });
+          send({ type: "delta", content: answer });
           productsCount = 0;
         } else {
           const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0, {

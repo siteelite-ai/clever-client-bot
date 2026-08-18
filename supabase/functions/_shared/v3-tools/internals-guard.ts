@@ -24,8 +24,8 @@ export const META_DECLINE_TEXT =
 
 /** Нейтральная замена, когда служебная лексика просочилась в текст ответа. */
 export const INTERNALS_REDACTED_TEXT =
-  "Не удалось подтвердить подходящие товары по данным каталога. " +
-  "Уточните один ключевой параметр или бюджет — и я попробую подобрать точнее.";
+  "Часть ответа содержала служебные сведения, поэтому я её скрыл. " +
+  "Могу продолжить по существу: уточнить характеристики, цену или наличие нужного товара.";
 
 function norm(s: string): string {
   return (s || "").toLowerCase().replace(/ё/g, "е");
@@ -93,7 +93,7 @@ export function redactInternals(text: string): RedactResult {
     if (re.test(n)) matched.push(re.source.slice(0, 40));
   }
   // Идентификаторы в бэктиках и snake_case-слова — структурный признак кода.
-  if (/`[A-Za-z_][A-Za-z0-9_.\[\]]*`/.test(raw)) matched.push("backticked_identifier");
+  if (/`[A-Za-z_][A-Za-z0-9_.[\]]*`/.test(raw)) matched.push("backticked_identifier");
   if (/\b[a-z]{3,}_[a-z]{3,}(?:_[a-z]+)*\b/.test(raw)) matched.push("snake_case_identifier");
 
   if (matched.length > 0) {

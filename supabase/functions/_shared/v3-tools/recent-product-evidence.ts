@@ -22,6 +22,39 @@ export interface RecentProductEvidence {
   shown_at: string;
 }
 
+interface EvidenceHistoryMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/**
+ * Extract only product titles that the widget previously rendered as links to
+ * a controlled 220volt product page. The title is merely a lookup hint: callers
+ * must confirm it with a fresh catalog request before treating it as evidence.
+ */
+export function extractRenderedProductTitles(
+  history: EvidenceHistoryMessage[],
+  limit = 5,
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const message of [...history].reverse()) {
+    if (message.role !== "assistant") continue;
+    const matches = message.content.matchAll(
+      /-\s+\*\*\[([^\]\r\n]{1,300})\]\((https:\/\/220volt\.kz\/catalog\/[^)\s]+)\)\*\*/giu,
+    );
+    for (const match of matches) {
+      const title = cleanText(match[1], 300);
+      const key = title.toLowerCase().replace(/ё/g, "е");
+      if (!title || seen.has(key)) continue;
+      seen.add(key);
+      out.push(title);
+      if (out.length >= Math.max(1, Math.min(limit, MAX_PRODUCTS))) return out;
+    }
+  }
+  return out;
+}
+
 export function isEvidenceOnlyFollowup(message: string): boolean {
   const normalized = cleanText(message, 800).toLowerCase().replace(/ё/g, "е");
   if (!normalized) return false;

@@ -3,6 +3,7 @@ import {
   buildDeterministicEvidenceAnswer,
   buildRecentProductEvidencePrompt,
   compactRecentProducts,
+  extractRenderedProductTitles,
   isEvidenceOnlyFollowup,
 } from "./recent-product-evidence.ts";
 import type { ProductFull } from "./types.ts";
@@ -60,4 +61,18 @@ Deno.test("deterministic evidence answer contains only cached facts and uncertai
   assertEquals(answer.includes("Мощность: 70 Вт"), true);
   assertEquals(answer.includes("гарантировать его нельзя"), true);
   assertEquals(answer.includes("https://"), false);
+});
+
+Deno.test("rendered product titles are only lookup hints from controlled product links", () => {
+  const titles = extractRenderedProductTitles([
+    { role: "user", content: "Покажи светильник" },
+    {
+      role: "assistant",
+      content: [
+        "- **[Gauss HALL с сенсором](https://220volt.kz/catalog/light/fixtures/gauss-hall/)**",
+        "- **[Внешняя подмена](https://example.com/catalog/light/item/)**",
+      ].join("\n"),
+    },
+  ]);
+  assertEquals(titles, ["Gauss HALL с сенсором"]);
 });

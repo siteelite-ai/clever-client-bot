@@ -46,8 +46,8 @@ Deno.test("redact: страховочная замена остаётся отв
   assert(r.redacted);
   assert(!answer.includes("внутренн"));
   assert(!answer.includes("механик"));
-  assertStringIncludes(answer, "не удалось подтвердить");
-  assertStringIncludes(answer, "уточните");
+  assertStringIncludes(answer, "служебные сведения");
+  assertStringIncludes(answer, "характеристики");
 });
 
 Deno.test("redact: нормальные товарные ответы не трогаем", () => {
