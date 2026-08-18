@@ -41,6 +41,12 @@ import {
 import { META_DECLINE_TEXT, isMetaSelfQuestion, redactInternals } from "../_shared/v3-tools/internals-guard.ts";
 import { CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest } from "../_shared/v3-tools/clean-power-safety.ts";
 import {
+  classifyHouseholdMotionLightRequest,
+  HOUSEHOLD_MOTION_LIGHT_EMPTY,
+  HOUSEHOLD_MOTION_LIGHT_INTRO,
+  verifiedHouseholdMotionLights,
+} from "../_shared/v3-tools/household-motion-light-policy.ts";
+import {
   classifyOutdoorPoeIntent,
   OUTDOOR_POE_ASSESSMENT_ANSWER,
   OUTDOOR_POE_EXPLANATION_ANSWER,
@@ -1770,6 +1776,77 @@ const OUTDOOR_POE_CATALOG_QUERIES = [
   "кабель Cat.5E LDPE",
   "кабель витая пара Cat.5E",
 ];
+
+const HOUSEHOLD_MOTION_LIGHT_CATALOG_QUERIES = [
+  "Gauss HALL",
+  "светильник Gauss HALL",
+  "накладной светильник с датчиком движения",
+  "светильник с микроволновым сенсором",
+];
+
+async function selectVerifiedHouseholdMotionLights(
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+  maxPrice: number | null,
+): Promise<ProductFull[]> {
+  const started = Date.now();
+  const searches = await Promise.all(
+    HOUSEHOLD_MOTION_LIGHT_CATALOG_QUERIES.map((query) => executeSearchCatalog({
+      mode: "by_query",
+      query,
+      min_price: 1,
+      ...(maxPrice === null ? {} : { max_price: maxPrice }),
+      per_page: 50,
+    }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache)),
+  );
+  const candidates: ProductRef[] = searches.flatMap((result) => result.ok ? result.results : []);
+  const verified = verifiedHouseholdMotionLights(candidates, maxPrice);
+  const elapsed = Date.now() - started;
+
+  send({
+    type: "tool_event",
+    tool: "search_catalog",
+    phase: "result",
+    duration_ms: elapsed,
+    summary: `Household motion-light policy: подтверждено ${verified.length}`,
+  });
+
+  if (verified.length === 0) {
+    send({ type: "delta", content: HOUSEHOLD_MOTION_LIGHT_EMPTY });
+    steps.push({
+      step: "v3_household_motion_light_empty",
+      ms: Date.now() - t0,
+      meta: {
+        queries: HOUSEHOLD_MOTION_LIGHT_CATALOG_QUERIES,
+        max_price: maxPrice,
+        catalog_totals: searches.map((result) => result.ok ? result.total : 0),
+        candidates: candidates.length,
+        duration_ms: elapsed,
+      },
+    });
+    return [];
+  }
+
+  const ids = verified.map((product) => product.id);
+  const rendered = executeRenderProducts({ product_ids: ids, total_available: verified.length }, ctx.cache);
+  if (!rendered.ok) {
+    send({ type: "delta", content: HOUSEHOLD_MOTION_LIGHT_EMPTY });
+    steps.push({ step: "v3_household_motion_light_render_failed", ms: Date.now() - t0, meta: { error_code: rendered.error_code } });
+    return [];
+  }
+
+  send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: verified.length });
+  steps.push({
+    step: "v3_household_motion_light_rendered",
+    ms: Date.now() - t0,
+    meta: { candidates: candidates.length, verified: verified.length, rendered: rendered.rendered_count, duration_ms: elapsed, max_price: maxPrice },
+  });
+  return ids
+    .map((id) => ctx.cache.get(id))
+    .filter((product): product is ProductFull => Boolean(product));
+}
 
 async function selectVerifiedOutdoorPoeProducts(
   ctx: ToolContext,
@@ -3514,6 +3591,7 @@ Deno.serve(async (req) => {
 
       try {
         const outdoorPoeIntent = classifyOutdoorPoeIntent(userMessage, history);
+        const householdMotionLightRequest = classifyHouseholdMotionLightRequest(userMessage);
         // GUARD v3_meta_question_declined: вопрос про устройство сервиса
         // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
         // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
@@ -3526,6 +3604,17 @@ Deno.serve(async (req) => {
           steps.push({ step: "v3_clean_power_safety_answer", ms: Date.now() - t0 });
           send({ type: "delta", content: CLEAN_POWER_SAFETY_ANSWER });
           productsCount = 0;
+        } else if (householdMotionLightRequest) {
+          send({ type: "delta", content: HOUSEHOLD_MOTION_LIGHT_INTRO });
+          const selectedProducts = await selectVerifiedHouseholdMotionLights(
+            ctx,
+            send,
+            steps,
+            t0,
+            householdMotionLightRequest.maxPrice,
+          );
+          productsCount = selectedProducts.length;
+          await persistRecentProductEvidence(supabase, sessionId, selectedProducts);
         } else if (outdoorPoeIntent === "assessment") {
           steps.push({ step: "v3_outdoor_poe_assessment", ms: Date.now() - t0 });
           send({ type: "delta", content: OUTDOOR_POE_ASSESSMENT_ANSWER });
