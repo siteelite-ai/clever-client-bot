@@ -27,6 +27,7 @@ export interface DroppedSearchFilter {
 export interface SearchFilterGuardResult {
   args: Record<string, unknown>;
   kept: Array<{ key: string; value: string }>;
+  inferred: Array<{ key: string; value: string }>;
   dropped: DroppedSearchFilter[];
 }
 
@@ -131,21 +132,39 @@ function contradictedByUser(value: string, userEvidence: string): boolean {
   return false;
 }
 
+function explicitlyAffirmedByUser(value: string, userEvidence: string): boolean {
+  if (contradictedByUser(value, userEvidence)) return false;
+  const valueTokens = norm(value)
+    .split(" ")
+    .filter((token) => token.length >= 3 || /\d/.test(token));
+  const evidenceTokens = norm(userEvidence)
+    .split(" ")
+    .filter((token) => token.length >= 3 || /\d/.test(token));
+  if (valueTokens.length === 0 || evidenceTokens.length === 0) return false;
+  return valueTokens.every((token) => evidenceTokens.some((candidate) => (
+    token === candidate || tokensMatchByStem(token, candidate)
+  )));
+}
+
 export function guardSearchFilters(
   args: Record<string, unknown>,
   facets: SearchFacet[],
   declaredReasoning: string,
   userEvidence: string = declaredReasoning,
 ): SearchFilterGuardResult {
-  if (args.mode !== "by_filter" || !args.options || typeof args.options !== "object") {
-    return { args, kept: [], dropped: [] };
+  if (args.mode !== "by_filter") {
+    return { args, kept: [], inferred: [], dropped: [] };
   }
 
   const nextOptions: Record<string, string[]> = {};
   const kept: Array<{ key: string; value: string }> = [];
+  const inferred: Array<{ key: string; value: string }> = [];
   const dropped: DroppedSearchFilter[] = [];
+  const requestedOptions = args.options && typeof args.options === "object"
+    ? args.options as Record<string, unknown>
+    : {};
 
-  for (const [key, rawValues] of Object.entries(args.options as Record<string, unknown>)) {
+  for (const [key, rawValues] of Object.entries(requestedOptions)) {
     const values = Array.isArray(rawValues) ? rawValues.map(String).filter((v) => v.trim()) : [];
     const facet = facets.find((candidate) => candidate.key === key);
     if (!facet) {
@@ -178,8 +197,35 @@ export function guardSearchFilters(
     }
   }
 
+  // Complete, but never guess, facet filters that the customer stated
+  // explicitly. LLM tool arguments are probabilistic and may omit one of the
+  // constraints it correctly described (for example, household use while
+  // retaining mounting type and a motion sensor). The live discovery result
+  // is the vocabulary: add a missing facet only when exactly one canonical
+  // value in that facet is evidenced by the customer's own words.
+  //
+  // Boolean labels such as "да"/"нет" are intentionally excluded: a generic
+  // conversational "да" is not proof of an arbitrary boolean product facet.
+  // Pure numbers are also excluded because a budget can accidentally equal an
+  // unrelated wattage, length, or pack-size facet.
+  for (const facet of facets) {
+    if (nextOptions[facet.key]?.length) continue;
+    const evidenced = facet.values.filter((candidate) => {
+      const normalized = norm(candidate.value);
+      if (!normalized || ["да", "нет", "есть", "отсутствует"].includes(normalized)) return false;
+      if (!/[a-zа-я]/iu.test(normalized)) return false;
+      return explicitlyAffirmedByUser(candidate.value, userEvidence);
+    });
+    if (evidenced.length !== 1) continue;
+    const value = evidenced[0].value;
+    nextOptions[facet.key] = [value];
+    const item = { key: facet.key, value };
+    kept.push(item);
+    inferred.push(item);
+  }
+
   const nextArgs = { ...args };
   if (Object.keys(nextOptions).length > 0) nextArgs.options = nextOptions;
   else delete nextArgs.options;
-  return { args: nextArgs, kept, dropped };
+  return { args: nextArgs, kept, inferred, dropped };
 }
