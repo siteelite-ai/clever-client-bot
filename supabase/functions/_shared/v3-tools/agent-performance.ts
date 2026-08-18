@@ -27,14 +27,42 @@ const TERMINAL_AFTER_SEARCH_TOOLS: readonly ToolName[] = [
   "note_state",
 ];
 
-export function toolNamesForAgentPhase(phase: AgentPhase): readonly ToolName[] {
-  if (phase === "search_after_discovery") return SEARCH_AFTER_DISCOVERY_TOOLS;
+export interface AgentToolPolicy {
+  reasoningRequiresCatalog?: boolean;
+}
+
+export function toolNamesForAgentPhase(phase: AgentPhase, policy: AgentToolPolicy = {}): readonly ToolName[] {
+  if (phase === "search_after_discovery") {
+    return policy.reasoningRequiresCatalog
+      ? SEARCH_AFTER_DISCOVERY_TOOLS.filter((tool) => tool !== "propose_clarification")
+      : SEARCH_AFTER_DISCOVERY_TOOLS;
+  }
   if (phase === "terminal_after_search") return TERMINAL_AFTER_SEARCH_TOOLS;
   return OPEN_TOOLS;
 }
 
-export function isToolAllowedInAgentPhase(phase: AgentPhase, tool: string): tool is ToolName {
-  return (toolNamesForAgentPhase(phase) as readonly string[]).includes(tool);
+export function isToolAllowedInAgentPhase(phase: AgentPhase, tool: string, policy: AgentToolPolicy = {}): tool is ToolName {
+  return (toolNamesForAgentPhase(phase, policy) as readonly string[]).includes(tool);
+}
+
+/**
+ * A model that has already translated the task into multiple measurable axes
+ * has enough information for a first catalog recommendation. This deliberately
+ * reads the model's reasoning instead of duplicating domain heuristics on the
+ * server. A single measurement can still be ambiguous; two distinct units are
+ * a conservative signal that the reasoning is actionable.
+ */
+export function hasActionableSelectionReasoning(text: string): boolean {
+  const units = new Set<string>();
+  const input = String(text ?? "").toLocaleLowerCase("ru").replace(/ё/g, "е");
+  const quantified = /\d+(?:[.,]\d+)?(?:\s*[–—-]\s*\d+(?:[.,]\d+)?)?\s*([a-zа-я°]+[²³]?)/giu;
+  let match: RegExpExecArray | null;
+  while ((match = quantified.exec(input)) !== null) {
+    const unit = match[1].replace(/\s+/g, "");
+    if (/^(шт|штук|раз|года?|лет|мин|сек)$/.test(unit)) continue;
+    units.add(unit);
+  }
+  return units.size >= 2;
 }
 
 export interface AgentPhaseEvent {
