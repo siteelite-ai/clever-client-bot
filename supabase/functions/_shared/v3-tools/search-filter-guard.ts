@@ -193,8 +193,12 @@ export function dropAffirmativeBooleanFilters(
     const values = Array.isArray(rawValues) ? rawValues.map(String).filter(Boolean) : [];
     const facet = facets.find((candidate) => candidate.key === key);
     const vocabulary = new Set((facet?.values ?? []).map((candidate) => norm(candidate.value)));
-    const isBooleanFacet = [...vocabulary].some((value) => AFFIRMATIVE_VALUES.has(value)) &&
-      [...vocabulary].some((value) => NEGATIVE_VALUES.has(value));
+    // Sparse catalog booleans often expose only "да"; products without the
+    // feature omit the facet entirely instead of storing "нет". A vocabulary
+    // containing only boolean literals is therefore boolean even when one side
+    // is absent.
+    const isBooleanFacet = vocabulary.size > 0 &&
+      [...vocabulary].every((value) => AFFIRMATIVE_VALUES.has(value) || NEGATIVE_VALUES.has(value));
     const removable = isBooleanFacet && values.length > 0 && values.every((value) => AFFIRMATIVE_VALUES.has(norm(value)));
     if (removable) {
       removed.push(...values.map((value) => ({ key, value })));
