@@ -132,6 +132,19 @@ export function parseNumSpan(raw: string): NumSpan | null {
 export function findTrait(product: ProductRef, key: string): { label: string; value: string } | null {
   const nk = normalizeKey(key);
   if (!nk) return null;
+
+  // Price is a first-class catalog field, not a short trait. Search already
+  // returns it as `ProductRef.price` and applies min_price/max_price against
+  // the same value. Treating it as absent here makes the evidence gate reject
+  // products that the catalog has just proven are within budget.
+  const keyTokens = new Set(nk.split(/\s+/u));
+  if (["цена", "стоимость", "price"].some((token) => keyTokens.has(token))) {
+    const price = Number(product.price);
+    if (Number.isFinite(price) && price > 0) {
+      return { label: "Цена", value: String(price) };
+    }
+  }
+
   const traits = Array.isArray(product.short_traits) ? product.short_traits : [];
   let fallback: { label: string; value: string } | null = null;
 
