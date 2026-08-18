@@ -12,9 +12,12 @@ const OPEN_TOOLS: readonly ToolName[] = [
   "note_state",
 ];
 
+// Once the main consultant has interpreted a colloquial term and discovered
+// the category, it must carry its own canonical token into search_catalog.
+// A second lexical model at this point can contradict that reasoning and turn
+// a precise form factor into a broad, unrelated product pool.
 const SEARCH_AFTER_DISCOVERY_TOOLS: readonly ToolName[] = [
   "search_catalog",
-  "jargon_recover_catalog",
   "lookup_knowledge",
   "lookup_contacts",
   "propose_clarification",
@@ -28,7 +31,6 @@ const TERMINAL_AFTER_SEARCH_TOOLS: readonly ToolName[] = [
 
 export interface AgentToolPolicy {
   reasoningRequiresCatalog?: boolean;
-  jargonRecoveryRequired?: boolean;
 }
 
 export function toolNamesForAgentPhase(phase: AgentPhase, policy: AgentToolPolicy = {}): readonly ToolName[] {
@@ -54,23 +56,10 @@ export function isToolAllowedInAgentPhase(phase: AgentPhase, tool: string, polic
  */
 export function forcedToolNameForAgentPhase(phase: AgentPhase, policy: AgentToolPolicy = {}): ToolName | null {
   if (phase === "terminal_after_search") return "render_products";
-  if (!policy.reasoningRequiresCatalog && !policy.jargonRecoveryRequired) return null;
+  if (!policy.reasoningRequiresCatalog) return null;
   if (phase === "open") return "discover_category";
-  if (phase === "search_after_discovery") {
-    return policy.jargonRecoveryRequired ? "jargon_recover_catalog" : "search_catalog";
-  }
+  if (phase === "search_after_discovery") return "search_catalog";
   return null;
-}
-
-/**
- * Detects the consultant's own explicit statement that a customer term is
- * colloquial/jargon and has to be translated before catalog lookup. This is a
- * language-level signal: it does not contain product names or a jargon list.
- */
-export function hasDeclaredJargonTranslation(text: string): boolean {
-  const input = String(text ?? "").toLocaleLowerCase("ru").replace(/ё/g, "е");
-  return /(?:народн\p{L}*|бытов\p{L}*|разговорн\p{L}*|жаргонн\p{L}*)\s+(?:названи\p{L}*|термин\p{L}*|обозначени\p{L}*)/u.test(input) ||
-    /(?:так\s+)?обычно\s+(?:называют|обозначают)|так\s+(?:называют|обозначают)/u.test(input);
 }
 
 /**

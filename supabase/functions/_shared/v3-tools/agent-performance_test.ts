@@ -3,7 +3,6 @@ import {
   compactCatalogResultForLlm,
   forcedToolNameForAgentPhase,
   hasActionableSelectionReasoning,
-  hasDeclaredJargonTranslation,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
   toolNamesForAgentPhase,
@@ -20,7 +19,7 @@ Deno.test("agent phase: successful discovery requires search and blocks rediscov
   assertEquals(phase, "search_after_discovery");
   assert(!toolNamesForAgentPhase(phase).includes("discover_category"));
   assert(toolNamesForAgentPhase(phase).includes("search_catalog"));
-  assert(toolNamesForAgentPhase(phase).includes("jargon_recover_catalog"));
+  assert(!toolNamesForAgentPhase(phase).includes("jargon_recover_catalog"));
 });
 
 Deno.test("agent phase: clarification is available only after discovery and before a non-empty search", () => {
@@ -65,15 +64,6 @@ Deno.test("agent phase: quantified reasoning forces exactly the next phase tool"
   assertEquals(forcedToolNameForAgentPhase("search_after_discovery", ready), "search_catalog");
   assertEquals(forcedToolNameForAgentPhase("terminal_after_search", ready), "render_products");
   assertEquals(forcedToolNameForAgentPhase("open", { reasoningRequiresCatalog: false }), null);
-  assertEquals(forcedToolNameForAgentPhase("search_after_discovery", {
-    jargonRecoveryRequired: true,
-  }), "jargon_recover_catalog");
-});
-
-Deno.test("agent phase: consultant-declared colloquial translation activates jargon recovery", () => {
-  assert(hasDeclaredJargonTranslation("«Кукуруза» — это бытовое название LED-ламп с открытыми SMD-светодиодами."));
-  assert(hasDeclaredJargonTranslation("Так обычно называют лампы формата CORN."));
-  assert(!hasDeclaredJargonTranslation("Нужен бытовой накладной светильник."));
 });
 
 Deno.test("agent phase: empty search reopens recovery while replacement keeps its workflow", () => {

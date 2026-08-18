@@ -43,7 +43,6 @@ import {
   compactCatalogResultForLlm,
   forcedToolNameForAgentPhase,
   hasActionableSelectionReasoning,
-  hasDeclaredJargonTranslation,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
   toolNamesForAgentPhase,
@@ -2467,9 +2466,6 @@ async function runExpertLoop(
         reasoningRequiresCatalog: intentMode === "select" && hasActionableSelectionReasoning(
           `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
         ),
-        jargonRecoveryRequired: intentMode === "select" && hasDeclaredJargonTranslation(
-          `${firstAssistantText}\n${assistantReasoning}`,
-        ),
       };
       const availableToolNames = toolNamesForAgentPhase(agentPhase, agentToolPolicy);
       const forcedToolName = forcedToolNameForAgentPhase(agentPhase, agentToolPolicy);
@@ -2544,7 +2540,6 @@ async function runExpertLoop(
       );
       const enforcementToolPolicy = {
         reasoningRequiresCatalog: agentToolPolicy.reasoningRequiresCatalog || responseHasActionableReasoning,
-        jargonRecoveryRequired: agentToolPolicy.jargonRecoveryRequired || hasDeclaredJargonTranslation(resp.text),
       };
       const enforcedToolNames = toolNamesForAgentPhase(agentPhase, enforcementToolPolicy);
       const requiresToolContinuation = resp.toolCalls.length === 0 && intentMode === "select" && (
