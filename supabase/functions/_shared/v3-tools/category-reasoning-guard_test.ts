@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { guardCategoryScopeByReasoning } from "./category-reasoning-guard.ts";
+import { groundedCategoryRecoveryQueries, guardCategoryScopeByReasoning } from "./category-reasoning-guard.ts";
 
 const discovered = {
   category: { pagetitle: "Светильники" },
@@ -49,4 +49,15 @@ Deno.test("category reasoning guard does not accept a wrong modifier through a s
     "Нужен светильник с датчиком движения для дома, внутри помещения.",
   );
   assertEquals(result.args, { mode: "by_filter" });
+});
+
+Deno.test("terminal category retry uses only leaves grounded in the reasoning", () => {
+  const queries = groundedCategoryRecoveryQueries({
+    category: { pagetitle: "Светотехника" },
+    leaf_categories: [
+      { pagetitle: "Люстры" },
+      { pagetitle: "Уличные светильники" },
+    ],
+  }, "Ищу современную люстру для зала.");
+  assertEquals(queries, ["Люстры"]);
 });
