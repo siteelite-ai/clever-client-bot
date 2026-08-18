@@ -39,6 +39,12 @@ import {
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
 import { META_DECLINE_TEXT, isMetaSelfQuestion, redactInternals } from "../_shared/v3-tools/internals-guard.ts";
+import {
+  compactCatalogResultForLlm,
+  nextAgentPhase,
+  toolNamesForAgentPhase,
+  type AgentPhase,
+} from "../_shared/v3-tools/agent-performance.ts";
 import { CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest } from "../_shared/v3-tools/clean-power-safety.ts";
 import {
   classifyHouseholdMotionLightRequest,
@@ -57,7 +63,7 @@ import {
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
-import type { ProductCache, ProductFull, ProductRef, SearchCatalogOk, ToolResult, ToolSideEffect } from "../_shared/v3-tools/types.ts";
+import type { ProductCache, ProductFull, ProductRef, SearchCatalogOk, ToolName, ToolResult, ToolSideEffect } from "../_shared/v3-tools/types.ts";
 import {
   MAX_REQUEST_BODY_BYTES,
   validateChatRequestBody,
@@ -1516,7 +1522,7 @@ function compactDiscoverCategoryForLlm(r: ToolResult, args: Record<string, unkno
       const values = Array.isArray(f.values) ? f.values : [];
       const sorted = [...values].sort((a, b) => (b.products_count ?? 0) - (a.products_count ?? 0));
       const numericShare = values.length === 0 ? 0 : values.filter((v) => /\d/.test(v.value)).length / values.length;
-      const baseLimit = values.length <= 80 && numericShare >= 0.5 ? 40 : 12;
+      const baseLimit = values.length <= 80 && numericShare >= 0.5 ? 16 : 8;
       const selected = new Map<string, { value: string; products_count?: number }>();
 
       for (const v of sorted) {
@@ -1550,9 +1556,16 @@ function compactDiscoverCategoryForLlm(r: ToolResult, args: Record<string, unkno
   };
 }
 
-function toolResultForLlm(r: ToolResult, args: Record<string, unknown>, userMessage: string): unknown {
+function toolResultForLlm(r: ToolResult, args: Record<string, unknown>, userMessage: string, assistantReasoning: string): unknown {
   // Strip heavy fields the model doesn't need to see.
   if (r.ok && r.tool === "discover_category") return compactDiscoverCategoryForLlm(r, args, userMessage);
+  if (r.ok && (r.tool === "search_catalog" || r.tool === "jargon_recover_catalog")) {
+    const { side_effects: _sideEffects, tool: _tool, ...catalogResult } = r;
+    return compactCatalogResultForLlm(
+      catalogResult,
+      `${userMessage}\n${assistantReasoning}\n${JSON.stringify(args)}`,
+    ).result;
+  }
   if (r.ok && r.tool === "render_products") {
     return {
       ok: true,
@@ -1644,6 +1657,7 @@ async function callOpenRouter(
   signal: AbortSignal,
   timeoutMs: number,
   phase: LLMPhase,
+  availableToolNames: readonly string[],
 ): Promise<ORResponse> {
   // Per-call timeout combined with turn-level signal: если один LLM-вызов
   // подвис на >timeoutMs — рвём именно его, а не весь ход целиком. Так у бюджета
@@ -1678,7 +1692,7 @@ async function callOpenRouter(
         temperature: 0.2,
         max_tokens: 4000,
         messages,
-        tools: TOOL_SCHEMAS,
+        tools: TOOL_SCHEMAS.filter((schema) => availableToolNames.includes(schema.function.name)),
         tool_choice: "auto",
       }),
       signal: localCtrl.signal,
@@ -1998,6 +2012,7 @@ async function runExpertLoop(
   let enforcedSearchCriteria: Criterion[] = [];
   let userBackedSearchCriteria: Criterion[] = [];
   let reasoningBackedSearch: { ids: string[]; total: number; criteria: Criterion[] } | null = null;
+  let agentPhase: AgentPhase = "open";
   // Session-wide whitelist of category pagetitles discovered via discover_category.
   // Source of truth for `category` / `category_in` in search_catalog calls.
   // Prevents LLM hallucinating category names (e.g. "Уличные светильники" вместо
@@ -2359,9 +2374,10 @@ async function runExpertLoop(
       }
 
       const llmStart = Date.now();
+      const availableToolNames = toolNamesForAgentPhase(agentPhase);
       let resp: ORResponse;
       try {
-        resp = await callOpenRouter(apiKey, messages, turnController.signal, phaseTimeoutMs, phase);
+        resp = await callOpenRouter(apiKey, messages, turnController.signal, phaseTimeoutMs, phase, availableToolNames);
       } catch (error) {
         const timeout = (error as Error)?.name === "TimeoutError" || String((error as Error)?.message ?? error).includes("llm_call_timeout:");
         if (step === 0 && timeout && !turnController.signal.aborted) {
@@ -2371,7 +2387,7 @@ async function runExpertLoop(
             meta: { primary_error: String((error as Error)?.message ?? error), retry_timeout_ms: LLM_TIMEOUT_INTRO_RETRY_MS },
           });
           try {
-            resp = await callOpenRouter(apiKey, messages, turnController.signal, LLM_TIMEOUT_INTRO_RETRY_MS, "intro");
+            resp = await callOpenRouter(apiKey, messages, turnController.signal, LLM_TIMEOUT_INTRO_RETRY_MS, "intro", availableToolNames);
             steps.push({
               step: "v3_llm_intro_timeout_recovered",
               ms: now(),
@@ -2422,7 +2438,7 @@ async function runExpertLoop(
       steps.push({
         step: "v3_llm_call",
         ms: now(),
-        meta: { step_index: step, duration_ms: Date.now() - llmStart, has_text: !!resp.text, tool_calls: resp.toolCalls.length, finish: resp.finishReason, phase, timeout_ms: phaseTimeoutMs, ctx_bytes: ctxBytes },
+        meta: { step_index: step, duration_ms: Date.now() - llmStart, has_text: !!resp.text, tool_calls: resp.toolCalls.length, finish: resp.finishReason, phase, timeout_ms: phaseTimeoutMs, ctx_bytes: ctxBytes, agent_phase: agentPhase, available_tools: availableToolNames },
       });
 
       const hasRender = resp.toolCalls.some((tc) => tc.name === "render_products");
@@ -3141,6 +3157,24 @@ async function runExpertLoop(
           }
         }
 
+        const previousAgentPhase: AgentPhase = agentPhase;
+        agentPhase = nextAgentPhase(agentPhase, {
+          tool: tc.name as ToolName,
+          ok: result.ok,
+          total: result.ok && (tc.name === "search_catalog" || tc.name === "jargon_recover_catalog")
+            ? (result as { total?: number }).total
+            : undefined,
+          intentMode,
+          replacementIntent,
+        });
+        if (agentPhase !== previousAgentPhase) {
+          steps.push({
+            step: "v3_agent_phase_transition",
+            ms: now(),
+            meta: { from: previousAgentPhase, to: agentPhase, tool: tc.name },
+          });
+        }
+
 
 
         // If render_products succeeded → emit products_block immediately.
@@ -3198,7 +3232,7 @@ async function runExpertLoop(
         void inferredFallback;
         void splitFallbackResult;
 
-        const baseReply = toolResultForLlm(result, effectiveArgs, userMessage) as unknown;
+        const baseReply = toolResultForLlm(result, effectiveArgs, userMessage, assistantReasoning) as unknown;
         const replyObj: Record<string, unknown> = (baseReply && typeof baseReply === "object")
           ? { ...(baseReply as Record<string, unknown>) }
           : { value: baseReply };
