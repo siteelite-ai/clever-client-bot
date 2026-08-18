@@ -43,6 +43,31 @@ function codeNorm(value: string): string {
   return norm(value).replace(/\s+/g, "");
 }
 
+const RU_SUFFIXES = [
+  "ыми", "ими", "ого", "его", "ому", "ему",
+  "ая", "яя", "ое", "ее", "ой", "ей", "ом", "ем", "ую", "юю",
+  "ый", "ий", "ые", "ие", "ых", "их", "ам", "ям", "ах", "ях", "ов", "ев",
+  "у", "ю", "а", "я", "о", "е", "ы", "и",
+];
+
+function stemRu(word: string): string {
+  if (word.length < 5) return word;
+  for (const suffix of RU_SUFFIXES) {
+    if (word.endsWith(suffix) && word.length - suffix.length >= 3) {
+      return word.slice(0, -suffix.length);
+    }
+  }
+  return word;
+}
+
+function tokensMatchByStem(left: string, right: string): boolean {
+  if (left.length < 4 || right.length < 4) return false;
+  const leftStem = stemRu(left);
+  const rightStem = stemRu(right);
+  const sharedLength = Math.min(leftStem.length, rightStem.length);
+  return sharedLength >= 4 && leftStem.slice(0, sharedLength) === rightStem.slice(0, sharedLength);
+}
+
 function sameFacetValue(left: string, right: string): boolean {
   if (norm(left) === norm(right)) return true;
   return /\d/.test(left + right) && codeNorm(left) === codeNorm(right);
@@ -61,7 +86,17 @@ function evidenceStatus(value: string, userEvidence: string): "affirmed" | "nega
     occurrences.push(index);
     from = index + Math.max(1, wanted.length);
   }
-  if (occurrences.length === 0) return "absent";
+  if (occurrences.length === 0) {
+    const valueTokens = wanted.split(" ").filter((token) => token.length >= 4);
+    const evidenceTokens = evidence.split(" ").filter((token) => token.length >= 4);
+    if (
+      valueTokens.length > 0 &&
+      valueTokens.every((token) => evidenceTokens.some((candidate) => tokensMatchByStem(token, candidate)))
+    ) {
+      return "affirmed";
+    }
+    return "absent";
+  }
 
   let sawNegated = false;
   for (const index of occurrences) {

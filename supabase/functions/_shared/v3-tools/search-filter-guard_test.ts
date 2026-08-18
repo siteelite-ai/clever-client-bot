@@ -48,3 +48,14 @@ Deno.test("filter guard accepts a criterion declared by the consultant", () => {
   );
   assertEquals(result.args.options, { kind: ["Бытовые светильники накладные"] });
 });
+
+Deno.test("filter guard accepts canonical value when reasoning uses inflected forms", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { kind: ["Бытовые светильники накладные"] } },
+    facets,
+    "Подбираю бытовой накладной светильник для помещения.",
+    "Нужен светильник для дома",
+  );
+  assertEquals(result.args.options, { kind: ["Бытовые светильники накладные"] });
+  assertEquals(result.dropped, []);
+});

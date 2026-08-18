@@ -17,6 +17,7 @@ import { applyCriteriaGate, buildCriteriaQuery, type Criterion } from "../_share
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaWithReasoning } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { guardSearchFilters } from "../_shared/v3-tools/search-filter-guard.ts";
+import { guardCategoryScopeByReasoning } from "../_shared/v3-tools/category-reasoning-guard.ts";
 import { buildRecentProductEvidencePrompt, loadRecentProductEvidence, persistRecentProductEvidence, type RecentProductEvidence } from "../_shared/v3-tools/recent-product-evidence.ts";
 import { META_DECLINE_TEXT, isMetaSelfQuestion, redactInternals } from "../_shared/v3-tools/internals-guard.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
@@ -2313,6 +2314,36 @@ async function runExpertLoop(
                 }
               }
             }
+          }
+        }
+
+        // ── Category Reasoning Guard
+        // A discovered leaf is syntactically valid, but it can still contradict
+        // the consultant's own plan (for example, an outdoor sibling after the
+        // consultant declared an indoor household fixture). Keep only leaf
+        // scopes supported by the declared reasoning. When none are supported,
+        // search category-wide with the proven facet filters instead of guessing
+        // another sibling.
+        if (tc.name === "search_catalog" && lastDiscover) {
+          const categoryEvidence = [
+            history.filter((message) => message.role === "user").slice(-6).map((message) => message.content).join("\n"),
+            userMessage,
+            firstAssistantText,
+            assistantReasoning,
+            resp.text,
+          ].join("\n");
+          const guardedCategory = guardCategoryScopeByReasoning(
+            tc.args as Record<string, unknown>,
+            lastDiscover,
+            categoryEvidence,
+          );
+          tc.args = guardedCategory.args;
+          if (guardedCategory.dropped.length > 0) {
+            steps.push({
+              step: "v3_guard_category_reasoning",
+              ms: now(),
+              meta: { kept: guardedCategory.kept, dropped: guardedCategory.dropped },
+            });
           }
         }
 
