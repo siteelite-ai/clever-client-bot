@@ -15,6 +15,7 @@ export interface SearchFacetValue {
 
 export interface SearchFacet {
   key: string;
+  caption?: string;
   values: SearchFacetValue[];
 }
 
@@ -37,6 +38,11 @@ export interface BooleanFilterFallbackResult {
   removed: Array<{ key: string; value: string }>;
 }
 
+export interface ReplacementIdentityFilterResult {
+  args: Record<string, unknown>;
+  removed: Array<{ key: string; values: string[]; kind: "brand" | "model" }>;
+}
+
 function norm(value: string): string {
   return String(value ?? "")
     .toLowerCase()
@@ -44,6 +50,57 @@ function norm(value: string): string {
     .replace(/[^a-zа-я0-9]+/giu, " ")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+function replacementIdentityKind(facet: Pick<SearchFacet, "key" | "caption">): "brand" | "model" | null {
+  const label = norm(`${facet.key} ${facet.caption ?? ""}`);
+  if (/(?:^| )(?:brand|vendor|manufacturer|producer|trademark|бренд|производител\w*|торгов\w* марк\w*|марка)(?: |$)/u.test(label)) {
+    return "brand";
+  }
+  if (/(?:^| )(?:model|series|модел\w*|серия|серии)(?: |$)/u.test(label)) return "model";
+  return null;
+}
+
+export function isReplacementIdentityFacet(facet: Pick<SearchFacet, "key" | "caption">): boolean {
+  return replacementIdentityKind(facet) !== null;
+}
+
+function explicitlyRequiresSameIdentity(userMessage: string, kind: "brand" | "model"): boolean {
+  const text = norm(userMessage);
+  if (kind === "brand") {
+    return /(?:тот же бренд|такой же бренд|этот же бренд|того же бренда|тот же производитель|того же производителя|та же марка|той же марки|same brand|same manufacturer)/u.test(text);
+  }
+  return /(?:та же модель|той же модели|такую же модель|та же серия|той же серии|такой же серии|same model|same series)/u.test(text);
+}
+
+/**
+ * An analog normally preserves functional characteristics, not the anchor's
+ * identity. A model can repeat a brand/series value from the anchor title and
+ * accidentally turn it into a hard catalog constraint. Remove such options
+ * unless the customer explicitly asks for the same brand/model/series.
+ */
+export function dropImplicitReplacementIdentityFilters(
+  args: Record<string, unknown>,
+  facets: SearchFacet[],
+  userMessage: string,
+): ReplacementIdentityFilterResult {
+  if (args.mode !== "by_filter" || !args.options || typeof args.options !== "object") {
+    return { args, removed: [] };
+  }
+  const nextOptions: Record<string, unknown> = { ...(args.options as Record<string, unknown>) };
+  const removed: ReplacementIdentityFilterResult["removed"] = [];
+  for (const facet of facets) {
+    const kind = replacementIdentityKind(facet);
+    if (!kind || explicitlyRequiresSameIdentity(userMessage, kind) || nextOptions[facet.key] === undefined) continue;
+    const values = Array.isArray(nextOptions[facet.key]) ? (nextOptions[facet.key] as unknown[]).map(String) : [];
+    delete nextOptions[facet.key];
+    removed.push({ key: facet.key, values, kind });
+  }
+  if (removed.length === 0) return { args, removed };
+  const nextArgs = { ...args };
+  if (Object.keys(nextOptions).length > 0) nextArgs.options = nextOptions;
+  else delete nextArgs.options;
+  return { args: nextArgs, removed };
 }
 
 function codeNorm(value: string): string {
