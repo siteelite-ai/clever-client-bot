@@ -8,8 +8,6 @@ const OPEN_TOOLS: readonly ToolName[] = [
   "jargon_recover_catalog",
   "lookup_knowledge",
   "lookup_contacts",
-  "render_products",
-  "propose_clarification",
   "escalate_to_manager",
   "note_state",
 ];
@@ -25,7 +23,6 @@ const SEARCH_AFTER_DISCOVERY_TOOLS: readonly ToolName[] = [
 
 const TERMINAL_AFTER_SEARCH_TOOLS: readonly ToolName[] = [
   "render_products",
-  "propose_clarification",
   "escalate_to_manager",
   "note_state",
 ];
@@ -34,6 +31,10 @@ export function toolNamesForAgentPhase(phase: AgentPhase): readonly ToolName[] {
   if (phase === "search_after_discovery") return SEARCH_AFTER_DISCOVERY_TOOLS;
   if (phase === "terminal_after_search") return TERMINAL_AFTER_SEARCH_TOOLS;
   return OPEN_TOOLS;
+}
+
+export function isToolAllowedInAgentPhase(phase: AgentPhase, tool: string): tool is ToolName {
+  return (toolNamesForAgentPhase(phase) as readonly string[]).includes(tool);
 }
 
 export interface AgentPhaseEvent {

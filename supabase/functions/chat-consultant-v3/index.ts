@@ -41,6 +41,7 @@ import {
 import { META_DECLINE_TEXT, isMetaSelfQuestion, redactInternals } from "../_shared/v3-tools/internals-guard.ts";
 import {
   compactCatalogResultForLlm,
+  isToolAllowedInAgentPhase,
   nextAgentPhase,
   toolNamesForAgentPhase,
   type AgentPhase,
@@ -2567,6 +2568,38 @@ async function runExpertLoop(
       // Execute tools sequentially (parallel possible but keep simple).
       for (const tc of resp.toolCalls) {
         const toolStart = Date.now();
+
+        // Tool schemas guide the model but are not a security/control boundary:
+        // some OpenRouter models can still emit a tool name omitted from the
+        // current request. Enforce the phase contract server-side so a repeated
+        // discovery/search is never executed merely because the model ignored
+        // the advertised tool set. Every assistant tool_call still receives a
+        // matching tool result, keeping the conversation protocol valid.
+        if (!isToolAllowedInAgentPhase(agentPhase, tc.name)) {
+          const phaseHint = agentPhase === "open"
+            ? "Сначала выполни discovery/search. Уточнение допустимо после discovery, только если без него поиск объективно невозможен."
+            : agentPhase === "search_after_discovery"
+              ? "Категория уже открыта. Используй search_catalog либо задай одно объективно необходимое уточнение. Не повторяй discover_category."
+              : "Ненулевой пул уже найден. Перенеси свои критерии в render_products либо честно эскалируй; новый поиск и уточнение не нужны.";
+          messages.push({
+            role: "tool",
+            tool_call_id: tc.id,
+            name: tc.name,
+            content: JSON.stringify({
+              ok: false,
+              error_code: "agent_phase_violation",
+              current_phase: agentPhase,
+              allowed_tools: availableToolNames,
+              _server_hint: phaseHint,
+            }),
+          });
+          steps.push({
+            step: "v3_agent_phase_violation",
+            ms: now(),
+            meta: { phase: agentPhase, blocked_tool: tc.name, allowed_tools: availableToolNames },
+          });
+          continue;
+        }
 
         if (
           tc.name === "render_products" &&
