@@ -24,6 +24,7 @@ import {
 } from "../_shared/v3-tools/search-filter-guard.ts";
 import {
   groundedCategoryRecoveryQueries,
+  groundedTokenRecoveryQueries,
   guardCategoryScopeByReasoning,
 } from "../_shared/v3-tools/category-reasoning-guard.ts";
 import { detectUserIntentMode, shouldSuppressNegativeSuitabilityCard } from "../_shared/v3-tools/intent-mode.ts";
@@ -3103,14 +3104,21 @@ async function runExpertLoop(
       });
     }
 
-    if (productsRendered === 0 && !semanticBackedSearch && !replacementIntent && intentMode === "select" && lastDiscover) {
+    if (productsRendered === 0 && !semanticBackedSearch && !replacementIntent && intentMode === "select") {
       const evidence = `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`;
-      const recoveryQueries = groundedCategoryRecoveryQueries(lastDiscover, evidence);
-      for (const query of recoveryQueries) {
+      const categoryQueries = groundedCategoryRecoveryQueries(lastDiscover, evidence)
+        .map((query) => ({ query, requireTitleEvidence: false, source: "category" as const }));
+      const tokenSource = lastSearchNoun || userMessage;
+      const tokenQueries = groundedTokenRecoveryQueries(tokenSource)
+        .filter((query) => !categoryQueries.some((candidate) => normalizeForMatch(candidate.query) === normalizeForMatch(query)))
+        .map((query) => ({ query, requireTitleEvidence: true, source: "token" as const }));
+      for (const candidate of [...categoryQueries, ...tokenQueries]) {
+        const query = candidate.query;
         const recovered = await runTool("search_catalog", { mode: "by_query", query, per_page: 8 }, ctx);
         if (!recovered.ok || recovered.tool !== "search_catalog") continue;
         const ids = recovered.results
           .filter((product) => Number.isFinite(product.price) && product.price > 0)
+          .filter((product) => !candidate.requireTitleEvidence || valueIsEvidenced(query, product.pagetitle))
           .map((product) => String(product.id));
         if (ids.length === 0) continue;
         semanticBackedSearch = {
@@ -3122,7 +3130,7 @@ async function runExpertLoop(
         steps.push({
           step: "v3_grounded_category_search_recovery",
           ms: now(),
-          meta: { query, candidates: ids.length, total: recovered.total },
+          meta: { query, source: candidate.source, candidates: ids.length, total: recovered.total },
         });
         break;
       }
