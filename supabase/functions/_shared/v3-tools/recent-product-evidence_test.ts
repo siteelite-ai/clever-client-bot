@@ -59,7 +59,8 @@ Deno.test("deterministic evidence answer contains only cached facts and uncertai
   assertEquals(answer.includes("45"), true);
   assertEquals(answer.includes("₸/шт."), true);
   assertEquals(answer.includes("Мощность: 70 Вт"), true);
-  assertEquals(answer.includes("гарантировать его нельзя"), true);
+  assertEquals(answer.includes("не могу подтвердить"), true);
+  assertEquals(answer.includes("нельзя гарантировать"), true);
   assertEquals(answer.includes("https://"), false);
 });
 

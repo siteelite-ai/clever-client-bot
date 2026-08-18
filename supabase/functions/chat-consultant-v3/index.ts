@@ -1856,6 +1856,10 @@ async function runExpertLoop(
 
   // Step 6 state: fresh-but-unshown product pool from latest successful search.
   let freshSearch: { tool: string; ids: string[]; total: number } | null = null;
+  // First non-empty semantic search in an ordinary selection turn. Unlike
+  // freshSearch, this pool cannot be overwritten by later broad retries. It is
+  // eligible for terminal recovery only after the same server criteria gate.
+  let semanticBackedSearch: { ids: string[]; total: number; criteria: Criterion[]; label: string } | null = null;
   // Priority pool from v3_guard_split_fallback — survives across LLM steps.
   // Preferred over freshSearch in render fallback, because subsequent broad
   // by_query calls can overwrite freshSearch with off-target results
@@ -2893,6 +2897,14 @@ async function runExpertLoop(
               : (typeof r2.source_query === "string" && r2.source_query ? r2.source_query : typeof tc.args.query === "string" ? tc.args.query : "");
             semanticEvidenceSeen ??= { label: sourceLabel, total: r2.total };
             freshSearch = { tool: tc.name, ids, total: r2.total };
+            if (!replacementIntent && intentMode === "select" && !semanticBackedSearch) {
+              semanticBackedSearch = {
+                ids: [...ids],
+                total: r2.total,
+                criteria: enforcedSearchCriteria.map((criterion) => ({ ...criterion })),
+                label: sourceLabel,
+              };
+            }
             const optionCount = runArgs.mode === "by_filter" && runArgs.options && typeof runArgs.options === "object"
               ? Object.keys(runArgs.options as Record<string, unknown>).length
               : 0;
@@ -3085,6 +3097,54 @@ async function runExpertLoop(
         step: "v3_reasoning_backed_render_recovery_skipped",
         ms: now(),
         meta: { candidates: reasoningBackedSearch.ids.length, passed: safeIds.length, rejected: gate.rejected },
+      });
+    }
+
+    // Ordinary selections can end after a successful semantic search without
+    // the model issuing render_products. Recover the FIRST non-empty pool,
+    // never a later broad retry, and run the same evidence gate again.
+    // Replacement turns are excluded because their stricter axis/family policy
+    // is handled by the reasoning-backed recovery above.
+    if (productsRendered === 0 && semanticBackedSearch && !replacementIntent && intentMode === "select") {
+      const candidateProducts = semanticBackedSearch.ids
+        .map((id) => ctx.cache.get(id))
+        .filter((product): product is NonNullable<typeof product> => Boolean(product));
+      const gate = applyCriteriaGate(candidateProducts, semanticBackedSearch.criteria);
+      const safeIds = semanticBackedSearch.ids.filter((id) => gate.passed_ids.includes(id));
+      if (safeIds.length > 0) {
+        const rescued = await runTool("render_products", {
+          product_ids: safeIds.slice(0, 5),
+          criteria: semanticBackedSearch.criteria,
+          total_available: semanticBackedSearch.total,
+        }, ctx);
+        if (rescued.ok) {
+          const rendered = rescued as { markdown: string; rendered_count: number };
+          for (const id of safeIds.slice(0, 5)) shownIds.add(id);
+          send({
+            type: "products_block",
+            markdown: rendered.markdown,
+            count: rendered.rendered_count,
+            total_available: semanticBackedSearch.total,
+          });
+          productsRendered += rendered.rendered_count;
+          steps.push({
+            step: "v3_semantic_render_recovery",
+            ms: now(),
+            meta: {
+              label: semanticBackedSearch.label,
+              candidates: semanticBackedSearch.ids.length,
+              rendered: rendered.rendered_count,
+              criteria: semanticBackedSearch.criteria,
+            },
+          });
+          steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "semantic_render_recovery", step_count: MAX_STEPS } });
+          return { finalText, productsRendered, shownProductIds: [...shownIds] };
+        }
+      }
+      steps.push({
+        step: "v3_semantic_render_recovery_skipped",
+        ms: now(),
+        meta: { candidates: semanticBackedSearch.ids.length, passed: safeIds.length, rejected: gate.rejected },
       });
     }
 
