@@ -339,6 +339,13 @@ export function guardSearchFilters(
   // unrelated wattage, length, or pack-size facet.
   for (const facet of facets) {
     if (nextOptions[facet.key]?.length) continue;
+    // Brand/model/series values are identifiers, not product properties. Never
+    // synthesize them by scanning free prose: short identifiers such as the
+    // brand "Свет" collide with ordinary words ("общего света") and can turn
+    // a broad valid request into a permanently empty catalog intersection.
+    // An identity option is still accepted when the model explicitly supplies
+    // it and the normal evidence checks above confirm it.
+    if (isReplacementIdentityFacet(facet)) continue;
     const evidenced = facet.values.filter((candidate) => {
       const normalized = norm(candidate.value);
       if (!normalized || ["да", "нет", "есть", "отсутствует"].includes(normalized)) return false;
