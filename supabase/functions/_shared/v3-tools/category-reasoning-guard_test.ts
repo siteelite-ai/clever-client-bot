@@ -1,9 +1,10 @@
-import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   groundedCategoryRecoveryQueries,
   groundedTokenRecoveryQueries,
   guardCategoryScopeByReasoning,
   selectGroundedTokenRecoveryCandidate,
+  titleContainsLiteralToken,
 } from "./category-reasoning-guard.ts";
 
 const discovered = {
@@ -74,11 +75,16 @@ Deno.test("terminal token ladder decomposes a failed semantic phrase", () => {
 Deno.test("token recovery keeps the consultant's selective title token and rejects a broad substitute", () => {
   const selected = selectGroundedTokenRecoveryCandidate([
     { query: "canonical-form", total: 25 },
-    { query: "generic-type", total: 410 },
+    { query: "generic-type", total: 1 },
   ], 703);
   assertEquals(selected, { query: "canonical-form", total: 25 });
   assertEquals(selectGroundedTokenRecoveryCandidate([
     { query: "generic-a", total: 180 },
     { query: "generic-b", total: 410 },
   ], 703), null);
+});
+
+Deno.test("token recovery requires a complete title word, not a prefix inside another token", () => {
+  assert(titleContainsLiteralToken("Product LED DISTINCTIVE capsule", "distinctive"));
+  assert(!titleContainsLiteralToken("Product GENERICTOOL floodlight", "generic"));
 });

@@ -111,6 +111,13 @@ export interface TokenRecoveryCandidate {
   total: number;
 }
 
+/** Exact normalized word evidence; prefixes inside a different title token do not count. */
+export function titleContainsLiteralToken(title: string, token: string): boolean {
+  const normalizedToken = norm(token);
+  if (!normalizedToken || normalizedToken.includes(" ")) return false;
+  return norm(title).split(" ").includes(normalizedToken);
+}
+
 /**
  * Select a literal title-token retry only when it is materially narrower than
  * the discovered category. This lets the consultant's own multiword canonical
@@ -123,9 +130,9 @@ export function selectGroundedTokenRecoveryCandidate<T extends TokenRecoveryCand
 ): T | null {
   const normalizedCategoryTotal = Number.isFinite(categoryTotal) && categoryTotal > 0 ? categoryTotal : 0;
   const selectiveLimit = Math.max(50, Math.ceil(normalizedCategoryTotal * 0.1));
-  return candidates
-    .filter((candidate) => Number.isFinite(candidate.total) && candidate.total > 0 && candidate.total <= selectiveLimit)
-    .sort((left, right) => left.total - right.total || right.query.length - left.query.length)[0] ?? null;
+  return candidates.find(
+    (candidate) => Number.isFinite(candidate.total) && candidate.total > 0 && candidate.total <= selectiveLimit,
+  ) ?? null;
 }
 
 export function guardCategoryScopeByReasoning(
