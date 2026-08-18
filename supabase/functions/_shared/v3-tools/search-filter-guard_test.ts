@@ -1,5 +1,9 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { dropAffirmativeBooleanFilters, guardSearchFilters } from "./search-filter-guard.ts";
+import {
+  dropAffirmativeBooleanFilters,
+  dropImplicitReplacementIdentityFilters,
+  guardSearchFilters,
+} from "./search-filter-guard.ts";
 
 const facets = [
   { key: "kind", values: [{ value: "Светильники для ЖКХ" }, { value: "Бытовые светильники накладные" }] },
@@ -200,4 +204,31 @@ Deno.test("boolean fallback recognizes a sparse affirmative-only facet", () => {
   );
   assertEquals(result.args, { mode: "by_filter" });
   assertEquals(result.removed, [{ key: "sensor", value: "да" }]);
+});
+
+Deno.test("analog search drops anchor identity but keeps functional facets", () => {
+  const result = dropImplicitReplacementIdentityFilters({
+    mode: "by_filter",
+    options: { brand: ["Philips"], mounting: ["встраиваемый"], power: ["7"] },
+  }, [
+    { key: "brand", caption: "Бренд", values: [{ value: "Philips" }] },
+    { key: "mounting", caption: "Способ монтажа", values: [{ value: "встраиваемый" }] },
+    { key: "power", caption: "Мощность", values: [{ value: "7" }] },
+  ], "предложи аналоги на светильник Philips DN027B 7W");
+
+  assertEquals(result.args.options, { mounting: ["встраиваемый"], power: ["7"] });
+  assertEquals(result.removed, [{ key: "brand", values: ["Philips"], kind: "brand" }]);
+});
+
+Deno.test("analog search keeps identity only when customer explicitly requires it", () => {
+  const result = dropImplicitReplacementIdentityFilters({
+    mode: "by_filter",
+    options: { brand: ["Philips"], series: ["CoreLine"] },
+  }, [
+    { key: "brand", caption: "Бренд", values: [{ value: "Philips" }] },
+    { key: "series", caption: "Серия", values: [{ value: "CoreLine" }] },
+  ], "нужен аналог того же бренда, но другой серии");
+
+  assertEquals(result.args.options, { brand: ["Philips"] });
+  assertEquals(result.removed, [{ key: "series", values: ["CoreLine"], kind: "model" }]);
 });

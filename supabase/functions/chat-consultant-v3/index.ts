@@ -16,7 +16,12 @@ import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-t
 import { applyCriteriaGate, buildCriteriaQuery, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaWithReasoning } from "../_shared/v3-tools/criteria-reasoning.ts";
-import { dropAffirmativeBooleanFilters, guardSearchFilters } from "../_shared/v3-tools/search-filter-guard.ts";
+import {
+  dropAffirmativeBooleanFilters,
+  dropImplicitReplacementIdentityFilters,
+  guardSearchFilters,
+  isReplacementIdentityFacet,
+} from "../_shared/v3-tools/search-filter-guard.ts";
 import { guardCategoryScopeByReasoning } from "../_shared/v3-tools/category-reasoning-guard.ts";
 import { detectUserIntentMode, shouldSuppressNegativeSuitabilityCard } from "../_shared/v3-tools/intent-mode.ts";
 import {
@@ -1178,7 +1183,12 @@ function replacementValueIsEvidenced(value: string, evidenceText: string, facet:
   return false;
 }
 
-function buildReplacementAxes(args: Record<string, unknown>, lastDiscover: DiscoverCategoryOk | null, evidenceText: string): ReplacementAxis[] {
+function buildReplacementAxes(
+  args: Record<string, unknown>,
+  lastDiscover: DiscoverCategoryOk | null,
+  evidenceText: string,
+  userMessage: string,
+): ReplacementAxis[] {
   if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) return [];
   const options = (args as { options?: Record<string, unknown> }).options;
   if (!options || typeof options !== "object") return [];
@@ -1186,6 +1196,10 @@ function buildReplacementAxes(args: Record<string, unknown>, lastDiscover: Disco
   for (const [key, raw] of Object.entries(options)) {
     const facet = lastDiscover.facets.find((f) => f.key === key);
     if (!facet) continue;
+    if (isReplacementIdentityFacet(facet)) {
+      const kept = dropImplicitReplacementIdentityFilters({ mode: "by_filter", options: { [key]: raw } }, [facet], userMessage);
+      if (kept.removed.length > 0) continue;
+    }
     const values = Array.isArray(raw)
       ? raw.map(String).filter((v) => v.length > 0 && replacementValueIsEvidenced(v, evidenceText, facet))
       : [];
@@ -2123,7 +2137,12 @@ async function runExpertLoop(
 
   const rememberReplacementAxes = (args: Record<string, unknown>) => {
     if (!replacementIntent) return;
-    const axes = buildReplacementAxes(args, lastDiscover, `${history.slice(-6).map((h) => h.content).join("\n")}\n${userMessage}\n${firstAssistantText}`);
+    const axes = buildReplacementAxes(
+      args,
+      lastDiscover,
+      `${history.slice(-6).map((h) => h.content).join("\n")}\n${userMessage}\n${firstAssistantText}`,
+      userMessage,
+    );
     if (axes.length >= 2) replacementRequiredAxes = axes;
   };
 
@@ -2446,24 +2465,35 @@ async function runExpertLoop(
           const userEvidence = `${history.filter((message) => message.role === "user").slice(-6).map((message) => message.content).join("\n")}\n${userMessage}`;
           const declaredReasoning = `${userEvidence}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
           const guarded = guardSearchFilters(tc.args as Record<string, unknown>, lastDiscover.facets, declaredReasoning, userEvidence);
-          tc.args = guarded.args;
-          if (guarded.kept.length > 0) {
-            enforcedSearchCriteria = guarded.kept.map(({ key, value }) => {
-              const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
-              return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
+          const identityGuard = replacementIntent
+            ? dropImplicitReplacementIdentityFilters(guarded.args, lastDiscover.facets, userMessage)
+            : { args: guarded.args, removed: [] };
+          const removedIdentityKeys = new Set(identityGuard.removed.map((item) => item.key));
+          const effectiveKept = guarded.kept.filter((item) => !removedIdentityKeys.has(item.key));
+          const effectiveInferred = guarded.inferred.filter((item) => !removedIdentityKeys.has(item.key));
+          tc.args = identityGuard.args;
+          enforcedSearchCriteria = effectiveKept.map(({ key, value }) => {
+            const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
+            return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
+          });
+          if (identityGuard.removed.length > 0) {
+            steps.push({
+              step: "v3_guard_replacement_identity_filters",
+              ms: now(),
+              meta: { removed: identityGuard.removed },
             });
           }
-          if (guarded.dropped.length > 0) {
+          if (guarded.dropped.length > 0 || identityGuard.removed.length > 0) {
             steps.push({
               step: "v3_guard_search_filters",
               ms: now(),
-              meta: { kept: guarded.kept, inferred: guarded.inferred, subsumed: guarded.subsumed, dropped: guarded.dropped },
+              meta: { kept: effectiveKept, inferred: effectiveInferred, subsumed: guarded.subsumed, dropped: guarded.dropped },
             });
-          } else if (guarded.inferred.length > 0 || guarded.subsumed.length > 0) {
+          } else if (effectiveInferred.length > 0 || guarded.subsumed.length > 0) {
             steps.push({
               step: "v3_guard_search_filters",
               ms: now(),
-              meta: { kept: guarded.kept, inferred: guarded.inferred, subsumed: guarded.subsumed, dropped: [] },
+              meta: { kept: effectiveKept, inferred: effectiveInferred, subsumed: guarded.subsumed, dropped: [] },
             });
           }
         }
