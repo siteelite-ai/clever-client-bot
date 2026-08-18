@@ -39,6 +39,7 @@ import {
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
 import { META_DECLINE_TEXT, isMetaSelfQuestion, redactInternals } from "../_shared/v3-tools/internals-guard.ts";
+import { CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest } from "../_shared/v3-tools/clean-power-safety.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
@@ -3443,6 +3444,10 @@ Deno.serve(async (req) => {
         if (isMetaSelfQuestion(userMessage)) {
           steps.push({ step: "v3_meta_question_declined", ms: Date.now() - t0, meta: { user_message: userMessage } });
           send({ type: "delta", content: META_DECLINE_TEXT });
+          productsCount = 0;
+        } else if (isCleanPowerSafetyRequest(userMessage)) {
+          steps.push({ step: "v3_clean_power_safety_answer", ms: Date.now() - t0 });
+          send({ type: "delta", content: CLEAN_POWER_SAFETY_ANSWER });
           productsCount = 0;
         } else if (recentProductEvidence.length > 0 && isEvidenceOnlyFollowup(userMessage)) {
           const answer = buildDeterministicEvidenceAnswer(recentProductEvidence);
