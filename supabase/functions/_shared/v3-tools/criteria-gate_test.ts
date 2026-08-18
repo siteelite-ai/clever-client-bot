@@ -109,6 +109,29 @@ Deno.test("checkCriterion: строковый признак подтвержд�
   );
 });
 
+Deno.test("checkCriterion: affirmative boolean feature is proven by catalog description", () => {
+  const p = {
+    ...product("1", []),
+    pagetitle: "Светильник с микроволновым сенсором",
+    description_excerpt: "Сенсор автоматически включает прибор при появлении движущихся объектов.",
+  };
+  assertEquals(
+    checkCriterion(p, { key: "С датчиком движения", op: "eq", value: "да", level: "A" }).verdict,
+    "pass",
+  );
+});
+
+Deno.test("checkCriterion: affirmative boolean remains unknown without feature evidence", () => {
+  const p = {
+    ...product("1", []),
+    description_excerpt: "Обычный потолочный светильник для сухих помещений.",
+  };
+  assertEquals(
+    checkCriterion(p, { key: "С датчиком движения", op: "eq", value: "да", level: "A" }).verdict,
+    "unknown",
+  );
+});
+
 Deno.test("checkCriterion: строковое противоречие в одноимённом фасете = fail", () => {
   const p = product("1", ["Вид светильника: Светильники для ЖКХ"]);
   assertEquals(

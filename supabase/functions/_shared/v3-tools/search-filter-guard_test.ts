@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { guardSearchFilters } from "./search-filter-guard.ts";
+import { dropAffirmativeBooleanFilters, guardSearchFilters } from "./search-filter-guard.ts";
 
 const facets = [
   { key: "kind", values: [{ value: "Светильники для ЖКХ" }, { value: "Бытовые светильники накладные" }] },
@@ -91,12 +91,16 @@ Deno.test("filter guard completes an explicit user facet omitted by the model", 
   assertEquals(result.args.options, {
     sensor: ["да"],
     kind: ["Бытовые светильники накладные"],
-    mount: ["накладной"],
   });
   assertEquals(result.inferred, [
     { key: "kind", value: "Бытовые светильники накладные" },
-    { key: "mount", value: "накладной" },
   ]);
+  assertEquals(result.subsumed, [{
+    key: "mount",
+    value: "накладной",
+    by_key: "kind",
+    by_value: "Бытовые светильники накладные",
+  }]);
 });
 
 Deno.test("filter guard can build options from unambiguous user evidence", () => {
@@ -130,4 +134,61 @@ Deno.test("filter guard never infers generic boolean facet values", () => {
   );
   assertEquals(result.args, { mode: "by_filter" });
   assertEquals(result.inferred, []);
+});
+
+Deno.test("filter guard removes a model-provided option subsumed by a compound value", () => {
+  const result = guardSearchFilters(
+    {
+      mode: "by_filter",
+      options: {
+        kind: ["Бытовые светильники накладные"],
+        mount: ["накладной"],
+      },
+    },
+    [
+      ...facets,
+      { key: "mount", values: [{ value: "накладной" }, { value: "встраиваемый" }] },
+    ],
+    "Подбираю бытовой накладной светильник.",
+    "Нужен бытовой накладной светильник.",
+  );
+  assertEquals(result.args.options, { kind: ["Бытовые светильники накладные"] });
+  assertEquals(result.kept, [{ key: "kind", value: "Бытовые светильники накладные" }]);
+  assertEquals(result.subsumed.length, 1);
+});
+
+Deno.test("boolean fallback removes only affirmative sparse feature filters", () => {
+  const result = dropAffirmativeBooleanFilters(
+    {
+      mode: "by_filter",
+      max_price: 4000,
+      options: {
+        kind: ["Бытовые светильники накладные"],
+        sensor: ["да"],
+      },
+    },
+    [
+      { key: "kind", values: [{ value: "Бытовые светильники накладные" }] },
+      { key: "sensor", values: [{ value: "да" }, { value: "нет" }] },
+    ],
+  );
+  assertEquals(result.args, {
+    mode: "by_filter",
+    max_price: 4000,
+    options: { kind: ["Бытовые светильники накладные"] },
+  });
+  assertEquals(result.removed, [{ key: "sensor", value: "да" }]);
+});
+
+Deno.test("boolean fallback preserves negative and non-boolean filters", () => {
+  const args = {
+    mode: "by_filter",
+    options: { emergency: ["нет"], brand: ["Gauss"] },
+  };
+  const result = dropAffirmativeBooleanFilters(args, [
+    { key: "emergency", values: [{ value: "да" }, { value: "нет" }] },
+    { key: "brand", values: [{ value: "Gauss" }] },
+  ]);
+  assertEquals(result.args, args);
+  assertEquals(result.removed, []);
 });
