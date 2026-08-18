@@ -23,8 +23,6 @@ const SEARCH_AFTER_DISCOVERY_TOOLS: readonly ToolName[] = [
 
 const TERMINAL_AFTER_SEARCH_TOOLS: readonly ToolName[] = [
   "render_products",
-  "escalate_to_manager",
-  "note_state",
 ];
 
 export interface AgentToolPolicy {
@@ -43,6 +41,21 @@ export function toolNamesForAgentPhase(phase: AgentPhase, policy: AgentToolPolic
 
 export function isToolAllowedInAgentPhase(phase: AgentPhase, tool: string, policy: AgentToolPolicy = {}): tool is ToolName {
   return (toolNamesForAgentPhase(phase, policy) as readonly string[]).includes(tool);
+}
+
+/**
+ * Once quantified reasoning exists, the remaining uncertainty is in tool
+ * arguments, not in which protocol phase comes next. OpenRouter still lets the
+ * model generate every argument and render criterion; this only forces the
+ * next function name so the model cannot spend multiple calls renegotiating
+ * the already completed plan.
+ */
+export function forcedToolNameForAgentPhase(phase: AgentPhase, policy: AgentToolPolicy = {}): ToolName | null {
+  if (phase === "terminal_after_search") return "render_products";
+  if (!policy.reasoningRequiresCatalog) return null;
+  if (phase === "open") return "discover_category";
+  if (phase === "search_after_discovery") return "search_catalog";
+  return null;
 }
 
 /**

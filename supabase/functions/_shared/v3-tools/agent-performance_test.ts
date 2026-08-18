@@ -1,6 +1,7 @@
 import { assert, assertEquals, assertLess } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   compactCatalogResultForLlm,
+  forcedToolNameForAgentPhase,
   hasActionableSelectionReasoning,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
@@ -53,9 +54,15 @@ Deno.test("agent phase: non-empty ordinary selection search becomes terminal", (
   assertEquals(phase, "terminal_after_search");
   assertEquals(toolNamesForAgentPhase(phase), [
     "render_products",
-    "escalate_to_manager",
-    "note_state",
   ]);
+});
+
+Deno.test("agent phase: quantified reasoning forces exactly the next phase tool", () => {
+  const ready = { reasoningRequiresCatalog: true };
+  assertEquals(forcedToolNameForAgentPhase("open", ready), "discover_category");
+  assertEquals(forcedToolNameForAgentPhase("search_after_discovery", ready), "search_catalog");
+  assertEquals(forcedToolNameForAgentPhase("terminal_after_search", ready), "render_products");
+  assertEquals(forcedToolNameForAgentPhase("open", { reasoningRequiresCatalog: false }), null);
 });
 
 Deno.test("agent phase: empty search reopens recovery while replacement keeps its workflow", () => {

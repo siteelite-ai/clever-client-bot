@@ -41,6 +41,7 @@ import {
 import { META_DECLINE_TEXT, isMetaSelfQuestion, redactInternals } from "../_shared/v3-tools/internals-guard.ts";
 import {
   compactCatalogResultForLlm,
+  forcedToolNameForAgentPhase,
   hasActionableSelectionReasoning,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
@@ -1660,6 +1661,7 @@ async function callOpenRouter(
   timeoutMs: number,
   phase: LLMPhase,
   availableToolNames: readonly string[],
+  forcedToolName: string | null,
 ): Promise<ORResponse> {
   // Per-call timeout combined with turn-level signal: если один LLM-вызов
   // подвис на >timeoutMs — рвём именно его, а не весь ход целиком. Так у бюджета
@@ -1695,7 +1697,9 @@ async function callOpenRouter(
         max_tokens: 4000,
         messages,
         tools: TOOL_SCHEMAS.filter((schema) => availableToolNames.includes(schema.function.name)),
-        tool_choice: "auto",
+        tool_choice: forcedToolName
+          ? { type: "function", function: { name: forcedToolName } }
+          : "auto",
       }),
       signal: localCtrl.signal,
     });
@@ -2382,9 +2386,10 @@ async function runExpertLoop(
         ),
       };
       const availableToolNames = toolNamesForAgentPhase(agentPhase, agentToolPolicy);
+      const forcedToolName = forcedToolNameForAgentPhase(agentPhase, agentToolPolicy);
       let resp: ORResponse;
       try {
-        resp = await callOpenRouter(apiKey, messages, turnController.signal, phaseTimeoutMs, phase, availableToolNames);
+        resp = await callOpenRouter(apiKey, messages, turnController.signal, phaseTimeoutMs, phase, availableToolNames, forcedToolName);
       } catch (error) {
         const timeout = (error as Error)?.name === "TimeoutError" || String((error as Error)?.message ?? error).includes("llm_call_timeout:");
         if (step === 0 && timeout && !turnController.signal.aborted) {
@@ -2394,7 +2399,7 @@ async function runExpertLoop(
             meta: { primary_error: String((error as Error)?.message ?? error), retry_timeout_ms: LLM_TIMEOUT_INTRO_RETRY_MS },
           });
           try {
-            resp = await callOpenRouter(apiKey, messages, turnController.signal, LLM_TIMEOUT_INTRO_RETRY_MS, "intro", availableToolNames);
+            resp = await callOpenRouter(apiKey, messages, turnController.signal, LLM_TIMEOUT_INTRO_RETRY_MS, "intro", availableToolNames, forcedToolName);
             steps.push({
               step: "v3_llm_intro_timeout_recovered",
               ms: now(),
@@ -2445,7 +2450,7 @@ async function runExpertLoop(
       steps.push({
         step: "v3_llm_call",
         ms: now(),
-        meta: { step_index: step, duration_ms: Date.now() - llmStart, has_text: !!resp.text, tool_calls: resp.toolCalls.length, finish: resp.finishReason, phase, timeout_ms: phaseTimeoutMs, ctx_bytes: ctxBytes, agent_phase: agentPhase, available_tools: availableToolNames },
+        meta: { step_index: step, duration_ms: Date.now() - llmStart, has_text: !!resp.text, tool_calls: resp.toolCalls.length, finish: resp.finishReason, phase, timeout_ms: phaseTimeoutMs, ctx_bytes: ctxBytes, agent_phase: agentPhase, available_tools: availableToolNames, forced_tool: forcedToolName },
       });
 
       const responseHasActionableReasoning = intentMode === "select" && hasActionableSelectionReasoning(
@@ -2563,7 +2568,7 @@ async function runExpertLoop(
           messages.push({
             role: "system",
             content: agentPhase === "terminal_after_search"
-              ? "Фазовый контракт: ненулевой пул уже найден. Не заканчивай ход текстом. Вызови render_products, перенеся в criteria требования из своего рассуждения, либо escalate_to_manager, если ни один кандидат нельзя подтвердить."
+              ? "Фазовый контракт: ненулевой пул уже найден. Не заканчивай ход текстом. Вызови render_products, перенеся в criteria требования из своего рассуждения; серверный criteria gate сам отклонит неподтверждённые карточки."
               : "Фазовый контракт: ты уже сформулировал несколько измеримых критериев подбора. Не заканчивай ход текстом и не спрашивай предпочтения, которые можешь выбрать как эксперт. Выполни discover_category/search_catalog и доведи найденный пул до render_products.",
           });
           steps.push({
@@ -2612,7 +2617,7 @@ async function runExpertLoop(
             ? "Сначала выполни discovery/search. Уточнение допустимо после discovery, только если без него поиск объективно невозможен."
             : agentPhase === "search_after_discovery"
               ? "Категория уже открыта. Используй search_catalog либо задай одно объективно необходимое уточнение. Не повторяй discover_category."
-              : "Ненулевой пул уже найден. Перенеси свои критерии в render_products либо честно эскалируй; новый поиск и уточнение не нужны.";
+              : "Ненулевой пул уже найден. Перенеси свои критерии в render_products; новый поиск, уточнение и служебные действия не нужны.";
           messages.push({
             role: "tool",
             tool_call_id: tc.id,
