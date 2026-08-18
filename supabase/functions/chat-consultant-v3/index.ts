@@ -1765,6 +1765,7 @@ async function callOpenRouterEvidenceFollowup(
 interface StepLog { step: string; ms: number; meta?: Record<string, unknown>; }
 
 const OUTDOOR_POE_CATALOG_QUERIES = [
+  "LDPE",
   "кабель витая пара LDPE",
   "кабель Cat.5E LDPE",
   "кабель витая пара Cat.5E",
