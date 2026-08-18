@@ -1617,6 +1617,7 @@ interface ORResponse {
 // не успевала отрендерить карточки из 30+ товаров за это время, и весь ход падал
 // с "не удалось обработать запрос". Разнесение по фазам убирает этот класс багов.
 const LLM_TIMEOUT_INTRO_MS = 30_000;
+const LLM_TIMEOUT_INTRO_RETRY_MS = 45_000;
 const LLM_TIMEOUT_TOOL_DECISION_MS = 30_000;
 const LLM_TIMEOUT_FINAL_RENDER_MS = 110_000;
 
@@ -2209,6 +2210,29 @@ async function runExpertLoop(
         resp = await callOpenRouter(apiKey, messages, turnController.signal, phaseTimeoutMs, phase);
       } catch (error) {
         const timeout = (error as Error)?.name === "TimeoutError" || String((error as Error)?.message ?? error).includes("llm_call_timeout:");
+        if (step === 0 && timeout && !turnController.signal.aborted) {
+          steps.push({
+            step: "v3_llm_intro_timeout_retry",
+            ms: now(),
+            meta: { primary_error: String((error as Error)?.message ?? error), retry_timeout_ms: LLM_TIMEOUT_INTRO_RETRY_MS },
+          });
+          try {
+            resp = await callOpenRouter(apiKey, messages, turnController.signal, LLM_TIMEOUT_INTRO_RETRY_MS, "intro");
+            steps.push({
+              step: "v3_llm_intro_timeout_recovered",
+              ms: now(),
+              meta: { retry_timeout_ms: LLM_TIMEOUT_INTRO_RETRY_MS },
+            });
+            // Retry succeeded; continue with the ordinary response pipeline.
+          } catch (retryError) {
+            steps.push({
+              step: "v3_llm_intro_timeout_retry_failed",
+              ms: now(),
+              meta: { retry_error: String((retryError as Error)?.message ?? retryError) },
+            });
+            throw retryError;
+          }
+        } else {
         const recoverableFollowup = step === 0 && timeout && recentProductEvidence.length > 0 && isEvidenceOnlyFollowup(userMessage);
         if (!recoverableFollowup) throw error;
         steps.push({
@@ -2238,6 +2262,7 @@ async function runExpertLoop(
               recovery_error: String((recoveryError as Error)?.message ?? recoveryError),
             },
           });
+        }
         }
       }
       steps.push({
