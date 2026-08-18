@@ -30,6 +30,13 @@ Deno.test("normalizeProductUrl: категории и внешние ссылк�
   assertEquals(normalizeProductUrl("javascript:alert(1)"), null);
 });
 
+Deno.test("normalizeProductUrl: кодирует скобки в товарном slug для Markdown", () => {
+  assertEquals(
+    normalizeProductUrl("https://220volt.kz/catalog/a/b/cable-(305m)-(up.)/"),
+    "https://220volt.kz/catalog/a/b/cable-%28305m%29-%28up.%29/",
+  );
+});
+
 Deno.test("sanitizeCatalogDescription: сохраняет доказательный признак", () => {
   const value = sanitizeCatalogDescription("Данная модель оборудована микроволновым сенсором движения");
   if (!value) throw new Error("description missing");

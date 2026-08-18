@@ -43,6 +43,11 @@ export function normalizeProductUrl(raw: unknown): string | null {
     parsed.hostname = "220volt.kz";
     parsed.search = "";
     parsed.hash = "";
+    // Markdown destinations and lightweight SSE consumers commonly treat a
+    // literal ')' as the end of a link. Product slugs may legitimately contain
+    // packaging markers such as "(305m)"; encode both parentheses so the
+    // controlled deep link remains one unambiguous URL in every client.
+    parsed.pathname = parsed.pathname.replace(/\(/g, "%28").replace(/\)/g, "%29");
     if (!parsed.pathname.endsWith("/")) parsed.pathname += "/";
     return parsed.toString();
   } catch {
