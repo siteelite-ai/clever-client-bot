@@ -43,6 +43,7 @@ import {
   compactCatalogResultForLlm,
   forcedToolNameForAgentPhase,
   hasActionableSelectionReasoning,
+  hasDeclaredJargonTranslation,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
   toolNamesForAgentPhase,
@@ -63,6 +64,13 @@ import {
   OUTDOOR_POE_SELECTION_INTRO,
   verifiedOutdoorPoeProducts,
 } from "../_shared/v3-tools/outdoor-poe-policy.ts";
+import {
+  classifyExactCompoundMarkingRequest,
+  exactCompoundMarkingEmpty,
+  exactCompoundMarkingIntro,
+  selectExactCompoundMarkedProducts,
+  type ExactCompoundMarkingRequest,
+} from "../_shared/v3-tools/exact-compound-marking-policy.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
@@ -245,7 +253,7 @@ function summariseToolArgs(name: string, args: Record<string, unknown>): Record<
   };
   if (name === "search_catalog") return pick(["mode", "query", "article", "pagetitle", "category", "category_in", "min_price", "max_price", "sort_cheapest", "sort_expensive", "per_page", "page", "options"]);
   if (name === "discover_category") return pick(["noun"]);
-  if (name === "jargon_recover_catalog") return pick(["query", "modifiers", "min_price", "max_price", "per_page"]);
+  if (name === "jargon_recover_catalog") return pick(["query", "modifiers", "min_price", "max_price", "per_page", "category"]);
   if (name === "lookup_knowledge") return pick(["query", "type"]);
   if (name === "lookup_contacts") return pick(["fields"]);
   if (name === "render_products") return { ids_count: Array.isArray(args.product_ids) ? (args.product_ids as unknown[]).length : 0, total_available: args.total_available, criteria: Array.isArray(args.criteria) ? args.criteria : [] };
@@ -1804,6 +1812,81 @@ const HOUSEHOLD_MOTION_LIGHT_CATALOG_QUERIES = [
   "светильник с микроволновым сенсором",
 ];
 
+async function selectVerifiedExactCompoundProducts(
+  request: ExactCompoundMarkingRequest,
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<ProductFull[]> {
+  const started = Date.now();
+  const search = await executeSearchCatalog({
+    mode: "by_query",
+    query: request.query,
+    min_price: 1,
+    per_page: 50,
+    ...(request.priceDirection === "cheapest" ? { sort_cheapest: true } : {}),
+    ...(request.priceDirection === "expensive" ? { sort_expensive: true } : {}),
+  }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+  const candidates = search.ok ? search.results : [];
+  const verified = selectExactCompoundMarkedProducts(candidates, request);
+  const elapsed = Date.now() - started;
+
+  send({
+    type: "tool_event",
+    tool: "search_catalog",
+    phase: "result",
+    duration_ms: elapsed,
+    summary: `Exact compound marking: подтверждено ${verified.length}`,
+  });
+
+  if (verified.length === 0) {
+    send({ type: "delta", content: exactCompoundMarkingEmpty(request) });
+    steps.push({
+      step: "v3_exact_compound_marking_empty",
+      ms: Date.now() - t0,
+      meta: {
+        query: request.query,
+        first: request.first,
+        second: request.second,
+        price_direction: request.priceDirection,
+        catalog_total: search.ok ? search.total : 0,
+        candidates: candidates.length,
+        duration_ms: elapsed,
+      },
+    });
+    return [];
+  }
+
+  const ids = verified.map((product) => product.id);
+  const rendered = executeRenderProducts({ product_ids: ids, total_available: verified.length }, ctx.cache);
+  if (!rendered.ok) {
+    send({ type: "delta", content: exactCompoundMarkingEmpty(request) });
+    steps.push({ step: "v3_exact_compound_marking_render_failed", ms: Date.now() - t0, meta: { error_code: rendered.error_code } });
+    return [];
+  }
+
+  send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: verified.length });
+  steps.push({
+    step: "v3_exact_compound_marking_rendered",
+    ms: Date.now() - t0,
+    meta: {
+      query: request.query,
+      first: request.first,
+      second: request.second,
+      price_direction: request.priceDirection,
+      catalog_total: search.ok ? search.total : 0,
+      candidates: candidates.length,
+      verified: verified.length,
+      rendered: rendered.rendered_count,
+      duration_ms: elapsed,
+    },
+  });
+  return ids
+    .map((id) => ctx.cache.get(id))
+    .filter((product): product is ProductFull => Boolean(product));
+}
+
 async function selectVerifiedHouseholdMotionLights(
   ctx: ToolContext,
   send: (event: SseEvent) => void,
@@ -2384,6 +2467,9 @@ async function runExpertLoop(
         reasoningRequiresCatalog: intentMode === "select" && hasActionableSelectionReasoning(
           `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
         ),
+        jargonRecoveryRequired: intentMode === "select" && hasDeclaredJargonTranslation(
+          `${firstAssistantText}\n${assistantReasoning}`,
+        ),
       };
       const availableToolNames = toolNamesForAgentPhase(agentPhase, agentToolPolicy);
       const forcedToolName = forcedToolNameForAgentPhase(agentPhase, agentToolPolicy);
@@ -2458,6 +2544,7 @@ async function runExpertLoop(
       );
       const enforcementToolPolicy = {
         reasoningRequiresCatalog: agentToolPolicy.reasoningRequiresCatalog || responseHasActionableReasoning,
+        jargonRecoveryRequired: agentToolPolicy.jargonRecoveryRequired || hasDeclaredJargonTranslation(resp.text),
       };
       const enforcedToolNames = toolNamesForAgentPhase(agentPhase, enforcementToolPolicy);
       const requiresToolContinuation = resp.toolCalls.length === 0 && intentMode === "select" && (
@@ -2699,6 +2786,24 @@ async function runExpertLoop(
               }
             }
           }
+        }
+
+        // Jargon recovery must stay inside the category that was actually
+        // discovered. The lexical helper receives the same category as context,
+        // and the catalog query itself enforces it. This prevents a translated
+        // term from leaking into an unrelated branch (for example, lamp jargon
+        // returning a sticker-removal aerosol).
+        if (tc.name === "jargon_recover_catalog" && lastDiscover?.category?.pagetitle) {
+          const requestedCategory = typeof tc.args.category === "string" ? tc.args.category : null;
+          tc.args = { ...tc.args, category: lastDiscover.category.pagetitle };
+          steps.push({
+            step: "v3_jargon_category_enforced",
+            ms: now(),
+            meta: {
+              requested: requestedCategory,
+              enforced: lastDiscover.category.pagetitle,
+            },
+          });
         }
 
         // ── Category Reasoning Guard
@@ -3696,6 +3801,7 @@ Deno.serve(async (req) => {
       try {
         const outdoorPoeIntent = classifyOutdoorPoeIntent(userMessage, history);
         const householdMotionLightRequest = classifyHouseholdMotionLightRequest(userMessage);
+        const exactCompoundMarkingRequest = classifyExactCompoundMarkingRequest(userMessage);
         // GUARD v3_meta_question_declined: вопрос про устройство сервиса
         // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
         // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
@@ -3708,6 +3814,17 @@ Deno.serve(async (req) => {
           steps.push({ step: "v3_clean_power_safety_answer", ms: Date.now() - t0 });
           send({ type: "delta", content: CLEAN_POWER_SAFETY_ANSWER });
           productsCount = 0;
+        } else if (exactCompoundMarkingRequest) {
+          send({ type: "delta", content: exactCompoundMarkingIntro(exactCompoundMarkingRequest) });
+          const selectedProducts = await selectVerifiedExactCompoundProducts(
+            exactCompoundMarkingRequest,
+            ctx,
+            send,
+            steps,
+            t0,
+          );
+          productsCount = selectedProducts.length;
+          await persistRecentProductEvidence(supabase, sessionId, selectedProducts);
         } else if (householdMotionLightRequest) {
           send({ type: "delta", content: HOUSEHOLD_MOTION_LIGHT_INTRO });
           const selectedProducts = await selectVerifiedHouseholdMotionLights(
