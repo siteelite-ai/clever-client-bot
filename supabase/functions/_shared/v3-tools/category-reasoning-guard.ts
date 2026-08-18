@@ -75,6 +75,28 @@ function leafSupported(leaf: string, umbrella: string, evidence: string): boolea
   return distinctive.every((token) => evidenceTokens.some((candidate) => tokenMatches(token, candidate)));
 }
 
+/** Canonical leaf names safe to use for one terminal semantic retry. */
+export function groundedCategoryRecoveryQueries(
+  discovered: DiscoveredCategoryScope | null,
+  declaredReasoning: string,
+  limit = 3,
+): string[] {
+  if (!discovered) return [];
+  const umbrella = discovered.category?.pagetitle?.trim() ?? "";
+  const leaves = (discovered.leaf_categories ?? [])
+    .map((leaf) => leaf.pagetitle?.trim() ?? "")
+    .filter(Boolean)
+    .filter((leaf) => leafSupported(leaf, umbrella, declaredReasoning));
+  const unique = [...new Map(leaves.map((leaf) => [norm(leaf), leaf])).values()];
+  if (unique.length > 0) return unique.slice(0, Math.max(1, limit));
+  const umbrellaTokens = significantTokens(umbrella);
+  const evidenceTokens = significantTokens(declaredReasoning);
+  const umbrellaGrounded = umbrellaTokens.length > 0 && umbrellaTokens.every(
+    (token) => evidenceTokens.some((candidate) => tokenMatches(token, candidate)),
+  );
+  return umbrellaGrounded ? [umbrella] : [];
+}
+
 export function guardCategoryScopeByReasoning(
   args: Record<string, unknown>,
   discovered: DiscoveredCategoryScope | null,

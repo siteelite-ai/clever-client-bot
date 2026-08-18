@@ -22,7 +22,10 @@ import {
   guardSearchFilters,
   isReplacementIdentityFacet,
 } from "../_shared/v3-tools/search-filter-guard.ts";
-import { guardCategoryScopeByReasoning } from "../_shared/v3-tools/category-reasoning-guard.ts";
+import {
+  groundedCategoryRecoveryQueries,
+  guardCategoryScopeByReasoning,
+} from "../_shared/v3-tools/category-reasoning-guard.ts";
 import { detectUserIntentMode, shouldSuppressNegativeSuitabilityCard } from "../_shared/v3-tools/intent-mode.ts";
 import {
   buildDeterministicEvidenceAnswer,
@@ -3098,6 +3101,31 @@ async function runExpertLoop(
         ms: now(),
         meta: { candidates: reasoningBackedSearch.ids.length, passed: safeIds.length, rejected: gate.rejected },
       });
+    }
+
+    if (productsRendered === 0 && !semanticBackedSearch && !replacementIntent && intentMode === "select" && lastDiscover) {
+      const evidence = `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`;
+      const recoveryQueries = groundedCategoryRecoveryQueries(lastDiscover, evidence);
+      for (const query of recoveryQueries) {
+        const recovered = await runTool("search_catalog", { mode: "by_query", query, per_page: 8 }, ctx);
+        if (!recovered.ok || recovered.tool !== "search_catalog") continue;
+        const ids = recovered.results
+          .filter((product) => Number.isFinite(product.price) && product.price > 0)
+          .map((product) => String(product.id));
+        if (ids.length === 0) continue;
+        semanticBackedSearch = {
+          ids,
+          total: recovered.total,
+          criteria: enforcedSearchCriteria.map((criterion) => ({ ...criterion })),
+          label: query,
+        };
+        steps.push({
+          step: "v3_grounded_category_search_recovery",
+          ms: now(),
+          meta: { query, candidates: ids.length, total: recovered.total },
+        });
+        break;
+      }
     }
 
     // Ordinary selections can end after a successful semantic search without
