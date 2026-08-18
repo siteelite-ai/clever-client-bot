@@ -2455,7 +2455,13 @@ async function runExpertLoop(
             steps.push({
               step: "v3_guard_search_filters",
               ms: now(),
-              meta: { kept: guarded.kept, dropped: guarded.dropped },
+              meta: { kept: guarded.kept, inferred: guarded.inferred, dropped: guarded.dropped },
+            });
+          } else if (guarded.inferred.length > 0) {
+            steps.push({
+              step: "v3_guard_search_filters",
+              ms: now(),
+              meta: { kept: guarded.kept, inferred: guarded.inferred, dropped: [] },
             });
           }
         }

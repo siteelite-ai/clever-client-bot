@@ -13,8 +13,13 @@ Deno.test("filter guard removes a valid but unrequested catalog value", () => {
     "Подбираю бытовой накладной светильник, не для ЖКХ",
     "Нужен бытовой накладной светильник, не для ЖКХ",
   );
-  assertEquals(result.args, { mode: "by_filter", category: "Светильники" });
+  assertEquals(result.args, {
+    mode: "by_filter",
+    category: "Светильники",
+    options: { kind: ["Бытовые светильники накладные"] },
+  });
   assertEquals(result.dropped[0].reason, "negated_by_user");
+  assertEquals(result.inferred, [{ key: "kind", value: "Бытовые светильники накладные" }]);
 });
 
 Deno.test("filter guard canonicalizes and keeps a user-affirmed value", () => {
@@ -69,4 +74,60 @@ Deno.test("filter guard accepts a noun value declared through its adjective form
   );
   assertEquals(result.args.options, { material: ["медь"] });
   assertEquals(result.dropped, []);
+});
+
+Deno.test("filter guard completes an explicit user facet omitted by the model", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { sensor: ["да"] } },
+    [
+      ...facets,
+      { key: "mount", values: [{ value: "накладной" }, { value: "встраиваемый" }] },
+      { key: "sensor", values: [{ value: "да" }, { value: "нет" }] },
+    ],
+    "Ищу накладной светильник с датчиком.",
+    "Мне нужен бытовой накладной светильник с датчиком движения.",
+  );
+
+  assertEquals(result.args.options, {
+    sensor: ["да"],
+    kind: ["Бытовые светильники накладные"],
+    mount: ["накладной"],
+  });
+  assertEquals(result.inferred, [
+    { key: "kind", value: "Бытовые светильники накладные" },
+    { key: "mount", value: "накладной" },
+  ]);
+});
+
+Deno.test("filter guard can build options from unambiguous user evidence", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter" },
+    facets,
+    "Подбираю товар.",
+    "Нужен бытовой накладной светильник.",
+  );
+  assertEquals(result.args.options, { kind: ["Бытовые светильники накладные"] });
+  assertEquals(result.inferred, [{ key: "kind", value: "Бытовые светильники накладные" }]);
+});
+
+Deno.test("filter guard does not guess when several values are explicit", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter" },
+    [{ key: "color", values: [{ value: "белый" }, { value: "черный" }] }],
+    "Подбираю цвет.",
+    "Подойдёт белый или черный.",
+  );
+  assertEquals(result.args, { mode: "by_filter" });
+  assertEquals(result.inferred, []);
+});
+
+Deno.test("filter guard never infers generic boolean facet values", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter" },
+    [{ key: "sensor", values: [{ value: "да" }, { value: "нет" }] }],
+    "Подбираю товар.",
+    "Да, покажите варианты.",
+  );
+  assertEquals(result.args, { mode: "by_filter" });
+  assertEquals(result.inferred, []);
 });
