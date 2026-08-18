@@ -192,3 +192,12 @@ Deno.test("boolean fallback preserves negative and non-boolean filters", () => {
   assertEquals(result.args, args);
   assertEquals(result.removed, []);
 });
+
+Deno.test("boolean fallback recognizes a sparse affirmative-only facet", () => {
+  const result = dropAffirmativeBooleanFilters(
+    { mode: "by_filter", options: { sensor: ["да"] } },
+    [{ key: "sensor", values: [{ value: "да" }] }],
+  );
+  assertEquals(result.args, { mode: "by_filter" });
+  assertEquals(result.removed, [{ key: "sensor", value: "да" }]);
+});

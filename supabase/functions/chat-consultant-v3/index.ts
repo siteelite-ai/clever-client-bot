@@ -2740,7 +2740,7 @@ async function runExpertLoop(
             const originalPerPage = Number(relaxed.args.per_page);
             const fallbackArgs: Record<string, unknown> = {
               ...relaxed.args,
-              per_page: Number.isFinite(originalPerPage) ? Math.max(20, originalPerPage) : 20,
+              per_page: Number.isFinite(originalPerPage) ? Math.max(50, originalPerPage) : 50,
               ...(
                 typeof relaxed.args.max_price === "number" &&
                 relaxed.args.sort_cheapest !== true &&
