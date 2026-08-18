@@ -65,7 +65,18 @@ function tokensMatchByStem(left: string, right: string): boolean {
   const leftStem = stemRu(left);
   const rightStem = stemRu(right);
   const sharedLength = Math.min(leftStem.length, rightStem.length);
-  return sharedLength >= 4 && leftStem.slice(0, sharedLength) === rightStem.slice(0, sharedLength);
+  if (sharedLength >= 4 && leftStem.slice(0, sharedLength) === rightStem.slice(0, sharedLength)) return true;
+  // Common Russian noun→adjective derivation changes one final letter after
+  // the same root (e.g. "медь" ↔ "медные"). Accept a single differing code
+  // point only for equal stems with a stable 3-letter root.
+  if (leftStem.length === rightStem.length && leftStem.length >= 4 && leftStem.slice(0, 3) === rightStem.slice(0, 3)) {
+    let differences = 0;
+    for (let index = 0; index < leftStem.length; index++) {
+      if (leftStem[index] !== rightStem[index]) differences += 1;
+    }
+    if (differences === 1) return true;
+  }
+  return false;
 }
 
 function sameFacetValue(left: string, right: string): boolean {

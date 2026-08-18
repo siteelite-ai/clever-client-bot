@@ -59,3 +59,14 @@ Deno.test("filter guard accepts canonical value when reasoning uses inflected fo
   assertEquals(result.args.options, { kind: ["Бытовые светильники накладные"] });
   assertEquals(result.dropped, []);
 });
+
+Deno.test("filter guard accepts a noun value declared through its adjective form", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { material: ["медь"] } },
+    [{ key: "material", values: [{ value: "медь" }, { value: "CCA" }] }],
+    "Для PoE нужны медные жилы, а не CCA.",
+    "Нужен кабель для PoE.",
+  );
+  assertEquals(result.args.options, { material: ["медь"] });
+  assertEquals(result.dropped, []);
+});

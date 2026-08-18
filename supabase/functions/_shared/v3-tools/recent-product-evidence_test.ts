@@ -1,5 +1,10 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildRecentProductEvidencePrompt, compactRecentProducts } from "./recent-product-evidence.ts";
+import {
+  buildDeterministicEvidenceAnswer,
+  buildRecentProductEvidencePrompt,
+  compactRecentProducts,
+  isEvidenceOnlyFollowup,
+} from "./recent-product-evidence.ts";
 import type { ProductFull } from "./types.ts";
 
 function product(overrides: Partial<ProductFull> = {}): ProductFull {
@@ -30,4 +35,29 @@ Deno.test("recent evidence prompt neutralizes markup and forbids stale render", 
   assert(!prompt.includes("<script>"));
   assert(prompt.includes("untrusted data"));
   assert(prompt.includes("search_catalog confirms"));
+});
+
+Deno.test("evidence follow-up classifier separates questions from a new selection", () => {
+  assertEquals(isEvidenceOnlyFollowup("Они точно подходят для 30 квадратных метров?"), true);
+  assertEquals(isEvidenceOnlyFollowup("Почему варианты отличаются по цене? Сравни характеристики."), true);
+  assertEquals(isEvidenceOnlyFollowup("Тогда подбери подходящий кабель"), false);
+});
+
+Deno.test("deterministic evidence answer contains only cached facts and uncertainty boundary", () => {
+  const answer = buildDeterministicEvidenceAnswer([{
+    id: "1",
+    pagetitle: "Люстра TEST 70W",
+    article: null,
+    vendor: "TEST",
+    price: 45000,
+    unit: "шт.",
+    url: "https://220volt.kz/catalog/test/",
+    short_traits: ["Мощность: 70 Вт", "Световой поток: 4200 лм"],
+    shown_at: "2026-08-17T00:00:00.000Z",
+  }]);
+  assertEquals(answer.includes("45"), true);
+  assertEquals(answer.includes("₸/шт."), true);
+  assertEquals(answer.includes("Мощность: 70 Вт"), true);
+  assertEquals(answer.includes("гарантировать его нельзя"), true);
+  assertEquals(answer.includes("https://"), false);
 });

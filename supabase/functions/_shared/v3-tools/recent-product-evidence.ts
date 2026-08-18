@@ -22,6 +22,31 @@ export interface RecentProductEvidence {
   shown_at: string;
 }
 
+export function isEvidenceOnlyFollowup(message: string): boolean {
+  const normalized = cleanText(message, 800).toLowerCase().replace(/ё/g, "е");
+  if (!normalized) return false;
+  if (/(?:^|\s)(?:подбери|подобрать|найди|найти|покажи|предложи|добавь)(?:\s|$)/u.test(normalized)) return false;
+  return /(?:почему|точно|сравн|характерист|единиц|цена|остат|подход|этот|эта|эти|вариант)/u.test(normalized);
+}
+
+function displayUnit(unit: string | null): string {
+  const value = cleanText(unit, 40);
+  return value ? `/${value}` : "";
+}
+
+export function buildDeterministicEvidenceAnswer(products: RecentProductEvidence[]): string {
+  const rows = products.slice(0, 5).map((product, index) => {
+    const traits = product.short_traits.slice(0, 5).map((trait) => cleanText(trait, 180)).filter(Boolean);
+    const facts = traits.length ? traits.join("; ") : "дополнительные характеристики в карточке не подтверждены";
+    return `${index + 1}. ${cleanText(product.pagetitle, 240)} — ${product.price.toLocaleString("ru-RU")} ₸${displayUnit(product.unit)}; ${facts}.`;
+  });
+  return [
+    "По ранее показанным карточкам могу подтвердить только следующие данные:",
+    ...rows,
+    "Если нужного параметра нет в этом списке, гарантировать его нельзя — лучше уточнить его у менеджера или проверить в актуальной карточке товара.",
+  ].join("\n");
+}
+
 function cleanText(value: unknown, max: number): string {
   return String(value ?? "")
     .replace(/\p{Cc}/gu, " ")
