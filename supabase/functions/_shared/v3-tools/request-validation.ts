@@ -13,6 +13,9 @@ const MAX_OBJECT_KEYS = 100;
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+// Compatibility window for the public widget released before UUID validation.
+// Keep this exact and bounded: messageId is an idempotency key, not an auth token.
+const LEGACY_WIDGET_MESSAGE_ID_RE = /^msg_[0-9]{13}_[a-z0-9]{8}$/i;
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
 const FORBIDDEN_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const TOP_LEVEL_FIELDS = new Set([
@@ -158,7 +161,9 @@ export function validateChatRequestBody(
   const messageId = input.messageId;
   if (typeof messageId !== "string") {
     addIssue(issues, "messageId", "expected_string");
-  } else if (!UUID_RE.test(messageId)) {
+  } else if (
+    !UUID_RE.test(messageId) && !LEGACY_WIDGET_MESSAGE_ID_RE.test(messageId)
+  ) {
     addIssue(issues, "messageId", "invalid_format");
   }
 

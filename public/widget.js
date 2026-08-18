@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = '2026-08-17-stream-trace';
+  var WIDGET_VERSION = 'widget-2cbc6c7a404fe7bc';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -59,14 +59,74 @@
       });
     }
   }
+  function newSessionId() {
+    return 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+  }
+  function isValidSessionId(value) {
+    return typeof value === 'string' && value.length > 0 && value.length <= 128 &&
+      /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(value);
+  }
+  function isPlainRecord(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+    var proto = Object.getPrototypeOf(value);
+    return proto === Object.prototype || proto === null;
+  }
+  function sanitizeHistory(value) {
+    if (!Array.isArray(value)) return [];
+    var cleaned = [];
+    var totalChars = 0;
+    for (var i = value.length - 1; i >= 0 && cleaned.length < 20; i--) {
+      var item = value[i];
+      if (!isPlainRecord(item) || (item.role !== 'user' && item.role !== 'assistant') ||
+          typeof item.content !== 'string') continue;
+      var content = item.content.trim();
+      var maxChars = item.role === 'user' ? 2000 : 8000;
+      if (!content || content.length > maxChars || totalChars + content.length > 32000) continue;
+      cleaned.unshift({ role: item.role, content: content });
+      totalChars += content.length;
+    }
+    return cleaned;
+  }
+  function sanitizeDialogSlots(value) {
+    if (!isPlainRecord(value)) return {};
+    var forbidden = Object.create(null);
+    forbidden.__proto__ = true;
+    forbidden.constructor = true;
+    forbidden.prototype = true;
+    var budget = { nodes: 0 };
+    function cloneJson(input, depth) {
+      budget.nodes++;
+      if (budget.nodes > 1000 || depth > 12) throw new Error('slots too complex');
+      if (input === null || typeof input === 'string' || typeof input === 'boolean') return input;
+      if (typeof input === 'number' && Number.isFinite(input)) return input;
+      if (Array.isArray(input)) return input.map(function(child) { return cloneJson(child, depth + 1); });
+      if (!isPlainRecord(input)) throw new Error('slots contain invalid value');
+      var keys = Object.keys(input);
+      if (keys.length > 100) throw new Error('slots contain too many keys');
+      var output = Object.create(null);
+      for (var i = 0; i < keys.length; i++) {
+        if (forbidden[keys[i]]) throw new Error('slots contain forbidden key');
+        output[keys[i]] = cloneJson(input[keys[i]], depth + 1);
+      }
+      return output;
+    }
+    try {
+      var result = cloneJson(value, 0);
+      if (JSON.stringify(result).length > 16000) return {};
+      return result;
+    } catch(e) {
+      return {};
+    }
+  }
   // Try to restore from sessionStorage
   try {
     const saved = sessionStorage.getItem(STORAGE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
-      sessionId = parsed.sessionId || ('session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now());
-      conversationHistory = parsed.history || [{ role: 'assistant', content: initialGreeting }];
-      dialogSlots = parsed.dialogSlots || {};
+      sessionId = isPlainRecord(parsed) && isValidSessionId(parsed.sessionId) ? parsed.sessionId : newSessionId();
+      conversationHistory = isPlainRecord(parsed) ? sanitizeHistory(parsed.history) : [];
+      dialogSlots = isPlainRecord(parsed) ? sanitizeDialogSlots(parsed.dialogSlots) : {};
+      if (!conversationHistory.length) conversationHistory = [{ role: 'assistant', content: initialGreeting }];
 
       // Инвариант: слоты не могут существовать без пользовательских сообщений.
       // Если в истории нет ни одной user-реплики — это «новый чат», сбрасываем slots
@@ -75,13 +135,13 @@
         && conversationHistory.some(function(m) { return m && m.role === 'user'; });
       if (!hasUserMessages) {
         dialogSlots = {};
-        sessionId = 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+        sessionId = newSessionId();
       }
     }
   } catch(e) {}
   
   if (!sessionId) {
-    sessionId = 'session_' + Math.random().toString(36).substr(2, 9) + '_' + Date.now();
+    sessionId = newSessionId();
   }
   if (!conversationHistory) {
     conversationHistory = [{ role: 'assistant', content: initialGreeting }];
@@ -107,12 +167,35 @@
   // Save state to sessionStorage
   function saveState() {
     try {
+      conversationHistory = sanitizeHistory(conversationHistory);
+      dialogSlots = sanitizeDialogSlots(dialogSlots);
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
         sessionId: sessionId,
         history: conversationHistory.slice(-20),
         dialogSlots: dialogSlots
       }));
     } catch(e) {}
+  }
+
+  async function createHttpError(response, label) {
+    var detail = '';
+    var errorCode = '';
+    var issues = [];
+    try {
+      var responseText = (await response.text()).slice(0, 2000);
+      detail = responseText;
+      try {
+        var errorBody = JSON.parse(responseText);
+        errorCode = typeof errorBody.code === 'string' ? errorBody.code : '';
+        issues = Array.isArray(errorBody.issues) ? errorBody.issues.slice(0, 10) : [];
+        detail = typeof errorBody.error === 'string' ? errorBody.error : responseText;
+      } catch(e) {}
+    } catch(e) {}
+    var error = new Error(label + ' HTTP ' + response.status + (detail ? ': ' + detail : ''));
+    error.status = response.status;
+    error.code = errorCode;
+    error.issues = issues;
+    return error;
   }
 
   // Clean up any previous widget instance before initializing again
@@ -781,7 +864,7 @@
     var activeSlots = {};
     var slotCount = 0;
     for (var sk in dialogSlots) {
-      if (dialogSlots[sk].status === 'pending' && slotCount < 3) {
+      if (isPlainRecord(dialogSlots[sk]) && dialogSlots[sk].status === 'pending' && slotCount < 3) {
         activeSlots[sk] = dialogSlots[sk];
         slotCount++;
       }
@@ -807,9 +890,7 @@
 
     clearTimeout(timer);
 
-    if (!response.ok) {
-      throw new Error(label + ' HTTP ' + response.status);
-    }
+    if (!response.ok) throw await createHttpError(response, label);
 
     // Check if we actually got a streaming response
     var contentType = response.headers.get('content-type') || '';
@@ -1017,9 +1098,7 @@
 
     clearTimeout(timer);
 
-    if (!response.ok) {
-      throw new Error(label + ' HTTP ' + response.status);
-    }
+    if (!response.ok) throw await createHttpError(response, label);
 
     var text = await response.text();
     var data;
@@ -1228,7 +1307,11 @@
       try { console.warn('[Widget] showing partial stream content (no fallback triggered)'); } catch(e) {}
     } else {
       hideTyping();
-      addMessage('Извините, произошла ошибка соединения. Попробуйте позже.', 'assistant');
+      if (lastError && lastError.status === 400) {
+        addMessage('Не удалось продолжить диалог из-за некорректных или устаревших данных. Обновите страницу и повторите запрос.', 'assistant');
+      } else {
+        addMessage('Извините, произошла ошибка соединения. Попробуйте позже.', 'assistant');
+      }
     }
 
     isLoading = false;
