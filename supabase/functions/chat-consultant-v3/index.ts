@@ -27,6 +27,7 @@ import {
   groundedTokenRecoveryQueries,
   guardCategoryScopeByReasoning,
   selectGroundedTokenRecoveryCandidate,
+  titleContainsLiteralToken,
 } from "../_shared/v3-tools/category-reasoning-guard.ts";
 import { detectUserIntentMode, shouldSuppressNegativeSuitabilityCard } from "../_shared/v3-tools/intent-mode.ts";
 import {
@@ -3164,7 +3165,7 @@ async function runExpertLoop(
             for (const query of tokenQueries) {
               const recovered = await runTool("search_catalog", { ...runArgs, query }, ctx);
               if (!recovered.ok || recovered.tool !== "search_catalog") continue;
-              const titleBacked = recovered.results.filter((product) => valueIsEvidenced(query, product.pagetitle));
+              const titleBacked = recovered.results.filter((product) => titleContainsLiteralToken(product.pagetitle, query));
               if (titleBacked.length === 0) continue;
               tokenAttempts.push({
                 query,
