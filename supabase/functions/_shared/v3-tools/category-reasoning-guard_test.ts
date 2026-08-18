@@ -3,6 +3,7 @@ import {
   groundedCategoryRecoveryQueries,
   groundedTokenRecoveryQueries,
   guardCategoryScopeByReasoning,
+  selectGroundedTokenRecoveryCandidate,
 } from "./category-reasoning-guard.ts";
 
 const discovered = {
@@ -68,4 +69,16 @@ Deno.test("terminal category retry uses only leaves grounded in the reasoning", 
 
 Deno.test("terminal token ladder decomposes a failed semantic phrase", () => {
   assertEquals(groundedTokenRecoveryQueries("современные люстры"), ["современные", "люстры"]);
+});
+
+Deno.test("token recovery keeps the consultant's selective title token and rejects a broad substitute", () => {
+  const selected = selectGroundedTokenRecoveryCandidate([
+    { query: "canonical-form", total: 25 },
+    { query: "generic-type", total: 410 },
+  ], 703);
+  assertEquals(selected, { query: "canonical-form", total: 25 });
+  assertEquals(selectGroundedTokenRecoveryCandidate([
+    { query: "generic-a", total: 180 },
+    { query: "generic-b", total: 410 },
+  ], 703), null);
 });
