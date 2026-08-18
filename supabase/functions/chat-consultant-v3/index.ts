@@ -40,10 +40,18 @@ import {
 } from "../_shared/v3-tools/recent-product-evidence.ts";
 import { META_DECLINE_TEXT, isMetaSelfQuestion, redactInternals } from "../_shared/v3-tools/internals-guard.ts";
 import { CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest } from "../_shared/v3-tools/clean-power-safety.ts";
+import {
+  classifyOutdoorPoeIntent,
+  OUTDOOR_POE_ASSESSMENT_ANSWER,
+  OUTDOOR_POE_EXPLANATION_ANSWER,
+  OUTDOOR_POE_SELECTION_EMPTY,
+  OUTDOOR_POE_SELECTION_INTRO,
+  verifiedOutdoorPoeProducts,
+} from "../_shared/v3-tools/outdoor-poe-policy.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
-import type { ProductCache, ProductFull, SearchCatalogOk, ToolResult, ToolSideEffect } from "../_shared/v3-tools/types.ts";
+import type { ProductCache, ProductFull, ProductRef, SearchCatalogOk, ToolResult, ToolSideEffect } from "../_shared/v3-tools/types.ts";
 import {
   MAX_REQUEST_BODY_BYTES,
   validateChatRequestBody,
@@ -1756,6 +1764,73 @@ async function callOpenRouterEvidenceFollowup(
 
 interface StepLog { step: string; ms: number; meta?: Record<string, unknown>; }
 
+const OUTDOOR_POE_CATALOG_QUERIES = [
+  "кабель витая пара LDPE",
+  "кабель Cat.5E LDPE",
+  "кабель витая пара Cat.5E",
+];
+
+async function selectVerifiedOutdoorPoeProducts(
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<ProductFull[]> {
+  const started = Date.now();
+  const searches = await Promise.all(
+    OUTDOOR_POE_CATALOG_QUERIES.map((query) => executeSearchCatalog({
+      mode: "by_query",
+      query,
+      min_price: 1,
+      per_page: 50,
+    }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache)),
+  );
+  const candidates: ProductRef[] = searches.flatMap((result) => result.ok ? result.results : []);
+  const verified = verifiedOutdoorPoeProducts(candidates);
+  const elapsed = Date.now() - started;
+
+  send({
+    type: "tool_event",
+    tool: "search_catalog",
+    phase: "result",
+    duration_ms: elapsed,
+    summary: `PoE outdoor policy: подтверждено ${verified.length}`,
+  });
+
+  if (verified.length === 0) {
+    send({ type: "delta", content: OUTDOOR_POE_SELECTION_EMPTY });
+    steps.push({
+      step: "v3_outdoor_poe_selection_empty",
+      ms: Date.now() - t0,
+      meta: {
+        queries: OUTDOOR_POE_CATALOG_QUERIES,
+        catalog_totals: searches.map((result) => result.ok ? result.total : 0),
+        candidates: candidates.length,
+        duration_ms: elapsed,
+      },
+    });
+    return [];
+  }
+
+  const ids = verified.map((product) => product.id);
+  const rendered = executeRenderProducts({ product_ids: ids, total_available: verified.length }, ctx.cache);
+  if (!rendered.ok) {
+    send({ type: "delta", content: OUTDOOR_POE_SELECTION_EMPTY });
+    steps.push({ step: "v3_outdoor_poe_render_failed", ms: Date.now() - t0, meta: { error_code: rendered.error_code } });
+    return [];
+  }
+
+  send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: verified.length });
+  steps.push({
+    step: "v3_outdoor_poe_selection_rendered",
+    ms: Date.now() - t0,
+    meta: { candidates: candidates.length, verified: verified.length, rendered: rendered.rendered_count, duration_ms: elapsed },
+  });
+  return ids
+    .map((id) => ctx.cache.get(id))
+    .filter((product): product is ProductFull => Boolean(product));
+}
+
 async function insertTurnLogStart(
   supabase: SupabaseClient,
   sessionId: string,
@@ -3437,6 +3512,7 @@ Deno.serve(async (req) => {
       }
 
       try {
+        const outdoorPoeIntent = classifyOutdoorPoeIntent(userMessage, history);
         // GUARD v3_meta_question_declined: вопрос про устройство сервиса
         // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
         // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
@@ -3449,6 +3525,19 @@ Deno.serve(async (req) => {
           steps.push({ step: "v3_clean_power_safety_answer", ms: Date.now() - t0 });
           send({ type: "delta", content: CLEAN_POWER_SAFETY_ANSWER });
           productsCount = 0;
+        } else if (outdoorPoeIntent === "assessment") {
+          steps.push({ step: "v3_outdoor_poe_assessment", ms: Date.now() - t0 });
+          send({ type: "delta", content: OUTDOOR_POE_ASSESSMENT_ANSWER });
+          productsCount = 0;
+        } else if (outdoorPoeIntent === "explanation") {
+          steps.push({ step: "v3_outdoor_poe_explanation", ms: Date.now() - t0 });
+          send({ type: "delta", content: OUTDOOR_POE_EXPLANATION_ANSWER });
+          productsCount = 0;
+        } else if (outdoorPoeIntent === "selection") {
+          send({ type: "delta", content: OUTDOOR_POE_SELECTION_INTRO });
+          const selectedProducts = await selectVerifiedOutdoorPoeProducts(ctx, send, steps, t0);
+          productsCount = selectedProducts.length;
+          await persistRecentProductEvidence(supabase, sessionId, selectedProducts);
         } else if (recentProductEvidence.length > 0 && isEvidenceOnlyFollowup(userMessage)) {
           const answer = buildDeterministicEvidenceAnswer(recentProductEvidence);
           steps.push({
