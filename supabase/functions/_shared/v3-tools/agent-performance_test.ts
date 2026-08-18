@@ -22,6 +22,25 @@ Deno.test("agent phase: successful discovery requires search and blocks rediscov
   assert(!toolNamesForAgentPhase(phase).includes("jargon_recover_catalog"));
 });
 
+Deno.test("agent phase: jargon helper is unavailable initially and only opens after category_not_found", () => {
+  assert(!toolNamesForAgentPhase("open").includes("jargon_recover_catalog"));
+  assertEquals(nextAgentPhase("open", {
+    tool: "discover_category",
+    ok: false,
+    errorCode: "category_not_found",
+    intentMode: "select",
+    replacementIntent: false,
+  }), "jargon_after_failed_discovery");
+  assert(toolNamesForAgentPhase("jargon_after_failed_discovery").includes("jargon_recover_catalog"));
+  assertEquals(nextAgentPhase("open", {
+    tool: "discover_category",
+    ok: false,
+    errorCode: "upstream_error",
+    intentMode: "select",
+    replacementIntent: false,
+  }), "open");
+});
+
 Deno.test("agent phase: clarification is available only after discovery and before a non-empty search", () => {
   assert(!toolNamesForAgentPhase("open").includes("propose_clarification"));
   assert(toolNamesForAgentPhase("search_after_discovery").includes("propose_clarification"));
@@ -66,14 +85,15 @@ Deno.test("agent phase: quantified reasoning forces exactly the next phase tool"
   assertEquals(forcedToolNameForAgentPhase("open", { reasoningRequiresCatalog: false }), null);
 });
 
-Deno.test("agent phase: empty search reopens recovery while replacement keeps its workflow", () => {
+Deno.test("agent phase: empty search keeps the established category and blocks lexical reinterpretation", () => {
   assertEquals(nextAgentPhase("search_after_discovery", {
     tool: "search_catalog",
     ok: true,
     total: 0,
     intentMode: "select",
     replacementIntent: false,
-  }), "open");
+  }), "search_after_discovery");
+  assert(!toolNamesForAgentPhase("search_after_discovery").includes("jargon_recover_catalog"));
   assertEquals(nextAgentPhase("search_after_discovery", {
     tool: "search_catalog",
     ok: true,
@@ -81,6 +101,25 @@ Deno.test("agent phase: empty search reopens recovery while replacement keeps it
     intentMode: "select",
     replacementIntent: true,
   }), "open");
+});
+
+Deno.test("agent phase: partial jargon result cannot be forced into product rendering", () => {
+  assertEquals(nextAgentPhase("jargon_after_failed_discovery", {
+    tool: "jargon_recover_catalog",
+    ok: true,
+    total: 2,
+    partialMatch: true,
+    intentMode: "select",
+    replacementIntent: false,
+  }), "jargon_after_failed_discovery");
+  assertEquals(nextAgentPhase("jargon_after_failed_discovery", {
+    tool: "jargon_recover_catalog",
+    ok: true,
+    total: 2,
+    partialMatch: false,
+    intentMode: "select",
+    replacementIntent: false,
+  }), "terminal_after_search");
 });
 
 Deno.test("LLM catalog view is bounded, relevance-ranked, and materially smaller", () => {

@@ -2699,7 +2699,9 @@ async function runExpertLoop(
             ? "Сначала выполни discovery/search. Уточнение допустимо после discovery, только если без него поиск объективно невозможен."
             : agentPhase === "search_after_discovery"
               ? "Категория уже открыта. Используй search_catalog либо задай одно объективно необходимое уточнение. Не повторяй discover_category."
-              : "Ненулевой пул уже найден. Перенеси свои критерии в render_products; новый поиск, уточнение и служебные действия не нужны.";
+              : agentPhase === "jargon_after_failed_discovery"
+                ? "Категория не распознана. Используй резервный jargon_recover_catalog или обычный search_catalog с каноническим термином из собственного рассуждения."
+                : "Ненулевой пул уже найден. Перенеси свои критерии в render_products; новый поиск, уточнение и служебные действия не нужны.";
           messages.push({
             role: "tool",
             tool_call_id: tc.id,
@@ -3331,8 +3333,12 @@ async function runExpertLoop(
         agentPhase = nextAgentPhase(agentPhase, {
           tool: tc.name as ToolName,
           ok: result.ok,
+          errorCode: result.ok ? undefined : result.error_code,
           total: result.ok && (tc.name === "search_catalog" || tc.name === "jargon_recover_catalog")
             ? (result as { total?: number }).total
+            : undefined,
+          partialMatch: result.ok && tc.name === "jargon_recover_catalog"
+            ? Boolean((result as { partial_match?: boolean }).partial_match)
             : undefined,
           intentMode,
           replacementIntent,

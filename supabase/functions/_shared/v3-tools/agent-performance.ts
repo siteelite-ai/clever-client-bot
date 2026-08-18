@@ -1,11 +1,14 @@
 import type { ProductRef, ToolName } from "./types.ts";
 
-export type AgentPhase = "open" | "search_after_discovery" | "terminal_after_search";
+export type AgentPhase =
+  | "open"
+  | "search_after_discovery"
+  | "jargon_after_failed_discovery"
+  | "terminal_after_search";
 
 const OPEN_TOOLS: readonly ToolName[] = [
   "discover_category",
   "search_catalog",
-  "jargon_recover_catalog",
   "lookup_knowledge",
   "lookup_contacts",
   "escalate_to_manager",
@@ -25,6 +28,19 @@ const SEARCH_AFTER_DISCOVERY_TOOLS: readonly ToolName[] = [
   "note_state",
 ];
 
+// The lexical helper is a reserve for a category term the catalog could not
+// resolve. It must not reinterpret a term that the main consultant has already
+// understood inside a valid category; that consultant should carry its own
+// canonical/EN candidate into search_catalog instead.
+const JARGON_AFTER_FAILED_DISCOVERY_TOOLS: readonly ToolName[] = [
+  "jargon_recover_catalog",
+  "search_catalog",
+  "lookup_knowledge",
+  "lookup_contacts",
+  "escalate_to_manager",
+  "note_state",
+];
+
 const TERMINAL_AFTER_SEARCH_TOOLS: readonly ToolName[] = [
   "render_products",
 ];
@@ -39,6 +55,7 @@ export function toolNamesForAgentPhase(phase: AgentPhase, policy: AgentToolPolic
       ? SEARCH_AFTER_DISCOVERY_TOOLS.filter((tool) => tool !== "propose_clarification")
       : SEARCH_AFTER_DISCOVERY_TOOLS;
   }
+  if (phase === "jargon_after_failed_discovery") return JARGON_AFTER_FAILED_DISCOVERY_TOOLS;
   if (phase === "terminal_after_search") return TERMINAL_AFTER_SEARCH_TOOLS;
   return OPEN_TOOLS;
 }
@@ -59,6 +76,7 @@ export function forcedToolNameForAgentPhase(phase: AgentPhase, policy: AgentTool
   if (!policy.reasoningRequiresCatalog) return null;
   if (phase === "open") return "discover_category";
   if (phase === "search_after_discovery") return "search_catalog";
+  if (phase === "jargon_after_failed_discovery") return "jargon_recover_catalog";
   return null;
 }
 
@@ -86,6 +104,8 @@ export interface AgentPhaseEvent {
   tool: ToolName;
   ok: boolean;
   total?: number;
+  errorCode?: string;
+  partialMatch?: boolean;
   intentMode: "select" | "inquire";
   replacementIntent: boolean;
 }
@@ -97,11 +117,32 @@ export interface AgentPhaseEvent {
  */
 export function nextAgentPhase(current: AgentPhase, event: AgentPhaseEvent): AgentPhase {
   if (event.tool === "discover_category") {
-    return event.ok ? "search_after_discovery" : "open";
+    if (event.ok) return "search_after_discovery";
+    return event.errorCode === "category_not_found" ? "jargon_after_failed_discovery" : "open";
   }
 
-  if (event.tool === "search_catalog" || event.tool === "jargon_recover_catalog") {
-    if (!event.ok || !Number.isFinite(event.total) || (event.total ?? 0) <= 0) return "open";
+  if (event.tool === "search_catalog") {
+    if (!event.ok || !Number.isFinite(event.total) || (event.total ?? 0) <= 0) {
+      // A zero result does not invalidate a successfully discovered category.
+      // Keep the main consultant in ordinary search so it can try the
+      // canonical/EN term it already inferred instead of delegating meaning to
+      // a second model.
+      if (current === "search_after_discovery" || current === "jargon_after_failed_discovery") return current;
+      return "open";
+    }
+    if (event.intentMode === "select" && !event.replacementIntent) return "terminal_after_search";
+    return "open";
+  }
+
+  if (event.tool === "jargon_recover_catalog") {
+    if (
+      !event.ok ||
+      !Number.isFinite(event.total) ||
+      (event.total ?? 0) <= 0 ||
+      event.partialMatch
+    ) {
+      return current === "jargon_after_failed_discovery" ? current : "open";
+    }
     if (event.intentMode === "select" && !event.replacementIntent) return "terminal_after_search";
     return "open";
   }
