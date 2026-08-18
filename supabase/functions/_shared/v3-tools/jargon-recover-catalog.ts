@@ -89,6 +89,8 @@ export async function executeJargonRecoverCatalog(
   const jargon = await tryJargonFallback(source, {
     apiKey: deps.openrouterApiKey,
     category: categoryHint,
+    fetchImpl: deps.fetchImpl,
+    timeoutMs: deps.timeoutMs,
   });
   const candidates = [
     ...(jargon.ok ? jargon.candidates : []),
@@ -107,6 +109,10 @@ export async function executeJargonRecoverCatalog(
     const result = await executeSearchCatalog({
       mode: "by_query",
       query: candidate,
+      // The discovered category is a hard relevance boundary, not merely an
+      // LLM hint. Without it a plausible lexical candidate can return an
+      // unrelated product from another catalog branch.
+      category: input.category,
       min_price: input.min_price,
       max_price: input.max_price,
       per_page: perPage,

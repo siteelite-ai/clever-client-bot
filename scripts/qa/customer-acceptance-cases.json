@@ -69,6 +69,39 @@
       ]
     },
     {
+      "id": "customer-corn-lamp-jargon",
+      "title": "Жаргон «лампа-кукуруза» остаётся в категории ламп",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "а у тебя есть лампы кукуруза?",
+          "expect": {
+            "min_products": 1,
+            "require_product_title": ["CORN"],
+            "forbid_product_title": ["LABEL OFF", "удаления наклеек", "аэрозоль"],
+            "forbid_text": ["search_catalog", "discover_category", "jargon_recover_catalog", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-vvg-exact-cheapest",
+      "title": "Точная маркировка ВВГ 2×1,5 и минимальная цена",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "найди кабель ввг 2*1,5 самый дешевый",
+          "expect": {
+            "min_products": 1,
+            "max_products": 1,
+            "require_product_title": ["2*1,5", "2×1,5", "2x1,5"],
+            "forbid_product_title": ["4*2,5", "4×2,5", "4x2,5"],
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
       "id": "customer-generator-clean-power",
       "title": "Генератор 900 Вт, котёл и чистая синусоида",
       "repeat": 3,
