@@ -3157,7 +3157,7 @@ async function runExpertLoop(
           }
         }
 
-        const previousAgentPhase = agentPhase;
+        const previousAgentPhase: AgentPhase = agentPhase;
         agentPhase = nextAgentPhase(agentPhase, {
           tool: tc.name as ToolName,
           ok: result.ok,
