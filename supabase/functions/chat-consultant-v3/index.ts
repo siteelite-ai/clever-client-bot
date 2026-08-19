@@ -1694,6 +1694,7 @@ async function callOpenRouter(
     }>;
   };
   try {
+    const availableTools = TOOL_SCHEMAS.filter((schema) => availableToolNames.includes(schema.function.name));
     res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -1707,10 +1708,14 @@ async function callOpenRouter(
         temperature: 0.2,
         max_tokens: 4000,
         messages,
-        tools: TOOL_SCHEMAS.filter((schema) => availableToolNames.includes(schema.function.name)),
-        tool_choice: forcedToolName
-          ? { type: "function", function: { name: forcedToolName } }
-          : "auto",
+        ...(availableTools.length > 0
+          ? {
+            tools: availableTools,
+            tool_choice: forcedToolName
+              ? { type: "function", function: { name: forcedToolName } }
+              : "auto",
+          }
+          : {}),
       }),
       signal: localCtrl.signal,
     });
@@ -2723,6 +2728,8 @@ async function runExpertLoop(
               ? "Категория уже открыта. Используй search_catalog либо задай одно объективно необходимое уточнение. Не повторяй discover_category."
               : agentPhase === "jargon_after_failed_discovery"
                 ? "Категория не распознана. Используй резервный jargon_recover_catalog или обычный search_catalog с каноническим термином из собственного рассуждения."
+              : agentPhase === "inquiry_explanation_ready"
+                ? "Каталожные доказательства по названной серии уже получены. Ответь клиенту развёрнутым объяснением на русском без карточек, цен, ссылок и новых вызовов инструментов."
                 : "Ненулевой пул уже найден. Перенеси свои критерии в render_products; новый поиск, уточнение и служебные действия не нужны.";
           messages.push({
             role: "tool",
@@ -3474,6 +3481,7 @@ async function runExpertLoop(
             : undefined,
           intentMode,
           replacementIntent,
+          explanationOnly: inquiryRequiresCatalogGrounding,
         });
         if (agentPhase !== previousAgentPhase) {
           steps.push({

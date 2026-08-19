@@ -114,6 +114,21 @@ Deno.test("agent phase: further inquiry searches preserve render access", () => 
   }), "inquiry_with_results");
 });
 
+Deno.test("named-series explanation becomes a prose-only evidence phase", () => {
+  const phase = nextAgentPhase("search_after_discovery", {
+    tool: "search_catalog",
+    ok: true,
+    total: 8,
+    intentMode: "inquire",
+    replacementIntent: false,
+    explanationOnly: true,
+  });
+  assertEquals(phase, "inquiry_explanation_ready");
+  assertEquals(toolNamesForAgentPhase(phase), []);
+  assertEquals(forcedToolNameForAgentPhase(phase), null);
+  assert(!isToolAllowedInAgentPhase(phase, "render_products"));
+});
+
 Deno.test("inquiry prose is deferred until evidence while selection reasoning stays visible", () => {
   assert(shouldDeferInquiryIntro("inquire", true, false, false));
   assert(!shouldDeferInquiryIntro("select", true, false, false));

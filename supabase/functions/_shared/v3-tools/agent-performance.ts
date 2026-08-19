@@ -5,6 +5,7 @@ export type AgentPhase =
   | "search_after_discovery"
   | "jargon_after_failed_discovery"
   | "inquiry_with_results"
+  | "inquiry_explanation_ready"
   | "terminal_after_search";
 
 const OPEN_TOOLS: readonly ToolName[] = [
@@ -82,6 +83,7 @@ export function toolNamesForAgentPhase(phase: AgentPhase, policy: AgentToolPolic
   }
   if (phase === "jargon_after_failed_discovery") return JARGON_AFTER_FAILED_DISCOVERY_TOOLS;
   if (phase === "inquiry_with_results") return INQUIRY_WITH_RESULTS_TOOLS;
+  if (phase === "inquiry_explanation_ready") return [];
   if (phase === "terminal_after_search") return TERMINAL_AFTER_SEARCH_TOOLS;
   return OPEN_TOOLS;
 }
@@ -134,6 +136,7 @@ export interface AgentPhaseEvent {
   partialMatch?: boolean;
   intentMode: "select" | "inquire";
   replacementIntent: boolean;
+  explanationOnly?: boolean;
 }
 
 /**
@@ -157,7 +160,7 @@ export function nextAgentPhase(current: AgentPhase, event: AgentPhaseEvent): Age
       return "open";
     }
     if (event.intentMode === "select") return "terminal_after_search";
-    return "inquiry_with_results";
+    return event.explanationOnly ? "inquiry_explanation_ready" : "inquiry_with_results";
   }
 
   if (event.tool === "jargon_recover_catalog") {
@@ -170,7 +173,7 @@ export function nextAgentPhase(current: AgentPhase, event: AgentPhaseEvent): Age
       return current === "jargon_after_failed_discovery" ? current : "open";
     }
     if (event.intentMode === "select") return "terminal_after_search";
-    return "inquiry_with_results";
+    return event.explanationOnly ? "inquiry_explanation_ready" : "inquiry_with_results";
   }
 
   if (event.tool === "render_products" && !event.ok) return "open";
