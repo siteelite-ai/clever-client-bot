@@ -44,6 +44,8 @@ import {
   compactRecentProducts,
   extractRenderedProductTitles,
   isEvidenceOnlyFollowup,
+  isRecentProductPriceSelectionFollowup,
+  latestRecentProductEvidenceSet,
   loadRecentProductEvidence,
   persistRecentProductEvidence,
   type RecentProductEvidence,
@@ -2151,6 +2153,95 @@ async function selectVerifiedExactCompoundProducts(
   return ids
     .map((id) => ctx.cache.get(id))
     .filter((product): product is ProductFull => Boolean(product));
+}
+
+async function selectVerifiedRecentPriceFollowup(
+  userMessage: string,
+  evidence: RecentProductEvidence[],
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<{ handled: boolean; products: ProductFull[] }> {
+  const intent = detectPriceDirection(userMessage);
+  if (
+    evidence.length === 0 ||
+    !isRecentProductPriceSelectionFollowup(userMessage) ||
+    intent?.kind !== "superlative" ||
+    intent.direction === "same"
+  ) {
+    return { handled: false, products: [] };
+  }
+
+  const started = Date.now();
+  const latestEvidence = latestRecentProductEvidenceSet(evidence);
+  const refreshed = await Promise.all(latestEvidence.map(async (previous) => {
+    const result = await executeSearchCatalog({
+      mode: "by_pagetitle",
+      pagetitle: previous.pagetitle,
+      per_page: 3,
+    }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+    if (!result.ok) return null;
+    const wanted = previous.pagetitle.toLowerCase().replace(/ё/g, "е").replace(/\s+/g, " ").trim();
+    const exact = result.results.find((product) =>
+      product.pagetitle.toLowerCase().replace(/ё/g, "е").replace(/\s+/g, " ").trim() === wanted
+    );
+    return exact ? ctx.cache.get(String(exact.id)) ?? null : null;
+  }));
+  const liveProducts = refreshed
+    .filter((product): product is ProductFull => Boolean(product && Number.isFinite(product.price) && product.price > 0))
+    .sort((left, right) => intent.direction === "more_expensive" ? right.price - left.price : left.price - right.price);
+  const selected = liveProducts.slice(0, 1);
+  const elapsed = Date.now() - started;
+
+  send({
+    type: "tool_event",
+    tool: "search_catalog",
+    phase: "result",
+    duration_ms: elapsed,
+    summary: `Recent product price follow-up: подтверждено ${liveProducts.length}`,
+  });
+
+  if (selected.length === 0) {
+    send({
+      type: "delta",
+      content: "Не удалось заново подтвердить ранее показанные карточки в актуальном каталоге. Не буду выдавать устаревшую цену или ссылку — могу повторить подбор.",
+    });
+    steps.push({
+      step: "v3_recent_price_followup_empty",
+      ms: Date.now() - t0,
+      meta: { evidence_count: evidence.length, latest_evidence_count: latestEvidence.length, direction: intent.direction, duration_ms: elapsed },
+    });
+    return { handled: true, products: [] };
+  }
+
+  const rendered = executeRenderProducts({
+    product_ids: selected.map((product) => product.id),
+    total_available: liveProducts.length,
+  }, ctx.cache);
+  if (!rendered.ok) {
+    steps.push({
+      step: "v3_recent_price_followup_render_failed",
+      ms: Date.now() - t0,
+      meta: { error_code: rendered.error_code },
+    });
+    return { handled: true, products: [] };
+  }
+  send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: liveProducts.length });
+  steps.push({
+    step: "v3_recent_price_followup_rendered",
+    ms: Date.now() - t0,
+    meta: {
+      evidence_count: evidence.length,
+      latest_evidence_count: latestEvidence.length,
+      refreshed_count: liveProducts.length,
+      direction: intent.direction,
+      selected_id: selected[0].id,
+      selected_price: selected[0].price,
+      duration_ms: elapsed,
+    },
+  });
+  return { handled: true, products: selected };
 }
 
 async function selectVerifiedHouseholdMotionLights(
@@ -4617,6 +4708,17 @@ Deno.serve(async (req) => {
           steps.push({ step: "v3_clean_power_safety_answer", ms: Date.now() - t0 });
           send({ type: "delta", content: CLEAN_POWER_SAFETY_ANSWER });
           productsCount = 0;
+        } else if (recentProductEvidence.length > 0 && isRecentProductPriceSelectionFollowup(userMessage)) {
+          const selection = await selectVerifiedRecentPriceFollowup(
+            userMessage,
+            recentProductEvidence,
+            ctx,
+            send,
+            steps,
+            t0,
+          );
+          productsCount = selection.products.length;
+          await persistRecentProductEvidence(supabase, sessionId, selection.products);
         } else if (exactCompoundMarkingRequest) {
           send({ type: "delta", content: exactCompoundMarkingIntro(exactCompoundMarkingRequest) });
           const selectedProducts = await selectVerifiedExactCompoundProducts(

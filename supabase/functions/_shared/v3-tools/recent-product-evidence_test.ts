@@ -5,6 +5,8 @@ import {
   compactRecentProducts,
   extractRenderedProductTitles,
   isEvidenceOnlyFollowup,
+  isRecentProductPriceSelectionFollowup,
+  latestRecentProductEvidenceSet,
 } from "./recent-product-evidence.ts";
 import type { ProductFull } from "./types.ts";
 
@@ -42,6 +44,22 @@ Deno.test("evidence follow-up classifier separates questions from a new selectio
   assertEquals(isEvidenceOnlyFollowup("Они точно подходят для 30 квадратных метров?"), true);
   assertEquals(isEvidenceOnlyFollowup("Почему варианты отличаются по цене? Сравни характеристики."), true);
   assertEquals(isEvidenceOnlyFollowup("Тогда подбери подходящий кабель"), false);
+});
+
+Deno.test("price follow-up classifier requires both a superlative and a reference to the shown set", () => {
+  assertEquals(isRecentProductPriceSelectionFollowup("самый бюджетный, дай ссылку"), true);
+  assertEquals(isRecentProductPriceSelectionFollowup("покажи самый дорогой из этих вариантов"), true);
+  assertEquals(isRecentProductPriceSelectionFollowup("найди самый дешёвый кабель"), false);
+  assertEquals(isRecentProductPriceSelectionFollowup("дай ссылку на товар"), false);
+});
+
+Deno.test("price follow-up uses only the newest rendered batch", () => {
+  const older = compactRecentProducts([product({ id: "old", pagetitle: "Старый вариант" })], "2026-08-17T00:00:00.000Z");
+  const newest = compactRecentProducts([
+    product({ id: "new-1", pagetitle: "Новый вариант 1" }),
+    product({ id: "new-2", pagetitle: "Новый вариант 2" }),
+  ], "2026-08-17T00:05:00.000Z");
+  assertEquals(latestRecentProductEvidenceSet([...newest, ...older]).map((item) => item.id), ["new-1", "new-2"]);
 });
 
 Deno.test("deterministic evidence answer contains only cached facts and uncertainty boundary", () => {
