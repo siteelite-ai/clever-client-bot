@@ -133,7 +133,7 @@
               ["Gallant", "Галант", "серия"],
               ["преимуществ", "особенн", "отлич", "дизайн", "механизм", "исполн"]
             ],
-            "forbid_text": ["свежих карточек", "снята с производства", "не представлена", "Schneider Electric", "search_catalog", "discover_category", "render_products"]
+            "forbid_text": ["свежих карточек", "снята с производства", "не представлена", "Schneider Electric", "ось ", "це ", "знайшов", "вимикач", "якість", "ціна", "наявність", "search_catalog", "discover_category", "render_products"]
           }
         },
         {

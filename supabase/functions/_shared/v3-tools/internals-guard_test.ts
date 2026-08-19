@@ -4,6 +4,7 @@ import {
   containsUnrenderedCatalogFacts,
   isMetaSelfQuestion,
   redactInternals,
+  stripUnrenderedCatalogFactSegments,
 } from "./internals-guard.ts";
 
 Deno.test("catalog facts detector catches price, article, availability, and product links", () => {
@@ -11,6 +12,14 @@ Deno.test("catalog facts detector catches price, article, availability, and prod
   assert(containsUnrenderedCatalogFacts("Цена: 1 000 тг"));
   assert(containsUnrenderedCatalogFacts("[Товар](https://220volt.kz/catalog/a/b/c/)"));
   assertEquals(containsUnrenderedCatalogFacts("Для этой линии нужен автомат на 16 А."), false);
+});
+
+Deno.test("catalog fact sanitizer removes only unsafe paragraphs", () => {
+  const result = stripUnrenderedCatalogFactSegments(
+    "Серия отличается строгим дизайном и защитными шторками.\n\n**Цена** — от 1 100 ₸.\n\nМогу показать позиции этой серии.",
+  );
+  assertEquals(result.text, "Серия отличается строгим дизайном и защитными шторками.\n\nМогу показать позиции этой серии.");
+  assertEquals(result.removed, ["**Цена** — от 1 100 ₸."]);
 });
 
 Deno.test("meta: вопрос про платформу перехватывается", () => {

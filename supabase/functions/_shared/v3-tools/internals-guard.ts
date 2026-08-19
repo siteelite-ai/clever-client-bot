@@ -122,6 +122,31 @@ export function containsUnrenderedCatalogFacts(text: string): boolean {
   );
 }
 
+export interface CatalogFactStripResult {
+  text: string;
+  removed: string[];
+}
+
+/**
+ * Preserve a grounded explanatory answer while removing whole paragraphs that
+ * contain card-only facts such as prices, articles, availability or product
+ * links. The previous all-or-nothing replacement hid valid explanations when
+ * one price sentence slipped into an otherwise useful response.
+ */
+export function stripUnrenderedCatalogFactSegments(text: string): CatalogFactStripResult {
+  const paragraphs = String(text ?? "")
+    .split(/\n\s*\n/u)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+  const kept: string[] = [];
+  const removed: string[] = [];
+  for (const paragraph of paragraphs) {
+    if (containsUnrenderedCatalogFacts(paragraph)) removed.push(paragraph);
+    else kept.push(paragraph);
+  }
+  return { text: kept.join("\n\n"), removed };
+}
+
 /**
  * Проверяет текст ассистента на служебную лексику. При срабатывании возвращает
  * нейтральную замену целиком (частичная чистка тут бессмысленна: утечка обычно

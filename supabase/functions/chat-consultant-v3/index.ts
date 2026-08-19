@@ -41,7 +41,7 @@ import {
   persistRecentProductEvidence,
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
-import { META_DECLINE_TEXT, containsUnrenderedCatalogFacts, isMetaSelfQuestion, redactInternals } from "../_shared/v3-tools/internals-guard.ts";
+import { META_DECLINE_TEXT, containsUnrenderedCatalogFacts, isMetaSelfQuestion, redactInternals, stripUnrenderedCatalogFactSegments } from "../_shared/v3-tools/internals-guard.ts";
 import {
   compactCatalogResultForLlm,
   forcedToolNameForAgentPhase,
@@ -2592,7 +2592,8 @@ async function runExpertLoop(
             const hasPrice = /\d[\d\s.,]{0,}\s*(?:₸|тг(?:\.|\b)|тенге\b)/iu.test(rawText);
             const hasMdLink = /\[[^\]]+\]\(https?:\/\/[^\s)]+\)/.test(rawText);
             if (containsUnrenderedCatalogFacts(rawText)) {
-              const replaced = "Не смог подтвердить карточки и товарные факты для этого ответа, поэтому не буду показывать неподтверждённые цены или ссылки. Напишите точное название, артикул или один обязательный параметр — проверю по каталогу заново.";
+              const sanitized = stripUnrenderedCatalogFactSegments(rawText);
+              const replaced = sanitized.text || "Не смог подтвердить карточки и товарные факты для этого ответа, поэтому не буду показывать неподтверждённые цены или ссылки. Напишите точное название, артикул или один обязательный параметр — проверю по каталогу заново.";
               steps.push({
                 step: "v3_guard_text_facts_leak",
                 ms: now(),
@@ -2603,7 +2604,10 @@ async function runExpertLoop(
                   has_price: hasPrice,
                   has_md_link: hasMdLink,
                   original_text: rawText,
-                  reason: "final_text_without_render_products_with_catalog_facts",
+                  removed_segments: sanitized.removed,
+                  reason: sanitized.text
+                    ? "unsafe_catalog_fact_segments_removed"
+                    : "final_text_without_render_products_with_catalog_facts",
                 },
               });
               outText = replaced;
