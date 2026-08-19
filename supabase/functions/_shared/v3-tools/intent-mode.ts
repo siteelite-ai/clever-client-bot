@@ -16,13 +16,19 @@ export function requiresCatalogGroundingForInquiry(message: string): boolean {
   return extractNamedSeriesToken(message) !== null;
 }
 
-export function resolveNamedSeriesToken(message: string, recentDialogue: string[]): string | null {
+export function resolveNamedSeriesToken(
+  message: string,
+  recentDialogue: Array<{ role: "user" | "assistant"; content: string }>,
+): string | null {
   const direct = extractNamedSeriesToken(message);
   if (direct) return direct;
   const normalized = message.toLocaleLowerCase("ru").replace(/ё/g, "е");
   if (!/(?:этой|данной|указанной|названной)\s+серии/u.test(normalized)) return null;
   for (const fragment of [...recentDialogue].reverse()) {
-    const inherited = extractNamedSeriesToken(fragment);
+    // Generated prose can contain phrases such as "серия отличается...".
+    // Only the user's explicit entity mention is authoritative across turns.
+    if (fragment.role !== "user") continue;
+    const inherited = extractNamedSeriesToken(fragment.content);
     if (inherited) return inherited;
   }
   return null;

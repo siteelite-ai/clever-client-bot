@@ -29,10 +29,15 @@ Deno.test("explicitly named series explanations require a live catalog search", 
   assertEquals(extractNamedSeriesToken("Расскажи, чем хороша серия Галант?"), "галант");
   assertEquals(extractNamedSeriesToken("Покажи товары этой серии"), null);
   assertEquals(resolveNamedSeriesToken("Покажи товары этой серии", [
-    "Расскажи, чем хороша серия Галант?",
-    "Серия Gallant от Werkel отличается безопасной конструкцией.",
-  ]), "gallant");
-  assertEquals(resolveNamedSeriesToken("Покажи другую серию", ["Серия Gallant от Werkel"]), null);
+    { role: "user", content: "Расскажи, чем хороша серия Галант?" },
+    { role: "assistant", content: "Серия отличается безопасной конструкцией." },
+  ]), "галант");
+  assertEquals(resolveNamedSeriesToken("Покажи товары этой серии", [
+    { role: "assistant", content: "Серия Gallant от Werkel отличается безопасной конструкцией." },
+  ]), null);
+  assertEquals(resolveNamedSeriesToken("Покажи другую серию", [
+    { role: "user", content: "Расскажи про серию Gallant" },
+  ]), null);
 });
 
 Deno.test("negative suitability conclusion suppresses a misleading product card", () => {

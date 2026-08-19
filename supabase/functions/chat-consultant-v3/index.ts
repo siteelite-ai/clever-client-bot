@@ -2242,7 +2242,7 @@ async function runExpertLoop(
   const replacementIntent = isReplacementIntent(userMessage);
   const replacementExcludedIdentityValues = new Set<string>();
   const intentMode = detectUserIntentMode(userMessage);
-  const namedSeriesToken = resolveNamedSeriesToken(userMessage, history.slice(-8).map((message) => message.content));
+  const namedSeriesToken = resolveNamedSeriesToken(userMessage, history.slice(-8));
   const inquiryRequiresCatalogGrounding = intentMode === "inquire" && requiresCatalogGroundingForInquiry(userMessage);
   const seriesTurnRequiresGrounding = Boolean(namedSeriesToken);
   const codeConstraints = extractCodeConstraints(userMessage);
@@ -3013,6 +3013,27 @@ async function runExpertLoop(
         // идентифицировать по ID, значения brand/model, удалённые из фильтра
         // поиска, всё равно защищают финальную выдачу.
         if (tc.name === "render_products") {
+          if (namedSeriesToken) {
+            const originalIds = Array.isArray(tc.args.product_ids)
+              ? (tc.args.product_ids as unknown[]).map(String)
+              : [];
+            const groundedIds = originalIds.filter((id) => {
+              const product = ctx.cache.get(id);
+              return Boolean(product && titleContainsLiteralToken(product.pagetitle, namedSeriesToken));
+            });
+            if (groundedIds.length !== originalIds.length) {
+              (tc.args as Record<string, unknown>).product_ids = groundedIds;
+              steps.push({
+                step: "v3_guard_named_series_render",
+                ms: now(),
+                meta: {
+                  series: namedSeriesToken,
+                  before: originalIds.length,
+                  after: groundedIds.length,
+                },
+              });
+            }
+          }
           const anchorId = getAnchorExcludeId();
           const familyExclude = getFamilyExcludeSet();
           // Strict axis-based filtering применяется ТОЛЬКО когда есть конкретный
@@ -3723,7 +3744,7 @@ async function runExpertLoop(
     // or step budget): the terminal label must not discard a proven candidate.
     // This is not a broad last-chance pool: every ID came from canonical facet
     // values declared in the consultant's reasoning.
-    if (productsRendered === 0 && reasoningBackedSearch) {
+    if (productsRendered === 0 && reasoningBackedSearch && (!seriesTurnRequiresGrounding || seriesGroundingSatisfied)) {
       const candidateProducts = reasoningBackedSearch.ids
         .map((id) => ctx.cache.get(id))
         .filter((product): product is NonNullable<typeof product> => Boolean(product));
@@ -3772,7 +3793,7 @@ async function runExpertLoop(
       });
     }
 
-    if (productsRendered === 0 && !semanticBackedSearch && !replacementIntent && intentMode === "select") {
+    if (productsRendered === 0 && !semanticBackedSearch && !replacementIntent && intentMode === "select" && !seriesTurnRequiresGrounding) {
       const evidence = `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`;
       const categoryQueries = groundedCategoryRecoveryQueries(lastDiscover, evidence)
         .map((query) => ({ query, requireTitleEvidence: false, source: "category" as const }));
@@ -3809,7 +3830,13 @@ async function runExpertLoop(
     // never a later broad retry, and run the same evidence gate again.
     // Replacement turns are excluded because their stricter axis/family policy
     // is handled by the reasoning-backed recovery above.
-    if (productsRendered === 0 && semanticBackedSearch && !replacementIntent && intentMode === "select") {
+    if (
+      productsRendered === 0 &&
+      semanticBackedSearch &&
+      !replacementIntent &&
+      intentMode === "select" &&
+      (!seriesTurnRequiresGrounding || seriesGroundingSatisfied)
+    ) {
       const candidateProducts = semanticBackedSearch.ids
         .map((id) => ctx.cache.get(id))
         .filter((product): product is NonNullable<typeof product> => Boolean(product));
