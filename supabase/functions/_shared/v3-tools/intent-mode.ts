@@ -5,11 +5,15 @@ export type UserIntentMode = "select" | "inquire";
  * catalog before it can finish. Deictic follow-ups such as "эта серия" are
  * excluded because they rely on evidence persisted from the preceding turn.
  */
-export function requiresCatalogGroundingForInquiry(message: string): boolean {
+export function extractNamedSeriesToken(message: string): string | null {
   const normalized = message.toLocaleLowerCase("ru").replace(/ё/g, "е");
   const match = normalized.match(/(?:^|[^\p{L}])сер(?:ия|ии|ию|ией)\s+[«"']?([\p{L}][\p{L}\d-]{3,})/u);
-  if (!match) return false;
-  return !/^(?:этой|эта|эту|данной|данная|данную|такой|такая)$/u.test(match[1]);
+  if (!match || /^(?:этой|эта|эту|данной|данная|данную|такой|такая)$/u.test(match[1])) return null;
+  return match[1];
+}
+
+export function requiresCatalogGroundingForInquiry(message: string): boolean {
+  return extractNamedSeriesToken(message) !== null;
 }
 
 // Product questions are evidence requests, not new selections. This distinction

@@ -27,10 +27,11 @@ import {
   groundedCategoryRecoveryQueries,
   groundedTokenRecoveryQueries,
   guardCategoryScopeByReasoning,
+  filterProductsByNamedSeries,
   selectGroundedTokenRecoveryCandidate,
   titleContainsLiteralToken,
 } from "../_shared/v3-tools/category-reasoning-guard.ts";
-import { detectUserIntentMode, requiresCatalogGroundingForInquiry, shouldSuppressNegativeSuitabilityCard } from "../_shared/v3-tools/intent-mode.ts";
+import { detectUserIntentMode, extractNamedSeriesToken, requiresCatalogGroundingForInquiry, shouldSuppressNegativeSuitabilityCard } from "../_shared/v3-tools/intent-mode.ts";
 import {
   buildDeterministicEvidenceAnswer,
   buildRecentProductEvidencePrompt,
@@ -2174,7 +2175,7 @@ async function runExpertLoop(
   let userBackedSearchCriteria: Criterion[] = [];
   let reasoningBackedSearch: { ids: string[]; total: number; criteria: Criterion[] } | null = null;
   let agentPhase: AgentPhase = "open";
-  let catalogSearchAttempted = false;
+  let seriesGroundingSatisfied = false;
   // Session-wide whitelist of category pagetitles discovered via discover_category.
   // Source of truth for `category` / `category_in` in search_catalog calls.
   // Prevents LLM hallucinating category names (e.g. "Уличные светильники" вместо
@@ -2241,6 +2242,7 @@ async function runExpertLoop(
   const replacementIntent = isReplacementIntent(userMessage);
   const replacementExcludedIdentityValues = new Set<string>();
   const intentMode = detectUserIntentMode(userMessage);
+  const namedSeriesToken = extractNamedSeriesToken(userMessage);
   const inquiryRequiresCatalogGrounding = intentMode === "inquire" && requiresCatalogGroundingForInquiry(userMessage);
   const codeConstraints = extractCodeConstraints(userMessage);
   // Replacement-intent guardrail (§9.9 "Замены и аналоги"): the user's message
@@ -2540,7 +2542,7 @@ async function runExpertLoop(
 
       const llmStart = Date.now();
       const agentToolPolicy = {
-        reasoningRequiresCatalog: inquiryRequiresCatalogGrounding && !catalogSearchAttempted || (
+        reasoningRequiresCatalog: inquiryRequiresCatalogGrounding && !seriesGroundingSatisfied || (
           intentMode === "select" && hasActionableSelectionReasoning(
             `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
           )
@@ -2632,7 +2634,7 @@ async function runExpertLoop(
         intentMode === "select" && (
           agentPhase === "terminal_after_search" ||
           responseHasActionableReasoning
-        ) || inquiryRequiresCatalogGrounding && !catalogSearchAttempted
+        ) || inquiryRequiresCatalogGrounding && !seriesGroundingSatisfied
       );
       const hasRender = resp.toolCalls.some((tc) => tc.name === "render_products" && isToolAllowedInAgentPhase(agentPhase, tc.name, enforcementToolPolicy));
       const isFirstTurn = step === 0;
@@ -2747,7 +2749,7 @@ async function runExpertLoop(
             role: "system",
             content: agentPhase === "terminal_after_search"
               ? "Фазовый контракт: ненулевой пул уже найден. Не заканчивай ход текстом. Вызови render_products, перенеся в criteria требования из своего рассуждения; серверный criteria gate сам отклонит неподтверждённые карточки."
-              : inquiryRequiresCatalogGrounding && !catalogSearchAttempted
+              : inquiryRequiresCatalogGrounding && !seriesGroundingSatisfied
               ? "Фазовый контракт: пользователь спрашивает о конкретно названной серии. Не делай вывод о бренде, наличии или свойствах только по памяти либо списку характеристик категории. Выполни search_catalog по названию серии; затем отвечай по найденным карточкам и базе знаний."
               : "Фазовый контракт: ты уже сформулировал несколько измеримых критериев подбора. Не заканчивай ход текстом и не спрашивай предпочтения, которые можешь выбрать как эксперт. Выполни discover_category/search_catalog и доведи найденный пул до render_products.",
           });
@@ -3249,8 +3251,38 @@ async function runExpertLoop(
 
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
         let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
-        if (tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") {
-          catalogSearchAttempted = true;
+        if (
+          namedSeriesToken &&
+          (tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") &&
+          result.ok
+        ) {
+          const catalogResult = result as SearchCatalogOk & { tool: "search_catalog"; warnings?: string[] };
+          const grounded = filterProductsByNamedSeries(catalogResult.results ?? [], namedSeriesToken);
+          if (grounded.length > 0) {
+            seriesGroundingSatisfied = true;
+            result = {
+              ...catalogResult,
+              results: grounded,
+              total: grounded.length,
+              warnings: [...(catalogResult.warnings ?? []), `named_series_grounded:${namedSeriesToken}`],
+            };
+          } else if (catalogResult.total > 0) {
+            result = {
+              ...catalogResult,
+              results: [],
+              total: 0,
+              warnings: [
+                ...(catalogResult.warnings ?? []),
+                `named_series_not_in_titles:${namedSeriesToken}`,
+                `server_hint:retry_by_query_with_exact_series_name:${namedSeriesToken}`,
+              ],
+            };
+          }
+          steps.push({
+            step: "v3_guard_named_series_evidence",
+            ms: now(),
+            meta: { series: namedSeriesToken, input_total: catalogResult.total, grounded_count: grounded.length },
+          });
         }
 
         // The catalog applies AND semantics to multiword full-text queries.

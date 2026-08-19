@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { detectUserIntentMode, requiresCatalogGroundingForInquiry, shouldSuppressNegativeSuitabilityCard } from "./intent-mode.ts";
+import { detectUserIntentMode, extractNamedSeriesToken, requiresCatalogGroundingForInquiry, shouldSuppressNegativeSuitabilityCard } from "./intent-mode.ts";
 
 Deno.test("suitability questions are inquiry mode", () => {
   assertEquals(detectUserIntentMode("Подойдёт или нет?"), "inquire");
@@ -26,6 +26,8 @@ Deno.test("explicitly named series explanations require a live catalog search", 
   assertEquals(requiresCatalogGroundingForInquiry("Объясни особенности серии Gallant"), true);
   assertEquals(requiresCatalogGroundingForInquiry("Объясни преимущества этой серии"), false);
   assertEquals(requiresCatalogGroundingForInquiry("Расскажи про оплату и доставку"), false);
+  assertEquals(extractNamedSeriesToken("Расскажи, чем хороша серия Галант?"), "галант");
+  assertEquals(extractNamedSeriesToken("Покажи товары этой серии"), null);
 });
 
 Deno.test("negative suitability conclusion suppresses a misleading product card", () => {

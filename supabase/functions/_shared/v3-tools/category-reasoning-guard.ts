@@ -174,6 +174,11 @@ export function titleContainsLiteralToken(title: string, token: string): boolean
   });
 }
 
+/** Keep only products whose title proves the current named series. */
+export function filterProductsByNamedSeries<T extends { pagetitle: string }>(products: T[], seriesToken: string): T[] {
+  return products.filter((product) => titleContainsLiteralToken(product.pagetitle, seriesToken));
+}
+
 /**
  * Select a literal title-token retry only when it is materially narrower than
  * the discovered category. This lets the consultant's own multiword canonical
