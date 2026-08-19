@@ -1,6 +1,10 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { executeJargonRecoverCatalog, titleSupportsGroundedJargonQuery } from "./jargon-recover-catalog.ts";
-import type { ProductCache } from "./types.ts";
+import {
+  executeJargonRecoverCatalog,
+  selectGroundedJargonCacheFallback,
+  titleSupportsGroundedJargonQuery,
+} from "./jargon-recover-catalog.ts";
+import type { ProductCache, ProductRef } from "./types.ts";
 
 Deno.test("jargon recovery applies discovered category to the actual catalog query", async () => {
   const requestedUrls: string[] = [];
@@ -66,6 +70,8 @@ Deno.test("jargon recovery applies discovered category to the actual catalog que
 
 Deno.test("grounded jargon title evidence accepts compact codes without a product dictionary", () => {
   assertEquals(titleSupportsGroundedJargonQuery("Кабель ВВГ нг 2*1,5", "кабель ВВГнг"), true);
+  assertEquals(titleSupportsGroundedJargonQuery("Кабель ВВГнг 2*1,5", "ВВГнг"), true);
+  assertEquals(titleSupportsGroundedJargonQuery("Кабель ВВГ 2*1,5", "ВВГ"), true);
   assertEquals(titleSupportsGroundedJargonQuery("Лампа LED CORN капсула 5Вт", "лампа CORN"), true);
 });
 
@@ -75,4 +81,22 @@ Deno.test("grounded jargon title evidence rejects unrelated and overly broad mat
     false,
   );
   assertEquals(titleSupportsGroundedJargonQuery("Лампа LED стандартная", "лампа"), false);
+  assertEquals(titleSupportsGroundedJargonQuery("ЛАМПА LED стандартная", "ЛАМПА"), false);
+});
+
+Deno.test("cached jargon fallback keeps only candidate and caller-proven title evidence", () => {
+  const products: ProductRef[] = [
+    { id: "exact", pagetitle: "Кабель ВВГнг 2*1,5", vendor: null, price: 300, stock: "in_stock", short_traits: [] },
+    { id: "wrong-size", pagetitle: "Кабель ВВГнг 4*1,5", vendor: null, price: 200, stock: "in_stock", short_traits: [] },
+    { id: "unrelated", pagetitle: "Средство LABEL OFF 2*1,5", vendor: null, price: 100, stock: "in_stock", short_traits: [] },
+  ];
+
+  const selected = selectGroundedJargonCacheFallback(
+    products,
+    ["лампа", "ВВГнг"],
+    (product) => product.pagetitle.includes("2*1,5"),
+  );
+
+  assertEquals(selected?.matchedQuery, "ВВГнг");
+  assertEquals(selected?.results.map((product) => product.id), ["exact"]);
 });

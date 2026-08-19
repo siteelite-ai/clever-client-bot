@@ -10,6 +10,7 @@ import { executeSearchCatalog, type SearchCatalogInput } from "../_shared/v3-too
 import { executeDiscoverCategory, type DiscoverCategoryInput, type DiscoverCategoryOk, type Facet } from "../_shared/v3-tools/discover-category.ts";
 import {
   executeJargonRecoverCatalog,
+  selectGroundedJargonCacheFallback,
   titleSupportsGroundedJargonQuery,
   type JargonRecoverCatalogInput,
 } from "../_shared/v3-tools/jargon-recover-catalog.ts";
@@ -3752,6 +3753,59 @@ async function runExpertLoop(
 
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
         let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
+
+        // A jargon lookup may load relevant base products and then return zero
+        // because conversational modifiers do not occur as identical word
+        // forms in catalog traits (for example an adjective versus a code in
+        // the title). Preserve the model's own semantic direction only when a
+        // distinctive candidate AND the user's exact compound marking are both
+        // visible in the cached live title. No product dictionary or new search
+        // route is introduced, and broad words cannot activate this recovery.
+        if (
+          tc.name === "jargon_recover_catalog" &&
+          result.ok &&
+          Number((result as { total?: number }).total ?? 0) === 0 &&
+          explicitCompoundMarking &&
+          !replacementIntent &&
+          intentMode === "select"
+        ) {
+          const jargonResult = result as typeof result & {
+            candidates?: string[];
+            results?: ProductRef[];
+            source_query?: string;
+            matched_query?: string | null;
+            partial_match?: boolean;
+            unmatched_tokens?: string[];
+          };
+          const recovered = selectGroundedJargonCacheFallback(
+            [...ctx.cache.values()],
+            Array.isArray(jargonResult.candidates) ? jargonResult.candidates : [],
+            (product) => productTitleMatchesExplicitCompoundMarking(product.pagetitle, explicitCompoundMarking),
+          );
+          if (recovered) {
+            const modifiers = Array.isArray(runArgs.modifiers)
+              ? (runArgs.modifiers as unknown[]).filter((value): value is string => typeof value === "string")
+              : [];
+            result = {
+              ...jargonResult,
+              results: recovered.results,
+              total: recovered.results.length,
+              matched_query: recovered.matchedQuery,
+              partial_match: modifiers.length > 0,
+              unmatched_tokens: modifiers,
+            } as typeof result;
+            steps.push({
+              step: "v3_grounded_compound_jargon_cache_recovery",
+              ms: now(),
+              meta: {
+                marking: explicitCompoundMarking,
+                matched_query: recovered.matchedQuery,
+                cached_candidates: recovered.results.length,
+                modifiers,
+              },
+            });
+          }
+        }
         if (
           namedSeriesToken &&
           (tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") &&

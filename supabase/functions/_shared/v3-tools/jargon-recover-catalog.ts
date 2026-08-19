@@ -46,13 +46,43 @@ function normalizeCodeLike(s: string): string {
 export function titleSupportsGroundedJargonQuery(title: string, matchedQuery: string): boolean {
   const tokens = normalize(matchedQuery).split(/\s+/).filter((token) => token.length >= 3);
   if (tokens.length === 0) return false;
-  if (tokens.length === 1 && !/[a-z\d]/iu.test(tokens[0])) return false;
+  const rawSingleToken = matchedQuery.trim();
+  const isCompactCyrillicCode = /^[А-ЯЁ]{2,4}(?:[а-яё]{1,4})?$/u.test(rawSingleToken);
+  if (tokens.length === 1 && !/[a-z\d]/iu.test(tokens[0]) && !isCompactCyrillicCode) return false;
 
   const normalizedTitle = normalize(title);
   const compactTitle = normalizeCodeLike(title);
   return tokens.every((token) =>
     normalizedTitle.split(/\s+/).includes(token) || compactTitle.includes(normalizeCodeLike(token))
   );
+}
+
+/**
+ * Recovers only a live-title-grounded subset that a preceding jargon lookup
+ * already loaded into the request cache. The caller supplies any additional
+ * literal invariant (for example an exact N×S marking); this helper merely
+ * keeps candidate order, title evidence and deduplication data-agnostic.
+ *
+ * It deliberately rejects broad one-word candidates through
+ * titleSupportsGroundedJargonQuery and never performs another catalog call.
+ */
+export function selectGroundedJargonCacheFallback(
+  products: ProductRef[],
+  candidates: string[],
+  additionalTitleEvidence: (product: ProductRef) => boolean,
+): { matchedQuery: string; results: ProductRef[] } | null {
+  for (const candidate of candidates) {
+    const byId = new Map<string, ProductRef>();
+    for (const product of products) {
+      if (!Number.isFinite(product.price) || product.price <= 0) continue;
+      if (!titleSupportsGroundedJargonQuery(product.pagetitle, candidate)) continue;
+      if (!additionalTitleEvidence(product)) continue;
+      if (!byId.has(product.id)) byId.set(product.id, product);
+    }
+    const results = [...byId.values()];
+    if (results.length > 0) return { matchedQuery: candidate, results };
+  }
+  return null;
 }
 
 function tokenize(s: string): string[] {
