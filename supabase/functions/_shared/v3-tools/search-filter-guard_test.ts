@@ -40,6 +40,17 @@ Deno.test("filter guard canonicalizes and keeps a user-affirmed value", () => {
   assertEquals(result.kept, [{ key: "brand", value: "Gauss" }]);
 });
 
+Deno.test("filter guard canonicalizes a live facet caption to its machine key", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { "Номинальный ток": ["16"] } },
+    [{ key: "nominal_current", caption: "Номинальный ток", values: [{ value: "10" }, { value: "16" }] }],
+    "Номинальный ток 16.",
+    "Нужен номинальный ток 16.",
+  );
+  assertEquals(result.args.options, { nominal_current: ["16"] });
+  assertEquals(result.user_backed, [{ key: "nominal_current", value: "16" }]);
+});
+
 Deno.test("filter guard drops unknown facet keys and values", () => {
   const result = guardSearchFilters(
     { mode: "by_filter", options: { invented: ["x"], brand: ["Acme"] } },

@@ -29,6 +29,8 @@ Deno.test("render criteria: named entity browse keeps only user-backed filters",
 Deno.test("compact code criterion must be visible in the product title", () => {
   const criterion = { key: "Характеристика", op: "eq", value: "C", level: "A" } as Criterion;
   assertEquals(titleProvesCompactCriterion("Автомат 1P 16A характеристика C", criterion), true);
+  assertEquals(titleProvesCompactCriterion("Автомат 1Р 16А х-ка С", criterion), true);
+  assertEquals(titleProvesCompactCriterion("Автомат с заземлением 1Р 16А", criterion), false);
   assertEquals(titleProvesCompactCriterion("Автомат 1P 16A CHINT", criterion), false);
   assertEquals(titleProvesCompactCriterion("Товар белый", { ...criterion, value: "белый" }), true);
 });

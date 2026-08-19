@@ -384,11 +384,14 @@ export function guardSearchFilters(
 
   for (const [key, rawValues] of Object.entries(requestedOptions)) {
     const values = Array.isArray(rawValues) ? rawValues.map(String).filter((v) => v.trim()) : [];
-    const facet = facets.find((candidate) => candidate.key === key);
+    const facet = facets.find((candidate) =>
+      candidate.key === key || (candidate.caption && norm(candidate.caption) === norm(key))
+    );
     if (!facet) {
       for (const value of values) dropped.push({ key, value, reason: "unknown_facet" });
       continue;
     }
+    const canonicalKey = facet.key;
 
     for (const rawValue of values) {
       const canonical = facet.values.find((candidate) => sameFacetValue(candidate.value, rawValue))?.value;
@@ -409,10 +412,10 @@ export function guardSearchFilters(
         });
         continue;
       }
-      nextOptions[key] ??= [];
-      if (!nextOptions[key].includes(canonical)) nextOptions[key].push(canonical);
-      kept.push({ key, value: canonical });
-      if (explicitlyAffirmedByUser(canonical, userEvidence)) userBacked.push({ key, value: canonical });
+      nextOptions[canonicalKey] ??= [];
+      if (!nextOptions[canonicalKey].includes(canonical)) nextOptions[canonicalKey].push(canonical);
+      kept.push({ key: canonicalKey, value: canonical });
+      if (explicitlyAffirmedByUser(canonical, userEvidence)) userBacked.push({ key: canonicalKey, value: canonical });
     }
   }
 

@@ -102,11 +102,13 @@ export function resolveRenderCriteria(
  * traits: the customer cannot verify the promised variant from the card. */
 export function titleProvesCompactCriterion(title: string, criterion: Criterion): boolean {
   if (typeof criterion.value !== "string") return true;
-  const value = normalizeKey(criterion.value).replace(/\s+/g, "");
+  const rawValue = criterion.value.trim();
+  const value = normalizeKey(rawValue).replace(/\s+/g, "");
   if (!value || value.length > 4 || !/[a-zа-я]/iu.test(value)) return true;
   if (["да", "нет", "yes", "no", "true", "false"].includes(value)) return true;
-  const titleTokens = normalizeKey(title).split(" ").filter(Boolean);
-  return titleTokens.includes(value);
+  const foldCode = (token: string) => token === "С" ? "c" : normalizeKey(token);
+  const titleTokens = title.match(/[a-zа-я0-9]+/giu)?.map(foldCode) ?? [];
+  return titleTokens.includes(foldCode(rawValue));
 }
 
 /** Числовой интервал, к которому сводится любое распознанное значение характеристики. */

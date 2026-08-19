@@ -2184,6 +2184,32 @@ async function runExpertLoop(
   // the cards cannot silently diverge from the preceding reasoning.
   let enforcedSearchCriteria: Criterion[] = [];
   let userBackedSearchCriteria: Criterion[] = [];
+  const guardVisibleCardinality = (ids: string[]) => {
+    const compactCriteria = userBackedSearchCriteria.filter((criterion) =>
+      typeof criterion.value === "string" && !titleProvesCompactCriterion("", criterion)
+    );
+    let guarded = ids.filter((id) => {
+      const product = ctx.cache.get(id);
+      return Boolean(product && compactCriteria.every((criterion) =>
+        titleProvesCompactCriterion(product.pagetitle, criterion)
+      ));
+    });
+    const compactRemoved = ids.length - guarded.length;
+    const priceIntent = detectPriceDirection(userMessage);
+    const superlative = priceIntent?.kind === "superlative" ? priceIntent : null;
+    if (superlative && guarded.length > 0) {
+      guarded = [...guarded]
+        .sort((left, right) => {
+          const leftPrice = ctx.cache.get(left)?.price ?? Number.POSITIVE_INFINITY;
+          const rightPrice = ctx.cache.get(right)?.price ?? Number.POSITIVE_INFINITY;
+          return superlative.direction === "more_expensive"
+            ? rightPrice - leftPrice
+            : leftPrice - rightPrice;
+        })
+        .slice(0, 1);
+    }
+    return { ids: guarded, compactCriteria, compactRemoved, superlative };
+  };
   let reasoningBackedSearch: { ids: string[]; total: number; criteria: Criterion[] } | null = null;
   let agentPhase: AgentPhase = "open";
   let seriesGroundingSatisfied = false;
@@ -3104,39 +3130,20 @@ async function runExpertLoop(
           const originalIds = Array.isArray(tc.args.product_ids)
             ? (tc.args.product_ids as unknown[]).map(String)
             : [];
-          const compactCriteria = userBackedSearchCriteria.filter((criterion) =>
-            typeof criterion.value === "string" &&
-            !titleProvesCompactCriterion("", criterion)
-          );
-          let visibleIds = originalIds.filter((id) => {
-            const product = ctx.cache.get(id);
-            return Boolean(product && compactCriteria.every((criterion) =>
-              titleProvesCompactCriterion(product.pagetitle, criterion)
-            ));
-          });
-          if (compactCriteria.length > 0 && visibleIds.length !== originalIds.length) {
+          const guarded = guardVisibleCardinality(originalIds);
+          const visibleIds = guarded.ids;
+          if (guarded.compactCriteria.length > 0 && guarded.compactRemoved > 0) {
             steps.push({
               step: "v3_guard_compact_code_title_evidence",
               ms: now(),
-              meta: { before: originalIds.length, after: visibleIds.length, criteria: compactCriteria },
+              meta: { before: originalIds.length, after: originalIds.length - guarded.compactRemoved, criteria: guarded.compactCriteria },
             });
           }
-
-          const priceIntent = detectPriceDirection(userMessage);
-          if (priceIntent?.kind === "superlative" && visibleIds.length > 0) {
-            visibleIds = [...visibleIds]
-              .sort((left, right) => {
-                const leftPrice = ctx.cache.get(left)?.price ?? Number.POSITIVE_INFINITY;
-                const rightPrice = ctx.cache.get(right)?.price ?? Number.POSITIVE_INFINITY;
-                return priceIntent.direction === "more_expensive"
-                  ? rightPrice - leftPrice
-                  : leftPrice - rightPrice;
-              })
-              .slice(0, 1);
+          if (guarded.superlative && visibleIds.length > 0) {
             steps.push({
               step: "v3_guard_superlative_single_product",
               ms: now(),
-              meta: { direction: priceIntent.direction, before: originalIds.length, after: visibleIds.length },
+              meta: { direction: guarded.superlative.direction, before: originalIds.length, after: visibleIds.length },
             });
           }
           if (visibleIds.length !== originalIds.length) {
@@ -3844,6 +3851,7 @@ async function runExpertLoop(
             filterReplacementCompatibleIds([id], replacementRequiredAxes, ctx.cache, prioritySplitAxisIdSets, equivalentReplacementRequested).length > 0;
         });
       }
+      safeIds = guardVisibleCardinality(safeIds).ids;
       if (safeIds.length > 0) {
         const rescued = await runTool("render_products", {
           product_ids: safeIds.slice(0, 5),
@@ -3924,7 +3932,9 @@ async function runExpertLoop(
         .map((id) => ctx.cache.get(id))
         .filter((product): product is NonNullable<typeof product> => Boolean(product));
       const gate = applyCriteriaGate(candidateProducts, semanticBackedSearch.criteria);
-      const safeIds = semanticBackedSearch.ids.filter((id) => gate.passed_ids.includes(id));
+      const safeIds = guardVisibleCardinality(
+        semanticBackedSearch.ids.filter((id) => gate.passed_ids.includes(id)),
+      ).ids;
       if (safeIds.length > 0) {
         const rescued = await runTool("render_products", {
           product_ids: safeIds.slice(0, 5),
