@@ -19,6 +19,7 @@ import { alignCriteriaWithReasoning } from "../_shared/v3-tools/criteria-reasoni
 import {
   dropAffirmativeBooleanFilters,
   dropImplicitReplacementIdentityFilters,
+  explicitReplacementModelValues,
   guardSearchFilters,
   isReplacementIdentityFacet,
   productMatchesExcludedReplacementIdentity,
@@ -1350,6 +1351,7 @@ function filterReplacementCompatibleIds(
   axes: ReplacementAxis[],
   cache: ProductCache,
   axisIdSets: Map<string, Set<string>> | null = null,
+  requireAllAxesInTitle = false,
 ): string[] {
   if (axes.length < 2) return ids;
   const minMatches = Math.max(2, axes.length - 1);
@@ -1357,6 +1359,14 @@ function filterReplacementCompatibleIds(
   ids.forEach((id, order) => {
     const product = cache.get(id);
     if (!product) return;
+    if (requireAllAxesInTitle) {
+      const title = product.pagetitle ?? "";
+      const allVisible = axes.every((axis) =>
+        axis.values.some((target) => axisValueMatchesText(target, title, axis))
+      );
+      if (allVisible) ranked.push({ id, matches: axes.length, order });
+      return;
+    }
     const matchedAxes = axes.filter((axis) => axisIdSets?.get(axis.key)?.has(id) || productMatchesReplacementAxis(product, axis));
     const missesDiameter = axes.some((axis) => axis.isDiameter) && !matchedAxes.some((axis) => axis.isDiameter);
     if (missesDiameter && hasRectangularSizeMarker(product.pagetitle)) return;
@@ -2240,6 +2250,7 @@ async function runExpertLoop(
   // source product, not its analog. Computed lazily because the anchor is only
   // discoverable in cache after at least one search populated it.
   const replacementIntent = isReplacementIntent(userMessage);
+  const equivalentReplacementRequested = replacementIntent && /равноцен\p{L}*/iu.test(userMessage);
   const replacementExcludedIdentityValues = new Set<string>();
   const intentMode = detectUserIntentMode(userMessage);
   const namedSeriesToken = resolveNamedSeriesToken(userMessage, history.slice(-8));
@@ -2352,7 +2363,7 @@ async function runExpertLoop(
         const p = ctx.cache.get(id);
         if (!p || !(p.price > 0)) continue;
         if (productMatchesExcludedReplacementIdentity(p, replacementExcludedIdentityValues)) continue;
-        if (replacementRequiredAxes.length >= 2 && filterReplacementCompatibleIds([id], replacementRequiredAxes, ctx.cache, prioritySplitAxisIdSets).length === 0) continue;
+        if (replacementRequiredAxes.length >= 2 && filterReplacementCompatibleIds([id], replacementRequiredAxes, ctx.cache, prioritySplitAxisIdSets, equivalentReplacementRequested).length === 0) continue;
         seen.add(id);
         out.push(id);
       }
@@ -2484,6 +2495,11 @@ async function runExpertLoop(
 
   const rememberReplacementAxes = (args: Record<string, unknown>) => {
     if (!replacementIntent) return;
+    if (lastDiscover) {
+      for (const value of explicitReplacementModelValues(lastDiscover.facets, userMessage)) {
+        replacementExcludedIdentityValues.add(value);
+      }
+    }
     const axes = buildReplacementAxes(
       args,
       lastDiscover,
@@ -3051,7 +3067,7 @@ async function runExpertLoop(
             });
             const afterFamily = filtered.length;
             if (replacementIntent && replacementRequiredAxes.length >= 2) {
-              filtered = filterReplacementCompatibleIds(filtered, replacementRequiredAxes, ctx.cache, prioritySplitAxisIdSets);
+              filtered = filterReplacementCompatibleIds(filtered, replacementRequiredAxes, ctx.cache, prioritySplitAxisIdSets, equivalentReplacementRequested);
             }
             if (filtered.length !== origIds.length) {
               (tc.args as Record<string, unknown>).product_ids = filtered;
@@ -3760,7 +3776,7 @@ async function runExpertLoop(
           const product = ctx.cache.get(id);
           if (!product || productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues)) return false;
           return replacementRequiredAxes.length < 2 ||
-            filterReplacementCompatibleIds([id], replacementRequiredAxes, ctx.cache, prioritySplitAxisIdSets).length > 0;
+            filterReplacementCompatibleIds([id], replacementRequiredAxes, ctx.cache, prioritySplitAxisIdSets, equivalentReplacementRequested).length > 0;
         });
       }
       if (safeIds.length > 0) {

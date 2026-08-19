@@ -58,12 +58,34 @@ function replacementIdentityKind(facet: Pick<SearchFacet, "key" | "caption">): "
   if (/(?:^| )(?:brand|vendor|manufacturer|producer|trademark|бренд|производител\w*|торгов\w* марк\w*|марка)(?: |$)/u.test(label)) {
     return "brand";
   }
-  if (/(?:^| )(?:model|series|модел\w*|серия|серии)(?: |$)/u.test(label)) return "model";
+  if (/(?:^| )(?:model|series|collection|модел\w*|серия|серии|коллекц\w*)(?: |$)/u.test(label)) return "model";
   return null;
 }
 
 export function isReplacementIdentityFacet(facet: Pick<SearchFacet, "key" | "caption">): boolean {
   return replacementIdentityKind(facet) !== null;
+}
+
+/**
+ * Find an explicitly named source model/series/collection in live facet
+ * values. Brand values are intentionally excluded: a replacement may remain
+ * within the same manufacturer, while the source product family must not be
+ * offered back as its own analog.
+ */
+export function explicitReplacementModelValues(
+  facets: SearchFacet[],
+  userMessage: string,
+): string[] {
+  const evidence = ` ${norm(userMessage)} `;
+  const found = new Set<string>();
+  for (const facet of facets) {
+    if (replacementIdentityKind(facet) !== "model") continue;
+    for (const candidate of facet.values) {
+      const value = norm(candidate.value);
+      if (value && evidence.includes(` ${value} `)) found.add(candidate.value);
+    }
+  }
+  return [...found];
 }
 
 function explicitlyRequiresSameIdentity(userMessage: string, kind: "brand" | "model"): boolean {

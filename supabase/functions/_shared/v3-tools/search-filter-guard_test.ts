@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   dropAffirmativeBooleanFilters,
   dropImplicitReplacementIdentityFilters,
+  explicitReplacementModelValues,
   productMatchesExcludedReplacementIdentity,
   guardSearchFilters,
 } from "./search-filter-guard.ts";
@@ -96,6 +97,25 @@ Deno.test("filter guard does not drop a short code when proving a compound value
     "Покажи розетку TV.",
   );
   assertEquals(explicit.user_backed, [{ key: "socket_type", value: "розетка TV" }]);
+});
+
+Deno.test("replacement identity treats an explicit collection as the source family", () => {
+  const identityFacets = [
+    { key: "brand", caption: "Бренд", values: [{ value: "IEK" }] },
+    { key: "collection", caption: "Коллекция", values: [{ value: "GENERICA" }, { value: "HOME" }] },
+  ];
+  assertEquals(
+    explicitReplacementModelValues(identityFacets, "Предложи замену GENERICA IEK"),
+    ["GENERICA"],
+  );
+  assertEquals(
+    dropImplicitReplacementIdentityFilters(
+      { mode: "by_filter", options: { collection: ["GENERICA"] } },
+      identityFacets,
+      "Предложи замену GENERICA",
+    ).removed,
+    [{ key: "collection", values: ["GENERICA"], kind: "model" }],
+  );
 });
 
 Deno.test("filter guard accepts canonical value when reasoning uses inflected forms", () => {
