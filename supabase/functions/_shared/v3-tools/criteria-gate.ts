@@ -76,6 +76,28 @@ export function normalizeKey(s: string): string {
     .trim();
 }
 
+/**
+ * Compose the criteria enforced at render time. Named-entity browse turns use
+ * strict user-evidence mode: the model may describe or rank the exact entity,
+ * but it cannot silently turn its own prose into a new mandatory filter.
+ */
+export function resolveRenderCriteria(
+  enforced: Criterion[],
+  raw: Criterion[],
+  userBacked: Criterion[],
+  strictUserEvidenceOnly: boolean,
+): Criterion[] {
+  const base = strictUserEvidenceOnly ? userBacked : enforced;
+  const baseKeys = new Set(base.map((criterion) => normalizeKey(criterion.key)));
+  return [
+    ...base,
+    ...(strictUserEvidenceOnly
+      ? []
+      : raw.filter((criterion) => !baseKeys.has(normalizeKey(String(criterion?.key ?? ""))))),
+  ].filter((criterion) => criterion && typeof criterion.key === "string" && criterion.value !== undefined)
+    .map((criterion) => ({ ...criterion }));
+}
+
 /** Числовой интервал, к которому сводится любое распознанное значение характеристики. */
 export interface NumSpan {
   min: number;

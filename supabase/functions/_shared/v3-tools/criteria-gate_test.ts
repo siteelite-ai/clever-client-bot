@@ -8,6 +8,7 @@ import {
   checkCriterion,
   findTrait,
   parseNumSpan,
+  resolveRenderCriteria,
   type Criterion,
 } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
@@ -15,6 +16,14 @@ import type { ProductRef } from "./types.ts";
 function product(id: string, traits: string[]): ProductRef {
   return { id, pagetitle: `P-${id}`, vendor: null, price: 100, stock: "unknown", short_traits: traits };
 }
+
+Deno.test("render criteria: named entity browse keeps only user-backed filters", () => {
+  const inferred = [{ key: "Тип", op: "eq", value: "ошибочный", level: "A" }] as Criterion[];
+  const raw = [{ key: "Мощность", op: "min", value: 100, level: "A" }] as Criterion[];
+  const userBacked = [{ key: "Цвет", op: "eq", value: "белый", level: "A" }] as Criterion[];
+  assertEquals(resolveRenderCriteria(inferred, raw, userBacked, true), userBacked);
+  assertEquals(resolveRenderCriteria(inferred, raw, userBacked, false), [...inferred, ...raw]);
+});
 
 Deno.test("parseNumSpan: scalar, decimal comma", () => {
   assertEquals(parseNumSpan("12"), { min: 12, max: 12 });

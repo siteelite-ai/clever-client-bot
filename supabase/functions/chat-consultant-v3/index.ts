@@ -13,7 +13,7 @@ import { executeJargonRecoverCatalog, type JargonRecoverCatalogInput } from "../
 import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3-tools/lookup-knowledge.ts";
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
-import { applyCriteriaGate, buildCriteriaQuery, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
+import { applyCriteriaGate, buildCriteriaQuery, resolveRenderCriteria, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaWithReasoning } from "../_shared/v3-tools/criteria-reasoning.ts";
 import {
@@ -3134,17 +3134,19 @@ async function runExpertLoop(
           const rawCriteria = Array.isArray((tc.args as Record<string, unknown>).criteria)
             ? ((tc.args as Record<string, unknown>).criteria as Criterion[])
             : [];
-          const enforcedKeys = new Set(enforcedSearchCriteria.map((criterion) => normalizeForMatch(criterion.key)));
-          let criteria = [
-            ...enforcedSearchCriteria,
-            ...rawCriteria.filter((criterion) => !enforcedKeys.has(normalizeForMatch(String(criterion?.key ?? "")))),
-          ].filter((c) => c && typeof c.key === "string" && c.value !== undefined);
-          if (enforcedSearchCriteria.length > 0) {
+          let criteria = resolveRenderCriteria(
+            enforcedSearchCriteria,
+            rawCriteria,
+            userBackedSearchCriteria,
+            Boolean(namedSeriesToken),
+          );
+          const criteriaEnforcedAtRender = namedSeriesToken ? userBackedSearchCriteria : enforcedSearchCriteria;
+          if (namedSeriesToken || criteriaEnforcedAtRender.length > 0) {
             (tc.args as Record<string, unknown>).criteria = criteria;
             steps.push({
-              step: "v3_guard_reasoning_criteria_enforced",
+              step: namedSeriesToken ? "v3_guard_user_backed_series_criteria" : "v3_guard_reasoning_criteria_enforced",
               ms: now(),
-              meta: { criteria: enforcedSearchCriteria },
+              meta: { criteria: criteriaEnforcedAtRender },
             });
           }
           if (criteria.length > 0) {
