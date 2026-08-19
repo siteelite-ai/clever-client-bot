@@ -82,6 +82,11 @@ function matchesEveryGroup(value, groups) {
   return groups.every((group) => Array.isArray(group) && group.length > 0 && includesAny(value, group));
 }
 
+function includesStandalonePhrase(haystack, phrase) {
+  const escaped = String(phrase).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'iu').test(haystack);
+}
+
 export function evaluate(expect = {}, response) {
   const failures = [];
   const productTitles = response.links.map((link) => link.title).join('\n');
@@ -96,7 +101,9 @@ export function evaluate(expect = {}, response) {
     if (includesAny(allOutput, [phrase])) failures.push(`forbidden text: ${phrase}`);
   }
   for (const phrase of expect.forbid_product_title ?? []) {
-    if (includesAny(productTitles, [phrase])) failures.push(`forbidden product title: ${phrase}`);
+    if (response.links.some((link) => includesStandalonePhrase(link.title, phrase))) {
+      failures.push(`forbidden product title: ${phrase}`);
+    }
   }
   if (Array.isArray(expect.require_any_text) && !includesAny(allOutput, expect.require_any_text)) {
     failures.push(`none of required text fragments found: ${expect.require_any_text.join(', ')}`);

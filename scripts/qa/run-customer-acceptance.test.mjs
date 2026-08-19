@@ -54,6 +54,25 @@ test('evaluate checks every product title group and maximum price', () => {
   assert(failures.some((failure) => failure.startsWith('product price exceeds 1000')));
 });
 
+test('forbidden product nominal is matched as a token, not inside another nominal', () => {
+  const base = {
+    text: '',
+    textBeforeProducts: '',
+    productsMarkdown: '',
+    completed: true,
+    diagnosticError: null,
+    serverProductsCount: 1,
+  };
+  assert.deepEqual(evaluate({ forbid_product_title: ['6А'] }, {
+    ...base,
+    links: [{ title: 'Автомат 1P 16А характеристика C', url: 'https://220volt.kz/catalog/a/b/item/', price: 500 }],
+  }), []);
+  assert(evaluate({ forbid_product_title: ['6А'] }, {
+    ...base,
+    links: [{ title: 'Автомат 1P 6А характеристика C', url: 'https://220volt.kz/catalog/a/b/item/', price: 500 }],
+  }).includes('forbidden product title: 6А'));
+});
+
 test('evaluate rejects catalog claims that bypass product cards', () => {
   const failures = evaluate({ min_products: 1, forbid_unrendered_catalog_facts: true }, {
     text: '**Товар** — 477 ₸/шт. Арт. ABC-123. Наличие: Алматы.',
