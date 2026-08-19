@@ -92,6 +92,8 @@ import {
   exactCompoundMarkingIntro,
   extractExplicitCompoundMarking,
   productTitleMatchesExplicitCompoundMarking,
+  requiresSemanticCompoundEvidence,
+  semanticCompoundSourceQuery,
   selectExactCompoundMarkedProducts,
   shouldTerminateAfterGroundedCompoundSearch,
   subsumeCriteriaProvenByExplicitCompound,
@@ -1904,6 +1906,63 @@ async function callOpenRouterSeriesExplanation(
 
 interface StepLog { step: string; ms: number; meta?: Record<string, unknown>; }
 
+async function answerVerifiedNamedSeriesInquiry(
+  seriesToken: string,
+  userMessage: string,
+  apiKey: string,
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+  signal: AbortSignal,
+): Promise<void> {
+  const started = Date.now();
+  send({ type: "tool_event", tool: "search_catalog", phase: "start", summary: "Проверяю серию в каталоге…" });
+  const search = await executeSearchCatalog({
+    mode: "by_query",
+    query: seriesToken,
+    min_price: 1,
+    per_page: 8,
+  }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+  const groundedRefs = search.ok ? filterProductsByNamedSeries(search.results, seriesToken) : [];
+  const products = groundedRefs
+    .map((product) => ctx.cache.get(String(product.id)))
+    .filter((product): product is ProductFull => Boolean(product));
+  const duration = Date.now() - started;
+  send({
+    type: "tool_event",
+    tool: "search_catalog",
+    phase: "result",
+    duration_ms: duration,
+    summary: `Серия подтверждена: ${products.length}`,
+  });
+  steps.push({
+    step: "v3_named_series_direct_grounding",
+    ms: Date.now() - t0,
+    meta: {
+      series: seriesToken,
+      catalog_ok: search.ok,
+      catalog_total: search.ok ? search.total : 0,
+      grounded_count: products.length,
+      duration_ms: duration,
+    },
+  });
+  if (products.length === 0) {
+    send({
+      type: "delta",
+      content: `Не смог подтвердить серию «${seriesToken}» по актуальным карточкам каталога. Не буду приписывать ей производителя или преимущества без товарных данных — уточните написание серии или обратитесь к менеджеру.`,
+    });
+    return;
+  }
+  const explanation = await callOpenRouterSeriesExplanation(apiKey, userMessage, products, signal);
+  send({ type: "delta", content: explanation.text });
+  steps.push({
+    step: "v3_named_series_direct_explanation",
+    ms: Date.now() - t0,
+    meta: { series: seriesToken, evidence_count: products.length, finish: explanation.finishReason },
+  });
+}
+
 const OUTDOOR_POE_CATALOG_QUERIES = [
   "LDPE",
   "кабель витая пара LDPE",
@@ -1921,6 +1980,7 @@ const HOUSEHOLD_MOTION_LIGHT_CATALOG_QUERIES = [
 interface DirectReplacementResult {
   handled: boolean;
   products: ProductFull[];
+  retryable_reason?: "anchor_not_found" | "leaf_discovery_failed";
 }
 
 async function selectVerifiedOrdinaryReplacement(
@@ -1962,7 +2022,11 @@ async function selectVerifiedOrdinaryReplacement(
       ms: Date.now() - t0,
       meta: { reason: anchor ? "anchor_without_leaf_category" : "anchor_not_found", lookup },
     });
-    return { handled: false, products: [] };
+    return {
+      handled: false,
+      products: [],
+      ...(anchor ? {} : { retryable_reason: "anchor_not_found" as const }),
+    };
   }
 
   const discovery = await executeDiscoverCategory({ noun: anchor.leaf_category, semantic_query: anchor.pagetitle }, {
@@ -1976,7 +2040,7 @@ async function selectVerifiedOrdinaryReplacement(
       ms: Date.now() - t0,
       meta: { reason: "leaf_discovery_failed", leaf_category: anchor.leaf_category, error_code: discovery.error_code },
     });
-    return { handled: false, products: [] };
+    return { handled: false, products: [], retryable_reason: "leaf_discovery_failed" };
   }
 
   const axes = selectExplicitAnchorAxes(anchor, discovery.facets, userMessage);
@@ -2158,6 +2222,96 @@ async function selectVerifiedExactCompoundProducts(
   return ids
     .map((id) => ctx.cache.get(id))
     .filter((product): product is ProductFull => Boolean(product));
+}
+
+async function selectVerifiedSemanticCompoundProducts(
+  userMessage: string,
+  marking: { first: number; second: number },
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<{ handled: boolean; products: ProductFull[] }> {
+  const sourceQuery = semanticCompoundSourceQuery(userMessage);
+  if (!sourceQuery) return { handled: false, products: [] };
+  const literalMarking = `${marking.first}*${String(marking.second).replace(".", ",")}`;
+  const started = Date.now();
+  send({ type: "tool_event", tool: "jargon_recover_catalog", phase: "start", summary: "Проверяю каталожную маркировку…" });
+  const recovered = await executeJargonRecoverCatalog({
+    query: sourceQuery,
+    modifiers: [literalMarking],
+    min_price: 1,
+    per_page: 20,
+  }, {
+    baseUrl: CATALOG_BASE_URL,
+    apiToken: ctx.catalogToken,
+    openrouterApiKey: ctx.openrouterKey,
+    categoryContextEnabled: ctx.jargonCategoryContextEnabled,
+    axialModifiersEnabled: ctx.jargonAxialModifiersEnabled,
+  }, ctx.cache);
+  const matchedQuery = recovered.ok ? String(recovered.matched_query ?? "").trim() : "";
+  let verified = recovered.ok && matchedQuery
+    ? recovered.results.filter((product) =>
+      productTitleMatchesExplicitCompoundMarking(product.pagetitle, marking) &&
+      titleSupportsGroundedJargonQuery(product.pagetitle, matchedQuery)
+    )
+    : [];
+  const priceIntent = detectPriceDirection(userMessage);
+  if (priceIntent?.kind === "superlative") {
+    verified = [...verified].sort((left, right) =>
+      priceIntent.direction === "more_expensive" ? right.price - left.price : left.price - right.price
+    ).slice(0, 1);
+  } else {
+    verified = verified.slice(0, 5);
+  }
+  const elapsed = Date.now() - started;
+  send({
+    type: "tool_event",
+    tool: "jargon_recover_catalog",
+    phase: "result",
+    duration_ms: elapsed,
+    summary: `Смысловые признаки подтверждены: ${verified.length}`,
+  });
+  if (verified.length === 0) {
+    steps.push({
+      step: "v3_semantic_compound_preflight_empty",
+      ms: Date.now() - t0,
+      meta: {
+        source_query: sourceQuery,
+        marking,
+        matched_query: matchedQuery || null,
+        recovered_total: recovered.ok ? recovered.total : 0,
+        duration_ms: elapsed,
+      },
+    });
+    return { handled: false, products: [] };
+  }
+  const ids = verified.map((product) => String(product.id));
+  const rendered = executeRenderProducts({
+    product_ids: ids,
+    total_available: recovered.ok ? recovered.total : verified.length,
+  }, ctx.cache);
+  if (!rendered.ok) {
+    steps.push({ step: "v3_semantic_compound_preflight_render_failed", ms: Date.now() - t0, meta: { error_code: rendered.error_code } });
+    return { handled: false, products: [] };
+  }
+  send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: recovered.ok ? recovered.total : verified.length });
+  const products = ids
+    .map((id) => ctx.cache.get(id))
+    .filter((product): product is ProductFull => Boolean(product));
+  steps.push({
+    step: "v3_semantic_compound_preflight_rendered",
+    ms: Date.now() - t0,
+    meta: {
+      source_query: sourceQuery,
+      marking,
+      matched_query: matchedQuery,
+      recovered_total: recovered.ok ? recovered.total : verified.length,
+      rendered: rendered.rendered_count,
+      duration_ms: elapsed,
+    },
+  });
+  return { handled: true, products };
 }
 
 async function selectVerifiedRecentPriceFollowup(
@@ -2470,6 +2624,7 @@ async function runExpertLoop(
     compoundRecoveryHints.push(hint);
   };
   const explicitCompoundMarking = extractExplicitCompoundMarking(userMessage);
+  const semanticCompoundEvidenceRequired = requiresSemanticCompoundEvidence(userMessage);
   const gateWithLiteralCompoundEvidence = (products: ProductFull[], criteria: Criterion[]) => {
     const adjusted = explicitCompoundMarking && products.length > 0 && products.every((product) =>
       productTitleMatchesExplicitCompoundMarking(product.pagetitle, explicitCompoundMarking)
@@ -3656,7 +3811,29 @@ async function runExpertLoop(
               meta: { criteria: criteriaEnforcedAtRender },
             });
           }
-          if (criteria.length > 0) {
+          const renderIds = Array.isArray(tc.args.product_ids)
+            ? (tc.args.product_ids as unknown[]).map(String)
+            : [];
+          const groundedSemanticIds = new Set(semanticBackedSearch?.ids ?? []);
+          const hasGroundedSemanticTitleEvidence = Boolean(
+            semanticBackedSearch &&
+            semanticBackedSearch.evidenceStrength >= 4 &&
+            renderIds.length > 0 &&
+            renderIds.every((id) => groundedSemanticIds.has(id))
+          );
+          if (semanticCompoundEvidenceRequired && criteria.length === 0 && !hasGroundedSemanticTitleEvidence) {
+            gateShortCircuit = {
+              tool: "render_products",
+              ok: false,
+              error_code: "semantic_constraint_unverified",
+              message: "Составной размер подтверждён заголовками, но дополнительный смысловой признак из запроса не перенесён в проверяемый критерий. Повтори render_products с обязательным criterion уровня A, который следует из твоего рассуждения и подтверждается карточками; широкий пул рендерить нельзя.",
+            } as unknown as ToolResult;
+            steps.push({
+              step: "v3_guard_semantic_compound_criterion_required",
+              ms: now(),
+              meta: { marking: explicitCompoundMarking, render_ids: renderIds.length },
+            });
+          } else if (criteria.length > 0) {
             // ── Слой 4: числа клиента — тоже инвариант ─────────────────────────
             // Модель не имеет права тихо ослабить порог до того, что нашлось в
             // каталоге. Если критерий уровня A слабее числа, названного клиентом
@@ -3700,7 +3877,7 @@ async function runExpertLoop(
                 meta: { violations: understated },
               });
             }
-            const ids = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
+            const ids = renderIds;
             const products = ids
               .map((id) => ctx.cache.get(id))
               .filter((p): p is NonNullable<typeof p> => Boolean(p));
@@ -4041,6 +4218,7 @@ async function runExpertLoop(
             ) continue;
 
             const adjusted = gateWithLiteralCompoundEvidence(exactProducts, recoveryCriteria);
+            if (semanticCompoundEvidenceRequired && adjusted.criteria.length === 0) continue;
             let safeProducts = exactProducts.filter((product) => adjusted.report.passed_ids.includes(product.id));
             let titleEvidenceHints: string[] = [];
             if (adjusted.criteria.length === 0) {
@@ -4718,6 +4896,11 @@ async function runExpertLoop(
       semanticBackedSearch &&
       !replacementIntent &&
       intentMode === "select" &&
+      (
+        !semanticCompoundEvidenceRequired ||
+        semanticBackedSearch.criteria.length > 0 ||
+        semanticBackedSearch.evidenceStrength >= 4
+      ) &&
       (!seriesTurnRequiresGrounding || seriesGroundingSatisfied)
     ) {
       const candidateProducts = semanticBackedSearch.ids
@@ -5015,6 +5198,13 @@ Deno.serve(async (req) => {
         const outdoorPoeIntent = classifyOutdoorPoeIntent(userMessage, history);
         const householdMotionLightRequest = classifyHouseholdMotionLightRequest(userMessage);
         const exactCompoundMarkingRequest = classifyExactCompoundMarkingRequest(userMessage);
+        const explicitCompoundMarking = extractExplicitCompoundMarking(userMessage);
+        const semanticCompoundMarking = explicitCompoundMarking && requiresSemanticCompoundEvidence(userMessage)
+          ? explicitCompoundMarking
+          : null;
+        const namedSeriesInquiryToken = detectUserIntentMode(userMessage) === "inquire"
+          ? resolveNamedSeriesToken(userMessage, history.slice(-8))
+          : null;
         // GUARD v3_meta_question_declined: вопрос про устройство сервиса
         // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
         // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
@@ -5027,6 +5217,18 @@ Deno.serve(async (req) => {
           steps.push({ step: "v3_clean_power_safety_answer", ms: Date.now() - t0 });
           send({ type: "delta", content: CLEAN_POWER_SAFETY_ANSWER });
           productsCount = 0;
+        } else if (namedSeriesInquiryToken) {
+          await answerVerifiedNamedSeriesInquiry(
+            namedSeriesInquiryToken,
+            userMessage,
+            settings.openrouter_api_key!,
+            ctx,
+            send,
+            steps,
+            t0,
+            req.signal,
+          );
+          productsCount = 0;
         } else if (recentProductEvidence.length > 0 && isRecentProductPriceSelectionFollowup(userMessage)) {
           const selection = await selectVerifiedRecentPriceFollowup(
             userMessage,
@@ -5038,6 +5240,34 @@ Deno.serve(async (req) => {
           );
           productsCount = selection.products.length;
           await persistRecentProductEvidence(supabase, sessionId, selection.products);
+        } else if (semanticCompoundMarking) {
+          send({
+            type: "delta",
+            content: `Понял требования: сохраняю точный размер ${semanticCompoundMarking.first}×${String(semanticCompoundMarking.second).replace(".", ",")} и перевожу дополнительные смысловые признаки в каталожную маркировку. Покажу только карточки, где оба условия подтверждены названием.`,
+          });
+          const direct = await selectVerifiedSemanticCompoundProducts(
+            userMessage,
+            semanticCompoundMarking,
+            ctx,
+            send,
+            steps,
+            t0,
+          );
+          if (direct.handled) {
+            productsCount = direct.products.length;
+            await persistRecentProductEvidence(supabase, sessionId, direct.products);
+          } else {
+            const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0, {
+              anchorFilterEnabled: settings.v3_anchor_filter_enabled,
+              relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
+              criteriaGateEnabled: true,
+            }, recentProductEvidence);
+            productsCount = out.productsRendered;
+            const shownProducts = out.shownProductIds
+              .map((id) => ctx.cache.get(id))
+              .filter((product): product is NonNullable<typeof product> => Boolean(product));
+            await persistRecentProductEvidence(supabase, sessionId, shownProducts);
+          }
         } else if (exactCompoundMarkingRequest) {
           send({ type: "delta", content: exactCompoundMarkingIntro(exactCompoundMarkingRequest) });
           const selectedProducts = await selectVerifiedExactCompoundProducts(
@@ -5083,7 +5313,15 @@ Deno.serve(async (req) => {
           send({ type: "delta", content: answer });
           productsCount = 0;
         } else if (isReplacementIntent(userMessage) && !/равноцен\p{L}*/iu.test(userMessage)) {
-          const direct = await selectVerifiedOrdinaryReplacement(userMessage, ctx, send, steps, t0);
+          let direct = await selectVerifiedOrdinaryReplacement(userMessage, ctx, send, steps, t0);
+          if (!direct.handled && direct.retryable_reason) {
+            steps.push({
+              step: "v3_replacement_preflight_retry",
+              ms: Date.now() - t0,
+              meta: { reason: direct.retryable_reason },
+            });
+            direct = await selectVerifiedOrdinaryReplacement(userMessage, ctx, send, steps, t0);
+          }
           if (direct.handled) {
             productsCount = direct.products.length;
             await persistRecentProductEvidence(supabase, sessionId, direct.products);

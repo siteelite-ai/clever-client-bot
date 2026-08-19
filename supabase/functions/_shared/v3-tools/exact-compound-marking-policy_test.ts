@@ -5,6 +5,8 @@ import {
   compoundRecoveryQueries,
   extractExplicitCompoundMarking,
   productTitleMatchesExplicitCompoundMarking,
+  requiresSemanticCompoundEvidence,
+  semanticCompoundSourceQuery,
   selectExactCompoundMarkedProducts,
   shouldTerminateAfterGroundedCompoundSearch,
   subsumeCriteriaProvenByExplicitCompound,
@@ -33,6 +35,17 @@ Deno.test("exact compound route extracts a price-sorted catalog query", () => {
 Deno.test("exact compound shortcut yields semantic multi-attribute requests to the consultant", () => {
   assertEquals(classifyExactCompoundMarkingRequest("какой есть кабель ввг 3*1,5 негорючий покажи все позиции"), null);
   assertEquals(classifyExactCompoundMarkingRequest("нужен медный кабель негорючий 2*1,5"), null);
+});
+
+Deno.test("compound semantic evidence classifier is structural and product-agnostic", () => {
+  assertEquals(requiresSemanticCompoundEvidence("найди кабель ВВГ 2*1,5"), false);
+  assertEquals(requiresSemanticCompoundEvidence("нужен медный кабель негорючий 2*1,5"), true);
+  assertEquals(requiresSemanticCompoundEvidence("покажи изделие для улицы стойкое 3×2,5"), true);
+  assertEquals(requiresSemanticCompoundEvidence("нужен товар без составного размера"), false);
+  assertEquals(
+    semanticCompoundSourceQuery("Нужен медный кабель негорючий 2*1,5, пожалуйста!"),
+    "медный кабель негорючий",
+  );
 });
 
 Deno.test("exact compound route rejects a nearby size and returns the cheapest exact match", () => {
