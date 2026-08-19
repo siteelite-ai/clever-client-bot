@@ -76,6 +76,28 @@ Deno.test("filter guard distinguishes user-backed constraints from model guidanc
   assertEquals(result.user_backed, [{ key: "brand", value: "Gauss" }]);
 });
 
+Deno.test("filter guard does not drop a short code when proving a compound value", () => {
+  const seriesFacets = [{
+    key: "socket_type",
+    values: [{ value: "розетка TV" }, { value: "электрическая" }],
+  }];
+  const inferred = guardSearchFilters(
+    { mode: "by_filter", options: { socket_type: ["розетка TV"] } },
+    seriesFacets,
+    "Модель предлагает розетку TV.",
+    "Покажи розетки и выключатели.",
+  );
+  assertEquals(inferred.user_backed, []);
+
+  const explicit = guardSearchFilters(
+    { mode: "by_filter", options: { socket_type: ["розетка TV"] } },
+    seriesFacets,
+    "Пользователь запросил розетку TV.",
+    "Покажи розетку TV.",
+  );
+  assertEquals(explicit.user_backed, [{ key: "socket_type", value: "розетка TV" }]);
+});
+
 Deno.test("filter guard accepts canonical value when reasoning uses inflected forms", () => {
   const result = guardSearchFilters(
     { mode: "by_filter", options: { kind: ["Бытовые светильники накладные"] } },

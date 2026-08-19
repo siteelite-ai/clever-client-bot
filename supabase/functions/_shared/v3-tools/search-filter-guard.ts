@@ -226,12 +226,13 @@ function contradictedByUser(value: string, userEvidence: string): boolean {
 
 function explicitlyAffirmedByUser(value: string, userEvidence: string): boolean {
   if (contradictedByUser(value, userEvidence)) return false;
+  const isEvidenceToken = (token: string) => token.length >= 3 || /\d/.test(token) || /^[a-z]{2,}$/u.test(token);
   const valueTokens = norm(value)
     .split(" ")
-    .filter((token) => token.length >= 3 || /\d/.test(token));
+    .filter(isEvidenceToken);
   const evidenceTokens = norm(userEvidence)
     .split(" ")
-    .filter((token) => token.length >= 3 || /\d/.test(token));
+    .filter(isEvidenceToken);
   if (valueTokens.length === 0 || evidenceTokens.length === 0) return false;
   return valueTokens.every((token) => evidenceTokens.some((candidate) => (
     token === candidate || tokensMatchByStem(token, candidate)
