@@ -183,7 +183,7 @@ Deno.test("filter guard completes an explicit user facet omitted by the model", 
     [
       ...facets,
       { key: "mount", values: [{ value: "накладной" }, { value: "встраиваемый" }] },
-      { key: "sensor", values: [{ value: "да" }, { value: "нет" }] },
+      { key: "sensor", caption: "Датчик", values: [{ value: "да" }, { value: "нет" }] },
     ],
     "Ищу накладной светильник с датчиком.",
     "Мне нужен бытовой накладной светильник с датчиком движения.",
@@ -250,6 +250,19 @@ Deno.test("filter guard never infers generic boolean facet values", () => {
   );
   assertEquals(result.args, { mode: "by_filter" });
   assertEquals(result.inferred, []);
+});
+
+Deno.test("filter guard keeps a model-provided affirmative boolean when its facet meaning is explicit", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { "Негорючесть": ["Да"] } },
+    [{ key: "non_combustible", caption: "Негорючесть", values: [{ value: "Да" }] }],
+    "Подбираю негорючий кабель с исполнением нг.",
+    "Нужен негорючий кабель.",
+  );
+
+  assertEquals(result.args.options, { non_combustible: ["Да"] });
+  assertEquals(result.user_backed, [{ key: "non_combustible", value: "Да" }]);
+  assertEquals(result.dropped, []);
 });
 
 Deno.test("filter guard removes a model-provided option subsumed by a compound value", () => {

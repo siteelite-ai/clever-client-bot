@@ -84,9 +84,12 @@ export function compoundRecoveryQueries(
   const singleWord = cleanedHints.filter((hint) => /^\p{L}[\p{L}\p{N}-]*$/u.test(hint));
   const phrases = cleanedHints.filter((hint) => !singleWord.includes(hint));
   const tokens = cleanedHints.flatMap((hint) => hint.match(/[\p{L}\p{N}-]{3,}/gu) ?? []);
+  const leadingTokens = phrases
+    .map((hint) => hint.match(/^[\p{L}\p{N}-]{3,}/u)?.[0] ?? "")
+    .filter(Boolean);
   const seen = new Set<string>();
   const queries: string[] = [];
-  for (const hint of [...singleWord, ...phrases, ...tokens]) {
+  for (const hint of [...singleWord, ...leadingTokens, ...phrases, ...tokens]) {
     const query = `${hint} ${literal}`.replace(/\s+/gu, " ").trim();
     const key = norm(query);
     if (!key || seen.has(key)) continue;

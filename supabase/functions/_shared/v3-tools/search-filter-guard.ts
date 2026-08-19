@@ -403,7 +403,29 @@ export function guardSearchFilters(
         dropped.push({ key, value: canonical, reason: "negated_by_user" });
         continue;
       }
-      const status = evidenceStatus(canonical, declaredReasoning);
+      const normalizedCanonical = norm(canonical);
+      const isAffirmativeBoolean = AFFIRMATIVE_VALUES.has(normalizedCanonical);
+      const facetLabel = facet.caption || facet.key;
+      const labelUserStatus = isAffirmativeBoolean ? evidenceStatus(facetLabel, userEvidence) : "absent";
+      if (labelUserStatus === "negated") {
+        dropped.push({ key, value: canonical, reason: "negated_by_user" });
+        continue;
+      }
+      // For a model-provided affirmative boolean, the evidence is the facet's
+      // meaning ("Негорючесть") being declared, not the generic storage value
+      // "Да". This remains strict: no missing boolean filter is inferred, and
+      // a bare conversational "да" cannot activate an unrelated facet.
+      const literalValueStatus = isAffirmativeBoolean && normalizedCanonical.length <= 3
+        ? "absent"
+        : evidenceStatus(canonical, declaredReasoning);
+      const labelReasoningStatus = isAffirmativeBoolean
+        ? evidenceStatus(facetLabel, declaredReasoning)
+        : "absent";
+      const status = literalValueStatus === "affirmed" || labelReasoningStatus === "affirmed"
+        ? "affirmed"
+        : literalValueStatus === "negated" || labelReasoningStatus === "negated"
+          ? "negated"
+          : "absent";
       if (status !== "affirmed") {
         dropped.push({
           key,
@@ -415,7 +437,10 @@ export function guardSearchFilters(
       nextOptions[canonicalKey] ??= [];
       if (!nextOptions[canonicalKey].includes(canonical)) nextOptions[canonicalKey].push(canonical);
       kept.push({ key: canonicalKey, value: canonical });
-      if (explicitlyAffirmedByUser(canonical, userEvidence)) userBacked.push({ key: canonicalKey, value: canonical });
+      if (
+        explicitlyAffirmedByUser(canonical, userEvidence) ||
+        isAffirmativeBoolean && labelUserStatus === "affirmed"
+      ) userBacked.push({ key: canonicalKey, value: canonical });
     }
   }
 
