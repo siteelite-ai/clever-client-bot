@@ -57,6 +57,7 @@ import {
 } from "../_shared/v3-tools/agent-performance.ts";
 import { CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest } from "../_shared/v3-tools/clean-power-safety.ts";
 import { deterministicSeriesExplanation } from "../_shared/v3-tools/series-explanation.ts";
+import { rankSplitReplacementCandidates, type RankedReplacementCandidate } from "../_shared/v3-tools/replacement-fallback.ts";
 import {
   classifyHouseholdMotionLightRequest,
   HOUSEHOLD_MOTION_LIGHT_EMPTY,
@@ -1355,9 +1356,12 @@ function filterReplacementCompatibleIds(
   cache: ProductCache,
   axisIdSets: Map<string, Set<string>> | null = null,
   requireAllAxesInTitle = false,
+  allowNearMatch = false,
 ): string[] {
   if (axes.length < 2) return ids;
-  const minMatches = Math.max(2, axes.length - 1);
+  const minMatches = allowNearMatch
+    ? (axes.length === 2 ? 1 : axes.length - 1)
+    : Math.max(2, axes.length - 1);
   const ranked: Array<{ id: string; matches: number; order: number }> = [];
   ids.forEach((id, order) => {
     const product = cache.get(id);
@@ -2255,8 +2259,13 @@ async function runExpertLoop(
   // (see DN027B аналог-кейс: split_fallback дал 12 релевантных id,
   // потом by_query "downlight"→309 затёр freshSearch и render выдал мусор).
   const prioritySplitPool: string[] = [];
-  const prioritySplitAxisIdSets: Map<string, Set<string>> | null = null;
+  const prioritySplitAxisIdSets = new Map<string, Set<string>>();
   let replacementRequiredAxes: ReplacementAxis[] = [];
+  let replacementSplitFallback: {
+    axes: ReplacementAxis[];
+    candidates: RankedReplacementCandidate[];
+  } | null = null;
+  let replacementSplitFallbackCaptionSent = false;
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
   // Последний осмысленный поисковый запрос — нужен как «существительное» для
@@ -2404,7 +2413,14 @@ async function runExpertLoop(
         const p = ctx.cache.get(id);
         if (!p || !(p.price > 0)) continue;
         if (productMatchesExcludedReplacementIdentity(p, replacementExcludedIdentityValues)) continue;
-        if (replacementRequiredAxes.length >= 2 && filterReplacementCompatibleIds([id], replacementRequiredAxes, ctx.cache, prioritySplitAxisIdSets, equivalentReplacementRequested).length === 0) continue;
+        if (replacementRequiredAxes.length >= 2 && filterReplacementCompatibleIds(
+          [id],
+          replacementRequiredAxes,
+          ctx.cache,
+          prioritySplitAxisIdSets,
+          equivalentReplacementRequested,
+          Boolean(replacementSplitFallback),
+        ).length === 0) continue;
         seen.add(id);
         out.push(id);
       }
@@ -3110,7 +3126,14 @@ async function runExpertLoop(
             });
             const afterFamily = filtered.length;
             if (replacementIntent && replacementRequiredAxes.length >= 2) {
-              filtered = filterReplacementCompatibleIds(filtered, replacementRequiredAxes, ctx.cache, prioritySplitAxisIdSets, equivalentReplacementRequested);
+              filtered = filterReplacementCompatibleIds(
+                filtered,
+                replacementRequiredAxes,
+                ctx.cache,
+                prioritySplitAxisIdSets,
+                equivalentReplacementRequested,
+                Boolean(replacementSplitFallback),
+              );
             }
             if (filtered.length !== origIds.length) {
               (tc.args as Record<string, unknown>).product_ids = filtered;
@@ -3236,7 +3259,21 @@ async function runExpertLoop(
             userBackedSearchCriteria,
             Boolean(namedSeriesToken),
           );
-          const criteriaEnforcedAtRender = namedSeriesToken ? userBackedSearchCriteria : enforcedSearchCriteria;
+          if (replacementSplitFallback && !equivalentReplacementRequested) {
+            criteria = [];
+            (tc.args as Record<string, unknown>).criteria = [];
+            steps.push({
+              step: "v3_guard_near_replacement_criteria_relaxed",
+              ms: now(),
+              meta: {
+                axes: replacementSplitFallback.axes.map((axis) => ({ caption: axis.caption, values: axis.values })),
+                candidates: replacementSplitFallback.candidates,
+              },
+            });
+          }
+          const criteriaEnforcedAtRender = replacementSplitFallback && !equivalentReplacementRequested
+            ? []
+            : namedSeriesToken ? userBackedSearchCriteria : enforcedSearchCriteria;
           if (namedSeriesToken || criteriaEnforcedAtRender.length > 0) {
             (tc.args as Record<string, unknown>).criteria = criteria;
             steps.push({
@@ -3578,6 +3615,7 @@ async function runExpertLoop(
             });
           }
         }
+        let anchorOnlyReplacementSearch = false;
         if (flags.anchorFilterEnabled && tc.name === "search_catalog" && replacementIntent) {
           const anchorId = getAnchorExcludeId();
           const filtered = filterAnchorFromSearchResult(result, anchorId, (runArgs as Record<string, unknown>).mode);
@@ -3590,6 +3628,7 @@ async function runExpertLoop(
             });
           } else if (filtered.skipped) {
             result = filtered.result;
+            anchorOnlyReplacementSearch = filtered.skipped === "anchor_only";
             steps.push({
               step: "v3_anchor_filter_skipped",
               ms: now(),
@@ -3603,9 +3642,60 @@ async function runExpertLoop(
           }
 
         }
+        if (
+          anchorOnlyReplacementSearch &&
+          !equivalentReplacementRequested &&
+          replacementRequiredAxes.length >= 2 &&
+          runArgs.mode === "by_filter"
+        ) {
+          const split = await trySplitFallback(runArgs, ctx);
+          if (split) {
+            const anchorId = getAnchorExcludeId();
+            const excludedIds = getFamilyExcludeSet();
+            if (anchorId) excludedIds.add(anchorId);
+            const ranked = rankSplitReplacementCandidates(split.axes, excludedIds, 8)
+              .filter((candidate) => {
+                const product = ctx.cache.get(candidate.id);
+                return Boolean(
+                  product &&
+                  !productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues)
+                );
+              });
+            const fallbackProducts = ranked
+              .map((candidate) => ctx.cache.get(candidate.id))
+              .filter((product): product is ProductFull => Boolean(product));
+            if (fallbackProducts.length > 0) {
+              prioritySplitPool.splice(0, prioritySplitPool.length, ...fallbackProducts.map((product) => product.id));
+              prioritySplitAxisIdSets.clear();
+              for (const axis of split.axes) {
+                prioritySplitAxisIdSets.set(axis.axis, new Set(axis.ids));
+              }
+              replacementSplitFallback = {
+                axes: replacementRequiredAxes.map((axis) => ({ ...axis, values: [...axis.values] })),
+                candidates: ranked,
+              };
+              const catalogResult = result as SearchCatalogOk & { tool: "search_catalog"; warnings?: string[] };
+              result = {
+                ...catalogResult,
+                results: fallbackProducts,
+                total: fallbackProducts.length,
+                warnings: [...(catalogResult.warnings ?? []), "replacement_split_fallback"],
+              };
+              steps.push({
+                step: "v3_replacement_split_fallback",
+                ms: now(),
+                meta: {
+                  strict_total: catalogResult.total,
+                  duration_ms: split.ms,
+                  axes: split.axes.map((axis) => ({ key: axis.axis, total: axis.total, candidates: axis.ids.length })),
+                  ranked,
+                },
+              });
+            }
+          }
+        }
         const effectiveArgs: Record<string, unknown> = runArgs;
         const inferredFallback: Array<{ key: string; value: string }> | null = null;
-        const splitFallbackResult: { axes: SplitAxis[]; ms: number } | null = null;
 
         const dur = Date.now() - toolStart;
         send({
@@ -3642,13 +3732,12 @@ async function runExpertLoop(
 
 
 
-        // [removed per spec v2 2026-06-29] v3_guard_split_fallback:
-        // LLM сам признаёт пустое пересечение и предлагает альтернативу
-        // (rule 14 в промпте будет переформулировано — без серверного hint).
+        // Remember model-selected replacement axes for strict and near-match
+        // guards. A split fallback is activated above only after the strict
+        // intersection contains the source product and no real analogue.
         if (tc.name === "search_catalog" && result.ok && replacementIntent && (result as { total: number }).total === 0) {
           rememberReplacementAxes(tc.args);
         }
-        void trySplitFallback;
         void findFacetMatchForCode;
         void filterReplacementCompatibleIds;
 
@@ -3760,6 +3849,18 @@ async function runExpertLoop(
           const renderedIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
           for (const id of renderedIds) shownIds.add(id);
 
+          if (replacementSplitFallback && !replacementSplitFallbackCaptionSent) {
+            const axes = replacementSplitFallback.axes
+              .map((axis) => `${axis.caption}: ${axis.values.join("/")}`)
+              .join(", ");
+            const caption = `Точного совпадения по всем параметрам исходной модели в каталоге не подтвердилось. Показываю ближайшие аналоги, найденные отдельно по критериям (${axes}); перед заменой сверьте монтажные размеры и остальные характеристики.`;
+            send({ type: "assistant_turn_break", reason: "text_before_render" });
+            send({ type: "delta", content: caption });
+            finalText += `${finalText ? "\n\n" : ""}${caption}`;
+            replacementSplitFallbackCaptionSent = true;
+            steps.push({ step: "v3_replacement_split_fallback_caption", ms: now(), meta: { axes } });
+          }
+
           // ── Step 3: Promise-Reality Audit
           const audit = promiseRealityCheck(firstAssistantText, renderedIds, ctx.cache, lastDiscover);
           if (audit) {
@@ -3807,7 +3908,6 @@ async function runExpertLoop(
         // _fresh_pool_ids hint, _intersection_empty/_split_axes hint —
         // соответствующие гарды снесены, текст и решения генерирует LLM.
         void inferredFallback;
-        void splitFallbackResult;
 
         const baseReply = toolResultForLlm(result, effectiveArgs, userMessage, assistantReasoning) as unknown;
         const replyObj: Record<string, unknown> = (baseReply && typeof baseReply === "object")
@@ -3876,7 +3976,14 @@ async function runExpertLoop(
           const product = ctx.cache.get(id);
           if (!product || productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues)) return false;
           return replacementRequiredAxes.length < 2 ||
-            filterReplacementCompatibleIds([id], replacementRequiredAxes, ctx.cache, prioritySplitAxisIdSets, equivalentReplacementRequested).length > 0;
+            filterReplacementCompatibleIds(
+              [id],
+              replacementRequiredAxes,
+              ctx.cache,
+              prioritySplitAxisIdSets,
+              equivalentReplacementRequested,
+              Boolean(replacementSplitFallback),
+            ).length > 0;
         });
       }
       safeIds = guardVisibleCardinality(safeIds).ids;
