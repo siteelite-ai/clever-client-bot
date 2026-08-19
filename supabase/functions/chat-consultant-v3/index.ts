@@ -30,7 +30,7 @@ import {
   selectGroundedTokenRecoveryCandidate,
   titleContainsLiteralToken,
 } from "../_shared/v3-tools/category-reasoning-guard.ts";
-import { detectUserIntentMode, shouldSuppressNegativeSuitabilityCard } from "../_shared/v3-tools/intent-mode.ts";
+import { detectUserIntentMode, requiresCatalogGroundingForInquiry, shouldSuppressNegativeSuitabilityCard } from "../_shared/v3-tools/intent-mode.ts";
 import {
   buildDeterministicEvidenceAnswer,
   buildRecentProductEvidencePrompt,
@@ -2105,6 +2105,7 @@ async function runExpertLoop(
   let userBackedSearchCriteria: Criterion[] = [];
   let reasoningBackedSearch: { ids: string[]; total: number; criteria: Criterion[] } | null = null;
   let agentPhase: AgentPhase = "open";
+  let catalogSearchAttempted = false;
   // Session-wide whitelist of category pagetitles discovered via discover_category.
   // Source of truth for `category` / `category_in` in search_catalog calls.
   // Prevents LLM hallucinating category names (e.g. "Уличные светильники" вместо
@@ -2171,6 +2172,7 @@ async function runExpertLoop(
   const replacementIntent = isReplacementIntent(userMessage);
   const replacementExcludedIdentityValues = new Set<string>();
   const intentMode = detectUserIntentMode(userMessage);
+  const inquiryRequiresCatalogGrounding = intentMode === "inquire" && requiresCatalogGroundingForInquiry(userMessage);
   const codeConstraints = extractCodeConstraints(userMessage);
   // Replacement-intent guardrail (§9.9 "Замены и аналоги"): the user's message
   // names the ANCHOR product (its brand + model/series + specs). The compound
@@ -2469,8 +2471,10 @@ async function runExpertLoop(
 
       const llmStart = Date.now();
       const agentToolPolicy = {
-        reasoningRequiresCatalog: intentMode === "select" && hasActionableSelectionReasoning(
-          `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
+        reasoningRequiresCatalog: inquiryRequiresCatalogGrounding && !catalogSearchAttempted || (
+          intentMode === "select" && hasActionableSelectionReasoning(
+            `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
+          )
         ),
       };
       const availableToolNames = toolNamesForAgentPhase(agentPhase, agentToolPolicy);
@@ -2548,9 +2552,11 @@ async function runExpertLoop(
         reasoningRequiresCatalog: agentToolPolicy.reasoningRequiresCatalog || responseHasActionableReasoning,
       };
       const enforcedToolNames = toolNamesForAgentPhase(agentPhase, enforcementToolPolicy);
-      const requiresToolContinuation = resp.toolCalls.length === 0 && intentMode === "select" && (
-        agentPhase === "terminal_after_search" ||
-        responseHasActionableReasoning
+      const requiresToolContinuation = resp.toolCalls.length === 0 && (
+        intentMode === "select" && (
+          agentPhase === "terminal_after_search" ||
+          responseHasActionableReasoning
+        ) || inquiryRequiresCatalogGrounding && !catalogSearchAttempted
       );
       const hasRender = resp.toolCalls.some((tc) => tc.name === "render_products" && isToolAllowedInAgentPhase(agentPhase, tc.name, enforcementToolPolicy));
       const isFirstTurn = step === 0;
@@ -2665,12 +2671,14 @@ async function runExpertLoop(
             role: "system",
             content: agentPhase === "terminal_after_search"
               ? "Фазовый контракт: ненулевой пул уже найден. Не заканчивай ход текстом. Вызови render_products, перенеся в criteria требования из своего рассуждения; серверный criteria gate сам отклонит неподтверждённые карточки."
+              : inquiryRequiresCatalogGrounding && !catalogSearchAttempted
+              ? "Фазовый контракт: пользователь спрашивает о конкретно названной серии. Не делай вывод о бренде, наличии или свойствах только по памяти либо списку характеристик категории. Выполни search_catalog по названию серии; затем отвечай по найденным карточкам и базе знаний."
               : "Фазовый контракт: ты уже сформулировал несколько измеримых критериев подбора. Не заканчивай ход текстом и не спрашивай предпочтения, которые можешь выбрать как эксперт. Выполни discover_category/search_catalog и доведи найденный пул до render_products.",
           });
           steps.push({
             step: "v3_agent_premature_final_blocked",
             ms: now(),
-            meta: { phase: agentPhase, reasoning_requires_catalog: responseHasActionableReasoning },
+            meta: { phase: agentPhase, reasoning_requires_catalog: responseHasActionableReasoning, inquiry_requires_catalog: inquiryRequiresCatalogGrounding },
           });
           continue;
         }
@@ -3163,6 +3171,9 @@ async function runExpertLoop(
 
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
         let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
+        if (tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") {
+          catalogSearchAttempted = true;
+        }
 
         // The catalog applies AND semantics to multiword full-text queries.
         // When the consultant has already generated a canonical phrase, a

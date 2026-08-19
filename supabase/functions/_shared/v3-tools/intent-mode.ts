@@ -1,5 +1,17 @@
 export type UserIntentMode = "select" | "inquire";
 
+/**
+ * A factual explanation of an explicitly named series must consult the live
+ * catalog before it can finish. Deictic follow-ups such as "эта серия" are
+ * excluded because they rely on evidence persisted from the preceding turn.
+ */
+export function requiresCatalogGroundingForInquiry(message: string): boolean {
+  const normalized = message.toLocaleLowerCase("ru").replace(/ё/g, "е");
+  const match = normalized.match(/(?:^|[^\p{L}])сер(?:ия|ии|ию|ией)\s+[«"']?([\p{L}][\p{L}\d-]{3,})/u);
+  if (!match) return false;
+  return !/^(?:этой|эта|эту|данной|данная|данную|такой|такая)$/u.test(match[1]);
+}
+
 // Product questions are evidence requests, not new selections. This distinction
 // controls whether the factual explanation beside render_products is visible.
 export function detectUserIntentMode(message: string): UserIntentMode {
