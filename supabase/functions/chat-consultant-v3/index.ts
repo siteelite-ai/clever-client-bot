@@ -90,6 +90,7 @@ import {
   extractExplicitCompoundMarking,
   productTitleMatchesExplicitCompoundMarking,
   selectExactCompoundMarkedProducts,
+  subsumeCriteriaProvenByExplicitCompound,
   type ExactCompoundMarkingRequest,
 } from "../_shared/v3-tools/exact-compound-marking-policy.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
@@ -2458,6 +2459,14 @@ async function runExpertLoop(
   let enforcedSearchCriteria: Criterion[] = [];
   let userBackedSearchCriteria: Criterion[] = [];
   const explicitCompoundMarking = extractExplicitCompoundMarking(userMessage);
+  const gateWithLiteralCompoundEvidence = (products: ProductFull[], criteria: Criterion[]) => {
+    const adjusted = explicitCompoundMarking && products.length > 0 && products.every((product) =>
+      productTitleMatchesExplicitCompoundMarking(product.pagetitle, explicitCompoundMarking)
+    )
+      ? subsumeCriteriaProvenByExplicitCompound(criteria, explicitCompoundMarking)
+      : { criteria, subsumed: [] as Criterion[] };
+    return { ...adjusted, report: applyCriteriaGate(products, adjusted.criteria) };
+  };
   const guardVisibleCardinality = (ids: string[]) => {
     const compactCriteria = userBackedSearchCriteria.filter((criterion) =>
       typeof criterion.value === "string" && !titleProvesCompactCriterion("", criterion)
@@ -3635,7 +3644,17 @@ async function runExpertLoop(
             const products = ids
               .map((id) => ctx.cache.get(id))
               .filter((p): p is NonNullable<typeof p> => Boolean(p));
-            const report = applyCriteriaGate(products, criteria);
+            const compoundAdjusted = gateWithLiteralCompoundEvidence(products, criteria);
+            if (compoundAdjusted.subsumed.length > 0) {
+              criteria = compoundAdjusted.criteria;
+              (tc.args as Record<string, unknown>).criteria = criteria;
+              steps.push({
+                step: "v3_guard_compound_criteria_subsumed",
+                ms: now(),
+                meta: { marking: explicitCompoundMarking, subsumed: compoundAdjusted.subsumed },
+              });
+            }
+            const report = compoundAdjusted.report;
             const passed = ids.filter((id) => report.passed_ids.includes(id));
             const meta = {
               criteria: criteria.map((c) => ({ key: c.key, op: c.op, value: c.value, level: c.level ?? "A" })),
@@ -3670,10 +3689,10 @@ async function runExpertLoop(
                   if (rqResult.ok) {
                     const r3 = rqResult as unknown as { results: Array<{ id: string; price: number }>; total: number };
                     const rqProducts = (r3.results ?? []).filter((p) => p && Number.isFinite(p.price) && p.price > 0);
-                    const gated = applyCriteriaGate(
-                      rqProducts.map((p) => ctx.cache.get(String(p.id))).filter((p): p is NonNullable<typeof p> => Boolean(p)),
-                      criteria,
-                    );
+                    const rqFullProducts = rqProducts
+                      .map((p) => ctx.cache.get(String(p.id)))
+                      .filter((p): p is NonNullable<typeof p> => Boolean(p));
+                    const gated = gateWithLiteralCompoundEvidence(rqFullProducts, criteria).report;
                     const rqIds = gated.passed_ids;
                     selfRequery = { query: rq, ids: rqIds, total: Number(r3.total) || rqProducts.length };
                     if (rqIds.length > 0) freshSearch = { tool: "criteria_self_requery", ids: rqIds, total: selfRequery.total };
@@ -4312,7 +4331,8 @@ async function runExpertLoop(
       const candidateProducts = reasoningBackedSearch.ids
         .map((id) => ctx.cache.get(id))
         .filter((product): product is NonNullable<typeof product> => Boolean(product));
-      const gate = applyCriteriaGate(candidateProducts, reasoningBackedSearch.criteria);
+      const adjusted = gateWithLiteralCompoundEvidence(candidateProducts, reasoningBackedSearch.criteria);
+      const gate = adjusted.report;
       let safeIds = reasoningBackedSearch.ids.filter((id) => gate.passed_ids.includes(id));
       if (replacementIntent) {
         const anchorId = getAnchorExcludeId();
@@ -4340,7 +4360,7 @@ async function runExpertLoop(
       if (safeIds.length > 0) {
         const rescued = await runTool("render_products", {
           product_ids: safeIds.slice(0, 5),
-          criteria: reasoningBackedSearch.criteria,
+          criteria: adjusted.criteria,
           total_available: reasoningBackedSearch.total,
         }, ctx);
         if (rescued.ok) {
@@ -4356,7 +4376,7 @@ async function runExpertLoop(
           steps.push({
             step: "v3_reasoning_backed_render_recovery",
             ms: now(),
-            meta: { candidates: reasoningBackedSearch.ids.length, rendered: rendered.rendered_count, criteria: reasoningBackedSearch.criteria },
+            meta: { candidates: reasoningBackedSearch.ids.length, rendered: rendered.rendered_count, criteria: adjusted.criteria },
           });
           steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "reasoning_backed_render_recovery", step_count: MAX_STEPS } });
           return { finalText, productsRendered, shownProductIds: [...shownIds] };
@@ -4416,14 +4436,15 @@ async function runExpertLoop(
       const candidateProducts = semanticBackedSearch.ids
         .map((id) => ctx.cache.get(id))
         .filter((product): product is NonNullable<typeof product> => Boolean(product));
-      const gate = applyCriteriaGate(candidateProducts, semanticBackedSearch.criteria);
+      const adjusted = gateWithLiteralCompoundEvidence(candidateProducts, semanticBackedSearch.criteria);
+      const gate = adjusted.report;
       const safeIds = guardVisibleCardinality(
         semanticBackedSearch.ids.filter((id) => gate.passed_ids.includes(id)),
       ).ids;
       if (safeIds.length > 0) {
         const rescued = await runTool("render_products", {
           product_ids: safeIds.slice(0, 5),
-          criteria: semanticBackedSearch.criteria,
+          criteria: adjusted.criteria,
           total_available: semanticBackedSearch.total,
         }, ctx);
         if (rescued.ok) {
@@ -4443,7 +4464,7 @@ async function runExpertLoop(
               label: semanticBackedSearch.label,
               candidates: semanticBackedSearch.ids.length,
               rendered: rendered.rendered_count,
-              criteria: semanticBackedSearch.criteria,
+              criteria: adjusted.criteria,
             },
           });
           steps.push({ step: "v3_turn_end", ms: now(), meta: { reason: "semantic_render_recovery", step_count: MAX_STEPS } });

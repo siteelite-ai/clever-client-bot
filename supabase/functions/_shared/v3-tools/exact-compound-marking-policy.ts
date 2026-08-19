@@ -1,4 +1,5 @@
 import type { ProductRef } from "./types.ts";
+import type { Criterion } from "./criteria-gate.ts";
 
 export interface ExactCompoundMarkingRequest {
   query: string;
@@ -63,6 +64,72 @@ export function productTitleMatchesExplicitCompoundMarking(
   marking: ExplicitCompoundMarking,
 ): boolean {
   return textHasExactCompoundMarking(pagetitle, marking);
+}
+
+function scalarCriterionNumber(criterion: Criterion): number | null {
+  if (criterion.op !== "eq" || Array.isArray(criterion.value)) return null;
+  if (typeof criterion.value === "number") return Number.isFinite(criterion.value) ? criterion.value : null;
+  const raw = criterion.value.trim().replace(",", ".");
+  if (!/^\d+(?:\.\d+)?$/u.test(raw)) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function keyTokens(key: string): Set<string> {
+  return new Set(norm(key).match(/[\p{L}\p{N}]{3,}/gu) ?? []);
+}
+
+/**
+ * Removes only criteria that duplicate a compound marking already proven by
+ * every candidate title. Other suitability criteria remain untouched.
+ *
+ * The model may express N×S either as one literal criterion (`3×1,5`) or as
+ * two scalar axes (`Количество жил = 3`, `Сечение жилы = 1,5 мм²`). Scalar
+ * axes are considered a decomposition only when their labels share a token or
+ * the second axis carries a square-millimetre unit. This is structural and
+ * product-agnostic; no category, brand, or jargon dictionary is involved.
+ */
+export function subsumeCriteriaProvenByExplicitCompound(
+  criteria: Criterion[],
+  marking: ExplicitCompoundMarking,
+): { criteria: Criterion[]; subsumed: Criterion[] } {
+  const subsumedIndexes = new Set<number>();
+
+  criteria.forEach((criterion, index) => {
+    if (
+      criterion.op === "eq" &&
+      typeof criterion.value === "string" &&
+      textHasExactCompoundMarking(criterion.value, marking)
+    ) {
+      subsumedIndexes.add(index);
+    }
+  });
+
+  const firstCandidates = criteria
+    .map((criterion, index) => ({ criterion, index, value: scalarCriterionNumber(criterion) }))
+    .filter((item) => !subsumedIndexes.has(item.index) && item.value === marking.first);
+  const secondCandidates = criteria
+    .map((criterion, index) => ({ criterion, index, value: scalarCriterionNumber(criterion) }))
+    .filter((item) => !subsumedIndexes.has(item.index) && item.value === marking.second);
+
+  outer: for (const first of firstCandidates) {
+    const firstTokens = keyTokens(first.criterion.key);
+    for (const second of secondCandidates) {
+      if (first.index === second.index) continue;
+      const secondTokens = keyTokens(second.criterion.key);
+      const sharedLabelToken = [...firstTokens].some((token) => secondTokens.has(token));
+      const squareMillimetreAxis = /мм\s*(?:2|²)/iu.test(String(second.criterion.unit ?? ""));
+      if (!sharedLabelToken && !squareMillimetreAxis) continue;
+      subsumedIndexes.add(first.index);
+      subsumedIndexes.add(second.index);
+      break outer;
+    }
+  }
+
+  return {
+    criteria: criteria.filter((_criterion, index) => !subsumedIndexes.has(index)),
+    subsumed: criteria.filter((_criterion, index) => subsumedIndexes.has(index)),
+  };
 }
 
 /**
