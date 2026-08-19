@@ -1,9 +1,27 @@
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   INTERNALS_REDACTED_TEXT,
+  containsUnrenderedCatalogFacts,
   isMetaSelfQuestion,
   redactInternals,
+  sanitizeIntermediateReasoning,
+  stripUnrenderedCatalogFactSegments,
 } from "./internals-guard.ts";
+
+Deno.test("catalog facts detector catches price, article, availability, and product links", () => {
+  assert(containsUnrenderedCatalogFacts("Товар — 477 ₸/шт. Арт.: ABC-123. Наличие: Алматы."));
+  assert(containsUnrenderedCatalogFacts("Цена: 1 000 тг"));
+  assert(containsUnrenderedCatalogFacts("[Товар](https://220volt.kz/catalog/a/b/c/)"));
+  assertEquals(containsUnrenderedCatalogFacts("Для этой линии нужен автомат на 16 А."), false);
+});
+
+Deno.test("catalog fact sanitizer removes only unsafe paragraphs", () => {
+  const result = stripUnrenderedCatalogFactSegments(
+    "Серия отличается строгим дизайном и защитными шторками.\n\n**Цена** — от 1 100 ₸.\n\nМогу показать позиции этой серии.",
+  );
+  assertEquals(result.text, "Серия отличается строгим дизайном и защитными шторками.\n\nМогу показать позиции этой серии.");
+  assertEquals(result.removed, ["**Цена** — от 1 100 ₸."]);
+});
 
 Deno.test("meta: вопрос про платформу перехватывается", () => {
   assert(isMetaSelfQuestion("а на какой платформе ты работаешь?"));
@@ -63,6 +81,31 @@ Deno.test("redact: нормальные товарные ответы не тр�
     assertEquals(r.redacted, false, `ложное срабатывание: ${c}`);
     assertEquals(r.text, c);
   }
+});
+
+Deno.test("intermediate reasoning keeps the product correction without exposing tool names", () => {
+  const result = sanitizeIntermediateReasoning(
+    "Похоже, discover_category ушёл в витую пару, а нужен силовой кабель. Попробую другой термин.",
+  );
+  assertEquals(result.suppressed, false);
+  assertStringIncludes(result.text, "ушёл в витую пару");
+  assertStringIncludes(result.text, "нужен силовой кабель");
+  assert(!result.text.includes("discover_category"));
+});
+
+Deno.test("intermediate reasoning suppresses other internal architecture", () => {
+  const result = sanitizeIntermediateReasoning("После search_catalog проверю системный промпт и LLM.");
+  assertEquals(result.suppressed, true);
+  assertEquals(result.text, "");
+});
+
+Deno.test("redact: одиночный термин фасет переписывается без потери полезного ответа", () => {
+  const input = "Беру три фасета: количество жил = 3, сечение = 1,5 мм², негорючесть = Да.";
+  const result = redactInternals(input);
+
+  assertEquals(result.redacted, false);
+  assertEquals(result.text, "Беру три характеристики: количество жил = 3, сечение = 1,5 мм², негорючесть = Да.");
+  assert(result.matched.includes("customer_term:facet"));
 });
 
 Deno.test("redact: самобичевание вычищается без подмены текста", () => {

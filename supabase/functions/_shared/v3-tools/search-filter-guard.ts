@@ -58,12 +58,73 @@ function replacementIdentityKind(facet: Pick<SearchFacet, "key" | "caption">): "
   if (/(?:^| )(?:brand|vendor|manufacturer|producer|trademark|бренд|производител\w*|торгов\w* марк\w*|марка)(?: |$)/u.test(label)) {
     return "brand";
   }
-  if (/(?:^| )(?:model|series|модел\w*|серия|серии)(?: |$)/u.test(label)) return "model";
+  if (/(?:^| )(?:model|series|collection|модел\w*|серия|серии|коллекц\w*)(?: |$)/u.test(label)) return "model";
   return null;
 }
 
 export function isReplacementIdentityFacet(facet: Pick<SearchFacet, "key" | "caption">): boolean {
   return replacementIdentityKind(facet) !== null;
+}
+
+/**
+ * Find an explicitly named source model/series/collection in live facet
+ * values. Brand values are intentionally excluded: a replacement may remain
+ * within the same manufacturer, while the source product family must not be
+ * offered back as its own analog.
+ */
+export function explicitReplacementModelValues(
+  facets: SearchFacet[],
+  userMessage: string,
+): string[] {
+  const evidence = ` ${norm(userMessage)} `;
+  const found = new Set<string>();
+  for (const facet of facets) {
+    if (replacementIdentityKind(facet) !== "model") continue;
+    for (const candidate of facet.values) {
+      const value = norm(candidate.value);
+      if (value && evidence.includes(` ${value} `)) found.add(candidate.value);
+    }
+  }
+  return [...found];
+}
+
+function replacementIdentityHints(userMessage: string): string[] {
+  const found = new Set<string>();
+  for (const match of userMessage.matchAll(/\b\d{2,}(?:-\d{1,})+\b/gu)) found.add(match[0]);
+  for (const match of userMessage.matchAll(/[\p{L}\p{N}][\p{L}\p{N}-]*/gu)) {
+    const raw = match[0];
+    const compact = raw.replace(/[^\p{L}\p{N}]/gu, "");
+    const hasLetter = /\p{L}/u.test(compact);
+    const hasDigit = /\p{N}/u.test(compact);
+    if (hasLetter && hasDigit && compact.length >= 5) found.add(raw);
+    if (
+      hasLetter &&
+      !hasDigit &&
+      compact.length >= 4 &&
+      raw === raw.toLocaleUpperCase("ru") &&
+      raw !== raw.toLocaleLowerCase("ru")
+    ) found.add(raw);
+  }
+  for (const quoted of userMessage.matchAll(/[«"]([^»"]{2,})[»"]/gu)) found.add(quoted[1]);
+  return [...found];
+}
+
+/**
+ * Confirm source-family hints against the current catalog pool. A hint is an
+ * identity only when it appears in some, but not all, titles: category and
+ * functional tokens shared by every candidate cannot become exclusions.
+ */
+export function inferReplacementIdentityValues(
+  userMessage: string,
+  productTitles: string[],
+): string[] {
+  if (productTitles.length < 2) return [];
+  return replacementIdentityHints(userMessage).filter((hint) => {
+    const wanted = ` ${norm(hint)} `;
+    if (!wanted.trim()) return false;
+    const matches = productTitles.filter((title) => ` ${norm(title)} `.includes(wanted)).length;
+    return matches > 0 && matches < productTitles.length;
+  });
 }
 
 function explicitlyRequiresSameIdentity(userMessage: string, kind: "brand" | "model"): boolean {
@@ -102,6 +163,34 @@ export function dropImplicitReplacementIdentityFilters(
   if (Object.keys(nextOptions).length > 0) nextArgs.options = nextOptions;
   else delete nextArgs.options;
   return { args: nextArgs, removed };
+}
+
+export interface ReplacementIdentityProduct {
+  pagetitle?: string | null;
+  vendor?: string | null;
+  short_traits?: string[] | null;
+}
+
+/**
+ * Values removed from an analog search because they identify the source item
+ * must also be excluded from recommendation cards. This closes the case where
+ * the anchor SKU was not found first, so an ID-based anchor filter could not
+ * protect the final render.
+ */
+export function productMatchesExcludedReplacementIdentity(
+  product: ReplacementIdentityProduct,
+  excludedValues: Iterable<string>,
+): boolean {
+  const evidence = norm([
+    product.pagetitle ?? "",
+    product.vendor ?? "",
+    ...(product.short_traits ?? []),
+  ].join(" "));
+  if (!evidence) return false;
+  return [...excludedValues]
+    .map(norm)
+    .filter(Boolean)
+    .some((value) => ` ${evidence} `.includes(` ${value} `));
 }
 
 function codeNorm(value: string): string {
@@ -198,12 +287,13 @@ function contradictedByUser(value: string, userEvidence: string): boolean {
 
 function explicitlyAffirmedByUser(value: string, userEvidence: string): boolean {
   if (contradictedByUser(value, userEvidence)) return false;
+  const isEvidenceToken = (token: string) => token.length >= 3 || /\d/.test(token) || /^[a-z]+$/u.test(token);
   const valueTokens = norm(value)
     .split(" ")
-    .filter((token) => token.length >= 3 || /\d/.test(token));
+    .filter(isEvidenceToken);
   const evidenceTokens = norm(userEvidence)
     .split(" ")
-    .filter((token) => token.length >= 3 || /\d/.test(token));
+    .filter(isEvidenceToken);
   if (valueTokens.length === 0 || evidenceTokens.length === 0) return false;
   return valueTokens.every((token) => evidenceTokens.some((candidate) => (
     token === candidate || tokensMatchByStem(token, candidate)
@@ -294,11 +384,14 @@ export function guardSearchFilters(
 
   for (const [key, rawValues] of Object.entries(requestedOptions)) {
     const values = Array.isArray(rawValues) ? rawValues.map(String).filter((v) => v.trim()) : [];
-    const facet = facets.find((candidate) => candidate.key === key);
+    const facet = facets.find((candidate) =>
+      candidate.key === key || (candidate.caption && norm(candidate.caption) === norm(key))
+    );
     if (!facet) {
       for (const value of values) dropped.push({ key, value, reason: "unknown_facet" });
       continue;
     }
+    const canonicalKey = facet.key;
 
     for (const rawValue of values) {
       const canonical = facet.values.find((candidate) => sameFacetValue(candidate.value, rawValue))?.value;
@@ -310,7 +403,29 @@ export function guardSearchFilters(
         dropped.push({ key, value: canonical, reason: "negated_by_user" });
         continue;
       }
-      const status = evidenceStatus(canonical, declaredReasoning);
+      const normalizedCanonical = norm(canonical);
+      const isAffirmativeBoolean = AFFIRMATIVE_VALUES.has(normalizedCanonical);
+      const facetLabel = facet.caption || facet.key;
+      const labelUserStatus = isAffirmativeBoolean ? evidenceStatus(facetLabel, userEvidence) : "absent";
+      if (labelUserStatus === "negated") {
+        dropped.push({ key, value: canonical, reason: "negated_by_user" });
+        continue;
+      }
+      // For a model-provided affirmative boolean, the evidence is the facet's
+      // meaning ("Негорючесть") being declared, not the generic storage value
+      // "Да". This remains strict: no missing boolean filter is inferred, and
+      // a bare conversational "да" cannot activate an unrelated facet.
+      const literalValueStatus = isAffirmativeBoolean && normalizedCanonical.length <= 3
+        ? "absent"
+        : evidenceStatus(canonical, declaredReasoning);
+      const labelReasoningStatus = isAffirmativeBoolean
+        ? evidenceStatus(facetLabel, declaredReasoning)
+        : "absent";
+      const status = literalValueStatus === "affirmed" || labelReasoningStatus === "affirmed"
+        ? "affirmed"
+        : literalValueStatus === "negated" || labelReasoningStatus === "negated"
+          ? "negated"
+          : "absent";
       if (status !== "affirmed") {
         dropped.push({
           key,
@@ -319,10 +434,13 @@ export function guardSearchFilters(
         });
         continue;
       }
-      nextOptions[key] ??= [];
-      if (!nextOptions[key].includes(canonical)) nextOptions[key].push(canonical);
-      kept.push({ key, value: canonical });
-      if (explicitlyAffirmedByUser(canonical, userEvidence)) userBacked.push({ key, value: canonical });
+      nextOptions[canonicalKey] ??= [];
+      if (!nextOptions[canonicalKey].includes(canonical)) nextOptions[canonicalKey].push(canonical);
+      kept.push({ key: canonicalKey, value: canonical });
+      if (
+        explicitlyAffirmedByUser(canonical, userEvidence) ||
+        isAffirmativeBoolean && labelUserStatus === "affirmed"
+      ) userBacked.push({ key: canonicalKey, value: canonical });
     }
   }
 

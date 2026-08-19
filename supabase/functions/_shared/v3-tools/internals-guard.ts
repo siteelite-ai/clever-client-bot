@@ -72,11 +72,79 @@ function correctCustomerTextTypos(text: string): string {
   );
 }
 
+/**
+ * A lone catalog term in otherwise useful shopping prose is a wording defect,
+ * not an architecture disclosure. Rewrite it locally instead of discarding the
+ * complete answer. If the same text also contains tool names, schema fields or
+ * other internal markers, the ordinary hard redaction still applies.
+ */
+function rewriteCustomerFacingServiceTerms(text: string): string {
+  const forms: Record<string, string> = {
+    "фасет": "характеристика",
+    "фасета": "характеристики",
+    "фасеты": "характеристики",
+    "фасетов": "характеристик",
+    "фасету": "характеристике",
+    "фасетам": "характеристикам",
+    "фасетом": "характеристикой",
+    "фасетами": "характеристиками",
+    "фасете": "характеристике",
+    "фасетах": "характеристиках",
+  };
+  return text.replace(/(?<![а-яa-z])фасет(?:а|ы|ов|у|ам|ом|ами|е|ах)?(?![а-яa-z])/giu, (match) => {
+    const replacement = forms[match.toLocaleLowerCase("ru")] ?? "характеристика";
+    return /^[А-ЯЁ]/u.test(match)
+      ? replacement[0].toLocaleUpperCase("ru") + replacement.slice(1)
+      : replacement;
+  });
+}
+
 export interface RedactResult {
   text: string;
   redacted: boolean;
   /** Какие признаки сработали — для логов. */
   matched: string[];
+}
+
+/**
+ * Product facts must be emitted by the deterministic product-card renderer.
+ * This detector is deliberately structural: it knows catalog-shaped facts,
+ * not product names, categories, brands, or jargon.
+ */
+export function containsUnrenderedCatalogFacts(text: string): boolean {
+  const raw = String(text ?? "");
+  if (!raw.trim()) return false;
+  return (
+    /https?:\/\/(?:www\.)?220volt\.kz\/[^\s)]+/iu.test(raw) ||
+    /\[[^\]]+\]\(https?:\/\/[^\s)]+\)/u.test(raw) ||
+    /\d[\d\s.,]{0,}\s*(?:₸|тг(?:\.|\b)|тенге\b)/iu.test(raw) ||
+    /(?:^|[\s*_-])(?:арт(?:икул)?\.?|наличие|цена)\s*:\s*\S/imu.test(raw)
+  );
+}
+
+export interface CatalogFactStripResult {
+  text: string;
+  removed: string[];
+}
+
+/**
+ * Preserve a grounded explanatory answer while removing whole paragraphs that
+ * contain card-only facts such as prices, articles, availability or product
+ * links. The previous all-or-nothing replacement hid valid explanations when
+ * one price sentence slipped into an otherwise useful response.
+ */
+export function stripUnrenderedCatalogFactSegments(text: string): CatalogFactStripResult {
+  const paragraphs = String(text ?? "")
+    .split(/\n\s*\n/u)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+  const kept: string[] = [];
+  const removed: string[] = [];
+  for (const paragraph of paragraphs) {
+    if (containsUnrenderedCatalogFacts(paragraph)) removed.push(paragraph);
+    else kept.push(paragraph);
+  }
+  return { text: kept.join("\n\n"), removed };
 }
 
 /**
@@ -87,32 +155,63 @@ export interface RedactResult {
 export function redactInternals(text: string): RedactResult {
   const raw = text ?? "";
   if (!raw.trim()) return { text: raw, redacted: false, matched: [] };
-  const n = norm(raw);
+  const customerFacing = rewriteCustomerFacingServiceTerms(raw);
+  const n = norm(customerFacing);
   const matched: string[] = [];
   for (const re of INTERNALS_PATTERNS) {
     if (re.test(n)) matched.push(re.source.slice(0, 40));
   }
   // Идентификаторы в бэктиках и snake_case-слова — структурный признак кода.
-  if (/`[A-Za-z_][A-Za-z0-9_.[\]]*`/.test(raw)) matched.push("backticked_identifier");
-  if (/\b[a-z]{3,}_[a-z]{3,}(?:_[a-z]+)*\b/.test(raw)) matched.push("snake_case_identifier");
+  if (/`[A-Za-z_][A-Za-z0-9_.[\]]*`/.test(customerFacing)) matched.push("backticked_identifier");
+  if (/\b[a-z]{3,}_[a-z]{3,}(?:_[a-z]+)*\b/.test(customerFacing)) matched.push("snake_case_identifier");
 
   if (matched.length > 0) {
     return { text: INTERNALS_REDACTED_TEXT, redacted: true, matched };
   }
-  const withoutSelfFlagellation = raw.replace(SELF_FLAGELLATION_RE, "")
+  const withoutSelfFlagellation = customerFacing.replace(SELF_FLAGELLATION_RE, "")
     .replace(/[ \t]{2,}/g, " ").trim();
   const cleaned = correctCustomerTextTypos(withoutSelfFlagellation);
   if (cleaned !== raw.trim()) {
     const softMatches: string[] = [];
-    if (withoutSelfFlagellation !== raw.trim()) {
+    if (withoutSelfFlagellation !== customerFacing.trim()) {
       softMatches.push("self_flagellation");
     }
     if (cleaned !== withoutSelfFlagellation) {
       softMatches.push("customer_text_typo:cash_receipt");
     }
+    if (customerFacing !== raw) {
+      softMatches.push("customer_term:facet");
+    }
     return { text: cleaned, redacted: false, matched: softMatches };
   }
   return { text: raw, redacted: false, matched: [] };
+}
+
+/**
+ * Keeps useful shopping reasoning while preventing internal tool names from
+ * turning an intermediate bubble into a generic security fallback. Only tool
+ * labels are rewritten; every other internal marker still triggers strict
+ * suppression through redactInternals.
+ */
+export function sanitizeIntermediateReasoning(text: string): RedactResult & { suppressed: boolean } {
+  const labels: Record<string, string> = {
+    discover_category: "поиск категории",
+    search_catalog: "поиск по каталогу",
+    jargon_recover_catalog: "поиск по каталогу",
+    render_products: "показ товаров",
+  };
+  const rewritten = String(text ?? "").replace(
+    /\b(?:discover_category|search_catalog|jargon_recover_catalog|render_products)\b/gu,
+    (value) => labels[value] ?? "поиск по каталогу",
+  );
+  const guarded = redactInternals(rewritten);
+  if (guarded.redacted) return { ...guarded, text: "", suppressed: true };
+  return {
+    ...guarded,
+    text: guarded.text,
+    suppressed: false,
+    matched: rewritten === text ? guarded.matched : [...guarded.matched, "customer_term:tool_name"],
+  };
 }
 
 /** Признаки того, что реплика всё-таки про товар/магазин, а не про устройство бота. */

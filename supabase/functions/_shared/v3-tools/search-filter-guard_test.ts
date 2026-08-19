@@ -2,6 +2,9 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   dropAffirmativeBooleanFilters,
   dropImplicitReplacementIdentityFilters,
+  explicitReplacementModelValues,
+  inferReplacementIdentityValues,
+  productMatchesExcludedReplacementIdentity,
   guardSearchFilters,
 } from "./search-filter-guard.ts";
 
@@ -35,6 +38,17 @@ Deno.test("filter guard canonicalizes and keeps a user-affirmed value", () => {
   );
   assertEquals(result.args.options, { brand: ["Gauss"] });
   assertEquals(result.kept, [{ key: "brand", value: "Gauss" }]);
+});
+
+Deno.test("filter guard canonicalizes a live facet caption to its machine key", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { "Номинальный ток": ["16"] } },
+    [{ key: "nominal_current", caption: "Номинальный ток", values: [{ value: "10" }, { value: "16" }] }],
+    "Номинальный ток 16.",
+    "Нужен номинальный ток 16.",
+  );
+  assertEquals(result.args.options, { nominal_current: ["16"] });
+  assertEquals(result.user_backed, [{ key: "nominal_current", value: "16" }]);
 });
 
 Deno.test("filter guard drops unknown facet keys and values", () => {
@@ -75,6 +89,72 @@ Deno.test("filter guard distinguishes user-backed constraints from model guidanc
   assertEquals(result.user_backed, [{ key: "brand", value: "Gauss" }]);
 });
 
+Deno.test("filter guard does not drop a short code when proving a compound value", () => {
+  const seriesFacets = [{
+    key: "socket_type",
+    values: [{ value: "розетка TV" }, { value: "электрическая" }],
+  }];
+  const inferred = guardSearchFilters(
+    { mode: "by_filter", options: { socket_type: ["розетка TV"] } },
+    seriesFacets,
+    "Модель предлагает розетку TV.",
+    "Покажи розетки и выключатели.",
+  );
+  assertEquals(inferred.user_backed, []);
+
+  const explicit = guardSearchFilters(
+    { mode: "by_filter", options: { socket_type: ["розетка TV"] } },
+    seriesFacets,
+    "Пользователь запросил розетку TV.",
+    "Покажи розетку TV.",
+  );
+  assertEquals(explicit.user_backed, [{ key: "socket_type", value: "розетка TV" }]);
+
+  const characteristic = guardSearchFilters(
+    { mode: "by_filter", options: { trip: ["C"] } },
+    [{ key: "trip", values: [{ value: "B" }, { value: "C" }] }],
+    "Характеристика C.",
+    "Нужна характеристика C.",
+  );
+  assertEquals(characteristic.user_backed, [{ key: "trip", value: "C" }]);
+});
+
+Deno.test("replacement identity treats an explicit collection as the source family", () => {
+  const identityFacets = [
+    { key: "brand", caption: "Бренд", values: [{ value: "IEK" }] },
+    { key: "collection", caption: "Коллекция", values: [{ value: "GENERICA" }, { value: "HOME" }] },
+  ];
+  assertEquals(
+    explicitReplacementModelValues(identityFacets, "Предложи замену GENERICA IEK"),
+    ["GENERICA"],
+  );
+  assertEquals(
+    dropImplicitReplacementIdentityFilters(
+      { mode: "by_filter", options: { collection: ["GENERICA"] } },
+      identityFacets,
+      "Предложи замену GENERICA",
+    ).removed,
+    [{ key: "collection", values: ["GENERICA"], kind: "model" }],
+  );
+});
+
+Deno.test("replacement identity is confirmed by a selective current-result title", () => {
+  const titles = [
+    "Автомат 1P ВА 47-29 16A GENERICA",
+    "Автомат 1P ВА 47-29М 16A GENERICA",
+    "Автомат 1P HDB3W 16A",
+    "Автомат 1P NXB-63S 16A",
+  ];
+  assertEquals(
+    inferReplacementIdentityValues(
+      "АВТОМАТ 1P ВА 47-29 16A GENERICA предложи равноценную замену",
+      titles,
+    ),
+    ["47-29", "GENERICA"],
+  );
+  assertEquals(inferReplacementIdentityValues("Нужна замена E27 IP65", titles), []);
+});
+
 Deno.test("filter guard accepts canonical value when reasoning uses inflected forms", () => {
   const result = guardSearchFilters(
     { mode: "by_filter", options: { kind: ["Бытовые светильники накладные"] } },
@@ -103,7 +183,7 @@ Deno.test("filter guard completes an explicit user facet omitted by the model", 
     [
       ...facets,
       { key: "mount", values: [{ value: "накладной" }, { value: "встраиваемый" }] },
-      { key: "sensor", values: [{ value: "да" }, { value: "нет" }] },
+      { key: "sensor", caption: "Датчик", values: [{ value: "да" }, { value: "нет" }] },
     ],
     "Ищу накладной светильник с датчиком.",
     "Мне нужен бытовой накладной светильник с датчиком движения.",
@@ -170,6 +250,19 @@ Deno.test("filter guard never infers generic boolean facet values", () => {
   );
   assertEquals(result.args, { mode: "by_filter" });
   assertEquals(result.inferred, []);
+});
+
+Deno.test("filter guard keeps a model-provided affirmative boolean when its facet meaning is explicit", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { "Негорючесть": ["Да"] } },
+    [{ key: "non_combustible", caption: "Негорючесть", values: [{ value: "Да" }] }],
+    "Подбираю негорючий кабель с исполнением нг.",
+    "Нужен негорючий кабель.",
+  );
+
+  assertEquals(result.args.options, { non_combustible: ["Да"] });
+  assertEquals(result.user_backed, [{ key: "non_combustible", value: "Да" }]);
+  assertEquals(result.dropped, []);
 });
 
 Deno.test("filter guard removes a model-provided option subsumed by a compound value", () => {
@@ -263,4 +356,17 @@ Deno.test("analog search keeps identity only when customer explicitly requires i
 
   assertEquals(result.args.options, { brand: ["Philips"] });
   assertEquals(result.removed, [{ key: "series", values: ["CoreLine"], kind: "model" }]);
+});
+
+Deno.test("analog render excludes identity values removed from search even without an anchor id", () => {
+  assertEquals(productMatchesExcludedReplacementIdentity({
+    pagetitle: "Автомат GENERICA 1P 16A",
+    vendor: "IEK",
+    short_traits: ["Характеристика: C"],
+  }, ["GENERICA"]), true);
+  assertEquals(productMatchesExcludedReplacementIdentity({
+    pagetitle: "Автомат CHINT 1P 16A",
+    vendor: "CHINT",
+    short_traits: ["Характеристика: C"],
+  }, ["GENERICA"]), false);
 });

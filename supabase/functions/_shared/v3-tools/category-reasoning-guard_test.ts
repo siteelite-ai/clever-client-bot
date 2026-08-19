@@ -3,6 +3,7 @@ import {
   groundedCategoryRecoveryQueries,
   groundedTokenRecoveryQueries,
   guardCategoryScopeByReasoning,
+  filterProductsByNamedSeries,
   selectGroundedTokenRecoveryCandidate,
   titleContainsLiteralToken,
 } from "./category-reasoning-guard.ts";
@@ -87,4 +88,19 @@ Deno.test("token recovery keeps the consultant's selective title token and rejec
 Deno.test("token recovery requires a complete title word, not a prefix inside another token", () => {
   assert(titleContainsLiteralToken("Product LED DISTINCTIVE capsule", "distinctive"));
   assert(!titleContainsLiteralToken("Product GENERICTOOL floodlight", "generic"));
+});
+
+Deno.test("token recovery grounds a Cyrillic series name in a near-identical Latin title", () => {
+  assert(titleContainsLiteralToken("Розетка с заземлением Gallant /W5073135", "Галант"));
+  assert(!titleContainsLiteralToken("Розетка с заземлением Glossa", "Галант"));
+  assert(!titleContainsLiteralToken("Средство LABEL OFF", "Галант"));
+});
+
+Deno.test("named series guard removes a non-empty but unrelated collection pool", () => {
+  const products = filterProductsByNamedSeries([
+    { pagetitle: "Розетка Asfora с заземлением" },
+    { pagetitle: "Выключатель BRITE двухклавишный" },
+    { pagetitle: "Розетка Gallant с защитными шторками" },
+  ], "Галант");
+  assertEquals(products, [{ pagetitle: "Розетка Gallant с защитными шторками" }]);
 });

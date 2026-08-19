@@ -76,6 +76,58 @@ export function normalizeKey(s: string): string {
     .trim();
 }
 
+/** Enforces a user price ceiling on every render path, including recoveries. */
+export function filterProductIdsByBudgetCap<T extends { price: number }>(
+  ids: string[],
+  products: ReadonlyMap<string, T>,
+  budgetCap: number | null,
+): { ids: string[]; dropped: number } {
+  if (budgetCap === null || !Number.isFinite(budgetCap) || budgetCap <= 0) {
+    return { ids: [...ids], dropped: 0 };
+  }
+  const kept = ids.filter((id) => {
+    const price = Number(products.get(id)?.price);
+    return Number.isFinite(price) && price > 0 && price <= budgetCap;
+  });
+  return { ids: kept, dropped: ids.length - kept.length };
+}
+
+/**
+ * Compose the criteria enforced at render time. Named-entity browse turns use
+ * strict user-evidence mode: the model may describe or rank the exact entity,
+ * but it cannot silently turn its own prose into a new mandatory filter.
+ */
+export function resolveRenderCriteria(
+  enforced: Criterion[],
+  raw: Criterion[],
+  userBacked: Criterion[],
+  strictUserEvidenceOnly: boolean,
+): Criterion[] {
+  const base = strictUserEvidenceOnly ? userBacked : enforced;
+  const baseKeys = new Set(base.map((criterion) => normalizeKey(criterion.key)));
+  return [
+    ...base,
+    ...(strictUserEvidenceOnly
+      ? []
+      : raw.filter((criterion) => !baseKeys.has(normalizeKey(String(criterion?.key ?? ""))))),
+  ].filter((criterion) => criterion && typeof criterion.key === "string" && criterion.value !== undefined)
+    .map((criterion) => ({ ...criterion }));
+}
+
+/** Compact letter/code values are unsafe when they only exist in hidden
+ * traits: the customer cannot verify the promised variant from the card. */
+export function titleProvesCompactCriterion(title: string, criterion: Criterion): boolean {
+  if (typeof criterion.value !== "string") return true;
+  const rawValue = criterion.value.trim();
+  const value = normalizeKey(rawValue).replace(/\s+/g, "");
+  const isCompactCode = /^[a-z0-9]{1,4}$/iu.test(rawValue) || /^[А-ЯЁ]$/u.test(rawValue);
+  if (!value || !isCompactCode || !/[a-zа-я]/iu.test(value)) return true;
+  if (["да", "нет", "yes", "no", "true", "false"].includes(value)) return true;
+  const foldCode = (token: string) => token === "С" ? "c" : normalizeKey(token);
+  const titleTokens = title.match(/[a-zа-я0-9]+/giu)?.map(foldCode) ?? [];
+  return titleTokens.includes(foldCode(rawValue));
+}
+
 /** Числовой интервал, к которому сводится любое распознанное значение характеристики. */
 export interface NumSpan {
   min: number;
@@ -138,7 +190,7 @@ export function findTrait(product: ProductRef, key: string): { label: string; va
   // the same value. Treating it as absent here makes the evidence gate reject
   // products that the catalog has just proven are within budget.
   const keyTokens = new Set(nk.split(/\s+/u));
-  if (["цена", "стоимость", "price"].some((token) => keyTokens.has(token))) {
+  if (["цена", "стоимость", "бюджет", "price", "budget"].some((token) => keyTokens.has(token))) {
     const price = Number(product.price);
     if (Number.isFinite(price) && price > 0) {
       return { label: "Цена", value: String(price) };

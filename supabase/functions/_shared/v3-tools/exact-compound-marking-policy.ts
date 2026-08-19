@@ -1,10 +1,16 @@
 import type { ProductRef } from "./types.ts";
+import type { Criterion } from "./criteria-gate.ts";
 
 export interface ExactCompoundMarkingRequest {
   query: string;
   first: number;
   second: number;
   priceDirection: "cheapest" | "expensive" | null;
+}
+
+export interface ExplicitCompoundMarking {
+  first: number;
+  second: number;
 }
 
 function norm(value: string): string {
@@ -21,6 +27,163 @@ const INQUIRY_ONLY = /(?:^|[^\p{L}])(?:подойд\p{L}*|почему|можн�
 const COMPOUND = /\b(\d{1,3})\s*(?:x|х|×|\*)\s*(\d+(?:[.,]\d+)?)\b/iu;
 
 /**
+ * Produces one punctuation-only catalog spelling for an explicit N×S token.
+ * Product words and their order remain exactly as the consultant supplied them.
+ */
+export function canonicalizeCompoundMarkingForCatalog(query: string): string {
+  return query.replace(new RegExp(COMPOUND.source, "giu"), (_match, first: string, second: string) =>
+    `${first}*${second.replace(".", ",")}`
+  );
+}
+
+/**
+ * Extracts only the explicit N×S token written by the user. This is deliberately
+ * independent of product vocabulary and selection intent so the same literal
+ * constraint can protect every final-render path, including semantic requests.
+ */
+export function extractExplicitCompoundMarking(message: string): ExplicitCompoundMarking | null {
+  const match = norm(message).match(COMPOUND);
+  if (!match) return null;
+  const first = number(match[1]);
+  const second = number(match[2]);
+  return first === null || second === null ? null : { first, second };
+}
+
+function textHasExactCompoundMarking(evidence: string, marking: ExplicitCompoundMarking): boolean {
+  for (const match of evidence.matchAll(new RegExp(COMPOUND.source, "giu"))) {
+    const first = number(match[1]);
+    const second = number(match[2]);
+    if (first === marking.first && second === marking.second) return true;
+  }
+  return false;
+}
+
+/** Final-card evidence must be visible in the product title itself. */
+export function productTitleMatchesExplicitCompoundMarking(
+  pagetitle: string,
+  marking: ExplicitCompoundMarking,
+): boolean {
+  return textHasExactCompoundMarking(pagetitle, marking);
+}
+
+/**
+ * Builds a bounded literal-search ladder from wording already selected by the
+ * consultant. The only server-generated part is the punctuation-normalized
+ * N×S token written by the user. No product nouns, families or synonyms are
+ * introduced here.
+ */
+export function compoundRecoveryQueries(
+  marking: ExplicitCompoundMarking,
+  modelHints: string[],
+  limit = 8,
+): string[] {
+  const literal = `${marking.first}*${String(marking.second).replace(".", ",")}`;
+  const cleanedHints = modelHints
+    .map((hint) => norm(hint).replace(new RegExp(COMPOUND.source, "giu"), " ").replace(/\s+/gu, " ").trim())
+    .filter(Boolean);
+  const singleWord = cleanedHints.filter((hint) => /^\p{L}[\p{L}\p{N}-]*$/u.test(hint));
+  const phrases = cleanedHints.filter((hint) => !singleWord.includes(hint));
+  const tokens = cleanedHints.flatMap((hint) => hint.match(/[\p{L}\p{N}-]{3,}/gu) ?? []);
+  const leadingTokens = phrases
+    .map((hint) => hint.match(/^[\p{L}\p{N}-]{3,}/u)?.[0] ?? "")
+    .filter(Boolean);
+  const seen = new Set<string>();
+  const queries: string[] = [];
+  for (const hint of [...singleWord, ...leadingTokens, ...phrases, ...tokens]) {
+    const query = `${hint} ${literal}`.replace(/\s+/gu, " ").trim();
+    const key = norm(query);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    queries.push(query);
+    if (queries.length >= Math.max(1, Math.min(limit, 12))) break;
+  }
+  return queries;
+}
+
+/**
+ * Allows the server to finish a non-exhaustive selection immediately after a
+ * model-owned filtered search when every live title proves the user's N×S.
+ * Exhaustive requests remain model-owned because the ordinary recovery has a
+ * bounded card limit and must not silently turn “all positions” into a sample.
+ */
+export function shouldTerminateAfterGroundedCompoundSearch(
+  message: string,
+  pagetitles: string[],
+  marking: ExplicitCompoundMarking,
+): boolean {
+  if (pagetitles.length === 0) return false;
+  const normalized = norm(message).replace(/\s+/gu, " ");
+  if (/(?:^|[^\p{L}])(?:все|весь|всю|полный\s+список|все\s+позиции)(?=$|[^\p{L}])/u.test(normalized)) return false;
+  return pagetitles.every((title) => productTitleMatchesExplicitCompoundMarking(title, marking));
+}
+
+function scalarCriterionNumber(criterion: Criterion): number | null {
+  if (criterion.op !== "eq" || Array.isArray(criterion.value)) return null;
+  if (typeof criterion.value === "number") return Number.isFinite(criterion.value) ? criterion.value : null;
+  const raw = criterion.value.trim().replace(",", ".");
+  if (!/^\d+(?:\.\d+)?$/u.test(raw)) return null;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function keyTokens(key: string): Set<string> {
+  return new Set(norm(key).match(/[\p{L}\p{N}]{3,}/gu) ?? []);
+}
+
+/**
+ * Removes only criteria that duplicate a compound marking already proven by
+ * every candidate title. Other suitability criteria remain untouched.
+ *
+ * The model may express N×S either as one literal criterion (`3×1,5`) or as
+ * two scalar axes (`Количество жил = 3`, `Сечение жилы = 1,5 мм²`). Scalar
+ * axes are considered a decomposition only when their labels share a token or
+ * the second axis carries a square-millimetre unit. This is structural and
+ * product-agnostic; no category, brand, or jargon dictionary is involved.
+ */
+export function subsumeCriteriaProvenByExplicitCompound(
+  criteria: Criterion[],
+  marking: ExplicitCompoundMarking,
+): { criteria: Criterion[]; subsumed: Criterion[] } {
+  const subsumedIndexes = new Set<number>();
+
+  criteria.forEach((criterion, index) => {
+    if (
+      criterion.op === "eq" &&
+      typeof criterion.value === "string" &&
+      textHasExactCompoundMarking(criterion.value, marking)
+    ) {
+      subsumedIndexes.add(index);
+    }
+  });
+
+  const firstCandidates = criteria
+    .map((criterion, index) => ({ criterion, index, value: scalarCriterionNumber(criterion) }))
+    .filter((item) => !subsumedIndexes.has(item.index) && item.value === marking.first);
+  const secondCandidates = criteria
+    .map((criterion, index) => ({ criterion, index, value: scalarCriterionNumber(criterion) }))
+    .filter((item) => !subsumedIndexes.has(item.index) && item.value === marking.second);
+
+  outer: for (const first of firstCandidates) {
+    const firstTokens = keyTokens(first.criterion.key);
+    for (const second of secondCandidates) {
+      if (first.index === second.index) continue;
+      const secondTokens = keyTokens(second.criterion.key);
+      const sharedLabelToken = [...firstTokens].some((token) => secondTokens.has(token));
+      const squareMillimetreAxis = /мм\s*(?:2|²)/iu.test(String(second.criterion.unit ?? ""));
+      if (!sharedLabelToken && !squareMillimetreAxis) continue;
+      subsumedIndexes.add(first.index);
+      subsumedIndexes.add(second.index);
+      break outer;
+    }
+  }
+
+  return {
+    criteria: criteria.filter((_criterion, index) => !subsumedIndexes.has(index)),
+    subsumed: criteria.filter((_criterion, index) => subsumedIndexes.has(index)),
+  };
+}
+
+/**
  * Routes an explicit product lookup containing a compound catalog marking
  * (for example 2×1.5, with x/х/×/* spellings used by the catalog)
  * without asking the model to recreate those exact numbers as facet values.
@@ -28,11 +191,9 @@ const COMPOUND = /\b(\d{1,3})\s*(?:x|х|×|\*)\s*(\d+(?:[.,]\d+)?)\b/iu;
 export function classifyExactCompoundMarkingRequest(message: string): ExactCompoundMarkingRequest | null {
   const input = norm(message);
   if (!SELECT_INTENT.test(input) || INQUIRY_ONLY.test(input)) return null;
-  const match = input.match(COMPOUND);
-  if (!match) return null;
-  const first = number(match[1]);
-  const second = number(match[2]);
-  if (first === null || second === null) return null;
+  const marking = extractExplicitCompoundMarking(input);
+  if (!marking) return null;
+  const { first, second } = marking;
 
   const priceDirection = /(?:сам\p{L}*\s+)?(?:дешев\p{L}*|бюджетн\p{L}*|недорог\p{L}*)/u.test(input)
     ? "cheapest"
@@ -42,21 +203,26 @@ export function classifyExactCompoundMarkingRequest(message: string): ExactCompo
 
   const query = input
     .replace(/[?!]/gu, " ")
-    .replace(/(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|покаж\p{L}*|подбер\p{L}*|хоч\p{L}*|пожалуйста)(?=$|[^\p{L}])/gu, " ")
+    .replace(/(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|покаж\p{L}*|подбер\p{L}*|хоч\p{L}*|нуж\p{L}*|пожалуйста)(?=$|[^\p{L}])/gu, " ")
     .replace(/(?:^|[^\p{L}])(?:сам\p{L}*|дешев\p{L}*|бюджетн\p{L}*|недорог\p{L}*|дорог\p{L}*|премиум\p{L}*)(?=$|[^\p{L}])/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();
   if (!/\p{L}/u.test(query)) return null;
+  // This shortcut is intentionally narrow. The catalog full-text endpoint has
+  // AND semantics; three or more lexical terms usually mean the request also
+  // contains a semantic attribute that the consultant must translate using
+  // its reasoning (for example an execution/material requirement). Sending
+  // that conversational phrase directly would turn a valid request into a
+  // deterministic false empty. No product vocabulary is used here.
+  const lexicalTerms = query
+    .replace(COMPOUND, " ")
+    .match(/\p{L}+/gu) ?? [];
+  if (lexicalTerms.length > 2) return null;
   return { query, first, second, priceDirection };
 }
 
 function hasExactCompound(evidence: string, request: ExactCompoundMarkingRequest): boolean {
-  for (const match of evidence.matchAll(new RegExp(COMPOUND.source, "giu"))) {
-    const first = number(match[1]);
-    const second = number(match[2]);
-    if (first === request.first && second === request.second) return true;
-  }
-  return false;
+  return textHasExactCompoundMarking(evidence, request);
 }
 
 export function selectExactCompoundMarkedProducts(

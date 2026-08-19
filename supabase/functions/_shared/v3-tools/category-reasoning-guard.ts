@@ -111,11 +111,72 @@ export interface TokenRecoveryCandidate {
   total: number;
 }
 
-/** Exact normalized word evidence; prefixes inside a different title token do not count. */
+function transliterateRuToken(value: string): string {
+  const map: Record<string, string> = {
+    а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z",
+    и: "i", й: "i", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r",
+    с: "s", т: "t", у: "u", ф: "f", х: "kh", ц: "ts", ч: "ch", ш: "sh",
+    щ: "shch", ы: "y", э: "e", ю: "yu", я: "ya", ь: "", ъ: "",
+  };
+  return [...value].map((char) => map[char] ?? char).join("");
+}
+
+function editDistanceAtMostOne(left: string, right: string): boolean {
+  if (left === right) return true;
+  if (Math.abs(left.length - right.length) > 1) return false;
+  const shorter = left.length <= right.length ? left : right;
+  const longer = left.length <= right.length ? right : left;
+  if (shorter.length === longer.length) {
+    let mismatches = 0;
+    for (let index = 0; index < shorter.length; index += 1) {
+      if (shorter[index] !== longer[index] && ++mismatches > 1) return false;
+    }
+    return true;
+  }
+  let shortIndex = 0;
+  let longIndex = 0;
+  let skipped = false;
+  while (shortIndex < shorter.length && longIndex < longer.length) {
+    if (shorter[shortIndex] === longer[longIndex]) {
+      shortIndex += 1;
+      longIndex += 1;
+      continue;
+    }
+    if (skipped) return false;
+    skipped = true;
+    longIndex += 1;
+  }
+  return true;
+}
+
+/**
+ * Exact normalized word evidence, plus a conservative transliteration match
+ * for named series. The latter accepts only a one-character spelling gap in a
+ * token of at least five characters (for example a doubled Latin consonant),
+ * so prefixes inside unrelated title tokens still do not count. This is an
+ * alphabetic rule derived from current evidence, not a product-name dictionary.
+ */
 export function titleContainsLiteralToken(title: string, token: string): boolean {
   const normalizedToken = norm(token);
   if (!normalizedToken || normalizedToken.includes(" ")) return false;
-  return norm(title).split(" ").includes(normalizedToken);
+  const titleTokens = norm(title).split(" ");
+  if (titleTokens.includes(normalizedToken)) return true;
+
+  const transliteratedToken = transliterateRuToken(normalizedToken);
+  if (transliteratedToken.length < 5 || !/^[a-z0-9]+$/u.test(transliteratedToken)) return false;
+  return titleTokens.some((titleToken) => {
+    const transliteratedTitle = transliterateRuToken(titleToken);
+    return transliteratedTitle.length >= 5 &&
+      /^[a-z0-9]+$/u.test(transliteratedTitle) &&
+      transliteratedTitle[0] === transliteratedToken[0] &&
+      transliteratedTitle.at(-1) === transliteratedToken.at(-1) &&
+      editDistanceAtMostOne(transliteratedTitle, transliteratedToken);
+  });
+}
+
+/** Keep only products whose title proves the current named series. */
+export function filterProductsByNamedSeries<T extends { pagetitle: string }>(products: T[], seriesToken: string): T[] {
+  return products.filter((product) => titleContainsLiteralToken(product.pagetitle, seriesToken));
 }
 
 /**

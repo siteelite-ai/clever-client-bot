@@ -5,6 +5,8 @@ import {
   hasActionableSelectionReasoning,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
+  shouldDeferInquiryIntro,
+  shouldAllowCorrectiveDiscovery,
   toolNamesForAgentPhase,
 } from "./agent-performance.ts";
 import type { ProductRef } from "./types.ts";
@@ -77,12 +79,108 @@ Deno.test("agent phase: non-empty ordinary selection search becomes terminal", (
   ]);
 });
 
+Deno.test("agent phase: non-empty replacement search must render instead of reopening search", () => {
+  assertEquals(nextAgentPhase("search_after_discovery", {
+    tool: "search_catalog",
+    ok: true,
+    total: 5,
+    intentMode: "select",
+    replacementIntent: true,
+  }), "terminal_after_search");
+});
+
+Deno.test("agent phase: explanatory inquiry can render a previously found pool", () => {
+  const phase = nextAgentPhase("open", {
+    tool: "search_catalog",
+    ok: true,
+    total: 3,
+    intentMode: "inquire",
+    replacementIntent: false,
+  });
+
+  assertEquals(phase, "inquiry_with_results");
+  assert(isToolAllowedInAgentPhase(phase, "lookup_knowledge"));
+  assert(isToolAllowedInAgentPhase(phase, "search_catalog"));
+  assert(isToolAllowedInAgentPhase(phase, "render_products"));
+  assertEquals(forcedToolNameForAgentPhase(phase), null);
+});
+
+Deno.test("agent phase: further inquiry searches preserve render access", () => {
+  assertEquals(nextAgentPhase("inquiry_with_results", {
+    tool: "search_catalog",
+    ok: true,
+    total: 50,
+    intentMode: "inquire",
+    replacementIntent: false,
+  }), "inquiry_with_results");
+});
+
+Deno.test("named-series explanation becomes a prose-only evidence phase", () => {
+  const phase = nextAgentPhase("search_after_discovery", {
+    tool: "search_catalog",
+    ok: true,
+    total: 8,
+    intentMode: "inquire",
+    replacementIntent: false,
+    explanationOnly: true,
+  });
+  assertEquals(phase, "inquiry_explanation_ready");
+  assertEquals(toolNamesForAgentPhase(phase), []);
+  assertEquals(forcedToolNameForAgentPhase(phase), null);
+  assert(!isToolAllowedInAgentPhase(phase, "render_products"));
+});
+
+Deno.test("inquiry prose is deferred until evidence while selection reasoning stays visible", () => {
+  assert(shouldDeferInquiryIntro("inquire", true, false, false));
+  assert(!shouldDeferInquiryIntro("select", true, false, false));
+  assert(!shouldDeferInquiryIntro("inquire", false, false, true));
+  assert(!shouldDeferInquiryIntro("inquire", true, true, false));
+});
+
 Deno.test("agent phase: quantified reasoning forces exactly the next phase tool", () => {
   const ready = { reasoningRequiresCatalog: true };
   assertEquals(forcedToolNameForAgentPhase("open", ready), "discover_category");
   assertEquals(forcedToolNameForAgentPhase("search_after_discovery", ready), "search_catalog");
   assertEquals(forcedToolNameForAgentPhase("terminal_after_search", ready), "render_products");
   assertEquals(forcedToolNameForAgentPhase("open", { reasoningRequiresCatalog: false }), null);
+});
+
+Deno.test("agent phase: failed discovery has one forced jargon attempt followed by model-owned search", () => {
+  assertEquals(forcedToolNameForAgentPhase("jargon_after_failed_discovery"), "jargon_recover_catalog");
+  const searchPhase = nextAgentPhase("jargon_after_failed_discovery", {
+    tool: "jargon_recover_catalog",
+    ok: true,
+    total: 2,
+    partialMatch: true,
+    intentMode: "select",
+    replacementIntent: false,
+  });
+  assertEquals(searchPhase, "search_after_jargon");
+  assertEquals(toolNamesForAgentPhase(searchPhase), ["search_catalog"]);
+  assertEquals(forcedToolNameForAgentPhase(searchPhase), "search_catalog");
+});
+
+Deno.test("agent phase: permits one new-noun correction only before search progress", () => {
+  const base = {
+    phase: "search_after_discovery" as const,
+    alreadyUsed: false,
+    hasFreshSearch: false,
+    previousNoun: "кабель",
+    requestedNoun: "силовой кабель",
+  };
+  assert(shouldAllowCorrectiveDiscovery(base));
+  assert(!shouldAllowCorrectiveDiscovery({ ...base, alreadyUsed: true }));
+  assert(!shouldAllowCorrectiveDiscovery({ ...base, hasFreshSearch: true }));
+  assert(!shouldAllowCorrectiveDiscovery({ ...base, requestedNoun: "кабель" }));
+  assert(!shouldAllowCorrectiveDiscovery({ ...base, phase: "open" }));
+  assert(toolNamesForAgentPhase("search_after_discovery", {
+    correctiveDiscoveryAvailable: true,
+  }).includes("discover_category"));
+  assertEquals(forcedToolNameForAgentPhase("search_after_discovery", {
+    reasoningRequiresCatalog: true,
+    correctiveDiscoveryAvailable: true,
+  }), null);
+  assert(!toolNamesForAgentPhase("search_after_discovery").includes("discover_category"));
 });
 
 Deno.test("agent phase: empty search keeps the established category and blocks lexical reinterpretation", () => {
@@ -100,10 +198,10 @@ Deno.test("agent phase: empty search keeps the established category and blocks l
     total: 5,
     intentMode: "select",
     replacementIntent: true,
-  }), "open");
+  }), "terminal_after_search");
 });
 
-Deno.test("agent phase: partial jargon result cannot be forced into product rendering", () => {
+Deno.test("agent phase: partial jargon result requires catalog search before product rendering", () => {
   assertEquals(nextAgentPhase("jargon_after_failed_discovery", {
     tool: "jargon_recover_catalog",
     ok: true,
@@ -111,7 +209,15 @@ Deno.test("agent phase: partial jargon result cannot be forced into product rend
     partialMatch: true,
     intentMode: "select",
     replacementIntent: false,
-  }), "jargon_after_failed_discovery");
+  }), "search_after_jargon");
+  assertEquals(nextAgentPhase("jargon_after_failed_discovery", {
+    tool: "jargon_recover_catalog",
+    ok: true,
+    total: 0,
+    partialMatch: false,
+    intentMode: "select",
+    replacementIntent: false,
+  }), "search_after_jargon");
   assertEquals(nextAgentPhase("jargon_after_failed_discovery", {
     tool: "jargon_recover_catalog",
     ok: true,

@@ -4,6 +4,9 @@ export type AgentPhase =
   | "open"
   | "search_after_discovery"
   | "jargon_after_failed_discovery"
+  | "search_after_jargon"
+  | "inquiry_with_results"
+  | "inquiry_explanation_ready"
   | "terminal_after_search";
 
 const OPEN_TOOLS: readonly ToolName[] = [
@@ -41,21 +44,61 @@ const JARGON_AFTER_FAILED_DISCOVERY_TOOLS: readonly ToolName[] = [
   "note_state",
 ];
 
+// A lexical recovery attempt is evidence for the main consultant, not a loop.
+// Whether it found a full or partial candidate, the consultant must carry its
+// own interpretation into a real catalog search next. Keeping this phase to a
+// single forced tool prevents repeated discovery/jargon calls while leaving
+// the search arguments entirely model-owned.
+const SEARCH_AFTER_JARGON_TOOLS: readonly ToolName[] = [
+  "search_catalog",
+];
+
 const TERMINAL_AFTER_SEARCH_TOOLS: readonly ToolName[] = [
+  "render_products",
+];
+
+// An explanatory inquiry may need one or more catalog searches plus knowledge
+// before it can answer, but once a non-empty pool exists the model must also be
+// allowed to render that pool. Previously render_products stayed forbidden in
+// `open`, so the model repeatedly searched and eventually hit the 140 s turn
+// timeout even though it had already found the requested products.
+const INQUIRY_WITH_RESULTS_TOOLS: readonly ToolName[] = [
+  ...OPEN_TOOLS,
   "render_products",
 ];
 
 export interface AgentToolPolicy {
   reasoningRequiresCatalog?: boolean;
+  correctiveDiscoveryAvailable?: boolean;
+}
+
+/**
+ * Explanatory prose about a named product or series is not customer-safe until
+ * at least one evidence tool has run. Keep the model's first fragment as
+ * internal reasoning and publish the grounded final explanation instead.
+ */
+export function shouldDeferInquiryIntro(
+  intentMode: "select" | "inquire",
+  isFirstTurn: boolean,
+  hasRender: boolean,
+  isFinalTurn: boolean,
+): boolean {
+  return intentMode === "inquire" && isFirstTurn && !hasRender && !isFinalTurn;
 }
 
 export function toolNamesForAgentPhase(phase: AgentPhase, policy: AgentToolPolicy = {}): readonly ToolName[] {
   if (phase === "search_after_discovery") {
-    return policy.reasoningRequiresCatalog
+    const searchTools = policy.reasoningRequiresCatalog
       ? SEARCH_AFTER_DISCOVERY_TOOLS.filter((tool) => tool !== "propose_clarification")
       : SEARCH_AFTER_DISCOVERY_TOOLS;
+    return policy.correctiveDiscoveryAvailable
+      ? ["discover_category", ...searchTools]
+      : searchTools;
   }
   if (phase === "jargon_after_failed_discovery") return JARGON_AFTER_FAILED_DISCOVERY_TOOLS;
+  if (phase === "search_after_jargon") return SEARCH_AFTER_JARGON_TOOLS;
+  if (phase === "inquiry_with_results") return INQUIRY_WITH_RESULTS_TOOLS;
+  if (phase === "inquiry_explanation_ready") return [];
   if (phase === "terminal_after_search") return TERMINAL_AFTER_SEARCH_TOOLS;
   return OPEN_TOOLS;
 }
@@ -73,10 +116,12 @@ export function isToolAllowedInAgentPhase(phase: AgentPhase, tool: string, polic
  */
 export function forcedToolNameForAgentPhase(phase: AgentPhase, policy: AgentToolPolicy = {}): ToolName | null {
   if (phase === "terminal_after_search") return "render_products";
+  if (phase === "jargon_after_failed_discovery") return "jargon_recover_catalog";
+  if (phase === "search_after_jargon") return "search_catalog";
   if (!policy.reasoningRequiresCatalog) return null;
   if (phase === "open") return "discover_category";
+  if (phase === "search_after_discovery" && policy.correctiveDiscoveryAvailable) return null;
   if (phase === "search_after_discovery") return "search_catalog";
-  if (phase === "jargon_after_failed_discovery") return "jargon_recover_catalog";
   return null;
 }
 
@@ -108,6 +153,26 @@ export interface AgentPhaseEvent {
   partialMatch?: boolean;
   intentMode: "select" | "inquire";
   replacementIntent: boolean;
+  explanationOnly?: boolean;
+}
+
+/**
+ * Allows one model-owned category correction before any usable search pool.
+ * A formally successful discovery may resolve a broad noun to the wrong live
+ * sibling; the model can retry a genuinely different noun once, but cannot
+ * reopen discovery after search progress or loop on the same wording.
+ */
+export function shouldAllowCorrectiveDiscovery(input: {
+  phase: AgentPhase;
+  alreadyUsed: boolean;
+  hasFreshSearch: boolean;
+  previousNoun: string;
+  requestedNoun: string;
+}): boolean {
+  if (input.phase !== "search_after_discovery" || input.alreadyUsed || input.hasFreshSearch) return false;
+  const previous = normalize(input.previousNoun);
+  const requested = normalize(input.requestedNoun);
+  return Boolean(previous && requested && previous !== requested);
 }
 
 /**
@@ -127,24 +192,22 @@ export function nextAgentPhase(current: AgentPhase, event: AgentPhaseEvent): Age
       // Keep the main consultant in ordinary search so it can try the
       // canonical/EN term it already inferred instead of delegating meaning to
       // a second model.
-      if (current === "search_after_discovery" || current === "jargon_after_failed_discovery") return current;
+      if (
+        current === "search_after_discovery" ||
+        current === "jargon_after_failed_discovery" ||
+        current === "search_after_jargon"
+      ) return current;
       return "open";
     }
-    if (event.intentMode === "select" && !event.replacementIntent) return "terminal_after_search";
-    return "open";
+    if (event.intentMode === "select") return "terminal_after_search";
+    return event.explanationOnly ? "inquiry_explanation_ready" : "inquiry_with_results";
   }
 
   if (event.tool === "jargon_recover_catalog") {
-    if (
-      !event.ok ||
-      !Number.isFinite(event.total) ||
-      (event.total ?? 0) <= 0 ||
-      event.partialMatch
-    ) {
-      return current === "jargon_after_failed_discovery" ? current : "open";
-    }
-    if (event.intentMode === "select" && !event.replacementIntent) return "terminal_after_search";
-    return "open";
+    if (!event.ok || !Number.isFinite(event.total)) return current === "jargon_after_failed_discovery" ? current : "open";
+    if ((event.total ?? 0) <= 0 || event.partialMatch) return "search_after_jargon";
+    if (event.intentMode === "select") return "terminal_after_search";
+    return event.explanationOnly ? "inquiry_explanation_ready" : "inquiry_with_results";
   }
 
   if (event.tool === "render_products" && !event.ok) return "open";

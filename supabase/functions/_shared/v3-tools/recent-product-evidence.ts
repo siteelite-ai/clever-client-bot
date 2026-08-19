@@ -62,6 +62,31 @@ export function isEvidenceOnlyFollowup(message: string): boolean {
   return /(?:почему|точно|сравн|характерист|единиц|цена|остат|подход|этот|эта|эти|вариант)/u.test(normalized);
 }
 
+/**
+ * A price superlative plus an explicit reference signal means “choose from the
+ * products you just showed”, not “start a new catalog selection”. Product
+ * nouns are deliberately absent from this classifier: it is structural and
+ * cannot grow into a category dictionary.
+ */
+export function isRecentProductPriceSelectionFollowup(message: string): boolean {
+  const normalized = cleanText(message, 800).toLowerCase().replace(/ё/g, "е");
+  if (!normalized) return false;
+  const hasPriceSuperlative = /(?:самый\s+(?:дешев|недорог|доступн|дорог)|самые\s+(?:дешев|дорог)|бюджетн|поэконом|премиум|премьюм|флагман)/u.test(normalized);
+  const hasPriorSetReference = /(?:ссылк|из\s+(?:них|этих|вариантов)|(?:этот|эта|эти|тот|та|те)\s+вариант|вариант\s+(?:выше|из\s+списка))/u.test(normalized);
+  return hasPriceSuperlative && hasPriorSetReference;
+}
+
+/** Returns only the newest rendered batch, never older merged session items. */
+export function latestRecentProductEvidenceSet(products: RecentProductEvidence[]): RecentProductEvidence[] {
+  if (products.length === 0) return [];
+  const validTimes = products
+    .map((product) => Date.parse(product.shown_at))
+    .filter(Number.isFinite);
+  if (validTimes.length === 0) return products.slice(0, MAX_PRODUCTS);
+  const latest = Math.max(...validTimes);
+  return products.filter((product) => Date.parse(product.shown_at) === latest).slice(0, MAX_PRODUCTS);
+}
+
 function displayUnit(unit: string | null): string {
   const value = cleanText(unit, 40);
   return value ? `/${value}` : "";

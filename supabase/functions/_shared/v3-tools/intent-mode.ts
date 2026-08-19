@@ -1,9 +1,51 @@
 export type UserIntentMode = "select" | "inquire";
 
+/**
+ * A factual explanation of an explicitly named series must consult the live
+ * catalog before it can finish. Deictic follow-ups such as "эта серия" are
+ * excluded because they rely on evidence persisted from the preceding turn.
+ */
+export function extractNamedSeriesToken(message: string): string | null {
+  const normalized = message.toLocaleLowerCase("ru").replace(/ё/g, "е");
+  const match = normalized.match(/(?:^|[^\p{L}])сер(?:ия|ии|ию|ией)\s+[«"']?([\p{L}][\p{L}\d-]{3,})/u);
+  if (!match || /^(?:этой|эта|эту|данной|данная|данную|такой|такая)$/u.test(match[1])) return null;
+  return match[1];
+}
+
+export function requiresCatalogGroundingForInquiry(message: string): boolean {
+  return extractNamedSeriesToken(message) !== null;
+}
+
+export function resolveNamedSeriesToken(
+  message: string,
+  recentDialogue: Array<{ role: "user" | "assistant"; content: string }>,
+): string | null {
+  const direct = extractNamedSeriesToken(message);
+  if (direct) return direct;
+  const normalized = message.toLocaleLowerCase("ru").replace(/ё/g, "е");
+  if (!/(?:этой|данной|указанной|названной)\s+серии/u.test(normalized)) return null;
+  for (const fragment of [...recentDialogue].reverse()) {
+    // Generated prose can contain phrases such as "серия отличается...".
+    // Only the user's explicit entity mention is authoritative across turns.
+    if (fragment.role !== "user") continue;
+    const inherited = extractNamedSeriesToken(fragment.content);
+    if (inherited) return inherited;
+  }
+  return null;
+}
+
 // Product questions are evidence requests, not new selections. This distinction
 // controls whether the factual explanation beside render_products is visible.
 export function detectUserIntentMode(message: string): UserIntentMode {
   const normalized = message.toLowerCase().replace(/ё/g, "е");
+  // Explanation requests must keep their prose even when the answer also
+  // contains product cards. Conversely, a catalog imperative wins over words
+  // such as "характеристика": in "найди автомат ... характеристика C" that
+  // word is a filter, not a request to explain an existing product.
+  const explanation = /(?:^|[^\p{L}])(?:расскаж\p{L}*|объясн\p{L}*|почему|чем\s+хорош\p{L}*|преимуществ\p{L}*|особенност\p{L}*|чем\s+отлича\p{L}*|в\s+чем\s+разниц\p{L}*)(?=$|[^\p{L}])/u;
+  if (explanation.test(normalized)) return "inquire";
+  const selection = /(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|подбер\p{L}*|предлож\p{L}*|покаж\p{L}*|нуж\p{L}*|хоч\p{L}*|выбер\p{L}*)(?=$|[^\p{L}])/u;
+  if (selection.test(normalized)) return "select";
   const inquiry = /(указан[аы]?|за упаковк|за штук|за шт\.?|сколько штук|сколько в упаковк|что входит|входит ли|комплектац|характеристик|состав|совместим|подойдет(?:\s+ли|\s+или\s+нет)|подходит(?:\s+ли|\s+или\s+нет)|подходят ли|точно\s+подход|годится ли|хватит|можно ли|нужно ли|почему|нельзя|чем отличает|в чем разниц|разница между|отличие|отличия|какая мощност|какое напряжен|какой цвет|какой размер|какие размеры|какой диаметр|для чего|как работает|как пользоват|инструкц|гарант|срок служб|расход|потребл|расшифров)/u;
   if (inquiry.test(normalized)) return "inquire";
   const hasQuestion = /\?/.test(normalized);

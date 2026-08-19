@@ -6,8 +6,11 @@ import {
   applyCriteriaGate,
   buildCriteriaQuery,
   checkCriterion,
+  filterProductIdsByBudgetCap,
   findTrait,
   parseNumSpan,
+  resolveRenderCriteria,
+  titleProvesCompactCriterion,
   type Criterion,
 } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
@@ -15,6 +18,24 @@ import type { ProductRef } from "./types.ts";
 function product(id: string, traits: string[]): ProductRef {
   return { id, pagetitle: `P-${id}`, vendor: null, price: 100, stock: "unknown", short_traits: traits };
 }
+
+Deno.test("render criteria: named entity browse keeps only user-backed filters", () => {
+  const inferred = [{ key: "Тип", op: "eq", value: "ошибочный", level: "A" }] as Criterion[];
+  const raw = [{ key: "Мощность", op: "min", value: 100, level: "A" }] as Criterion[];
+  const userBacked = [{ key: "Цвет", op: "eq", value: "белый", level: "A" }] as Criterion[];
+  assertEquals(resolveRenderCriteria(inferred, raw, userBacked, true), userBacked);
+  assertEquals(resolveRenderCriteria(inferred, raw, userBacked, false), [...inferred, ...raw]);
+});
+
+Deno.test("compact code criterion must be visible in the product title", () => {
+  const criterion = { key: "Характеристика", op: "eq", value: "C", level: "A" } as Criterion;
+  assertEquals(titleProvesCompactCriterion("Автомат 1P 16A характеристика C", criterion), true);
+  assertEquals(titleProvesCompactCriterion("Автомат 1Р 16А х-ка С", criterion), true);
+  assertEquals(titleProvesCompactCriterion("Автомат с заземлением 1Р 16А", criterion), false);
+  assertEquals(titleProvesCompactCriterion("Автомат 1P 16A CHINT", criterion), false);
+  assertEquals(titleProvesCompactCriterion("Товар белый", { ...criterion, value: "белый" }), true);
+  assertEquals(titleProvesCompactCriterion("Кабель ВВГнг 2×1,5", { ...criterion, value: "медь" }), true);
+});
 
 Deno.test("parseNumSpan: scalar, decimal comma", () => {
   assertEquals(parseNumSpan("12"), { min: 12, max: 12 });
@@ -51,6 +72,7 @@ Deno.test("findTrait: first-class catalog price is evidence for budget criteria"
   const p = { ...product("1", []), price: 2800 };
   assertEquals(findTrait(p, "Цена")?.value, "2800");
   assertEquals(findTrait(p, "Стоимость товара")?.value, "2800");
+  assertEquals(findTrait(p, "Бюджет")?.value, "2800");
 });
 
 Deno.test("checkCriterion: price max uses ProductRef.price without a short trait", () => {
@@ -67,6 +89,22 @@ Deno.test("checkCriterion: price max uses ProductRef.price without a short trait
   assertEquals(report.rejected, [
     { id: "2", key: "Цена", expected: "≤ 4000 тенге", actual: "4300" },
   ]);
+});
+
+Deno.test("budget cap filters ordinary and recovery render ids by catalog price", () => {
+  const products = new Map([
+    ["within", { price: 900 }],
+    ["over", { price: 1745 }],
+    ["zero", { price: 0 }],
+  ]);
+  assertEquals(filterProductIdsByBudgetCap(["within", "over", "zero", "missing"], products, 1000), {
+    ids: ["within"],
+    dropped: 3,
+  });
+  assertEquals(filterProductIdsByBudgetCap(["within", "over"], products, null), {
+    ids: ["within", "over"],
+    dropped: 0,
+  });
 });
 
 Deno.test("checkCriterion: range overlap → pass, disjoint → fail", () => {
