@@ -2901,12 +2901,30 @@ async function runExpertLoop(
         assistantReasoning += `\n${resp.text}`;
         if (isFirstTurn && !hasRender && !isFinalTurn) {
           firstAssistantText = resp.text.trim();
+          const sanitizedIntro = containsUnrenderedCatalogFacts(resp.text)
+            ? stripUnrenderedCatalogFactSegments(resp.text)
+            : { text: resp.text, removed: [] as string[] };
+          const introText = sanitizedIntro.text.trim();
+          if (sanitizedIntro.removed.length > 0) {
+            steps.push({
+              step: "v3_guard_premature_text_facts",
+              ms: now(),
+              meta: {
+                fragment_index: step,
+                original_text: resp.text,
+                removed_segments: sanitizedIntro.removed,
+                kept_chars: introText.length,
+              },
+            });
+          }
           if (shouldDeferInquiryIntro(intentMode, isFirstTurn, hasRender, isFinalTurn)) {
             steps.push({ step: "v3_assistant_text_inquiry_deferred", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+          } else if (introText) {
+            send({ type: "delta", content: introText });
+            finalText += introText;
+            steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: introText.length, fragment_index: step, text: introText } });
           } else {
-            send({ type: "delta", content: resp.text });
-            finalText += resp.text;
-            steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+            steps.push({ step: "v3_assistant_text_suppressed_catalog_facts", ms: now(), meta: { fragment_index: step } });
           }
         } else if (isFinalTurn) {
           // Финальный ответ модели — отдельный пузырь после тулов/карточек.
