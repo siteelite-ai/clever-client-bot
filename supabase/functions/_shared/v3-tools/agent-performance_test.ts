@@ -5,6 +5,7 @@ import {
   hasActionableSelectionReasoning,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
+  shouldDeferInquiryIntro,
   toolNamesForAgentPhase,
 } from "./agent-performance.ts";
 import type { ProductRef } from "./types.ts";
@@ -111,6 +112,13 @@ Deno.test("agent phase: further inquiry searches preserve render access", () => 
     intentMode: "inquire",
     replacementIntent: false,
   }), "inquiry_with_results");
+});
+
+Deno.test("inquiry prose is deferred until evidence while selection reasoning stays visible", () => {
+  assert(shouldDeferInquiryIntro("inquire", true, false, false));
+  assert(!shouldDeferInquiryIntro("select", true, false, false));
+  assert(!shouldDeferInquiryIntro("inquire", false, false, true));
+  assert(!shouldDeferInquiryIntro("inquire", true, true, false));
 });
 
 Deno.test("agent phase: quantified reasoning forces exactly the next phase tool", () => {

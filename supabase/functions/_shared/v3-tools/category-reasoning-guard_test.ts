@@ -88,3 +88,9 @@ Deno.test("token recovery requires a complete title word, not a prefix inside an
   assert(titleContainsLiteralToken("Product LED DISTINCTIVE capsule", "distinctive"));
   assert(!titleContainsLiteralToken("Product GENERICTOOL floodlight", "generic"));
 });
+
+Deno.test("token recovery grounds a Cyrillic series name in a near-identical Latin title", () => {
+  assert(titleContainsLiteralToken("Розетка с заземлением Gallant /W5073135", "Галант"));
+  assert(!titleContainsLiteralToken("Розетка с заземлением Glossa", "Галант"));
+  assert(!titleContainsLiteralToken("Средство LABEL OFF", "Галант"));
+});

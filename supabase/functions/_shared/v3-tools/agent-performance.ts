@@ -60,6 +60,20 @@ export interface AgentToolPolicy {
   reasoningRequiresCatalog?: boolean;
 }
 
+/**
+ * Explanatory prose about a named product or series is not customer-safe until
+ * at least one evidence tool has run. Keep the model's first fragment as
+ * internal reasoning and publish the grounded final explanation instead.
+ */
+export function shouldDeferInquiryIntro(
+  intentMode: "select" | "inquire",
+  isFirstTurn: boolean,
+  hasRender: boolean,
+  isFinalTurn: boolean,
+): boolean {
+  return intentMode === "inquire" && isFirstTurn && !hasRender && !isFinalTurn;
+}
+
 export function toolNamesForAgentPhase(phase: AgentPhase, policy: AgentToolPolicy = {}): readonly ToolName[] {
   if (phase === "search_after_discovery") {
     return policy.reasoningRequiresCatalog

@@ -48,6 +48,7 @@ import {
   hasActionableSelectionReasoning,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
+  shouldDeferInquiryIntro,
   toolNamesForAgentPhase,
   type AgentPhase,
 } from "../_shared/v3-tools/agent-performance.ts";
@@ -2565,10 +2566,14 @@ async function runExpertLoop(
       if (resp.text.trim()) {
         assistantReasoning += `\n${resp.text}`;
         if (isFirstTurn && !hasRender && !isFinalTurn) {
-          send({ type: "delta", content: resp.text });
-          finalText += resp.text;
           firstAssistantText = resp.text.trim();
-          steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+          if (shouldDeferInquiryIntro(intentMode, isFirstTurn, hasRender, isFinalTurn)) {
+            steps.push({ step: "v3_assistant_text_inquiry_deferred", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+          } else {
+            send({ type: "delta", content: resp.text });
+            finalText += resp.text;
+            steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
+          }
         } else if (isFinalTurn) {
           // Финальный ответ модели — отдельный пузырь после тулов/карточек.
           // GUARD v3_guard_text_facts_leak (§221 anti-hallucination):
