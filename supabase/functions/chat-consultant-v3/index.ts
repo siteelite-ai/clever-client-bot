@@ -56,7 +56,7 @@ import {
   type AgentPhase,
 } from "../_shared/v3-tools/agent-performance.ts";
 import { CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest } from "../_shared/v3-tools/clean-power-safety.ts";
-import { deterministicSeriesExplanation } from "../_shared/v3-tools/series-explanation.ts";
+import { deterministicSeriesExplanation, safeSeriesTraits } from "../_shared/v3-tools/series-explanation.ts";
 import { rankSplitReplacementCandidates, type RankedReplacementCandidate } from "../_shared/v3-tools/replacement-fallback.ts";
 import {
   extractReplacementLookupKeys,
@@ -1843,7 +1843,7 @@ async function callOpenRouterSeriesExplanation(
   const evidence = products.slice(0, 8).map((product) => ({
     pagetitle: String(product.pagetitle ?? "").slice(0, 300),
     vendor: String(product.vendor ?? "").slice(0, 120),
-    short_traits: (product.short_traits ?? []).slice(0, 12).map((trait) => String(trait).slice(0, 220)),
+    short_traits: safeSeriesTraits(product.short_traits ?? []).slice(0, 12).map((trait) => String(trait).slice(0, 220)),
     description_excerpt: String(product.description_excerpt ?? "").slice(0, 500),
   }));
   try {
