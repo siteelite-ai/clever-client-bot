@@ -92,14 +92,24 @@ function displayUnit(unit: string | null): string {
   return value ? `/${value}` : "";
 }
 
-export function buildDeterministicEvidenceAnswer(products: RecentProductEvidence[]): string {
+export function buildDeterministicEvidenceAnswer(
+  products: RecentProductEvidence[],
+  userMessage = "",
+): string {
+  const normalizedMessage = cleanText(userMessage, 800).toLowerCase().replace(/ё/g, "е");
+  const asksForComparison = /(?:сравн|отлич|разниц|почему.{0,40}цен|цен[аы].{0,40}(?:отлич|разн))/u.test(normalizedMessage);
+  const comparisonBoundary = asksForComparison
+    ? products.length < 2
+      ? "В последней выдаче только один вариант, поэтому сравнить товары и объяснить разницу в цене нельзя."
+      : "Сравниваю цены и подтверждённые характеристики ранее показанных вариантов:"
+    : "По ранее показанным карточкам могу подтвердить только следующие данные:";
   const rows = products.slice(0, 5).map((product, index) => {
     const traits = product.short_traits.slice(0, 5).map((trait) => cleanText(trait, 180)).filter(Boolean);
     const facts = traits.length ? traits.join("; ") : "дополнительные характеристики в карточке не подтверждены";
     return `${index + 1}. ${cleanText(product.pagetitle, 240)} — ${product.price.toLocaleString("ru-RU")} ₸${displayUnit(product.unit)}; ${facts}.`;
   });
   return [
-    "По ранее показанным карточкам могу подтвердить только следующие данные:",
+    comparisonBoundary,
     ...rows,
     "Если нужного параметра нет в этом списке, я не могу подтвердить его: пригодность нельзя гарантировать без проверки у менеджера или в актуальной карточке товара.",
   ].join("\n");
