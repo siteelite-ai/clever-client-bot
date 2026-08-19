@@ -7,6 +7,11 @@ export interface ExactCompoundMarkingRequest {
   priceDirection: "cheapest" | "expensive" | null;
 }
 
+export interface ExplicitCompoundMarking {
+  first: number;
+  second: number;
+}
+
 function norm(value: string): string {
   return String(value ?? "").toLocaleLowerCase("ru").replace(/ё/g, "е");
 }
@@ -21,6 +26,36 @@ const INQUIRY_ONLY = /(?:^|[^\p{L}])(?:подойд\p{L}*|почему|можн�
 const COMPOUND = /\b(\d{1,3})\s*(?:x|х|×|\*)\s*(\d+(?:[.,]\d+)?)\b/iu;
 
 /**
+ * Extracts only the explicit N×S token written by the user. This is deliberately
+ * independent of product vocabulary and selection intent so the same literal
+ * constraint can protect every final-render path, including semantic requests.
+ */
+export function extractExplicitCompoundMarking(message: string): ExplicitCompoundMarking | null {
+  const match = norm(message).match(COMPOUND);
+  if (!match) return null;
+  const first = number(match[1]);
+  const second = number(match[2]);
+  return first === null || second === null ? null : { first, second };
+}
+
+function textHasExactCompoundMarking(evidence: string, marking: ExplicitCompoundMarking): boolean {
+  for (const match of evidence.matchAll(new RegExp(COMPOUND.source, "giu"))) {
+    const first = number(match[1]);
+    const second = number(match[2]);
+    if (first === marking.first && second === marking.second) return true;
+  }
+  return false;
+}
+
+/** Final-card evidence must be visible in the product title itself. */
+export function productTitleMatchesExplicitCompoundMarking(
+  pagetitle: string,
+  marking: ExplicitCompoundMarking,
+): boolean {
+  return textHasExactCompoundMarking(pagetitle, marking);
+}
+
+/**
  * Routes an explicit product lookup containing a compound catalog marking
  * (for example 2×1.5, with x/х/×/* spellings used by the catalog)
  * without asking the model to recreate those exact numbers as facet values.
@@ -28,11 +63,9 @@ const COMPOUND = /\b(\d{1,3})\s*(?:x|х|×|\*)\s*(\d+(?:[.,]\d+)?)\b/iu;
 export function classifyExactCompoundMarkingRequest(message: string): ExactCompoundMarkingRequest | null {
   const input = norm(message);
   if (!SELECT_INTENT.test(input) || INQUIRY_ONLY.test(input)) return null;
-  const match = input.match(COMPOUND);
-  if (!match) return null;
-  const first = number(match[1]);
-  const second = number(match[2]);
-  if (first === null || second === null) return null;
+  const marking = extractExplicitCompoundMarking(input);
+  if (!marking) return null;
+  const { first, second } = marking;
 
   const priceDirection = /(?:сам\p{L}*\s+)?(?:дешев\p{L}*|бюджетн\p{L}*|недорог\p{L}*)/u.test(input)
     ? "cheapest"
@@ -61,12 +94,7 @@ export function classifyExactCompoundMarkingRequest(message: string): ExactCompo
 }
 
 function hasExactCompound(evidence: string, request: ExactCompoundMarkingRequest): boolean {
-  for (const match of evidence.matchAll(new RegExp(COMPOUND.source, "giu"))) {
-    const first = number(match[1]);
-    const second = number(match[2]);
-    if (first === request.first && second === request.second) return true;
-  }
-  return false;
+  return textHasExactCompoundMarking(evidence, request);
 }
 
 export function selectExactCompoundMarkedProducts(

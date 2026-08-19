@@ -75,6 +75,8 @@ import {
   classifyExactCompoundMarkingRequest,
   exactCompoundMarkingEmpty,
   exactCompoundMarkingIntro,
+  extractExplicitCompoundMarking,
+  productTitleMatchesExplicitCompoundMarking,
   selectExactCompoundMarkedProducts,
   type ExactCompoundMarkingRequest,
 } from "../_shared/v3-tools/exact-compound-marking-policy.ts";
@@ -2184,6 +2186,7 @@ async function runExpertLoop(
   // the cards cannot silently diverge from the preceding reasoning.
   let enforcedSearchCriteria: Criterion[] = [];
   let userBackedSearchCriteria: Criterion[] = [];
+  const explicitCompoundMarking = extractExplicitCompoundMarking(userMessage);
   const guardVisibleCardinality = (ids: string[]) => {
     const compactCriteria = userBackedSearchCriteria.filter((criterion) =>
       typeof criterion.value === "string" && !titleProvesCompactCriterion("", criterion)
@@ -2195,6 +2198,17 @@ async function runExpertLoop(
       ));
     });
     const compactRemoved = ids.length - guarded.length;
+    const afterCompact = guarded.length;
+    if (explicitCompoundMarking) {
+      guarded = guarded.filter((id) => {
+        const product = ctx.cache.get(id);
+        return Boolean(product && productTitleMatchesExplicitCompoundMarking(
+          product.pagetitle,
+          explicitCompoundMarking,
+        ));
+      });
+    }
+    const compoundRemoved = afterCompact - guarded.length;
     const priceIntent = detectPriceDirection(userMessage);
     const superlative = priceIntent?.kind === "superlative" ? priceIntent : null;
     if (superlative && guarded.length > 0) {
@@ -2208,7 +2222,7 @@ async function runExpertLoop(
         })
         .slice(0, 1);
     }
-    return { ids: guarded, compactCriteria, compactRemoved, superlative };
+    return { ids: guarded, compactCriteria, compactRemoved, explicitCompoundMarking, compoundRemoved, superlative };
   };
   let reasoningBackedSearch: { ids: string[]; total: number; criteria: Criterion[] } | null = null;
   let agentPhase: AgentPhase = "open";
@@ -3137,6 +3151,18 @@ async function runExpertLoop(
               step: "v3_guard_compact_code_title_evidence",
               ms: now(),
               meta: { before: originalIds.length, after: originalIds.length - guarded.compactRemoved, criteria: guarded.compactCriteria },
+            });
+          }
+          if (guarded.explicitCompoundMarking && guarded.compoundRemoved > 0) {
+            steps.push({
+              step: "v3_guard_exact_compound_title_evidence",
+              ms: now(),
+              meta: {
+                before: originalIds.length - guarded.compactRemoved,
+                after: visibleIds.length,
+                removed: guarded.compoundRemoved,
+                marking: guarded.explicitCompoundMarking,
+              },
             });
           }
           if (guarded.superlative && visibleIds.length > 0) {

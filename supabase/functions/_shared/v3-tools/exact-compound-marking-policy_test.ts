@@ -1,6 +1,8 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   classifyExactCompoundMarkingRequest,
+  extractExplicitCompoundMarking,
+  productTitleMatchesExplicitCompoundMarking,
   selectExactCompoundMarkedProducts,
 } from "./exact-compound-marking-policy.ts";
 import type { ProductRef } from "./types.ts";
@@ -38,4 +40,19 @@ Deno.test("exact compound route rejects a nearby size and returns the cheapest e
   ], request);
 
   assertEquals(selected.map((item) => item.id), ["exact-cheapest"]);
+});
+
+Deno.test("explicit compound marking is a generic final-render invariant", () => {
+  const marking = extractExplicitCompoundMarking("нужен медный огнестойкий кабель 2*1,5");
+  assertEquals(marking, { first: 2, second: 1.5 });
+
+  assertEquals(productTitleMatchesExplicitCompoundMarking("Кабель ВВГнг 2×1.5", marking!), true);
+  assertEquals(productTitleMatchesExplicitCompoundMarking("Кабель КПСнг 2х1,50", marking!), true);
+  assertEquals(productTitleMatchesExplicitCompoundMarking("Кабель ВВГнг 4*1,5", marking!), false);
+  assertEquals(productTitleMatchesExplicitCompoundMarking("Провод СИП 2*16", marking!), false);
+  assertEquals(productTitleMatchesExplicitCompoundMarking("Кабель огнестойкий без размера в названии", marking!), false);
+});
+
+Deno.test("ordinary numeric requirements do not become compound marking constraints", () => {
+  assertEquals(extractExplicitCompoundMarking("светильник для комнаты 25 м² до 5000 тенге"), null);
 });
