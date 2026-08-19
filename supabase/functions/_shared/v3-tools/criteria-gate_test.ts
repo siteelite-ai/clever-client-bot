@@ -9,6 +9,7 @@ import {
   findTrait,
   parseNumSpan,
   resolveRenderCriteria,
+  titleProvesCompactCriterion,
   type Criterion,
 } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
@@ -23,6 +24,13 @@ Deno.test("render criteria: named entity browse keeps only user-backed filters",
   const userBacked = [{ key: "Цвет", op: "eq", value: "белый", level: "A" }] as Criterion[];
   assertEquals(resolveRenderCriteria(inferred, raw, userBacked, true), userBacked);
   assertEquals(resolveRenderCriteria(inferred, raw, userBacked, false), [...inferred, ...raw]);
+});
+
+Deno.test("compact code criterion must be visible in the product title", () => {
+  const criterion = { key: "Характеристика", op: "eq", value: "C", level: "A" } as Criterion;
+  assertEquals(titleProvesCompactCriterion("Автомат 1P 16A характеристика C", criterion), true);
+  assertEquals(titleProvesCompactCriterion("Автомат 1P 16A CHINT", criterion), false);
+  assertEquals(titleProvesCompactCriterion("Товар белый", { ...criterion, value: "белый" }), true);
 });
 
 Deno.test("parseNumSpan: scalar, decimal comma", () => {

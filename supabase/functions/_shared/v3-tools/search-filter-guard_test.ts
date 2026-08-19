@@ -98,6 +98,14 @@ Deno.test("filter guard does not drop a short code when proving a compound value
     "Покажи розетку TV.",
   );
   assertEquals(explicit.user_backed, [{ key: "socket_type", value: "розетка TV" }]);
+
+  const characteristic = guardSearchFilters(
+    { mode: "by_filter", options: { trip: ["C"] } },
+    [{ key: "trip", values: [{ value: "B" }, { value: "C" }] }],
+    "Характеристика C.",
+    "Нужна характеристика C.",
+  );
+  assertEquals(characteristic.user_backed, [{ key: "trip", value: "C" }]);
 });
 
 Deno.test("replacement identity treats an explicit collection as the source family", () => {

@@ -98,6 +98,17 @@ export function resolveRenderCriteria(
     .map((criterion) => ({ ...criterion }));
 }
 
+/** Compact letter/code values are unsafe when they only exist in hidden
+ * traits: the customer cannot verify the promised variant from the card. */
+export function titleProvesCompactCriterion(title: string, criterion: Criterion): boolean {
+  if (typeof criterion.value !== "string") return true;
+  const value = normalizeKey(criterion.value).replace(/\s+/g, "");
+  if (!value || value.length > 4 || !/[a-zа-я]/iu.test(value)) return true;
+  if (["да", "нет", "yes", "no", "true", "false"].includes(value)) return true;
+  const titleTokens = normalizeKey(title).split(" ").filter(Boolean);
+  return titleTokens.includes(value);
+}
+
 /** Числовой интервал, к которому сводится любое распознанное значение характеристики. */
 export interface NumSpan {
   min: number;

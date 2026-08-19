@@ -13,7 +13,7 @@ import { executeJargonRecoverCatalog, type JargonRecoverCatalogInput } from "../
 import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3-tools/lookup-knowledge.ts";
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
-import { applyCriteriaGate, buildCriteriaQuery, resolveRenderCriteria, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
+import { applyCriteriaGate, buildCriteriaQuery, resolveRenderCriteria, titleProvesCompactCriterion, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaWithReasoning } from "../_shared/v3-tools/criteria-reasoning.ts";
 import {
@@ -3099,6 +3099,50 @@ async function runExpertLoop(
         void detectPriceDirection;
         void findAnchorInCache;
         void rewriteRenderIdsByPriceDirection;
+
+        if (tc.name === "render_products") {
+          const originalIds = Array.isArray(tc.args.product_ids)
+            ? (tc.args.product_ids as unknown[]).map(String)
+            : [];
+          const compactCriteria = userBackedSearchCriteria.filter((criterion) =>
+            typeof criterion.value === "string" &&
+            !titleProvesCompactCriterion("", criterion)
+          );
+          let visibleIds = originalIds.filter((id) => {
+            const product = ctx.cache.get(id);
+            return Boolean(product && compactCriteria.every((criterion) =>
+              titleProvesCompactCriterion(product.pagetitle, criterion)
+            ));
+          });
+          if (compactCriteria.length > 0 && visibleIds.length !== originalIds.length) {
+            steps.push({
+              step: "v3_guard_compact_code_title_evidence",
+              ms: now(),
+              meta: { before: originalIds.length, after: visibleIds.length, criteria: compactCriteria },
+            });
+          }
+
+          const priceIntent = detectPriceDirection(userMessage);
+          if (priceIntent?.kind === "superlative" && visibleIds.length > 0) {
+            visibleIds = [...visibleIds]
+              .sort((left, right) => {
+                const leftPrice = ctx.cache.get(left)?.price ?? Number.POSITIVE_INFINITY;
+                const rightPrice = ctx.cache.get(right)?.price ?? Number.POSITIVE_INFINITY;
+                return priceIntent.direction === "more_expensive"
+                  ? rightPrice - leftPrice
+                  : leftPrice - rightPrice;
+              })
+              .slice(0, 1);
+            steps.push({
+              step: "v3_guard_superlative_single_product",
+              ms: now(),
+              meta: { direction: priceIntent.direction, before: originalIds.length, after: visibleIds.length },
+            });
+          }
+          if (visibleIds.length !== originalIds.length) {
+            (tc.args as Record<string, unknown>).product_ids = visibleIds;
+          }
+        }
 
 
         // ── Step 5b: Budget Cap Hard Post-Filter ─────────────────────────────

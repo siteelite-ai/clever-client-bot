@@ -287,7 +287,7 @@ function contradictedByUser(value: string, userEvidence: string): boolean {
 
 function explicitlyAffirmedByUser(value: string, userEvidence: string): boolean {
   if (contradictedByUser(value, userEvidence)) return false;
-  const isEvidenceToken = (token: string) => token.length >= 3 || /\d/.test(token) || /^[a-z]{2,}$/u.test(token);
+  const isEvidenceToken = (token: string) => token.length >= 3 || /\d/.test(token) || /^[a-z]+$/u.test(token);
   const valueTokens = norm(value)
     .split(" ")
     .filter(isEvidenceToken);
