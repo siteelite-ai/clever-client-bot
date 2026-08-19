@@ -8,7 +8,11 @@ import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supa
 import { TOOL_SCHEMAS, buildSystemPrompt } from "../_shared/v3-tools/schemas.ts";
 import { executeSearchCatalog, type SearchCatalogInput } from "../_shared/v3-tools/search-catalog.ts";
 import { executeDiscoverCategory, type DiscoverCategoryInput, type DiscoverCategoryOk, type Facet } from "../_shared/v3-tools/discover-category.ts";
-import { executeJargonRecoverCatalog, type JargonRecoverCatalogInput } from "../_shared/v3-tools/jargon-recover-catalog.ts";
+import {
+  executeJargonRecoverCatalog,
+  titleSupportsGroundedJargonQuery,
+  type JargonRecoverCatalogInput,
+} from "../_shared/v3-tools/jargon-recover-catalog.ts";
 
 import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3-tools/lookup-knowledge.ts";
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
@@ -2458,6 +2462,11 @@ async function runExpertLoop(
   let lastSearchSignature: string | null = null;
   let noProgressStreak = 0;
   let noProgressBreak = false;
+  // A successful jargon lookup may terminate the agent loop only when live
+  // catalog titles independently prove the helper-selected query. This keeps
+  // model-owned reasoning/search while preventing both redundant searches and
+  // unrelated lexical fallbacks.
+  let groundedJargonTerminal = false;
   // Turn-level guard: рендерим карточку контактов максимум один раз,
   // даже если LLM по ошибке вызвал lookup_contacts повторно (топик-дубль).
   const contactsEmitted = { value: false };
@@ -3960,10 +3969,9 @@ async function runExpertLoop(
         void findFacetMatchForCode;
         void filterReplacementCompatibleIds;
 
-        // [removed per spec v2 2026-06-29] v3_guard_jargon_auto_render,
-        // v3_guard_compound_pool_filter: серверный авто-рендер после
-        // jargon_recover_catalog и эвристический отсев по «составным
-        // токенам» убраны. LLM сам зовёт render_products по rule 1/3f/10.
+        // The server does not broadly auto-render jargon results. It may only
+        // preserve and finalize the subset whose live titles prove every
+        // meaningful token in the model/helper-selected matched_query.
         if ((tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") && result.ok) {
           const r2 = result as unknown as {
             results: Array<{ id: string; price: number }>;
@@ -3973,12 +3981,19 @@ async function runExpertLoop(
             source_query?: string;
             matched_query?: string;
           };
-          const ids = (r2.results ?? [])
+          const pricedIds = (r2.results ?? [])
             .filter((p) => p && Number.isFinite(p.price) && p.price > 0)
             .map((p) => String(p.id));
+          const matchedQuery = typeof r2.matched_query === "string" ? r2.matched_query.trim() : "";
+          const ids = tc.name === "jargon_recover_catalog"
+            ? pricedIds.filter((id) => {
+              const product = ctx.cache.get(id);
+              return Boolean(product && matchedQuery && titleSupportsGroundedJargonQuery(product.pagetitle, matchedQuery));
+            })
+            : pricedIds;
           if (ids.length > 0) {
-            const sourceLabel = typeof r2.matched_query === "string" && r2.matched_query
-              ? r2.matched_query
+            const sourceLabel = matchedQuery
+              ? matchedQuery
               : (typeof r2.source_query === "string" && r2.source_query ? r2.source_query : typeof tc.args.query === "string" ? tc.args.query : "");
             semanticEvidenceSeen ??= { label: sourceLabel, total: r2.total };
             freshSearch = { tool: tc.name, ids, total: r2.total };
@@ -3989,6 +4004,25 @@ async function runExpertLoop(
                 criteria: userBackedSearchCriteria.map((criterion) => ({ ...criterion })),
                 label: sourceLabel,
               };
+            }
+            if (
+              tc.name === "jargon_recover_catalog" &&
+              matchedQuery &&
+              !replacementIntent &&
+              intentMode === "select" &&
+              !seriesTurnRequiresGrounding
+            ) {
+              groundedJargonTerminal = true;
+              steps.push({
+                step: "v3_grounded_jargon_terminal",
+                ms: now(),
+                meta: {
+                  matched_query: matchedQuery,
+                  grounded_candidates: ids.length,
+                  returned_candidates: pricedIds.length,
+                  partial_match: Boolean(r2.partial_match),
+                },
+              });
             }
             const optionCount = runArgs.mode === "by_filter" && runArgs.options && typeof runArgs.options === "object"
               ? Object.keys(runArgs.options as Record<string, unknown>).length
@@ -4162,11 +4196,13 @@ async function runExpertLoop(
           name: tc.name,
           content: JSON.stringify(replyObj),
         });
+        if (groundedJargonTerminal) break;
       }
 
 
 
       // No-progress detector — выходим в forced-finalize, не сжигая остаток бюджета.
+      if (groundedJargonTerminal) break;
       if (noProgressBreak) break;
       // Тупик по критериям: сервер сам дважды сходил в каталог по формулировке
       // модели и не нашёл ничего — новых сигналов не будет, честно завершаем.
@@ -4337,7 +4373,13 @@ async function runExpertLoop(
       step: "v3_turn_end",
       ms: now(),
       meta: {
-        reason: criteriaDeadEndBreak ? "criteria_dead_end" : noProgressBreak ? "no_progress" : "forced_stepcount",
+        reason: groundedJargonTerminal
+          ? "grounded_jargon_terminal"
+          : criteriaDeadEndBreak
+            ? "criteria_dead_end"
+            : noProgressBreak
+              ? "no_progress"
+              : "forced_stepcount",
         step_count: MAX_STEPS,
       },
     });

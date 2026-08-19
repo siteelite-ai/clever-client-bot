@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { executeJargonRecoverCatalog } from "./jargon-recover-catalog.ts";
+import { executeJargonRecoverCatalog, titleSupportsGroundedJargonQuery } from "./jargon-recover-catalog.ts";
 import type { ProductCache } from "./types.ts";
 
 Deno.test("jargon recovery applies discovered category to the actual catalog query", async () => {
@@ -62,4 +62,17 @@ Deno.test("jargon recovery applies discovered category to the actual catalog que
   assertEquals(result.ok ? result.results[0]?.pagetitle : null, "Лампа LED CORN капсула 5Вт 230В 4000К G4 ИЭК");
   const catalogUrls = requestedUrls.filter((url) => url.includes("catalog.test"));
   assertEquals(catalogUrls.map((url) => new URL(url).searchParams.get("category")), ["Лампы", "Лампы"]);
+});
+
+Deno.test("grounded jargon title evidence accepts compact codes without a product dictionary", () => {
+  assertEquals(titleSupportsGroundedJargonQuery("Кабель ВВГ нг 2*1,5", "кабель ВВГнг"), true);
+  assertEquals(titleSupportsGroundedJargonQuery("Лампа LED CORN капсула 5Вт", "лампа CORN"), true);
+});
+
+Deno.test("grounded jargon title evidence rejects unrelated and overly broad matches", () => {
+  assertEquals(
+    titleSupportsGroundedJargonQuery("Средство для удаления наклеек LABEL OFF", "лампа CORN"),
+    false,
+  );
+  assertEquals(titleSupportsGroundedJargonQuery("Лампа LED стандартная", "лампа"), false);
 });

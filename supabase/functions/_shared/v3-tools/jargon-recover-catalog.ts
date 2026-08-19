@@ -31,6 +31,30 @@ function normalizeCodeLike(s: string): string {
   return normalize(s).replace(/[авекмнорстух]/gu, (ch) => map[ch] ?? ch).replace(/\s+/g, "");
 }
 
+/**
+ * Proves that a catalog title supports the exact query selected by the jargon
+ * helper. This is intentionally lexical and data-agnostic: it accepts neither
+ * a synonym dictionary nor the helper's claim alone. Every meaningful query
+ * token must be visible in the live product title. Code-like tokens may span
+ * spaces/punctuation (for example, `ВВГнг` in `ВВГ нг`).
+ *
+ * A single ordinary word is too broad to terminate the search (`лампа` could
+ * match thousands of unrelated forms). A lone token is accepted only when it
+ * is structurally distinctive: it contains Latin letters, digits, or a mixed
+ * alphanumeric/code shape.
+ */
+export function titleSupportsGroundedJargonQuery(title: string, matchedQuery: string): boolean {
+  const tokens = normalize(matchedQuery).split(/\s+/).filter((token) => token.length >= 3);
+  if (tokens.length === 0) return false;
+  if (tokens.length === 1 && !/[a-z\d]/iu.test(tokens[0])) return false;
+
+  const normalizedTitle = normalize(title);
+  const compactTitle = normalizeCodeLike(title);
+  return tokens.every((token) =>
+    normalizedTitle.split(/\s+/).includes(token) || compactTitle.includes(normalizeCodeLike(token))
+  );
+}
+
 function tokenize(s: string): string[] {
   return normalize(s).split(/\s+/).filter((t) => t.length >= 3);
 }
