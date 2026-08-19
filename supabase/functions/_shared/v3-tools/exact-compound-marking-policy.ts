@@ -49,6 +49,32 @@ export function extractExplicitCompoundMarking(message: string): ExplicitCompoun
   return first === null || second === null ? null : { first, second };
 }
 
+/**
+ * Detects when an explicit N×S lookup also contains semantic requirements that
+ * cannot be proven by the compound marking alone. The rule is intentionally
+ * structural: after request/sort language and the literal marking are removed,
+ * more than two lexical terms means the model must project at least one
+ * additional requirement into a machine-checkable render criterion. No
+ * product nouns, brands, aliases, or catalog values are encoded here.
+ */
+export function requiresSemanticCompoundEvidence(message: string): boolean {
+  if (!extractExplicitCompoundMarking(message)) return false;
+  return (semanticCompoundSourceQuery(message).match(/\p{L}+/gu) ?? []).length > 2;
+}
+
+/** Model-owned lexical source for semantic recovery, with only request/sort
+ * language and the literal N×S constraint removed. */
+export function semanticCompoundSourceQuery(message: string): string {
+  return norm(message)
+    .replace(/[?!]/gu, " ")
+    .replace(/(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|покаж\p{L}*|подбер\p{L}*|хоч\p{L}*|нуж\p{L}*|пожалуйста)(?=$|[^\p{L}])/gu, " ")
+    .replace(/(?:^|[^\p{L}])(?:сам\p{L}*|дешев\p{L}*|бюджетн\p{L}*|недорог\p{L}*|дорог\p{L}*|премиум\p{L}*)(?=$|[^\p{L}])/gu, " ")
+    .replace(new RegExp(COMPOUND.source, "giu"), " ")
+    .replace(/\s+/gu, " ")
+    .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
+    .trim();
+}
+
 function textHasExactCompoundMarking(evidence: string, marking: ExplicitCompoundMarking): boolean {
   for (const match of evidence.matchAll(new RegExp(COMPOUND.source, "giu"))) {
     const first = number(match[1]);
@@ -214,10 +240,7 @@ export function classifyExactCompoundMarkingRequest(message: string): ExactCompo
   // its reasoning (for example an execution/material requirement). Sending
   // that conversational phrase directly would turn a valid request into a
   // deterministic false empty. No product vocabulary is used here.
-  const lexicalTerms = query
-    .replace(COMPOUND, " ")
-    .match(/\p{L}+/gu) ?? [];
-  if (lexicalTerms.length > 2) return null;
+  if (requiresSemanticCompoundEvidence(message)) return null;
   return { query, first, second, priceDirection };
 }
 
