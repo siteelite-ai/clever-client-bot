@@ -13,6 +13,8 @@ on:
       - 'scripts/qa/customer-acceptance-cases.json'
       - 'scripts/qa/run-customer-acceptance.mjs'
       - 'scripts/qa/run-customer-acceptance.test.mjs'
+      - 'scripts/qa/widget-browser-smoke.mjs'
+      - 'scripts/qa/widget-browser-smoke.test.mjs'
       - '.github/workflows/typecheck-edge-functions.yml'
   pull_request:
     paths:
@@ -26,6 +28,8 @@ on:
       - 'scripts/qa/customer-acceptance-cases.json'
       - 'scripts/qa/run-customer-acceptance.mjs'
       - 'scripts/qa/run-customer-acceptance.test.mjs'
+      - 'scripts/qa/widget-browser-smoke.mjs'
+      - 'scripts/qa/widget-browser-smoke.test.mjs'
       - '.github/workflows/typecheck-edge-functions.yml'
 
 jobs:
@@ -56,8 +60,8 @@ jobs:
       - name: Check widget release contract
         run: node scripts/qa/check-widget-release-contract.mjs
 
-      - name: Test customer acceptance evaluator
-        run: node --test scripts/qa/run-customer-acceptance.test.mjs
+      - name: Test customer acceptance and browser evaluators
+        run: node --test scripts/qa/run-customer-acceptance.test.mjs scripts/qa/widget-browser-smoke.test.mjs
 
       - name: Test shared v3 safeguards
         run: deno test supabase/functions/_shared/v3-tools/*_test.ts
