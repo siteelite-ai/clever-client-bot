@@ -72,6 +72,33 @@ function correctCustomerTextTypos(text: string): string {
   );
 }
 
+/**
+ * A lone catalog term in otherwise useful shopping prose is a wording defect,
+ * not an architecture disclosure. Rewrite it locally instead of discarding the
+ * complete answer. If the same text also contains tool names, schema fields or
+ * other internal markers, the ordinary hard redaction still applies.
+ */
+function rewriteCustomerFacingServiceTerms(text: string): string {
+  const forms: Record<string, string> = {
+    "фасет": "характеристика",
+    "фасета": "характеристики",
+    "фасеты": "характеристики",
+    "фасетов": "характеристик",
+    "фасету": "характеристике",
+    "фасетам": "характеристикам",
+    "фасетом": "характеристикой",
+    "фасетами": "характеристиками",
+    "фасете": "характеристике",
+    "фасетах": "характеристиках",
+  };
+  return text.replace(/(?<![а-яa-z])фасет(?:а|ы|ов|у|ам|ом|ами|е|ах)?(?![а-яa-z])/giu, (match) => {
+    const replacement = forms[match.toLocaleLowerCase("ru")] ?? "характеристика";
+    return /^[А-ЯЁ]/u.test(match)
+      ? replacement[0].toLocaleUpperCase("ru") + replacement.slice(1)
+      : replacement;
+  });
+}
+
 export interface RedactResult {
   text: string;
   redacted: boolean;
@@ -103,28 +130,32 @@ export function containsUnrenderedCatalogFacts(text: string): boolean {
 export function redactInternals(text: string): RedactResult {
   const raw = text ?? "";
   if (!raw.trim()) return { text: raw, redacted: false, matched: [] };
-  const n = norm(raw);
+  const customerFacing = rewriteCustomerFacingServiceTerms(raw);
+  const n = norm(customerFacing);
   const matched: string[] = [];
   for (const re of INTERNALS_PATTERNS) {
     if (re.test(n)) matched.push(re.source.slice(0, 40));
   }
   // Идентификаторы в бэктиках и snake_case-слова — структурный признак кода.
-  if (/`[A-Za-z_][A-Za-z0-9_.[\]]*`/.test(raw)) matched.push("backticked_identifier");
-  if (/\b[a-z]{3,}_[a-z]{3,}(?:_[a-z]+)*\b/.test(raw)) matched.push("snake_case_identifier");
+  if (/`[A-Za-z_][A-Za-z0-9_.[\]]*`/.test(customerFacing)) matched.push("backticked_identifier");
+  if (/\b[a-z]{3,}_[a-z]{3,}(?:_[a-z]+)*\b/.test(customerFacing)) matched.push("snake_case_identifier");
 
   if (matched.length > 0) {
     return { text: INTERNALS_REDACTED_TEXT, redacted: true, matched };
   }
-  const withoutSelfFlagellation = raw.replace(SELF_FLAGELLATION_RE, "")
+  const withoutSelfFlagellation = customerFacing.replace(SELF_FLAGELLATION_RE, "")
     .replace(/[ \t]{2,}/g, " ").trim();
   const cleaned = correctCustomerTextTypos(withoutSelfFlagellation);
   if (cleaned !== raw.trim()) {
     const softMatches: string[] = [];
-    if (withoutSelfFlagellation !== raw.trim()) {
+    if (withoutSelfFlagellation !== customerFacing.trim()) {
       softMatches.push("self_flagellation");
     }
     if (cleaned !== withoutSelfFlagellation) {
       softMatches.push("customer_text_typo:cash_receipt");
+    }
+    if (customerFacing !== raw) {
+      softMatches.push("customer_term:facet");
     }
     return { text: cleaned, redacted: false, matched: softMatches };
   }

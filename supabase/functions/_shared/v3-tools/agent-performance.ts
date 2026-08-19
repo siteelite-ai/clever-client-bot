@@ -4,6 +4,7 @@ export type AgentPhase =
   | "open"
   | "search_after_discovery"
   | "jargon_after_failed_discovery"
+  | "inquiry_with_results"
   | "terminal_after_search";
 
 const OPEN_TOOLS: readonly ToolName[] = [
@@ -45,6 +46,16 @@ const TERMINAL_AFTER_SEARCH_TOOLS: readonly ToolName[] = [
   "render_products",
 ];
 
+// An explanatory inquiry may need one or more catalog searches plus knowledge
+// before it can answer, but once a non-empty pool exists the model must also be
+// allowed to render that pool. Previously render_products stayed forbidden in
+// `open`, so the model repeatedly searched and eventually hit the 140 s turn
+// timeout even though it had already found the requested products.
+const INQUIRY_WITH_RESULTS_TOOLS: readonly ToolName[] = [
+  ...OPEN_TOOLS,
+  "render_products",
+];
+
 export interface AgentToolPolicy {
   reasoningRequiresCatalog?: boolean;
 }
@@ -56,6 +67,7 @@ export function toolNamesForAgentPhase(phase: AgentPhase, policy: AgentToolPolic
       : SEARCH_AFTER_DISCOVERY_TOOLS;
   }
   if (phase === "jargon_after_failed_discovery") return JARGON_AFTER_FAILED_DISCOVERY_TOOLS;
+  if (phase === "inquiry_with_results") return INQUIRY_WITH_RESULTS_TOOLS;
   if (phase === "terminal_after_search") return TERMINAL_AFTER_SEARCH_TOOLS;
   return OPEN_TOOLS;
 }
@@ -131,7 +143,7 @@ export function nextAgentPhase(current: AgentPhase, event: AgentPhaseEvent): Age
       return "open";
     }
     if (event.intentMode === "select") return "terminal_after_search";
-    return "open";
+    return "inquiry_with_results";
   }
 
   if (event.tool === "jargon_recover_catalog") {
@@ -144,7 +156,7 @@ export function nextAgentPhase(current: AgentPhase, event: AgentPhaseEvent): Age
       return current === "jargon_after_failed_discovery" ? current : "open";
     }
     if (event.intentMode === "select") return "terminal_after_search";
-    return "open";
+    return "inquiry_with_results";
   }
 
   if (event.tool === "render_products" && !event.ok) return "open";

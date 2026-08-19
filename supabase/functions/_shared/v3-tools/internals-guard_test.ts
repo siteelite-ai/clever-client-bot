@@ -73,6 +73,15 @@ Deno.test("redact: нормальные товарные ответы не тр�
   }
 });
 
+Deno.test("redact: одиночный термин фасет переписывается без потери полезного ответа", () => {
+  const input = "Беру три фасета: количество жил = 3, сечение = 1,5 мм², негорючесть = Да.";
+  const result = redactInternals(input);
+
+  assertEquals(result.redacted, false);
+  assertEquals(result.text, "Беру три характеристики: количество жил = 3, сечение = 1,5 мм², негорючесть = Да.");
+  assert(result.matched.includes("customer_term:facet"));
+});
+
 Deno.test("redact: самобичевание вычищается без подмены текста", () => {
   const r = redactInternals("Погорячился, показал шесть вариантов. Сейчас догружу остаток.");
   assertEquals(r.redacted, false);

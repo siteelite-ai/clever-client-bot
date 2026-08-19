@@ -87,6 +87,32 @@ Deno.test("agent phase: non-empty replacement search must render instead of reop
   }), "terminal_after_search");
 });
 
+Deno.test("agent phase: explanatory inquiry can render a previously found pool", () => {
+  const phase = nextAgentPhase("open", {
+    tool: "search_catalog",
+    ok: true,
+    total: 3,
+    intentMode: "inquire",
+    replacementIntent: false,
+  });
+
+  assertEquals(phase, "inquiry_with_results");
+  assert(isToolAllowedInAgentPhase(phase, "lookup_knowledge"));
+  assert(isToolAllowedInAgentPhase(phase, "search_catalog"));
+  assert(isToolAllowedInAgentPhase(phase, "render_products"));
+  assertEquals(forcedToolNameForAgentPhase(phase), null);
+});
+
+Deno.test("agent phase: further inquiry searches preserve render access", () => {
+  assertEquals(nextAgentPhase("inquiry_with_results", {
+    tool: "search_catalog",
+    ok: true,
+    total: 50,
+    intentMode: "inquire",
+    replacementIntent: false,
+  }), "inquiry_with_results");
+});
+
 Deno.test("agent phase: quantified reasoning forces exactly the next phase tool", () => {
   const ready = { reasoningRequiresCatalog: true };
   assertEquals(forcedToolNameForAgentPhase("open", ready), "discover_category");
