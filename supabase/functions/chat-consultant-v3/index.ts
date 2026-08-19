@@ -51,13 +51,14 @@ import {
   persistRecentProductEvidence,
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
-import { META_DECLINE_TEXT, containsUnrenderedCatalogFacts, isMetaSelfQuestion, redactInternals, stripUnrenderedCatalogFactSegments } from "../_shared/v3-tools/internals-guard.ts";
+import { META_DECLINE_TEXT, containsUnrenderedCatalogFacts, isMetaSelfQuestion, redactInternals, sanitizeIntermediateReasoning, stripUnrenderedCatalogFactSegments } from "../_shared/v3-tools/internals-guard.ts";
 import {
   compactCatalogResultForLlm,
   forcedToolNameForAgentPhase,
   hasActionableSelectionReasoning,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
+  shouldAllowCorrectiveDiscovery,
   shouldDeferInquiryIntro,
   toolNamesForAgentPhase,
   type AgentPhase,
@@ -2516,6 +2517,10 @@ async function runExpertLoop(
   };
   let reasoningBackedSearch: { ids: string[]; total: number; criteria: Criterion[] } | null = null;
   let agentPhase: AgentPhase = "open";
+  // A successful discovery may still resolve a broad noun to the wrong live
+  // sibling. Let the consultant correct that diagnosis exactly once, before a
+  // usable search pool exists; the phase guard still blocks every later retry.
+  let correctiveDiscoveryUsed = false;
   let seriesGroundingSatisfied = false;
   // Session-wide whitelist of category pagetitles discovered via discover_category.
   // Source of truth for `category` / `category_in` in search_catalog calls.
@@ -2917,6 +2922,8 @@ async function runExpertLoop(
             `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
           )
         ),
+        correctiveDiscoveryAvailable: agentPhase === "search_after_discovery" &&
+          !correctiveDiscoveryUsed && !freshSearch,
       };
       const availableToolNames = toolNamesForAgentPhase(agentPhase, agentToolPolicy);
       const forcedToolName = forcedToolNameForAgentPhase(agentPhase, agentToolPolicy);
@@ -3020,11 +3027,18 @@ async function runExpertLoop(
       if (resp.text.trim()) {
         assistantReasoning += `\n${resp.text}`;
         if (isFirstTurn && !hasRender && !isFinalTurn) {
-          firstAssistantText = resp.text.trim();
-          const sanitizedIntro = containsUnrenderedCatalogFacts(resp.text)
-            ? stripUnrenderedCatalogFactSegments(resp.text)
-            : { text: resp.text, removed: [] as string[] };
+          const safeReasoning = sanitizeIntermediateReasoning(resp.text);
+          const sanitizedIntro = containsUnrenderedCatalogFacts(safeReasoning.text)
+            ? stripUnrenderedCatalogFactSegments(safeReasoning.text)
+            : { text: safeReasoning.text, removed: [] as string[] };
           const introText = sanitizedIntro.text.trim();
+          if (safeReasoning.suppressed) {
+            steps.push({
+              step: "v3_assistant_text_suppressed_internals",
+              ms: now(),
+              meta: { fragment_index: step, matched: safeReasoning.matched },
+            });
+          }
           if (sanitizedIntro.removed.length > 0) {
             steps.push({
               step: "v3_guard_premature_text_facts",
@@ -3042,6 +3056,7 @@ async function runExpertLoop(
           } else if (introText) {
             send({ type: "delta", content: introText });
             finalText += introText;
+            firstAssistantText = introText;
             steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: introText.length, fragment_index: step, text: introText } });
           } else {
             steps.push({ step: "v3_assistant_text_suppressed_catalog_facts", ms: now(), meta: { fragment_index: step } });
@@ -3126,11 +3141,21 @@ async function runExpertLoop(
           // текста), а сейчас наконец появилось «размышление» перед следующим
           // тулом — поднимаем его как intro bubble, чтобы пользователь видел,
           // что эксперт рассуждает, а не молча «думает».
-          send({ type: "assistant_turn_break", reason: "intro_late" });
-          send({ type: "delta", content: resp.text });
-          finalText += resp.text;
-          firstAssistantText = resp.text.trim();
-          steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text, late: true } });
+          const safeReasoning = sanitizeIntermediateReasoning(resp.text);
+          const introText = safeReasoning.text.trim();
+          if (introText) {
+            send({ type: "assistant_turn_break", reason: "intro_late" });
+            send({ type: "delta", content: introText });
+            finalText += introText;
+            firstAssistantText = introText;
+            steps.push({ step: "v3_assistant_text", ms: now(), meta: { chars: introText.length, fragment_index: step, text: introText, late: true } });
+          } else {
+            steps.push({
+              step: "v3_assistant_text_suppressed_internals",
+              ms: now(),
+              meta: { fragment_index: step, matched: safeReasoning.matched, late: true },
+            });
+          }
         } else {
           steps.push({ step: "v3_assistant_text_suppressed", ms: now(), meta: { chars: resp.text.length, fragment_index: step, text: resp.text } });
         }
@@ -3184,13 +3209,21 @@ async function runExpertLoop(
       for (const tc of resp.toolCalls) {
         const toolStart = Date.now();
 
+        const correctiveDiscovery = tc.name === "discover_category" && shouldAllowCorrectiveDiscovery({
+          phase: agentPhase,
+          alreadyUsed: correctiveDiscoveryUsed,
+          hasFreshSearch: Boolean(freshSearch),
+          previousNoun: lastDiscover?.resolved_from ?? lastDiscover?.category?.pagetitle ?? "",
+          requestedNoun: typeof tc.args.noun === "string" ? tc.args.noun : "",
+        });
+
         // Tool schemas guide the model but are not a security/control boundary:
         // some OpenRouter models can still emit a tool name omitted from the
         // current request. Enforce the phase contract server-side so a repeated
         // discovery/search is never executed merely because the model ignored
         // the advertised tool set. Every assistant tool_call still receives a
         // matching tool result, keeping the conversation protocol valid.
-        if (!isToolAllowedInAgentPhase(agentPhase, tc.name, enforcementToolPolicy)) {
+        if (!isToolAllowedInAgentPhase(agentPhase, tc.name, enforcementToolPolicy) && !correctiveDiscovery) {
           const phaseHint = agentPhase === "open"
             ? "Сначала выполни discovery/search. Уточнение допустимо после discovery, только если без него поиск объективно невозможен."
             : agentPhase === "search_after_discovery"
@@ -3220,6 +3253,17 @@ async function runExpertLoop(
             meta: { phase: agentPhase, blocked_tool: tc.name, allowed_tools: enforcedToolNames },
           });
           continue;
+        }
+        if (correctiveDiscovery) {
+          correctiveDiscoveryUsed = true;
+          steps.push({
+            step: "v3_corrective_discovery_allowed",
+            ms: now(),
+            meta: {
+              previous_noun: lastDiscover?.resolved_from ?? lastDiscover?.category?.pagetitle ?? null,
+              requested_noun: tc.args.noun,
+            },
+          });
         }
 
         if (
@@ -4226,11 +4270,21 @@ async function runExpertLoop(
         // LLM сам решает (rule 3c), какие фасеты передавать и что делать при 0.
         void classifyOptionsSource;
 
-        if (tc.name === "discover_category" && result.ok) {
-          lastDiscover = result as unknown as DiscoverCategoryOk;
-          addToWhitelist(lastDiscover.category?.pagetitle);
-          for (const leaf of lastDiscover.leaf_categories ?? []) {
-            addToWhitelist(leaf.pagetitle);
+        if (tc.name === "discover_category") {
+          if (correctiveDiscovery) {
+            // The previous category has just been rejected by the consultant's
+            // own reasoning. Never let its whitelist constrain the corrected
+            // search or the jargon fallback after a failed correction.
+            categoryWhitelist.clear();
+            whitelistNorm.clear();
+            if (!result.ok) lastDiscover = null;
+          }
+          if (result.ok) {
+            lastDiscover = result as unknown as DiscoverCategoryOk;
+            addToWhitelist(lastDiscover.category?.pagetitle);
+            for (const leaf of lastDiscover.leaf_categories ?? []) {
+              addToWhitelist(leaf.pagetitle);
+            }
           }
         }
 

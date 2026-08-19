@@ -6,6 +6,7 @@ import {
   isToolAllowedInAgentPhase,
   nextAgentPhase,
   shouldDeferInquiryIntro,
+  shouldAllowCorrectiveDiscovery,
   toolNamesForAgentPhase,
 } from "./agent-performance.ts";
 import type { ProductRef } from "./types.ts";
@@ -157,6 +158,29 @@ Deno.test("agent phase: failed discovery has one forced jargon attempt followed 
   assertEquals(searchPhase, "search_after_jargon");
   assertEquals(toolNamesForAgentPhase(searchPhase), ["search_catalog"]);
   assertEquals(forcedToolNameForAgentPhase(searchPhase), "search_catalog");
+});
+
+Deno.test("agent phase: permits one new-noun correction only before search progress", () => {
+  const base = {
+    phase: "search_after_discovery" as const,
+    alreadyUsed: false,
+    hasFreshSearch: false,
+    previousNoun: "кабель",
+    requestedNoun: "силовой кабель",
+  };
+  assert(shouldAllowCorrectiveDiscovery(base));
+  assert(!shouldAllowCorrectiveDiscovery({ ...base, alreadyUsed: true }));
+  assert(!shouldAllowCorrectiveDiscovery({ ...base, hasFreshSearch: true }));
+  assert(!shouldAllowCorrectiveDiscovery({ ...base, requestedNoun: "кабель" }));
+  assert(!shouldAllowCorrectiveDiscovery({ ...base, phase: "open" }));
+  assert(toolNamesForAgentPhase("search_after_discovery", {
+    correctiveDiscoveryAvailable: true,
+  }).includes("discover_category"));
+  assertEquals(forcedToolNameForAgentPhase("search_after_discovery", {
+    reasoningRequiresCatalog: true,
+    correctiveDiscoveryAvailable: true,
+  }), null);
+  assert(!toolNamesForAgentPhase("search_after_discovery").includes("discover_category"));
 });
 
 Deno.test("agent phase: empty search keeps the established category and blocks lexical reinterpretation", () => {

@@ -4,6 +4,7 @@ import {
   containsUnrenderedCatalogFacts,
   isMetaSelfQuestion,
   redactInternals,
+  sanitizeIntermediateReasoning,
   stripUnrenderedCatalogFactSegments,
 } from "./internals-guard.ts";
 
@@ -80,6 +81,22 @@ Deno.test("redact: нормальные товарные ответы не тр�
     assertEquals(r.redacted, false, `ложное срабатывание: ${c}`);
     assertEquals(r.text, c);
   }
+});
+
+Deno.test("intermediate reasoning keeps the product correction without exposing tool names", () => {
+  const result = sanitizeIntermediateReasoning(
+    "Похоже, discover_category ушёл в витую пару, а нужен силовой кабель. Попробую другой термин.",
+  );
+  assertEquals(result.suppressed, false);
+  assertStringIncludes(result.text, "ушёл в витую пару");
+  assertStringIncludes(result.text, "нужен силовой кабель");
+  assert(!result.text.includes("discover_category"));
+});
+
+Deno.test("intermediate reasoning suppresses other internal architecture", () => {
+  const result = sanitizeIntermediateReasoning("После search_catalog проверю системный промпт и LLM.");
+  assertEquals(result.suppressed, true);
+  assertEquals(result.text, "");
 });
 
 Deno.test("redact: одиночный термин фасет переписывается без потери полезного ответа", () => {

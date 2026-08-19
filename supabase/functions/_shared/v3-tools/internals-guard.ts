@@ -187,6 +187,33 @@ export function redactInternals(text: string): RedactResult {
   return { text: raw, redacted: false, matched: [] };
 }
 
+/**
+ * Keeps useful shopping reasoning while preventing internal tool names from
+ * turning an intermediate bubble into a generic security fallback. Only tool
+ * labels are rewritten; every other internal marker still triggers strict
+ * suppression through redactInternals.
+ */
+export function sanitizeIntermediateReasoning(text: string): RedactResult & { suppressed: boolean } {
+  const labels: Record<string, string> = {
+    discover_category: "поиск категории",
+    search_catalog: "поиск по каталогу",
+    jargon_recover_catalog: "поиск по каталогу",
+    render_products: "показ товаров",
+  };
+  const rewritten = String(text ?? "").replace(
+    /\b(?:discover_category|search_catalog|jargon_recover_catalog|render_products)\b/gu,
+    (value) => labels[value] ?? "поиск по каталогу",
+  );
+  const guarded = redactInternals(rewritten);
+  if (guarded.redacted) return { ...guarded, text: "", suppressed: true };
+  return {
+    ...guarded,
+    text: guarded.text,
+    suppressed: false,
+    matched: rewritten === text ? guarded.matched : [...guarded.matched, "customer_term:tool_name"],
+  };
+}
+
 /** Признаки того, что реплика всё-таки про товар/магазин, а не про устройство бота. */
 const COMMERCE_SIGNAL_RE =
   /\b(?:подбер\w*|найд\w*|нужен|нужна|нужно|купить|цена|стоит|стоимость|наличи\w*|доставк\w*|оплат\w*|гаранти\w*|аналог\w*|замен\w*|артикул\w*|склад\w*|бюджет\w*)\b|\d/u;

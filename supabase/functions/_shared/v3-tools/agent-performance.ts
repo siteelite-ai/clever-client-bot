@@ -69,6 +69,7 @@ const INQUIRY_WITH_RESULTS_TOOLS: readonly ToolName[] = [
 
 export interface AgentToolPolicy {
   reasoningRequiresCatalog?: boolean;
+  correctiveDiscoveryAvailable?: boolean;
 }
 
 /**
@@ -87,9 +88,12 @@ export function shouldDeferInquiryIntro(
 
 export function toolNamesForAgentPhase(phase: AgentPhase, policy: AgentToolPolicy = {}): readonly ToolName[] {
   if (phase === "search_after_discovery") {
-    return policy.reasoningRequiresCatalog
+    const searchTools = policy.reasoningRequiresCatalog
       ? SEARCH_AFTER_DISCOVERY_TOOLS.filter((tool) => tool !== "propose_clarification")
       : SEARCH_AFTER_DISCOVERY_TOOLS;
+    return policy.correctiveDiscoveryAvailable
+      ? ["discover_category", ...searchTools]
+      : searchTools;
   }
   if (phase === "jargon_after_failed_discovery") return JARGON_AFTER_FAILED_DISCOVERY_TOOLS;
   if (phase === "search_after_jargon") return SEARCH_AFTER_JARGON_TOOLS;
@@ -116,6 +120,7 @@ export function forcedToolNameForAgentPhase(phase: AgentPhase, policy: AgentTool
   if (phase === "search_after_jargon") return "search_catalog";
   if (!policy.reasoningRequiresCatalog) return null;
   if (phase === "open") return "discover_category";
+  if (phase === "search_after_discovery" && policy.correctiveDiscoveryAvailable) return null;
   if (phase === "search_after_discovery") return "search_catalog";
   return null;
 }
@@ -149,6 +154,25 @@ export interface AgentPhaseEvent {
   intentMode: "select" | "inquire";
   replacementIntent: boolean;
   explanationOnly?: boolean;
+}
+
+/**
+ * Allows one model-owned category correction before any usable search pool.
+ * A formally successful discovery may resolve a broad noun to the wrong live
+ * sibling; the model can retry a genuinely different noun once, but cannot
+ * reopen discovery after search progress or loop on the same wording.
+ */
+export function shouldAllowCorrectiveDiscovery(input: {
+  phase: AgentPhase;
+  alreadyUsed: boolean;
+  hasFreshSearch: boolean;
+  previousNoun: string;
+  requestedNoun: string;
+}): boolean {
+  if (input.phase !== "search_after_discovery" || input.alreadyUsed || input.hasFreshSearch) return false;
+  const previous = normalize(input.previousNoun);
+  const requested = normalize(input.requestedNoun);
+  return Boolean(previous && requested && previous !== requested);
 }
 
 /**
