@@ -59,6 +59,11 @@ import { CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest } from "../_shared
 import { deterministicSeriesExplanation } from "../_shared/v3-tools/series-explanation.ts";
 import { rankSplitReplacementCandidates, type RankedReplacementCandidate } from "../_shared/v3-tools/replacement-fallback.ts";
 import {
+  extractReplacementLookupKeys,
+  productContainsSourceModel,
+  selectExplicitAnchorAxes,
+} from "../_shared/v3-tools/replacement-preflight.ts";
+import {
   classifyHouseholdMotionLightRequest,
   HOUSEHOLD_MOTION_LIGHT_EMPTY,
   HOUSEHOLD_MOTION_LIGHT_INTRO,
@@ -1901,6 +1906,173 @@ const HOUSEHOLD_MOTION_LIGHT_CATALOG_QUERIES = [
   "накладной светильник с датчиком движения",
   "светильник с микроволновым сенсором",
 ];
+
+interface DirectReplacementResult {
+  handled: boolean;
+  products: ProductFull[];
+}
+
+async function selectVerifiedOrdinaryReplacement(
+  userMessage: string,
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<DirectReplacementResult> {
+  const started = Date.now();
+  const lookup = extractReplacementLookupKeys(userMessage);
+  let anchor: ProductRef | null = null;
+
+  for (const article of lookup.articles) {
+    const found = await executeSearchCatalog({ mode: "by_article", article, per_page: 3 }, {
+      baseUrl: CATALOG_BASE_URL,
+      apiToken: ctx.catalogToken,
+    }, ctx.cache);
+    if (found.ok && found.results.length > 0) {
+      anchor = found.results[0];
+      break;
+    }
+  }
+  if (!anchor) {
+    for (const code of lookup.modelCodes.slice(0, 3)) {
+      const found = await executeSearchCatalog({ mode: "by_pagetitle", pagetitle: code, per_page: 5 }, {
+        baseUrl: CATALOG_BASE_URL,
+        apiToken: ctx.catalogToken,
+      }, ctx.cache);
+      if (!found.ok || found.results.length === 0) continue;
+      anchor = found.results.find((product) => productContainsSourceModel(product, [code])) ?? found.results[0];
+      break;
+    }
+  }
+
+  if (!anchor?.leaf_category) {
+    steps.push({
+      step: "v3_replacement_preflight_skipped",
+      ms: Date.now() - t0,
+      meta: { reason: anchor ? "anchor_without_leaf_category" : "anchor_not_found", lookup },
+    });
+    return { handled: false, products: [] };
+  }
+
+  const discovery = await executeDiscoverCategory({ noun: anchor.leaf_category, semantic_query: anchor.pagetitle }, {
+    baseUrl: CATALOG_BASE_URL,
+    apiToken: ctx.catalogToken,
+    openrouterApiKey: ctx.openrouterKey,
+  });
+  if (!discovery.ok) {
+    steps.push({
+      step: "v3_replacement_preflight_skipped",
+      ms: Date.now() - t0,
+      meta: { reason: "leaf_discovery_failed", leaf_category: anchor.leaf_category, error_code: discovery.error_code },
+    });
+    return { handled: false, products: [] };
+  }
+
+  const axes = selectExplicitAnchorAxes(anchor, discovery.facets, userMessage);
+  if (axes.length < 2) {
+    steps.push({
+      step: "v3_replacement_preflight_skipped",
+      ms: Date.now() - t0,
+      meta: { reason: "insufficient_explicit_axes", leaf_category: anchor.leaf_category, axes },
+    });
+    return { handled: false, products: [] };
+  }
+
+  const sourceModel = extractModelCode(anchor.pagetitle);
+  const sourceModels = sourceModel ? [sourceModel] : [];
+  const excludedIds = new Set([anchor.id]);
+  const isCandidate = (product: ProductRef): boolean =>
+    !excludedIds.has(product.id) && !productContainsSourceModel(product, sourceModels);
+  const baseSearch: Pick<SearchCatalogInput, "category" | "anchor_leaf_category" | "min_price" | "per_page"> = {
+    category: anchor.leaf_category,
+    anchor_leaf_category: anchor.leaf_category,
+    min_price: 1,
+    per_page: 8,
+  };
+  const strict = await executeSearchCatalog({
+    mode: "by_filter",
+    ...baseSearch,
+    options: Object.fromEntries(axes.map((axis) => [axis.key, [axis.value]])),
+  }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+  let selected = strict.ok ? strict.results.filter(isCandidate).slice(0, 4) : [];
+  let nearMatch = false;
+
+  if (selected.length === 0) {
+    const splitSearches = await Promise.all(axes.map(async (axis) => ({
+      axis,
+      result: await executeSearchCatalog({
+        mode: "by_filter",
+        ...baseSearch,
+        per_page: 5,
+        options: { [axis.key]: [axis.value] },
+      }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache),
+    })));
+    const ranked = rankSplitReplacementCandidates(splitSearches.map(({ axis, result }) => ({
+      key: axis.key,
+      total: result.ok ? result.total : axis.total,
+      ids: result.ok ? result.results.filter(isCandidate).map((product) => product.id) : [],
+    })), excludedIds, 4);
+    selected = ranked
+      .map((candidate) => ctx.cache.get(candidate.id))
+      .filter((product): product is ProductFull => Boolean(product && isCandidate(product)));
+    nearMatch = selected.length > 0;
+  }
+
+  const axesLabel = axes.map((axis) => `${axis.caption}: ${axis.value}`).join(", ");
+  const elapsed = Date.now() - started;
+  send({
+    type: "tool_event",
+    tool: "search_catalog",
+    phase: "result",
+    duration_ms: elapsed,
+    summary: `Replacement preflight: подтверждено ${selected.length}`,
+  });
+
+  if (selected.length === 0) {
+    send({
+      type: "delta",
+      content: `По исходной модели подтвердил категорию и параметры (${axesLabel}), но других позиций с этими признаками в каталоге сейчас не нашёл. Могу передать запрос менеджеру для проверки замены под заказ.`,
+    });
+    steps.push({
+      step: "v3_replacement_preflight_empty",
+      ms: Date.now() - t0,
+      meta: { anchor_id: anchor.id, leaf_category: anchor.leaf_category, axes, duration_ms: elapsed },
+    });
+    return { handled: true, products: [] };
+  }
+
+  send({
+    type: "delta",
+    content: nearMatch
+      ? `Точного совпадения по всем параметрам исходной модели в каталоге не подтвердилось. Показываю ближайшие аналоги, найденные отдельно по критериям (${axesLabel}); перед заменой сверьте монтажные размеры и остальные характеристики.`
+      : `Нашёл аналоги в той же категории с подтверждёнными параметрами (${axesLabel}). Перед заменой сверьте монтажные размеры и остальные характеристики.`,
+  });
+  const ids = selected.map((product) => product.id);
+  const rendered = executeRenderProducts({ product_ids: ids, total_available: selected.length }, ctx.cache);
+  if (!rendered.ok) {
+    steps.push({ step: "v3_replacement_preflight_render_failed", ms: Date.now() - t0, meta: { error_code: rendered.error_code } });
+    return { handled: true, products: [] };
+  }
+  send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: selected.length });
+  steps.push({
+    step: "v3_replacement_preflight_rendered",
+    ms: Date.now() - t0,
+    meta: {
+      anchor_id: anchor.id,
+      source_model: sourceModel,
+      leaf_category: anchor.leaf_category,
+      axes,
+      strict_total: strict.ok ? strict.total : 0,
+      near_match: nearMatch,
+      rendered: rendered.rendered_count,
+      duration_ms: elapsed,
+    },
+  });
+  const fullProducts = ids
+    .map((id) => ctx.cache.get(id))
+    .filter((product): product is ProductFull => Boolean(product));
+  return { handled: true, products: fullProducts };
+}
 
 async function selectVerifiedExactCompoundProducts(
   request: ExactCompoundMarkingRequest,
@@ -4421,6 +4593,23 @@ Deno.serve(async (req) => {
           });
           send({ type: "delta", content: answer });
           productsCount = 0;
+        } else if (isReplacementIntent(userMessage) && !/равноцен\p{L}*/iu.test(userMessage)) {
+          const direct = await selectVerifiedOrdinaryReplacement(userMessage, ctx, send, steps, t0);
+          if (direct.handled) {
+            productsCount = direct.products.length;
+            await persistRecentProductEvidence(supabase, sessionId, direct.products);
+          } else {
+            const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0, {
+              anchorFilterEnabled: settings.v3_anchor_filter_enabled,
+              relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
+              criteriaGateEnabled: true,
+            }, recentProductEvidence);
+            productsCount = out.productsRendered;
+            const shownProducts = out.shownProductIds
+              .map((id) => ctx.cache.get(id))
+              .filter((product): product is NonNullable<typeof product> => Boolean(product));
+            await persistRecentProductEvidence(supabase, sessionId, shownProducts);
+          }
         } else {
           const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0, {
             anchorFilterEnabled: settings.v3_anchor_filter_enabled,
