@@ -31,7 +31,7 @@ import {
   selectGroundedTokenRecoveryCandidate,
   titleContainsLiteralToken,
 } from "../_shared/v3-tools/category-reasoning-guard.ts";
-import { detectUserIntentMode, extractNamedSeriesToken, requiresCatalogGroundingForInquiry, shouldSuppressNegativeSuitabilityCard } from "../_shared/v3-tools/intent-mode.ts";
+import { detectUserIntentMode, requiresCatalogGroundingForInquiry, resolveNamedSeriesToken, shouldSuppressNegativeSuitabilityCard } from "../_shared/v3-tools/intent-mode.ts";
 import {
   buildDeterministicEvidenceAnswer,
   buildRecentProductEvidencePrompt,
@@ -2242,8 +2242,9 @@ async function runExpertLoop(
   const replacementIntent = isReplacementIntent(userMessage);
   const replacementExcludedIdentityValues = new Set<string>();
   const intentMode = detectUserIntentMode(userMessage);
-  const namedSeriesToken = extractNamedSeriesToken(userMessage);
+  const namedSeriesToken = resolveNamedSeriesToken(userMessage, history.slice(-8).map((message) => message.content));
   const inquiryRequiresCatalogGrounding = intentMode === "inquire" && requiresCatalogGroundingForInquiry(userMessage);
+  const seriesTurnRequiresGrounding = Boolean(namedSeriesToken);
   const codeConstraints = extractCodeConstraints(userMessage);
   // Replacement-intent guardrail (§9.9 "Замены и аналоги"): the user's message
   // names the ANCHOR product (its brand + model/series + specs). The compound
@@ -2542,7 +2543,7 @@ async function runExpertLoop(
 
       const llmStart = Date.now();
       const agentToolPolicy = {
-        reasoningRequiresCatalog: inquiryRequiresCatalogGrounding && !seriesGroundingSatisfied || (
+        reasoningRequiresCatalog: seriesTurnRequiresGrounding && !seriesGroundingSatisfied || (
           intentMode === "select" && hasActionableSelectionReasoning(
             `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
           )
@@ -2634,7 +2635,7 @@ async function runExpertLoop(
         intentMode === "select" && (
           agentPhase === "terminal_after_search" ||
           responseHasActionableReasoning
-        ) || inquiryRequiresCatalogGrounding && !seriesGroundingSatisfied
+        ) || seriesTurnRequiresGrounding && !seriesGroundingSatisfied
       );
       const hasRender = resp.toolCalls.some((tc) => tc.name === "render_products" && isToolAllowedInAgentPhase(agentPhase, tc.name, enforcementToolPolicy));
       const isFirstTurn = step === 0;
@@ -2749,7 +2750,7 @@ async function runExpertLoop(
             role: "system",
             content: agentPhase === "terminal_after_search"
               ? "Фазовый контракт: ненулевой пул уже найден. Не заканчивай ход текстом. Вызови render_products, перенеся в criteria требования из своего рассуждения; серверный criteria gate сам отклонит неподтверждённые карточки."
-              : inquiryRequiresCatalogGrounding && !seriesGroundingSatisfied
+              : seriesTurnRequiresGrounding && !seriesGroundingSatisfied
               ? "Фазовый контракт: пользователь спрашивает о конкретно названной серии. Не делай вывод о бренде, наличии или свойствах только по памяти либо списку характеристик категории. Выполни search_catalog по названию серии; затем отвечай по найденным карточкам и базе знаний."
               : "Фазовый контракт: ты уже сформулировал несколько измеримых критериев подбора. Не заканчивай ход текстом и не спрашивай предпочтения, которые можешь выбрать как эксперт. Выполни discover_category/search_catalog и доведи найденный пул до render_products.",
           });
@@ -3244,6 +3245,24 @@ async function runExpertLoop(
               }
             }
           }
+        }
+
+        if (tc.name === "search_catalog" && namedSeriesToken && !seriesGroundingSatisfied) {
+          const requested = tc.args as Record<string, unknown>;
+          const exactSeriesArgs: Record<string, unknown> = {
+            mode: "by_query",
+            query: namedSeriesToken,
+            per_page: Math.max(5, Math.min(10, Number(requested.per_page) || 8)),
+          };
+          for (const key of ["min_price", "max_price", "sort_cheapest", "sort_expensive"] as const) {
+            if (requested[key] !== undefined) exactSeriesArgs[key] = requested[key];
+          }
+          tc.args = exactSeriesArgs;
+          steps.push({
+            step: "v3_named_series_exact_query_enforced",
+            ms: now(),
+            meta: { series: namedSeriesToken, requested: summariseToolArgs("search_catalog", requested) },
+          });
         }
 
         const runArgs: Record<string, unknown> = tc.args;

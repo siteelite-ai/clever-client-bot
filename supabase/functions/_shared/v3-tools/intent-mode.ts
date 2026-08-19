@@ -16,6 +16,18 @@ export function requiresCatalogGroundingForInquiry(message: string): boolean {
   return extractNamedSeriesToken(message) !== null;
 }
 
+export function resolveNamedSeriesToken(message: string, recentDialogue: string[]): string | null {
+  const direct = extractNamedSeriesToken(message);
+  if (direct) return direct;
+  const normalized = message.toLocaleLowerCase("ru").replace(/ё/g, "е");
+  if (!/(?:этой|данной|указанной|названной)\s+серии/u.test(normalized)) return null;
+  for (const fragment of [...recentDialogue].reverse()) {
+    const inherited = extractNamedSeriesToken(fragment);
+    if (inherited) return inherited;
+  }
+  return null;
+}
+
 // Product questions are evidence requests, not new selections. This distinction
 // controls whether the factual explanation beside render_products is visible.
 export function detectUserIntentMode(message: string): UserIntentMode {
