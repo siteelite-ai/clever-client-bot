@@ -2538,7 +2538,7 @@ async function runExpertLoop(
   // First non-empty semantic search in an ordinary selection turn. Unlike
   // freshSearch, this pool cannot be overwritten by later broad retries. It is
   // eligible for terminal recovery only after the same server criteria gate.
-  let semanticBackedSearch: { ids: string[]; total: number; criteria: Criterion[]; label: string } | null = null;
+  let semanticBackedSearch: { ids: string[]; total: number; criteria: Criterion[]; label: string; evidenceStrength: number } | null = null;
   // Priority pool from v3_guard_split_fallback — survives across LLM steps.
   // Preferred over freshSearch in render fallback, because subsequent broad
   // by_query calls can overwrite freshSearch with off-target results
@@ -4040,6 +4040,7 @@ async function runExpertLoop(
                 total: acceptedProducts.length,
                 criteria: [],
                 label: query,
+                evidenceStrength: 5,
               };
             }
             groundedCompoundSearchTerminal = true;
@@ -4279,13 +4280,38 @@ async function runExpertLoop(
               : (typeof r2.source_query === "string" && r2.source_query ? r2.source_query : typeof tc.args.query === "string" ? tc.args.query : "");
             semanticEvidenceSeen ??= { label: sourceLabel, total: r2.total };
             freshSearch = { tool: tc.name, ids, total: r2.total };
-            if (!replacementIntent && intentMode === "select" && !semanticBackedSearch) {
-              semanticBackedSearch = {
-                ids: [...ids],
-                total: r2.total,
-                criteria: userBackedSearchCriteria.map((criterion) => ({ ...criterion })),
-                label: sourceLabel,
-              };
+            if (!replacementIntent && intentMode === "select") {
+              const visibleSemanticIds = explicitCompoundMarking
+                ? guardVisibleCardinality(ids).ids
+                : [...ids];
+              const hasExactCompoundEvidence = Boolean(explicitCompoundMarking && visibleSemanticIds.length > 0);
+              const candidateEvidenceStrength =
+                (hasExactCompoundEvidence ? 2 : 0) +
+                (matchedQuery ? 2 : 0) +
+                (userBackedSearchCriteria.length > 0 ? 1 : 0);
+              if (
+                visibleSemanticIds.length > 0 &&
+                (!semanticBackedSearch || candidateEvidenceStrength > semanticBackedSearch.evidenceStrength)
+              ) {
+                const replacedWeakerPool = Boolean(semanticBackedSearch);
+                semanticBackedSearch = {
+                  ids: visibleSemanticIds,
+                  total: r2.total,
+                  criteria: userBackedSearchCriteria.map((criterion) => ({ ...criterion })),
+                  label: sourceLabel,
+                  evidenceStrength: candidateEvidenceStrength,
+                };
+                steps.push({
+                  step: "v3_semantic_pool_evidence_selected",
+                  ms: now(),
+                  meta: {
+                    label: sourceLabel,
+                    candidates: visibleSemanticIds.length,
+                    strength: candidateEvidenceStrength,
+                    replaced_weaker_pool: replacedWeakerPool,
+                  },
+                });
+              }
             }
             if (
               tc.name === "jargon_recover_catalog" &&
@@ -4615,6 +4641,7 @@ async function runExpertLoop(
           total: recovered.total,
           criteria: userBackedSearchCriteria.map((criterion) => ({ ...criterion })),
           label: query,
+          evidenceStrength: explicitCompoundMarking ? 2 : 0,
         };
         steps.push({
           step: "v3_grounded_category_search_recovery",
