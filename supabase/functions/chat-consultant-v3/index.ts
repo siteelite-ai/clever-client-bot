@@ -2331,6 +2331,9 @@ async function runExpertLoop(
   const effectiveCodeConstraints = replacementIntent
     ? codeConstraints.filter(isAnalogPortableToken)
     : codeConstraints;
+  const replacementSourceModelCodes = replacementIntent
+    ? codeConstraints.filter((code) => !isAnalogPortableToken(code))
+    : [];
   // NOTE (2026-06-29): compound-filter нейтрализован — это было «мышление сервера»,
   // которое выбрасывало валидные карточки по эвристическим токенам из текста запроса
   // (например, «ввг 3*1,5» → токены "3" и "1.5" отвергали 100% реальных кабелей).
@@ -2413,6 +2416,7 @@ async function runExpertLoop(
         const p = ctx.cache.get(id);
         if (!p || !(p.price > 0)) continue;
         if (productMatchesExcludedReplacementIdentity(p, replacementExcludedIdentityValues)) continue;
+        if (replacementSourceModelCodes.some((code) => productMatchesCodeConstraint(p, code))) continue;
         if (replacementRequiredAxes.length >= 2 && filterReplacementCompatibleIds(
           [id],
           replacementRequiredAxes,
@@ -3116,13 +3120,16 @@ async function runExpertLoop(
           // ("заменить освещение в гостиной") — без якоря — гвард пропускается:
           // LLM сам выбирает релевантные товары из пула по обычной семантике.
           const hasAnchor = Boolean(anchorId) || familyExclude.size > 0;
-          const hasIdentityExclusions = replacementExcludedIdentityValues.size > 0;
+          const hasIdentityExclusions = replacementExcludedIdentityValues.size > 0 || replacementSourceModelCodes.length > 0;
           if (hasAnchor || hasIdentityExclusions) {
             const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
             let filtered = origIds.filter((id) => {
               if (id === anchorId || familyExclude.has(id)) return false;
               const product = ctx.cache.get(id);
-              return !product || !productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues);
+              return !product || (
+                !productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues) &&
+                !replacementSourceModelCodes.some((code) => productMatchesCodeConstraint(product, code))
+              );
             });
             const afterFamily = filtered.length;
             if (replacementIntent && replacementRequiredAxes.length >= 2) {
@@ -3593,7 +3600,8 @@ async function runExpertLoop(
         ) {
           const catalogResult = result as SearchCatalogOk & { tool: "search_catalog" };
           const filteredResults = catalogResult.results.filter((product) =>
-            !productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues)
+            !productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues) &&
+            !replacementSourceModelCodes.some((code) => productMatchesCodeConstraint(product, code))
           );
           const removedCount = catalogResult.results.length - filteredResults.length;
           if (removedCount > 0) {
@@ -3615,6 +3623,11 @@ async function runExpertLoop(
             });
           }
         }
+        const strictReplacementSearchEmpty = replacementIntent &&
+          tc.name === "search_catalog" &&
+          result.ok &&
+          result.tool === "search_catalog" &&
+          Number((result as SearchCatalogOk).total) <= 0;
         let anchorOnlyReplacementSearch = false;
         if (flags.anchorFilterEnabled && tc.name === "search_catalog" && replacementIntent) {
           const anchorId = getAnchorExcludeId();
@@ -3643,10 +3656,11 @@ async function runExpertLoop(
 
         }
         if (
-          anchorOnlyReplacementSearch &&
+          (anchorOnlyReplacementSearch || strictReplacementSearchEmpty) &&
           !equivalentReplacementRequested &&
           replacementRequiredAxes.length >= 2 &&
-          runArgs.mode === "by_filter"
+          runArgs.mode === "by_filter" &&
+          (Boolean(getAnchorExcludeId()) || replacementSourceModelCodes.length > 0)
         ) {
           const split = await trySplitFallback(runArgs, ctx);
           if (split) {
@@ -3658,7 +3672,8 @@ async function runExpertLoop(
                 const product = ctx.cache.get(candidate.id);
                 return Boolean(
                   product &&
-                  !productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues)
+                  !productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues) &&
+                  !replacementSourceModelCodes.some((code) => productMatchesCodeConstraint(product, code))
                 );
               });
             const fallbackProducts = ranked
@@ -3686,6 +3701,8 @@ async function runExpertLoop(
                 ms: now(),
                 meta: {
                   strict_total: catalogResult.total,
+                  trigger: anchorOnlyReplacementSearch ? "anchor_only" : "strict_empty",
+                  source_model_codes: replacementSourceModelCodes,
                   duration_ms: split.ms,
                   axes: split.axes.map((axis) => ({ key: axis.axis, total: axis.total, candidates: axis.ids.length })),
                   ranked,
@@ -3974,7 +3991,11 @@ async function runExpertLoop(
         safeIds = safeIds.filter((id) => {
           if (id === anchorId || familyExclude.has(id)) return false;
           const product = ctx.cache.get(id);
-          if (!product || productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues)) return false;
+          if (
+            !product ||
+            productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues) ||
+            replacementSourceModelCodes.some((code) => productMatchesCodeConstraint(product, code))
+          ) return false;
           return replacementRequiredAxes.length < 2 ||
             filterReplacementCompatibleIds(
               [id],
