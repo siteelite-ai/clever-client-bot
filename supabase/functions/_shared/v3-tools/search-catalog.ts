@@ -2,6 +2,7 @@
 // Data-agnostic: baseUrl + apiToken injected from caller.
 
 import type { ProductCache, ProductRef, SearchCatalogOk, ToolError } from "./types.ts";
+import { canonicalizeCompoundMarkingForCatalog } from "./exact-compound-marking-policy.ts";
 
 const PRODUCT_DESCRIPTION_MAX_CHARS = 1_200;
 
@@ -371,6 +372,38 @@ async function singleSearchSorted(
   return { ok: true, total: totalApi, results: sorted.slice(0, requestedPerPage) };
 }
 
+async function singleSearchSortedWithCompoundFallback(
+  input: SearchCatalogInput,
+  deps: CatalogClientDeps,
+  cache: ProductCache,
+  categoryOverride: string | undefined,
+  warnings: string[],
+): Promise<SingleSearchResult> {
+  const primary = await singleSearchSorted(input, deps, cache, categoryOverride, warnings);
+  if (
+    !primary.ok ||
+    primary.total > 0 ||
+    input.mode !== "by_query" ||
+    typeof input.query !== "string"
+  ) return primary;
+
+  const canonicalQuery = canonicalizeCompoundMarkingForCatalog(input.query);
+  if (canonicalQuery === input.query) return primary;
+
+  const retry = await singleSearchSorted(
+    { ...input, query: canonicalQuery },
+    deps,
+    cache,
+    categoryOverride,
+    warnings,
+  );
+  if (!retry.ok || retry.total <= 0) return primary;
+  if (!warnings.includes("compound_query_variant_retry")) {
+    warnings.push("compound_query_variant_retry");
+  }
+  return retry;
+}
+
 export async function executeSearchCatalog(
   input: SearchCatalogInput,
   deps: CatalogClientDeps,
@@ -414,14 +447,14 @@ export async function executeSearchCatalog(
 
   // Один запрос: либо нет category fan-out, либо ровно одна категория.
   if (categories.length <= 1) {
-    const r = await singleSearchSorted(input, deps, cache, categories[0], warnings);
+    const r = await singleSearchSortedWithCompoundFallback(input, deps, cache, categories[0], warnings);
     if (!r.ok) return { tool: "search_catalog", ok: false, error_code: r.error_code, message: r.message };
     return { tool: "search_catalog", ok: true, mode: input.mode, total: r.total, results: r.results, ...(warnings.length ? { warnings } : {}) };
   }
 
   // Fan-out: параллельные запросы по каждой листовой категории, merge с дедупликацией по id.
   const settled = await Promise.all(
-    categories.map((cat) => singleSearchSorted(input, deps, cache, cat, warnings)),
+    categories.map((cat) => singleSearchSortedWithCompoundFallback(input, deps, cache, cat, warnings)),
   );
   const okResults = settled.filter((r): r is Extract<SingleSearchResult, { ok: true }> => r.ok);
   if (okResults.length === 0) {

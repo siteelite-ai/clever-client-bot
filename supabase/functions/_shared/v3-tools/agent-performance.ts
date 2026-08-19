@@ -4,6 +4,7 @@ export type AgentPhase =
   | "open"
   | "search_after_discovery"
   | "jargon_after_failed_discovery"
+  | "search_after_jargon"
   | "inquiry_with_results"
   | "inquiry_explanation_ready"
   | "terminal_after_search";
@@ -41,6 +42,15 @@ const JARGON_AFTER_FAILED_DISCOVERY_TOOLS: readonly ToolName[] = [
   "lookup_contacts",
   "escalate_to_manager",
   "note_state",
+];
+
+// A lexical recovery attempt is evidence for the main consultant, not a loop.
+// Whether it found a full or partial candidate, the consultant must carry its
+// own interpretation into a real catalog search next. Keeping this phase to a
+// single forced tool prevents repeated discovery/jargon calls while leaving
+// the search arguments entirely model-owned.
+const SEARCH_AFTER_JARGON_TOOLS: readonly ToolName[] = [
+  "search_catalog",
 ];
 
 const TERMINAL_AFTER_SEARCH_TOOLS: readonly ToolName[] = [
@@ -82,6 +92,7 @@ export function toolNamesForAgentPhase(phase: AgentPhase, policy: AgentToolPolic
       : SEARCH_AFTER_DISCOVERY_TOOLS;
   }
   if (phase === "jargon_after_failed_discovery") return JARGON_AFTER_FAILED_DISCOVERY_TOOLS;
+  if (phase === "search_after_jargon") return SEARCH_AFTER_JARGON_TOOLS;
   if (phase === "inquiry_with_results") return INQUIRY_WITH_RESULTS_TOOLS;
   if (phase === "inquiry_explanation_ready") return [];
   if (phase === "terminal_after_search") return TERMINAL_AFTER_SEARCH_TOOLS;
@@ -101,10 +112,11 @@ export function isToolAllowedInAgentPhase(phase: AgentPhase, tool: string, polic
  */
 export function forcedToolNameForAgentPhase(phase: AgentPhase, policy: AgentToolPolicy = {}): ToolName | null {
   if (phase === "terminal_after_search") return "render_products";
+  if (phase === "jargon_after_failed_discovery") return "jargon_recover_catalog";
+  if (phase === "search_after_jargon") return "search_catalog";
   if (!policy.reasoningRequiresCatalog) return null;
   if (phase === "open") return "discover_category";
   if (phase === "search_after_discovery") return "search_catalog";
-  if (phase === "jargon_after_failed_discovery") return "jargon_recover_catalog";
   return null;
 }
 
@@ -156,7 +168,11 @@ export function nextAgentPhase(current: AgentPhase, event: AgentPhaseEvent): Age
       // Keep the main consultant in ordinary search so it can try the
       // canonical/EN term it already inferred instead of delegating meaning to
       // a second model.
-      if (current === "search_after_discovery" || current === "jargon_after_failed_discovery") return current;
+      if (
+        current === "search_after_discovery" ||
+        current === "jargon_after_failed_discovery" ||
+        current === "search_after_jargon"
+      ) return current;
       return "open";
     }
     if (event.intentMode === "select") return "terminal_after_search";
@@ -164,14 +180,8 @@ export function nextAgentPhase(current: AgentPhase, event: AgentPhaseEvent): Age
   }
 
   if (event.tool === "jargon_recover_catalog") {
-    if (
-      !event.ok ||
-      !Number.isFinite(event.total) ||
-      (event.total ?? 0) <= 0 ||
-      event.partialMatch
-    ) {
-      return current === "jargon_after_failed_discovery" ? current : "open";
-    }
+    if (!event.ok || !Number.isFinite(event.total)) return current === "jargon_after_failed_discovery" ? current : "open";
+    if ((event.total ?? 0) <= 0 || event.partialMatch) return "search_after_jargon";
     if (event.intentMode === "select") return "terminal_after_search";
     return event.explanationOnly ? "inquiry_explanation_ready" : "inquiry_with_results";
   }

@@ -26,6 +26,16 @@ const INQUIRY_ONLY = /(?:^|[^\p{L}])(?:подойд\p{L}*|почему|можн�
 const COMPOUND = /\b(\d{1,3})\s*(?:x|х|×|\*)\s*(\d+(?:[.,]\d+)?)\b/iu;
 
 /**
+ * Produces one punctuation-only catalog spelling for an explicit N×S token.
+ * Product words and their order remain exactly as the consultant supplied them.
+ */
+export function canonicalizeCompoundMarkingForCatalog(query: string): string {
+  return query.replace(new RegExp(COMPOUND.source, "giu"), (_match, first: string, second: string) =>
+    `${first}*${second.replace(".", ",")}`
+  );
+}
+
+/**
  * Extracts only the explicit N×S token written by the user. This is deliberately
  * independent of product vocabulary and selection intent so the same literal
  * constraint can protect every final-render path, including semantic requests.

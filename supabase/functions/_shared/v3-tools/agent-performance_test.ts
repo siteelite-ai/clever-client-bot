@@ -144,6 +144,21 @@ Deno.test("agent phase: quantified reasoning forces exactly the next phase tool"
   assertEquals(forcedToolNameForAgentPhase("open", { reasoningRequiresCatalog: false }), null);
 });
 
+Deno.test("agent phase: failed discovery has one forced jargon attempt followed by model-owned search", () => {
+  assertEquals(forcedToolNameForAgentPhase("jargon_after_failed_discovery"), "jargon_recover_catalog");
+  const searchPhase = nextAgentPhase("jargon_after_failed_discovery", {
+    tool: "jargon_recover_catalog",
+    ok: true,
+    total: 2,
+    partialMatch: true,
+    intentMode: "select",
+    replacementIntent: false,
+  });
+  assertEquals(searchPhase, "search_after_jargon");
+  assertEquals(toolNamesForAgentPhase(searchPhase), ["search_catalog"]);
+  assertEquals(forcedToolNameForAgentPhase(searchPhase), "search_catalog");
+});
+
 Deno.test("agent phase: empty search keeps the established category and blocks lexical reinterpretation", () => {
   assertEquals(nextAgentPhase("search_after_discovery", {
     tool: "search_catalog",
@@ -162,7 +177,7 @@ Deno.test("agent phase: empty search keeps the established category and blocks l
   }), "terminal_after_search");
 });
 
-Deno.test("agent phase: partial jargon result cannot be forced into product rendering", () => {
+Deno.test("agent phase: partial jargon result requires catalog search before product rendering", () => {
   assertEquals(nextAgentPhase("jargon_after_failed_discovery", {
     tool: "jargon_recover_catalog",
     ok: true,
@@ -170,7 +185,15 @@ Deno.test("agent phase: partial jargon result cannot be forced into product rend
     partialMatch: true,
     intentMode: "select",
     replacementIntent: false,
-  }), "jargon_after_failed_discovery");
+  }), "search_after_jargon");
+  assertEquals(nextAgentPhase("jargon_after_failed_discovery", {
+    tool: "jargon_recover_catalog",
+    ok: true,
+    total: 0,
+    partialMatch: false,
+    intentMode: "select",
+    replacementIntent: false,
+  }), "search_after_jargon");
   assertEquals(nextAgentPhase("jargon_after_failed_discovery", {
     tool: "jargon_recover_catalog",
     ok: true,

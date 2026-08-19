@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  canonicalizeCompoundMarkingForCatalog,
   classifyExactCompoundMarkingRequest,
   extractExplicitCompoundMarking,
   productTitleMatchesExplicitCompoundMarking,
@@ -55,4 +56,10 @@ Deno.test("explicit compound marking is a generic final-render invariant", () =>
 
 Deno.test("ordinary numeric requirements do not become compound marking constraints", () => {
   assertEquals(extractExplicitCompoundMarking("светильник для комнаты 25 м² до 5000 тенге"), null);
+});
+
+Deno.test("compound catalog syntax changes punctuation without changing the model's words", () => {
+  assertEquals(canonicalizeCompoundMarkingForCatalog("ВВГнг 2х1.5"), "ВВГнг 2*1,5");
+  assertEquals(canonicalizeCompoundMarkingForCatalog("кабель ВВГ нг 2 × 1,50"), "кабель ВВГ нг 2*1,50");
+  assertEquals(canonicalizeCompoundMarkingForCatalog("светильник 5000 лм"), "светильник 5000 лм");
 });
