@@ -33,6 +33,7 @@ Deno.test("compact code criterion must be visible in the product title", () => {
   assertEquals(titleProvesCompactCriterion("Автомат с заземлением 1Р 16А", criterion), false);
   assertEquals(titleProvesCompactCriterion("Автомат 1P 16A CHINT", criterion), false);
   assertEquals(titleProvesCompactCriterion("Товар белый", { ...criterion, value: "белый" }), true);
+  assertEquals(titleProvesCompactCriterion("Кабель ВВГнг 2×1,5", { ...criterion, value: "медь" }), true);
 });
 
 Deno.test("parseNumSpan: scalar, decimal comma", () => {

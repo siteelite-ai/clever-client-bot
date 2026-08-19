@@ -104,7 +104,8 @@ export function titleProvesCompactCriterion(title: string, criterion: Criterion)
   if (typeof criterion.value !== "string") return true;
   const rawValue = criterion.value.trim();
   const value = normalizeKey(rawValue).replace(/\s+/g, "");
-  if (!value || value.length > 4 || !/[a-zа-я]/iu.test(value)) return true;
+  const isCompactCode = /^[a-z0-9]{1,4}$/iu.test(rawValue) || /^[А-ЯЁ]$/u.test(rawValue);
+  if (!value || !isCompactCode || !/[a-zа-я]/iu.test(value)) return true;
   if (["да", "нет", "yes", "no", "true", "false"].includes(value)) return true;
   const foldCode = (token: string) => token === "С" ? "c" : normalizeKey(token);
   const titleTokens = title.match(/[a-zа-я0-9]+/giu)?.map(foldCode) ?? [];
