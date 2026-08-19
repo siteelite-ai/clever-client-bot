@@ -6,6 +6,7 @@ import {
   applyCriteriaGate,
   buildCriteriaQuery,
   checkCriterion,
+  filterProductIdsByBudgetCap,
   findTrait,
   parseNumSpan,
   resolveRenderCriteria,
@@ -71,6 +72,7 @@ Deno.test("findTrait: first-class catalog price is evidence for budget criteria"
   const p = { ...product("1", []), price: 2800 };
   assertEquals(findTrait(p, "Цена")?.value, "2800");
   assertEquals(findTrait(p, "Стоимость товара")?.value, "2800");
+  assertEquals(findTrait(p, "Бюджет")?.value, "2800");
 });
 
 Deno.test("checkCriterion: price max uses ProductRef.price without a short trait", () => {
@@ -87,6 +89,22 @@ Deno.test("checkCriterion: price max uses ProductRef.price without a short trait
   assertEquals(report.rejected, [
     { id: "2", key: "Цена", expected: "≤ 4000 тенге", actual: "4300" },
   ]);
+});
+
+Deno.test("budget cap filters ordinary and recovery render ids by catalog price", () => {
+  const products = new Map([
+    ["within", { price: 900 }],
+    ["over", { price: 1745 }],
+    ["zero", { price: 0 }],
+  ]);
+  assertEquals(filterProductIdsByBudgetCap(["within", "over", "zero", "missing"], products, 1000), {
+    ids: ["within"],
+    dropped: 3,
+  });
+  assertEquals(filterProductIdsByBudgetCap(["within", "over"], products, null), {
+    ids: ["within", "over"],
+    dropped: 0,
+  });
 });
 
 Deno.test("checkCriterion: range overlap → pass, disjoint → fail", () => {

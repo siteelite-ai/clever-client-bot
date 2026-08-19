@@ -76,6 +76,22 @@ export function normalizeKey(s: string): string {
     .trim();
 }
 
+/** Enforces a user price ceiling on every render path, including recoveries. */
+export function filterProductIdsByBudgetCap<T extends { price: number }>(
+  ids: string[],
+  products: ReadonlyMap<string, T>,
+  budgetCap: number | null,
+): { ids: string[]; dropped: number } {
+  if (budgetCap === null || !Number.isFinite(budgetCap) || budgetCap <= 0) {
+    return { ids: [...ids], dropped: 0 };
+  }
+  const kept = ids.filter((id) => {
+    const price = Number(products.get(id)?.price);
+    return Number.isFinite(price) && price > 0 && price <= budgetCap;
+  });
+  return { ids: kept, dropped: ids.length - kept.length };
+}
+
 /**
  * Compose the criteria enforced at render time. Named-entity browse turns use
  * strict user-evidence mode: the model may describe or rank the exact entity,
@@ -174,7 +190,7 @@ export function findTrait(product: ProductRef, key: string): { label: string; va
   // the same value. Treating it as absent here makes the evidence gate reject
   // products that the catalog has just proven are within budget.
   const keyTokens = new Set(nk.split(/\s+/u));
-  if (["цена", "стоимость", "price"].some((token) => keyTokens.has(token))) {
+  if (["цена", "стоимость", "бюджет", "price", "budget"].some((token) => keyTokens.has(token))) {
     const price = Number(product.price);
     if (Number.isFinite(price) && price > 0) {
       return { label: "Цена", value: String(price) };

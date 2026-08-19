@@ -18,7 +18,7 @@ import {
 import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3-tools/lookup-knowledge.ts";
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
-import { applyCriteriaGate, buildCriteriaQuery, resolveRenderCriteria, titleProvesCompactCriterion, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
+import { applyCriteriaGate, buildCriteriaQuery, filterProductIdsByBudgetCap, resolveRenderCriteria, titleProvesCompactCriterion, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaWithReasoning } from "../_shared/v3-tools/criteria-reasoning.ts";
 import {
@@ -3550,20 +3550,13 @@ async function runExpertLoop(
           const budgetCap = extractBudgetCap(userMessage);
           if (budgetCap !== null && budgetCap > 0) {
             const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
-            const kept: string[] = [];
-            let dropped = 0;
-            for (const id of origIds) {
-              const p = ctx.cache.get(id) as unknown as CachedProd | undefined;
-              if (!p || typeof p.price !== "number" || p.price <= 0) { kept.push(id); continue; }
-              if (p.price <= budgetCap) kept.push(id);
-              else dropped++;
-            }
-            if (dropped > 0) {
-              (tc.args as Record<string, unknown>).product_ids = kept;
+            const guarded = filterProductIdsByBudgetCap(origIds, ctx.cache, budgetCap);
+            if (guarded.dropped > 0) {
+              (tc.args as Record<string, unknown>).product_ids = guarded.ids;
               steps.push({
                 step: "v3_guard_budget_cap",
                 ms: now(),
-                meta: { budget_cap: budgetCap, before: origIds.length, after: kept.length, dropped },
+                meta: { budget_cap: budgetCap, before: origIds.length, after: guarded.ids.length, dropped: guarded.dropped },
               });
             }
           }
@@ -4587,6 +4580,15 @@ async function runExpertLoop(
         });
       }
       safeIds = guardVisibleCardinality(safeIds).ids;
+      const budgetGuard = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage));
+      safeIds = budgetGuard.ids;
+      if (budgetGuard.dropped > 0) {
+        steps.push({
+          step: "v3_guard_budget_cap_recovery",
+          ms: now(),
+          meta: { before: safeIds.length + budgetGuard.dropped, after: safeIds.length, dropped: budgetGuard.dropped },
+        });
+      }
       if (safeIds.length > 0) {
         const rescued = await runTool("render_products", {
           product_ids: safeIds.slice(0, 5),
@@ -4669,9 +4671,18 @@ async function runExpertLoop(
         .filter((product): product is NonNullable<typeof product> => Boolean(product));
       const adjusted = gateWithLiteralCompoundEvidence(candidateProducts, semanticBackedSearch.criteria);
       const gate = adjusted.report;
-      const safeIds = guardVisibleCardinality(
+      let safeIds = guardVisibleCardinality(
         semanticBackedSearch.ids.filter((id) => gate.passed_ids.includes(id)),
       ).ids;
+      const budgetGuard = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage));
+      safeIds = budgetGuard.ids;
+      if (budgetGuard.dropped > 0) {
+        steps.push({
+          step: "v3_guard_budget_cap_recovery",
+          ms: now(),
+          meta: { before: safeIds.length + budgetGuard.dropped, after: safeIds.length, dropped: budgetGuard.dropped },
+        });
+      }
       if (safeIds.length > 0) {
         const rescued = await runTool("render_products", {
           product_ids: safeIds.slice(0, 5),
