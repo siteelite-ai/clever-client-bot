@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   dropAffirmativeBooleanFilters,
   dropImplicitReplacementIdentityFilters,
+  productMatchesExcludedReplacementIdentity,
   guardSearchFilters,
 } from "./search-filter-guard.ts";
 
@@ -263,4 +264,17 @@ Deno.test("analog search keeps identity only when customer explicitly requires i
 
   assertEquals(result.args.options, { brand: ["Philips"] });
   assertEquals(result.removed, [{ key: "series", values: ["CoreLine"], kind: "model" }]);
+});
+
+Deno.test("analog render excludes identity values removed from search even without an anchor id", () => {
+  assertEquals(productMatchesExcludedReplacementIdentity({
+    pagetitle: "Автомат GENERICA 1P 16A",
+    vendor: "IEK",
+    short_traits: ["Характеристика: C"],
+  }, ["GENERICA"]), true);
+  assertEquals(productMatchesExcludedReplacementIdentity({
+    pagetitle: "Автомат CHINT 1P 16A",
+    vendor: "CHINT",
+    short_traits: ["Характеристика: C"],
+  }, ["GENERICA"]), false);
 });

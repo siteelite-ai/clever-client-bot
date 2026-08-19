@@ -8,6 +8,19 @@ Deno.test("suitability questions are inquiry mode", () => {
   assertEquals(detectUserIntentMode("Тогда подбери подходящий кабель"), "select");
 });
 
+Deno.test("explicit catalog selection is not misclassified by a characteristic filter", () => {
+  assertEquals(
+    detectUserIntentMode("Найди автомат до 1000 тенге 1 полюсной, 16 А характеристика C"),
+    "select",
+  );
+  assertEquals(detectUserIntentMode("Покажи товары этой серии"), "select");
+});
+
+Deno.test("series explanation remains inquiry mode so prose is preserved", () => {
+  assertEquals(detectUserIntentMode("Расскажи, чем хороша серия Галант по розеткам и выключателям?"), "inquire");
+  assertEquals(detectUserIntentMode("Объясни преимущества этой серии"), "inquire");
+});
+
 Deno.test("negative suitability conclusion suppresses a misleading product card", () => {
   assertEquals(
     shouldSuppressNegativeSuitabilityCard(

@@ -104,6 +104,34 @@ export function dropImplicitReplacementIdentityFilters(
   return { args: nextArgs, removed };
 }
 
+export interface ReplacementIdentityProduct {
+  pagetitle?: string | null;
+  vendor?: string | null;
+  short_traits?: string[] | null;
+}
+
+/**
+ * Values removed from an analog search because they identify the source item
+ * must also be excluded from recommendation cards. This closes the case where
+ * the anchor SKU was not found first, so an ID-based anchor filter could not
+ * protect the final render.
+ */
+export function productMatchesExcludedReplacementIdentity(
+  product: ReplacementIdentityProduct,
+  excludedValues: Iterable<string>,
+): boolean {
+  const evidence = norm([
+    product.pagetitle ?? "",
+    product.vendor ?? "",
+    ...(product.short_traits ?? []),
+  ].join(" "));
+  if (!evidence) return false;
+  return [...excludedValues]
+    .map(norm)
+    .filter(Boolean)
+    .some((value) => ` ${evidence} `.includes(` ${value} `));
+}
+
 function codeNorm(value: string): string {
   return norm(value).replace(/\s+/g, "");
 }

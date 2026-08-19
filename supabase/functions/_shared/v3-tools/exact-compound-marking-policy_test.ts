@@ -24,6 +24,11 @@ Deno.test("exact compound route extracts a price-sorted catalog query", () => {
   assertEquals(classifyExactCompoundMarkingRequest("Подойдёт ли кабель ВВГ 2×1,5?"), null);
 });
 
+Deno.test("exact compound shortcut yields semantic multi-attribute requests to the consultant", () => {
+  assertEquals(classifyExactCompoundMarkingRequest("какой есть кабель ввг 3*1,5 негорючий покажи все позиции"), null);
+  assertEquals(classifyExactCompoundMarkingRequest("нужен медный кабель негорючий 2*1,5"), null);
+});
+
 Deno.test("exact compound route rejects a nearby size and returns the cheapest exact match", () => {
   const request = classifyExactCompoundMarkingRequest("найди кабель ввг 2*1,5 самый дешевый")!;
   const selected = selectExactCompoundMarkedProducts([

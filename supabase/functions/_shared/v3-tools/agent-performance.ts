@@ -130,7 +130,7 @@ export function nextAgentPhase(current: AgentPhase, event: AgentPhaseEvent): Age
       if (current === "search_after_discovery" || current === "jargon_after_failed_discovery") return current;
       return "open";
     }
-    if (event.intentMode === "select" && !event.replacementIntent) return "terminal_after_search";
+    if (event.intentMode === "select") return "terminal_after_search";
     return "open";
   }
 
@@ -143,7 +143,7 @@ export function nextAgentPhase(current: AgentPhase, event: AgentPhaseEvent): Age
     ) {
       return current === "jargon_after_failed_discovery" ? current : "open";
     }
-    if (event.intentMode === "select" && !event.replacementIntent) return "terminal_after_search";
+    if (event.intentMode === "select") return "terminal_after_search";
     return "open";
   }
 

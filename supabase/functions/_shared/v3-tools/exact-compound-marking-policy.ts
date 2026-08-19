@@ -42,11 +42,21 @@ export function classifyExactCompoundMarkingRequest(message: string): ExactCompo
 
   const query = input
     .replace(/[?!]/gu, " ")
-    .replace(/(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|покаж\p{L}*|подбер\p{L}*|хоч\p{L}*|пожалуйста)(?=$|[^\p{L}])/gu, " ")
+    .replace(/(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|покаж\p{L}*|подбер\p{L}*|хоч\p{L}*|нуж\p{L}*|пожалуйста)(?=$|[^\p{L}])/gu, " ")
     .replace(/(?:^|[^\p{L}])(?:сам\p{L}*|дешев\p{L}*|бюджетн\p{L}*|недорог\p{L}*|дорог\p{L}*|премиум\p{L}*)(?=$|[^\p{L}])/gu, " ")
     .replace(/\s+/gu, " ")
     .trim();
   if (!/\p{L}/u.test(query)) return null;
+  // This shortcut is intentionally narrow. The catalog full-text endpoint has
+  // AND semantics; three or more lexical terms usually mean the request also
+  // contains a semantic attribute that the consultant must translate using
+  // its reasoning (for example an execution/material requirement). Sending
+  // that conversational phrase directly would turn a valid request into a
+  // deterministic false empty. No product vocabulary is used here.
+  const lexicalTerms = query
+    .replace(COMPOUND, " ")
+    .match(/\p{L}+/gu) ?? [];
+  if (lexicalTerms.length > 2) return null;
   return { query, first, second, priceDirection };
 }
 

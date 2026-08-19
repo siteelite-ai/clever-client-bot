@@ -1,6 +1,6 @@
 {
-  "schema_version": 1,
-  "source": "тестированиебота130826.docx, актуальная версия 2026-08-17",
+  "schema_version": 2,
+  "source": "тестированиебота130826.docx и Копия тестированиебота130826.docx, актуальная версия 2026-08-19",
   "cases": [
     {
       "id": "customer-dn027b-analogs",
@@ -97,6 +97,128 @@
             "require_product_title": ["2*1,5", "2×1,5", "2x1,5"],
             "forbid_product_title": ["4*2,5", "4×2,5", "4x2,5"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-vvgng-3x1_5-all",
+      "title": "Все позиции негорючего кабеля ВВГ 3×1,5",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "какой есть кабель ввг 3*1,5 негорючий покажи все позиции",
+          "expect": {
+            "min_products": 1,
+            "require_every_product_title_groups": [
+              ["3*1,5", "3×1,5", "3x1,5", "3х1,5"],
+              ["нг", "негорюч"]
+            ],
+            "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-gallant-explain-and-show",
+      "title": "Сначала объяснение серии Gallant, затем её товары",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "Расскажи, чем хороша серия Галант по розеткам и выключателям?",
+          "expect": {
+            "min_text_chars": 120,
+            "min_text_before_products_chars": 120,
+            "require_text_groups": [
+              ["Gallant", "Галант", "серия"],
+              ["преимуществ", "особенн", "отлич", "дизайн", "механизм", "исполн"]
+            ],
+            "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
+          }
+        },
+        {
+          "message": "Покажи товары этой серии.",
+          "expect": {
+            "min_products": 1,
+            "require_every_product_title_any": ["Gallant", "Галант"],
+            "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-breaker-replacement-under-1000",
+      "title": "Равноценная замена автомата 1P 16 А C до 1 000 ₸",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "Автомат 1P ВА 47-29 16 А 4,5кА характеристика C GENERICA ИЭК предложи равноценную замену этому автомату по цене не дороже 1000 тг",
+          "expect": {
+            "min_products": 1,
+            "forbid_unrendered_catalog_facts": true,
+            "max_product_price": 1000,
+            "require_every_product_title_groups": [
+              ["1P", "1Р", "1-пол", "1 полюс"],
+              ["16A", "16 A", "16А", "16 А"],
+              ["4,5кА", "4,5 кА", "4.5kA", "4.5 kA"],
+              ["х-ка C", "х-ка С", "хар-ка C", "хар-ка С", "характеристика C", "характеристика С"]
+            ],
+            "forbid_product_title": ["GENERICA"],
+            "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-breaker-filter-cheapest-followup",
+      "title": "Простой фильтр автомата и сохранение 16 А в продолжении",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "Найди автомат до 1000 тенге 1 полюсной, 16 А характеристика C",
+          "expect": {
+            "min_products": 1,
+            "forbid_unrendered_catalog_facts": true,
+            "max_product_price": 1000,
+            "require_every_product_title_groups": [
+              ["1P", "1Р", "1-пол", "1 полюс"],
+              ["16A", "16 A", "16А", "16 А"],
+              ["х-ка C", "х-ка С", "хар-ка C", "хар-ка С", "характеристика C", "характеристика С"]
+            ],
+            "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
+          }
+        },
+        {
+          "message": "самый бюджетный, дай ссылку",
+          "expect": {
+            "min_products": 1,
+            "max_products": 1,
+            "max_product_price": 1000,
+            "require_every_product_title_groups": [
+              ["1P", "1Р", "1-пол", "1 полюс"],
+              ["16A", "16 A", "16А", "16 А"],
+              ["х-ка C", "х-ка С", "хар-ка C", "хар-ка С", "характеристика C", "характеристика С"]
+            ],
+            "forbid_product_title": ["10 A", "10А", "10A", "6 A", "6А", "6A"],
+            "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-copper-fire-resistant-2x1_5",
+      "title": "Медный негорючий кабель 2×1,5",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "нужен медный кабель негорючий 2*1,5",
+          "expect": {
+            "min_products": 1,
+            "require_every_product_title_groups": [
+              ["2*1,5", "2×1,5", "2x1,5", "2х1,5"],
+              ["нг", "негорюч"]
+            ],
+            "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"]
           }
         }
       ]

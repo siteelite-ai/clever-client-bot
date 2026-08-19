@@ -80,6 +80,22 @@ export interface RedactResult {
 }
 
 /**
+ * Product facts must be emitted by the deterministic product-card renderer.
+ * This detector is deliberately structural: it knows catalog-shaped facts,
+ * not product names, categories, brands, or jargon.
+ */
+export function containsUnrenderedCatalogFacts(text: string): boolean {
+  const raw = String(text ?? "");
+  if (!raw.trim()) return false;
+  return (
+    /https?:\/\/(?:www\.)?220volt\.kz\/[^\s)]+/iu.test(raw) ||
+    /\[[^\]]+\]\(https?:\/\/[^\s)]+\)/u.test(raw) ||
+    /\d[\d\s.,]{0,}\s*(?:₸|тг(?:\.|\b)|тенге\b)/iu.test(raw) ||
+    /(?:^|[\s*_-])(?:арт(?:икул)?\.?|наличие|цена)\s*:\s*\S/imu.test(raw)
+  );
+}
+
+/**
  * Проверяет текст ассистента на служебную лексику. При срабатывании возвращает
  * нейтральную замену целиком (частичная чистка тут бессмысленна: утечка обычно
  * размазана по всему абзацу). Самокритичные ярлыки чистятся без подмены.

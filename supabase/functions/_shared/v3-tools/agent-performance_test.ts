@@ -77,6 +77,16 @@ Deno.test("agent phase: non-empty ordinary selection search becomes terminal", (
   ]);
 });
 
+Deno.test("agent phase: non-empty replacement search must render instead of reopening search", () => {
+  assertEquals(nextAgentPhase("search_after_discovery", {
+    tool: "search_catalog",
+    ok: true,
+    total: 5,
+    intentMode: "select",
+    replacementIntent: true,
+  }), "terminal_after_search");
+});
+
 Deno.test("agent phase: quantified reasoning forces exactly the next phase tool", () => {
   const ready = { reasoningRequiresCatalog: true };
   assertEquals(forcedToolNameForAgentPhase("open", ready), "discover_category");
@@ -100,7 +110,7 @@ Deno.test("agent phase: empty search keeps the established category and blocks l
     total: 5,
     intentMode: "select",
     replacementIntent: true,
-  }), "open");
+  }), "terminal_after_search");
 });
 
 Deno.test("agent phase: partial jargon result cannot be forced into product rendering", () => {

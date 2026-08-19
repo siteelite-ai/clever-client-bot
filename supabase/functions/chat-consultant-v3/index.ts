@@ -21,6 +21,7 @@ import {
   dropImplicitReplacementIdentityFilters,
   guardSearchFilters,
   isReplacementIdentityFacet,
+  productMatchesExcludedReplacementIdentity,
 } from "../_shared/v3-tools/search-filter-guard.ts";
 import {
   groundedCategoryRecoveryQueries,
@@ -40,7 +41,7 @@ import {
   persistRecentProductEvidence,
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
-import { META_DECLINE_TEXT, isMetaSelfQuestion, redactInternals } from "../_shared/v3-tools/internals-guard.ts";
+import { META_DECLINE_TEXT, containsUnrenderedCatalogFacts, isMetaSelfQuestion, redactInternals } from "../_shared/v3-tools/internals-guard.ts";
 import {
   compactCatalogResultForLlm,
   forcedToolNameForAgentPhase,
@@ -2167,6 +2168,7 @@ async function runExpertLoop(
   // source product, not its analog. Computed lazily because the anchor is only
   // discoverable in cache after at least one search populated it.
   const replacementIntent = isReplacementIntent(userMessage);
+  const replacementExcludedIdentityValues = new Set<string>();
   const intentMode = detectUserIntentMode(userMessage);
   const codeConstraints = extractCodeConstraints(userMessage);
   // Replacement-intent guardrail (§9.9 "Замены и аналоги"): the user's message
@@ -2274,6 +2276,7 @@ async function runExpertLoop(
         if (familyExclude.has(id)) continue;
         const p = ctx.cache.get(id);
         if (!p || !(p.price > 0)) continue;
+        if (productMatchesExcludedReplacementIdentity(p, replacementExcludedIdentityValues)) continue;
         if (replacementRequiredAxes.length >= 2 && filterReplacementCompatibleIds([id], replacementRequiredAxes, ctx.cache, prioritySplitAxisIdSets).length === 0) continue;
         seen.add(id);
         out.push(id);
@@ -2581,9 +2584,9 @@ async function runExpertLoop(
           if (!hasRender && productsRendered === 0) {
             const rawText = resp.text;
             const hasCatalogUrl = /https?:\/\/(?:www\.)?220volt\.kz\/[^\s)]+/i.test(rawText);
-            const hasPrice = /\d[\d\s.,]{1,}\s*(₸|тг|тенге)\b/iu.test(rawText);
+            const hasPrice = /\d[\d\s.,]{0,}\s*(?:₸|тг(?:\.|\b)|тенге\b)/iu.test(rawText);
             const hasMdLink = /\[[^\]]+\]\(https?:\/\/[^\s)]+\)/.test(rawText);
-            if (hasCatalogUrl || hasPrice || hasMdLink) {
+            if (containsUnrenderedCatalogFacts(rawText)) {
               const replaced = "Не смог подтвердить карточки и товарные факты для этого ответа, поэтому не буду показывать неподтверждённые цены или ссылки. Напишите точное название, артикул или один обязательный параметр — проверю по каталогу заново.";
               steps.push({
                 step: "v3_guard_text_facts_leak",
@@ -2851,6 +2854,11 @@ async function runExpertLoop(
           const effectiveUserBacked = guarded.user_backed.filter((item) => !removedIdentityKeys.has(item.key));
           const effectiveInferred = guarded.inferred.filter((item) => !removedIdentityKeys.has(item.key));
           tc.args = identityGuard.args;
+          for (const removed of identityGuard.removed) {
+            for (const value of removed.values) {
+              if (value.trim()) replacementExcludedIdentityValues.add(value.trim());
+            }
+          }
           enforcedSearchCriteria = effectiveKept.map(({ key, value }) => {
             const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
             return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
@@ -2879,6 +2887,7 @@ async function runExpertLoop(
               meta: { kept: effectiveKept, inferred: effectiveInferred, subsumed: guarded.subsumed, dropped: [] },
             });
           }
+          rememberReplacementAxes(tc.args);
         }
 
         // [removed per spec v2 2026-06-29] v3_guard_leaf_scope,
@@ -2902,8 +2911,9 @@ async function runExpertLoop(
         // В режиме "аналог/замена" из карточек убираем:
         //   1) сам якорь (это источник, а не аналог);
         //   2) другие SKU той же модельной серии (это варианты, не аналоги).
-        // Срабатывает ТОЛЬКО при replacementIntent + найденном якоре, поэтому
-        // обычные подборки не затрагиваются.
+        // Срабатывает только в replacement-intent. Если якорь не удалось
+        // идентифицировать по ID, значения brand/model, удалённые из фильтра
+        // поиска, всё равно защищают финальную выдачу.
         if (tc.name === "render_products") {
           const anchorId = getAnchorExcludeId();
           const familyExclude = getFamilyExcludeSet();
@@ -2912,9 +2922,14 @@ async function runExpertLoop(
           // ("заменить освещение в гостиной") — без якоря — гвард пропускается:
           // LLM сам выбирает релевантные товары из пула по обычной семантике.
           const hasAnchor = Boolean(anchorId) || familyExclude.size > 0;
-          if (hasAnchor) {
+          const hasIdentityExclusions = replacementExcludedIdentityValues.size > 0;
+          if (hasAnchor || hasIdentityExclusions) {
             const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
-            let filtered = origIds.filter((id) => id !== anchorId && !familyExclude.has(id));
+            let filtered = origIds.filter((id) => {
+              if (id === anchorId || familyExclude.has(id)) return false;
+              const product = ctx.cache.get(id);
+              return !product || !productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues);
+            });
             const afterFamily = filtered.length;
             if (replacementIntent && replacementRequiredAxes.length >= 2) {
               filtered = filterReplacementCompatibleIds(filtered, replacementRequiredAxes, ctx.cache, prioritySplitAxisIdSets);
@@ -2933,6 +2948,7 @@ async function runExpertLoop(
                   after: filtered.length,
                   removed: origIds.length - filtered.length,
                   anchor_gated: true,
+                  identity_values_count: replacementExcludedIdentityValues.size,
                 },
               });
             }
@@ -3241,6 +3257,39 @@ async function runExpertLoop(
             }
           }
         }
+        if (
+          replacementIntent &&
+          tc.name === "search_catalog" &&
+          result.ok &&
+          result.tool === "search_catalog" &&
+          runArgs.mode !== "by_article" &&
+          runArgs.mode !== "by_pagetitle" &&
+          replacementExcludedIdentityValues.size > 0
+        ) {
+          const catalogResult = result as SearchCatalogOk & { tool: "search_catalog" };
+          const filteredResults = catalogResult.results.filter((product) =>
+            !productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues)
+          );
+          const removedCount = catalogResult.results.length - filteredResults.length;
+          if (removedCount > 0) {
+            result = {
+              ...catalogResult,
+              results: filteredResults,
+              total: filteredResults.length === 0
+                ? 0
+                : Math.max(filteredResults.length, catalogResult.total - removedCount),
+              warnings: [
+                ...(catalogResult.warnings ?? []),
+                `replacement_identity_excluded:${removedCount}`,
+              ],
+            };
+            steps.push({
+              step: "v3_replacement_identity_excluded",
+              ms: now(),
+              meta: { removed: removedCount, remaining: filteredResults.length },
+            });
+          }
+        }
         if (flags.anchorFilterEnabled && tc.name === "search_catalog" && replacementIntent) {
           const anchorId = getAnchorExcludeId();
           const filtered = filterAnchorFromSearchResult(result, anchorId, (runArgs as Record<string, unknown>).mode);
@@ -3529,7 +3578,18 @@ async function runExpertLoop(
         .map((id) => ctx.cache.get(id))
         .filter((product): product is NonNullable<typeof product> => Boolean(product));
       const gate = applyCriteriaGate(candidateProducts, reasoningBackedSearch.criteria);
-      const safeIds = reasoningBackedSearch.ids.filter((id) => gate.passed_ids.includes(id));
+      let safeIds = reasoningBackedSearch.ids.filter((id) => gate.passed_ids.includes(id));
+      if (replacementIntent) {
+        const anchorId = getAnchorExcludeId();
+        const familyExclude = getFamilyExcludeSet();
+        safeIds = safeIds.filter((id) => {
+          if (id === anchorId || familyExclude.has(id)) return false;
+          const product = ctx.cache.get(id);
+          if (!product || productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues)) return false;
+          return replacementRequiredAxes.length < 2 ||
+            filterReplacementCompatibleIds([id], replacementRequiredAxes, ctx.cache, prioritySplitAxisIdSets).length > 0;
+        });
+      }
       if (safeIds.length > 0) {
         const rescued = await runTool("render_products", {
           product_ids: safeIds.slice(0, 5),

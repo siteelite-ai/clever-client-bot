@@ -1,9 +1,17 @@
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   INTERNALS_REDACTED_TEXT,
+  containsUnrenderedCatalogFacts,
   isMetaSelfQuestion,
   redactInternals,
 } from "./internals-guard.ts";
+
+Deno.test("catalog facts detector catches price, article, availability, and product links", () => {
+  assert(containsUnrenderedCatalogFacts("Товар — 477 ₸/шт. Арт.: ABC-123. Наличие: Алматы."));
+  assert(containsUnrenderedCatalogFacts("Цена: 1 000 тг"));
+  assert(containsUnrenderedCatalogFacts("[Товар](https://220volt.kz/catalog/a/b/c/)"));
+  assertEquals(containsUnrenderedCatalogFacts("Для этой линии нужен автомат на 16 А."), false);
+});
 
 Deno.test("meta: вопрос про платформу перехватывается", () => {
   assert(isMetaSelfQuestion("а на какой платформе ты работаешь?"));
