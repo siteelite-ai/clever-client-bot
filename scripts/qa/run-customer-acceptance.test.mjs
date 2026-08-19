@@ -104,6 +104,20 @@ test('evaluate rejects catalog claims that bypass product cards', () => {
   assert(failures.includes('products 0 < 1'));
 });
 
+test('evaluate rejects duplicated catalog facts even when a card was rendered', () => {
+  const failures = evaluate({ forbid_unrendered_catalog_facts: true }, {
+    text: 'Лидер по цене — 477 ₸/шт. Наличие: Алматы.',
+    textBeforeProducts: 'Лидер по цене — 477 ₸/шт. Наличие: Алматы.',
+    productsMarkdown: '- **[Товар](https://220volt.kz/catalog/a/b/item/)**\n  Цена: *477* ₸',
+    links: [{ title: 'Товар', url: 'https://220volt.kz/catalog/a/b/item/', price: 477 }],
+    completed: true,
+    diagnosticError: null,
+    serverProductsCount: 1,
+  });
+
+  assert(failures.includes('unrendered catalog facts in assistant text'));
+});
+
 test('evaluate allows evidence-only follow-ups without fresh product cards by default', () => {
   const failures = evaluate({}, {
     text: 'По ранее показанному товару: цена 477 ₸/шт., арт. ABC-123.',

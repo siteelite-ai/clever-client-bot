@@ -2911,23 +2911,25 @@ async function runExpertLoop(
         } else if (isFinalTurn) {
           // Финальный ответ модели — отдельный пузырь после тулов/карточек.
           // GUARD v3_guard_text_facts_leak (§221 anti-hallucination):
-          // если LLM в ФИНАЛЬНОМ тексте без render_products в этом turn И при
-          // productsRendered === 0 пытается выдать каталог-факты (ссылки на
-          // 220volt, цены в ₸/тг, markdown-ссылки на товары) — это значит,
-          // модель пересказывает старые tool_results из истории как «карточки».
+          // если LLM в ФИНАЛЬНОМ тексте без render_products в этом шаге пытается
+          // выдать каталог-факты (ссылки на 220volt, цены в ₸/тг, markdown-ссылки
+          // на товары), модель пересказывает tool_results как «карточки» или
+          // дублирует уже отрендеренные карточки.
           // По спеке факты о товарах должны идти ТОЛЬКО через render_products,
           // поэтому такой текст подменяем на честный honest-empty.
           // Data-agnostic: никаких brand/category хардкодов, только структурные
           // регэкспы (URL host, валютные единицы, [..](..) синтаксис).
           let outText = resp.text;
-          if (!hasRender && productsRendered === 0) {
+          if (!hasRender) {
             const rawText = resp.text;
             const hasCatalogUrl = /https?:\/\/(?:www\.)?220volt\.kz\/[^\s)]+/i.test(rawText);
             const hasPrice = /\d[\d\s.,]{0,}\s*(?:₸|тг(?:\.|\b)|тенге\b)/iu.test(rawText);
             const hasMdLink = /\[[^\]]+\]\(https?:\/\/[^\s)]+\)/.test(rawText);
             if (containsUnrenderedCatalogFacts(rawText)) {
               const sanitized = stripUnrenderedCatalogFactSegments(rawText);
-              const replaced = sanitized.text || "Не смог подтвердить карточки и товарные факты для этого ответа, поэтому не буду показывать неподтверждённые цены или ссылки. Напишите точное название, артикул или один обязательный параметр — проверю по каталогу заново.";
+              const replaced = sanitized.text || (productsRendered > 0
+                ? ""
+                : "Не смог подтвердить карточки и товарные факты для этого ответа, поэтому не буду показывать неподтверждённые цены или ссылки. Напишите точное название, артикул или один обязательный параметр — проверю по каталогу заново.");
               steps.push({
                 step: "v3_guard_text_facts_leak",
                 ms: now(),
@@ -2941,19 +2943,25 @@ async function runExpertLoop(
                   removed_segments: sanitized.removed,
                   reason: sanitized.text
                     ? "unsafe_catalog_fact_segments_removed"
+                    : productsRendered > 0
+                    ? "duplicate_or_unrendered_catalog_facts_suppressed"
                     : "final_text_without_render_products_with_catalog_facts",
                 },
               });
               outText = replaced;
             }
           }
-          if (!isFirstTurn) {
-            send({ type: "assistant_turn_break", reason: "final_text" });
+          if (outText.trim()) {
+            if (!isFirstTurn) {
+              send({ type: "assistant_turn_break", reason: "final_text" });
+            }
+            send({ type: "delta", content: outText });
+            finalText += outText;
+            if (isFirstTurn) firstAssistantText = outText.trim();
+            steps.push({ step: "v3_assistant_text_final", ms: now(), meta: { chars: outText.length, fragment_index: step, text: outText } });
+          } else {
+            steps.push({ step: "v3_assistant_text_final_suppressed", ms: now(), meta: { fragment_index: step } });
           }
-          send({ type: "delta", content: outText });
-          finalText += outText;
-          if (isFirstTurn) firstAssistantText = outText.trim();
-          steps.push({ step: "v3_assistant_text_final", ms: now(), meta: { chars: outText.length, fragment_index: step, text: outText } });
         } else if (hasRender) {
           // Текст рядом с render_products → отдельный caption-пузырь ПЕРЕД карточками.
           // Раньше для не-inquire режима текст глушился ("карточки говорят сами"),

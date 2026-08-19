@@ -140,7 +140,6 @@ export function evaluate(expect = {}, response) {
   }
   if (
     expect.forbid_unrendered_catalog_facts === true &&
-    response.links.length === 0 &&
     /(?:\bарт\.?\s*[A-ZА-ЯЁ0-9-]{3,}|\bналичие\s*:|\bцена\s*:\s*\d|₸\s*\/|₸\/)/iu.test(response.text)
   ) {
     failures.push('unrendered catalog facts in assistant text');
