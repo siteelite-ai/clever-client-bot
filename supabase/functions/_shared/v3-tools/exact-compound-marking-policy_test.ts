@@ -5,6 +5,7 @@ import {
   extractExplicitCompoundMarking,
   productTitleMatchesExplicitCompoundMarking,
   selectExactCompoundMarkedProducts,
+  shouldTerminateAfterGroundedCompoundSearch,
   subsumeCriteriaProvenByExplicitCompound,
 } from "./exact-compound-marking-policy.ts";
 import type { ProductRef } from "./types.ts";
@@ -79,6 +80,25 @@ Deno.test("compound criterion subsumption does not remove unrelated equal number
   ], marking);
   assertEquals(adjusted.subsumed.map((criterion) => criterion.key), ["Размер"]);
   assertEquals(adjusted.criteria.map((criterion) => criterion.key), ["Количество", "Напряжение"]);
+});
+
+Deno.test("grounded compound search terminates only a non-exhaustive exact-title pool", () => {
+  const marking = extractExplicitCompoundMarking("нужен медный кабель негорючий 2*1,5")!;
+  assertEquals(shouldTerminateAfterGroundedCompoundSearch(
+    "нужен медный кабель негорючий 2*1,5",
+    ["Кабель ВВГ нг 2*1,5", "Кабель ВВГ нг LS 2×1.5"],
+    marking,
+  ), true);
+  assertEquals(shouldTerminateAfterGroundedCompoundSearch(
+    "покажи все позиции кабеля 2*1,5",
+    ["Кабель ВВГ нг 2*1,5"],
+    marking,
+  ), false);
+  assertEquals(shouldTerminateAfterGroundedCompoundSearch(
+    "нужен кабель 2*1,5",
+    ["Кабель ВВГ нг 4*1,5"],
+    marking,
+  ), false);
 });
 
 Deno.test("compound catalog syntax changes punctuation without changing the model's words", () => {

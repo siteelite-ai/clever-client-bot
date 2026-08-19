@@ -66,6 +66,23 @@ export function productTitleMatchesExplicitCompoundMarking(
   return textHasExactCompoundMarking(pagetitle, marking);
 }
 
+/**
+ * Allows the server to finish a non-exhaustive selection immediately after a
+ * model-owned filtered search when every live title proves the user's N×S.
+ * Exhaustive requests remain model-owned because the ordinary recovery has a
+ * bounded card limit and must not silently turn “all positions” into a sample.
+ */
+export function shouldTerminateAfterGroundedCompoundSearch(
+  message: string,
+  pagetitles: string[],
+  marking: ExplicitCompoundMarking,
+): boolean {
+  if (pagetitles.length === 0) return false;
+  const normalized = norm(message).replace(/\s+/gu, " ");
+  if (/(?:^|[^\p{L}])(?:все|весь|всю|полный\s+список|все\s+позиции)(?=$|[^\p{L}])/u.test(normalized)) return false;
+  return pagetitles.every((title) => productTitleMatchesExplicitCompoundMarking(title, marking));
+}
+
 function scalarCriterionNumber(criterion: Criterion): number | null {
   if (criterion.op !== "eq" || Array.isArray(criterion.value)) return null;
   if (typeof criterion.value === "number") return Number.isFinite(criterion.value) ? criterion.value : null;

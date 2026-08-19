@@ -90,6 +90,7 @@ import {
   extractExplicitCompoundMarking,
   productTitleMatchesExplicitCompoundMarking,
   selectExactCompoundMarkedProducts,
+  shouldTerminateAfterGroundedCompoundSearch,
   subsumeCriteriaProvenByExplicitCompound,
   type ExactCompoundMarkingRequest,
 } from "../_shared/v3-tools/exact-compound-marking-policy.ts";
@@ -2567,6 +2568,7 @@ async function runExpertLoop(
   // model-owned reasoning/search while preventing both redundant searches and
   // unrelated lexical fallbacks.
   let groundedJargonTerminal = false;
+  let groundedCompoundSearchTerminal = false;
   // Turn-level guard: рендерим карточку контактов максимум один раз,
   // даже если LLM по ошибке вызвал lookup_contacts повторно (топик-дубль).
   const contactsEmitted = { value: false };
@@ -4143,6 +4145,38 @@ async function runExpertLoop(
                 total: r2.total,
                 criteria: enforcedSearchCriteria.map((criterion) => ({ ...criterion })),
               };
+              if (explicitCompoundMarking && !replacementIntent && intentMode === "select") {
+                const groundedProducts = ids
+                  .map((id) => ctx.cache.get(id))
+                  .filter((product): product is ProductFull => Boolean(product));
+                const titleGrounded = shouldTerminateAfterGroundedCompoundSearch(
+                  userMessage,
+                  groundedProducts.map((product) => product.pagetitle),
+                  explicitCompoundMarking,
+                );
+                const adjusted = gateWithLiteralCompoundEvidence(groundedProducts, reasoningBackedSearch.criteria);
+                const safeIds = guardVisibleCardinality(
+                  ids.filter((id) => adjusted.report.passed_ids.includes(id)),
+                ).ids;
+                if (titleGrounded && safeIds.length > 0) {
+                  reasoningBackedSearch = {
+                    ids: safeIds,
+                    total: r2.total,
+                    criteria: adjusted.criteria,
+                  };
+                  groundedCompoundSearchTerminal = true;
+                  steps.push({
+                    step: "v3_grounded_compound_search_terminal",
+                    ms: now(),
+                    meta: {
+                      marking: explicitCompoundMarking,
+                      searched_candidates: ids.length,
+                      grounded_candidates: safeIds.length,
+                      criteria: adjusted.criteria,
+                    },
+                  });
+                }
+              }
             }
           }
           // Track which ladder candidates were already tried (to nudge LLM in tool reply on timeout).
@@ -4306,13 +4340,13 @@ async function runExpertLoop(
           name: tc.name,
           content: JSON.stringify(replyObj),
         });
-        if (groundedJargonTerminal) break;
+        if (groundedJargonTerminal || groundedCompoundSearchTerminal) break;
       }
 
 
 
       // No-progress detector — выходим в forced-finalize, не сжигая остаток бюджета.
-      if (groundedJargonTerminal) break;
+      if (groundedJargonTerminal || groundedCompoundSearchTerminal) break;
       if (noProgressBreak) break;
       // Тупик по критериям: сервер сам дважды сходил в каталог по формулировке
       // модели и не нашёл ничего — новых сигналов не будет, честно завершаем.
@@ -4487,6 +4521,8 @@ async function runExpertLoop(
       meta: {
         reason: groundedJargonTerminal
           ? "grounded_jargon_terminal"
+          : groundedCompoundSearchTerminal
+            ? "grounded_compound_search_terminal"
           : criteriaDeadEndBreak
             ? "criteria_dead_end"
             : noProgressBreak
