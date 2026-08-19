@@ -3,21 +3,23 @@ import { rankSplitReplacementCandidates } from "./replacement-fallback.ts";
 
 Deno.test("ordinary analogue fallback ranks shared-axis evidence and excludes the source", () => {
   assertEquals(rankSplitReplacementCandidates([
-    { key: "power", ids: ["anchor", "both", "power-only"] },
-    { key: "diameter", ids: ["anchor", "both", "diameter-only"] },
+    { key: "power", ids: ["anchor", "both", "power-only"], total: 33 },
+    { key: "diameter", ids: ["anchor", "both", "diameter-only"], total: 2 },
   ], new Set(["anchor"])), [
     { id: "both", matched_axis_keys: ["power", "diameter"] },
-    { id: "power-only", matched_axis_keys: ["power"] },
     { id: "diameter-only", matched_axis_keys: ["diameter"] },
+    { id: "power-only", matched_axis_keys: ["power"] },
   ]);
 });
 
-Deno.test("three-axis fallback rejects a candidate supported by only one axis", () => {
+Deno.test("three-axis near analogue ranks selective one-axis evidence above a generic axis", () => {
   assertEquals(rankSplitReplacementCandidates([
-    { key: "power", ids: ["one", "two"] },
-    { key: "diameter", ids: ["two"] },
-    { key: "voltage", ids: ["three"] },
+    { key: "power", ids: ["power-only", "two"], total: 33 },
+    { key: "diameter", ids: ["two"], total: 2 },
+    { key: "led", ids: ["generic"], total: 1200 },
   ], new Set()), [
     { id: "two", matched_axis_keys: ["power", "diameter"] },
+    { id: "power-only", matched_axis_keys: ["power"] },
+    { id: "generic", matched_axis_keys: ["led"] },
   ]);
 });

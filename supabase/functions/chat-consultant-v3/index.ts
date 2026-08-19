@@ -3667,7 +3667,11 @@ async function runExpertLoop(
             const anchorId = getAnchorExcludeId();
             const excludedIds = getFamilyExcludeSet();
             if (anchorId) excludedIds.add(anchorId);
-            const ranked = rankSplitReplacementCandidates(split.axes, excludedIds, 8)
+            const ranked = rankSplitReplacementCandidates(
+              split.axes.map((axis) => ({ key: axis.axis, ids: axis.ids, total: axis.total })),
+              excludedIds,
+              4,
+            )
               .filter((candidate) => {
                 const product = ctx.cache.get(candidate.id);
                 return Boolean(
@@ -4260,6 +4264,15 @@ Deno.serve(async (req) => {
       const logId = await insertTurnLogStart(supabase, sessionId, userMessage, [...steps]);
       send({ type: "diagnostic", log_id: logId, phase: "start" });
 
+      // Long model calls used to leave the SSE connection completely silent.
+      // Some proxies/runtime paths then treated a healthy request as idle and
+      // terminated it before the first answer token. SSE comments are invisible
+      // to the widget parser but keep the transport active while work continues.
+      const keepAliveBytes = new TextEncoder().encode(": keep-alive\n\n");
+      const keepAliveTimer = setInterval(() => {
+        try { controller.enqueue(keepAliveBytes); } catch { /* stream already closed */ }
+      }, 10_000);
+
       // Systemic protection against hard worker kills (Edge Runtime SIGKILL via req.signal).
       // try/catch/finally может НЕ выполниться, если рантайм убивает воркер до return.
       // Поэтому регистрируем abort-listener сразу и заворачиваем финализацию в EdgeRuntime.waitUntil,
@@ -4441,6 +4454,7 @@ Deno.serve(async (req) => {
           });
         } catch { /* stream may be closed */ }
       } finally {
+        clearInterval(keepAliveTimer);
         try { req.signal.removeEventListener("abort", onRuntimeAbort); } catch { /* ignore */ }
         // КРИТИЧНО: сначала дожидаемся UPDATE'а лога, пока стрим ещё открыт и воркер жив.
         // После controller.close() Supabase Edge Runtime может убить воркера, не дождавшись

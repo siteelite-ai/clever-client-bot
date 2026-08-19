@@ -29,6 +29,22 @@ test('parseSse keeps pre-product text and parses card prices', () => {
   assert.equal(parsed.serverProductsCount, 1);
 });
 
+test('parseSse ignores heartbeat comments without losing completion', () => {
+  const body = [
+    ': keep-alive',
+    '',
+    'data: {"choices":[{"delta":{"content":"Ответ"}}]}',
+    ': keep-alive',
+    'data: [DONE]',
+    '',
+  ].join('\n');
+
+  const parsed = parseSse(body);
+  assert.equal(parsed.text, 'Ответ');
+  assert.equal(parsed.completed, true);
+  assert.equal(parsed.links.length, 0);
+});
+
 test('evaluate checks every product title group and maximum price', () => {
   const response = {
     text: '',
