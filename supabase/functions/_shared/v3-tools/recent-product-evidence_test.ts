@@ -82,6 +82,26 @@ Deno.test("deterministic evidence answer contains only cached facts and uncertai
   assertEquals(answer.includes("https://"), false);
 });
 
+Deno.test("single-product comparison states that a price comparison is impossible", () => {
+  const evidence = compactRecentProducts([product({ pagetitle: "Подвесной светильник" })]);
+  const answer = buildDeterministicEvidenceAnswer(
+    evidence,
+    "Почему варианты отличаются по цене? Сравни подтверждённые характеристики.",
+  );
+  assertEquals(answer.includes("только один вариант"), true);
+  assertEquals(answer.includes("разницу в цене нельзя"), true);
+  assertEquals(answer.includes("Подвесной светильник"), true);
+});
+
+Deno.test("multi-product comparison explicitly frames prices and confirmed characteristics", () => {
+  const evidence = compactRecentProducts([
+    product({ id: "1", pagetitle: "Первый вариант" }),
+    product({ id: "2", pagetitle: "Второй вариант", price: 4990 }),
+  ]);
+  const answer = buildDeterministicEvidenceAnswer(evidence, "Сравни варианты");
+  assertEquals(answer.includes("Сравниваю цены и подтверждённые характеристики"), true);
+});
+
 Deno.test("rendered product titles are only lookup hints from controlled product links", () => {
   const titles = extractRenderedProductTitles([
     { role: "user", content: "Покажи светильник" },

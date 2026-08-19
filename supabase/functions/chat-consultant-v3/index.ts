@@ -2978,7 +2978,7 @@ async function runExpertLoop(
           });
         } catch (recoveryError) {
           resp = {
-            text: buildDeterministicEvidenceAnswer(recentProductEvidence),
+            text: buildDeterministicEvidenceAnswer(recentProductEvidence, userMessage),
             toolCalls: [],
             finishReason: "deterministic_evidence_fallback",
           };
@@ -5074,7 +5074,7 @@ Deno.serve(async (req) => {
           productsCount = selectedProducts.length;
           await persistRecentProductEvidence(supabase, sessionId, selectedProducts);
         } else if (recentProductEvidence.length > 0 && isEvidenceOnlyFollowup(userMessage)) {
-          const answer = buildDeterministicEvidenceAnswer(recentProductEvidence);
+          const answer = buildDeterministicEvidenceAnswer(recentProductEvidence, userMessage);
           steps.push({
             step: "v3_deterministic_evidence_followup",
             ms: Date.now() - t0,
