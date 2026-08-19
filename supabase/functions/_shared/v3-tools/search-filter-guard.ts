@@ -88,6 +88,45 @@ export function explicitReplacementModelValues(
   return [...found];
 }
 
+function replacementIdentityHints(userMessage: string): string[] {
+  const found = new Set<string>();
+  for (const match of userMessage.matchAll(/\b\d{2,}(?:-\d{1,})+\b/gu)) found.add(match[0]);
+  for (const match of userMessage.matchAll(/[\p{L}\p{N}][\p{L}\p{N}-]*/gu)) {
+    const raw = match[0];
+    const compact = raw.replace(/[^\p{L}\p{N}]/gu, "");
+    const hasLetter = /\p{L}/u.test(compact);
+    const hasDigit = /\p{N}/u.test(compact);
+    if (hasLetter && hasDigit && compact.length >= 5) found.add(raw);
+    if (
+      hasLetter &&
+      !hasDigit &&
+      compact.length >= 4 &&
+      raw === raw.toLocaleUpperCase("ru") &&
+      raw !== raw.toLocaleLowerCase("ru")
+    ) found.add(raw);
+  }
+  for (const quoted of userMessage.matchAll(/[«"]([^»"]{2,})[»"]/gu)) found.add(quoted[1]);
+  return [...found];
+}
+
+/**
+ * Confirm source-family hints against the current catalog pool. A hint is an
+ * identity only when it appears in some, but not all, titles: category and
+ * functional tokens shared by every candidate cannot become exclusions.
+ */
+export function inferReplacementIdentityValues(
+  userMessage: string,
+  productTitles: string[],
+): string[] {
+  if (productTitles.length < 2) return [];
+  return replacementIdentityHints(userMessage).filter((hint) => {
+    const wanted = ` ${norm(hint)} `;
+    if (!wanted.trim()) return false;
+    const matches = productTitles.filter((title) => ` ${norm(title)} `.includes(wanted)).length;
+    return matches > 0 && matches < productTitles.length;
+  });
+}
+
 function explicitlyRequiresSameIdentity(userMessage: string, kind: "brand" | "model"): boolean {
   const text = norm(userMessage);
   if (kind === "brand") {

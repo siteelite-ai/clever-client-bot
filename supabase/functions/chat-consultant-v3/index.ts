@@ -21,6 +21,7 @@ import {
   dropImplicitReplacementIdentityFilters,
   explicitReplacementModelValues,
   guardSearchFilters,
+  inferReplacementIdentityValues,
   isReplacementIdentityFacet,
   productMatchesExcludedReplacementIdentity,
 } from "../_shared/v3-tools/search-filter-guard.ts";
@@ -3443,6 +3444,26 @@ async function runExpertLoop(
             if (fallbackResult.ok && Number((fallbackResult as { total?: number }).total ?? 0) > 0) {
               result = fallbackResult;
             }
+          }
+        }
+        if (
+          replacementIntent &&
+          tc.name === "search_catalog" &&
+          result.ok &&
+          result.tool === "search_catalog"
+        ) {
+          const catalogResult = result as SearchCatalogOk & { tool: "search_catalog" };
+          const inferredIdentity = inferReplacementIdentityValues(
+            userMessage,
+            catalogResult.results.map((product) => product.pagetitle),
+          );
+          for (const value of inferredIdentity) replacementExcludedIdentityValues.add(value);
+          if (inferredIdentity.length > 0) {
+            steps.push({
+              step: "v3_replacement_identity_inferred_from_pool",
+              ms: now(),
+              meta: { values: inferredIdentity, pool_size: catalogResult.results.length },
+            });
           }
         }
         if (

@@ -3,6 +3,7 @@ import {
   dropAffirmativeBooleanFilters,
   dropImplicitReplacementIdentityFilters,
   explicitReplacementModelValues,
+  inferReplacementIdentityValues,
   productMatchesExcludedReplacementIdentity,
   guardSearchFilters,
 } from "./search-filter-guard.ts";
@@ -116,6 +117,23 @@ Deno.test("replacement identity treats an explicit collection as the source fami
     ).removed,
     [{ key: "collection", values: ["GENERICA"], kind: "model" }],
   );
+});
+
+Deno.test("replacement identity is confirmed by a selective current-result title", () => {
+  const titles = [
+    "Автомат 1P ВА 47-29 16A GENERICA",
+    "Автомат 1P ВА 47-29М 16A GENERICA",
+    "Автомат 1P HDB3W 16A",
+    "Автомат 1P NXB-63S 16A",
+  ];
+  assertEquals(
+    inferReplacementIdentityValues(
+      "АВТОМАТ 1P ВА 47-29 16A GENERICA предложи равноценную замену",
+      titles,
+    ),
+    ["47-29", "GENERICA"],
+  );
+  assertEquals(inferReplacementIdentityValues("Нужна замена E27 IP65", titles), []);
 });
 
 Deno.test("filter guard accepts canonical value when reasoning uses inflected forms", () => {
