@@ -1,11 +1,30 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { evaluate, parseSse } from './run-customer-acceptance.mjs';
+import { DEFAULT_ENDPOINT, evaluate, parseSse, resolveEndpoint } from './run-customer-acceptance.mjs';
 
 function data(payload) {
   return `data: ${JSON.stringify(payload)}`;
 }
+
+test('resolveEndpoint keeps production by default and accepts an isolated preview function', () => {
+  assert.equal(resolveEndpoint(['node', 'runner']), DEFAULT_ENDPOINT);
+  assert.equal(
+    resolveEndpoint(['node', 'runner', '--endpoint=https://example.supabase.co/functions/v1/chat-consultant-v3-preview/']),
+    'https://example.supabase.co/functions/v1/chat-consultant-v3-preview',
+  );
+});
+
+test('resolveEndpoint rejects unsafe or non-function targets', () => {
+  assert.throws(
+    () => resolveEndpoint(['node', 'runner', '--endpoint=http://example.com/functions/v1/preview']),
+    /HTTPS/,
+  );
+  assert.throws(
+    () => resolveEndpoint(['node', 'runner', '--endpoint=https://example.com/not-a-function']),
+    /one Edge Function/,
+  );
+});
 
 test('parseSse keeps pre-product text and parses card prices', () => {
   const body = [

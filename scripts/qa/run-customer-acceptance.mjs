@@ -6,7 +6,30 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
 const casesPath = path.join(here, 'customer-acceptance-cases.json');
-const endpoint = 'https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3';
+export const DEFAULT_ENDPOINT = 'https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3';
+
+export function resolveEndpoint(argv = process.argv) {
+  const raw = argv.find((arg) => arg.startsWith('--endpoint='))?.slice('--endpoint='.length).trim();
+  if (!raw) return DEFAULT_ENDPOINT;
+  let parsed;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(`Invalid acceptance endpoint: ${raw}`);
+  }
+  const localHttp = parsed.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(parsed.hostname);
+  if (parsed.protocol !== 'https:' && !localHttp) {
+    throw new Error('Acceptance endpoint must use HTTPS (HTTP is allowed only for localhost)');
+  }
+  if (!/^\/functions\/v1\/[a-z0-9-]+\/?$/i.test(parsed.pathname)) {
+    throw new Error(`Acceptance endpoint must target one Edge Function: ${parsed.pathname}`);
+  }
+  parsed.search = '';
+  parsed.hash = '';
+  return parsed.toString().replace(/\/$/, '');
+}
+
+const endpoint = resolveEndpoint();
 
 const widget = fs.readFileSync(path.join(root, 'public/widget.js'), 'utf8');
 const apiKey = widget.match(/supabaseKey:\s*'([^']+)'/)?.[1];
