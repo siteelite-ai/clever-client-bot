@@ -86,6 +86,7 @@ import {
 } from "../_shared/v3-tools/outdoor-poe-policy.ts";
 import {
   classifyExactCompoundMarkingRequest,
+  compoundRecoveryQueries,
   exactCompoundMarkingEmpty,
   exactCompoundMarkingIntro,
   extractExplicitCompoundMarking,
@@ -2460,6 +2461,13 @@ async function runExpertLoop(
   // the cards cannot silently diverge from the preceding reasoning.
   let enforcedSearchCriteria: Criterion[] = [];
   let userBackedSearchCriteria: Criterion[] = [];
+  const compoundRecoveryHints: string[] = [];
+  const rememberCompoundRecoveryHint = (value: unknown) => {
+    if (typeof value !== "string") return;
+    const hint = value.trim();
+    if (!hint || compoundRecoveryHints.some((known) => normalizeForMatch(known) === normalizeForMatch(hint))) return;
+    compoundRecoveryHints.push(hint);
+  };
   const explicitCompoundMarking = extractExplicitCompoundMarking(userMessage);
   const gateWithLiteralCompoundEvidence = (products: ProductFull[], criteria: Criterion[]) => {
     const adjusted = explicitCompoundMarking && products.length > 0 && products.every((product) =>
@@ -3228,6 +3236,18 @@ async function runExpertLoop(
           return { finalText, productsRendered, shownProductIds: [...shownIds] };
         }
 
+        // Preserve the consultant's own noun/category/query wording before
+        // canonical guards modify it. A later recovery may use these strings,
+        // but live title/criteria evidence remains mandatory.
+        if (tc.name === "discover_category") rememberCompoundRecoveryHint(tc.args.noun);
+        if (tc.name === "search_catalog") {
+          rememberCompoundRecoveryHint(tc.args.query);
+          rememberCompoundRecoveryHint(tc.args.category);
+          if (Array.isArray(tc.args.category_in)) {
+            for (const category of tc.args.category_in) rememberCompoundRecoveryHint(category);
+          }
+        }
+
         // [removed per spec v2 2026-06-29] v3_guard_numeric_truncation:
         // дробные значения LLM передаёт сам (rule 3b в промпте).
 
@@ -3754,6 +3774,12 @@ async function runExpertLoop(
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
         let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
 
+        if (tc.name === "jargon_recover_catalog" && result.ok) {
+          const jargonEvidence = result as { matched_query?: string | null; candidates?: string[] };
+          rememberCompoundRecoveryHint(jargonEvidence.matched_query);
+          for (const candidate of jargonEvidence.candidates ?? []) rememberCompoundRecoveryHint(candidate);
+        }
+
         // A jargon lookup may load relevant base products and then return zero
         // because conversational modifiers do not occur as identical word
         // forms in catalog traits (for example an adjective versus a code in
@@ -3940,6 +3966,96 @@ async function runExpertLoop(
             if (fallbackResult.ok && Number((fallbackResult as { total?: number }).total ?? 0) > 0) {
               result = fallbackResult;
             }
+          }
+        }
+
+        // A broad noun can resolve to different valid live catalog branches.
+        // If the model-owned filtered search remains empty, retry only wording
+        // already selected by the model plus the user's literal N×S marking.
+        // A recovered card must still pass the original criteria, or (when no
+        // canonical criteria exist after failed discovery) visibly prove a
+        // distinctive family/code selected by the model.
+        if (
+          tc.name === "search_catalog" &&
+          result.ok &&
+          Number((result as { total?: number }).total ?? 0) === 0 &&
+          explicitCompoundMarking &&
+          !replacementIntent &&
+          intentMode === "select"
+        ) {
+          const recoveryCriteria = enforcedSearchCriteria.length > 0
+            ? enforcedSearchCriteria.map((criterion) => ({ ...criterion }))
+            : userBackedSearchCriteria.map((criterion) => ({ ...criterion }));
+          for (const query of compoundRecoveryQueries(explicitCompoundMarking, compoundRecoveryHints)) {
+            const recovered = await runTool("search_catalog", { mode: "by_query", query, per_page: 20 }, ctx);
+            if (!recovered.ok || recovered.tool !== "search_catalog") continue;
+            const exactProducts = recovered.results
+              .map((product) => ctx.cache.get(String(product.id)))
+              .filter((product): product is ProductFull => Boolean(
+                product && productTitleMatchesExplicitCompoundMarking(product.pagetitle, explicitCompoundMarking)
+              ));
+            if (
+              exactProducts.length === 0 ||
+              !shouldTerminateAfterGroundedCompoundSearch(
+                userMessage,
+                exactProducts.map((product) => product.pagetitle),
+                explicitCompoundMarking,
+              )
+            ) continue;
+
+            const adjusted = gateWithLiteralCompoundEvidence(exactProducts, recoveryCriteria);
+            let safeProducts = exactProducts.filter((product) => adjusted.report.passed_ids.includes(product.id));
+            let titleEvidenceHints: string[] = [];
+            if (adjusted.criteria.length === 0) {
+              titleEvidenceHints = compoundRecoveryHints.filter((hint) =>
+                safeProducts.some((product) => titleSupportsGroundedJargonQuery(product.pagetitle, hint))
+              );
+              safeProducts = safeProducts.filter((product) =>
+                titleEvidenceHints.some((hint) => titleSupportsGroundedJargonQuery(product.pagetitle, hint))
+              );
+            }
+            const safeIds = guardVisibleCardinality(safeProducts.map((product) => product.id)).ids;
+            if (safeIds.length === 0) continue;
+            const safeSet = new Set(safeIds);
+            const acceptedProducts = safeProducts.filter((product) => safeSet.has(product.id));
+            result = {
+              ...recovered,
+              results: acceptedProducts,
+              total: acceptedProducts.length,
+              warnings: [...(recovered.warnings ?? []), `grounded_compound_recovery:${query}`],
+            };
+            for (const key of ["options", "category", "category_in"] as const) delete runArgs[key];
+            runArgs.mode = "by_query";
+            runArgs.query = query;
+            runArgs.per_page = 20;
+            if (adjusted.criteria.length > 0) {
+              reasoningBackedSearch = {
+                ids: safeIds,
+                total: acceptedProducts.length,
+                criteria: adjusted.criteria,
+              };
+            } else {
+              semanticBackedSearch = {
+                ids: safeIds,
+                total: acceptedProducts.length,
+                criteria: [],
+                label: query,
+              };
+            }
+            groundedCompoundSearchTerminal = true;
+            steps.push({
+              step: "v3_grounded_compound_literal_recovery",
+              ms: now(),
+              meta: {
+                query,
+                marking: explicitCompoundMarking,
+                candidates: exactProducts.length,
+                accepted: safeIds.length,
+                criteria: adjusted.criteria,
+                title_evidence_hints: titleEvidenceHints,
+              },
+            });
+            break;
           }
         }
         if (

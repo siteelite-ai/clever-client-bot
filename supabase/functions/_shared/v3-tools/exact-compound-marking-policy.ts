@@ -67,6 +67,37 @@ export function productTitleMatchesExplicitCompoundMarking(
 }
 
 /**
+ * Builds a bounded literal-search ladder from wording already selected by the
+ * consultant. The only server-generated part is the punctuation-normalized
+ * N×S token written by the user. No product nouns, families or synonyms are
+ * introduced here.
+ */
+export function compoundRecoveryQueries(
+  marking: ExplicitCompoundMarking,
+  modelHints: string[],
+  limit = 8,
+): string[] {
+  const literal = `${marking.first}*${String(marking.second).replace(".", ",")}`;
+  const cleanedHints = modelHints
+    .map((hint) => norm(hint).replace(new RegExp(COMPOUND.source, "giu"), " ").replace(/\s+/gu, " ").trim())
+    .filter(Boolean);
+  const singleWord = cleanedHints.filter((hint) => /^\p{L}[\p{L}\p{N}-]*$/u.test(hint));
+  const phrases = cleanedHints.filter((hint) => !singleWord.includes(hint));
+  const tokens = cleanedHints.flatMap((hint) => hint.match(/[\p{L}\p{N}-]{3,}/gu) ?? []);
+  const seen = new Set<string>();
+  const queries: string[] = [];
+  for (const hint of [...singleWord, ...phrases, ...tokens]) {
+    const query = `${hint} ${literal}`.replace(/\s+/gu, " ").trim();
+    const key = norm(query);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    queries.push(query);
+    if (queries.length >= Math.max(1, Math.min(limit, 12))) break;
+  }
+  return queries;
+}
+
+/**
  * Allows the server to finish a non-exhaustive selection immediately after a
  * model-owned filtered search when every live title proves the user's N×S.
  * Exhaustive requests remain model-owned because the ordinary recovery has a

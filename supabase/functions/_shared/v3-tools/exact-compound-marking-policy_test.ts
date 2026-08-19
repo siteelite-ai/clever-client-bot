@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   canonicalizeCompoundMarkingForCatalog,
   classifyExactCompoundMarkingRequest,
+  compoundRecoveryQueries,
   extractExplicitCompoundMarking,
   productTitleMatchesExplicitCompoundMarking,
   selectExactCompoundMarkedProducts,
@@ -105,4 +106,20 @@ Deno.test("compound catalog syntax changes punctuation without changing the mode
   assertEquals(canonicalizeCompoundMarkingForCatalog("ВВГнг 2х1.5"), "ВВГнг 2*1,5");
   assertEquals(canonicalizeCompoundMarkingForCatalog("кабель ВВГ нг 2 × 1,50"), "кабель ВВГ нг 2*1,50");
   assertEquals(canonicalizeCompoundMarkingForCatalog("светильник 5000 лм"), "светильник 5000 лм");
+});
+
+Deno.test("compound recovery ladder uses only model wording plus the user's literal marking", () => {
+  const marking = extractExplicitCompoundMarking("нужен кабель 2×1,5")!;
+  assertEquals(compoundRecoveryQueries(marking, [
+    "кабель",
+    "Кабель силовой с медными жилами",
+    "Кабель ВВГ",
+  ], 6), [
+    "кабель 2*1,5",
+    "кабель силовой с медными жилами 2*1,5",
+    "кабель ввг 2*1,5",
+    "силовой 2*1,5",
+    "медными 2*1,5",
+    "жилами 2*1,5",
+  ]);
 });
