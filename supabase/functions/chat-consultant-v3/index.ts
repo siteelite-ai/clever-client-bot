@@ -22,7 +22,12 @@ import { applyCriteriaGate, buildCriteriaQuery, filterProductIdsByBudgetCap, res
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaWithReasoning, hasMeasuredSelectionRequirement, projectReasoningRangeCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { verifySelectionTarget } from "../_shared/v3-tools/selection-contract.ts";
-import { classifyShrinkFitRequest, selectDimensionallyCompatibleProducts } from "../_shared/v3-tools/dimensional-fit-policy.ts";
+import {
+  mergeCompatibilityCriteria,
+  parseCompatibilityRelations,
+  reasoningNeedsCompatibilityRelations,
+  uncoveredReasoningBounds,
+} from "../_shared/v3-tools/compatibility-contract.ts";
 import {
   broadAssortmentNeedsClarification,
   buildBroadAssortmentClarification,
@@ -2528,42 +2533,6 @@ async function answerBroadAssortmentRequest(
   });
 }
 
-async function selectVerifiedDimensionalFit(
-  request: { objectDiameterMm: number; searchNoun: string },
-  ctx: ToolContext,
-  send: (event: SseEvent) => void,
-  steps: StepLog[],
-  t0: number,
-): Promise<ProductFull[]> {
-  const started = Date.now();
-  const result = await executeSearchCatalog({
-    mode: "by_query",
-    query: request.searchNoun,
-    min_price: 1,
-    per_page: 200,
-  }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
-  const candidates = result.ok ? result.results : [];
-  const compatible = selectDimensionallyCompatibleProducts(candidates, request.objectDiameterMm);
-  const intro = `Для кабеля Ø${String(request.objectDiameterMm).replace(".", ",")} мм проверяю оба каталожных размера: трубка до усадки должна быть строго больше диаметра кабеля, после усадки — строго меньше.`;
-  send({ type: "delta", content: intro });
-  if (compatible.length === 0) {
-    send({ type: "delta", content: " По этим двум условиям подтверждённых позиций в текущей выдаче нет; неподходящий размер показывать не буду." });
-    steps.push({ step: "v3_dimensional_fit_empty", ms: Date.now() - t0, meta: { object_mm: request.objectDiameterMm, candidates: candidates.length } });
-    return [];
-  }
-  const rendered = executeRenderProducts({ product_ids: compatible.map((product) => product.id) }, ctx.cache);
-  if (!rendered.ok) return [];
-  send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: compatible.length });
-  steps.push({
-    step: "v3_dimensional_fit_rendered",
-    ms: Date.now() - t0,
-    meta: { object_mm: request.objectDiameterMm, candidates: candidates.length, rendered: rendered.rendered_count, duration_ms: Date.now() - started },
-  });
-  return compatible
-    .map((product) => ctx.cache.get(product.id))
-    .filter((product): product is ProductFull => Boolean(product));
-}
-
 async function selectVerifiedOutdoorPoeProducts(
   ctx: ToolContext,
   send: (event: SseEvent) => void,
@@ -2714,6 +2683,10 @@ async function runExpertLoop(
   let enforcedSearchCriteria: Criterion[] = [];
   let userBackedSearchCriteria: Criterion[] = [];
   let activeSelectionTarget: string | null = null;
+  // Terminal recovery is allowed only after a complete render contract has
+  // passed all target/criteria/compatibility checks. A rejected render must
+  // never be able to bypass a missing relation by falling through to recovery.
+  let activeSelectionContractComplete = false;
   const compoundRecoveryHints: string[] = [];
   const rememberCompoundRecoveryHint = (value: unknown) => {
     if (typeof value !== "string") return;
@@ -3946,6 +3919,7 @@ async function runExpertLoop(
         // mandatory render input. It is checked against live catalog evidence
         // before criteria and before any markdown reaches the customer.
         if (tc.name === "render_products") {
+          activeSelectionContractComplete = false;
           const target = typeof tc.args.selection_target === "string" ? tc.args.selection_target.trim() : "";
           if (target) activeSelectionTarget = target;
           const ids = Array.isArray(tc.args.product_ids)
@@ -4000,19 +3974,23 @@ async function runExpertLoop(
         // Гейт сверяет их с short_traits карточек: fail → карточку не рендерим,
         // unknown (характеристики нет) → карточку оставляем.
         if (flags.criteriaGateEnabled && tc.name === "render_products") {
+          const reasoningEvidence = `${userMessage}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
+          const compatibilityRelations = parseCompatibilityRelations(
+            (tc.args as Record<string, unknown>).compatibility_relations,
+          );
           const rawCriteria = Array.isArray((tc.args as Record<string, unknown>).criteria)
             ? ((tc.args as Record<string, unknown>).criteria as Criterion[])
             : [];
           let criteria = resolveRenderCriteria(
             enforcedSearchCriteria,
-            rawCriteria,
+            mergeCompatibilityCriteria(rawCriteria, compatibilityRelations),
             userBackedSearchCriteria,
             Boolean(namedSeriesToken),
           );
           if (lastDiscover) {
             const projected = projectReasoningRangeCriteria(
               criteria,
-              `${firstAssistantText}\n${assistantReasoning}\n${resp.text}`,
+              reasoningEvidence,
               lastDiscover.facets,
             );
             if (projected.added.length > 0) {
@@ -4020,6 +3998,28 @@ async function runExpertLoop(
               (tc.args as Record<string, unknown>).criteria = criteria;
               steps.push({ step: "v3_reasoning_ranges_projected", ms: now(), meta: { added: projected.added } });
             }
+          }
+          const compatibilityRequired = reasoningNeedsCompatibilityRelations(reasoningEvidence);
+          const uncoveredRelations = compatibilityRequired
+            ? uncoveredReasoningBounds(compatibilityRelations, reasoningEvidence)
+            : [];
+          if (compatibilityRequired && compatibilityRelations.length === 0) {
+            gateShortCircuit ??= {
+              tool: "render_products",
+              ok: false,
+              error_code: "compatibility_relations_required",
+              message: "в рассуждении есть относительная совместимость, но compatibility_relations[] пуст. Перенеси каждый параметр товара, оператор относительно опорного значения и единицу; без проверяемой связи карточки не будут показаны",
+            } as unknown as ToolResult;
+            steps.push({ step: "v3_compatibility_relations_required", ms: now(), meta: { render_ids: Array.isArray(tc.args.product_ids) ? tc.args.product_ids.length : 0 } });
+          } else if (uncoveredRelations.length > 0) {
+            gateShortCircuit ??= {
+              tool: "render_products",
+              ok: false,
+              error_code: "compatibility_relations_incomplete",
+              message: "compatibility_relations[] не покрывает все направленные границы из рассуждения. Передай каждую границу отдельно и не меняй её направление",
+              uncovered: uncoveredRelations,
+            } as unknown as ToolResult;
+            steps.push({ step: "v3_compatibility_relations_incomplete", ms: now(), meta: { uncovered: uncoveredRelations } });
           }
           if (
             criteria.length === 0 &&
@@ -4211,6 +4211,10 @@ async function runExpertLoop(
               }
             }
           }
+        }
+
+        if (tc.name === "render_products") {
+          activeSelectionContractComplete = gateShortCircuit === null;
         }
 
         if (tc.name === "search_catalog" && namedSeriesToken && !seriesGroundingSatisfied) {
@@ -5035,6 +5039,7 @@ async function runExpertLoop(
       productsRendered === 0 &&
       reasoningBackedSearch &&
       activeSelectionTarget &&
+      activeSelectionContractComplete &&
       (!seriesTurnRequiresGrounding || seriesGroundingSatisfied)
     ) {
       const candidateProducts = reasoningBackedSearch.ids
@@ -5151,6 +5156,7 @@ async function runExpertLoop(
       productsRendered === 0 &&
       semanticBackedSearch &&
       activeSelectionTarget &&
+      activeSelectionContractComplete &&
       !replacementIntent &&
       intentMode === "select" &&
       (
@@ -5501,7 +5507,6 @@ Deno.serve(async (req) => {
         const broadAssortmentToken = broadAssortmentRequest
           ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8))
           : null;
-        const dimensionalFitRequest = classifyShrinkFitRequest(userMessage);
         // GUARD v3_meta_question_declined: вопрос про устройство сервиса
         // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
         // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
@@ -5517,10 +5522,6 @@ Deno.serve(async (req) => {
         } else if (broadAssortmentRequest) {
           await answerBroadAssortmentRequest(broadAssortmentToken, ctx, send, steps, t0);
           productsCount = 0;
-        } else if (dimensionalFitRequest) {
-          const selectedProducts = await selectVerifiedDimensionalFit(dimensionalFitRequest, ctx, send, steps, t0);
-          productsCount = selectedProducts.length;
-          await persistRecentProductEvidence(supabase, effectiveSessionId, selectedProducts);
         } else if (namedSeriesInquiryToken) {
           await answerVerifiedNamedSeriesInquiry(
             namedSeriesInquiryToken,

@@ -81,26 +81,33 @@ export function projectReasoningRangeCriteria(
   const added: Criterion[] = [];
   const text = String(reasoningText ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е");
   const re = new RegExp(String.raw`(${NUM})\s*[–—-]\s*(${NUM})\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])`, "giu");
+  const ranges: Array<{ low: number; high: number; unit: string }> = [];
   for (let match; (match = re.exec(text)) !== null;) {
     const first = Number(match[1].replace(",", "."));
     const second = Number(match[2].replace(",", "."));
     const unit = canonicalMeasurementUnit(match[3]);
     if (!Number.isFinite(first) || !Number.isFinite(second) || !unit) continue;
+    ranges.push({ low: Math.min(first, second), high: Math.max(first, second), unit });
+  }
+  for (const range of ranges) {
+    // Multiple ranges with the same unit usually describe different product
+    // parameters/states. Mapping both onto one facet would invent semantics;
+    // the structured compatibility contract must identify their live keys.
+    if (ranges.filter((candidate) => candidate.unit === range.unit).length !== 1) continue;
     const matchingFacets = (facets ?? []).filter((facet) =>
-      facet.type === "number" && facet.unit && canonicalMeasurementUnit(facet.unit) === unit
+      facet.type === "number" && facet.unit && canonicalMeasurementUnit(facet.unit) === range.unit
     );
     if (matchingFacets.length !== 1) continue;
-    const [low, high] = [Math.min(first, second), Math.max(first, second)];
     const alreadyRepresented = next.some((criterion) => {
-      if (canonicalMeasurementUnit(criterion.unit ?? "") !== unit) return false;
+      if (canonicalMeasurementUnit(criterion.unit ?? "") !== range.unit) return false;
       if (criterion.op === "range" && Array.isArray(criterion.value)) {
-        return Number(criterion.value[0]) === low && Number(criterion.value[1]) === high;
+        return Number(criterion.value[0]) === range.low && Number(criterion.value[1]) === range.high;
       }
       return false;
     });
     if (alreadyRepresented) continue;
     const facet = matchingFacets[0];
-    const criterion: Criterion = { key: facet.key || facet.caption, op: "range", value: [low, high], unit: facet.unit, level: "A" };
+    const criterion: Criterion = { key: facet.key || facet.caption, op: "range", value: [range.low, range.high], unit: facet.unit, level: "A" };
     next.push(criterion);
     added.push(criterion);
   }

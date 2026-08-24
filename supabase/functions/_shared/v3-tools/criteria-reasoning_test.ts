@@ -37,6 +37,13 @@ Deno.test("числовой диапазон из рассуждения про�
   assertEquals(projected.added, [{ key: "svetovoj_potok", op: "range", value: [3750, 5000], unit: "лм", level: "A" }]);
 });
 
+Deno.test("два диапазона одной единицы не проецируются на один фасет наугад", () => {
+  const projected = projectReasoningRangeCriteria([], "до установки 15–20 мм, после установки 6–8 мм", [
+    { key: "size", caption: "Размер", type: "number", unit: "мм" },
+  ]);
+  assertEquals(projected.added, []);
+});
+
 Deno.test("alignCriteriaWithReasoning: eq на числе клиента → min по прозе", () => {
   const criteria: Criterion[] = [
     { key: "Параметр альфа", op: "eq", value: 12, unit: "мм", level: "A" },
