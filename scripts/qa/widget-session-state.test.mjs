@@ -24,7 +24,7 @@ function savedDialogue(updatedAt) {
   };
 }
 
-function bootWidget({ state, now = Date.now(), confirmResult = true } = {}) {
+function bootWidget({ state, now = Date.now(), confirmResult = true, fetchImpl } = {}) {
   const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
     runScripts: 'outside-only',
     url: 'https://220volt.testdevops.ru/',
@@ -32,6 +32,10 @@ function bootWidget({ state, now = Date.now(), confirmResult = true } = {}) {
   dom.window.HTMLElement.prototype.scrollIntoView = function() {};
   dom.window.confirm = () => confirmResult;
   dom.window.Date.now = () => now;
+  dom.window.TextDecoder = TextDecoder;
+  dom.window.fetch = fetchImpl ?? (async () => {
+    throw new Error('Unexpected fetch in widget session-state test');
+  });
   if (state) dom.window.sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   dom.window.eval(widgetSource);
   return dom;
@@ -114,5 +118,45 @@ test('an open tab expires its dialogue after inactivity', () => {
   assert.notEqual(state.sessionId, 'session_saved_customer_test');
   assert.deepEqual(state.dialogSlots, {});
   assert.doesNotMatch(visibleMessages(dom), /старый вопрос/u);
+  dom.window.close();
+});
+
+test('server boundary automatically isolates a self-contained new topic without a user reset', async () => {
+  const now = 1_800_000_000_000;
+  const boundarySessionId = 'session_automatic_new_topic';
+  const sse = [
+    `data: ${JSON.stringify({ v3_event: { type: 'conversation_boundary', mode: 'new_task', session_id: boundarySessionId } })}`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content: 'Нашёл лампы.' } }] })}`,
+    `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'test-log', phase: 'complete', products_count: 0 } })}`,
+    'data: [DONE]',
+    '',
+  ].join('\n\n');
+  const dom = bootWidget({
+    state: savedDialogue(now - 1_000),
+    now,
+    fetchImpl: async () => new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } }),
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'а у тебя есть лампы кукуруза?';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  const deadline = Date.now() + 2_000;
+  while (readState(dom)?.history?.at(-1)?.content !== 'Нашёл лампы.' && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  const state = readState(dom);
+  assert.equal(state.sessionId, boundarySessionId);
+  assert.deepEqual(state.dialogSlots, {});
+  assert.deepEqual(state.history.map((message) => message.content), [
+    'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?',
+    'а у тебя есть лампы кукуруза?',
+    'Нашёл лампы.',
+  ]);
+  assert.match(visibleMessages(dom), /старый вопрос про кабель/u);
+  assert.equal(dom.window.document.querySelectorAll('.volt-topic-divider').length, 1);
+  assert.match(visibleMessages(dom), /Новая тема/u);
   dom.window.close();
 });
