@@ -97,6 +97,50 @@ export function groundedCategoryRecoveryQueries(
   return umbrellaGrounded ? [umbrella] : [];
 }
 
+/** Keep terminal candidates inside taxonomy leaves explicitly grounded by the
+ * consultant's reasoning. Every significant token of a target leaf must be
+ * evidenced by the product title or its live leaf category. */
+export function filterProductsByGroundedCategoryTargets<T extends { pagetitle: string; leaf_category?: string | null }>(
+  products: T[],
+  targets: string[],
+  umbrella = "",
+  declaredReasoning = "",
+): T[] {
+  const grounded = [...new Set((targets ?? []).map((target) => target.trim()).filter(Boolean))];
+  if (grounded.length === 0) return [];
+  const umbrellaTokens = significantTokens(umbrella);
+  const targetTokenSets = grounded.map((target) => significantTokens(target));
+  const umbrellaClassTokens = umbrellaTokens.filter((token) =>
+    targetTokenSets.some((tokens) => tokens.some((candidate) => tokenMatches(token, candidate)))
+  );
+  const recurringTargetTokens = targetTokenSets[0]?.filter((token) =>
+    targetTokenSets.slice(1).every((tokens) => tokens.some((candidate) => tokenMatches(token, candidate)))
+  ) ?? [];
+  const classTokens = umbrellaClassTokens.length > 0 ? umbrellaClassTokens : recurringTargetTokens;
+  const distinctiveByTarget = grounded.map((target) =>
+    significantTokens(target).filter((token) =>
+      !classTokens.some((classToken) => tokenMatches(token, classToken))
+    )
+  );
+  const hasDistinctiveTargets = distinctiveByTarget.some((tokens) => tokens.length > 0);
+  return products.filter((product) => {
+    if (product.leaf_category && declaredReasoning && !leafSupported(product.leaf_category, umbrella, declaredReasoning)) {
+      return false;
+    }
+    const exactLeaf = norm(product.leaf_category ?? "");
+    if (exactLeaf && grounded.some((target) => norm(target) === exactLeaf)) return true;
+    const evidenceTokens = significantTokens(`${product.pagetitle} ${product.leaf_category ?? ""}`);
+    const umbrellaMatched = classTokens.length === 0 || classTokens.every((token) =>
+      evidenceTokens.some((candidate) => tokenMatches(token, candidate))
+    );
+    if (!umbrellaMatched) return false;
+    if (!hasDistinctiveTargets) return true;
+    return distinctiveByTarget.some((tokens) => tokens.some((token) =>
+      evidenceTokens.some((candidate) => tokenMatches(token, candidate))
+    ));
+  });
+}
+
 /**
  * Last-resort query ladder for a failed multiword semantic query. Each token is
  * still only a hint; callers must require the same token in catalog evidence.
@@ -228,8 +272,12 @@ export function guardCategoryScopeByReasoning(
   if (dropped.length === 0) return { args, kept, dropped };
 
   const { category: _category, category_in: _categoryIn, ...rest } = args;
+  const hasFacetScope = rest.options && typeof rest.options === "object" &&
+    Object.keys(rest.options as Record<string, unknown>).length > 0;
   const nextArgs = kept.length === 0
-    ? rest
+    ? rest.mode === "by_filter" && !hasFacetScope && umbrella
+      ? { ...rest, category: umbrella }
+      : rest
     : kept.length === 1
     ? { ...rest, category: kept[0] }
     : { ...rest, category_in: kept };

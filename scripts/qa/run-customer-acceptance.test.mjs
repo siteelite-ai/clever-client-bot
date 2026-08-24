@@ -49,6 +49,16 @@ test('parseSse keeps pre-product text and parses card prices', () => {
   assert.equal(parsed.serverProductsCount, 1);
 });
 
+test('parseSse preserves safe tool progress for acceptance diagnostics', () => {
+  const body = [
+    `data: ${JSON.stringify({ v3_event: { type: 'tool_event', tool: 'search_catalog', phase: 'result', summary: 'Найдено 3', duration_ms: 125 } })}`,
+    'data: [DONE]',
+  ].join('\n\n');
+  assert.deepEqual(parseSse(body).toolEvents, [
+    { tool: 'search_catalog', phase: 'result', summary: 'Найдено 3', duration_ms: 125 },
+  ]);
+});
+
 test('parseSse keeps stock line for warehouse-priority assertions', () => {
   const body = [
     data({ v3_event: {
@@ -110,6 +120,30 @@ test('evaluate checks every product title group and maximum price', () => {
   }, response);
   assert(failures.some((failure) => failure.startsWith('product titles violate required groups')));
   assert(failures.some((failure) => failure.startsWith('product price exceeds 1000')));
+});
+
+test('evaluate validates a generic strict numeric pair around the object size', () => {
+  const base = {
+    text: '',
+    textBeforeProducts: '',
+    productsMarkdown: '',
+    completed: true,
+    diagnosticError: null,
+    serverProductsCount: 2,
+  };
+  assert.deepEqual(evaluate({ require_every_product_pair_around: 12 }, {
+    ...base,
+    links: [
+      { title: 'Изделие 13,0/6,5 мм' },
+      { title: 'Изделие 16/8 мм' },
+    ],
+  }), []);
+  const failures = evaluate({ require_every_product_pair_around: 12 }, {
+    ...base,
+    serverProductsCount: 1,
+    links: [{ title: 'Изделие 12/6 мм' }],
+  });
+  assert(failures.some((failure) => failure.includes('does not strictly surround 12')));
 });
 
 test('forbidden product nominal is matched as a token, not inside another nominal', () => {

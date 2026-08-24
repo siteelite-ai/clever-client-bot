@@ -3,6 +3,7 @@ import type { ProductRef, ToolName } from "./types.ts";
 export type AgentPhase =
   | "open"
   | "search_after_discovery"
+  | "rediscover_after_failed_discovery"
   | "jargon_after_failed_discovery"
   | "search_after_jargon"
   | "inquiry_with_results"
@@ -64,6 +65,15 @@ const JARGON_AFTER_FAILED_DISCOVERY_TOOLS: readonly ToolName[] = [
   "note_state",
 ];
 
+// A colloquial or overly specific first noun may fail even when the main
+// consultant has already described the correct broader product class. Give
+// that same consultant one bounded chance to retry taxonomy discovery before
+// delegating meaning to the lexical helper. The function name is forced, but
+// the replacement noun remains entirely model-owned.
+const REDISCOVER_AFTER_FAILED_DISCOVERY_TOOLS: readonly ToolName[] = [
+  "discover_category",
+];
+
 // A lexical recovery attempt is evidence for the main consultant, not a loop.
 // Whether it found a full or partial candidate, the consultant must carry its
 // own interpretation into a real catalog search next. Keeping this phase to a
@@ -90,6 +100,11 @@ const INQUIRY_WITH_RESULTS_TOOLS: readonly ToolName[] = [
 export interface AgentToolPolicy {
   reasoningRequiresCatalog?: boolean;
   correctiveDiscoveryAvailable?: boolean;
+  /** A selection may not terminate before it has entered the live taxonomy.
+   * This controls only the protocol phase; the model still supplies the noun
+   * and remains free to clarify after discovery when its reasoning is not yet
+   * sufficient for a product search. */
+  selectionRequiresInitialDiscovery?: boolean;
 }
 
 /**
@@ -115,6 +130,7 @@ export function toolNamesForAgentPhase(phase: AgentPhase, policy: AgentToolPolic
       ? ["discover_category", ...searchTools]
       : searchTools;
   }
+  if (phase === "rediscover_after_failed_discovery") return REDISCOVER_AFTER_FAILED_DISCOVERY_TOOLS;
   if (phase === "jargon_after_failed_discovery") return JARGON_AFTER_FAILED_DISCOVERY_TOOLS;
   if (phase === "search_after_jargon") return SEARCH_AFTER_JARGON_TOOLS;
   if (phase === "inquiry_with_results") return INQUIRY_WITH_RESULTS_TOOLS;
@@ -136,8 +152,10 @@ export function isToolAllowedInAgentPhase(phase: AgentPhase, tool: string, polic
  */
 export function forcedToolNameForAgentPhase(phase: AgentPhase, policy: AgentToolPolicy = {}): ToolName | null {
   if (phase === "terminal_after_search") return "render_products";
+  if (phase === "rediscover_after_failed_discovery") return "discover_category";
   if (phase === "jargon_after_failed_discovery") return "jargon_recover_catalog";
   if (phase === "search_after_jargon") return "search_catalog";
+  if (phase === "open" && policy.selectionRequiresInitialDiscovery) return "discover_category";
   if (!policy.reasoningRequiresCatalog) return null;
   if (phase === "open") return "discover_category";
   if (phase === "search_after_discovery" && policy.correctiveDiscoveryAvailable) return null;
@@ -203,7 +221,10 @@ export function shouldAllowCorrectiveDiscovery(input: {
 export function nextAgentPhase(current: AgentPhase, event: AgentPhaseEvent): AgentPhase {
   if (event.tool === "discover_category") {
     if (event.ok) return "search_after_discovery";
-    return event.errorCode === "category_not_found" ? "jargon_after_failed_discovery" : "open";
+    if (event.errorCode !== "category_not_found") return "open";
+    return current === "rediscover_after_failed_discovery"
+      ? "jargon_after_failed_discovery"
+      : "rediscover_after_failed_discovery";
   }
 
   if (event.tool === "search_catalog") {

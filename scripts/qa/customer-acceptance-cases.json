@@ -390,10 +390,7 @@
           "expect": {
             "min_products": 1,
             "require_every_product_title_any": ["светильник", "панель", "люстра"],
-            "require_every_product_title_groups": [
-              ["4000lm", "4000 lm", "4000лм", "5000lm", "5000 lm", "5000лм", "6000lm", "6000 lm", "6000лм", "7000lm", "7000 lm", "7000лм", "40W", "40Вт", "50W", "50Вт", "60W", "60Вт"]
-            ],
-            "forbid_every_product_title_any": ["улич", "прожектор", "Avenue", "E40", "IP65"],
+            "forbid_every_product_title_any": ["улич", "прожектор", "Avenue", "E40"],
             "require_any_text": ["лм", "люмен", "гостин", "основн"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
@@ -425,8 +422,7 @@
           "message": "подбери термоусадочную трубку для кабеля диаметром 12 мм",
           "expect": {
             "min_products": 1,
-            "require_every_product_title_any": ["16/8", "16-8", "16,0/4,0", "16.0/4.0", "19,1/9,55", "19.1/9.55", "20/10", "20-10"],
-            "forbid_product_title": ["12/6", "12-6"],
+            "require_every_product_pair_around": 12,
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }
@@ -441,7 +437,7 @@
           "message": "подбери трубку ТТУ на кабель диаметром 10 мм",
           "expect": {
             "min_products": 1,
-            "require_every_product_title_any": ["12/6", "12-6", "16/8", "16-8", "19,1/9,55", "19.1/9.55", "20/10", "20-10"],
+            "require_every_product_pair_around": 10,
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }

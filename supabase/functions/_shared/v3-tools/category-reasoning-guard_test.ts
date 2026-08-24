@@ -1,5 +1,6 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  filterProductsByGroundedCategoryTargets,
   groundedCategoryRecoveryQueries,
   groundedTokenRecoveryQueries,
   guardCategoryScopeByReasoning,
@@ -55,7 +56,17 @@ Deno.test("category reasoning guard does not accept a wrong modifier through a s
     },
     "Нужен светильник с датчиком движения для дома, внутри помещения.",
   );
-  assertEquals(result.args, { mode: "by_filter" });
+  assertEquals(result.args, { mode: "by_filter", category: "Светильники" });
+});
+
+Deno.test("category reasoning guard keeps the live umbrella when dropping the only unsupported leaf", () => {
+  const result = guardCategoryScopeByReasoning(
+    { mode: "by_filter", category: "Уличные светильники" },
+    discovered,
+    "Нужно светодиодное освещение внутри жилой комнаты.",
+  );
+  assertEquals(result.args, { mode: "by_filter", category: "Светильники" });
+  assertEquals(result.dropped, [{ category: "Уличные светильники", reason: "not_declared_in_reasoning" }]);
 });
 
 Deno.test("terminal category retry uses only leaves grounded in the reasoning", () => {
@@ -67,6 +78,47 @@ Deno.test("terminal category retry uses only leaves grounded in the reasoning", 
     ],
   }, "Ищу современную люстру для зала.");
   assertEquals(queries, ["Люстры"]);
+});
+
+Deno.test("terminal category target removes sibling product classes", () => {
+  const products = filterProductsByGroundedCategoryTargets([
+    { pagetitle: "Светильник потолочный LED 60W", leaf_category: "Потолочные светильники" },
+    { pagetitle: "Прожектор светодиодный IP65", leaf_category: "Прожекторы" },
+    { pagetitle: "Лампа светодиодная E27", leaf_category: "Светодиодные лампы" },
+  ], ["Потолочные светильники"], "Светильники");
+  assertEquals(products, [
+    { pagetitle: "Светильник потолочный LED 60W", leaf_category: "Потолочные светильники" },
+  ]);
+});
+
+Deno.test("terminal category target treats supported leaf modifiers as alternatives", () => {
+  const products = filterProductsByGroundedCategoryTargets([
+    { pagetitle: "Светильник светодиодный потолочный 60W", leaf_category: null },
+    { pagetitle: "Прожектор светодиодный потолочный 60W", leaf_category: "Прожекторы" },
+  ], ["Светильники потолочные накладные", "Светильники встраиваемые"], "Светильники");
+  assertEquals(products, [
+    { pagetitle: "Светильник светодиодный потолочный 60W", leaf_category: null },
+  ]);
+});
+
+Deno.test("terminal category target derives class from common leaf token when umbrella is broader", () => {
+  const products = filterProductsByGroundedCategoryTargets([
+    { pagetitle: "Светильник потолочный LED 60W", leaf_category: null },
+    { pagetitle: "Прожектор потолочный LED 60W", leaf_category: "Прожекторы" },
+  ], ["Потолочные светильники", "Накладные светильники"], "Освещение");
+  assertEquals(products, [
+    { pagetitle: "Светильник потолочный LED 60W", leaf_category: null },
+  ]);
+});
+
+Deno.test("terminal category target rejects a live leaf unsupported by initial reasoning", () => {
+  const products = filterProductsByGroundedCategoryTargets([
+    { pagetitle: "Светильник потолочный LED", leaf_category: "Потолочные светильники" },
+    { pagetitle: "Светильник уличный LED", leaf_category: "Уличные светильники" },
+  ], ["Светильники"], "Светильники", "Нужны потолочные светильники для жилой гостиной");
+  assertEquals(products, [
+    { pagetitle: "Светильник потолочный LED", leaf_category: "Потолочные светильники" },
+  ]);
 });
 
 Deno.test("terminal token ladder decomposes a failed semantic phrase", () => {

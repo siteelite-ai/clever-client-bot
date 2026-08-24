@@ -8,7 +8,10 @@ import {
   checkCriterion,
   filterProductIdsByBudgetCap,
   findTrait,
+  mergeFacetOptionConstraints,
   parseNumSpan,
+  projectCatalogFilterEvidence,
+  projectCriteriaFacetOptions,
   resolveRenderCriteria,
   titleProvesCompactCriterion,
   type Criterion,
@@ -197,6 +200,80 @@ Deno.test("applyCriteriaGate: уровень A требует доказател
     { id: "2", key: "параметр альфа", expected: "12–15", actual: "4-6 ед" },
     { id: "3", key: "параметр альфа", expected: "12–15", actual: "нет данных" },
   ]);
+});
+
+Deno.test("repeated equality values of one facet are alternatives, not impossible AND", () => {
+  const items = [
+    product("20", ["Мощность: 20 Вт"]),
+    product("50", ["Мощность: 50 Вт"]),
+    product("75", ["Мощность: 75 Вт"]),
+  ];
+  const criteria: Criterion[] = [20, 30, 50, 100].map((value) => ({
+    key: "Мощность",
+    op: "eq",
+    value,
+    unit: "Вт",
+    level: "A",
+  }));
+  const report = applyCriteriaGate(items, criteria);
+  assertEquals(report.passed_ids, ["20", "50"]);
+  assertEquals(report.rejected.map((item) => item.id), ["75"]);
+});
+
+Deno.test("mandatory criteria compile into live facet OR values and numeric bounds", () => {
+  const projection = projectCriteriaFacetOptions([
+    { key: "Мощность", op: "eq", value: 20, unit: "Вт", level: "A" },
+    { key: "Мощность", op: "eq", value: 50, unit: "Вт", level: "A" },
+    { key: "Степень защиты", op: "eq", value: "IP65", level: "A" },
+    { key: "Световой поток", op: "min", value: 3750, unit: "лм", level: "A" },
+  ], [
+    { key: "power", caption: "Мощность", unit: "Вт", values: [{ value: "20" }, { value: "30" }, { value: "50" }] },
+    { key: "ip", caption: "Степень защиты", unit: null, values: [{ value: "IP44" }, { value: "IP65" }] },
+    { key: "flow", caption: "Световой поток", unit: "лм", values: [{ value: "3000" }, { value: "4000" }, { value: "5000" }] },
+  ]);
+  assertEquals(projection.options, { power: ["20", "50"], ip: ["IP65"], flow: ["4000", "5000"] });
+  assertEquals(projection.unmatched_keys, []);
+});
+
+Deno.test("independent facet projections merge as one strict intersection", () => {
+  assertEquals(mergeFacetOptionConstraints(
+    { before: ["13", "14", "16"], after: ["4", "6", "7", "8"] },
+    { ratio: ["2:1"], before: ["14", "16"] },
+  ), {
+    options: { before: ["14", "16"], after: ["4", "6", "7", "8"], ratio: ["2:1"] },
+    conflicting_keys: [],
+  });
+});
+
+Deno.test("contradictory projections fail closed", () => {
+  assertEquals(mergeFacetOptionConstraints({ axis: ["a"] }, { axis: ["b"] }), {
+    options: {},
+    conflicting_keys: ["axis"],
+  });
+});
+
+Deno.test("numeric bounds intersect before the live facet result is bounded", () => {
+  const projection = projectCriteriaFacetOptions([
+    { key: "Световой поток", op: "min", value: 3750, unit: "лм", level: "A" },
+    { key: "Световой поток", op: "max", value: 5000, unit: "лм", level: "A" },
+  ], [{
+    key: "flow",
+    caption: "Световой поток",
+    unit: "лм",
+    values: [
+      ...Array.from({ length: 13 }, (_, index) => ({ value: String(6000 + index * 100) })),
+      { value: "3800" }, { value: "4000" }, { value: "4500" }, { value: "4800" }, { value: "5100" },
+    ],
+  }]);
+  assertEquals(projection.options, { flow: ["3800", "4000", "4500", "4800"] });
+  assertEquals(projection.proven_criteria.length, 2);
+  assertEquals(projection.unmatched_keys, []);
+});
+
+Deno.test("successful canonical filter lineage proves an omitted compact trait", () => {
+  const criterion: Criterion = { key: "Параметр каталога", op: "eq", value: "6,8–12", level: "A" };
+  const items = projectCatalogFilterEvidence([product("1", [])], [criterion]);
+  assertEquals(applyCriteriaGate(items, [criterion]).passed_ids, ["1"]);
 });
 
 Deno.test("applyCriteriaGate: уровень B не отсеивает", () => {

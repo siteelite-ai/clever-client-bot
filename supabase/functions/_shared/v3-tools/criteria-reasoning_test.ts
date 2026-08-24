@@ -2,7 +2,7 @@
 // Data-agnostic: абстрактные имена параметров.
 
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { alignCriteriaWithReasoning, extractReasoningBounds, hasMeasuredSelectionRequirement, projectReasoningRangeCriteria } from "./criteria-reasoning.ts";
+import { alignCriteriaWithReasoning, extractReasoningBounds, hasMeasuredSelectionRequirement, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria } from "./criteria-reasoning.ts";
 import { checkCriterion, type Criterion } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
 
@@ -34,7 +34,25 @@ Deno.test("числовой диапазон из рассуждения про�
     { key: "svetovoj_potok", caption: "Световой поток", type: "number", unit: "лм" },
     { key: "power", caption: "Мощность", type: "number", unit: "Вт" },
   ]);
-  assertEquals(projected.added, [{ key: "svetovoj_potok", op: "range", value: [3750, 5000], unit: "лм", level: "A" }]);
+  assertEquals(projected.added, [{ key: "Световой поток", op: "range", value: [3750, 5000], unit: "лм", level: "A" }]);
+});
+
+Deno.test("русский диапазон от X до Y проецируется так же, как запись через тире", () => {
+  const projected = projectReasoningRangeCriteria([], "нужно от 3500 до 5000 люмен", [
+    { key: "flow", caption: "Поток", type: "number", unit: "лм" },
+  ]);
+  assertEquals(projected.added, [{ key: "Поток", op: "range", value: [3500, 5000], unit: "лм", level: "A" }]);
+});
+
+Deno.test("проверенный средний расчёт сохраняет исходный диапазон результата", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "Ориентир 150–200 лк. Считаем: 25 м² × 175 лк (среднее) ≈ 4375 лм.",
+    [{ key: "flow", caption: "Световой поток", type: "number", unit: "лм" }],
+  );
+  assertEquals(projected.added, [
+    { key: "Световой поток", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
+  ]);
 });
 
 Deno.test("два диапазона одной единицы не проецируются на один фасет наугад", () => {
@@ -42,6 +60,74 @@ Deno.test("два диапазона одной единицы не проеци
     { key: "size", caption: "Размер", type: "number", unit: "мм" },
   ]);
   assertEquals(projected.added, []);
+});
+
+Deno.test("существующий критерий модели разрешает неоднозначность фасетов с одной единицей", () => {
+  const projected = projectReasoningRangeCriteria(
+    [{ key: "Световой поток, Лм", op: "min", value: 3750, unit: "лм", level: "A" }],
+    "Нужен световой поток 3750–5000 лм",
+    [
+      { key: "lamp_flow", caption: "Световой поток, Лм", type: "number", unit: "лм" },
+      { key: "module_flow", caption: "Поток светодиодного модуля", type: "number", unit: "лм" },
+    ],
+  );
+  assertEquals(projected.added, [
+    { key: "Световой поток, Лм", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
+  ]);
+});
+
+Deno.test("числовые live-значения компенсируют строковый тип фасета каталога", () => {
+  const projected = projectReasoningRangeCriteria(
+    [{ key: "Световой поток", op: "min", value: 3750, unit: "лм", level: "A" }],
+    "Нужен световой поток 3750–5000 лм",
+    [{
+      key: "flow",
+      caption: "Световой поток",
+      type: "checkbox",
+      unit: "лм",
+      values: [{ value: "3000" }, { value: "4000" }, { value: "5000" }],
+    }],
+  );
+  assertEquals(projected.added, [
+    { key: "Световой поток", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
+  ]);
+});
+
+Deno.test("слова рядом с диапазоном разрешают неоднозначность live-фасетов", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "Для комнаты нужен суммарный световой поток 3750–5000 лм.",
+    [
+      { key: "lamp_flow", caption: "Световой поток", type: "checkbox", unit: "лм", values: [{ value: "4000" }] },
+      { key: "module_flow", caption: "Поток светодиодного модуля", type: "checkbox", unit: "лм", values: [{ value: "4100" }] },
+    ],
+  );
+  assertEquals(projected.added, [
+    { key: "Световой поток", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
+  ]);
+});
+
+Deno.test("единица из live-подписи компенсирует пустое поле unit", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "Нужен световой поток 3750–5000 лм",
+    [{ key: "flow_lm", caption: "Световой поток, Лм", type: "checkbox", unit: null, values: [{ value: "4000" }] }],
+  );
+  assertEquals(projected.added, [
+    { key: "Световой поток, Лм", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
+  ]);
+});
+
+Deno.test("числовой критерий из рассуждения повышается с B до обязательного A", () => {
+  const result = promoteMeasuredReasoningCriteria([
+    { key: "Световой поток", op: "min", value: 3750, unit: "лм", level: "B" },
+    { key: "Цвет", op: "eq", value: "белый", level: "B" },
+  ], "Для задачи нужен поток 3750–5000 лм");
+  assertEquals(result.criteria, [
+    { key: "Световой поток", op: "min", value: 3750, unit: "лм", level: "A" },
+    { key: "Цвет", op: "eq", value: "белый", level: "B" },
+  ]);
+  assertEquals(result.promoted, ["Световой поток"]);
 });
 
 Deno.test("alignCriteriaWithReasoning: eq на числе клиента → min по прозе", () => {

@@ -43,6 +43,8 @@ const onlyIds = process.argv.find((arg) => arg.startsWith('--case='))
   .filter(Boolean);
 const repeatOverrideRaw = process.argv.find((arg) => arg.startsWith('--repeat='))?.slice('--repeat='.length);
 const repeatOverride = repeatOverrideRaw ? Number(repeatOverrideRaw) : null;
+const compactOutput = process.argv.includes('--compact');
+const minimalOutput = process.argv.includes('--minimal');
 const selected = onlyIds?.length ? suite.cases.filter((item) => onlyIds.includes(item.id)) : suite.cases;
 const missingIds = onlyIds?.filter((id) => !selected.some((item) => item.id === id)) ?? [];
 if (missingIds.length > 0) throw new Error(`Unknown case: ${missingIds.join(', ')}`);
@@ -57,6 +59,7 @@ export function parseSse(body) {
   let serverProductsCount = null;
   let diagnosticError = null;
   let conversationBoundary = null;
+  const toolEvents = [];
   for (const line of body.split(/\r?\n/)) {
     if (!line.startsWith('data: ')) continue;
     const payload = line.slice(6).trim();
@@ -81,6 +84,14 @@ export function parseSse(body) {
     if (event?.type === 'conversation_boundary' && event.mode === 'new_task' && typeof event.session_id === 'string') {
       conversationBoundary = { mode: event.mode, sessionId: event.session_id };
     }
+    if (event?.type === 'tool_event') {
+      toolEvents.push({
+        tool: typeof event.tool === 'string' ? event.tool : null,
+        phase: typeof event.phase === 'string' ? event.phase : null,
+        summary: typeof event.summary === 'string' ? event.summary : null,
+        duration_ms: Number.isFinite(event.duration_ms) ? event.duration_ms : null,
+      });
+    }
     const delta = parsed.choices?.[0]?.delta?.content;
     if (typeof delta === 'string') {
       text += delta;
@@ -101,7 +112,7 @@ export function parseSse(body) {
       stockLine,
     });
   }
-  return { text, textBeforeProducts, productsMarkdown, links, logId, completed, serverProductsCount, diagnosticError, conversationBoundary };
+  return { text, textBeforeProducts, productsMarkdown, links, logId, completed, serverProductsCount, diagnosticError, conversationBoundary, toolEvents };
 }
 
 function includesAny(haystack, needles) {
@@ -116,6 +127,15 @@ function matchesEveryGroup(value, groups) {
 function includesStandalonePhrase(haystack, phrase) {
   const escaped = String(phrase).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'iu').test(haystack);
+}
+
+function parseTitleNumericPair(title) {
+  const match = String(title ?? '').match(/(\d+(?:[.,]\d+)?)\s*\/\s*(\d+(?:[.,]\d+)?)/u);
+  if (!match) return null;
+  const first = Number(match[1].replace(',', '.'));
+  const second = Number(match[2].replace(',', '.'));
+  if (!Number.isFinite(first) || !Number.isFinite(second) || first <= 0 || second <= 0 || first === second) return null;
+  return { high: Math.max(first, second), low: Math.min(first, second) };
 }
 
 export function evaluate(expect = {}, response) {
@@ -165,6 +185,16 @@ export function evaluate(expect = {}, response) {
       .filter((link) => includesAny(link.title, expect.forbid_every_product_title_any))
       .map((link) => link.title);
     if (invalidTitles.length > 0) failures.push(`product titles contain forbidden class fragments: ${invalidTitles.join(' | ')}`);
+  }
+  if (Number.isFinite(expect.require_every_product_pair_around)) {
+    const reference = Number(expect.require_every_product_pair_around);
+    const invalidTitles = response.links.filter((link) => {
+      const pair = parseTitleNumericPair(link.title);
+      return !pair || !(pair.high > reference && pair.low < reference);
+    }).map((link) => link.title);
+    if (invalidTitles.length > 0) {
+      failures.push(`product title pair does not strictly surround ${reference}: ${invalidTitles.join(' | ')}`);
+    }
   }
   if (Array.isArray(expect.deprioritized_warehouses)) {
     for (const link of response.links) {
@@ -250,6 +280,7 @@ async function runTurn({ message, expect }, state) {
     text: parsed.text,
     completed: parsed.completed,
     conversation_boundary: parsed.conversationBoundary,
+    tool_events: parsed.toolEvents,
     passed: failures.length === 0,
     failures,
   };
@@ -282,7 +313,49 @@ export async function main() {
 
   report.finished_at = new Date().toISOString();
   report.passed = report.cases.every((item) => item.passed);
-  console.log(JSON.stringify(report, null, 2));
+  const output = minimalOutput
+    ? {
+        endpoint: report.endpoint,
+        passed: report.passed,
+        cases: report.cases.map((testCase) => ({
+          id: testCase.id,
+          passed: testCase.passed,
+          repeats: testCase.repeats.map((repeat) => ({
+            run: repeat.run,
+            passed: repeat.passed,
+            duration_ms: repeat.turns.reduce((total, turn) => total + turn.duration_ms, 0),
+            products: repeat.turns.flatMap((turn) => turn.products.map((product) => product.title)),
+            failures: repeat.turns.flatMap((turn) => turn.failures),
+            log_ids: repeat.turns.map((turn) => turn.log_id).filter(Boolean),
+          })),
+        })),
+      }
+    : compactOutput
+    ? {
+        endpoint: report.endpoint,
+        passed: report.passed,
+        cases: report.cases.map((testCase) => ({
+          id: testCase.id,
+          passed: testCase.passed,
+          repeats: testCase.repeats.map((repeat) => ({
+            run: repeat.run,
+            passed: repeat.passed,
+            turns: repeat.turns.map((turn) => ({
+              passed: turn.passed,
+              duration_ms: turn.duration_ms,
+              log_id: turn.log_id,
+              products_count: turn.products_count,
+              products: turn.products.map((product) => product.title),
+              text: turn.text,
+              failures: turn.failures,
+              diagnostic_error: turn.diagnostic_error,
+              tool_events: turn.tool_events,
+            })),
+          })),
+        })),
+      }
+    : report;
+  console.log(JSON.stringify(output, null, 2));
   if (!report.passed) process.exitCode = 1;
 }
 
