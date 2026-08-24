@@ -142,6 +142,7 @@ import {
   shouldStartNewConversation,
   stripCurrentUserEcho,
 } from "../_shared/v3-tools/conversation-boundary.ts";
+import { classifyPublicFailure, UpstreamHttpError } from "../_shared/v3-tools/public-failure.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -1821,7 +1822,7 @@ async function callOpenRouter(
 
     if (!res.ok) {
       const errText = await res.text();
-      throw new Error(`OpenRouter ${res.status}: ${errText.slice(0, 200)}`);
+      throw new UpstreamHttpError(res.status, errText);
     }
 
     // КРИТИЧНО: res.json() стримит body и может висеть дольше, чем сам fetch.
@@ -1890,7 +1891,7 @@ async function callOpenRouterEvidenceFollowup(
       }),
       signal: localCtrl.signal,
     });
-    if (!response.ok) throw new Error(`OpenRouter evidence follow-up ${response.status}: ${(await response.text()).slice(0, 200)}`);
+    if (!response.ok) throw new UpstreamHttpError(response.status, await response.text());
     const data = await response.json() as { choices?: Array<{ message?: { content?: string | null }; finish_reason?: string }> };
     const text = data.choices?.[0]?.message?.content?.trim() ?? "";
     if (!text) throw new Error("OpenRouter evidence follow-up returned empty text");
@@ -1945,7 +1946,7 @@ async function callOpenRouterSeriesExplanation(
       }),
       signal: localCtrl.signal,
     });
-    if (!response.ok) throw new Error(`OpenRouter series explanation ${response.status}: ${(await response.text()).slice(0, 200)}`);
+    if (!response.ok) throw new UpstreamHttpError(response.status, await response.text());
     const data = await response.json() as { choices?: Array<{ message?: { content?: string | null }; finish_reason?: string }> };
     const text = data.choices?.[0]?.message?.content?.trim() ?? "";
     return {
@@ -5990,6 +5991,7 @@ Deno.serve(async (req) => {
   const t0 = Date.now();
   const steps: StepLog[] = [];
   let errorMsg: string | null = null;
+  let publicDiagnosticError: string | null = null;
   let finalTextAccum = "";
   let productsCount = 0;
 
@@ -6325,19 +6327,25 @@ Deno.serve(async (req) => {
 
       } catch (e) {
         errorMsg = (e as Error)?.message ?? String(e);
-        const isAbort = errorMsg?.toLowerCase().includes("abort") || (e as Error)?.name === "AbortError";
+        const publicFailure = classifyPublicFailure(e);
+        publicDiagnosticError = publicFailure.public_code;
+        const isAbort = publicFailure.kind === "request_aborted" || publicFailure.kind === "request_timeout";
         if (isAbort) errorMsg = `aborted: ${errorMsg}`;
         console.error("[v3] expert error:", e);
-        steps.push({ step: "v3_turn_end", ms: Date.now() - t0, meta: { reason: isAbort ? "aborted" : "error", error: errorMsg } });
+        steps.push({
+          step: "v3_turn_end",
+          ms: Date.now() - t0,
+          meta: {
+            reason: isAbort ? "aborted" : "error",
+            error: errorMsg,
+            public_error: publicFailure.public_code,
+            retryable: publicFailure.retryable,
+          },
+        });
         try {
-          // Честный выход вместо «переформулируйте»: если подбор упёрся в лимит
-          // времени, значит под названные требования подходящих позиций найти не
-          // удалось. Признаём это прямо и отправляем клиента к менеджеру.
           send({
             type: "delta",
-            content: isAbort
-              ? "\n\nПод названные вами требования подобрать позицию в каталоге не удалось — не хочу предлагать то, что им не соответствует. Напишите или позвоните менеджеру: он проверит наличие под заказ и подскажет альтернативу."
-              : "\n\nНе получилось обработать запрос. Попробуйте переформулировать или свяжитесь с менеджером.",
+            content: `\n\n${publicFailure.customer_message}`,
           });
         } catch { /* stream may be closed */ }
       } finally {
@@ -6353,7 +6361,7 @@ Deno.serve(async (req) => {
             log_id: logId,
             phase: "complete",
             products_count: productsCount,
-            error: errorMsg,
+            error: publicDiagnosticError,
           });
         } catch { /* stream may be closed */ }
         // Только теперь безопасно закрывать стрим — UPDATE уже долетел до БД.
