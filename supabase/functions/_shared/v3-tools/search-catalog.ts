@@ -462,7 +462,7 @@ export async function executeSearchCatalog(
     const hasCat = !!input.category || (Array.isArray(input.category_in) && input.category_in.length > 0);
     const hasOpts = input.options && Object.keys(input.options).length > 0;
     if (!hasCat && !hasOpts) {
-      return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "by_filter requires category/category_in or options" };
+      return { tool: "search_catalog", ok: false, error_code: "incomplete_filter", message: "by_filter requires category/category_in or options" };
     }
   } else if (input.mode !== "by_article" && input.mode !== "by_pagetitle" && input.mode !== "by_query") {
     return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "missing field for mode" };

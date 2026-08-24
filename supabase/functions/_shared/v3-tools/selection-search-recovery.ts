@@ -35,9 +35,9 @@ export interface SelectionSearchFailure {
 }
 
 /**
- * Recovery is allowed for an empty filtered result and for the one structural
- * serialization error where the model emitted `by_filter` without either a
- * live scope or options. Other catalog/input errors fail closed.
+ * Recovery is allowed for an empty filtered result and for the structured
+ * incomplete-filter result where the model emitted `by_filter` without either
+ * a live scope or options. Other catalog/input errors fail closed.
  */
 export function isRecoverableSelectionSearchFailure(
   args: Record<string, unknown>,
@@ -45,9 +45,7 @@ export function isRecoverableSelectionSearchFailure(
 ): boolean {
   if (args.mode !== "by_filter") return false;
   if (result.ok) return Number(result.total ?? 0) === 0;
-  if (result.error_code !== "bad_input") return false;
-  const message = String(result.message ?? "").toLocaleLowerCase("en-US");
-  return message.includes("by_filter requires category/category_in or options");
+  return result.error_code === "incomplete_filter";
 }
 
 const REVALIDATE: SelectionSearchRecoveryAttempt["revalidate"] = [

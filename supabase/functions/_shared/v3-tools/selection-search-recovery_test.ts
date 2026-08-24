@@ -75,7 +75,7 @@ Deno.test("empty and structurally incomplete by-filter calls enter the same reco
   ), true);
   assertEquals(isRecoverableSelectionSearchFailure(
     { mode: "by_filter", per_page: 50 },
-    { ok: false, error_code: "bad_input", message: "by_filter requires category/category_in or options" },
+    { ok: false, error_code: "incomplete_filter", message: "message wording is irrelevant" },
   ), true);
 });
 
@@ -83,6 +83,10 @@ Deno.test("recovery controller does not swallow unrelated bad input or transport
   assertEquals(isRecoverableSelectionSearchFailure(
     { mode: "by_filter" },
     { ok: false, error_code: "bad_input", message: "invalid option value" },
+  ), false);
+  assertEquals(isRecoverableSelectionSearchFailure(
+    { mode: "by_filter" },
+    { ok: false, error_code: "bad_input", message: "by_filter requires category/category_in or options" },
   ), false);
   assertEquals(isRecoverableSelectionSearchFailure(
     { mode: "by_filter" },

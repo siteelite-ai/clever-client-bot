@@ -2,6 +2,26 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { executeSearchCatalog } from "./search-catalog.ts";
 import type { ProductCache } from "./types.ts";
 
+Deno.test("incomplete by-filter input exposes a structured recovery code", async () => {
+  let fetched = false;
+  const result = await executeSearchCatalog({
+    mode: "by_filter",
+    per_page: 50,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl: () => {
+      fetched = true;
+      return Promise.resolve(new Response("", { status: 500 }));
+    },
+  }, new Map());
+
+  assertEquals(fetched, false);
+  assertEquals(result.ok, false);
+  if (result.ok) return;
+  assertEquals(result.error_code, "incomplete_filter");
+});
+
 Deno.test("catalog retries an equivalent compound spelling only after an empty result", async () => {
   const queries: string[] = [];
   const fetchImpl: typeof fetch = (input) => {
