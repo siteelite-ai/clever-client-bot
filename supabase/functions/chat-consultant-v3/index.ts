@@ -2491,6 +2491,42 @@ async function selectVerifiedHouseholdMotionLights(
     .filter((product): product is ProductFull => Boolean(product));
 }
 
+async function answerBroadAssortmentRequest(
+  seriesToken: string | null,
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<void> {
+  const started = Date.now();
+  const leaves: string[] = [];
+  let total = 0;
+  if (seriesToken) {
+    const result = await executeSearchCatalog({
+      mode: "by_query",
+      query: seriesToken,
+      min_price: 1,
+      per_page: 50,
+    }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+    if (result.ok) {
+      const grounded = filterProductsByNamedSeries(result.results, seriesToken);
+      total = result.total;
+      for (const product of grounded) {
+        const leaf = String(product.leaf_category ?? "").trim();
+        if (leaf && !leaves.includes(leaf)) leaves.push(leaf);
+      }
+    }
+  }
+  const suffix = leaves.length > 0 ? ` В каталоге уже видны разделы: ${leaves.slice(0, 5).join(", ")}.` : "";
+  const answer = `Уточните, пожалуйста, какой раздел или тип товара показать: широкий ассортимент нельзя честно представить несколькими случайными карточками.${suffix}`;
+  send({ type: "delta", content: answer });
+  steps.push({
+    step: "v3_broad_assortment_preflight",
+    ms: Date.now() - t0,
+    meta: { series: seriesToken, total, leaf_categories: leaves, duration_ms: Date.now() - started },
+  });
+}
+
 async function selectVerifiedOutdoorPoeProducts(
   ctx: ToolContext,
   send: (event: SseEvent) => void,
@@ -2640,6 +2676,7 @@ async function runExpertLoop(
   // the cards cannot silently diverge from the preceding reasoning.
   let enforcedSearchCriteria: Criterion[] = [];
   let userBackedSearchCriteria: Criterion[] = [];
+  let activeSelectionTarget: string | null = null;
   const compoundRecoveryHints: string[] = [];
   const rememberCompoundRecoveryHint = (value: unknown) => {
     if (typeof value !== "string") return;
@@ -3873,6 +3910,7 @@ async function runExpertLoop(
         // before criteria and before any markdown reaches the customer.
         if (tc.name === "render_products") {
           const target = typeof tc.args.selection_target === "string" ? tc.args.selection_target.trim() : "";
+          if (target) activeSelectionTarget = target;
           const ids = Array.isArray(tc.args.product_ids)
             ? (tc.args.product_ids as unknown[]).map(String)
             : [];
@@ -4944,13 +4982,20 @@ async function runExpertLoop(
     // or step budget): the terminal label must not discard a proven candidate.
     // This is not a broad last-chance pool: every ID came from canonical facet
     // values declared in the consultant's reasoning.
-    if (productsRendered === 0 && reasoningBackedSearch && (!seriesTurnRequiresGrounding || seriesGroundingSatisfied)) {
+    if (
+      productsRendered === 0 &&
+      reasoningBackedSearch &&
+      activeSelectionTarget &&
+      (!seriesTurnRequiresGrounding || seriesGroundingSatisfied)
+    ) {
       const candidateProducts = reasoningBackedSearch.ids
         .map((id) => ctx.cache.get(id))
         .filter((product): product is NonNullable<typeof product> => Boolean(product));
       const adjusted = gateWithLiteralCompoundEvidence(candidateProducts, reasoningBackedSearch.criteria);
       const gate = adjusted.report;
       let safeIds = reasoningBackedSearch.ids.filter((id) => gate.passed_ids.includes(id));
+      const targetReport = verifySelectionTarget(activeSelectionTarget, candidateProducts);
+      safeIds = safeIds.filter((id) => targetReport.passed_ids.includes(id));
       if (replacementIntent) {
         const anchorId = getAnchorExcludeId();
         const familyExclude = getFamilyExcludeSet();
@@ -5018,7 +5063,7 @@ async function runExpertLoop(
     if (productsRendered === 0 && !semanticBackedSearch && !replacementIntent && intentMode === "select" && !seriesTurnRequiresGrounding) {
       const evidence = `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`;
       const categoryQueries = groundedCategoryRecoveryQueries(lastDiscover, evidence)
-        .map((query) => ({ query, requireTitleEvidence: false, source: "category" as const }));
+        .map((query) => ({ query, requireTitleEvidence: true, source: "category" as const }));
       const tokenSource = lastSearchNoun || userMessage;
       const tokenQueries = groundedTokenRecoveryQueries(tokenSource)
         .filter((query) => !categoryQueries.some((candidate) => normalizeForMatch(candidate.query) === normalizeForMatch(query)))
@@ -5056,6 +5101,7 @@ async function runExpertLoop(
     if (
       productsRendered === 0 &&
       semanticBackedSearch &&
+      activeSelectionTarget &&
       !replacementIntent &&
       intentMode === "select" &&
       (
@@ -5073,6 +5119,8 @@ async function runExpertLoop(
       let safeIds = guardVisibleCardinality(
         semanticBackedSearch.ids.filter((id) => gate.passed_ids.includes(id)),
       ).ids;
+      const targetReport = verifySelectionTarget(activeSelectionTarget, candidateProducts);
+      safeIds = safeIds.filter((id) => targetReport.passed_ids.includes(id));
       const budgetGuard = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage));
       safeIds = budgetGuard.ids;
       if (budgetGuard.dropped > 0) {
@@ -5400,6 +5448,10 @@ Deno.serve(async (req) => {
         const namedSeriesInquiryToken = detectUserIntentMode(userMessage) === "inquire"
           ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8))
           : null;
+        const broadAssortmentRequest = isBroadAssortmentRequest(userMessage);
+        const broadAssortmentToken = broadAssortmentRequest
+          ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8))
+          : null;
         // GUARD v3_meta_question_declined: вопрос про устройство сервиса
         // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
         // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
@@ -5411,6 +5463,9 @@ Deno.serve(async (req) => {
         } else if (isCleanPowerSafetyRequest(userMessage)) {
           steps.push({ step: "v3_clean_power_safety_answer", ms: Date.now() - t0 });
           send({ type: "delta", content: CLEAN_POWER_SAFETY_ANSWER });
+          productsCount = 0;
+        } else if (broadAssortmentRequest) {
+          await answerBroadAssortmentRequest(broadAssortmentToken, ctx, send, steps, t0);
           productsCount = 0;
         } else if (namedSeriesInquiryToken) {
           await answerVerifiedNamedSeriesInquiry(

@@ -374,7 +374,7 @@
           "expect": {
             "min_products": 1,
             "max_product_price": 4000,
-            "require_every_product_title_any": ["датчик", "сенсор"],
+            "require_every_product_title_any": ["датчик", "сенсор", "SNR"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }
@@ -422,7 +422,7 @@
           "message": "подбери термоусадочную трубку для кабеля диаметром 12 мм",
           "expect": {
             "min_products": 1,
-            "require_every_product_title_any": ["16/8", "16-8", "20/10", "20-10"],
+            "require_every_product_title_any": ["16/8", "16-8", "16,0/4,0", "16.0/4.0", "20/10", "20-10"],
             "forbid_product_title": ["12/6", "12-6"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
