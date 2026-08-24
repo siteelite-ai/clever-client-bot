@@ -9,6 +9,9 @@ verify_jwt = false
 [functions.chat-consultant-v3]
 verify_jwt = false
 
+[functions.chat-consultant-v3-preview]
+verify_jwt = true
+
 [functions.widget-config]
 verify_jwt = false
 
@@ -17,6 +20,5 @@ verify_jwt = false
 
 [functions.knowledge-process]
 verify_jwt = false
-
 
 
