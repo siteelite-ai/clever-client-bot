@@ -108,6 +108,11 @@ import {
   validateChatRequestBody,
   type ChatHistoryMessage,
 } from "../_shared/v3-tools/request-validation.ts";
+import {
+  classifyConversationBoundary,
+  shouldStartNewConversation,
+  stripCurrentUserEcho,
+} from "../_shared/v3-tools/conversation-boundary.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -128,6 +133,7 @@ const TURN_TIMEOUT_MS = 140_000;
 type SseEvent =
   | { type: "delta"; content: string }
   | { type: "diagnostic"; log_id: string | null; phase: "start" | "complete"; products_count?: number; error?: string | null }
+  | { type: "conversation_boundary"; mode: "new_task"; session_id: string }
   | { type: "assistant_turn_break"; reason: "tool_pending" | "after_render" | "final_text" | "text_before_render" | "intro_late" }
   | { type: "tool_event"; tool: string; phase: "start" | "result"; duration_ms?: number; summary?: string }
   | { type: "products_block"; markdown: string; count: number; total_available?: number }
@@ -151,6 +157,7 @@ function encodeSse(ev: SseEvent): Uint8Array {
 interface AppSettings {
   openrouter_api_key: string | null;
   volt220_api_token: string | null;
+  classifier_model: string;
   v3_anchor_filter_enabled: boolean;
   v3_relaxation_hints_enabled: boolean;
   v3_jargon_category_context_enabled: boolean;
@@ -162,12 +169,13 @@ async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
   try {
     const { data } = await supabase
       .from("app_settings")
-      .select("openrouter_api_key, volt220_api_token, v3_anchor_filter_enabled, v3_relaxation_hints_enabled, v3_jargon_category_context_enabled, v3_jargon_axial_modifiers_enabled, v3_criteria_gate_enabled")
+      .select("openrouter_api_key, volt220_api_token, classifier_model, v3_anchor_filter_enabled, v3_relaxation_hints_enabled, v3_jargon_category_context_enabled, v3_jargon_axial_modifiers_enabled, v3_criteria_gate_enabled")
       .limit(1)
       .single();
     const row = data as {
       openrouter_api_key?: string;
       volt220_api_token?: string;
+      classifier_model?: string;
       v3_anchor_filter_enabled?: boolean;
       v3_relaxation_hints_enabled?: boolean;
       v3_jargon_category_context_enabled?: boolean;
@@ -177,6 +185,7 @@ async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
     return {
       openrouter_api_key: row?.openrouter_api_key ?? Deno.env.get("OPENROUTER_API_KEY") ?? null,
       volt220_api_token: row?.volt220_api_token ?? Deno.env.get("VOLT220_API_TOKEN") ?? null,
+      classifier_model: row?.classifier_model?.trim() || "google/gemini-2.5-flash",
       v3_anchor_filter_enabled: Boolean(row?.v3_anchor_filter_enabled),
       v3_relaxation_hints_enabled: Boolean(row?.v3_relaxation_hints_enabled),
       v3_jargon_category_context_enabled: Boolean(row?.v3_jargon_category_context_enabled),
@@ -187,6 +196,7 @@ async function loadSettings(supabase: SupabaseClient): Promise<AppSettings> {
     return {
       openrouter_api_key: Deno.env.get("OPENROUTER_API_KEY") ?? null,
       volt220_api_token: Deno.env.get("VOLT220_API_TOKEN") ?? null,
+      classifier_model: "google/gemini-2.5-flash",
       v3_anchor_filter_enabled: false,
       v3_relaxation_hints_enabled: false,
       v3_jargon_category_context_enabled: false,
@@ -5150,20 +5160,51 @@ Deno.serve(async (req) => {
       if (req.signal.aborted) onRuntimeAbort();
       else req.signal.addEventListener("abort", onRuntimeAbort, { once: true });
 
+      const priorHistory = stripCurrentUserEcho(history, userMessage);
+      const boundary = await classifyConversationBoundary(
+        userMessage,
+        priorHistory,
+        slots,
+        {
+          apiKey: settings.openrouter_api_key!,
+          model: settings.classifier_model,
+        },
+        req.signal,
+      );
+      const startsNewTask = shouldStartNewConversation(boundary);
+      const effectiveSessionId = startsNewTask ? `session_${crypto.randomUUID()}` : sessionId;
+      const effectiveHistory = startsNewTask ? [] : priorHistory;
+      const effectiveSlots = startsNewTask ? {} : slots;
+      steps.push({
+        step: "v3_conversation_boundary",
+        ms: Date.now() - t0,
+        meta: {
+          mode: startsNewTask ? "new_task" : "continuation",
+          classifier_mode: boundary.mode,
+          confidence: boundary.confidence,
+          source: boundary.source,
+          reason: boundary.reason,
+          history_echo_removed: priorHistory.length !== history.length,
+        },
+      });
+      if (startsNewTask) {
+        send({ type: "conversation_boundary", mode: "new_task", session_id: effectiveSessionId });
+      }
+
       const cache: ProductCache = new Map();
       const ctx: ToolContext = {
         cache,
         supabase,
         catalogToken: settings.volt220_api_token!,
         openrouterKey: settings.openrouter_api_key!,
-        sessionId,
+        sessionId: effectiveSessionId,
         jargonCategoryContextEnabled: settings.v3_jargon_category_context_enabled,
         jargonAxialModifiersEnabled: settings.v3_jargon_axial_modifiers_enabled,
       };
 
-      let recentProductEvidence = await loadRecentProductEvidence(supabase, sessionId);
+      let recentProductEvidence = await loadRecentProductEvidence(supabase, effectiveSessionId);
       if (recentProductEvidence.length === 0 && isEvidenceOnlyFollowup(userMessage)) {
-        const lookupTitles = extractRenderedProductTitles(history);
+        const lookupTitles = extractRenderedProductTitles(effectiveHistory);
         const recoveredProducts: ProductFull[] = [];
         for (const pagetitle of lookupTitles) {
           const recovered = await runTool("search_catalog", {
@@ -5187,7 +5228,7 @@ Deno.serve(async (req) => {
             ms: Date.now() - t0,
             meta: { count: recentProductEvidence.length, lookup_titles: lookupTitles.length },
           });
-          await persistRecentProductEvidence(supabase, sessionId, recoveredProducts);
+          await persistRecentProductEvidence(supabase, effectiveSessionId, recoveredProducts);
         }
       }
       if (recentProductEvidence.length > 0) {
@@ -5195,7 +5236,7 @@ Deno.serve(async (req) => {
       }
 
       try {
-        const outdoorPoeIntent = classifyOutdoorPoeIntent(userMessage, history);
+        const outdoorPoeIntent = classifyOutdoorPoeIntent(userMessage, effectiveHistory);
         const householdMotionLightRequest = classifyHouseholdMotionLightRequest(userMessage);
         const exactCompoundMarkingRequest = classifyExactCompoundMarkingRequest(userMessage);
         const explicitCompoundMarking = extractExplicitCompoundMarking(userMessage);
@@ -5203,7 +5244,7 @@ Deno.serve(async (req) => {
           ? explicitCompoundMarking
           : null;
         const namedSeriesInquiryToken = detectUserIntentMode(userMessage) === "inquire"
-          ? resolveNamedSeriesToken(userMessage, history.slice(-8))
+          ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8))
           : null;
         // GUARD v3_meta_question_declined: вопрос про устройство сервиса
         // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
@@ -5239,7 +5280,7 @@ Deno.serve(async (req) => {
             t0,
           );
           productsCount = selection.products.length;
-          await persistRecentProductEvidence(supabase, sessionId, selection.products);
+          await persistRecentProductEvidence(supabase, effectiveSessionId, selection.products);
         } else if (semanticCompoundMarking) {
           send({
             type: "delta",
@@ -5255,9 +5296,9 @@ Deno.serve(async (req) => {
           );
           if (direct.handled) {
             productsCount = direct.products.length;
-            await persistRecentProductEvidence(supabase, sessionId, direct.products);
+            await persistRecentProductEvidence(supabase, effectiveSessionId, direct.products);
           } else {
-            const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0, {
+            const out = await runExpertLoop(userMessage, effectiveHistory, effectiveSlots, settings.openrouter_api_key!, ctx, send, steps, t0, {
               anchorFilterEnabled: settings.v3_anchor_filter_enabled,
               relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
               criteriaGateEnabled: true,
@@ -5266,7 +5307,7 @@ Deno.serve(async (req) => {
             const shownProducts = out.shownProductIds
               .map((id) => ctx.cache.get(id))
               .filter((product): product is NonNullable<typeof product> => Boolean(product));
-            await persistRecentProductEvidence(supabase, sessionId, shownProducts);
+            await persistRecentProductEvidence(supabase, effectiveSessionId, shownProducts);
           }
         } else if (exactCompoundMarkingRequest) {
           send({ type: "delta", content: exactCompoundMarkingIntro(exactCompoundMarkingRequest) });
@@ -5278,7 +5319,7 @@ Deno.serve(async (req) => {
             t0,
           );
           productsCount = selectedProducts.length;
-          await persistRecentProductEvidence(supabase, sessionId, selectedProducts);
+          await persistRecentProductEvidence(supabase, effectiveSessionId, selectedProducts);
         } else if (householdMotionLightRequest) {
           send({ type: "delta", content: HOUSEHOLD_MOTION_LIGHT_INTRO });
           const selectedProducts = await selectVerifiedHouseholdMotionLights(
@@ -5289,7 +5330,7 @@ Deno.serve(async (req) => {
             householdMotionLightRequest.maxPrice,
           );
           productsCount = selectedProducts.length;
-          await persistRecentProductEvidence(supabase, sessionId, selectedProducts);
+          await persistRecentProductEvidence(supabase, effectiveSessionId, selectedProducts);
         } else if (outdoorPoeIntent === "assessment") {
           steps.push({ step: "v3_outdoor_poe_assessment", ms: Date.now() - t0 });
           send({ type: "delta", content: OUTDOOR_POE_ASSESSMENT_ANSWER });
@@ -5302,7 +5343,7 @@ Deno.serve(async (req) => {
           send({ type: "delta", content: OUTDOOR_POE_SELECTION_INTRO });
           const selectedProducts = await selectVerifiedOutdoorPoeProducts(ctx, send, steps, t0);
           productsCount = selectedProducts.length;
-          await persistRecentProductEvidence(supabase, sessionId, selectedProducts);
+          await persistRecentProductEvidence(supabase, effectiveSessionId, selectedProducts);
         } else if (recentProductEvidence.length > 0 && isEvidenceOnlyFollowup(userMessage)) {
           const answer = buildDeterministicEvidenceAnswer(recentProductEvidence, userMessage);
           steps.push({
@@ -5324,9 +5365,9 @@ Deno.serve(async (req) => {
           }
           if (direct.handled) {
             productsCount = direct.products.length;
-            await persistRecentProductEvidence(supabase, sessionId, direct.products);
+            await persistRecentProductEvidence(supabase, effectiveSessionId, direct.products);
           } else {
-            const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0, {
+            const out = await runExpertLoop(userMessage, effectiveHistory, effectiveSlots, settings.openrouter_api_key!, ctx, send, steps, t0, {
               anchorFilterEnabled: settings.v3_anchor_filter_enabled,
               relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
               criteriaGateEnabled: true,
@@ -5335,10 +5376,10 @@ Deno.serve(async (req) => {
             const shownProducts = out.shownProductIds
               .map((id) => ctx.cache.get(id))
               .filter((product): product is NonNullable<typeof product> => Boolean(product));
-            await persistRecentProductEvidence(supabase, sessionId, shownProducts);
+            await persistRecentProductEvidence(supabase, effectiveSessionId, shownProducts);
           }
         } else {
-          const out = await runExpertLoop(userMessage, history, slots, settings.openrouter_api_key!, ctx, send, steps, t0, {
+          const out = await runExpertLoop(userMessage, effectiveHistory, effectiveSlots, settings.openrouter_api_key!, ctx, send, steps, t0, {
             anchorFilterEnabled: settings.v3_anchor_filter_enabled,
             relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
             // Criteria gate — production-инвариант доказательности, а не
@@ -5349,7 +5390,7 @@ Deno.serve(async (req) => {
           const shownProducts = out.shownProductIds
             .map((id) => ctx.cache.get(id))
             .filter((product): product is NonNullable<typeof product> => Boolean(product));
-          await persistRecentProductEvidence(supabase, sessionId, shownProducts);
+          await persistRecentProductEvidence(supabase, effectiveSessionId, shownProducts);
         }
 
       } catch (e) {

@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-6b49e1483c877053';
+  var WIDGET_VERSION = 'widget-721b29a413855247';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -520,6 +520,25 @@
     .volt-message.assistant strong {
       color: white;
     }
+
+    .volt-topic-divider {
+      align-self: stretch;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: rgba(255, 255, 255, 0.55);
+      font-size: 11px;
+      line-height: 1;
+      margin: 4px 0;
+    }
+
+    .volt-topic-divider::before,
+    .volt-topic-divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: rgba(255, 255, 255, 0.12);
+    }
     
     .volt-product-card {
       background: #333;
@@ -889,6 +908,34 @@
     return true;
   }
 
+  // The server can isolate a self-contained new request before routing it.
+  // Keep old bubbles visible for orientation, but persist and send only the new
+  // topic. The user does not need to close incognito or press "Новый диалог".
+  function applyAutomaticConversationBoundary(nextSessionId, currentMessage) {
+    if (!isValidSessionId(nextSessionId) || nextSessionId === sessionId) return false;
+    sessionId = nextSessionId;
+    dialogSlots = {};
+    conversationHistory = [
+      { role: 'assistant', content: initialGreeting },
+      { role: 'user', content: currentMessage }
+    ];
+    saveState();
+
+    var userMessages = messagesContainer.querySelectorAll('.volt-message.user');
+    var currentUserBubble = userMessages.length ? userMessages[userMessages.length - 1] : null;
+    if (currentUserBubble && currentUserBubble.previousElementSibling &&
+        currentUserBubble.previousElementSibling.classList.contains('volt-topic-divider')) return true;
+    if (currentUserBubble) {
+      var divider = document.createElement('div');
+      divider.className = 'volt-topic-divider';
+      divider.setAttribute('role', 'separator');
+      divider.setAttribute('aria-label', 'Новая тема');
+      divider.textContent = 'Новая тема';
+      messagesContainer.insertBefore(divider, currentUserBubble);
+    }
+    return true;
+  }
+
   function expireConversationIfNeeded(preserveInput) {
     if (!hasUserMessages(conversationHistory)) return false;
     var now = Date.now();
@@ -1075,6 +1122,10 @@
               continue;
             }
             if (ev.type === 'contacts') { contacts = ev.html; continue; }
+            if (ev.type === 'conversation_boundary' && ev.mode === 'new_task') {
+              applyAutomaticConversationBoundary(ev.session_id, message);
+              continue;
+            }
             if (ev.type === 'slot_update') { dialogSlots = ev.slots || {}; saveState(); continue; }
             if (ev.type === 'products_block' && ev.markdown) {
               if (!firstTokenReceived) { firstTokenReceived = true; onFirstToken(); }
@@ -1128,6 +1179,10 @@
                 continue;
               }
               if (ev2.type === 'contacts') { contacts = ev2.html; continue; }
+              if (ev2.type === 'conversation_boundary' && ev2.mode === 'new_task') {
+                applyAutomaticConversationBoundary(ev2.session_id, message);
+                continue;
+              }
               if (ev2.type === 'slot_update') { dialogSlots = ev2.slots || {}; saveState(); continue; }
               if (ev2.type === 'products_block' && ev2.markdown) {
                 handleProductsBlock(ev2.markdown);

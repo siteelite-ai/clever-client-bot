@@ -56,6 +56,7 @@ export function parseSse(body) {
   let completed = false;
   let serverProductsCount = null;
   let diagnosticError = null;
+  let conversationBoundary = null;
   for (const line of body.split(/\r?\n/)) {
     if (!line.startsWith('data: ')) continue;
     const payload = line.slice(6).trim();
@@ -77,6 +78,9 @@ export function parseSse(body) {
         serverProductsCount = event.products_count;
       }
     }
+    if (event?.type === 'conversation_boundary' && event.mode === 'new_task' && typeof event.session_id === 'string') {
+      conversationBoundary = { mode: event.mode, sessionId: event.session_id };
+    }
     const delta = parsed.choices?.[0]?.delta?.content;
     if (typeof delta === 'string') {
       text += delta;
@@ -93,7 +97,7 @@ export function parseSse(body) {
       price: Number.isFinite(parsedPrice) && parsedPrice > 0 ? parsedPrice : null,
     });
   }
-  return { text, textBeforeProducts, productsMarkdown, links, logId, completed, serverProductsCount, diagnosticError };
+  return { text, textBeforeProducts, productsMarkdown, links, logId, completed, serverProductsCount, diagnosticError, conversationBoundary };
 }
 
 function includesAny(haystack, needles) {
@@ -114,6 +118,12 @@ export function evaluate(expect = {}, response) {
   const failures = [];
   const productTitles = response.links.map((link) => link.title).join('\n');
   const allOutput = `${response.text}\n${response.productsMarkdown}`;
+  if (expect.conversation_boundary === 'new_task' && response.conversationBoundary?.mode !== 'new_task') {
+    failures.push('expected automatic new_task conversation boundary');
+  }
+  if (expect.conversation_boundary === 'continuation' && response.conversationBoundary) {
+    failures.push(`unexpected conversation boundary: ${response.conversationBoundary.mode}`);
+  }
   if (Number.isFinite(expect.min_products) && response.links.length < expect.min_products) {
     failures.push(`products ${response.links.length} < ${expect.min_products}`);
   }
@@ -202,6 +212,10 @@ async function runTurn({ message, expect }, state) {
   const parsed = parseSse(raw);
   const failures = response.ok ? evaluate(expect, parsed) : [`HTTP ${response.status}`];
   const combined = [parsed.text, parsed.productsMarkdown].filter(Boolean).join('\n\n');
+  if (parsed.conversationBoundary?.sessionId) {
+    state.sessionId = parsed.conversationBoundary.sessionId;
+    state.history = [];
+  }
   state.history.push({ role: 'user', content: message }, { role: 'assistant', content: combined });
   return {
     message,
@@ -213,6 +227,7 @@ async function runTurn({ message, expect }, state) {
     products: parsed.links,
     text: parsed.text,
     completed: parsed.completed,
+    conversation_boundary: parsed.conversationBoundary,
     passed: failures.length === 0,
     failures,
   };

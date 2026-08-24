@@ -64,6 +64,16 @@ test('parseSse ignores heartbeat comments without losing completion', () => {
   assert.equal(parsed.links.length, 0);
 });
 
+test('parseSse exposes automatic conversation boundaries', () => {
+  const parsed = parseSse([
+    data({ v3_event: { type: 'conversation_boundary', mode: 'new_task', session_id: 'session_new_scope' } }),
+    'data: [DONE]',
+  ].join('\n'));
+  assert.deepEqual(parsed.conversationBoundary, { mode: 'new_task', sessionId: 'session_new_scope' });
+  assert.deepEqual(evaluate({ conversation_boundary: 'new_task' }, parsed), []);
+  assert(evaluate({ conversation_boundary: 'continuation' }, parsed).includes('unexpected conversation boundary: new_task'));
+});
+
 test('evaluate checks every product title group and maximum price', () => {
   const response = {
     text: '',
