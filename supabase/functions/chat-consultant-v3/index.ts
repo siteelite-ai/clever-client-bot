@@ -53,6 +53,7 @@ import {
 } from "../_shared/v3-tools/recent-product-evidence.ts";
 import { META_DECLINE_TEXT, containsUnrenderedCatalogFacts, isMetaSelfQuestion, redactInternals, sanitizeIntermediateReasoning, stripUnrenderedCatalogFactSegments } from "../_shared/v3-tools/internals-guard.ts";
 import {
+  boundedAgentStepTimeout,
   compactCatalogResultForLlm,
   forcedToolNameForAgentPhase,
   hasActionableSelectionReasoning,
@@ -127,6 +128,10 @@ const CATALOG_BASE_URL = Deno.env.get("CATALOG_API_BASE_URL") ?? "https://220vol
 const MODEL = "deepseek/deepseek-v4-flash"; // MoE 284B/13B-active, 1M ctx, optimized for agent workflows. rollback: "deepseek/deepseek-v4-pro"
 const MAX_STEPS = 12;
 const TURN_TIMEOUT_MS = 140_000;
+// Stop starting remote model calls before the hard abort so the ordinary
+// evidence-gated recovery below has time to render a proven pool and close SSE.
+const TURN_SOFT_DEADLINE_MS = 105_000;
+const MIN_AGENT_STEP_BUDGET_MS = 5_000;
 
 // ─── SSE encoding ───────────────────────────────────────────────────────────
 
@@ -1854,11 +1859,12 @@ async function callOpenRouterSeriesExplanation(
   userMessage: string,
   products: ProductFull[],
   signal: AbortSignal,
+  timeoutMs = 45_000,
 ): Promise<ORResponse> {
   const localCtrl = new AbortController();
   const localTimer = setTimeout(
     () => localCtrl.abort(new DOMException("llm_call_timeout:series_explanation", "TimeoutError")),
-    45_000,
+    timeoutMs,
   );
   const onOuterAbort = () => localCtrl.abort((signal as { reason?: unknown }).reason);
   if (signal.aborted) localCtrl.abort((signal as { reason?: unknown }).reason);
@@ -2734,6 +2740,7 @@ async function runExpertLoop(
   // Прерываем ход и отвечаем честно, вместо выжигания 140 с до таймаута.
   let criteriaDeadEnds = 0;
   let criteriaDeadEndBreak = false;
+  let deadlineFinalizeBreak = false;
 
   // No-progress detector: подряд два search_catalog с тем же сигнатурным
   // набором id (или пусто) → дальнейшие итерации не дадут нового сигнала,
@@ -3080,6 +3087,23 @@ async function runExpertLoop(
         phaseTimeoutMs = LLM_TIMEOUT_TOOL_DECISION_MS;
       }
 
+      const boundedPhaseTimeoutMs = boundedAgentStepTimeout(
+        phaseTimeoutMs,
+        now(),
+        TURN_SOFT_DEADLINE_MS,
+        MIN_AGENT_STEP_BUDGET_MS,
+      );
+      if (boundedPhaseTimeoutMs === null) {
+        deadlineFinalizeBreak = true;
+        steps.push({
+          step: "v3_soft_deadline_finalize",
+          ms: now(),
+          meta: { step_index: step, phase, reason: "insufficient_remote_step_budget" },
+        });
+        break;
+      }
+      phaseTimeoutMs = boundedPhaseTimeoutMs;
+
       const llmStart = Date.now();
       const agentToolPolicy = {
         reasoningRequiresCatalog: seriesTurnRequiresGrounding && !seriesGroundingSatisfied || (
@@ -3098,24 +3122,39 @@ async function runExpertLoop(
           const evidenceProducts = (freshSearch?.ids ?? [])
             .map((id) => ctx.cache.get(id))
             .filter((product): product is ProductFull => Boolean(product));
-          resp = await callOpenRouterSeriesExplanation(apiKey, userMessage, evidenceProducts, turnController.signal);
+          resp = await callOpenRouterSeriesExplanation(apiKey, userMessage, evidenceProducts, turnController.signal, phaseTimeoutMs);
         } else {
           resp = await callOpenRouter(apiKey, messages, turnController.signal, phaseTimeoutMs, phase, availableToolNames, forcedToolName);
         }
       } catch (error) {
         const timeout = (error as Error)?.name === "TimeoutError" || String((error as Error)?.message ?? error).includes("llm_call_timeout:");
         if (step === 0 && timeout && !turnController.signal.aborted) {
+          const retryTimeoutMs = boundedAgentStepTimeout(
+            LLM_TIMEOUT_INTRO_RETRY_MS,
+            now(),
+            TURN_SOFT_DEADLINE_MS,
+            MIN_AGENT_STEP_BUDGET_MS,
+          );
+          if (retryTimeoutMs === null) {
+            deadlineFinalizeBreak = true;
+            steps.push({
+              step: "v3_soft_deadline_finalize",
+              ms: now(),
+              meta: { step_index: step, phase, reason: "intro_retry_budget_exhausted" },
+            });
+            break;
+          }
           steps.push({
             step: "v3_llm_intro_timeout_retry",
             ms: now(),
-            meta: { primary_error: String((error as Error)?.message ?? error), retry_timeout_ms: LLM_TIMEOUT_INTRO_RETRY_MS },
+            meta: { primary_error: String((error as Error)?.message ?? error), retry_timeout_ms: retryTimeoutMs },
           });
           try {
-            resp = await callOpenRouter(apiKey, messages, turnController.signal, LLM_TIMEOUT_INTRO_RETRY_MS, "intro", availableToolNames, forcedToolName);
+            resp = await callOpenRouter(apiKey, messages, turnController.signal, retryTimeoutMs, "intro", availableToolNames, forcedToolName);
             steps.push({
               step: "v3_llm_intro_timeout_recovered",
               ms: now(),
-              meta: { retry_timeout_ms: LLM_TIMEOUT_INTRO_RETRY_MS },
+              meta: { retry_timeout_ms: retryTimeoutMs },
             });
             // Retry succeeded; continue with the ordinary response pipeline.
           } catch (retryError) {
@@ -3124,39 +3163,70 @@ async function runExpertLoop(
               ms: now(),
               meta: { retry_error: String((retryError as Error)?.message ?? retryError) },
             });
-            throw retryError;
+            const retryTimedOut = (retryError as Error)?.name === "TimeoutError" ||
+              String((retryError as Error)?.message ?? retryError).includes("llm_call_timeout:");
+            if (retryTimedOut && !turnController.signal.aborted) {
+              if (recentProductEvidence.length > 0 && isEvidenceOnlyFollowup(userMessage)) {
+                resp = {
+                  text: buildDeterministicEvidenceAnswer(recentProductEvidence, userMessage),
+                  toolCalls: [],
+                  finishReason: "deterministic_evidence_fallback",
+                };
+                steps.push({
+                  step: "v3_llm_followup_recovered",
+                  ms: now(),
+                  meta: { strategy: "deterministic_evidence_after_intro_retry_timeout", evidence_count: recentProductEvidence.length },
+                });
+              } else {
+                deadlineFinalizeBreak = true;
+                break;
+              }
+            } else {
+              throw retryError;
+            }
           }
+        } else if (timeout && recentProductEvidence.length > 0 && isEvidenceOnlyFollowup(userMessage)) {
+          steps.push({
+            step: "v3_llm_followup_timeout_recovery",
+            ms: now(),
+            meta: { primary_error: String((error as Error)?.message ?? error), evidence_count: recentProductEvidence.length },
+          });
+          try {
+            resp = await callOpenRouterEvidenceFollowup(apiKey, userMessage, recentProductEvidence, turnController.signal);
+            steps.push({
+              step: "v3_llm_followup_recovered",
+              ms: now(),
+              meta: { strategy: "compact_evidence_llm", evidence_count: recentProductEvidence.length },
+            });
+          } catch (recoveryError) {
+            resp = {
+              text: buildDeterministicEvidenceAnswer(recentProductEvidence, userMessage),
+              toolCalls: [],
+              finishReason: "deterministic_evidence_fallback",
+            };
+            steps.push({
+              step: "v3_llm_followup_recovered",
+              ms: now(),
+              meta: {
+                strategy: "deterministic_evidence",
+                evidence_count: recentProductEvidence.length,
+                recovery_error: String((recoveryError as Error)?.message ?? recoveryError),
+              },
+            });
+          }
+        } else if (timeout && !turnController.signal.aborted) {
+          // A later model phase may time out after a verified search pool was
+          // found. Exit into the shared evidence recovery instead of throwing
+          // past it and discarding those candidates.
+          deadlineFinalizeBreak = true;
+          steps.push({
+            step: "v3_llm_timeout_finalize",
+            ms: now(),
+            meta: { step_index: step, phase, timeout_ms: phaseTimeoutMs },
+          });
+          break;
         } else {
-        const recoverableFollowup = step === 0 && timeout && recentProductEvidence.length > 0 && isEvidenceOnlyFollowup(userMessage);
-        if (!recoverableFollowup) throw error;
-        steps.push({
-          step: "v3_llm_followup_timeout_recovery",
-          ms: now(),
-          meta: { primary_error: String((error as Error)?.message ?? error), evidence_count: recentProductEvidence.length },
-        });
-        try {
-          resp = await callOpenRouterEvidenceFollowup(apiKey, userMessage, recentProductEvidence, turnController.signal);
-          steps.push({
-            step: "v3_llm_followup_recovered",
-            ms: now(),
-            meta: { strategy: "compact_evidence_llm", evidence_count: recentProductEvidence.length },
-          });
-        } catch (recoveryError) {
-          resp = {
-            text: buildDeterministicEvidenceAnswer(recentProductEvidence, userMessage),
-            toolCalls: [],
-            finishReason: "deterministic_evidence_fallback",
-          };
-          steps.push({
-            step: "v3_llm_followup_recovered",
-            ms: now(),
-            meta: {
-              strategy: "deterministic_evidence",
-              evidence_count: recentProductEvidence.length,
-              recovery_error: String((recoveryError as Error)?.message ?? recoveryError),
-            },
-          });
-        }
+          throw error;
         }
       }
       steps.push({
@@ -4978,6 +5048,8 @@ async function runExpertLoop(
           ? "grounded_jargon_terminal"
           : groundedCompoundSearchTerminal
             ? "grounded_compound_search_terminal"
+          : deadlineFinalizeBreak
+            ? "deadline_finalize"
           : criteriaDeadEndBreak
             ? "criteria_dead_end"
             : noProgressBreak
