@@ -27,6 +27,7 @@ export function validateWidgetSnapshot(snapshot, {
     throw new Error('Widget input did not return to the active state');
   }
   if (!/button "Отправить"/u.test(turn)) throw new Error('Widget send button is missing');
+  if (!/button "Новый диалог"/u.test(snapshot)) throw new Error('Widget new-dialog control is missing');
   return { queryIndex, turn };
 }
 
@@ -47,6 +48,8 @@ export async function runWidgetBrowserSmoke(tab, {
   }
   const send = page.getByLabel('Отправить');
   if (await send.count() !== 1) throw new Error('Widget send button is ambiguous or missing');
+  const newConversation = page.getByRole('button', { name: 'Новый диалог' });
+  if (await newConversation.count() !== 1) throw new Error('Widget new-dialog control is ambiguous or missing');
   await input.fill(query);
   await send.click();
 
@@ -74,6 +77,7 @@ export async function runWidgetBrowserSmoke(tab, {
   return {
     passed: true,
     query,
+    newConversationAvailable: true,
     productLinkCount: linkCount,
     firstHref,
     turnSnapshot: validated.turn,

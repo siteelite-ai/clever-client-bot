@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-2cbc6c7a404fe7bc';
+  var WIDGET_VERSION = 'widget-6b49e1483c877053';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -27,9 +27,14 @@
 
   // Generate unique session ID — persist across page navigations
   const STORAGE_KEY = 'volt_widget_state';
+  // Не переносим скрытый контекст через длительный перерыв или восстановление
+  // старой вкладки браузером. Короткая навигация по каталогу сохраняет диалог.
+  const SESSION_TTL_MS = 30 * 60 * 1000;
+  const SESSION_FUTURE_SKEW_MS = 5 * 60 * 1000;
   let sessionId;
   let conversationHistory;
   let dialogSlots = {};
+  let lastActivityAt = 0;
   // Стабильный UUID одного сообщения для валидации, журналирования и будущей дедупликации.
   let currentMessageId = '';
   function generateMessageId() {
@@ -118,24 +123,41 @@
       return {};
     }
   }
+  function hasUserMessages(history) {
+    return Array.isArray(history) && history.some(function(message) {
+      return message && message.role === 'user';
+    });
+  }
+  function isRecentStoredState(value, now) {
+    if (!isPlainRecord(value) || !Number.isFinite(value.updatedAt)) return false;
+    if (value.updatedAt <= 0 || value.updatedAt > now + SESSION_FUTURE_SKEW_MS) return false;
+    return now - value.updatedAt <= SESSION_TTL_MS;
+  }
+  function resetConversationState() {
+    sessionId = newSessionId();
+    conversationHistory = [{ role: 'assistant', content: initialGreeting }];
+    dialogSlots = {};
+    currentMessageId = '';
+    lastActivityAt = Date.now();
+  }
   // Try to restore from sessionStorage
   try {
     const saved = sessionStorage.getItem(STORAGE_KEY);
     if (saved) {
       const parsed = JSON.parse(saved);
-      sessionId = isPlainRecord(parsed) && isValidSessionId(parsed.sessionId) ? parsed.sessionId : newSessionId();
-      conversationHistory = isPlainRecord(parsed) ? sanitizeHistory(parsed.history) : [];
-      dialogSlots = isPlainRecord(parsed) ? sanitizeDialogSlots(parsed.dialogSlots) : {};
-      if (!conversationHistory.length) conversationHistory = [{ role: 'assistant', content: initialGreeting }];
-
-      // Инвариант: слоты не могут существовать без пользовательских сообщений.
-      // Если в истории нет ни одной user-реплики — это «новый чат», сбрасываем slots
-      // и пересоздаём sessionId, чтобы сервер не подцеплял зомби-state из прошлой вкладочной сессии.
-      const hasUserMessages = Array.isArray(conversationHistory)
-        && conversationHistory.some(function(m) { return m && m.role === 'user'; });
-      if (!hasUserMessages) {
-        dialogSlots = {};
-        sessionId = newSessionId();
+      const now = Date.now();
+      if (isRecentStoredState(parsed, now) && isValidSessionId(parsed.sessionId)) {
+        sessionId = parsed.sessionId;
+        conversationHistory = sanitizeHistory(parsed.history);
+        dialogSlots = sanitizeDialogSlots(parsed.dialogSlots);
+        lastActivityAt = parsed.updatedAt;
+        if (!conversationHistory.length || !hasUserMessages(conversationHistory)) {
+          resetConversationState();
+        }
+      } else {
+        // Legacy-состояние без updatedAt и просроченный диалог сбрасываются.
+        sessionStorage.removeItem(STORAGE_KEY);
+        resetConversationState();
       }
     }
   } catch(e) {}
@@ -145,6 +167,9 @@
   }
   if (!conversationHistory) {
     conversationHistory = [{ role: 'assistant', content: initialGreeting }];
+  }
+  if (!lastActivityAt) {
+    lastActivityAt = Date.now();
   }
   
   let isOpen = false;
@@ -169,10 +194,12 @@
     try {
       conversationHistory = sanitizeHistory(conversationHistory);
       dialogSlots = sanitizeDialogSlots(dialogSlots);
+      lastActivityAt = Date.now();
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
         sessionId: sessionId,
         history: conversationHistory.slice(-20),
-        dialogSlots: dialogSlots
+        dialogSlots: dialogSlots,
+        updatedAt: lastActivityAt
       }));
     } catch(e) {}
   }
@@ -336,6 +363,7 @@
       font-weight: 600;
     }
     
+    #volt-widget-new-chat,
     #volt-widget-close {
       background: none;
       border: none;
@@ -346,8 +374,14 @@
       transition: opacity 0.2s;
     }
     
+    #volt-widget-new-chat:hover,
     #volt-widget-close:hover {
       opacity: 1;
+    }
+
+    #volt-widget-new-chat:disabled {
+      cursor: not-allowed;
+      opacity: 0.3;
     }
     
     #volt-widget-messages {
@@ -652,6 +686,12 @@
         </div>
         <div class="volt-header-right">
           <img id="volt-widget-logo" src="${CONFIG.logo}" alt="220volt">
+          <button id="volt-widget-new-chat" aria-label="Новый диалог" title="Новый диалог">
+            <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 12a9 9 0 1 0 3-6.7L3 8"/>
+              <path d="M3 3v5h5"/>
+            </svg>
+          </button>
           <button id="volt-widget-close" aria-label="Закрыть">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M18 6L6 18M6 6l12 12"/>
@@ -690,6 +730,7 @@
   // Get elements
   const button = document.getElementById('volt-widget-button');
   const window = document.getElementById('volt-widget-window');
+  const newChatBtn = document.getElementById('volt-widget-new-chat');
   const closeBtn = document.getElementById('volt-widget-close');
   const input = document.getElementById('volt-widget-input');
   const sendBtn = document.getElementById('volt-widget-send');
@@ -708,6 +749,7 @@
   // Toggle widget
   function toggleWidget() {
     isOpen = !isOpen;
+    if (isOpen) expireConversationIfNeeded(false);
     window.classList.toggle('open', isOpen);
     if (isOpen) {
       input.focus();
@@ -716,6 +758,12 @@
 
   button.addEventListener('click', toggleWidget);
   closeBtn.addEventListener('click', toggleWidget);
+  newChatBtn.addEventListener('click', function() {
+    if (isLoading) return;
+    if (hasUserMessages(conversationHistory) && typeof globalThis.confirm === 'function' &&
+        !globalThis.confirm('Начать новый диалог? Текущая история будет очищена.')) return;
+    resetVisibleConversation(false);
+  });
 
   // Escape HTML to prevent XSS
   function escapeHtml(text) {
@@ -791,8 +839,7 @@
     return result;
   }
 
-  // Add message to chat (returns the DOM element)
-  function addMessage(content, role) {
+  function createMessageElement(content, role) {
     const msg = document.createElement('div');
     msg.className = `volt-message ${role}`;
     if (role === 'user') {
@@ -800,6 +847,12 @@
     } else {
       msg.innerHTML = formatMessage(content);
     }
+    return msg;
+  }
+
+  // Add message to chat (returns the DOM element)
+  function addMessage(content, role) {
+    const msg = createMessageElement(content, role);
     messagesContainer.appendChild(msg);
     if (role === 'user') {
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -808,6 +861,46 @@
     }
     return msg;
   }
+
+  function renderConversationHistory() {
+    const safeHistory = sanitizeHistory(conversationHistory);
+    messagesContainer.textContent = '';
+    for (var i = 0; i < safeHistory.length; i++) {
+      messagesContainer.appendChild(createMessageElement(safeHistory[i].content, safeHistory[i].role));
+    }
+    if (!safeHistory.length) {
+      messagesContainer.appendChild(createMessageElement(initialGreeting, 'assistant'));
+    }
+    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+  }
+
+  function resetVisibleConversation(preserveInput) {
+    var draft = preserveInput ? input.value : '';
+    resetConversationState();
+    saveState();
+    renderConversationHistory();
+    input.value = draft;
+    if (charCounter) {
+      charCounter.textContent = '';
+      charCounter.style.display = 'none';
+      charCounter.className = '';
+    }
+    sendBtn.disabled = !draft.trim();
+    return true;
+  }
+
+  function expireConversationIfNeeded(preserveInput) {
+    if (!hasUserMessages(conversationHistory)) return false;
+    var now = Date.now();
+    var expired = !Number.isFinite(lastActivityAt) || lastActivityAt <= 0 ||
+      lastActivityAt > now + SESSION_FUTURE_SKEW_MS || now - lastActivityAt > SESSION_TTL_MS;
+    if (!expired || isLoading) return false;
+    return resetVisibleConversation(preserveInput);
+  }
+
+  // Восстановленный контекст обязан быть видимым: не отправляем модели историю,
+  // которой пользователь не видит в окне чата.
+  renderConversationHistory();
 
   function addDiagnosticLabel(target, logId, isPartial) {
     if (!target || (!logId && !isPartial)) return;
@@ -1111,12 +1204,15 @@
 
   // Send message with streaming + fallback
   async function sendMessage() {
+    if (isLoading) return;
+    expireConversationIfNeeded(true);
     var message = input.value.trim();
-    if (!message || isLoading) return;
+    if (!message) return;
 
     isLoading = true;
     input.value = '';
     sendBtn.disabled = true;
+    newChatBtn.disabled = true;
 
     // При любом ретрае в рамках одного sendMessage отправляется тот же UUID.
     currentMessageId = generateMessageId();
@@ -1316,6 +1412,7 @@
 
     isLoading = false;
     sendBtn.disabled = false;
+    newChatBtn.disabled = false;
     try { input.focus(); } catch(e) {}
   }
 
@@ -1346,6 +1443,12 @@
   window.Widget220volt = {
     open: function() { if (!isOpen) toggleWidget(); },
     close: function() { if (isOpen) toggleWidget(); },
-    toggle: toggleWidget
+    toggle: toggleWidget,
+    newConversation: function() {
+      if (isLoading) return false;
+      if (hasUserMessages(conversationHistory) && typeof globalThis.confirm === 'function' &&
+          !globalThis.confirm('Начать новый диалог? Текущая история будет очищена.')) return false;
+      return resetVisibleConversation(false);
+    }
   };
 })();

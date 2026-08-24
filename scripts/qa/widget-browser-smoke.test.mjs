@@ -8,6 +8,7 @@ const successfulSnapshot = `
 - generic: старый диалог
 - generic: ${query}
 - generic: Ищу лампы в каталоге
+- button "Новый диалог":
 - strong:
   - link "Лампа LED CORN 5Вт":
     - /url: https://220volt.kz/catalog/svetotexnika/lampyi/lampa-led-corn/
@@ -28,5 +29,9 @@ test('widget browser smoke rejects generic fallback and inactive controls', () =
   assert.throws(
     () => validateWidgetSnapshot(successfulSnapshot.replace(' [active]', ''), { query }),
     /active state/,
+  );
+  assert.throws(
+    () => validateWidgetSnapshot(successfulSnapshot.replace('- button "Новый диалог":\n', ''), { query }),
+    /new-dialog control/,
   );
 });
