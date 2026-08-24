@@ -47,6 +47,15 @@ jobs:
         with:
           deno-version: v1.x
 
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install test dependencies
+        run: npm ci --ignore-scripts
+
       - name: Type-check chat-consultant
         run: deno check supabase/functions/chat-consultant/index.ts
 
