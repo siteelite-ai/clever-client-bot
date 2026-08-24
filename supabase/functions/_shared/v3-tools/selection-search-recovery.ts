@@ -27,6 +27,29 @@ export interface SelectionSearchRecoveryPlanInput {
   compatibility_shaped: boolean;
 }
 
+export interface SelectionSearchFailure {
+  ok: boolean;
+  total?: number;
+  error_code?: string;
+  message?: string;
+}
+
+/**
+ * Recovery is allowed for an empty filtered result and for the one structural
+ * serialization error where the model emitted `by_filter` without either a
+ * live scope or options. Other catalog/input errors fail closed.
+ */
+export function isRecoverableSelectionSearchFailure(
+  args: Record<string, unknown>,
+  result: SelectionSearchFailure,
+): boolean {
+  if (args.mode !== "by_filter") return false;
+  if (result.ok) return Number(result.total ?? 0) === 0;
+  if (result.error_code !== "bad_input") return false;
+  const message = String(result.message ?? "").toLocaleLowerCase("en-US");
+  return message.includes("by_filter requires category/category_in or options");
+}
+
 const REVALIDATE: SelectionSearchRecoveryAttempt["revalidate"] = [
   "selection_target",
   "mandatory_criteria",

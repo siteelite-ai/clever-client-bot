@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildSelectionSearchRecoveryPlan } from "./selection-search-recovery.ts";
+import { buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure } from "./selection-search-recovery.ts";
 
 const facets = [
   { key: "feature", caption: "Функция", type: "string", unit: null, values: [{ value: "Да" }] },
@@ -66,4 +66,30 @@ Deno.test("policy contains no product vocabulary or hard-coded taxonomy", () => 
   for (const forbidden of ["термоус", "люстр", "светильник", "кабель", "ибп", "korn"]) {
     assertEquals(source.toLocaleLowerCase("ru-RU").includes(forbidden), false);
   }
+});
+
+Deno.test("empty and structurally incomplete by-filter calls enter the same recovery controller", () => {
+  assertEquals(isRecoverableSelectionSearchFailure(
+    { mode: "by_filter", category_in: ["Live leaf"] },
+    { ok: true, total: 0 },
+  ), true);
+  assertEquals(isRecoverableSelectionSearchFailure(
+    { mode: "by_filter", per_page: 50 },
+    { ok: false, error_code: "bad_input", message: "by_filter requires category/category_in or options" },
+  ), true);
+});
+
+Deno.test("recovery controller does not swallow unrelated bad input or transport failures", () => {
+  assertEquals(isRecoverableSelectionSearchFailure(
+    { mode: "by_filter" },
+    { ok: false, error_code: "bad_input", message: "invalid option value" },
+  ), false);
+  assertEquals(isRecoverableSelectionSearchFailure(
+    { mode: "by_filter" },
+    { ok: false, error_code: "catalog_timeout", message: "timeout" },
+  ), false);
+  assertEquals(isRecoverableSelectionSearchFailure(
+    { mode: "by_query" },
+    { ok: true, total: 0 },
+  ), false);
 });

@@ -22,9 +22,9 @@ import { applyCriteriaGate, buildCriteriaQuery, filterProductIdsByBudgetCap, mer
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaWithReasoning, hasMeasuredSelectionRequirement, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
-import { buildSelectionSearchRecoveryPlan } from "../_shared/v3-tools/selection-search-recovery.ts";
+import { buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract } from "../_shared/v3-tools/selection-actionability.ts";
-import { initialSelectionDeclaration, parseSelectionTarget, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "../_shared/v3-tools/selection-contract.ts";
+import { bootstrapSelectionTargetFromTaxonomy, initialSelectionDeclaration, parseSelectionTarget, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "../_shared/v3-tools/selection-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
   commonCompatibilityReference,
@@ -4912,9 +4912,12 @@ async function runExpertLoop(
         // before a card can be rendered.
         if (
           tc.name === "search_catalog" &&
-          result.ok &&
-          Number((result as { total?: number }).total ?? 0) === 0 &&
-          runArgs.mode === "by_filter"
+          isRecoverableSelectionSearchFailure(runArgs, result as unknown as {
+            ok: boolean;
+            total?: number;
+            error_code?: string;
+            message?: string;
+          })
         ) {
           const reasoningEvidence = `${userMessage}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
           const mayProjectReasoning = Boolean(
@@ -5242,6 +5245,20 @@ async function runExpertLoop(
             addToWhitelist(lastDiscover.category?.pagetitle);
             for (const leaf of lastDiscover.leaf_categories ?? []) {
               addToWhitelist(leaf.pagetitle);
+            }
+            if (intentMode === "select" && !activeSelectionTarget) {
+              const bootstrapped = bootstrapSelectionTargetFromTaxonomy(
+                `${userMessage}\n${initialSelectionDeclaration(firstAssistantText || assistantReasoning)}`,
+                lastDiscover.category?.pagetitle ?? "",
+              );
+              if (bootstrapped) {
+                activeSelectionTarget = bootstrapped;
+                steps.push({
+                  step: "v3_selection_target_bootstrapped",
+                  ms: now(),
+                  meta: { target: bootstrapped, source: "initial_reasoning_and_live_taxonomy" },
+                });
+              }
             }
           }
         }

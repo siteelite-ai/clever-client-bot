@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { initialSelectionDeclaration, parseSelectionTarget, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "./selection-contract.ts";
+import { bootstrapSelectionTargetFromTaxonomy, initialSelectionDeclaration, parseSelectionTarget, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
@@ -127,4 +127,18 @@ Deno.test("grounded label cannot authorize a sibling live class", () => {
     grounded_ids: ["sibling"],
   });
   assertEquals(report.passed_ids, []);
+});
+
+Deno.test("live taxonomy bootstraps only a class declared before search planning", () => {
+  assertEquals(
+    bootstrapSelectionTargetFromTaxonomy(
+      "Нужен потолочный светильник для основной комнаты. Сейчас посмотрю варианты.",
+      "Светильники",
+    ),
+    "Светильники",
+  );
+  assertEquals(
+    bootstrapSelectionTargetFromTaxonomy("Нужен источник резервного питания.", "Стабилизаторы"),
+    null,
+  );
 });

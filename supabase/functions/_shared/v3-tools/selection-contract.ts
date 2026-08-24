@@ -90,6 +90,21 @@ export function initialSelectionDeclaration(text: string): string {
     .trim();
 }
 
+/**
+ * Supplies a conservative terminal target when discovery succeeded but the
+ * model exhausted the turn before emitting `render_products`. The target is
+ * live taxonomy, accepted only when that same base class was already declared
+ * by the user or the consultant before search planning began.
+ */
+export function bootstrapSelectionTargetFromTaxonomy(
+  initialEvidence: string,
+  liveClass: string,
+): string | null {
+  const candidate = String(liveClass ?? "").trim();
+  if (!candidate || meaningfulTokens(candidate).length === 0) return null;
+  return selectionTargetIsDeclared(candidate, initialEvidence) ? candidate : null;
+}
+
 function productEvidence(product: ProductRef): string {
   return [
     product.pagetitle,
