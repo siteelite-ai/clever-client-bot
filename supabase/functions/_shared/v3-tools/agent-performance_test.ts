@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertLess } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  boundedAgentStepTimeout,
   compactCatalogResultForLlm,
   forcedToolNameForAgentPhase,
   hasActionableSelectionReasoning,
@@ -10,6 +11,13 @@ import {
   toolNamesForAgentPhase,
 } from "./agent-performance.ts";
 import type { ProductRef } from "./types.ts";
+
+Deno.test("agent deadline: remote steps are bounded and reserve finalization time", () => {
+  assertEquals(boundedAgentStepTimeout(30_000, 20_000, 105_000, 5_000), 30_000);
+  assertEquals(boundedAgentStepTimeout(110_000, 90_000, 105_000, 5_000), 15_000);
+  assertEquals(boundedAgentStepTimeout(30_000, 100_001, 105_000, 5_000), null);
+  assertEquals(boundedAgentStepTimeout(30_000, 105_000, 105_000, 5_000), null);
+});
 
 Deno.test("agent phase: successful discovery requires search and blocks rediscovery", () => {
   const phase = nextAgentPhase("open", {

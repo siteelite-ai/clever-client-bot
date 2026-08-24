@@ -9,6 +9,26 @@ export type AgentPhase =
   | "inquiry_explanation_ready"
   | "terminal_after_search";
 
+/**
+ * Bound one model call to the soft turn deadline. `null` means there is not
+ * enough time for another remote step, so the caller must use its existing
+ * evidence-backed finalization path instead.
+ */
+export function boundedAgentStepTimeout(
+  requestedMs: number,
+  elapsedMs: number,
+  softDeadlineMs: number,
+  minimumUsefulStepMs: number,
+): number | null {
+  const requested = Number.isFinite(requestedMs) ? Math.max(1, Math.floor(requestedMs)) : 1;
+  const elapsed = Number.isFinite(elapsedMs) ? Math.max(0, Math.floor(elapsedMs)) : 0;
+  const deadline = Number.isFinite(softDeadlineMs) ? Math.max(0, Math.floor(softDeadlineMs)) : 0;
+  const minimum = Number.isFinite(minimumUsefulStepMs) ? Math.max(1, Math.floor(minimumUsefulStepMs)) : 1;
+  const remaining = deadline - elapsed;
+  if (remaining < minimum) return null;
+  return Math.min(requested, remaining);
+}
+
 const OPEN_TOOLS: readonly ToolName[] = [
   "discover_category",
   "search_catalog",
