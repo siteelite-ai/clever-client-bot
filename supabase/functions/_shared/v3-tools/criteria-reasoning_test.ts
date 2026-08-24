@@ -2,7 +2,7 @@
 // Data-agnostic: абстрактные имена параметров.
 
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { alignCriteriaWithReasoning, extractReasoningBounds, hasMeasuredSelectionRequirement } from "./criteria-reasoning.ts";
+import { alignCriteriaWithReasoning, extractReasoningBounds, hasMeasuredSelectionRequirement, projectReasoningRangeCriteria } from "./criteria-reasoning.ts";
 import { checkCriterion, type Criterion } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
 
@@ -27,6 +27,14 @@ Deno.test("измеримое рассуждение требует машинн
   assertEquals(hasMeasuredSelectionRequirement("нужен поток 3750–5000 лм для комнаты"), true);
   assertEquals(hasMeasuredSelectionRequirement("трубка должна охватывать кабель 12 мм"), true);
   assertEquals(hasMeasuredSelectionRequirement("покажи кабель ВВГ 2×1,5"), false);
+});
+
+Deno.test("числовой диапазон из рассуждения проецируется на уникальный живой фасет", () => {
+  const projected = projectReasoningRangeCriteria([], "ориентир 3750–5000 люмен", [
+    { key: "svetovoj_potok", caption: "Световой поток", type: "number", unit: "лм" },
+    { key: "power", caption: "Мощность", type: "number", unit: "Вт" },
+  ]);
+  assertEquals(projected.added, [{ key: "svetovoj_potok", op: "range", value: [3750, 5000], unit: "лм", level: "A" }]);
 });
 
 Deno.test("alignCriteriaWithReasoning: eq на числе клиента → min по прозе", () => {

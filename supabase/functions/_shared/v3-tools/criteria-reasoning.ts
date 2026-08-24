@@ -36,6 +36,11 @@ export interface ReasoningAlignment {
   strict: boolean;
 }
 
+export interface ReasoningRangeProjection {
+  criteria: Criterion[];
+  added: Criterion[];
+}
+
 const NUM = String.raw`\d+(?:[.,]\d+)?`;
 const UNIT = String.raw`[a-zа-я°]{1,6}[²³]?\d?`;
 
@@ -51,6 +56,55 @@ export function hasMeasuredSelectionRequirement(text: string): boolean {
     return true;
   }
   return false;
+}
+
+function canonicalMeasurementUnit(raw: string): string {
+  const unit = normalizeUnit(raw);
+  const aliases: Record<string, string> = {
+    ватт: "вт", ватта: "вт", ваттов: "вт", watt: "вт", watts: "вт", w: "вт",
+    люмен: "лм", люмена: "лм", люменов: "лм", lumen: "лм", lumens: "лм", lm: "лм",
+    вольт: "в", вольта: "в", вольтов: "в", volt: "в", volts: "в", v: "в",
+    ампер: "а", ампера: "а", амперов: "а", amp: "а", amps: "а",
+  };
+  return aliases[unit] ?? unit;
+}
+
+/** Projects explicit numeric ranges from the consultant's own prose onto a
+ * unique live numeric facet with the same unit. This is the server-side bridge
+ * from reasoning to criteria; no product/category vocabulary is embedded. */
+export function projectReasoningRangeCriteria(
+  criteria: Criterion[],
+  reasoningText: string,
+  facets: Array<{ key: string; caption: string; type: string; unit: string | null }>,
+): ReasoningRangeProjection {
+  const next = (Array.isArray(criteria) ? criteria : []).map((criterion) => ({ ...criterion }));
+  const added: Criterion[] = [];
+  const text = String(reasoningText ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е");
+  const re = new RegExp(String.raw`(${NUM})\s*[–—-]\s*(${NUM})\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])`, "giu");
+  for (let match; (match = re.exec(text)) !== null;) {
+    const first = Number(match[1].replace(",", "."));
+    const second = Number(match[2].replace(",", "."));
+    const unit = canonicalMeasurementUnit(match[3]);
+    if (!Number.isFinite(first) || !Number.isFinite(second) || !unit) continue;
+    const matchingFacets = (facets ?? []).filter((facet) =>
+      facet.type === "number" && facet.unit && canonicalMeasurementUnit(facet.unit) === unit
+    );
+    if (matchingFacets.length !== 1) continue;
+    const [low, high] = [Math.min(first, second), Math.max(first, second)];
+    const alreadyRepresented = next.some((criterion) => {
+      if (canonicalMeasurementUnit(criterion.unit ?? "") !== unit) return false;
+      if (criterion.op === "range" && Array.isArray(criterion.value)) {
+        return Number(criterion.value[0]) === low && Number(criterion.value[1]) === high;
+      }
+      return false;
+    });
+    if (alreadyRepresented) continue;
+    const facet = matchingFacets[0];
+    const criterion: Criterion = { key: facet.key || facet.caption, op: "range", value: [low, high], unit: facet.unit, level: "A" };
+    next.push(criterion);
+    added.push(criterion);
+  }
+  return { criteria: next, added };
 }
 
 // Порядок важен: сначала отрицательные формы («не более»), иначе «более»

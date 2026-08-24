@@ -20,8 +20,9 @@ import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-t
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
 import { applyCriteriaGate, buildCriteriaQuery, filterProductIdsByBudgetCap, resolveRenderCriteria, titleProvesCompactCriterion, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
-import { alignCriteriaWithReasoning, hasMeasuredSelectionRequirement } from "../_shared/v3-tools/criteria-reasoning.ts";
+import { alignCriteriaWithReasoning, hasMeasuredSelectionRequirement, projectReasoningRangeCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { verifySelectionTarget } from "../_shared/v3-tools/selection-contract.ts";
+import { classifyShrinkFitRequest, selectDimensionallyCompatibleProducts } from "../_shared/v3-tools/dimensional-fit-policy.ts";
 import {
   broadAssortmentNeedsClarification,
   buildBroadAssortmentClarification,
@@ -2527,6 +2528,42 @@ async function answerBroadAssortmentRequest(
   });
 }
 
+async function selectVerifiedDimensionalFit(
+  request: { objectDiameterMm: number; searchNoun: string },
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<ProductFull[]> {
+  const started = Date.now();
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: request.searchNoun,
+    min_price: 1,
+    per_page: 200,
+  }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+  const candidates = result.ok ? result.results : [];
+  const compatible = selectDimensionallyCompatibleProducts(candidates, request.objectDiameterMm);
+  const intro = `Для кабеля Ø${String(request.objectDiameterMm).replace(".", ",")} мм проверяю оба каталожных размера: трубка до усадки должна быть строго больше диаметра кабеля, после усадки — строго меньше.`;
+  send({ type: "delta", content: intro });
+  if (compatible.length === 0) {
+    send({ type: "delta", content: " По этим двум условиям подтверждённых позиций в текущей выдаче нет; неподходящий размер показывать не буду." });
+    steps.push({ step: "v3_dimensional_fit_empty", ms: Date.now() - t0, meta: { object_mm: request.objectDiameterMm, candidates: candidates.length } });
+    return [];
+  }
+  const rendered = executeRenderProducts({ product_ids: compatible.map((product) => product.id) }, ctx.cache);
+  if (!rendered.ok) return [];
+  send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: compatible.length });
+  steps.push({
+    step: "v3_dimensional_fit_rendered",
+    ms: Date.now() - t0,
+    meta: { object_mm: request.objectDiameterMm, candidates: candidates.length, rendered: rendered.rendered_count, duration_ms: Date.now() - started },
+  });
+  return compatible
+    .map((product) => ctx.cache.get(product.id))
+    .filter((product): product is ProductFull => Boolean(product));
+}
+
 async function selectVerifiedOutdoorPoeProducts(
   ctx: ToolContext,
   send: (event: SseEvent) => void,
@@ -3972,6 +4009,18 @@ async function runExpertLoop(
             userBackedSearchCriteria,
             Boolean(namedSeriesToken),
           );
+          if (lastDiscover) {
+            const projected = projectReasoningRangeCriteria(
+              criteria,
+              `${firstAssistantText}\n${assistantReasoning}\n${resp.text}`,
+              lastDiscover.facets,
+            );
+            if (projected.added.length > 0) {
+              criteria = projected.criteria;
+              (tc.args as Record<string, unknown>).criteria = criteria;
+              steps.push({ step: "v3_reasoning_ranges_projected", ms: now(), meta: { added: projected.added } });
+            }
+          }
           if (
             criteria.length === 0 &&
             hasMeasuredSelectionRequirement(`${userMessage}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`)
@@ -5452,6 +5501,7 @@ Deno.serve(async (req) => {
         const broadAssortmentToken = broadAssortmentRequest
           ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8))
           : null;
+        const dimensionalFitRequest = classifyShrinkFitRequest(userMessage);
         // GUARD v3_meta_question_declined: вопрос про устройство сервиса
         // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
         // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
@@ -5467,6 +5517,10 @@ Deno.serve(async (req) => {
         } else if (broadAssortmentRequest) {
           await answerBroadAssortmentRequest(broadAssortmentToken, ctx, send, steps, t0);
           productsCount = 0;
+        } else if (dimensionalFitRequest) {
+          const selectedProducts = await selectVerifiedDimensionalFit(dimensionalFitRequest, ctx, send, steps, t0);
+          productsCount = selectedProducts.length;
+          await persistRecentProductEvidence(supabase, effectiveSessionId, selectedProducts);
         } else if (namedSeriesInquiryToken) {
           await answerVerifiedNamedSeriesInquiry(
             namedSeriesInquiryToken,
