@@ -54,7 +54,7 @@ jobs:
           cache: npm
 
       - name: Install test dependencies
-        run: npm ci --ignore-scripts
+        run: npm install --ignore-scripts --package-lock=false --no-audit --no-fund
 
       - name: Type-check chat-consultant
         run: deno check supabase/functions/chat-consultant/index.ts
