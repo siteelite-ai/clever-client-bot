@@ -32,6 +32,21 @@ export function formatPriceUnitSuffix(unit: string | null | undefined): string {
   return `/${u.replace(/\.$/, "")}`;
 }
 
+const DEPRIORITIZED_WAREHOUSES = ["иргели", "чинт астана"];
+
+export function prioritizeWarehouses(
+  warehouses: Array<{ city: string; qty: number }>,
+): Array<{ city: string; qty: number }> {
+  return warehouses
+    .map((warehouse, index) => ({ warehouse, index }))
+    .sort((left, right) => {
+      const leftPriority = DEPRIORITIZED_WAREHOUSES.includes(left.warehouse.city.toLocaleLowerCase("ru-RU").trim()) ? 1 : 0;
+      const rightPriority = DEPRIORITIZED_WAREHOUSES.includes(right.warehouse.city.toLocaleLowerCase("ru-RU").trim()) ? 1 : 0;
+      return leftPriority - rightPriority || right.warehouse.qty - left.warehouse.qty || left.index - right.index;
+    })
+    .map(({ warehouse }) => warehouse);
+}
+
 function formatStockLine(
   warehouses: Array<{ city: string; qty: number }> | undefined,
   fallbackLabel: string,
@@ -42,7 +57,8 @@ function formatStockLine(
   if (Array.isArray(warehouses) && warehouses.length > 0) {
     const safeUnit = String(unit ?? "").trim().replace(/[()\r\n]/g, "").slice(0, 12);
     const quantitySuffix = safeUnit ? ` ${safeUnit}` : "";
-    const top = warehouses.slice(0, 3).map((w) => `${w.city} (${w.qty}${quantitySuffix})`);
+    const ordered = prioritizeWarehouses(warehouses);
+    const top = ordered.slice(0, 3).map((w) => `${w.city} (${w.qty}${quantitySuffix})`);
     const extra = warehouses.length > 3 ? ` и ещё ${warehouses.length - 3} городов` : "";
     return `${top.join(", ")}${extra}`;
   }

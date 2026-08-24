@@ -20,7 +20,13 @@ import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-t
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
 import { applyCriteriaGate, buildCriteriaQuery, filterProductIdsByBudgetCap, resolveRenderCriteria, titleProvesCompactCriterion, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
-import { alignCriteriaWithReasoning } from "../_shared/v3-tools/criteria-reasoning.ts";
+import { alignCriteriaWithReasoning, hasMeasuredSelectionRequirement } from "../_shared/v3-tools/criteria-reasoning.ts";
+import { verifySelectionTarget } from "../_shared/v3-tools/selection-contract.ts";
+import {
+  broadAssortmentNeedsClarification,
+  buildBroadAssortmentClarification,
+  isBroadAssortmentRequest,
+} from "../_shared/v3-tools/broad-assortment.ts";
 import {
   dropAffirmativeBooleanFilters,
   dropImplicitReplacementIdentityFilters,
@@ -74,6 +80,7 @@ import {
 } from "../_shared/v3-tools/replacement-preflight.ts";
 import {
   classifyHouseholdMotionLightRequest,
+  HOUSEHOLD_MOTION_LIGHT_GENERIC_INTRO,
   HOUSEHOLD_MOTION_LIGHT_EMPTY,
   HOUSEHOLD_MOTION_LIGHT_INTRO,
   verifiedHouseholdMotionLights,
@@ -299,7 +306,7 @@ function summariseToolArgs(name: string, args: Record<string, unknown>): Record<
   if (name === "jargon_recover_catalog") return pick(["query", "modifiers", "min_price", "max_price", "per_page", "category"]);
   if (name === "lookup_knowledge") return pick(["query", "type"]);
   if (name === "lookup_contacts") return pick(["fields"]);
-  if (name === "render_products") return { ids_count: Array.isArray(args.product_ids) ? (args.product_ids as unknown[]).length : 0, total_available: args.total_available, criteria: Array.isArray(args.criteria) ? args.criteria : [] };
+  if (name === "render_products") return { ids_count: Array.isArray(args.product_ids) ? (args.product_ids as unknown[]).length : 0, total_available: args.total_available, selection_target: args.selection_target, criteria: Array.isArray(args.criteria) ? args.criteria : [] };
   if (name === "propose_clarification") return pick(["facet_key", "question"]);
   if (name === "escalate_to_manager") return pick(["reason"]);
   if (name === "note_state") return pick(["key", "ttl_turns"]);
@@ -2425,6 +2432,7 @@ async function selectVerifiedHouseholdMotionLights(
   steps: StepLog[],
   t0: number,
   maxPrice: number | null,
+  surfaceMountedRequired: boolean,
 ): Promise<ProductFull[]> {
   const started = Date.now();
   const searches = await Promise.all(
@@ -2437,7 +2445,7 @@ async function selectVerifiedHouseholdMotionLights(
     }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache)),
   );
   const candidates: ProductRef[] = searches.flatMap((result) => result.ok ? result.results : []);
-  const verified = verifiedHouseholdMotionLights(candidates, maxPrice);
+  const verified = verifiedHouseholdMotionLights(candidates, maxPrice, 4, surfaceMountedRequired);
   const elapsed = Date.now() - started;
 
   send({
@@ -2772,6 +2780,7 @@ async function runExpertLoop(
   const equivalentReplacementRequested = replacementIntent && /равноцен\p{L}*/iu.test(userMessage);
   const replacementExcludedIdentityValues = new Set<string>();
   const intentMode = detectUserIntentMode(userMessage);
+  const broadAssortmentRequest = isBroadAssortmentRequest(userMessage);
   const namedSeriesToken = resolveNamedSeriesToken(userMessage, history.slice(-8));
   const inquiryRequiresCatalogGrounding = intentMode === "inquire" && requiresCatalogGroundingForInquiry(userMessage);
   const seriesTurnRequiresGrounding = Boolean(namedSeriesToken);
@@ -3785,6 +3794,21 @@ async function runExpertLoop(
           const originalIds = Array.isArray(tc.args.product_ids)
             ? (tc.args.product_ids as unknown[]).map(String)
             : [];
+          if (broadAssortmentNeedsClarification(broadAssortmentRequest, lastDiscover, originalIds.length)) {
+            const clarification = buildBroadAssortmentClarification(lastDiscover!);
+            send({ type: "delta", content: clarification });
+            finalText += `${finalText ? "\n\n" : ""}${clarification}`;
+            steps.push({
+              step: "v3_broad_assortment_clarification",
+              ms: now(),
+              meta: {
+                proposed_count: originalIds.length,
+                category_total: lastDiscover?.category?.total_products ?? null,
+                leaf_categories: lastDiscover?.leaf_categories?.map((leaf) => leaf.pagetitle) ?? [],
+              },
+            });
+            return { finalText, productsRendered, shownProductIds: [...shownIds] };
+          }
           const guarded = guardVisibleCardinality(originalIds);
           const visibleIds = guarded.ids;
           if (guarded.compactCriteria.length > 0 && guarded.compactRemoved > 0) {
@@ -3841,6 +3865,50 @@ async function runExpertLoop(
           }
         }
 
+        let gateShortCircuit: ToolResult | null = null;
+        let selfRequery: { query: string; ids: string[]; total: number } | null = null;
+
+        // Product-class contract: the model's own initial interpretation is a
+        // mandatory render input. It is checked against live catalog evidence
+        // before criteria and before any markdown reaches the customer.
+        if (tc.name === "render_products") {
+          const target = typeof tc.args.selection_target === "string" ? tc.args.selection_target.trim() : "";
+          const ids = Array.isArray(tc.args.product_ids)
+            ? (tc.args.product_ids as unknown[]).map(String)
+            : [];
+          const products = ids
+            .map((id) => ctx.cache.get(id))
+            .filter((product): product is ProductFull => Boolean(product));
+          if (!target) {
+            gateShortCircuit = {
+              tool: "render_products",
+              ok: false,
+              error_code: "selection_target_required",
+              message: "selection_target обязателен: перенеси точный класс товара и контекст применения из своего первого рассуждения, не переименовывай цель под найденный пул",
+            } as unknown as ToolResult;
+            steps.push({ step: "v3_selection_target_required", ms: now(), meta: { render_ids: ids.length } });
+          } else if (products.length > 0) {
+            const targetReport = verifySelectionTarget(target, products);
+            const passed = ids.filter((id) => targetReport.passed_ids.includes(id));
+            if (passed.length === 0) {
+              gateShortCircuit = {
+                tool: "render_products",
+                ok: false,
+                error_code: "selection_target_mismatch",
+                message: "ни одна карточка не подтверждает целевой класс товара и контекст применения из твоего рассуждения; выполни новый поиск по исходной цели либо честно сообщи, что подходящих позиций нет",
+                report: targetReport,
+              } as unknown as ToolResult;
+            } else if (passed.length !== ids.length) {
+              (tc.args as Record<string, unknown>).product_ids = passed;
+            }
+            steps.push({
+              step: "v3_selection_target_gate",
+              ms: now(),
+              meta: { target, before: ids.length, after: passed.length, rejected: targetReport.rejected_ids },
+            });
+          }
+        }
+
 
         // [removed per spec v2 2026-06-29] v3_guard_compound_render_filter,
         // v3_guard_render_autocomplement, v3_guard_escalate_cancelled,
@@ -3856,8 +3924,6 @@ async function runExpertLoop(
         // («не менее», «с запасом», «больше диаметра кабеля») фасетом не проверяются.
         // Гейт сверяет их с short_traits карточек: fail → карточку не рендерим,
         // unknown (характеристики нет) → карточку оставляем.
-        let gateShortCircuit: ToolResult | null = null;
-        let selfRequery: { query: string; ids: string[]; total: number } | null = null;
         if (flags.criteriaGateEnabled && tc.name === "render_products") {
           const rawCriteria = Array.isArray((tc.args as Record<string, unknown>).criteria)
             ? ((tc.args as Record<string, unknown>).criteria as Criterion[])
@@ -3868,6 +3934,22 @@ async function runExpertLoop(
             userBackedSearchCriteria,
             Boolean(namedSeriesToken),
           );
+          if (
+            criteria.length === 0 &&
+            hasMeasuredSelectionRequirement(`${userMessage}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`)
+          ) {
+            gateShortCircuit ??= {
+              tool: "render_products",
+              ok: false,
+              error_code: "selection_criteria_required",
+              message: "в рассуждении есть измеримые требования, но criteria[] пуст. Перенеси каждое измеримое условие и рассчитанную границу в критерий уровня A; без этого карточки не будут показаны",
+            } as unknown as ToolResult;
+            steps.push({
+              step: "v3_measured_selection_criteria_required",
+              ms: now(),
+              meta: { render_ids: Array.isArray(tc.args.product_ids) ? tc.args.product_ids.length : 0 },
+            });
+          }
           if (replacementSplitFallback && !equivalentReplacementRequested) {
             criteria = [];
             (tc.args as Record<string, unknown>).criteria = [];
@@ -5393,13 +5475,19 @@ Deno.serve(async (req) => {
           productsCount = selectedProducts.length;
           await persistRecentProductEvidence(supabase, effectiveSessionId, selectedProducts);
         } else if (householdMotionLightRequest) {
-          send({ type: "delta", content: HOUSEHOLD_MOTION_LIGHT_INTRO });
+          send({
+            type: "delta",
+            content: householdMotionLightRequest.surfaceMountedRequired
+              ? HOUSEHOLD_MOTION_LIGHT_INTRO
+              : HOUSEHOLD_MOTION_LIGHT_GENERIC_INTRO,
+          });
           const selectedProducts = await selectVerifiedHouseholdMotionLights(
             ctx,
             send,
             steps,
             t0,
             householdMotionLightRequest.maxPrice,
+            householdMotionLightRequest.surfaceMountedRequired,
           );
           productsCount = selectedProducts.length;
           await persistRecentProductEvidence(supabase, effectiveSessionId, selectedProducts);

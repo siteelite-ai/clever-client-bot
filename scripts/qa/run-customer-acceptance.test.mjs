@@ -43,9 +43,22 @@ test('parseSse keeps pre-product text and parses card prices', () => {
     title: 'Товар 1P 16А х-ка C',
     url: 'https://220volt.kz/catalog/a/b/item-%28x%29/',
     price: 1234,
+    stockLine: null,
   }]);
   assert.equal(parsed.completed, true);
   assert.equal(parsed.serverProductsCount, 1);
+});
+
+test('parseSse keeps stock line for warehouse-priority assertions', () => {
+  const body = [
+    data({ v3_event: {
+      type: 'products_block',
+      markdown: '- **[Прожектор](https://220volt.kz/p)**\n  Цена: *100* ₸\n  Наличие: Алматы (2 шт), Иргели (50 шт)',
+    } }),
+    'data: [DONE]',
+  ].join('\n');
+  const parsed = parseSse(body);
+  assert.equal(parsed.links[0].stockLine, 'Алматы (2 шт), Иргели (50 шт)');
 });
 
 test('parseSse ignores heartbeat comments without losing completion', () => {

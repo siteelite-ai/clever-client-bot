@@ -2,7 +2,7 @@
 // Data-agnostic: абстрактные имена параметров.
 
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { alignCriteriaWithReasoning, extractReasoningBounds } from "./criteria-reasoning.ts";
+import { alignCriteriaWithReasoning, extractReasoningBounds, hasMeasuredSelectionRequirement } from "./criteria-reasoning.ts";
 import { checkCriterion, type Criterion } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
 
@@ -21,6 +21,12 @@ Deno.test("extractReasoningBounds: направления и строгость"
     { op: "max", value: 15, unit: "а", strict: false },
   ]);
   assertEquals(extractReasoningBounds("нужно 12 штук"), []);
+});
+
+Deno.test("измеримое рассуждение требует машинного критерия, голая маркировка — нет", () => {
+  assertEquals(hasMeasuredSelectionRequirement("нужен поток 3750–5000 лм для комнаты"), true);
+  assertEquals(hasMeasuredSelectionRequirement("трубка должна охватывать кабель 12 мм"), true);
+  assertEquals(hasMeasuredSelectionRequirement("покажи кабель ВВГ 2×1,5"), false);
 });
 
 Deno.test("alignCriteriaWithReasoning: eq на числе клиента → min по прозе", () => {

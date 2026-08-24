@@ -2,6 +2,7 @@ import type { ProductRef } from "./types.ts";
 
 export interface HouseholdMotionLightRequest {
   maxPrice: number | null;
+  surfaceMountedRequired: boolean;
 }
 
 function norm(value: string): string {
@@ -31,12 +32,15 @@ export function classifyHouseholdMotionLightRequest(
   const motionSensor =
     /(?:датчик\p{L}*\s+движени\p{L}*|микроволнов\p{L}*\s+сенсор\p{L}*|сенсор\p{L}*)/u
       .test(current);
-  if (!household || !surfaceMounted || !fixture || !motionSensor) return null;
+  if (!household || !fixture || !motionSensor) return null;
 
   const budgetMatch = current.match(
     /(?:не\s+более|до|максимум)\s*([\d\s\u00a0]+(?:[.,]\d+)?)\s*(?:₸|тг|тенге)?/u,
   );
-  return { maxPrice: budgetMatch ? parseNumber(budgetMatch[1]) : null };
+  return {
+    maxPrice: budgetMatch ? parseNumber(budgetMatch[1]) : null,
+    surfaceMountedRequired: surfaceMounted,
+  };
 }
 
 function evidence(product: ProductRef): string {
@@ -56,6 +60,7 @@ function evidence(product: ProductRef): string {
 export function isVerifiedHouseholdMotionLight(
   product: ProductRef,
   maxPrice: number | null,
+  surfaceMountedRequired = true,
 ): boolean {
   const title = norm(product.pagetitle);
   const facts = evidence(product);
@@ -69,20 +74,23 @@ export function isVerifiedHouseholdMotionLight(
   // normally the same fact is also present in the leaf category/description.
   const householdSurface =
     /бытов\p{L}*|накладн\p{L}*|(?:^|[^a-z])hall(?:[^a-z]|$)/u.test(facts);
+  const surfaceMounted = /накладн\p{L}*|(?:^|[^a-z])hall(?:[^a-z]|$)/u.test(facts);
   const wrongUseClass = /для\s+жкх|промышлен\p{L}*|уличн\p{L}*|дпп/u.test(
     title,
   );
-  return priceFits && fixture && sensor && householdSurface && !wrongUseClass;
+  return priceFits && fixture && sensor && householdSurface &&
+    (!surfaceMountedRequired || surfaceMounted) && !wrongUseClass;
 }
 
 export function verifiedHouseholdMotionLights(
   products: ProductRef[],
   maxPrice: number | null,
   limit = 4,
+  surfaceMountedRequired = true,
 ): ProductRef[] {
   const seen = new Set<string>();
   return products
-    .filter((product) => isVerifiedHouseholdMotionLight(product, maxPrice))
+    .filter((product) => isVerifiedHouseholdMotionLight(product, maxPrice, surfaceMountedRequired))
     .sort((left, right) => {
       const leftTitle = norm(left.pagetitle);
       const rightTitle = norm(right.pagetitle);
@@ -104,6 +112,9 @@ export function verifiedHouseholdMotionLights(
 
 export const HOUSEHOLD_MOTION_LIGHT_INTRO =
   "Подбираю бытовой накладной светильник со встроенным датчиком движения и проверяю цену по каталогу; варианты для ЖКХ, промышленные и уличные модели исключаю.";
+
+export const HOUSEHOLD_MOTION_LIGHT_GENERIC_INTRO =
+  "Подбираю бытовой светильник со встроенным датчиком движения и проверяю цену по каталогу; варианты для ЖКХ, промышленные и уличные модели исключаю.";
 
 export const HOUSEHOLD_MOTION_LIGHT_EMPTY =
   "В текущей выдаче каталога не удалось одновременно подтвердить бытовое накладное исполнение, датчик движения и заданный бюджет. Не буду заменять запрос обычным светильником или моделью для ЖКХ; наличие подходящего варианта уточнит менеджер.";

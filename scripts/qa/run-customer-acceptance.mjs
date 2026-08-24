@@ -91,10 +91,14 @@ export function parseSse(body) {
   const re = /- \*\*\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)\*\*(?:\r?\n\s+Цена:\s+\*([\d\s]+)\*\s+₸[^\r\n]*)?/g;
   for (let match; (match = re.exec(productsMarkdown)) !== null;) {
     const parsedPrice = Number(String(match[3] ?? '').replace(/\s+/g, ''));
+    const nextBlock = productsMarkdown.indexOf('\n\n- **[', match.index + match[0].length);
+    const block = productsMarkdown.slice(match.index, nextBlock >= 0 ? nextBlock : undefined);
+    const stockLine = block.match(/\r?\n\s+Наличие:\s*([^\r\n]+)/u)?.[1]?.trim() ?? null;
     links.push({
       title: match[1],
       url: match[2],
       price: Number.isFinite(parsedPrice) && parsedPrice > 0 ? parsedPrice : null,
+      stockLine,
     });
   }
   return { text, textBeforeProducts, productsMarkdown, links, logId, completed, serverProductsCount, diagnosticError, conversationBoundary };
@@ -155,6 +159,24 @@ export function evaluate(expect = {}, response) {
       .filter((link) => !matchesEveryGroup(link.title, expect.require_every_product_title_groups))
       .map((link) => link.title);
     if (invalidTitles.length > 0) failures.push(`product titles violate required groups: ${invalidTitles.join(' | ')}`);
+  }
+  if (Array.isArray(expect.forbid_every_product_title_any)) {
+    const invalidTitles = response.links
+      .filter((link) => includesAny(link.title, expect.forbid_every_product_title_any))
+      .map((link) => link.title);
+    if (invalidTitles.length > 0) failures.push(`product titles contain forbidden class fragments: ${invalidTitles.join(' | ')}`);
+  }
+  if (Array.isArray(expect.deprioritized_warehouses)) {
+    for (const link of response.links) {
+      if (!link.stockLine) continue;
+      const parts = link.stockLine.split(',').map((part) => part.trim()).filter(Boolean);
+      let deprioritizedSeen = false;
+      for (const part of parts) {
+        const isDeprioritized = expect.deprioritized_warehouses.some((warehouse) => includesAny(part, [warehouse]));
+        if (isDeprioritized) deprioritizedSeen = true;
+        else if (deprioritizedSeen) failures.push(`deprioritized warehouse shown before ordinary warehouse: ${link.stockLine}`);
+      }
+    }
   }
   if (Number.isFinite(expect.max_product_price)) {
     const missingPrices = response.links.filter((link) => !Number.isFinite(link.price));

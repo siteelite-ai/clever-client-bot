@@ -39,6 +39,20 @@ export interface ReasoningAlignment {
 const NUM = String.raw`\d+(?:[.,]\d+)?`;
 const UNIT = String.raw`[a-zа-я°]{1,6}[²³]?\d?`;
 
+/** Measured reasoning must be represented by at least one render criterion.
+ * Bare structural markings such as 2×1.5 have no unit and remain under the
+ * existing exact-compound policy. */
+export function hasMeasuredSelectionRequirement(text: string): boolean {
+  const value = String(text ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е");
+  const re = new RegExp(String.raw`\d+(?:[.,]\d+)?(?:\s*[–—-]\s*\d+(?:[.,]\d+)?)?\s*(${UNIT})(?![a-zа-я])`, "giu");
+  for (let match; (match = re.exec(value)) !== null;) {
+    const unit = normalizeUnit(match[1]);
+    if (!unit || /^(шт|штук|раз|года?|лет|мин|сек)$/u.test(unit)) continue;
+    return true;
+  }
+  return false;
+}
+
 // Порядок важен: сначала отрицательные формы («не более»), иначе «более»
 // перехватит их и направление получится обратным.
 const DIRECTIONS: Array<{ re: string; op: "min" | "max"; strict: boolean }> = [
@@ -190,4 +204,3 @@ export function alignCriteriaWithReasoning(
 
   return { criteria: next, alignments, ambiguities };
 }
-

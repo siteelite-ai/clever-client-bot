@@ -1,6 +1,6 @@
 import { assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import { extractUnit } from "./search-catalog.ts";
-import { executeRenderProducts, formatPriceUnitSuffix } from "./render.ts";
+import { executeRenderProducts, formatPriceUnitSuffix, prioritizeWarehouses } from "./render.ts";
 import type { ProductCache } from "./types.ts";
 
 Deno.test("extractUnit: по подписи характеристики", () => {
@@ -96,4 +96,14 @@ Deno.test("render: не обещает непроверенные дополни
   );
   if (!r.ok) throw new Error("expected ok");
   if (r.markdown.includes("И ещё")) throw new Error(r.markdown);
+});
+
+Deno.test("render: бизнес-склады показываются после обычных складов независимо от остатка", () => {
+  const ordered = prioritizeWarehouses([
+    { city: "Иргели", qty: 5000 },
+    { city: "Алматы", qty: 12 },
+    { city: "Чинт Астана", qty: 7000 },
+    { city: "Караганда", qty: 7 },
+  ]);
+  assertEquals(ordered.map((item) => item.city), ["Алматы", "Караганда", "Чинт Астана", "Иргели"]);
 });
