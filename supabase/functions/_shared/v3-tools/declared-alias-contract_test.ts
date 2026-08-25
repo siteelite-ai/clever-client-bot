@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  aliasDuplicatesCatalogClass,
   extractDeclaredCatalogAlias,
   extractPostNominalCatalogQualifier,
   titleContainsDeclaredAlias,
@@ -45,6 +46,11 @@ Deno.test("the consultant cannot invent an alias phrase absent from the customer
 Deno.test("literal alias proof uses complete title words", () => {
   assertEquals(titleContainsDeclaredAlias("Лампа Кукуруза LED", "кукуруза"), true);
   assertEquals(titleContainsDeclaredAlias("Лампа кукурузная LED", "кукуруза"), false);
+});
+
+Deno.test("an inflected product class is not treated as a separate alias", () => {
+  assertEquals(aliasDuplicatesCatalogClass("прожекторы", ["Прожекторы", "прожектор"]), true);
+  assertEquals(aliasDuplicatesCatalogClass("кукуруза", ["Лампы", "светодиодная лампа"]), false);
 });
 
 Deno.test("a post-nominal customer qualifier is lexical evidence, not application context", () => {

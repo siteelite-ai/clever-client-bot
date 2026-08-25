@@ -48,6 +48,15 @@ Deno.test("structural lookup preserves a complete exact product identifier", () 
   });
 });
 
+Deno.test("equivalent replacement preserves every portable request code across Cyrillic notation", () => {
+  assertEquals(extractPortableTechnicalRequirements(
+    "Автомат 1Р ВА 47-29 16 А 4,5кА характеристика С — предложи равноценную замену",
+  ), ["1Р", "16А", "4.5кА"]);
+  assertEquals(extractExplicitSingleLetterCodes(
+    "Автомат 1Р ВА 47-29 16 А 4,5кА характеристика С — предложи равноценную замену",
+  ), ["c"]);
+});
+
 Deno.test("replacement preflight selects only explicit live non-identity facets", () => {
   const axes = selectExplicitAnchorAxes(anchor, [
     { key: "brand", caption: "Бренд", type: "string", unit: null, values: [{ value: "Philips", products_count: 20 }] },

@@ -46,7 +46,7 @@ export function extractExplicitSingleLetterCodes(message: string): string[] {
   const matches = [...String(message ?? "").matchAll(
     /(?<![\p{L}\p{N}])\p{L}{4,}(?:\s+\p{L}{4,}){0,2}\s*[:=–—-]?\s+([A-ZА-ЯЁ])(?![\p{L}\p{N}])/gu,
   )];
-  return distinct(matches.map((match) => codeNorm(match[1])));
+  return distinct(matches.map((match) => visualCodeNorm(match[1])));
 }
 
 /**

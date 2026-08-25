@@ -41,6 +41,20 @@ export function titleContainsDeclaredAlias(title: string, alias: string): boolea
   return Boolean(needle && haystack.includes(` ${needle} `));
 }
 
+/** A qualifier is not an alias when it merely repeats the already grounded
+ * product class with another inflection (for example plural customer wording
+ * versus singular catalog titles). Real colloquial names remain distinct. */
+export function aliasDuplicatesCatalogClass(alias: string, classes: Array<string | null | undefined>): boolean {
+  const aliasTokens = normalize(alias).split(" ").filter(Boolean);
+  if (aliasTokens.length === 0) return false;
+  return classes.some((value) => {
+    const classTokens = normalize(String(value ?? "")).split(" ").filter(Boolean);
+    return classTokens.length > 0 && aliasTokens.every((aliasToken) =>
+      classTokens.some((classToken) => inflectionStem(aliasToken) === inflectionStem(classToken))
+    );
+  });
+}
+
 const POST_NOMINAL_STOP = new Set([
   "для", "под", "с", "со", "без", "на", "в", "во", "из", "к", "по", "до", "от",
   "есть", "имеется", "нужен", "нужна", "нужно", "нужны", "покажи", "найди", "ищу",

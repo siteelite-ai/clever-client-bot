@@ -29,7 +29,7 @@ import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract } from "../_shared/v3-tools/selection-actionability.ts";
 import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
-import { extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
+import { aliasDuplicatesCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
   commonCompatibilityReference,
@@ -110,6 +110,7 @@ import {
   toolNamesForAgentPhase,
 } from "../_shared/v3-tools/agent-performance.ts";
 import { CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest } from "../_shared/v3-tools/clean-power-safety.ts";
+import { ELECTRICAL_PROTECTION_TRIP_ANSWER, isElectricalProtectionTripDiagnostic } from "../_shared/v3-tools/electrical-trip-safety.ts";
 import { deterministicSeriesExplanation, safeSeriesTraits } from "../_shared/v3-tools/series-explanation.ts";
 import { type RankedReplacementCandidate,
   rankSplitReplacementCandidates } from "../_shared/v3-tools/replacement-fallback.ts";
@@ -2493,6 +2494,27 @@ async function selectVerifiedOrdinaryReplacement(
     nearMatch = !equivalentOnly && selected.length > 0;
   }
 
+  if (equivalentOnly && selected.length === 0) {
+    const portableRequirements = extractPortableTechnicalRequirements(userMessage);
+    if (portableRequirements.length >= 2) {
+      const broad = await executeSearchCatalog({
+        mode: "by_filter",
+        ...baseSearch,
+        ...(budgetCap !== null ? { max_price: budgetCap, sort_cheapest: true } : {}),
+        per_page: 50,
+      }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+      if (broad.ok) {
+        selected = broad.results
+          .filter(isCandidate)
+          .filter((product) => budgetCap === null || product.price <= budgetCap)
+          .filter((product) => productTitleSupportsPortableRequirements(product.pagetitle, portableRequirements))
+          .slice(0, 4)
+          .map((product) => ctx.cache.get(product.id))
+          .filter((product): product is ProductFull => Boolean(product));
+      }
+    }
+  }
+
   const axesLabel = axes.map((axis) => `${axis.caption}: ${axis.value}`).join(", ");
   const elapsed = Date.now() - started;
   send({
@@ -4858,7 +4880,21 @@ async function runExpertLoop(
             userMessage,
             `${firstAssistantText}\n${assistantReasoning}`,
           );
-          const lexicalClaim = aliasClaim ?? declaredAliasQuery;
+          let lexicalClaim = aliasClaim ?? declaredAliasQuery;
+          if (lexicalClaim && aliasDuplicatesCatalogClass(lexicalClaim, [
+            target,
+            activeSelectionTarget,
+            liveTaxonomyDeclaration,
+          ])) {
+            steps.push({
+              step: "v3_declared_alias_equals_product_class",
+              ms: now(),
+              meta: { alias: lexicalClaim, target, live_class: liveTaxonomyDeclaration },
+            });
+            declaredAliasQuery = null;
+            requiredCatalogAlias = null;
+            lexicalClaim = null;
+          }
           if (lexicalClaim && !groundedJargonTerminal) {
             requiredCatalogAlias ??= lexicalClaim;
             const finalIds = Array.isArray((tc.args as Record<string, unknown>).product_ids)
@@ -7966,6 +8002,10 @@ Deno.serve(async (req) => {
         } else if (isCleanPowerSafetyRequest(userMessage)) {
           steps.push({ step: "v3_clean_power_safety_answer", ms: Date.now() - t0 });
           send({ type: "delta", content: CLEAN_POWER_SAFETY_ANSWER });
+          productsCount = 0;
+        } else if (isElectricalProtectionTripDiagnostic(userMessage)) {
+          steps.push({ step: "v3_electrical_trip_safety_answer", ms: Date.now() - t0 });
+          send({ type: "delta", content: ELECTRICAL_PROTECTION_TRIP_ANSWER });
           productsCount = 0;
         } else if (broadAssortmentRequest) {
           await answerBroadAssortmentRequest(broadAssortmentToken, ctx, send, steps, t0);
