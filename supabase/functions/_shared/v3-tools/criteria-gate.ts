@@ -105,6 +105,37 @@ export function mergeFacetOptionConstraints(
   };
 }
 
+/**
+ * User-backed criteria are turn invariants. A later fallback may contribute
+ * more explicit constraints, but it must never erase constraints proved by an
+ * earlier strict search. Equality values for one facet are kept as separate
+ * entries because the criteria gate interprets them as an OR group.
+ */
+export function mergeUserBackedCriteria(
+  existing: Criterion[],
+  incoming: Criterion[],
+): Criterion[] {
+  const merged: Criterion[] = [];
+  const seen = new Set<string>();
+  for (const criterion of [...(existing ?? []), ...(incoming ?? [])]) {
+    if (!criterion?.key || criterion.value === undefined) continue;
+    const value = Array.isArray(criterion.value)
+      ? criterion.value.map((item) => String(item)).join("\u0000")
+      : String(criterion.value);
+    const signature = [
+      normalizeKey(criterion.key),
+      criterion.op,
+      value,
+      normalizeKey(String(criterion.unit ?? "")),
+      criterion.exclusive === true ? "exclusive" : "inclusive",
+    ].join("\u0001");
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    merged.push({ ...criterion, level: "A" });
+  }
+  return merged;
+}
+
 // ─── Нормализация ────────────────────────────────────────────────────────────
 
 export function normalizeKey(s: string): string {
@@ -169,7 +200,13 @@ export function resolveRenderCriteria(
   userBacked: Criterion[],
   strictUserEvidenceOnly: boolean,
 ): Criterion[] {
-  const base = strictUserEvidenceOnly ? userBacked : enforced;
+  const userKeys = new Set(userBacked.map((criterion) => normalizeKey(criterion.key)));
+  const base = strictUserEvidenceOnly
+    ? userBacked
+    : [
+      ...userBacked,
+      ...enforced.filter((criterion) => !userKeys.has(normalizeKey(criterion.key))),
+    ];
   const baseKeys = new Set(base.map((criterion) => normalizeKey(criterion.key)));
   return [
     ...base,

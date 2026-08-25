@@ -9,6 +9,7 @@ import {
   filterProductIdsByBudgetCap,
   findTrait,
   mergeFacetOptionConstraints,
+  mergeUserBackedCriteria,
   parseNumSpan,
   projectCatalogFilterEvidence,
   projectCriteriaFacetOptions,
@@ -27,7 +28,22 @@ Deno.test("render criteria: named entity browse keeps only user-backed filters",
   const raw = [{ key: "Мощность", op: "min", value: 100, level: "A" }] as Criterion[];
   const userBacked = [{ key: "Цвет", op: "eq", value: "белый", level: "A" }] as Criterion[];
   assertEquals(resolveRenderCriteria(inferred, raw, userBacked, true), userBacked);
-  assertEquals(resolveRenderCriteria(inferred, raw, userBacked, false), [...inferred, ...raw]);
+  assertEquals(resolveRenderCriteria(inferred, raw, userBacked, false), [...userBacked, ...inferred, ...raw]);
+});
+
+Deno.test("render criteria: explicit user filters override inferred filters on the same facet", () => {
+  const inferred = [{ key: "Connector", op: "eq", value: "B", level: "A" }] as Criterion[];
+  const raw = [{ key: "Connector", op: "eq", value: "C", level: "A" }] as Criterion[];
+  const userBacked = [{ key: "Connector", op: "eq", value: "A", level: "A" }] as Criterion[];
+  assertEquals(resolveRenderCriteria(inferred, raw, userBacked, false), userBacked);
+});
+
+Deno.test("user-backed criteria accumulate monotonically across fallback searches", () => {
+  const first = [{ key: "Connector", op: "eq", value: "A", level: "A" }] as Criterion[];
+  const second = [{ key: "Count", op: "eq", value: "3", level: "A" }] as Criterion[];
+  assertEquals(mergeUserBackedCriteria(first, []), first);
+  assertEquals(mergeUserBackedCriteria(first, second), [...first, ...second]);
+  assertEquals(mergeUserBackedCriteria([...first, ...second], first), [...first, ...second]);
 });
 
 Deno.test("a broad semantic recovery cannot discard the latest mandatory contract", () => {

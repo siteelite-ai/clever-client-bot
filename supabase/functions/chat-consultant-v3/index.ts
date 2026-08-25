@@ -18,7 +18,7 @@ import {
 import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3-tools/lookup-knowledge.ts";
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
-import { applyCriteriaGate, buildCriteriaQuery, filterProductIdsByBudgetCap, mergeFacetOptionConstraints, projectCatalogFilterEvidence, projectCriteriaFacetOptions, resolveRenderCriteria, titleProvesCompactCriterion, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
+import { applyCriteriaGate, buildCriteriaQuery, filterProductIdsByBudgetCap, mergeFacetOptionConstraints, mergeUserBackedCriteria, projectCatalogFilterEvidence, projectCriteriaFacetOptions, resolveRenderCriteria, titleProvesCompactCriterion, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, hasMeasuredSelectionRequirement, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
@@ -3926,7 +3926,10 @@ async function runExpertLoop(
             return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
           });
           enforcedSearchCriteria = guardedSearchCriteria;
-          userBackedSearchCriteria = guardedUserBackedCriteria;
+          userBackedSearchCriteria = mergeUserBackedCriteria(
+            userBackedSearchCriteria,
+            guardedUserBackedCriteria,
+          );
 
           // One ordinary-selection compiler owns both retrieval and rendering.
           // If the consultant stated an explicit measured range, compile it to
@@ -5756,6 +5759,43 @@ async function runExpertLoop(
             addToWhitelist(lastDiscover.category?.pagetitle);
             for (const leaf of lastDiscover.leaf_categories ?? []) {
               addToWhitelist(leaf.pagetitle);
+            }
+            // Freeze explicit user constraints as soon as their live facet
+            // vocabulary becomes available. This is independent of whether
+            // the model's next search uses by_filter or a semantic query, so a
+            // later fallback cannot erase values such as a connector, colour,
+            // count or a measured lower bound.
+            if (intentMode === "select") {
+              const explicit = guardSearchFilters(
+                { mode: "by_filter" },
+                lastDiscover.facets,
+                userMessage,
+                userMessage,
+              );
+              const explicitCriteria: Criterion[] = explicit.user_backed.map(({ key, value }) => {
+                const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
+                return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
+              });
+              const measuredCriteria = projectReasoningRangeCriteria(
+                [],
+                userMessage,
+                lastDiscover.facets,
+              ).added.map((criterion) => ({ ...criterion, level: "A" as const }));
+              const before = userBackedSearchCriteria.length;
+              userBackedSearchCriteria = mergeUserBackedCriteria(
+                userBackedSearchCriteria,
+                [...explicitCriteria, ...measuredCriteria],
+              );
+              if (userBackedSearchCriteria.length > before) {
+                steps.push({
+                  step: "v3_user_constraints_frozen",
+                  ms: now(),
+                  meta: {
+                    added: userBackedSearchCriteria.slice(before),
+                    total: userBackedSearchCriteria.length,
+                  },
+                });
+              }
             }
             if (intentMode === "select" && !activeSelectionTarget) {
               const bootstrapped = bootstrapSelectionTargetFromDiscovery(
