@@ -25,7 +25,7 @@ import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-le
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract } from "../_shared/v3-tools/selection-actionability.ts";
-import { bootstrapSelectionTargetFromDiscovery, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "../_shared/v3-tools/selection-contract.ts";
+import { bootstrapSelectionTargetFromDiscovery, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "../_shared/v3-tools/selection-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
   commonCompatibilityReference,
@@ -4068,10 +4068,14 @@ async function runExpertLoop(
         // Product-class contract: the model's own initial interpretation is a
         // mandatory render input. It is checked against live catalog evidence
         // before criteria and before any markdown reaches the customer.
+        const renderRawCriteria = tc.name === "render_products" && Array.isArray((tc.args as Record<string, unknown>).criteria)
+          ? ((tc.args as Record<string, unknown>).criteria as Criterion[])
+          : [];
         if (tc.name === "render_products") {
           activeSelectionContractComplete = false;
           const targetProjection = parseSelectionTarget(tc.args.selection_target);
           const target = targetProjection.product_class;
+          const priorActiveSelectionTarget = activeSelectionTarget;
           const initialReasoningDeclaration = initialSelectionDeclaration(firstAssistantText);
           // Only the discovered umbrella may complete the initial class name.
           // Leaves are excluded: otherwise a later sibling search could
@@ -4104,7 +4108,6 @@ async function runExpertLoop(
               liveTaxonomyDeclaration,
             ) || namedSeriesBaseClassDeclared || bootstrappedTargetExtensionDeclared
             : false;
-          if (target && targetDeclared) activeSelectionTarget = target;
           const ids = Array.isArray(tc.args.product_ids)
             ? (tc.args.product_ids as unknown[]).map(String)
             : [];
@@ -4132,7 +4135,8 @@ async function runExpertLoop(
               meta: { target, initial_reasoning: initialReasoningDeclaration },
             });
           } else if (products.length > 0) {
-            const targetReport = semanticBackedSearch && lastDiscover
+            let verificationTarget = target;
+            let targetReport = semanticBackedSearch && lastDiscover
               ? verifySelectionTargetWithGroundedSearch({
                 target,
                 products,
@@ -4141,6 +4145,31 @@ async function runExpertLoop(
                 grounded_ids: semanticBackedSearch.ids,
               })
               : verifySelectionTarget(target, products);
+            if (
+              targetReport.passed_ids.length === 0 &&
+              priorActiveSelectionTarget &&
+              selectionTargetIsDeclared(priorActiveSelectionTarget, target) &&
+              selectionTargetExtensionIsCriterionBacked(priorActiveSelectionTarget, target, renderRawCriteria)
+            ) {
+              const baseReport = semanticBackedSearch && lastDiscover
+                ? verifySelectionTargetWithGroundedSearch({
+                  target: priorActiveSelectionTarget,
+                  products,
+                  live_class: lastDiscover.category.pagetitle,
+                  grounded_label: semanticBackedSearch.label,
+                  grounded_ids: semanticBackedSearch.ids,
+                })
+                : verifySelectionTarget(priorActiveSelectionTarget, products);
+              if (baseReport.passed_ids.length > 0) {
+                verificationTarget = priorActiveSelectionTarget;
+                targetReport = baseReport;
+                steps.push({
+                  step: "v3_selection_target_criterion_projection",
+                  ms: now(),
+                  meta: { declared_target: target, verified_base: verificationTarget, criteria: renderRawCriteria },
+                });
+              }
+            }
             const passed = ids.filter((id) => targetReport.passed_ids.includes(id));
             if (passed.length === 0) {
               gateShortCircuit = {
@@ -4156,8 +4185,11 @@ async function runExpertLoop(
             steps.push({
               step: "v3_selection_target_gate",
               ms: now(),
-              meta: { target, application_context: targetProjection.application_context, before: ids.length, after: passed.length, rejected: targetReport.rejected_ids },
+              meta: { target, verification_target: verificationTarget, application_context: targetProjection.application_context, before: ids.length, after: passed.length, rejected: targetReport.rejected_ids },
             });
+            if (passed.length > 0) activeSelectionTarget = verificationTarget;
+          } else {
+            activeSelectionTarget = target;
           }
         }
 
@@ -4208,9 +4240,7 @@ async function runExpertLoop(
               meta: { alignments: alignedCompatibility.alignments, completed: completedCompatibility.added },
             });
           }
-          const rawCriteria = Array.isArray((tc.args as Record<string, unknown>).criteria)
-            ? ((tc.args as Record<string, unknown>).criteria as Criterion[])
-            : [];
+          const rawCriteria = renderRawCriteria;
           // Named-series browsing is entity retrieval, not a fit calculation.
           // Prices, voltage ranges and temperatures in grounded series prose
           // must not manufacture compatibility obligations the customer never

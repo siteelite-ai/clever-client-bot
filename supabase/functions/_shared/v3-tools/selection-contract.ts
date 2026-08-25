@@ -113,6 +113,34 @@ function meaningfulTokens(value: string): string[] {
   return out;
 }
 
+function meaningfulRawTokens(value: string): string[] {
+  return normalize(value).split(/\s+/u)
+    .filter((token) => token && token.length >= 3 && !META_WORDS.has(token) && !/^\d+$/u.test(token));
+}
+
+/**
+ * Catalog families and standards are often written either as one compact code
+ * or as adjacent title tokens (for example `ABcd` vs `AB cd`). Treat only an
+ * exact concatenation of consecutive live-title tokens as the same identity;
+ * substring matching is deliberately forbidden so a broad word cannot prove a
+ * different class.
+ */
+function productEvidenceMatchesToken(product: ProductRef, rawTargetToken: string): boolean {
+  const evidenceTokens = normalize(productEvidence(product)).split(/\s+/u).filter(Boolean);
+  const targetStem = stem(rawTargetToken);
+  if (evidenceTokens.some((token) => token.length >= 3 && stem(token) === targetStem)) return true;
+  if (rawTargetToken.length > 16 || evidenceTokens.length < 2) return false;
+  for (let start = 0; start < evidenceTokens.length - 1; start += 1) {
+    let compact = evidenceTokens[start];
+    for (let end = start + 1; end < Math.min(evidenceTokens.length, start + 4); end += 1) {
+      compact += evidenceTokens[end];
+      if (compact === rawTargetToken) return true;
+      if (compact.length >= rawTargetToken.length) break;
+    }
+  }
+  return false;
+}
+
 /** A render target must already be present in the customer's request or in the
  * consultant's initial product-class declaration. Later search vocabulary is
  * not allowed to rename the target to a sibling class. */
@@ -191,6 +219,28 @@ export function selectionTargetDeclarationIsGrounded(
   );
 }
 
+/**
+ * A provider may accidentally append a mandatory attribute to product_class
+ * even though it also serialized that attribute as a level-A criterion. The
+ * server may keep the already grounded base class only when every added class
+ * token is represented by that mandatory criterion. The criteria gate remains
+ * responsible for proving the attribute on every card, so this cannot turn an
+ * unverified application phrase into product identity.
+ */
+export function selectionTargetExtensionIsCriterionBacked(
+  baseTarget: string,
+  extendedTarget: string,
+  criteria: Criterion[],
+): boolean {
+  const baseTokens = new Set(meaningfulTokens(baseTarget));
+  const extraTokens = meaningfulTokens(extendedTarget).filter((token) => !baseTokens.has(token));
+  if (baseTokens.size === 0 || extraTokens.length === 0) return false;
+  const mandatoryEvidence = new Set((Array.isArray(criteria) ? criteria : [])
+    .filter((criterion) => criterion && (criterion.level ?? "A") === "A")
+    .flatMap((criterion) => meaningfulTokens(`${criterion.key} ${String(criterion.value ?? "")}`)));
+  return mandatoryEvidence.size > 0 && extraTokens.every((token) => mandatoryEvidence.has(token));
+}
+
 function productEvidence(product: ProductRef): string {
   return [
     product.pagetitle,
@@ -210,11 +260,15 @@ export function verifySelectionTarget(
   target: string,
   products: ProductRef[],
 ): SelectionTargetReport {
-  const tokens = meaningfulTokens(target);
+  const rawTokens = meaningfulRawTokens(target);
+  const tokens = rawTokens.map(stem).filter((token, index, values) => values.indexOf(token) === index);
   const perProduct = products.map((product) => {
-    const evidence = new Set(meaningfulTokens(productEvidence(product)));
-    const matched = tokens.filter((token) => evidence.has(token));
-    const missing = tokens.filter((token) => !evidence.has(token));
+    const rawByStem = new Map(rawTokens.map((token) => [stem(token), token] as const));
+    const matched = tokens.filter((token) => {
+      const raw = rawByStem.get(token);
+      return Boolean(raw && productEvidenceMatchesToken(product, raw));
+    });
+    const missing = tokens.filter((token) => !matched.includes(token));
     const coverage = tokens.length > 0 ? matched.length / tokens.length : 0;
     // One- or two-token canonical product classes need one literal proof.
     // Rich class names require at least 75% of their independently stated

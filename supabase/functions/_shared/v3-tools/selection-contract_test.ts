@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "./selection-contract.ts";
+import { bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
@@ -56,6 +56,16 @@ Deno.test("two-token class requires both identity signals", () => {
   ]);
   assertEquals(report.passed_ids, ["fixture"]);
   assertEquals(report.rejected_ids, ["flood", "lamp"]);
+});
+
+Deno.test("compact family code matches the same adjacent live-title tokens", () => {
+  const report = verifySelectionTarget("Кабель ABcd", [
+    product("split", "Кабель AB cd 3*1,5", "Кабели"),
+    product("missing", "Кабель AB 3*1,5", "Кабели"),
+    product("sibling", "Средство AB cd", "Бытовая химия"),
+  ]);
+  assertEquals(report.passed_ids, ["split"]);
+  assertEquals(report.rejected_ids, ["missing", "sibling"]);
 });
 
 Deno.test("verified render contract becomes a visible data-agnostic caption", () => {
@@ -207,4 +217,22 @@ Deno.test("terminal target keeps a short declared discovery noun instead of a lo
 Deno.test("a safely bootstrapped short noun may authorize its formal class extension", () => {
   assertEquals(selectionTargetIsDeclared("автомат", "Автоматический выключатель"), true);
   assertEquals(selectionTargetIsDeclared("ИБП", "Стабилизатор напряжения"), false);
+});
+
+Deno.test("a richer target falls back to its base only through mandatory criteria", () => {
+  assertEquals(selectionTargetExtensionIsCriterionBacked(
+    "кабель AB",
+    "кабель AB огнестойкий",
+    [{ key: "Огнестойкость", op: "eq", value: "Да", level: "A" }],
+  ), true);
+  assertEquals(selectionTargetExtensionIsCriterionBacked(
+    "светильник",
+    "уличный светильник",
+    [{ key: "Цвет", op: "eq", value: "чёрный", level: "A" }],
+  ), false);
+  assertEquals(selectionTargetExtensionIsCriterionBacked(
+    "светильник",
+    "уличный светильник",
+    [{ key: "Уличное исполнение", op: "eq", value: "Да", level: "B" }],
+  ), false);
 });
