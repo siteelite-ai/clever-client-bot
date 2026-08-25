@@ -145,6 +145,7 @@ import {
   subsumeCriteriaProvenByExplicitCompound,
 } from "../_shared/v3-tools/exact-compound-marking-policy.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
+import { selectReadinessClarification } from "../_shared/v3-tools/selection-readiness.ts";
 import { type EscalateInput,
   executeEscalate } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
@@ -7450,11 +7451,26 @@ Deno.serve(async (req) => {
         const broadAssortmentToken = broadAssortmentRequest
           ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8))
           : null;
+        const readinessClarification = selectReadinessClarification(
+          userMessage,
+          effectiveHistory.slice(-8).map((message) => message.content).join("\n"),
+        );
         // GUARD v3_meta_question_declined: вопрос про устройство сервиса
         // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
         // отвечаем фиксированной деловой фразой и возвращаем клиента к подбору.
         // Так утечка внутреннего устройства невозможна в принципе.
-        if (isMetaSelfQuestion(userMessage)) {
+        if (readinessClarification) {
+          const { profile, ...clarificationInput } = readinessClarification;
+          send({ type: "delta", content: clarificationInput.question });
+          const clarification = executeProposeClarification(clarificationInput);
+          emitSideEffects(clarification, send);
+          steps.push({
+            step: "v3_selection_readiness_clarification",
+            ms: Date.now() - t0,
+            meta: { profile, facet_key: clarificationInput.facet_key },
+          });
+          productsCount = 0;
+        } else if (isMetaSelfQuestion(userMessage)) {
           steps.push({ step: "v3_meta_question_declined", ms: Date.now() - t0, meta: { user_message: userMessage } });
           send({ type: "delta", content: META_DECLINE_TEXT });
           productsCount = 0;
