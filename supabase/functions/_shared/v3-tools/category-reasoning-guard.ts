@@ -14,6 +14,11 @@ export interface CategoryReasoningGuardResult {
   dropped: Array<{ category: string; reason: "not_declared_in_reasoning" }>;
 }
 
+export interface GroundedCategoryRecoveryScope<T extends DiscoveredCategoryScope> {
+  discovery: T;
+  targets: string[];
+}
+
 const RU_SUFFIXES = [
   "ыми", "ими", "ого", "его", "ому", "ему",
   "ая", "яя", "ое", "ее", "ой", "ей", "ом", "ем", "ую", "юю",
@@ -63,16 +68,39 @@ function distinctiveLeafTokens(leaf: string, umbrella: string): string[] {
   );
 }
 
+function evidenceAffirmsToken(evidence: string, token: string): boolean {
+  const tokens = norm(evidence).split(" ").filter(Boolean);
+  for (let index = 0; index < tokens.length; index += 1) {
+    if (!tokenMatches(token, tokens[index])) continue;
+    // In a transformation request (`replace X with Y`) X is the source being
+    // removed, not positive evidence for the target category. A later mention
+    // after `with/на` can still affirm the same class independently.
+    let belongsToReplacementSource = false;
+    for (let start = index - 1; start >= Math.max(0, index - 12); start -= 1) {
+      if (!tokens[start].startsWith("замен")) continue;
+      const separator = tokens.slice(start + 1, Math.min(tokens.length, index + 13)).indexOf("на");
+      if (separator >= 0 && index < start + 1 + separator) belongsToReplacementSource = true;
+      break;
+    }
+    if (belongsToReplacementSource) continue;
+    const context = tokens.slice(Math.max(0, index - 5), Math.min(tokens.length, index + 15)).join(" ");
+    const rejected = /(?:(?:^|\s)не\s+(?:то|подход\p{L}*|нуж\p{L}*|соответ\p{L}*|верн\p{L}*)|(?:^|\s)(?:ошибоч\p{L}*|неверн\p{L}*|отсеч\p{L}*|исключ\p{L}*|убра\p{L}*|лишн\p{L}*)|(?:^|\s)нуж\p{L}*\s+друг\p{L}*|(?:^|\s)треб\p{L}*\s+друг\p{L}*)/u.test(context);
+    if (!rejected) return true;
+  }
+  return false;
+}
+
 function leafSupported(leaf: string, umbrella: string, evidence: string): boolean {
   const distinctive = distinctiveLeafTokens(leaf, umbrella);
   // A leaf whose name is indistinguishable from the umbrella provides no
   // semantic assertion to verify and is safe to keep.
   if (distinctive.length === 0) return true;
-  const evidenceTokens = significantTokens(evidence);
   // Every semantic assertion introduced by the leaf name must be present. A
   // shared requested feature alone (for example, "с датчиком движения") must
   // not justify an unrelated sibling modifier such as "уличный".
-  return distinctive.every((token) => evidenceTokens.some((candidate) => tokenMatches(token, candidate)));
+  // A rejected branch is not positive evidence merely because its name occurs
+  // in the explanation ("this branch does not fit; choose another type").
+  return distinctive.every((token) => evidenceAffirmsToken(evidence, token));
 }
 
 /** Canonical leaf names safe to use for one terminal semantic retry. */
@@ -95,6 +123,91 @@ export function groundedCategoryRecoveryQueries(
     (token) => evidenceTokens.some((candidate) => tokenMatches(token, candidate)),
   );
   return umbrellaGrounded ? [umbrella] : [];
+}
+
+/**
+ * A successful taxonomy lookup is not automatically a successful intent
+ * resolution. Preserve all live discoveries and rank only those whose class
+ * is grounded in the frozen selection evidence. Newer grounded scopes win;
+ * an ungrounded corrective lookup cannot erase an earlier useful umbrella.
+ */
+export function rankGroundedCategoryRecoveryScopes<T extends DiscoveredCategoryScope>(
+  discoveries: readonly T[],
+  declaredReasoning: string,
+  limit = 4,
+): Array<GroundedCategoryRecoveryScope<T>> {
+  const selected: Array<GroundedCategoryRecoveryScope<T>> = [];
+  const seen = new Set<string>();
+  for (let index = discoveries.length - 1; index >= 0; index -= 1) {
+    const discovery = discoveries[index];
+    const targets = groundedCategoryRecoveryQueries(discovery, declaredReasoning, 20);
+    if (targets.length === 0) continue;
+    const umbrella = discovery.category?.pagetitle?.trim() ?? "";
+    const umbrellaGrounded = significantTokens(umbrella).every((token) =>
+      evidenceAffirmsToken(declaredReasoning, token)
+    );
+    const hasGroundedDistinctiveLeaf = targets.some((target) =>
+      distinctiveLeafTokens(target, umbrella).length > 0
+    );
+    // `leafSupported()` deliberately treats a leaf identical to its umbrella
+    // as harmless during an already-scoped search. Scope ranking is stricter:
+    // an exact leaf cannot make an unrelated corrective discovery ground
+    // itself; the umbrella must be affirmed by frozen intent evidence.
+    if (!umbrellaGrounded && !hasGroundedDistinctiveLeaf) continue;
+    const signature = [
+      norm(umbrella),
+      ...targets.map(norm).sort(),
+    ].join("|");
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    selected.push({ discovery, targets });
+    if (selected.length >= Math.max(1, limit)) break;
+  }
+  return selected;
+}
+
+/** Keep terminal candidates inside taxonomy leaves explicitly grounded by the
+ * consultant's reasoning. Every significant token of a target leaf must be
+ * evidenced by the product title or its live leaf category. */
+export function filterProductsByGroundedCategoryTargets<T extends { pagetitle: string; leaf_category?: string | null }>(
+  products: T[],
+  targets: string[],
+  umbrella = "",
+  declaredReasoning = "",
+): T[] {
+  const grounded = [...new Set((targets ?? []).map((target) => target.trim()).filter(Boolean))];
+  if (grounded.length === 0) return [];
+  const umbrellaTokens = significantTokens(umbrella);
+  const targetTokenSets = grounded.map((target) => significantTokens(target));
+  const umbrellaClassTokens = umbrellaTokens.filter((token) =>
+    targetTokenSets.some((tokens) => tokens.some((candidate) => tokenMatches(token, candidate)))
+  );
+  const recurringTargetTokens = targetTokenSets[0]?.filter((token) =>
+    targetTokenSets.slice(1).every((tokens) => tokens.some((candidate) => tokenMatches(token, candidate)))
+  ) ?? [];
+  const classTokens = umbrellaClassTokens.length > 0 ? umbrellaClassTokens : recurringTargetTokens;
+  const distinctiveByTarget = grounded.map((target) =>
+    significantTokens(target).filter((token) =>
+      !classTokens.some((classToken) => tokenMatches(token, classToken))
+    )
+  );
+  const hasDistinctiveTargets = distinctiveByTarget.some((tokens) => tokens.length > 0);
+  return products.filter((product) => {
+    if (product.leaf_category && declaredReasoning && !leafSupported(product.leaf_category, umbrella, declaredReasoning)) {
+      return false;
+    }
+    const exactLeaf = norm(product.leaf_category ?? "");
+    if (exactLeaf && grounded.some((target) => norm(target) === exactLeaf)) return true;
+    const evidenceTokens = significantTokens(`${product.pagetitle} ${product.leaf_category ?? ""}`);
+    const umbrellaMatched = classTokens.length === 0 || classTokens.every((token) =>
+      evidenceTokens.some((candidate) => tokenMatches(token, candidate))
+    );
+    if (!umbrellaMatched) return false;
+    if (!hasDistinctiveTargets) return true;
+    return distinctiveByTarget.some((tokens) => tokens.some((token) =>
+      evidenceTokens.some((candidate) => tokenMatches(token, candidate))
+    ));
+  });
 }
 
 /**
@@ -228,8 +341,12 @@ export function guardCategoryScopeByReasoning(
   if (dropped.length === 0) return { args, kept, dropped };
 
   const { category: _category, category_in: _categoryIn, ...rest } = args;
+  const hasFacetScope = rest.options && typeof rest.options === "object" &&
+    Object.keys(rest.options as Record<string, unknown>).length > 0;
   const nextArgs = kept.length === 0
-    ? rest
+    ? rest.mode === "by_filter" && !hasFacetScope && umbrella
+      ? { ...rest, category: umbrella }
+      : rest
     : kept.length === 1
     ? { ...rest, category: kept[0] }
     : { ...rest, category_in: kept };

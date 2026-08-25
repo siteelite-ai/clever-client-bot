@@ -301,7 +301,11 @@ async function singleSearch(
         stock: inferStock(raw),
         short_traits: extractTraits(raw),
         description_excerpt: descriptionExcerpt,
-        leaf_category: extractLeafCategory(raw),
+        // A product returned by an exact category-filtered request has that
+        // category as verified query provenance even when the API omits the
+        // redundant category object in the product payload. Preserve this
+        // lineage for later class gates instead of treating it as unknown.
+        leaf_category: extractLeafCategory(raw) ?? categoryOverride ?? null,
         ...(warehouses.length > 0 ? { warehouses } : {}),
       };
       cache.set(id, { ...ref, url: u });
@@ -325,6 +329,31 @@ async function singleSearch(
  */
 const SORT_PAGE_SIZE = 50;
 const MAX_SORT_FETCH = 200; // 4 страницы × 50 — потолок защиты от тяжёлых категорий
+const MAX_OPTION_ALTERNATIVE_REQUESTS = 24;
+
+/**
+ * The catalog endpoint does not reliably implement OR for repeated
+ * `options[key][]` values: an exact range compiled from live facet values can
+ * return zero although every individual value exists. Compile OR-within-a-
+ * facet / AND-between-facets into exact request variants. The expansion is
+ * deliberately bounded; oversized model requests keep the legacy aggregate
+ * form instead of causing an unbounded network fan-out.
+ */
+export function expandOptionAlternatives(input: SearchCatalogInput): SearchCatalogInput[] {
+  const entries = Object.entries(input.options ?? {})
+    .map(([key, values]) => [key, [...new Set((Array.isArray(values) ? values : []).map(String).filter(Boolean))]] as const)
+    .filter(([, values]) => values.length > 0);
+  if (entries.length === 0 || entries.every(([, values]) => values.length === 1)) return [input];
+  const combinations = entries.reduce((count, [, values]) => count * values.length, 1);
+  if (!Number.isFinite(combinations) || combinations <= 1 || combinations > MAX_OPTION_ALTERNATIVE_REQUESTS) {
+    return [input];
+  }
+  let variants: Array<Record<string, string[]>> = [{}];
+  for (const [key, values] of entries) {
+    variants = variants.flatMap((variant) => values.map((value) => ({ ...variant, [key]: [value] })));
+  }
+  return variants.map((options) => ({ ...input, options }));
+}
 
 async function singleSearchSorted(
   input: SearchCatalogInput,
@@ -404,6 +433,22 @@ async function singleSearchSortedWithCompoundFallback(
   return retry;
 }
 
+async function searchWithRateLimitRetry(
+  input: SearchCatalogInput,
+  deps: CatalogClientDeps,
+  cache: ProductCache,
+  categoryOverride: string | undefined,
+  warnings: string[],
+): Promise<SingleSearchResult> {
+  let result = await singleSearchSortedWithCompoundFallback(input, deps, cache, categoryOverride, warnings);
+  for (let attempt = 1; !result.ok && result.error_code === "rate_limited" && attempt <= 2; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    result = await singleSearchSortedWithCompoundFallback(input, deps, cache, categoryOverride, warnings);
+    if (result.ok && !warnings.includes("rate_limit_retry_recovered")) warnings.push("rate_limit_retry_recovered");
+  }
+  return result;
+}
+
 export async function executeSearchCatalog(
   input: SearchCatalogInput,
   deps: CatalogClientDeps,
@@ -417,7 +462,7 @@ export async function executeSearchCatalog(
     const hasCat = !!input.category || (Array.isArray(input.category_in) && input.category_in.length > 0);
     const hasOpts = input.options && Object.keys(input.options).length > 0;
     if (!hasCat && !hasOpts) {
-      return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "by_filter requires category/category_in or options" };
+      return { tool: "search_catalog", ok: false, error_code: "incomplete_filter", message: "by_filter requires category/category_in or options" };
     }
   } else if (input.mode !== "by_article" && input.mode !== "by_pagetitle" && input.mode !== "by_query") {
     return { tool: "search_catalog", ok: false, error_code: "bad_input", message: "missing field for mode" };
@@ -445,17 +490,43 @@ export async function executeSearchCatalog(
     }
   }
 
-  // Один запрос: либо нет category fan-out, либо ровно одна категория.
-  if (categories.length <= 1) {
-    const r = await singleSearchSortedWithCompoundFallback(input, deps, cache, categories[0], warnings);
+  const optionVariants = input.mode === "by_filter" ? expandOptionAlternatives(input) : [input];
+  if (optionVariants.length > 1) warnings.push(`option_alternatives_fanout:${optionVariants.length}`);
+
+  // Один запрос: нет ни category fan-out, ни OR-альтернатив фасета.
+  if (categories.length <= 1 && optionVariants.length === 1) {
+    const r = await searchWithRateLimitRetry(optionVariants[0], deps, cache, categories[0], warnings);
     if (!r.ok) return { tool: "search_catalog", ok: false, error_code: r.error_code, message: r.message };
     return { tool: "search_catalog", ok: true, mode: input.mode, total: r.total, results: r.results, ...(warnings.length ? { warnings } : {}) };
   }
 
-  // Fan-out: параллельные запросы по каждой листовой категории, merge с дедупликацией по id.
-  const settled = await Promise.all(
-    categories.map((cat) => singleSearchSortedWithCompoundFallback(input, deps, cache, cat, warnings)),
-  );
+  // Fan-out: Cartesian product of leaf categories and exact option variants.
+  // Each request keeps AND between different facets; merged requests implement
+  // OR between accepted values of the same facet.
+  const categoryVariants = categories.length > 0 ? categories : [undefined];
+  const settled: SingleSearchResult[] = [];
+  if (optionVariants.length > 1) {
+    // Exact alternatives are intentionally executed one variant at a time.
+    // Bursting a dozen live values at once causes catalog 429 responses and a
+    // false empty result. Stop once enough unique cards are collected for the
+    // requested page; all completed variants remain exact evidence.
+    const collected = new Set<string>();
+    const requestedPerPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
+    for (const variant of optionVariants) {
+      const batch = await Promise.all(categoryVariants.map((cat) =>
+        searchWithRateLimitRetry(variant, deps, cache, cat, warnings)
+      ));
+      settled.push(...batch);
+      for (const result of batch) {
+        if (result.ok) result.results.forEach((product) => collected.add(product.id));
+      }
+      if (collected.size >= requestedPerPage) break;
+    }
+  } else {
+    settled.push(...await Promise.all(
+      categoryVariants.map((cat) => searchWithRateLimitRetry(optionVariants[0], deps, cache, cat, warnings)),
+    ));
+  }
   const okResults = settled.filter((r): r is Extract<SingleSearchResult, { ok: true }> => r.ok);
   if (okResults.length === 0) {
     // Все упали — возвращаем первую ошибку.
@@ -468,6 +539,14 @@ export async function executeSearchCatalog(
     totalSum += r.total;
     for (const p of r.results) {
       if (!mergedById.has(p.id)) mergedById.set(p.id, p);
+    }
+  }
+  if (mergedById.size === 0) {
+    const rateLimitError = settled.find((r): r is Extract<SingleSearchResult, { ok: false }> =>
+      !r.ok && r.error_code === "rate_limited"
+    );
+    if (rateLimitError) {
+      return { tool: "search_catalog", ok: false, error_code: rateLimitError.error_code, message: rateLimitError.message };
     }
   }
   const merged = [...mergedById.values()];

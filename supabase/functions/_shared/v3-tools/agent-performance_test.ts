@@ -2,6 +2,7 @@ import { assert, assertEquals, assertLess } from "https://deno.land/std@0.224.0/
 import {
   boundedAgentStepTimeout,
   compactCatalogResultForLlm,
+  deterministicIntroTimeoutToolCall,
   forcedToolNameForAgentPhase,
   hasActionableSelectionReasoning,
   isToolAllowedInAgentPhase,
@@ -19,6 +20,18 @@ Deno.test("agent deadline: remote steps are bounded and reserve finalization tim
   assertEquals(boundedAgentStepTimeout(30_000, 105_000, 105_000, 5_000), null);
 });
 
+Deno.test("forced discovery timeout falls back to live taxonomy without product rules", () => {
+  assertEquals(deterministicIntroTimeoutToolCall("discover_category", "  Нужен товар 16 А  "), {
+    name: "discover_category",
+    args: {
+      noun: "Нужен товар 16 А",
+      semantic_query: "Нужен товар 16 А",
+    },
+  });
+  assertEquals(deterministicIntroTimeoutToolCall("search_catalog", "Нужен товар"), null);
+  assertEquals(deterministicIntroTimeoutToolCall("discover_category", "   "), null);
+});
+
 Deno.test("agent phase: successful discovery requires search and blocks rediscovery", () => {
   const phase = nextAgentPhase("open", {
     tool: "discover_category",
@@ -32,9 +45,18 @@ Deno.test("agent phase: successful discovery requires search and blocks rediscov
   assert(!toolNamesForAgentPhase(phase).includes("jargon_recover_catalog"));
 });
 
-Deno.test("agent phase: jargon helper is unavailable initially and only opens after category_not_found", () => {
+Deno.test("agent phase: jargon helper stays closed until the bounded taxonomy retry also fails", () => {
   assert(!toolNamesForAgentPhase("open").includes("jargon_recover_catalog"));
-  assertEquals(nextAgentPhase("open", {
+  const retryPhase = nextAgentPhase("open", {
+    tool: "discover_category",
+    ok: false,
+    errorCode: "category_not_found",
+    intentMode: "select",
+    replacementIntent: false,
+  });
+  assertEquals(retryPhase, "rediscover_after_failed_discovery");
+  assert(!toolNamesForAgentPhase(retryPhase).includes("jargon_recover_catalog"));
+  assertEquals(nextAgentPhase(retryPhase, {
     tool: "discover_category",
     ok: false,
     errorCode: "category_not_found",
@@ -153,8 +175,37 @@ Deno.test("agent phase: quantified reasoning forces exactly the next phase tool"
   assertEquals(forcedToolNameForAgentPhase("open", { reasoningRequiresCatalog: false }), null);
 });
 
-Deno.test("agent phase: failed discovery has one forced jargon attempt followed by model-owned search", () => {
-  assertEquals(forcedToolNameForAgentPhase("jargon_after_failed_discovery"), "jargon_recover_catalog");
+Deno.test("agent phase: every selection enters live taxonomy before it may finish", () => {
+  assertEquals(forcedToolNameForAgentPhase("open", {
+    reasoningRequiresCatalog: false,
+    selectionRequiresInitialDiscovery: true,
+  }), "discover_category");
+  assertEquals(forcedToolNameForAgentPhase("search_after_discovery", {
+    reasoningRequiresCatalog: false,
+    selectionRequiresInitialDiscovery: true,
+  }), null);
+});
+
+Deno.test("agent phase: failed discovery retries taxonomy once before forced jargon", () => {
+  const retryPhase = nextAgentPhase("open", {
+    tool: "discover_category",
+    ok: false,
+    errorCode: "category_not_found",
+    intentMode: "select",
+    replacementIntent: false,
+  });
+  assertEquals(retryPhase, "rediscover_after_failed_discovery");
+  assertEquals(toolNamesForAgentPhase(retryPhase), ["discover_category"]);
+  assertEquals(forcedToolNameForAgentPhase(retryPhase), "discover_category");
+  const jargonPhase = nextAgentPhase(retryPhase, {
+    tool: "discover_category",
+    ok: false,
+    errorCode: "category_not_found",
+    intentMode: "select",
+    replacementIntent: false,
+  });
+  assertEquals(jargonPhase, "jargon_after_failed_discovery");
+  assertEquals(forcedToolNameForAgentPhase(jargonPhase), "jargon_recover_catalog");
   const searchPhase = nextAgentPhase("jargon_after_failed_discovery", {
     tool: "jargon_recover_catalog",
     ok: true,
@@ -166,6 +217,15 @@ Deno.test("agent phase: failed discovery has one forced jargon attempt followed 
   assertEquals(searchPhase, "search_after_jargon");
   assertEquals(toolNamesForAgentPhase(searchPhase), ["search_catalog"]);
   assertEquals(forcedToolNameForAgentPhase(searchPhase), "search_catalog");
+});
+
+Deno.test("agent phase: successful taxonomy retry proceeds to ordinary search", () => {
+  assertEquals(nextAgentPhase("rediscover_after_failed_discovery", {
+    tool: "discover_category",
+    ok: true,
+    intentMode: "select",
+    replacementIntent: false,
+  }), "search_after_discovery");
 });
 
 Deno.test("agent phase: permits one new-noun correction only before search progress", () => {

@@ -14,6 +14,16 @@ export interface ReplacementLookupKeys {
   modelCodes: string[];
 }
 
+/** Compact variant/curve/class codes are often visible in titles even when
+ * the catalog omits the matching trait. Capture only a standalone uppercase
+ * letter explicitly introduced by a parameter label. */
+export function extractExplicitSingleLetterCodes(message: string): string[] {
+  const matches = [...String(message ?? "").matchAll(
+    /(?<![\p{L}\p{N}])\p{L}{4,}(?:\s+\p{L}{4,}){0,2}\s*[:=–—-]?\s+([A-ZА-ЯЁ])(?![\p{L}\p{N}])/gu,
+  )];
+  return distinct(matches.map((match) => codeNorm(match[1])));
+}
+
 function norm(value: string): string {
   return String(value ?? "")
     .toLocaleLowerCase("ru-RU")
@@ -35,11 +45,17 @@ function distinct(values: string[]): string[] {
 export function extractReplacementLookupKeys(message: string): ReplacementLookupKeys {
   const articles = distinct([...message.matchAll(/(?<!\d)\d{6,18}(?!\d)/gu)].map((match) => match[0]));
   const tokens = message.match(/[a-zа-я0-9][a-zа-я0-9._/-]{2,}/giu) ?? [];
-  const modelCodes = distinct(tokens
+  const separatedModelCodes = [...message.matchAll(
+    /(?<![\p{L}\p{N}])[\p{L}]{1,6}\s+\d{1,6}(?:\s*[-/.]\s*\d{1,6})+(?![\p{L}\p{N}])/giu,
+  )].flatMap((match) => {
+    const spaced = match[0].replace(/\s+/gu, " ").replace(/\s*([-/.])\s*/gu, "$1").trim();
+    return [spaced, spaced.replace(/\s+/gu, "")];
+  });
+  const modelCodes = distinct([...separatedModelCodes, ...tokens
     .map((token) => token.replace(/[^a-zа-я0-9-]/giu, ""))
     .filter((token) => token.length >= 4 && /\p{L}/u.test(token) && /\d/u.test(token))
     .filter((token) => !/^\d+(?:[.,-]\d+)?[a-zа-я]{1,4}$/iu.test(token))
-    .sort((left, right) => right.length - left.length));
+  ].sort((left, right) => right.length - left.length));
   return { articles, modelCodes };
 }
 
@@ -84,6 +100,28 @@ function explicitInAnchorText(value: string, evidence: string): boolean {
   return compact.length >= 2 && codeNorm(evidence).includes(compact);
 }
 
+function captionIsEvidenced(caption: string, evidence: string): boolean {
+  const evidenceTokens = norm(evidence).split(" ").filter((token) => token.length >= 4);
+  return norm(caption).split(" ")
+    .filter((token) => token.length >= 4)
+    .some((captionToken) => evidenceTokens.some((token) =>
+      token.slice(0, 4) === captionToken.slice(0, 4)
+    ));
+}
+
+function standaloneCodeIsEvidenced(value: string, evidence: string): boolean {
+  const wanted = codeNorm(value);
+  if (!wanted) return false;
+  return (String(evidence ?? "").match(/[\p{L}\p{N}]+/gu) ?? [])
+    .some((token) => codeNorm(token) === wanted);
+}
+
+function compactSingleCodes(value: string): string[] {
+  return [...new Set((String(value ?? "").match(/[\p{L}\p{N}]+/gu) ?? [])
+    .map(codeNorm)
+    .filter((token) => token.length === 1 && /\p{L}/u.test(token)))];
+}
+
 /**
  * Builds a compact search plan only from live anchor traits, live facet values,
  * and literals present in the customer's anchor description. No category or
@@ -100,9 +138,38 @@ export function selectExplicitAnchorAxes(
   for (const facet of facets) {
     if (isReplacementIdentityFacet(facet)) continue;
     const trait = traitEntries(product).find((entry) => captionsMatch(entry.caption, facet.caption));
-    if (!trait) continue;
-    const canonical = canonicalFacetValue(facet, trait.value);
-    if (!canonical || !explicitInAnchorText(canonical.value, evidence)) continue;
+    const traitCanonical = trait ? canonicalFacetValue(facet, trait.value) : null;
+    const visibleCompactCanonical = captionIsEvidenced(facet.caption, userMessage)
+      ? (facet.values ?? []).find((candidate) => {
+        const codes = compactSingleCodes(candidate.value);
+        return codes.some((code) =>
+          standaloneCodeIsEvidenced(code, userMessage) &&
+          standaloneCodeIsEvidenced(code, product.pagetitle)
+        );
+      })
+      : null;
+    const canonical = traitCanonical ?? (visibleCompactCanonical
+      ? { value: String(visibleCompactCanonical.value), total: Number(visibleCompactCanonical.products_count ?? Number.POSITIVE_INFINITY) }
+      : null);
+    if (!canonical) continue;
+    const singleCodes = compactSingleCodes(canonical.value);
+    const explicitValue = explicitInAnchorText(canonical.value, evidence) || Boolean(
+      singleCodes.length > 0 &&
+      captionIsEvidenced(facet.caption, userMessage) &&
+      singleCodes.some((code) =>
+        standaloneCodeIsEvidenced(code, userMessage) &&
+        standaloneCodeIsEvidenced(code, product.pagetitle)
+      ),
+    );
+    if (!explicitValue) continue;
+    // A bare binary number occurs in many unrelated technical and merchandising
+    // facets. It becomes an analogue axis only when the customer also named
+    // the facet meaning (for example, a pole-count caption), not merely because
+    // another "1" happens to occur in the model title.
+    const facetIsBinary = (facet.values ?? []).length > 0 && (facet.values ?? []).every(({ value }) =>
+      /^[01](?:[.,]0+)?$/u.test(String(value).trim())
+    );
+    if (facetIsBinary && !captionIsEvidenced(facet.caption, userMessage)) continue;
     axes.push({ key: facet.key, caption: facet.caption, value: canonical.value, total: canonical.total });
   }
   return axes

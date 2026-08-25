@@ -2,7 +2,7 @@
 // Data-agnostic: абстрактные имена параметров.
 
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { alignCriteriaWithReasoning, extractReasoningBounds } from "./criteria-reasoning.ts";
+import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, extractReasoningBounds, hasMeasuredSelectionRequirement, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "./criteria-reasoning.ts";
 import { checkCriterion, type Criterion } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
 
@@ -21,6 +21,132 @@ Deno.test("extractReasoningBounds: направления и строгость"
     { op: "max", value: 15, unit: "а", strict: false },
   ]);
   assertEquals(extractReasoningBounds("нужно 12 штук"), []);
+});
+
+Deno.test("измеримое рассуждение требует машинного критерия, голая маркировка — нет", () => {
+  assertEquals(hasMeasuredSelectionRequirement("нужен поток 3750–5000 лм для комнаты"), true);
+  assertEquals(hasMeasuredSelectionRequirement("трубка должна охватывать кабель 12 мм"), true);
+  assertEquals(hasMeasuredSelectionRequirement("покажи кабель ВВГ 2×1,5"), false);
+  assertEquals(hasMeasuredSelectionRequirement("Обычно такие лампы имеют E27 или E14 и часто работают на 220 В."), false);
+  assertEquals(hasMeasuredSelectionRequirement("Считаем: площадь 25 м² × 175 лк, итого 4375 лм."), true);
+});
+
+Deno.test("числовой диапазон из рассуждения проецируется на уникальный живой фасет", () => {
+  const projected = projectReasoningRangeCriteria([], "ориентир 3750–5000 люмен", [
+    { key: "svetovoj_potok", caption: "Световой поток", type: "number", unit: "лм" },
+    { key: "power", caption: "Мощность", type: "number", unit: "Вт" },
+  ]);
+  assertEquals(projected.added, [{ key: "Световой поток", op: "range", value: [3750, 5000], unit: "лм", level: "A" }]);
+});
+
+Deno.test("русский диапазон от X до Y проецируется так же, как запись через тире", () => {
+  const projected = projectReasoningRangeCriteria([], "нужно от 3500 до 5000 люмен", [
+    { key: "flow", caption: "Поток", type: "number", unit: "лм" },
+  ]);
+  assertEquals(projected.added, [{ key: "Поток", op: "range", value: [3500, 5000], unit: "лм", level: "A" }]);
+});
+
+Deno.test("проверенный средний расчёт сохраняет исходный диапазон результата", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "Ориентир 150–200 лк. Считаем: 25 м² × 175 лк (среднее) ≈ 4375 лм.",
+    [{ key: "flow", caption: "Световой поток", type: "number", unit: "лм" }],
+  );
+  assertEquals(projected.added, [
+    { key: "Световой поток", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
+  ]);
+});
+
+Deno.test("форматированный приблизительный результат сохраняет диапазон расчёта", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "Ориентир 150–200 лк: 25 м² × 175 лк ≈ **~4400 лм** — это целевой поток.",
+    [{
+      key: "svetovoy_potok",
+      caption: "Световой поток, лм",
+      type: "number",
+      unit: "лм",
+      values: [{ value: "3000" }, { value: "3750" }, { value: "4000" }, { value: "5000" }, { value: "6000" }],
+    }],
+  );
+  assertEquals(projected.added, [
+    { key: "Световой поток, лм", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
+  ]);
+});
+
+Deno.test("два диапазона одной единицы не проецируются на один фасет наугад", () => {
+  const projected = projectReasoningRangeCriteria([], "до установки 15–20 мм, после установки 6–8 мм", [
+    { key: "size", caption: "Размер", type: "number", unit: "мм" },
+  ]);
+  assertEquals(projected.added, []);
+});
+
+Deno.test("существующий критерий модели разрешает неоднозначность фасетов с одной единицей", () => {
+  const projected = projectReasoningRangeCriteria(
+    [{ key: "Световой поток, Лм", op: "min", value: 3750, unit: "лм", level: "A" }],
+    "Нужен световой поток 3750–5000 лм",
+    [
+      { key: "lamp_flow", caption: "Световой поток, Лм", type: "number", unit: "лм" },
+      { key: "module_flow", caption: "Поток светодиодного модуля", type: "number", unit: "лм" },
+    ],
+  );
+  assertEquals(projected.added, [
+    { key: "Световой поток, Лм", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
+  ]);
+});
+
+Deno.test("числовые live-значения компенсируют строковый тип фасета каталога", () => {
+  const projected = projectReasoningRangeCriteria(
+    [{ key: "Световой поток", op: "min", value: 3750, unit: "лм", level: "A" }],
+    "Нужен световой поток 3750–5000 лм",
+    [{
+      key: "flow",
+      caption: "Световой поток",
+      type: "checkbox",
+      unit: "лм",
+      values: [{ value: "3000" }, { value: "4000" }, { value: "5000" }],
+    }],
+  );
+  assertEquals(projected.added, [
+    { key: "Световой поток", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
+  ]);
+});
+
+Deno.test("слова рядом с диапазоном разрешают неоднозначность live-фасетов", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "Для комнаты нужен суммарный световой поток 3750–5000 лм.",
+    [
+      { key: "lamp_flow", caption: "Световой поток", type: "checkbox", unit: "лм", values: [{ value: "4000" }] },
+      { key: "module_flow", caption: "Поток светодиодного модуля", type: "checkbox", unit: "лм", values: [{ value: "4100" }] },
+    ],
+  );
+  assertEquals(projected.added, [
+    { key: "Световой поток", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
+  ]);
+});
+
+Deno.test("единица из live-подписи компенсирует пустое поле unit", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "Нужен световой поток 3750–5000 лм",
+    [{ key: "flow_lm", caption: "Световой поток, Лм", type: "checkbox", unit: null, values: [{ value: "4000" }] }],
+  );
+  assertEquals(projected.added, [
+    { key: "Световой поток, Лм", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
+  ]);
+});
+
+Deno.test("числовой критерий из рассуждения повышается с B до обязательного A", () => {
+  const result = promoteMeasuredReasoningCriteria([
+    { key: "Световой поток", op: "min", value: 3750, unit: "лм", level: "B" },
+    { key: "Цвет", op: "eq", value: "белый", level: "B" },
+  ], "Для задачи нужен поток 3750–5000 лм");
+  assertEquals(result.criteria, [
+    { key: "Световой поток", op: "min", value: 3750, unit: "лм", level: "A" },
+    { key: "Цвет", op: "eq", value: "белый", level: "B" },
+  ]);
+  assertEquals(result.promoted, ["Световой поток"]);
 });
 
 Deno.test("alignCriteriaWithReasoning: eq на числе клиента → min по прозе", () => {
@@ -157,4 +283,110 @@ Deno.test("«не менее» не сбивает уже строгий min", (
   const r = alignCriteriaWithReasoning(criteria, "нужен размер не менее 10 мм");
   assertEquals(r.criteria[0].exclusive, true);
   assertEquals(r.alignments.length, 0);
+});
+
+Deno.test("advisory model defaults do not become mandatory filters", () => {
+  const criteria: Criterion[] = [
+    { key: "Параметр альфа", op: "range", value: [30, 40], unit: "ед", level: "A" },
+    { key: "Параметр бета", op: "eq", value: "нейтральный", level: "A" },
+    { key: "Параметр гамма", op: "eq", value: "внутренний", level: "A" },
+  ];
+  const aligned = alignCriteriaImportanceWithReasoning(
+    criteria,
+    "Значит, нужен параметр альфа 30–40 ед. Параметр бета логичнее нейтральный. Параметр гамма — внутренний.",
+  );
+  assertEquals(aligned.criteria.map((criterion) => criterion.level), ["A", "B", "B"]);
+  assertEquals(aligned.demoted, ["Параметр бета", "Параметр гамма"]);
+});
+
+Deno.test("user-backed criterion stays mandatory without necessity wording", () => {
+  const criterion: Criterion = { key: "Параметр дельта", op: "eq", value: "точный", level: "A" };
+  const aligned = alignCriteriaImportanceWithReasoning(
+    [criterion],
+    "Параметр дельта — точный.",
+    [criterion],
+  );
+  assertEquals(aligned.criteria[0].level, "A");
+  assertEquals(aligned.demoted, []);
+});
+
+Deno.test("calculated result remains mandatory without a modal verb", () => {
+  const criterion: Criterion = { key: "Параметр результата", op: "range", value: [3750, 5000], unit: "ед", level: "A" };
+  const aligned = alignCriteriaImportanceWithReasoning(
+    [criterion],
+    "25 ед × 150–200 ед = 3750–5000 ед суммарного результата.",
+  );
+  assertEquals(aligned.criteria[0].level, "A");
+  assertEquals(aligned.demoted, []);
+});
+
+Deno.test("projected measured range keeps one contract across equivalent reasoning wording", () => {
+  const facets = [{
+    key: "measured_output",
+    caption: "Measured output, lm",
+    type: "number",
+    unit: "lm",
+    values: [{ value: "3000" }, { value: "3750" }, { value: "4000" }, { value: "5000" }, { value: "6000" }],
+  }];
+  const softFilters: Criterion[] = [
+    { key: "Mounting", op: "eq", value: "ceiling", level: "A" },
+  ];
+  const contract = compileMeasuredReasoningSearchContract(
+    softFilters,
+    "For the stated area this gives the required measured output of approximately 3750-5000 lm. Mounting is preferably ceiling.",
+    [],
+    facets,
+  );
+  assertEquals(contract.projected_criteria, [
+    { key: "Measured output, lm", op: "range", value: [3750, 5000], unit: "lm", level: "A" },
+  ]);
+  assertEquals(contract.mandatory_criteria, contract.projected_criteria);
+  assertEquals(contract.options, { measured_output: ["3750", "4000", "5000"] });
+  assertEquals(contract.demoted, ["Mounting"]);
+});
+
+Deno.test("projected measured range is not demoted by comfort wording", () => {
+  const facets = [{
+    key: "svetovoy_potok",
+    caption: "Световой поток, лм",
+    type: "number",
+    unit: "лм",
+    values: [{ value: "3000" }, { value: "3750" }, { value: "4000" }, { value: "5000" }],
+  }];
+  const contract = compileMeasuredReasoningSearchContract(
+    [],
+    "Для комфортного освещения это даёт потребный световой поток примерно 3750–5000 лм.",
+    [],
+    facets,
+  );
+  assertEquals(contract.mandatory_criteria.map((criterion) => criterion.level), ["A"]);
+  assertEquals(contract.options, { svetovoy_potok: ["3750", "4000", "5000"] });
+});
+
+Deno.test("an otherwise unbounded selection promotes only projectable measured criteria", () => {
+  const aligned = promoteProjectableMeasuredFallbackCriteria([
+    { key: "Measured output", op: "min", value: 3750, unit: "lm", level: "B" },
+    { key: "Colour", op: "eq", value: "neutral", level: "B" },
+  ], [{
+    key: "measured_output",
+    caption: "Measured output",
+    unit: "lm",
+    values: [{ value: "3000" }, { value: "4000" }],
+  }]);
+  assertEquals(aligned.criteria.map((criterion) => criterion.level), ["A", "B"]);
+  assertEquals(aligned.promoted, ["Measured output"]);
+});
+
+Deno.test("fallback promotion preserves an existing mandatory contract", () => {
+  const aligned = promoteProjectableMeasuredFallbackCriteria([
+    { key: "Exact class", op: "eq", value: "declared", level: "A" },
+    { key: "Measured output", op: "min", value: 3750, unit: "lm", level: "B" },
+  ], [{
+    key: "measured_output",
+    caption: "Measured output",
+    unit: "lm",
+    values: [{ value: "4000" }],
+  }]);
+  assertEquals(aligned.criteria.map((criterion) => criterion.level), ["A", "B"]);
+  assertEquals(aligned.promoted, []);
 });

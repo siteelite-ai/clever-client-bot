@@ -346,6 +346,133 @@
           }
         }
       ]
+    },
+    {
+      "id": "customer-new-household-motion-without-mount",
+      "title": "Бытовой светильник с датчиком без навязанного типа монтажа",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000 тенге",
+          "expect": {
+            "min_products": 1,
+            "max_product_price": 4000,
+            "require_every_product_title_any": ["датчик", "сенсор", "HALL"],
+            "forbid_every_product_title_any": ["для ЖКХ", "ДПП", "уличный", "промышленный"],
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-new-motion-generic",
+      "title": "Обычный запрос светильника с датчиком сохраняет признак датчика",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "мне нужен светильник с датчиком движения с ценой не более 4000 тенге",
+          "expect": {
+            "min_products": 1,
+            "max_product_price": 4000,
+            "require_every_product_title_any": ["датч", "сенсор", "SNR"],
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-new-chandelier-25m2",
+      "title": "Основное светодиодное освещение гостиной 25 м² без уличной подмены",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?",
+          "expect": {
+            "min_products": 1,
+            "require_every_product_title_any": ["светильник", "панель", "люстра"],
+            "forbid_every_product_title_any": ["улич", "прожектор", "Avenue", "E40"],
+            "require_any_text": ["лм", "люмен", "гостин", "основн"],
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-new-outdoor-floodlight-warehouse-priority",
+      "title": "Уличный прожектор и бизнес-приоритет складов",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома",
+          "expect": {
+            "min_products": 1,
+            "require_every_product_title_any": ["прожектор"],
+            "deprioritized_warehouses": ["Иргели", "Чинт Астана"],
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-new-heat-shrink-12mm",
+      "title": "Термоусадка на кабель 12 мм учитывает размер до и после усадки",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "подбери термоусадочную трубку для кабеля диаметром 12 мм",
+          "expect": {
+            "min_products": 1,
+            "require_every_product_pair_around": 12,
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-new-heat-shrink-10mm",
+      "title": "Трубка ТТУ на кабель 10 мм проходит проверку совместимости",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "подбери трубку ТТУ на кабель диаметром 10 мм",
+          "expect": {
+            "min_products": 1,
+            "require_every_product_pair_around": 10,
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-new-gallant-broad-assortment",
+      "title": "Широкий ассортимент Gallant сначала уточняется",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "покажи ассортимент Gallant на сайте",
+          "expect": {
+            "max_products": 0,
+            "require_any_text": ["уточните", "раздел", "товарн", "групп", "розет", "выключател"],
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-new-ups-boiler-250w",
+      "title": "ИБП для котла 250 Вт не подменяется АВР/ATS",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "Какой ИБП подойдет для газового котла мощностью 250 ватт?",
+          "expect": {
+            "require_every_product_title_any": ["ИБП", "UPS", "беспереб"],
+            "forbid_every_product_title_any": ["ATS", "АВР", "ввод резерва", "переключатель"],
+            "require_any_text": ["синус", "ВА", "запас", "котл"],
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
     }
   ]
 }

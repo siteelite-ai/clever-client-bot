@@ -85,6 +85,49 @@ Deno.test("grounded jargon title evidence rejects unrelated and overly broad mat
   assertEquals(titleSupportsGroundedJargonQuery("ЛАМПА LED стандартная", "ЛАМПА"), false);
 });
 
+Deno.test("jargon recovery decomposes an ungrounded translated phrase into a title-proven token", async () => {
+  const catalogQueries: string[] = [];
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("openrouter.ai")) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { tool_calls: [{ function: { arguments: JSON.stringify({ candidates: ["LED corn lamp"] }) } }] } }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const query = new URL(url).searchParams.get("query") ?? "";
+    catalogQueries.push(query);
+    const results = query === "LED corn lamp" || query.toLowerCase() === "corn"
+      ? [{
+        id: 24780,
+        pagetitle: "Лампа LED CORN капсула 5Вт",
+        price: 476,
+        url: "https://220volt.kz/catalog/svetotexnika/lampyi/24780/",
+        category: { pagetitle: "Лампы" },
+        options: [],
+      }]
+      : [];
+    return new Response(JSON.stringify({ data: { results, pagination: { total: results.length } } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const result = await executeJargonRecoverCatalog({
+    query: "кукуруза",
+    category: "Лампы",
+    per_page: 5,
+  }, {
+    baseUrl: "https://catalog.test/api",
+    apiToken: "catalog-token",
+    openrouterApiKey: "router-token",
+    categoryContextEnabled: true,
+    fetchImpl,
+  }, new Map());
+
+  assertEquals(result.ok ? result.matched_query : null, "corn");
+  assertEquals(catalogQueries.slice(0, 3), ["LED corn lamp", "кукуруза", "corn"]);
+});
+
 Deno.test("cached jargon fallback keeps only candidate and caller-proven title evidence", () => {
   const products: ProductRef[] = [
     { id: "exact", pagetitle: "Кабель ВВГнг 2*1,5", vendor: null, price: 300, stock: "in_stock", short_traits: [] },

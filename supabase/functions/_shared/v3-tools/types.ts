@@ -58,6 +58,7 @@ export interface ToolError {
     | "transport_5xx"
     | "rate_limited"
     | "bad_input"
+    | "incomplete_filter"
     | "no_products"
     | "all_zero_price"
     | "knowledge_unavailable"

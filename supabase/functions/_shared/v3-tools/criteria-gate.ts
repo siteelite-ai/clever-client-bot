@@ -66,6 +66,45 @@ export interface CriteriaGateReport {
   per_product: ProductGateResult[];
 }
 
+export interface CriteriaFacet {
+  key: string;
+  caption: string;
+  unit: string | null;
+  values: Array<{ value: string }>;
+}
+
+export interface CriteriaFacetProjection {
+  options: Record<string, string[]>;
+  proven_criteria: Criterion[];
+  unmatched_keys: string[];
+}
+
+/** Intersects independent live-facet constraints into one catalog query. */
+export function mergeFacetOptionConstraints(
+  ...sources: Array<Record<string, string[]>>
+): { options: Record<string, string[]>; conflicting_keys: string[] } {
+  const merged = new Map<string, Set<string>>();
+  const conflicting = new Set<string>();
+  for (const source of sources) {
+    for (const [key, rawValues] of Object.entries(source ?? {})) {
+      const values = new Set((rawValues ?? []).map(String).filter(Boolean));
+      if (values.size === 0) continue;
+      const previous = merged.get(key);
+      if (!previous) {
+        merged.set(key, values);
+        continue;
+      }
+      const intersection = new Set([...previous].filter((value) => values.has(value)));
+      merged.set(key, intersection);
+      if (intersection.size === 0) conflicting.add(key);
+    }
+  }
+  return {
+    options: Object.fromEntries([...merged].filter(([, values]) => values.size > 0).map(([key, values]) => [key, [...values]])),
+    conflicting_keys: [...conflicting],
+  };
+}
+
 // ─── Нормализация ────────────────────────────────────────────────────────────
 
 export function normalizeKey(s: string): string {
@@ -74,6 +113,33 @@ export function normalizeKey(s: string): string {
     .replace(/ё/g, "е")
     .replace(/[^a-zа-я0-9]+/gi, " ")
     .trim();
+}
+
+function criterionEvidenceValue(criterion: Criterion): string {
+  const value = Array.isArray(criterion.value)
+    ? `${criterion.value[0]}–${criterion.value[1]}`
+    : String(criterion.value);
+  return `${value}${criterion.unit ? ` ${criterion.unit}` : ""}`;
+}
+
+/**
+ * A successful canonical by_filter response is first-party catalog evidence
+ * for the exact facet values used in that request, even if compact result
+ * cards omit those facets. Project that lineage only onto products returned by
+ * the proven filtered pool; free model criteria never enter this function.
+ */
+export function projectCatalogFilterEvidence<T extends ProductRef>(
+  products: T[],
+  provenCriteria: Criterion[],
+): T[] {
+  if (!Array.isArray(provenCriteria) || provenCriteria.length === 0) return products.map((product) => ({ ...product }));
+  return products.map((product) => ({
+    ...product,
+    short_traits: [
+      ...(product.short_traits ?? []),
+      ...provenCriteria.map((criterion) => `${criterion.key}: ${criterionEvidenceValue(criterion)}`),
+    ],
+  }));
 }
 
 /** Enforces a user price ceiling on every render path, including recoveries. */
@@ -367,15 +433,43 @@ export function applyCriteriaGate(
     return report;
   }
 
+  // Multiple values of one canonical `eq` facet come from an OR filter
+  // (`options[key][]=a&options[key][]=b`). Treating them as independent AND
+  // requirements makes every product impossible to prove.
+  const grouped = new Map<string, Criterion[]>();
+  active.forEach((criterion, index) => {
+    const key = criterion.op === "eq" ? `eq:${normalizeKey(criterion.key)}` : `single:${index}`;
+    const list = grouped.get(key) ?? [];
+    list.push(criterion);
+    grouped.set(key, list);
+  });
+  const groups = [...grouped.values()].map((items) => ({
+    items,
+    key: items[0].key,
+    level: items.some((criterion) => (criterion.level ?? "A") === "A") ? "A" as const : "B" as const,
+  }));
+  const evaluateGroup = (product: ProductRef, items: Criterion[]): CriterionCheck => {
+    const checks = items.map((criterion) => checkCriterion(product, criterion));
+    if (checks.length === 1) return checks[0];
+    const passed = checks.find((check) => check.verdict === "pass");
+    const expected = `одно из: ${checks.map((check) => check.expected).join(" | ")}`;
+    if (passed) return { key: items[0].key, verdict: "pass", expected, actual: passed.actual };
+    const actual = checks.map((check) => check.actual).filter((value): value is string => Boolean(value));
+    if (checks.every((check) => check.verdict === "fail")) {
+      return { key: items[0].key, verdict: "fail", expected, actual: [...new Set(actual)].join(" | ") || null };
+    }
+    return { key: items[0].key, verdict: "unknown", expected, actual: [...new Set(actual)].join(" | ") || null };
+  };
+
   const verifiedKeys = new Set<string>();
 
   for (const p of products) {
-    const checks = active.map((c) => checkCriterion(p, c));
+    const checks = groups.map((group) => evaluateGroup(p, group.items));
     checks.forEach((ch, i) => {
-      if (ch.verdict !== "unknown" && (active[i].level ?? "A") === "A") verifiedKeys.add(ch.key);
+      if (ch.verdict !== "unknown" && groups[i].level === "A") verifiedKeys.add(ch.key);
     });
 
-    const hardFail = checks.find((ch, i) => ch.verdict !== "pass" && (active[i].level ?? "A") === "A");
+    const hardFail = checks.find((ch, i) => ch.verdict !== "pass" && groups[i].level === "A");
     if (hardFail) {
       report.rejected.push({
         id: String(p.id),
@@ -391,11 +485,91 @@ export function applyCriteriaGate(
     report.per_product.push({ id: String(p.id), verdict: anyPass ? "pass" : "unknown", checks });
   }
 
-  report.unverifiable_keys = active
-    .filter((c) => (c.level ?? "A") === "A" && !verifiedKeys.has(c.key))
-    .map((c) => c.key);
+  report.unverifiable_keys = groups
+    .filter((group) => group.level === "A" && !verifiedKeys.has(group.key))
+    .map((group) => group.key);
 
   return report;
+}
+
+/** Compile mandatory criteria into exact values of uniquely matching live
+ * facets. Repeated equality criteria for one key become OR values; different
+ * constraints on one facet intersect. Product and category names are absent. */
+export function projectCriteriaFacetOptions(
+  criteria: Criterion[],
+  facets: CriteriaFacet[],
+): CriteriaFacetProjection {
+  const mandatory = (Array.isArray(criteria) ? criteria : []).filter((criterion) =>
+    criterion?.key && (criterion.level ?? "A") === "A"
+  );
+  const groups = new Map<string, Criterion[]>();
+  mandatory.forEach((criterion) => {
+    const key = normalizeKey(criterion.key);
+    groups.set(key, [...(groups.get(key) ?? []), criterion]);
+  });
+  const optionSets = new Map<string, Set<string>>();
+  const proven: Criterion[] = [];
+  const unmatched: string[] = [];
+  for (const items of groups.values()) {
+    const wanted = normalizeKey(items[0].key);
+    const exact = facets.filter((facet) => [normalizeKey(facet.key), normalizeKey(facet.caption)].includes(wanted));
+    const matches = exact.length > 0 ? exact : facets.filter((facet) => {
+      const labels = [normalizeKey(facet.key), normalizeKey(facet.caption)];
+      return wanted.length >= 5 && labels.some((label) => label.includes(wanted) || wanted.includes(label));
+    });
+    if (matches.length !== 1) {
+      unmatched.push(items[0].key);
+      continue;
+    }
+    const facet = matches[0];
+    const acceptedByCriterion = items.map((criterion) => new Set(facet.values.flatMap(({ value }) => {
+      const pseudo = {
+        id: "facet",
+        pagetitle: "",
+        vendor: null,
+        price: 1,
+        stock: "unknown" as const,
+        // The resolved live facet may be referenced by either its public
+        // caption or its machine key. Expose both aliases to the pure checker.
+        short_traits: [
+          `${facet.caption || facet.key}: ${value}`,
+          `${facet.key}: ${value}`,
+        ],
+      };
+      return checkCriterion(pseudo, criterion).verdict === "pass" ? [String(value)] : [];
+    })));
+    const equalitySets = acceptedByCriterion.filter((_, index) => items[index].op === "eq");
+    const constraintSets = acceptedByCriterion.filter((_, index) => items[index].op !== "eq");
+    const equalityAlternatives = equalitySets.length > 0
+      ? new Set(equalitySets.flatMap((set) => [...set]))
+      : null;
+    const constraints = constraintSets.length > 0
+      ? new Set([...constraintSets[0]].filter((value) => constraintSets.slice(1).every((set) => set.has(value))))
+      : null;
+    const accepted = equalityAlternatives && constraints
+      ? new Set([...equalityAlternatives].filter((value) => constraints.has(value)))
+      : equalityAlternatives ?? constraints ?? new Set<string>();
+    if (accepted.size === 0) {
+      unmatched.push(items[0].key);
+      continue;
+    }
+    const bounded = new Set([...accepted].slice(0, 12));
+    const previous = optionSets.get(facet.key);
+    optionSets.set(
+      facet.key,
+      previous ? new Set([...previous].filter((value) => bounded.has(value))) : bounded,
+    );
+    if ((optionSets.get(facet.key)?.size ?? 0) === 0) {
+      unmatched.push(items[0].key);
+      continue;
+    }
+    proven.push(...items);
+  }
+  return {
+    options: Object.fromEntries([...optionSets].filter(([, values]) => values.size > 0).map(([key, values]) => [key, [...values]])),
+    proven_criteria: proven,
+    unmatched_keys: unmatched,
+  };
 }
 
 // ─── Слой 3: критерии как поисковый запрос (self-requery) ─────────────────────

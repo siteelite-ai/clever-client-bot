@@ -24,7 +24,13 @@ Deno.test("household motion-light policy recognizes only a fully explicit reques
     classifyHouseholdMotionLightRequest(
       "мне нужен бытовой накладной светильник с датчиком движения с ценой не более 4000 тенге",
     ),
-    { maxPrice: 4000 },
+    { maxPrice: 4000, surfaceMountedRequired: true },
+  );
+  assertEquals(
+    classifyHouseholdMotionLightRequest(
+      "мне нужен бытовой светильник с датчиком движения с ценой не более 4000 тенге",
+    ),
+    { maxPrice: 4000, surfaceMountedRequired: false },
   );
   assertEquals(
     classifyHouseholdMotionLightRequest("покажи светильник с датчиком"),

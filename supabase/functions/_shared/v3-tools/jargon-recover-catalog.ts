@@ -195,10 +195,17 @@ export async function executeJargonRecoverCatalog(
       }, deps, cache);
       if (!result.ok) continue;
 
-      const filtered = result.results.filter((p) => productMatchesModifiers(p, activeModifiers));
+      // A non-empty search response is not lexical proof: catalog search may
+      // broaden or tokenize a candidate and return products that contain only
+      // its generic part. Keep walking the helper's candidates until the
+      // complete selected term is visible in live titles.
+      const groundedResults = result.results.filter((product) =>
+        titleSupportsGroundedJargonQuery(product.pagetitle, candidate)
+      );
+      const filtered = groundedResults.filter((p) => productMatchesModifiers(p, activeModifiers));
       if (filtered.length > 0) return { matched: { candidate, filtered }, axial };
-      if (deps.axialModifiersEnabled && axial === null && result.results.length > 0 && activeModifiers.length > 0) {
-        axial = { candidate, baseResults: result.results };
+      if (deps.axialModifiersEnabled && axial === null && groundedResults.length > 0 && activeModifiers.length > 0) {
+        axial = { candidate, baseResults: groundedResults };
       }
     }
     return { matched: null, axial };
@@ -207,6 +214,27 @@ export async function executeJargonRecoverCatalog(
   const initial = await tryCandidates(candidates, modifiers);
   let matched = initial.matched;
   let axialFallback = initial.axial;
+
+  // A lexical helper often returns a translated phrase while live titles mix
+  // languages (for example a Russian class noun plus a Latin family token).
+  // If no complete phrase is title-grounded, try its atomic tokens from most
+  // distinctive to shortest. The title-proof policy still rejects broad
+  // ordinary one-word candidates, so this is not an unguarded OR search.
+  if (!matched) {
+    const atomicCandidates = candidates
+      .flatMap((candidate) => tokenize(candidate))
+      .filter((candidate, index, values) =>
+        !candidates.some((full) => normalize(full) === normalize(candidate)) &&
+        values.findIndex((value) => normalize(value) === normalize(candidate)) === index
+      )
+      .sort((left, right) => right.length - left.length);
+    for (const candidate of atomicCandidates) {
+      if (!allCandidates.some((known) => normalize(known) === normalize(candidate))) allCandidates.push(candidate);
+    }
+    const atomic = await tryCandidates(atomicCandidates, modifiers);
+    matched = atomic.matched;
+    axialFallback ??= atomic.axial;
+  }
 
   // If literal modifier matching is empty, translate the consultant's own
   // descriptive modifiers together with its query. Numeric/code-like axes stay
