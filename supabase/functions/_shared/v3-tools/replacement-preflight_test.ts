@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   excludeMandatoryAxisCodesFromSourceModels, extractExplicitSingleLetterCodes, extractReplacementLookupKeys,
+  extractPortableTechnicalRequirements,
   portableTechnicalCodeMatchesText, productContainsSourceModel,
   productTitleSupportsMandatoryAxes,
   productTitleSupportsPortableRequirements, selectExplicitAnchorAxes } from "./replacement-preflight.ts";
@@ -102,6 +103,19 @@ Deno.test("standalone code after a parameter label becomes visible replacement e
     ["c"],
   );
   assertEquals(extractExplicitSingleLetterCodes("бренд CHINT"), []);
+});
+
+Deno.test("portable replacement requirements do not fuse adjacent measurements", () => {
+  assertEquals(
+    extractPortableTechnicalRequirements(
+      "Автомат 1Р ВА 47-29 16 А 4,5кА характеристика С до 1000 тг",
+    ),
+    ["1Р", "16А", "4.5кА"],
+  );
+  assertEquals(
+    extractPortableTechnicalRequirements("Замена лампы GX53 12Вт 220В"),
+    ["12Вт", "220В", "GX53"],
+  );
 });
 
 Deno.test("explicit live technical codes become mandatory replacement axes", () => {
@@ -218,7 +232,7 @@ Deno.test("final replacement title contract requires every portable code", () =>
   assertEquals(
     productTitleSupportsPortableRequirements(
       "Автоматический выключатель M06N 1P 16A C ARMAT ИЭК",
-      requirements,
+      ["1Р", "16А", "С"],
     ),
     true,
   );

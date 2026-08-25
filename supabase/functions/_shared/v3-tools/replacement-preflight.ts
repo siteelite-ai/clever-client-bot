@@ -49,6 +49,42 @@ export function extractExplicitSingleLetterCodes(message: string): string[] {
   return distinct(matches.map((match) => codeNorm(match[1])));
 }
 
+/**
+ * Extracts technical requirements that can legitimately survive a change of
+ * product identity. The grammar accepts compact letter/number standards and
+ * numeric values with units, but rejects SKU-shaped codes and a false code
+ * formed across two adjacent measurements (for example `16 А 4,5 кА`).
+ */
+export function extractPortableTechnicalRequirements(message: string): string[] {
+  const source = String(message ?? "");
+  const out: string[] = [];
+  const add = (raw: string) => {
+    const clean = raw.replace(/\s+/gu, "").replace(/,/gu, ".").trim();
+    const normalized = codeNorm(clean);
+    if (!normalized || normalized.includes("-")) return;
+    if (!/\p{L}/u.test(normalized) || !/\d/u.test(normalized)) return;
+    if (/^\d+(?:\.\d+)?(?:тг|тенге|kzt)$/iu.test(normalized)) return;
+    if (/^\d+(?:\.\d+)?\p{L}{1,5}$/u.test(normalized) || normalized.length <= 4) {
+      out.push(clean);
+    }
+  };
+
+  for (const match of source.matchAll(
+    /(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?\s*(?:[\p{L}]{1,5}|мм²|мм2)(?![\p{L}\p{N}])/giu,
+  )) add(match[0]);
+
+  for (const match of source.matchAll(
+    /(?<![\p{L}\p{N}])[\p{L}]{1,5}\s*\d{1,5}[\p{L}\d.-]*(?![\p{L}\p{N}])/giu,
+  )) {
+    const prefix = source.slice(0, match.index ?? 0);
+    if (/\d+(?:[.,]\d+)?\s*$/u.test(prefix)) continue;
+    add(match[0]);
+  }
+  return distinct(out.map((value) => codeNorm(value)))
+    .map((normalized) => out.find((value) => codeNorm(value) === normalized)!)
+    .filter(Boolean);
+}
+
 function norm(value: string): string {
   return String(value ?? "")
     .toLocaleLowerCase("ru-RU")
@@ -110,10 +146,10 @@ export function productTitleSupportsPortableRequirements(
   requirements: string[],
 ): boolean {
   const titleTokens = new Set(
-    (String(productTitle).match(/[\p{L}\p{N}]+/gu) ?? []).map(codeNorm),
+    (String(productTitle).match(/[\p{L}\p{N}]+/gu) ?? []).map(visualCodeNorm),
   );
   return requirements.every((requirement) => {
-    const normalized = codeNorm(requirement);
+    const normalized = visualCodeNorm(requirement);
     return normalized.length === 1
       ? titleTokens.has(normalized)
       : portableTechnicalCodeMatchesText(requirement, productTitle);

@@ -108,6 +108,7 @@ import { type RankedReplacementCandidate,
 import {
   excludeMandatoryAxisCodesFromSourceModels,
   extractExplicitSingleLetterCodes,
+  extractPortableTechnicalRequirements,
   extractReplacementLookupKeys,
   portableTechnicalCodeMatchesText,
   productContainsSourceModel,
@@ -2366,17 +2367,17 @@ async function selectVerifiedOrdinaryReplacement(
   });
 
   if (selected.length === 0) {
-    send({
-      type: "delta",
-      content: `По исходной модели подтвердил категорию и параметры (${axesLabel}), но других позиций с этими признаками в каталоге сейчас не нашёл. Могу передать запрос менеджеру для проверки замены под заказ.`,
-    });
     steps.push({
-      step: "v3_replacement_preflight_empty",
+      step: "v3_replacement_preflight_delegated",
       ms: Date.now() - t0,
-        meta: { anchor_id: anchor.id, leaf_category: anchor.leaf_category, axes,
+      meta: { anchor_id: anchor.id, leaf_category: anchor.leaf_category, axes,
         mandatory_axes: mandatoryAxes, required_visible_codes: requiredVisibleCodes, equivalent_only: equivalentOnly, budget_cap: budgetCap, duration_ms: elapsed },
     });
-    return { handled: true, products: [] };
+    return {
+      handled: false,
+      products: [],
+      source_candidate_ids: [...new Set([...sourceCandidateIds, anchor.id])],
+    };
   }
 
   send({
@@ -3141,18 +3142,11 @@ async function runExpertLoop(
   //   - keep short canonical tokens (normalized length ≤ 4): e27, ip65, a60, gu10;
   //   - drop longer mixed letter+digit tokens (length ≥ 5) → treated as
   //     model/series codes (DN027B, BA4729).
-  const isAnalogPortableToken = (code: string): boolean => {
-    const n = normalizeCodeLike(code);
-    if (n.includes("-")) return false;
-    if (/^\d+(?:\.\d+)?[a-z]{1,4}$/.test(n)) return true;
-    if (n.length <= 4) return true;
-    return false;
-  };
   const effectiveCodeConstraints = replacementIntent
-    ? codeConstraints.filter(isAnalogPortableToken)
+    ? extractPortableTechnicalRequirements(userMessage)
     : codeConstraints;
   const replacementSourceModelCodes = replacementIntent
-    ? codeConstraints.filter((code) => !isAnalogPortableToken(code))
+    ? extractReplacementLookupKeys(userMessage).modelCodes
     : [];
   // NOTE (2026-06-29): compound-filter нейтрализован — это было «мышление сервера»,
   // которое выбрасывало валидные карточки по эвристическим токенам из текста запроса
@@ -3407,9 +3401,7 @@ async function runExpertLoop(
   };
 
   const portableReplacementRequirements = (): string[] => {
-    const portableCodes = effectiveCodeConstraints.filter(
-      isAnalogPortableToken,
-    );
+    const portableCodes = effectiveCodeConstraints;
     const explicitSingleCodes = new Set(
       extractExplicitSingleLetterCodes(
         `${firstAssistantText}\n${assistantReasoning}`,
@@ -4652,7 +4644,14 @@ async function runExpertLoop(
               targetReport.passed_ids.length === 0 &&
               priorActiveSelectionTarget &&
               selectionTargetIsDeclared(priorActiveSelectionTarget, target) &&
-              selectionTargetExtensionIsCriterionBacked(priorActiveSelectionTarget, target, renderRawCriteria)
+              (
+                replacementIntent ||
+                selectionTargetExtensionIsCriterionBacked(
+                  priorActiveSelectionTarget,
+                  target,
+                  renderRawCriteria,
+                )
+              )
             ) {
               const baseReport = semanticBackedSearch && lastDiscover
                 ? verifySelectionTargetWithGroundedSearch({
