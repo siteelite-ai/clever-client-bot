@@ -1,0 +1,352 @@
+{
+  "schema_version": 1,
+  "source": "Notion 220volt.kz bug reports BT-929, BT-928, BT-927, BT-925, BT-924, BT-923, BT-922, BT-821, BT-746; production recheck 2026-08-25",
+  "cases": [
+    {
+      "id": "bt929-pump-cable-clarification",
+      "title": "BT-929: cable for a pump requires clarification",
+      "turns": [{
+        "message": "Мне нужен кабель для насоса",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["мощн", "ток"], ["длин", "расстоян"], ["напряж", "фаз"], ["проклад", "улиц", "помещен", "перенос"]]
+        }
+      }]
+    },
+    {
+      "id": "bt929-outdoor-floodlight-clarification",
+      "title": "BT-929: outdoor floodlight requires clarification",
+      "turns": [{
+        "message": "Нужен прожектор на улицу.",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["площад", "размер", "территор"], ["высот", "установ"], ["ярк", "мощн", "люмен"]]
+        }
+      }]
+    },
+    {
+      "id": "bt929-motor-breaker-clarification",
+      "title": "BT-929: motor breaker requires motor data",
+      "turns": [{
+        "message": "Подберите автомат для двигателя",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["мощн", "ток"], ["напряж", "фаз"], ["пуск", "характерист"]]
+        }
+      }]
+    },
+    {
+      "id": "bt929-underground-cable-clarification",
+      "title": "BT-929: underground cable requires installation data",
+      "turns": [{
+        "message": "Какой кабель подойдет для прокладки в земле?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["земл", "труб", "ПНД", "брон"], ["мощн", "ток"], ["напряж", "фаз"], ["жил", "заземл"]]
+        }
+      }]
+    },
+    {
+      "id": "bt929-heat-shrink-12mm",
+      "title": "BT-929: heat shrink fits 12 mm cable",
+      "turns": [{
+        "message": "Подберите термоусадочную трубку для кабеля диаметром 12 мм.",
+        "expect": {"min_products": 1, "require_every_product_pair_around": 12}
+      }]
+    },
+    {
+      "id": "bt929-lugs-35mm-clarification",
+      "title": "BT-929: 35 mm2 cable lugs require clarification",
+      "turns": [{
+        "message": "Какие наконечники нужны для кабеля 35 мм²",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["мед", "алюмин"], ["болт", "клемм", "отверст", "тип"]],
+          "forbid_text": ["НКИ"]
+        }
+      }]
+    },
+    {
+      "id": "bt929-surveillance-cable-clarification",
+      "title": "BT-929: surveillance cable requires system clarification",
+      "turns": [{
+        "message": "Есть ли у вас кабель для видеонаблюдения?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["цифров", "аналог"], ["улиц", "помещен"], ["PoE", "питан", "расстоян"]]
+        }
+      }]
+    },
+    {
+      "id": "bt929-warm-led-clarification",
+      "title": "BT-929: 3000 K LED lamps require form-factor clarification",
+      "turns": [{
+        "message": "Есть ли светодиодные лампы с теплым светом 3000К?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["цокол"], ["форм", "колб"], ["мощн", "ватт"]]
+        }
+      }]
+    },
+    {
+      "id": "bt929-parking-floodlight-clarification",
+      "title": "BT-929: parking floodlights require site clarification",
+      "turns": [{
+        "message": "Какие прожекторы подойдут для освещения парковки?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["IP65", "IP66"], ["площад"], ["высот"]]
+        }
+      }]
+    },
+    {
+      "id": "bt928-living-room-25m2",
+      "title": "BT-928: LED lighting for a 25 m2 living room",
+      "turns": [{
+        "message": "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_any": ["светильник", "панель", "люстра"],
+          "forbid_every_product_title_any": ["улич", "прожектор", "E40"],
+          "require_any_text": ["лм", "люмен", "гостин", "основн"]
+        }
+      }]
+    },
+    {
+      "id": "bt928-boiler-breaker-diagnostic",
+      "title": "BT-928: boiler breaker trip is diagnosed before products",
+      "turns": [{
+        "message": "У меня выбивает автомат при включении бойлера. В чем может быть причина?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["мощн", "ток"], ["автомат", "характерист", "номинал"], ["утеч", "коротк", "провод", "контакт", "УЗО"]]
+        }
+      }]
+    },
+    {
+      "id": "bt927-copper-fire-resistant-2x1_5",
+      "title": "BT-927: copper fire-resistant 2x1.5 cable",
+      "turns": [{
+        "message": "нужен медный кабель негорючий 2*1,5",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_groups": [["2*1,5", "2×1,5", "2x1,5", "2х1,5"], ["нг", "негорюч"]],
+          "forbid_product_title": ["АВВГ", "AVVG"]
+        }
+      }]
+    },
+    {
+      "id": "bt927-led-floodlights-100w",
+      "title": "BT-927: LED floodlights from 100 W",
+      "turns": [{
+        "message": "Покажите светодиодные прожекторы мощностью от 100 Вт",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_any": ["прожектор"],
+          "forbid_every_product_title_any": ["лампа", "светильник"]
+        }
+      }]
+    },
+    {
+      "id": "bt925-corn-e27",
+      "title": "BT-925: corn lamp E27 jargon",
+      "repeat": 3,
+      "turns": [{
+        "message": "подбери лампу кукуруза на цоколь e27",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_groups": [["CORN", "кукуруз"], ["E27"]],
+          "forbid_every_product_title_any": ["LABEL OFF", "удаления наклеек", "аэрозоль"]
+        }
+      }]
+    },
+    {
+      "id": "bt924-dn027b-analogs",
+      "title": "BT-924: DN027B analogs exclude source",
+      "turns": [{
+        "message": "предложи аналоги на Светильник DN027B G2 LED6/NW 7W 220-240V D90 R; 929002070102/871869967897500",
+        "expect": {"min_products": 1, "forbid_product_title": ["DN027B"]}
+      }]
+    },
+    {
+      "id": "bt924-gx53-analogs",
+      "title": "BT-924: GX53 tablet lamp analogs",
+      "turns": [{
+        "message": "Подбери аналоги для лампы ECO T75 таблетка GX53",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_groups": [["GX53"], ["ламп", "ECO", "LED"]]
+        }
+      }]
+    },
+    {
+      "id": "bt924-apartment-breaker-25a",
+      "title": "BT-924: 25 A apartment breaker asks for missing axes",
+      "turns": [{
+        "message": "Подбери автомат 25А для квартиры",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["полюс", "фаз"], ["характерист", "крив"], ["отключ", "кА", "килоампер"]]
+        }
+      }]
+    },
+    {
+      "id": "bt924-schneider-cheaper-analogs",
+      "title": "BT-924: cheaper Schneider analogs",
+      "turns": [{
+        "message": "Подбери более дешевые аналоги автомата Schneider Electric Acti9 1P 16A C",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_groups": [["1P", "1Р", "1-пол"], ["16A", "16 А", "16А"], ["C", "С"]],
+          "forbid_product_title": ["Schneider", "Acti9"]
+        }
+      }]
+    },
+    {
+      "id": "bt924-replace-kg-cable",
+      "title": "BT-924: KG cable replacement preserves use case",
+      "turns": [{
+        "message": "Чем можно заменить кабель КГ?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["услов", "примен", "назнач", "подключ"], ["сечен", "жил"], ["гибк", "стационар", "подвиж"]]
+        }
+      }]
+    },
+    {
+      "id": "bt924-conditioner-3kw",
+      "title": "BT-924: cable for a 3 kW conditioner",
+      "turns": [{
+        "message": "Какой кабель нужен для кондиционера 3 кВт?",
+        "expect": {
+          "require_text_groups": [["3×2,5", "3x2,5", "3*2,5", "2,5 мм"], ["мед", "ВВГ"]]
+        }
+      }]
+    },
+    {
+      "id": "bt924-acti9-followup-show",
+      "title": "BT-924: follow-up show keeps Acti9 replacement context",
+      "turns": [
+        {
+          "message": "Подбери аналог Schneider Acti9 C16",
+          "expect": {"require_any_text": ["16", "C", "С", "полюс", "уточн"]}
+        },
+        {
+          "message": "покажи",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 1,
+            "require_every_product_title_groups": [["16A", "16 А", "16А"], ["C", "С"]],
+            "forbid_product_title": ["Schneider", "Acti9"],
+            "forbid_text": ["параметр покажи", "характеристика покажи"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "bt923-battery-unit",
+      "title": "BT-923: CR2025 packaging unit is explicit",
+      "turns": [{
+        "message": "Сколько стоит батарейка NBT-CR2025-BP5 и цена указана за штуку или упаковку?",
+        "expect": {
+          "require_text_groups": [["CR2025"], ["упаков", "блистер", "5 шт", "штук"]]
+        }
+      }]
+    },
+    {
+      "id": "bt923-vvg-3x1_5-unit",
+      "title": "BT-923: cheapest VVG 3x1.5 uses metre unit",
+      "turns": [{
+        "message": "найди самый дешевый кабель ВВГ 3*1,5",
+        "expect": {
+          "min_products": 1,
+          "max_products": 1,
+          "require_every_product_title_groups": [["3*1,5", "3×1,5", "3x1,5", "3х1,5"]],
+          "require_any_text": ["метр", "/м", "за м"]
+        }
+      }]
+    },
+    {
+      "id": "bt922-breaker-replacement-under-1000",
+      "title": "BT-922: equivalent breaker replacement under 1000 KZT",
+      "repeat": 3,
+      "turns": [{
+        "message": "Автомат 1Р ВА 47-29 16 А 4,5кА характеристика С GENERICA ИЭК предложи равноценную замену этому автомату по цене не дороже 1000 тг",
+        "expect": {
+          "min_products": 1,
+          "max_product_price": 1000,
+          "require_every_product_title_groups": [["1P", "1Р", "1-пол", "1 полюс"], ["16A", "16 A", "16А", "16 А"], ["4,5кА", "4,5 кА", "4.5kA", "4.5 kA"], ["х-ка C", "х-ка С", "характеристика C", "характеристика С"]],
+          "forbid_product_title": ["GENERICA"]
+        }
+      }]
+    },
+    {
+      "id": "bt821-dku-100w-replacement",
+      "title": "BT-821: DKU 100 W replacement excludes source",
+      "turns": [{
+        "message": "ДКУ-LED-03-100W (ЭТФ) предложи самую близкую замену на этот светильник по характеристикам",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_any": ["ДКУ", "улич", "консоль", "100W", "100Вт", "100 Вт"],
+          "forbid_product_title": ["ДКУ-LED-03-100W"]
+        }
+      }]
+    },
+    {
+      "id": "bt821-stabilizer-analogs",
+      "title": "BT-821: ACH-10001-C analogs stay in stabilizers",
+      "turns": [{
+        "message": "подбери аналоги для Стабилизатора ACH-10001-C",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_any": ["стабилизатор", "ACH", "АСН"],
+          "forbid_every_product_title_any": ["светильник", "панель"]
+        }
+      }]
+    },
+    {
+      "id": "bt746-extension-50m",
+      "title": "BT-746: 50 m extension cord",
+      "turns": [{
+        "message": "подбери удлинитель на 50 м",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_groups": [["удлинитель", "катушка"], ["50 м", "50м"]]
+        }
+      }]
+    },
+    {
+      "id": "bt746-white-extension-3-sockets",
+      "title": "BT-746: white extension cord with three sockets",
+      "turns": [{
+        "message": "нужен белый удлинитель на 3 места",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_groups": [["удлинитель"], ["3 мест", "3 розет", "3 гнезд"], ["бел"]]
+        }
+      }]
+    },
+    {
+      "id": "bt746-black-double-socket",
+      "title": "BT-746: black double socket",
+      "turns": [{
+        "message": "подбери черную двойную розетку",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_groups": [["розет"], ["двойн", "2 мест", "2 пост"], ["черн"]]
+        }
+      }]
+    },
+    {
+      "id": "bt746-garmoniya-sockets",
+      "title": "BT-746: Garmoniya socket series",
+      "turns": [{
+        "message": "покажи розетки серии Гармония",
+        "expect": {
+          "min_products": 1,
+          "require_every_product_title_any": ["Гармония"]
+        }
+      }]
+    }
+  ]
+}

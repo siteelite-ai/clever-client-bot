@@ -5,7 +5,10 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
-const casesPath = path.join(here, 'customer-acceptance-cases.json');
+const casesFileArg = process.argv.find((arg) => arg.startsWith('--cases-file='))?.slice('--cases-file='.length).trim();
+const casesPath = casesFileArg
+  ? path.resolve(process.cwd(), casesFileArg)
+  : path.join(here, 'customer-acceptance-cases.json');
 export const DEFAULT_ENDPOINT = 'https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3';
 
 export function resolveEndpoint(argv = process.argv) {
