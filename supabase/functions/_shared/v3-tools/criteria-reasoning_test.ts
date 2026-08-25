@@ -178,6 +178,28 @@ Deno.test("unitless live-фасет выбирается только после
   }]);
 });
 
+Deno.test("natural customer area projects onto an ASCII-square live facet", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Зал 30 квадратов",
+    "Подбираю современный вариант для зала.",
+    [{
+      key: "max_area",
+      caption: "Максимальная площадь освещения, м2",
+      type: "checkbox",
+      unit: null,
+      values: [{ value: "25" }, { value: "30" }, { value: "35" }],
+    }],
+  );
+  assertEquals(projected.added, [{
+    key: "Максимальная площадь освещения, м2",
+    op: "eq",
+    value: "30",
+    unit: "м²",
+    level: "A",
+  }]);
+});
+
 Deno.test("направленная величина клиента не сужается до точного равенства", () => {
   const projected = projectLiteralMeasuredCriteria(
     [],

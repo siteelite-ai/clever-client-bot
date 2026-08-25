@@ -3,6 +3,7 @@ import {
   correctCriteria,
   extractClientQuantities,
   findUnderstatedCriteria,
+  normalizeUnit,
 } from "./criteria-consistency.ts";
 import type { Criterion } from "./criteria-gate.ts";
 
@@ -19,6 +20,17 @@ Deno.test("extract: дробное и несколько", () => {
     { value: 12.5, unit: "мм" },
     { value: 30, unit: "вт" },
   ]);
+});
+
+Deno.test("extract: natural room area spellings normalize to square metres", () => {
+  assertEquals(extractClientQuantities("зал 30 квадратов"), [{ value: 30, unit: "м²" }]);
+  assertEquals(extractClientQuantities("30 квадратных метров"), [{ value: 30, unit: "м²" }]);
+  assertEquals(extractClientQuantities("комната 25 кв. м"), [{ value: 25, unit: "м²" }]);
+});
+
+Deno.test("normalizeUnit preserves ASCII square and cubic suffixes", () => {
+  assertEquals(normalizeUnit("мм2"), "мм²");
+  assertEquals(normalizeUnit("м3"), "м³");
 });
 
 Deno.test("min-критерий ниже числа клиента → violation", () => {
@@ -68,4 +80,3 @@ Deno.test("correctCriteria не трогает валидные критерии
   const criteria: Criterion[] = [{ key: "A", op: "min", value: 300, unit: "мм", level: "A" }];
   assertEquals(correctCriteria(criteria, []), criteria);
 });
-

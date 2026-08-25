@@ -39,6 +39,15 @@ Deno.test("replacement preflight recognizes a spaced letter-number model code", 
   assertEquals(lookup.modelCodes.some((value) => /16|4,?5/u.test(value)), false);
 });
 
+Deno.test("structural lookup preserves a complete exact product identifier", () => {
+  assertEquals(extractReplacementLookupKeys(
+    "Сколько стоит батарейка NBT-CR2025-BP5 и цена указана за штуку или упаковку?",
+  ), {
+    articles: [],
+    modelCodes: ["NBT-CR2025-BP5"],
+  });
+});
+
 Deno.test("replacement preflight selects only explicit live non-identity facets", () => {
   const axes = selectExplicitAnchorAxes(anchor, [
     { key: "brand", caption: "Бренд", type: "string", unit: null, values: [{ value: "Philips", products_count: 20 }] },

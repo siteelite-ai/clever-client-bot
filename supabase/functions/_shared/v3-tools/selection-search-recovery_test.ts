@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildAnchorMissingRecoveryQueries, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldFinalizePendingSelection } from "./selection-search-recovery.ts";
+import { buildAnchorMissingRecoveryQueries, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizePendingSelection } from "./selection-search-recovery.ts";
 
 const facets = [
   { key: "feature", caption: "Функция", type: "string", unit: null, values: [{ value: "Да" }] },
@@ -104,6 +104,7 @@ Deno.test("an ordinary pending contract reaches the deterministic finalizer", ()
     intent_mode: "select" as const,
     has_discovery: true,
     has_selection_target: true,
+    has_search_attempt: false,
     mandatory_criteria_count: 1,
     replacement_intent: false,
     series_grounding_required: false,
@@ -115,6 +116,14 @@ Deno.test("an ordinary pending contract reaches the deterministic finalizer", ()
   assertEquals(shouldFinalizePendingSelection({ ...pending, intent_mode: "inquire" }), false);
   assertEquals(shouldFinalizePendingSelection({ ...pending, replacement_intent: true }), false);
   assertEquals(shouldFinalizePendingSelection({ ...pending, compatibility_required: true }), false);
+  assertEquals(shouldFinalizePendingSelection({ ...pending, mandatory_criteria_count: 0 }), false);
+  assertEquals(shouldFinalizePendingSelection({ ...pending, mandatory_criteria_count: 0, has_search_attempt: true }), true);
+});
+
+Deno.test("substantive inquiries do not receive a contradictory catalog-empty suffix", () => {
+  assertEquals(shouldAppendCatalogEmpty({ products_rendered: 0, intent_mode: "inquire", final_text: "Цена подтверждена каталогом." }), false);
+  assertEquals(shouldAppendCatalogEmpty({ products_rendered: 0, intent_mode: "inquire", final_text: "" }), true);
+  assertEquals(shouldAppendCatalogEmpty({ products_rendered: 0, intent_mode: "select", final_text: "Ищу варианты." }), true);
 });
 
 Deno.test("reasoning query plan is deduplicated, specific-first and bounded", () => {

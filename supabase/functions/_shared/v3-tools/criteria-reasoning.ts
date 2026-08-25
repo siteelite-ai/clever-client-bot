@@ -334,7 +334,7 @@ export function projectReasoningRangeCriteria(
       );
       const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
       const labelHasUnit = `${facet.key} ${facet.caption}`
-        .match(/[a-zа-я°]{1,10}[²³]?/giu)
+        .match(/[a-zа-я°]{1,10}[²³]?\d?/giu)
         ?.some((token) => canonicalMeasurementUnit(token) === range.unit) ?? false;
       return (facet.type === "number" || hasNumericLiveValues) &&
         (declaredUnit === range.unit || labelHasUnit);
@@ -417,7 +417,7 @@ export function projectLiteralMeasuredCriteria(
     const unitFacets = (facets ?? []).filter((facet) => {
       const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
       const labelHasUnit = `${facet.key} ${facet.caption}`
-        .match(/[a-zа-я°]{1,10}[²³]?/giu)
+        .match(/[a-zа-я°]{1,10}[²³]?\d?/giu)
         ?.some((token) => canonicalMeasurementUnit(token) === unit) ?? false;
       // Some catalog branches omit `unit` even for numeric facets. A unitless
       // fallback is safe only when no suffix declares another scale and the

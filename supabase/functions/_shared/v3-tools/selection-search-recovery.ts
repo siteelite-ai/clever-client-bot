@@ -44,11 +44,18 @@ export interface PendingSelectionFinalizationInput {
   intent_mode: "select" | "inquire";
   has_discovery: boolean;
   has_selection_target: boolean;
+  has_search_attempt: boolean;
   mandatory_criteria_count: number;
   replacement_intent: boolean;
   series_grounding_required: boolean;
   compatibility_relation_count: number;
   compatibility_required: boolean;
+}
+
+export interface CatalogEmptyDecisionInput {
+  products_rendered: number;
+  intent_mode: "select" | "inquire";
+  final_text: string;
 }
 
 /**
@@ -63,11 +70,20 @@ export function shouldFinalizePendingSelection(input: PendingSelectionFinalizati
     input.intent_mode === "select" &&
     input.has_discovery &&
     input.has_selection_target &&
-    input.mandatory_criteria_count > 0 &&
+    (input.mandatory_criteria_count > 0 || input.has_search_attempt) &&
     !input.replacement_intent &&
     !input.series_grounding_required &&
     input.compatibility_relation_count < 2 &&
     !input.compatibility_required;
+}
+
+/** A product-selection turn must close an empty catalog attempt explicitly.
+ * An inquiry that already produced a substantive evidence-backed answer must
+ * not append the contradictory phrase “no suitable products found”. */
+export function shouldAppendCatalogEmpty(input: CatalogEmptyDecisionInput): boolean {
+  if (input.products_rendered > 0) return false;
+  if (input.intent_mode === "select") return true;
+  return String(input.final_text ?? "").trim().length === 0;
 }
 
 function normalizeQuery(value: string): string {
