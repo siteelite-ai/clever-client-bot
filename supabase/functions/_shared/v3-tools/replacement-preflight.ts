@@ -7,6 +7,31 @@ export interface ExplicitReplacementAxis {
   caption: string;
   value: string;
   total: number;
+  /** A customer-visible technical code that must survive near-match recovery. */
+  mandatory?: true;
+}
+
+export function productTitleSupportsMandatoryAxes(
+  productTitle: string,
+  axes: ExplicitReplacementAxis[],
+): boolean {
+  return axes
+    .filter((axis) => axis.mandatory)
+    .every((axis) =>
+      portableTechnicalCodeMatchesText(axis.value, productTitle)
+    );
+}
+
+export function excludeMandatoryAxisCodesFromSourceModels(
+  modelCodes: string[],
+  axes: ExplicitReplacementAxis[],
+): string[] {
+  const mandatory = axes.filter((axis) => axis.mandatory);
+  return modelCodes.filter((code) =>
+    !mandatory.some((axis) =>
+      portableTechnicalCodeMatchesText(axis.value, code)
+    )
+  );
 }
 
 export interface ReplacementLookupKeys {
@@ -35,6 +60,64 @@ function norm(value: string): string {
 
 function codeNorm(value: string): string {
   return norm(value).replace(/\s+/gu, "");
+}
+
+function visualCodeNorm(value: string): string {
+  const lookalikes: Record<string, string> = {
+    а: "a",
+    в: "b",
+    е: "e",
+    к: "k",
+    м: "m",
+    н: "h",
+    о: "o",
+    р: "p",
+    с: "c",
+    т: "t",
+    у: "y",
+    х: "x",
+  };
+  return codeNorm(value).replace(
+    /[авекмнорстух]/gu,
+    (char) => lookalikes[char] ?? char,
+  );
+}
+
+/** Exact comparison for mixed letter/digit codes such as GX53, IP44 or 16A. */
+export function portableTechnicalCodeMatchesText(
+  target: string,
+  text: string,
+): boolean {
+  const wanted = visualCodeNorm(target);
+  if (!wanted || !/\p{L}/u.test(wanted) || !/\d/u.test(wanted)) return false;
+  const candidates = [
+    ...(String(text).match(/[\p{L}\p{N}]+/gu) ?? []),
+    ...(String(text).match(/[\p{L}]{1,12}\s*[-_/]?\s*\d{1,12}/gu) ?? []),
+    ...(String(text).match(/\d{1,12}(?:[.,-]\d{1,12})*\s*[\p{L}]{1,6}/gu) ??
+      []),
+  ];
+  return candidates.some((candidate) => visualCodeNorm(candidate) === wanted);
+}
+
+/**
+ * Final title-level compatibility contract for replacement cards. This is
+ * deliberately independent from categories, brands and product dictionaries:
+ * every portable requirement came either from the customer's request or from
+ * a live facet value explicitly selected in the consultant's reasoning.
+ */
+export function productTitleSupportsPortableRequirements(
+  productTitle: string,
+  requirements: string[],
+): boolean {
+  const titleTokens = new Set(
+    (String(productTitle).match(/[\p{L}\p{N}]+/gu) ?? []).map(codeNorm),
+  );
+  return requirements.every((requirement) => {
+    const normalized = codeNorm(requirement);
+    return normalized.length === 1
+      ? titleTokens.has(normalized)
+      : portableTechnicalCodeMatchesText(requirement, productTitle);
+  });
 }
 
 function distinct(values: string[]): string[] {
@@ -123,6 +206,24 @@ function compactSingleCodes(value: string): string[] {
 }
 
 /**
+ * Detect a portable technical code from live catalog evidence rather than a
+ * product dictionary. The value must mix letters and digits, and the exact
+ * canonical value must be visible both in the customer's request and in the
+ * source card. Model/series facets are removed by the caller before this runs.
+ */
+function isExplicitPortableTechnicalCode(
+  value: string,
+  userMessage: string,
+  productTitle: string,
+): boolean {
+  const compact = visualCodeNorm(value);
+  return compact.length >= 2 && compact.length <= 24 &&
+    /\p{L}/u.test(compact) && /\d/u.test(compact) &&
+    portableTechnicalCodeMatchesText(value, userMessage) &&
+    portableTechnicalCodeMatchesText(value, productTitle);
+}
+
+/**
  * Builds a compact search plan only from live anchor traits, live facet values,
  * and literals present in the customer's anchor description. No category or
  * product dictionaries are used. Identity facets never become analogue axes.
@@ -169,11 +270,21 @@ export function selectExplicitAnchorAxes(
     const facetIsBinary = (facet.values ?? []).length > 0 && (facet.values ?? []).every(({ value }) =>
       /^[01](?:[.,]0+)?$/u.test(String(value).trim())
     );
-    if (facetIsBinary && !captionIsEvidenced(facet.caption, userMessage)) continue;
-    axes.push({ key: facet.key, caption: facet.caption, value: canonical.value, total: canonical.total });
+    if (facetIsBinary && !captionIsEvidenced(facet.caption, userMessage)) { continue;
+    }
+    const mandatory = isExplicitPortableTechnicalCode(
+      canonical.value,
+      userMessage,
+      product.pagetitle,
+    );
+    axes.push({ key: facet.key, caption: facet.caption, value: canonical.value, total: canonical.total,
+      ...(mandatory ? { mandatory: true as const } : {}),
+    });
   }
   return axes
-    .sort((left, right) => left.total - right.total || left.caption.localeCompare(right.caption, "ru"))
+    .sort((left, right) =>
+      Number(Boolean(right.mandatory)) - Number(Boolean( left.mandatory)) ||
+      left.total - right.total || left.caption.localeCompare(right.caption, "ru"))
     .slice(0, Math.max(2, limit));
 }
 

@@ -22,7 +22,8 @@ export interface SearchFacet {
 export interface DroppedSearchFilter {
   key: string;
   value: string;
-  reason: "unknown_facet" | "unknown_value" | "not_declared_in_reasoning" | "negated_by_user";
+  reason:
+    | "unknown_facet" | "unknown_value" | "not_declared_in_reasoning" | "negated_by_user";
 }
 
 export interface SearchFilterGuardResult {
@@ -88,9 +89,30 @@ export function explicitReplacementModelValues(
   return [...found];
 }
 
+/** Explicit source brand/model/series values to exclude from ordinary analogs. */
+export
+
+function explicitReplacementIdentityValues(
+  facets: SearchFacet[],
+  userMessage: string,
+): string[] {
+  const evidence = ` ${norm(userMessage)} `;
+  const found = new Set<string>();
+  for (const facet of facets) {
+    const kind = replacementIdentityKind(facet);
+    if (!kind || explicitlyRequiresSameIdentity(userMessage, kind)) continue;
+    for (const candidate of facet.values) {
+      const value = norm(candidate.value);
+      if (value && evidence.includes(` ${value} `)) found.add(candidate.value);
+    }
+  }
+  return [...found];
+}
+
 function replacementIdentityHints(userMessage: string): string[] {
   const found = new Set<string>();
-  for (const match of userMessage.matchAll(/\b\d{2,}(?:-\d{1,})+\b/gu)) found.add(match[0]);
+  for (const match of userMessage.matchAll(/\b\d{2,}(?:-\d{1,})+\b/gu)) { found.add(match[0]);
+  }
   for (const match of userMessage.matchAll(/[\p{L}\p{N}][\p{L}\p{N}-]*/gu)) {
     const raw = match[0];
     const compact = raw.replace(/[^\p{L}\p{N}]/gu, "");
@@ -105,7 +127,8 @@ function replacementIdentityHints(userMessage: string): string[] {
       raw !== raw.toLocaleLowerCase("ru")
     ) found.add(raw);
   }
-  for (const quoted of userMessage.matchAll(/[«"]([^»"]{2,})[»"]/gu)) found.add(quoted[1]);
+  for (const quoted of userMessage.matchAll(/[«"]([^»"]{2,})[»"]/gu)) { found.add(quoted[1]);
+  }
   return [...found];
 }
 
@@ -163,6 +186,37 @@ export function dropImplicitReplacementIdentityFilters(
   if (Object.keys(nextOptions).length > 0) nextArgs.options = nextOptions;
   else delete nextArgs.options;
   return { args: nextArgs, removed };
+}
+
+export function dropImplicitReplacementIdentityCriteria<
+  T extends { key: string },
+>(
+  criteria: T[],
+  facets: SearchFacet[],
+  userMessage: string,
+): { criteria: T[]; removed: T[] } {
+  const kept: T[] = [];
+  const removed: T[] = [];
+  for (const criterion of criteria) {
+    const criterionLabel = norm(criterion.key);
+    const facet = facets.find((candidate) => {
+      const key = norm(candidate.key);
+      const caption = norm(candidate.caption ?? "");
+      return criterionLabel === key || criterionLabel === caption ||
+        Boolean(
+          criterionLabel && caption &&
+            (criterionLabel.includes(caption) ||
+              caption.includes(criterionLabel)),
+        );
+    });
+    const kind = facet
+      ? replacementIdentityKind(facet)
+      : replacementIdentityKind({ key: criterion.key, caption: criterion.key });
+    if (kind && !explicitlyRequiresSameIdentity(userMessage, kind)) {
+      removed.push(criterion);
+    } else kept.push(criterion);
+  }
+  return { criteria: kept, removed };
 }
 
 export interface ReplacementIdentityProduct {
@@ -300,6 +354,21 @@ function explicitlyAffirmedByUser(value: string, userEvidence: string): boolean 
   )));
 }
 
+function facetMeaningIsEvidenced(
+  facet: SearchFacet,
+  evidence: string,
+): boolean {
+  const facetTokens = norm(`${facet.key} ${facet.caption ?? ""}`)
+    .split(" ")
+    .filter((token) => token.length >= 4);
+  const evidenceTokens = norm(evidence).split(" ").filter((token) =>
+    token.length >= 4
+  );
+  return facetTokens.some((facetToken) =>
+    evidenceTokens.some((token) => tokensMatchByStem(facetToken, token))
+  );
+}
+
 function significantValueTokens(value: string): string[] {
   return norm(value)
     .split(" ")
@@ -388,7 +457,8 @@ export function guardSearchFilters(
       candidate.key === key || (candidate.caption && norm(candidate.caption) === norm(key))
     );
     if (!facet) {
-      for (const value of values) dropped.push({ key, value, reason: "unknown_facet" });
+      for (const value of values) { dropped.push({ key, value, reason: "unknown_facet" });
+      }
       continue;
     }
     const canonicalKey = facet.key;
@@ -435,7 +505,8 @@ export function guardSearchFilters(
         continue;
       }
       nextOptions[canonicalKey] ??= [];
-      if (!nextOptions[canonicalKey].includes(canonical)) nextOptions[canonicalKey].push(canonical);
+      if (!nextOptions[canonicalKey].includes(canonical)) { nextOptions[canonicalKey].push(canonical);
+      }
       kept.push({ key: canonicalKey, value: canonical });
       if (
         explicitlyAffirmedByUser(canonical, userEvidence) ||
@@ -484,6 +555,31 @@ export function guardSearchFilters(
   // both to an inconsistent legacy catalog turns a valid request into an empty
   // intersection. Keep the richer value and remove only a strictly subsumed
   // option; the richer value remains an enforced render criterion.
+  for (const facet of facets) {
+    if (nextOptions [facet.key]?.length || isReplacementIdentityFacet(facet)) {
+      continue;
+    }
+    if (!facetMeaningIsEvidenced(facet, declaredReasoning)) continue;
+    const evidenced = facet. values.filter((candidate) => {
+      const value = norm(candidate.value);
+      if (!value || ["да", "нет", "есть", "отсутствует"].includes(value)) {
+        return false;
+      }
+      return explicitlyAffirmedByUser(candidate.value, declaredReasoning);
+    });
+    if (evidenced.length !== 1) continue;
+    const value = evidenced[0].value;
+    nextOptions[facet.key] = [value];
+    const item = { key: facet.key, value };
+    kept.push(item);
+    inferred.push(item);
+  }
+
+  // A compound canonical value can already encode another explicit filter
+  // ("Бытовые светильники накладные" includes mounting="накладной"). Sending
+  // both to an inconsistent legacy catalog turns a valid request into an empty
+  // intersection. Keep the richer value and remove only a strictly subsumed
+  // option; the richer value remains an enforced render criterion.
   for (const [key, values] of Object.entries({ ...nextOptions })) {
     if (values.length === 0) continue;
     const covering = Object.entries(nextOptions).find(([otherKey, otherValues]) => (
@@ -493,7 +589,8 @@ export function guardSearchFilters(
     const [byKey, byValues] = covering;
     for (const value of values) {
       const byValue = byValues.find((candidate) => valueSubsumes(candidate, value));
-      if (byValue) subsumed.push({ key, value, by_key: byKey, by_value: byValue });
+      if (byValue) { subsumed.push({ key, value, by_key: byKey, by_value: byValue });
+    }
     }
     delete nextOptions[key];
     for (let index = kept.length - 1; index >= 0; index--) {

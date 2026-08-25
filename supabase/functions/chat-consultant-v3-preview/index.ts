@@ -1,3 +1,3 @@
-// Isolated QA entrypoint. It registers the same handler as v3 under a separate
-// deployed function name so live acceptance can never mutate production.
+// Deployment-only wrapper: keep preview behavior byte-for-byte aligned with
+// the candidate v3 implementation without duplicating its source tree.
 import "../chat-consultant-v3/index.ts";

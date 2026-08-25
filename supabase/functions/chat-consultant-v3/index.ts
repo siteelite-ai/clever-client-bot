@@ -5,20 +5,23 @@
 // Tools: search_catalog, lookup_knowledge, render_products.
 
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
-import { TOOL_SCHEMAS, buildSystemPrompt } from "../_shared/v3-tools/schemas.ts";
+import { buildSystemPrompt,
+  TOOL_SCHEMAS } from "../_shared/v3-tools/schemas.ts";
 import { executeSearchCatalog, type SearchCatalogInput } from "../_shared/v3-tools/search-catalog.ts";
-import { executeDiscoverCategory, type DiscoverCategoryInput, type DiscoverCategoryOk, type Facet } from "../_shared/v3-tools/discover-category.ts";
+import { type DiscoverCategoryInput, type DiscoverCategoryOk,
+  executeDiscoverCategory, type Facet } from "../_shared/v3-tools/discover-category.ts";
 import {
   executeJargonRecoverCatalog,
+  type JargonRecoverCatalogInput,
   selectGroundedJargonCacheFallback,
   titleSupportsGroundedJargonQuery,
-  type JargonRecoverCatalogInput,
 } from "../_shared/v3-tools/jargon-recover-catalog.ts";
 
 import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3-tools/lookup-knowledge.ts";
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
-import { applyCriteriaGate, buildCriteriaQuery, filterProductIdsByBudgetCap, mergeFacetOptionConstraints, mergeUserBackedCriteria, projectCatalogFilterEvidence, projectCriteriaFacetOptions, resolveRenderCriteria, titleProvesCompactCriterion, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
+import { applyCriteriaGate, buildCriteriaQuery,
+  type Criterion, filterProductIdsByBudgetCap, mergeFacetOptionConstraints, mergeUserBackedCriteria, projectCatalogFilterEvidence, projectCriteriaFacetOptions, resolveRenderCriteria, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, hasMeasuredSelectionRequirement, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
@@ -38,8 +41,8 @@ import {
   mergeCompatibilityCriteria,
   minimumCompatibilityRelationCount,
   parseCompatibilityRelations,
-  projectPairedTitleEvidence,
   projectCompatibilityFacetOptions,
+  projectPairedTitleEvidence,
   reasoningNeedsCompatibilityRelations,
   subsumeCriteriaProvenByCompatibility,
   subsumeCriteriaProvenByPairedTitleRatio,
@@ -52,7 +55,9 @@ import {
   isBroadAssortmentRequest,
 } from "../_shared/v3-tools/broad-assortment.ts";
 import {
+  dropImplicitReplacementIdentityCriteria,
   dropImplicitReplacementIdentityFilters,
+  explicitReplacementIdentityValues,
   explicitReplacementModelValues,
   guardSearchFilters,
   inferReplacementIdentityValues,
@@ -60,11 +65,11 @@ import {
   productMatchesExcludedReplacementIdentity,
 } from "../_shared/v3-tools/search-filter-guard.ts";
 import {
-  groundedCategoryRecoveryQueries,
   filterProductsByGroundedCategoryTargets,
+  filterProductsByNamedSeries,
+  groundedCategoryRecoveryQueries,
   groundedTokenRecoveryQueries,
   guardCategoryScopeByReasoning,
-  filterProductsByNamedSeries,
   rankGroundedCategoryRecoveryScopes,
   selectGroundedTokenRecoveryCandidate,
   titleContainsLiteralToken,
@@ -82,8 +87,10 @@ import {
   persistRecentProductEvidence,
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
-import { META_DECLINE_TEXT, containsUnrenderedCatalogFacts, isMetaSelfQuestion, redactInternals, sanitizeIntermediateReasoning, stripUnrenderedCatalogFactSegments } from "../_shared/v3-tools/internals-guard.ts";
+import { containsUnrenderedCatalogFacts, isMetaSelfQuestion,
+  META_DECLINE_TEXT, redactInternals, sanitizeIntermediateReasoning, stripUnrenderedCatalogFactSegments } from "../_shared/v3-tools/internals-guard.ts";
 import {
+  type AgentPhase,
   boundedAgentStepTimeout,
   compactCatalogResultForLlm,
   deterministicIntroTimeoutToolCall,
@@ -93,21 +100,25 @@ import {
   shouldAllowCorrectiveDiscovery,
   shouldDeferInquiryIntro,
   toolNamesForAgentPhase,
-  type AgentPhase,
 } from "../_shared/v3-tools/agent-performance.ts";
 import { CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest } from "../_shared/v3-tools/clean-power-safety.ts";
 import { deterministicSeriesExplanation, safeSeriesTraits } from "../_shared/v3-tools/series-explanation.ts";
-import { rankSplitReplacementCandidates, type RankedReplacementCandidate } from "../_shared/v3-tools/replacement-fallback.ts";
+import { type RankedReplacementCandidate,
+  rankSplitReplacementCandidates } from "../_shared/v3-tools/replacement-fallback.ts";
 import {
+  excludeMandatoryAxisCodesFromSourceModels,
   extractExplicitSingleLetterCodes,
   extractReplacementLookupKeys,
+  portableTechnicalCodeMatchesText,
   productContainsSourceModel,
+  productTitleSupportsMandatoryAxes,
+  productTitleSupportsPortableRequirements,
   selectExplicitAnchorAxes,
 } from "../_shared/v3-tools/replacement-preflight.ts";
 import {
   classifyHouseholdMotionLightRequest,
-  HOUSEHOLD_MOTION_LIGHT_GENERIC_INTRO,
   HOUSEHOLD_MOTION_LIGHT_EMPTY,
+  HOUSEHOLD_MOTION_LIGHT_GENERIC_INTRO,
   HOUSEHOLD_MOTION_LIGHT_INTRO,
   verifiedHouseholdMotionLights,
 } from "../_shared/v3-tools/household-motion-light-policy.ts";
@@ -124,23 +135,24 @@ import {
   compoundRecoveryQueries,
   exactCompoundMarkingEmpty,
   exactCompoundMarkingIntro,
+  type ExactCompoundMarkingRequest,
   extractExplicitCompoundMarking,
   productTitleMatchesExplicitCompoundMarking,
   requiresSemanticCompoundEvidence,
-  semanticCompoundSourceQuery,
   selectExactCompoundMarkedProducts,
+  semanticCompoundSourceQuery,
   shouldTerminateAfterGroundedCompoundSearch,
   subsumeCriteriaProvenByExplicitCompound,
-  type ExactCompoundMarkingRequest,
 } from "../_shared/v3-tools/exact-compound-marking-policy.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
-import { executeEscalate, type EscalateInput } from "../_shared/v3-tools/escalate.ts";
+import { type EscalateInput,
+  executeEscalate } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
 import type { ProductCache, ProductFull, ProductRef, SearchCatalogOk, ToolName, ToolResult, ToolSideEffect } from "../_shared/v3-tools/types.ts";
 import {
+  type ChatHistoryMessage,
   MAX_REQUEST_BODY_BYTES,
   validateChatRequestBody,
-  type ChatHistoryMessage,
 } from "../_shared/v3-tools/request-validation.ts";
 import {
   classifyConversationBoundary,
@@ -171,13 +183,14 @@ const MIN_AGENT_STEP_BUDGET_MS = 5_000;
 
 type SseEvent =
   | { type: "delta"; content: string }
-  | { type: "diagnostic"; log_id: string | null; phase: "start" | "complete"; products_count?: number; error?: string | null }
+  | { type: "diagnostic"; log_id: string | null; phase: "start" | "complete"; products_count?: number; error?: string | null; }
   | { type: "conversation_boundary"; mode: "new_task"; session_id: string }
-  | { type: "assistant_turn_break"; reason: "tool_pending" | "after_render" | "final_text" | "text_before_render" | "intro_late" }
-  | { type: "tool_event"; tool: string; phase: "start" | "result"; duration_ms?: number; summary?: string }
-  | { type: "products_block"; markdown: string; count: number; total_available?: number }
+  | { type: "assistant_turn_break"; reason:
+      | "tool_pending" | "after_render" | "final_text" | "text_before_render" | "intro_late"; }
+  | { type: "tool_event"; tool: string; phase: "start" | "result"; duration_ms?: number; summary?: string; }
+  | { type: "products_block"; markdown: string; count: number; total_available?: number; }
   | { type: "contacts"; html: string }
-  | { type: "quick_replies"; replies: Array<{ value: string; label: string }>; facet_key: string }
+  | { type: "quick_replies"; replies: Array<{ value: string; label: string }>; facet_key: string; }
   | { type: "slot_update"; slots: Record<string, unknown> }
   | { type: "done" };
 
@@ -309,14 +322,15 @@ function summariseToolResult(name: string, r: ToolResult): string {
   if (!r.ok) {
     if (name === "render_products") {
       const report = (r as unknown as {
-        report?: { rejected?: Array<{ key?: string }>; unverifiable_keys?: string[] };
+        report?: { rejected?: Array<{ key?: string }>; unverifiable_keys?: string[]; };
         uncovered?: Array<{ op?: string; value?: number; unit?: string; strict?: boolean }>;
       }).report;
       const keys = [
         ...(report?.unverifiable_keys ?? []),
         ...(report?.rejected ?? []).map((item) => item.key ?? ""),
       ].filter(Boolean).filter((value, index, all) => all.indexOf(value) === index).slice(0, 4);
-      if (keys.length > 0) return `ошибка: ${r.error_code}; критерии: ${keys.join(", ")}`;
+      if (keys.length > 0) { return `ошибка: ${r.error_code}; критерии: ${keys.join(", ")}`;
+      }
       const uncovered = (r as unknown as {
         uncovered?: Array<{ op?: string; value?: number; unit?: string; strict?: boolean }>;
       }).uncovered ?? [];
@@ -326,14 +340,17 @@ function summariseToolResult(name: string, r: ToolResult): string {
     }
     return `ошибка: ${r.error_code}`;
   }
-  if (name === "search_catalog" || name === "jargon_recover_catalog") return `найдено ${(r as { total: number }).total}`;
+  if (name === "search_catalog" || name === "jargon_recover_catalog") { return `найдено ${(r as { total: number }).total}`;
+  }
   if (name === "discover_category") {
-    const x = r as unknown as { category?: { total_products?: number }; facets?: unknown[] };
+    const x = r as unknown as { category?: { total_products?: number }; facets?: unknown[]; };
     return `категория: ${x.category?.total_products ?? 0} тов., фасетов ${x.facets?.length ?? 0}`;
   }
-  if (name === "lookup_knowledge") return `${(r as { hits: unknown[] }).hits.length} фрагментов`;
+  if (name === "lookup_knowledge") { return `${(r as { hits: unknown[] }).hits.length} фрагментов`;
+  }
   if (name === "lookup_contacts") return `контакты загружены`;
-  if (name === "render_products") return `показано ${(r as { rendered_count: number }).rendered_count}`;
+  if (name === "render_products") { return `показано ${(r as { rendered_count: number }).rendered_count}`;
+  }
   if (name === "propose_clarification") return `уточнение задано`;
   if (name === "escalate_to_manager") return `передано менеджеру`;
   if (name === "note_state") return `состояние сохранено`;
@@ -347,12 +364,15 @@ function summariseToolArgs(name: string, args: Record<string, unknown>): Record<
     for (const k of keys) if (args[k] !== undefined) o[k] = args[k];
     return o;
   };
-  if (name === "search_catalog") return pick(["mode", "query", "article", "pagetitle", "category", "category_in", "min_price", "max_price", "sort_cheapest", "sort_expensive", "per_page", "page", "options"]);
+  if (name === "search_catalog") { return pick(["mode", "query", "article", "pagetitle", "category", "category_in", "min_price", "max_price", "sort_cheapest", "sort_expensive", "per_page", "page", "options"]);
+  }
   if (name === "discover_category") return pick(["noun"]);
-  if (name === "jargon_recover_catalog") return pick(["query", "modifiers", "min_price", "max_price", "per_page", "category"]);
+  if (name === "jargon_recover_catalog") { return pick(["query", "modifiers", "min_price", "max_price", "per_page", "category"]);
+  }
   if (name === "lookup_knowledge") return pick(["query", "type"]);
   if (name === "lookup_contacts") return pick(["fields"]);
-  if (name === "render_products") return { ids_count: Array.isArray(args.product_ids) ? (args.product_ids as unknown[]).length : 0, total_available: args.total_available, selection_target: args.selection_target, criteria: Array.isArray(args.criteria) ? args.criteria : [] };
+  if (name === "render_products") { return { ids_count: Array.isArray(args.product_ids) ? (args.product_ids as unknown[]).length : 0, total_available: args.total_available, selection_target: args.selection_target, criteria: Array.isArray(args.criteria) ? args.criteria : [] };
+  }
   if (name === "propose_clarification") return pick(["facet_key", "question"]);
   if (name === "escalate_to_manager") return pick(["reason"]);
   if (name === "note_state") return pick(["key", "ttl_turns"]);
@@ -360,20 +380,23 @@ function summariseToolArgs(name: string, args: Record<string, unknown>): Record<
 }
 
 function summariseToolResultMeta(name: string, r: ToolResult): Record<string, unknown> {
-  if (!r.ok) return { error_code: r.error_code, message: (r as { message?: string }).message };
+  if (!r.ok) { return { error_code: r.error_code, message: (r as { message?: string }).message };
+  }
   if (name === "search_catalog" || name === "jargon_recover_catalog") {
-    const x = r as { total: number; branch_tag?: string; resolved_filters?: unknown; partial_match?: boolean; unmatched_tokens?: string[]; matched_query?: string | null; candidates?: string[] };
+    const x = r as { total: number; branch_tag?: string; resolved_filters?: unknown; partial_match?: boolean; unmatched_tokens?: string[]; matched_query?: string | null; candidates?: string[]; };
     const meta: Record<string, unknown> = { total: x.total, branch_tag: x.branch_tag };
     if (name === "jargon_recover_catalog") {
-      if (typeof x.partial_match === "boolean") meta.partial_match = x.partial_match;
-      if (Array.isArray(x.unmatched_tokens)) meta.unmatched_tokens = x.unmatched_tokens;
+      if (typeof x.partial_match === "boolean") { meta.partial_match = x.partial_match;
+      }
+      if (Array.isArray(x.unmatched_tokens)) { meta.unmatched_tokens = x.unmatched_tokens;
+      }
       if (x.matched_query !== undefined) meta.matched_query = x.matched_query;
       if (Array.isArray(x.candidates)) meta.candidates = x.candidates;
     }
     return meta;
   }
   if (name === "discover_category") {
-    const x = r as unknown as { category?: { pagetitle?: string; total_products?: number }; facets?: Array<{ key: string; values?: unknown[] }>; resolved_from?: string };
+    const x = r as unknown as { category?: { pagetitle?: string; total_products?: number }; facets?: Array<{ key: string; values?: unknown[] }>; resolved_from?: string; };
     return {
       pagetitle: x.category?.pagetitle,
       resolved_from: x.resolved_from,
@@ -382,8 +405,10 @@ function summariseToolResultMeta(name: string, r: ToolResult): Record<string, un
       facet_keys: (x.facets ?? []).slice(0, 20).map((f) => f.key),
     };
   }
-  if (name === "lookup_knowledge") return { hits: (r as { hits: unknown[] }).hits.length };
-  if (name === "render_products") return { rendered_count: (r as { rendered_count: number }).rendered_count, blocked_by_zero_price: (r as { blocked_by_zero_price?: number }).blocked_by_zero_price };
+  if (name === "lookup_knowledge") { return { hits: (r as { hits: unknown[] }).hits.length };
+  }
+  if (name === "render_products") { return { rendered_count: (r as { rendered_count: number }).rendered_count, blocked_by_zero_price: (r as { blocked_by_zero_price?: number }).blocked_by_zero_price };
+  }
   return {};
 }
 
@@ -432,7 +457,8 @@ function tokenMatchesEvidenceByStem(token: string, evidenceTokens: string[]): bo
     // Совпадение по общему префиксу длиной ≥ min(stem,eStem) — обе формы
     // одного корня. Защищает от ложных срабатываний на коротких словах.
     const minLen = Math.min(stem.length, eStem.length);
-    if (minLen >= 4 && stem.slice(0, minLen) === eStem.slice(0, minLen)) return true;
+    if (minLen >= 4 && stem.slice(0, minLen) === eStem.slice(0, minLen)) { return true;
+    }
     // На случай, если стем токена сам является префиксом формы из текста
     if (stem.length >= 4 && et.startsWith(stem)) return true;
     if (eStem.length >= 4 && token.startsWith(eStem)) return true;
@@ -448,7 +474,8 @@ function valueIsEvidenced(value: string, evidenceText: string): boolean {
   if (/\d/.test(valueNorm) && normalizeCodeLike(evidenceText).includes(normalizeCodeLike(value))) return true;
   const parts = valueNorm.split(/\s+/).filter((p) => p.length >= 2);
   const evidenceTokens = evidenceNorm.split(/\s+/).filter((p) => p.length >= 2);
-  if (parts.length > 1 && parts.every((p) => evidenceNorm.includes(p))) return true;
+  if (parts.length > 1 && parts.every((p) => evidenceNorm.includes(p))) { return true;
+  }
   // Морфологический матч: хотя бы один значимый токен значения совпадает по
   // стему с токеном в тексте (черный↔черная, двухместный↔двухместная).
   // Для многословных значений требуем, чтобы все значимые токены имели стем-матч.
@@ -528,7 +555,8 @@ function buildNoIntersectionText(input: {
   const filtersText = input.confirmedFilters.map((f) => `${f.facet.caption}: ${f.value}`).join(", ");
   const parts: string[] = [];
   parts.push(`По сочетанию «${requestedOnly}»${filtersText ? ` + ${filtersText}` : ""} точного совпадения не нашёл.`);
-  if (input.confirmedTotal > 0 && filtersText) parts.push(`По ${filtersText} товары есть.`);
+  if (input.confirmedTotal > 0 && filtersText) { parts.push(`По ${filtersText} товары есть.`);
+  }
   if (input.semanticTotal > 0) {
     const withValues = input.semanticFacetValues
       .filter((x) => x.values.length > 0)
@@ -580,7 +608,7 @@ async function guardedOutcomeForSearch(
   const evidenceText = `${conversationEvidence}\n${userMessage}\n${firstAssistantText}`;
 
   const confirmedFilters: Array<{ facet: Facet; key: string; value: string }> = [];
-  const suspiciousFilters: Array<{ facet: Facet; key: string; value: string; existsInFacet: boolean; evidenced: boolean }> = [];
+  const suspiciousFilters: Array<{ facet: Facet; key: string; value: string; existsInFacet: boolean; evidenced: boolean; }> = [];
 
   for (const [key, rawVals] of Object.entries(options)) {
     const facet = lastDiscover.facets.find((f) => f.key === key);
@@ -711,8 +739,9 @@ function detectNumericTruncationInOptions(
       const submitted = String(raw).trim();
       if (!/^\d+$/.test(submitted)) continue; // bare integer only
       const match = decimalsInText.find((t) => t.integer === submitted);
-      if (match) violations.push({ key, submitted, expected: `${match.integer}.${match.decimal}` });
+      if (match) { violations.push({ key, submitted, expected: `${match.integer}.${match.decimal}` });
     }
+  }
   }
   return violations.length > 0 ? violations : null;
 }
@@ -724,7 +753,7 @@ function detectNumericTruncationInOptions(
 function classifyOptionsSource(
   args: Record<string, unknown>,
   userMessage: string,
-): { userExplicit: Array<{ key: string; value: string }>; assistantInferred: Array<{ key: string; value: string }> } {
+): { userExplicit: Array<{ key: string; value: string }>; assistantInferred: Array<{ key: string; value: string }>; } {
   const out = {
     userExplicit: [] as Array<{ key: string; value: string }>,
     assistantInferred: [] as Array<{ key: string; value: string }>,
@@ -734,7 +763,8 @@ function classifyOptionsSource(
     if (!Array.isArray(rawVals)) continue;
     for (const raw of rawVals) {
       const value = String(raw);
-      if (valueIsEvidenced(value, userMessage)) out.userExplicit.push({ key, value });
+      if (valueIsEvidenced(value, userMessage)) { out.userExplicit.push({ key, value });
+      }
       else out.assistantInferred.push({ key, value });
     }
   }
@@ -751,7 +781,7 @@ function promiseRealityCheck(
   renderedProductIds: string[],
   cache: ProductCache,
   lastDiscover: DiscoverCategoryOk | null,
-): { corrective: string; mismatches: Array<{ caption: string; promised: string; actual: string[] }> } | null {
+): { corrective: string; mismatches: Array<{ caption: string; promised: string; actual: string[] }>; } | null {
   if (!lastDiscover || !firstAssistantText) return null;
   const unitFacets = lastDiscover.facets.filter((f) => f.unit && f.unit.trim());
   if (unitFacets.length === 0) return null;
@@ -823,8 +853,10 @@ function detectPriceDirection(msg: string): PriceIntent | null {
   if (/\b(в том же.*(сегмент|ценов)|таком же.*ценов|той же цене|такого же.*ценов)/u.test(m)) {
     return { kind: "comparative", direction: "same" };
   }
-  if (/(подешевле|дешевле)/u.test(m)) return { kind: "comparative", direction: "cheaper" };
-  if (/(подороже|дороже)/u.test(m)) return { kind: "comparative", direction: "more_expensive" };
+  if (/(подешевле|дешевле)/u.test(m)) { return { kind: "comparative", direction: "cheaper" };
+  }
+  if (/(подороже|дороже)/u.test(m)) { return { kind: "comparative", direction: "more_expensive" };
+  }
 
   // Superlative: абсолютная сортировка по найденному пулу, без якоря.
   if (/(самый\s+дешёв|самый\s+дешев|самые\s+дешёв|самые\s+дешев|самый\s+недорог|бюджетн|поэконом|подоступн|самый\s+доступн)/u.test(m)) {
@@ -836,7 +868,7 @@ function detectPriceDirection(msg: string): PriceIntent | null {
   return null;
 }
 
-type CachedProd = { id: string; price: number; pagetitle?: string; title?: string; vendor?: string | null; short_traits?: string[] };
+type CachedProd = { id: string; price: number; pagetitle?: string; title?: string; vendor?: string | null; short_traits?: string[]; };
 
 function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd | null {
   const msgRaw = userMessage.toLowerCase().replace(/[«»"',.()]/g, " ");
@@ -852,12 +884,14 @@ function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd
   for (const t of msgRaw.split(/\s+/)) {
     const cleaned = t.replace(/[^\p{L}\p{N}-]/gu, "");
     if (cleaned.length < 4) continue;
-    if (/\p{L}/u.test(cleaned) && /\p{N}/u.test(cleaned)) distinctive.push(cleaned);
+    if (/\p{L}/u.test(cleaned) && /\p{N}/u.test(cleaned)) { distinctive.push(cleaned);
+  }
   }
   // Чистое число ≥4 цифр (артикул-номер).
   for (const t of userMessage.matchAll(/\b\d{4,}\b/g)) distinctive.push(t[0]);
   // Текст в кавычках.
-  for (const t of userMessage.matchAll(/[«"]([^»"]{2,})[»"]/gu)) distinctive.push(t[1].toLowerCase());
+  for (const t of userMessage.matchAll(/[«"]([^»"]{2,})[»"]/gu)) { distinctive.push(t[1].toLowerCase());
+  }
 
   if (distinctive.length === 0) return null;
 
@@ -936,7 +970,8 @@ function extractAlternativeOptionsFromAssistant(text: string): { question: strin
       .split(/\s+или\s+/iu)
       .map(cleanDialogueOptionLabel)
       .filter((p) => p.length >= 2 && p.length <= 120);
-    if (options.length >= 2 && options.length <= 4) return { question, options };
+    if (options.length >= 2 && options.length <= 4) { return { question, options };
+  }
   }
   return null;
 }
@@ -973,7 +1008,8 @@ function resolveDialogueChoice(
     .sort((a, b) => b.score - a.score);
   const best = scored[0];
   const second = scored[1];
-  if (!best || best.score <= 0 || (second && best.score <= second.score)) return null;
+  if (!best || best.score <= 0 || (second && best.score <= second.score)) { return null;
+  }
   return {
     question: parsed.question,
     chosen: best.option,
@@ -1001,7 +1037,8 @@ function resolvePendingClarificationChoice(
     .sort((a, b) => b.score - a.score);
   const best = scored[0];
   const second = scored[1];
-  if (!best || best.score <= 0 || (second && best.score <= second.score)) return null;
+  if (!best || best.score <= 0 || (second && best.score <= second.score)) { return null;
+  }
   return {
     question: typeof p.question === "string" ? p.question : "уточнение",
     chosen: best.option,
@@ -1018,7 +1055,7 @@ function relaxToolArgsFromDialogueChoice(
   args: Record<string, unknown>,
   choice: DialogueChoiceResolution | null,
   userMessage: string,
-): { args: Record<string, unknown>; removed: Array<{ key: string; value: string; relaxed_by: string }> } | null {
+): { args: Record<string, unknown>; removed: Array<{ key: string; value: string; relaxed_by: string }>; } | null {
   if (!choice) return null;
   const relaxedText = choice.relaxed.join("\n");
   if (!relaxedText.trim()) return null;
@@ -1035,7 +1072,8 @@ function relaxToolArgsFromDialogueChoice(
     const kept: string[] = [];
     for (const value of args.modifiers.map(String).filter(Boolean)) {
       const relaxedBy = shouldRelax(value);
-      if (relaxedBy) removed.push({ key: "modifiers", value, relaxed_by: relaxedBy });
+      if (relaxedBy) { removed.push({ key: "modifiers", value, relaxed_by: relaxedBy });
+      }
       else kept.push(value);
     }
     if (kept.length !== args.modifiers.length) nextArgs.modifiers = kept;
@@ -1077,7 +1115,7 @@ function detectRelaxIntent(userMessage: string): boolean {
 function relaxToolArgsFromUserIntent(
   args: Record<string, unknown>,
   userMessage: string,
-): { args: Record<string, unknown>; removed: Array<{ key: string; value: string; reason: string }> } | null {
+): { args: Record<string, unknown>; removed: Array<{ key: string; value: string; reason: string }>; } | null {
   if (!detectRelaxIntent(userMessage)) return null;
   const nextArgs = { ...args };
   const removed: Array<{ key: string; value: string; reason: string }> = [];
@@ -1088,7 +1126,8 @@ function relaxToolArgsFromUserIntent(
     const kept: string[] = [];
     for (const value of args.modifiers.map(String).filter(Boolean)) {
       if (repeatedNow(value)) kept.push(value);
-      else removed.push({ key: "modifiers", value, reason: "relax_intent_not_repeated" });
+      else { removed.push({ key: "modifiers", value, reason: "relax_intent_not_repeated" });
+    }
     }
     if (kept.length !== args.modifiers.length) {
       if (kept.length > 0) nextArgs.modifiers = kept;
@@ -1180,19 +1219,24 @@ function rewriteRenderIdsByPriceDirection(
   const products = productIds
     .map((id) => cache.get(String(id)) as unknown as CachedProd | undefined)
     .filter((p): p is CachedProd => !!p && typeof p.price === "number" && p.price > 0);
-  if (products.length === 0) return { ids: productIds, filteredOut: 0, sorted: false };
+  if (products.length === 0) { return { ids: productIds, filteredOut: 0, sorted: false };
+  }
 
   let filtered = products;
   if (anchor) {
-    if (direction === "cheaper") filtered = products.filter((p) => p.price < anchor.price && p.id !== anchor.id);
-    else if (direction === "more_expensive") filtered = products.filter((p) => p.price > anchor.price && p.id !== anchor.id);
+    if (direction === "cheaper") { filtered = products.filter((p) => p.price < anchor.price && p.id !== anchor.id);
+    }
+    else if (direction === "more_expensive") { filtered = products.filter((p) => p.price > anchor.price && p.id !== anchor.id);
+    }
     else if (direction === "same") {
       const lo = anchor.price * 0.7, hi = anchor.price * 1.3;
       filtered = products.filter((p) => p.price >= lo && p.price <= hi && p.id !== anchor.id);
     }
   }
-  if (direction === "cheaper" || direction === "same") filtered = [...filtered].sort((a, b) => a.price - b.price);
-  else if (direction === "more_expensive") filtered = [...filtered].sort((a, b) => b.price - a.price);
+  if (direction === "cheaper" || direction === "same") { filtered = [...filtered].sort((a, b) => a.price - b.price);
+  }
+  else if (direction === "more_expensive") { filtered = [...filtered].sort((a, b) => b.price - a.price);
+  }
 
   const ids = filtered.slice(0, 8).map((p) => p.id);
   return { ids, filteredOut: products.length - filtered.length, sorted: true };
@@ -1309,7 +1353,8 @@ function buildReplacementAxes(
   evidenceText: string,
   userMessage: string,
 ): ReplacementAxis[] {
-  if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) return [];
+  if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) { return [];
+  }
   const options = (args as { options?: Record<string, unknown> }).options;
   if (!options || typeof options !== "object") return [];
   const axes: ReplacementAxis[] = [];
@@ -1334,12 +1379,14 @@ function leafScopeSearchArgs(
   lastDiscover: DiscoverCategoryOk | null,
   replacementIntent = false,
 ): { args: Record<string, unknown>; scoped: boolean; reason: string | null } {
-  if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) return { args, scoped: false, reason: null };
+  if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) { return { args, scoped: false, reason: null };
+  }
   const leaves = (lastDiscover.leaf_categories ?? []).map((l) => l.pagetitle).filter(Boolean);
   if (leaves.length === 0) return { args, scoped: false, reason: null };
   const category = typeof args.category === "string" ? args.category : null;
   const categoryIn = Array.isArray(args.category_in) ? args.category_in.map(String).filter(Boolean) : [];
-  if (categoryIn.length > 0 || (category && leaves.includes(category))) return { args, scoped: false, reason: null };
+  if (categoryIn.length > 0 || (category && leaves.includes(category))) { return { args, scoped: false, reason: null };
+  }
   if (!category || category === lastDiscover.category.pagetitle) {
     const { category: _category, ...rest } = args;
     if (replacementIntent) {
@@ -1363,8 +1410,9 @@ function leafScopeSearchArgs(
 function canonicalizeSearchOptionsFromDiscover(
   args: Record<string, unknown>,
   lastDiscover: DiscoverCategoryOk | null,
-): { args: Record<string, unknown>; rewrites: Array<{ key: string; from: string; to: string }> } | null {
-  if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) return null;
+): { args: Record<string, unknown>; rewrites: Array<{ key: string; from: string; to: string }>; } | null {
+  if ((args as { mode?: string }).mode !== "by_filter" || !lastDiscover) { return null;
+  }
   const options = (args as { options?: Record<string, unknown> }).options;
   if (!options || typeof options !== "object") return null;
   const nextOptions: Record<string, string[]> = {};
@@ -1392,7 +1440,8 @@ function numericAxisValueMatches(target: string, text: string, axis: Replacement
   const targets = extractNumbers(target);
   if (targets.length === 0) return false;
   const actual = extractNumbers(text);
-  if (actual.some((n) => targets.some((t) => Math.abs(n - t) < 0.0001))) return true;
+  if (actual.some((n) => targets.some((t) => Math.abs(n - t) < 0.0001))) { return true;
+  }
   if (axis.isDiameter) {
     return actual.some((n) => targets.some((t) => Math.abs(n - t * 10) < 0.0001 || Math.abs(n * 10 - t) < 0.0001));
   }
@@ -1401,6 +1450,10 @@ function numericAxisValueMatches(target: string, text: string, axis: Replacement
 
 function axisValueMatchesText(target: string, text: string, axis: ReplacementAxis): boolean {
   if (!target || !text) return false;
+  const normalizedTarget = normalizeCodeLike(target);
+  if (/\d/u.test(normalizedTarget) && /[a-z]/u.test(normalizedTarget)) {
+    return portableTechnicalCodeMatchesText(target, text);
+  }
   if (/\d/.test(target)) return numericAxisValueMatches(target, text, axis);
   const targetCodes = (target.match(/[\p{L}\p{N}]+/gu) ?? [])
     .map(normalizeCodeLike)
@@ -1458,7 +1511,8 @@ function filterReplacementCompatibleIds(
     const matchedAxes = axes.filter((axis) => axisIdSets?.get(axis.key)?.has(id) || productMatchesReplacementAxis(product, axis));
     const missesDiameter = axes.some((axis) => axis.isDiameter) && !matchedAxes.some((axis) => axis.isDiameter);
     if (missesDiameter && hasRectangularSizeMarker(product.pagetitle)) return;
-    if (matchedAxes.length >= minMatches) ranked.push({ id, matches: matchedAxes.length, order });
+    if (matchedAxes.length >= minMatches) { ranked.push({ id, matches: matchedAxes.length, order });
+  }
   });
   return ranked
     .sort((a, b) => b.matches - a.matches || a.order - b.order)
@@ -1470,7 +1524,8 @@ function extractCodeConstraints(text: string): string[] {
   const add = (raw: string) => {
     const clean = raw.replace(/\s+/g, "").replace(/,/g, ".").trim();
     const key = normalizeCodeLike(clean);
-    if (key.length >= 2 && /\d/.test(key) && /[a-z]/i.test(key)) out.set(key, clean);
+    if (key.length >= 2 && /\d/.test(key) && /[a-z]/i.test(key)) { out.set(key, clean);
+  }
   };
   for (const m of text.matchAll(/(?<![\p{L}\p{N}])[\p{L}]{1,5}\s*\d{1,5}[\p{L}\d.-]*(?![\p{L}\p{N}])/giu)) add(m[0]);
   for (const m of text.matchAll(/(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?\s*(?:[\p{L}]{1,5}|мм²|мм2)(?![\p{L}\p{N}])/giu)) {
@@ -1544,8 +1599,10 @@ function buildGenericConstraintTokens(lastDiscover: DiscoverCategoryOk | null): 
   if (!lastDiscover) return generic;
   addNormalizedWords(generic, lastDiscover.category?.pagetitle ?? "");
   addNormalizedWords(generic, lastDiscover.resolved_from ?? "");
-  for (const leaf of lastDiscover.leaf_categories ?? []) addNormalizedWords(generic, leaf.pagetitle);
-  for (const facet of lastDiscover.facets ?? []) addNormalizedWords(generic, `${facet.key} ${facet.caption}`);
+  for (const leaf of lastDiscover.leaf_categories ?? []) { addNormalizedWords(generic, leaf.pagetitle);
+  }
+  for (const facet of lastDiscover.facets ?? []) { addNormalizedWords(generic, `${facet.key} ${facet.caption}`);
+  }
   return generic;
 }
 
@@ -1578,7 +1635,7 @@ async function trySplitFallback(
     const mergedOptions: Record<string, string[]> = { ...stickyOptions, [axis]: values };
     const input: SearchCatalogInput = {
       mode: "by_filter",
-      per_page: 5,
+      per_page: 20,
       options: mergedOptions,
       min_price: typeof origArgs.min_price === "number" ? origArgs.min_price : 1,
       ...(typeof origArgs.max_price === "number" ? { max_price: origArgs.max_price } : {}),
@@ -1589,11 +1646,11 @@ async function trySplitFallback(
     try {
       const r = await executeSearchCatalog(input, deps, ctx.cache);
       if (!r.ok || r.total === 0) return null;
-      const okRes = r as unknown as { results: Array<{ id: string | number; price?: number }>; total: number };
+      const okRes = r as unknown as { results: Array<{ id: string | number; price?: number }>; total: number; };
       const ids = (okRes.results ?? [])
         .filter((p) => typeof p.price === "number" && p.price > 0)
         .map((p) => String(p.id))
-        .slice(0, 4);
+        .slice(0, 20);
       if (ids.length === 0) return null;
       return { axis, value: values.join("|"), ids, total: okRes.total } as SplitAxis;
     } catch {
@@ -1616,7 +1673,7 @@ function compactDiscoverCategoryForLlm(r: ToolResult, args: Record<string, unkno
   const x = r as unknown as {
     ok: true;
     category: { id: number | null; pagetitle: string; total_products: number };
-    facets: Array<{ key: string; caption: string; type: string; unit: string | null; min?: number | null; max?: number | null; values?: Array<{ value: string; products_count?: number }> }>;
+    facets: Array<{ key: string; caption: string; type: string; unit: string | null; min?: number | null; max?: number | null; values?: Array<{ value: string; products_count?: number }>; }>;
     leaf_categories?: Array<{ id: number; pagetitle: string }>;
     resolved_from?: string;
   };
@@ -1675,7 +1732,8 @@ function compactDiscoverCategoryForLlm(r: ToolResult, args: Record<string, unkno
 
 function toolResultForLlm(r: ToolResult, args: Record<string, unknown>, userMessage: string, assistantReasoning: string): unknown {
   // Strip heavy fields the model doesn't need to see.
-  if (r.ok && r.tool === "discover_category") return compactDiscoverCategoryForLlm(r, args, userMessage);
+  if (r.ok && r.tool === "discover_category") { return compactDiscoverCategoryForLlm(r, args, userMessage);
+  }
   if (r.ok && (r.tool === "search_catalog" || r.tool === "jargon_recover_catalog")) {
     const { side_effects: _sideEffects, tool: _tool, ...catalogResult } = r;
     return compactCatalogResultForLlm(
@@ -1714,7 +1772,7 @@ function toolResultForLlm(r: ToolResult, args: Record<string, unknown>, userMess
   }
   // strip side_effects from LLM view
   if ("side_effects" in r) {
-    const { side_effects: _se, ...rest } = r as ToolResult & { side_effects?: ToolSideEffect[] };
+    const { side_effects: _se, ...rest } = r as ToolResult & { side_effects?: ToolSideEffect[]; };
     return rest;
   }
   return r;
@@ -1726,9 +1784,11 @@ function emitSideEffects(r: ToolResult, send: (ev: SseEvent) => void) {
   if (!Array.isArray(fx)) return;
   for (const ev of fx) {
     if (ev.type === "contacts") send({ type: "contacts", html: ev.html });
-    else if (ev.type === "quick_replies") send({ type: "quick_replies", replies: ev.replies, facet_key: ev.facet_key });
-    else if (ev.type === "slot_update") send({ type: "slot_update", slots: ev.slots });
+    else if (ev.type === "quick_replies") { send({ type: "quick_replies", replies: ev.replies, facet_key: ev.facet_key });
+    }
+    else if (ev.type === "slot_update") { send({ type: "slot_update", slots: ev.slots });
   }
+}
 }
 
 // ─── OpenRouter call ────────────────────────────────────────────────────────
@@ -1736,7 +1796,7 @@ function emitSideEffects(r: ToolResult, send: (ev: SseEvent) => void) {
 interface ORMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string | null;
-  tool_calls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }>;
+  tool_calls?: Array<{ id: string; type: "function"; function: { name: string; arguments: string }; }>;
   tool_call_id?: string;
   name?: string;
 }
@@ -1792,7 +1852,7 @@ async function callOpenRouter(
   let res: Response;
   let data: {
     choices?: Array<{
-      message?: { content?: string | null; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }> };
+      message?: { content?: string | null; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>; };
       finish_reason?: string;
     }>;
   };
@@ -1894,10 +1954,12 @@ async function callOpenRouterEvidenceFollowup(
       }),
       signal: localCtrl.signal,
     });
-    if (!response.ok) throw new UpstreamHttpError(response.status, await response.text());
-    const data = await response.json() as { choices?: Array<{ message?: { content?: string | null }; finish_reason?: string }> };
+    if (!response.ok) { throw new UpstreamHttpError(response.status, await response.text());
+    }
+    const data = await response.json() as { choices?: Array<{ message?: { content?: string | null }; finish_reason?: string }>; };
     const text = data.choices?.[0]?.message?.content?.trim() ?? "";
-    if (!text) throw new Error("OpenRouter evidence follow-up returned empty text");
+    if (!text) { throw new Error("OpenRouter evidence follow-up returned empty text");
+    }
     return { text, toolCalls: [], finishReason: data.choices?.[0]?.finish_reason ?? "stop" };
   } finally {
     clearTimeout(localTimer);
@@ -1949,8 +2011,9 @@ async function callOpenRouterSeriesExplanation(
       }),
       signal: localCtrl.signal,
     });
-    if (!response.ok) throw new UpstreamHttpError(response.status, await response.text());
-    const data = await response.json() as { choices?: Array<{ message?: { content?: string | null }; finish_reason?: string }> };
+    if (!response.ok) { throw new UpstreamHttpError(response.status, await response.text());
+    }
+    const data = await response.json() as { choices?: Array<{ message?: { content?: string | null }; finish_reason?: string }>; };
     const text = data.choices?.[0]?.message?.content?.trim() ?? "";
     return {
       text: text || deterministicSeriesExplanation(userMessage, products),
@@ -2048,6 +2111,7 @@ interface DirectReplacementResult {
   handled: boolean;
   products: ProductFull[];
   retryable_reason?: "anchor_not_found" | "leaf_discovery_failed";
+  source_candidate_ids?: string[];
 }
 
 async function selectVerifiedOrdinaryReplacement(
@@ -2062,6 +2126,7 @@ async function selectVerifiedOrdinaryReplacement(
   const budgetCap = extractBudgetCap(userMessage);
   const requiredVisibleCodes = equivalentOnly ? extractExplicitSingleLetterCodes(userMessage) : [];
   const lookup = extractReplacementLookupKeys(userMessage);
+  const sourceCandidateIds = new Set<string>();
   let anchor: ProductRef | null = null;
 
   for (const article of lookup.articles) {
@@ -2070,6 +2135,7 @@ async function selectVerifiedOrdinaryReplacement(
       apiToken: ctx.catalogToken,
     }, ctx.cache);
     if (found.ok && found.results.length > 0) {
+      for (const product of found.results) sourceCandidateIds.add(product.id);
       anchor = found.results[0];
       break;
     }
@@ -2095,6 +2161,9 @@ async function selectVerifiedOrdinaryReplacement(
           ? found.results.filter((product) => productContainsSourceModel(product, [code]))
           : [];
       }
+      if (found.ok && normalizeCodeLike(code).length >= 5) {
+        for (const product of found.results) sourceCandidateIds.add(product.id);
+      }
       if (grounded.length === 0) continue;
       const structuralConstraints = extractCodeConstraints(userMessage);
       anchor = [...grounded].sort((left, right) => {
@@ -2107,6 +2176,16 @@ async function selectVerifiedOrdinaryReplacement(
   }
 
   if (!anchor?.leaf_category) {
+    send({
+      type: "tool_event",
+      tool: "search_catalog",
+      phase: "result",
+      summary: `Replacement preflight пропущен: ${
+        anchor
+          ? "у исходной карточки нет листовой категории"
+          : "исходная карточка не найдена"
+      }; кандидатов исходной семьи: ${sourceCandidateIds.size}`,
+    });
     steps.push({
       step: "v3_replacement_preflight_skipped",
       ms: Date.now() - t0,
@@ -2115,6 +2194,8 @@ async function selectVerifiedOrdinaryReplacement(
     return {
       handled: false,
       products: [],
+      source_candidate_ids: [
+      ...sourceCandidateIds],
       ...(anchor ? {} : { retryable_reason: "anchor_not_found" as const }),
     };
   }
@@ -2125,32 +2206,60 @@ async function selectVerifiedOrdinaryReplacement(
     openrouterApiKey: ctx.openrouterKey,
   });
   if (!discovery.ok) {
+    send({
+      type: "tool_event",
+      tool: "discover_category",
+      phase: "result",
+      summary:
+        `Replacement preflight пропущен: категория исходной карточки не подтверждена (${discovery.error_code})`,
+    });
     steps.push({
       step: "v3_replacement_preflight_skipped",
       ms: Date.now() - t0,
       meta: { reason: "leaf_discovery_failed", leaf_category: anchor.leaf_category, error_code: discovery.error_code },
     });
-    return { handled: false, products: [], retryable_reason: "leaf_discovery_failed" };
+    return { handled: false, products: [],
+      source_candidate_ids: [...sourceCandidateIds], retryable_reason: "leaf_discovery_failed" };
   }
 
   const axes = selectExplicitAnchorAxes(anchor, discovery.facets, userMessage, equivalentOnly ? 6 : 3);
   if (axes.length < 2) {
+    send({
+      type: "tool_event",
+      tool: "search_catalog",
+      phase: "result",
+      summary:
+        `Replacement preflight пропущен: подтверждено осей ${axes.length} из 2`,
+    });
     steps.push({
       step: "v3_replacement_preflight_skipped",
       ms: Date.now() - t0,
       meta: { reason: "insufficient_explicit_axes", leaf_category: anchor.leaf_category, axes },
     });
-    return { handled: false, products: [] };
+    return { handled: false, products: [],
+      source_candidate_ids: [...sourceCandidateIds] };
   }
 
   const sourceModel = extractModelCode(anchor.pagetitle);
-  const sourceModels = lookup.modelCodes.length > 0
+  const sourceModels = excludeMandatoryAxisCodesFromSourceModels( lookup.modelCodes.length > 0
     ? lookup.modelCodes
-    : sourceModel ? [sourceModel] : [];
+    : sourceModel ? [sourceModel] : [],
+    axes,
+  );
   const excludedIds = new Set([anchor.id]);
+  const mandatoryAxes: ReplacementAxis[] = axes
+    .filter((axis) => axis.mandatory)
+    .map((axis) => ({
+      key: axis.key,
+      caption: axis.caption,
+      values: [axis.value],
+      unit: null,
+      isDiameter: false,
+    }));
   const isCandidate = (product: ProductRef): boolean =>
     !excludedIds.has(product.id) &&
     !productContainsSourceModel(product, sourceModels) &&
+    productTitleSupportsMandatoryAxes(product.pagetitle, axes) &&
     requiredVisibleCodes.every((code) => {
       const titleCodes = new Set((product.pagetitle.match(/[\p{L}\p{N}]+/gu) ?? []).map(normalizeCodeLike));
       return titleCodes.has(code);
@@ -2248,7 +2357,10 @@ async function selectVerifiedOrdinaryReplacement(
     tool: "search_catalog",
     phase: "result",
     duration_ms: elapsed,
-    summary: `Replacement preflight: подтверждено ${selected.length}`,
+    summary: `Replacement preflight: подтверждено ${selected.length}; обязательные оси: ${
+        mandatoryAxes.map((axis) => `${axis.caption}=${axis.values.join("/")}`)
+          .join(", ") || "нет"
+      }`,
   });
 
   if (selected.length === 0) {
@@ -2259,7 +2371,8 @@ async function selectVerifiedOrdinaryReplacement(
     steps.push({
       step: "v3_replacement_preflight_empty",
       ms: Date.now() - t0,
-        meta: { anchor_id: anchor.id, leaf_category: anchor.leaf_category, axes, required_visible_codes: requiredVisibleCodes, equivalent_only: equivalentOnly, budget_cap: budgetCap, duration_ms: elapsed },
+        meta: { anchor_id: anchor.id, leaf_category: anchor.leaf_category, axes,
+        mandatory_axes: mandatoryAxes, required_visible_codes: requiredVisibleCodes, equivalent_only: equivalentOnly, budget_cap: budgetCap, duration_ms: elapsed },
     });
     return { handled: true, products: [] };
   }
@@ -2285,6 +2398,7 @@ async function selectVerifiedOrdinaryReplacement(
       source_model: sourceModel,
       leaf_category: anchor.leaf_category,
       axes,
+      mandatory_axes: mandatoryAxes,
       strict_total: strict.ok ? strict.total : 0,
       near_match: nearMatch,
       equivalent_only: equivalentOnly,
@@ -2787,12 +2901,14 @@ async function runExpertLoop(
   send: (ev: SseEvent) => void,
   steps: StepLog[],
   t0: number,
-  flags: { anchorFilterEnabled: boolean; relaxationHintsEnabled: boolean; criteriaGateEnabled: boolean },
+  flags: { anchorFilterEnabled: boolean; relaxationHintsEnabled: boolean; criteriaGateEnabled: boolean; },
   recentProductEvidence: RecentProductEvidence[] = [],
+  preExcludedReplacementIds: string[] = [],
 ): Promise<{ finalText: string; productsRendered: number; shownProductIds: string[] }> {
   const now = () => Date.now() - t0;
   let finalText = "";
   let productsRendered = 0;
+  const preExcludedReplacementIdSet = new Set(preExcludedReplacementIds);
   let firstAssistantText = "";
   // Вся проза модели за ход (включая заглушённые фрагменты) — источник истины
   // для Слоя 5: направление подбора берём из рассуждения, а не из сырого числа
@@ -2869,7 +2985,7 @@ async function runExpertLoop(
     }
     return { ids: guarded, compactCriteria, compactRemoved, explicitCompoundMarking, compoundRemoved, superlative };
   };
-  let reasoningBackedSearch: { ids: string[]; total: number; criteria: Criterion[] } | null = null;
+  let reasoningBackedSearch: { ids: string[]; total: number; criteria: Criterion[]; } | null = null;
   let agentPhase: AgentPhase = "open";
   // A successful discovery may still resolve a broad noun to the wrong live
   // sibling. Let the consultant correct that diagnosis exactly once, before a
@@ -2897,7 +3013,7 @@ async function runExpertLoop(
   // First non-empty semantic search in an ordinary selection turn. Unlike
   // freshSearch, this pool cannot be overwritten by later broad retries. It is
   // eligible for terminal recovery only after the same server criteria gate.
-  let semanticBackedSearch: { ids: string[]; total: number; criteria: Criterion[]; label: string; evidenceStrength: number } | null = null;
+  let semanticBackedSearch: { ids: string[]; total: number; criteria: Criterion[]; label: string; evidenceStrength: number; } | null = null;
   // Priority pool from v3_guard_split_fallback — survives across LLM steps.
   // Preferred over freshSearch in render fallback, because subsequent broad
   // by_query calls can overwrite freshSearch with off-target results
@@ -2918,7 +3034,8 @@ async function runExpertLoop(
   // обретают смысл только вместе с предметом текущего поиска.
   let lastSearchNoun = "";
   const ensureActiveSelectionTarget = (evidence: string, source: string) => {
-    if (activeSelectionTarget || !lastDiscover || intentMode !== "select") return activeSelectionTarget;
+    if (activeSelectionTarget || !lastDiscover || intentMode !== "select") { return activeSelectionTarget;
+    }
     const bootstrapped = bootstrapSelectionTargetFromDiscovery(
       `${evidence}\n${initialSelectionDiscoveryNoun ?? ""}`,
       lastDiscover.resolved_from ?? "",
@@ -3055,9 +3172,10 @@ async function runExpertLoop(
     result: ToolResult,
     anchorId: string | null,
     mode?: unknown,
-  ): { result: ToolResult; excluded: boolean; skipped?: "identification" | "anchor_only" } => {
+  ): { result: ToolResult; excluded: boolean; skipped?: "identification" | "anchor_only"; } => {
     if (!anchorId) return { result, excluded: false };
-    if (result.tool !== "search_catalog" || !result.ok) return { result, excluded: false };
+    if (result.tool !== "search_catalog" || !result.ok) { return { result, excluded: false };
+    }
     const m = typeof mode === "string" ? mode : "";
     if (m === "by_article" || m === "by_pagetitle") {
       return { result, excluded: false, skipped: "identification" };
@@ -3091,6 +3209,7 @@ async function runExpertLoop(
       for (const id of ids) {
         if (out.length >= n) return;
         if (seen.has(id) || shownIds.has(id)) continue;
+        if (preExcludedReplacementIdSet.has(id)) continue;
         if (excludeId && id === excludeId) continue;
         if (familyExclude.has(id)) continue;
         const p = ctx.cache.get(id);
@@ -3149,7 +3268,8 @@ async function runExpertLoop(
   };
 
   const tryCodeFacetRescue = async (allowBroadFallback = true): Promise<number> => {
-    if (!lastDiscover || codeConstraints.length === 0 || replacementIntent) return 0;
+    if (!lastDiscover || codeConstraints.length === 0 || replacementIntent) { return 0;
+    }
     const options: Record<string, string[]> = {};
     const matched: Array<{ code: string; facet_key: string; value: string }> = [];
     for (const code of codeConstraints) {
@@ -3173,12 +3293,14 @@ async function runExpertLoop(
     const priceIntent = detectPriceDirection(userMessage);
     if (priceIntent?.kind === "superlative") {
       if (priceIntent.direction === "cheaper") searchInput.sort_cheapest = true;
-      if (priceIntent.direction === "more_expensive") searchInput.sort_expensive = true;
+      if (priceIntent.direction === "more_expensive") { searchInput.sort_expensive = true;
+    }
     }
 
     const start = Date.now();
     let bridgeUsed: string | null = null;
-    let result = null as Awaited<ReturnType<typeof executeSearchCatalog>> | null;
+    let result = null as
+      | Awaited<ReturnType<typeof executeSearchCatalog>> | null;
     for (const query of semanticBridgeQueries()) {
       const bridge = await executeSearchCatalog({
         mode: "by_query",
@@ -3217,7 +3339,10 @@ async function runExpertLoop(
 
     const ids = result.results.map((p) => String(p.id));
     const filtered = filterByCompoundConstraints(ids);
-    const pool = filtered.ids.length > 0 ? filtered.ids : ids;
+    const rawPool = filtered.ids.length > 0 ? filtered.ids : ids;
+    // NOTE: «strict semantic» fast-path удалён (2026-06-29) — LLM сам решает по rule 3a/3f.
+    // Рендерим всё, что нашёл tryCodeFacetRescue; решение «честный отказ vs показать» — на LLM.
+    const pool = guardReplacementRenderIds(rawPool);
     // NOTE: «strict semantic» fast-path удалён (2026-06-29) — LLM сам решает по rule 3a/3f.
     // Рендерим всё, что нашёл tryCodeFacetRescue; решение «честный отказ vs показать» — на LLM.
     const render = executeRenderProducts({ product_ids: pool, total_available: result.total } as RenderProductsInput, ctx.cache);
@@ -3237,7 +3362,15 @@ async function runExpertLoop(
   const rememberReplacementAxes = (args: Record<string, unknown>) => {
     if (!replacementIntent) return;
     if (lastDiscover) {
-      for (const value of explicitReplacementModelValues(lastDiscover.facets, userMessage)) {
+      for (const value of explicitReplacementIdentityValues(
+          lastDiscover.facets,
+          userMessage,
+        )
+      ) {
+        replacementExcludedIdentityValues.add(value);
+      }
+      for (
+        const value of explicitReplacementModelValues(lastDiscover.facets, userMessage)) {
         replacementExcludedIdentityValues.add(value);
       }
     }
@@ -3248,6 +3381,128 @@ async function runExpertLoop(
       userMessage,
     );
     if (axes.length >= 2) replacementRequiredAxes = axes;
+  };
+
+  const portableReplacementRequirements = (): string[] => {
+    const portableCodes = effectiveCodeConstraints.filter(
+      isAnalogPortableToken,
+    );
+    const explicitSingleCodes = new Set(
+      extractExplicitSingleLetterCodes(
+        `${firstAssistantText}\n${assistantReasoning}`,
+      ),
+    );
+    const singleAxisCodes = replacementRequiredAxes
+      .flatMap((axis) => axis.values)
+      .filter((value) => {
+        const normalized = normalizeCodeLike(value);
+        return normalized.length === 1 && explicitSingleCodes.has(normalized);
+      });
+    return [...new Map(
+      [...portableCodes, ...singleAxisCodes].map((
+        value,
+      ) => [normalizeCodeLike(value), value]),
+    ).values()];
+  };
+
+  const productTitleMeetsPortableRequirements = (
+    product: ProductRef,
+    requirements: string[],
+  ): boolean => {
+    return productTitleSupportsPortableRequirements(
+      product.pagetitle,
+      requirements,
+    );
+  };
+
+  /**
+   * One replacement invariant for model renders and every terminal recovery.
+   * Retrieval paths may differ, but no path may emit a source-family card or
+   * a title that contradicts portable compatibility requirements.
+   */
+  const guardReplacementRenderIds = (ids: string[]): string[] => {
+    if (!replacementIntent) return ids;
+    const anchorId = getAnchorExcludeId();
+    const familyExclude = getFamilyExcludeSet();
+    const portableRequirements = portableReplacementRequirements();
+    let guarded = ids.filter((id) => {
+      if (
+        id === anchorId || familyExclude.has(id) ||
+        preExcludedReplacementIdSet.has(id)
+      ) return false;
+      const product = ctx.cache.get(id);
+      if (!product) return false;
+      if (
+        portableRequirements.length >= 2 &&
+        !productTitleMeetsPortableRequirements(product, portableRequirements)
+      ) return false;
+      return !productMatchesExcludedReplacementIdentity(
+        product,
+        replacementExcludedIdentityValues,
+      ) && !replacementSourceModelCodes.some((code) =>
+        productMatchesCodeConstraint(product, code)
+      );
+    });
+    if (replacementRequiredAxes.length >= 2) {
+      guarded = filterReplacementCompatibleIds(
+        guarded,
+        replacementRequiredAxes,
+        ctx.cache,
+        prioritySplitAxisIdSets,
+        equivalentReplacementRequested,
+        Boolean(replacementSplitFallback),
+      );
+    }
+    return guarded;
+  };
+
+  const attemptPortableReplacementTitleRecovery = async (
+    runArgs: Record<string, unknown>,
+  ): Promise<(SearchCatalogOk & { tool: "search_catalog" }) | null> => {
+    if (!replacementIntent || getAnchorExcludeId()) return null;
+    const requirements = portableReplacementRequirements();
+    if (requirements.length < 2) return null;
+    const category = typeof runArgs.category === "string"
+      ? runArgs.category
+      : undefined;
+    const recovered = await executeSearchCatalog(
+      {
+        mode: "by_query",
+        query: requirements.join(" "),
+        min_price: 1,
+        per_page: 50,
+        sort_cheapest: true,
+        ...(category ? { category } : {}),
+      },
+      { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+      ctx.cache,
+    );
+    if (!recovered.ok) return null;
+    const verified = recovered.results.filter((product) => {
+      if (
+        preExcludedReplacementIdSet.has(product.id) ||
+        productMatchesExcludedReplacementIdentity(
+          product,
+          replacementExcludedIdentityValues,
+        ) || replacementSourceModelCodes.some((code) =>
+          productMatchesCodeConstraint(product, code)
+        )
+      ) {
+        return false;
+      }
+      return productTitleMeetsPortableRequirements(product, requirements);
+    });
+    if (verified.length === 0) return null;
+    return {
+      ...recovered,
+      tool: "search_catalog",
+      results: verified.slice(0, 8),
+      total: verified.length,
+      warnings: [
+        ...(recovered.warnings ?? []),
+        `portable_replacement_title_recovery:${requirements.join("|")}`,
+      ],
+    };
   };
 
   const dialogueChoice = resolvePendingClarificationChoice(slots, userMessage) ?? resolveDialogueChoice(history, userMessage);
@@ -3599,7 +3854,8 @@ async function runExpertLoop(
             }
             send({ type: "delta", content: outText });
             finalText += outText;
-            if (isFirstTurn) firstAssistantText = outText.trim();
+            if (isFirstTurn) { firstAssistantText = outText.trim();
+            }
             steps.push({ step: "v3_assistant_text_final", ms: now(), meta: { chars: outText.length, fragment_index: step, text: outText } });
           } else {
             steps.push({ step: "v3_assistant_text_final_suppressed", ms: now(), meta: { fragment_index: step } });
@@ -3618,7 +3874,8 @@ async function runExpertLoop(
           }
           send({ type: "delta", content: resp.text });
           finalText += resp.text;
-          if (isFirstTurn) firstAssistantText = resp.text.trim();
+          if (isFirstTurn) { firstAssistantText = resp.text.trim();
+            }
           steps.push({
             step: intentMode === "inquire" ? "v3_assistant_text_inquire" : "v3_assistant_text_with_render",
             ms: now(),
@@ -3787,6 +4044,7 @@ async function runExpertLoop(
           if (
             !initialSelectionDiscoveryNoun &&
             intentMode === "select" &&
+            !replacementIntent &&
             typeof tc.args.noun === "string" &&
             tc.args.noun.trim()
           ) {
@@ -3800,8 +4058,9 @@ async function runExpertLoop(
           rememberCompoundRecoveryHint(tc.args.query);
           rememberCompoundRecoveryHint(tc.args.category);
           if (Array.isArray(tc.args.category_in)) {
-            for (const category of tc.args.category_in) rememberCompoundRecoveryHint(category);
+            for (const category of tc.args.category_in) { rememberCompoundRecoveryHint(category);
           }
+        }
         }
 
         // [removed per spec v2 2026-06-29] v3_guard_numeric_truncation:
@@ -3920,8 +4179,9 @@ async function runExpertLoop(
           tc.args = identityGuard.args;
           for (const removed of identityGuard.removed) {
             for (const value of removed.values) {
-              if (value.trim()) replacementExcludedIdentityValues.add(value.trim());
+              if (value.trim()) { replacementExcludedIdentityValues.add(value.trim());
             }
+          }
           }
           const guardedSearchCriteria: Criterion[] = effectiveKept.map(({ key, value }) => {
             const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
@@ -4034,6 +4294,28 @@ async function runExpertLoop(
         // идентифицировать по ID, значения brand/model, удалённые из фильтра
         // поиска, всё равно защищают финальную выдачу.
         if (tc.name === "render_products") {
+          if (
+            replacementIntent && lastDiscover &&
+            Array.isArray((tc.args as Record<string, unknown>).criteria)
+          ) {
+            const identityCriteria = dropImplicitReplacementIdentityCriteria(
+              (tc.args as Record<string, unknown>).criteria as Criterion[],
+              lastDiscover.facets,
+              userMessage,
+            );
+            for (const criterion of identityCriteria.removed) {
+              const values = Array.isArray(criterion.value)
+                ? criterion.value
+                : [criterion.value];
+              for (const value of values) {
+                if (String(value).trim()) {
+                  replacementExcludedIdentityValues.add(String(value).trim());
+                }
+              }
+            }
+            (tc.args as Record<string, unknown>).criteria =
+              identityCriteria.criteria;
+          }
           if (namedSeriesToken) {
             const originalIds = Array.isArray(tc.args.product_ids)
               ? (tc.args.product_ids as unknown[]).map(String)
@@ -4061,14 +4343,30 @@ async function runExpertLoop(
           // якорь (replace this specific SKU). Для category-level замены
           // ("заменить освещение в гостиной") — без якоря — гвард пропускается:
           // LLM сам выбирает релевантные товары из пула по обычной семантике.
+          const portableRequirements = anchorId
+            ? []
+            : portableReplacementRequirements();
+          // Strict axis-based filtering применяется ТОЛЬКО когда есть конкретный
+          // якорь (replace this specific SKU). Для category-level замены
+          // ("заменить освещение в гостиной") — без якоря — гвард пропускается:
+          // LLM сам выбирает релевантные товары из пула по обычной семантике.
           const hasAnchor = Boolean(anchorId) || familyExclude.size > 0;
-          const hasIdentityExclusions = replacementExcludedIdentityValues.size > 0 || replacementSourceModelCodes.length > 0;
+          const hasIdentityExclusions = replacementExcludedIdentityValues.size > 0 || replacementSourceModelCodes.length > 0 ||
+            preExcludedReplacementIdSet.size > 0 ||
+            portableRequirements.length >= 2;
           if (hasAnchor || hasIdentityExclusions) {
             const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
             let filtered = origIds.filter((id) => {
-              if (id === anchorId || familyExclude.has(id)) return false;
+              if (id === anchorId || familyExclude.has(id) ||
+                preExcludedReplacementIdSet.has(id)
+              ) return false;
               const product = ctx.cache.get(id);
               return !product || (
+                (portableRequirements.length < 2 ||
+                  productTitleMeetsPortableRequirements(
+                    product,
+                    portableRequirements,
+                  )) &&
                 !productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues) &&
                 !replacementSourceModelCodes.some((code) => productMatchesCodeConstraint(product, code))
               );
@@ -4084,6 +4382,7 @@ async function runExpertLoop(
                 Boolean(replacementSplitFallback),
               );
             }
+            filtered = guardReplacementRenderIds(filtered);
             if (filtered.length !== origIds.length) {
               (tc.args as Record<string, unknown>).product_ids = filtered;
               steps.push({
@@ -4190,7 +4489,8 @@ async function runExpertLoop(
         }
 
         let gateShortCircuit: ToolResult | null = null;
-        let selfRequery: { query: string; ids: string[]; total: number } | null = null;
+        let selfRequery:
+          | { query: string; ids: string[]; total: number } | null = null;
 
         // Product-class contract: the model's own initial interpretation is a
         // mandatory render input. It is checked against live catalog evidence
@@ -4669,6 +4969,22 @@ async function runExpertLoop(
             userBackedSearchCriteria,
             Boolean(namedSeriesToken),
           );
+          if (replacementIntent && lastDiscover) {
+            const identityCriteria = dropImplicitReplacementIdentityCriteria(
+              criteria,
+              lastDiscover.facets,
+              userMessage,
+            );
+            criteria = identityCriteria.criteria;
+            (tc.args as Record<string, unknown>).criteria = criteria;
+            if (identityCriteria.removed.length > 0) {
+              steps.push({
+                step: "v3_guard_replacement_identity_criteria_removed",
+                ms: now(),
+                meta: { removed: identityCriteria.removed },
+              });
+            }
+          }
           let protectedReasoningCriteria = reasoningProjectedSearchCriteria.map((criterion) => ({ ...criterion }));
           if (lastDiscover && !pairedTitleContractProven) {
             const projected = projectReasoningRangeCriteria(
@@ -5082,7 +5398,7 @@ async function runExpertLoop(
                 try {
                   const rqResult = await runTool("search_catalog", { mode: "by_query", query: rq, per_page: 10 }, ctx);
                   if (rqResult.ok) {
-                    const r3 = rqResult as unknown as { results: Array<{ id: string; price: number }>; total: number };
+                    const r3 = rqResult as unknown as { results: Array<{ id: string; price: number }>; total: number; };
                     const rqProducts = (r3.results ?? []).filter((p) => p && Number.isFinite(p.price) && p.price > 0);
                     const rqFullProducts = rqProducts
                       .map((p) => ctx.cache.get(String(p.id)))
@@ -5096,7 +5412,8 @@ async function runExpertLoop(
                       : [];
                     const rqIds = intersectCandidateProofs(gated.passed_ids, priorProofs).ids;
                     selfRequery = { query: rq, ids: rqIds, total: Number(r3.total) || rqProducts.length };
-                    if (rqIds.length > 0) freshSearch = { tool: "criteria_self_requery", ids: rqIds, total: selfRequery.total };
+                    if (rqIds.length > 0) { freshSearch = { tool: "criteria_self_requery", ids: rqIds, total: selfRequery.total };
+                  }
                   } else {
                     selfRequery = { query: rq, ids: [], total: 0 };
                   }
@@ -5212,7 +5529,8 @@ async function runExpertLoop(
             per_page: Math.max(5, Math.min(10, Number(requested.per_page) || 8)),
           };
           for (const key of ["min_price", "max_price", "sort_cheapest", "sort_expensive"] as const) {
-            if (requested[key] !== undefined) exactSeriesArgs[key] = requested[key];
+            if (requested[key] !== undefined) { exactSeriesArgs[key] = requested[key];
+          }
           }
           tc.args = exactSeriesArgs;
           steps.push({
@@ -5249,9 +5567,10 @@ async function runExpertLoop(
         }
 
         if (tc.name === "jargon_recover_catalog" && result.ok) {
-          const jargonEvidence = result as { matched_query?: string | null; candidates?: string[] };
+          const jargonEvidence = result as { matched_query?: string | null; candidates?: string[]; };
           rememberCompoundRecoveryHint(jargonEvidence.matched_query);
-          for (const candidate of jargonEvidence.candidates ?? []) rememberCompoundRecoveryHint(candidate);
+          for (const candidate of jargonEvidence.candidates ?? []) { rememberCompoundRecoveryHint(candidate);
+        }
         }
 
         // A jargon lookup may load relevant base products and then return zero
@@ -5311,7 +5630,7 @@ async function runExpertLoop(
           (tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") &&
           result.ok
         ) {
-          const catalogResult = result as SearchCatalogOk & { tool: "search_catalog"; warnings?: string[] };
+          const catalogResult = result as SearchCatalogOk & { tool: "search_catalog"; warnings?: string[]; };
           const grounded = filterProductsByNamedSeries(catalogResult.results ?? [], namedSeriesToken);
           if (grounded.length > 0) {
             seriesGroundingSatisfied = true;
@@ -5365,7 +5684,8 @@ async function runExpertLoop(
             }> = [];
             for (const query of tokenQueries) {
               const recovered = await runTool("search_catalog", { ...runArgs, query }, ctx);
-              if (!recovered.ok || recovered.tool !== "search_catalog") continue;
+              if (!recovered.ok || recovered.tool !== "search_catalog") { continue;
+              }
               const titleBacked = recovered.results.filter((product) => titleContainsLiteralToken(product.pagetitle, query));
               if (titleBacked.length === 0) continue;
               tokenAttempts.push({
@@ -5518,7 +5838,8 @@ async function runExpertLoop(
               total: acceptedProducts.length,
               warnings: [...(recovered.warnings ?? []), `grounded_compound_recovery:${query}`],
             };
-            for (const key of ["options", "category", "category_in"] as const) delete runArgs[key];
+            for (const key of ["options", "category", "category_in"] as const) { delete runArgs[key];
+            }
             runArgs.mode = "by_query";
             runArgs.query = query;
             runArgs.per_page = 20;
@@ -5559,12 +5880,13 @@ async function runExpertLoop(
           result.ok &&
           result.tool === "search_catalog"
         ) {
-          const catalogResult = result as SearchCatalogOk & { tool: "search_catalog" };
+          const catalogResult = result as SearchCatalogOk & { tool: "search_catalog"; };
           const inferredIdentity = inferReplacementIdentityValues(
             userMessage,
             catalogResult.results.map((product) => product.pagetitle),
           );
-          for (const value of inferredIdentity) replacementExcludedIdentityValues.add(value);
+          for (const value of inferredIdentity) { replacementExcludedIdentityValues.add(value);
+          }
           if (inferredIdentity.length > 0) {
             steps.push({
               step: "v3_replacement_identity_inferred_from_pool",
@@ -5580,10 +5902,14 @@ async function runExpertLoop(
           result.tool === "search_catalog" &&
           runArgs.mode !== "by_article" &&
           runArgs.mode !== "by_pagetitle" &&
-          replacementExcludedIdentityValues.size > 0
+          (
+          replacementExcludedIdentityValues.size > 0 ||
+            preExcludedReplacementIdSet.size > 0
+        )
         ) {
-          const catalogResult = result as SearchCatalogOk & { tool: "search_catalog" };
+          const catalogResult = result as SearchCatalogOk & { tool: "search_catalog"; };
           const filteredResults = catalogResult.results.filter((product) =>
+            !preExcludedReplacementIdSet.has(product.id) &&
             !productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues) &&
             !replacementSourceModelCodes.some((code) => productMatchesCodeConstraint(product, code))
           );
@@ -5604,6 +5930,29 @@ async function runExpertLoop(
               step: "v3_replacement_identity_excluded",
               ms: now(),
               meta: { removed: removedCount, remaining: filteredResults.length },
+            });
+          }
+        }
+        if (
+          replacementIntent && tc.name === "search_catalog" && result.ok &&
+          result.tool === "search_catalog" &&
+          Number((result as SearchCatalogOk).total) <= 0 &&
+          runArgs.mode !== "by_article" && runArgs.mode !== "by_pagetitle"
+        ) {
+        const recovered = await attemptPortableReplacementTitleRecovery(
+            runArgs,
+          );
+          if (recovered) {
+            result = recovered;
+            steps.push({
+              step: "v3_portable_replacement_title_recovery",
+              ms: now(),
+              meta: {
+                query: recovered.warnings?.find((warning) =>
+                  warning.startsWith("portable_replacement_title_recovery:")
+                ) ?? null,
+                verified: recovered.results.length,
+              },
             });
           }
         }
@@ -5650,6 +5999,8 @@ async function runExpertLoop(
             const anchorId = getAnchorExcludeId();
             const excludedIds = getFamilyExcludeSet();
             if (anchorId) excludedIds.add(anchorId);
+            for (
+            const id of preExcludedReplacementIdSet) excludedIds.add(id);
             const splitAxisSets = new Map(
               split.axes.map((axis) => [axis.axis, new Set(axis.ids)] as const),
             );
@@ -5694,7 +6045,7 @@ async function runExpertLoop(
                   candidates: ranked,
                 };
               }
-              const catalogResult = result as SearchCatalogOk & { tool: "search_catalog"; warnings?: string[] };
+              const catalogResult = result as SearchCatalogOk & { tool: "search_catalog"; warnings?: string[]; };
               const recoveryKind = equivalentReplacementRequested
                 ? "replacement_equivalent_split_recovery"
                 : "replacement_split_fallback";
@@ -5776,10 +6127,11 @@ async function runExpertLoop(
               const explicit = guardSearchFilters(
                 { mode: "by_filter" },
                 lastDiscover.facets,
-                userMessage,
+                `${
+                userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
                 userMessage,
               );
-              const explicitCriteria: Criterion[] = explicit.user_backed.map(({ key, value }) => {
+              const explicitCriteria: Criterion[] = explicit.kept.map(({ key, value }) => {
                 const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
                 return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
               });
@@ -6238,7 +6590,8 @@ async function runExpertLoop(
     });
 
     const attemptTerminalJargonRecovery = async (source: string) => {
-      if (!terminalDiscover || !activeSelectionTarget || !source.trim()) return null;
+      if (!terminalDiscover || !activeSelectionTarget || !source.trim()) { return null;
+      }
       const terminalCriteria = resolveRenderCriteria(
         [],
         latestRenderCriteria,
@@ -6246,7 +6599,8 @@ async function runExpertLoop(
         Boolean(namedSeriesToken),
       );
       const modifiers = terminalCriteria.flatMap((criterion) => {
-        if ((criterion.level ?? "A") !== "A" || criterion.op !== "eq") return [];
+        if ((criterion.level ?? "A") !== "A" || criterion.op !== "eq") { return [];
+        }
         const values = Array.isArray(criterion.value) ? criterion.value : [criterion.value];
         return values.map(String).map((value) => value.trim()).filter(Boolean);
       });
@@ -6263,7 +6617,8 @@ async function runExpertLoop(
         phase: "result",
         summary: summariseToolResult("jargon_recover_catalog", jargonResult),
       });
-      if (!jargonResult.ok || jargonResult.tool !== "jargon_recover_catalog") return null;
+      if (!jargonResult.ok || jargonResult.tool !== "jargon_recover_catalog") { return null;
+      }
       const matchedQuery = String(jargonResult.matched_query ?? "").trim();
       const candidateProducts = jargonResult.results
         .map((product) => ctx.cache.get(String(product.id)))
@@ -6272,13 +6627,14 @@ async function runExpertLoop(
         ));
       const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, candidateProducts);
       const gate = applyCriteriaGate(candidateProducts, terminalCriteria);
-      const safeIds = filterProductIdsByBudgetCap(
+      const safeIds = guardReplacementRenderIds( filterProductIdsByBudgetCap(
         candidateProducts
           .map((product) => product.id)
           .filter((id) => targetReport.passed_ids.includes(id) && gate.passed_ids.includes(id)),
         ctx.cache,
         extractBudgetCap(userMessage),
-      ).ids.slice(0, 10);
+      ).ids,
+      ).slice(0, 10);
       if (safeIds.length === 0) return null;
       const rendered = await runTool("render_products", {
         product_ids: safeIds,
@@ -6399,7 +6755,8 @@ async function runExpertLoop(
               }
             }
           }
-          safeIds = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage)).ids.slice(0, 10);
+          safeIds = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage)).ids;
+          safeIds = guardReplacementRenderIds(safeIds).slice(0, 10);
           send({
             type: "tool_event",
             tool: "search_catalog",
@@ -6413,7 +6770,7 @@ async function runExpertLoop(
               total_available: recovered.total,
             }, ctx);
             if (rescued.ok) {
-              const rendered = rescued as { markdown: string; rendered_count: number };
+              const rendered = rescued as { markdown: string; rendered_count: number; };
               for (const id of safeIds) shownIds.add(id);
               send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: recovered.total });
               productsRendered += rendered.rendered_count;
@@ -6452,7 +6809,8 @@ async function runExpertLoop(
         ])) {
           attemptedQueries.push(query);
           const queryResult = await runTool("search_catalog", { mode: "by_query", query, per_page: 50 }, ctx);
-          if (!queryResult.ok || queryResult.tool !== "search_catalog") continue;
+          if (!queryResult.ok || queryResult.tool !== "search_catalog") { continue;
+          }
           totalAvailable = Math.max(totalAvailable, queryResult.total);
           const queryProducts = queryResult.results
             .map((product) => ctx.cache.get(String(product.id)))
@@ -6474,7 +6832,8 @@ async function runExpertLoop(
           }
           if (recoveredIds.length >= 5) break;
         }
-        const budgetSafeIds = filterProductIdsByBudgetCap(recoveredIds, ctx.cache, extractBudgetCap(userMessage)).ids;
+        const budgetSafeIds = guardReplacementRenderIds( filterProductIdsByBudgetCap(recoveredIds, ctx.cache, extractBudgetCap(userMessage)).ids,
+        );
         send({
           type: "tool_event",
           tool: "search_catalog",
@@ -6488,7 +6847,7 @@ async function runExpertLoop(
             total_available: totalAvailable || budgetSafeIds.length,
           }, ctx);
           if (rescued.ok) {
-            const rendered = rescued as { markdown: string; rendered_count: number };
+            const rendered = rescued as { markdown: string; rendered_count: number; };
             for (const id of budgetSafeIds) shownIds.add(id);
             send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: totalAvailable || budgetSafeIds.length });
             productsRendered += rendered.rendered_count;
@@ -6561,7 +6920,9 @@ async function runExpertLoop(
         const anchorId = getAnchorExcludeId();
         const familyExclude = getFamilyExcludeSet();
         safeIds = safeIds.filter((id) => {
-          if (id === anchorId || familyExclude.has(id)) return false;
+          if (id === anchorId || familyExclude.has(id) ||
+            preExcludedReplacementIdSet.has(id)
+          ) return false;
           const product = ctx.cache.get(id);
           if (
             !product ||
@@ -6582,6 +6943,7 @@ async function runExpertLoop(
       safeIds = guardVisibleCardinality(safeIds).ids;
       const budgetGuard = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage));
       safeIds = budgetGuard.ids;
+      safeIds = guardReplacementRenderIds(safeIds);
       if (budgetGuard.dropped > 0) {
         steps.push({
           step: "v3_guard_budget_cap_recovery",
@@ -6596,7 +6958,7 @@ async function runExpertLoop(
           total_available: reasoningBackedSearch.total,
         }, ctx);
         if (rescued.ok) {
-          const rendered = rescued as { markdown: string; rendered_count: number };
+          const rendered = rescued as { markdown: string; rendered_count: number; };
           for (const id of safeIds.slice(0, 5)) shownIds.add(id);
           send({
             type: "products_block",
@@ -6756,6 +7118,7 @@ async function runExpertLoop(
       safeIds = safeIds.filter((id) => groundedIds.has(id) && targetReport.passed_ids.includes(id));
       const budgetGuard = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage));
       safeIds = budgetGuard.ids;
+      safeIds = guardReplacementRenderIds(safeIds);
       if (budgetGuard.dropped > 0) {
         steps.push({
           step: "v3_guard_budget_cap_recovery",
@@ -6770,7 +7133,7 @@ async function runExpertLoop(
           total_available: semanticBackedSearch.total,
         }, ctx);
         if (rescued.ok) {
-          const rendered = rescued as { markdown: string; rendered_count: number };
+          const rendered = rescued as { markdown: string; rendered_count: number; };
           for (const id of safeIds.slice(0, 5)) shownIds.add(id);
           send({
             type: "products_block",
@@ -6843,7 +7206,8 @@ async function runExpertLoop(
 // ─── HTTP handler ───────────────────────────────────────────────────────────
 
 Deno.serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS") { return new Response("ok", { headers: corsHeaders });
+  }
   if (req.method !== "POST") {
     return new Response("Method not allowed", {
       status: 405,
@@ -6957,7 +7321,7 @@ Deno.serve(async (req) => {
       // Поэтому регистрируем abort-listener сразу и заворачиваем финализацию в EdgeRuntime.waitUntil,
       // чтобы UPDATE chat_request_logs гарантированно ушёл в БД.
       let logFinalized = false;
-      const rt = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void } }).EdgeRuntime;
+      const rt = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void }; }).EdgeRuntime;
 
       // Async-версия для штатного finally: дожидаемся UPDATE до закрытия стрима,
       // чтобы воркер не уехал в idle/shutdown до завершения запроса к PostgREST.
@@ -7220,7 +7584,8 @@ Deno.serve(async (req) => {
               anchorFilterEnabled: settings.v3_anchor_filter_enabled,
               relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
               criteriaGateEnabled: true,
-            }, recentProductEvidence);
+            }, recentProductEvidence,
+              direct.source_candidate_ids ?? []);
             productsCount = out.productsRendered;
             const shownProducts = out.shownProductIds
               .map((id) => ctx.cache.get(id))

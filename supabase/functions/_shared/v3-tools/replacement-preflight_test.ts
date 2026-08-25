@@ -1,5 +1,9 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { extractExplicitSingleLetterCodes, extractReplacementLookupKeys, productContainsSourceModel, selectExplicitAnchorAxes } from "./replacement-preflight.ts";
+import {
+  excludeMandatoryAxisCodesFromSourceModels, extractExplicitSingleLetterCodes, extractReplacementLookupKeys,
+  portableTechnicalCodeMatchesText, productContainsSourceModel,
+  productTitleSupportsMandatoryAxes,
+  productTitleSupportsPortableRequirements, selectExplicitAnchorAxes } from "./replacement-preflight.ts";
 import type { ProductRef } from "./types.ts";
 
 const anchor: ProductRef = {
@@ -98,4 +102,138 @@ Deno.test("standalone code after a parameter label becomes visible replacement e
     ["c"],
   );
   assertEquals(extractExplicitSingleLetterCodes("бренд CHINT"), []);
+});
+
+Deno.test("explicit live technical codes become mandatory replacement axes", () => {
+  const product: ProductRef = {
+    id: "anchor",
+    pagetitle: "Лампа ECO T75 таблетка GX53 10Вт",
+    vendor: "Vendor",
+    price: 900,
+    stock: "in_stock",
+    short_traits: ["Тип цоколя: GX53", "Форма колбы: T75", "Мощность: 10"],
+  };
+  const axes = selectExplicitAnchorAxes(product, [
+    {
+      key: "socket",
+      caption: "Тип цоколя",
+      type: "string",
+      unit: null,
+      values: [{ value: "GX53", products_count: 30 }],
+    },
+    {
+      key: "shape",
+      caption: "Форма колбы",
+      type: "string",
+      unit: null,
+      values: [{ value: "T75", products_count: 4 }],
+    },
+    {
+      key: "power",
+      caption: "Мощность",
+      type: "number",
+      unit: "Вт",
+      values: [{ value: "10", products_count: 2 }],
+    },
+  ], "Подбери аналоги для лампы ECO T75 таблетка GX53");
+
+  assertEquals(axes, [
+    {
+      key: "shape",
+      caption: "Форма колбы",
+      value: "T75",
+      total: 4,
+      mandatory: true,
+    },
+    {
+      key: "socket",
+      caption: "Тип цоколя",
+      value: "GX53",
+      total: 30,
+      mandatory: true,
+    },
+    { key: "power", caption: "Мощность", value: "10", total: 2 },
+  ]);
+});
+
+Deno.test("portable technical codes compare as whole codes, not by their digits", () => {
+  assertEquals(
+    portableTechnicalCodeMatchesText("GX53", "Лампа NLL-GX53-13-230"),
+    true,
+  );
+  assertEquals(
+    portableTechnicalCodeMatchesText(
+      "GX53",
+      "Лампа NLL-GX70-13-230; поток 1053 лм",
+    ),
+    false,
+  );
+  assertEquals(portableTechnicalCodeMatchesText("IP 44", "защита IP44"), true);
+  assertEquals(portableTechnicalCodeMatchesText("C16", "автомат С16"), true);
+});
+
+Deno.test("near replacement cannot relax a mandatory title code", () => {
+  const axes = [
+    {
+      key: "socket",
+      caption: "Тип цоколя",
+      value: "GX53",
+      total: 30,
+      mandatory: true as const,
+    },
+    { key: "power", caption: "Мощность", value: "12", total: 8 },
+  ];
+  assertEquals(
+    productTitleSupportsMandatoryAxes("Лампа NLL-GX53-12-230", axes),
+    true,
+  );
+  assertEquals(
+    productTitleSupportsMandatoryAxes(
+      "Лампа NLL-GX70-12-230; поток 1053 лм",
+      axes,
+    ),
+    false,
+  );
+});
+
+Deno.test("a live compatibility code is not also a source-model exclusion", () => {
+  const axes = [
+    {
+      key: "socket",
+      caption: "Тип цоколя",
+      value: "GX53",
+      total: 30,
+      mandatory: true as const,
+    },
+    { key: "power", caption: "Мощность", value: "12", total: 8 },
+  ];
+  assertEquals(
+    excludeMandatoryAxisCodesFromSourceModels(["GX53", "DN027B"], axes),
+    ["DN027B"],
+  );
+});
+
+Deno.test("final replacement title contract requires every portable code", () => {
+  const requirements = ["1P", "16A", "C"];
+  assertEquals(
+    productTitleSupportsPortableRequirements(
+      "Автоматический выключатель M06N 1P 16A C ARMAT ИЭК",
+      requirements,
+    ),
+    true,
+  );
+  assertEquals(
+    productTitleSupportsPortableRequirements(
+      "Авт.выкл-ль iC60N 3П 16А С /A9F79316/",
+      requirements,
+    ),
+    false,
+  );
+  assertEquals(
+    productTitleSupportsPortableRequirements(
+      "Авт.выкл-ль iC60N 1П 32А С /A9F79132/",
+      requirements,
+    ),
+    false,
+  );
 });

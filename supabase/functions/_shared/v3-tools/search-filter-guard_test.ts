@@ -1,11 +1,13 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   dropAffirmativeBooleanFilters,
+  dropImplicitReplacementIdentityCriteria,
   dropImplicitReplacementIdentityFilters,
+  explicitReplacementIdentityValues,
   explicitReplacementModelValues,
+  guardSearchFilters,
   inferReplacementIdentityValues,
   productMatchesExcludedReplacementIdentity,
-  guardSearchFilters,
 } from "./search-filter-guard.ts";
 
 const facets = [
@@ -369,4 +371,87 @@ Deno.test("analog render excludes identity values removed from search even witho
     vendor: "CHINT",
     short_traits: ["Характеристика: C"],
   }, ["GENERICA"]), false);
+});
+
+Deno.test("analog render criteria drop source brand and collection", () => {
+  const result = dropImplicitReplacementIdentityCriteria([
+    { key: "Количество полюсов", value: "1" },
+    { key: "Коллекция", value: "Acti9" },
+    { key: "Бренд", value: "Schneider Electric" },
+    { key: "Номинальный ток", value: "16" },
+  ], [
+    { key: "poles", caption: "Количество полюсов", values: [{ value: "1" }] },
+    { key: "collection", caption: "Коллекция", values: [{ value: "Acti9" }] },
+    {
+      key: "brand",
+      caption: "Бренд",
+      values: [{ value: "Schneider Electric" }],
+    },
+    { key: "current", caption: "Номинальный ток", values: [{ value: "16" }] },
+  ], "Подбери более дешевые аналоги Schneider Electric Acti9 1P 16A C");
+
+  assertEquals(result.criteria, [
+    { key: "Количество полюсов", value: "1" },
+    { key: "Номинальный ток", value: "16" },
+  ]);
+  assertEquals(result.removed.map((criterion) => criterion.key), [
+    "Коллекция",
+    "Бренд",
+  ]);
+});
+
+Deno.test("explicit reasoning completes omitted live technical filters but not identity", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { collection: ["Acti9"] } },
+    [
+      {
+        key: "poles",
+        caption: "Количество полюсов",
+        values: [{ value: "1" }, { value: "2" }, { value: "3" }],
+      },
+      {
+        key: "current",
+        caption: "Номинальный ток",
+        values: [{ value: "10" }, { value: "16" }, { value: "25" }],
+      },
+      {
+        key: "curve",
+        caption: "Характеристика срабатывания",
+        values: [{ value: "B" }, { value: "C" }, { value: "D" }],
+      },
+      { key: "collection", caption: "Коллекция", values: [{ value: "Acti9" }] },
+    ],
+    "Ключевые параметры: 1 полюс, номинальный ток 16 А, характеристика срабатывания C. Коллекция Acti9 — источник.",
+    "Подбери аналоги Schneider Electric Acti9 1P 16A C",
+  );
+
+  assertEquals(result.args.options, {
+    collection: ["Acti9"],
+    poles: ["1"],
+    current: ["16"],
+    curve: ["C"],
+  });
+  assertEquals(result.inferred, [
+    { key: "curve", value: "C" },
+    { key: "poles", value: "1" },
+    { key: "current", value: "16" },
+  ]);
+});
+
+Deno.test("ordinary replacement excludes explicitly named source brand and collection", () => {
+  assertEquals(
+    explicitReplacementIdentityValues([
+      {
+        key: "brand",
+        caption: "Бренд",
+        values: [{ value: "Schneider Electric" }, { value: "IEK" }],
+      },
+      {
+        key: "collection",
+        caption: "Коллекция",
+        values: [{ value: "Acti9" }, { value: "EASY9" }],
+      },
+    ], "Подбери аналоги Schneider Electric Acti9 1P 16A C"),
+    ["Schneider Electric", "Acti9"],
+  );
 });
