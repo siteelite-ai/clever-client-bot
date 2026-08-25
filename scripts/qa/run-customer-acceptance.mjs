@@ -48,6 +48,8 @@ const repeatOverrideRaw = process.argv.find((arg) => arg.startsWith('--repeat=')
 const repeatOverride = repeatOverrideRaw ? Number(repeatOverrideRaw) : null;
 const compactOutput = process.argv.includes('--compact');
 const minimalOutput = process.argv.includes('--minimal');
+const failuresOnlyOutput = process.argv.includes('--failures-only');
+const stopOnFailure = process.argv.includes('--stop-on-failure');
 const selected = onlyIds?.length ? suite.cases.filter((item) => onlyIds.includes(item.id)) : suite.cases;
 const missingIds = onlyIds?.filter((id) => !selected.some((item) => item.id === id)) ?? [];
 if (missingIds.length > 0) throw new Error(`Unknown case: ${missingIds.join(', ')}`);
@@ -349,10 +351,12 @@ export async function main() {
       const turns = [];
       for (const turn of testCase.turns) turns.push(await runTurn(turn, state));
       caseResult.repeats.push({ run, session_id: state.sessionId, turns, passed: turns.every((turn) => turn.passed) });
+      if (stopOnFailure && !caseResult.repeats.at(-1).passed) break;
     }
     caseResult.passed = caseResult.repeats.every((run) => run.passed);
     report.cases.push(caseResult);
     process.stderr.write(`${testCase.id}: ${caseResult.passed ? 'PASS' : 'FAIL'}\n`);
+    if (stopOnFailure && !caseResult.passed) break;
   }
 
   report.finished_at = new Date().toISOString();
@@ -399,6 +403,14 @@ export async function main() {
         })),
       }
     : report;
+  if (failuresOnlyOutput) {
+    output.cases = output.cases
+      .filter((testCase) => !testCase.passed)
+      .map((testCase) => ({
+        ...testCase,
+        repeats: testCase.repeats.filter((repeat) => !repeat.passed),
+      }));
+  }
   console.log(JSON.stringify(output, null, 2));
   if (!report.passed) process.exitCode = 1;
 }
