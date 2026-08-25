@@ -239,6 +239,7 @@ Deno.test("agent phase: permits one new-noun correction only before search progr
   assert(shouldAllowCorrectiveDiscovery(base));
   assert(!shouldAllowCorrectiveDiscovery({ ...base, alreadyUsed: true }));
   assert(!shouldAllowCorrectiveDiscovery({ ...base, hasFreshSearch: true }));
+  assert(!shouldAllowCorrectiveDiscovery({ ...base, previousCategoryGrounded: true }));
   assert(!shouldAllowCorrectiveDiscovery({ ...base, requestedNoun: "кабель" }));
   assert(!shouldAllowCorrectiveDiscovery({ ...base, phase: "open" }));
   assert(toolNamesForAgentPhase("search_after_discovery", {

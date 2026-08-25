@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldFinalizePendingSelection } from "./selection-search-recovery.ts";
+import { buildAnchorMissingRecoveryQueries, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldFinalizePendingSelection } from "./selection-search-recovery.ts";
 
 const facets = [
   { key: "feature", caption: "Функция", type: "string", unit: null, values: [{ value: "Да" }] },
@@ -128,4 +128,21 @@ Deno.test("reasoning query plan is deduplicated, specific-first and bounded", ()
     "Detailed model owned class with trait",
     "Detailed model owned class",
   ]);
+});
+
+Deno.test("missing-anchor recovery is derived only from live grounded taxonomy", () => {
+  const recovery = buildAnchorMissingRecoveryQueries(
+    {
+      category: { pagetitle: "Power devices" },
+      leaf_categories: [
+        { pagetitle: "Portable power devices" },
+        { pagetitle: "Industrial power devices" },
+      ],
+    },
+    "The consultant selected portable power devices for this request",
+    ["100W"],
+  );
+  assertEquals(recovery.targets, ["Portable power devices"]);
+  assertEquals(recovery.queries[0], "Portable power devices 100W");
+  assert(recovery.queries.length <= 4);
 });

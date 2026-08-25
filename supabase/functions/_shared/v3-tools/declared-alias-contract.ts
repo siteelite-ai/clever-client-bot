@@ -45,6 +45,9 @@ const POST_NOMINAL_STOP = new Set([
   "для", "под", "с", "со", "без", "на", "в", "во", "из", "к", "по", "до", "от",
   "есть", "имеется", "нужен", "нужна", "нужно", "нужны", "покажи", "найди", "ищу",
   "самый", "самая", "дешевый", "дешевая", "дешевые",
+  // Relational markers introduce a separately parsed entity; they are not a
+  // customer nickname for the product class itself.
+  "серия", "серии", "серий", "коллекция", "коллекции", "линейка", "линейки",
 ]);
 
 function inflectionStem(token: string): string {

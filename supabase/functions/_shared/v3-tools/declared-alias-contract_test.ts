@@ -54,4 +54,5 @@ Deno.test("a post-nominal customer qualifier is lexical evidence, not applicatio
   assertEquals(extractPostNominalCatalogQualifier("найди термоусадку 12 мм", "термоусадка"), null);
   assertEquals(extractPostNominalCatalogQualifier("покажи прожекторы мощностью от 100 Вт", "прожекторы"), null);
   assertEquals(extractPostNominalCatalogQualifier("нужен провод длиной 50 м", "провод"), null);
+  assertEquals(extractPostNominalCatalogQualifier("покажи розетки серии Гармония", "розетки"), null);
 });

@@ -26,7 +26,7 @@ import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/cr
 import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, hasMeasuredSelectionRequirement, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
-import { buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
+import { buildAnchorMissingRecoveryQueries, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract } from "../_shared/v3-tools/selection-actionability.ts";
 import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
@@ -74,6 +74,14 @@ import {
   selectGroundedTokenRecoveryCandidate,
   titleContainsLiteralToken,
 } from "../_shared/v3-tools/category-reasoning-guard.ts";
+import {
+  buildCanonicalEntityRecoveryInput,
+  buildFacetConsistencyRecoveryInput,
+  classifyCatalogSearchOutcome,
+  type CatalogSearchState,
+  findNamedSeriesFacetEvidence,
+  searchInputUsesNamedSeriesFacet,
+} from "../_shared/v3-tools/catalog-search-outcome.ts";
 import { detectUserIntentMode, requiresCatalogGroundingForInquiry, resolveNamedSeriesToken, shouldSuppressNegativeSuitabilityCard } from "../_shared/v3-tools/intent-mode.ts";
 import {
   buildDeterministicEvidenceAnswer,
@@ -116,6 +124,11 @@ import {
   productTitleSupportsPortableRequirements,
   selectExplicitAnchorAxes,
 } from "../_shared/v3-tools/replacement-preflight.ts";
+import {
+  buildReplacementSelectionPlan,
+  type ReplacementSelectionPlan,
+  selectionPlanSystemHint,
+} from "../_shared/v3-tools/selection-plan.ts";
 import {
   classifyHouseholdMotionLightRequest,
   HOUSEHOLD_MOTION_LIGHT_EMPTY,
@@ -346,8 +359,14 @@ function summariseToolResult(name: string, r: ToolResult): string {
   if (name === "search_catalog" || name === "jargon_recover_catalog") { return `найдено ${(r as { total: number }).total}`;
   }
   if (name === "discover_category") {
-    const x = r as unknown as { category?: { total_products?: number }; facets?: unknown[]; };
-    return `категория: ${x.category?.total_products ?? 0} тов., фасетов ${x.facets?.length ?? 0}`;
+    const x = r as unknown as {
+      category?: { pagetitle?: string; total_products?: number };
+      facets?: unknown[];
+      leaf_categories?: Array<{ pagetitle?: string }>;
+    };
+    const title = x.category?.pagetitle?.trim();
+    const leafCount = x.leaf_categories?.length ?? 0;
+    return `категория${title ? ` «${title}»` : ""}: ${x.category?.total_products ?? 0} тов., фасетов ${x.facets?.length ?? 0}, листьев ${leafCount}`;
   }
   if (name === "lookup_knowledge") { return `${(r as { hits: unknown[] }).hits.length} фрагментов`;
   }
@@ -2113,7 +2132,8 @@ const HOUSEHOLD_MOTION_LIGHT_CATALOG_QUERIES = [
 interface DirectReplacementResult {
   handled: boolean;
   products: ProductFull[];
-  retryable_reason?: "anchor_not_found" | "leaf_discovery_failed";
+  outcome: CatalogSearchState;
+  retryable_reason?: "leaf_discovery_failed";
   source_candidate_ids?: string[];
 }
 
@@ -2197,9 +2217,9 @@ async function selectVerifiedOrdinaryReplacement(
     return {
       handled: false,
       products: [],
+      outcome: anchor ? "query_inconsistent" : "anchor_missing",
       source_candidate_ids: [
       ...sourceCandidateIds],
-      ...(anchor ? {} : { retryable_reason: "anchor_not_found" as const }),
     };
   }
 
@@ -2221,7 +2241,7 @@ async function selectVerifiedOrdinaryReplacement(
       ms: Date.now() - t0,
       meta: { reason: "leaf_discovery_failed", leaf_category: anchor.leaf_category, error_code: discovery.error_code },
     });
-    return { handled: false, products: [],
+    return { handled: false, products: [], outcome: "upstream_error",
       source_candidate_ids: [...sourceCandidateIds], retryable_reason: "leaf_discovery_failed" };
   }
 
@@ -2239,7 +2259,7 @@ async function selectVerifiedOrdinaryReplacement(
       ms: Date.now() - t0,
       meta: { reason: "insufficient_explicit_axes", leaf_category: anchor.leaf_category, axes },
     });
-    return { handled: false, products: [],
+    return { handled: false, products: [], outcome: "query_inconsistent",
       source_candidate_ids: [...sourceCandidateIds] };
   }
 
@@ -2376,6 +2396,7 @@ async function selectVerifiedOrdinaryReplacement(
     return {
       handled: false,
       products: [],
+      outcome: "confirmed_empty",
       source_candidate_ids: [...new Set([...sourceCandidateIds, anchor.id])],
     };
   }
@@ -2390,7 +2411,7 @@ async function selectVerifiedOrdinaryReplacement(
   const rendered = executeRenderProducts({ product_ids: ids, total_available: selected.length }, ctx.cache);
   if (!rendered.ok) {
     steps.push({ step: "v3_replacement_preflight_render_failed", ms: Date.now() - t0, meta: { error_code: rendered.error_code } });
-    return { handled: true, products: [] };
+    return { handled: true, products: [], outcome: "upstream_error" };
   }
   send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: selected.length });
   steps.push({
@@ -2414,7 +2435,7 @@ async function selectVerifiedOrdinaryReplacement(
   const fullProducts = ids
     .map((id) => ctx.cache.get(id))
     .filter((product): product is ProductFull => Boolean(product));
-  return { handled: true, products: fullProducts };
+  return { handled: true, products: fullProducts, outcome: "found" };
 }
 
 async function selectVerifiedExactCompoundProducts(
@@ -2907,6 +2928,7 @@ async function runExpertLoop(
   flags: { anchorFilterEnabled: boolean; relaxationHintsEnabled: boolean; criteriaGateEnabled: boolean; },
   recentProductEvidence: RecentProductEvidence[] = [],
   preExcludedReplacementIds: string[] = [],
+  selectionPlan: ReplacementSelectionPlan | null = null,
 ): Promise<{ finalText: string; productsRendered: number; shownProductIds: string[] }> {
   const now = () => Date.now() - t0;
   let finalText = "";
@@ -3526,9 +3548,14 @@ async function runExpertLoop(
   const dialogueChoice = resolvePendingClarificationChoice(slots, userMessage) ?? resolveDialogueChoice(history, userMessage);
   const baseSystemPrompt = buildSystemPrompt(flags.relaxationHintsEnabled, flags.criteriaGateEnabled);
   const recentEvidencePrompt = buildRecentProductEvidencePrompt(recentProductEvidence);
+  const selectionPlanPrompt = selectionPlanSystemHint(selectionPlan);
   const systemContent = dialogueChoice
-    ? `${baseSystemPrompt}\n\n${dialogueChoiceSystemHint(dialogueChoice)}${recentEvidencePrompt}`
-    : `${baseSystemPrompt}${recentEvidencePrompt}`;
+    ? `${baseSystemPrompt}\n\n${dialogueChoiceSystemHint(dialogueChoice)}${recentEvidencePrompt}${
+      selectionPlanPrompt ? `\n\n${selectionPlanPrompt}` : ""
+    }`
+    : `${baseSystemPrompt}${recentEvidencePrompt}${
+      selectionPlanPrompt ? `\n\n${selectionPlanPrompt}` : ""
+    }`;
 
   const messages: ORMessage[] = [
     { role: "system", content: systemContent },
@@ -3985,6 +4012,13 @@ async function runExpertLoop(
           phase: agentPhase,
           alreadyUsed: correctiveDiscoveryUsed,
           hasFreshSearch: Boolean(freshSearch),
+          previousCategoryGrounded: Boolean(
+            lastDiscover?.category?.pagetitle &&
+            selectionTargetIsDeclared(
+              lastDiscover.category.pagetitle,
+              `${userMessage}\n${initialSelectionDeclaration(firstAssistantText)}`,
+            )
+          ),
           previousNoun: lastDiscover?.resolved_from ?? lastDiscover?.category?.pagetitle ?? "",
           requestedNoun: typeof tc.args.noun === "string" ? tc.args.noun : "",
         });
@@ -5563,18 +5597,27 @@ async function runExpertLoop(
 
         if (tc.name === "search_catalog" && namedSeriesToken && !seriesGroundingSatisfied) {
           const requested = tc.args as Record<string, unknown>;
-          const exactSeriesArgs: Record<string, unknown> = {
-            mode: "by_query",
-            query: namedSeriesToken,
-            per_page: Math.max(5, Math.min(10, Number(requested.per_page) || 8)),
-          };
-          for (const key of ["min_price", "max_price", "sort_cheapest", "sort_expensive"] as const) {
-            if (requested[key] !== undefined) { exactSeriesArgs[key] = requested[key];
+          const groundedFacetSearch = searchInputUsesNamedSeriesFacet(
+            requested as Partial<SearchCatalogInput>,
+            lastDiscover?.facets ?? [],
+            namedSeriesToken,
+          );
+          if (!groundedFacetSearch) {
+            const exactSeriesArgs: Record<string, unknown> = {
+              mode: "by_query",
+              query: namedSeriesToken,
+              per_page: Math.max(5, Math.min(10, Number(requested.per_page) || 8)),
+            };
+            for (const key of ["min_price", "max_price", "sort_cheapest", "sort_expensive"] as const) {
+              if (requested[key] !== undefined) { exactSeriesArgs[key] = requested[key];
+            }
+            }
+            tc.args = exactSeriesArgs;
           }
-          }
-          tc.args = exactSeriesArgs;
           steps.push({
-            step: "v3_named_series_exact_query_enforced",
+            step: groundedFacetSearch
+              ? "v3_named_series_live_facet_preserved"
+              : "v3_named_series_exact_query_enforced",
             ms: now(),
             meta: { series: namedSeriesToken, requested: summariseToolArgs("search_catalog", requested) },
           });
@@ -5666,12 +5709,161 @@ async function runExpertLoop(
           }
         }
         if (
+          tc.name === "search_catalog" &&
+          result.ok &&
+          Number((result as { total?: number }).total ?? 0) === 0 &&
+          selectionPlan &&
+          selectionPlan.anchor_state !== "found" &&
+          selectionPlan.anchor_state !== "upstream_error" &&
+          lastDiscover
+        ) {
+          const declaredReasoning = [
+            userMessage,
+            firstAssistantText,
+            assistantReasoning,
+            resp.text,
+          ].join("\n");
+          const recoveryPlan = buildAnchorMissingRecoveryQueries(
+            lastDiscover,
+            declaredReasoning,
+            selectionPlan.portable_requirements.map((item) => item.value),
+          );
+          const requirements = selectionPlan.portable_requirements.map((item) =>
+            item.value
+          );
+          let recoveredResult: (SearchCatalogOk & {
+            tool: "search_catalog";
+          }) | null = null;
+          let attempted = 0;
+          for (const query of recoveryPlan.queries) {
+            attempted += 1;
+            const recovered = await executeSearchCatalog(
+              { mode: "by_query", query, min_price: 1, per_page: 50 },
+              { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+              ctx.cache,
+            );
+            if (!recovered.ok) continue;
+            const grounded = filterProductsByGroundedCategoryTargets(
+              recovered.results,
+              recoveryPlan.targets,
+              lastDiscover.category.pagetitle,
+              declaredReasoning,
+            ).filter((product) =>
+              requirements.length === 0 ||
+              productTitleSupportsPortableRequirements(
+                product.pagetitle,
+                requirements,
+              )
+            ).filter((product) =>
+              !selectionPlan.source_identifiers.some((identifier) =>
+                productContainsSourceModel(product, [identifier])
+              )
+            );
+            if (grounded.length === 0) continue;
+            recoveredResult = {
+              ...recovered,
+              total: grounded.length,
+              results: grounded,
+              warnings: [
+                ...(recovered.warnings ?? []),
+                "anchor_missing_reasoning_recovery",
+              ],
+            };
+            break;
+          }
+          if (recoveredResult) result = recoveredResult;
+          steps.push({
+            step: "v3_anchor_missing_reasoning_recovery",
+            ms: now(),
+            meta: {
+              targets: recoveryPlan.targets,
+              attempted_queries: attempted,
+              requirements,
+              recovered: recoveredResult?.results.length ?? 0,
+            },
+          });
+        }
+        if (
           namedSeriesToken &&
           (tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") &&
           result.ok
         ) {
-          const catalogResult = result as SearchCatalogOk & { tool: "search_catalog"; warnings?: string[]; };
-          const grounded = filterProductsByNamedSeries(catalogResult.results ?? [], namedSeriesToken);
+          let catalogResult = result as SearchCatalogOk & { tool: "search_catalog"; warnings?: string[]; };
+          let grounded = filterProductsByNamedSeries(catalogResult.results ?? [], namedSeriesToken);
+          if (grounded.length === 0 && tc.name === "search_catalog" && lastDiscover) {
+            const facetEvidence = findNamedSeriesFacetEvidence(
+              lastDiscover.facets,
+              namedSeriesToken,
+            );
+            let recovered: (SearchCatalogOk & { tool: "search_catalog" }) | null = null;
+            let recoveryStrategy = "explicit_entity_query";
+            if (facetEvidence) {
+              const outcome = classifyCatalogSearchOutcome({
+                search_ok: true,
+                search_total: 0,
+                discovery_evidence_count: facetEvidence.products_count,
+              });
+              if (outcome.state === "query_inconsistent") {
+              const recoveryInput = buildFacetConsistencyRecoveryInput(
+                facetEvidence,
+                runArgs as Partial<SearchCatalogInput>,
+              );
+              const facetRecovered = await executeSearchCatalog(
+                recoveryInput,
+                { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+                ctx.cache,
+              );
+              recovered = facetRecovered.ok ? facetRecovered : null;
+              recoveryStrategy = "live_facet";
+              if (facetRecovered.ok) {
+                catalogResult = facetRecovered;
+                grounded = filterProductsByNamedSeries(
+                  facetRecovered.results,
+                  namedSeriesToken,
+                );
+              }
+              }
+            }
+            // A facet is useful evidence but not a prerequisite: the customer
+            // already supplied the entity token. Always perform one final
+            // exact-token lookup when the first pool contains no matching
+            // titles, then keep only products that prove that token visibly.
+            if (grounded.length === 0) {
+              const canonicalQuery = await executeSearchCatalog(
+                buildCanonicalEntityRecoveryInput(namedSeriesToken),
+                { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+                ctx.cache,
+              );
+              recovered = canonicalQuery.ok ? canonicalQuery : recovered;
+              recoveryStrategy = facetEvidence
+                ? "live_facet_then_explicit_entity_query"
+                : "explicit_entity_query";
+              if (canonicalQuery.ok) {
+                const canonicalGrounded = filterProductsByNamedSeries(
+                  canonicalQuery.results,
+                  namedSeriesToken,
+                );
+                if (canonicalGrounded.length > 0) {
+                  catalogResult = canonicalQuery;
+                  grounded = canonicalGrounded;
+                }
+              }
+            }
+            steps.push({
+              step: "v3_catalog_query_inconsistency_recovery",
+              ms: now(),
+              meta: {
+                entity: namedSeriesToken,
+                facet_key: facetEvidence?.key ?? null,
+                facet_value: facetEvidence?.value ?? null,
+                discovery_count: facetEvidence?.products_count ?? 0,
+                strategy: recoveryStrategy,
+                recovered_ok: Boolean(recovered),
+                recovered_total: recovered?.total ?? 0,
+                grounded_count: grounded.length,
+              },
+            });
+          }
           if (grounded.length > 0) {
             seriesGroundingSatisfied = true;
             result = {
@@ -7732,12 +7924,17 @@ Deno.serve(async (req) => {
             productsCount = direct.products.length;
             await persistRecentProductEvidence(supabase, effectiveSessionId, direct.products);
           } else {
+            const replacementSelectionPlan = buildReplacementSelectionPlan(
+              userMessage,
+              direct.outcome,
+            );
             const out = await runExpertLoop(userMessage, effectiveHistory, effectiveSlots, settings.openrouter_api_key!, ctx, send, steps, t0, {
               anchorFilterEnabled: settings.v3_anchor_filter_enabled,
               relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
               criteriaGateEnabled: true,
             }, recentProductEvidence,
-              direct.source_candidate_ids ?? []);
+              direct.source_candidate_ids ?? [],
+              replacementSelectionPlan);
             productsCount = out.productsRendered;
             const shownProducts = out.shownProductIds
               .map((id) => ctx.cache.get(id))

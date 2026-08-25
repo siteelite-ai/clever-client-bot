@@ -2,6 +2,11 @@ import type { Facet } from "./discover-category.ts";
 import type { Criterion } from "./criteria-gate.ts";
 import { projectCriteriaFacetOptions } from "./criteria-gate.ts";
 import { dropAffirmativeBooleanFilters } from "./search-filter-guard.ts";
+import {
+  type DiscoveredCategoryScope,
+  groundedCategoryRecoveryQueries,
+  groundedTokenRecoveryQueries,
+} from "./category-reasoning-guard.ts";
 
 export type SelectionSearchRecoveryKind =
   | "preserve_filters_expand_category_scope"
@@ -94,6 +99,42 @@ export function rankReasoningSearchQueries(values: Array<string | null | undefin
       return rightTokens - leftTokens || right.length - left.length;
     })
     .slice(0, Math.max(1, limit));
+}
+
+/**
+ * When an exact source SKU is absent, derive a bounded search ladder only from
+ * live taxonomy names already supported by the consultant's reasoning. Token
+ * fallbacks remain safe because the caller must revalidate every candidate
+ * against the complete grounded category targets and final selection contract.
+ */
+export function buildAnchorMissingRecoveryQueries(
+  discovered: DiscoveredCategoryScope | null,
+  declaredReasoning: string,
+  literalRequirements: string[] = [],
+  limit = 4,
+): { targets: string[]; queries: string[] } {
+  const targets = groundedCategoryRecoveryQueries(
+    discovered,
+    declaredReasoning,
+    20,
+  );
+  const tokens = targets.flatMap((target) =>
+    groundedTokenRecoveryQueries(target, 4)
+  );
+  const requirementQuery = literalRequirements
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .join(" ");
+  const combined = targets.map((target) =>
+    [target, requirementQuery].filter(Boolean).join(" ")
+  );
+  return {
+    targets,
+    queries: rankReasoningSearchQueries(
+      [...combined, requirementQuery, ...targets, ...tokens],
+      limit,
+    ),
+  };
 }
 
 /**

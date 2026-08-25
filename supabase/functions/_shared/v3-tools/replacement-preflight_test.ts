@@ -184,6 +184,8 @@ Deno.test("portable technical codes compare as whole codes, not by their digits"
   );
   assertEquals(portableTechnicalCodeMatchesText("IP 44", "защита IP44"), true);
   assertEquals(portableTechnicalCodeMatchesText("C16", "автомат С16"), true);
+  assertEquals(portableTechnicalCodeMatchesText("100W", "светильник 100Вт"), true);
+  assertEquals(portableTechnicalCodeMatchesText("220V", "напряжение 220В"), true);
 });
 
 Deno.test("near replacement cannot relax a mandatory title code", () => {

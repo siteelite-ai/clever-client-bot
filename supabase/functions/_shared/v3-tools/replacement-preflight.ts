@@ -116,7 +116,12 @@ function visualCodeNorm(value: string): string {
   return codeNorm(value).replace(
     /[авекмнорстух]/gu,
     (char) => lookalikes[char] ?? char,
-  );
+  )
+    // Standard electrical units may be written as Latin symbols or Russian
+    // abbreviations. Normalize only terminal unit suffixes, never prose.
+    .replace(/(?<=\d)kbt$/u, "kw")
+    .replace(/(?<=\d)bt$/u, "w")
+    .replace(/(?<=\d)b$/u, "v");
 }
 
 /** Exact comparison for mixed letter/digit codes such as GX53, IP44 or 16A. */
