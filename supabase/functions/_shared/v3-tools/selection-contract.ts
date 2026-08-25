@@ -18,6 +18,23 @@ export interface SelectionTargetProjection {
   application_context: string[];
 }
 
+/**
+ * Keeps the verified product class monotonic across failed render attempts.
+ * A newly declared class may initialize an empty contract, but it may refine
+ * an existing class only after at least one live card proves that refinement.
+ */
+export function advanceSelectionTarget(
+  currentTarget: string | null,
+  declaredTarget: string,
+  verifiedProductCount: number,
+): string | null {
+  const current = String(currentTarget ?? "").trim();
+  const declared = String(declaredTarget ?? "").trim();
+  if (!declared) return current || null;
+  if (!current) return declared;
+  return verifiedProductCount > 0 ? declared : current;
+}
+
 function captionText(value: unknown, limit = 100): string {
   return String(value ?? "")
     .replace(/[<>\p{Cc}]+/gu, " ")
@@ -192,6 +209,16 @@ export function bootstrapSelectionTargetFromDiscovery(
   const resolved = String(resolvedFrom ?? "").trim();
   const resolvedTokens = meaningfulTokens(resolved);
   const rawTokenCount = normalize(resolved).split(/\s+/u).filter(Boolean).length;
+  const taxonomyBase = bootstrapSelectionTargetFromTaxonomy(initialEvidence, liveClass);
+  const taxonomyTokens = meaningfulTokens(taxonomyBase ?? "");
+  if (
+    taxonomyBase &&
+    taxonomyTokens.length > 0 &&
+    taxonomyTokens.length < resolvedTokens.length &&
+    selectionTargetIsDeclared(taxonomyBase, resolved)
+  ) {
+    return taxonomyBase;
+  }
   if (
     resolvedTokens.length > 0 &&
     resolvedTokens.length <= 3 &&
@@ -200,7 +227,7 @@ export function bootstrapSelectionTargetFromDiscovery(
   ) {
     return resolved;
   }
-  return bootstrapSelectionTargetFromTaxonomy(initialEvidence, liveClass);
+  return taxonomyBase;
 }
 
 /** A discovered taxonomy label cannot declare itself. It may complete a
@@ -290,6 +317,23 @@ export function verifySelectionTarget(
 }
 
 /**
+ * A one-token class is the entire customer-visible identity promise, so it
+ * must occur in the card title rather than only in hidden taxonomy metadata.
+ * Rich multi-token classes keep the ordinary title+taxonomy verifier because
+ * catalog titles may legitimately abbreviate one part of a formal class.
+ */
+export function verifySelectionTargetWithVisibleTitle(
+  target: string,
+  products: ProductRef[],
+): SelectionTargetReport {
+  if (meaningfulTokens(target).length !== 1) return verifySelectionTarget(target, products);
+  return verifySelectionTarget(
+    target,
+    products.map((product) => ({ ...product, leaf_category: null })),
+  );
+}
+
+/**
  * A model-owned, title-grounded search label may prove a subtype whose wording
  * differs from the structured target, while the live taxonomy proves the base
  * class. This does not introduce aliases: the distinctive label must occur
@@ -303,8 +347,9 @@ export function verifySelectionTargetWithGroundedSearch(input: {
   grounded_label: string;
   grounded_ids: readonly string[];
 }): SelectionTargetReport {
-  const ordinary = verifySelectionTarget(input.target, input.products);
+  const ordinary = verifySelectionTargetWithVisibleTitle(input.target, input.products);
   if (ordinary.passed_ids.length > 0) return ordinary;
+  if (meaningfulTokens(input.target).length === 1) return ordinary;
   if (!selectionTargetIsDeclared(input.live_class, input.target)) return ordinary;
 
   const liveTokens = new Set(meaningfulTokens(input.live_class));

@@ -5,6 +5,7 @@ import {
   groundedTokenRecoveryQueries,
   guardCategoryScopeByReasoning,
   filterProductsByNamedSeries,
+  rankGroundedCategoryRecoveryScopes,
   selectGroundedTokenRecoveryCandidate,
   titleContainsLiteralToken,
 } from "./category-reasoning-guard.ts";
@@ -57,6 +58,36 @@ Deno.test("category reasoning guard does not accept a wrong modifier through a s
     "Нужен светильник с датчиком движения для дома, внутри помещения.",
   );
   assertEquals(result.args, { mode: "by_filter", category: "Светильники" });
+});
+
+Deno.test("a rejected live branch cannot ground itself through a negative mention", () => {
+  const discovered = {
+    category: { pagetitle: "Базовые изделия" },
+    leaf_categories: [{ pagetitle: "Наружные базовые изделия" }],
+  };
+  assertEquals(
+    groundedCategoryRecoveryQueries(
+      discovered,
+      "Каталог вернул только наружные базовые изделия, но это не подходит. Нужен другой внутренний тип.",
+    ),
+    ["Базовые изделия"],
+  );
+  assertEquals(
+    filterProductsByGroundedCategoryTargets(
+      [{ pagetitle: "Наружное базовое изделие", leaf_category: "Наружные базовые изделия" }],
+      ["Базовые изделия"],
+      "Базовые изделия",
+      "Ветка наружных изделий неверная, требуется другой тип.",
+    ),
+    [],
+  );
+  assertEquals(
+    groundedCategoryRecoveryQueries(
+      discovered,
+      "В общей ветке базовых изделий есть наружные изделия, их нужно отсечь как лишние и взять внутренний тип.",
+    ),
+    ["Базовые изделия"],
+  );
 });
 
 Deno.test("category reasoning guard keeps the live umbrella when dropping the only unsupported leaf", () => {
@@ -119,6 +150,60 @@ Deno.test("terminal category target rejects a live leaf unsupported by initial r
   assertEquals(products, [
     { pagetitle: "Светильник потолочный LED", leaf_category: "Потолочные светильники" },
   ]);
+});
+
+Deno.test("an ungrounded corrective discovery cannot erase an earlier grounded scope", () => {
+  const broad = {
+    category: { pagetitle: "Светильники" },
+    leaf_categories: [{ pagetitle: "Уличные светильники" }],
+  };
+  const wrongCorrection = {
+    category: { pagetitle: "Уличные светильники" },
+    leaf_categories: [{ pagetitle: "Уличные прожекторы" }],
+  };
+  const scopes = rankGroundedCategoryRecoveryScopes(
+    [broad, wrongCorrection],
+    "Нужен потолочный светильник для гостиной",
+  );
+  assertEquals(scopes.map(({ discovery }) => discovery.category?.pagetitle), ["Светильники"]);
+  assertEquals(scopes[0]?.targets, ["Светильники"]);
+});
+
+Deno.test("the source side of replace X with Y does not ground the target category", () => {
+  const sourceCategory = {
+    category: { pagetitle: "Каталог" },
+    leaf_categories: [{ pagetitle: "Исходные устройства" }],
+  };
+  assertEquals(
+    groundedCategoryRecoveryQueries(
+      sourceCategory,
+      "Хочу заменить исходное устройство на новое решение",
+    ),
+    [],
+  );
+  assertEquals(
+    groundedCategoryRecoveryQueries(
+      sourceCategory,
+      "Хочу заменить старое исходное устройство на новое исходное устройство",
+    ),
+    ["Исходные устройства"],
+  );
+});
+
+Deno.test("an exact umbrella leaf cannot self-ground from the source side of a transformation", () => {
+  const targetScope = {
+    category: { pagetitle: "Целевые устройства" },
+    leaf_categories: [{ pagetitle: "Побочные устройства" }],
+  };
+  const sourceScope = {
+    category: { pagetitle: "Исходные устройства" },
+    leaf_categories: [{ pagetitle: "Исходные устройства" }],
+  };
+  const scopes = rankGroundedCategoryRecoveryScopes(
+    [targetScope, sourceScope],
+    "Хочу заменить исходное устройство на целевое устройство",
+  );
+  assertEquals(scopes.map(({ discovery }) => discovery.category?.pagetitle), ["Целевые устройства"]);
 });
 
 Deno.test("terminal token ladder decomposes a failed semantic phrase", () => {

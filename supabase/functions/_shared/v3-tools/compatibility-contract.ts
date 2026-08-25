@@ -230,7 +230,7 @@ export function minimumCompatibilityRelationCount(text: string): number {
     (/верхн/u.test(value) && /нижн/u.test(value));
   const qualitativePair =
     /свободн/u.test(value) && /(?:наде|проходи|входи|вмеща|охватыва)/u.test(value) &&
-    /плотн/u.test(value) && /(?:обж|фиксир|садит|сесть|села|село)/u.test(value);
+    /плотн/u.test(value) && /(?:обж|обож|фиксир|садит|сесть|села|село)/u.test(value);
   return (pairedStates || qualitativePair) && new RegExp(MEASURED, "iu").test(value) ? 2 : reasoningNeedsCompatibilityRelations(value) ? 1 : 0;
 }
 
@@ -246,7 +246,7 @@ export function alignCompatibilityRelationsWithReasoning(
   const bounds = extractReasoningBounds(reasoningText);
   const prose = String(reasoningText ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е");
   const requiresClearance = /свободн/u.test(prose) && /(?:наде|проходи|входи|вмеща|охватыва)/u.test(prose);
-  const requiresCompression = /плотн/u.test(prose) && /(?:обж|фиксир|садит|сесть|села|село)/u.test(prose);
+  const requiresCompression = /плотн/u.test(prose) && /(?:обж|обож|фиксир|садит|сесть|села|село)/u.test(prose);
   const alignments: CompatibilityRelationAlignment[] = [];
   const initiallyAligned = relations.map((relation) => {
     const key = normalizeKey(relation.product_key);
@@ -335,7 +335,7 @@ export function completePairedCompatibilityRelations(
   if (!reference || minimumCompatibilityRelationCount(reasoningText) < 2) return { relations: next, added };
   const prose = String(reasoningText ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е");
   const requiresClearance = /свободн/u.test(prose) && /(?:наде|проходи|входи|вмеща|охватыва)/u.test(prose);
-  const requiresCompression = /плотн/u.test(prose) && /(?:обж|фиксир|садит|сесть|села|село)/u.test(prose);
+  const requiresCompression = /плотн/u.test(prose) && /(?:обж|обож|фиксир|садит|сесть|села|село)/u.test(prose);
   const unit = canonicalUnit(reference.unit);
   const addUniqueState = (direction: "upper" | "lower", required: boolean) => {
     if (!required) return;

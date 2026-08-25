@@ -30,6 +30,18 @@ Deno.test("render criteria: named entity browse keeps only user-backed filters",
   assertEquals(resolveRenderCriteria(inferred, raw, userBacked, false), [...inferred, ...raw]);
 });
 
+Deno.test("a broad semantic recovery cannot discard the latest mandatory contract", () => {
+  const latest = [
+    { key: "Поток", op: "range", value: [3750, 5000], level: "A" },
+    { key: "Площадь", op: "min", value: 25, level: "A" },
+  ] as Criterion[];
+  const recovered = resolveRenderCriteria([], latest, [], false);
+  assertEquals(recovered, latest);
+  assertEquals(applyCriteriaGate([
+    product("weak", ["Мощность: 7 Вт"]),
+  ], recovered).passed_ids, []);
+});
+
 Deno.test("compact code criterion must be visible in the product title", () => {
   const criterion = { key: "Характеристика", op: "eq", value: "C", level: "A" } as Criterion;
   assertEquals(titleProvesCompactCriterion("Автомат 1P 16A характеристика C", criterion), true);
@@ -232,6 +244,20 @@ Deno.test("mandatory criteria compile into live facet OR values and numeric boun
     { key: "flow", caption: "Световой поток", unit: "лм", values: [{ value: "3000" }, { value: "4000" }, { value: "5000" }] },
   ]);
   assertEquals(projection.options, { power: ["20", "50"], ip: ["IP65"], flow: ["4000", "5000"] });
+  assertEquals(projection.unmatched_keys, []);
+});
+
+Deno.test("machine facet key compiles through the same resolved live facet", () => {
+  const projection = projectCriteriaFacetOptions([
+    { key: "measured_output__lm", op: "min", value: 3750, unit: "lm", level: "A" },
+  ], [{
+    key: "measured_output__lm",
+    caption: "Measured output, lm",
+    unit: "lm",
+    values: [{ value: "3000" }, { value: "4000" }, { value: "5000" }],
+  }]);
+  assertEquals(projection.options, { measured_output__lm: ["4000", "5000"] });
+  assertEquals(projection.proven_criteria.length, 1);
   assertEquals(projection.unmatched_keys, []);
 });
 

@@ -34,6 +34,68 @@ export interface SelectionSearchFailure {
   message?: string;
 }
 
+export interface PendingSelectionFinalizationInput {
+  products_rendered: number;
+  intent_mode: "select" | "inquire";
+  has_discovery: boolean;
+  has_selection_target: boolean;
+  mandatory_criteria_count: number;
+  replacement_intent: boolean;
+  series_grounding_required: boolean;
+  compatibility_relation_count: number;
+  compatibility_required: boolean;
+}
+
+/**
+ * A model response without another tool call is not allowed to bypass an
+ * already-formed selection contract. All ordinary selections with enough
+ * machine-readable evidence must converge on the same deterministic finalizer.
+ * Compatibility, replacement and named-series modes retain their specialised
+ * proof controllers and therefore fail closed here.
+ */
+export function shouldFinalizePendingSelection(input: PendingSelectionFinalizationInput): boolean {
+  return input.products_rendered === 0 &&
+    input.intent_mode === "select" &&
+    input.has_discovery &&
+    input.has_selection_target &&
+    input.mandatory_criteria_count > 0 &&
+    !input.replacement_intent &&
+    !input.series_grounding_required &&
+    input.compatibility_relation_count < 2 &&
+    !input.compatibility_required;
+}
+
+function normalizeQuery(value: string): string {
+  return String(value ?? "")
+    .toLocaleLowerCase("ru-RU")
+    .replace(/ё/g, "е")
+    .replace(/[^a-zа-я0-9]+/giu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Bounded query plan built exclusively from wording already selected by the
+ * consultant. More specific phrases run first; no product vocabulary or
+ * synthetic dictionary is introduced by the server.
+ */
+export function rankReasoningSearchQueries(values: Array<string | null | undefined>, limit = 4): string[] {
+  const unique = new Map<string, string>();
+  for (const raw of values) {
+    const query = String(raw ?? "").trim();
+    const normalized = normalizeQuery(query);
+    if (!normalized || unique.has(normalized)) continue;
+    unique.set(normalized, query);
+  }
+  return [...unique.values()]
+    .sort((left, right) => {
+      const leftTokens = normalizeQuery(left).split(" ").filter(Boolean).length;
+      const rightTokens = normalizeQuery(right).split(" ").filter(Boolean).length;
+      return rightTokens - leftTokens || right.length - left.length;
+    })
+    .slice(0, Math.max(1, limit));
+}
+
 /**
  * Recovery is allowed for an empty filtered result and for the structured
  * incomplete-filter result where the model emitted `by_filter` without either

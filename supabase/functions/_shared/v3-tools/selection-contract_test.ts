@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "./selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
@@ -214,6 +214,25 @@ Deno.test("terminal target keeps a short declared discovery noun instead of a lo
   );
 });
 
+Deno.test("live declared base class stays separate from discovery modifiers", () => {
+  assertEquals(
+    bootstrapSelectionTargetFromDiscovery(
+      "Нужен потолочный или накладной светодиодный светильник.",
+      "потолочный светодиодный светильник",
+      "Светильники",
+    ),
+    "Светильники",
+  );
+  assertEquals(
+    bootstrapSelectionTargetFromDiscovery(
+      "Найди автомат на 16 А.",
+      "автомат",
+      "Автоматические выключатели",
+    ),
+    "автомат",
+  );
+});
+
 Deno.test("a safely bootstrapped short noun may authorize its formal class extension", () => {
   assertEquals(selectionTargetIsDeclared("автомат", "Автоматический выключатель"), true);
   assertEquals(selectionTargetIsDeclared("ИБП", "Стабилизатор напряжения"), false);
@@ -235,4 +254,19 @@ Deno.test("a richer target falls back to its base only through mandatory criteri
     "уличный светильник",
     [{ key: "Уличное исполнение", op: "eq", value: "Да", level: "B" }],
   ), false);
+});
+
+Deno.test("a failed render cannot replace an already grounded selection target", () => {
+  assertEquals(advanceSelectionTarget("Светильники", "Потолочные светильники", 0), "Светильники");
+  assertEquals(advanceSelectionTarget("Светильники", "Потолочные светильники", 3), "Потолочные светильники");
+  assertEquals(advanceSelectionTarget(null, "Потолочные светильники", 0), "Потолочные светильники");
+});
+
+Deno.test("a single-token class must be visible in the final card title", () => {
+  const products = [
+    product("visible", "Прожектор ALPHA", "Прожекторы"),
+    product("hidden", "Устройство ALPHA 50 Вт", "Прожекторы"),
+  ];
+  assertEquals(verifySelectionTarget("прожектор", products).passed_ids, ["visible", "hidden"]);
+  assertEquals(verifySelectionTargetWithVisibleTitle("прожектор", products).passed_ids, ["visible"]);
 });

@@ -529,7 +529,12 @@ export function projectCriteriaFacetOptions(
         vendor: null,
         price: 1,
         stock: "unknown" as const,
-        short_traits: [`${facet.caption || facet.key}: ${value}`],
+        // The resolved live facet may be referenced by either its public
+        // caption or its machine key. Expose both aliases to the pure checker.
+        short_traits: [
+          `${facet.caption || facet.key}: ${value}`,
+          `${facet.key}: ${value}`,
+        ],
       };
       return checkCriterion(pseudo, criterion).verdict === "pass" ? [String(value)] : [];
     })));

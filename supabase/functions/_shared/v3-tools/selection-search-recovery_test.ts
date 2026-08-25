@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure } from "./selection-search-recovery.ts";
+import { buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldFinalizePendingSelection } from "./selection-search-recovery.ts";
 
 const facets = [
   { key: "feature", caption: "Функция", type: "string", unit: null, values: [{ value: "Да" }] },
@@ -96,4 +96,36 @@ Deno.test("recovery controller does not swallow unrelated bad input or transport
     { mode: "by_query" },
     { ok: true, total: 0 },
   ), false);
+});
+
+Deno.test("an ordinary pending contract reaches the deterministic finalizer", () => {
+  const pending = {
+    products_rendered: 0,
+    intent_mode: "select" as const,
+    has_discovery: true,
+    has_selection_target: true,
+    mandatory_criteria_count: 1,
+    replacement_intent: false,
+    series_grounding_required: false,
+    compatibility_relation_count: 0,
+    compatibility_required: false,
+  };
+  assertEquals(shouldFinalizePendingSelection(pending), true);
+  assertEquals(shouldFinalizePendingSelection({ ...pending, products_rendered: 1 }), false);
+  assertEquals(shouldFinalizePendingSelection({ ...pending, intent_mode: "inquire" }), false);
+  assertEquals(shouldFinalizePendingSelection({ ...pending, replacement_intent: true }), false);
+  assertEquals(shouldFinalizePendingSelection({ ...pending, compatibility_required: true }), false);
+});
+
+Deno.test("reasoning query plan is deduplicated, specific-first and bounded", () => {
+  assertEquals(rankReasoningSearchQueries([
+    "Base class",
+    "Detailed model owned class",
+    "base   class",
+    "Detailed model owned class with trait",
+    null,
+  ], 2), [
+    "Detailed model owned class with trait",
+    "Detailed model owned class",
+  ]);
 });

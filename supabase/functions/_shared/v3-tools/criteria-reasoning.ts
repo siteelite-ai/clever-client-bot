@@ -16,7 +16,7 @@
 // Модуль ЧИСТЫЙ и DATA-AGNOSTIC: только числа, единицы и направляющие слова —
 // никаких доменных ключей, категорий, брендов.
 
-import type { Criterion } from "./criteria-gate.ts";
+import { projectCriteriaFacetOptions, type CriteriaFacet, type Criterion } from "./criteria-gate.ts";
 import { extractClientQuantities, normalizeUnit } from "./criteria-consistency.ts";
 
 export interface ReasoningBound {
@@ -41,8 +41,121 @@ export interface ReasoningRangeProjection {
   added: Criterion[];
 }
 
+export interface CriteriaImportanceAlignment {
+  criteria: Criterion[];
+  demoted: string[];
+}
+
+export interface MeasuredReasoningSearchContract {
+  criteria: Criterion[];
+  mandatory_criteria: Criterion[];
+  projected_criteria: Criterion[];
+  options: Record<string, string[]>;
+  demoted: string[];
+  unmatched_keys: string[];
+}
+
 const NUM = String.raw`\d+(?:[.,]\d+)?`;
 const UNIT = String.raw`[a-zа-я°]{1,6}[²³]?\d?`;
+
+function normalizeEvidence(value: unknown): string {
+  return String(value ?? "")
+    .toLocaleLowerCase("ru-RU")
+    .replace(/ё/g, "е")
+    .replace(/[^a-zа-я0-9]+/giu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function criteriaIdentityMatches(left: Criterion, right: Criterion): boolean {
+  const leftKey = normalizeEvidence(left.key);
+  const rightKey = normalizeEvidence(right.key);
+  if (!leftKey || !rightKey || !(leftKey === rightKey || leftKey.includes(rightKey) || rightKey.includes(leftKey))) return false;
+  const leftValue = normalizeEvidence(Array.isArray(left.value) ? left.value.join(" ") : left.value);
+  const rightValue = normalizeEvidence(Array.isArray(right.value) ? right.value.join(" ") : right.value);
+  return !leftValue || !rightValue || leftValue === rightValue;
+}
+
+function clauseSupportsCriterion(clause: string, criterion: Criterion): boolean {
+  const normalizedClause = normalizeEvidence(clause);
+  if (!normalizedClause) return false;
+  const rawValues = Array.isArray(criterion.value) ? criterion.value : [criterion.value];
+  const valueSupported = rawValues.some((value) => {
+    const normalized = normalizeEvidence(value);
+    return normalized.length >= 2 && normalizedClause.includes(normalized);
+  });
+  if (valueSupported) return true;
+  const keyTokens = normalizeEvidence(criterion.key).split(" ").filter((token) => token.length >= 4);
+  return keyTokens.length > 0 && keyTokens.every((token) => normalizedClause.includes(token));
+}
+
+/**
+ * A consultant may explain useful defaults without declaring them mandatory
+ * ("preferable", "probably", "for comfort"). Model-supplied level A must not
+ * turn such advice into an empty hard intersection. Only user-backed criteria
+ * or clauses with explicit necessity/limit language remain mandatory.
+ */
+export function alignCriteriaImportanceWithReasoning(
+  criteria: Criterion[],
+  reasoningText: string,
+  userBackedCriteria: Criterion[] = [],
+  protectedReasoningCriteria: Criterion[] = [],
+): CriteriaImportanceAlignment {
+  const clauses = String(reasoningText ?? "").split(/(?<=[.!?;])|\n+/u).map((clause) => clause.trim()).filter(Boolean);
+  const mandatory = /(?:обязат|необходим|нуж(?:ен|на|но|ны)|треб(?:уется|уем|ование)|долж(?:ен|на|но|ны)|не\s+менее|не\s+более|минимум|максимум|точно|значит|счита|расчет|получа|итого|составля|[=×])/iu;
+  const advisory = /(?:логичн|предпочт|скорее\s+всего|желатель|комфортн|уютн|можно|например|по\s+желанию|кому\s+как)/iu;
+  const demoted: string[] = [];
+  const aligned = (Array.isArray(criteria) ? criteria : []).map((criterion) => {
+    if (!criterion || (criterion.level ?? "A") !== "A") return { ...criterion };
+    if (
+      userBackedCriteria.some((candidate) => criteriaIdentityMatches(criterion, candidate)) ||
+      protectedReasoningCriteria.some((candidate) => criteriaIdentityMatches(criterion, candidate))
+    ) return { ...criterion, level: "A" as const };
+    const relevant = clauses.filter((clause) => clauseSupportsCriterion(clause, criterion));
+    if (relevant.some((clause) => mandatory.test(clause))) return { ...criterion, level: "A" as const };
+    if (relevant.length === 0 || relevant.some((clause) => advisory.test(clause)) || !relevant.some((clause) => mandatory.test(clause))) {
+      demoted.push(criterion.key);
+      return { ...criterion, level: "B" as const };
+    }
+    return { ...criterion };
+  });
+  return { criteria: aligned, demoted };
+}
+
+/**
+ * Compile an ordinary selection's measured reasoning into the exact values of
+ * the live catalog facets before search. This closes the gap where the model
+ * states a calculated range, but serializes only unrelated preference filters:
+ * the same range then governs both candidate retrieval and final rendering.
+ *
+ * Projected ranges are protected from wording-based importance demotion. Their
+ * origin is structural (an explicit measured range mapped to one live facet),
+ * so equivalent phrases cannot randomly switch the contract between A and B.
+ */
+export function compileMeasuredReasoningSearchContract(
+  criteria: Criterion[],
+  reasoningText: string,
+  userBackedCriteria: Criterion[],
+  facets: Array<CriteriaFacet & { type: string }>,
+): MeasuredReasoningSearchContract {
+  const projected = projectReasoningRangeCriteria(criteria, reasoningText, facets);
+  const importance = alignCriteriaImportanceWithReasoning(
+    projected.criteria,
+    reasoningText,
+    userBackedCriteria,
+    projected.added,
+  );
+  const mandatory = importance.criteria.filter((criterion) => (criterion.level ?? "A") === "A");
+  const facetProjection = projectCriteriaFacetOptions(mandatory, facets);
+  return {
+    criteria: importance.criteria,
+    mandatory_criteria: mandatory,
+    projected_criteria: projected.added,
+    options: facetProjection.options,
+    demoted: importance.demoted,
+    unmatched_keys: facetProjection.unmatched_keys,
+  };
+}
 
 /** Measured reasoning must be represented by at least one render criterion.
  * Bare structural markings such as 2×1.5 have no unit and remain under the
@@ -53,7 +166,22 @@ export function hasMeasuredSelectionRequirement(text: string): boolean {
   for (let match; (match = re.exec(value)) !== null;) {
     const unit = normalizeUnit(match[1]);
     if (!unit || /^(шт|штук|раз|года?|лет|мин|сек)$/u.test(unit)) continue;
-    return true;
+    const clauseStart = Math.max(
+      value.lastIndexOf(".", match.index),
+      value.lastIndexOf("!", match.index),
+      value.lastIndexOf("?", match.index),
+      value.lastIndexOf("\n", match.index),
+    ) + 1;
+    const nextStops = [".", "!", "?", "\n"]
+      .map((separator) => value.indexOf(separator, re.lastIndex))
+      .filter((index) => index >= 0);
+    const clauseEnd = nextStops.length > 0 ? Math.min(...nextStops) : value.length;
+    const clause = value.slice(clauseStart, clauseEnd);
+    const explicitRange = /\d+(?:[.,]\d+)?\s*[–—-]\s*\d+(?:[.,]\d+)?/u.test(match[0]);
+    const obligation = /(?:нуж|необходим|долж|треб|минимум|максимум|не\s+менее|не\s+более|больше|меньше|свыше|до\s+\d|от\s+\d|ориентир|диапазон|расчет|счита|получа|итого|составля|подбира|выбира|[≈=×])/iu.test(clause);
+    // Measurements used only to describe a typical product ("обычно 220 В",
+    // "часто 10 Вт") are catalog narration, not selection requirements.
+    if (explicitRange || obligation) return true;
   }
   return false;
 }
@@ -84,6 +212,38 @@ export function promoteMeasuredReasoningCriteria(
       Array.isArray(criterion.value) && criterion.value.every((value) => Number.isFinite(Number(value)));
     const unit = canonicalMeasurementUnit(criterion.unit ?? "");
     if ((criterion.level ?? "A") !== "B" || !numeric || !unit || !reasoningUnits.has(unit)) return { ...criterion };
+    promoted.push(criterion.key);
+    return { ...criterion, level: "A" as const };
+  });
+  return { criteria: next, promoted };
+}
+
+/**
+ * An ordinary selection must not reach render with only advisory criteria when
+ * the model did serialize a measurable catalog constraint. If there is no A
+ * criterion at all, promote only numeric B criteria that compile to one exact
+ * live facet with at least one valid value. The live schema supplies the proof;
+ * no product vocabulary is involved.
+ */
+export function promoteProjectableMeasuredFallbackCriteria(
+  criteria: Criterion[],
+  facets: CriteriaFacet[],
+): { criteria: Criterion[]; promoted: string[] } {
+  const source = (Array.isArray(criteria) ? criteria : []).map((criterion) => ({ ...criterion }));
+  if (source.some((criterion) => (criterion.level ?? "A") === "A")) {
+    return { criteria: source, promoted: [] };
+  }
+  const candidates = source
+    .filter((criterion) => {
+      const numeric = typeof criterion.value === "number" ||
+        Array.isArray(criterion.value) && criterion.value.every((value) => Number.isFinite(Number(value)));
+      return (criterion.level ?? "A") === "B" && numeric;
+    })
+    .map((criterion) => ({ ...criterion, level: "A" as const }));
+  const projection = projectCriteriaFacetOptions(candidates, facets);
+  const promoted: string[] = [];
+  const next = source.map((criterion) => {
+    if (!projection.proven_criteria.some((candidate) => criteriaIdentityMatches(criterion, candidate))) return criterion;
     promoted.push(criterion.key);
     return { ...criterion, level: "A" as const };
   });
@@ -131,7 +291,7 @@ export function projectReasoningRangeCriteria(
   // derive scalar×[low,high] in the result unit. This is unit/arithmetic based:
   // no category, product or parameter names are embedded.
   const calculations = new RegExp(
-    String.raw`(${NUM})\s*(${UNIT})\s*[×xх*]\s*(${NUM})\s*(${UNIT})[^\n]{0,60}?[≈=]\s*(${NUM})\s*(${UNIT})(?![a-zа-я])`,
+    String.raw`(${NUM})\s*(${UNIT})\s*[×xх*]\s*(${NUM})\s*(${UNIT})[^\n]{0,60}?[≈=][\s*_~≈]*(${NUM})\s*(${UNIT})(?![a-zа-я])`,
     "giu",
   );
   for (let match; (match = calculations.exec(text)) !== null;) {

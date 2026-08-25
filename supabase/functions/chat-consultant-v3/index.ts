@@ -20,12 +20,13 @@ import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-t
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
 import { applyCriteriaGate, buildCriteriaQuery, filterProductIdsByBudgetCap, mergeFacetOptionConstraints, projectCatalogFilterEvidence, projectCriteriaFacetOptions, resolveRenderCriteria, titleProvesCompactCriterion, type Criterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
-import { alignCriteriaWithReasoning, hasMeasuredSelectionRequirement, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
+import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, hasMeasuredSelectionRequirement, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
-import { buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure } from "../_shared/v3-tools/selection-search-recovery.ts";
+import { buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract } from "../_shared/v3-tools/selection-actionability.ts";
-import { bootstrapSelectionTargetFromDiscovery, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "../_shared/v3-tools/selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
+import { extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
   commonCompatibilityReference,
@@ -64,6 +65,7 @@ import {
   groundedTokenRecoveryQueries,
   guardCategoryScopeByReasoning,
   filterProductsByNamedSeries,
+  rankGroundedCategoryRecoveryScopes,
   selectGroundedTokenRecoveryCandidate,
   titleContainsLiteralToken,
 } from "../_shared/v3-tools/category-reasoning-guard.ts";
@@ -2797,13 +2799,17 @@ async function runExpertLoop(
   // в реплике клиента.
   let assistantReasoning = "";
   let lastDiscover: DiscoverCategoryOk | null = null;
+  const selectionDiscoveries: DiscoverCategoryOk[] = [];
   // Machine-readable projection of the facet values the consultant declared
   // and then used for search. It is merged into render criteria server-side so
   // the cards cannot silently diverge from the preceding reasoning.
   let enforcedSearchCriteria: Criterion[] = [];
   let userBackedSearchCriteria: Criterion[] = [];
+  let reasoningProjectedSearchCriteria: Criterion[] = [];
   let latestRenderCriteria: Criterion[] = [];
   let activeSelectionTarget: string | null = null;
+  let groundedSelectionTargetHint: string | null = null;
+  let initialSelectionDiscoveryNoun: string | null = null;
   let activeCompatibilityRelations: ReturnType<typeof parseCompatibilityRelations> = [];
   // Terminal recovery is allowed only after a complete render contract has
   // passed all target/criteria/compatibility checks. A rejected render must
@@ -2911,12 +2917,29 @@ async function runExpertLoop(
   // self-requery: критерии сами по себе («не менее 40 мм») не запрос, они
   // обретают смысл только вместе с предметом текущего поиска.
   let lastSearchNoun = "";
+  const ensureActiveSelectionTarget = (evidence: string, source: string) => {
+    if (activeSelectionTarget || !lastDiscover || intentMode !== "select") return activeSelectionTarget;
+    const bootstrapped = bootstrapSelectionTargetFromDiscovery(
+      `${evidence}\n${initialSelectionDiscoveryNoun ?? ""}`,
+      lastDiscover.resolved_from ?? "",
+      lastDiscover.category?.pagetitle ?? "",
+    );
+    if (!bootstrapped) return null;
+    activeSelectionTarget = bootstrapped;
+    steps.push({
+      step: "v3_selection_target_bootstrapped",
+      ms: now(),
+      meta: { target: bootstrapped, source },
+    });
+    return activeSelectionTarget;
+  };
   const triedSelfRequeries = new Set<string>();
   // Бюджет тупика по критериям: если сервер уже сам сходил в каталог по
   // формулировке модели и не нашёл ничего — дальше искать нечем.
   // Прерываем ход и отвечаем честно, вместо выжигания 140 с до таймаута.
   let criteriaDeadEnds = 0;
   let criteriaDeadEndBreak = false;
+  let rejectedRenderFinalizeBreak = false;
   let deadlineFinalizeBreak = false;
 
   // No-progress detector: подряд два search_catalog с тем же сигнатурным
@@ -2934,6 +2957,10 @@ async function runExpertLoop(
   // unrelated lexical fallbacks.
   let groundedJargonTerminal = false;
   let groundedCompoundSearchTerminal = false;
+  // If the consultant explicitly calls customer vocabulary a colloquial or
+  // jargon name, that reasoning becomes a proof obligation. A broad facet
+  // search cannot silently replace it with a merely similar product shape.
+  let declaredAliasQuery: string | null = null;
   // Turn-level guard: рендерим карточку контактов максимум один раз,
   // даже если LLM по ошибке вызвал lookup_contacts повторно (топик-дубль).
   const contactsEmitted = { value: false };
@@ -3452,9 +3479,27 @@ async function runExpertLoop(
           agentToolPolicy.selectionRequiresInitialDiscovery
         ) || seriesTurnRequiresGrounding && !seriesGroundingSatisfied
       );
+      ensureActiveSelectionTarget(
+        `${userMessage}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`,
+        "accumulated_reasoning",
+      );
+      const pendingEvidence = `${userMessage}\n${firstAssistantText}`;
+      const pendingSelectionState = {
+        products_rendered: productsRendered,
+        intent_mode: intentMode,
+        has_discovery: Boolean(lastDiscover),
+        has_selection_target: Boolean(activeSelectionTarget),
+        mandatory_criteria_count: latestRenderCriteria.filter((criterion) => (criterion.level ?? "A") === "A").length,
+        replacement_intent: replacementIntent,
+        series_grounding_required: seriesTurnRequiresGrounding,
+        compatibility_relation_count: minimumCompatibilityRelationCount(pendingEvidence),
+        compatibility_required: reasoningNeedsCompatibilityRelations(pendingEvidence),
+      } as const;
+      const routesPendingSelectionToFinalizer = resp.toolCalls.length === 0 && !requiresToolContinuation &&
+        shouldFinalizePendingSelection(pendingSelectionState);
       const hasRender = resp.toolCalls.some((tc) => tc.name === "render_products" && isToolAllowedInAgentPhase(agentPhase, tc.name, enforcementToolPolicy));
       const isFirstTurn = step === 0;
-      const isFinalTurn = resp.toolCalls.length === 0 && !requiresToolContinuation;
+      const isFinalTurn = resp.toolCalls.length === 0 && !requiresToolContinuation && !routesPendingSelectionToFinalizer;
 
       // UX-правило по роли шага в диалоге:
       //  • первый шаг с тулами впереди → intro-пузырь эксперта (показываем)
@@ -3465,6 +3510,7 @@ async function runExpertLoop(
       //  • промежуточная болтовня между тулами → глушим
       if (resp.text.trim()) {
         assistantReasoning += `\n${resp.text}`;
+        declaredAliasQuery ??= extractDeclaredCatalogAlias(userMessage, assistantReasoning);
         if (isFirstTurn && !hasRender && !isFinalTurn) {
           const safeReasoning = sanitizeIntermediateReasoning(resp.text);
           const sanitizedIntro = containsUnrenderedCatalogFacts(safeReasoning.text)
@@ -3620,6 +3666,14 @@ async function runExpertLoop(
           });
           continue;
         }
+        if (routesPendingSelectionToFinalizer) {
+          steps.push({
+            step: "v3_pending_selection_routed_to_finalizer",
+            ms: now(),
+            meta: { reason: "model_finished_without_render", criteria: latestRenderCriteria.length },
+          });
+          break;
+        }
         // No tools → turn ends. Last-chance: if user asked relative-price and we rendered nothing → rescue.
         // NOTE (2026-06-29): tryPriceDirectionRescue удалён — LLM сам должен сделать
         // правильный search_catalog по правилам <price_anchoring>.
@@ -3724,7 +3778,18 @@ async function runExpertLoop(
         // Preserve the consultant's own noun/category/query wording before
         // canonical guards modify it. A later recovery may use these strings,
         // but live title/criteria evidence remains mandatory.
-        if (tc.name === "discover_category") rememberCompoundRecoveryHint(tc.args.noun);
+        if (tc.name === "discover_category") {
+          rememberCompoundRecoveryHint(tc.args.noun);
+          if (
+            !initialSelectionDiscoveryNoun &&
+            intentMode === "select" &&
+            typeof tc.args.noun === "string" &&
+            tc.args.noun.trim()
+          ) {
+            initialSelectionDiscoveryNoun = tc.args.noun.trim();
+            declaredAliasQuery ??= extractPostNominalCatalogQualifier(userMessage, initialSelectionDiscoveryNoun);
+          }
+        }
         if (tc.name === "search_catalog") {
           rememberCompoundRecoveryHint(tc.args.query);
           rememberCompoundRecoveryHint(tc.args.category);
@@ -3811,6 +3876,7 @@ async function runExpertLoop(
           const categoryEvidence = [
             history.filter((message) => message.role === "user").slice(-6).map((message) => message.content).join("\n"),
             userMessage,
+            initialSelectionDiscoveryNoun,
             firstAssistantText,
             assistantReasoning,
             resp.text,
@@ -3836,7 +3902,7 @@ async function runExpertLoop(
         // values explicitly negated by the customer are removed.
         if (tc.name === "search_catalog" && lastDiscover) {
           const userEvidence = `${history.filter((message) => message.role === "user").slice(-6).map((message) => message.content).join("\n")}\n${userMessage}`;
-          const declaredReasoning = `${userEvidence}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
+          const declaredReasoning = `${userEvidence}\n${initialSelectionDiscoveryNoun ?? ""}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
           const guarded = guardSearchFilters(tc.args as Record<string, unknown>, lastDiscover.facets, declaredReasoning, userEvidence);
           const identityGuard = replacementIntent
             ? dropImplicitReplacementIdentityFilters(guarded.args, lastDiscover.facets, userMessage)
@@ -3851,14 +3917,66 @@ async function runExpertLoop(
               if (value.trim()) replacementExcludedIdentityValues.add(value.trim());
             }
           }
-          enforcedSearchCriteria = effectiveKept.map(({ key, value }) => {
+          const guardedSearchCriteria: Criterion[] = effectiveKept.map(({ key, value }) => {
             const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
             return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
           });
-          userBackedSearchCriteria = effectiveUserBacked.map(({ key, value }) => {
+          const guardedUserBackedCriteria: Criterion[] = effectiveUserBacked.map(({ key, value }) => {
             const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
             return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
           });
+          enforcedSearchCriteria = guardedSearchCriteria;
+          userBackedSearchCriteria = guardedUserBackedCriteria;
+
+          // One ordinary-selection compiler owns both retrieval and rendering.
+          // If the consultant stated an explicit measured range, compile it to
+          // exact live facet values before the catalog call. Soft preferences
+          // are kept in the explanation/render contract as level B, but cannot
+          // over-constrain the hard catalog intersection.
+          const ordinaryMeasuredSelection = intentMode === "select" &&
+            !replacementIntent &&
+            !seriesTurnRequiresGrounding &&
+            !reasoningNeedsCompatibilityRelations(`${userMessage}\n${firstAssistantText}`);
+          if (ordinaryMeasuredSelection) {
+            const measuredContract = compileMeasuredReasoningSearchContract(
+              guardedSearchCriteria,
+              declaredReasoning,
+              guardedUserBackedCriteria,
+              lastDiscover.facets,
+            );
+            if (
+              measuredContract.projected_criteria.length > 0 &&
+              Object.keys(measuredContract.options).length > 0
+            ) {
+              const current = tc.args as Record<string, unknown>;
+              const {
+                query: _query,
+                article: _article,
+                pagetitle: _pagetitle,
+                options: _options,
+                ...searchControls
+              } = current;
+              tc.args = {
+                ...searchControls,
+                mode: "by_filter",
+                options: measuredContract.options,
+              };
+              enforcedSearchCriteria = measuredContract.mandatory_criteria;
+              reasoningProjectedSearchCriteria = measuredContract.projected_criteria;
+              latestRenderCriteria = measuredContract.mandatory_criteria.map((criterion) => ({ ...criterion }));
+              steps.push({
+                step: "v3_measured_reasoning_search_compiled",
+                ms: now(),
+                meta: {
+                  projected: measuredContract.projected_criteria,
+                  mandatory: measuredContract.mandatory_criteria,
+                  demoted_preferences: measuredContract.demoted,
+                  unmatched: measuredContract.unmatched_keys,
+                  options: measuredContract.options,
+                },
+              });
+            }
+          }
           if (identityGuard.removed.length > 0) {
             steps.push({
               step: "v3_guard_replacement_identity_filters",
@@ -4104,16 +4222,51 @@ async function runExpertLoop(
           const targetDeclared = target
             ? selectionTargetDeclarationIsGrounded(
               target,
-              `${userMessage}\n${initialReasoningDeclaration}`,
+              `${userMessage}\n${initialSelectionDiscoveryNoun ?? ""}\n${initialReasoningDeclaration}`,
               liveTaxonomyDeclaration,
             ) || namedSeriesBaseClassDeclared || bootstrappedTargetExtensionDeclared
             : false;
-          const ids = Array.isArray(tc.args.product_ids)
+          if (targetDeclared) groundedSelectionTargetHint = target;
+          let ids = Array.isArray(tc.args.product_ids)
             ? (tc.args.product_ids as unknown[]).map(String)
             : [];
-          const products = ids
+          let products = ids
             .map((id) => ctx.cache.get(id))
             .filter((product): product is ProductFull => Boolean(product));
+          if (
+            intentMode === "select" &&
+            !replacementIntent &&
+            !seriesTurnRequiresGrounding &&
+            lastDiscover &&
+            target &&
+            products.length > 0
+          ) {
+            // Category validity is derived from the frozen requested class,
+            // not from later taxonomy narration. Otherwise merely explaining
+            // that a wrong sibling exists can authorize that sibling.
+            const categoryEvidence = `${userMessage}\n${target}`;
+            const groundedTargets = groundedCategoryRecoveryQueries(lastDiscover, categoryEvidence, 20);
+            if (groundedTargets.length > 0) {
+              const groundedProducts = filterProductsByGroundedCategoryTargets(
+                products,
+                groundedTargets,
+                lastDiscover.category.pagetitle,
+                categoryEvidence,
+              );
+              const groundedIds = new Set(groundedProducts.map((product) => product.id));
+              const filteredIds = ids.filter((id) => groundedIds.has(id));
+              if (filteredIds.length !== ids.length) {
+                steps.push({
+                  step: "v3_render_category_grounding_gate",
+                  ms: now(),
+                  meta: { before: ids.length, after: filteredIds.length, target, grounded_targets: groundedTargets },
+                });
+                ids = filteredIds;
+                products = groundedProducts;
+                (tc.args as Record<string, unknown>).product_ids = filteredIds;
+              }
+            }
+          }
           if (!target) {
             gateShortCircuit = {
               tool: "render_products",
@@ -4144,7 +4297,7 @@ async function runExpertLoop(
                 grounded_label: semanticBackedSearch.label,
                 grounded_ids: semanticBackedSearch.ids,
               })
-              : verifySelectionTarget(target, products);
+              : verifySelectionTargetWithVisibleTitle(target, products);
             if (
               targetReport.passed_ids.length === 0 &&
               priorActiveSelectionTarget &&
@@ -4159,7 +4312,7 @@ async function runExpertLoop(
                   grounded_label: semanticBackedSearch.label,
                   grounded_ids: semanticBackedSearch.ids,
                 })
-                : verifySelectionTarget(priorActiveSelectionTarget, products);
+                : verifySelectionTargetWithVisibleTitle(priorActiveSelectionTarget, products);
               if (baseReport.passed_ids.length > 0) {
                 verificationTarget = priorActiveSelectionTarget;
                 targetReport = baseReport;
@@ -4172,7 +4325,7 @@ async function runExpertLoop(
             }
             const passed = ids.filter((id) => targetReport.passed_ids.includes(id));
             if (passed.length === 0) {
-              gateShortCircuit = {
+              gateShortCircuit ??= {
                 tool: "render_products",
                 ok: false,
                 error_code: "selection_target_mismatch",
@@ -4187,9 +4340,55 @@ async function runExpertLoop(
               ms: now(),
               meta: { target, verification_target: verificationTarget, application_context: targetProjection.application_context, before: ids.length, after: passed.length, rejected: targetReport.rejected_ids },
             });
-            if (passed.length > 0) activeSelectionTarget = verificationTarget;
+            activeSelectionTarget = advanceSelectionTarget(
+              activeSelectionTarget,
+              verificationTarget,
+              passed.length,
+            );
           } else {
-            activeSelectionTarget = target;
+            activeSelectionTarget = advanceSelectionTarget(activeSelectionTarget, target, 0);
+          }
+
+          const aliasClaim = extractDeclaredCatalogAlias(
+            userMessage,
+            `${firstAssistantText}\n${assistantReasoning}`,
+          );
+          const lexicalClaim = aliasClaim ?? declaredAliasQuery;
+          if (lexicalClaim && !groundedJargonTerminal) {
+            const finalIds = Array.isArray((tc.args as Record<string, unknown>).product_ids)
+              ? ((tc.args as Record<string, unknown>).product_ids as unknown[]).map(String)
+              : [];
+            const finalProducts = finalIds
+              .map((id) => ctx.cache.get(id))
+              .filter((product): product is ProductFull => Boolean(product));
+            const groundedSearchLabel = semanticBackedSearch?.label?.trim() ?? "";
+            const aliasProven = finalProducts.length > 0 && finalProducts.every((product) =>
+              titleContainsDeclaredAlias(product.pagetitle, lexicalClaim) ||
+              Boolean(
+                groundedSearchLabel &&
+                titleSupportsGroundedJargonQuery(product.pagetitle, groundedSearchLabel),
+              )
+            );
+            if (!aliasProven) {
+              declaredAliasQuery = lexicalClaim;
+              gateShortCircuit = {
+                tool: "render_products",
+                ok: false,
+                error_code: "declared_alias_unproven",
+                message: "ты назвал пользовательский термин разговорным или жаргонным, но выбранные карточки не подтверждают ни этот термин, ни выбранный тобой канонический поисковый эквивалент в заголовках; сначала выполни лексический recovery",
+              } as unknown as ToolResult;
+              steps.push({
+                step: "v3_declared_alias_gate",
+                ms: now(),
+                meta: {
+                  alias: lexicalClaim,
+                  search_label: groundedSearchLabel || null,
+                  candidates: finalProducts.length,
+                },
+              });
+            } else {
+              declaredAliasQuery = null;
+            }
           }
         }
 
@@ -4267,7 +4466,7 @@ async function runExpertLoop(
                   .filter((product): product is ProductFull => Boolean(product));
                 const recovered = filterProductsByPairedTitleFit(searchPool, reference.value);
                 if (recovered.products.length > 0 && activeSelectionTarget) {
-                  const targetReport = verifySelectionTarget(activeSelectionTarget, recovered.products);
+                  const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, recovered.products);
                   const targetIds = new Set(targetReport.passed_ids);
                   const targetPassed = recovered.products.filter((product) => targetIds.has(product.id));
                   const budgetPassed = filterProductIdsByBudgetCap(
@@ -4306,7 +4505,7 @@ async function runExpertLoop(
                       .map((product) => ctx.cache.get(String(product.id)))
                       .filter((product): product is ProductFull => Boolean(product));
                     const recoveredPairs = filterProductsByPairedTitleFit(recoveredProducts, reference.value);
-                    const targetReport = verifySelectionTarget(activeSelectionTarget, recoveredPairs.products);
+                    const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, recoveredPairs.products);
                     const targetIds = new Set(targetReport.passed_ids);
                     const targetPassed = recoveredPairs.products.filter((product) => targetIds.has(product.id));
                     const budgetPassed = new Set(filterProductIdsByBudgetCap(
@@ -4378,7 +4577,7 @@ async function runExpertLoop(
                     .map((product) => ctx.cache.get(String(product.id)))
                     .filter((product): product is ProductFull => Boolean(product));
                   const recoveredPairs = filterProductsByPairedTitleFit(recoveredProducts, reference.value);
-                  const targetReport = verifySelectionTarget(activeSelectionTarget, recoveredPairs.products);
+                  const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, recoveredPairs.products);
                   const targetIds = new Set(targetReport.passed_ids);
                   const targetPassed = recoveredPairs.products.filter((product) => targetIds.has(product.id));
                   const budgetPassed = new Set(filterProductIdsByBudgetCap(
@@ -4460,6 +4659,7 @@ async function runExpertLoop(
             userBackedSearchCriteria,
             Boolean(namedSeriesToken),
           );
+          let protectedReasoningCriteria = reasoningProjectedSearchCriteria.map((criterion) => ({ ...criterion }));
           if (lastDiscover && !pairedTitleContractProven) {
             const projected = projectReasoningRangeCriteria(
               criteria,
@@ -4468,6 +4668,7 @@ async function runExpertLoop(
             );
             if (projected.added.length > 0) {
               criteria = projected.criteria;
+              protectedReasoningCriteria = [...protectedReasoningCriteria, ...projected.added];
               (tc.args as Record<string, unknown>).criteria = criteria;
               steps.push({ step: "v3_reasoning_ranges_projected", ms: now(), meta: { added: projected.added } });
             }
@@ -4592,14 +4793,37 @@ async function runExpertLoop(
             const measuredReasoning = `${userMessage}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
             const aligned = alignCriteriaWithReasoning(criteria, measuredReasoning);
             const promoted = promoteMeasuredReasoningCriteria(aligned.criteria, measuredReasoning);
-            criteria = promoted.criteria;
+            const importance = alignCriteriaImportanceWithReasoning(
+              promoted.criteria,
+              measuredReasoning,
+              userBackedSearchCriteria,
+              protectedReasoningCriteria,
+            );
+            const fallbackMeasured = intentMode === "select" &&
+                !replacementIntent &&
+                !seriesTurnRequiresGrounding &&
+                !compatibilityRequired &&
+                lastDiscover
+              ? promoteProjectableMeasuredFallbackCriteria(importance.criteria, lastDiscover.facets)
+              : { criteria: importance.criteria, promoted: [] as string[] };
+            criteria = fallbackMeasured.criteria;
 
-            if (aligned.alignments.length > 0 || promoted.promoted.length > 0) {
+            if (
+              aligned.alignments.length > 0 ||
+              promoted.promoted.length > 0 ||
+              fallbackMeasured.promoted.length > 0 ||
+              importance.demoted.length > 0
+            ) {
               (tc.args as Record<string, unknown>).criteria = criteria;
               steps.push({
                 step: "v3_guard_criteria_reasoning_aligned",
                 ms: now(),
-                meta: { alignments: aligned.alignments, promoted: promoted.promoted },
+                meta: {
+                  alignments: aligned.alignments,
+                  promoted: promoted.promoted,
+                  fallback_promoted: fallbackMeasured.promoted,
+                  demoted_advisory: importance.demoted,
+                },
               });
             }
             if (aligned.ambiguities.length > 0) {
@@ -4739,24 +4963,62 @@ async function runExpertLoop(
                     });
                     if (attempted.ok && attempted.tool === "search_catalog" && attempted.results.length > 0) {
                       recovered = attempted;
+                      recoverySearchArgs = attempt.args;
                       break;
                     }
                   }
                 }
                 if (recovered.ok && recovered.tool === "search_catalog") {
-                  const recoveredProducts = recovered.results
-                    .map((product) => ctx.cache.get(String(product.id)))
-                    .filter((product): product is ProductFull => Boolean(product));
-                  const evidenced = projectCatalogFilterEvidence(recoveredProducts, projection.proven_criteria);
-                  const recoveredGate = gateWithLiteralCompoundEvidence(
-                    projectPairedTitleEvidence(evidenced, compatibilityRelations),
-                    criteria,
-                  ).report;
-                  const targetReport = verifySelectionTarget(activeSelectionTarget, recoveredProducts);
-                  const targetIds = new Set(targetReport.passed_ids);
-                  const gatedIds = recovered.results
-                    .map((product) => String(product.id))
-                    .filter((id) => recoveredGate.passed_ids.includes(id) && targetIds.has(id));
+                  const recoveryDiscover = lastDiscover;
+                  const recoveryTarget = activeSelectionTarget;
+                  const recoveryCategoryEvidence = `${userMessage}\n${recoveryTarget}`;
+                  const groundedTargets = groundedCategoryRecoveryQueries(recoveryDiscover, recoveryCategoryEvidence, 20);
+                  const evaluateRecoveredPool = (pool: SearchCatalogOk): string[] => {
+                    const recoveredProducts = pool.results
+                      .map((product) => ctx.cache.get(String(product.id)))
+                      .filter((product): product is ProductFull => Boolean(product));
+                    const categoryGroundedProducts = filterProductsByGroundedCategoryTargets(
+                      recoveredProducts,
+                      groundedTargets,
+                      recoveryDiscover.category.pagetitle,
+                      recoveryCategoryEvidence,
+                    );
+                    const categoryIds = new Set(categoryGroundedProducts.map((product) => product.id));
+                    const evidenced = projectCatalogFilterEvidence(categoryGroundedProducts, projection.proven_criteria);
+                    const recoveredGate = gateWithLiteralCompoundEvidence(
+                      projectPairedTitleEvidence(evidenced, compatibilityRelations),
+                      criteria,
+                    ).report;
+                    const targetReport = verifySelectionTargetWithVisibleTitle(recoveryTarget, categoryGroundedProducts);
+                    const targetIds = new Set(targetReport.passed_ids);
+                    return pool.results
+                      .map((product) => String(product.id))
+                      .filter((id) => categoryIds.has(id) && recoveredGate.passed_ids.includes(id) && targetIds.has(id));
+                  };
+                  let gatedIds = evaluateRecoveredPool(recovered);
+                  if (
+                    gatedIds.length === 0 &&
+                    ("category" in recoverySearchArgs || "category_in" in recoverySearchArgs)
+                  ) {
+                    const { category: _category, category_in: _categoryIn, ...unscopedArgs } = recoverySearchArgs;
+                    const unscoped = await runTool("search_catalog", unscopedArgs, ctx);
+                    if (unscoped.ok && unscoped.tool === "search_catalog") {
+                      const unscopedGatedIds = evaluateRecoveredPool(unscoped);
+                      steps.push({
+                        step: "v3_criteria_post_gate_scope_recovery",
+                        ms: now(),
+                        meta: {
+                          scoped_found: recovered.results.length,
+                          unscoped_found: unscoped.results.length,
+                          safe: unscopedGatedIds.length,
+                        },
+                      });
+                      if (unscopedGatedIds.length > 0) {
+                        recovered = unscoped;
+                        gatedIds = unscopedGatedIds;
+                      }
+                    }
+                  }
                   const budgetPassed = filterProductIdsByBudgetCap(
                     gatedIds,
                     ctx.cache,
@@ -4789,7 +5051,7 @@ async function runExpertLoop(
             if (passed.length === 0 && report.rejected.length > 0) {
               // Всё отсеяно данными карточек → возвращаем модели явную ошибку с отчётом,
               // чтобы она переискала или честно сказала клиенту (см. <criteria_contract>).
-              gateShortCircuit = {
+              gateShortCircuit ??= {
                 tool: "render_products",
                 ok: false,
                 error_code: "criteria_mismatch",
@@ -5489,13 +5751,15 @@ async function runExpertLoop(
           }
           if (result.ok) {
             lastDiscover = result as unknown as DiscoverCategoryOk;
+            selectionDiscoveries.push(lastDiscover);
+            if (selectionDiscoveries.length > 8) selectionDiscoveries.shift();
             addToWhitelist(lastDiscover.category?.pagetitle);
             for (const leaf of lastDiscover.leaf_categories ?? []) {
               addToWhitelist(leaf.pagetitle);
             }
             if (intentMode === "select" && !activeSelectionTarget) {
               const bootstrapped = bootstrapSelectionTargetFromDiscovery(
-                `${userMessage}\n${initialSelectionDeclaration(firstAssistantText || assistantReasoning)}`,
+                `${userMessage}\n${initialSelectionDiscoveryNoun ?? ""}\n${initialSelectionDeclaration(firstAssistantText || assistantReasoning)}`,
                 lastDiscover.resolved_from ?? "",
                 lastDiscover.category?.pagetitle ?? "",
               );
@@ -5558,6 +5822,10 @@ async function runExpertLoop(
               const candidateEvidenceStrength =
                 (hasExactCompoundEvidence ? 2 : 0) +
                 (matchedQuery ? 2 : 0) +
+                (sourceLabel && ids.every((id) => {
+                  const product = ctx.cache.get(id);
+                  return Boolean(product && titleSupportsGroundedJargonQuery(product.pagetitle, sourceLabel));
+                }) ? 2 : 0) +
                 (userBackedSearchCriteria.length > 0 ? 1 : 0);
               if (
                 visibleSemanticIds.length > 0 &&
@@ -5591,6 +5859,7 @@ async function runExpertLoop(
               !seriesTurnRequiresGrounding
             ) {
               groundedJargonTerminal = true;
+              declaredAliasQuery = null;
               steps.push({
                 step: "v3_grounded_jargon_terminal",
                 ms: now(),
@@ -5706,6 +5975,34 @@ async function runExpertLoop(
             ms: now(),
             meta: { from: previousAgentPhase, to: agentPhase, tool: tc.name },
           });
+        }
+
+        if (tc.name === "render_products" && !result.ok) {
+          // A structurally valid tool call is not a completed selection
+          // contract when the renderer received no verified cards (or failed
+          // for any other reason). Terminal recovery must prove the contract
+          // again from catalog evidence instead of inheriting this flag.
+          activeSelectionContractComplete = false;
+          const rejectedEvidence = `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`;
+          ensureActiveSelectionTarget(rejectedEvidence, "rejected_render_reasoning");
+          rejectedRenderFinalizeBreak = shouldFinalizePendingSelection({
+            products_rendered: productsRendered,
+            intent_mode: intentMode,
+            has_discovery: Boolean(lastDiscover),
+            has_selection_target: Boolean(activeSelectionTarget),
+            mandatory_criteria_count: latestRenderCriteria.filter((criterion) => (criterion.level ?? "A") === "A").length,
+            replacement_intent: replacementIntent,
+            series_grounding_required: seriesTurnRequiresGrounding,
+            compatibility_relation_count: minimumCompatibilityRelationCount(rejectedEvidence),
+            compatibility_required: reasoningNeedsCompatibilityRelations(rejectedEvidence),
+          });
+          if (rejectedRenderFinalizeBreak) {
+            steps.push({
+              step: "v3_rejected_render_routed_to_finalizer",
+              ms: now(),
+              meta: { error_code: result.error_code, criteria: latestRenderCriteria.length },
+            });
+          }
         }
 
 
@@ -5843,6 +6140,7 @@ async function runExpertLoop(
 
       // No-progress detector — выходим в forced-finalize, не сжигая остаток бюджета.
       if (groundedJargonTerminal || groundedCompoundSearchTerminal) break;
+      if (rejectedRenderFinalizeBreak) break;
       if (noProgressBreak) break;
       // Тупик по критериям: сервер сам дважды сходил в каталог по формулировке
       // модели и не нашёл ничего — новых сигналов не будет, честно завершаем.
@@ -5853,30 +6151,132 @@ async function runExpertLoop(
 
     // If the model ends without rendering a non-empty, reasoning-guarded
     // by_filter result, render only the IDs that still pass the server evidence
-    // If the model explained a measurable requirement but exhausted its step
-    // budget before a render contract, compile only that explicit range into a
-    // unique live facet. The discovered category supplies the class boundary;
-    // an unverified semantic pool is never rendered.
+    // If the model explained mandatory requirements but exhausted its step
+    // budget before a valid render contract, compile the complete latest
+    // criteria intersection into live facets. Keeping only the numeric range
+    // here would lose an independent type/mounting requirement.
     const terminalReasoningEvidence = `${userMessage}\n${firstAssistantText}`;
-    if (
-      productsRendered === 0 &&
-      lastDiscover &&
-      activeSelectionTarget &&
-      !replacementIntent &&
-      intentMode === "select" &&
-      !seriesTurnRequiresGrounding &&
-      minimumCompatibilityRelationCount(terminalReasoningEvidence) < 2 &&
-      !reasoningNeedsCompatibilityRelations(terminalReasoningEvidence)
-    ) {
-      const projectedRange = projectReasoningRangeCriteria(latestRenderCriteria, terminalReasoningEvidence, lastDiscover.facets);
-      const terminalRangeCriteria = projectedRange.added.length > 0
-        ? projectedRange.added
-        : projectedRange.criteria.filter((criterion) => criterion.op === "range" && (criterion.level ?? "A") === "A");
-      const facetProjection = projectCriteriaFacetOptions(terminalRangeCriteria, lastDiscover.facets);
-      if (terminalRangeCriteria.length > 0 && Object.keys(facetProjection.options).length > 0) {
+    ensureActiveSelectionTarget(
+      `${terminalReasoningEvidence}\n${assistantReasoning}`,
+      "terminal_accumulated_reasoning",
+    );
+    const terminalCategoryEvidence = [
+      userMessage,
+      initialSelectionDiscoveryNoun,
+      activeSelectionTarget,
+      groundedSelectionTargetHint,
+    ].filter(Boolean).join("\n");
+    const terminalRecoveryScope = rankGroundedCategoryRecoveryScopes(
+      selectionDiscoveries,
+      terminalCategoryEvidence,
+      1,
+    )[0] ?? null;
+    // The latest taxonomy response may be a technically valid but semantically
+    // wrong corrective branch. Prefer the newest discovery grounded in the
+    // frozen target evidence; fall back to the legacy pointer only when there
+    // is no history (for compatibility with non-selection paths).
+    const terminalDiscover = terminalRecoveryScope?.discovery ??
+      (selectionDiscoveries.length === 0 ? lastDiscover : null);
+    const terminalGroundedTargets = terminalRecoveryScope?.targets ?? [];
+    const terminalFinalizationRequired = shouldFinalizePendingSelection({
+      products_rendered: productsRendered,
+      intent_mode: intentMode,
+      has_discovery: Boolean(terminalDiscover),
+      has_selection_target: Boolean(activeSelectionTarget),
+      mandatory_criteria_count: latestRenderCriteria.filter((criterion) => (criterion.level ?? "A") === "A").length,
+      replacement_intent: replacementIntent,
+      series_grounding_required: seriesTurnRequiresGrounding,
+      compatibility_relation_count: minimumCompatibilityRelationCount(terminalReasoningEvidence),
+      compatibility_required: reasoningNeedsCompatibilityRelations(terminalReasoningEvidence),
+    });
+
+    const attemptTerminalJargonRecovery = async (source: string) => {
+      if (!terminalDiscover || !activeSelectionTarget || !source.trim()) return null;
+      send({ type: "tool_event", tool: "jargon_recover_catalog", phase: "start", summary: "Проверяю каталожное название…" });
+      const jargonResult = await runTool("jargon_recover_catalog", {
+        query: source,
+        category: terminalDiscover.category.pagetitle,
+        per_page: 10,
+      }, ctx);
+      send({
+        type: "tool_event",
+        tool: "jargon_recover_catalog",
+        phase: "result",
+        summary: summariseToolResult("jargon_recover_catalog", jargonResult),
+      });
+      if (!jargonResult.ok || jargonResult.tool !== "jargon_recover_catalog") return null;
+      const matchedQuery = String(jargonResult.matched_query ?? "").trim();
+      const candidateProducts = jargonResult.results
+        .map((product) => ctx.cache.get(String(product.id)))
+        .filter((product): product is ProductFull => Boolean(
+          product && matchedQuery && titleSupportsGroundedJargonQuery(product.pagetitle, matchedQuery)
+        ));
+      const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, candidateProducts);
+      const terminalCriteria = resolveRenderCriteria(
+        [],
+        latestRenderCriteria,
+        userBackedSearchCriteria,
+        Boolean(namedSeriesToken),
+      );
+      const gate = applyCriteriaGate(candidateProducts, terminalCriteria);
+      const safeIds = filterProductIdsByBudgetCap(
+        candidateProducts
+          .map((product) => product.id)
+          .filter((id) => targetReport.passed_ids.includes(id) && gate.passed_ids.includes(id)),
+        ctx.cache,
+        extractBudgetCap(userMessage),
+      ).ids.slice(0, 10);
+      if (safeIds.length === 0) return null;
+      const rendered = await runTool("render_products", {
+        product_ids: safeIds,
+        criteria: terminalCriteria,
+        total_available: jargonResult.total,
+      }, ctx);
+      if (!rendered.ok || rendered.tool !== "render_products") return null;
+      return { jargonResult, rendered, safeIds, matchedQuery, candidateCount: candidateProducts.length };
+    };
+
+    // A metalinguistic claim made in the consultant's reasoning outranks every
+    // generic facet/search recovery. Resolve that claim first, or keep the turn
+    // empty; otherwise the system would knowingly render a broad sibling pool.
+    if (productsRendered === 0 && declaredAliasQuery && !replacementIntent && intentMode === "select") {
+      const recoveredAlias = await attemptTerminalJargonRecovery(declaredAliasQuery);
+      if (recoveredAlias) {
+        for (const id of recoveredAlias.safeIds) shownIds.add(id);
+        send({
+          type: "products_block",
+          markdown: recoveredAlias.rendered.markdown,
+          count: recoveredAlias.rendered.rendered_count,
+          total_available: recoveredAlias.jargonResult.total,
+        });
+        productsRendered += recoveredAlias.rendered.rendered_count;
+        steps.push({
+          step: "v3_declared_alias_recovery",
+          ms: now(),
+          meta: {
+            source: declaredAliasQuery,
+            matched_query: recoveredAlias.matchedQuery,
+            candidates: recoveredAlias.candidateCount,
+            rendered: recoveredAlias.rendered.rendered_count,
+          },
+        });
+        return { finalText, productsRendered, shownProductIds: [...shownIds] };
+      }
+      steps.push({
+        step: "v3_declared_alias_recovery_empty",
+        ms: now(),
+        meta: { source: declaredAliasQuery },
+      });
+    }
+    if (!declaredAliasQuery && terminalFinalizationRequired && terminalDiscover && activeSelectionTarget) {
+      const projectedRange = projectReasoningRangeCriteria(latestRenderCriteria, terminalReasoningEvidence, terminalDiscover.facets);
+      const terminalCriteria = projectedRange.criteria.filter((criterion) => (criterion.level ?? "A") === "A");
+      const facetProjection = projectCriteriaFacetOptions(terminalCriteria, terminalDiscover.facets);
+      if (terminalCriteria.length > 0 && Object.keys(facetProjection.options).length > 0) {
+        send({ type: "tool_event", tool: "search_catalog", phase: "start", summary: "Перепроверяю итоговый набор по обязательным параметрам…" });
         const terminalSearchArgs: Record<string, unknown> = {
           mode: "by_filter",
-          category_in: lastDiscover.leaf_categories.map((category) => category.pagetitle),
+          category_in: terminalDiscover.leaf_categories.map((category) => category.pagetitle),
           options: facetProjection.options,
           per_page: 50,
         };
@@ -5884,9 +6284,9 @@ async function runExpertLoop(
         if (recovered.ok && recovered.tool === "search_catalog" && recovered.results.length === 0) {
           const recoveryPlan = buildSelectionSearchRecoveryPlan({
             failed_args: terminalSearchArgs,
-            facets: lastDiscover.facets,
-            leaf_categories: lastDiscover.leaf_categories.map((category) => category.pagetitle),
-            reasoning_criteria: [],
+            facets: terminalDiscover.facets,
+            leaf_categories: terminalDiscover.leaf_categories.map((category) => category.pagetitle),
+            reasoning_criteria: terminalCriteria,
             compatibility_shaped: false,
           });
           for (const attempt of recoveryPlan) {
@@ -5908,30 +6308,54 @@ async function runExpertLoop(
           }
         }
         if (recovered.ok && recovered.tool === "search_catalog") {
-          const products = recovered.results
-            .map((product) => ctx.cache.get(String(product.id)))
-            .filter((product): product is ProductFull => Boolean(product));
-          const initialCategoryReasoning = `${userMessage}\n${firstAssistantText}`;
-          const groundedTargets = groundedCategoryRecoveryQueries(lastDiscover, initialCategoryReasoning, 20);
-          const categoryGroundedProducts = filterProductsByGroundedCategoryTargets(
-            products,
-            groundedTargets,
-            lastDiscover.category.pagetitle,
-            initialCategoryReasoning,
-          );
-          const selectionTargetReport = verifySelectionTarget(activeSelectionTarget, categoryGroundedProducts);
-          const selectionTargetIds = new Set(selectionTargetReport.passed_ids);
-          const evidenced = projectCatalogFilterEvidence(products, facetProjection.proven_criteria);
-          const gate = applyCriteriaGate(evidenced, terminalRangeCriteria);
-          const targetIds = new Set(categoryGroundedProducts.map((product) => product.id));
-          let safeIds = recovered.results
-            .map((product) => String(product.id))
-            .filter((id) => gate.passed_ids.includes(id) && targetIds.has(id) && selectionTargetIds.has(id));
+          const terminalTarget = activeSelectionTarget;
+          const evaluateTerminalPool = (pool: SearchCatalogOk) => {
+            const products = pool.results
+              .map((product) => ctx.cache.get(String(product.id)))
+              .filter((product): product is ProductFull => Boolean(product));
+            const categoryGroundedProducts = filterProductsByGroundedCategoryTargets(
+              products,
+              terminalGroundedTargets,
+              terminalDiscover.category.pagetitle,
+              terminalCategoryEvidence,
+            );
+            const selectionTargetReport = verifySelectionTargetWithVisibleTitle(terminalTarget, categoryGroundedProducts);
+            const selectionTargetIds = new Set(selectionTargetReport.passed_ids);
+            const evidenced = projectCatalogFilterEvidence(products, facetProjection.proven_criteria);
+            const gate = applyCriteriaGate(evidenced, terminalCriteria);
+            const targetIds = new Set(categoryGroundedProducts.map((product) => product.id));
+            return pool.results
+              .map((product) => String(product.id))
+              .filter((id) => gate.passed_ids.includes(id) && targetIds.has(id) && selectionTargetIds.has(id));
+          };
+          let safeIds = evaluateTerminalPool(recovered);
+          if (safeIds.length === 0) {
+            const { category: _category, category_in: _categoryIn, ...unscopedArgs } = terminalSearchArgs;
+            const unscoped = await runTool("search_catalog", unscopedArgs, ctx);
+            if (unscoped.ok && unscoped.tool === "search_catalog") {
+              const unscopedSafeIds = evaluateTerminalPool(unscoped);
+              steps.push({
+                step: "v3_terminal_post_gate_scope_recovery",
+                ms: now(),
+                meta: { scoped_found: recovered.results.length, unscoped_found: unscoped.results.length, safe: unscopedSafeIds.length },
+              });
+              if (unscopedSafeIds.length > 0) {
+                recovered = unscoped;
+                safeIds = unscopedSafeIds;
+              }
+            }
+          }
           safeIds = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage)).ids.slice(0, 10);
+          send({
+            type: "tool_event",
+            tool: "search_catalog",
+            phase: "result",
+            summary: `Итоговая перепроверка: подтверждено ${safeIds.length}`,
+          });
           if (safeIds.length > 0) {
             const rescued = await runTool("render_products", {
               product_ids: safeIds,
-              criteria: terminalRangeCriteria,
+              criteria: terminalCriteria,
               total_available: recovered.total,
             }, ctx);
             if (rescued.ok) {
@@ -5942,12 +6366,91 @@ async function runExpertLoop(
               steps.push({
                 step: "v3_measured_reasoning_terminal_recovery",
                 ms: now(),
-                meta: { criteria: terminalRangeCriteria, found: recovered.results.length, rendered: rendered.rendered_count },
+                meta: { criteria: terminalCriteria, found: recovered.results.length, rendered: rendered.rendered_count },
               });
               return { finalText, productsRendered, shownProductIds: [...shownIds] };
             }
           }
         }
+      }
+    }
+
+    // Some live numeric facets expose only a bounded value sample, so a valid
+    // calculated range cannot always be serialized back into exact `options`.
+    // Re-run only the nouns/queries that the consultant itself selected while
+    // reasoning, preferring the most specific wording. This keeps the final
+    // lookup aligned with the explanation and avoids both a product dictionary
+    // and an expensive scan of unrelated catalog pages. Every returned card is
+    // still revalidated against the complete target/criteria/budget contract.
+    if (!declaredAliasQuery && terminalFinalizationRequired && terminalDiscover && activeSelectionTarget) {
+      const projected = projectReasoningRangeCriteria(latestRenderCriteria, terminalReasoningEvidence, terminalDiscover.facets);
+      const terminalCriteria = projected.criteria.filter((criterion) => (criterion.level ?? "A") === "A");
+      if (terminalCriteria.length > 0) {
+        send({ type: "tool_event", tool: "search_catalog", phase: "start", summary: "Сверяю поиск с выбранным типом товара…" });
+        const recoveredIds: string[] = [];
+        const seen = new Set<string>();
+        const attemptedQueries: string[] = [];
+        let totalAvailable = 0;
+        for (const query of rankReasoningSearchQueries([
+          ...compoundRecoveryHints,
+          lastSearchNoun,
+          activeSelectionTarget,
+        ])) {
+          attemptedQueries.push(query);
+          const queryResult = await runTool("search_catalog", { mode: "by_query", query, per_page: 50 }, ctx);
+          if (!queryResult.ok || queryResult.tool !== "search_catalog") continue;
+          totalAvailable = Math.max(totalAvailable, queryResult.total);
+          const queryProducts = queryResult.results
+            .map((product) => ctx.cache.get(String(product.id)))
+            .filter((product): product is ProductFull => Boolean(product));
+          const categoryGroundedProducts = filterProductsByGroundedCategoryTargets(
+            queryProducts,
+            terminalGroundedTargets,
+            terminalDiscover.category.pagetitle,
+            terminalCategoryEvidence,
+          );
+          const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, categoryGroundedProducts);
+          const targetIds = new Set(targetReport.passed_ids);
+          const criteriaReport = applyCriteriaGate(categoryGroundedProducts, terminalCriteria);
+          for (const product of categoryGroundedProducts) {
+            if (seen.has(product.id) || !targetIds.has(product.id) || !criteriaReport.passed_ids.includes(product.id)) continue;
+            seen.add(product.id);
+            recoveredIds.push(product.id);
+            if (recoveredIds.length >= 5) break;
+          }
+          if (recoveredIds.length >= 5) break;
+        }
+        const budgetSafeIds = filterProductIdsByBudgetCap(recoveredIds, ctx.cache, extractBudgetCap(userMessage)).ids;
+        send({
+          type: "tool_event",
+          tool: "search_catalog",
+          phase: "result",
+          summary: `Сверка по выбранному типу: подтверждено ${budgetSafeIds.length}`,
+        });
+        if (budgetSafeIds.length > 0) {
+          const rescued = await runTool("render_products", {
+            product_ids: budgetSafeIds,
+            criteria: terminalCriteria,
+            total_available: totalAvailable || budgetSafeIds.length,
+          }, ctx);
+          if (rescued.ok) {
+            const rendered = rescued as { markdown: string; rendered_count: number };
+            for (const id of budgetSafeIds) shownIds.add(id);
+            send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: totalAvailable || budgetSafeIds.length });
+            productsRendered += rendered.rendered_count;
+            steps.push({
+              step: "v3_terminal_reasoning_query_recovery",
+              ms: now(),
+              meta: { criteria: terminalCriteria, queries: attemptedQueries, rendered: rendered.rendered_count },
+            });
+            return { finalText, productsRendered, shownProductIds: [...shownIds] };
+          }
+        }
+        steps.push({
+          step: "v3_terminal_reasoning_query_recovery_empty",
+          ms: now(),
+          meta: { criteria: terminalCriteria, queries: attemptedQueries },
+        });
       }
     }
 
@@ -5957,6 +6460,7 @@ async function runExpertLoop(
     // values declared in the consultant's reasoning.
     if (
       productsRendered === 0 &&
+      !declaredAliasQuery &&
       reasoningBackedSearch &&
       activeSelectionTarget &&
       reasoningBackedSearch.criteria.length > 0 &&
@@ -5985,8 +6489,20 @@ async function runExpertLoop(
       );
       const gate = adjusted.report;
       let safeIds = reasoningBackedSearch.ids.filter((id) => gate.passed_ids.includes(id));
-      const targetReport = verifySelectionTarget(activeSelectionTarget, candidateProducts);
-      safeIds = safeIds.filter((id) => targetReport.passed_ids.includes(id));
+      let terminalTargetProducts = candidateProducts;
+      if (intentMode === "select" && !replacementIntent && !seriesTurnRequiresGrounding && terminalDiscover) {
+        if (terminalGroundedTargets.length > 0) {
+          terminalTargetProducts = filterProductsByGroundedCategoryTargets(
+            candidateProducts,
+            terminalGroundedTargets,
+            terminalDiscover.category.pagetitle,
+            terminalCategoryEvidence,
+          );
+        }
+      }
+      const groundedIds = new Set(terminalTargetProducts.map((product) => product.id));
+      const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, terminalTargetProducts);
+      safeIds = safeIds.filter((id) => groundedIds.has(id) && targetReport.passed_ids.includes(id));
       if (replacementIntent) {
         const anchorId = getAnchorExcludeId();
         const familyExclude = getFamilyExcludeSet();
@@ -6051,7 +6567,56 @@ async function runExpertLoop(
       });
     }
 
-    if (productsRendered === 0 && !semanticBackedSearch && !replacementIntent && intentMode === "select" && !seriesTurnRequiresGrounding) {
+    // A successful broad category discovery does not prove that the user's
+    // colloquial noun is literal catalog vocabulary. After two distinct empty
+    // model-owned semantic queries, route once through the existing LLM lexical
+    // helper. This is a state transition, not a synonym table: the helper's
+    // candidate must occur literally in every accepted live title, and the
+    // original selection target/criteria/budget gates still apply.
+    if (
+      productsRendered === 0 &&
+      !declaredAliasQuery &&
+      noProgressBreak &&
+      !semanticBackedSearch &&
+      !replacementIntent &&
+      intentMode === "select" &&
+      !seriesTurnRequiresGrounding &&
+      !semanticCompoundEvidenceRequired &&
+      terminalDiscover &&
+      activeSelectionTarget &&
+      triedLadderQueries.size >= 2 &&
+      lastSearchNoun.trim()
+    ) {
+      const recoveredJargon = await attemptTerminalJargonRecovery(lastSearchNoun);
+      if (recoveredJargon) {
+        for (const id of recoveredJargon.safeIds) shownIds.add(id);
+        send({
+          type: "products_block",
+          markdown: recoveredJargon.rendered.markdown,
+          count: recoveredJargon.rendered.rendered_count,
+          total_available: recoveredJargon.jargonResult.total,
+        });
+        productsRendered += recoveredJargon.rendered.rendered_count;
+        steps.push({
+          step: "v3_terminal_jargon_recovery",
+          ms: now(),
+          meta: {
+            source: lastSearchNoun,
+            matched_query: recoveredJargon.matchedQuery,
+            candidates: recoveredJargon.candidateCount,
+            rendered: recoveredJargon.rendered.rendered_count,
+          },
+        });
+        return { finalText, productsRendered, shownProductIds: [...shownIds] };
+      }
+      steps.push({
+        step: "v3_terminal_jargon_recovery_empty",
+        ms: now(),
+        meta: { source: lastSearchNoun },
+      });
+    }
+
+    if (productsRendered === 0 && !declaredAliasQuery && !semanticBackedSearch && !replacementIntent && intentMode === "select" && !seriesTurnRequiresGrounding) {
       const evidence = `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`;
       const categoryQueries = groundedCategoryRecoveryQueries(lastDiscover, evidence)
         .map((query) => ({ query, requireTitleEvidence: true, source: "category" as const }));
@@ -6091,9 +6656,10 @@ async function runExpertLoop(
     // is handled by the reasoning-backed recovery above.
     if (
       productsRendered === 0 &&
+      !declaredAliasQuery &&
       semanticBackedSearch &&
       activeSelectionTarget &&
-      activeSelectionContractComplete &&
+      terminalFinalizationRequired &&
       !replacementIntent &&
       intentMode === "select" &&
       (
@@ -6106,16 +6672,34 @@ async function runExpertLoop(
       const candidateProducts = semanticBackedSearch.ids
         .map((id) => ctx.cache.get(id))
         .filter((product): product is NonNullable<typeof product> => Boolean(product));
-      const adjusted = gateWithLiteralCompoundEvidence(
-        projectPairedTitleEvidence(candidateProducts, activeCompatibilityRelations),
+      const categoryGroundedProducts = terminalDiscover && terminalGroundedTargets.length > 0
+        ? filterProductsByGroundedCategoryTargets(
+          candidateProducts,
+          terminalGroundedTargets,
+          terminalDiscover.category.pagetitle,
+          terminalCategoryEvidence,
+        )
+        : [];
+      // A semantic pool is retrieval evidence only. Reconstruct the same full
+      // criteria contract used by the rejected render; otherwise a later broad
+      // token retry could silently discard a calculated or user-backed bound.
+      const terminalCriteria = resolveRenderCriteria(
         semanticBackedSearch.criteria,
+        latestRenderCriteria,
+        userBackedSearchCriteria,
+        Boolean(namedSeriesToken),
+      );
+      const adjusted = gateWithLiteralCompoundEvidence(
+        projectPairedTitleEvidence(categoryGroundedProducts, activeCompatibilityRelations),
+        terminalCriteria,
       );
       const gate = adjusted.report;
       let safeIds = guardVisibleCardinality(
         semanticBackedSearch.ids.filter((id) => gate.passed_ids.includes(id)),
       ).ids;
-      const targetReport = verifySelectionTarget(activeSelectionTarget, candidateProducts);
-      safeIds = safeIds.filter((id) => targetReport.passed_ids.includes(id));
+      const groundedIds = new Set(categoryGroundedProducts.map((product) => product.id));
+      const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, categoryGroundedProducts);
+      safeIds = safeIds.filter((id) => groundedIds.has(id) && targetReport.passed_ids.includes(id));
       const budgetGuard = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage));
       safeIds = budgetGuard.ids;
       if (budgetGuard.dropped > 0) {
@@ -6254,18 +6838,6 @@ Deno.serve(async (req) => {
   const slots = rawSlots ?? {};
 
   const supabase = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false } });
-  const settings = await loadSettings(supabase);
-
-  if (!settings.openrouter_api_key) {
-    return new Response(JSON.stringify({ error: "missing_openrouter_key" }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
-  if (!settings.volt220_api_token) {
-    return new Response(JSON.stringify({ error: "missing_catalog_token" }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-  }
 
   const t0 = Date.now();
   const steps: StepLog[] = [];
@@ -6296,6 +6868,27 @@ Deno.serve(async (req) => {
         } catch (e) { console.error("[v3] enqueue failed:", e); }
       };
 
+      // Open the SSE transport before any settings/database dependency. When
+      // that dependency stalled before Response construction, the edge gateway
+      // returned a bare HTTP 503 after ~30 seconds and the widget had no stream
+      // it could keep alive or diagnose.
+      const keepAliveBytes = new TextEncoder().encode(": keep-alive\n\n");
+      try { controller.enqueue(new TextEncoder().encode(": stream-open\n\n")); } catch { /* stream already closed */ }
+      const keepAliveTimer = setInterval(() => {
+        try { controller.enqueue(keepAliveBytes); } catch { /* stream already closed */ }
+      }, 10_000);
+
+      const settings = await loadSettings(supabase);
+      if (!settings.openrouter_api_key || !settings.volt220_api_token) {
+        errorMsg = !settings.openrouter_api_key ? "missing_openrouter_key" : "missing_catalog_token";
+        publicDiagnosticError = "internal_error";
+        send({ type: "delta", content: "Не удалось запустить подбор из-за внутренней ошибки. Повторите запрос позже или свяжитесь с менеджером." });
+        send({ type: "diagnostic", log_id: null, phase: "complete", products_count: 0, error: publicDiagnosticError });
+        clearInterval(keepAliveTimer);
+        try { send({ type: "done" }); } catch { /* ignore */ }
+        try { controller.close(); } catch { /* already closed */ }
+        return;
+      }
 
       steps.push({ step: "v3_turn_start", ms: 0, meta: { user_message: userMessage, session_id: sessionId, message_id: body.messageId } });
 
@@ -6304,15 +6897,6 @@ Deno.serve(async (req) => {
       // чтобы воркер не убили до завершения insert/update при abort стрима.
       const logId = await insertTurnLogStart(supabase, sessionId, userMessage, [...steps]);
       send({ type: "diagnostic", log_id: logId, phase: "start" });
-
-      // Long model calls used to leave the SSE connection completely silent.
-      // Some proxies/runtime paths then treated a healthy request as idle and
-      // terminated it before the first answer token. SSE comments are invisible
-      // to the widget parser but keep the transport active while work continues.
-      const keepAliveBytes = new TextEncoder().encode(": keep-alive\n\n");
-      const keepAliveTimer = setInterval(() => {
-        try { controller.enqueue(keepAliveBytes); } catch { /* stream already closed */ }
-      }, 10_000);
 
       // Systemic protection against hard worker kills (Edge Runtime SIGKILL via req.signal).
       // try/catch/finally может НЕ выполниться, если рантайм убивает воркер до return.

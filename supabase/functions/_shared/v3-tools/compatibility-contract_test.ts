@@ -138,6 +138,7 @@ Deno.test("relative equality is resolved from the opposite relation and qualitat
 Deno.test("paired states require two independent relations", () => {
   assertEquals(minimumCompatibilityRelationCount("до установки больше 10 мм, после установки плотно фиксируется"), 2);
   assertEquals(minimumCompatibilityRelationCount("должно свободно надеваться на 10 мм и плотно обжимать объект"), 2);
+  assertEquals(minimumCompatibilityRelationCount("для объекта 12 мм размер берём чуть больше, чтобы свободно наделся и плотно обожмёт объект"), 2);
   assertEquals(minimumCompatibilityRelationCount("устройство выдерживает нагрузку не менее 250 Вт"), 1);
   assertEquals(minimumCompatibilityRelationCount("мощность товара не менее 40 Вт"), 0);
 });
