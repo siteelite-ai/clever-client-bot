@@ -2961,6 +2961,10 @@ async function runExpertLoop(
   // jargon name, that reasoning becomes a proof obligation. A broad facet
   // search cannot silently replace it with a merely similar product shape.
   let declaredAliasQuery: string | null = null;
+  // Persistent lexical invariant for the whole turn. `declaredAliasQuery` is
+  // transient controller state and may be cleared after a grounded lookup;
+  // the customer's qualifier itself must survive until cards are rendered.
+  let requiredCatalogAlias: string | null = null;
   // Turn-level guard: рендерим карточку контактов максимум один раз,
   // даже если LLM по ошибке вызвал lookup_contacts повторно (топик-дубль).
   const contactsEmitted = { value: false };
@@ -3787,7 +3791,9 @@ async function runExpertLoop(
             tc.args.noun.trim()
           ) {
             initialSelectionDiscoveryNoun = tc.args.noun.trim();
-            declaredAliasQuery ??= extractPostNominalCatalogQualifier(userMessage, initialSelectionDiscoveryNoun);
+            const qualifier = extractPostNominalCatalogQualifier(userMessage, initialSelectionDiscoveryNoun);
+            declaredAliasQuery ??= qualifier;
+            requiredCatalogAlias ??= qualifier;
           }
         }
         if (tc.name === "search_catalog") {
@@ -4358,6 +4364,7 @@ async function runExpertLoop(
           );
           const lexicalClaim = aliasClaim ?? declaredAliasQuery;
           if (lexicalClaim && !groundedJargonTerminal) {
+            requiredCatalogAlias ??= lexicalClaim;
             const finalIds = Array.isArray((tc.args as Record<string, unknown>).product_ids)
               ? ((tc.args as Record<string, unknown>).product_ids as unknown[]).map(String)
               : [];
@@ -6285,8 +6292,9 @@ async function runExpertLoop(
     // A metalinguistic claim made in the consultant's reasoning outranks every
     // generic facet/search recovery. Resolve that claim first, or keep the turn
     // empty; otherwise the system would knowingly render a broad sibling pool.
-    if (productsRendered === 0 && declaredAliasQuery && !replacementIntent && intentMode === "select") {
-      const recoveredAlias = await attemptTerminalJargonRecovery(declaredAliasQuery);
+    const terminalAliasRequirement = declaredAliasQuery ?? requiredCatalogAlias;
+    if (productsRendered === 0 && terminalAliasRequirement && !replacementIntent && intentMode === "select") {
+      const recoveredAlias = await attemptTerminalJargonRecovery(terminalAliasRequirement);
       if (recoveredAlias) {
         for (const id of recoveredAlias.safeIds) shownIds.add(id);
         send({
@@ -6300,7 +6308,7 @@ async function runExpertLoop(
           step: "v3_declared_alias_recovery",
           ms: now(),
           meta: {
-            source: declaredAliasQuery,
+            source: terminalAliasRequirement,
             matched_query: recoveredAlias.matchedQuery,
             candidates: recoveredAlias.candidateCount,
             rendered: recoveredAlias.rendered.rendered_count,
@@ -6311,10 +6319,10 @@ async function runExpertLoop(
       steps.push({
         step: "v3_declared_alias_recovery_empty",
         ms: now(),
-        meta: { source: declaredAliasQuery },
+        meta: { source: terminalAliasRequirement },
       });
     }
-    if (!declaredAliasQuery && terminalFinalizationRequired && terminalDiscover && activeSelectionTarget) {
+    if (!terminalAliasRequirement && terminalFinalizationRequired && terminalDiscover && activeSelectionTarget) {
       const projectedRange = projectReasoningRangeCriteria(latestRenderCriteria, terminalReasoningEvidence, terminalDiscover.facets);
       const terminalCriteria = projectedRange.criteria.filter((criterion) => (criterion.level ?? "A") === "A");
       const facetProjection = projectCriteriaFacetOptions(terminalCriteria, terminalDiscover.facets);
@@ -6428,7 +6436,7 @@ async function runExpertLoop(
     // lookup aligned with the explanation and avoids both a product dictionary
     // and an expensive scan of unrelated catalog pages. Every returned card is
     // still revalidated against the complete target/criteria/budget contract.
-    if (!declaredAliasQuery && terminalFinalizationRequired && terminalDiscover && activeSelectionTarget) {
+    if (!terminalAliasRequirement && terminalFinalizationRequired && terminalDiscover && activeSelectionTarget) {
       const projected = projectReasoningRangeCriteria(latestRenderCriteria, terminalReasoningEvidence, terminalDiscover.facets);
       const terminalCriteria = projected.criteria.filter((criterion) => (criterion.level ?? "A") === "A");
       if (terminalCriteria.length > 0) {
@@ -6506,7 +6514,7 @@ async function runExpertLoop(
     // values declared in the consultant's reasoning.
     if (
       productsRendered === 0 &&
-      !declaredAliasQuery &&
+      !terminalAliasRequirement &&
       reasoningBackedSearch &&
       activeSelectionTarget &&
       reasoningBackedSearch.criteria.length > 0 &&
@@ -6621,7 +6629,7 @@ async function runExpertLoop(
     // original selection target/criteria/budget gates still apply.
     if (
       productsRendered === 0 &&
-      !declaredAliasQuery &&
+      !terminalAliasRequirement &&
       noProgressBreak &&
       !semanticBackedSearch &&
       !replacementIntent &&
@@ -6662,7 +6670,7 @@ async function runExpertLoop(
       });
     }
 
-    if (productsRendered === 0 && !declaredAliasQuery && !semanticBackedSearch && !replacementIntent && intentMode === "select" && !seriesTurnRequiresGrounding) {
+    if (productsRendered === 0 && !terminalAliasRequirement && !semanticBackedSearch && !replacementIntent && intentMode === "select" && !seriesTurnRequiresGrounding) {
       const evidence = `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`;
       const categoryQueries = groundedCategoryRecoveryQueries(lastDiscover, evidence)
         .map((query) => ({ query, requireTitleEvidence: true, source: "category" as const }));
@@ -6702,7 +6710,7 @@ async function runExpertLoop(
     // is handled by the reasoning-backed recovery above.
     if (
       productsRendered === 0 &&
-      !declaredAliasQuery &&
+      !terminalAliasRequirement &&
       semanticBackedSearch &&
       activeSelectionTarget &&
       terminalFinalizationRequired &&
