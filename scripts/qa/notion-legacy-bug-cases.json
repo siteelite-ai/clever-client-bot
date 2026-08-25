@@ -322,7 +322,8 @@
         "message": "нужен белый удлинитель на 3 места",
         "expect": {
           "min_products": 1,
-          "require_every_product_title_groups": [["удлинитель"], ["3 мест", "3 розет", "3 гнезд"], ["бел"]]
+          "require_every_product_title_groups": [["удлинитель"], ["3 мест", "3мест", "3 розет", "3 гнезд"]],
+          "require_any_text": ["бел"]
         }
       }]
     },
@@ -333,7 +334,7 @@
         "message": "подбери черную двойную розетку",
         "expect": {
           "min_products": 1,
-          "require_every_product_title_groups": [["розет"], ["двойн", "2 мест", "2 пост"], ["черн"]]
+          "require_every_product_title_groups": [["розет"], ["двойн", "2 мест", "2-мест", "2 пост"], ["черн"]]
         }
       }]
     },

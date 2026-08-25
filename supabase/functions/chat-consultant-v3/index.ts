@@ -146,6 +146,7 @@ import {
 } from "../_shared/v3-tools/exact-compound-marking-policy.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { selectReadinessClarification } from "../_shared/v3-tools/selection-readiness.ts";
+import { buildVisibleRequestContract, titleSupportsVisibleRequestContract } from "../_shared/v3-tools/visible-request-contract.ts";
 import { type EscalateInput,
   executeEscalate } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
@@ -2950,6 +2951,7 @@ async function runExpertLoop(
     return { ...adjusted, report: applyCriteriaGate(products, adjusted.criteria) };
   };
   const guardVisibleCardinality = (ids: string[]) => {
+    const visibleRequestContract = buildVisibleRequestContract(userMessage);
     const compactCriteria = userBackedSearchCriteria.filter((criterion) =>
       typeof criterion.value === "string" && !titleProvesCompactCriterion("", criterion)
     );
@@ -2961,6 +2963,17 @@ async function runExpertLoop(
     });
     const compactRemoved = ids.length - guarded.length;
     const afterCompact = guarded.length;
+    guarded = guarded.filter((id) => {
+      const product = ctx.cache.get(id);
+      return Boolean(
+        product && titleSupportsVisibleRequestContract(
+          product.pagetitle,
+          visibleRequestContract,
+        ),
+      );
+    });
+    const visibleRequestRemoved = afterCompact - guarded.length;
+    const afterVisibleRequest = guarded.length;
     if (explicitCompoundMarking) {
       guarded = guarded.filter((id) => {
         const product = ctx.cache.get(id);
@@ -2970,7 +2983,7 @@ async function runExpertLoop(
         ));
       });
     }
-    const compoundRemoved = afterCompact - guarded.length;
+    const compoundRemoved = afterVisibleRequest - guarded.length;
     const priceIntent = detectPriceDirection(userMessage);
     const superlative = priceIntent?.kind === "superlative" ? priceIntent : null;
     if (superlative && guarded.length > 0) {
@@ -2984,7 +2997,16 @@ async function runExpertLoop(
         })
         .slice(0, 1);
     }
-    return { ids: guarded, compactCriteria, compactRemoved, explicitCompoundMarking, compoundRemoved, superlative };
+    return {
+      ids: guarded,
+      compactCriteria,
+      compactRemoved,
+      visibleRequestContract,
+      visibleRequestRemoved,
+      explicitCompoundMarking,
+      compoundRemoved,
+      superlative,
+    };
   };
   let reasoningBackedSearch: { ids: string[]; total: number; criteria: Criterion[]; } | null = null;
   let agentPhase: AgentPhase = "open";
@@ -3343,7 +3365,7 @@ async function runExpertLoop(
     const rawPool = filtered.ids.length > 0 ? filtered.ids : ids;
     // NOTE: «strict semantic» fast-path удалён (2026-06-29) — LLM сам решает по rule 3a/3f.
     // Рендерим всё, что нашёл tryCodeFacetRescue; решение «честный отказ vs показать» — на LLM.
-    const pool = guardReplacementRenderIds(rawPool);
+    const pool = guardFinalRenderIds(rawPool);
     // NOTE: «strict semantic» fast-path удалён (2026-06-29) — LLM сам решает по rule 3a/3f.
     // Рендерим всё, что нашёл tryCodeFacetRescue; решение «честный отказ vs показать» — на LLM.
     const render = executeRenderProducts({ product_ids: pool, total_available: result.total } as RenderProductsInput, ctx.cache);
@@ -3456,6 +3478,9 @@ async function runExpertLoop(
     }
     return guarded;
   };
+
+  const guardFinalRenderIds = (ids: string[]): string[] =>
+    guardReplacementRenderIds(guardVisibleCardinality(ids).ids);
 
   const attemptPortableReplacementTitleRecovery = async (
     runArgs: Record<string, unknown>,
@@ -4383,7 +4408,7 @@ async function runExpertLoop(
                 Boolean(replacementSplitFallback),
               );
             }
-            filtered = guardReplacementRenderIds(filtered);
+            filtered = guardFinalRenderIds(filtered);
             if (filtered.length !== origIds.length) {
               (tc.args as Record<string, unknown>).product_ids = filtered;
               steps.push({
@@ -4440,6 +4465,21 @@ async function runExpertLoop(
               step: "v3_guard_compact_code_title_evidence",
               ms: now(),
               meta: { before: originalIds.length, after: originalIds.length - guarded.compactRemoved, criteria: guarded.compactCriteria },
+            });
+          }
+          if (guarded.visibleRequestContract.length > 0 && guarded.visibleRequestRemoved > 0) {
+            steps.push({
+              step: "v3_guard_visible_request_title_evidence",
+              ms: now(),
+              meta: {
+                before: originalIds.length - guarded.compactRemoved,
+                after: visibleIds.length + guarded.compoundRemoved,
+                removed: guarded.visibleRequestRemoved,
+                requirements: guarded.visibleRequestContract.map((requirement) => ({
+                  kind: requirement.kind,
+                  label: requirement.label,
+                })),
+              },
             });
           }
           if (guarded.explicitCompoundMarking && guarded.compoundRemoved > 0) {
@@ -6628,7 +6668,7 @@ async function runExpertLoop(
         ));
       const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, candidateProducts);
       const gate = applyCriteriaGate(candidateProducts, terminalCriteria);
-      const safeIds = guardReplacementRenderIds( filterProductIdsByBudgetCap(
+      const safeIds = guardFinalRenderIds( filterProductIdsByBudgetCap(
         candidateProducts
           .map((product) => product.id)
           .filter((id) => targetReport.passed_ids.includes(id) && gate.passed_ids.includes(id)),
@@ -6704,7 +6744,7 @@ async function runExpertLoop(
           }
         }
       }
-      safeIds = guardReplacementRenderIds(safeIds).slice(0, 10);
+      safeIds = guardFinalRenderIds(safeIds).slice(0, 10);
       if (
         safeIds.length > 0 &&
         compatibilityPool.ok &&
@@ -6854,7 +6894,7 @@ async function runExpertLoop(
             }
           }
           safeIds = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage)).ids;
-          safeIds = guardReplacementRenderIds(safeIds).slice(0, 10);
+          safeIds = guardFinalRenderIds(safeIds).slice(0, 10);
           send({
             type: "tool_event",
             tool: "search_catalog",
@@ -6930,7 +6970,7 @@ async function runExpertLoop(
           }
           if (recoveredIds.length >= 5) break;
         }
-        const budgetSafeIds = guardReplacementRenderIds( filterProductIdsByBudgetCap(recoveredIds, ctx.cache, extractBudgetCap(userMessage)).ids,
+        const budgetSafeIds = guardFinalRenderIds( filterProductIdsByBudgetCap(recoveredIds, ctx.cache, extractBudgetCap(userMessage)).ids,
         );
         send({
           type: "tool_event",
@@ -7041,7 +7081,7 @@ async function runExpertLoop(
       safeIds = guardVisibleCardinality(safeIds).ids;
       const budgetGuard = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage));
       safeIds = budgetGuard.ids;
-      safeIds = guardReplacementRenderIds(safeIds);
+      safeIds = guardFinalRenderIds(safeIds);
       if (budgetGuard.dropped > 0) {
         steps.push({
           step: "v3_guard_budget_cap_recovery",
@@ -7216,7 +7256,7 @@ async function runExpertLoop(
       safeIds = safeIds.filter((id) => groundedIds.has(id) && targetReport.passed_ids.includes(id));
       const budgetGuard = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage));
       safeIds = budgetGuard.ids;
-      safeIds = guardReplacementRenderIds(safeIds);
+      safeIds = guardFinalRenderIds(safeIds);
       if (budgetGuard.dropped > 0) {
         steps.push({
           step: "v3_guard_budget_cap_recovery",
