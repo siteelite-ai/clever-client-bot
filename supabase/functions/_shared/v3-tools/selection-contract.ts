@@ -151,6 +151,46 @@ export function bootstrapSelectionTargetFromTaxonomy(
   return selectionTargetIsDeclared(candidate, initialEvidence) ? candidate : null;
 }
 
+/** Prefer the short noun that discovery actually resolved when it was already
+ * stated before search. This preserves a customer's ordinary class wording
+ * even when the live category has a longer formal title. Full-message nouns
+ * are deliberately rejected so a timeout fallback cannot turn the whole
+ * request into a product class. */
+export function bootstrapSelectionTargetFromDiscovery(
+  initialEvidence: string,
+  resolvedFrom: string,
+  liveClass: string,
+): string | null {
+  const resolved = String(resolvedFrom ?? "").trim();
+  const resolvedTokens = meaningfulTokens(resolved);
+  const rawTokenCount = normalize(resolved).split(/\s+/u).filter(Boolean).length;
+  if (
+    resolvedTokens.length > 0 &&
+    resolvedTokens.length <= 3 &&
+    rawTokenCount <= 3 &&
+    selectionTargetIsDeclared(resolved, initialEvidence)
+  ) {
+    return resolved;
+  }
+  return bootstrapSelectionTargetFromTaxonomy(initialEvidence, liveClass);
+}
+
+/** A discovered taxonomy label cannot declare itself. It may complete a
+ * render target only when that same live base class was already grounded in
+ * the pre-search request/reasoning. */
+export function selectionTargetDeclarationIsGrounded(
+  target: string,
+  initialEvidence: string,
+  liveClass: string,
+): boolean {
+  if (selectionTargetIsDeclared(target, initialEvidence)) return true;
+  const groundedLiveClass = bootstrapSelectionTargetFromTaxonomy(initialEvidence, liveClass);
+  return Boolean(
+    groundedLiveClass &&
+    selectionTargetIsDeclared(target, groundedLiveClass),
+  );
+}
+
 function productEvidence(product: ProductRef): string {
   return [
     product.pagetitle,

@@ -22,9 +22,10 @@ import { applyCriteriaGate, buildCriteriaQuery, filterProductIdsByBudgetCap, mer
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaWithReasoning, hasMeasuredSelectionRequirement, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
+import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract } from "../_shared/v3-tools/selection-actionability.ts";
-import { bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "../_shared/v3-tools/selection-contract.ts";
+import { bootstrapSelectionTargetFromDiscovery, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "../_shared/v3-tools/selection-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
   commonCompatibilityReference,
@@ -96,6 +97,7 @@ import { CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest } from "../_shared
 import { deterministicSeriesExplanation, safeSeriesTraits } from "../_shared/v3-tools/series-explanation.ts";
 import { rankSplitReplacementCandidates, type RankedReplacementCandidate } from "../_shared/v3-tools/replacement-fallback.ts";
 import {
+  extractExplicitSingleLetterCodes,
   extractReplacementLookupKeys,
   productContainsSourceModel,
   selectExplicitAnchorAxes,
@@ -800,18 +802,6 @@ type PriceDirection = "cheaper" | "more_expensive" | "same";
 type PriceIntentKind = "superlative" | "comparative";
 interface PriceIntent { kind: PriceIntentKind; direction: PriceDirection; }
 
-function extractBudgetCap(msg: string): number | null {
-  const m = msg.toLowerCase().replace(/\s+/g, " ");
-  // "до 1000 тг", "не дороже 1000 тенге", "не более 1000 ₸", "в пределах 1000 тг", "максимум 1000 тг"
-  const re = /(?:до|не\s+дороже|не\s+более|в\s+пределах|максимум|макс\.?|бюджет(?:\s+до)?)\s+(\d[\d\s]{0,9})\s*(?:тг|тенге|₸|kzt)\b/u;
-  const m1 = m.match(re);
-  if (m1) {
-    const n = parseInt(m1[1].replace(/\s+/g, ""), 10);
-    if (Number.isFinite(n) && n > 0) return n;
-  }
-  return null;
-}
-
 // Возвращает намерение клиента про цену:
 //   - "superlative" — абсолютная сортировка по уже найденному пулу
 //     ("самый дешёвый", "самый дорогой", "бюджетный", "премиум"). Якорь
@@ -1410,6 +1400,13 @@ function numericAxisValueMatches(target: string, text: string, axis: Replacement
 function axisValueMatchesText(target: string, text: string, axis: ReplacementAxis): boolean {
   if (!target || !text) return false;
   if (/\d/.test(target)) return numericAxisValueMatches(target, text, axis);
+  const targetCodes = (target.match(/[\p{L}\p{N}]+/gu) ?? [])
+    .map(normalizeCodeLike)
+    .filter((token) => token.length === 1 && /[a-z]/u.test(token));
+  if (targetCodes.length > 0) {
+    const textCodes = new Set((text.match(/[\p{L}\p{N}]+/gu) ?? []).map(normalizeCodeLike));
+    if (targetCodes.some((code) => textCodes.has(code))) return true;
+  }
   return facetValueEquals(text, target) || valueIsEvidenced(target, text);
 }
 
@@ -1581,7 +1578,10 @@ async function trySplitFallback(
       mode: "by_filter",
       per_page: 5,
       options: mergedOptions,
-      min_price: 1,
+      min_price: typeof origArgs.min_price === "number" ? origArgs.min_price : 1,
+      ...(typeof origArgs.max_price === "number" ? { max_price: origArgs.max_price } : {}),
+      ...(origArgs.sort_cheapest === true ? { sort_cheapest: true } : {}),
+      ...(origArgs.sort_expensive === true ? { sort_expensive: true } : {}),
         ...(category ? { category } : categoryIn && categoryIn.length > 0 ? { category_in: categoryIn } : {}),
     };
     try {
@@ -2056,6 +2056,9 @@ async function selectVerifiedOrdinaryReplacement(
   t0: number,
 ): Promise<DirectReplacementResult> {
   const started = Date.now();
+  const equivalentOnly = /равноцен\p{L}*/iu.test(userMessage);
+  const budgetCap = extractBudgetCap(userMessage);
+  const requiredVisibleCodes = equivalentOnly ? extractExplicitSingleLetterCodes(userMessage) : [];
   const lookup = extractReplacementLookupKeys(userMessage);
   let anchor: ProductRef | null = null;
 
@@ -2071,12 +2074,32 @@ async function selectVerifiedOrdinaryReplacement(
   }
   if (!anchor) {
     for (const code of lookup.modelCodes.slice(0, 3)) {
-      const found = await executeSearchCatalog({ mode: "by_pagetitle", pagetitle: code, per_page: 5 }, {
+      let found = await executeSearchCatalog({ mode: "by_pagetitle", pagetitle: code, per_page: 5 }, {
         baseUrl: CATALOG_BASE_URL,
         apiToken: ctx.catalogToken,
       }, ctx.cache);
-      if (!found.ok || found.results.length === 0) continue;
-      anchor = found.results.find((product) => productContainsSourceModel(product, [code])) ?? found.results[0];
+      let grounded = found.ok
+        ? found.results.filter((product) => productContainsSourceModel(product, [code]))
+        : [];
+      if (grounded.length === 0) {
+        // Some catalog installations treat by_pagetitle as full-title equality.
+        // Retry the exact extracted identifier as a text query, but accept only
+        // cards whose title independently contains that same model code.
+        found = await executeSearchCatalog({ mode: "by_query", query: code, per_page: 50 }, {
+          baseUrl: CATALOG_BASE_URL,
+          apiToken: ctx.catalogToken,
+        }, ctx.cache);
+        grounded = found.ok
+          ? found.results.filter((product) => productContainsSourceModel(product, [code]))
+          : [];
+      }
+      if (grounded.length === 0) continue;
+      const structuralConstraints = extractCodeConstraints(userMessage);
+      anchor = [...grounded].sort((left, right) => {
+        const score = (product: ProductRef) => structuralConstraints
+          .filter((constraint) => productMatchesCodeConstraint(product, constraint)).length;
+        return score(right) - score(left);
+      })[0];
       break;
     }
   }
@@ -2108,7 +2131,7 @@ async function selectVerifiedOrdinaryReplacement(
     return { handled: false, products: [], retryable_reason: "leaf_discovery_failed" };
   }
 
-  const axes = selectExplicitAnchorAxes(anchor, discovery.facets, userMessage);
+  const axes = selectExplicitAnchorAxes(anchor, discovery.facets, userMessage, equivalentOnly ? 6 : 3);
   if (axes.length < 2) {
     steps.push({
       step: "v3_replacement_preflight_skipped",
@@ -2119,10 +2142,17 @@ async function selectVerifiedOrdinaryReplacement(
   }
 
   const sourceModel = extractModelCode(anchor.pagetitle);
-  const sourceModels = sourceModel ? [sourceModel] : [];
+  const sourceModels = lookup.modelCodes.length > 0
+    ? lookup.modelCodes
+    : sourceModel ? [sourceModel] : [];
   const excludedIds = new Set([anchor.id]);
   const isCandidate = (product: ProductRef): boolean =>
-    !excludedIds.has(product.id) && !productContainsSourceModel(product, sourceModels);
+    !excludedIds.has(product.id) &&
+    !productContainsSourceModel(product, sourceModels) &&
+    requiredVisibleCodes.every((code) => {
+      const titleCodes = new Set((product.pagetitle.match(/[\p{L}\p{N}]+/gu) ?? []).map(normalizeCodeLike));
+      return titleCodes.has(code);
+    });
   const baseSearch: Pick<SearchCatalogInput, "category" | "anchor_leaf_category" | "min_price" | "per_page"> = {
     category: anchor.leaf_category,
     anchor_leaf_category: anchor.leaf_category,
@@ -2132,10 +2162,35 @@ async function selectVerifiedOrdinaryReplacement(
   const strict = await executeSearchCatalog({
     mode: "by_filter",
     ...baseSearch,
+    ...(budgetCap !== null ? { max_price: budgetCap, sort_cheapest: true } : {}),
     options: Object.fromEntries(axes.map((axis) => [axis.key, [axis.value]])),
   }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
-  let selected = strict.ok ? strict.results.filter(isCandidate).slice(0, 4) : [];
+  let selected = strict.ok
+    ? strict.results
+      .filter(isCandidate)
+      .filter((product) => budgetCap === null || product.price <= budgetCap)
+      .slice(0, 4)
+    : [];
   let nearMatch = false;
+
+  const replacementAxes: ReplacementAxis[] = axes.map((axis) => ({
+    key: axis.key,
+    caption: axis.caption,
+    values: [axis.value],
+    unit: null,
+    isDiameter: false,
+  }));
+  if (equivalentOnly && selected.length > 0) {
+    const exactVisibleIds = new Set(filterReplacementCompatibleIds(
+      selected.map((product) => product.id),
+      replacementAxes,
+      ctx.cache,
+      null,
+      true,
+      false,
+    ));
+    selected = selected.filter((product) => exactVisibleIds.has(product.id));
+  }
 
   if (selected.length === 0) {
     const splitSearches = await Promise.all(axes.map(async (axis) => ({
@@ -2143,19 +2198,45 @@ async function selectVerifiedOrdinaryReplacement(
       result: await executeSearchCatalog({
         mode: "by_filter",
         ...baseSearch,
+        ...(budgetCap !== null ? { max_price: budgetCap, sort_cheapest: true } : {}),
         per_page: 5,
         options: { [axis.key]: [axis.value] },
       }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache),
     })));
-    const ranked = rankSplitReplacementCandidates(splitSearches.map(({ axis, result }) => ({
+    let ranked = rankSplitReplacementCandidates(splitSearches.map(({ axis, result }) => ({
       key: axis.key,
       total: result.ok ? result.total : axis.total,
-      ids: result.ok ? result.results.filter(isCandidate).map((product) => product.id) : [],
+      ids: result.ok
+        ? result.results
+          .filter(isCandidate)
+          .filter((product) => budgetCap === null || product.price <= budgetCap)
+          .map((product) => product.id)
+        : [],
     })), excludedIds, 4);
+    if (equivalentOnly) {
+      const splitAxisSets = new Map(splitSearches.map(({ axis, result }) => [
+        axis.key,
+        new Set(result.ok
+          ? result.results
+            .filter(isCandidate)
+            .filter((product) => budgetCap === null || product.price <= budgetCap)
+            .map((product) => product.id)
+          : []),
+      ] as const));
+      const exactVisibleIds = new Set(filterReplacementCompatibleIds(
+        ranked.map((candidate) => candidate.id),
+        replacementAxes,
+        ctx.cache,
+        splitAxisSets,
+        true,
+        false,
+      ));
+      ranked = ranked.filter((candidate) => exactVisibleIds.has(candidate.id));
+    }
     selected = ranked
       .map((candidate) => ctx.cache.get(candidate.id))
       .filter((product): product is ProductFull => Boolean(product && isCandidate(product)));
-    nearMatch = selected.length > 0;
+    nearMatch = !equivalentOnly && selected.length > 0;
   }
 
   const axesLabel = axes.map((axis) => `${axis.caption}: ${axis.value}`).join(", ");
@@ -2176,7 +2257,7 @@ async function selectVerifiedOrdinaryReplacement(
     steps.push({
       step: "v3_replacement_preflight_empty",
       ms: Date.now() - t0,
-      meta: { anchor_id: anchor.id, leaf_category: anchor.leaf_category, axes, duration_ms: elapsed },
+        meta: { anchor_id: anchor.id, leaf_category: anchor.leaf_category, axes, required_visible_codes: requiredVisibleCodes, equivalent_only: equivalentOnly, budget_cap: budgetCap, duration_ms: elapsed },
     });
     return { handled: true, products: [] };
   }
@@ -2204,6 +2285,9 @@ async function selectVerifiedOrdinaryReplacement(
       axes,
       strict_total: strict.ok ? strict.total : 0,
       near_match: nearMatch,
+      equivalent_only: equivalentOnly,
+      required_visible_codes: requiredVisibleCodes,
+      budget_cap: budgetCap,
       rendered: rendered.rendered_count,
       duration_ms: elapsed,
     },
@@ -4001,13 +4085,24 @@ async function runExpertLoop(
               liveTaxonomyDeclaration,
               `${priorDialogueDeclaration}\n${userMessage}\n${initialReasoningDeclaration}`,
             ) &&
-            selectionTargetIsDeclared(liveTaxonomyDeclaration, target),
+              selectionTargetIsDeclared(liveTaxonomyDeclaration, target),
           );
+          const bootstrappedTargetExtensionDeclared = Boolean(
+            activeSelectionTarget &&
+            selectionTargetIsDeclared(activeSelectionTarget, target),
+          );
+          // The live taxonomy is evidence about catalog structure, not about
+          // the customer's requested class. Appending it to the declaration
+          // text allowed a wrong discovery branch to authorize its own class
+          // (for example, a sibling category could replace the user's target).
+          // Taxonomy may still bootstrap a target above, but only when the same
+          // base class was already present before search planning began.
           const targetDeclared = target
-            ? selectionTargetIsDeclared(
+            ? selectionTargetDeclarationIsGrounded(
               target,
-              `${userMessage}\n${initialReasoningDeclaration}\n${liveTaxonomyDeclaration}`,
-            ) || namedSeriesBaseClassDeclared
+              `${userMessage}\n${initialReasoningDeclaration}`,
+              liveTaxonomyDeclaration,
+            ) || namedSeriesBaseClassDeclared || bootstrappedTargetExtensionDeclared
             : false;
           if (target && targetDeclared) activeSelectionTarget = target;
           const ids = Array.isArray(tc.args.product_ids)
@@ -4085,16 +4180,21 @@ async function runExpertLoop(
         let pairedTitleProvenIds: string[] = [];
         if (flags.criteriaGateEnabled && tc.name === "render_products") {
           const reasoningEvidence = `${userMessage}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
+          // Compatibility obligations are frozen at the initial expert
+          // interpretation. Later catalog facts (voltages, temperature ranges,
+          // input/output labels) cannot manufacture a fit problem that the
+          // customer never asked about.
+          const initialCompatibilityEvidence = `${userMessage}\n${firstAssistantText}`;
           const parsedCompatibilityRelations = parseCompatibilityRelations(
             (tc.args as Record<string, unknown>).compatibility_relations,
           );
           const alignedCompatibility = alignCompatibilityRelationsWithReasoning(
             parsedCompatibilityRelations,
-            reasoningEvidence,
+            initialCompatibilityEvidence,
           );
           const completedCompatibility = completePairedCompatibilityRelations(
             alignedCompatibility.relations,
-            reasoningEvidence,
+            initialCompatibilityEvidence,
             lastDiscover?.facets ?? [],
             extractSingleMeasuredReference(userMessage),
           );
@@ -4115,8 +4215,8 @@ async function runExpertLoop(
           // Prices, voltage ranges and temperatures in grounded series prose
           // must not manufacture compatibility obligations the customer never
           // asked for. Exact series title/facet evidence remains mandatory.
-          const compatibilityRequired = !namedSeriesToken && reasoningNeedsCompatibilityRelations(reasoningEvidence);
-          const minimumRelations = namedSeriesToken ? 0 : minimumCompatibilityRelationCount(reasoningEvidence);
+          const compatibilityRequired = !namedSeriesToken && reasoningNeedsCompatibilityRelations(initialCompatibilityEvidence);
+          const minimumRelations = namedSeriesToken ? 0 : minimumCompatibilityRelationCount(initialCompatibilityEvidence);
           const relationReference = commonCompatibilityReference(compatibilityRelations);
           let pairedTitleContractProven = false;
           if (minimumRelations >= 2 || relationReference) {
@@ -4345,7 +4445,7 @@ async function runExpertLoop(
           latestRenderCriteria = criteria.map((criterion) => ({ ...criterion }));
           const unresolvedRelativeEquality = compatibilityRequired && compatibilityRelations.some((relation) => relation.relation === "eq");
           const uncoveredRelations = compatibilityRequired
-            ? uncoveredReasoningBounds(compatibilityRelations, reasoningEvidence)
+            ? uncoveredReasoningBounds(compatibilityRelations, initialCompatibilityEvidence)
             : [];
           if (
             minimumRelations >= 2 &&
@@ -4512,6 +4612,10 @@ async function runExpertLoop(
                 meta: { marking: explicitCompoundMarking, subsumed: compoundAdjusted.subsumed },
               });
             }
+            // Terminal recovery must see the final corrected contract, not the
+            // model's pre-alignment draft. This value is only consumed behind
+            // the same target, compatibility, criteria and budget gates.
+            latestRenderCriteria = criteria.map((criterion) => ({ ...criterion }));
             const report = compoundAdjusted.report;
             let passed = ids.filter((id) => report.passed_ids.includes(id));
             const meta = {
@@ -5235,7 +5339,6 @@ async function runExpertLoop(
         }
         if (
           (anchorOnlyReplacementSearch || strictReplacementSearchEmpty) &&
-          !equivalentReplacementRequested &&
           replacementRequiredAxes.length >= 2 &&
           runArgs.mode === "by_filter" &&
           (Boolean(getAnchorExcludeId()) || replacementSourceModelCodes.length > 0)
@@ -5245,11 +5348,27 @@ async function runExpertLoop(
             const anchorId = getAnchorExcludeId();
             const excludedIds = getFamilyExcludeSet();
             if (anchorId) excludedIds.add(anchorId);
-            const ranked = rankSplitReplacementCandidates(
-              split.axes.map((axis) => ({ key: axis.axis, ids: axis.ids, total: axis.total })),
-              excludedIds,
-              4,
-            )
+            const splitAxisSets = new Map(
+              split.axes.map((axis) => [axis.axis, new Set(axis.ids)] as const),
+            );
+            const ranked = (equivalentReplacementRequested
+              ? filterReplacementCompatibleIds(
+                [...new Set(split.axes.flatMap((axis) => axis.ids))],
+                replacementRequiredAxes,
+                ctx.cache,
+                splitAxisSets,
+                true,
+                false,
+              ).slice(0, 4).map((id) => ({
+                id,
+                matched_axis_keys: replacementRequiredAxes.map((axis) => axis.key),
+              }))
+              : rankSplitReplacementCandidates(
+                split.axes.map((axis) => ({ key: axis.axis, ids: axis.ids, total: axis.total })),
+                excludedIds,
+                4,
+              ))
+              .filter((candidate) => !excludedIds.has(candidate.id))
               .filter((candidate) => {
                 const product = ctx.cache.get(candidate.id);
                 return Boolean(
@@ -5267,19 +5386,26 @@ async function runExpertLoop(
               for (const axis of split.axes) {
                 prioritySplitAxisIdSets.set(axis.axis, new Set(axis.ids));
               }
-              replacementSplitFallback = {
-                axes: replacementRequiredAxes.map((axis) => ({ ...axis, values: [...axis.values] })),
-                candidates: ranked,
-              };
+              if (!equivalentReplacementRequested) {
+                replacementSplitFallback = {
+                  axes: replacementRequiredAxes.map((axis) => ({ ...axis, values: [...axis.values] })),
+                  candidates: ranked,
+                };
+              }
               const catalogResult = result as SearchCatalogOk & { tool: "search_catalog"; warnings?: string[] };
+              const recoveryKind = equivalentReplacementRequested
+                ? "replacement_equivalent_split_recovery"
+                : "replacement_split_fallback";
               result = {
                 ...catalogResult,
                 results: fallbackProducts,
                 total: fallbackProducts.length,
-                warnings: [...(catalogResult.warnings ?? []), "replacement_split_fallback"],
+                warnings: [...(catalogResult.warnings ?? []), recoveryKind],
               };
               steps.push({
-                step: "v3_replacement_split_fallback",
+                step: equivalentReplacementRequested
+                  ? "v3_replacement_equivalent_split_recovery"
+                  : "v3_replacement_split_fallback",
                 ms: now(),
                 meta: {
                   strict_total: catalogResult.total,
@@ -5288,6 +5414,7 @@ async function runExpertLoop(
                   duration_ms: split.ms,
                   axes: split.axes.map((axis) => ({ key: axis.axis, total: axis.total, candidates: axis.ids.length })),
                   ranked,
+                  exact_visible_axes_required: equivalentReplacementRequested,
                 },
               });
             }
@@ -5337,8 +5464,9 @@ async function runExpertLoop(
               addToWhitelist(leaf.pagetitle);
             }
             if (intentMode === "select" && !activeSelectionTarget) {
-              const bootstrapped = bootstrapSelectionTargetFromTaxonomy(
+              const bootstrapped = bootstrapSelectionTargetFromDiscovery(
                 `${userMessage}\n${initialSelectionDeclaration(firstAssistantText || assistantReasoning)}`,
+                lastDiscover.resolved_from ?? "",
                 lastDiscover.category?.pagetitle ?? "",
               );
               if (bootstrapped) {
@@ -5699,7 +5827,7 @@ async function runExpertLoop(
     // budget before a render contract, compile only that explicit range into a
     // unique live facet. The discovered category supplies the class boundary;
     // an unverified semantic pool is never rendered.
-    const terminalReasoningEvidence = `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`;
+    const terminalReasoningEvidence = `${userMessage}\n${firstAssistantText}`;
     if (
       productsRendered === 0 &&
       lastDiscover &&
@@ -5801,18 +5929,29 @@ async function runExpertLoop(
       productsRendered === 0 &&
       reasoningBackedSearch &&
       activeSelectionTarget &&
-      activeSelectionContractComplete &&
+      reasoningBackedSearch.criteria.length > 0 &&
       (!seriesTurnRequiresGrounding || seriesGroundingSatisfied)
     ) {
       const candidateProducts = reasoningBackedSearch.ids
         .map((id) => ctx.cache.get(id))
         .filter((product): product is NonNullable<typeof product> => Boolean(product));
+      // Reconstruct the complete render contract from every proof accumulated
+      // before the provider stopped: catalog-filter criteria plus the latest
+      // model render criteria. Requiring a previously successful render here
+      // made this recovery unreachable precisely when the model timed out
+      // between a proven search and render_products.
+      const terminalCriteria = resolveRenderCriteria(
+        reasoningBackedSearch.criteria,
+        latestRenderCriteria,
+        userBackedSearchCriteria,
+        Boolean(namedSeriesToken),
+      );
       const adjusted = gateWithLiteralCompoundEvidence(
         projectPairedTitleEvidence(
           projectCatalogFilterEvidence(candidateProducts, reasoningBackedSearch.criteria),
           activeCompatibilityRelations,
         ),
-        reasoningBackedSearch.criteria,
+        terminalCriteria,
       );
       const gate = adjusted.report;
       let safeIds = reasoningBackedSearch.ids.filter((id) => gate.passed_ids.includes(id));
@@ -6395,7 +6534,7 @@ Deno.serve(async (req) => {
           });
           send({ type: "delta", content: answer });
           productsCount = 0;
-        } else if (isReplacementIntent(userMessage) && !/равноцен\p{L}*/iu.test(userMessage)) {
+        } else if (isReplacementIntent(userMessage)) {
           let direct = await selectVerifiedOrdinaryReplacement(userMessage, ctx, send, steps, t0);
           if (!direct.handled && direct.retryable_reason) {
             steps.push({

@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "./selection-contract.ts";
+import { bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
@@ -156,4 +156,55 @@ Deno.test("live taxonomy bootstraps only a class declared before search planning
     bootstrapSelectionTargetFromTaxonomy("Нужен источник резервного питания.", "Стабилизаторы"),
     null,
   );
+});
+
+Deno.test("a wrong live taxonomy branch cannot authorize its own class", () => {
+  assertEquals(
+    selectionTargetDeclarationIsGrounded(
+      "Стабилизаторы",
+      "Нужен источник бесперебойного питания для котла.",
+      "Стабилизаторы",
+    ),
+    false,
+  );
+  assertEquals(
+    selectionTargetDeclarationIsGrounded(
+      "Светильники",
+      "Нужен потолочный светильник для основной комнаты.",
+      "Светильники",
+    ),
+    true,
+  );
+});
+
+Deno.test("terminal target keeps a short declared discovery noun instead of a longer live label", () => {
+  assertEquals(
+    bootstrapSelectionTargetFromDiscovery(
+      "Найди автомат на 16 А.",
+      "автомат",
+      "Автоматические выключатели",
+    ),
+    "автомат",
+  );
+  assertEquals(
+    bootstrapSelectionTargetFromDiscovery(
+      "Какой ИБП подойдёт котлу?",
+      "ИБП",
+      "Стабилизаторы",
+    ),
+    "ИБП",
+  );
+  assertEquals(
+    bootstrapSelectionTargetFromDiscovery(
+      "Нужен товар с несколькими условиями.",
+      "Нужен товар с несколькими условиями",
+      "Случайная категория",
+    ),
+    null,
+  );
+});
+
+Deno.test("a safely bootstrapped short noun may authorize its formal class extension", () => {
+  assertEquals(selectionTargetIsDeclared("автомат", "Автоматический выключатель"), true);
+  assertEquals(selectionTargetIsDeclared("ИБП", "Стабилизатор напряжения"), false);
 });
