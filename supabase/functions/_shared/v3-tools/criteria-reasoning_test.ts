@@ -462,6 +462,25 @@ Deno.test("projected measured range is not demoted by comfort wording", () => {
   assertEquals(contract.options, { svetovoy_potok: ["3750", "4000", "5000"] });
 });
 
+Deno.test("advisory catalog filters are removed even when no measured range can be projected", () => {
+  const contract = compileMeasuredReasoningSearchContract(
+    [
+      { key: "Protection", op: "eq", value: "IP65", level: "A" },
+      { key: "Material", op: "eq", value: "aluminium", level: "A" },
+    ],
+    "For this use I first look at protection IP65. Aluminium is a useful housing material.",
+    [],
+    [
+      { key: "protection", caption: "Protection", type: "checkbox", unit: null, values: [{ value: "IP65" }] },
+      { key: "material", caption: "Material", type: "checkbox", unit: null, values: [{ value: "aluminium" }] },
+    ],
+  );
+  assertEquals(contract.projected_criteria, []);
+  assertEquals(contract.mandatory_criteria, []);
+  assertEquals(contract.options, {});
+  assertEquals(contract.demoted, ["Protection", "Material"]);
+});
+
 Deno.test("an otherwise unbounded selection promotes only projectable measured criteria", () => {
   const aligned = promoteProjectableMeasuredFallbackCriteria([
     { key: "Measured output", op: "min", value: 3750, unit: "lm", level: "B" },

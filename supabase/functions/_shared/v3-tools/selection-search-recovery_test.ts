@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildAnchorMissingRecoveryQueries, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizePendingSelection } from "./selection-search-recovery.ts";
+import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizePendingSelection } from "./selection-search-recovery.ts";
 
 const facets = [
   { key: "feature", caption: "Функция", type: "string", unit: null, values: [{ value: "Да" }] },
@@ -154,4 +154,13 @@ Deno.test("missing-anchor recovery is derived only from live grounded taxonomy",
   assertEquals(recovery.targets, ["Portable power devices"]);
   assertEquals(recovery.queries[0], "Portable power devices 100W");
   assert(recovery.queries.length <= 4);
+});
+
+Deno.test("category verification fetches candidates without claiming facet proof", () => {
+  assertEquals(buildCategoryVerificationSearchInput(["Live leaf", "Live leaf", "  Another leaf  "]), {
+    mode: "by_filter",
+    category_in: ["Live leaf", "Another leaf"],
+    per_page: 50,
+  });
+  assertEquals(buildCategoryVerificationSearchInput([]), null);
 });

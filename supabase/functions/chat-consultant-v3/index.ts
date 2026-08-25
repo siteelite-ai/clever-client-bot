@@ -26,7 +26,7 @@ import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/cr
 import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
-import { buildAnchorMissingRecoveryQueries, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
+import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract } from "../_shared/v3-tools/selection-actionability.ts";
 import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
@@ -4409,9 +4409,16 @@ async function runExpertLoop(
               guardedUserBackedCriteria,
               lastDiscover.facets,
             );
+            // Importance alignment is useful even when a numeric range cannot
+            // be projected onto one unique facet. Without this branch, soft
+            // model advice (for example a typical material or protection
+            // class) remains in the original hard `options` intersection and
+            // can turn a broad, valid request into a random honest-empty.
+            // User-backed and explicitly necessary criteria remain level A;
+            // only advisory filters are removed from retrieval.
             if (
-              measuredContract.projected_criteria.length > 0 &&
-              Object.keys(measuredContract.options).length > 0
+              measuredContract.projected_criteria.length > 0 ||
+              measuredContract.demoted.length > 0
             ) {
               const current = tc.args as Record<string, unknown>;
               const {
@@ -4424,7 +4431,9 @@ async function runExpertLoop(
               tc.args = {
                 ...searchControls,
                 mode: "by_filter",
-                options: measuredContract.options,
+                ...(Object.keys(measuredContract.options).length > 0
+                  ? { options: measuredContract.options }
+                  : {}),
               };
               enforcedSearchCriteria = measuredContract.mandatory_criteria;
               reasoningProjectedSearchCriteria = measuredContract.projected_criteria;
@@ -7241,7 +7250,10 @@ async function runExpertLoop(
         }
         if (recovered.ok && recovered.tool === "search_catalog") {
           const terminalTarget = activeSelectionTarget;
-          const evaluateTerminalPool = (pool: SearchCatalogOk) => {
+          const evaluateTerminalPool = (
+            pool: SearchCatalogOk,
+            provenCriteria: Criterion[] = facetProjection.proven_criteria,
+          ) => {
             const products = pool.results
               .map((product) => ctx.cache.get(String(product.id)))
               .filter((product): product is ProductFull => Boolean(product));
@@ -7253,7 +7265,7 @@ async function runExpertLoop(
             );
             const selectionTargetReport = verifySelectionTargetWithVisibleTitle(terminalTarget, categoryGroundedProducts);
             const selectionTargetIds = new Set(selectionTargetReport.passed_ids);
-            const evidenced = projectCatalogFilterEvidence(products, facetProjection.proven_criteria);
+            const evidenced = projectCatalogFilterEvidence(products, provenCriteria);
             const gate = applyCriteriaGate(evidenced, terminalCriteria);
             const targetIds = new Set(categoryGroundedProducts.map((product) => product.id));
             return pool.results
@@ -7274,6 +7286,32 @@ async function runExpertLoop(
               if (unscopedSafeIds.length > 0) {
                 recovered = unscoped;
                 safeIds = unscopedSafeIds;
+              }
+            }
+          }
+          if (safeIds.length === 0) {
+            const verificationArgs = buildCategoryVerificationSearchInput(
+              terminalDiscover.leaf_categories.map((category) => category.pagetitle),
+            );
+            if (verificationArgs) {
+              const categoryPool = await runTool("search_catalog", verificationArgs, ctx);
+              if (categoryPool.ok && categoryPool.tool === "search_catalog") {
+                // Category-only retrieval proves no facet. Every mandatory
+                // criterion must be visible in the returned product evidence.
+                const categorySafeIds = evaluateTerminalPool(categoryPool, []);
+                steps.push({
+                  step: "v3_terminal_category_verification_recovery",
+                  ms: now(),
+                  meta: {
+                    category_found: categoryPool.results.length,
+                    locally_verified: categorySafeIds.length,
+                    criteria: terminalCriteria,
+                  },
+                });
+                if (categorySafeIds.length > 0) {
+                  recovered = categoryPool;
+                  safeIds = categorySafeIds;
+                }
               }
             }
           }

@@ -59,6 +59,29 @@ export interface CatalogEmptyDecisionInput {
 }
 
 /**
+ * A cold or inconsistent facet endpoint can report an empty intersection even
+ * though the already-grounded live category contains valid products. Fetch a
+ * bounded category candidate pool and let the caller revalidate the complete
+ * target/criteria/compatibility/budget contract locally. No filter is claimed
+ * as proven by this retrieval step.
+ */
+export function buildCategoryVerificationSearchInput(
+  leafCategories: string[],
+): Record<string, unknown> | null {
+  const categories = [...new Set(
+    (Array.isArray(leafCategories) ? leafCategories : [])
+      .map((category) => String(category ?? "").trim())
+      .filter(Boolean),
+  )];
+  if (categories.length === 0) return null;
+  return {
+    mode: "by_filter",
+    category_in: categories,
+    per_page: 50,
+  };
+}
+
+/**
  * A model response without another tool call is not allowed to bypass an
  * already-formed selection contract. All ordinary selections with enough
  * machine-readable evidence must converge on the same deterministic finalizer.
