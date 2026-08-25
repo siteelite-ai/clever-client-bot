@@ -71,11 +71,16 @@ export function extractPostNominalCatalogQualifier(
   for (let index = 0; index < tokens.length - 1; index += 1) {
     if (inflectionStem(tokens[index]) !== nounStem) continue;
     const candidate = tokens[index + 1];
+    const following = tokens.slice(index + 2, index + 5);
+    const measurementTail = /^\d/u.test(following[0] ?? "") ||
+      /^(?:от|до|более|менее|свыше|не)$/u.test(following[0] ?? "") &&
+        following.slice(1).some((token) => /^\d/u.test(token));
     if (
       candidate.length < 3 ||
       /^\d/u.test(candidate) ||
       POST_NOMINAL_STOP.has(candidate) ||
-      inflectionStem(candidate) === nounStem
+      inflectionStem(candidate) === nounStem ||
+      measurementTail
     ) continue;
     return candidate;
   }

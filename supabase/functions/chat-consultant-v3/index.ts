@@ -6232,11 +6232,23 @@ async function runExpertLoop(
 
     const attemptTerminalJargonRecovery = async (source: string) => {
       if (!terminalDiscover || !activeSelectionTarget || !source.trim()) return null;
+      const terminalCriteria = resolveRenderCriteria(
+        [],
+        latestRenderCriteria,
+        userBackedSearchCriteria,
+        Boolean(namedSeriesToken),
+      );
+      const modifiers = terminalCriteria.flatMap((criterion) => {
+        if ((criterion.level ?? "A") !== "A" || criterion.op !== "eq") return [];
+        const values = Array.isArray(criterion.value) ? criterion.value : [criterion.value];
+        return values.map(String).map((value) => value.trim()).filter(Boolean);
+      });
       send({ type: "tool_event", tool: "jargon_recover_catalog", phase: "start", summary: "Проверяю каталожное название…" });
       const jargonResult = await runTool("jargon_recover_catalog", {
         query: source,
+        modifiers,
         category: terminalDiscover.category.pagetitle,
-        per_page: 10,
+        per_page: 50,
       }, ctx);
       send({
         type: "tool_event",
@@ -6252,12 +6264,6 @@ async function runExpertLoop(
           product && matchedQuery && titleSupportsGroundedJargonQuery(product.pagetitle, matchedQuery)
         ));
       const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, candidateProducts);
-      const terminalCriteria = resolveRenderCriteria(
-        [],
-        latestRenderCriteria,
-        userBackedSearchCriteria,
-        Boolean(namedSeriesToken),
-      );
       const gate = applyCriteriaGate(candidateProducts, terminalCriteria);
       const safeIds = filterProductIdsByBudgetCap(
         candidateProducts
