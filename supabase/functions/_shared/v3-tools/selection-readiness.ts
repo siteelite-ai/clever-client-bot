@@ -8,6 +8,11 @@ interface ReadinessProfile {
   id: string;
   applies: RegExp;
   required: RegExp[];
+  /** Resolve overlapping profiles without relying on declaration order. */
+  priority?: number;
+  /** Broad browsing may start with application context even when exact sizing
+   * still needs more data. Profiles without this contract remain strict. */
+  exploratory_minimum?: RegExp[];
   question: string;
   facet_key: string;
   options: ProposeClarificationInput["options"];
@@ -141,7 +146,25 @@ const PROFILES: ReadinessProfile[] = [
     ],
   },
   {
+    id: "outdoor_floodlight",
+    applies: /прожектор\p{L}*[^.!?\n]{0,80}(?:улиц\p{L}*|наруж\p{L}*)|(?:улиц\p{L}*|наруж\p{L}*)[^.!?\n]{0,80}прожектор\p{L}*/iu,
+    required: [
+      /(?:площад\p{L}*|размер\p{L}*|территор\p{L}*)/iu,
+      /(?:высот\p{L}*|установ\p{L}*|монтаж\p{L}*)/iu,
+      /(?:ярк\p{L}*|мощн\p{L}*|люмен\p{L}*|\d+(?:[.,]\d+)?\s*(?:вт|w|лм)\b)/iu,
+    ],
+    exploratory_minimum: [/(?:двор\p{L}*|участ\p{L}*|территор\p{L}*|частн\p{L}*\s+дом\p{L}*)/iu],
+    question: "Для уличного прожектора сначала уточните площадь или размеры территории, высоту установки и требуемую яркость/мощность в люменах или ваттах. Какая площадь и на какой высоте будет установлен прожектор?",
+    facet_key: "mounting_height",
+    options: [
+      { value: "До 4 м", label: "До 4 м" },
+      { value: "4–8 м", label: "4–8 м" },
+      { value: "Выше 8 м", label: "Выше 8 м" },
+    ],
+  },
+  {
     id: "parking_floodlight",
+    priority: 10,
     applies: /прожектор\p{L}*[^.!?\n]{0,80}парковк\p{L}*|парковк\p{L}*[^.!?\n]{0,80}прожектор\p{L}*/iu,
     required: [
       /\bip\s*6[56]\b/iu,
@@ -165,17 +188,23 @@ export function selectReadinessClarification(
   const current = String(currentMessage ?? "").trim();
   if (!current) return null;
   const evidence = `${dialogueEvidence}\n${current}`;
-  for (const profile of PROFILES) {
-    if (!profile.applies.test(current)) continue;
-    if (profile.required.every((requirement) => requirement.test(evidence))) {
-      return null;
-    }
-    return {
-      profile: profile.id,
-      question: profile.question,
-      facet_key: profile.facet_key,
-      options: profile.options,
-    };
-  }
-  return null;
+  const profile = PROFILES
+    .map((candidate, index) => ({ candidate, index }))
+    .filter(({ candidate }) => candidate.applies.test(current))
+    .sort((left, right) =>
+      (right.candidate.priority ?? 0) - (left.candidate.priority ?? 0) || left.index - right.index
+    )[0]?.candidate;
+  if (!profile) return null;
+  if (profile.required.every((requirement) => requirement.test(evidence))) return null;
+  const exploratoryIntent = /(?:предлож\p{L}*|покаж\p{L}*|подбер\p{L}*)[^.!?\n]{0,40}вариант\p{L}*/iu.test(current);
+  if (
+    exploratoryIntent && profile.exploratory_minimum?.length &&
+    profile.exploratory_minimum.every((requirement) => requirement.test(evidence))
+  ) return null;
+  return {
+    profile: profile.id,
+    question: profile.question,
+    facet_key: profile.facet_key,
+    options: profile.options,
+  };
 }

@@ -146,6 +146,31 @@ test('evaluate validates a generic strict numeric pair around the object size', 
   assert(failures.some((failure) => failure.includes('does not strictly surround 12')));
 });
 
+test('evaluate enforces a measured lower bound in every product title', () => {
+  const base = {
+    text: '',
+    textBeforeProducts: '',
+    productsMarkdown: '',
+    completed: true,
+    diagnosticError: null,
+    serverProductsCount: 2,
+  };
+  const contract = { require_every_product_measurement: { min: 100, units: ['Вт', 'W'], allow_compact_numeric: true } };
+  assert.deepEqual(evaluate(contract, {
+    ...base,
+    links: [{ title: 'Изделие 100 Вт' }, { title: 'Изделие 06-150' }],
+  }), []);
+  assert.deepEqual(evaluate(contract, {
+    ...base,
+    links: [{ title: 'Изделие 06-100' }, { title: 'Изделие 2x50' }],
+  }), []);
+  const failures = evaluate(contract, {
+    ...base,
+    links: [{ title: 'Изделие 06-100 10 Вт' }, { title: 'Изделие без мощности' }],
+  });
+  assert(failures.some((failure) => failure.startsWith('product title measurement violates contract')));
+});
+
 test('forbidden product nominal is matched as a token, not inside another nominal', () => {
   const base = {
     text: '',

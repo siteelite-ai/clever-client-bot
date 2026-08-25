@@ -2,7 +2,7 @@
 // Data-agnostic: абстрактные имена параметров.
 
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, extractReasoningBounds, hasMeasuredSelectionRequirement, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "./criteria-reasoning.ts";
+import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, extractReasoningBounds, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "./criteria-reasoning.ts";
 import { checkCriterion, type Criterion } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
 
@@ -135,6 +135,83 @@ Deno.test("единица из live-подписи компенсирует пу
   assertEquals(projected.added, [
     { key: "Световой поток, Лм", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
   ]);
+});
+
+Deno.test("точное число клиента проецируется на разделенный live-фасет", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Нужен аппарат 16 А",
+    "Подбираю аппарат на 16 А.",
+    [{
+      key: "rated_current",
+      caption: "Номинальный ток, А",
+      type: "checkbox",
+      unit: "А",
+      values: [{ value: "6" }, { value: "16" }],
+    }],
+  );
+  assertEquals(projected.added, [{
+    key: "Номинальный ток, А",
+    op: "eq",
+    value: "16",
+    unit: "А",
+    level: "A",
+  }]);
+});
+
+Deno.test("unitless live-фасет выбирается только после исключения явно другой шкалы", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Нужен аппарат 16 А",
+    "Подбираю аппарат на 16 А.",
+    [
+      { key: "cable_section", caption: "Макс. сечение кабеля, мм2", type: "checkbox", unit: null, values: [{ value: "6" }, { value: "16" }] },
+      { key: "rated_current", caption: "Номинальный ток", type: "checkbox", unit: null, values: [{ value: "6" }, { value: "16" }] },
+    ],
+  );
+  assertEquals(projected.added, [{
+    key: "Номинальный ток",
+    op: "eq",
+    value: "16",
+    unit: "а",
+    level: "A",
+  }]);
+});
+
+Deno.test("направленная величина клиента не сужается до точного равенства", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Нужна мощность от 100 Вт",
+    "Требуется не менее 100 Вт.",
+    [{ key: "power", caption: "Мощность, Вт", type: "number", unit: "Вт", values: [{ value: "100" }, { value: "150" }] }],
+  );
+  assertEquals(projected.added, []);
+});
+
+Deno.test("противоположные направления одного размера не превращаются в eq", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Размер детали 10 мм",
+    "До установки нужен размер больше 10 мм, после установки — меньше 10 мм.",
+    [
+      { key: "before", caption: "Размер до установки", type: "number", unit: "мм", values: [{ value: "10" }] },
+      { key: "after", caption: "Размер после установки", type: "number", unit: "мм", values: [{ value: "10" }] },
+    ],
+  );
+  assertEquals(projected.added, []);
+});
+
+Deno.test("два равноправных live-фасета одной единицы не выбираются наугад", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Нужен параметр 10 мм",
+    "Подбираю значение 10 мм.",
+    [
+      { key: "alpha", caption: "Параметр альфа", type: "number", unit: "мм", values: [{ value: "10" }] },
+      { key: "beta", caption: "Параметр бета", type: "number", unit: "мм", values: [{ value: "10" }] },
+    ],
+  );
+  assertEquals(projected.added, []);
 });
 
 Deno.test("числовой критерий из рассуждения повышается с B до обязательного A", () => {

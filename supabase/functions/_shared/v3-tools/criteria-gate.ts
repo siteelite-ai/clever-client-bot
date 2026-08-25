@@ -217,6 +217,26 @@ export function resolveRenderCriteria(
     .map((criterion) => ({ ...criterion }));
 }
 
+/**
+ * The deterministic finalizer must enforce the same monotonic contract as a
+ * normal render. In particular, a broad recovery may not forget literals that
+ * were frozen from the customer's request before the model built its latest
+ * criteria array.
+ */
+export function resolveTerminalSelectionCriteria(
+  projected: Criterion[],
+  latest: Criterion[],
+  userBacked: Criterion[],
+  strictUserEvidenceOnly = false,
+): Criterion[] {
+  return resolveRenderCriteria(
+    projected,
+    latest,
+    userBacked,
+    strictUserEvidenceOnly,
+  ).filter((criterion) => (criterion.level ?? "A") === "A");
+}
+
 /** Compact letter/code values are unsafe when they only exist in hidden
  * traits: the customer cannot verify the promised variant from the card. */
 export function titleProvesCompactCriterion(title: string, criterion: Criterion): boolean {
@@ -403,6 +423,27 @@ export function checkCriterion(product: ProductRef, c: Criterion): CriterionChec
     return { key: c.key, verdict: "unknown", expected, actual: null };
   }
   const actual = trait.value;
+
+  // Catalog facet values are strings even when they represent measurements.
+  // Numeric equality must therefore use numeric spans, not substring matching:
+  // `16` is not equal to `160`, `1600` or `0.1-0.16`. Keep mixed letter-number
+  // codes (1P, E27, IP65) on the string path unless an explicit unit proves
+  // that the criterion is measured.
+  if (c.op === "eq" && typeof c.value === "string") {
+    const valueIsPlainNumeric = /^\s*-?\d+(?:[.,]\d+)?\s*$/u.test(c.value);
+    const wantedNumeric = c.unit || valueIsPlainNumeric ? parseNumSpan(c.value) : null;
+    if (wantedNumeric) {
+      const actualNumeric = parseNumSpan(actual);
+      return {
+        key: c.key,
+        verdict: actualNumeric && spansOverlap(actualNumeric, wantedNumeric)
+          ? "pass"
+          : actualNumeric ? "fail" : "unknown",
+        expected,
+        actual,
+      };
+    }
+  }
 
   // Строковый критерий
   if (c.op === "eq" && typeof c.value === "string") {

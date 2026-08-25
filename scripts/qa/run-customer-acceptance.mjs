@@ -141,6 +141,34 @@ function parseTitleNumericPair(title) {
   return { high: Math.max(first, second), low: Math.min(first, second) };
 }
 
+function titleMeasurements(title, units, allowCompactNumeric = false) {
+  const aliases = (Array.isArray(units) ? units : [])
+    .map((unit) => String(unit).trim())
+    .filter(Boolean)
+    .map((unit) => unit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (aliases.length === 0) return [];
+  const values = [];
+  const pattern = new RegExp(`(-?\\d+(?:[.,]\\d+)?)\\s*(?:${aliases.join('|')})(?![\\p{L}\\p{N}])`, 'giu');
+  for (let match; (match = pattern.exec(String(title ?? ''))) !== null;) {
+    const value = Number(match[1].replace(',', '.'));
+    if (Number.isFinite(value)) values.push(value);
+  }
+  if (values.length > 0 || !allowCompactNumeric) return values;
+  const source = String(title ?? '');
+  const multiplication = /(\d+(?:[.,]\d+)?)\s*[xх×*]\s*(\d+(?:[.,]\d+)?)/giu;
+  for (let match; (match = multiplication.exec(source)) !== null;) {
+    const left = Number(match[1].replace(',', '.'));
+    const right = Number(match[2].replace(',', '.'));
+    if (Number.isFinite(left) && Number.isFinite(right)) values.push(left * right);
+  }
+  const compact = /-(\d{2,5})(?=$|[\s/),])/gu;
+  for (let match; (match = compact.exec(source)) !== null;) {
+    const value = Number(match[1]);
+    if (Number.isFinite(value)) values.push(value);
+  }
+  return values;
+}
+
 export function evaluate(expect = {}, response) {
   const failures = [];
   const productTitles = response.links.map((link) => link.title).join('\n');
@@ -197,6 +225,19 @@ export function evaluate(expect = {}, response) {
     }).map((link) => link.title);
     if (invalidTitles.length > 0) {
       failures.push(`product title pair does not strictly surround ${reference}: ${invalidTitles.join(' | ')}`);
+    }
+  }
+  if (expect.require_every_product_measurement && typeof expect.require_every_product_measurement === 'object') {
+    const contract = expect.require_every_product_measurement;
+    const invalidTitles = response.links.filter((link) => {
+      const values = titleMeasurements(link.title, contract.units, contract.allow_compact_numeric === true);
+      return values.length === 0 || !values.some((value) =>
+        (!Number.isFinite(contract.min) || value >= contract.min) &&
+        (!Number.isFinite(contract.max) || value <= contract.max)
+      );
+    }).map((link) => link.title);
+    if (invalidTitles.length > 0) {
+      failures.push(`product title measurement violates contract: ${invalidTitles.join(' | ')}`);
     }
   }
   if (Array.isArray(expect.deprioritized_warehouses)) {

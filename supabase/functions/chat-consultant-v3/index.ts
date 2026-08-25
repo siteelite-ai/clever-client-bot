@@ -21,9 +21,9 @@ import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
 import { applyCriteriaGate, buildCriteriaQuery,
-  type Criterion, filterProductIdsByBudgetCap, mergeFacetOptionConstraints, mergeUserBackedCriteria, projectCatalogFilterEvidence, projectCriteriaFacetOptions, resolveRenderCriteria, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
+  type Criterion, filterProductIdsByBudgetCap, mergeFacetOptionConstraints, mergeUserBackedCriteria, projectCatalogFilterEvidence, projectCriteriaFacetOptions, resolveRenderCriteria, resolveTerminalSelectionCriteria, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
-import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, hasMeasuredSelectionRequirement, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
+import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
@@ -6350,6 +6350,22 @@ async function runExpertLoop(
             for (const leaf of lastDiscover.leaf_categories ?? []) {
               addToWhitelist(leaf.pagetitle);
             }
+            if (replacementIntent) {
+              const sourceIdentity = explicitReplacementIdentityValues(
+                lastDiscover.facets,
+                userMessage,
+              );
+              for (const value of sourceIdentity) {
+                replacementExcludedIdentityValues.add(value);
+              }
+              if (sourceIdentity.length > 0) {
+                steps.push({
+                  step: "v3_replacement_identity_frozen_from_discovery",
+                  ms: now(),
+                  meta: { values: sourceIdentity },
+                });
+              }
+            }
             // Freeze explicit user constraints as soon as their live facet
             // vocabulary becomes available. This is independent of whether
             // the model's next search uses by_filter or a semantic query, so a
@@ -6372,10 +6388,16 @@ async function runExpertLoop(
                 userMessage,
                 lastDiscover.facets,
               ).added.map((criterion) => ({ ...criterion, level: "A" as const }));
+              const literalMeasuredCriteria = projectLiteralMeasuredCriteria(
+                [...explicitCriteria, ...measuredCriteria],
+                userMessage,
+                `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
+                lastDiscover.facets,
+              ).added;
               const before = userBackedSearchCriteria.length;
               userBackedSearchCriteria = mergeUserBackedCriteria(
                 userBackedSearchCriteria,
-                [...explicitCriteria, ...measuredCriteria],
+                [...explicitCriteria, ...measuredCriteria, ...literalMeasuredCriteria],
               );
               if (userBackedSearchCriteria.length > before) {
                 steps.push({
@@ -7009,7 +7031,12 @@ async function runExpertLoop(
     }
     if (!terminalAliasRequirement && terminalFinalizationRequired && terminalDiscover && activeSelectionTarget) {
       const projectedRange = projectReasoningRangeCriteria(latestRenderCriteria, terminalReasoningEvidence, terminalDiscover.facets);
-      const terminalCriteria = projectedRange.criteria.filter((criterion) => (criterion.level ?? "A") === "A");
+      const terminalCriteria = resolveTerminalSelectionCriteria(
+        projectedRange.criteria,
+        latestRenderCriteria,
+        userBackedSearchCriteria,
+        Boolean(namedSeriesToken),
+      );
       const facetProjection = projectCriteriaFacetOptions(terminalCriteria, terminalDiscover.facets);
       if (terminalCriteria.length > 0 && Object.keys(facetProjection.options).length > 0) {
         send({ type: "tool_event", tool: "search_catalog", phase: "start", summary: "Перепроверяю итоговый набор по обязательным параметрам…" });

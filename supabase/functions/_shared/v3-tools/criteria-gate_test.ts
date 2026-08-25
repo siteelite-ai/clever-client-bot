@@ -14,6 +14,7 @@ import {
   projectCatalogFilterEvidence,
   projectCriteriaFacetOptions,
   resolveRenderCriteria,
+  resolveTerminalSelectionCriteria,
   titleProvesCompactCriterion,
   type Criterion,
 } from "./criteria-gate.ts";
@@ -56,6 +57,16 @@ Deno.test("a broad semantic recovery cannot discard the latest mandatory contrac
   assertEquals(applyCriteriaGate([
     product("weak", ["Мощность: 7 Вт"]),
   ], recovered).passed_ids, []);
+});
+
+Deno.test("terminal recovery preserves frozen user criteria omitted by the model", () => {
+  const projected = [{ key: "Power", op: "min", value: 100, unit: "W", level: "A" }] as Criterion[];
+  const latest = [{ key: "Curve", op: "eq", value: "C", level: "A" }] as Criterion[];
+  const userBacked = [{ key: "Current", op: "eq", value: "16 A", level: "A" }] as Criterion[];
+  assertEquals(
+    resolveTerminalSelectionCriteria(projected, latest, userBacked),
+    [...userBacked, ...projected, ...latest],
+  );
 });
 
 Deno.test("compact code criterion must be visible in the product title", () => {
@@ -158,6 +169,13 @@ Deno.test("checkCriterion: string eq — нормализованное вхож
   const p = product("1", ["Параметр строковый: Значение Икс"]);
   assertEquals(checkCriterion(p, { key: "параметр строковый", op: "eq", value: "значение икс" }).verdict, "pass");
   assertEquals(checkCriterion(p, { key: "параметр строковый", op: "eq", value: "значение игрек" }).verdict, "fail");
+});
+
+Deno.test("numeric string equality does not match longer numbers by substring", () => {
+  const criterion: Criterion = { key: "Параметр", op: "eq", value: "16", unit: "А", level: "A" };
+  assertEquals(checkCriterion(product("exact", ["Параметр: 16"]), criterion).verdict, "pass");
+  assertEquals(checkCriterion(product("large", ["Параметр: 1600"]), criterion).verdict, "fail");
+  assertEquals(checkCriterion(product("range", ["Параметр: 0.1-0.16"]), criterion).verdict, "fail");
 });
 
 Deno.test("checkCriterion: отсутствие характеристики = unknown, не fail", () => {

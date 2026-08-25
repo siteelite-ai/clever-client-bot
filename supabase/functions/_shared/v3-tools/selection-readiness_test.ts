@@ -10,6 +10,7 @@ const cases = [
   ["Какие наконечники нужны для кабеля 35 мм²", "cable_lug"],
   ["Есть ли у вас кабель для видеонаблюдения?", "surveillance_cable"],
   ["Есть ли светодиодные лампы с теплым светом 3000К?", "warm_led_lamp"],
+  ["Нужен прожектор на улицу.", "outdoor_floodlight"],
   ["Какие прожекторы подойдут для освещения парковки?", "parking_floodlight"],
 ] as const;
 
@@ -33,5 +34,19 @@ Deno.test("selection readiness does not block a precise floodlight search", () =
   assertEquals(
     selectReadinessClarification("Покажите светодиодные прожекторы мощностью от 100 Вт"),
     null,
+  );
+});
+
+Deno.test("explicit exploratory variants with application context may browse before exact sizing", () => {
+  assertEquals(
+    selectReadinessClarification("Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома"),
+    null,
+  );
+});
+
+Deno.test("specific readiness profile wins over an overlapping generic profile", () => {
+  assertEquals(
+    selectReadinessClarification("Нужен уличный прожектор для парковки")?.profile,
+    "parking_floodlight",
   );
 });
