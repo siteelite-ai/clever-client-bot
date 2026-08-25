@@ -6650,6 +6650,103 @@ async function runExpertLoop(
     // generic facet/search recovery. Resolve that claim first, or keep the turn
     // empty; otherwise the system would knowingly render a broad sibling pool.
     const terminalAliasRequirement = declaredAliasQuery ?? requiredCatalogAlias;
+    const terminalCompatibilityEvidence = `${terminalReasoningEvidence}\n${assistantReasoning}`;
+    const terminalCompatibilityReference = extractSingleMeasuredReference(userMessage);
+    const terminalCompatibilityDiscover = terminalDiscover ?? lastDiscover;
+    if (
+      productsRendered === 0 &&
+      !terminalAliasRequirement &&
+      terminalCompatibilityDiscover &&
+      activeSelectionTarget &&
+      terminalCompatibilityReference &&
+      minimumCompatibilityRelationCount(terminalCompatibilityEvidence) >= 2
+    ) {
+      const evaluateCompatibilityPool = (pool: SearchCatalogOk) => {
+        const products = pool.results
+          .map((product) => ctx.cache.get(String(product.id)))
+          .filter((product): product is ProductFull => Boolean(product));
+        const paired = filterProductsByPairedTitleFit(
+          products,
+          terminalCompatibilityReference.value,
+        );
+        const target = verifySelectionTargetWithVisibleTitle(
+          activeSelectionTarget!,
+          paired.products,
+        );
+        const targetIds = new Set(target.passed_ids);
+        return filterProductIdsByBudgetCap(
+          paired.products
+            .filter((product) => targetIds.has(product.id))
+            .map((product) => product.id),
+          ctx.cache,
+          extractBudgetCap(userMessage),
+        ).ids;
+      };
+      let compatibilityPool = await runTool("search_catalog", {
+        mode: "by_filter",
+        category_in: terminalCompatibilityDiscover.leaf_categories.map((category) => category.pagetitle),
+        per_page: 50,
+      }, ctx);
+      let safeIds = compatibilityPool.ok && compatibilityPool.tool === "search_catalog"
+        ? evaluateCompatibilityPool(compatibilityPool)
+        : [];
+      if (safeIds.length === 0) {
+        const semanticPool = await runTool("search_catalog", {
+          mode: "by_query",
+          query: activeSelectionTarget,
+          per_page: 50,
+        }, ctx);
+        if (semanticPool.ok && semanticPool.tool === "search_catalog") {
+          const semanticIds = evaluateCompatibilityPool(semanticPool);
+          if (semanticIds.length > 0) {
+            compatibilityPool = semanticPool;
+            safeIds = semanticIds;
+          }
+        }
+      }
+      safeIds = guardReplacementRenderIds(safeIds).slice(0, 10);
+      if (
+        safeIds.length > 0 &&
+        compatibilityPool.ok &&
+        compatibilityPool.tool === "search_catalog"
+      ) {
+        const rendered = await runTool("render_products", {
+          product_ids: safeIds,
+          criteria: [],
+          total_available: compatibilityPool.total,
+        }, ctx);
+        if (rendered.ok && rendered.tool === "render_products") {
+          for (const id of safeIds) shownIds.add(id);
+          const compatibilityCaption =
+            `Уточняю по подтверждённым размерам: до установки размер должен быть больше ${terminalCompatibilityReference.value} ${terminalCompatibilityReference.unit}, а после усадки — меньше. Показываю только карточки, где обе границы видны в названии.`;
+          send({ type: "assistant_turn_break", reason: "text_before_render" });
+          send({ type: "delta", content: compatibilityCaption });
+          finalText += `${finalText ? "\n\n" : ""}${compatibilityCaption}`;
+          send({
+            type: "products_block",
+            markdown: rendered.markdown,
+            count: rendered.rendered_count,
+            total_available: compatibilityPool.total,
+          });
+          productsRendered += rendered.rendered_count;
+          steps.push({
+            step: "v3_terminal_compatibility_pair_recovery",
+            ms: now(),
+            meta: {
+              target: activeSelectionTarget,
+              reference: terminalCompatibilityReference,
+              rendered: rendered.rendered_count,
+            },
+          });
+          return { finalText, productsRendered, shownProductIds: [...shownIds] };
+        }
+      }
+      steps.push({
+        step: "v3_terminal_compatibility_pair_recovery_empty",
+        ms: now(),
+        meta: { target: activeSelectionTarget, reference: terminalCompatibilityReference },
+      });
+    }
     if (productsRendered === 0 && terminalAliasRequirement && !replacementIntent && intentMode === "select") {
       const recoveredAlias = await attemptTerminalJargonRecovery(terminalAliasRequirement);
       if (recoveredAlias) {
