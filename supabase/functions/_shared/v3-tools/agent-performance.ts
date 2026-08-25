@@ -30,6 +30,31 @@ export function boundedAgentStepTimeout(
   return Math.min(requested, remaining);
 }
 
+export interface DeterministicIntroToolCall {
+  name: "discover_category";
+  args: { noun: string; semantic_query: string };
+}
+
+/**
+ * The first selection step is protocol-forced discovery. If the provider times
+ * out before serializing that trivial tool call, retrying the same large model
+ * wastes the turn budget and leaves no time for search. The live taxonomy
+ * resolver already accepts a semantic query, so the complete customer message
+ * is a safe, domain-agnostic fallback input. No category or product term is
+ * inferred here; the resolver still chooses only from the live category tree.
+ */
+export function deterministicIntroTimeoutToolCall(
+  forcedToolName: ToolName | null,
+  userMessage: string,
+): DeterministicIntroToolCall | null {
+  const message = String(userMessage ?? "").replace(/\s+/gu, " ").trim();
+  if (forcedToolName !== "discover_category" || !message) return null;
+  return {
+    name: "discover_category",
+    args: { noun: message, semantic_query: message },
+  };
+}
+
 const OPEN_TOOLS: readonly ToolName[] = [
   "discover_category",
   "search_catalog",

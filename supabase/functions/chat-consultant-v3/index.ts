@@ -24,7 +24,7 @@ import { alignCriteriaWithReasoning, hasMeasuredSelectionRequirement, projectRea
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
 import { buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract } from "../_shared/v3-tools/selection-actionability.ts";
-import { bootstrapSelectionTargetFromTaxonomy, initialSelectionDeclaration, parseSelectionTarget, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "../_shared/v3-tools/selection-contract.ts";
+import { bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "../_shared/v3-tools/selection-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
   commonCompatibilityReference,
@@ -83,6 +83,7 @@ import { META_DECLINE_TEXT, containsUnrenderedCatalogFacts, isMetaSelfQuestion, 
 import {
   boundedAgentStepTimeout,
   compactCatalogResultForLlm,
+  deterministicIntroTimeoutToolCall,
   forcedToolNameForAgentPhase,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
@@ -3225,60 +3226,81 @@ async function runExpertLoop(
       } catch (error) {
         const timeout = (error as Error)?.name === "TimeoutError" || String((error as Error)?.message ?? error).includes("llm_call_timeout:");
         if (step === 0 && timeout && !turnController.signal.aborted) {
-          const retryTimeoutMs = boundedAgentStepTimeout(
-            LLM_TIMEOUT_INTRO_RETRY_MS,
-            now(),
-            TURN_SOFT_DEADLINE_MS,
-            MIN_AGENT_STEP_BUDGET_MS,
-          );
-          if (retryTimeoutMs === null) {
-            deadlineFinalizeBreak = true;
+          const deterministicDiscovery = deterministicIntroTimeoutToolCall(forcedToolName, userMessage);
+          if (deterministicDiscovery) {
+            resp = {
+              text: "",
+              toolCalls: [{
+                id: crypto.randomUUID(),
+                name: deterministicDiscovery.name,
+                args: deterministicDiscovery.args,
+              }],
+              finishReason: "deterministic_intro_discovery_fallback",
+            };
             steps.push({
-              step: "v3_soft_deadline_finalize",
+              step: "v3_llm_intro_timeout_discovery_fallback",
               ms: now(),
-              meta: { step_index: step, phase, reason: "intro_retry_budget_exhausted" },
+              meta: {
+                primary_error: String((error as Error)?.message ?? error),
+                strategy: "live_taxonomy_full_message",
+              },
             });
-            break;
-          }
-          steps.push({
-            step: "v3_llm_intro_timeout_retry",
-            ms: now(),
-            meta: { primary_error: String((error as Error)?.message ?? error), retry_timeout_ms: retryTimeoutMs },
-          });
-          try {
-            resp = await callOpenRouter(apiKey, messages, turnController.signal, retryTimeoutMs, "intro", availableToolNames, forcedToolName);
+          } else {
+            const retryTimeoutMs = boundedAgentStepTimeout(
+              LLM_TIMEOUT_INTRO_RETRY_MS,
+              now(),
+              TURN_SOFT_DEADLINE_MS,
+              MIN_AGENT_STEP_BUDGET_MS,
+            );
+            if (retryTimeoutMs === null) {
+              deadlineFinalizeBreak = true;
+              steps.push({
+                step: "v3_soft_deadline_finalize",
+                ms: now(),
+                meta: { step_index: step, phase, reason: "intro_retry_budget_exhausted" },
+              });
+              break;
+            }
             steps.push({
-              step: "v3_llm_intro_timeout_recovered",
+              step: "v3_llm_intro_timeout_retry",
               ms: now(),
-              meta: { retry_timeout_ms: retryTimeoutMs },
+              meta: { primary_error: String((error as Error)?.message ?? error), retry_timeout_ms: retryTimeoutMs },
             });
-            // Retry succeeded; continue with the ordinary response pipeline.
-          } catch (retryError) {
-            steps.push({
-              step: "v3_llm_intro_timeout_retry_failed",
-              ms: now(),
-              meta: { retry_error: String((retryError as Error)?.message ?? retryError) },
-            });
-            const retryTimedOut = (retryError as Error)?.name === "TimeoutError" ||
-              String((retryError as Error)?.message ?? retryError).includes("llm_call_timeout:");
-            if (retryTimedOut && !turnController.signal.aborted) {
-              if (recentProductEvidence.length > 0 && isEvidenceOnlyFollowup(userMessage)) {
-                resp = {
-                  text: buildDeterministicEvidenceAnswer(recentProductEvidence, userMessage),
-                  toolCalls: [],
-                  finishReason: "deterministic_evidence_fallback",
-                };
-                steps.push({
-                  step: "v3_llm_followup_recovered",
-                  ms: now(),
-                  meta: { strategy: "deterministic_evidence_after_intro_retry_timeout", evidence_count: recentProductEvidence.length },
-                });
+            try {
+              resp = await callOpenRouter(apiKey, messages, turnController.signal, retryTimeoutMs, "intro", availableToolNames, forcedToolName);
+              steps.push({
+                step: "v3_llm_intro_timeout_recovered",
+                ms: now(),
+                meta: { retry_timeout_ms: retryTimeoutMs },
+              });
+              // Retry succeeded; continue with the ordinary response pipeline.
+            } catch (retryError) {
+              steps.push({
+                step: "v3_llm_intro_timeout_retry_failed",
+                ms: now(),
+                meta: { retry_error: String((retryError as Error)?.message ?? retryError) },
+              });
+              const retryTimedOut = (retryError as Error)?.name === "TimeoutError" ||
+                String((retryError as Error)?.message ?? retryError).includes("llm_call_timeout:");
+              if (retryTimedOut && !turnController.signal.aborted) {
+                if (recentProductEvidence.length > 0 && isEvidenceOnlyFollowup(userMessage)) {
+                  resp = {
+                    text: buildDeterministicEvidenceAnswer(recentProductEvidence, userMessage),
+                    toolCalls: [],
+                    finishReason: "deterministic_evidence_fallback",
+                  };
+                  steps.push({
+                    step: "v3_llm_followup_recovered",
+                    ms: now(),
+                    meta: { strategy: "deterministic_evidence_after_intro_retry_timeout", evidence_count: recentProductEvidence.length },
+                  });
+                } else {
+                  deadlineFinalizeBreak = true;
+                  break;
+                }
               } else {
-                deadlineFinalizeBreak = true;
-                break;
+                throw retryError;
               }
-            } else {
-              throw retryError;
             }
           }
         } else if (timeout && recentProductEvidence.length > 0 && isEvidenceOnlyFollowup(userMessage)) {
@@ -3971,11 +3993,21 @@ async function runExpertLoop(
           // Leaves are excluded: otherwise a later sibling search could
           // authorize its own drift merely because that leaf exists.
           const liveTaxonomyDeclaration = lastDiscover?.category?.pagetitle ?? "";
+          const priorDialogueDeclaration = history.slice(-8).map((message) => message.content).join("\n");
+          const namedSeriesBaseClassDeclared = Boolean(
+            namedSeriesToken &&
+            liveTaxonomyDeclaration &&
+            selectionTargetIsDeclared(
+              liveTaxonomyDeclaration,
+              `${priorDialogueDeclaration}\n${userMessage}\n${initialReasoningDeclaration}`,
+            ) &&
+            selectionTargetIsDeclared(liveTaxonomyDeclaration, target),
+          );
           const targetDeclared = target
             ? selectionTargetIsDeclared(
               target,
               `${userMessage}\n${initialReasoningDeclaration}\n${liveTaxonomyDeclaration}`,
-            )
+            ) || namedSeriesBaseClassDeclared
             : false;
           if (target && targetDeclared) activeSelectionTarget = target;
           const ids = Array.isArray(tc.args.product_ids)
@@ -4079,8 +4111,12 @@ async function runExpertLoop(
           const rawCriteria = Array.isArray((tc.args as Record<string, unknown>).criteria)
             ? ((tc.args as Record<string, unknown>).criteria as Criterion[])
             : [];
-          const compatibilityRequired = reasoningNeedsCompatibilityRelations(reasoningEvidence);
-          const minimumRelations = minimumCompatibilityRelationCount(reasoningEvidence);
+          // Named-series browsing is entity retrieval, not a fit calculation.
+          // Prices, voltage ranges and temperatures in grounded series prose
+          // must not manufacture compatibility obligations the customer never
+          // asked for. Exact series title/facet evidence remains mandatory.
+          const compatibilityRequired = !namedSeriesToken && reasoningNeedsCompatibilityRelations(reasoningEvidence);
+          const minimumRelations = namedSeriesToken ? 0 : minimumCompatibilityRelationCount(reasoningEvidence);
           const relationReference = commonCompatibilityReference(compatibilityRelations);
           let pairedTitleContractProven = false;
           if (minimumRelations >= 2 || relationReference) {
@@ -4351,6 +4387,7 @@ async function runExpertLoop(
           }
           if (
             criteria.length === 0 &&
+            !namedSeriesToken &&
             !pairedTitleContractProven &&
             hasMeasuredSelectionRequirement(`${userMessage}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`)
           ) {
@@ -4486,13 +4523,30 @@ async function runExpertLoop(
             };
             if (passed.length === 0 && report.rejected.length > 0 && lastDiscover && activeSelectionTarget) {
               let projection = projectCriteriaFacetOptions(criteria, lastDiscover.facets);
+              if (Object.keys(projection.options).length === 0) {
+                steps.push({
+                  step: "v3_criteria_facet_projection_empty",
+                  ms: now(),
+                  meta: {
+                    unmatched: projection.unmatched_keys,
+                    facets: lastDiscover.facets.map((facet) => ({
+                      key: facet.key,
+                      caption: facet.caption,
+                      type: facet.type,
+                      unit: facet.unit,
+                      values_count: facet.values.length,
+                    })),
+                  },
+                });
+              }
               if (Object.keys(projection.options).length > 0) {
-                let recovered = await runTool("search_catalog", {
+                let recoverySearchArgs: Record<string, unknown> = {
                   mode: "by_filter",
                   category_in: lastDiscover.leaf_categories.map((category) => category.pagetitle),
                   options: projection.options,
                   per_page: 50,
-                }, ctx);
+                };
+                let recovered = await runTool("search_catalog", recoverySearchArgs, ctx);
                 if (recovered.ok && recovered.tool === "search_catalog" && recovered.results.length === 0) {
                   const numericCriteria = criteria.filter((criterion) =>
                     typeof criterion.value === "number" || Array.isArray(criterion.value)
@@ -4505,12 +4559,13 @@ async function runExpertLoop(
                     Object.keys(essentialProjection.options).length > 0 &&
                     JSON.stringify(essentialProjection.options) !== JSON.stringify(projection.options)
                   ) {
-                    const retried = await runTool("search_catalog", {
+                    recoverySearchArgs = {
                       mode: "by_filter",
                       category_in: lastDiscover.leaf_categories.map((category) => category.pagetitle),
                       options: essentialProjection.options,
                       per_page: 50,
-                    }, ctx);
+                    };
+                    const retried = await runTool("search_catalog", recoverySearchArgs, ctx);
                     projection = essentialProjection;
                     recovered = retried;
                     steps.push({
@@ -4518,6 +4573,40 @@ async function runExpertLoop(
                       ms: now(),
                       meta: { options: essentialProjection.options, full_criteria_still_enforced: criteria.length },
                     });
+                  }
+                }
+                if (recovered.ok && recovered.tool === "search_catalog" && recovered.results.length === 0) {
+                  // Reuse the one generic recovery controller here as well as
+                  // on model-originated empty by_filter searches. Aggregated
+                  // umbrella facets can be valid while their taxonomy leaf
+                  // fan-out is stale or too narrow. Removing only category
+                  // scope preserves the exact live options; target, criteria,
+                  // compatibility and budget are revalidated below before any
+                  // card can escape.
+                  const recoveryPlan = buildSelectionSearchRecoveryPlan({
+                    failed_args: recoverySearchArgs,
+                    facets: lastDiscover.facets,
+                    leaf_categories: lastDiscover.leaf_categories.map((category) => category.pagetitle),
+                    reasoning_criteria: projection.proven_criteria,
+                    compatibility_shaped: compatibilityRequired,
+                  });
+                  for (const attempt of recoveryPlan) {
+                    const attempted = await runTool("search_catalog", attempt.args, ctx);
+                    steps.push({
+                      step: "v3_criteria_selection_search_recovery_attempt",
+                      ms: now(),
+                      meta: {
+                        kind: attempt.kind,
+                        relaxed_inputs: attempt.relaxed_inputs,
+                        revalidate: attempt.revalidate,
+                        found: attempted.ok && attempted.tool === "search_catalog" ? attempted.results.length : 0,
+                        total: attempted.ok && attempted.tool === "search_catalog" ? attempted.total : 0,
+                      },
+                    });
+                    if (attempted.ok && attempted.tool === "search_catalog" && attempted.results.length > 0) {
+                      recovered = attempted;
+                      break;
+                    }
                   }
                 }
                 if (recovered.ok && recovered.tool === "search_catalog") {
@@ -5479,6 +5568,27 @@ async function runExpertLoop(
             finalText += `${finalText ? "\n\n" : ""}${caption}`;
             replacementSplitFallbackCaptionSent = true;
             steps.push({ step: "v3_replacement_split_fallback_caption", ms: now(), meta: { axes } });
+          }
+
+          // Some providers emit the complete expert decision only as tool
+          // arguments and leave visible text empty. Once every hard gate has
+          // passed, preserve that reasoning for the customer as a compact,
+          // deterministic caption. It is derived solely from the verified
+          // selection contract; failed renders never reach this branch.
+          if (intentMode === "select" && !finalText.trim() && !replacementSplitFallbackCaptionSent) {
+            const criteria = Array.isArray((tc.args as Record<string, unknown>).criteria)
+              ? (tc.args as Record<string, unknown>).criteria as Criterion[]
+              : [];
+            const caption = buildSelectionEvidenceCaption(tc.args.selection_target, criteria);
+            if (caption) {
+              send({ type: "delta", content: caption });
+              finalText = caption;
+              steps.push({
+                step: "v3_selection_evidence_caption",
+                ms: now(),
+                meta: { chars: caption.length, criteria: criteria.length },
+              });
+            }
           }
 
           // ── Step 3: Promise-Reality Audit

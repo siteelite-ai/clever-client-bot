@@ -2,6 +2,7 @@ import { assert, assertEquals, assertLess } from "https://deno.land/std@0.224.0/
 import {
   boundedAgentStepTimeout,
   compactCatalogResultForLlm,
+  deterministicIntroTimeoutToolCall,
   forcedToolNameForAgentPhase,
   hasActionableSelectionReasoning,
   isToolAllowedInAgentPhase,
@@ -17,6 +18,18 @@ Deno.test("agent deadline: remote steps are bounded and reserve finalization tim
   assertEquals(boundedAgentStepTimeout(110_000, 90_000, 105_000, 5_000), 15_000);
   assertEquals(boundedAgentStepTimeout(30_000, 100_001, 105_000, 5_000), null);
   assertEquals(boundedAgentStepTimeout(30_000, 105_000, 105_000, 5_000), null);
+});
+
+Deno.test("forced discovery timeout falls back to live taxonomy without product rules", () => {
+  assertEquals(deterministicIntroTimeoutToolCall("discover_category", "  Нужен товар 16 А  "), {
+    name: "discover_category",
+    args: {
+      noun: "Нужен товар 16 А",
+      semantic_query: "Нужен товар 16 А",
+    },
+  });
+  assertEquals(deterministicIntroTimeoutToolCall("search_catalog", "Нужен товар"), null);
+  assertEquals(deterministicIntroTimeoutToolCall("discover_category", "   "), null);
 });
 
 Deno.test("agent phase: successful discovery requires search and blocks rediscovery", () => {

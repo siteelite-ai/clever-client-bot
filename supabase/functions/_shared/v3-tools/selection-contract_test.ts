@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { bootstrapSelectionTargetFromTaxonomy, initialSelectionDeclaration, parseSelectionTarget, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "./selection-contract.ts";
+import { bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch } from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
@@ -56,6 +56,21 @@ Deno.test("two-token class requires both identity signals", () => {
   ]);
   assertEquals(report.passed_ids, ["fixture"]);
   assertEquals(report.rejected_ids, ["flood", "lamp"]);
+});
+
+Deno.test("verified render contract becomes a visible data-agnostic caption", () => {
+  assertEquals(buildSelectionEvidenceCaption({
+    product_class: "Класс альфа",
+    application_context: ["комната 25 м²", "основное применение"],
+  }, [
+    { key: "Параметр потока", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
+    { key: "Монтаж", op: "eq", value: "потолочный", level: "A" },
+    { key: "Цвет", op: "eq", value: "белый", level: "B" },
+  ]), "Для задачи «комната 25 м², основное применение» проверены обязательные параметры товара: Параметр потока — 3750–5000 лм; Монтаж — потолочный. Ниже — варианты, прошедшие эти условия.");
+});
+
+Deno.test("caption is absent without verified mandatory criteria", () => {
+  assertEquals(buildSelectionEvidenceCaption({ product_class: "Класс", application_context: ["контекст"] }, []), null);
 });
 
 Deno.test("render target cannot drift to a sibling mentioned only by later search tactics", () => {

@@ -1,4 +1,5 @@
 import type { ProductRef } from "./types.ts";
+import type { Criterion } from "./criteria-gate.ts";
 
 export interface SelectionTargetReport {
   target: string;
@@ -15,6 +16,51 @@ export interface SelectionTargetReport {
 export interface SelectionTargetProjection {
   product_class: string;
   application_context: string[];
+}
+
+function captionText(value: unknown, limit = 100): string {
+  return String(value ?? "")
+    .replace(/[<>\p{Cc}]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, limit);
+}
+
+function formatCriterionValue(criterion: Criterion): string {
+  const unit = captionText(criterion.unit ?? "", 16);
+  const suffix = unit ? ` ${unit}` : "";
+  if (criterion.op === "range" && Array.isArray(criterion.value)) {
+    return `${captionText(criterion.value[0], 24)}–${captionText(criterion.value[1], 24)}${suffix}`;
+  }
+  const value = captionText(criterion.value, 60);
+  if (criterion.op === "min") return `${criterion.exclusive ? "более" : "от"} ${value}${suffix}`;
+  if (criterion.op === "max") return `${criterion.exclusive ? "менее" : "до"} ${value}${suffix}`;
+  return `${value}${suffix}`;
+}
+
+/**
+ * Builds a deterministic explanation only after target and criteria gates have
+ * passed. This preserves the consultant's machine-readable reasoning when a
+ * provider emits a tool call without visible prose. It contains no catalog
+ * facts beyond the exact verified render contract and no product vocabulary.
+ */
+export function buildSelectionEvidenceCaption(
+  targetValue: unknown,
+  criteria: Criterion[],
+): string | null {
+  const target = parseSelectionTarget(targetValue);
+  const mandatory = (Array.isArray(criteria) ? criteria : [])
+    .filter((criterion) => criterion?.key && criterion.value !== undefined && (criterion.level ?? "A") === "A")
+    .slice(0, 6);
+  if (mandatory.length === 0) return null;
+  const context = target.application_context.map((item) => captionText(item, 80)).filter(Boolean).slice(0, 3);
+  const clauses = mandatory.map((criterion) =>
+    `${captionText(criterion.key, 80)} — ${formatCriterionValue(criterion)}`
+  );
+  const prefix = context.length > 0
+    ? `Для задачи «${context.join(", ")}»`
+    : "Для этой задачи";
+  return `${prefix} проверены обязательные параметры товара: ${clauses.join("; ")}. Ниже — варианты, прошедшие эти условия.`;
 }
 
 /** Keeps class identity separate from suitability/application constraints. */
