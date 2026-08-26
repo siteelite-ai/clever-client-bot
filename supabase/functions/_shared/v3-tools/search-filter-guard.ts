@@ -452,22 +452,25 @@ function numericFacetValueIsLocallyEvidenced(
       if (expectedUnits.has(normalizeUnit(match[1]))) return true;
     }
   }
-  const normalizedEvidence = norm(evidence);
-  let from = 0;
-  while (from < normalizedEvidence.length) {
-    const index = normalizedEvidence.indexOf(normalizedValue, from);
-    if (index < 0) break;
-    const context = normalizedEvidence.slice(
-      Math.max(0, index - 60),
-      Math.min(normalizedEvidence.length, index + normalizedValue.length + 60),
+  const evidenceTokens = norm(evidence).split(" ").filter(Boolean);
+  const valueTokens = normalizedValue.split(" ").filter(Boolean);
+  for (let index = 0; index <= evidenceTokens.length - valueTokens.length; index++) {
+    if (!valueTokens.every((token, offset) => evidenceTokens[index + offset] === token)) continue;
+    // A unitless numeric facet must be named in the same compact phrase as the
+    // number. A broad character window let a later product noun reclassify a
+    // measured value from another dimension (`150–200 лк ... тип лампы` became
+    // `Количество ламп = 150`). Five tokens preserve ordinary phrasing such as
+    // `мощность светильника должна быть 100 Вт` without crossing into a later
+    // sentence or parameter.
+    const contextTokens = evidenceTokens.slice(
+      Math.max(0, index - 5),
+      Math.min(evidenceTokens.length, index + valueTokens.length + 6),
     );
-    const contextTokens = context.split(" ").filter(Boolean);
     if (contextTokens.some((token) => (
       token === anchor || tokensMatchByStem(anchor, token) ||
       anchor.length >= 3 && token.length >= 3 &&
         (token.includes(anchor) || anchor.includes(token))
     ))) return true;
-    from = index + Math.max(1, normalizedValue.length);
   }
   return false;
 }

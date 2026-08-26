@@ -514,6 +514,17 @@ Deno.test("an area value cannot become power even near product wording", () => {
   ).args.options, undefined);
 });
 
+Deno.test("a measured lighting target cannot become a later unitless lamp count", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { lamp_count: ["150"] } },
+    [{ key: "lamp_count", caption: "Количество ламп", values: [{ value: "1" }, { value: "150" }] }],
+    "Для гостиной базовый ориентир 150–200 лк, нужен световой поток 3750–5000 лм. Тип лампы — LED.",
+    "Гостиная 25 м².",
+  );
+  assertEquals(result.args.options, undefined);
+  assertEquals(result.dropped, [{ key: "lamp_count", value: "150", reason: "not_declared_in_reasoning" }]);
+});
+
 Deno.test("a matching measurement unit proves an exact numeric facet value", () => {
   const result = guardSearchFilters(
     { mode: "by_filter", options: { current: ["16"] } },
