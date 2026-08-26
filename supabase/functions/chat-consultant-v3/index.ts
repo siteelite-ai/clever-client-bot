@@ -6605,6 +6605,94 @@ async function runExpertLoop(
               });
             }
           }
+          // If even the individual facet endpoints are sparse or inconsistent,
+          // verify a bounded pool from the already-grounded category itself.
+          // This is the final ordinary-analogue recovery: it never runs for an
+          // explicit equivalent replacement, and every ranked axis is proved
+          // from the returned card rather than inferred from the API total.
+          if (!replacementSplitFallback && !equivalentReplacementRequested && lastDiscover) {
+            const categoryIn = Array.isArray(runArgs.category_in)
+              ? runArgs.category_in.map(String).filter(Boolean)
+              : lastDiscover.leaf_categories.map((category) => category.pagetitle).filter(Boolean);
+            const baseControls = {
+              min_price: typeof runArgs.min_price === "number" ? runArgs.min_price : 1,
+              ...(typeof runArgs.max_price === "number" ? { max_price: runArgs.max_price } : {}),
+              ...(runArgs.sort_cheapest === true ? { sort_cheapest: true } : {}),
+              ...(runArgs.sort_expensive === true ? { sort_expensive: true } : {}),
+              per_page: 50,
+            };
+            let broad = await executeSearchCatalog({
+              mode: "by_filter",
+              ...(categoryIn.length > 0
+                ? { category_in: categoryIn }
+                : { category: lastDiscover.category.pagetitle }),
+              ...baseControls,
+            }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+            if (!broad.ok || broad.results.length === 0) {
+              broad = await executeSearchCatalog({
+                mode: "by_filter",
+                category: lastDiscover.category.pagetitle,
+                ...baseControls,
+              }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+            }
+            if (broad.ok && broad.results.length > 0) {
+              const excludedIds = getFamilyExcludeSet();
+              const anchorId = getAnchorExcludeId();
+              if (anchorId) excludedIds.add(anchorId);
+              for (const id of preExcludedReplacementIdSet) excludedIds.add(id);
+              const verifiedAxes = replacementRequiredAxes.map((axis) => {
+                const ids = broad.results
+                  .filter((candidate) => {
+                    const product = ctx.cache.get(candidate.id);
+                    return Boolean(product && productMatchesReplacementAxis(product, axis));
+                  })
+                  .map((candidate) => candidate.id);
+                return { key: axis.key, ids, total: ids.length };
+              });
+              const ranked = rankSplitReplacementCandidates(
+                verifiedAxes,
+                excludedIds,
+                4,
+              )
+                .filter((candidate) => {
+                  const product = ctx.cache.get(candidate.id);
+                  return Boolean(
+                    product &&
+                    !productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues) &&
+                    !replacementSourceModelCodes.some((code) => productMatchesCodeConstraint(product, code))
+                  );
+                });
+              const fallbackProducts = ranked
+                .map((candidate) => ctx.cache.get(candidate.id))
+                .filter((product): product is ProductFull => Boolean(product));
+              if (fallbackProducts.length > 0) {
+                prioritySplitPool.splice(0, prioritySplitPool.length, ...fallbackProducts.map((product) => product.id));
+                prioritySplitAxisIdSets.clear();
+                for (const axis of verifiedAxes) prioritySplitAxisIdSets.set(axis.key, new Set(axis.ids));
+                replacementSplitFallback = {
+                  axes: replacementRequiredAxes.map((axis) => ({ ...axis, values: [...axis.values] })),
+                  candidates: ranked,
+                };
+                const catalogResult = result as SearchCatalogOk & { tool: "search_catalog"; warnings?: string[] };
+                result = {
+                  ...catalogResult,
+                  results: fallbackProducts,
+                  total: fallbackProducts.length,
+                  warnings: [...(catalogResult.warnings ?? []), "replacement_category_evidence_fallback"],
+                };
+                steps.push({
+                  step: "v3_replacement_category_evidence_fallback",
+                  ms: now(),
+                  meta: {
+                    strict_total: catalogResult.total,
+                    category_pool: broad.results.length,
+                    axes: verifiedAxes.map((axis) => ({ key: axis.key, candidates: axis.ids.length })),
+                    ranked,
+                  },
+                });
+              }
+            }
+          }
         }
         const effectiveArgs: Record<string, unknown> = runArgs;
         const inferredFallback: Array<{ key: string; value: string }> | null = null;
