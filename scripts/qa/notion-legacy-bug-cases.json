@@ -142,7 +142,7 @@
         "message": "Покажите светодиодные прожекторы мощностью от 100 Вт",
         "expect": {
           "min_products": 1,
-          "require_every_product_title_any": ["прожектор"],
+          "require_every_product_title_groups": [["прожектор"], ["светодиод", "LED", "СДО"]],
           "require_every_product_measurement": { "min": 100, "units": ["Вт", "W"], "allow_compact_numeric": true },
           "forbid_every_product_title_any": ["лампа", "светильник"]
         }

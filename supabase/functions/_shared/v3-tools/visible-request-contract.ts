@@ -1,7 +1,100 @@
+import { extractClientQuantities, normalizeUnit } from "./criteria-consistency.ts";
+
 export interface VisibleRequestRequirement {
-  kind: "linear_measurement" | "count";
+  kind: "linear_measurement" | "bounded_measurement" | "count" | "literal_modifier";
   label: string;
   matches: (title: string) => boolean;
+}
+
+export interface VisibleRequestContractContext {
+  /** Frozen product class established by the selection-target gate. */
+  productClass?: string | null;
+  /** All live titles observed in this turn, not only the latest recovery pool. */
+  candidateTitles?: string[];
+}
+
+const WORKFLOW_WORDS = new Set([
+  "покажи", "покажите", "найди", "найдите", "подбери", "подберите",
+  "нужен", "нужна", "нужно", "нужны", "хочу", "ищу", "есть", "дайте",
+  "мне", "нам", "самый", "самая", "самые", "дешевый", "дешевле",
+]);
+
+function normalizeToken(value: string): string {
+  return String(value ?? "")
+    .toLocaleLowerCase("ru-RU")
+    .replace(/ё/g, "е")
+    .replace(/[^a-zа-я0-9]+/giu, "")
+    .trim();
+}
+
+function tokenStem(value: string): string {
+  const token = normalizeToken(value);
+  if (/^[a-z0-9]+$/u.test(token) || token.length < 5) return token;
+  const stripped = token.replace(
+    /(?:иями|ями|ами|ыми|ими|ого|его|ому|ему|ая|яя|ое|ее|ые|ие|ый|ий|ой|ую|юю|ых|их|ым|им|ом|ем|ов|ев|ам|ям|ах|ях|а|я|у|ю|ы|и|е|о)$/u,
+    "",
+  );
+  return stripped.length >= 4 ? stripped : token;
+}
+
+function canonicalUnit(raw: string): string {
+  const unit = normalizeUnit(raw);
+  const aliases: Record<string, string> = {
+    ватт: "вт", ватта: "вт", ваттов: "вт", watt: "вт", watts: "вт", w: "вт",
+    люмен: "лм", люмена: "лм", люменов: "лм", lumen: "лм", lumens: "лм", lm: "лм",
+    вольт: "в", вольта: "в", вольтов: "в", volt: "в", volts: "в", v: "в",
+    ампер: "а", ампера: "а", амперов: "а", amp: "а", amps: "а", a: "а",
+  };
+  return aliases[unit] ?? unit;
+}
+
+function titleSatisfiesBound(
+  title: string,
+  expected: { value: number; unit: string; direction: "min" | "max"; exclusive: boolean },
+): boolean {
+  const unit = canonicalUnit(expected.unit);
+  return extractClientQuantities(title).some((quantity) => {
+    if (canonicalUnit(quantity.unit) !== unit) return false;
+    if (expected.direction === "min") {
+      return expected.exclusive ? quantity.value > expected.value : quantity.value >= expected.value;
+    }
+    return expected.exclusive ? quantity.value < expected.value : quantity.value <= expected.value;
+  });
+}
+
+function literalRequestModifiers(
+  source: string,
+  context: VisibleRequestContractContext,
+): Array<{ stem: string; label: string }> {
+  const classStems = new Set(
+    String(context.productClass ?? "")
+      .match(/[a-zа-я0-9]+/giu)
+      ?.map(tokenStem)
+      .filter((token) => token.length >= 3) ?? [],
+  );
+  if (classStems.size === 0) return [];
+  const sourceTokens = source.match(/[a-zа-я0-9]+/giu) ?? [];
+  const liveTitleStems = new Set(
+    (context.candidateTitles ?? [])
+      .flatMap((title) => title.match(/[a-zа-я0-9]+/giu) ?? [])
+      .map(tokenStem)
+      .filter(Boolean),
+  );
+  const modifiers = new Map<string, string>();
+  for (let index = 0; index < sourceTokens.length; index += 1) {
+    if (!classStems.has(tokenStem(sourceTokens[index]))) continue;
+    for (const offset of [-2, -1, 1, 2]) {
+      const token = normalizeToken(sourceTokens[index + offset] ?? "");
+      const stem = tokenStem(token);
+      if (
+        !stem || stem.length < 4 || classStems.has(stem) ||
+        WORKFLOW_WORDS.has(token) || /^\d/u.test(token) ||
+        !liveTitleStems.has(stem)
+      ) continue;
+      modifiers.set(stem, token);
+    }
+  }
+  return [...modifiers].map(([stem, label]) => ({ stem, label }));
 }
 
 /**
@@ -12,6 +105,7 @@ export interface VisibleRequestRequirement {
  */
 export function buildVisibleRequestContract(
   userMessage: string,
+  context: VisibleRequestContractContext = {},
 ): VisibleRequestRequirement[] {
   const source = String(userMessage ?? "");
   const requirements: VisibleRequestRequirement[] = [];
@@ -23,6 +117,10 @@ export function buildVisibleRequestContract(
   };
 
   for (const match of source.matchAll(/(?<!\d)(\d+(?:[.,]\d+)?)\s*(?:м|m)(?![\p{L}\p{N}²³])/giu)) {
+    const prefix = source.slice(Math.max(0, (match.index ?? 0) - 24), match.index ?? 0);
+    if (/(?:не\s+менее|минимум|от|не\s+более|максимум|до|больше|свыше|меньше|менее)\s*$/iu.test(prefix)) {
+      continue;
+    }
     const raw = match[1];
     const canonical = raw.replace(",", ".");
     const escaped = canonical.replace(".", "[.,]");
@@ -54,6 +152,38 @@ export function buildVisibleRequestContract(
       label: "двойная розетка",
       matches: (title) =>
         /двойн\p{L}*|(?<!\d)2\s*(?:[-–—]?\s*)?(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*|пост\p{L}*)(?!\p{L})/iu.test(title),
+    });
+  }
+
+  // Preserve explicit directional quantities at the final card boundary.
+  // The check is purely number+unit based and therefore applies equally to
+  // power, current, voltage, length, luminous flux and future catalog scales.
+  // Area/volume describe application context and are deliberately excluded.
+  const boundPattern = /(?:(не\s+менее|минимум|от|не\s+более|максимум|до|больше|свыше|меньше|менее)\s*)(\d+(?:[.,]\d+)?)\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])/giu;
+  for (const match of source.matchAll(boundPattern)) {
+    const marker = match[1].toLocaleLowerCase("ru-RU").replace(/ё/g, "е").replace(/\s+/g, " ");
+    const value = Number(match[2].replace(",", "."));
+    const unit = canonicalUnit(match[3]);
+    if (!Number.isFinite(value) || !unit || /[²³]/u.test(unit)) continue;
+    const direction = /^(?:не менее|минимум|от|больше|свыше)$/u.test(marker) ? "min" : "max";
+    const exclusive = /^(?:больше|свыше|меньше|менее)$/u.test(marker);
+    const label = `${marker} ${match[2]} ${match[3]}`;
+    add(`bound:${direction}:${exclusive}:${value}:${unit}`, {
+      kind: "bounded_measurement",
+      label,
+      matches: (title) => titleSatisfiesBound(title, { value, unit, direction, exclusive }),
+    });
+  }
+
+  // Keep a literal modifier next to the selected class only when at least one
+  // live title in this turn independently proves that vocabulary. This avoids
+  // dictionaries and prevents a later broad recovery from mixing cards that
+  // satisfy different halves of the request (for example type vs power).
+  for (const modifier of literalRequestModifiers(source, context)) {
+    add(`modifier:${modifier.stem}`, {
+      kind: "literal_modifier",
+      label: modifier.label,
+      matches: (title) => (title.match(/[a-zа-я0-9]+/giu) ?? []).some((token) => tokenStem(token) === modifier.stem),
     });
   }
 

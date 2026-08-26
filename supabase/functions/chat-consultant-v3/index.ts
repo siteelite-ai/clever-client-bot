@@ -3164,7 +3164,12 @@ async function runExpertLoop(
     return { ...adjusted, report: applyCriteriaGate(products, adjusted.criteria) };
   };
   const guardVisibleCardinality = (ids: string[]) => {
-    const visibleRequestContract = buildVisibleRequestContract(userMessage);
+    const visibleRequestContract = buildVisibleRequestContract(userMessage, {
+      productClass: activeSelectionTarget ?? lastDiscover?.category?.pagetitle ?? "",
+      // A modifier proven by an earlier narrow pool remains monotonic even if
+      // a later recovery pool contains only broader sibling cards.
+      candidateTitles: [...ctx.cache.values()].map((product) => product.pagetitle),
+    });
     const compactCriteria = userBackedSearchCriteria.filter((criterion) =>
       typeof criterion.value === "string" && !titleProvesCompactCriterion("", criterion)
     );
