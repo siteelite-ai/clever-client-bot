@@ -117,8 +117,11 @@ import {
   parseConfiguredModelFallbacks,
 } from "../_shared/v3-tools/model-routing.ts";
 import { deterministicSeriesExplanation, safeSeriesTraits } from "../_shared/v3-tools/series-explanation.ts";
-import { type RankedReplacementCandidate,
-  rankSplitReplacementCandidates } from "../_shared/v3-tools/replacement-fallback.ts";
+import {
+  intersectReplacementAxisEvidence,
+  type RankedReplacementCandidate,
+  rankSplitReplacementCandidates,
+} from "../_shared/v3-tools/replacement-fallback.ts";
 import {
   derivePortableAxisTitleRequirements,
   excludeMandatoryAxisCodesFromSourceModels,
@@ -3533,6 +3536,14 @@ async function runExpertLoop(
 
   const rememberReplacementAxes = (args: Record<string, unknown>) => {
     if (!replacementIntent) return;
+    // When the source SKU is absent, only the first complete contract is free
+    // from candidate-card feedback. Later model turns can quote catalog traits
+    // and must not silently redefine the source specification from those
+    // candidates.
+    if (
+      selectionPlan?.anchor_state === "anchor_missing" &&
+      replacementRequiredAxes.length >= 2
+    ) return;
     if (lastDiscover) {
       for (const value of explicitReplacementIdentityValues(
           lastDiscover.facets,
@@ -6432,7 +6443,7 @@ async function runExpertLoop(
             });
           }
         }
-        const strictReplacementSearchEmpty = replacementIntent &&
+        let strictReplacementSearchEmpty = replacementIntent &&
           tc.name === "search_catalog" &&
           result.ok &&
           result.tool === "search_catalog" &&
@@ -6464,6 +6475,41 @@ async function runExpertLoop(
           }
 
         }
+        // Legacy catalog filters can report a non-zero total while the returned
+        // cards visibly contradict one or more requested axes. Treat the strict
+        // intersection as non-empty only after product evidence proves every
+        // axis; raw `total` is discovery evidence, not compatibility proof.
+        if (
+          replacementIntent && tc.name === "search_catalog" && result.ok &&
+          result.tool === "search_catalog" && runArgs.mode === "by_filter" &&
+          replacementRequiredAxes.length >= 2
+        ) {
+          const catalogResult = result as SearchCatalogOk & { tool: "search_catalog" };
+          const provenAxes = replacementRequiredAxes.map((axis) => ({
+            key: axis.key,
+            ids: catalogResult.results
+              .filter((candidate) => {
+                const product = ctx.cache.get(candidate.id);
+                return Boolean(product && productMatchesReplacementAxis(product, axis));
+              })
+              .map((candidate) => candidate.id),
+          }));
+          const exactIds = intersectReplacementAxisEvidence(provenAxes);
+          if (exactIds.length === 0) {
+            if (!strictReplacementSearchEmpty && catalogResult.results.length > 0) {
+              steps.push({
+                step: "v3_replacement_strict_result_unverified",
+                ms: now(),
+                meta: {
+                  reported_total: catalogResult.total,
+                  candidates: catalogResult.results.length,
+                  proven_axes: provenAxes.map((axis) => ({ key: axis.key, candidates: axis.ids.length })),
+                },
+              });
+            }
+            strictReplacementSearchEmpty = true;
+          }
+        }
         if (
           (anchorOnlyReplacementSearch || strictReplacementSearchEmpty) &&
           replacementRequiredAxes.length >= 2 &&
@@ -6477,12 +6523,24 @@ async function runExpertLoop(
             if (anchorId) excludedIds.add(anchorId);
             for (
             const id of preExcludedReplacementIdSet) excludedIds.add(id);
+            // A split search is also only a retrieval hint. Remove ids whose
+            // actual card does not prove the searched axis before ranking.
+            const verifiedSplitAxes = split.axes.map((splitAxis) => {
+              const required = replacementRequiredAxes.find((axis) => axis.key === splitAxis.axis);
+              const ids = required
+                ? splitAxis.ids.filter((id) => {
+                  const product = ctx.cache.get(id);
+                  return Boolean(product && productMatchesReplacementAxis(product, required));
+                })
+                : [];
+              return { ...splitAxis, ids };
+            });
             const splitAxisSets = new Map(
-              split.axes.map((axis) => [axis.axis, new Set(axis.ids)] as const),
+              verifiedSplitAxes.map((axis) => [axis.axis, new Set(axis.ids)] as const),
             );
             const ranked = (equivalentReplacementRequested
               ? filterReplacementCompatibleIds(
-                [...new Set(split.axes.flatMap((axis) => axis.ids))],
+                [...new Set(verifiedSplitAxes.flatMap((axis) => axis.ids))],
                 replacementRequiredAxes,
                 ctx.cache,
                 splitAxisSets,
@@ -6493,7 +6551,7 @@ async function runExpertLoop(
                 matched_axis_keys: replacementRequiredAxes.map((axis) => axis.key),
               }))
               : rankSplitReplacementCandidates(
-                split.axes.map((axis) => ({ key: axis.axis, ids: axis.ids, total: axis.total })),
+                verifiedSplitAxes.map((axis) => ({ key: axis.axis, ids: axis.ids, total: axis.total })),
                 excludedIds,
                 4,
               ))
@@ -6512,7 +6570,7 @@ async function runExpertLoop(
             if (fallbackProducts.length > 0) {
               prioritySplitPool.splice(0, prioritySplitPool.length, ...fallbackProducts.map((product) => product.id));
               prioritySplitAxisIdSets.clear();
-              for (const axis of split.axes) {
+              for (const axis of verifiedSplitAxes) {
                 prioritySplitAxisIdSets.set(axis.axis, new Set(axis.ids));
               }
               if (!equivalentReplacementRequested) {
@@ -6541,7 +6599,7 @@ async function runExpertLoop(
                   trigger: anchorOnlyReplacementSearch ? "anchor_only" : "strict_empty",
                   source_model_codes: replacementSourceModelCodes,
                   duration_ms: split.ms,
-                  axes: split.axes.map((axis) => ({ key: axis.axis, total: axis.total, candidates: axis.ids.length })),
+                  axes: verifiedSplitAxes.map((axis) => ({ key: axis.axis, total: axis.total, candidates: axis.ids.length })),
                   ranked,
                   exact_visible_axes_required: equivalentReplacementRequested,
                 },

@@ -23,7 +23,8 @@ export interface DroppedSearchFilter {
   key: string;
   value: string;
   reason:
-    | "unknown_facet" | "unknown_value" | "not_declared_in_reasoning" | "negated_by_user";
+    | "unknown_facet" | "unknown_value" | "not_declared_in_reasoning" | "negated_by_user"
+    | "non_atomic_value";
 }
 
 export interface SearchFilterGuardResult {
@@ -292,6 +293,19 @@ function sameFacetValue(left: string, right: string): boolean {
   return /\d/.test(left + right) && codeNorm(left) === codeNorm(right);
 }
 
+/**
+ * A selectable facet value represents one product property. Search-keyword
+ * dumps and other list-like metadata are sometimes exposed by the legacy
+ * catalog as facets too; accepting them lets candidate-card content become a
+ * self-reinforcing filter. Keep the boundary structural and vocabulary-free.
+ */
+function isAtomicFacetValue(value: string): boolean {
+  const text = String(value ?? "").trim();
+  if (!text || text.length > 240) return false;
+  const commaParts = text.split(",").map((part) => part.trim()).filter(Boolean);
+  return commaParts.length <= 5;
+}
+
 function evidenceStatus(value: string, userEvidence: string): "affirmed" | "negated" | "absent" {
   const wanted = norm(value);
   const evidence = norm(userEvidence);
@@ -494,6 +508,10 @@ export function guardSearchFilters(
         dropped.push({ key, value: rawValue, reason: "unknown_value" });
         continue;
       }
+      if (!isAtomicFacetValue(canonical)) {
+        dropped.push({ key, value: canonical, reason: "non_atomic_value" });
+        continue;
+      }
       if (contradictedByUser(canonical, userEvidence)) {
         dropped.push({ key, value: canonical, reason: "negated_by_user" });
         continue;
@@ -562,6 +580,7 @@ export function guardSearchFilters(
     if (isReplacementIdentityFacet(facet)) continue;
     const evidenced = facet.values.filter((candidate) => {
       const normalized = norm(candidate.value);
+      if (!isAtomicFacetValue(candidate.value)) return false;
       if (!normalized || ["да", "нет", "есть", "отсутствует"].includes(normalized)) return false;
       if (!/[a-zа-я]/iu.test(normalized)) return false;
       return explicitlyAffirmedByUser(candidate.value, userEvidence);
@@ -587,6 +606,7 @@ export function guardSearchFilters(
     if (!facetMeaningIsEvidenced(facet, declaredReasoning)) continue;
     const evidenced = facet. values.filter((candidate) => {
       const value = norm(candidate.value);
+      if (!isAtomicFacetValue(candidate.value)) return false;
       if (!value || ["да", "нет", "есть", "отсутствует"].includes(value)) {
         return false;
       }

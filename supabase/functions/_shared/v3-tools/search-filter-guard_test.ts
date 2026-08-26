@@ -65,6 +65,27 @@ Deno.test("filter guard drops unknown facet keys and values", () => {
   assertEquals(result.dropped.map((item) => item.reason), ["unknown_facet", "unknown_value"]);
 });
 
+Deno.test("list-like catalog metadata cannot become a product filter", () => {
+  const keywordDump = Array.from(
+    { length: 12 },
+    (_, index) => `стабилизатор вариант ${index + 1}`,
+  ).join(",");
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { keywords: [keywordDump] } },
+    [{
+      key: "keywords",
+      caption: "Поисковый запрос",
+      values: [{ value: keywordDump }],
+    }],
+    `В данных кандидата встретилось поле «Поисковый запрос»: ${keywordDump}`,
+    "Подбери аналог модели AX-100",
+  );
+
+  assertEquals(result.args, { mode: "by_filter" });
+  assertEquals(result.dropped.map((item) => item.reason), ["non_atomic_value"]);
+  assertEquals(result.inferred, []);
+});
+
 Deno.test("filter guard accepts a criterion declared by the consultant", () => {
   const result = guardSearchFilters(
     { mode: "by_filter", options: { kind: ["Бытовые светильники накладные"] } },

@@ -9,6 +9,16 @@ export interface RankedReplacementCandidate {
   matched_axis_keys: string[];
 }
 
+/** Candidate ids proven on every independent replacement axis. */
+export function intersectReplacementAxisEvidence(
+  axes: ReplacementAxisEvidence[],
+): string[] {
+  if (axes.length < 2) return [];
+  const first = [...new Set(axes[0].ids.map(String).filter(Boolean))];
+  const remaining = axes.slice(1).map((axis) => new Set(axis.ids.map(String)));
+  return first.filter((id) => remaining.every((ids) => ids.has(id)));
+}
+
 /**
  * Ranks only candidates proven by independent searches over model-selected
  * replacement axes. More matching axes rank first; among equally supported

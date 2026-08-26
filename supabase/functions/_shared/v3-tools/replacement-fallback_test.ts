@@ -1,5 +1,20 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { rankSplitReplacementCandidates } from "./replacement-fallback.ts";
+import {
+  intersectReplacementAxisEvidence,
+  rankSplitReplacementCandidates,
+} from "./replacement-fallback.ts";
+
+Deno.test("strict replacement is non-empty only when one card proves every axis", () => {
+  assertEquals(intersectReplacementAxisEvidence([
+    { key: "power", ids: ["power-only", "exact"] },
+    { key: "phase", ids: ["phase-only", "exact"] },
+    { key: "type", ids: ["exact", "type-only"] },
+  ]), ["exact"]);
+  assertEquals(intersectReplacementAxisEvidence([
+    { key: "power", ids: ["power-only"] },
+    { key: "phase", ids: ["phase-only"] },
+  ]), []);
+});
 
 Deno.test("ordinary analogue fallback ranks shared-axis evidence and excludes the source", () => {
   assertEquals(rankSplitReplacementCandidates([
