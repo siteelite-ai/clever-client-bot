@@ -29,7 +29,7 @@ import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract, shouldContinueSelectionPastOptionalClarification } from "../_shared/v3-tools/selection-actionability.ts";
 import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionEvidenceCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
-import { aliasDuplicatesCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
+import { aliasDuplicatesIndependentCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
   commonCompatibilityReference,
@@ -5013,11 +5013,15 @@ async function runExpertLoop(
             `${firstAssistantText}\n${assistantReasoning}`,
           );
           let lexicalClaim = aliasClaim ?? declaredAliasQuery;
-          if (lexicalClaim && aliasDuplicatesCatalogClass(lexicalClaim, [
-            target,
-            activeSelectionTarget,
+          // Only independent taxonomy/discovery evidence may show that the
+          // alleged alias is merely an inflection of the product class. The
+          // model's later selection_target can itself contain the alias and
+          // must never discharge its own lexical proof obligation.
+          if (lexicalClaim && aliasDuplicatesIndependentCatalogClass(
+            lexicalClaim,
             liveTaxonomyDeclaration,
-          ])) {
+            initialSelectionDiscoveryNoun,
+          )) {
             steps.push({
               step: "v3_declared_alias_equals_product_class",
               ms: now(),

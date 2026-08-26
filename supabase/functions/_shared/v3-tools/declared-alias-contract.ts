@@ -64,6 +64,16 @@ export function aliasDuplicatesCatalogClass(alias: string, classes: Array<string
   });
 }
 
+/** Only independently discovered class labels may discharge an alias. A
+ * model-generated selection target is intentionally not accepted here. */
+export function aliasDuplicatesIndependentCatalogClass(
+  alias: string,
+  liveTaxonomy: string | null | undefined,
+  discoveryNoun: string | null | undefined,
+): boolean {
+  return aliasDuplicatesCatalogClass(alias, [liveTaxonomy, discoveryNoun]);
+}
+
 const POST_NOMINAL_STOP = new Set([
   "для", "под", "с", "со", "без", "на", "в", "во", "из", "к", "по", "до", "от",
   "есть", "имеется", "нужен", "нужна", "нужно", "нужны", "покажи", "найди", "ищу",

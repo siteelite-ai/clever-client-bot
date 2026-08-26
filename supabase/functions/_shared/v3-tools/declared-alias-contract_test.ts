@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   aliasDuplicatesCatalogClass,
+  aliasDuplicatesIndependentCatalogClass,
   extractDeclaredCatalogAlias,
   extractPostNominalCatalogQualifier,
   retainRequiredCatalogAlias,
@@ -58,6 +59,11 @@ Deno.test("a grounded lexical spelling remains required through later criteria g
 Deno.test("an inflected product class is not treated as a separate alias", () => {
   assertEquals(aliasDuplicatesCatalogClass("прожекторы", ["Прожекторы", "прожектор"]), true);
   assertEquals(aliasDuplicatesCatalogClass("кукуруза", ["Лампы", "светодиодная лампа"]), false);
+});
+
+Deno.test("a model-expanded target cannot discharge its own alias", () => {
+  assertEquals(aliasDuplicatesCatalogClass("кукуруза", ["лампа кукуруза"]), true);
+  assertEquals(aliasDuplicatesIndependentCatalogClass("кукуруза", "Лампы", "лампа"), false);
 });
 
 Deno.test("a post-nominal customer qualifier is lexical evidence, not application context", () => {
