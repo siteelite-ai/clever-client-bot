@@ -134,6 +134,25 @@ function meaningfulRawTokens(value: string): string[] {
   return normalize(value).split(/\s+/u)
     .filter((token) => token && token.length >= 3 && !META_WORDS.has(token) && !/^\d+$/u.test(token));
 }
+/**
+ * Recognises only an explicit list of bare product-class heads. This is much
+ * narrower than splitting every conjunction: sockets and switches is a set
+ * of alternative classes, while motion sensor and illuminance remains one
+ * compound identity contract because one side contains more than one
+ * meaningful token. Keeping that distinction prevents an attribute joined by
+ * "and" from silently becoming optional.
+ */
+function bareClassAlternatives(value: string): string[] | null {
+  const raw = String(value ?? "").trim();
+  const connector = /(?:[,;/]|(?<!\p{L})(?:и|или|and|or)(?!\p{L}))/iu;
+  if (!connector.test(raw)) return null;
+  const parts = raw
+    .split(/\s*(?:[,;/]|(?<!\p{L})(?:и|или|and|or)(?!\p{L}))\s*/iu)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length < 2 || parts.some((part) => meaningfulRawTokens(part).length !== 1)) return null;
+  return parts;
+}
 
 /**
  * Catalog families and standards are often written either as one compact code
@@ -317,6 +336,30 @@ export function verifySelectionTarget(
   target: string,
   products: ProductRef[],
 ): SelectionTargetReport {
+  const alternatives = bareClassAlternatives(target);
+  if (alternatives) {
+    const alternativeReports = alternatives.map((alternative) =>
+      verifySelectionTargetWithVisibleTitle(alternative, products)
+    );
+    const perProduct = products.map((product) => {
+      const candidates = alternativeReports.map((report) => ({
+        passed: report.passed_ids.includes(product.id),
+        row: report.per_product.find((item) => item.id === product.id)!,
+      }));
+      const best = candidates.sort((left, right) =>
+        Number(right.passed) - Number(left.passed) ||
+        right.row.coverage - left.row.coverage ||
+        right.row.matched.length - left.row.matched.length
+      )[0];
+      return { ...best.row, passes: best.passed };
+    });
+    return {
+      target: String(target ?? "").trim(),
+      passed_ids: perProduct.filter((item) => item.passes).map((item) => item.id),
+      rejected_ids: perProduct.filter((item) => !item.passes).map((item) => item.id),
+      per_product: perProduct.map(({ passes: _passes, ...item }) => item),
+    };
+  }
   const rawTokens = meaningfulRawTokens(target);
   const tokens = rawTokens.map(stem).filter((token, index, values) => values.indexOf(token) === index);
   const perProduct = products.map((product) => {

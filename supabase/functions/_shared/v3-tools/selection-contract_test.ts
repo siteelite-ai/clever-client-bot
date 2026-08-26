@@ -58,6 +58,24 @@ Deno.test("two-token class requires both identity signals", () => {
   assertEquals(report.rejected_ids, ["flood", "lamp"]);
 });
 
+Deno.test("an explicit bare class list accepts either class but rejects siblings", () => {
+  const report = verifySelectionTargetWithVisibleTitle("розетки и выключатели", [
+    product("socket", "Розетка Gallant с заземлением", "Розетки"),
+    product("switch", "Выключатель Gallant одноклавишный", "Выключатели"),
+    product("frame", "Рамка Gallant двухместная", "Рамки"),
+  ]);
+  assertEquals(report.passed_ids, ["socket", "switch"]);
+  assertEquals(report.rejected_ids, ["frame"]);
+});
+
+Deno.test("an attribute conjunction is not weakened into class alternatives", () => {
+  const report = verifySelectionTargetWithVisibleTitle("датчик движения и освещенности", [
+    product("motion", "Датчик движения настенный", "Датчики движения"),
+  ]);
+  assertEquals(report.passed_ids, []);
+  assertEquals(report.rejected_ids, ["motion"]);
+});
+
 Deno.test("compact family code matches the same adjacent live-title tokens", () => {
   const report = verifySelectionTarget("Кабель ABcd", [
     product("split", "Кабель AB cd 3*1,5", "Кабели"),
