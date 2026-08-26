@@ -66,13 +66,13 @@ function literalRequestModifiers(
   source: string,
   context: VisibleRequestContractContext,
 ): Array<{ stem: string; label: string }> {
-  const classStems = new Set(
-    String(context.productClass ?? "")
-      .match(/[a-zа-я0-9]+/giu)
-      ?.map(tokenStem)
-      .filter((token) => token.length >= 3) ?? [],
-  );
-  if (classStems.size === 0) return [];
+  const classTokens = String(context.productClass ?? "")
+    .match(/[a-zа-я0-9]+/giu) ?? [];
+  // Only the final class head is exempt. Earlier class words can themselves
+  // be customer-owned modifiers ("LED floodlight", "double socket") and must
+  // not disappear merely because a model repeated them inside product_class.
+  const classHead = tokenStem(classTokens.at(-1) ?? "");
+  if (classHead.length < 3) return [];
   const sourceTokens = source.match(/[a-zа-я0-9]+/giu) ?? [];
   const liveTitleStems = new Set(
     (context.candidateTitles ?? [])
@@ -82,12 +82,12 @@ function literalRequestModifiers(
   );
   const modifiers = new Map<string, string>();
   for (let index = 0; index < sourceTokens.length; index += 1) {
-    if (!classStems.has(tokenStem(sourceTokens[index]))) continue;
+    if (tokenStem(sourceTokens[index]) !== classHead) continue;
     for (const offset of [-2, -1, 1, 2]) {
       const token = normalizeToken(sourceTokens[index + offset] ?? "");
       const stem = tokenStem(token);
       if (
-        !stem || stem.length < 4 || classStems.has(stem) ||
+        !stem || stem.length < 4 || stem === classHead ||
         WORKFLOW_WORDS.has(token) || /^\d/u.test(token) ||
         !liveTitleStems.has(stem)
       ) continue;

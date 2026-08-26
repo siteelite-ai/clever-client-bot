@@ -42,7 +42,7 @@ Deno.test("a live literal class modifier survives a later mixed recovery pool", 
   const contract = buildVisibleRequestContract(
     "Покажите светодиодные прожекторы мощностью от 100 Вт",
     {
-      productClass: "Прожекторы",
+      productClass: "светодиодные прожекторы",
       candidateTitles: [
         "Прожектор светодиодный 70W",
         "Прожектор ИО 150Вт",

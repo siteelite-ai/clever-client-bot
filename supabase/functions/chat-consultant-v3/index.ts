@@ -8321,7 +8321,7 @@ async function runExpertLoop(
             type: "tool_event",
             tool: "search_catalog",
             phase: "result",
-            summary: `Расширенная проверка: подтверждено ${safeIds.length}`,
+            summary: `Расширенная проверка: найдено ${recovered.results.length}, класс ${targetIds.size}, подтверждено ${safeIds.length}`,
           });
           if (safeIds.length > 0) {
             const rendered = await runTool("render_products", {
