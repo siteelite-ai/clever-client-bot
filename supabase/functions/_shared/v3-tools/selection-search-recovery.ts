@@ -11,6 +11,7 @@ import {
 export type SelectionSearchRecoveryKind =
   | "preserve_filters_expand_category_scope"
   | "preserve_scope_verify_sparse_boolean_as_evidence"
+  | "verify_compatibility_in_grounded_category"
   | "project_reasoning_ranges_in_category"
   | "project_reasoning_ranges_expand_category_scope";
 
@@ -281,6 +282,24 @@ export function buildSelectionSearchRecoveryPlan(
       proven_criteria: [],
       revalidate: [...REVALIDATE],
     });
+  }
+
+  // A paired/relational selection can be reasoned correctly while the model
+  // serializes the threshold as an exact facet value. After that intersection
+  // is empty, fetch only a bounded pool from the already-grounded live
+  // category. This retrieval proves no filter: the caller must rebuild and
+  // enforce the full compatibility relation before rendering any card.
+  if (input.compatibility_shaped) {
+    const args = buildCategoryVerificationSearchInput(input.leaf_categories);
+    if (args) {
+      add({
+        kind: "verify_compatibility_in_grounded_category",
+        args,
+        relaxed_inputs: ["model_filter_serialization"],
+        proven_criteria: [],
+        revalidate: [...REVALIDATE],
+      });
+    }
   }
 
   // Paired-state compatibility has its own two-sided projection. A scalar

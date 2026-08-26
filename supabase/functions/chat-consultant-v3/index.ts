@@ -6204,6 +6204,14 @@ async function runExpertLoop(
             if (recovered.ok && recovered.tool === "search_catalog" && recovered.results.length > 0) {
               for (const key of Object.keys(runArgs)) delete runArgs[key];
               Object.assign(runArgs, attempt.args);
+              if (attempt.kind === "verify_compatibility_in_grounded_category") {
+                // The failed model options were only a serialization attempt,
+                // not evidence. Preserve explicit customer constraints, then
+                // let the compatibility controller rebuild directional proof
+                // from reasoning and live facets before render.
+                enforcedSearchCriteria = userBackedSearchCriteria.map((criterion) => ({ ...criterion }));
+                reasoningProjectedSearchCriteria = [];
+              }
               result = recovered;
               break;
             }

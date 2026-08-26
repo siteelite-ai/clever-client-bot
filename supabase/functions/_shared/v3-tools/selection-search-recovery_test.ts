@@ -50,7 +50,7 @@ Deno.test("reasoning criteria create bounded scoped then unscoped attempts", () 
   assert(plan.length <= 4);
 });
 
-Deno.test("paired compatibility cannot be replaced by scalar range recovery", () => {
+Deno.test("paired compatibility verifies the grounded category without scalar substitution", () => {
   const plan = buildSelectionSearchRecoveryPlan({
     failed_args: { mode: "by_filter", category_in: ["Live leaf"], per_page: 20 },
     facets,
@@ -58,7 +58,14 @@ Deno.test("paired compatibility cannot be replaced by scalar range recovery", ()
     reasoning_criteria: [{ key: "Поток", op: "range", value: [1, 2], unit: "лм", level: "A" }],
     compatibility_shaped: true,
   });
-  assertEquals(plan, []);
+  assertEquals(plan.map(({ kind }) => kind), ["verify_compatibility_in_grounded_category"]);
+  assertEquals(plan[0].args, {
+    mode: "by_filter",
+    category_in: ["Live leaf"],
+    per_page: 50,
+  });
+  assertEquals(plan[0].proven_criteria, []);
+  assertEquals(plan[0].revalidate, ["selection_target", "mandatory_criteria", "compatibility", "budget"]);
 });
 
 Deno.test("policy contains no product vocabulary or hard-coded taxonomy", () => {
