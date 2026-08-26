@@ -84,6 +84,14 @@ export function isEvidenceOnlyFollowup(message: string): boolean {
   return /(?:почему|точно|сравн|характерист|единиц|цена|остат|подход|этот|эта|эти|вариант)/u.test(normalized);
 }
 
+/** A short imperative that refers to the already rendered batch. It is kept
+ * separate from a new catalog selection: callers must have recent server-side
+ * evidence and must refresh every card before rendering it again. */
+export function isRecentProductShowFollowup(message: string): boolean {
+  const normalized = cleanText(message, 800).toLowerCase().replace(/ё/g, "е");
+  return /^(?:(?:да|хорошо|ладно|ок|давай|тогда|ну|пожалуйста|можно)\s+)*(?:покаж\p{L}*|вывед\p{L}*)(?:\s+(?:(?:их|эти|те)(?:\s+(?:варианты|товары|ссылки?))?|варианты|товары|найденные|предложенные|ссылки?))?$/u.test(normalized);
+}
+
 /**
  * A price superlative plus an explicit reference signal means “choose from the
  * products you just showed”, not “start a new catalog selection”. Product

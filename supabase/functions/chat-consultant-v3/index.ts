@@ -90,6 +90,7 @@ import {
   extractPriorAssistantProse,
   extractRenderedProductTitles,
   isEvidenceOnlyFollowup,
+  isRecentProductShowFollowup,
   isRecentProductPriceSelectionFollowup,
   latestRecentProductEvidenceSet,
   loadRecentProductEvidence,
@@ -2736,6 +2737,76 @@ async function selectVerifiedSemanticCompoundProducts(
   return { handled: true, products };
 }
 
+async function refreshRecentProductSet(
+  evidence: RecentProductEvidence[],
+  ctx: ToolContext,
+): Promise<ProductFull[]> {
+  const latestEvidence = latestRecentProductEvidenceSet(evidence);
+  const refreshed = await Promise.all(latestEvidence.map(async (previous) => {
+    const result = await executeSearchCatalog({
+      mode: "by_pagetitle",
+      pagetitle: previous.pagetitle,
+      per_page: 3,
+    }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+    if (!result.ok) return null;
+    const wanted = previous.pagetitle.toLowerCase().replace(/ё/g, "е").replace(/\s+/g, " ").trim();
+    const exact = result.results.find((product) =>
+      product.pagetitle.toLowerCase().replace(/ё/g, "е").replace(/\s+/g, " ").trim() === wanted
+    );
+    return exact ? ctx.cache.get(String(exact.id)) ?? null : null;
+  }));
+  return refreshed.filter((product): product is ProductFull => Boolean(
+    product && Number.isFinite(product.price) && product.price > 0,
+  ));
+}
+
+async function selectVerifiedRecentShowFollowup(
+  userMessage: string,
+  evidence: RecentProductEvidence[],
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<{ handled: boolean; products: ProductFull[] }> {
+  if (evidence.length === 0 || !isRecentProductShowFollowup(userMessage)) {
+    return { handled: false, products: [] };
+  }
+  const started = Date.now();
+  const liveProducts = (await refreshRecentProductSet(evidence, ctx)).slice(0, 5);
+  const elapsed = Date.now() - started;
+  if (liveProducts.length === 0) {
+    send({
+      type: "delta",
+      content: "Ранее показанные карточки не удалось заново подтвердить в актуальном каталоге. Не буду выводить устаревшие товары — могу повторить подбор.",
+    });
+    steps.push({
+      step: "v3_recent_show_followup_empty",
+      ms: Date.now() - t0,
+      meta: { evidence_count: evidence.length, duration_ms: elapsed },
+    });
+    return { handled: true, products: [] };
+  }
+  const rendered = executeRenderProducts({
+    product_ids: liveProducts.map((product) => product.id),
+    total_available: liveProducts.length,
+  }, ctx.cache);
+  if (!rendered.ok) {
+    steps.push({
+      step: "v3_recent_show_followup_render_failed",
+      ms: Date.now() - t0,
+      meta: { error_code: rendered.error_code },
+    });
+    return { handled: true, products: [] };
+  }
+  send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: liveProducts.length });
+  steps.push({
+    step: "v3_recent_show_followup_rendered",
+    ms: Date.now() - t0,
+    meta: { evidence_count: evidence.length, refreshed_count: liveProducts.length, duration_ms: elapsed },
+  });
+  return { handled: true, products: liveProducts };
+}
+
 async function selectVerifiedRecentPriceFollowup(
   userMessage: string,
   evidence: RecentProductEvidence[],
@@ -2756,21 +2827,7 @@ async function selectVerifiedRecentPriceFollowup(
 
   const started = Date.now();
   const latestEvidence = latestRecentProductEvidenceSet(evidence);
-  const refreshed = await Promise.all(latestEvidence.map(async (previous) => {
-    const result = await executeSearchCatalog({
-      mode: "by_pagetitle",
-      pagetitle: previous.pagetitle,
-      per_page: 3,
-    }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
-    if (!result.ok) return null;
-    const wanted = previous.pagetitle.toLowerCase().replace(/ё/g, "е").replace(/\s+/g, " ").trim();
-    const exact = result.results.find((product) =>
-      product.pagetitle.toLowerCase().replace(/ё/g, "е").replace(/\s+/g, " ").trim() === wanted
-    );
-    return exact ? ctx.cache.get(String(exact.id)) ?? null : null;
-  }));
-  const liveProducts = refreshed
-    .filter((product): product is ProductFull => Boolean(product && Number.isFinite(product.price) && product.price > 0))
+  const liveProducts = (await refreshRecentProductSet(evidence, ctx))
     .sort((left, right) => intent.direction === "more_expensive" ? right.price - left.price : left.price - right.price);
   const selected = liveProducts.slice(0, 1);
   const elapsed = Date.now() - started;
@@ -3579,18 +3636,25 @@ async function runExpertLoop(
 
   const portableReplacementRequirements = (): string[] => {
     const portableCodes = effectiveCodeConstraints;
+    const reasoningEvidence = `${priorReplacementReasoning}\n${firstAssistantText}\n${assistantReasoning}`;
+    const explicitTitleAxisCodes = derivePortableAxisTitleRequirements(
+      replacementTitleAxes,
+      reasoningEvidence,
+    );
     // A disclosed near-match may relax model-inferred source properties, but
-    // never a literal technical code typed by the customer. Keeping derived
-    // axis codes here would make the fallback unreachable by demanding that a
-    // partial analogue still display every property of the missing source.
+    // never a literal customer code or a live title axis that the consultant
+    // explicitly decoded in its reasoning. Other model-inferred source traits
+    // remain relaxable so the partial-analogue path is still reachable.
     if (replacementSplitFallback && !equivalentReplacementRequested) {
-      return portableCodes;
+      return [...new Map(
+        [...portableCodes, ...explicitTitleAxisCodes].map((value) => [normalizeCodeLike(value), value]),
+      ).values()];
     }
     const titleAxes = [...replacementRequiredAxes, ...replacementTitleAxes]
       .filter((axis, index, all) => all.findIndex((candidate) => candidate.key === axis.key) === index);
     const provenAxisCodes = derivePortableAxisTitleRequirements(
       titleAxes,
-      `${priorReplacementReasoning}\n${firstAssistantText}\n${assistantReasoning}`,
+      reasoningEvidence,
     );
     if (provenAxisCodes.length >= 2) return provenAxisCodes;
     return [...new Map(
@@ -7568,7 +7632,7 @@ async function runExpertLoop(
       anchorMissingRecoveryPool &&
       activeSelectionTarget
     ) {
-      const explicitRequirements = selectionPlan.portable_requirements.map((item) => item.value);
+      const explicitRequirements = portableReplacementRequirements();
       const products = anchorMissingRecoveryPool.ids
         .map((id) => ctx.cache.get(id))
         .filter((product): product is ProductFull => Boolean(product && product.price > 0))
@@ -8528,6 +8592,17 @@ Deno.serve(async (req) => {
             req.signal,
           );
           productsCount = 0;
+        } else if (recentProductEvidence.length > 0 && isRecentProductShowFollowup(userMessage)) {
+          const selection = await selectVerifiedRecentShowFollowup(
+            userMessage,
+            recentProductEvidence,
+            ctx,
+            send,
+            steps,
+            t0,
+          );
+          productsCount = selection.products.length;
+          await persistRecentProductEvidence(supabase, effectiveSessionId, selection.products);
         } else if (recentProductEvidence.length > 0 && isRecentProductPriceSelectionFollowup(userMessage)) {
           const selection = await selectVerifiedRecentPriceFollowup(
             userMessage,
