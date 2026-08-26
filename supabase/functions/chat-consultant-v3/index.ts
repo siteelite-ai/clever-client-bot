@@ -111,6 +111,10 @@ import {
 } from "../_shared/v3-tools/agent-performance.ts";
 import { CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest } from "../_shared/v3-tools/clean-power-safety.ts";
 import { ELECTRICAL_PROTECTION_TRIP_ANSWER, isElectricalProtectionTripDiagnostic } from "../_shared/v3-tools/electrical-trip-safety.ts";
+import {
+  buildOpenRouterModelRouting,
+  parseConfiguredModelFallbacks,
+} from "../_shared/v3-tools/model-routing.ts";
 import { deterministicSeriesExplanation, safeSeriesTraits } from "../_shared/v3-tools/series-explanation.ts";
 import { type RankedReplacementCandidate,
   rankSplitReplacementCandidates } from "../_shared/v3-tools/replacement-fallback.ts";
@@ -189,6 +193,10 @@ const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const CATALOG_BASE_URL = Deno.env.get("CATALOG_API_BASE_URL") ?? "https://220volt.kz/api";
 
 const MODEL = "deepseek/deepseek-v4-flash"; // MoE 284B/13B-active, 1M ctx, optimized for agent workflows. rollback: "deepseek/deepseek-v4-pro"
+const AGENT_MODEL_ROUTING = buildOpenRouterModelRouting(
+  MODEL,
+  parseConfiguredModelFallbacks(Deno.env.get("OPENROUTER_AGENT_FALLBACK_MODELS")),
+);
 const MAX_STEPS = 12;
 const TURN_TIMEOUT_MS = 140_000;
 // Stop starting remote model calls before the hard abort so the ordinary
@@ -1890,7 +1898,7 @@ async function callOpenRouter(
         "X-Title": "220volt-chat-consultant-v3",
       },
       body: JSON.stringify({
-        model: MODEL,
+        ...AGENT_MODEL_ROUTING,
         temperature: 0.2,
         max_tokens: 4000,
         messages,
@@ -1965,7 +1973,7 @@ async function callOpenRouterEvidenceFollowup(
         "X-Title": "220volt-chat-consultant-v3-evidence-followup",
       },
       body: JSON.stringify({
-        model: MODEL,
+        ...AGENT_MODEL_ROUTING,
         temperature: 0.1,
         max_tokens: 1200,
         messages: [
@@ -2024,7 +2032,7 @@ async function callOpenRouterSeriesExplanation(
         "X-Title": "220volt-chat-series-explanation",
       },
       body: JSON.stringify({
-        model: MODEL,
+        ...AGENT_MODEL_ROUTING,
         temperature: 0.1,
         max_tokens: 1400,
         messages: [
