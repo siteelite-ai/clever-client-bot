@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
@@ -99,6 +99,28 @@ Deno.test("verified render contract becomes a visible data-agnostic caption", ()
 
 Deno.test("caption is absent without verified mandatory criteria", () => {
   assertEquals(buildSelectionEvidenceCaption({ product_class: "Класс", application_context: ["контекст"] }, []), null);
+});
+
+Deno.test("successful selection render keeps its verified context visible without mandatory criteria", () => {
+  assertEquals(
+    buildSelectionRenderCaption({
+      product_class: "потолочный светильник",
+      application_context: ["гостиная 25 м²", "основное освещение"],
+    }, []),
+    "Для задачи «гостиная 25 м², основное освещение» показываю варианты класса «потолочный светильник», прошедшие проверку соответствия заявленному типу товара.",
+  );
+});
+
+Deno.test("render caption prefers verified mandatory criteria over the context-only fallback", () => {
+  assertEquals(
+    buildSelectionRenderCaption({
+      product_class: "светильник",
+      application_context: ["гостиная 25 м²"],
+    }, [
+      { key: "Световой поток", op: "min", value: 3750, unit: "лм", level: "A" },
+    ]),
+    "Для задачи «гостиная 25 м²» проверены обязательные параметры товара: Световой поток — от 3750 лм. Ниже — варианты, прошедшие эти условия.",
+  );
 });
 
 Deno.test("render target cannot drift to a sibling mentioned only by later search tactics", () => {

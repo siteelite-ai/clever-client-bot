@@ -80,6 +80,35 @@ export function buildSelectionEvidenceCaption(
   return `${prefix} проверены обязательные параметры товара: ${clauses.join("; ")}. Ниже — варианты, прошедшие эти условия.`;
 }
 
+/**
+ * Guarantees a visible, truthful explanation for every successful selection
+ * render. Prefer the verified criterion evidence above. When a provider leaves
+ * the machine-readable criterion list empty, fall back only to the already
+ * verified target contract: application context and product class. This keeps
+ * the reasoning visible without inventing catalog characteristics.
+ */
+export function buildSelectionRenderCaption(
+  targetValue: unknown,
+  criteria: Criterion[],
+): string {
+  const evidenceCaption = buildSelectionEvidenceCaption(targetValue, criteria);
+  if (evidenceCaption) return evidenceCaption;
+
+  const target = parseSelectionTarget(targetValue);
+  const context = target.application_context
+    .map((item) => captionText(item, 80))
+    .filter(Boolean)
+    .slice(0, 3);
+  const productClass = captionText(target.product_class, 100);
+  const subject = productClass
+    ? `варианты класса «${productClass}»`
+    : "варианты товаров";
+  if (context.length > 0) {
+    return `Для задачи «${context.join(", ")}» показываю ${subject}, прошедшие проверку соответствия заявленному типу товара.`;
+  }
+  return `Показываю ${subject}, прошедшие проверку соответствия заявленному типу товара.`;
+}
+
 /** Keeps class identity separate from suitability/application constraints. */
 export function parseSelectionTarget(value: unknown): SelectionTargetProjection {
   if (typeof value === "string") {

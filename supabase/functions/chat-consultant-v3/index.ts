@@ -28,7 +28,7 @@ import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-le
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract, shouldContinueSelectionPastOptionalClarification } from "../_shared/v3-tools/selection-actionability.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionEvidenceCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
@@ -7281,16 +7281,18 @@ async function runExpertLoop(
             const criteria = Array.isArray((tc.args as Record<string, unknown>).criteria)
               ? (tc.args as Record<string, unknown>).criteria as Criterion[]
               : [];
-            const caption = buildSelectionEvidenceCaption(tc.args.selection_target, criteria);
-            if (caption) {
-              send({ type: "delta", content: caption });
-              finalText = caption;
-              steps.push({
-                step: "v3_selection_evidence_caption",
-                ms: now(),
-                meta: { chars: caption.length, criteria: criteria.length },
-              });
-            }
+            const caption = buildSelectionRenderCaption(tc.args.selection_target, criteria);
+            send({ type: "delta", content: caption });
+            finalText = caption;
+            steps.push({
+              step: "v3_selection_evidence_caption",
+              ms: now(),
+              meta: {
+                chars: caption.length,
+                criteria: criteria.length,
+                mode: criteria.some((criterion) => (criterion.level ?? "A") === "A") ? "criteria" : "target_context",
+              },
+            });
           }
 
           // ── Step 3: Promise-Reality Audit
