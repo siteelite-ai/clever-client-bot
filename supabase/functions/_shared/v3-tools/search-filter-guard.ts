@@ -56,10 +56,10 @@ function norm(value: string): string {
 
 function replacementIdentityKind(facet: Pick<SearchFacet, "key" | "caption">): "brand" | "model" | null {
   const label = norm(`${facet.key} ${facet.caption ?? ""}`);
-  if (/(?:^| )(?:brand|vendor|manufacturer|producer|trademark|бренд|производител\w*|торгов\w* марк\w*|марка)(?: |$)/u.test(label)) {
+  if (/(?:^| )(?:brand|vendor|manufacturer|producer|trademark|бренд|производител\p{L}*|торгов\p{L}* марк\p{L}*|марка)(?: |$)/u.test(label)) {
     return "brand";
   }
-  if (/(?:^| )(?:model|series|collection|модел\w*|серия|серии|коллекц\w*)(?: |$)/u.test(label)) return "model";
+  if (/(?:^| )(?:model|series|collection|модел\p{L}*|сери\p{L}*|коллекц\p{L}*)(?: |$)/u.test(label)) return "model";
   return null;
 }
 

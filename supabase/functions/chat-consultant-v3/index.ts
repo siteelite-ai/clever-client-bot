@@ -123,10 +123,12 @@ import {
   extractExplicitSingleLetterCodes,
   extractPortableTechnicalRequirements,
   extractReplacementLookupKeys,
+  isReplacementIntent,
   portableTechnicalCodeMatchesText,
   productContainsSourceModel,
   productTitleSupportsMandatoryAxes,
   productTitleSupportsPortableRequirements,
+  resolveReplacementIntent,
   selectExplicitAnchorAxes,
 } from "../_shared/v3-tools/replacement-preflight.ts";
 import {
@@ -936,35 +938,6 @@ function findAnchorInCache(cache: ProductCache, userMessage: string): CachedProd
     if (score >= 1 && (!best || score > best.score)) best = { p, score };
   }
   return best?.p ?? null;
-}
-
-// Detects intent to find ALTERNATIVES to a referenced product. In such cases
-// the anchor SKU itself MUST NOT appear in the rendered list (it's the source,
-// not an analog). Triggers: "аналог", "замен", "похож", "альтернатив", "вместо",
-// "взамен", "замена".
-// Replacement-режим требует ДВУХ условий одновременно:
-// 1) триггер-слово (аналог/замен/вместо/похож/альтернатив/взамен);
-// 2) признак якоря в той же фразе — конкретная модель/артикул/имя в кавычках.
-// Без якоря «заменить люстру на светодиодное освещение» — это смена ТИПА товара,
-// а не подбор аналога конкретной модели. По контракту <replacement_anchoring>
-// весь алгоритм требует anchor (leaf_category, price, traits), которого без
-// этих сигналов взять неоткуда → LLM застревает. Такие запросы должны идти
-// обычным select-маршрутом: discover_category → нужный leaf → by_filter → render.
-function isReplacementIntent(msg: string): boolean {
-  const m = msg.toLowerCase().replace(/ё/g, "е");
-  const trigger = /(аналог|альтернатив|похож|замен|вместо|взамен)/u.test(m);
-  if (!trigger) return false;
-  // Признаки якоря: любой токен длиной ≥3, содержащий И букву И цифру
-  // (Acti9, C16, D32, ВА47-29, MAD22-2-080, IP65, E27, dn027b),
-  // ИЛИ длинное число (артикул ≥4 цифр), ИЛИ имя в кавычках.
-  // Data-agnostic: ловим коды моделей без хардкода брендов/серий.
-  const tokens = m.match(/[a-zа-я0-9][a-zа-я0-9-]{2,}/giu) ?? [];
-  const hasAlphaNumAnchor = tokens.some((t) => /[a-zа-я]/iu.test(t) && /\d/.test(t));
-  const hasAnchor =
-    hasAlphaNumAnchor ||
-    /\b\d{4,}\b/.test(m) ||
-    /«[^»]{2,}»|"[^"]{2,}"/u.test(m);
-  return hasAnchor;
 }
 
 interface DialogueChoiceResolution {
@@ -3292,7 +3265,7 @@ async function runExpertLoop(
   // the anchor SKU itself must never appear in the rendered list — it's the
   // source product, not its analog. Computed lazily because the anchor is only
   // discoverable in cache after at least one search populated it.
-  const replacementIntent = isReplacementIntent(userMessage);
+  const replacementIntent = resolveReplacementIntent(userMessage, history.slice(-8));
   const equivalentReplacementRequested = replacementIntent && /равноцен\p{L}*/iu.test(userMessage);
   const replacementExcludedIdentityValues = new Set<string>();
   const intentMode = detectUserIntentMode(userMessage);

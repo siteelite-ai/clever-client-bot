@@ -39,6 +39,40 @@ export interface ReplacementLookupKeys {
   modelCodes: string[];
 }
 
+export interface ReplacementDialogueMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/** Detect an alternative request only when the same phrase also identifies
+ * the source product structurally. Broad redesign requests stay ordinary. */
+export function isReplacementIntent(message: string): boolean {
+  const value = norm(message);
+  const trigger = /(?:^| )(?:аналог\p{L}*|альтернатив\p{L}*|похож\p{L}*|замен\p{L}*|вместо|взамен)(?: |$)/u.test(value);
+  if (!trigger) return false;
+  const tokens = String(message).match(/[a-zа-я0-9][a-zа-я0-9-]{2,}/giu) ?? [];
+  const hasAlphaNumericAnchor = tokens.some((token) => /\p{L}/u.test(token) && /\d/u.test(token));
+  return hasAlphaNumericAnchor || /\b\d{4,}\b/u.test(value) || /«[^»]{2,}»|"[^"]{2,}"/u.test(message);
+}
+
+/** Carry replacement mode through a short confirmation/show command only.
+ * Substantive new wording breaks inheritance and starts ordinary routing. */
+export function resolveReplacementIntent(
+  message: string,
+  recentDialogue: ReplacementDialogueMessage[],
+): boolean {
+  if (isReplacementIntent(message)) return true;
+  const followup = norm(message);
+  if (!/^(?:(?:да|хорошо|ладно|ок|okay|давай|тогда|ну|пожалуйста|можно) )*(?:покаж\p{L}*|предлож\p{L}*|давай|продолж\p{L}*)(?: (?:их|эти|варианты|товары|подходящие|найденные|предложенные|ссылки?))?$/u.test(followup)) {
+    return false;
+  }
+  for (const fragment of [...recentDialogue].reverse()) {
+    if (fragment.role !== "user") continue;
+    return isReplacementIntent(fragment.content);
+  }
+  return false;
+}
+
 /** Compact variant/curve/class codes are often visible in titles even when
  * the catalog omits the matching trait. Capture only a standalone uppercase
  * letter explicitly introduced by a parameter label. */

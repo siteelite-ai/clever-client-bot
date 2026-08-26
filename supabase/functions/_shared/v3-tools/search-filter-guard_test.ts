@@ -7,6 +7,7 @@ import {
   explicitReplacementModelValues,
   guardSearchFilters,
   inferReplacementIdentityValues,
+  isReplacementIdentityFacet,
   productMatchesExcludedReplacementIdentity,
 } from "./search-filter-guard.ts";
 
@@ -398,6 +399,22 @@ Deno.test("analog render criteria drop source brand and collection", () => {
     "Коллекция",
     "Бренд",
   ]);
+});
+
+Deno.test("localized live identity captions are recognized without English machine keys", () => {
+  assertEquals(isReplacementIdentityFacet({ key: "kollekciya__seriya", caption: "Коллекция (серия)" }), true);
+  assertEquals(isReplacementIdentityFacet({ key: "proizvoditel", caption: "Производитель товара" }), true);
+
+  const result = dropImplicitReplacementIdentityCriteria([
+    { key: "Коллекция (серия)", value: "Acti9" },
+    { key: "Номинальный ток", value: "16" },
+  ], [
+    { key: "kollekciya__seriya", caption: "Коллекция (серия)", values: [{ value: "Acti9" }] },
+    { key: "nominalnyj_tok", caption: "Номинальный ток", values: [{ value: "16" }] },
+  ], "Подбери аналог Schneider Acti9 C16");
+
+  assertEquals(result.criteria, [{ key: "Номинальный ток", value: "16" }]);
+  assertEquals(result.removed, [{ key: "Коллекция (серия)", value: "Acti9" }]);
 });
 
 Deno.test("explicit reasoning completes omitted live technical filters but not identity", () => {

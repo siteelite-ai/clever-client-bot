@@ -2,9 +2,10 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   excludeMandatoryAxisCodesFromSourceModels, extractExplicitSingleLetterCodes, extractReplacementLookupKeys,
   extractPortableTechnicalRequirements,
+  isReplacementIntent,
   portableTechnicalCodeMatchesText, productContainsSourceModel,
   productTitleSupportsMandatoryAxes,
-  productTitleSupportsPortableRequirements, selectExplicitAnchorAxes } from "./replacement-preflight.ts";
+  productTitleSupportsPortableRequirements, resolveReplacementIntent, selectExplicitAnchorAxes } from "./replacement-preflight.ts";
 import type { ProductRef } from "./types.ts";
 
 const anchor: ProductRef = {
@@ -29,6 +30,18 @@ Deno.test("replacement preflight extracts article and source model without measu
     articles: ["929002070102", "871869967897500"],
     modelCodes: ["DN027B", "LED6NW"],
   });
+});
+
+Deno.test("replacement intent requires a source identifier and survives only a short continuation", () => {
+  const history = [
+    { role: "user" as const, content: "Подбери аналог Schneider Acti9 C16" },
+    { role: "assistant" as const, content: "Проверяю технические параметры замены." },
+  ];
+  assertEquals(isReplacementIntent(history[0].content), true);
+  assertEquals(isReplacementIntent("Хочу заменить люстру на светодиодное освещение"), false);
+  assertEquals(resolveReplacementIntent("покажи", history), true);
+  assertEquals(resolveReplacementIntent("да, покажите варианты", history), true);
+  assertEquals(resolveReplacementIntent("покажи кабель ВВГ 3×1,5", history), false);
 });
 
 Deno.test("replacement preflight recognizes a spaced letter-number model code", () => {
