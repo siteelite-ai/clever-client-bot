@@ -68,7 +68,10 @@ export function normalizeMeasurementText(raw: string): string {
 export function extractClientQuantities(text: string): ClientQuantity[] {
   const s = normalizeMeasurementText(text);
   const out: ClientQuantity[] = [];
-  const re = new RegExp(String.raw`(${NUM})\s*([a-zа-я°]{1,6}[²³]?\d?)(?![a-zа-я])`, "gu");
+  // A number embedded in a product/model identifier is not a measurement:
+  // `Acti9 C16` must not become `9 C`, just as `IP65` is not `65` of an
+  // arbitrary unit. An explicit quantity still works (`C16, ток 16 А`).
+  const re = new RegExp(String.raw`(?<![a-zа-я])(${NUM})\s*([a-zа-я°]{1,6}[²³]?\d?)(?![a-zа-я])`, "gu");
   let m: RegExpExecArray | null;
   while ((m = re.exec(s)) !== null) {
     const value = Number(m[1].replace(",", "."));

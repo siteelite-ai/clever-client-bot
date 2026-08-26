@@ -28,6 +28,13 @@ Deno.test("extract: natural room area spellings normalize to square metres", () 
   assertEquals(extractClientQuantities("комната 25 кв. м"), [{ value: 25, unit: "м²" }]);
 });
 
+Deno.test("extract: product codes are not measurements", () => {
+  assertEquals(extractClientQuantities("Подбери аналог Schneider Acti9 C16 и IP65"), []);
+  assertEquals(extractClientQuantities("Acti9 C16, номинальный ток 16 А"), [
+    { value: 16, unit: "а" },
+  ]);
+});
+
 Deno.test("normalizeUnit preserves ASCII square and cubic suffixes", () => {
   assertEquals(normalizeUnit("мм2"), "мм²");
   assertEquals(normalizeUnit("м3"), "м³");
