@@ -354,6 +354,27 @@ function explicitlyAffirmedByUser(value: string, userEvidence: string): boolean 
   )));
 }
 
+function visualSingleLetter(value: string): string {
+  const map: Record<string, string> = {
+    а: "a", в: "b", е: "e", к: "k", м: "m", н: "h",
+    о: "o", р: "p", с: "c", т: "t", у: "y", х: "x",
+  };
+  const normalized = norm(value);
+  return normalized.length === 1 ? (map[normalized] ?? normalized) : normalized;
+}
+
+/** One-letter technical values are evidence only after the surrounding facet
+ * meaning has already been proven in the same reasoning. */
+function explicitlyAffirmedByFacetReasoning(value: string, evidence: string): boolean {
+  const normalized = norm(value);
+  if (normalized.length !== 1 || !/\p{L}/u.test(normalized)) {
+    return explicitlyAffirmedByUser(value, evidence);
+  }
+  const wanted = visualSingleLetter(normalized);
+  return norm(evidence).split(" ")
+    .some((token) => token.length === 1 && /\p{L}/u.test(token) && visualSingleLetter(token) === wanted);
+}
+
 function facetMeaningIsEvidenced(
   facet: SearchFacet,
   evidence: string,
@@ -565,7 +586,7 @@ export function guardSearchFilters(
       if (!value || ["да", "нет", "есть", "отсутствует"].includes(value)) {
         return false;
       }
-      return explicitlyAffirmedByUser(candidate.value, declaredReasoning);
+      return explicitlyAffirmedByFacetReasoning(candidate.value, declaredReasoning);
     });
     if (evidenced.length !== 1) continue;
     const value = evidenced[0].value;

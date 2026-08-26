@@ -48,7 +48,7 @@ Deno.test("replacement reasoning compiles portable live facets and drops source 
     { key: "curve", caption: "Характеристика срабатывания", unit: null, values: [{ value: "B" }, { value: "C" }] },
     { key: "kollekciya", caption: "Коллекция (серия)", unit: null, values: [{ value: "Acti9" }] },
   ],
-  "Acti9 C16 — 1-полюсный скорее всего. Ключевые параметры: номинальный ток 16 А, характеристика срабатывания C.",
+  "Acti9 C16 — 1-полюсный скорее всего. Ключевые параметры: номинальный ток 16 А, характеристика C.",
   "Подбери аналог Schneider Acti9 C16",
   "Подбери аналог Schneider Acti9 C16");
 

@@ -96,6 +96,14 @@ function clauseSupportsCriterion(clause: string, criterion: Criterion): boolean 
   });
   if (valueSupported) return true;
   const keyTokens = normalizeEvidence(criterion.key).split(" ").filter((token) => token.length >= 4);
+  const shortCodeSupported = rawValues.some((value) => {
+    const normalized = normalizeEvidence(value);
+    if (normalized.length !== 1 || !/\p{L}/u.test(normalized)) return false;
+    const visual = (token: string) => ({ а: "a", в: "b", е: "e", к: "k", м: "m", н: "h", о: "o", р: "p", с: "c", т: "t", у: "y", х: "x" }[token] ?? token);
+    return normalizedClause.split(" ").some((token) => token.length === 1 && visual(token) === visual(normalized)) &&
+      keyTokens.some((token) => normalizedClause.includes(token));
+  });
+  if (shortCodeSupported) return true;
   return keyTokens.length > 0 && keyTokens.every((token) => normalizedClause.includes(token));
 }
 

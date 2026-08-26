@@ -455,6 +455,26 @@ Deno.test("explicit reasoning completes omitted live technical filters but not i
   ]);
 });
 
+Deno.test("one-letter technical value is inferred only with its facet meaning", () => {
+  const facets = [{
+    key: "curve",
+    caption: "Характеристика срабатывания",
+    values: [{ value: "B" }, { value: "C" }, { value: "D" }],
+  }];
+  assertEquals(guardSearchFilters(
+    { mode: "by_filter" },
+    facets,
+    "Ключевой параметр: характеристика С.",
+    "Подбери аналог QX-20",
+  ).args.options, { curve: ["C"] });
+  assertEquals(guardSearchFilters(
+    { mode: "by_filter" },
+    facets,
+    "Подбираю автомат с хорошим запасом.",
+    "Подбери аналог QX-20",
+  ).args.options, undefined);
+});
+
 Deno.test("ordinary replacement excludes explicitly named source brand and collection", () => {
   assertEquals(
     explicitReplacementIdentityValues([
