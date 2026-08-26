@@ -3192,6 +3192,10 @@ async function runExpertLoop(
   // freshSearch, this pool cannot be overwritten by later broad retries. It is
   // eligible for terminal recovery only after the same server criteria gate.
   let semanticBackedSearch: { ids: string[]; total: number; criteria: Criterion[]; label: string; evidenceStrength: number; } | null = null;
+  // A grounded pool recovered after an absent source SKU must survive a bad
+  // final model pick (for example, selecting only cards from the source
+  // family). A dedicated terminal finalizer rechecks this pool.
+  let anchorMissingRecoveryPool: { ids: string[]; total: number } | null = null;
   // Priority pool from v3_guard_split_fallback — survives across LLM steps.
   // Preferred over freshSearch in render fallback, because subsequent broad
   // by_query calls can overwrite freshSearch with off-target results
@@ -6374,7 +6378,13 @@ async function runExpertLoop(
             };
             break;
           }
-          if (recoveredResult) result = recoveredResult;
+          if (recoveredResult) {
+            result = recoveredResult;
+            anchorMissingRecoveryPool = {
+              ids: recoveredResult.results.map((product) => String(product.id)),
+              total: recoveredResult.total,
+            };
+          }
           steps.push({
             step: "v3_anchor_missing_reasoning_recovery",
             ms: now(),
@@ -7443,6 +7453,92 @@ async function runExpertLoop(
         step: "v3_declared_alias_recovery_empty",
         ms: now(),
         meta: { source: terminalAliasRequirement },
+      });
+    }
+    if (
+      productsRendered === 0 &&
+      replacementIntent &&
+      selectionPlan?.anchor_state === "anchor_missing" &&
+      !equivalentReplacementRequested &&
+      anchorMissingRecoveryPool &&
+      activeSelectionTarget
+    ) {
+      const explicitRequirements = selectionPlan.portable_requirements.map((item) => item.value);
+      const products = anchorMissingRecoveryPool.ids
+        .map((id) => ctx.cache.get(id))
+        .filter((product): product is ProductFull => Boolean(product && product.price > 0))
+        .filter((product) =>
+          !selectionPlan.source_identifiers.some((identifier) =>
+            productContainsSourceModel(product, [identifier])
+          ) &&
+          !productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues) &&
+          !replacementSourceModelCodes.some((code) => productMatchesCodeConstraint(product, code))
+        )
+        .filter((product) =>
+          explicitRequirements.length === 0 ||
+          productTitleSupportsPortableRequirements(product.pagetitle, explicitRequirements)
+        );
+      const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, products);
+      const targetIds = new Set(targetReport.passed_ids);
+      let safeIds = products.map((product) => product.id).filter((id) => targetIds.has(id));
+      if (replacementRequiredAxes.length >= 2) {
+        const rankedNearIds = filterReplacementCompatibleIds(
+          safeIds,
+          replacementRequiredAxes,
+          ctx.cache,
+          null,
+          false,
+          true,
+        );
+        if (rankedNearIds.length > 0) safeIds = rankedNearIds;
+      }
+      safeIds = filterProductIdsByBudgetCap(
+        safeIds,
+        ctx.cache,
+        extractBudgetCap(userMessage),
+      ).ids.slice(0, 4);
+      if (safeIds.length > 0) {
+        const rendered = executeRenderProducts(
+          { product_ids: safeIds, total_available: anchorMissingRecoveryPool.total },
+          ctx.cache,
+        );
+        if (rendered.ok) {
+          const caption = replacementRequiredAxes.length >= 2
+            ? "Исходную модель в актуальном каталоге подтвердить не удалось. Показываю ближайшие товары того же класса, ранжированные по характеристикам, которые удалось подтвердить в карточках; это не подтверждение полной взаимозаменяемости."
+            : "Исходную модель в актуальном каталоге подтвердить не удалось. Показываю товары того же класса для дальнейшей сверки; это не подтверждение полной взаимозаменяемости.";
+          send({ type: "assistant_turn_break", reason: "text_before_render" });
+          send({ type: "delta", content: caption });
+          finalText += `${finalText ? "\n\n" : ""}${caption}`;
+          send({
+            type: "products_block",
+            markdown: rendered.markdown,
+            count: rendered.rendered_count,
+            total_available: anchorMissingRecoveryPool.total,
+          });
+          for (const id of safeIds) shownIds.add(id);
+          productsRendered += rendered.rendered_count;
+          steps.push({
+            step: "v3_terminal_anchor_missing_recovery",
+            ms: now(),
+            meta: {
+              recovered_pool: anchorMissingRecoveryPool.ids.length,
+              target_candidates: targetIds.size,
+              rendered: rendered.rendered_count,
+              explicit_requirements: explicitRequirements,
+              ranked_axes: replacementRequiredAxes.map((axis) => axis.key),
+            },
+          });
+          return { finalText, productsRendered, shownProductIds: [...shownIds] };
+        }
+      }
+      steps.push({
+        step: "v3_terminal_anchor_missing_recovery_empty",
+        ms: now(),
+        meta: {
+          recovered_pool: anchorMissingRecoveryPool.ids.length,
+          target_candidates: targetIds.size,
+          explicit_requirements: explicitRequirements,
+        },
       });
     }
     if (!terminalAliasRequirement && terminalFinalizationRequired && terminalDiscover && activeSelectionTarget) {
