@@ -495,6 +495,29 @@ Deno.test("an otherwise unbounded selection promotes only projectable measured c
   assertEquals(aligned.promoted, ["Measured output"]);
 });
 
+Deno.test("a measured preference already demoted as advisory cannot be promoted again", () => {
+  const criteria: Criterion[] = [
+    { key: "Measured output", op: "min", value: 3750, unit: "lm", level: "A" },
+  ];
+  const importance = alignCriteriaImportanceWithReasoning(
+    criteria,
+    "Measured output 3750 lm is one possible reference point.",
+  );
+  const aligned = promoteProjectableMeasuredFallbackCriteria(
+    importance.criteria,
+    [{
+      key: "measured_output",
+      caption: "Measured output",
+      unit: "lm",
+      values: [{ value: "4000" }],
+    }],
+    importance.demoted,
+  );
+  assertEquals(importance.demoted, ["Measured output"]);
+  assertEquals(aligned.criteria.map((criterion) => criterion.level), ["B"]);
+  assertEquals(aligned.promoted, []);
+});
+
 Deno.test("fallback promotion preserves an existing mandatory contract", () => {
   const aligned = promoteProjectableMeasuredFallbackCriteria([
     { key: "Exact class", op: "eq", value: "declared", level: "A" },

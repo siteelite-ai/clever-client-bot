@@ -233,16 +233,20 @@ export function promoteMeasuredReasoningCriteria(
 export function promoteProjectableMeasuredFallbackCriteria(
   criteria: Criterion[],
   facets: CriteriaFacet[],
+  excludedCriteria: string[] = [],
 ): { criteria: Criterion[]; promoted: string[] } {
   const source = (Array.isArray(criteria) ? criteria : []).map((criterion) => ({ ...criterion }));
   if (source.some((criterion) => (criterion.level ?? "A") === "A")) {
     return { criteria: source, promoted: [] };
   }
+  const excludedKeys = new Set(
+    (Array.isArray(excludedCriteria) ? excludedCriteria : []).map(normalizeEvidence).filter(Boolean),
+  );
   const candidates = source
     .filter((criterion) => {
       const numeric = typeof criterion.value === "number" ||
         Array.isArray(criterion.value) && criterion.value.every((value) => Number.isFinite(Number(value)));
-      return (criterion.level ?? "A") === "B" && numeric;
+      return (criterion.level ?? "A") === "B" && numeric && !excludedKeys.has(normalizeEvidence(criterion.key));
     })
     .map((criterion) => ({ ...criterion, level: "A" as const }));
   const projection = projectCriteriaFacetOptions(candidates, facets);

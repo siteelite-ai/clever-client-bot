@@ -5379,7 +5379,11 @@ async function runExpertLoop(
                 !seriesTurnRequiresGrounding &&
                 !compatibilityRequired &&
                 lastDiscover
-              ? promoteProjectableMeasuredFallbackCriteria(importance.criteria, lastDiscover.facets)
+              ? promoteProjectableMeasuredFallbackCriteria(
+                importance.criteria,
+                lastDiscover.facets,
+                importance.demoted,
+              )
               : { criteria: importance.criteria, promoted: [] as string[] };
             criteria = fallbackMeasured.criteria;
 
