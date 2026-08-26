@@ -5426,7 +5426,13 @@ async function runExpertLoop(
               !replacementIntent &&
               !seriesTurnRequiresGrounding &&
               !compatibilityRequired;
-            const frozenRender = ordinarySelectionContract
+            // A compiled replacement contract is just as binding as an
+            // ordinary retrieval contract. Extra criteria first invented in
+            // render_products (for example weight) did not shape the pool and
+            // may rank/explain it, but cannot retroactively empty the result.
+            const compiledReplacementContract = replacementIntent &&
+              reasoningProjectedSearchCriteria.length > 0;
+            const frozenRender = ordinarySelectionContract || compiledReplacementContract
               ? demoteUnfrozenRenderCriteria(
                 fallbackMeasured.criteria,
                 [

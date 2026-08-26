@@ -546,6 +546,23 @@ Deno.test("render-only model criteria cannot retroactively strengthen an ordinar
   assertEquals(aligned.demoted, ["Implementation count"]);
 });
 
+Deno.test("render-only replacement criteria cannot strengthen a compiled retrieval contract", () => {
+  const frozen: Criterion[] = [
+    { key: "Номинальный ток", op: "eq", value: 16, unit: "А", level: "A" },
+    { key: "Характеристика срабатывания", op: "eq", value: "Тип C", level: "A" },
+  ];
+  const aligned = demoteUnfrozenRenderCriteria([
+    ...frozen,
+    { key: "Вес", op: "max", value: 1, unit: "кг", level: "A" },
+  ], frozen);
+  assertEquals(aligned.criteria.map((criterion) => [criterion.key, criterion.level]), [
+    ["Номинальный ток", "A"],
+    ["Характеристика срабатывания", "A"],
+    ["Вес", "B"],
+  ]);
+  assertEquals(aligned.demoted, ["Вес"]);
+});
+
 Deno.test("fallback promotion preserves an existing mandatory contract", () => {
   const aligned = promoteProjectableMeasuredFallbackCriteria([
     { key: "Exact class", op: "eq", value: "declared", level: "A" },

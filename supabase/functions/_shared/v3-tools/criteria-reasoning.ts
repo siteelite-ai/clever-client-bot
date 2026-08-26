@@ -142,7 +142,7 @@ export function alignCriteriaImportanceWithReasoning(
 }
 
 /**
- * Freeze an ordinary selection's hard contract at retrieval time. A criterion
+ * Freeze a selection's hard contract at retrieval time. A criterion
  * invented only for render did not shape the candidate pool and cannot make
  * that pool retroactively empty. User-backed, guarded-search and structurally
  * projected reasoning criteria are supplied as `frozenCriteria` and stay A.
