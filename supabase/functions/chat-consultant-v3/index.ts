@@ -2292,8 +2292,11 @@ async function selectVerifiedOrdinaryReplacement(
           ? found.results.filter((product) => productContainsSourceModel(product, [code]))
           : [];
       }
-      if (found.ok && normalizeCodeLike(code).length >= 5) {
-        for (const product of found.results) sourceCandidateIds.add(product.id);
+      if (normalizeCodeLike(code).length >= 5) {
+        // A broad text lookup may return dozens of same-category products that
+        // do not contain the requested model at all. Only title-grounded
+        // matches are source candidates; the rest remain eligible analogues.
+        for (const product of grounded) sourceCandidateIds.add(product.id);
       }
       if (grounded.length === 0) continue;
       const structuralConstraints = extractCodeConstraints(userMessage);
