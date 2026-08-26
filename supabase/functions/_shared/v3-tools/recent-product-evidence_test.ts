@@ -3,6 +3,7 @@ import {
   buildDeterministicEvidenceAnswer,
   buildRecentProductEvidencePrompt,
   compactRecentProducts,
+  extractPriorAssistantProse,
   extractRenderedProductTitles,
   isEvidenceOnlyFollowup,
   isRecentProductPriceSelectionFollowup,
@@ -114,4 +115,18 @@ Deno.test("rendered product titles are only lookup hints from controlled product
     },
   ]);
   assertEquals(titles, ["Gauss HALL с сенсором"]);
+});
+
+Deno.test("prior reasoning excludes rendered product blocks and their numeric metadata", () => {
+  const prose = extractPriorAssistantProse([{
+    role: "assistant",
+    content: [
+      "Ключевые параметры аналога: номинальный ток 16 А, характеристика C.",
+      "",
+      "- **[Автомат M06N 1P 16A C](https://220volt.kz/catalog/electrics/item/)**",
+      "  Цена: *4 500* ₸",
+      "  Наличие: Алматы (4 шт)",
+    ].join("\n"),
+  }]);
+  assertEquals(prose, "Ключевые параметры аналога: номинальный ток 16 А, характеристика C.");
 });

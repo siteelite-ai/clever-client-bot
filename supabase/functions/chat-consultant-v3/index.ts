@@ -87,6 +87,7 @@ import {
   buildDeterministicEvidenceAnswer,
   buildRecentProductEvidencePrompt,
   compactRecentProducts,
+  extractPriorAssistantProse,
   extractRenderedProductTitles,
   isEvidenceOnlyFollowup,
   isRecentProductPriceSelectionFollowup,
@@ -3272,7 +3273,7 @@ async function runExpertLoop(
   const replacementIntent = Boolean(replacementSourceMessage);
   const replacementEvidenceMessage = replacementSourceMessage ?? userMessage;
   const priorReplacementReasoning = replacementIntent
-    ? history.filter((message) => message.role === "assistant").slice(-4).map((message) => message.content).join("\n")
+    ? extractPriorAssistantProse(history.slice(-8), 4)
     : "";
   const equivalentReplacementRequested = replacementIntent && /равноцен\p{L}*/iu.test(replacementEvidenceMessage);
   const replacementExcludedIdentityValues = new Set<string>();
