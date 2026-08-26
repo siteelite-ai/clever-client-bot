@@ -61,16 +61,24 @@ export function resolveReplacementIntent(
   message: string,
   recentDialogue: ReplacementDialogueMessage[],
 ): boolean {
-  if (isReplacementIntent(message)) return true;
+  return resolveReplacementSourceMessage(message, recentDialogue) !== null;
+}
+
+/** Returns the authoritative source request for replacement guards. */
+export function resolveReplacementSourceMessage(
+  message: string,
+  recentDialogue: ReplacementDialogueMessage[],
+): string | null {
+  if (isReplacementIntent(message)) return message;
   const followup = norm(message);
   if (!/^(?:(?:да|хорошо|ладно|ок|okay|давай|тогда|ну|пожалуйста|можно) )*(?:покаж\p{L}*|предлож\p{L}*|давай|продолж\p{L}*)(?: (?:их|эти|варианты|товары|подходящие|найденные|предложенные|ссылки?))?$/u.test(followup)) {
-    return false;
+    return null;
   }
   for (const fragment of [...recentDialogue].reverse()) {
     if (fragment.role !== "user") continue;
-    return isReplacementIntent(fragment.content);
+    return isReplacementIntent(fragment.content) ? fragment.content : null;
   }
-  return false;
+  return null;
 }
 
 /** Compact variant/curve/class codes are often visible in titles even when

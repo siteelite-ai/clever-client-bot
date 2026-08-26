@@ -129,10 +129,12 @@ import {
   productTitleSupportsMandatoryAxes,
   productTitleSupportsPortableRequirements,
   resolveReplacementIntent,
+  resolveReplacementSourceMessage,
   selectExplicitAnchorAxes,
 } from "../_shared/v3-tools/replacement-preflight.ts";
 import {
   buildReplacementSelectionPlan,
+  compileReplacementReasoningContract,
   type ReplacementSelectionPlan,
   selectionPlanSystemHint,
 } from "../_shared/v3-tools/selection-plan.ts";
@@ -3265,8 +3267,10 @@ async function runExpertLoop(
   // the anchor SKU itself must never appear in the rendered list — it's the
   // source product, not its analog. Computed lazily because the anchor is only
   // discoverable in cache after at least one search populated it.
-  const replacementIntent = resolveReplacementIntent(userMessage, history.slice(-8));
-  const equivalentReplacementRequested = replacementIntent && /равноцен\p{L}*/iu.test(userMessage);
+  const replacementSourceMessage = resolveReplacementSourceMessage(userMessage, history.slice(-8));
+  const replacementIntent = Boolean(replacementSourceMessage);
+  const replacementEvidenceMessage = replacementSourceMessage ?? userMessage;
+  const equivalentReplacementRequested = replacementIntent && /равноцен\p{L}*/iu.test(replacementEvidenceMessage);
   const replacementExcludedIdentityValues = new Set<string>();
   const intentMode = detectUserIntentMode(userMessage);
   const broadAssortmentRequest = isBroadAssortmentRequest(userMessage);
@@ -3289,10 +3293,10 @@ async function runExpertLoop(
   //   - drop longer mixed letter+digit tokens (length ≥ 5) → treated as
   //     model/series codes (DN027B, BA4729).
   const effectiveCodeConstraints = replacementIntent
-    ? extractPortableTechnicalRequirements(userMessage)
+    ? extractPortableTechnicalRequirements(replacementEvidenceMessage)
     : codeConstraints;
   const replacementSourceModelCodes = replacementIntent
-    ? extractReplacementLookupKeys(userMessage).modelCodes
+    ? extractReplacementLookupKeys(replacementEvidenceMessage).modelCodes
     : [];
   // NOTE (2026-06-29): compound-filter нейтрализован — это было «мышление сервера»,
   // которое выбрасывало валидные карточки по эвристическим токенам из текста запроса
@@ -3305,7 +3309,7 @@ async function runExpertLoop(
   // (compound-filter удалён выше; этот блок был хвостом старой реализации)
   const getAnchorExcludeId = (): string | null => {
     if (!replacementIntent) return null;
-    const a = findAnchorInCache(ctx.cache, userMessage);
+    const a = findAnchorInCache(ctx.cache, replacementEvidenceMessage);
     return a?.id ?? null;
   };
   // Same-series family exclusion: in replacement-intent turns, other SKUs from
@@ -3315,7 +3319,7 @@ async function runExpertLoop(
   // the model code is an alphanumeric token in the title.
   const getFamilyExcludeSet = (): Set<string> => {
     if (!replacementIntent) return new Set();
-    const a = findAnchorInCache(ctx.cache, userMessage);
+    const a = findAnchorInCache(ctx.cache, replacementEvidenceMessage);
     if (!a) return new Set();
     return findSameFamilyIds(ctx.cache, a);
   };
@@ -3527,13 +3531,13 @@ async function runExpertLoop(
     if (lastDiscover) {
       for (const value of explicitReplacementIdentityValues(
           lastDiscover.facets,
-          userMessage,
+          replacementEvidenceMessage,
         )
       ) {
         replacementExcludedIdentityValues.add(value);
       }
       for (
-        const value of explicitReplacementModelValues(lastDiscover.facets, userMessage)) {
+        const value of explicitReplacementModelValues(lastDiscover.facets, replacementEvidenceMessage)) {
         replacementExcludedIdentityValues.add(value);
       }
     }
@@ -3541,7 +3545,7 @@ async function runExpertLoop(
       args,
       lastDiscover,
       `${history.slice(-6).map((h) => h.content).join("\n")}\n${userMessage}\n${firstAssistantText}`,
-      userMessage,
+      replacementEvidenceMessage,
     );
     if (axes.length >= 2) replacementRequiredAxes = axes;
   };
@@ -3553,14 +3557,23 @@ async function runExpertLoop(
         `${firstAssistantText}\n${assistantReasoning}`,
       ),
     );
-    const singleAxisCodes = replacementRequiredAxes
-      .flatMap((axis) => axis.values)
-      .filter((value) => {
+    const axisCodes = replacementRequiredAxes.flatMap((axis) => {
+      const captionUnit = axis.caption.match(/(?:,|\()\s*([a-zа-я]{1,5})\)?$/iu)?.[1] ?? null;
+      const unit = axis.unit ?? captionUnit;
+      return axis.values.flatMap((value) => {
         const normalized = normalizeCodeLike(value);
-        return normalized.length === 1 && explicitSingleCodes.has(normalized);
+        if (normalized.length === 1 && explicitSingleCodes.has(normalized)) return [value];
+        if (/\d/u.test(value) && /\p{L}/u.test(value)) return [value];
+        if (/^\d+(?:[.,]\d+)?$/u.test(value) && unit && /\p{L}/u.test(unit)) return [`${value}${unit}`];
+        return [];
       });
+    });
+    const provenAxisCodes = [...new Map(
+      axisCodes.map((value) => [normalizeCodeLike(value), value]),
+    ).values()];
+    if (provenAxisCodes.length >= 2) return provenAxisCodes;
     return [...new Map(
-      [...portableCodes, ...singleAxisCodes].map((
+      [...portableCodes, ...provenAxisCodes].map((
         value,
       ) => [normalizeCodeLike(value), value]),
     ).values()];
@@ -4347,7 +4360,7 @@ async function runExpertLoop(
           const declaredReasoning = `${userEvidence}\n${initialSelectionDiscoveryNoun ?? ""}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
           const guarded = guardSearchFilters(tc.args as Record<string, unknown>, lastDiscover.facets, declaredReasoning, userEvidence);
           const identityGuard = replacementIntent
-            ? dropImplicitReplacementIdentityFilters(guarded.args, lastDiscover.facets, userMessage)
+            ? dropImplicitReplacementIdentityFilters(guarded.args, lastDiscover.facets, replacementEvidenceMessage)
             : { args: guarded.args, removed: [] };
           const removedIdentityKeys = new Set(identityGuard.removed.map((item) => item.key));
           const effectiveKept = guarded.kept.filter((item) => !removedIdentityKeys.has(item.key));
@@ -4373,6 +4386,55 @@ async function runExpertLoop(
             userBackedSearchCriteria,
             guardedUserBackedCriteria,
           );
+
+          // A missing source card does not erase the consultant's own
+          // replacement analysis. Compile its declared key parameters into
+          // the current live facets before retrieval, while keeping source
+          // brand/series and advisory guesses out of the hard intersection.
+          if (
+            replacementIntent &&
+            (selectionPlan?.anchor_state === "anchor_missing" || !getAnchorExcludeId())
+          ) {
+            const replacementContract = compileReplacementReasoningContract(
+              lastDiscover.facets,
+              declaredReasoning,
+              userEvidence,
+              replacementEvidenceMessage,
+            );
+            if (replacementContract.criteria.length >= 2) {
+              const current = tc.args as Record<string, unknown>;
+              const {
+                query: _query,
+                article: _article,
+                pagetitle: _pagetitle,
+                options: _options,
+                category: _category,
+                category_in: _categoryIn,
+                ...searchControls
+              } = current;
+              const leaves = lastDiscover.leaf_categories.map((category) => category.pagetitle).filter(Boolean);
+              tc.args = {
+                ...searchControls,
+                mode: "by_filter",
+                ...(leaves.length > 0
+                  ? { category_in: leaves }
+                  : { category: lastDiscover.category.pagetitle }),
+                options: replacementContract.options,
+              };
+              enforcedSearchCriteria = replacementContract.criteria.map((criterion) => ({ ...criterion }));
+              reasoningProjectedSearchCriteria = replacementContract.criteria.map((criterion) => ({ ...criterion }));
+              latestRenderCriteria = replacementContract.criteria.map((criterion) => ({ ...criterion }));
+              steps.push({
+                step: "v3_replacement_reasoning_search_compiled",
+                ms: now(),
+                meta: {
+                  criteria: replacementContract.criteria,
+                  options: replacementContract.options,
+                  demoted_advisory: replacementContract.demoted,
+                },
+              });
+            }
+          }
 
           // One ordinary-selection compiler owns both retrieval and rendering.
           // If the consultant stated an explicit measured range, compile it to
@@ -4487,7 +4549,7 @@ async function runExpertLoop(
             const identityCriteria = dropImplicitReplacementIdentityCriteria(
               (tc.args as Record<string, unknown>).criteria as Criterion[],
               lastDiscover.facets,
-              userMessage,
+              replacementEvidenceMessage,
             );
             for (const criterion of identityCriteria.removed) {
               const values = Array.isArray(criterion.value)
@@ -5195,7 +5257,7 @@ async function runExpertLoop(
             const identityCriteria = dropImplicitReplacementIdentityCriteria(
               criteria,
               lastDiscover.facets,
-              userMessage,
+              replacementEvidenceMessage,
             );
             criteria = identityCriteria.criteria;
             (tc.args as Record<string, unknown>).criteria = criteria;
@@ -6219,7 +6281,7 @@ async function runExpertLoop(
             if (
               exactProducts.length === 0 ||
               !shouldTerminateAfterGroundedCompoundSearch(
-                userMessage,
+                replacementEvidenceMessage,
                 exactProducts.map((product) => product.pagetitle),
                 explicitCompoundMarking,
               )
@@ -6530,7 +6592,7 @@ async function runExpertLoop(
             if (replacementIntent) {
               const sourceIdentity = explicitReplacementIdentityValues(
                 lastDiscover.facets,
-                userMessage,
+                replacementEvidenceMessage,
               );
               for (const value of sourceIdentity) {
                 replacementExcludedIdentityValues.add(value);

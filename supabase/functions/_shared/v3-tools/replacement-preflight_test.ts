@@ -5,7 +5,7 @@ import {
   isReplacementIntent,
   portableTechnicalCodeMatchesText, productContainsSourceModel,
   productTitleSupportsMandatoryAxes,
-  productTitleSupportsPortableRequirements, resolveReplacementIntent, selectExplicitAnchorAxes } from "./replacement-preflight.ts";
+  productTitleSupportsPortableRequirements, resolveReplacementIntent, resolveReplacementSourceMessage, selectExplicitAnchorAxes } from "./replacement-preflight.ts";
 import type { ProductRef } from "./types.ts";
 
 const anchor: ProductRef = {
@@ -40,8 +40,10 @@ Deno.test("replacement intent requires a source identifier and survives only a s
   assertEquals(isReplacementIntent(history[0].content), true);
   assertEquals(isReplacementIntent("Хочу заменить люстру на светодиодное освещение"), false);
   assertEquals(resolveReplacementIntent("покажи", history), true);
+  assertEquals(resolveReplacementSourceMessage("покажи", history), history[0].content);
   assertEquals(resolveReplacementIntent("да, покажите варианты", history), true);
   assertEquals(resolveReplacementIntent("покажи кабель ВВГ 3×1,5", history), false);
+  assertEquals(resolveReplacementSourceMessage("покажи кабель ВВГ 3×1,5", history), null);
 });
 
 Deno.test("replacement preflight recognizes a spaced letter-number model code", () => {

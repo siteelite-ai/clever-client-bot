@@ -3,6 +3,13 @@ import {
   extractReplacementLookupKeys,
 } from "./replacement-preflight.ts";
 import type { CatalogSearchState } from "./catalog-search-outcome.ts";
+import { projectCriteriaFacetOptions, type CriteriaFacet, type Criterion } from "./criteria-gate.ts";
+import { alignCriteriaImportanceWithReasoning } from "./criteria-reasoning.ts";
+import {
+  dropImplicitReplacementIdentityFilters,
+  guardSearchFilters,
+  type SearchFacet,
+} from "./search-filter-guard.ts";
 
 export type SelectionCriterionSource =
   | "user_literal"
@@ -20,6 +27,65 @@ export interface ReplacementSelectionPlan {
   anchor_state: CatalogSearchState;
   source_identifiers: string[];
   portable_requirements: SelectionPlanCriterion[];
+}
+
+export interface ReplacementReasoningContract {
+  criteria: Criterion[];
+  options: Record<string, string[]>;
+  demoted: string[];
+}
+
+/**
+ * Compile the consultant's declared portable requirements into live facets.
+ * Source identity is removed before compilation; advisory assumptions remain
+ * level B and therefore cannot narrow retrieval or final rendering.
+ */
+export function compileReplacementReasoningContract(
+  facets: Array<SearchFacet & CriteriaFacet>,
+  reasoningText: string,
+  userEvidence: string,
+  sourceMessage: string,
+): ReplacementReasoningContract {
+  const guarded = guardSearchFilters(
+    { mode: "by_filter" },
+    facets,
+    reasoningText,
+    userEvidence,
+  );
+  const identityFree = dropImplicitReplacementIdentityFilters(
+    guarded.args,
+    facets,
+    sourceMessage,
+  );
+  const options = identityFree.args.options && typeof identityFree.args.options === "object"
+    ? identityFree.args.options as Record<string, string[]>
+    : {};
+  const criteria: Criterion[] = Object.entries(options).flatMap(([key, values]) => {
+    const facet = facets.find((candidate) => candidate.key === key);
+    return values.map((value) => ({
+      key: facet?.caption || key,
+      op: "eq" as const,
+      value,
+      unit: facet?.unit ?? undefined,
+      level: "A" as const,
+    }));
+  });
+  const userBacked: Criterion[] = guarded.user_backed.map(({ key, value }) => {
+    const facet = facets.find((candidate) => candidate.key === key);
+    return { key: facet?.caption || key, op: "eq", value, unit: facet?.unit ?? undefined, level: "A" };
+  });
+  const importance = alignCriteriaImportanceWithReasoning(
+    criteria,
+    reasoningText,
+    userBacked,
+  );
+  const mandatory = importance.criteria.filter((criterion) => (criterion.level ?? "A") === "A");
+  const projected = projectCriteriaFacetOptions(mandatory, facets);
+  return {
+    criteria: projected.proven_criteria,
+    options: projected.options,
+    demoted: importance.demoted,
+  };
 }
 
 export function buildReplacementSelectionPlan(

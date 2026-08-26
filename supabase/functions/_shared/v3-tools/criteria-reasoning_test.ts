@@ -39,6 +39,19 @@ Deno.test("числовой диапазон из рассуждения про�
   assertEquals(projected.added, [{ key: "Световой поток", op: "range", value: [3750, 5000], unit: "лм", level: "A" }]);
 });
 
+Deno.test("ключевые параметры замены обязательны, вероятная характеристика остаётся рекомендацией", () => {
+  const aligned = alignCriteriaImportanceWithReasoning([
+    { key: "Количество полюсов", op: "eq", value: "1", level: "A" },
+    { key: "Номинальный ток", op: "eq", value: "16", level: "A" },
+    { key: "Характеристика", op: "eq", value: "C", level: "A" },
+  ], "1-полюсный скорее всего. Ключевые параметры: номинальный ток 16 А, характеристика C.");
+  assertEquals(aligned.criteria.map((criterion) => [criterion.key, criterion.level]), [
+    ["Количество полюсов", "B"],
+    ["Номинальный ток", "A"],
+    ["Характеристика", "A"],
+  ]);
+});
+
 Deno.test("русский диапазон от X до Y проецируется так же, как запись через тире", () => {
   const projected = projectReasoningRangeCriteria([], "нужно от 3500 до 5000 люмен", [
     { key: "flow", caption: "Поток", type: "number", unit: "лм" },

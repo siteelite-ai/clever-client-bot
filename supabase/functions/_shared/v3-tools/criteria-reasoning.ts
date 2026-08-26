@@ -112,7 +112,7 @@ export function alignCriteriaImportanceWithReasoning(
   protectedReasoningCriteria: Criterion[] = [],
 ): CriteriaImportanceAlignment {
   const clauses = String(reasoningText ?? "").split(/(?<=[.!?;])|\n+/u).map((clause) => clause.trim()).filter(Boolean);
-  const mandatory = /(?:обязат|необходим|нуж(?:ен|на|но|ны)|треб(?:уется|уем|ование)|долж(?:ен|на|но|ны)|не\s+менее|не\s+более|минимум|максимум|точно|значит|счита|расчет|получа|итого|составля|[=×])/iu;
+  const mandatory = /(?:обязат|необходим|нуж(?:ен|на|но|ны)|треб(?:уется|уем|ование)|долж(?:ен|на|но|ны)|ключев\p{L}*\s+параметр\p{L}*|не\s+менее|не\s+более|минимум|максимум|точно|значит|счита|расчет|получа|итого|составля|[=×])/iu;
   const advisory = /(?:логичн|предпочт|скорее\s+всего|желатель|комфортн|уютн|можно|например|по\s+желанию|кому\s+как)/iu;
   const demoted: string[] = [];
   const aligned = (Array.isArray(criteria) ? criteria : []).map((criterion) => {
