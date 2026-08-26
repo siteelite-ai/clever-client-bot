@@ -8242,6 +8242,134 @@ async function runExpertLoop(
       });
     }
 
+    // A compact model search can contain candidates that satisfy different
+    // halves of an explicit customer request (for example the requested type
+    // at a lower measurement and the requested measurement for a sibling
+    // type). If every ordinary recovery remains empty, inspect one bounded
+    // page of the already-grounded live category and intersect the immutable
+    // card-visible contract. No vocabulary or value is invented here: class
+    // comes from the target gate, category from discovery, and every remaining
+    // condition is proved by the final title itself.
+    if (
+      productsRendered === 0 &&
+      !terminalAliasRequirement &&
+      !replacementIntent &&
+      intentMode === "select" &&
+      !seriesTurnRequiresGrounding &&
+      terminalDiscover &&
+      activeSelectionTarget &&
+      !broadAssortmentRequest
+    ) {
+      const visibleContract = buildVisibleRequestContract(userMessage, {
+        productClass: activeSelectionTarget,
+        candidateTitles: [...ctx.cache.values()].map((product) => product.pagetitle),
+      });
+      if (visibleContract.length > 0) {
+        const categoryIn = terminalDiscover.leaf_categories
+          .map((category) => category.pagetitle)
+          .filter(Boolean);
+        send({
+          type: "tool_event",
+          tool: "search_catalog",
+          phase: "start",
+          summary: "Проверяю расширенный набор по условиям запроса…",
+        });
+        let recovered = await runTool("search_catalog", {
+          mode: "by_filter",
+          ...(categoryIn.length > 0
+            ? { category_in: categoryIn }
+            : { category: terminalDiscover.category.pagetitle }),
+          per_page: 50,
+        }, ctx);
+        if (
+          (!recovered.ok || recovered.tool !== "search_catalog" || recovered.results.length === 0) &&
+          categoryIn.length > 0
+        ) {
+          recovered = await runTool("search_catalog", {
+            mode: "by_filter",
+            category: terminalDiscover.category.pagetitle,
+            per_page: 50,
+          }, ctx);
+        }
+        if (recovered.ok && recovered.tool === "search_catalog") {
+          const products = recovered.results
+            .map((product) => ctx.cache.get(String(product.id)))
+            .filter((product): product is ProductFull => Boolean(product));
+          const groundedProducts = terminalGroundedTargets.length > 0
+            ? filterProductsByGroundedCategoryTargets(
+              products,
+              terminalGroundedTargets,
+              terminalDiscover.category.pagetitle,
+              terminalCategoryEvidence,
+            )
+            : products;
+          const targetReport = verifySelectionTargetWithVisibleTitle(
+            activeSelectionTarget,
+            groundedProducts,
+          );
+          const targetIds = new Set(targetReport.passed_ids);
+          const candidateIds = groundedProducts
+            .map((product) => product.id)
+            .filter((id) => targetIds.has(id));
+          let safeIds = guardFinalRenderIds(candidateIds);
+          safeIds = filterProductIdsByBudgetCap(
+            safeIds,
+            ctx.cache,
+            extractBudgetCap(userMessage),
+          ).ids.slice(0, 10);
+          send({
+            type: "tool_event",
+            tool: "search_catalog",
+            phase: "result",
+            summary: `Расширенная проверка: подтверждено ${safeIds.length}`,
+          });
+          if (safeIds.length > 0) {
+            const rendered = await runTool("render_products", {
+              product_ids: safeIds,
+              criteria: [],
+              total_available: recovered.total,
+            }, ctx);
+            if (rendered.ok && rendered.tool === "render_products") {
+              for (const id of safeIds) shownIds.add(id);
+              send({
+                type: "products_block",
+                markdown: rendered.markdown,
+                count: rendered.rendered_count,
+                total_available: recovered.total,
+              });
+              productsRendered += rendered.rendered_count;
+              steps.push({
+                step: "v3_terminal_visible_request_recovery",
+                ms: now(),
+                meta: {
+                  category_candidates: recovered.results.length,
+                  target_candidates: targetIds.size,
+                  rendered: rendered.rendered_count,
+                  requirements: visibleContract.map((requirement) => ({
+                    kind: requirement.kind,
+                    label: requirement.label,
+                  })),
+                },
+              });
+              return { finalText, productsRendered, shownProductIds: [...shownIds] };
+            }
+          }
+          steps.push({
+            step: "v3_terminal_visible_request_recovery_empty",
+            ms: now(),
+            meta: {
+              category_candidates: recovered.results.length,
+              target_candidates: targetIds.size,
+              requirements: visibleContract.map((requirement) => ({
+                kind: requirement.kind,
+                label: requirement.label,
+              })),
+            },
+          });
+        }
+      }
+    }
+
     // NOTE (2026-06-29): tryPriceDirectionRescue + broad last-chance render удалены.
     // Если шаги исчерпаны без render — это честный honest-empty (см. блок ниже),
     // а не серверная подмена «fresh pool из последнего поиска».
