@@ -542,6 +542,7 @@ export function guardSearchFilters(
   facets: SearchFacet[],
   declaredReasoning: string,
   userEvidence: string = declaredReasoning,
+  inferenceEvidence: string = declaredReasoning,
 ): SearchFilterGuardResult {
   if (args.mode !== "by_filter") {
     return { args, kept: [], user_backed: [], inferred: [], subsumed: [], dropped: [] };
@@ -674,17 +675,22 @@ export function guardSearchFilters(
     if (nextOptions [facet.key]?.length || isReplacementIdentityFacet(facet)) {
       continue;
     }
-    if (!facetMeaningIsEvidenced(facet, declaredReasoning)) continue;
+    // Missing numeric/options may be completed only from actual consultant
+    // reasoning. At the discovery boundary declaredReasoning can contain only
+    // the customer's application measurement (for example cable diameter),
+    // which must not be copied into several product-state facets before the
+    // consultant has expressed the directed compatibility relation.
+    if (!facetMeaningIsEvidenced(facet, inferenceEvidence)) continue;
     const evidenced = facet. values.filter((candidate) => {
       const value = norm(candidate.value);
       if (!isAtomicFacetValue(candidate.value)) return false;
       if (!value || ["да", "нет", "есть", "отсутствует"].includes(value)) {
         return false;
       }
-      if (!numericFacetValueIsLocallyEvidenced(candidate.value, facet, declaredReasoning)) {
+      if (!numericFacetValueIsLocallyEvidenced(candidate.value, facet, inferenceEvidence)) {
         return false;
       }
-      return explicitlyAffirmedByFacetReasoning(candidate.value, declaredReasoning);
+      return explicitlyAffirmedByFacetReasoning(candidate.value, inferenceEvidence);
     });
     if (evidenced.length !== 1) continue;
     const value = evidenced[0].value;

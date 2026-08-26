@@ -546,6 +546,22 @@ Deno.test("directional reasoning rejects equality to the measured reference", ()
   assertEquals(result.dropped, [{ key: "before", value: "12", reason: "not_declared_in_reasoning" }]);
 });
 
+Deno.test("discovery cannot copy an application measurement into product-state facets before reasoning", () => {
+  const user = "Подбери изделие на объект диаметром 10 мм.";
+  const result = guardSearchFilters(
+    { mode: "by_filter" },
+    [
+      { key: "before", caption: "Внутренний диаметр до изменения, мм", unit: "мм", values: [{ value: "10" }, { value: "12" }] },
+      { key: "after", caption: "Внутренний диаметр после изменения, мм", unit: "мм", values: [{ value: "6" }, { value: "10" }] },
+    ],
+    user,
+    user,
+    "",
+  );
+  assertEquals(result.args.options, undefined);
+  assertEquals(result.inferred, []);
+});
+
 Deno.test("one-letter technical value is inferred only with its facet meaning", () => {
   const facets = [{
     key: "curve",

@@ -6944,8 +6944,9 @@ async function runExpertLoop(
                 { mode: "by_filter" },
                 lastDiscover.facets,
                 `${
-                userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
+                  userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
                 userMessage,
+                `${firstAssistantText}\n${assistantReasoning}`,
               );
               const explicitCriteria: Criterion[] = explicit.kept.map(({ key, value }) => {
                 const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
