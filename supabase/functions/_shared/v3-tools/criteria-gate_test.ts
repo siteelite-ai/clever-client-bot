@@ -281,6 +281,20 @@ Deno.test("mandatory criteria compile into live facet OR values and numeric boun
   assertEquals(projection.unmatched_keys, []);
 });
 
+Deno.test("short facet codes remain exact while Cyrillic and Latin glyphs interoperate", () => {
+  const projection = projectCriteriaFacetOptions([
+    { key: "Характеристика срабатывания", op: "eq", value: "Тип C", level: "A" },
+  ], [{
+    key: "curve",
+    caption: "Характеристика срабатывания",
+    unit: null,
+    values: [{ value: "Тип B" }, { value: "Тип \u0421" }, { value: "Тип D" }],
+  }]);
+  assertEquals(projection.options, { curve: ["Тип \u0421"] });
+  assertEquals(projection.proven_criteria.length, 1);
+  assertEquals(projection.unmatched_keys, []);
+});
+
 Deno.test("machine facet key compiles through the same resolved live facet", () => {
   const projection = projectCriteriaFacetOptions([
     { key: "measured_output__lm", op: "min", value: 3750, unit: "lm", level: "A" },

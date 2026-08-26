@@ -3562,7 +3562,9 @@ async function runExpertLoop(
       const unit = axis.unit ?? captionUnit;
       return axis.values.flatMap((value) => {
         const normalized = normalizeCodeLike(value);
-        if (normalized.length === 1 && explicitSingleCodes.has(normalized)) return [value];
+        const shortCode = value.split(/[^\p{L}\p{N}]+/gu)
+          .find((token) => normalizeCodeLike(token).length === 1 && explicitSingleCodes.has(normalizeCodeLike(token)));
+        if (shortCode) return [shortCode];
         if (/\d/u.test(value) && /\p{L}/u.test(value)) return [value];
         if (/^\d+(?:[.,]\d+)?$/u.test(value) && unit && /\p{L}/u.test(unit)) return [`${value}${unit}`];
         return [];

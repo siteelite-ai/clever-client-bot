@@ -356,11 +356,37 @@ function semanticStem(token: string): string {
   return stem;
 }
 
+function foldVisualCodeToken(token: string): string {
+  return token.replace(/[\u0430\u0432\u0441\u0435\u043d\u043a\u043c\u043e\u0440\u0442\u0445\u0443]/gu, (letter) => ({
+    "\u0430": "a",
+    "\u0432": "b",
+    "\u0441": "c",
+    "\u0435": "e",
+    "\u043d": "h",
+    "\u043a": "k",
+    "\u043c": "m",
+    "\u043e": "o",
+    "\u0440": "p",
+    "\u0442": "t",
+    "\u0445": "x",
+    "\u0443": "y",
+  }[letter] ?? letter));
+}
+
 function stringEvidenceMatches(wanted: string, evidence: string): boolean {
   const want = normalizeKey(wanted);
   const got = normalizeKey(evidence);
   if (!want || !got) return false;
   if (got.includes(want) || want.includes(got)) return true;
+  // One-letter tokens are meaningful catalog codes in otherwise descriptive
+  // values (`Тип C`, `кривая B`). The semantic stem matcher below deliberately
+  // ignores short words, so require these distinguishing codes explicitly.
+  // Fold only visually equivalent Cyrillic/Latin glyphs; B/C/D remain distinct.
+  const gotTokens = new Set(got.split(/\s+/u).map(foldVisualCodeToken));
+  const wantedCodes = want.split(/\s+/u)
+    .filter((token) => /^\p{L}$/u.test(token))
+    .map(foldVisualCodeToken);
+  if (wantedCodes.some((token) => !gotTokens.has(token))) return false;
   const gotStems = got.split(/\s+/u).filter((x) => x.length >= 3).map(semanticStem);
   const wantStems = want.split(/\s+/u).filter((x) => x.length >= 3).map(semanticStem);
   return wantStems.length > 0 && wantStems.every((stem) => gotStems.some((actual) => {

@@ -367,12 +367,16 @@ function visualSingleLetter(value: string): string {
  * meaning has already been proven in the same reasoning. */
 function explicitlyAffirmedByFacetReasoning(value: string, evidence: string): boolean {
   const normalized = norm(value);
-  if (normalized.length !== 1 || !/\p{L}/u.test(normalized)) {
-    return explicitlyAffirmedByUser(value, evidence);
+  const evidenceTokens = norm(evidence).split(" ");
+  const shortCodes = normalized.split(" ").filter((token) => token.length === 1 && /\p{L}/u.test(token));
+  if (shortCodes.length > 0 && shortCodes.some((code) => {
+    const wanted = visualSingleLetter(code);
+    return evidenceTokens.some((token) => token.length === 1 && /\p{L}/u.test(token) && visualSingleLetter(token) === wanted);
+  })) {
+    return true;
   }
-  const wanted = visualSingleLetter(normalized);
-  return norm(evidence).split(" ")
-    .some((token) => token.length === 1 && /\p{L}/u.test(token) && visualSingleLetter(token) === wanted);
+  if (/\d/u.test(normalized) && /\p{L}/u.test(normalized) && codeNorm(evidence).includes(codeNorm(value))) return true;
+  return explicitlyAffirmedByUser(value, evidence);
 }
 
 function facetMeaningIsEvidenced(
