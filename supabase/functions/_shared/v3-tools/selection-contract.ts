@@ -247,6 +247,25 @@ export function selectionTargetDeclarationIsGrounded(
 }
 
 /**
+ * A short continuation may omit the class already shown in the previous
+ * product batch. Accept that class only with two independent proofs: it is
+ * present in prior dialogue evidence and it is the same live taxonomy class
+ * discovered for the current turn. Either signal alone remains insufficient.
+ */
+export function continuedSelectionTargetIsGrounded(
+  target: string,
+  priorDialogueEvidence: string,
+  liveClass: string,
+): boolean {
+  return Boolean(
+    target &&
+    liveClass &&
+    selectionTargetIsDeclared(target, priorDialogueEvidence) &&
+    selectionTargetIsDeclared(liveClass, target),
+  );
+}
+
+/**
  * A provider may accidentally append a mandatory attribute to product_class
  * even though it also serialized that attribute as a level-A criterion. The
  * server may keep the already grounded base class only when every added class

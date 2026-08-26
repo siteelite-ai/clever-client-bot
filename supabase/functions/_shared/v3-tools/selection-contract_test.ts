@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
@@ -236,6 +236,25 @@ Deno.test("live declared base class stays separate from discovery modifiers", ()
 Deno.test("a safely bootstrapped short noun may authorize its formal class extension", () => {
   assertEquals(selectionTargetIsDeclared("автомат", "Автоматический выключатель"), true);
   assertEquals(selectionTargetIsDeclared("ИБП", "Стабилизатор напряжения"), false);
+});
+
+Deno.test("a continuation class requires both prior cards and matching live taxonomy", () => {
+  const prior = "Автоматический выключатель M06N 1P 16A C ARMAT ИЭК";
+  assertEquals(continuedSelectionTargetIsGrounded(
+    "автоматический выключатель",
+    prior,
+    "Автоматические выключатели",
+  ), true);
+  assertEquals(continuedSelectionTargetIsGrounded(
+    "стабилизатор напряжения",
+    prior,
+    "Автоматические выключатели",
+  ), false);
+  assertEquals(continuedSelectionTargetIsGrounded(
+    "автоматический выключатель",
+    "Ранее ничего не показывали",
+    "Автоматические выключатели",
+  ), false);
 });
 
 Deno.test("a richer target falls back to its base only through mandatory criteria", () => {

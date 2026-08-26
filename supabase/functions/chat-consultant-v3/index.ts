@@ -28,7 +28,7 @@ import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-le
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract } from "../_shared/v3-tools/selection-actionability.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionEvidenceCaption, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionEvidenceCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
@@ -4771,6 +4771,15 @@ async function runExpertLoop(
             activeSelectionTarget &&
             selectionTargetIsDeclared(activeSelectionTarget, target),
           );
+          const replacementContinuationClassDeclared = Boolean(
+            replacementIntent &&
+            target &&
+            continuedSelectionTargetIsGrounded(
+              target,
+              priorDialogueDeclaration,
+              liveTaxonomyDeclaration,
+            ),
+          );
           // The live taxonomy is evidence about catalog structure, not about
           // the customer's requested class. Appending it to the declaration
           // text allowed a wrong discovery branch to authorize its own class
@@ -4782,7 +4791,7 @@ async function runExpertLoop(
               target,
               `${userMessage}\n${initialSelectionDiscoveryNoun ?? ""}\n${initialReasoningDeclaration}`,
               liveTaxonomyDeclaration,
-            ) || namedSeriesBaseClassDeclared || bootstrappedTargetExtensionDeclared
+            ) || namedSeriesBaseClassDeclared || bootstrappedTargetExtensionDeclared || replacementContinuationClassDeclared
             : false;
           if (targetDeclared) groundedSelectionTargetHint = target;
           let ids = Array.isArray(tc.args.product_ids)
