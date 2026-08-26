@@ -9,6 +9,8 @@
 // explicit negation always wins. Unproven filters are removed; the catalog can
 // still search the discovered category and the evidence gate validates cards.
 
+import { normalizeUnit } from "./criteria-consistency.ts";
+
 export interface SearchFacetValue {
   value: string;
 }
@@ -16,6 +18,7 @@ export interface SearchFacetValue {
 export interface SearchFacet {
   key: string;
   caption?: string;
+  unit?: string | null;
   values: SearchFacetValue[];
 }
 
@@ -417,8 +420,29 @@ function numericFacetValueIsLocallyEvidenced(
   if (!/\d/u.test(normalizedValue) || /[a-zа-я]/iu.test(normalizedValue)) return true;
   const publicLabel = String(facet.caption ?? "").trim() || facet.key;
   const labelBase = publicLabel.split(",")[0];
-  const anchor = norm(labelBase).split(" ").filter((token) => token.length >= 3).at(-1);
-  if (!anchor) return false;
+  const labelTokens = norm(labelBase).split(" ").filter((token) => token.length >= 3);
+  if (labelTokens.length === 0) return false;
+  // Captions often start with a generic qualifier ("nominal", "quantity")
+  // and then name the measured property. The first non-generic token is a
+  // stronger local anchor than a trailing product noun (for example the noun
+  // after "power" must not authorize a room-area number as wattage).
+  const anchor = labelTokens.find((token) =>
+    !/^(?:номинал|максимал|минимал|рабоч|общ|количеств|числ)/u.test(token)
+  ) ?? labelTokens.at(-1)!;
+  const expectedUnits = new Set([
+    normalizeUnit(facet.unit ?? ""),
+    ...String(facet.caption ?? "").split(",").slice(1)
+      .flatMap((suffix) => suffix.match(/[a-zа-я°]{1,10}[²³]?\d?/giu) ?? [])
+      .map(normalizeUnit),
+  ].filter(Boolean));
+  const exactNumber = normalizedValue.match(/^\d+(?:[.,]\d+)?$/u)?.[0];
+  if (exactNumber && expectedUnits.size > 0) {
+    const literal = exactNumber.replace(/[.,]/u, "[.,]");
+    const measurement = new RegExp(`(?<![a-zа-я0-9])${literal}\\s*([a-zа-я°]{1,10}[²³]?\\d?)(?![a-zа-я])`, "giu");
+    for (let match; (match = measurement.exec(String(evidence ?? ""))) !== null;) {
+      if (expectedUnits.has(normalizeUnit(match[1]))) return true;
+    }
+  }
   const normalizedEvidence = norm(evidence);
   let from = 0;
   while (from < normalizedEvidence.length) {
@@ -431,7 +455,8 @@ function numericFacetValueIsLocallyEvidenced(
     const contextTokens = context.split(" ").filter(Boolean);
     if (contextTokens.some((token) => (
       token === anchor || tokensMatchByStem(anchor, token) ||
-      anchor.length >= 3 && (token.includes(anchor) || anchor.includes(token))
+      anchor.length >= 3 && token.length >= 3 &&
+        (token.includes(anchor) || anchor.includes(token))
     ))) return true;
     from = index + Math.max(1, normalizedValue.length);
   }
@@ -540,6 +565,10 @@ export function guardSearchFilters(
       }
       if (!isAtomicFacetValue(canonical)) {
         dropped.push({ key, value: canonical, reason: "non_atomic_value" });
+        continue;
+      }
+      if (!numericFacetValueIsLocallyEvidenced(canonical, facet, declaredReasoning)) {
+        dropped.push({ key, value: canonical, reason: "not_declared_in_reasoning" });
         continue;
       }
       if (contradictedByUser(canonical, userEvidence)) {

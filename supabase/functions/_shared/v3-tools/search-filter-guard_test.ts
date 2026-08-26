@@ -491,6 +491,39 @@ Deno.test("one measured number cannot populate a different numeric facet", () =>
   assertEquals(result.inferred, []);
 });
 
+Deno.test("an area value cannot become power even near product wording", () => {
+  const lightFacets = [{
+    key: "power",
+    caption: "Мощность ламп, Вт",
+    unit: "Вт",
+    values: [{ value: "25" }, { value: "40" }],
+  }];
+  const reasoning = "Для комнаты 25 м² рассчитываю 3750–5000 лм и выбираю светильник без сменных ламп.";
+
+  assertEquals(guardSearchFilters(
+    { mode: "by_filter", options: { power: ["25"] } },
+    lightFacets,
+    reasoning,
+    "Комната 25 м²",
+  ).args.options, undefined);
+  assertEquals(guardSearchFilters(
+    { mode: "by_filter" },
+    lightFacets,
+    reasoning,
+    "Комната 25 м²",
+  ).args.options, undefined);
+});
+
+Deno.test("a matching measurement unit proves an exact numeric facet value", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { current: ["16"] } },
+    [{ key: "current", caption: "Номинальный ток, А", unit: "А", values: [{ value: "16" }] }],
+    "Для нагрузки выбираю 16 А.",
+    "Нужно 16 А.",
+  );
+  assertEquals(result.args.options, { current: ["16"] });
+});
+
 Deno.test("one-letter technical value is inferred only with its facet meaning", () => {
   const facets = [{
     key: "curve",
