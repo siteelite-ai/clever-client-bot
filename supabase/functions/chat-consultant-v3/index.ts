@@ -3209,6 +3209,8 @@ async function runExpertLoop(
     candidates: RankedReplacementCandidate[];
   } | null = null;
   let replacementSplitFallbackCaptionSent = false;
+  let anchorMissingClassOnlyRender = false;
+  let anchorMissingClassOnlyCaptionSent = false;
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
   let catalogSearchAttempted = false;
@@ -4663,6 +4665,39 @@ async function runExpertLoop(
                 },
               });
             }
+          }
+          if (
+            selectionPlan?.anchor_state === "anchor_missing" &&
+            !equivalentReplacementRequested &&
+            replacementRequiredAxes.length < 2
+          ) {
+            const originalIds = Array.isArray(tc.args.product_ids)
+              ? (tc.args.product_ids as unknown[]).map(String)
+              : [];
+            const cachedProducts = originalIds
+              .map((id) => ctx.cache.get(id))
+              .filter((product): product is ProductFull => Boolean(product));
+            const targetIds = activeSelectionTarget
+              ? new Set(verifySelectionTargetWithVisibleTitle(activeSelectionTarget, cachedProducts).passed_ids)
+              : new Set(cachedProducts.map((product) => product.id));
+            const safeIds = originalIds
+              .filter((id) => targetIds.has(id))
+              .filter((id) => {
+                const product = ctx.cache.get(id);
+                return Boolean(
+                  product && product.price > 0 &&
+                  !productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues) &&
+                  !replacementSourceModelCodes.some((code) => productMatchesCodeConstraint(product, code))
+                );
+              })
+              .slice(0, 4);
+            (tc.args as Record<string, unknown>).product_ids = safeIds;
+            anchorMissingClassOnlyRender = safeIds.length > 0;
+            steps.push({
+              step: "v3_guard_anchor_missing_class_only_render",
+              ms: now(),
+              meta: { before: originalIds.length, after: safeIds.length, target: activeSelectionTarget },
+            });
           }
         }
 
@@ -7079,6 +7114,19 @@ async function runExpertLoop(
           const r = result as { markdown: string; rendered_count: number };
           const renderedIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
           for (const id of renderedIds) shownIds.add(id);
+
+          if (anchorMissingClassOnlyRender && !anchorMissingClassOnlyCaptionSent) {
+            const caption = "Исходную модель в актуальном каталоге подтвердить не удалось, а проверяемых характеристик для точного сравнения недостаточно. Показываю несколько товаров того же класса для дальнейшей сверки; взаимозаменяемость не подтверждена.";
+            send({ type: "assistant_turn_break", reason: "text_before_render" });
+            send({ type: "delta", content: caption });
+            finalText += `${finalText ? "\n\n" : ""}${caption}`;
+            anchorMissingClassOnlyCaptionSent = true;
+            steps.push({
+              step: "v3_anchor_missing_class_only_caption",
+              ms: now(),
+              meta: { rendered_ids: renderedIds },
+            });
+          }
 
           if (replacementSplitFallback && !replacementSplitFallbackCaptionSent) {
             const axes = replacementSplitFallback.axes
