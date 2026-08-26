@@ -1,6 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
-  excludeMandatoryAxisCodesFromSourceModels, extractExplicitSingleLetterCodes, extractReplacementLookupKeys,
+  derivePortableAxisTitleRequirements, excludeMandatoryAxisCodesFromSourceModels, extractExplicitSingleLetterCodes, extractReplacementLookupKeys,
   extractPortableTechnicalRequirements,
   isReplacementIntent,
   portableTechnicalCodeMatchesText, productContainsSourceModel,
@@ -285,4 +285,15 @@ Deno.test("final replacement title contract requires every portable code", () =>
     ),
     false,
   );
+});
+
+Deno.test("live numeric axes inherit a unique explicit reasoning unit for title proof", () => {
+  assertEquals(derivePortableAxisTitleRequirements([
+    { caption: "Характеристика срабатывания", values: ["C"], unit: null },
+    { caption: "Номинальный ток", values: ["16"], unit: null },
+  ], "Ключевые параметры: характеристика С, номинальный ток 16 А."), ["C", "16А"]);
+
+  assertEquals(derivePortableAxisTitleRequirements([
+    { caption: "Номинальный ток", values: ["16"], unit: null },
+  ], "Возможны 16 А и 16 кА для разных параметров."), []);
 });

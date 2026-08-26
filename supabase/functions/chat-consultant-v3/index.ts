@@ -119,6 +119,7 @@ import { deterministicSeriesExplanation, safeSeriesTraits } from "../_shared/v3-
 import { type RankedReplacementCandidate,
   rankSplitReplacementCandidates } from "../_shared/v3-tools/replacement-fallback.ts";
 import {
+  derivePortableAxisTitleRequirements,
   excludeMandatoryAxisCodesFromSourceModels,
   extractExplicitSingleLetterCodes,
   extractPortableTechnicalRequirements,
@@ -3552,27 +3553,10 @@ async function runExpertLoop(
 
   const portableReplacementRequirements = (): string[] => {
     const portableCodes = effectiveCodeConstraints;
-    const explicitSingleCodes = new Set(
-      extractExplicitSingleLetterCodes(
-        `${firstAssistantText}\n${assistantReasoning}`,
-      ),
+    const provenAxisCodes = derivePortableAxisTitleRequirements(
+      replacementRequiredAxes,
+      `${firstAssistantText}\n${assistantReasoning}`,
     );
-    const axisCodes = replacementRequiredAxes.flatMap((axis) => {
-      const captionUnit = axis.caption.match(/(?:,|\()\s*([a-zа-я]{1,5})\)?$/iu)?.[1] ?? null;
-      const unit = axis.unit ?? captionUnit;
-      return axis.values.flatMap((value) => {
-        const normalized = normalizeCodeLike(value);
-        const shortCode = value.split(/[^\p{L}\p{N}]+/gu)
-          .find((token) => normalizeCodeLike(token).length === 1 && explicitSingleCodes.has(normalizeCodeLike(token)));
-        if (shortCode) return [shortCode];
-        if (/\d/u.test(value) && /\p{L}/u.test(value)) return [value];
-        if (/^\d+(?:[.,]\d+)?$/u.test(value) && unit && /\p{L}/u.test(unit)) return [`${value}${unit}`];
-        return [];
-      });
-    });
-    const provenAxisCodes = [...new Map(
-      axisCodes.map((value) => [normalizeCodeLike(value), value]),
-    ).values()];
     if (provenAxisCodes.length >= 2) return provenAxisCodes;
     return [...new Map(
       [...portableCodes, ...provenAxisCodes].map((
@@ -5431,7 +5415,7 @@ async function runExpertLoop(
             // render_products (for example weight) did not shape the pool and
             // may rank/explain it, but cannot retroactively empty the result.
             const compiledReplacementContract = replacementIntent &&
-              reasoningProjectedSearchCriteria.length > 0;
+              (reasoningProjectedSearchCriteria.length > 0 || enforcedSearchCriteria.length > 0);
             const frozenRender = ordinarySelectionContract || compiledReplacementContract
               ? demoteUnfrozenRenderCriteria(
                 fallbackMeasured.criteria,

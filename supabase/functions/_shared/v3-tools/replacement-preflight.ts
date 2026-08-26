@@ -166,6 +166,59 @@ function visualCodeNorm(value: string): string {
     .replace(/(?<=\d)b$/u, "v");
 }
 
+export interface PortableReplacementAxis {
+  caption: string;
+  values: string[];
+  unit: string | null;
+}
+
+/**
+ * Compiles live replacement axes into title-visible proof obligations. A live
+ * facet may omit its unit even though the consultant states it explicitly
+ * (`Номинальный ток: 16 А`). In that case the number is accepted only when a
+ * unique number+unit code in the reasoning has the same live numeric value.
+ * Model-only codes without a matching live axis never enter the result.
+ */
+export function derivePortableAxisTitleRequirements(
+  axes: PortableReplacementAxis[],
+  reasoningText: string,
+): string[] {
+  const explicitSingleCodes = new Set(extractExplicitSingleLetterCodes(reasoningText));
+  const reasoningCodes = extractPortableTechnicalRequirements(reasoningText);
+  const requirements: string[] = [];
+  for (const axis of axes ?? []) {
+    const captionUnit = axis.caption.match(/(?:,|\()\s*([a-zа-я]{1,5})\)?$/iu)?.[1] ?? null;
+    const unit = axis.unit ?? captionUnit;
+    for (const value of axis.values ?? []) {
+      const shortCode = value.split(/[^\p{L}\p{N}]+/gu)
+        .find((token) => {
+          const normalized = visualCodeNorm(token);
+          return normalized.length === 1 && explicitSingleCodes.has(normalized);
+        });
+      if (shortCode) {
+        requirements.push(shortCode);
+        continue;
+      }
+      if (/\d/u.test(value) && /\p{L}/u.test(value)) {
+        requirements.push(value);
+        continue;
+      }
+      if (!/^\d+(?:[.,]\d+)?$/u.test(value)) continue;
+      if (unit && /\p{L}/u.test(unit)) {
+        requirements.push(`${value}${unit}`);
+        continue;
+      }
+      const numeric = Number(value.replace(",", "."));
+      const groundedCodes = reasoningCodes.filter((code) => {
+        const match = visualCodeNorm(code).match(/^(\d+(?:\.\d+)?)(\p{L}{1,5})$/u);
+        return Boolean(match && Number(match[1]) === numeric);
+      });
+      if (groundedCodes.length === 1) requirements.push(groundedCodes[0]);
+    }
+  }
+  return [...new Map(requirements.map((value) => [visualCodeNorm(value), value])).values()];
+}
+
 /** Exact comparison for mixed letter/digit codes such as GX53, IP44 or 16A. */
 export function portableTechnicalCodeMatchesText(
   target: string,
