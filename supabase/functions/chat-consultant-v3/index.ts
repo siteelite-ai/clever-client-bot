@@ -118,6 +118,7 @@ import {
 } from "../_shared/v3-tools/model-routing.ts";
 import { deterministicSeriesExplanation, safeSeriesTraits } from "../_shared/v3-tools/series-explanation.ts";
 import {
+  classifyNamedTraitEvidence,
   intersectReplacementAxisEvidence,
   type RankedReplacementCandidate,
   rankSplitReplacementCandidates,
@@ -1477,15 +1478,13 @@ function axisValueMatchesText(target: string, text: string, axis: ReplacementAxi
 }
 
 function productMatchesReplacementAxis(product: { pagetitle?: string; short_traits?: string[] }, axis: ReplacementAxis): boolean {
-  const captionNorm = normalizeForMatch(axis.caption);
-  for (const line of product.short_traits ?? []) {
-    const [rawCaption, ...rawValue] = line.split(":");
-    if (!rawCaption || rawValue.length === 0) continue;
-    if (normalizeForMatch(rawCaption) !== captionNorm) continue;
-    const actual = rawValue.join(":").trim();
-    if (!actual) continue;
-    if (axis.values.some((target) => axisValueMatchesText(target, actual, axis))) return true;
-  }
+  const namedTrait = classifyNamedTraitEvidence(
+    product.short_traits,
+    axis.caption,
+    (actual) => axis.values.some((target) => axisValueMatchesText(target, actual, axis)),
+  );
+  if (namedTrait === "proven") return true;
+  if (namedTrait === "contradicted") return false;
   const haystack = `${product.pagetitle ?? ""} ${(product.short_traits ?? []).join(" ")}`;
   if (axis.values.some((target) => axisValueMatchesText(target, haystack, axis))) return true;
   return false;

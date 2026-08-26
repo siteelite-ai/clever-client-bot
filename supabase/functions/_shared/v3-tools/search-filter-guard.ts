@@ -408,6 +408,36 @@ function facetMeaningIsEvidenced(
   );
 }
 
+function numericFacetValueIsLocallyEvidenced(
+  value: string,
+  facet: SearchFacet,
+  evidence: string,
+): boolean {
+  const normalizedValue = norm(value);
+  if (!/\d/u.test(normalizedValue) || /[a-zа-я]/iu.test(normalizedValue)) return true;
+  const publicLabel = String(facet.caption ?? "").trim() || facet.key;
+  const labelBase = publicLabel.split(",")[0];
+  const anchor = norm(labelBase).split(" ").filter((token) => token.length >= 3).at(-1);
+  if (!anchor) return false;
+  const normalizedEvidence = norm(evidence);
+  let from = 0;
+  while (from < normalizedEvidence.length) {
+    const index = normalizedEvidence.indexOf(normalizedValue, from);
+    if (index < 0) break;
+    const context = normalizedEvidence.slice(
+      Math.max(0, index - 60),
+      Math.min(normalizedEvidence.length, index + normalizedValue.length + 60),
+    );
+    const contextTokens = context.split(" ").filter(Boolean);
+    if (contextTokens.some((token) => (
+      token === anchor || tokensMatchByStem(anchor, token) ||
+      anchor.length >= 3 && (token.includes(anchor) || anchor.includes(token))
+    ))) return true;
+    from = index + Math.max(1, normalizedValue.length);
+  }
+  return false;
+}
+
 function significantValueTokens(value: string): string[] {
   return norm(value)
     .split(" ")
@@ -608,6 +638,9 @@ export function guardSearchFilters(
       const value = norm(candidate.value);
       if (!isAtomicFacetValue(candidate.value)) return false;
       if (!value || ["да", "нет", "есть", "отсутствует"].includes(value)) {
+        return false;
+      }
+      if (!numericFacetValueIsLocallyEvidenced(candidate.value, facet, declaredReasoning)) {
         return false;
       }
       return explicitlyAffirmedByFacetReasoning(candidate.value, declaredReasoning);

@@ -476,6 +476,21 @@ Deno.test("explicit reasoning completes omitted live technical filters but not i
   ]);
 });
 
+Deno.test("one measured number cannot populate a different numeric facet", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { power: ["10"] } },
+    [
+      { key: "power", caption: "Номинальная мощность, кВа", values: [{ value: "10" }] },
+      { key: "current", caption: "Номинальный ток, А", values: [{ value: "10" }] },
+    ],
+    "Ключевой параметр — номинальная мощность 10 кВА.",
+    "Подбери аналог модели AX-100.",
+  );
+
+  assertEquals(result.args.options, { power: ["10"] });
+  assertEquals(result.inferred, []);
+});
+
 Deno.test("one-letter technical value is inferred only with its facet meaning", () => {
   const facets = [{
     key: "curve",

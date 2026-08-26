@@ -1,8 +1,22 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  classifyNamedTraitEvidence,
   intersectReplacementAxisEvidence,
   rankSplitReplacementCandidates,
 } from "./replacement-fallback.ts";
+
+Deno.test("a named trait mismatch cannot be rescued by an unrelated equal number", () => {
+  assertEquals(classifyNamedTraitEvidence(
+    ["Номинальная мощность: 5", "Номинальный ток: 10"],
+    "Номинальная мощность",
+    (actual) => actual === "10",
+  ), "contradicted");
+  assertEquals(classifyNamedTraitEvidence(
+    ["Номинальная мощность: 10", "Номинальный ток: 10"],
+    "Номинальная мощность",
+    (actual) => actual === "10",
+  ), "proven");
+});
 
 Deno.test("strict replacement is non-empty only when one card proves every axis", () => {
   assertEquals(intersectReplacementAxisEvidence([

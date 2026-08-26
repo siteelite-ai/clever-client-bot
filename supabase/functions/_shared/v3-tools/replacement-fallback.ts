@@ -9,6 +9,38 @@ export interface RankedReplacementCandidate {
   matched_axis_keys: string[];
 }
 
+export type NamedTraitEvidence = "proven" | "contradicted" | "absent";
+
+function normalizeTraitLabel(value: string): string {
+  return String(value ?? "")
+    .toLocaleLowerCase("ru-RU")
+    .replace(/ё/g, "е")
+    .replace(/[^a-zа-я0-9]+/giu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * An explicitly named trait outranks unrelated numbers elsewhere on the card.
+ * Once a card says `Power: 5`, a `10` in its current, model or dimensions can
+ * no longer prove `Power: 10` through a broad text fallback.
+ */
+export function classifyNamedTraitEvidence(
+  shortTraits: string[] | null | undefined,
+  caption: string,
+  matches: (actual: string) => boolean,
+): NamedTraitEvidence {
+  const wanted = normalizeTraitLabel(caption);
+  let found = false;
+  for (const line of shortTraits ?? []) {
+    const [rawCaption, ...rawValue] = line.split(":");
+    if (!rawCaption || rawValue.length === 0 || normalizeTraitLabel(rawCaption) !== wanted) continue;
+    found = true;
+    if (matches(rawValue.join(":").trim())) return "proven";
+  }
+  return found ? "contradicted" : "absent";
+}
+
 /** Candidate ids proven on every independent replacement axis. */
 export function intersectReplacementAxisEvidence(
   axes: ReplacementAxisEvidence[],
