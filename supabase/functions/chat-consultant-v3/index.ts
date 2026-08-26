@@ -3271,6 +3271,9 @@ async function runExpertLoop(
   const replacementSourceMessage = resolveReplacementSourceMessage(userMessage, history.slice(-8));
   const replacementIntent = Boolean(replacementSourceMessage);
   const replacementEvidenceMessage = replacementSourceMessage ?? userMessage;
+  const priorReplacementReasoning = replacementIntent
+    ? history.filter((message) => message.role === "assistant").slice(-4).map((message) => message.content).join("\n")
+    : "";
   const equivalentReplacementRequested = replacementIntent && /равноцен\p{L}*/iu.test(replacementEvidenceMessage);
   const replacementExcludedIdentityValues = new Set<string>();
   const intentMode = detectUserIntentMode(userMessage);
@@ -3555,7 +3558,7 @@ async function runExpertLoop(
     const portableCodes = effectiveCodeConstraints;
     const provenAxisCodes = derivePortableAxisTitleRequirements(
       replacementRequiredAxes,
-      `${firstAssistantText}\n${assistantReasoning}`,
+      `${priorReplacementReasoning}\n${firstAssistantText}\n${assistantReasoning}`,
     );
     if (provenAxisCodes.length >= 2) return provenAxisCodes;
     return [...new Map(
@@ -4343,7 +4346,7 @@ async function runExpertLoop(
         // values explicitly negated by the customer are removed.
         if (tc.name === "search_catalog" && lastDiscover) {
           const userEvidence = `${history.filter((message) => message.role === "user").slice(-6).map((message) => message.content).join("\n")}\n${userMessage}`;
-          const declaredReasoning = `${userEvidence}\n${initialSelectionDiscoveryNoun ?? ""}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
+          const declaredReasoning = `${userEvidence}\n${priorReplacementReasoning}\n${initialSelectionDiscoveryNoun ?? ""}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
           const guarded = guardSearchFilters(tc.args as Record<string, unknown>, lastDiscover.facets, declaredReasoning, userEvidence);
           const identityGuard = replacementIntent
             ? dropImplicitReplacementIdentityFilters(guarded.args, lastDiscover.facets, replacementEvidenceMessage)

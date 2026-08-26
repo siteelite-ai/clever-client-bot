@@ -59,3 +59,19 @@ Deno.test("replacement reasoning compiles portable live facets and drops source 
   ]);
   assertEquals(contract.demoted, ["Количество полюсов"]);
 });
+
+Deno.test("a short followup compiles the prior replacement reasoning into the same live contract", () => {
+  const contract = compileReplacementReasoningContract([
+    { key: "current", caption: "Номинальный ток", unit: "А", values: [{ value: "16" }, { value: "32" }] },
+    { key: "curve", caption: "Характеристика срабатывания", unit: null, values: [{ value: "B" }, { value: "C" }] },
+  ],
+  "покажи\nРанее определено: ключевые параметры аналога — номинальный ток 16 А, характеристика C.",
+  "Подбери аналог Schneider Acti9 C16\nпокажи",
+  "Подбери аналог Schneider Acti9 C16");
+
+  assertEquals(contract.options, { current: ["16"], curve: ["C"] });
+  assertEquals(contract.criteria.map((criterion) => criterion.key), [
+    "Номинальный ток",
+    "Характеристика срабатывания",
+  ]);
+});
