@@ -3567,6 +3567,13 @@ async function runExpertLoop(
 
   const portableReplacementRequirements = (): string[] => {
     const portableCodes = effectiveCodeConstraints;
+    // A disclosed near-match may relax model-inferred source properties, but
+    // never a literal technical code typed by the customer. Keeping derived
+    // axis codes here would make the fallback unreachable by demanding that a
+    // partial analogue still display every property of the missing source.
+    if (replacementSplitFallback && !equivalentReplacementRequested) {
+      return portableCodes;
+    }
     const provenAxisCodes = derivePortableAxisTitleRequirements(
       replacementRequiredAxes,
       `${priorReplacementReasoning}\n${firstAssistantText}\n${assistantReasoning}`,
@@ -6493,7 +6500,15 @@ async function runExpertLoop(
               })
               .map((candidate) => candidate.id),
           }));
-          const exactIds = intersectReplacementAxisEvidence(provenAxes);
+          const strictTitleRequirements = portableReplacementRequirements();
+          const exactIds = intersectReplacementAxisEvidence(provenAxes).filter((id) => {
+            const product = ctx.cache.get(id);
+            return Boolean(
+              product &&
+              (strictTitleRequirements.length < 2 ||
+                productTitleMeetsPortableRequirements(product, strictTitleRequirements))
+            );
+          });
           if (exactIds.length === 0) {
             if (!strictReplacementSearchEmpty && catalogResult.results.length > 0) {
               steps.push({
@@ -6503,6 +6518,7 @@ async function runExpertLoop(
                   reported_total: catalogResult.total,
                   candidates: catalogResult.results.length,
                   proven_axes: provenAxes.map((axis) => ({ key: axis.key, candidates: axis.ids.length })),
+                  title_requirements: strictTitleRequirements,
                 },
               });
             }
