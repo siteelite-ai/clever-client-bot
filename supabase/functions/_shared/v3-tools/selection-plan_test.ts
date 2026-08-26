@@ -62,6 +62,7 @@ Deno.test("replacement reasoning compiles portable live facets and drops source 
     { caption: "Номинальный ток", values: ["16"], unit: "А" },
     { caption: "Характеристика срабатывания", values: ["Тип C"], unit: null },
   ]);
+  assertEquals(contract.title_axes.length, 3);
 });
 
 Deno.test("a short followup compiles the prior replacement reasoning into the same live contract", () => {
@@ -79,4 +80,17 @@ Deno.test("a short followup compiles the prior replacement reasoning into the sa
     "Характеристика срабатывания",
   ]);
   assertEquals(contract.axes.length, 2);
+  assertEquals(contract.title_axes.length, 2);
+});
+
+Deno.test("advisory retrieval axes still preserve explicit compact title codes", () => {
+  const contract = compileReplacementReasoningContract([
+    { key: "current", caption: "Номинальный ток", unit: "А", values: [{ value: "16" }, { value: "32" }] },
+    { key: "curve", caption: "Характеристика срабатывания", unit: null, values: [{ value: "B" }, { value: "C" }] },
+  ],
+  "Ищу замену: номинал 16 А и характеристика C выглядят подходящими вариантами.",
+  "Подбери аналог Schneider Acti9 C16",
+  "Подбери аналог Schneider Acti9 C16");
+
+  assertEquals(contract.title_axes.map((axis) => axis.values), [["16"], ["C"]]);
 });

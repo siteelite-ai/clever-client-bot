@@ -3204,6 +3204,7 @@ async function runExpertLoop(
   const prioritySplitPool: string[] = [];
   const prioritySplitAxisIdSets = new Map<string, Set<string>>();
   let replacementRequiredAxes: ReplacementAxis[] = [];
+  let replacementTitleAxes: ReplacementAxis[] = [];
   let replacementSplitFallback: {
     axes: ReplacementAxis[];
     candidates: RankedReplacementCandidate[];
@@ -3584,8 +3585,10 @@ async function runExpertLoop(
     if (replacementSplitFallback && !equivalentReplacementRequested) {
       return portableCodes;
     }
+    const titleAxes = [...replacementRequiredAxes, ...replacementTitleAxes]
+      .filter((axis, index, all) => all.findIndex((candidate) => candidate.key === axis.key) === index);
     const provenAxisCodes = derivePortableAxisTitleRequirements(
-      replacementRequiredAxes,
+      titleAxes,
       `${priorReplacementReasoning}\n${firstAssistantText}\n${assistantReasoning}`,
     );
     if (provenAxisCodes.length >= 2) return provenAxisCodes;
@@ -4418,6 +4421,10 @@ async function runExpertLoop(
               userEvidence,
               replacementEvidenceMessage,
             );
+            replacementTitleAxes = replacementContract.title_axes.map((axis) => ({
+              ...axis,
+              isDiameter: isDiameterFacet(axis),
+            }));
             if (replacementContract.criteria.length >= 2) {
               replacementRequiredAxes = replacementContract.axes.map((axis) => ({
                 ...axis,

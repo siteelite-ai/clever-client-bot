@@ -34,6 +34,7 @@ export interface ReplacementReasoningContract {
   options: Record<string, string[]>;
   demoted: string[];
   axes: Array<{ key: string; caption: string; values: string[]; unit: string | null }>;
+  title_axes: Array<{ key: string; caption: string; values: string[]; unit: string | null }>;
 }
 
 /**
@@ -82,20 +83,25 @@ export function compileReplacementReasoningContract(
   );
   const mandatory = importance.criteria.filter((criterion) => (criterion.level ?? "A") === "A");
   const projected = projectCriteriaFacetOptions(mandatory, facets);
+  const compileAxes = (source: Record<string, string[]>) => Object.entries(source).flatMap(([key, values]) => {
+    const facet = facets.find((candidate) => candidate.key === key);
+    if (!facet || values.length === 0) return [];
+    return [{
+      key,
+      caption: facet.caption || key,
+      values: [...values],
+      unit: facet.unit ?? null,
+    }];
+  });
   return {
     criteria: projected.proven_criteria,
     options: projected.options,
     demoted: importance.demoted,
-    axes: Object.entries(projected.options).flatMap(([key, values]) => {
-      const facet = facets.find((candidate) => candidate.key === key);
-      if (!facet || values.length === 0) return [];
-      return [{
-        key,
-        caption: facet.caption || key,
-        values: [...values],
-        unit: facet.unit ?? null,
-      }];
-    }),
+    axes: compileAxes(projected.options),
+    // These live, identity-free axes may be advisory for retrieval but still
+    // provide title-visible proof for compact customer codes. The downstream
+    // compiler accepts only explicit one-letter or number+unit requirements.
+    title_axes: compileAxes(options),
   };
 }
 
