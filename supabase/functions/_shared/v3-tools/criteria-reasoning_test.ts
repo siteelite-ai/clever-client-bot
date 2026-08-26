@@ -150,6 +150,36 @@ Deno.test("единица из live-подписи компенсирует пу
   ]);
 });
 
+Deno.test("machine-key suffix cannot override the public physical unit", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "Для стабилизатора нужен диапазон входного напряжения 140–260 В.",
+    [
+      {
+        key: "moschnosty__vt__quat__v",
+        caption: "Мощность, Вт",
+        type: "number",
+        unit: null,
+        values: [{ value: "8000-9000" }],
+      },
+      {
+        key: "vhodnoe_napryaghenie__v__kirmeli_kerneui__v",
+        caption: "Входное напряжение, В",
+        type: "checkbox",
+        unit: null,
+        values: [{ value: "140-260" }],
+      },
+    ],
+  );
+  assertEquals(projected.added, [{
+    key: "Входное напряжение, В",
+    op: "range",
+    value: [140, 260],
+    unit: "в",
+    level: "A",
+  }]);
+});
+
 Deno.test("точное число клиента проецируется на разделенный live-фасет", () => {
   const projected = projectLiteralMeasuredCriteria(
     [],

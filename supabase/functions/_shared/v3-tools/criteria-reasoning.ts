@@ -374,7 +374,8 @@ export function projectReasoningRangeCriteria(
         /\d+(?:[.,]\d+)?/u.test(String(value ?? ""))
       );
       const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
-      const labelHasUnit = `${facet.key} ${facet.caption}`
+      const publicLabel = String(facet.caption ?? "").trim() || facet.key;
+      const labelHasUnit = publicLabel
         .match(/[a-zа-я°]{1,10}[²³]?\d?/giu)
         ?.some((token) => canonicalMeasurementUnit(token) === range.unit) ?? false;
       return (facet.type === "number" || hasNumericLiveValues) &&
@@ -457,7 +458,8 @@ export function projectLiteralMeasuredCriteria(
 
     const unitFacets = (facets ?? []).filter((facet) => {
       const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
-      const labelHasUnit = `${facet.key} ${facet.caption}`
+      const publicLabel = String(facet.caption ?? "").trim() || facet.key;
+      const labelHasUnit = publicLabel
         .match(/[a-zа-я°]{1,10}[²³]?\d?/giu)
         ?.some((token) => canonicalMeasurementUnit(token) === unit) ?? false;
       // Some catalog branches omit `unit` even for numeric facets. A unitless
