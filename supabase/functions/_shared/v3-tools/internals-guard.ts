@@ -195,13 +195,14 @@ export function redactInternals(text: string): RedactResult {
  */
 export function sanitizeIntermediateReasoning(text: string): RedactResult & { suppressed: boolean } {
   const labels: Record<string, string> = {
+    discover: "поиск категории",
     discover_category: "поиск категории",
     search_catalog: "поиск по каталогу",
     jargon_recover_catalog: "поиск по каталогу",
     render_products: "показ товаров",
   };
   const rewritten = String(text ?? "").replace(
-    /\b(?:discover_category|search_catalog|jargon_recover_catalog|render_products)\b/gu,
+    /\b(?:discover_category|discover|search_catalog|jargon_recover_catalog|render_products)\b/gu,
     (value) => labels[value] ?? "поиск по каталогу",
   );
   const guarded = redactInternals(rewritten);

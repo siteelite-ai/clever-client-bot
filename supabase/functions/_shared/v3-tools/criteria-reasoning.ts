@@ -51,6 +51,11 @@ export interface CriteriaImportanceAlignment {
   demoted: string[];
 }
 
+export interface FrozenCriteriaAlignment {
+  criteria: Criterion[];
+  demoted: string[];
+}
+
 export interface MeasuredReasoningSearchContract {
   criteria: Criterion[];
   mandatory_criteria: Criterion[];
@@ -123,6 +128,29 @@ export function alignCriteriaImportanceWithReasoning(
       return { ...criterion, level: "B" as const };
     }
     return { ...criterion };
+  });
+  return { criteria: aligned, demoted };
+}
+
+/**
+ * Freeze an ordinary selection's hard contract at retrieval time. A criterion
+ * invented only for render did not shape the candidate pool and cannot make
+ * that pool retroactively empty. User-backed, guarded-search and structurally
+ * projected reasoning criteria are supplied as `frozenCriteria` and stay A.
+ */
+export function demoteUnfrozenRenderCriteria(
+  criteria: Criterion[],
+  frozenCriteria: Criterion[],
+): FrozenCriteriaAlignment {
+  const frozen = Array.isArray(frozenCriteria) ? frozenCriteria : [];
+  const demoted: string[] = [];
+  const aligned = (Array.isArray(criteria) ? criteria : []).map((criterion) => {
+    if (!criterion || (criterion.level ?? "A") !== "A") return { ...criterion };
+    if (frozen.some((candidate) => criteriaIdentityMatches(criterion, candidate))) {
+      return { ...criterion, level: "A" as const };
+    }
+    demoted.push(criterion.key);
+    return { ...criterion, level: "B" as const };
   });
   return { criteria: aligned, demoted };
 }

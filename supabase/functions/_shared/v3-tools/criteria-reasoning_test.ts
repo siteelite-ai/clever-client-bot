@@ -2,7 +2,7 @@
 // Data-agnostic: абстрактные имена параметров.
 
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, extractReasoningBounds, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "./criteria-reasoning.ts";
+import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, demoteUnfrozenRenderCriteria, extractReasoningBounds, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "./criteria-reasoning.ts";
 import { checkCriterion, type Criterion } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
 
@@ -516,6 +516,21 @@ Deno.test("a measured preference already demoted as advisory cannot be promoted 
   assertEquals(importance.demoted, ["Measured output"]);
   assertEquals(aligned.criteria.map((criterion) => criterion.level), ["B"]);
   assertEquals(aligned.promoted, []);
+});
+
+Deno.test("render-only model criteria cannot retroactively strengthen an ordinary search", () => {
+  const frozen: Criterion[] = [
+    { key: "Measured output", op: "range", value: [3750, 5000], unit: "lm", level: "A" },
+  ];
+  const aligned = demoteUnfrozenRenderCriteria([
+    ...frozen,
+    { key: "Implementation count", op: "eq", value: 5, level: "A" },
+  ], frozen);
+  assertEquals(aligned.criteria, [
+    frozen[0],
+    { key: "Implementation count", op: "eq", value: 5, level: "B" },
+  ]);
+  assertEquals(aligned.demoted, ["Implementation count"]);
 });
 
 Deno.test("fallback promotion preserves an existing mandatory contract", () => {

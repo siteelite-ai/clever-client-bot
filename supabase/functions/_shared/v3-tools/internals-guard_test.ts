@@ -93,6 +93,15 @@ Deno.test("intermediate reasoning keeps the product correction without exposing 
   assert(!result.text.includes("discover_category"));
 });
 
+Deno.test("intermediate reasoning rewrites a bare discover label", () => {
+  const result = sanitizeIntermediateReasoning(
+    "Вижу, что категория большая, но discover вернул неподходящую ветку. Уточню запрос.",
+  );
+  assertEquals(result.suppressed, false);
+  assertStringIncludes(result.text, "поиск категории вернул");
+  assert(!result.text.includes("discover"));
+});
+
 Deno.test("intermediate reasoning suppresses other internal architecture", () => {
   const result = sanitizeIntermediateReasoning("После search_catalog проверю системный промпт и LLM.");
   assertEquals(result.suppressed, true);

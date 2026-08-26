@@ -23,7 +23,7 @@ import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-t
 import { applyCriteriaGate, buildCriteriaQuery,
   type Criterion, filterProductIdsByBudgetCap, mergeFacetOptionConstraints, mergeUserBackedCriteria, projectCatalogFilterEvidence, projectCriteriaFacetOptions, resolveRenderCriteria, resolveTerminalSelectionCriteria, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
-import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
+import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, demoteUnfrozenRenderCriteria, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
@@ -5385,13 +5385,28 @@ async function runExpertLoop(
                 importance.demoted,
               )
               : { criteria: importance.criteria, promoted: [] as string[] };
-            criteria = fallbackMeasured.criteria;
+            const ordinarySelectionContract = intentMode === "select" &&
+              !replacementIntent &&
+              !seriesTurnRequiresGrounding &&
+              !compatibilityRequired;
+            const frozenRender = ordinarySelectionContract
+              ? demoteUnfrozenRenderCriteria(
+                fallbackMeasured.criteria,
+                [
+                  ...userBackedSearchCriteria,
+                  ...enforcedSearchCriteria,
+                  ...protectedReasoningCriteria,
+                ],
+              )
+              : { criteria: fallbackMeasured.criteria, demoted: [] as string[] };
+            criteria = frozenRender.criteria;
 
             if (
               aligned.alignments.length > 0 ||
               promoted.promoted.length > 0 ||
               fallbackMeasured.promoted.length > 0 ||
-              importance.demoted.length > 0
+              importance.demoted.length > 0 ||
+              frozenRender.demoted.length > 0
             ) {
               (tc.args as Record<string, unknown>).criteria = criteria;
               steps.push({
@@ -5402,6 +5417,7 @@ async function runExpertLoop(
                   promoted: promoted.promoted,
                   fallback_promoted: fallbackMeasured.promoted,
                   demoted_advisory: importance.demoted,
+                  demoted_late: frozenRender.demoted,
                 },
               });
             }
