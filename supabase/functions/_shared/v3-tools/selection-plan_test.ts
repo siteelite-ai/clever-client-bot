@@ -58,6 +58,10 @@ Deno.test("replacement reasoning compiles portable live facets and drops source 
     "Характеристика срабатывания",
   ]);
   assertEquals(contract.demoted, ["Количество полюсов"]);
+  assertEquals(contract.axes.map((axis) => ({ caption: axis.caption, values: axis.values, unit: axis.unit })), [
+    { caption: "Номинальный ток", values: ["16"], unit: "А" },
+    { caption: "Характеристика срабатывания", values: ["Тип C"], unit: null },
+  ]);
 });
 
 Deno.test("a short followup compiles the prior replacement reasoning into the same live contract", () => {
@@ -74,4 +78,5 @@ Deno.test("a short followup compiles the prior replacement reasoning into the sa
     "Номинальный ток",
     "Характеристика срабатывания",
   ]);
+  assertEquals(contract.axes.length, 2);
 });

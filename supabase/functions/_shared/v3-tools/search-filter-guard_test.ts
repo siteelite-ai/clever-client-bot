@@ -524,6 +524,17 @@ Deno.test("a matching measurement unit proves an exact numeric facet value", () 
   assertEquals(result.args.options, { current: ["16"] });
 });
 
+Deno.test("directional reasoning rejects equality to the measured reference", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { before: ["12"] } },
+    [{ key: "before", caption: "Размер до изменения, мм", unit: "мм", values: [{ value: "12" }, { value: "16" }] }],
+    "Изделие до изменения должно быть строго больше 12 мм.",
+    "Объект размером 12 мм.",
+  );
+  assertEquals(result.args.options, undefined);
+  assertEquals(result.dropped, [{ key: "before", value: "12", reason: "not_declared_in_reasoning" }]);
+});
+
 Deno.test("one-letter technical value is inferred only with its facet meaning", () => {
   const facets = [{
     key: "curve",

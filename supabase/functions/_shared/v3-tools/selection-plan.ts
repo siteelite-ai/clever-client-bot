@@ -33,6 +33,7 @@ export interface ReplacementReasoningContract {
   criteria: Criterion[];
   options: Record<string, string[]>;
   demoted: string[];
+  axes: Array<{ key: string; caption: string; values: string[]; unit: string | null }>;
 }
 
 /**
@@ -85,6 +86,16 @@ export function compileReplacementReasoningContract(
     criteria: projected.proven_criteria,
     options: projected.options,
     demoted: importance.demoted,
+    axes: Object.entries(projected.options).flatMap(([key, values]) => {
+      const facet = facets.find((candidate) => candidate.key === key);
+      if (!facet || values.length === 0) return [];
+      return [{
+        key,
+        caption: facet.caption || key,
+        values: [...values],
+        unit: facet.unit ?? null,
+      }];
+    }),
   };
 }
 

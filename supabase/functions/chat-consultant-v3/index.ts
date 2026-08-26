@@ -4419,6 +4419,10 @@ async function runExpertLoop(
               replacementEvidenceMessage,
             );
             if (replacementContract.criteria.length >= 2) {
+              replacementRequiredAxes = replacementContract.axes.map((axis) => ({
+                ...axis,
+                isDiameter: isDiameterFacet(axis),
+              }));
               const current = tc.args as Record<string, unknown>;
               const {
                 query: _query,

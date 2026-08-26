@@ -10,6 +10,7 @@
 // still search the discovered category and the evidence gate validates cards.
 
 import { normalizeUnit } from "./criteria-consistency.ts";
+import { extractReasoningBounds } from "./criteria-reasoning.ts";
 
 export interface SearchFacetValue {
   value: string;
@@ -437,6 +438,14 @@ function numericFacetValueIsLocallyEvidenced(
   ].filter(Boolean));
   const exactNumber = normalizedValue.match(/^\d+(?:[.,]\d+)?$/u)?.[0];
   if (exactNumber && expectedUnits.size > 0) {
+    const scalar = Number(exactNumber.replace(",", "."));
+    const directional = extractReasoningBounds(evidence).some((bound) =>
+      bound.value === scalar && expectedUnits.has(normalizeUnit(bound.unit))
+    );
+    // Once the consultant has stated that the product value must be above or
+    // below the reference, exact equality to that same measured reference is
+    // contradictory even if the literal number appears in the request.
+    if (directional) return false;
     const literal = exactNumber.replace(/[.,]/u, "[.,]");
     const measurement = new RegExp(`(?<![a-zа-я0-9])${literal}\\s*([a-zа-я°]{1,10}[²³]?\\d?)(?![a-zа-я])`, "giu");
     for (let match; (match = measurement.exec(String(evidence ?? ""))) !== null;) {
