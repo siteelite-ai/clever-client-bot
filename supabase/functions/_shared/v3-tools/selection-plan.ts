@@ -6,6 +6,7 @@ import type { CatalogSearchState } from "./catalog-search-outcome.ts";
 import { projectCriteriaFacetOptions, type CriteriaFacet, type Criterion } from "./criteria-gate.ts";
 import { alignCriteriaImportanceWithReasoning } from "./criteria-reasoning.ts";
 import {
+  dropImplicitReplacementIdentityCriteria,
   dropImplicitReplacementIdentityFilters,
   guardSearchFilters,
   type SearchFacet,
@@ -35,6 +36,44 @@ export interface ReplacementReasoningContract {
   demoted: string[];
   axes: Array<{ key: string; caption: string; values: string[]; unit: string | null }>;
   title_axes: Array<{ key: string; caption: string; values: string[]; unit: string | null }>;
+}
+
+function compileAxes(
+  source: Record<string, string[]>,
+  facets: Array<SearchFacet & CriteriaFacet>,
+): ReplacementReasoningContract["axes"] {
+  return Object.entries(source).flatMap(([key, values]) => {
+    const facet = facets.find((candidate) => candidate.key === key);
+    if (!facet || values.length === 0) return [];
+    return [{
+      key,
+      caption: facet.caption || key,
+      values: [...values],
+      unit: facet.unit ?? null,
+    }];
+  });
+}
+
+/**
+ * Turns final structured replacement criteria into live, title-verifiable
+ * axes. Source identity is removed first. The render guard later accepts only
+ * codes that were also explicit in the consultant's reasoning.
+ */
+export function compileReplacementRenderTitleAxes(
+  facets: Array<SearchFacet & CriteriaFacet>,
+  criteria: Criterion[],
+  sourceMessage: string,
+): ReplacementReasoningContract["title_axes"] {
+  const identityFree = dropImplicitReplacementIdentityCriteria(
+    Array.isArray(criteria) ? criteria : [],
+    facets,
+    sourceMessage,
+  );
+  const projected = projectCriteriaFacetOptions(
+    identityFree.criteria.map((criterion) => ({ ...criterion, level: "A" as const })),
+    facets,
+  );
+  return compileAxes(projected.options, facets);
 }
 
 /**
@@ -83,25 +122,15 @@ export function compileReplacementReasoningContract(
   );
   const mandatory = importance.criteria.filter((criterion) => (criterion.level ?? "A") === "A");
   const projected = projectCriteriaFacetOptions(mandatory, facets);
-  const compileAxes = (source: Record<string, string[]>) => Object.entries(source).flatMap(([key, values]) => {
-    const facet = facets.find((candidate) => candidate.key === key);
-    if (!facet || values.length === 0) return [];
-    return [{
-      key,
-      caption: facet.caption || key,
-      values: [...values],
-      unit: facet.unit ?? null,
-    }];
-  });
   return {
     criteria: projected.proven_criteria,
     options: projected.options,
     demoted: importance.demoted,
-    axes: compileAxes(projected.options),
+    axes: compileAxes(projected.options, facets),
     // These live, identity-free axes may be advisory for retrieval but still
     // provide title-visible proof for compact customer codes. The downstream
     // compiler accepts only explicit one-letter or number+unit requirements.
-    title_axes: compileAxes(options),
+    title_axes: compileAxes(options, facets),
   };
 }
 

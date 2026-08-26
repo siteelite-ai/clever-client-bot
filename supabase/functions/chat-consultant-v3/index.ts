@@ -141,6 +141,7 @@ import {
 import {
   buildReplacementSelectionPlan,
   compileReplacementReasoningContract,
+  compileReplacementRenderTitleAxes,
   type ReplacementSelectionPlan,
   selectionPlanSystemHint,
 } from "../_shared/v3-tools/selection-plan.ts";
@@ -4591,6 +4592,23 @@ async function runExpertLoop(
             }
             (tc.args as Record<string, unknown>).criteria =
               identityCriteria.criteria;
+            const renderTitleAxes = compileReplacementRenderTitleAxes(
+              lastDiscover.facets,
+              identityCriteria.criteria,
+              replacementEvidenceMessage,
+            ).map((axis) => ({ ...axis, isDiameter: isDiameterFacet(axis) }));
+            for (const axis of renderTitleAxes) {
+              if (!replacementTitleAxes.some((candidate) => candidate.key === axis.key)) {
+                replacementTitleAxes.push(axis);
+              }
+            }
+            if (renderTitleAxes.length > 0) {
+              steps.push({
+                step: "v3_replacement_render_title_axes_compiled",
+                ms: now(),
+                meta: { axes: renderTitleAxes.map(({ key, values, unit }) => ({ key, values, unit })) },
+              });
+            }
           }
           if (namedSeriesToken) {
             const originalIds = Array.isArray(tc.args.product_ids)
@@ -4874,6 +4892,7 @@ async function runExpertLoop(
               target,
               priorDialogueDeclaration,
               liveTaxonomyDeclaration,
+              lastDiscover?.resolved_from ?? "",
             ),
           );
           // The live taxonomy is evidence about catalog structure, not about

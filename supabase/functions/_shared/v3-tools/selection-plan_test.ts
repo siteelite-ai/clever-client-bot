@@ -5,6 +5,7 @@ import {
 import {
   buildReplacementSelectionPlan,
   compileReplacementReasoningContract,
+  compileReplacementRenderTitleAxes,
   selectionPlanSystemHint,
 } from "./selection-plan.ts";
 
@@ -93,4 +94,24 @@ Deno.test("advisory retrieval axes still preserve explicit compact title codes",
   "Подбери аналог Schneider Acti9 C16");
 
   assertEquals(contract.title_axes.map((axis) => axis.values), [["16"], ["C"]]);
+});
+
+Deno.test("final structured criteria supply title axes without restoring source identity", () => {
+  const facets = [
+    { key: "brand", caption: "Бренд", unit: null, values: [{ value: "Schneider" }] },
+    { key: "series", caption: "Коллекция", unit: null, values: [{ value: "Acti9" }] },
+    { key: "current", caption: "Номинальный ток", unit: null, values: [{ value: "10" }, { value: "16" }] },
+    { key: "curve", caption: "Характеристика срабатывания", unit: null, values: [{ value: "B" }, { value: "C" }] },
+  ];
+  const axes = compileReplacementRenderTitleAxes(facets, [
+    { key: "Бренд", op: "eq", value: "Schneider", level: "A" },
+    { key: "Коллекция", op: "eq", value: "Acti9", level: "A" },
+    { key: "Номинальный ток", op: "eq", value: "16", unit: "А", level: "B" },
+    { key: "Характеристика срабатывания", op: "eq", value: "C", level: "B" },
+  ], "Подбери аналог Schneider Acti9 C16");
+
+  assertEquals(axes.map((axis) => ({ key: axis.key, values: axis.values })), [
+    { key: "current", values: ["16"] },
+    { key: "curve", values: ["C"] },
+  ]);
 });

@@ -256,11 +256,22 @@ export function continuedSelectionTargetIsGrounded(
   target: string,
   priorDialogueEvidence: string,
   liveClass: string,
+  resolvedFrom = "",
 ): boolean {
+  const priorBase = resolvedFrom
+    ? bootstrapSelectionTargetFromDiscovery(
+      priorDialogueEvidence,
+      resolvedFrom,
+      liveClass,
+    )
+    : null;
+  const priorDeclaresTarget = selectionTargetIsDeclared(target, priorDialogueEvidence) || Boolean(
+    priorBase && selectionTargetIsDeclared(priorBase, target),
+  );
   return Boolean(
     target &&
     liveClass &&
-    selectionTargetIsDeclared(target, priorDialogueEvidence) &&
+    priorDeclaresTarget &&
     selectionTargetIsDeclared(liveClass, target),
   );
 }

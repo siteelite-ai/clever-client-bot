@@ -114,6 +114,22 @@ Deno.test("live taxonomy may complete a partially declared class but cannot auth
   ), false);
 });
 
+Deno.test("short continuation bridges a prior ordinary class name only through the same live taxonomy", () => {
+  const prior = "Подбери аналог Schneider Acti9 C16\nИщу аналог модульного автомата на 16 А с характеристикой C.";
+  assertEquals(continuedSelectionTargetIsGrounded(
+    "автоматический выключатель",
+    prior,
+    "Автоматические выключатели",
+    "автомат",
+  ), true);
+  assertEquals(continuedSelectionTargetIsGrounded(
+    "стабилизатор напряжения",
+    prior,
+    "Стабилизаторы напряжения",
+    "автомат",
+  ), false);
+});
+
 Deno.test("literal model-owned search evidence can prove a subtype inside the live base class", () => {
   const products = [
     product("proved", "ALPHA modular controller", "Controllers"),
