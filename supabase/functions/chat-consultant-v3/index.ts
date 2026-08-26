@@ -29,7 +29,7 @@ import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract, shouldContinueSelectionPastOptionalClarification } from "../_shared/v3-tools/selection-actionability.ts";
 import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionEvidenceCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
-import { aliasDuplicatesIndependentCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
+import { aliasDuplicatesIndependentCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
   commonCompatibilityReference,
@@ -5134,14 +5134,14 @@ async function runExpertLoop(
               .map((id) => ctx.cache.get(id))
               .filter((product): product is ProductFull => Boolean(product));
             const groundedSearchLabel = semanticBackedSearch?.label?.trim() ?? "";
-            const aliasProven = finalProducts.length > 0 && finalProducts.every((product) =>
+            const aliasProvenProducts = finalProducts.filter((product) =>
               titleContainsDeclaredAlias(product.pagetitle, lexicalClaim) ||
               Boolean(
                 groundedSearchLabel &&
                 titleSupportsGroundedJargonQuery(product.pagetitle, groundedSearchLabel),
               )
             );
-            if (!aliasProven) {
+            if (aliasProvenProducts.length === 0) {
               declaredAliasQuery = lexicalClaim;
               gateShortCircuit = {
                 tool: "render_products",
@@ -5159,6 +5159,16 @@ async function runExpertLoop(
                 },
               });
             } else {
+              const aliasIds = new Set(aliasProvenProducts.map((product) => product.id));
+              const filteredIds = finalIds.filter((id) => aliasIds.has(id));
+              if (filteredIds.length !== finalIds.length) {
+                (tc.args as Record<string, unknown>).product_ids = filteredIds;
+                steps.push({
+                  step: "v3_declared_alias_subset_gate",
+                  ms: now(),
+                  meta: { alias: lexicalClaim, before: finalIds.length, after: filteredIds.length },
+                });
+              }
               declaredAliasQuery = null;
             }
           }
@@ -7504,16 +7514,18 @@ async function runExpertLoop(
     const terminalCompatibilityDiscover = terminalDiscover ?? lastDiscover;
     if (
       productsRendered === 0 &&
-      !terminalAliasRequirement &&
       terminalCompatibilityDiscover &&
       activeSelectionTarget &&
       terminalCompatibilityReference &&
       minimumCompatibilityRelationCount(terminalCompatibilityEvidence) >= 2
     ) {
       const evaluateCompatibilityPool = (pool: SearchCatalogOk) => {
-        const products = pool.results
+        let products = pool.results
           .map((product) => ctx.cache.get(String(product.id)))
           .filter((product): product is ProductFull => Boolean(product));
+        if (terminalAliasRequirement) {
+          products = filterProductsByDeclaredAlias(products, terminalAliasRequirement);
+        }
         const paired = filterProductsByPairedTitleFit(
           products,
           terminalCompatibilityReference.value,

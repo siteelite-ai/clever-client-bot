@@ -41,6 +41,18 @@ export function titleContainsDeclaredAlias(title: string, alias: string): boolea
   return Boolean(needle && haystack.includes(` ${needle} `));
 }
 
+/** A mixed candidate pool must be narrowed to the cards that independently
+ * prove the customer's literal qualifier; one unrelated neighbour must not
+ * invalidate the proven subset. */
+export function filterProductsByDeclaredAlias<T extends { pagetitle: string }>(
+  products: T[],
+  alias: string,
+): T[] {
+  return (Array.isArray(products) ? products : []).filter((product) =>
+    titleContainsDeclaredAlias(product.pagetitle, alias)
+  );
+}
+
 /** A grounded canonical spelling remains mandatory until final cards pass all
  * independent criteria; an earlier invariant outranks a later helper result. */
 export function retainRequiredCatalogAlias(current: string | null, matchedQuery: string): string | null {

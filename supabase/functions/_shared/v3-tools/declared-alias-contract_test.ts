@@ -4,6 +4,7 @@ import {
   aliasDuplicatesIndependentCatalogClass,
   extractDeclaredCatalogAlias,
   extractPostNominalCatalogQualifier,
+  filterProductsByDeclaredAlias,
   retainRequiredCatalogAlias,
   titleContainsDeclaredAlias,
 } from "./declared-alias-contract.ts";
@@ -48,6 +49,14 @@ Deno.test("the consultant cannot invent an alias phrase absent from the customer
 Deno.test("literal alias proof uses complete title words", () => {
   assertEquals(titleContainsDeclaredAlias("Лампа Кукуруза LED", "кукуруза"), true);
   assertEquals(titleContainsDeclaredAlias("Лампа кукурузная LED", "кукуруза"), false);
+});
+
+Deno.test("a mixed pool keeps only cards with literal qualifier evidence", () => {
+  const products = [
+    { id: "proved", pagetitle: "Generic component AX 12/6" },
+    { id: "sibling", pagetitle: "Generic component BX 12/6" },
+  ];
+  assertEquals(filterProductsByDeclaredAlias(products, "AX").map((item) => item.id), ["proved"]);
 });
 
 Deno.test("a grounded lexical spelling remains required through later criteria gates", () => {
