@@ -8081,6 +8081,13 @@ Deno.serve(async (req) => {
         const semanticCompoundMarking = explicitCompoundMarking && requiresSemanticCompoundEvidence(userMessage)
           ? explicitCompoundMarking
           : null;
+        // Routing and the expert loop must resolve the same dialogue intent.
+        // Otherwise a short continuation such as `покажи` enters the ordinary
+        // branch before the loop can inherit the already proven replacement.
+        const replacementSourceRequest = resolveReplacementSourceMessage(
+          userMessage,
+          effectiveHistory.slice(-8),
+        );
         const namedSeriesInquiryToken = detectUserIntentMode(userMessage) === "inquire"
           ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8))
           : null;
@@ -8253,22 +8260,22 @@ Deno.serve(async (req) => {
           });
           send({ type: "delta", content: answer });
           productsCount = 0;
-        } else if (isReplacementIntent(userMessage)) {
-          let direct = await selectVerifiedOrdinaryReplacement(userMessage, ctx, send, steps, t0);
+        } else if (replacementSourceRequest) {
+          let direct = await selectVerifiedOrdinaryReplacement(replacementSourceRequest, ctx, send, steps, t0);
           if (!direct.handled && direct.retryable_reason) {
             steps.push({
               step: "v3_replacement_preflight_retry",
               ms: Date.now() - t0,
               meta: { reason: direct.retryable_reason },
             });
-            direct = await selectVerifiedOrdinaryReplacement(userMessage, ctx, send, steps, t0);
+            direct = await selectVerifiedOrdinaryReplacement(replacementSourceRequest, ctx, send, steps, t0);
           }
           if (direct.handled) {
             productsCount = direct.products.length;
             await persistRecentProductEvidence(supabase, effectiveSessionId, direct.products);
           } else {
             const replacementSelectionPlan = buildReplacementSelectionPlan(
-              userMessage,
+              replacementSourceRequest,
               direct.outcome,
             );
             const out = await runExpertLoop(userMessage, effectiveHistory, effectiveSlots, settings.openrouter_api_key!, ctx, send, steps, t0, {
