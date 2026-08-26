@@ -5965,81 +5965,6 @@ async function runExpertLoop(
           }
         }
         if (
-          tc.name === "search_catalog" &&
-          result.ok &&
-          Number((result as { total?: number }).total ?? 0) === 0 &&
-          selectionPlan &&
-          selectionPlan.anchor_state !== "found" &&
-          selectionPlan.anchor_state !== "upstream_error" &&
-          lastDiscover
-        ) {
-          const declaredReasoning = [
-            userMessage,
-            firstAssistantText,
-            assistantReasoning,
-            resp.text,
-          ].join("\n");
-          const recoveryPlan = buildAnchorMissingRecoveryQueries(
-            lastDiscover,
-            declaredReasoning,
-            selectionPlan.portable_requirements.map((item) => item.value),
-          );
-          const requirements = selectionPlan.portable_requirements.map((item) =>
-            item.value
-          );
-          let recoveredResult: (SearchCatalogOk & {
-            tool: "search_catalog";
-          }) | null = null;
-          let attempted = 0;
-          for (const query of recoveryPlan.queries) {
-            attempted += 1;
-            const recovered = await executeSearchCatalog(
-              { mode: "by_query", query, min_price: 1, per_page: 50 },
-              { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
-              ctx.cache,
-            );
-            if (!recovered.ok) continue;
-            const grounded = filterProductsByGroundedCategoryTargets(
-              recovered.results,
-              recoveryPlan.targets,
-              lastDiscover.category.pagetitle,
-              declaredReasoning,
-            ).filter((product) =>
-              requirements.length === 0 ||
-              productTitleSupportsPortableRequirements(
-                product.pagetitle,
-                requirements,
-              )
-            ).filter((product) =>
-              !selectionPlan.source_identifiers.some((identifier) =>
-                productContainsSourceModel(product, [identifier])
-              )
-            );
-            if (grounded.length === 0) continue;
-            recoveredResult = {
-              ...recovered,
-              total: grounded.length,
-              results: grounded,
-              warnings: [
-                ...(recovered.warnings ?? []),
-                "anchor_missing_reasoning_recovery",
-              ],
-            };
-            break;
-          }
-          if (recoveredResult) result = recoveredResult;
-          steps.push({
-            step: "v3_anchor_missing_reasoning_recovery",
-            ms: now(),
-            meta: {
-              targets: recoveryPlan.targets,
-              attempted_queries: attempted,
-              requirements,
-              recovered: recoveredResult?.results.length ?? 0,
-            },
-          });
-        }
-        if (
           namedSeriesToken &&
           (tc.name === "search_catalog" || tc.name === "jargon_recover_catalog") &&
           result.ok
@@ -6390,6 +6315,76 @@ async function runExpertLoop(
               meta: { values: inferredIdentity, pool_size: catalogResult.results.length },
             });
           }
+        }
+        // Recovery must observe the effective pool after source-family and
+        // exact-source exclusions. Running it on the raw catalog result leaves
+        // a gap where `total > 0` before identity filtering becomes zero after
+        // filtering, and no later stage receives any candidates.
+        if (
+          tc.name === "search_catalog" && result.ok &&
+          Number((result as { total?: number }).total ?? 0) === 0 &&
+          selectionPlan &&
+          selectionPlan.anchor_state !== "found" &&
+          selectionPlan.anchor_state !== "upstream_error" &&
+          lastDiscover
+        ) {
+          const declaredReasoning = [
+            userMessage,
+            firstAssistantText,
+            assistantReasoning,
+            resp.text,
+          ].join("\n");
+          const recoveryPlan = buildAnchorMissingRecoveryQueries(
+            lastDiscover,
+            declaredReasoning,
+            selectionPlan.portable_requirements.map((item) => item.value),
+          );
+          const requirements = selectionPlan.portable_requirements.map((item) => item.value);
+          let recoveredResult: (SearchCatalogOk & { tool: "search_catalog" }) | null = null;
+          let attempted = 0;
+          for (const query of recoveryPlan.queries) {
+            attempted += 1;
+            const recovered = await executeSearchCatalog(
+              { mode: "by_query", query, min_price: 1, per_page: 50 },
+              { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken },
+              ctx.cache,
+            );
+            if (!recovered.ok) continue;
+            const grounded = filterProductsByGroundedCategoryTargets(
+              recovered.results,
+              recoveryPlan.targets,
+              lastDiscover.category.pagetitle,
+              declaredReasoning,
+            ).filter((product) =>
+              requirements.length === 0 ||
+              productTitleSupportsPortableRequirements(product.pagetitle, requirements)
+            ).filter((product) =>
+              !selectionPlan.source_identifiers.some((identifier) =>
+                productContainsSourceModel(product, [identifier])
+              )
+            ).filter((product) =>
+              !productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues)
+            );
+            if (grounded.length === 0) continue;
+            recoveredResult = {
+              ...recovered,
+              total: grounded.length,
+              results: grounded,
+              warnings: [...(recovered.warnings ?? []), "anchor_missing_reasoning_recovery"],
+            };
+            break;
+          }
+          if (recoveredResult) result = recoveredResult;
+          steps.push({
+            step: "v3_anchor_missing_reasoning_recovery",
+            ms: now(),
+            meta: {
+              targets: recoveryPlan.targets,
+              attempted_queries: attempted,
+              requirements,
+              recovered: recoveredResult?.results.length ?? 0,
+            },
+          });
         }
         if (
           replacementIntent &&
