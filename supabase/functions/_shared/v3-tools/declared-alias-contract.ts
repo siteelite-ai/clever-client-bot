@@ -41,6 +41,15 @@ export function titleContainsDeclaredAlias(title: string, alias: string): boolea
   return Boolean(needle && haystack.includes(` ${needle} `));
 }
 
+/** A grounded canonical spelling remains mandatory until final cards pass all
+ * independent criteria; an earlier invariant outranks a later helper result. */
+export function retainRequiredCatalogAlias(current: string | null, matchedQuery: string): string | null {
+  const retained = String(current ?? "").trim();
+  if (retained) return retained;
+  const grounded = String(matchedQuery ?? "").trim();
+  return grounded || null;
+}
+
 /** A qualifier is not an alias when it merely repeats the already grounded
  * product class with another inflection (for example plural customer wording
  * versus singular catalog titles). Real colloquial names remain distinct. */

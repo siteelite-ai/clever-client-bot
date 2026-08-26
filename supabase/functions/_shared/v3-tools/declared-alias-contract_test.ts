@@ -3,6 +3,7 @@ import {
   aliasDuplicatesCatalogClass,
   extractDeclaredCatalogAlias,
   extractPostNominalCatalogQualifier,
+  retainRequiredCatalogAlias,
   titleContainsDeclaredAlias,
 } from "./declared-alias-contract.ts";
 
@@ -46,6 +47,12 @@ Deno.test("the consultant cannot invent an alias phrase absent from the customer
 Deno.test("literal alias proof uses complete title words", () => {
   assertEquals(titleContainsDeclaredAlias("Лампа Кукуруза LED", "кукуруза"), true);
   assertEquals(titleContainsDeclaredAlias("Лампа кукурузная LED", "кукуруза"), false);
+});
+
+Deno.test("a grounded lexical spelling remains required through later criteria gates", () => {
+  assertEquals(retainRequiredCatalogAlias(null, "CORN"), "CORN");
+  assertEquals(retainRequiredCatalogAlias("кукуруза", "CORN"), "кукуруза");
+  assertEquals(retainRequiredCatalogAlias(null, "  "), null);
 });
 
 Deno.test("an inflected product class is not treated as a separate alias", () => {

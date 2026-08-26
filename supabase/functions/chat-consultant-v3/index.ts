@@ -27,9 +27,9 @@ import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compi
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
-import { hasActionableSelectionContract } from "../_shared/v3-tools/selection-actionability.ts";
+import { hasActionableSelectionContract, shouldContinueSelectionPastOptionalClarification } from "../_shared/v3-tools/selection-actionability.ts";
 import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionEvidenceCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
-import { aliasDuplicatesCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
+import { aliasDuplicatesCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
   commonCompatibilityReference,
@@ -3253,6 +3253,7 @@ async function runExpertLoop(
   let noProgressBreak = false;
   let lastToolErrorCode: string | null = null;
   let repeatedToolErrorStreak = 0;
+  let optionalClarificationRejected = false;
   // A successful jargon lookup may terminate the agent loop only when live
   // catalog titles independently prove the helper-selected query. This keeps
   // model-owned reasoning/search while preventing both redundant searches and
@@ -3774,7 +3775,7 @@ async function runExpertLoop(
           intentMode === "select" && hasActionableSelectionContract(
             `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
           )
-        ),
+        ) || optionalClarificationRejected,
         selectionRequiresInitialDiscovery: intentMode === "select" && agentPhase === "open" && !lastDiscover,
         correctiveDiscoveryAvailable: agentPhase === "search_after_discovery" &&
           !correctiveDiscoveryUsed && !freshSearch,
@@ -4803,6 +4804,27 @@ async function runExpertLoop(
         let gateShortCircuit: ToolResult | null = null;
         let selfRequery:
           | { query: string; ids: string[]; total: number } | null = null;
+
+        if (tc.name === "propose_clarification") {
+          const clarificationArgs = tc.args as Partial<ProposeClarificationInput>;
+          if (shouldContinueSelectionPastOptionalClarification({
+            intentMode,
+            hasDiscovery: Boolean(lastDiscover),
+            userMessage,
+            question: typeof clarificationArgs.question === "string" ? clarificationArgs.question : "",
+            facetKey: typeof clarificationArgs.facet_key === "string" ? clarificationArgs.facet_key : "",
+            options: Array.isArray(clarificationArgs.options) ? clarificationArgs.options : [],
+          })) {
+            optionalClarificationRejected = true;
+            gateShortCircuit = {
+              tool: "propose_clarification",
+              ok: false,
+              error_code: "optional_preference_not_blocking",
+              message: "это необязательное предпочтение, которого клиент не задавал; выбери разумный экспертный вариант или несколько разных вариантов и продолжи подбор через search_catalog",
+            } as unknown as ToolResult;
+            steps.push({ step: "v3_optional_preference_clarification_rejected", ms: now(), meta: { question: clarificationArgs.question ?? null, facet_key: clarificationArgs.facet_key ?? null } });
+          }
+        }
 
         // Product-class contract: the model's own initial interpretation is a
         // mandatory render input. It is checked against live catalog evidence
@@ -6960,6 +6982,7 @@ async function runExpertLoop(
               !seriesTurnRequiresGrounding
             ) {
               groundedJargonTerminal = true;
+              requiredCatalogAlias = retainRequiredCatalogAlias(requiredCatalogAlias, matchedQuery);
               declaredAliasQuery = null;
               steps.push({
                 step: "v3_grounded_jargon_terminal",
