@@ -475,6 +475,23 @@ function numericFacetValueIsLocallyEvidenced(
   return false;
 }
 
+/** A measured value belongs to a state-specific product facet only when the
+ * customer named that state too. A bare reference such as "object 10 mm" may
+ * guide a compatibility relation, but it cannot freeze both "before = 10"
+ * and "after = 10" as user-authored product constraints. */
+function facetStateQualifierIsUserBacked(
+  facet: SearchFacet,
+  evidence: string,
+): boolean {
+  const stateToken = /^(?:до|после|исходн\p{L}*|конечн\p{L}*|начальн\p{L}*|финальн\p{L}*|входн\p{L}*|выходн\p{L}*|before|after|initial|final|input|output)$/u;
+  const qualifiers = norm(`${facet.key} ${facet.caption ?? ""}`).split(" ").filter((token) => stateToken.test(token));
+  if (qualifiers.length === 0) return true;
+  const evidenceTokens = norm(evidence).split(" ").filter(Boolean);
+  return qualifiers.some((qualifier) =>
+    evidenceTokens.some((token) => token === qualifier || tokensMatchByStem(token, qualifier))
+  ) && facetMeaningIsEvidenced(facet, evidence);
+}
+
 function significantValueTokens(value: string): string[] {
   return norm(value)
     .split(" ")
@@ -624,7 +641,8 @@ export function guardSearchFilters(
       }
       kept.push({ key: canonicalKey, value: canonical });
       if (
-        explicitlyAffirmedByUser(canonical, userEvidence) ||
+        explicitlyAffirmedByUser(canonical, userEvidence) &&
+          facetStateQualifierIsUserBacked(facet, userEvidence) ||
         isAffirmativeBoolean && labelUserStatus === "affirmed"
       ) userBacked.push({ key: canonicalKey, value: canonical });
     }

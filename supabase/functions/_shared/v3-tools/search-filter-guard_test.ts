@@ -562,6 +562,31 @@ Deno.test("discovery cannot copy an application measurement into product-state f
   assertEquals(result.inferred, []);
 });
 
+Deno.test("an application measurement cannot become a user-backed product-state equality", () => {
+  const facets = [{
+    key: "before",
+    caption: "Внутренний диаметр до изменения, мм",
+    unit: "мм",
+    values: [{ value: "10" }, { value: "12" }],
+  }];
+  const inferred = guardSearchFilters(
+    { mode: "by_filter", options: { before: ["10"] } },
+    facets,
+    "Для свободной посадки сначала проверю внутренний диаметр до изменения 10 мм.",
+    "Объект диаметром 10 мм.",
+  );
+  assertEquals(inferred.args.options, { before: ["10"] });
+  assertEquals(inferred.user_backed, []);
+
+  const explicit = guardSearchFilters(
+    { mode: "by_filter", options: { before: ["10"] } },
+    facets,
+    "Нужен внутренний диаметр до изменения 10 мм.",
+    "Нужен внутренний диаметр до изменения 10 мм.",
+  );
+  assertEquals(explicit.user_backed, [{ key: "before", value: "10" }]);
+});
+
 Deno.test("one-letter technical value is inferred only with its facet meaning", () => {
   const facets = [{
     key: "curve",
