@@ -190,6 +190,9 @@ export function evaluate(expect = {}, response) {
   for (const phrase of expect.forbid_text ?? []) {
     if (includesAny(allOutput, [phrase])) failures.push(`forbidden text: ${phrase}`);
   }
+  for (const phrase of expect.forbid_assistant_text ?? []) {
+    if (includesAny(response.text, [phrase])) failures.push(`forbidden assistant text: ${phrase}`);
+  }
   for (const phrase of expect.forbid_product_title ?? []) {
     if (response.links.some((link) => includesStandalonePhrase(link.title, phrase))) {
       failures.push(`forbidden product title: ${phrase}`);
@@ -212,6 +215,19 @@ export function evaluate(expect = {}, response) {
       .filter((link) => !matchesEveryGroup(link.title, expect.require_every_product_title_groups))
       .map((link) => link.title);
     if (invalidTitles.length > 0) failures.push(`product titles violate required groups: ${invalidTitles.join(' | ')}`);
+  }
+  if (expect.require_exact_or_split && typeof expect.require_exact_or_split === 'object') {
+    const contract = expect.require_exact_or_split;
+    const exact = Array.isArray(contract.exact_title_groups) && response.links.some((link) =>
+      matchesEveryGroup(link.title, contract.exact_title_groups)
+    );
+    const splitTitles = Array.isArray(contract.split_title_groups) && contract.split_title_groups.every((group) =>
+      Array.isArray(group) && group.length > 0 && response.links.some((link) => includesAny(link.title, group))
+    );
+    const splitText = Array.isArray(contract.split_text_groups) && matchesEveryGroup(response.text, contract.split_text_groups);
+    if (!exact && !(splitTitles && splitText)) {
+      failures.push('neither exact product nor evidence-labelled split alternatives were returned');
+    }
   }
   if (Array.isArray(expect.forbid_every_product_title_any)) {
     const invalidTitles = response.links

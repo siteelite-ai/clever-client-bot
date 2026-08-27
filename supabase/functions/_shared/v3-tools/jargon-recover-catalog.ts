@@ -20,7 +20,10 @@ export interface JargonRecoverCatalogDeps extends CatalogClientDeps {
   openrouterApiKey: string;
   /** Флаг: передавать ли активную категорию в jargon-помощник для более точных кандидатов. */
   categoryContextEnabled?: boolean;
-  /** Флаг: при пустом пересечении с modifiers возвращать базовые товары и класть модификаторы в unmatched_tokens (не «резать в 0»). */
+  /**
+   * @deprecated Truthful partial evidence is now an invariant rather than an
+   * experiment. Kept only so older callers and database rows remain compatible.
+   */
   axialModifiersEnabled?: boolean;
 }
 
@@ -127,6 +130,49 @@ function productMatchesModifiers(p: ProductRef, modifiers: string[]): boolean {
 }
 
 /**
+ * Proves one independently requested axis from visible catalog evidence.
+ * Structural values (E27, IP65, 2x1.5) are compared punctuation-insensitively;
+ * ordinary phrases must occur literally after normalization. The function is
+ * deliberately vocabulary-free and therefore cannot manufacture synonyms.
+ */
+export function productSupportsGroundedAxis(product: ProductRef, axis: string): boolean {
+  const value = normalize(axis);
+  if (!value) return false;
+  const rawHaystack = `${product.pagetitle} ${product.vendor ?? ""} ${product.short_traits.join(" ")}`;
+  if (/\d/u.test(value) && /\p{L}/u.test(value)) {
+    return normalizeCodeLike(rawHaystack).includes(normalizeCodeLike(value));
+  }
+  return normalize(rawHaystack).includes(value);
+}
+
+function customerAxisLabel(value: string): string {
+  return String(value ?? "")
+    .replace(/[<>\p{Cc}*_`[\]()]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, 80);
+}
+
+/** Customer-facing disclaimer for evidence-backed, separately rendered axes. */
+export function buildGroundedAxisSplitCaption(baseAxis: string, otherAxes: string[]): string {
+  const labels = [baseAxis, ...otherAxes]
+    .map(customerAxisLabel)
+    .filter(Boolean)
+    .filter((label, index, values) => values.findIndex((value) => normalize(value) === normalize(label)) === index)
+    .slice(0, 4);
+  const quoted = labels.map((label) => `«${label}»`);
+  if (quoted.length < 2) {
+    return "Точное сочетание всех условий в актуальном каталоге не подтвердилось. Показываю отдельно подтверждённое направление — это не полное совпадение с исходным запросом.";
+  }
+  return `Товаров, где одновременно подтверждены ${quoted.join(" и ")}, в актуальном каталоге не нашлось. Показываю эти направления отдельно: карточки из разных секций нельзя считать одним полным совпадением. Выберите, какое условие сохранить.`;
+}
+
+export function buildGroundedAxisSectionHeading(axis: string): string {
+  const label = customerAxisLabel(axis) || "отдельное условие";
+  return `**Отдельно подтверждено «${label}»:**`;
+}
+
+/**
  * Считает токены исходного запроса+modifiers, которые не встречаются НИ В ОДНОЙ карточке.
  * Data-agnostic: никаких словарей форм/типов/категорий, чисто лексическая проверка.
  */
@@ -213,7 +259,11 @@ export async function executeJargonRecoverCatalog(
       );
       const filtered = groundedResults.filter((p) => productMatchesModifiers(p, activeModifiers));
       if (filtered.length > 0) return { matched: { candidate, filtered }, axial };
-      if (deps.axialModifiersEnabled && axial === null && groundedResults.length > 0 && activeModifiers.length > 0) {
+      // Preserve live evidence for the base lexical class even when an
+      // independent modifier makes the strict intersection empty. Returning
+      // this as an explicit partial match is an honesty boundary, so it must
+      // not depend on an operational feature flag.
+      if (axial === null && groundedResults.length > 0 && activeModifiers.length > 0) {
         axial = { candidate, baseResults: groundedResults };
       }
     }
@@ -288,9 +338,10 @@ export async function executeJargonRecoverCatalog(
     };
   }
 
-  // Флаг v3_jargon_axial_modifiers_enabled: возвращаем базовые карточки без
-  // модификаторов и честно сообщаем модели, что именно не совпало.
-  if (deps.axialModifiersEnabled && axialFallback) {
+  // Return base cards without silently dropping modifiers. The orchestrator
+  // may render them only as separately labelled alternatives, never as proof
+  // of the original combined request.
+  if (axialFallback) {
     const sliced = axialFallback.baseResults.slice(0, perPage);
     // Явно объявляем ВСЕ токены модификаторов как unmatched — это ключевой сигнал
     // для модели: карточки существуют по noun, но конкретный модификатор клиента

@@ -118,7 +118,11 @@ export function containsUnrenderedCatalogFacts(text: string): boolean {
     /https?:\/\/(?:www\.)?220volt\.kz\/[^\s)]+/iu.test(raw) ||
     /\[[^\]]+\]\(https?:\/\/[^\s)]+\)/u.test(raw) ||
     /\d[\d\s.,]{0,}\s*(?:₸|тг(?:\.|\b)|тенге\b)/iu.test(raw) ||
-    /(?:^|[\s*_-])(?:арт(?:икул)?\.?|наличие|цена)\s*:\s*\S/imu.test(raw)
+    /(?:^|[\s*_-])(?:арт(?:икул)?\.?|наличие|цена)\s*:\s*\S/imu.test(raw) ||
+    // Availability is also a catalog fact even when the model omits price,
+    // article and URL. Questions/future intent such as «проверю, есть ли» do
+    // not match because the assertion must begin with «в каталоге ...».
+    /(?<![а-яa-z])в\s+каталог\p{L}*\s+(?:уже\s+)?(?:есть|имеются|нашл\p{L}*|представл\p{L}*|доступн\p{L}*|видн\p{L}*)(?![а-яa-z])/iu.test(raw)
   );
 }
 

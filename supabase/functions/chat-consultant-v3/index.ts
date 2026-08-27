@@ -11,8 +11,11 @@ import { executeSearchCatalog, type SearchCatalogInput } from "../_shared/v3-too
 import { type DiscoverCategoryInput, type DiscoverCategoryOk,
   executeDiscoverCategory, type Facet } from "../_shared/v3-tools/discover-category.ts";
 import {
+  buildGroundedAxisSectionHeading,
+  buildGroundedAxisSplitCaption,
   executeJargonRecoverCatalog,
   type JargonRecoverCatalogInput,
+  productSupportsGroundedAxis,
   selectGroundedJargonCacheFallback,
   titleSupportsGroundedJargonQuery,
 } from "../_shared/v3-tools/jargon-recover-catalog.ts";
@@ -3329,6 +3332,17 @@ async function runExpertLoop(
   // unrelated lexical fallbacks.
   let groundedJargonTerminal = false;
   let groundedCompoundSearchTerminal = false;
+  type PendingJargonAxisSplit = {
+    source: string;
+    matchedQuery: string;
+    baseIds: string[];
+    modifiers: string[];
+    total: number;
+  };
+  // A strict jargon+modifier intersection may be empty while both axes have
+  // live catalog evidence. Preserve that proof explicitly; it can later be
+  // rendered only as separately labelled alternatives with a disclaimer.
+  let pendingJargonAxisSplit: PendingJargonAxisSplit | null = null;
   // If the consultant explicitly calls customer vocabulary a colloquial or
   // jargon name, that reasoning becomes a proof obligation. A broad facet
   // search cannot silently replace it with a merely similar product shape.
@@ -7069,6 +7083,39 @@ async function runExpertLoop(
               : (typeof r2.source_query === "string" && r2.source_query ? r2.source_query : typeof tc.args.query === "string" ? tc.args.query : "");
             semanticEvidenceSeen ??= { label: sourceLabel, total: r2.total };
             freshSearch = { tool: tc.name, ids, total: r2.total };
+            if (tc.name === "jargon_recover_catalog" && r2.partial_match && matchedQuery) {
+              const baseProducts = ids
+                .map((id) => ctx.cache.get(id))
+                .filter((product): product is ProductFull => Boolean(product));
+              const unresolvedModifiers = (Array.isArray(runArgs.modifiers) ? runArgs.modifiers : [])
+                .map(String)
+                .map((value) => value.trim())
+                .filter(Boolean)
+                .filter((value, index, values) =>
+                  values.findIndex((known) => normalizeForMatch(known) === normalizeForMatch(value)) === index
+                )
+                .filter((modifier) => !baseProducts.some((product) =>
+                  productSupportsGroundedAxis(product, modifier)
+                ));
+              if (unresolvedModifiers.length > 0) {
+                pendingJargonAxisSplit = {
+                  source: typeof r2.source_query === "string" ? r2.source_query : sourceLabel,
+                  matchedQuery,
+                  baseIds: ids,
+                  modifiers: unresolvedModifiers,
+                  total: r2.total,
+                };
+                steps.push({
+                  step: "v3_jargon_axis_split_pending",
+                  ms: now(),
+                  meta: {
+                    matched_query: matchedQuery,
+                    base_candidates: ids.length,
+                    modifiers: unresolvedModifiers,
+                  },
+                });
+              }
+            }
             if (!replacementIntent && intentMode === "select") {
               const visibleSemanticIds = explicitCompoundMarking
                 ? guardVisibleCardinality(ids).ids
@@ -7474,7 +7521,18 @@ async function runExpertLoop(
       compatibility_required: reasoningNeedsCompatibilityRelations(terminalReasoningEvidence),
     });
 
-    const attemptTerminalJargonRecovery = async (source: string) => {
+    const attemptTerminalJargonRecovery = async (source: string): Promise<
+      | {
+        kind: "exact";
+        jargonResult: Extract<ToolResult, { tool: "jargon_recover_catalog"; ok: true }>;
+        rendered: Extract<ToolResult, { tool: "render_products"; ok: true }>;
+        safeIds: string[];
+        matchedQuery: string;
+        candidateCount: number;
+      }
+      | { kind: "partial"; split: PendingJargonAxisSplit }
+      | null
+    > => {
       if (!terminalDiscover || !activeSelectionTarget || !source.trim()) { return null;
       }
       const terminalCriteria = resolveRenderCriteria(
@@ -7494,6 +7552,7 @@ async function runExpertLoop(
         query: source,
         modifiers,
         category: terminalDiscover.category.pagetitle,
+        category_in: terminalDiscover.leaf_categories.map((category) => category.pagetitle).filter(Boolean),
         per_page: 50,
       }, ctx);
       send({
@@ -7520,14 +7579,144 @@ async function runExpertLoop(
         extractBudgetCap(userMessage),
       ).ids,
       ).slice(0, 10);
-      if (safeIds.length === 0) return null;
+      if (safeIds.length === 0) {
+        const unresolvedModifiers = modifiers
+          .filter((modifier, index, values) =>
+            values.findIndex((known) => normalizeForMatch(known) === normalizeForMatch(modifier)) === index
+          )
+          .filter((modifier) => !candidateProducts.some((product) =>
+            productSupportsGroundedAxis(product, modifier)
+          ));
+        if (jargonResult.partial_match && matchedQuery && candidateProducts.length > 0 && unresolvedModifiers.length > 0) {
+          return {
+            kind: "partial",
+            split: {
+              source,
+              matchedQuery,
+              baseIds: candidateProducts.map((product) => product.id),
+              modifiers: unresolvedModifiers,
+              total: jargonResult.total,
+            },
+          };
+        }
+        return null;
+      }
       const rendered = await runTool("render_products", {
         product_ids: safeIds,
         criteria: terminalCriteria,
         total_available: jargonResult.total,
       }, ctx);
       if (!rendered.ok || rendered.tool !== "render_products") return null;
-      return { jargonResult, rendered, safeIds, matchedQuery, candidateCount: candidateProducts.length };
+      return { kind: "exact", jargonResult, rendered, safeIds, matchedQuery, candidateCount: candidateProducts.length };
+    };
+
+    const renderJargonAxisSplit = async (split: PendingJargonAxisSplit): Promise<boolean> => {
+      if (!terminalDiscover || !activeSelectionTarget || split.modifiers.length === 0) return false;
+      const target = activeSelectionTarget;
+      const budgetCap = extractBudgetCap(userMessage);
+      const baseProducts = split.baseIds
+        .map((id) => ctx.cache.get(id))
+        .filter((product): product is ProductFull => Boolean(
+          product &&
+          titleSupportsGroundedJargonQuery(product.pagetitle, split.matchedQuery) &&
+          Number.isFinite(product.price) && product.price > 0
+        ));
+      const baseTarget = verifySelectionTargetWithVisibleTitle(target, baseProducts);
+      const baseIds = filterProductIdsByBudgetCap(
+        baseProducts.map((product) => product.id).filter((id) => baseTarget.passed_ids.includes(id)),
+        ctx.cache,
+        budgetCap,
+      ).ids.slice(0, 3);
+      if (baseIds.length === 0) return false;
+
+      const sections: Array<{ label: string; ids: string[]; total: number }> = [
+        { label: split.matchedQuery, ids: baseIds, total: split.total },
+      ];
+      const usedIds = new Set(baseIds);
+      const categoryIn = terminalDiscover.leaf_categories.map((category) => category.pagetitle).filter(Boolean);
+      for (const modifier of split.modifiers.slice(0, 2)) {
+        send({ type: "tool_event", tool: "search_catalog", phase: "start", summary: `Проверяю отдельно условие «${modifier}»…` });
+        const axisResult = await runTool("search_catalog", {
+          mode: "by_query",
+          query: modifier,
+          ...(categoryIn.length > 0
+            ? { category_in: categoryIn }
+            : { category: terminalDiscover.category.pagetitle }),
+          min_price: 1,
+          per_page: 50,
+        }, ctx);
+        if (!axisResult.ok || axisResult.tool !== "search_catalog") {
+          send({ type: "tool_event", tool: "search_catalog", phase: "result", summary: `Условие «${modifier}»: поиск не завершён` });
+          continue;
+        }
+        const axisProducts = axisResult.results
+          .map((product) => ctx.cache.get(String(product.id)))
+          .filter((product): product is ProductFull => Boolean(
+            product &&
+            Number.isFinite(product.price) && product.price > 0 &&
+            productSupportsGroundedAxis(product, modifier)
+          ));
+        const axisTarget = verifySelectionTargetWithVisibleTitle(target, axisProducts);
+        const axisIds = filterProductIdsByBudgetCap(
+          axisProducts
+            .map((product) => product.id)
+            .filter((id) => axisTarget.passed_ids.includes(id) && !usedIds.has(id)),
+          ctx.cache,
+          budgetCap,
+        ).ids.slice(0, 3);
+        send({
+          type: "tool_event",
+          tool: "search_catalog",
+          phase: "result",
+          summary: `Условие «${modifier}»: подтверждено ${axisIds.length}`,
+        });
+        if (axisIds.length === 0) continue;
+        for (const id of axisIds) usedIds.add(id);
+        sections.push({ label: modifier, ids: axisIds, total: axisResult.total });
+      }
+      // One independent pool is not a split. Keep the ordinary honest-empty
+      // path rather than silently relaxing the original request.
+      if (sections.length < 2) return false;
+
+      const markdownSections: string[] = [];
+      let renderedCount = 0;
+      for (const section of sections) {
+        const rendered = executeRenderProducts(
+          { product_ids: section.ids, total_available: section.total },
+          ctx.cache,
+        );
+        if (!rendered.ok) continue;
+        markdownSections.push(`${buildGroundedAxisSectionHeading(section.label)}\n\n${rendered.markdown}`);
+        renderedCount += rendered.rendered_count;
+      }
+      if (markdownSections.length < 2 || renderedCount === 0) return false;
+
+      const caption = buildGroundedAxisSplitCaption(
+        split.matchedQuery,
+        sections.slice(1).map((section) => section.label),
+      );
+      send({ type: "assistant_turn_break", reason: "text_before_render" });
+      send({ type: "delta", content: caption });
+      finalText += `${finalText ? "\n\n" : ""}${caption}`;
+      send({
+        type: "products_block",
+        markdown: markdownSections.join("\n\n"),
+        count: renderedCount,
+        total_available: sections.reduce((sum, section) => sum + section.total, 0),
+      });
+      for (const id of usedIds) shownIds.add(id);
+      productsRendered += renderedCount;
+      steps.push({
+        step: "v3_jargon_axis_split_rendered",
+        ms: now(),
+        meta: {
+          source: split.source,
+          matched_query: split.matchedQuery,
+          sections: sections.map((section) => ({ label: section.label, rendered: section.ids.length })),
+          rendered: renderedCount,
+        },
+      });
+      return true;
     };
 
     // A metalinguistic claim made in the consultant's reasoning outranks every
@@ -7633,10 +7822,33 @@ async function runExpertLoop(
         meta: { target: activeSelectionTarget, reference: terminalCompatibilityReference },
       });
     }
+    if (
+      productsRendered === 0 &&
+      pendingJargonAxisSplit &&
+      !replacementIntent &&
+      intentMode === "select" &&
+      await renderJargonAxisSplit(pendingJargonAxisSplit)
+    ) {
+      return { finalText, productsRendered, shownProductIds: [...shownIds] };
+    }
     if (productsRendered === 0 && terminalAliasRequirement && !replacementIntent && intentMode === "select") {
       const recoveredAlias = await attemptTerminalJargonRecovery(terminalAliasRequirement);
-      if (recoveredAlias) {
+      if (recoveredAlias?.kind === "partial") {
+        pendingJargonAxisSplit = recoveredAlias.split;
+        if (await renderJargonAxisSplit(recoveredAlias.split)) {
+          return { finalText, productsRendered, shownProductIds: [...shownIds] };
+        }
+      }
+      if (recoveredAlias?.kind === "exact") {
         for (const id of recoveredAlias.safeIds) shownIds.add(id);
+        if (!finalText.trim()) {
+          const caption = buildSelectionRenderCaption({
+            product_class: recoveredAlias.matchedQuery,
+            application_context: [],
+          }, []);
+          send({ type: "delta", content: caption });
+          finalText = caption;
+        }
         send({
           type: "products_block",
           markdown: recoveredAlias.rendered.markdown,
@@ -8101,8 +8313,19 @@ async function runExpertLoop(
       lastSearchNoun.trim()
     ) {
       const recoveredJargon = await attemptTerminalJargonRecovery(lastSearchNoun);
-      if (recoveredJargon) {
+      if (recoveredJargon?.kind === "partial" && await renderJargonAxisSplit(recoveredJargon.split)) {
+        return { finalText, productsRendered, shownProductIds: [...shownIds] };
+      }
+      if (recoveredJargon?.kind === "exact") {
         for (const id of recoveredJargon.safeIds) shownIds.add(id);
+        if (!finalText.trim()) {
+          const caption = buildSelectionRenderCaption({
+            product_class: recoveredJargon.matchedQuery,
+            application_context: [],
+          }, []);
+          send({ type: "delta", content: caption });
+          finalText = caption;
+        }
         send({
           type: "products_block",
           markdown: recoveredJargon.rendered.markdown,

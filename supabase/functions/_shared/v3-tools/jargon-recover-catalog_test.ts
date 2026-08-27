@@ -1,6 +1,9 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  buildGroundedAxisSectionHeading,
+  buildGroundedAxisSplitCaption,
   executeJargonRecoverCatalog,
+  productSupportsGroundedAxis,
   selectGroundedJargonCacheFallback,
   splitSemanticJargonModifiers,
   titleSupportsGroundedJargonQuery,
@@ -217,4 +220,73 @@ Deno.test("empty literal intersection retries the model's semantic modifier as o
   assertEquals(helperQueries.length, 2);
   assertEquals(helperQueries[1].includes("кабель медный негорючий"), true);
   assertEquals(catalogQueries.includes("кабель ВВГнг"), true);
+});
+
+Deno.test("grounded axis proof is structural and vocabulary-free", () => {
+  const product: ProductRef = {
+    id: "lamp",
+    pagetitle: "Лампа LED A60 12Вт E27",
+    vendor: "Test",
+    price: 1000,
+    stock: "in_stock",
+    short_traits: ["Степень защиты IP65"],
+  };
+  assertEquals(productSupportsGroundedAxis(product, "E27"), true);
+  assertEquals(productSupportsGroundedAxis(product, "IP 65"), true);
+  assertEquals(productSupportsGroundedAxis(product, "E14"), false);
+  assertEquals(productSupportsGroundedAxis(product, "кукуруза"), false);
+});
+
+Deno.test("axis split copy states that independently proven sections are not one match", () => {
+  const caption = buildGroundedAxisSplitCaption("CORN", ["E27"]);
+  assertEquals(caption.includes("одновременно"), true);
+  assertEquals(caption.includes("не нашлось"), true);
+  assertEquals(caption.includes("отдельно"), true);
+  assertEquals(caption.includes("нельзя считать одним полным совпадением"), true);
+  assertEquals(buildGroundedAxisSectionHeading("E27"), "**Отдельно подтверждено «E27»:**");
+});
+
+Deno.test("empty jargon and modifier intersection always returns explicit partial evidence", async () => {
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("openrouter.ai")) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { tool_calls: [{ function: { arguments: JSON.stringify({ candidates: ["CORN"] }) } }] } }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const query = new URL(url).searchParams.get("query");
+    const results = query === "CORN"
+      ? [{
+        id: 24780,
+        pagetitle: "Лампа LED CORN 5Вт G4",
+        price: 476,
+        url: "https://220volt.kz/catalog/light/lamps/24780/",
+        category: { pagetitle: "Лампы" },
+        options: [],
+      }]
+      : [];
+    return new Response(JSON.stringify({ data: { results, pagination: { total: results.length } } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const result = await executeJargonRecoverCatalog({
+    query: "кукуруза",
+    modifiers: ["E27"],
+    per_page: 5,
+  }, {
+    baseUrl: "https://catalog.test/api",
+    apiToken: "catalog-token",
+    openrouterApiKey: "router-token",
+    // An old disabled feature flag must no longer erase truthful base evidence.
+    axialModifiersEnabled: false,
+    fetchImpl,
+  }, new Map());
+
+  assertEquals(result.ok, true);
+  assertEquals(result.ok ? result.total : 0, 1);
+  assertEquals(result.ok ? result.partial_match : false, true);
+  assertEquals(result.ok ? result.unmatched_tokens.includes("e27") : false, true);
+  assertEquals(result.ok ? result.results[0]?.pagetitle : null, "Лампа LED CORN 5Вт G4");
 });

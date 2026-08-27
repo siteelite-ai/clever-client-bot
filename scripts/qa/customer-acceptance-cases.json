@@ -82,6 +82,7 @@
             "min_products": 1,
             "require_product_title": ["CORN"],
             "forbid_product_title": ["LABEL OFF", "удаления наклеек", "аэрозоль"],
+            "forbid_assistant_text": ["E27", "E40"],
             "forbid_text": ["search_catalog", "discover_category", "jargon_recover_catalog", "render_products"]
           }
         }
@@ -108,6 +109,7 @@
             "min_products": 1,
             "require_product_title": ["CORN"],
             "forbid_product_title": ["LABEL OFF", "удаления наклеек", "аэрозоль"],
+            "forbid_assistant_text": ["E27", "E40"],
             "conversation_boundary": "new_task",
             "forbid_text": ["search_catalog", "discover_category", "jargon_recover_catalog", "render_products"]
           }

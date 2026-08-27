@@ -156,7 +156,11 @@
         "message": "подбери лампу кукуруза на цоколь e27",
         "expect": {
           "min_products": 1,
-          "require_every_product_title_groups": [["CORN", "кукуруз"], ["E27"]],
+          "require_exact_or_split": {
+            "exact_title_groups": [["CORN", "кукуруз"], ["E27"]],
+            "split_title_groups": [["CORN", "кукуруз"], ["E27"]],
+            "split_text_groups": [["одновременно", "сочетан"], ["не нашлось", "не подтверд"], ["отдельно", "разных секц"]]
+          },
           "forbid_every_product_title_any": ["LABEL OFF", "удаления наклеек", "аэрозоль"]
         }
       }]

@@ -122,6 +122,57 @@ test('evaluate checks every product title group and maximum price', () => {
   assert(failures.some((failure) => failure.startsWith('product price exceeds 1000')));
 });
 
+test('evaluate accepts either a true exact intersection or an explicitly labelled axis split', () => {
+  const contract = {
+    require_exact_or_split: {
+      exact_title_groups: [['CORN'], ['E27']],
+      split_title_groups: [['CORN'], ['E27']],
+      split_text_groups: [['одновременно'], ['не нашлось'], ['отдельно']],
+    },
+  };
+  const base = {
+    textBeforeProducts: '',
+    productsMarkdown: '',
+    completed: true,
+    diagnosticError: null,
+  };
+  assert.deepEqual(evaluate(contract, {
+    ...base,
+    text: 'Нашёл точное сочетание.',
+    links: [{ title: 'Лампа LED CORN E27' }],
+    serverProductsCount: 1,
+  }), []);
+  assert.deepEqual(evaluate(contract, {
+    ...base,
+    text: 'Одновременно условий не нашлось, поэтому показываю отдельно.',
+    links: [{ title: 'Лампа LED CORN G4' }, { title: 'Лампа LED A60 E27' }],
+    serverProductsCount: 2,
+  }), []);
+  assert(evaluate(contract, {
+    ...base,
+    text: 'Показываю варианты.',
+    links: [{ title: 'Лампа LED CORN G4' }, { title: 'Лампа LED A60 E27' }],
+    serverProductsCount: 2,
+  }).includes('neither exact product nor evidence-labelled split alternatives were returned'));
+});
+
+test('evaluate can forbid unsupported prose without rejecting evidence in product titles', () => {
+  const response = {
+    text: 'Показываю подтверждённые варианты.',
+    textBeforeProducts: 'Показываю подтверждённые варианты.',
+    productsMarkdown: '',
+    links: [{ title: 'Лампа LED CORN E27' }],
+    completed: true,
+    diagnosticError: null,
+    serverProductsCount: 1,
+  };
+  assert.deepEqual(evaluate({ forbid_assistant_text: ['E27'] }, response), []);
+  assert(evaluate({ forbid_assistant_text: ['E27'] }, {
+    ...response,
+    text: 'В каталоге есть E27.',
+  }).includes('forbidden assistant text: E27'));
+});
+
 test('evaluate validates a generic strict numeric pair around the object size', () => {
   const base = {
     text: '',
