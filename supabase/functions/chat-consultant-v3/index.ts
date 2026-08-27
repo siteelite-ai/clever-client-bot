@@ -7644,7 +7644,7 @@ async function runExpertLoop(
       const categoryIn = terminalDiscover.leaf_categories.map((category) => category.pagetitle).filter(Boolean);
       for (const modifier of split.modifiers.slice(0, 2)) {
         send({ type: "tool_event", tool: "search_catalog", phase: "start", summary: `Проверяю отдельно условие «${modifier}»…` });
-        const axisResult = await runTool("search_catalog", {
+        let axisResult = await runTool("search_catalog", {
           mode: "by_query",
           query: modifier,
           ...(categoryIn.length > 0
@@ -7657,21 +7657,42 @@ async function runExpertLoop(
           send({ type: "tool_event", tool: "search_catalog", phase: "result", summary: `Условие «${modifier}»: поиск не завершён` });
           continue;
         }
-        const axisProducts = axisResult.results
-          .map((product) => ctx.cache.get(String(product.id)))
-          .filter((product): product is ProductFull => Boolean(
-            product &&
-            Number.isFinite(product.price) && product.price > 0 &&
-            productSupportsGroundedAxis(product, modifier)
-          ));
-        const axisTarget = verifySelectionTargetWithVisibleTitle(target, axisProducts);
-        const axisIds = filterProductIdsByBudgetCap(
-          axisProducts
-            .map((product) => product.id)
-            .filter((id) => axisTarget.passed_ids.includes(id) && !usedIds.has(id)),
-          ctx.cache,
-          budgetCap,
-        ).ids.slice(0, 3);
+        const evaluateAxisResult = (result: SearchCatalogOk): string[] => {
+          const axisProducts = result.results
+            .map((product) => ctx.cache.get(String(product.id)))
+            .filter((product): product is ProductFull => Boolean(
+              product &&
+              Number.isFinite(product.price) && product.price > 0 &&
+              productSupportsGroundedAxis(product, modifier)
+            ));
+          const axisTarget = verifySelectionTargetWithVisibleTitle(target, axisProducts);
+          return filterProductIdsByBudgetCap(
+            axisProducts
+              .map((product) => product.id)
+              .filter((id) => axisTarget.passed_ids.includes(id) && !usedIds.has(id)),
+            ctx.cache,
+            budgetCap,
+          ).ids.slice(0, 3);
+        };
+        let axisIds = evaluateAxisResult(axisResult);
+        // Mirror the taxonomy/API-shape recovery used by jargon search. This
+        // retry cannot cross product classes because both the literal axis and
+        // the already frozen selection target are re-proved from every card.
+        if (axisIds.length === 0 && categoryIn.length > 0) {
+          const unscopedAxis = await runTool("search_catalog", {
+            mode: "by_query",
+            query: modifier,
+            min_price: 1,
+            per_page: 50,
+          }, ctx);
+          if (unscopedAxis.ok && unscopedAxis.tool === "search_catalog") {
+            const unscopedIds = evaluateAxisResult(unscopedAxis);
+            if (unscopedIds.length > 0) {
+              axisResult = unscopedAxis;
+              axisIds = unscopedIds;
+            }
+          }
+        }
         send({
           type: "tool_event",
           tool: "search_catalog",
