@@ -4048,7 +4048,7 @@ async function runExpertLoop(
       }
       const missingAnchorIntroGuard = introSafetyApplies && replacementIntent &&
           selectionPlan?.anchor_state === "anchor_missing"
-        ? replaceUngroundedMissingAnchorIntro(resp.text)
+        ? replaceUngroundedMissingAnchorIntro(resp.text, replacementEvidenceMessage)
         : { text: resp.text, removed: [] as string[] };
       const introAliasGuard = introSafetyApplies
         ? stripUngroundedIntroAliasDefinitions(missingAnchorIntroGuard.text, userMessage)

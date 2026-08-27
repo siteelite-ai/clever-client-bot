@@ -33,15 +33,26 @@ Deno.test("missing-anchor intro keeps model-owned class reasoning and literal cu
   const compact = replaceUngroundedMissingAnchorIntro(
     "Понял задачу — ищешь функциональную замену автомату Schneider Acti9 на 16 А, характеристика C. " +
       "Это модульный автомат на DIN-рейку, 1-полюсный, если не указано иное. Смотрю варианты.",
+    "Подбери аналог Schneider Acti9 C16",
   ).text;
   assertStringIncludes(compact, "замену автомату Schneider Acti9 на 16 А, характеристика C");
   assertEquals(/din-рейк|1-полюс/iu.test(compact), false);
 
   const sourceDefinition = replaceUngroundedMissingAnchorIntro(
     "Понял задачу. Вы ищете аналог стабилизатора ACH-10001-C — это релейный однофазный стабилизатор на 10 кВА, скорее всего бренда GENERICA.",
+    "Подбери аналог стабилизатора ACH-10001-C",
   ).text;
   assertStringIncludes(sourceDefinition, "аналог стабилизатора ACH-10001-C");
   assertEquals(/релейн|однофаз|10\s*ква|generica/iu.test(sourceDefinition), false);
+
+  const explicitAxes = replaceUngroundedMissingAnchorIntro(
+    "Ищем более бюджетные альтернативы автомату Schneider Acti9 1P 16A C — тот же класс " +
+      "(модульный автомат на DIN-рейку, 1 полюс, 16 А, характеристика C), но другой бренд.",
+    "Подбери более дешевые аналоги автомата Schneider Acti9 1P 16A C",
+  ).text;
+  assertStringIncludes(explicitAxes, "альтернативы автомату Schneider Acti9 1P 16A C");
+  assertStringIncludes(explicitAxes, "1 полюс, 16 А, характеристика C");
+  assertEquals(/din-рейк/iu.test(explicitAxes), false);
 });
 
 Deno.test("missing-anchor intro sanitizer is idempotent and does not invent a bubble from silence", () => {

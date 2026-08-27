@@ -140,7 +140,7 @@ export const MISSING_ANCHOR_SAFE_INTRO =
   "Если карточка не найдётся, покажу только товары подтверждённого класса и отдельно отмечу границы сравнения.";
 
 const MISSING_ANCHOR_TASK_RE =
-  /(?:аналог\p{L}*|замен\p{L}*|ищ(?:у|ешь|ете)|нужн\p{L}*\s+найт\p{L}*|подобр\p{L}*)/iu;
+  /(?:аналог\p{L}*|альтернатив\p{L}*|замен\p{L}*|ищ(?:у|ем|ешь|ете)|нужн\p{L}*\s+найт\p{L}*|подобр\p{L}*)/iu;
 const MISSING_ANCHOR_SPECULATION_RE =
   /(?:судя\s+по|скорее\s+всего|вероятн\p{L}*|предполож\p{L}*|похож\p{L}*\s+на|можно\s+вывест\p{L}*\s+из\s+код\p{L}*)/iu;
 
@@ -154,27 +154,55 @@ const MISSING_ANCHOR_SPECULATION_RE =
  * ordinary selections and replacements with a grounded source card retain the
  * consultant's own reasoning.
  */
-export function replaceUngroundedMissingAnchorIntro(text: string): CatalogFactStripResult {
+export function replaceUngroundedMissingAnchorIntro(
+  text: string,
+  customerText = "",
+): CatalogFactStripResult {
   const original = String(text ?? "").trim();
   if (!original) return { text: original, removed: [] };
   if (original === MISSING_ANCHOR_SAFE_INTRO) return { text: original, removed: [] };
   const sentences = original.match(/[^.!?]+(?:[.!?]+|$)/gu)
     ?.map((sentence) => sentence.trim())
     .filter(Boolean) ?? [];
-  const groundedTask = sentences
-    // Keep the model-owned product-class interpretation, but cut an appended
-    // source definition such as “— это релейный …”: the absent card cannot
-    // prove anything after that copula.
-    .map((sentence) => sentence
-      .replace(/\s+[—–-]\s+это(?!\p{L})[\s\S]*$/iu, ".")
-      .replace(/\s+/gu, " ")
-      .trim())
-    .find((sentence) =>
-      MISSING_ANCHOR_TASK_RE.test(sentence) &&
-      !MISSING_ANCHOR_SPECULATION_RE.test(sentence)
+  const taskCandidate = sentences
+    .map((sentence) => ({
+      original: sentence,
+      // Keep the model-owned product-class interpretation, but cut an appended
+      // source definition such as “— это релейный …” or “— тот же класс (…)”:
+      // the absent card cannot prove that tail.
+      grounded: sentence
+        .replace(/\s+[—–-]\s+(?:это|тот\s+же\s+класс)(?!\p{L})[\s\S]*$/iu, ".")
+        .replace(/\s+/gu, " ")
+        .trim(),
+    }))
+    .find(({ grounded }) =>
+      MISSING_ANCHOR_TASK_RE.test(grounded) &&
+      !MISSING_ANCHOR_SPECULATION_RE.test(grounded)
     );
+  const taskSentence = taskCandidate?.original;
+  const groundedTask = taskCandidate?.grounded;
+
+  // Preserve model-decoded parameter labels only when the explanatory clause
+  // contains a number/code literally present in the customer's request. This
+  // keeps useful mappings such as `C16` -> “16 А, характеристика C”, while an
+  // unrequested mounting type or guessed phase count is discarded.
+  const customerCompact = normalizeCompactCode(customerText);
+  const customerNumbers = new Set(String(customerText ?? "").match(/\d+(?:[.,]\d+)?/gu) ?? []);
+  const backedExplanations = [...String(taskSentence ?? "").matchAll(/\(([^()]{2,160})\)/gu)]
+    .flatMap((match) => String(match[1] ?? "").split(/[,;]+/gu))
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => {
+      const numbers = part.match(/\d+(?:[.,]\d+)?/gu) ?? [];
+      if (numbers.some((value) => customerNumbers.has(value))) return true;
+      const codes = part.match(/(?<!\p{L})([A-ZА-ЯЁ])(?!\p{L})/gu) ?? [];
+      return codes.some((code) => customerCompact.includes(normalizeCompactCode(code)));
+    });
+  const backedReasoning = backedExplanations.length > 0
+    ? ` Проверяю явно указанные параметры: ${backedExplanations.join(", ")}.`
+    : "";
   const safeText = groundedTask
-    ? `${groundedTask} ${MISSING_ANCHOR_SAFE_INTRO}`
+    ? `${groundedTask}${backedReasoning} ${MISSING_ANCHOR_SAFE_INTRO}`
     : MISSING_ANCHOR_SAFE_INTRO;
   if (safeText === original) return { text: original, removed: [] };
   return { text: safeText, removed: [original] };
