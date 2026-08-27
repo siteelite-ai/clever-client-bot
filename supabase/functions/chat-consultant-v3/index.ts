@@ -435,8 +435,13 @@ function summariseToolResultMeta(name: string, r: ToolResult): Record<string, un
   if (!r.ok) { return { error_code: r.error_code, message: (r as { message?: string }).message };
   }
   if (name === "search_catalog" || name === "jargon_recover_catalog") {
-    const x = r as { total: number; branch_tag?: string; resolved_filters?: unknown; partial_match?: boolean; unmatched_tokens?: string[]; matched_query?: string | null; candidates?: string[]; };
-    const meta: Record<string, unknown> = { total: x.total, branch_tag: x.branch_tag };
+    const x = r as { total: number; results?: unknown[]; warnings?: string[]; branch_tag?: string; resolved_filters?: unknown; partial_match?: boolean; unmatched_tokens?: string[]; matched_query?: string | null; candidates?: string[]; };
+    const meta: Record<string, unknown> = {
+      total: x.total,
+      materialized: Array.isArray(x.results) ? x.results.length : undefined,
+      warnings: Array.isArray(x.warnings) ? x.warnings : undefined,
+      branch_tag: x.branch_tag,
+    };
     if (name === "jargon_recover_catalog") {
       if (typeof x.partial_match === "boolean") { meta.partial_match = x.partial_match;
       }

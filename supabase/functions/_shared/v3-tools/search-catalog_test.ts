@@ -135,3 +135,96 @@ Deno.test("catalog retries a rate-limited single request instead of returning a 
   assertEquals(result.results.map((product) => product.id), ["recovered"]);
   assertEquals(result.warnings, ["rate_limit_retry_recovered"]);
 });
+
+Deno.test("catalog materializes a bounded later-page window when upstream total has no usable first-page cards", async () => {
+  const calls: Array<{ page: number; perPage: number }> = [];
+  const fetchImpl: typeof fetch = (input) => {
+    const url = new URL(String(input));
+    const page = Number(url.searchParams.get("page") ?? "1");
+    const perPage = Number(url.searchParams.get("per_page") ?? "10");
+    calls.push({ page, perPage });
+    const results = perPage === 50 && page === 2
+      ? [{
+          id: "usable-later",
+          pagetitle: "Стабилизатор напряжения 5 кВА",
+          price: 125000,
+          url: "https://220volt.kz/catalog/power/stabilizers/usable-later/",
+          options: [],
+        }]
+      : [{
+          id: `archived-${page}-${perPage}`,
+          pagetitle: "Архивная карточка",
+          price: 0,
+          url: "https://220volt.kz/catalog/power/stabilizers/archived/",
+          options: [],
+        }];
+    return Promise.resolve(new Response(JSON.stringify({
+      data: { results, pagination: { total: 130 } },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+  };
+
+  const result = await executeSearchCatalog({
+    mode: "by_filter",
+    category: "Стабилизаторы",
+    per_page: 10,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl,
+  }, new Map());
+
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.total, 130);
+  assertEquals(result.results.map((product) => product.id), ["usable-later"]);
+  assertEquals(result.warnings, ["catalog_materialization_recovered:1/130"]);
+  assertEquals(calls, [
+    { page: 1, perPage: 10 },
+    { page: 1, perPage: 50 },
+    { page: 2, perPage: 50 },
+  ]);
+});
+
+Deno.test("catalog exposes zero when a bounded raw pool cannot materialize any renderable card", async () => {
+  const calls: Array<{ page: number; perPage: number }> = [];
+  const fetchImpl: typeof fetch = (input) => {
+    const url = new URL(String(input));
+    calls.push({
+      page: Number(url.searchParams.get("page") ?? "1"),
+      perPage: Number(url.searchParams.get("per_page") ?? "10"),
+    });
+    return Promise.resolve(new Response(JSON.stringify({
+      data: {
+        results: [{
+          id: "unsafe-link",
+          pagetitle: "Карточка с неподконтрольной ссылкой",
+          price: 100,
+          url: "https://example.test/catalog/power/stabilizers/item/",
+          options: [],
+        }],
+        pagination: { total: 130 },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } }));
+  };
+
+  const result = await executeSearchCatalog({
+    mode: "by_filter",
+    category: "Стабилизаторы",
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl,
+  }, new Map());
+
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.total, 0);
+  assertEquals(result.results, []);
+  assertEquals(result.warnings, ["catalog_unmaterialized_total:130"]);
+  assertEquals(calls, [
+    { page: 1, perPage: 10 },
+    { page: 1, perPage: 50 },
+    { page: 2, perPage: 50 },
+    { page: 3, perPage: 50 },
+  ]);
+});
