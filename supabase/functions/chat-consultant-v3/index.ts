@@ -5819,12 +5819,20 @@ async function runExpertLoop(
                 ],
               )
               : { criteria: fallbackMeasured.criteria, demoted: [] as string[] };
-            criteria = frozenRender.criteria;
+            const targetCriteriaPromotion = replacementIntent
+              ? promoteSelectionTargetBackingCriteria(
+                activeSelectionTarget,
+                tc.args.selection_target,
+                frozenRender.criteria,
+              )
+              : { criteria: frozenRender.criteria, promoted: [] as Criterion[] };
+            criteria = targetCriteriaPromotion.criteria;
 
             if (
               aligned.alignments.length > 0 ||
               promoted.promoted.length > 0 ||
               fallbackMeasured.promoted.length > 0 ||
+              targetCriteriaPromotion.promoted.length > 0 ||
               importance.demoted.length > 0 ||
               frozenRender.demoted.length > 0
             ) {
@@ -5835,6 +5843,7 @@ async function runExpertLoop(
                 meta: {
                   alignments: aligned.alignments,
                   promoted: promoted.promoted,
+                  target_promoted: targetCriteriaPromotion.promoted,
                   fallback_promoted: fallbackMeasured.promoted,
                   demoted_advisory: importance.demoted,
                   demoted_late: frozenRender.demoted,
