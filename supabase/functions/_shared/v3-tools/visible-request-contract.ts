@@ -81,14 +81,20 @@ function literalRequestModifiers(
       .filter(Boolean),
   );
   const modifiers = new Map<string, string>();
+  const precedesDirectionalMeasurement = (index: number): boolean => {
+    const tail = sourceTokens.slice(index + 1, index + 6).join(" ");
+    return /^(?:(?:не\s+менее|минимум|от|не\s+более|максимум|до|больше|свыше|меньше|менее)\s+)\d+(?:[.,]\d+)?\s*[a-zа-я°]{1,10}[²³]?\d?(?:\s|$)/iu.test(tail);
+  };
   for (let index = 0; index < sourceTokens.length; index += 1) {
     if (tokenStem(sourceTokens[index]) !== classHead) continue;
     for (const offset of [-2, -1, 1, 2]) {
-      const token = normalizeToken(sourceTokens[index + offset] ?? "");
+      const modifierIndex = index + offset;
+      const token = normalizeToken(sourceTokens[modifierIndex] ?? "");
       const stem = tokenStem(token);
       if (
         !stem || stem.length < 4 || stem === classHead ||
         WORKFLOW_WORDS.has(token) || /^\d/u.test(token) ||
+        precedesDirectionalMeasurement(modifierIndex) ||
         !liveTitleStems.has(stem)
       ) continue;
       modifiers.set(stem, token);
@@ -195,4 +201,29 @@ export function titleSupportsVisibleRequestContract(
   requirements: VisibleRequestRequirement[],
 ): boolean {
   return requirements.every((requirement) => requirement.matches(title));
+}
+
+/**
+ * A taxonomy leaf is only a successful terminal recovery scope after at least
+ * one card survives the immutable customer contract. A non-empty but entirely
+ * rejected leaf must not prevent one bounded full-text search for the already-
+ * grounded product class.
+ */
+export function shouldExpandVisibleRecoverySearch(
+  hasLeafScope: boolean,
+  confirmedCount: number,
+): boolean {
+  return hasLeafScope && confirmedCount === 0;
+}
+
+export function shouldContinueVisibleRecoveryPage(input: {
+  page: number;
+  pageSize: number;
+  total: number;
+  confirmedCount: number;
+  maxPages: number;
+}): boolean {
+  return input.confirmedCount === 0 &&
+    input.page < input.maxPages &&
+    input.page * input.pageSize < input.total;
 }

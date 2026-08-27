@@ -251,6 +251,20 @@ export function titleProvesCompactCriterion(title: string, criterion: Criterion)
   return titleTokens.includes(foldCode(rawValue));
 }
 
+/**
+ * A compact live facet value is a card-visible literal requirement only when
+ * the customer actually typed that code. Semantic customer wording may map to
+ * a compact catalog value (for example a localized technology name → `LED`),
+ * but that internal projection must not force the projected code into a title.
+ */
+export function isLiteralUserCompactCriterion(
+  userMessage: string,
+  criterion: Criterion,
+): boolean {
+  return !titleProvesCompactCriterion("", criterion) &&
+    titleProvesCompactCriterion(userMessage, criterion);
+}
+
 /** Числовой интервал, к которому сводится любое распознанное значение характеристики. */
 export interface NumSpan {
   min: number;

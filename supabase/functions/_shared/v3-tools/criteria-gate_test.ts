@@ -16,6 +16,7 @@ import {
   resolveRenderCriteria,
   resolveTerminalSelectionCriteria,
   titleProvesCompactCriterion,
+  isLiteralUserCompactCriterion,
   type Criterion,
 } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
@@ -77,6 +78,12 @@ Deno.test("compact code criterion must be visible in the product title", () => {
   assertEquals(titleProvesCompactCriterion("Автомат 1P 16A CHINT", criterion), false);
   assertEquals(titleProvesCompactCriterion("Товар белый", { ...criterion, value: "белый" }), true);
   assertEquals(titleProvesCompactCriterion("Кабель ВВГнг 2×1,5", { ...criterion, value: "медь" }), true);
+});
+
+Deno.test("a projected compact facet is literal only when the customer typed the code", () => {
+  const led = { key: "Технология", op: "eq", value: "LED", level: "A" } as Criterion;
+  assertEquals(isLiteralUserCompactCriterion("светодиодный прожектор", led), false);
+  assertEquals(isLiteralUserCompactCriterion("LED прожектор", led), true);
 });
 
 Deno.test("parseNumSpan: scalar, decimal comma", () => {

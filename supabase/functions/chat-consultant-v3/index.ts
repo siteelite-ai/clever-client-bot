@@ -21,7 +21,7 @@ import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
 import { applyCriteriaGate, buildCriteriaQuery,
-  type Criterion, filterProductIdsByBudgetCap, mergeFacetOptionConstraints, mergeUserBackedCriteria, projectCatalogFilterEvidence, projectCriteriaFacetOptions, resolveRenderCriteria, resolveTerminalSelectionCriteria, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
+  type Criterion, filterProductIdsByBudgetCap, isLiteralUserCompactCriterion, mergeFacetOptionConstraints, mergeUserBackedCriteria, projectCatalogFilterEvidence, projectCriteriaFacetOptions, resolveRenderCriteria, resolveTerminalSelectionCriteria, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, demoteUnfrozenRenderCriteria, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
@@ -177,7 +177,12 @@ import {
 } from "../_shared/v3-tools/exact-compound-marking-policy.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import { selectReadinessClarification } from "../_shared/v3-tools/selection-readiness.ts";
-import { buildVisibleRequestContract, titleSupportsVisibleRequestContract } from "../_shared/v3-tools/visible-request-contract.ts";
+import {
+  buildVisibleRequestContract,
+  shouldContinueVisibleRecoveryPage,
+  shouldExpandVisibleRecoverySearch,
+  titleSupportsVisibleRequestContract,
+} from "../_shared/v3-tools/visible-request-contract.ts";
 import { type EscalateInput,
   executeEscalate } from "../_shared/v3-tools/escalate.ts";
 import { executeNoteState, type NoteStateInput } from "../_shared/v3-tools/note-state.ts";
@@ -3171,7 +3176,7 @@ async function runExpertLoop(
       candidateTitles: [...ctx.cache.values()].map((product) => product.pagetitle),
     });
     const compactCriteria = userBackedSearchCriteria.filter((criterion) =>
-      typeof criterion.value === "string" && !titleProvesCompactCriterion("", criterion)
+      isLiteralUserCompactCriterion(userMessage, criterion)
     );
     let guarded = ids.filter((id) => {
       const product = ctx.cache.get(id);
@@ -8307,21 +8312,90 @@ async function runExpertLoop(
             activeSelectionTarget,
             groundedProducts,
           );
-          const targetIds = new Set(targetReport.passed_ids);
+          let targetIds = new Set(targetReport.passed_ids);
           const candidateIds = groundedProducts
             .map((product) => product.id)
             .filter((id) => targetIds.has(id));
+          let recoveredCandidateCount = recovered.results.length;
+          let diagnosticCandidateIds = candidateIds;
           let safeIds = guardFinalRenderIds(candidateIds);
           safeIds = filterProductIdsByBudgetCap(
             safeIds,
             ctx.cache,
             extractBudgetCap(userMessage),
           ).ids.slice(0, 10);
+
+          // `category=` is exact-leaf-only in the catalog API. A non-empty leaf
+          // still is not a successful recovery when no card satisfies the
+          // frozen customer contract. Retry through the existing full-text
+          // catalog path using only the already-grounded class phrase; every
+          // result remains subject to the same class, measurement, modifier
+          // and budget guards before it can be rendered.
+          if (shouldExpandVisibleRecoverySearch(categoryIn.length > 0, safeIds.length)) {
+            const queryProductsById = new Map<string, ProductFull>();
+            const maxQueryPages = 4;
+            for (let page = 1; page <= maxQueryPages; page += 1) {
+              const queryRecovered = await runTool("search_catalog", {
+                mode: "by_query",
+                query: activeSelectionTarget,
+                page,
+                per_page: 50,
+              }, ctx);
+              if (!queryRecovered.ok || queryRecovered.tool !== "search_catalog") break;
+              recovered = queryRecovered;
+              for (const resultProduct of queryRecovered.results) {
+                const product = ctx.cache.get(String(resultProduct.id));
+                if (product) queryProductsById.set(product.id, product);
+              }
+              const queryProducts = [...queryProductsById.values()];
+              recoveredCandidateCount = queryProducts.length;
+              const queryGroundedProducts = terminalGroundedTargets.length > 0
+                ? filterProductsByGroundedCategoryTargets(
+                  queryProducts,
+                  terminalGroundedTargets,
+                  terminalDiscover.category.pagetitle,
+                  terminalCategoryEvidence,
+                )
+                : queryProducts;
+              const queryTargetReport = verifySelectionTargetWithVisibleTitle(
+                activeSelectionTarget,
+                queryGroundedProducts,
+              );
+              const queryTargetIds = new Set(queryTargetReport.passed_ids);
+              const queryCandidateIds = queryGroundedProducts
+                .map((product) => product.id)
+                .filter((id) => queryTargetIds.has(id));
+              let querySafeIds = guardFinalRenderIds(queryCandidateIds);
+              querySafeIds = filterProductIdsByBudgetCap(
+                querySafeIds,
+                ctx.cache,
+                extractBudgetCap(userMessage),
+              ).ids.slice(0, 10);
+              targetIds = queryTargetIds;
+              diagnosticCandidateIds = queryCandidateIds;
+              safeIds = querySafeIds;
+              if (!shouldContinueVisibleRecoveryPage({
+                page,
+                pageSize: 50,
+                total: queryRecovered.total,
+                confirmedCount: safeIds.length,
+                maxPages: maxQueryPages,
+              })) break;
+            }
+          }
+          const diagnosticGuard = guardVisibleCardinality(diagnosticCandidateIds);
+          const requirementCoverage = diagnosticGuard.visibleRequestContract.map((requirement) => {
+            const matched = diagnosticCandidateIds.filter((id) => {
+              const product = ctx.cache.get(id);
+              return Boolean(product && requirement.matches(product.pagetitle));
+            }).length;
+            return `${requirement.label}:${matched}/${diagnosticCandidateIds.length}`;
+          });
           send({
             type: "tool_event",
             tool: "search_catalog",
             phase: "result",
-            summary: `Расширенная проверка: найдено ${recovered.results.length}, класс ${targetIds.size}, подтверждено ${safeIds.length}`,
+            summary: `Расширенная проверка: найдено ${recoveredCandidateCount}, класс ${targetIds.size}, подтверждено ${safeIds.length}; коды −${diagnosticGuard.compactRemoved}, контракт −${diagnosticGuard.visibleRequestRemoved}; ${requirementCoverage.join(", ")}`,
           });
           if (safeIds.length > 0) {
             const rendered = await runTool("render_products", {
