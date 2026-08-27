@@ -235,7 +235,7 @@ export async function executeJargonRecoverCatalog(
   const jargon = await tryJargonFallback(source, {
     apiKey: deps.openrouterApiKey,
     category: categoryHint,
-    strategy: "title_token",
+    strategy: "translation_only",
     fetchImpl: deps.fetchImpl,
     timeoutMs: deps.timeoutMs,
   });
@@ -250,7 +250,11 @@ export async function executeJargonRecoverCatalog(
     matched: { candidate: string; filtered: ProductRef[] } | null;
     axial: { candidate: string; baseResults: ProductRef[] } | null;
   };
-  const tryCandidates = async (values: string[], activeModifiers: string[]): Promise<CandidateAttempt> => {
+  const tryCandidates = async (
+    values: string[],
+    activeModifiers: string[],
+    allowAxial = true,
+  ): Promise<CandidateAttempt> => {
     let axial: CandidateAttempt["axial"] = null;
     const liveCategoryNames = new Set(
       [input.category, ...categoryLeaves]
@@ -321,7 +325,7 @@ export async function executeJargonRecoverCatalog(
       // independent modifier makes the strict intersection empty. Returning
       // this as an explicit partial match is an honesty boundary, so it must
       // not depend on an operational feature flag.
-      if (axial === null && groundedResults.length > 0 && activeModifiers.length > 0) {
+      if (allowAxial && axial === null && groundedResults.length > 0 && activeModifiers.length > 0) {
         axial = { candidate, baseResults: groundedResults };
       }
     }
@@ -351,6 +355,32 @@ export async function executeJargonRecoverCatalog(
     const atomic = await tryCandidates(atomicCandidates, modifiers);
     matched = atomic.matched;
     axialFallback ??= atomic.axial;
+  }
+
+  // If literal translation/transliteration produced no live base, ask once for
+  // a professional title token. This weaker semantic route is never allowed to
+  // create an axial split: an associated product with a missing modifier must
+  // not be presented as one half of the customer's original combination.
+  if (!matched && !axialFallback) {
+    const translated = await tryJargonFallback(source, {
+      apiKey: deps.openrouterApiKey,
+      category: categoryHint,
+      strategy: "title_token",
+      fetchImpl: deps.fetchImpl,
+      timeoutMs: deps.timeoutMs,
+    });
+    const translatedCandidates = (translated.ok ? translated.candidates : [])
+      .map((candidate) => candidate.trim())
+      .filter(Boolean)
+      .filter((candidate, index, values) =>
+        values.findIndex((value) => normalize(value) === normalize(candidate)) === index
+      );
+    for (const candidate of translatedCandidates) {
+      if (!allCandidates.some((known) => normalize(known) === normalize(candidate))) allCandidates.push(candidate);
+    }
+    const translatedAttempt = await tryCandidates(translatedCandidates, modifiers, false);
+    matched = translatedAttempt.matched;
+    axialFallback ??= translatedAttempt.axial;
   }
 
   // If literal modifier matching is empty, translate the consultant's own

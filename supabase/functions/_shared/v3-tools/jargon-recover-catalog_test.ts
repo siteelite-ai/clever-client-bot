@@ -305,7 +305,7 @@ Deno.test("empty jargon and modifier intersection always returns explicit partia
   assertEquals(result.ok ? result.results[0]?.pagetitle : null, "Лампа LED CORN 5Вт G4");
 });
 
-Deno.test("literal title-token strategy is the primary jargon recovery mode", async () => {
+Deno.test("literal translation strategy is the primary jargon recovery mode", async () => {
   let helperCalls = 0;
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
@@ -313,7 +313,7 @@ Deno.test("literal title-token strategy is the primary jargon recovery mode", as
       helperCalls += 1;
       const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ content?: string }> };
       const system = body.messages?.[0]?.content ?? "";
-      const candidates = system.includes("буквального поиска") ? ["CORN"] : ["светодиодная лампа"];
+      const candidates = system.includes("буквальный переводчик") ? ["CORN"] : ["светодиодная лампа"];
       return new Response(JSON.stringify({
         choices: [{ message: { tool_calls: [{ function: { arguments: JSON.stringify({ candidates }) } }] } }],
       }), { status: 200, headers: { "content-type": "application/json" } });
@@ -408,4 +408,54 @@ Deno.test("taxonomy shape drift retries a distinctive candidate and keeps only t
   assertEquals(result.ok ? result.results.map((product) => product.id) : [], ["24780"]);
   assertEquals(result.ok ? result.partial_match : false, true);
   assertEquals(catalogCategories.includes(null), true);
+});
+
+Deno.test("professional fallback cannot turn an associated product into an axial split", async () => {
+  const helperSystems: string[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes("openrouter.ai")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ content?: string }> };
+      const system = body.messages?.[0]?.content ?? "";
+      helperSystems.push(system);
+      const candidates = system.includes("буквальный переводчик") ? ["MAIZE"] : ["лампа для растений"];
+      return new Response(JSON.stringify({
+        choices: [{ message: { tool_calls: [{ function: { arguments: JSON.stringify({ candidates }) } }] } }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const query = new URL(url).searchParams.get("query");
+    const results = query === "лампа для растений"
+      ? [{
+        id: 1,
+        pagetitle: "Лампа для растений G4",
+        price: 1000,
+        url: "https://220volt.kz/catalog/light/lamps/1/",
+        category: { pagetitle: "Лампы" },
+        options: [],
+      }]
+      : [];
+    return new Response(JSON.stringify({ data: { results, pagination: { total: results.length } } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const result = await executeJargonRecoverCatalog({
+    query: "кукуруза",
+    modifiers: ["E27"],
+    category: "Лампы",
+  }, {
+    baseUrl: "https://catalog.test/api",
+    apiToken: "catalog-token",
+    openrouterApiKey: "router-token",
+    fetchImpl,
+  }, new Map());
+
+  // The literal translation is absent. The weaker professional helper points
+  // at an associated product, but because E27 is missing it must not create a
+  // partial split that could later be rendered as if it were the source word.
+  assertEquals(helperSystems.length, 2);
+  assertEquals(result.ok ? result.matched_query : null, null);
+  assertEquals(result.ok ? result.results : [], []);
+  assertEquals(result.ok ? result.partial_match : true, false);
 });
