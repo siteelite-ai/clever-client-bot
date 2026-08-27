@@ -12,10 +12,13 @@ import type { ProductCache, ProductRef } from "./types.ts";
 
 Deno.test("jargon recovery applies discovered category to the actual catalog query", async () => {
   const requestedUrls: string[] = [];
-  const fetchImpl: typeof fetch = async (input) => {
+  let helperPrompt = "";
+  const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
     requestedUrls.push(url);
     if (url.includes("openrouter.ai")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ content?: string }> };
+      helperPrompt = body.messages?.at(-1)?.content ?? "";
       return new Response(JSON.stringify({
         choices: [{
           message: {
@@ -62,7 +65,8 @@ Deno.test("jargon recovery applies discovered category to the actual catalog que
     baseUrl: "https://catalog.test/api",
     apiToken: "catalog-token",
     openrouterApiKey: "router-token",
-    categoryContextEnabled: true,
+    // An old disabled rollout flag must not remove live taxonomy context.
+    categoryContextEnabled: false,
     fetchImpl,
   }, cache);
 
@@ -71,6 +75,7 @@ Deno.test("jargon recovery applies discovered category to the actual catalog que
   assertEquals(result.ok ? result.results[0]?.pagetitle : null, "Лампа LED CORN капсула 5Вт 230В 4000К G4 ИЭК");
   const catalogUrls = requestedUrls.filter((url) => url.includes("catalog.test"));
   assertEquals(catalogUrls.map((url) => new URL(url).searchParams.get("category")), ["Светодиодные лампы", "Светодиодные лампы"]);
+  assertEquals(helperPrompt.includes("Категория каталога: «Лампы»"), true);
 });
 
 Deno.test("grounded jargon title evidence accepts compact codes without a product dictionary", () => {
@@ -289,4 +294,52 @@ Deno.test("empty jargon and modifier intersection always returns explicit partia
   assertEquals(result.ok ? result.partial_match : false, true);
   assertEquals(result.ok ? result.unmatched_tokens.includes("e27") : false, true);
   assertEquals(result.ok ? result.results[0]?.pagetitle : null, "Лампа LED CORN 5Вт G4");
+});
+
+Deno.test("literal title-token retry recovers when the broad lexical answer is explanatory", async () => {
+  let helperCalls = 0;
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes("openrouter.ai")) {
+      helperCalls += 1;
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ content?: string }> };
+      const system = body.messages?.[0]?.content ?? "";
+      const candidates = system.includes("буквального поиска") ? ["CORN"] : ["светодиодная лампа"];
+      return new Response(JSON.stringify({
+        choices: [{ message: { tool_calls: [{ function: { arguments: JSON.stringify({ candidates }) } }] } }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const query = new URL(url).searchParams.get("query");
+    const results = query === "CORN"
+      ? [{
+        id: 24780,
+        pagetitle: "Лампа LED CORN 5Вт G4",
+        price: 476,
+        url: "https://220volt.kz/catalog/light/lamps/24780/",
+        category: { pagetitle: "Лампы" },
+        options: [],
+      }]
+      : [];
+    return new Response(JSON.stringify({ data: { results, pagination: { total: results.length } } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const result = await executeJargonRecoverCatalog({
+    query: "кукуруза",
+    modifiers: ["E27"],
+    category: "Лампы",
+    per_page: 5,
+  }, {
+    baseUrl: "https://catalog.test/api",
+    apiToken: "catalog-token",
+    openrouterApiKey: "router-token",
+    fetchImpl,
+  }, new Map());
+
+  assertEquals(helperCalls, 2);
+  assertEquals(result.ok ? result.matched_query : null, "CORN");
+  assertEquals(result.ok ? result.partial_match : false, true);
+  assertEquals(result.ok ? result.results.length : 0, 1);
 });

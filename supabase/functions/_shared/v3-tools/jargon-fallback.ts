@@ -11,6 +11,8 @@ interface JargonFallbackDeps {
   timeoutMs?: number;
   /** Активная категория каталога (например «Лампы»). Помогает помощнику давать релевантные кандидаты. */
   category?: string;
+  /** A stricter retry that asks only for short literal title tokens. */
+  strategy?: "broad" | "title_token";
 }
 
 export interface JargonFallbackResult {
@@ -20,6 +22,8 @@ export interface JargonFallbackResult {
 }
 
 const SYSTEM = `Ты — лексический помощник. Пользователь ввёл термин, по которому каталог 220volt.kz ничего не нашёл. Предложи 1–3 альтернативных поисковых термина — синонимов, профессиональных названий, англоязычных аналогов или альтернативных написаний. НЕ объясняй. Используй ТОЛЬКО инструмент propose_candidates.`;
+
+const TITLE_TOKEN_SYSTEM = `Ты — лексический помощник для буквального поиска по названиям товаров. Верни 1–3 коротких отличительных кандидата длиной 1–2 слова, которые могут буквально встречаться в названии карточки. Для разговорного или жаргонного слова обязательно рассмотри прямой перевод на английский и транслитерацию. Не добавляй характеристики, которых нет в запросе, не возвращай одно только общее название категории, не объясняй. Используй ТОЛЬКО инструмент propose_candidates.`;
 
 const TOOL = {
   type: "function",
@@ -55,6 +59,7 @@ export async function tryJargonFallback(
     : controller.signal;
 
   try {
+    const titleTokenMode = deps.strategy === "title_token";
     const res = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -63,10 +68,10 @@ export async function tryJargonFallback(
       },
       body: JSON.stringify({
         model: "google/gemini-2.5-flash",
-        temperature: 0.3,
+        temperature: titleTokenMode ? 0 : 0.3,
         max_tokens: 200,
         messages: [
-          { role: "system", content: SYSTEM },
+          { role: "system", content: titleTokenMode ? TITLE_TOKEN_SYSTEM : SYSTEM },
           { role: "user", content: deps.category ? `Категория каталога: «${deps.category}». Запрос клиента: «${query}». Предложи 1–3 канонических термина ИМЕННО В КОНТЕКСТЕ этой категории (форма/тип/подтип товара внутри категории). Кандидаты, не относящиеся к этой категории, НЕ предлагай.` : `Запрос: «${query}». Предложи альтернативные термины.` },
         ],
         tools: [TOOL],

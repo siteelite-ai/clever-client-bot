@@ -18,7 +18,7 @@ export interface JargonRecoverCatalogInput {
 
 export interface JargonRecoverCatalogDeps extends CatalogClientDeps {
   openrouterApiKey: string;
-  /** Флаг: передавать ли активную категорию в jargon-помощник для более точных кандидатов. */
+  /** @deprecated A live discovered category is now always used as safe context. */
   categoryContextEnabled?: boolean;
   /**
    * @deprecated Truthful partial evidence is now an invariant rather than an
@@ -205,7 +205,10 @@ export async function executeJargonRecoverCatalog(
 
   const modifiers = input.modifiers ?? [];
   const perPage = input.per_page ?? 10;
-  const categoryHint = deps.categoryContextEnabled && input.category ? input.category.trim() : undefined;
+  // The caller may pass only a live discovered category. It is evidence, not
+  // an experimental hint, so disabling an old rollout flag must not make the
+  // lexical helper context-free and stochastic again.
+  const categoryHint = input.category ? input.category.trim() : undefined;
   const categoryLeaves = Array.isArray(input.category_in)
     ? [...new Set(input.category_in.map(String).map((value) => value.trim()).filter(Boolean))]
     : [];
@@ -293,6 +296,32 @@ export async function executeJargonRecoverCatalog(
     const atomic = await tryCandidates(atomicCandidates, modifiers);
     matched = atomic.matched;
     axialFallback ??= atomic.axial;
+  }
+
+  // A broad lexical answer may be explanatory rather than a literal catalog
+  // token. Retry once with a stricter, vocabulary-free translation/
+  // transliteration task. Every returned candidate is still accepted only
+  // when the complete token is visible in live titles inside discovered leaves.
+  if (!matched && !axialFallback) {
+    const tokenJargon = await tryJargonFallback(source, {
+      apiKey: deps.openrouterApiKey,
+      category: categoryHint,
+      strategy: "title_token",
+      fetchImpl: deps.fetchImpl,
+      timeoutMs: deps.timeoutMs,
+    });
+    const tokenCandidates = (tokenJargon.ok ? tokenJargon.candidates : [])
+      .map((candidate) => candidate.trim())
+      .filter(Boolean)
+      .filter((candidate, index, values) =>
+        values.findIndex((value) => normalize(value) === normalize(candidate)) === index
+      );
+    for (const candidate of tokenCandidates) {
+      if (!allCandidates.some((known) => normalize(known) === normalize(candidate))) allCandidates.push(candidate);
+    }
+    const tokenAttempt = await tryCandidates(tokenCandidates, modifiers);
+    matched = tokenAttempt.matched;
+    axialFallback ??= tokenAttempt.axial;
   }
 
   // If literal modifier matching is empty, translate the consultant's own
