@@ -30,7 +30,7 @@ import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/cr
 import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, demoteUnfrozenRenderCriteria, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
-import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
+import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract, shouldContinueSelectionPastOptionalClarification } from "../_shared/v3-tools/selection-actionability.ts";
 import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
@@ -4280,6 +4280,22 @@ async function runExpertLoop(
 
 
       if (resp.toolCalls.length === 0) {
+        if (shouldFinalizeMissingAnchorReplacement({
+          products_rendered: productsRendered,
+          replacement_intent: replacementIntent,
+          anchor_state: selectionPlan?.anchor_state,
+          preserved_pool_size: anchorMissingRecoveryPool?.ids.length ?? 0,
+        })) {
+          steps.push({
+            step: "v3_anchor_missing_text_finish_routed_to_finalizer",
+            ms: now(),
+            meta: {
+              target: anchorMissingRecoveryPool?.target ?? null,
+              candidates: anchorMissingRecoveryPool?.ids.length ?? 0,
+            },
+          });
+          break;
+        }
         if (requiresToolContinuation) {
           messages.push({ role: "assistant", content: resp.text || null });
           messages.push({
@@ -7437,7 +7453,13 @@ async function runExpertLoop(
           activeSelectionContractComplete = false;
           const rejectedEvidence = `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`;
           ensureActiveSelectionTarget(rejectedEvidence, "rejected_render_reasoning");
-          rejectedRenderFinalizeBreak = shouldFinalizePendingSelection({
+          const anchorMissingPoolCanFinalize = shouldFinalizeMissingAnchorReplacement({
+            products_rendered: productsRendered,
+            replacement_intent: replacementIntent,
+            anchor_state: selectionPlan?.anchor_state,
+            preserved_pool_size: anchorMissingRecoveryPool?.ids.length ?? 0,
+          });
+          rejectedRenderFinalizeBreak = anchorMissingPoolCanFinalize || shouldFinalizePendingSelection({
             products_rendered: productsRendered,
             intent_mode: intentMode,
             has_discovery: Boolean(lastDiscover),
@@ -7453,7 +7475,13 @@ async function runExpertLoop(
             steps.push({
               step: "v3_rejected_render_routed_to_finalizer",
               ms: now(),
-              meta: { error_code: result.error_code, criteria: latestRenderCriteria.length },
+              meta: {
+                error_code: result.error_code,
+                criteria: latestRenderCriteria.length,
+                anchor_missing_pool: anchorMissingPoolCanFinalize
+                  ? anchorMissingRecoveryPool?.ids.length ?? 0
+                  : 0,
+              },
             });
           }
         }

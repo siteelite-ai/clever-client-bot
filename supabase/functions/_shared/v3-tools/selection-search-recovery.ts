@@ -59,6 +59,25 @@ export interface CatalogEmptyDecisionInput {
   final_text: string;
 }
 
+export interface MissingAnchorReplacementFinalizationInput {
+  products_rendered: number;
+  replacement_intent: boolean;
+  anchor_state: string | null | undefined;
+  preserved_pool_size: number;
+}
+
+/** A missing-anchor replacement with a preserved same-class pool is already
+ * actionable. Provider prose or a rejected ID subset must converge on the
+ * deterministic terminal proof path instead of reopening model decisions. */
+export function shouldFinalizeMissingAnchorReplacement(
+  input: MissingAnchorReplacementFinalizationInput,
+): boolean {
+  return input.products_rendered === 0 &&
+    input.replacement_intent &&
+    input.anchor_state === "anchor_missing" &&
+    input.preserved_pool_size > 0;
+}
+
 /**
  * A cold or inconsistent facet endpoint can report an empty intersection even
  * though the already-grounded live category contains valid products. Fetch a

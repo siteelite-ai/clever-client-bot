@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizePendingSelection } from "./selection-search-recovery.ts";
+import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "./selection-search-recovery.ts";
 
 const facets = [
   { key: "feature", caption: "Функция", type: "string", unit: null, values: [{ value: "Да" }] },
@@ -131,6 +131,27 @@ Deno.test("substantive inquiries do not receive a contradictory catalog-empty su
   assertEquals(shouldAppendCatalogEmpty({ products_rendered: 0, intent_mode: "inquire", final_text: "Цена подтверждена каталогом." }), false);
   assertEquals(shouldAppendCatalogEmpty({ products_rendered: 0, intent_mode: "inquire", final_text: "" }), true);
   assertEquals(shouldAppendCatalogEmpty({ products_rendered: 0, intent_mode: "select", final_text: "Ищу варианты." }), true);
+});
+
+Deno.test("a preserved missing-anchor class pool always reaches terminal finalization", () => {
+  assertEquals(shouldFinalizeMissingAnchorReplacement({
+    products_rendered: 0,
+    replacement_intent: true,
+    anchor_state: "anchor_missing",
+    preserved_pool_size: 4,
+  }), true);
+  assertEquals(shouldFinalizeMissingAnchorReplacement({
+    products_rendered: 0,
+    replacement_intent: true,
+    anchor_state: "anchor_missing",
+    preserved_pool_size: 0,
+  }), false);
+  assertEquals(shouldFinalizeMissingAnchorReplacement({
+    products_rendered: 1,
+    replacement_intent: true,
+    anchor_state: "anchor_missing",
+    preserved_pool_size: 4,
+  }), false);
 });
 
 Deno.test("reasoning query plan is deduplicated, specific-first and bounded", () => {
