@@ -18,6 +18,7 @@ Deno.test("catalog facts detector catches price, article, availability, and prod
   assert(containsUnrenderedCatalogFacts("В каталоге есть лампы с цоколем E27 и E40."));
   assert(containsUnrenderedCatalogFacts('В каталоге такие товары обычно проходят как другая форма.'));
   assert(containsUnrenderedCatalogFacts('В каталоге такого значения сейчас нет.'));
+  assert(containsUnrenderedCatalogFacts('В каталоге такой тип должен быть.'));
   assertEquals(containsUnrenderedCatalogFacts("Сейчас проверю, есть ли такие лампы в каталоге."), false);
   assertEquals(containsUnrenderedCatalogFacts("Для этой линии нужен автомат на 16 А."), false);
 });
@@ -219,6 +220,12 @@ Deno.test("redact: одиночный термин фасет переписыв
   assertEquals(result.redacted, false);
   assertEquals(result.text, "Беру три характеристики: количество жил = 3, сечение = 1,5 мм², негорючесть = Да.");
   assert(result.matched.includes("customer_term:facet"));
+});
+
+Deno.test("redact: внутренняя лестница жаргона становится клиентским действием", () => {
+  const result = redactInternals("Пройдусь по лестнице жаргона.");
+  assertEquals(result.redacted, false);
+  assertEquals(result.text, "Проверю варианты написания.");
 });
 
 Deno.test("redact: самобичевание вычищается без подмены текста", () => {

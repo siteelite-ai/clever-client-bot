@@ -91,12 +91,16 @@ function rewriteCustomerFacingServiceTerms(text: string): string {
     "фасете": "характеристике",
     "фасетах": "характеристиках",
   };
-  return text.replace(/(?<![а-яa-z])фасет(?:а|ы|ов|у|ам|ом|ами|е|ах)?(?![а-яa-z])/giu, (match) => {
+  const facetsRewritten = text.replace(/(?<![а-яa-z])фасет(?:а|ы|ов|у|ам|ом|ами|е|ах)?(?![а-яa-z])/giu, (match) => {
     const replacement = forms[match.toLocaleLowerCase("ru")] ?? "характеристика";
     return /^[А-ЯЁ]/u.test(match)
       ? replacement[0].toLocaleUpperCase("ru") + replacement.slice(1)
       : replacement;
   });
+  return facetsRewritten.replace(
+    /(?:пройдусь|пойду|проверю)?\s*(?:по|через)\s+лестниц\p{L}*\s+(?:жаргон\p{L}*|перевод\p{L}*)/giu,
+    (match) => /^[А-ЯЁ]/u.test(match.trim()) ? "Проверю варианты написания" : "проверю варианты написания",
+  );
 }
 
 export interface RedactResult {
@@ -122,7 +126,7 @@ export function containsUnrenderedCatalogFacts(text: string): boolean {
     // Availability is also a catalog fact even when the model omits price,
     // article and URL. Questions/future intent such as «проверю, есть ли» do
     // not match because the assertion must begin with «в каталоге ...».
-    /(?<![а-яa-z])в\s+каталог\p{L}*\s+(?:[^.!?\r\n]{0,80}\s+)?(?:есть|имеются|нет|нашл\p{L}*|представл\p{L}*|доступн\p{L}*|видн\p{L}*|отсутств\p{L}*|не\s+(?:знач\p{L}*|найд\p{L}*|вид\p{L}*)|проход\p{L}*\s+как|называ\p{L}*|относят\p{L}*)(?![а-яa-z])/iu.test(raw)
+    /(?<![а-яa-z])в\s+каталог\p{L}*\s+(?:[^.!?\r\n]{0,80}\s+)?(?:есть|имеются|нет|долж\p{L}*\s+быть|нашл\p{L}*|представл\p{L}*|доступн\p{L}*|видн\p{L}*|отсутств\p{L}*|не\s+(?:знач\p{L}*|найд\p{L}*|вид\p{L}*)|проход\p{L}*\s+как|называ\p{L}*|относят\p{L}*)(?![а-яa-z])/iu.test(raw)
   );
 }
 
