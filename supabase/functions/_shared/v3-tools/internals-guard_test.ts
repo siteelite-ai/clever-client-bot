@@ -150,6 +150,16 @@ Deno.test("alias generalization drops unrequested codes in parenthetical prose",
   );
 });
 
+Deno.test("Cyrillic alias definition drops unrequested codes after the word это", () => {
+  assertEquals(
+    stripUngroundedIntroTechnicalAttributes(
+      "«Лампа кукуруза» — понял, это светодиодные лампы с цоколем E27 или E40, похожие на початок. Смотрю форму колбы.",
+      "А у вас есть лампы кукуруза?",
+    ).text,
+    "«Лампа кукуруза» — понял, это светодиодные лампы, похожие на початок. Смотрю форму колбы.",
+  );
+});
+
 Deno.test("first visible reasoning guard is independent of the agent step", () => {
   assertEquals(shouldGuardFirstVisibleReasoning({
     productsRendered: 0,

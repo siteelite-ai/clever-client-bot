@@ -31,9 +31,19 @@ export function validateWidgetSnapshot(snapshot, {
   return { queryIndex, turn };
 }
 
+export function validateAssistantProse(messages, forbiddenPattern) {
+  if (!Array.isArray(messages)) throw new Error('Assistant prose snapshot is invalid');
+  const prose = messages.filter((message) => typeof message === 'string' && message.trim()).join('\n');
+  if (forbiddenPattern && forbiddenPattern.test(prose)) {
+    throw new Error(`Forbidden unsupported claim is visible in assistant prose: ${forbiddenPattern}`);
+  }
+  return prose;
+}
+
 export async function runWidgetBrowserSmoke(tab, {
   query = 'а у тебя есть лампы кукуруза?',
   expectedProductName = /\b(?:CORN|KORN)\b/iu,
+  forbiddenAssistantPattern = /(?:E27|E40)/iu,
   timeoutMs = 60_000,
 } = {}) {
   if (!tab?.playwright) throw new Error('A browser-client tab is required');
@@ -74,12 +84,23 @@ export async function runWidgetBrowserSmoke(tab, {
   if (!(await input.isEnabled()) || !(await send.isEnabled())) {
     throw new Error('Widget controls stayed disabled after completion');
   }
+  const staleTypingCount = await page.locator('#volt-typing-indicator, #volt-live-typing, #volt-products-typing').count();
+  if (staleTypingCount > 0) throw new Error(`Widget kept ${staleTypingCount} stale typing indicator(s)`);
+  const assistantMessages = await page.locator('.volt-message.assistant').evaluateAll((elements) =>
+    elements
+      .filter((element) => !element.querySelector('a') && !element.id.includes('typing'))
+      .map((element) => element.textContent?.trim() || '')
+  );
+  // The first prose bubble is the static greeting, so only validate the
+  // response generated after the submitted smoke query.
+  const assistantProse = validateAssistantProse(assistantMessages.slice(1), forbiddenAssistantPattern);
   return {
     passed: true,
     query,
     newConversationAvailable: true,
     productLinkCount: linkCount,
     firstHref,
+    assistantProse,
     turnSnapshot: validated.turn,
   };
 }
