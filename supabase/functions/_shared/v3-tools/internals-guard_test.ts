@@ -110,6 +110,23 @@ Deno.test("intro alias guard rejects post-discovery class equivalence and preser
   assertEquals(result.removed, ['В характеристике есть «капсула» — это оно и есть.']);
 });
 
+Deno.test("intro alias guard recognizes a customer-owned quoted definition without a dictionary", () => {
+  const result = stripUngroundedIntroAliasDefinitions(
+    'Понял, «лампа кукуруза» — это цилиндрическая светодиодная лампа. Цоколь E27 вы указали. Смотрю точную маркировку.',
+    "Нужна лампа кукуруза E27",
+  );
+  assertEquals(result.text, "Цоколь E27 вы указали. Смотрю точную маркировку.");
+  assertEquals(result.removed, ['Понял, «лампа кукуруза» — это цилиндрическая светодиодная лампа.']);
+});
+
+Deno.test("intro alias guard removes nearest-class substitution after alias context", () => {
+  const result = stripUngroundedIntroAliasDefinitions(
+    '«Кукуруза» — разговорное название формы. Цилиндрическая — это ближе всего к «кукурузе». Проверю точное написание.',
+  );
+  assertEquals(result.text, "Проверю точное написание.");
+  assertEquals(result.removed.length, 2);
+});
+
 Deno.test("meta: вопрос про платформу перехватывается", () => {
   assert(isMetaSelfQuestion("а на какой платформе ты работаешь?"));
   assert(isMetaSelfQuestion("ну я имею в виду на чем? техничкски расскажи"));

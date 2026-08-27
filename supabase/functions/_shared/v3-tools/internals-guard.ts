@@ -176,7 +176,7 @@ const COMPACT_TECHNICAL_CODE_RE = /(?<![\p{L}\p{N}])(?=[\p{L}\p{N}.-]{2,18}(?![\
 const ALIAS_OR_GENERALIZATION_RE = /(?:\bэто\b|названи\p{L}*|обычно|как\s+правило|чаще\s+всего|проход\p{L}*\s+как)/iu;
 const EXPLICIT_CRITERION_RE = /(?:нуж\p{L}*|треб\p{L}*|беру|закладыва\p{L}*|долж\p{L}*|не\s+(?:ниже|менее|выше|более))/iu;
 const TECHNICAL_ATTRIBUTE_CODE_LIST_RE = /((?:,\s*)?(?:обычно\s+)?(?:с|на|под)\s+(?:[\p{L}-]{2,32}\s+){1,3})((?:[\p{L}]*\d[\p{L}\d.-]*)(?:\s*(?:,|\/|или)\s*(?:[\p{L}]*\d[\p{L}\d.-]*))*)/giu;
-const UNGROUNDED_ALIAS_DEFINITION_RE = /(?:(?:(?:народн|разговорн|бытов|жаргонн|неофициальн)\p{L}*\s+)+(?:названи\p{L}*|обозначени\p{L}*|термин\p{L}*)|так\s+(?:в\s+народе\s+)?называ\p{L}*|(?:по\s+смыслу\s+)?это\s+чаще\s+всего|это\s+оно\s+и\s+есть|проход\p{L}*\s+как)/iu;
+const UNGROUNDED_ALIAS_DEFINITION_RE = /(?:(?:(?:народн|разговорн|бытов|жаргонн|неофициальн)\p{L}*\s+)+(?:названи\p{L}*|обозначени\p{L}*|термин\p{L}*)|так\s+(?:в\s+народе\s+)?называ\p{L}*|(?:по\s+смыслу\s+)?это\s+чаще\s+всего|это\s+оно\s+и\s+есть|это\s+ближе\s+всего|ближе\s+всего\s+к|проход\p{L}*\s+как)/iu;
 const ALIAS_GENERALIZATION_FOLLOWUP_RE = /^\s*(?:обычно|как\s+правило|чаще\s+всего)\s+(?:это|такие|они)(?!\p{L})/iu;
 
 function normalizeCompactCode(value: string): string {
@@ -227,15 +227,25 @@ export function stripUngroundedIntroTechnicalAttributes(
  * class, but that relation is not evidence until live card titles prove it.
  * Explicit engineering criteria remain intact and continue to drive search.
  */
-export function stripUngroundedIntroAliasDefinitions(text: string): CatalogFactStripResult {
+export function stripUngroundedIntroAliasDefinitions(
+  text: string,
+  customerText = "",
+): CatalogFactStripResult {
   const removed: string[] = [];
   let aliasContext = false;
+  const normalizedCustomer = norm(customerText).replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/gu, " ").trim();
   const paragraphs = String(text ?? "").split(/\n\s*\n/u);
   const cleaned = paragraphs.map((paragraph) => {
     const sentences = paragraph.match(/[^.!?]+(?:[.!?]+|$)/gu) ?? [paragraph];
     return sentences.map((sentence) => {
       const trimmed = sentence.trim();
-      const directDefinition = UNGROUNDED_ALIAS_DEFINITION_RE.test(trimmed);
+      const quotedCustomerDefinition = [...trimmed.matchAll(/[«“"]([^»”"\r\n]{2,80})[»”"]/gu)].some((match) => {
+        const phrase = norm(String(match[1] ?? "")).replace(/[^\p{L}\p{N}]+/gu, " ").replace(/\s+/gu, " ").trim();
+        if (!phrase || !normalizedCustomer || !(` ${normalizedCustomer} `.includes(` ${phrase} `))) return false;
+        const tail = trimmed.slice((match.index ?? 0) + match[0].length);
+        return /^\s*[—–-]\s*это(?!\p{L})/iu.test(tail);
+      });
+      const directDefinition = quotedCustomerDefinition || UNGROUNDED_ALIAS_DEFINITION_RE.test(trimmed);
       const followupGeneralization = aliasContext && ALIAS_GENERALIZATION_FOLLOWUP_RE.test(trimmed);
       if ((directDefinition || followupGeneralization) && !EXPLICIT_CRITERION_RE.test(trimmed)) {
         removed.push(trimmed);

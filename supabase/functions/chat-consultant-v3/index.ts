@@ -4034,7 +4034,7 @@ async function runExpertLoop(
         }
       }
       const introAliasGuard = introSafetyApplies
-        ? stripUngroundedIntroAliasDefinitions(resp.text)
+        ? stripUngroundedIntroAliasDefinitions(resp.text, userMessage)
         : { text: resp.text, removed: [] as string[] };
       const introAttributeGuard = introSafetyApplies
         ? stripUngroundedIntroTechnicalAttributes(introAliasGuard.text, userMessage)
