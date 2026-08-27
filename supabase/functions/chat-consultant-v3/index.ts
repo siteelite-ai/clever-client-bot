@@ -17,6 +17,7 @@ import {
   type JargonRecoverCatalogInput,
   productSupportsGroundedAxis,
   selectGroundedJargonCacheFallback,
+  titleSupportsGroundedAxis,
   titleSupportsGroundedJargonQuery,
 } from "../_shared/v3-tools/jargon-recover-catalog.ts";
 
@@ -7663,7 +7664,7 @@ async function runExpertLoop(
             .filter((product): product is ProductFull => Boolean(
               product &&
               Number.isFinite(product.price) && product.price > 0 &&
-              productSupportsGroundedAxis(product, modifier)
+              titleSupportsGroundedAxis(product.pagetitle, modifier)
             ));
           const axisTarget = verifySelectionTargetWithVisibleTitle(target, axisProducts);
           return filterProductIdsByBudgetCap(
@@ -7724,9 +7725,10 @@ async function runExpertLoop(
         split.matchedQuery,
         sections.slice(1).map((section) => section.label),
       );
+      const captionDelta = `${finalText ? "\n\n" : ""}${caption}`;
       send({ type: "assistant_turn_break", reason: "text_before_render" });
-      send({ type: "delta", content: caption });
-      finalText += `${finalText ? "\n\n" : ""}${caption}`;
+      send({ type: "delta", content: captionDelta });
+      finalText += captionDelta;
       send({
         type: "products_block",
         markdown: markdownSections.join("\n\n"),

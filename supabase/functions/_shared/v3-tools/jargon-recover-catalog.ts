@@ -155,9 +155,17 @@ function productMatchesModifiers(p: ProductRef, modifiers: string[]): boolean {
  * deliberately vocabulary-free and therefore cannot manufacture synonyms.
  */
 export function productSupportsGroundedAxis(product: ProductRef, axis: string): boolean {
+  return titleSupportsGroundedAxis(
+    `${product.pagetitle} ${product.vendor ?? ""} ${product.short_traits.join(" ")}`,
+    axis,
+  );
+}
+
+/** Same structural proof restricted to text that is visible in a card title. */
+export function titleSupportsGroundedAxis(title: string, axis: string): boolean {
   const value = normalize(axis);
   if (!value) return false;
-  const rawHaystack = `${product.pagetitle} ${product.vendor ?? ""} ${product.short_traits.join(" ")}`;
+  const rawHaystack = String(title ?? "");
   if (/\d/u.test(value) && /\p{L}/u.test(value)) {
     return normalizeCodeLike(rawHaystack).includes(normalizeCodeLike(value));
   }

@@ -6,6 +6,7 @@ import {
   productSupportsGroundedAxis,
   selectGroundedJargonCacheFallback,
   splitSemanticJargonModifiers,
+  titleSupportsGroundedAxis,
   titleSupportsLiveCategoryLabel,
   titleSupportsGroundedJargonQuery,
 } from "./jargon-recover-catalog.ts";
@@ -249,6 +250,8 @@ Deno.test("grounded axis proof is structural and vocabulary-free", () => {
   assertEquals(productSupportsGroundedAxis(product, "IP 65"), true);
   assertEquals(productSupportsGroundedAxis(product, "E14"), false);
   assertEquals(productSupportsGroundedAxis(product, "кукуруза"), false);
+  assertEquals(titleSupportsGroundedAxis(product.pagetitle, "IP65"), false);
+  assertEquals(titleSupportsGroundedAxis(product.pagetitle, "E27"), true);
 });
 
 Deno.test("axis split copy states that independently proven sections are not one match", () => {
