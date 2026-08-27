@@ -136,8 +136,13 @@ export interface CatalogFactStripResult {
 }
 
 export const MISSING_ANCHOR_SAFE_INTRO =
-  "Понял задачу. Сначала проверю исходную модель в актуальном каталоге, чтобы не переносить в подбор неподтверждённые характеристики. " +
+  "Сначала проверю исходную модель в актуальном каталоге, чтобы не переносить в подбор неподтверждённые характеристики. " +
   "Если карточка не найдётся, покажу только товары подтверждённого класса и отдельно отмечу границы сравнения.";
+
+const MISSING_ANCHOR_TASK_RE =
+  /(?:аналог\p{L}*|замен\p{L}*|ищ(?:у|ешь|ете)|нужн\p{L}*\s+найт\p{L}*|подобр\p{L}*)/iu;
+const MISSING_ANCHOR_SPECULATION_RE =
+  /(?:судя\s+по|скорее\s+всего|вероятн\p{L}*|предполож\p{L}*|похож\p{L}*\s+на|можно\s+вывест\p{L}*\s+из\s+код\p{L}*)/iu;
 
 /**
  * Before the source card is found, no attribute or brand inferred from its
@@ -153,7 +158,26 @@ export function replaceUngroundedMissingAnchorIntro(text: string): CatalogFactSt
   const original = String(text ?? "").trim();
   if (!original) return { text: original, removed: [] };
   if (original === MISSING_ANCHOR_SAFE_INTRO) return { text: original, removed: [] };
-  return { text: MISSING_ANCHOR_SAFE_INTRO, removed: [original] };
+  const sentences = original.match(/[^.!?]+(?:[.!?]+|$)/gu)
+    ?.map((sentence) => sentence.trim())
+    .filter(Boolean) ?? [];
+  const groundedTask = sentences
+    // Keep the model-owned product-class interpretation, but cut an appended
+    // source definition such as “— это релейный …”: the absent card cannot
+    // prove anything after that copula.
+    .map((sentence) => sentence
+      .replace(/\s+[—–-]\s+это(?!\p{L})[\s\S]*$/iu, ".")
+      .replace(/\s+/gu, " ")
+      .trim())
+    .find((sentence) =>
+      MISSING_ANCHOR_TASK_RE.test(sentence) &&
+      !MISSING_ANCHOR_SPECULATION_RE.test(sentence)
+    );
+  const safeText = groundedTask
+    ? `${groundedTask} ${MISSING_ANCHOR_SAFE_INTRO}`
+    : MISSING_ANCHOR_SAFE_INTRO;
+  if (safeText === original) return { text: original, removed: [] };
+  return { text: safeText, removed: [original] };
 }
 
 /** The intro boundary follows what the customer has seen, not an agent step. */

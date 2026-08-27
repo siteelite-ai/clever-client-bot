@@ -29,6 +29,21 @@ Deno.test("missing-anchor intro preserves the verification plan and removes infe
   assertStringIncludes(MISSING_ANCHOR_SAFE_INTRO, "подтверждённого класса");
 });
 
+Deno.test("missing-anchor intro keeps model-owned class reasoning and literal customer requirements", () => {
+  const compact = replaceUngroundedMissingAnchorIntro(
+    "Понял задачу — ищешь функциональную замену автомату Schneider Acti9 на 16 А, характеристика C. " +
+      "Это модульный автомат на DIN-рейку, 1-полюсный, если не указано иное. Смотрю варианты.",
+  ).text;
+  assertStringIncludes(compact, "замену автомату Schneider Acti9 на 16 А, характеристика C");
+  assertEquals(/din-рейк|1-полюс/iu.test(compact), false);
+
+  const sourceDefinition = replaceUngroundedMissingAnchorIntro(
+    "Понял задачу. Вы ищете аналог стабилизатора ACH-10001-C — это релейный однофазный стабилизатор на 10 кВА, скорее всего бренда GENERICA.",
+  ).text;
+  assertStringIncludes(sourceDefinition, "аналог стабилизатора ACH-10001-C");
+  assertEquals(/релейн|однофаз|10\s*ква|generica/iu.test(sourceDefinition), false);
+});
+
 Deno.test("missing-anchor intro sanitizer is idempotent and does not invent a bubble from silence", () => {
   assertEquals(replaceUngroundedMissingAnchorIntro(""), { text: "", removed: [] });
   assertEquals(
