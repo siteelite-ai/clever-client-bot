@@ -7571,23 +7571,20 @@ async function runExpertLoop(
         ));
       const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, candidateProducts);
       const gate = applyCriteriaGate(candidateProducts, terminalCriteria);
-      const safeIds = guardFinalRenderIds( filterProductIdsByBudgetCap(
-        candidateProducts
-          .map((product) => product.id)
-          .filter((id) => targetReport.passed_ids.includes(id) && gate.passed_ids.includes(id)),
-        ctx.cache,
-        extractBudgetCap(userMessage),
-      ).ids,
-      ).slice(0, 10);
-      if (safeIds.length === 0) {
-        const unresolvedModifiers = modifiers
-          .filter((modifier, index, values) =>
-            values.findIndex((known) => normalizeForMatch(known) === normalizeForMatch(modifier)) === index
-          )
-          .filter((modifier) => !candidateProducts.some((product) =>
-            productSupportsGroundedAxis(product, modifier)
-          ));
-        if (jargonResult.partial_match && matchedQuery && candidateProducts.length > 0 && unresolvedModifiers.length > 0) {
+      const unresolvedModifiers = modifiers
+        .filter((modifier, index, values) =>
+          values.findIndex((known) => normalizeForMatch(known) === normalizeForMatch(modifier)) === index
+        )
+        .filter((modifier) => !candidateProducts.some((product) =>
+          productSupportsGroundedAxis(product, modifier)
+        ));
+      // A helper-selected spelling whose source vocabulary is still reported
+      // as unmatched is evidence of a related direction, never proof of an
+      // exact customer request. Only an independently missing modifier can
+      // form a labelled split; an associative candidate with all modifiers
+      // (for example a different E27 lamp) must remain honest-empty.
+      if (jargonResult.partial_match) {
+        if (matchedQuery && candidateProducts.length > 0 && unresolvedModifiers.length > 0) {
           return {
             kind: "partial",
             split: {
@@ -7599,6 +7596,17 @@ async function runExpertLoop(
             },
           };
         }
+        return null;
+      }
+      const safeIds = guardFinalRenderIds( filterProductIdsByBudgetCap(
+        candidateProducts
+          .map((product) => product.id)
+          .filter((id) => targetReport.passed_ids.includes(id) && gate.passed_ids.includes(id)),
+        ctx.cache,
+        extractBudgetCap(userMessage),
+      ).ids,
+      ).slice(0, 10);
+      if (safeIds.length === 0) {
         return null;
       }
       const rendered = await runTool("render_products", {

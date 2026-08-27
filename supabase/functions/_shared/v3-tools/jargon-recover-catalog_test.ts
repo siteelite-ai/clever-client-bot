@@ -298,7 +298,7 @@ Deno.test("empty jargon and modifier intersection always returns explicit partia
   assertEquals(result.ok ? result.results[0]?.pagetitle : null, "Лампа LED CORN 5Вт G4");
 });
 
-Deno.test("literal title-token retry recovers when the broad lexical answer is explanatory", async () => {
+Deno.test("literal title-token strategy is the primary jargon recovery mode", async () => {
   let helperCalls = 0;
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = String(input);
@@ -340,7 +340,7 @@ Deno.test("literal title-token retry recovers when the broad lexical answer is e
     fetchImpl,
   }, new Map());
 
-  assertEquals(helperCalls, 2);
+  assertEquals(helperCalls, 1);
   assertEquals(result.ok ? result.matched_query : null, "CORN");
   assertEquals(result.ok ? result.partial_match : false, true);
   assertEquals(result.ok ? result.results.length : 0, 1);

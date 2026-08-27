@@ -216,6 +216,7 @@ export async function executeJargonRecoverCatalog(
   const jargon = await tryJargonFallback(source, {
     apiKey: deps.openrouterApiKey,
     category: categoryHint,
+    strategy: "title_token",
     fetchImpl: deps.fetchImpl,
     timeoutMs: deps.timeoutMs,
   });
@@ -328,32 +329,6 @@ export async function executeJargonRecoverCatalog(
     axialFallback ??= atomic.axial;
   }
 
-  // A broad lexical answer may be explanatory rather than a literal catalog
-  // token. Retry once with a stricter, vocabulary-free translation/
-  // transliteration task. Every returned candidate is still accepted only
-  // when the complete token is visible in live titles inside discovered leaves.
-  if (!matched && !axialFallback) {
-    const tokenJargon = await tryJargonFallback(source, {
-      apiKey: deps.openrouterApiKey,
-      category: categoryHint,
-      strategy: "title_token",
-      fetchImpl: deps.fetchImpl,
-      timeoutMs: deps.timeoutMs,
-    });
-    const tokenCandidates = (tokenJargon.ok ? tokenJargon.candidates : [])
-      .map((candidate) => candidate.trim())
-      .filter(Boolean)
-      .filter((candidate, index, values) =>
-        values.findIndex((value) => normalize(value) === normalize(candidate)) === index
-      );
-    for (const candidate of tokenCandidates) {
-      if (!allCandidates.some((known) => normalize(known) === normalize(candidate))) allCandidates.push(candidate);
-    }
-    const tokenAttempt = await tryCandidates(tokenCandidates, modifiers);
-    matched = tokenAttempt.matched;
-    axialFallback ??= tokenAttempt.axial;
-  }
-
   // If literal modifier matching is empty, translate the consultant's own
   // descriptive modifiers together with its query. Numeric/code-like axes stay
   // independent, and the caller still verifies matched_query in live titles.
@@ -364,6 +339,7 @@ export async function executeJargonRecoverCatalog(
       const bridgeJargon = await tryJargonFallback(bridgeSource, {
         apiKey: deps.openrouterApiKey,
         category: categoryHint,
+        strategy: "title_token",
         fetchImpl: deps.fetchImpl,
         timeoutMs: deps.timeoutMs,
       });
