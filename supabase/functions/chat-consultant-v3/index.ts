@@ -32,7 +32,7 @@ import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-le
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract, shouldContinueSelectionPastOptionalClarification } from "../_shared/v3-tools/selection-actionability.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, promoteSelectionTargetBackingCriteria, restoreSelectionTargetBackingCriteria, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, projectSelectionTargetFacetCriteria, promoteSelectionTargetBackingCriteria, restoreSelectionTargetBackingCriteria, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
@@ -5102,10 +5102,24 @@ async function runExpertLoop(
             tc.args.selection_target,
             renderRawCriteria,
           );
+          const targetFacetCriteria = replacementIntent && lastDiscover
+            ? projectSelectionTargetFacetCriteria(
+              priorActiveSelectionTarget,
+              tc.args.selection_target,
+              lastDiscover.facets,
+            )
+            : [];
           targetBackedRenderCriteria = restoreSelectionTargetBackingCriteria(
             targetBackedRenderCriteria,
-            targetBackedCriteria.backing,
+            [...targetBackedCriteria.backing, ...targetFacetCriteria],
           );
+          if (targetFacetCriteria.length > 0) {
+            steps.push({
+              step: "v3_selection_target_facets_compiled",
+              ms: now(),
+              meta: { target, criteria: targetFacetCriteria },
+            });
+          }
           if (targetBackedCriteria.promoted.length > 0) {
             renderRawCriteria = targetBackedCriteria.criteria;
             (tc.args as Record<string, unknown>).criteria = renderRawCriteria;

@@ -420,6 +420,54 @@ export function restoreSelectionTargetBackingCriteria(
 }
 
 /**
+ * Compile a structured target refinement into a unique live facet value when
+ * the provider omitted the equivalent criterion. Matching is literal and
+ * value-driven: captions, category names and the facet vocabulary itself
+ * cannot self-authorize a class. Ambiguous values are ignored.
+ */
+export function projectSelectionTargetFacetCriteria(
+  baseTarget: string | null,
+  targetValue: unknown,
+  facets: Array<{
+    key: string;
+    caption?: string | null;
+    unit?: string | null;
+    values?: Array<{ value: string }>;
+  }>,
+): Criterion[] {
+  const base = String(baseTarget ?? "").trim();
+  const target = parseSelectionTarget(targetValue);
+  if (
+    !base || !target.product_class ||
+    !selectionTargetIsDeclared(base, target.product_class)
+  ) return [];
+  const baseTokens = new Set(meaningfulTokens(base));
+  const targetTokens = new Set(meaningfulTokens(
+    `${target.product_class}\n${target.application_context.join("\n")}`,
+  ).filter((token) => !baseTokens.has(token)));
+  if (targetTokens.size === 0) return [];
+
+  return (Array.isArray(facets) ? facets : []).flatMap((facet) => {
+    const matches = (Array.isArray(facet.values) ? facet.values : [])
+      .map(({ value }) => String(value ?? "").trim())
+      .filter(Boolean)
+      .filter((value) => {
+        const tokens = meaningfulTokens(value);
+        return tokens.length > 0 && tokens.every((token) => targetTokens.has(token));
+      });
+    const unique = [...new Set(matches)];
+    if (unique.length !== 1) return [];
+    return [{
+      key: String(facet.caption || facet.key),
+      op: "eq" as const,
+      value: unique[0],
+      unit: facet.unit ?? undefined,
+      level: "A" as const,
+    }];
+  });
+}
+
+/**
  * Decides whether render verification may return to an already grounded base
  * class after the model emitted a richer class phrase. The projection never
  * authorizes a sibling: the base must still be declared inside the proposed

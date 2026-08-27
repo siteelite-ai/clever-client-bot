@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, promoteSelectionTargetBackingCriteria, restoreSelectionTargetBackingCriteria, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, projectSelectionTargetFacetCriteria, promoteSelectionTargetBackingCriteria, restoreSelectionTargetBackingCriteria, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
@@ -381,6 +381,53 @@ Deno.test("later scalar normalization cannot overwrite a target-backing facet va
     { key: "Мощность", op: "eq", value: "100", level: "A" },
     { key: "Способ монтажа", op: "eq", value: "консольный", level: "A" },
   ]);
+});
+
+Deno.test("a structured class refinement compiles into one literal live facet value", () => {
+  assertEquals(projectSelectionTargetFacetCriteria(
+    "светильник",
+    {
+      product_class: "консольный уличный светильник",
+      application_context: ["наружное освещение"],
+    },
+    [
+      {
+        key: "mount",
+        caption: "Способ монтажа",
+        unit: null,
+        values: [{ value: "консольный" }, { value: "потолочный" }],
+      },
+      {
+        key: "kind",
+        caption: "Вид",
+        unit: null,
+        values: [{ value: "настольные и напольные" }, { value: "для освещения улиц" }],
+      },
+    ],
+  ), [{
+    key: "Способ монтажа",
+    op: "eq",
+    value: "консольный",
+    unit: undefined,
+    level: "A",
+  }]);
+});
+
+Deno.test("ambiguous or undeclared live facet values cannot define the target", () => {
+  assertEquals(projectSelectionTargetFacetCriteria(
+    "устройство",
+    { product_class: "настенное устройство", application_context: [] },
+    [{
+      key: "mount",
+      caption: "Монтаж",
+      values: [{ value: "настенный" }, { value: "настенное" }],
+    }],
+  ), []);
+  assertEquals(projectSelectionTargetFacetCriteria(
+    "устройство",
+    { product_class: "настенное устройство", application_context: [] },
+    [{ key: "color", caption: "Цвет", values: [{ value: "чёрный" }] }],
+  ), []);
 });
 
 Deno.test("an exact named entity may discard a model-only class adjective but never switch siblings", () => {
