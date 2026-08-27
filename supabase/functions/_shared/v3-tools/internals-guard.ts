@@ -122,7 +122,7 @@ export function containsUnrenderedCatalogFacts(text: string): boolean {
     // Availability is also a catalog fact even when the model omits price,
     // article and URL. Questions/future intent such as «проверю, есть ли» do
     // not match because the assertion must begin with «в каталоге ...».
-    /(?<![а-яa-z])в\s+каталог\p{L}*\s+(?:уже\s+)?(?:есть|имеются|нашл\p{L}*|представл\p{L}*|доступн\p{L}*|видн\p{L}*)(?![а-яa-z])/iu.test(raw)
+    /(?<![а-яa-z])в\s+каталог\p{L}*\s+(?:[^.!?\r\n]{0,80}\s+)?(?:есть|имеются|нашл\p{L}*|представл\p{L}*|доступн\p{L}*|видн\p{L}*|проход\p{L}*\s+как|называ\p{L}*|относят\p{L}*)(?![а-яa-z])/iu.test(raw)
   );
 }
 
@@ -145,10 +145,69 @@ export function stripUnrenderedCatalogFactSegments(text: string): CatalogFactStr
   const kept: string[] = [];
   const removed: string[] = [];
   for (const paragraph of paragraphs) {
-    if (containsUnrenderedCatalogFacts(paragraph)) removed.push(paragraph);
-    else kept.push(paragraph);
+    if (!containsUnrenderedCatalogFacts(paragraph)) {
+      kept.push(paragraph);
+      continue;
+    }
+    // A useful intro and a premature catalog claim often share one paragraph.
+    // Remove only the unsafe sentence so the customer's visible reasoning is
+    // preserved instead of being replaced by silence.
+    const sentences = paragraph.match(/[^.!?]+(?:[.!?]+|$)/gu)?.map((sentence) => sentence.trim()).filter(Boolean) ?? [];
+    const safeSentences: string[] = [];
+    for (const sentence of sentences.length > 0 ? sentences : [paragraph]) {
+      if (containsUnrenderedCatalogFacts(sentence)) removed.push(sentence);
+      else safeSentences.push(sentence);
+    }
+    if (safeSentences.length > 0) kept.push(safeSentences.join(" "));
   }
   return { text: kept.join("\n\n"), removed };
+}
+
+const COMPACT_TECHNICAL_CODE_RE = /(?<![\p{L}\p{N}])(?=[\p{L}\p{N}.-]{2,18}(?![\p{L}\p{N}]))(?=[\p{L}\p{N}.-]*\p{L})(?=[\p{L}\p{N}.-]*\d)[\p{L}\p{N}][\p{L}\p{N}.-]{1,17}(?![\p{L}\p{N}])/gu;
+const ALIAS_OR_GENERALIZATION_RE = /(?:\bэто\b|названи\p{L}*|обычно|как\s+правило|чаще\s+всего|проход\p{L}*\s+как)/iu;
+const EXPLICIT_CRITERION_RE = /(?:нуж\p{L}*|треб\p{L}*|беру|закладыва\p{L}*|долж\p{L}*|не\s+(?:ниже|менее|выше|более))/iu;
+const TECHNICAL_ATTRIBUTE_CODE_LIST_RE = /((?:,\s*)?(?:обычно\s+)?(?:с|на|под)\s+(?:[\p{L}-]{2,32}\s+){1,3})((?:[\p{L}]*\d[\p{L}\d.-]*)(?:\s*(?:,|\/|или)\s*(?:[\p{L}]*\d[\p{L}\d.-]*))*)/giu;
+
+function normalizeCompactCode(value: string): string {
+  return String(value ?? "").toLocaleLowerCase("ru-RU").replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+/**
+ * The first visible reasoning bubble may explain a customer-owned nickname,
+ * but it must not attach arbitrary catalogue codes to that nickname. Codes the
+ * customer actually typed are retained. Explicitly reasoned requirements are
+ * also retained; only definitional/generalising claims are cleaned. This is a
+ * structural evidence boundary and contains no product/category vocabulary.
+ */
+export function stripUngroundedIntroTechnicalAttributes(
+  text: string,
+  customerText: string,
+): CatalogFactStripResult {
+  const requestedCodes = new Set(
+    (String(customerText ?? "").match(COMPACT_TECHNICAL_CODE_RE) ?? []).map(normalizeCompactCode),
+  );
+  const removed: string[] = [];
+  const paragraphs = String(text ?? "").split(/\n\s*\n/u);
+  const cleanedParagraphs = paragraphs.map((paragraph) => {
+    const sentences = paragraph.match(/[^.!?]+(?:[.!?]+|$)/gu) ?? [paragraph];
+    return sentences.map((sentence) => {
+      if (!ALIAS_OR_GENERALIZATION_RE.test(sentence) || EXPLICIT_CRITERION_RE.test(sentence)) return sentence.trim();
+      return sentence.replace(
+        TECHNICAL_ATTRIBUTE_CODE_LIST_RE,
+        (whole, prefix: string, codeList: string) => {
+          const trailingPunctuation = codeList.match(/[.!?]+$/u)?.[0] ?? "";
+          const codeBody = trailingPunctuation ? codeList.slice(0, -trailingPunctuation.length) : codeList;
+          const codes = codeBody.match(COMPACT_TECHNICAL_CODE_RE) ?? [];
+          const kept = codes.filter((code) => requestedCodes.has(normalizeCompactCode(code)));
+          if (kept.length === codes.length) return whole;
+          removed.push(String(whole).trim());
+          if (kept.length === 0) return trailingPunctuation;
+          return `${prefix}${kept.join(" или ")}${trailingPunctuation}`;
+        },
+      ).replace(/\s+,/gu, ",").replace(/[ \t]{2,}/gu, " ").trim();
+    }).filter(Boolean).join(" ");
+  }).map((paragraph) => paragraph.trim()).filter(Boolean);
+  return { text: cleanedParagraphs.join("\n\n"), removed };
 }
 
 /**

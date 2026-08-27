@@ -5,6 +5,7 @@ import {
   isMetaSelfQuestion,
   redactInternals,
   sanitizeIntermediateReasoning,
+  stripUngroundedIntroTechnicalAttributes,
   stripUnrenderedCatalogFactSegments,
 } from "./internals-guard.ts";
 
@@ -13,6 +14,7 @@ Deno.test("catalog facts detector catches price, article, availability, and prod
   assert(containsUnrenderedCatalogFacts("Цена: 1 000 тг"));
   assert(containsUnrenderedCatalogFacts("[Товар](https://220volt.kz/catalog/a/b/c/)"));
   assert(containsUnrenderedCatalogFacts("В каталоге есть лампы с цоколем E27 и E40."));
+  assert(containsUnrenderedCatalogFacts('В каталоге такие товары обычно проходят как другая форма.'));
   assertEquals(containsUnrenderedCatalogFacts("Сейчас проверю, есть ли такие лампы в каталоге."), false);
   assertEquals(containsUnrenderedCatalogFacts("Для этой линии нужен автомат на 16 А."), false);
 });
@@ -23,6 +25,43 @@ Deno.test("catalog fact sanitizer removes only unsafe paragraphs", () => {
   );
   assertEquals(result.text, "Серия отличается строгим дизайном и защитными шторками.\n\nМогу показать позиции этой серии.");
   assertEquals(result.removed, ["**Цена** — от 1 100 ₸."]);
+});
+
+Deno.test("catalog fact sanitizer preserves a safe sentence beside a premature claim", () => {
+  const result = stripUnrenderedCatalogFactSegments(
+    '«Кукуруза» — разговорное название формы лампы. В каталоге такие лампы обычно проходят как цилиндрические.',
+  );
+  assertEquals(result.text, '«Кукуруза» — разговорное название формы лампы.');
+  assertEquals(result.removed, ["В каталоге такие лампы обычно проходят как цилиндрические."]);
+});
+
+Deno.test("intro reasoning drops unrequested technical codes from alias generalizations", () => {
+  const result = stripUngroundedIntroTechnicalAttributes(
+    '«Кукуруза» — это обычно светодиодная лампа с цоколем E27 или E40, похожая на початок. Проверяю сам тип.',
+    "А у вас есть лампы кукуруза?",
+  );
+  assertEquals(
+    result.text,
+    '«Кукуруза» — это обычно светодиодная лампа, похожая на початок. Проверяю сам тип.',
+  );
+  assertEquals(result.removed, ["с цоколем E27 или E40"]);
+});
+
+Deno.test("intro reasoning retains customer codes and explicit derived criteria", () => {
+  assertEquals(
+    stripUngroundedIntroTechnicalAttributes(
+      '«Кукуруза» — это обычно лампа с цоколем E27 или E40.',
+      "Нужна лампа кукуруза E27",
+    ).text,
+    '«Кукуруза» — это обычно лампа с цоколем E27.',
+  );
+  assertEquals(
+    stripUngroundedIntroTechnicalAttributes(
+      "Для улицы нужен класс защиты IP65, поэтому проверяю его.",
+      "Подбери светильник на улицу",
+    ).text,
+    "Для улицы нужен класс защиты IP65, поэтому проверяю его.",
+  );
 });
 
 Deno.test("meta: вопрос про платформу перехватывается", () => {

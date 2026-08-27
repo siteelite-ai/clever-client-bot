@@ -102,7 +102,7 @@ import {
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
 import { containsUnrenderedCatalogFacts, isMetaSelfQuestion,
-  META_DECLINE_TEXT, redactInternals, sanitizeIntermediateReasoning, stripUnrenderedCatalogFactSegments } from "../_shared/v3-tools/internals-guard.ts";
+  META_DECLINE_TEXT, redactInternals, sanitizeIntermediateReasoning, stripUngroundedIntroTechnicalAttributes, stripUnrenderedCatalogFactSegments } from "../_shared/v3-tools/internals-guard.ts";
 import {
   type AgentPhase,
   boundedAgentStepTimeout,
@@ -4061,14 +4061,23 @@ async function runExpertLoop(
       //    (важно для предупреждений о несоответствии параметров: цоколь, мощность и т.п.)
       //  • промежуточная болтовня между тулами → глушим
       if (resp.text.trim()) {
-        assistantReasoning += `\n${resp.text}`;
+        const isUngroundedIntro = isFirstTurn && !hasRender && !isFinalTurn;
+        const introAttributes = isUngroundedIntro
+          ? stripUngroundedIntroTechnicalAttributes(resp.text, userMessage)
+          : { text: resp.text, removed: [] as string[] };
+        const introFacts = isUngroundedIntro && containsUnrenderedCatalogFacts(introAttributes.text)
+          ? stripUnrenderedCatalogFactSegments(introAttributes.text)
+          : { text: introAttributes.text, removed: [] as string[] };
+        // The same evidence-safe text drives both the visible bubble and all
+        // downstream proof contracts. Otherwise a hidden, unrequested code in
+        // raw model prose could still become a search/filter obligation even
+        // after being removed from the UI.
+        const reasoningTextForContracts = introFacts.text;
+        assistantReasoning += `\n${reasoningTextForContracts}`;
         declaredAliasQuery ??= extractDeclaredCatalogAlias(userMessage, assistantReasoning);
         if (isFirstTurn && !hasRender && !isFinalTurn) {
-          const safeReasoning = sanitizeIntermediateReasoning(resp.text);
-          const sanitizedIntro = containsUnrenderedCatalogFacts(safeReasoning.text)
-            ? stripUnrenderedCatalogFactSegments(safeReasoning.text)
-            : { text: safeReasoning.text, removed: [] as string[] };
-          const introText = sanitizedIntro.text.trim();
+          const safeReasoning = sanitizeIntermediateReasoning(reasoningTextForContracts);
+          const introText = safeReasoning.text.trim();
           if (safeReasoning.suppressed) {
             steps.push({
               step: "v3_assistant_text_suppressed_internals",
@@ -4076,14 +4085,26 @@ async function runExpertLoop(
               meta: { fragment_index: step, matched: safeReasoning.matched },
             });
           }
-          if (sanitizedIntro.removed.length > 0) {
+          if (introAttributes.removed.length > 0) {
+            steps.push({
+              step: "v3_guard_ungrounded_intro_attributes",
+              ms: now(),
+              meta: {
+                fragment_index: step,
+                original_text: resp.text,
+                removed_segments: introAttributes.removed,
+                kept_chars: introText.length,
+              },
+            });
+          }
+          if (introFacts.removed.length > 0) {
             steps.push({
               step: "v3_guard_premature_text_facts",
               ms: now(),
               meta: {
                 fragment_index: step,
                 original_text: resp.text,
-                removed_segments: sanitizedIntro.removed,
+                removed_segments: introFacts.removed,
                 kept_chars: introText.length,
               },
             });
