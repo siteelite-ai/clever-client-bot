@@ -304,25 +304,61 @@ export function evaluate(expect = {}, response) {
   return failures;
 }
 
+const TRANSIENT_NETWORK_CODES = new Set([
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_SOCKET',
+]);
+
+function isTransientNetworkError(error) {
+  const code = error?.code ?? error?.cause?.code;
+  return TRANSIENT_NETWORK_CODES.has(code) || /(?:terminated|fetch failed|socket|timeout)/iu.test(String(error?.message ?? ''));
+}
+
+export async function fetchAcceptanceTurn(payload, {
+  fetchImpl = fetch,
+  maxAttempts = 2,
+  retryDelayMs = 500,
+} = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetchImpl(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+          apikey: apiKey,
+        },
+        body: JSON.stringify(payload),
+      });
+      const raw = await response.text();
+      return { response, raw, attempts: attempt };
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts || !isTransientNetworkError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs * attempt));
+    }
+  }
+  throw lastError;
+}
+
 async function runTurn({ message, expect }, state) {
   const startedAt = Date.now();
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-      apikey: apiKey,
-    },
-    body: JSON.stringify({
-      message,
-      messageId: crypto.randomUUID(),
-      sessionId: state.sessionId,
-      history: state.history.slice(-10),
-      stream: true,
-      dialogSlots: {},
-    }),
+  const payload = {
+    message,
+    messageId: crypto.randomUUID(),
+    sessionId: state.sessionId,
+    history: state.history.slice(-10),
+    stream: true,
+    dialogSlots: {},
+  };
+  const { response, raw, attempts } = await fetchAcceptanceTurn(payload, {
+    maxAttempts: 2,
+    retryDelayMs: 500,
   });
-  const raw = await response.text();
   const parsed = parseSse(raw);
   const failures = response.ok ? evaluate(expect, parsed) : [`HTTP ${response.status}`];
   const combined = [parsed.text, parsed.productsMarkdown].filter(Boolean).join('\n\n');
@@ -335,6 +371,7 @@ async function runTurn({ message, expect }, state) {
     message,
     status: response.status,
     duration_ms: Date.now() - startedAt,
+    network_attempts: attempts,
     log_id: parsed.logId,
     diagnostic_error: parsed.diagnosticError,
     products_count: parsed.links.length,

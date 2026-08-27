@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { DEFAULT_ENDPOINT, evaluate, parseSse, resolveEndpoint } from './run-customer-acceptance.mjs';
+import { DEFAULT_ENDPOINT, evaluate, fetchAcceptanceTurn, parseSse, resolveEndpoint } from './run-customer-acceptance.mjs';
 
 function data(payload) {
   return `data: ${JSON.stringify(payload)}`;
@@ -24,6 +24,26 @@ test('resolveEndpoint rejects unsafe or non-function targets', () => {
     () => resolveEndpoint(['node', 'runner', '--endpoint=https://example.com/not-a-function']),
     /one Edge Function/,
   );
+});
+
+test('acceptance transport retries one transient stream interruption with the same payload', async () => {
+  const calls = [];
+  const payload = { message: 'test', messageId: 'stable-id' };
+  const result = await fetchAcceptanceTurn(payload, {
+    retryDelayMs: 0,
+    fetchImpl: async (_url, init) => {
+      calls.push(JSON.parse(init.body));
+      if (calls.length === 1) {
+        const error = new TypeError('terminated');
+        error.cause = Object.assign(new Error('read ETIMEDOUT'), { code: 'ETIMEDOUT' });
+        throw error;
+      }
+      return new Response('data: [DONE]\n\n', { status: 200 });
+    },
+  });
+  assert.equal(result.attempts, 2);
+  assert.equal(result.raw, 'data: [DONE]\n\n');
+  assert.deepEqual(calls, [payload, payload]);
 });
 
 test('parseSse keeps pre-product text and parses card prices', () => {
