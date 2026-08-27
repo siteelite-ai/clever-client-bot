@@ -76,8 +76,16 @@ Deno.test("jargon recovery applies discovered category to the actual catalog que
   assertEquals(result.ok ? result.total : 0, 1);
   assertEquals(result.ok ? result.results[0]?.pagetitle : null, "Лампа LED CORN капсула 5Вт 230В 4000К G4 ИЭК");
   const catalogUrls = requestedUrls.filter((url) => url.includes("catalog.test"));
-  assertEquals(catalogUrls.map((url) => new URL(url).searchParams.get("category")), ["Светодиодные лампы", null, "Светодиодные лампы"]);
+  assertEquals(catalogUrls.map((url) => new URL(url).searchParams.get("category")), [
+    "Светодиодные лампы",
+    null,
+    "Светодиодные лампы",
+    "Светодиодные лампы",
+    null,
+  ]);
   assertEquals(helperPrompt.includes("Категория каталога: «Лампы»"), true);
+  assertEquals(helperPrompt.includes("только граница безопасности"), true);
+  assertEquals(helperPrompt.includes("Не повторяй категорию"), true);
 });
 
 Deno.test("grounded jargon title evidence accepts compact codes without a product dictionary", () => {
@@ -354,6 +362,109 @@ Deno.test("literal translation strategy is the primary jargon recovery mode", as
   assertEquals(result.ok ? result.matched_query : null, "CORN");
   assertEquals(result.ok ? result.partial_match : false, true);
   assertEquals(result.ok ? result.results.length : 0, 1);
+});
+
+Deno.test("a generic modifier match cannot hide a stronger literal class axis", async () => {
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("openrouter.ai")) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { tool_calls: [{ function: { arguments: JSON.stringify({ candidates: ["LED", "CORN"] }) } }] } }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const query = new URL(url).searchParams.get("query");
+    const results = query === "LED"
+      ? [{
+        id: 1,
+        pagetitle: "Лампа LED A60 10Вт E27",
+        price: 900,
+        url: "https://220volt.kz/catalog/light/lamps/1/",
+        category: { pagetitle: "Светодиодные лампы" },
+        options: [],
+      }]
+      : query === "CORN"
+      ? [{
+        id: 2,
+        pagetitle: "Лампа LED CORN 5Вт G4",
+        price: 476,
+        url: "https://220volt.kz/catalog/light/lamps/2/",
+        category: { pagetitle: "Светодиодные лампы" },
+        options: [],
+      }]
+      : [];
+    return new Response(JSON.stringify({ data: { results, pagination: { total: results.length } } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const result = await executeJargonRecoverCatalog({
+    query: "кукуруза",
+    modifiers: ["E27"],
+    category: "Лампы",
+    category_in: ["Светодиодные лампы"],
+  }, {
+    baseUrl: "https://catalog.test/api",
+    apiToken: "catalog-token",
+    openrouterApiKey: "router-token",
+    fetchImpl,
+  }, new Map());
+
+  assertEquals(result.ok ? result.matched_query : null, "CORN");
+  assertEquals(result.ok ? result.results.map((product) => product.id) : [], ["2"]);
+  assertEquals(result.ok ? result.partial_match : false, true);
+  assertEquals(result.ok ? result.unmatched_tokens.includes("e27") : false, true);
+});
+
+Deno.test("an exact translated intersection outranks a different missing-modifier candidate", async () => {
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("openrouter.ai")) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { tool_calls: [{ function: { arguments: JSON.stringify({ candidates: ["CORN", "MAIZE"] }) } }] } }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const query = new URL(url).searchParams.get("query");
+    const results = query === "CORN"
+      ? [{
+        id: 3,
+        pagetitle: "Лампа LED CORN 8Вт E27",
+        price: 1200,
+        url: "https://220volt.kz/catalog/light/lamps/3/",
+        category: { pagetitle: "Светодиодные лампы" },
+        options: [],
+      }]
+      : query === "MAIZE"
+      ? [{
+        id: 4,
+        pagetitle: "Лампа LED MAIZE 5Вт G4",
+        price: 500,
+        url: "https://220volt.kz/catalog/light/lamps/4/",
+        category: { pagetitle: "Светодиодные лампы" },
+        options: [],
+      }]
+      : [];
+    return new Response(JSON.stringify({ data: { results, pagination: { total: results.length } } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const result = await executeJargonRecoverCatalog({
+    query: "кукуруза",
+    modifiers: ["E27"],
+    category: "Лампы",
+    category_in: ["Светодиодные лампы"],
+  }, {
+    baseUrl: "https://catalog.test/api",
+    apiToken: "catalog-token",
+    openrouterApiKey: "router-token",
+    fetchImpl,
+  }, new Map());
+
+  assertEquals(result.ok ? result.matched_query : null, "CORN");
+  assertEquals(result.ok ? result.results.map((product) => product.id) : [], ["3"]);
+  assertEquals(result.ok ? result.unmatched_tokens.includes("e27") : true, false);
 });
 
 Deno.test("taxonomy shape drift retries a distinctive candidate and keeps only the live umbrella category", async () => {

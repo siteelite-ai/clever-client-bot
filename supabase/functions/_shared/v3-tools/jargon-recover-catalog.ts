@@ -255,8 +255,8 @@ export async function executeJargonRecoverCatalog(
   const attemptedCandidates = new Set<string>();
 
   type CandidateAttempt = {
-    matched: { candidate: string; filtered: ProductRef[] } | null;
-    axial: { candidate: string; baseResults: ProductRef[] } | null;
+    matched: { candidate: string; filtered: ProductRef[]; evidenceScore: number } | null;
+    axial: { candidate: string; baseResults: ProductRef[]; evidenceScore: number } | null;
   };
   const tryCandidates = async (
     values: string[],
@@ -264,15 +264,35 @@ export async function executeJargonRecoverCatalog(
     allowAxial = true,
   ): Promise<CandidateAttempt> => {
     let axial: CandidateAttempt["axial"] = null;
+    let matched: CandidateAttempt["matched"] = null;
+    let matchedScore = -1;
+    let axialScore = -1;
     const liveCategoryNames = new Set(
       [input.category, ...categoryLeaves]
         .map((value) => normalize(String(value ?? "")))
         .filter(Boolean),
     );
+    const liveCategoryTokenStems = new Set(
+      [...liveCategoryNames]
+        .flatMap((value) => tokenize(value))
+        .map(inflectionStem),
+    );
     for (const candidate of values.slice(0, 4)) {
       const candidateKey = normalize(candidate);
       if (!candidateKey || attemptedCandidates.has(candidateKey)) continue;
       attemptedCandidates.add(candidateKey);
+      // A candidate which merely repeats the already discovered live taxonomy
+      // adds no evidence for the customer's unknown word. This rejects a
+      // stochastic translation such as «светодиодная лампа» inside the live
+      // leaf «Светодиодные лампы», without any product-specific dictionary.
+      const candidateEvidenceTokens = tokenize(candidate)
+        .filter((token) => !liveCategoryTokenStems.has(inflectionStem(token)));
+      const candidateScore = candidateEvidenceTokens.length > 0
+        ? candidateEvidenceTokens.reduce((sum, token) => sum + token.length, 0)
+        : liveCategoryTokenStems.size > 0
+        ? 0
+        : normalize(candidate).replace(/\s+/gu, "").length;
+      if (candidateScore <= 0) continue;
       const scopedInput: JargonRecoverCatalogInput = input;
       const result = await executeSearchCatalog({
         mode: "by_query",
@@ -328,16 +348,23 @@ export async function executeJargonRecoverCatalog(
         }
       }
       const filtered = groundedResults.filter((p) => productMatchesModifiers(p, activeModifiers));
-      if (filtered.length > 0) return { matched: { candidate, filtered }, axial };
+      if (filtered.length > 0 && candidateScore > matchedScore) {
+        matched = { candidate, filtered, evidenceScore: candidateScore };
+        matchedScore = candidateScore;
+      }
       // Preserve live evidence for the base lexical class even when an
       // independent modifier makes the strict intersection empty. Returning
       // this as an explicit partial match is an honesty boundary, so it must
       // not depend on an operational feature flag.
-      if (allowAxial && axial === null && groundedResults.length > 0 && activeModifiers.length > 0) {
-        axial = { candidate, baseResults: groundedResults };
+      if (
+        allowAxial && filtered.length === 0 && groundedResults.length > 0 &&
+        activeModifiers.length > 0 && candidateScore > axialScore
+      ) {
+        axial = { candidate, baseResults: groundedResults, evidenceScore: candidateScore };
+        axialScore = candidateScore;
       }
     }
-    return { matched: null, axial };
+    return { matched, axial };
   };
 
   const initial = await tryCandidates(candidates, modifiers);
@@ -422,17 +449,28 @@ export async function executeJargonRecoverCatalog(
   if (matched) {
     const sliced = matched.filtered.slice(0, perPage);
     const { partial_match, unmatched_tokens } = computePartialMatch(source, modifiers, sliced);
-    return {
-      tool: "jargon_recover_catalog",
-      ok: true,
-      source_query: source,
-      candidates: allCandidates,
-      matched_query: matched.candidate,
-      results: sliced,
-      total: matched.filtered.length,
-      partial_match,
-      unmatched_tokens,
-    };
+    // A translated candidate that happens to satisfy the modifier is weaker
+    // evidence than another live candidate which proves the lexical base but
+    // explicitly misses that modifier. Prefer the latter as a labelled split;
+    // otherwise an associated E27 product could hide the real CORN/G4 axis.
+    const axialIsStronger = axialFallback &&
+      normalize(axialFallback.candidate) !== normalize(matched.candidate) &&
+      axialFallback.baseResults.some((product) =>
+        titleSupportsGroundedJargonQuery(product.pagetitle, matched.candidate)
+      );
+    if (!(partial_match && axialIsStronger)) {
+      return {
+        tool: "jargon_recover_catalog",
+        ok: true,
+        source_query: source,
+        candidates: allCandidates,
+        matched_query: matched.candidate,
+        results: sliced,
+        total: matched.filtered.length,
+        partial_match,
+        unmatched_tokens,
+      };
+    }
   }
 
   // Return base cards without silently dropping modifiers. The orchestrator

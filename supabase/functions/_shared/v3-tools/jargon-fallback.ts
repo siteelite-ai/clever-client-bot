@@ -67,6 +67,13 @@ export async function tryJargonFallback(
       : deps.strategy === "title_token"
       ? TITLE_TOKEN_SYSTEM
       : SYSTEM;
+    const userContent = deps.strategy === "translation_only"
+      ? deps.category
+        ? `Категория каталога: «${deps.category}» — это только граница безопасности, а не подсказка для замены слова названием типа товара. Не повторяй категорию и не добавляй свойства товара. Запрос клиента: «${query}». Верни прямой перевод, транслитерацию или латинское написание именно необычного слова клиента; самый буквальный вариант поставь первым.`
+        : `Запрос клиента: «${query}». Верни прямой перевод, транслитерацию или латинское написание именно необычного слова клиента; самый буквальный вариант поставь первым. Не заменяй его названием категории или похожего товара.`
+      : deps.category
+      ? `Категория каталога: «${deps.category}». Запрос клиента: «${query}». Предложи 1–3 канонических термина ИМЕННО В КОНТЕКСТЕ этой категории (форма/тип/подтип товара внутри категории). Кандидаты, не относящиеся к этой категории, НЕ предлагай.`
+      : `Запрос: «${query}». Предложи альтернативные термины.`;
     const res = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
@@ -79,7 +86,7 @@ export async function tryJargonFallback(
         max_tokens: 200,
         messages: [
           { role: "system", content: system },
-          { role: "user", content: deps.category ? `Категория каталога: «${deps.category}». Запрос клиента: «${query}». Предложи 1–3 канонических термина ИМЕННО В КОНТЕКСТЕ этой категории (форма/тип/подтип товара внутри категории). Кандидаты, не относящиеся к этой категории, НЕ предлагай.` : `Запрос: «${query}». Предложи альтернативные термины.` },
+          { role: "user", content: userContent },
         ],
         tools: [TOOL],
         tool_choice: { type: "function", function: { name: "propose_candidates" } },
