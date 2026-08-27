@@ -67,12 +67,84 @@ export function requiresSemanticCompoundEvidence(message: string): boolean {
 export function semanticCompoundSourceQuery(message: string): string {
   return norm(message)
     .replace(/[?!]/gu, " ")
+    .replace(/(?:^|[^\p{L}])(?:како\p{L}*\s+есть|что\s+есть|все\s+позици\p{L}*|все\s+товар\p{L}*|все\s+вариант\p{L}*|весь\s+ассортимент)(?=$|[^\p{L}])/gu, " ")
     .replace(/(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|покаж\p{L}*|подбер\p{L}*|хоч\p{L}*|нуж\p{L}*|пожалуйста)(?=$|[^\p{L}])/gu, " ")
     .replace(/(?:^|[^\p{L}])(?:сам\p{L}*|дешев\p{L}*|бюджетн\p{L}*|недорог\p{L}*|дорог\p{L}*|премиум\p{L}*)(?=$|[^\p{L}])/gu, " ")
     .replace(new RegExp(COMPOUND.source, "giu"), " ")
     .replace(/\s+/gu, " ")
     .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
     .trim();
+}
+
+function semanticTokenStem(token: string): string {
+  const normalized = norm(token).replace(/[^\p{L}\p{N}]+/gu, "");
+  if (/^[a-z0-9]+$/u.test(normalized)) return normalized;
+  if (normalized.length >= 7) return normalized.slice(0, 5);
+  if (normalized.length >= 5) return normalized.slice(0, 4);
+  return normalized;
+}
+
+/**
+ * Separates the live-taxonomy class wording from descriptive requirements so
+ * jargon recovery can translate the complete semantic combination instead of
+ * treating it as one literal catalog phrase. The partition is learned only
+ * from category labels returned for the user's exact N×S marking; no product
+ * nouns, cable families, materials, or aliases are stored server-side.
+ *
+ * When the live taxonomy provides no lexical anchor, the original query stays
+ * intact. This fail-closed fallback avoids guessing which user word is a class.
+ */
+export function partitionSemanticCompoundSourceByLiveTaxonomy(
+  sourceQuery: string,
+  liveCategoryLabels: string[],
+): { query: string; semanticModifiers: string[] } {
+  const sourceTokens = sourceQuery.match(/[\p{L}\p{N}-]{3,}/gu) ?? [];
+  if (sourceTokens.length === 0) return { query: sourceQuery.trim(), semanticModifiers: [] };
+  const categoryStems = new Set(
+    liveCategoryLabels
+      .flatMap((label) => norm(label).match(/[\p{L}\p{N}-]{3,}/gu) ?? [])
+      .map(semanticTokenStem)
+      .filter(Boolean),
+  );
+  if (categoryStems.size === 0) return { query: sourceQuery.trim(), semanticModifiers: [] };
+
+  const classTokens = sourceTokens.filter((token) => categoryStems.has(semanticTokenStem(token)));
+  if (classTokens.length === 0) return { query: sourceQuery.trim(), semanticModifiers: [] };
+  const semanticModifiers = sourceTokens.filter((token) => !categoryStems.has(semanticTokenStem(token)));
+  if (semanticModifiers.length === 0) return { query: sourceQuery.trim(), semanticModifiers: [] };
+  return {
+    query: classTokens.join(" "),
+    semanticModifiers,
+  };
+}
+
+/**
+ * Keeps only the live leaves that best match the customer's own class wording.
+ * A numeric marking is shared by unrelated classes (for example a cable and an
+ * extension lead), so a marking-only seed must never authorize every category
+ * it happens to return. Ties stay allowed; zero-overlap leaves are excluded.
+ */
+export function selectBestMatchingSemanticCompoundCategories(
+  sourceQuery: string,
+  liveCategoryLabels: string[],
+): string[] {
+  const sourceStems = new Set(
+    (sourceQuery.match(/[\p{L}\p{N}-]{3,}/gu) ?? [])
+      .map(semanticTokenStem)
+      .filter(Boolean),
+  );
+  const scored = liveCategoryLabels.map((category) => {
+    const stems = new Set(
+      (norm(category).match(/[\p{L}\p{N}-]{3,}/gu) ?? [])
+        .map(semanticTokenStem)
+        .filter(Boolean),
+    );
+    const overlap = [...stems].filter((stem) => sourceStems.has(stem)).length;
+    return { category, overlap };
+  });
+  const best = Math.max(0, ...scored.map((item) => item.overlap));
+  if (best <= 0) return [];
+  return scored.filter((item) => item.overlap === best).map((item) => item.category);
 }
 
 function textHasExactCompoundMarking(evidence: string, marking: ExplicitCompoundMarking): boolean {
@@ -126,6 +198,12 @@ export function compoundRecoveryQueries(
   return queries;
 }
 
+/** A bounded direct selector must not pretend to satisfy an exhaustive request. */
+export function isExhaustiveCompoundRequest(message: string): boolean {
+  const normalized = norm(message).replace(/\s+/gu, " ");
+  return /(?:^|[^\p{L}])(?:все|весь|всю|полный\s+список|все\s+позиции)(?=$|[^\p{L}])/u.test(normalized);
+}
+
 /**
  * Allows the server to finish a non-exhaustive selection immediately after a
  * model-owned filtered search when every live title proves the user's N×S.
@@ -138,8 +216,7 @@ export function shouldTerminateAfterGroundedCompoundSearch(
   marking: ExplicitCompoundMarking,
 ): boolean {
   if (pagetitles.length === 0) return false;
-  const normalized = norm(message).replace(/\s+/gu, " ");
-  if (/(?:^|[^\p{L}])(?:все|весь|всю|полный\s+список|все\s+позиции)(?=$|[^\p{L}])/u.test(normalized)) return false;
+  if (isExhaustiveCompoundRequest(message)) return false;
   return pagetitles.every((title) => productTitleMatchesExplicitCompoundMarking(title, marking));
 }
 

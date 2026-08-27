@@ -112,6 +112,8 @@ export interface JargonRecoverOk {
   partial_match: boolean;
   /** Токены source_query+modifiers, отсутствующие во всех найденных карточках. */
   unmatched_tokens: string[];
+  /** True only when descriptive modifiers were translated together with the base query. */
+  semantic_bridge_matched?: boolean;
   side_effects?: ToolSideEffect[];
 }
 

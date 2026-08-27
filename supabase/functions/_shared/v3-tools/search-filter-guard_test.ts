@@ -607,6 +607,32 @@ Deno.test("one-letter technical value is inferred only with its facet meaning", 
   ).args.options, undefined);
 });
 
+Deno.test("an explicit unitless number is completed only for its locally named facet", () => {
+  const user = "Найди автомат 1 полюсной на 16 А, характеристика C";
+  const result = guardSearchFilters(
+    { mode: "by_filter" },
+    [
+      {
+        key: "poles",
+        caption: "Количество полюсов",
+        values: [{ value: "1" }, { value: "2" }, { value: "3" }],
+      },
+      {
+        key: "pack",
+        caption: "Количество в упаковке",
+        values: [{ value: "1" }, { value: "10" }],
+      },
+    ],
+    user,
+    user,
+    "",
+  );
+
+  assertEquals(result.args.options, { poles: ["1"] });
+  assertEquals(result.user_backed, [{ key: "poles", value: "1" }]);
+  assertEquals(result.inferred, [{ key: "poles", value: "1" }]);
+});
+
 Deno.test("ordinary replacement excludes explicitly named source brand and collection", () => {
   assertEquals(
     explicitReplacementIdentityValues([

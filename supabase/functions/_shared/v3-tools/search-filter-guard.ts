@@ -657,8 +657,10 @@ export function guardSearchFilters(
   //
   // Boolean labels such as "да"/"нет" are intentionally excluded: a generic
   // conversational "да" is not proof of an arbitrary boolean product facet.
-  // Pure numbers are also excluded because a budget can accidentally equal an
-  // unrelated wattage, length, or pack-size facet.
+  // Pure numbers are accepted only when the same compact user phrase also
+  // names this exact live facet. This preserves unitless catalog constraints
+  // such as "1 pole" without letting a budget become wattage, length or pack
+  // size merely because the number happens to coincide.
   for (const facet of facets) {
     if (nextOptions[facet.key]?.length) continue;
     // Brand/model/series values are identifiers, not product properties. Never
@@ -672,7 +674,11 @@ export function guardSearchFilters(
       const normalized = norm(candidate.value);
       if (!isAtomicFacetValue(candidate.value)) return false;
       if (!normalized || ["да", "нет", "есть", "отсутствует"].includes(normalized)) return false;
-      if (!/[a-zа-я]/iu.test(normalized)) return false;
+      if (!/[a-zа-я]/iu.test(normalized)) {
+        return /^\d+(?:[.,]\d+)?$/u.test(normalized) &&
+          numericFacetValueIsLocallyEvidenced(candidate.value, facet, userEvidence) &&
+          facetStateQualifierIsUserBacked(facet, userEvidence);
+      }
       return explicitlyAffirmedByUser(candidate.value, userEvidence);
     });
     if (evidenced.length !== 1) continue;

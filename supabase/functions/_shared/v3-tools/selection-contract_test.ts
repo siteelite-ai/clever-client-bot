@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, projectSelectionTargetFacetCriteria, promoteSelectionTargetBackingCriteria, restoreSelectionTargetBackingCriteria, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, initialSelectionDeclaration, parseSelectionTarget, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
@@ -151,6 +151,24 @@ Deno.test("live taxonomy may complete a partially declared class but cannot auth
   assertEquals(selectionTargetIsDeclared(
     "уличный светильник",
     `${initial}\nСветильники`,
+  ), false);
+});
+
+Deno.test("a formal live class may complete a derived leading customer noun", () => {
+  assertEquals(selectionTargetDeclarationIsGrounded(
+    "автоматический выключатель",
+    "Найди однополюсный автомат на 16 А",
+    "Автоматические выключатели",
+  ), true);
+  assertEquals(selectionTargetDeclarationIsGrounded(
+    "настенный светильник",
+    "Нужен потолочный светильник",
+    "Настенные светильники",
+  ), false);
+  assertEquals(selectionTargetDeclarationIsGrounded(
+    "стабилизатор напряжения",
+    "Нужен ИБП для котла",
+    "Стабилизаторы напряжения",
   ), false);
 });
 
@@ -397,6 +415,135 @@ Deno.test("replacement application context cannot turn source identity into targ
   assertEquals(promoted.backing.map((criterion) => criterion.key), ["Способ монтажа"]);
 });
 
+Deno.test("structured application context preserves a proven replacement suitability facet", () => {
+  const promoted = promoteSelectionApplicationBackingCriteria(
+    {
+      product_class: "светильник",
+      application_context: ["уличное освещение", "консольный монтаж", "100 Вт", "LED"],
+    },
+    [
+      { key: "Мощность ламп, Вт", op: "eq", value: "100", level: "A" },
+      { key: "Способ монтажа", op: "eq", value: "консольный", level: "B" },
+      { key: "Степень защиты, IP", op: "eq", value: "65", level: "B" },
+      { key: "Тип лампы", op: "eq", value: "LED", level: "A" },
+    ],
+  );
+  assertEquals(promoted.criteria.map((criterion) => [criterion.key, criterion.level]), [
+    ["Мощность ламп, Вт", "A"],
+    ["Способ монтажа", "A"],
+    ["Степень защиты, IP", "B"],
+    ["Тип лампы", "A"],
+  ]);
+  assertEquals(promoted.promoted.map((criterion) => criterion.key), ["Способ монтажа"]);
+  assertEquals(promoted.backing.map((criterion) => criterion.key), [
+    "Мощность ламп, Вт",
+    "Способ монтажа",
+    "Тип лампы",
+  ]);
+});
+
+Deno.test("structured application context links inflected wording only to an existing criterion", () => {
+  const promoted = promoteSelectionApplicationBackingCriteria(
+    {
+      product_class: "светодиодный светильник",
+      application_context: ["уличное освещение", "100 Вт"],
+    },
+    [
+      { key: "Вид светильника", op: "eq", value: "для освещения улиц", level: "B" },
+      { key: "Цвет корпуса", op: "eq", value: "чёрный", level: "B" },
+    ],
+  );
+  assertEquals(promoted.promoted.map((criterion) => criterion.key), ["Вид светильника"]);
+  assertEquals(promoted.criteria.map((criterion) => [criterion.key, criterion.level]), [
+    ["Вид светильника", "A"],
+    ["Цвет корпуса", "B"],
+  ]);
+});
+
+Deno.test("a compact application constraint compiles through one unique live facet value", () => {
+  assertEquals(projectSelectionApplicationFacetCriteria(
+    {
+      product_class: "светодиодный светильник",
+      application_context: ["уличный", "консольный", "100 Вт"],
+    },
+    [
+      {
+        key: "mount",
+        caption: "Способ монтажа",
+        values: [{ value: "консольный" }, { value: "потолочный" }],
+      },
+      {
+        key: "brand",
+        caption: "Бренд",
+        values: [{ value: "уличный" }, { value: "ЭТФ" }],
+      },
+      {
+        key: "power",
+        caption: "Мощность",
+        values: [{ value: "100" }, { value: "120" }],
+      },
+    ],
+  ), [{
+    key: "Способ монтажа",
+    op: "eq",
+    value: "консольный",
+    unit: undefined,
+    level: "A",
+  }]);
+});
+
+Deno.test("application context never promotes source identity fields", () => {
+  const promoted = promoteSelectionApplicationBackingCriteria(
+    {
+      product_class: "светильник",
+      application_context: ["замена ДКУ-LED-03-100W ЭТФ", "консольный монтаж"],
+    },
+    [
+      { key: "Бренд", op: "eq", value: "ЭТФ", level: "B" },
+      { key: "Модель", op: "eq", value: "ДКУ-LED-03-100W", level: "B" },
+      { key: "Способ монтажа", op: "eq", value: "консольный", level: "B" },
+    ],
+  );
+  assertEquals(promoted.promoted.map((criterion) => criterion.key), ["Способ монтажа"]);
+  assertEquals(promoted.criteria.map((criterion) => [criterion.key, criterion.level]), [
+    ["Бренд", "B"],
+    ["Модель", "B"],
+    ["Способ монтажа", "A"],
+  ]);
+});
+
+Deno.test("a mandatory live facet rejects an explicit sibling value in the visible title", () => {
+  const result = filterProductsByMandatoryFacetTitleContradictions(
+    [
+      product("console", "Светильник светодиодный ДКУ 100W консольный"),
+      product("ceiling", "Светильник светодиодный потолочный 100W"),
+      product("neutral", "Светильник светодиодный ДКУ 100W"),
+    ],
+    [{ key: "Способ монтажа", op: "eq", value: "консольный", level: "A" }],
+    [{
+      key: "mount",
+      caption: "Способ монтажа",
+      values: [{ value: "консольный" }, { value: "потолочный" }, { value: "подвесной" }],
+    }],
+  );
+  assertEquals(result.products.map((item) => item.id), ["console", "neutral"]);
+  assertEquals(result.rejected_ids, ["ceiling"]);
+});
+
+Deno.test("advisory and identity facets cannot create visible-title contradiction gates", () => {
+  const products = [product("candidate", "Светильник потолочный ЭТФ")];
+  assertEquals(filterProductsByMandatoryFacetTitleContradictions(
+    products,
+    [{ key: "Способ монтажа", op: "eq", value: "консольный", level: "B" }],
+    [{ key: "mount", caption: "Способ монтажа", values: [{ value: "консольный" }, { value: "потолочный" }] }],
+  ).rejected_ids, []);
+  assertEquals(filterProductsByMandatoryFacetTitleContradictions(
+    products,
+    [{ key: "Бренд", op: "eq", value: "Другой", level: "A" }],
+    [{ key: "brand", caption: "Бренд", values: [{ value: "Другой" }, { value: "ЭТФ" }] }],
+  ).rejected_ids, []);
+});
+
 Deno.test("an unrelated advisory value cannot strengthen a structured target", () => {
   const promoted = promoteSelectionTargetBackingCriteria(
     "светильник",
@@ -492,7 +639,31 @@ Deno.test("an exact named entity may discard a model-only class adjective but ne
 Deno.test("a failed render cannot replace an already grounded selection target", () => {
   assertEquals(advanceSelectionTarget("Светильники", "Потолочные светильники", 0), "Светильники");
   assertEquals(advanceSelectionTarget("Светильники", "Потолочные светильники", 3), "Потолочные светильники");
+  assertEquals(advanceSelectionTarget("ИБП", "Стабилизатор напряжения", 4), "ИБП");
   assertEquals(advanceSelectionTarget(null, "Потолочные светильники", 0), "Потолочные светильники");
+});
+
+Deno.test("a later class may refine but never replace the grounded base", () => {
+  assertEquals(selectionTargetPreservesGroundedBase("автомат", "автоматический выключатель"), true);
+  assertEquals(selectionTargetPreservesGroundedBase("лампа", "LED-лампа KORN"), true);
+  assertEquals(selectionTargetPreservesGroundedBase("ИБП", "стабилизатор напряжения"), false);
+  assertEquals(selectionTargetPreservesGroundedBase("потолочный светильник", "светильник"), false);
+});
+
+Deno.test("only an explicit parenthetical alias may expand a frozen shorthand", () => {
+  assertEquals(selectionTargetAliasExpansionIsGrounded(
+    "трубка ТТУ",
+    "трубка термоусаживаемая",
+    "Нужна трубка термоусаживаемая (ТТУ) для кабеля.",
+    "Трубки термоусаживаемые",
+  ), true);
+  assertEquals(selectionTargetAliasExpansionIsGrounded(
+    "ИБП",
+    "стабилизатор напряжения",
+    "Подбираю стабилизатор напряжения (ИБП).",
+    "Стабилизаторы напряжения",
+  ), false);
+  assertEquals(advanceSelectionTarget("трубка ТТУ", "трубка термоусаживаемая", 2, true), "трубка термоусаживаемая");
 });
 
 Deno.test("a single-token class must be visible in the final card title", () => {

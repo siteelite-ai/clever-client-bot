@@ -311,6 +311,36 @@ export function projectReasoningRangeCriteria(
   const added: Criterion[] = [];
   const text = String(reasoningText ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е");
   const ranges: Array<{ low: number; high: number; unit: string; context: string }> = [];
+  const localMeasurementContext = (start: number, end: number): string => {
+    const leftWindow = text.slice(Math.max(0, start - 120), start);
+    const lastBoundary = Math.max(
+      leftWindow.lastIndexOf("."),
+      leftWindow.lastIndexOf("!"),
+      leftWindow.lastIndexOf("?"),
+      leftWindow.lastIndexOf(";"),
+      leftWindow.lastIndexOf("\n"),
+    );
+    const left = leftWindow.slice(lastBoundary + 1);
+    const rightWindow = text.slice(end, Math.min(text.length, end + 80));
+    const rightBoundary = rightWindow.search(/[,.;!?\n]|\s+(?:а|но|зато)\s/iu);
+    const right = rightBoundary >= 0 ? rightWindow.slice(0, rightBoundary) : rightWindow;
+    return `${left}${text.slice(start, end)}${right}`;
+  };
+  const measurementStates = (value: string): Set<string> => {
+    const states = new Set<string>();
+    for (const token of String(value ?? "")
+      .toLocaleLowerCase("ru-RU")
+      .replace(/ё/g, "е")
+      .match(/[a-zа-я]+/giu) ?? []) {
+      if (token === "до" || /^before$/u.test(token)) states.add("before");
+      else if (token === "после" || /^after$/u.test(token)) states.add("after");
+      else if (/^(?:исходн|начальн|initial)/u.test(token)) states.add("initial");
+      else if (/^(?:конечн|финальн|final)/u.test(token)) states.add("final");
+      else if (/^(?:входн|input)/u.test(token)) states.add("input");
+      else if (/^(?:выходн|output)/u.test(token)) states.add("output");
+    }
+    return states;
+  };
   const rangePatterns = [
     new RegExp(String.raw`(?<![a-zа-я0-9-])(${NUM})\s*[–—-]\s*(${NUM})\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])`, "giu"),
     new RegExp(String.raw`от\s+(${NUM})\s+до\s+(${NUM})\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])`, "giu"),
@@ -325,7 +355,7 @@ export function projectReasoningRangeCriteria(
         low: Math.min(first, second),
         high: Math.max(first, second),
         unit,
-        context: text.slice(Math.max(0, match.index - 90), Math.min(text.length, re.lastIndex + 30)),
+        context: localMeasurementContext(match.index, re.lastIndex),
       };
       if (!ranges.some((range) => range.low === candidate.low && range.high === candidate.high && range.unit === candidate.unit)) {
         ranges.push(candidate);
@@ -384,10 +414,17 @@ export function projectReasoningRangeCriteria(
       return (facet.type === "number" || hasNumericLiveValues) &&
         (declaredUnit === range.unit || labelHasUnit);
     });
+    const rangeStates = measurementStates(range.context);
+    const stateCompatibleFacets = rangeStates.size === 0
+      ? unitFacets
+      : unitFacets.filter((facet) => {
+        const facetStates = measurementStates(`${facet.key} ${facet.caption}`);
+        return facetStates.size === 0 || [...facetStates].some((state) => rangeStates.has(state));
+      });
     const sameUnitHints = next.filter((criterion) =>
       canonicalMeasurementUnit(criterion.unit ?? "") === range.unit
     );
-    const hintedFacets = unitFacets.filter((facet) => {
+    const hintedFacets = stateCompatibleFacets.filter((facet) => {
       const labels = [facet.key, facet.caption].map((value) =>
         String(value ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е").replace(/[^a-zа-я0-9]+/giu, " ").trim()
       );
@@ -399,7 +436,7 @@ export function projectReasoningRangeCriteria(
     const contextTokens = new Set(
       range.context.match(/[a-zа-я]{4,}/giu)?.map((token) => token.toLocaleLowerCase("ru-RU").replace(/ё/g, "е")) ?? [],
     );
-    const contextualScores = unitFacets.map((facet) => {
+    const contextualScores = stateCompatibleFacets.map((facet) => {
       const labelTokens = `${facet.key} ${facet.caption}`
         .match(/[a-zа-я]{4,}/giu)?.map((token) => token.toLocaleLowerCase("ru-RU").replace(/ё/g, "е")) ?? [];
       return { facet, score: labelTokens.filter((token) => contextTokens.has(token)).length };
@@ -410,7 +447,7 @@ export function projectReasoningRangeCriteria(
       .map(({ facet }) => facet);
     const matchingFacets = hintedFacets.length === 1
       ? hintedFacets
-      : contextualFacets.length === 1 ? contextualFacets : unitFacets;
+      : contextualFacets.length === 1 ? contextualFacets : stateCompatibleFacets;
     if (matchingFacets.length !== 1) continue;
     const alreadyRepresented = next.some((criterion) => {
       if (canonicalMeasurementUnit(criterion.unit ?? "") !== range.unit) return false;

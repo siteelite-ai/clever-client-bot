@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   buildGroundedAxisSectionHeading,
   buildGroundedAxisSplitCaption,
+  classifyGroundedJargonEvidence,
   executeJargonRecoverCatalog,
   productSupportsGroundedAxis,
   selectGroundedJargonCacheFallback,
@@ -11,6 +12,12 @@ import {
   titleSupportsGroundedJargonQuery,
 } from "./jargon-recover-catalog.ts";
 import type { ProductCache, ProductRef } from "./types.ts";
+
+Deno.test("translated title evidence is exact unless a separate modifier is unresolved", () => {
+  assertEquals(classifyGroundedJargonEvidence(true, "CORN", 17, []), "exact");
+  assertEquals(classifyGroundedJargonEvidence(true, "CORN", 17, ["E27"]), "axis_split");
+  assertEquals(classifyGroundedJargonEvidence(false, "", 17, []), "empty");
+});
 
 Deno.test("jargon recovery applies discovered category to the actual catalog query", async () => {
   const requestedUrls: string[] = [];
@@ -240,9 +247,67 @@ Deno.test("empty literal intersection retries the model's semantic modifier as o
 
   assertEquals(result.ok ? result.matched_query : null, "кабель ВВГнг");
   assertEquals(result.ok ? result.results.map((product) => product.id) : [], ["101"]);
+  assertEquals(result.ok ? result.semantic_bridge_matched : false, true);
   assertEquals(helperQueries.length, 2);
   assertEquals(helperQueries[1].includes("кабель медный негорючий"), true);
   assertEquals(catalogQueries.includes("кабель ВВГнг"), true);
+});
+
+Deno.test("semantic jargon recovery appends structural axes when the exact card is beyond the base page", async () => {
+  const catalogQueries: string[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes("openrouter.ai")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ content?: string }> };
+      const prompt = body.messages?.at(-1)?.content ?? "";
+      const candidates = prompt.includes("кабель медный негорючий") ? ["кабель ВВГнг"] : ["кабель"];
+      return new Response(JSON.stringify({
+        choices: [{ message: { tool_calls: [{ function: { arguments: JSON.stringify({ candidates }) } }] } }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+
+    const query = new URL(url).searchParams.get("query") ?? "";
+    catalogQueries.push(query);
+    const products = query === "кабель ВВГнг"
+      ? Array.from({ length: 20 }, (_value, index) => ({
+        id: 200 + index,
+        pagetitle: `Кабель ВВГнг 4*${index + 1}`,
+        price: 300 + index,
+        url: `https://220volt.kz/catalog/cables/vvg/${200 + index}/`,
+        category: { pagetitle: "Кабели силовые" },
+        options: [],
+      }))
+      : query === "кабель ВВГнг 2*1,5"
+        ? [{
+          id: 299,
+          pagetitle: "Кабель силовой ВВГнг 2*1,5",
+          price: 350,
+          url: "https://220volt.kz/catalog/cables/vvg/299/",
+          category: { pagetitle: "Кабели силовые" },
+          options: [],
+        }]
+        : [];
+    return new Response(JSON.stringify({
+      data: { results: products, pagination: { total: products.length } },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  const result = await executeJargonRecoverCatalog({
+    query: "кабель",
+    modifiers: ["медный", "негорючий", "2*1.5"],
+    require_semantic_bridge: true,
+    per_page: 20,
+  }, {
+    baseUrl: "https://catalog.test/api",
+    apiToken: "catalog-token",
+    openrouterApiKey: "router-token",
+    fetchImpl,
+  }, new Map());
+
+  assertEquals(result.ok ? result.matched_query : null, "кабель ВВГнг");
+  assertEquals(result.ok ? result.results.map((product) => product.id) : [], ["299"]);
+  assertEquals(result.ok ? result.semantic_bridge_matched : false, true);
+  assertEquals(catalogQueries.includes("кабель ВВГнг 2*1,5"), true);
 });
 
 Deno.test("grounded axis proof is structural and vocabulary-free", () => {

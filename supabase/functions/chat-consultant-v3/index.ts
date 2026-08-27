@@ -13,6 +13,7 @@ import { type DiscoverCategoryInput, type DiscoverCategoryOk,
 import {
   buildGroundedAxisSectionHeading,
   buildGroundedAxisSplitCaption,
+  classifyGroundedJargonEvidence,
   executeJargonRecoverCatalog,
   type JargonRecoverCatalogInput,
   productSupportsGroundedAxis,
@@ -32,7 +33,7 @@ import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-le
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract, shouldContinueSelectionPastOptionalClarification } from "../_shared/v3-tools/selection-actionability.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, projectSelectionTargetFacetCriteria, promoteSelectionTargetBackingCriteria, restoreSelectionTargetBackingCriteria, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, initialSelectionDeclaration, parseSelectionTarget, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, declaredAliasIsStructurallyCustomerOwned, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
@@ -44,6 +45,7 @@ import {
   hasOppositeCompatibilityDirections,
   mergeCompatibilityCriteria,
   minimumCompatibilityRelationCount,
+  pairedStateCriterionReference,
   parseCompatibilityRelations,
   projectCompatibilityFacetOptions,
   projectPairedTitleEvidence,
@@ -175,9 +177,12 @@ import {
   exactCompoundMarkingIntro,
   type ExactCompoundMarkingRequest,
   extractExplicitCompoundMarking,
+  isExhaustiveCompoundRequest,
+  partitionSemanticCompoundSourceByLiveTaxonomy,
   productTitleMatchesExplicitCompoundMarking,
   requiresSemanticCompoundEvidence,
   selectExactCompoundMarkedProducts,
+  selectBestMatchingSemanticCompoundCategories,
   semanticCompoundSourceQuery,
   shouldTerminateAfterGroundedCompoundSearch,
   subsumeCriteriaProvenByExplicitCompound,
@@ -2674,14 +2679,72 @@ async function selectVerifiedSemanticCompoundProducts(
 ): Promise<{ handled: boolean; products: ProductFull[] }> {
   const sourceQuery = semanticCompoundSourceQuery(userMessage);
   if (!sourceQuery) return { handled: false, products: [] };
+  if (isExhaustiveCompoundRequest(userMessage)) {
+    steps.push({
+      step: "v3_semantic_compound_preflight_skipped",
+      ms: Date.now() - t0,
+      meta: { reason: "exhaustive_request", source_query: sourceQuery, marking },
+    });
+    return { handled: false, products: [] };
+  }
   const literalMarking = `${marking.first}*${String(marking.second).replace(".", ",")}`;
   const started = Date.now();
+
+  // Bootstrap this route from the literal invariant first. These cards are not
+  // yet eligible for rendering: they provide only live taxonomy context for
+  // translating the remaining semantic requirements. A bounded model/user
+  // wording ladder is used only if the punctuation-only marking probe is empty.
+  let seedSearch = await executeSearchCatalog({
+    mode: "by_query",
+    query: literalMarking,
+    min_price: 1,
+    per_page: 50,
+  }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+  let seedProducts = seedSearch.ok
+    ? seedSearch.results.filter((product) => productTitleMatchesExplicitCompoundMarking(product.pagetitle, marking))
+    : [];
+  let seedQuery = literalMarking;
+  if (seedProducts.length === 0) {
+    for (const query of compoundRecoveryQueries(marking, [sourceQuery])) {
+      const candidateSeed = await executeSearchCatalog({
+        mode: "by_query",
+        query,
+        min_price: 1,
+        per_page: 50,
+      }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+      const exact = candidateSeed.ok
+        ? candidateSeed.results.filter((product) => productTitleMatchesExplicitCompoundMarking(product.pagetitle, marking))
+        : [];
+      if (exact.length === 0) continue;
+      seedSearch = candidateSeed;
+      seedProducts = exact;
+      seedQuery = query;
+      break;
+    }
+  }
+  const categoryCounts = new Map<string, number>();
+  for (const product of seedProducts) {
+    const category = String(product.leaf_category ?? "").trim();
+    if (!category) continue;
+    categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
+  }
+  const discoveredCategories = [...categoryCounts.entries()]
+    .sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0], "ru"))
+    .slice(0, 8)
+    .map(([category]) => category);
+  const liveCategories = selectBestMatchingSemanticCompoundCategories(sourceQuery, discoveredCategories);
+  const partition = partitionSemanticCompoundSourceByLiveTaxonomy(sourceQuery, liveCategories);
+
   send({ type: "tool_event", tool: "jargon_recover_catalog", phase: "start", summary: "Проверяю каталожную маркировку…" });
   const recovered = await executeJargonRecoverCatalog({
-    query: sourceQuery,
-    modifiers: [literalMarking],
+    query: partition.query,
+    modifiers: [...partition.semanticModifiers, literalMarking],
     min_price: 1,
     per_page: 20,
+    ...(liveCategories.length > 0
+      ? { category: liveCategories[0], category_in: liveCategories }
+      : {}),
+    require_semantic_bridge: partition.semanticModifiers.length > 0,
   }, {
     baseUrl: CATALOG_BASE_URL,
     apiToken: ctx.catalogToken,
@@ -2690,7 +2753,9 @@ async function selectVerifiedSemanticCompoundProducts(
     axialModifiersEnabled: ctx.jargonAxialModifiersEnabled,
   }, ctx.cache);
   const matchedQuery = recovered.ok ? String(recovered.matched_query ?? "").trim() : "";
-  let verified = recovered.ok && matchedQuery
+  const semanticBridgeProven = partition.semanticModifiers.length === 0 ||
+    (recovered.ok && recovered.semantic_bridge_matched === true);
+  let verified = recovered.ok && matchedQuery && semanticBridgeProven
     ? recovered.results.filter((product) =>
       productTitleMatchesExplicitCompoundMarking(product.pagetitle, marking) &&
       titleSupportsGroundedJargonQuery(product.pagetitle, matchedQuery)
@@ -2718,7 +2783,15 @@ async function selectVerifiedSemanticCompoundProducts(
       ms: Date.now() - t0,
       meta: {
         source_query: sourceQuery,
+        recovery_query: partition.query,
+        semantic_modifiers: partition.semanticModifiers,
         marking,
+        seed_query: seedQuery,
+        seed_total: seedSearch.ok ? seedSearch.total : 0,
+        seed_exact: seedProducts.length,
+        live_categories: liveCategories,
+        discovered_categories: discoveredCategories,
+        semantic_bridge_proven: semanticBridgeProven,
         matched_query: matchedQuery || null,
         recovered_total: recovered.ok ? recovered.total : 0,
         duration_ms: elapsed,
@@ -2744,7 +2817,15 @@ async function selectVerifiedSemanticCompoundProducts(
     ms: Date.now() - t0,
     meta: {
       source_query: sourceQuery,
+      recovery_query: partition.query,
+      semantic_modifiers: partition.semanticModifiers,
       marking,
+      seed_query: seedQuery,
+      seed_total: seedSearch.ok ? seedSearch.total : 0,
+      seed_exact: seedProducts.length,
+      live_categories: liveCategories,
+      discovered_categories: discoveredCategories,
+      semantic_bridge_proven: semanticBridgeProven,
       matched_query: matchedQuery,
       recovered_total: recovered.ok ? recovered.total : verified.length,
       rendered: rendered.rendered_count,
@@ -3411,6 +3492,24 @@ async function runExpertLoop(
   const equivalentReplacementRequested = replacementIntent && /равноцен\p{L}*/iu.test(replacementEvidenceMessage);
   const replacementExcludedIdentityValues = new Set<string>();
   const intentMode = detectUserIntentMode(userMessage);
+  const ensureVisibleTerminalSelectionCaption = (
+    criteria: Criterion[],
+    recoveryStep: string,
+  ) => {
+    if (intentMode !== "select" || finalText.trim() || !activeSelectionTarget) return;
+    const caption = buildSelectionRenderCaption(activeSelectionTarget, criteria);
+    send({ type: "delta", content: caption });
+    finalText = caption;
+    steps.push({
+      step: "v3_terminal_selection_evidence_caption",
+      ms: now(),
+      meta: {
+        recovery_step: recoveryStep,
+        chars: caption.length,
+        criteria: criteria.length,
+      },
+    });
+  };
   const broadAssortmentRequest = isBroadAssortmentRequest(userMessage);
   const namedSeriesToken = resolveNamedSeriesToken(userMessage, history.slice(-8));
   const inquiryRequiresCatalogGrounding = intentMode === "inquire" && requiresCatalogGroundingForInquiry(userMessage);
@@ -5155,6 +5254,16 @@ async function runExpertLoop(
             tc.args.selection_target,
             renderRawCriteria,
           );
+          const applicationBackedCriteria = replacementIntent
+            ? promoteSelectionApplicationBackingCriteria(
+              tc.args.selection_target,
+              targetBackedCriteria.criteria,
+            )
+            : {
+              criteria: targetBackedCriteria.criteria,
+              promoted: [] as Criterion[],
+              backing: [] as Criterion[],
+            };
           const targetFacetCriteria = replacementIntent && lastDiscover
             ? projectSelectionTargetFacetCriteria(
               priorActiveSelectionTarget,
@@ -5162,26 +5271,48 @@ async function runExpertLoop(
               lastDiscover.facets,
             )
             : [];
+          const applicationFacetCriteria = replacementIntent && lastDiscover
+            ? projectSelectionApplicationFacetCriteria(
+              tc.args.selection_target,
+              lastDiscover.facets,
+            )
+            : [];
           targetBackedRenderCriteria = restoreSelectionTargetBackingCriteria(
             targetBackedRenderCriteria,
-            [...targetBackedCriteria.backing, ...targetFacetCriteria],
+            [
+              ...targetBackedCriteria.backing,
+              ...applicationBackedCriteria.backing,
+              ...targetFacetCriteria,
+              ...applicationFacetCriteria,
+            ],
           );
-          if (targetFacetCriteria.length > 0) {
+          if (targetFacetCriteria.length > 0 || applicationFacetCriteria.length > 0) {
             steps.push({
               step: "v3_selection_target_facets_compiled",
               ms: now(),
-              meta: { target, criteria: targetFacetCriteria },
+              meta: {
+                target,
+                criteria: targetFacetCriteria,
+                application_context: applicationFacetCriteria,
+              },
             });
           }
-          if (targetBackedCriteria.promoted.length > 0) {
-            renderRawCriteria = targetBackedCriteria.criteria;
+          if (
+            targetBackedCriteria.promoted.length > 0 ||
+            applicationBackedCriteria.promoted.length > 0
+          ) {
+            renderRawCriteria = applicationBackedCriteria.criteria;
             (tc.args as Record<string, unknown>).criteria = renderRawCriteria;
             steps.push({
               step: "v3_selection_target_criteria_promoted",
               ms: now(),
               meta: {
                 target,
-                promoted: targetBackedCriteria.promoted,
+                promoted: [
+                  ...targetBackedCriteria.promoted,
+                  ...applicationBackedCriteria.promoted,
+                ],
+                application_context: applicationBackedCriteria.promoted,
               },
             });
           }
@@ -5220,12 +5351,22 @@ async function runExpertLoop(
           // (for example, a sibling category could replace the user's target).
           // Taxonomy may still bootstrap a target above, but only when the same
           // base class was already present before search planning began.
+          const groundedAliasExpansion = target
+            ? selectionTargetAliasExpansionIsGrounded(
+              priorActiveSelectionTarget,
+              target,
+              initialReasoningDeclaration,
+              liveTaxonomyDeclaration,
+            )
+            : false;
           const targetDeclared = target
-            ? selectionTargetDeclarationIsGrounded(
+            ? (selectionTargetPreservesGroundedBase(priorActiveSelectionTarget, target) || groundedAliasExpansion) && (
+              selectionTargetDeclarationIsGrounded(
               target,
               `${userMessage}\n${initialSelectionDiscoveryNoun ?? ""}\n${initialReasoningDeclaration}`,
               liveTaxonomyDeclaration,
-            ) || namedSeriesBaseClassDeclared || bootstrappedTargetExtensionDeclared || replacementContinuationClassDeclared
+              ) || namedSeriesBaseClassDeclared || bootstrappedTargetExtensionDeclared || replacementContinuationClassDeclared
+            )
             : false;
           if (targetDeclared) groundedSelectionTargetHint = target;
           let ids = Array.isArray(tc.args.product_ids)
@@ -5286,7 +5427,7 @@ async function runExpertLoop(
             steps.push({
               step: "v3_selection_target_drift",
               ms: now(),
-              meta: { target, initial_reasoning: initialReasoningDeclaration },
+              meta: { target, grounded_target: priorActiveSelectionTarget, initial_reasoning: initialReasoningDeclaration },
             });
           } else if (products.length > 0) {
             let verificationTarget = target;
@@ -5360,6 +5501,7 @@ async function runExpertLoop(
               activeSelectionTarget,
               verificationTarget,
               passed.length,
+              groundedAliasExpansion,
             );
           } else {
             activeSelectionTarget = advanceSelectionTarget(activeSelectionTarget, target, 0);
@@ -5471,6 +5613,7 @@ async function runExpertLoop(
         // unknown (характеристики нет) → карточку оставляем.
         let pairedTitleReference: { value: number; unit: string } | null = null;
         let pairedTitleProvenIds: string[] = [];
+        let pairedCompatibilityCorrection: string | null = null;
         if (flags.criteriaGateEnabled && tc.name === "render_products") {
           const reasoningEvidence = `${userMessage}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
           // Compatibility obligations are frozen at the initial expert
@@ -5502,13 +5645,42 @@ async function runExpertLoop(
             });
           }
           const rawCriteria = renderRawCriteria;
+          const customerMeasuredReference = extractSingleMeasuredReference(userMessage);
+          const livePairedCriterion = pairedStateCriterionReference(
+            rawCriteria,
+            lastDiscover?.facets ?? [],
+            initialCompatibilityEvidence,
+          );
+          const schemaBackedPairedReference = livePairedCriterion && customerMeasuredReference &&
+              livePairedCriterion.value === customerMeasuredReference.value &&
+              livePairedCriterion.unit === customerMeasuredReference.unit
+            ? customerMeasuredReference
+            : null;
           // Named-series browsing is entity retrieval, not a fit calculation.
           // Prices, voltage ranges and temperatures in grounded series prose
           // must not manufacture compatibility obligations the customer never
           // asked for. Exact series title/facet evidence remains mandatory.
-          const compatibilityRequired = !namedSeriesToken && reasoningNeedsCompatibilityRelations(initialCompatibilityEvidence);
-          const minimumRelations = namedSeriesToken ? 0 : minimumCompatibilityRelationCount(initialCompatibilityEvidence);
-          const relationReference = commonCompatibilityReference(compatibilityRelations);
+          const compatibilityRequired = !namedSeriesToken && (
+            reasoningNeedsCompatibilityRelations(initialCompatibilityEvidence) || Boolean(schemaBackedPairedReference)
+          );
+          const minimumRelations = namedSeriesToken
+            ? 0
+            : Math.max(
+              minimumCompatibilityRelationCount(initialCompatibilityEvidence),
+              schemaBackedPairedReference ? 2 : 0,
+            );
+          const relationReference = commonCompatibilityReference(compatibilityRelations) ?? schemaBackedPairedReference;
+          if (schemaBackedPairedReference) {
+            steps.push({
+              step: "v3_paired_state_criterion_compiled",
+              ms: now(),
+              meta: {
+                reference: schemaBackedPairedReference,
+                criterion_key: livePairedCriterion?.criterion_key,
+                opposite_facet_key: livePairedCriterion?.opposite_facet_key,
+              },
+            });
+          }
           let pairedTitleContractProven = false;
           if (minimumRelations >= 2 || relationReference) {
             const reference = relationReference ?? extractSingleMeasuredReference(userMessage);
@@ -5667,6 +5839,10 @@ async function runExpertLoop(
               if (paired.products.length > 0) {
                 pairedTitleContractProven = true;
                 pairedTitleReference = reference;
+                if (schemaBackedPairedReference) {
+                  pairedCompatibilityCorrection =
+                    `Проверяю совместимость по обеим сторонам: размер до изменения должен быть строго больше ${reference.value} ${reference.unit}, а после изменения — строго меньше. В карточках ниже обе границы подтверждены названием.`;
+                }
                 paired = { ...paired, products: paired.products.slice(0, 10) };
                 pairedTitleProvenIds = paired.products.map((product) => product.id);
                 (tc.args as Record<string, unknown>).product_ids = paired.products.map((product) => product.id);
@@ -5984,11 +6160,25 @@ async function runExpertLoop(
             const products = ids
               .map((id) => ctx.cache.get(id))
               .filter((p): p is NonNullable<typeof p> => Boolean(p));
+            const titleConsistency = lastDiscover
+              ? filterProductsByMandatoryFacetTitleContradictions(
+                products,
+                criteria,
+                lastDiscover.facets,
+              )
+              : { products, rejected_ids: [] as string[] };
+            if (titleConsistency.rejected_ids.length > 0) {
+              steps.push({
+                step: "v3_guard_mandatory_facet_title_contradiction",
+                ms: now(),
+                meta: { rejected_ids: titleConsistency.rejected_ids },
+              });
+            }
             const provenFilterCriteria = reasoningBackedSearch && ids.every((id) => reasoningBackedSearch!.ids.includes(id))
               ? reasoningBackedSearch.criteria
               : [];
             const evidencedProducts = projectPairedTitleEvidence(
-              projectCatalogFilterEvidence(products, provenFilterCriteria),
+              projectCatalogFilterEvidence(titleConsistency.products, provenFilterCriteria),
               compatibilityRelations,
             );
             const compoundAdjusted = gateWithLiteralCompoundEvidence(evidencedProducts, criteria);
@@ -7770,6 +7960,17 @@ async function runExpertLoop(
             });
           }
 
+          if (pairedCompatibilityCorrection) {
+            send({ type: "assistant_turn_break", reason: "text_before_render" });
+            send({ type: "delta", content: pairedCompatibilityCorrection });
+            finalText += `${finalText ? "\n\n" : ""}${pairedCompatibilityCorrection}`;
+            steps.push({
+              step: "v3_paired_compatibility_visible_correction",
+              ms: now(),
+              meta: { reference: pairedTitleReference },
+            });
+          }
+
           // ── Step 3: Promise-Reality Audit
           const audit = promiseRealityCheck(firstAssistantText, renderedIds, ctx.cache, lastDiscover);
           if (audit) {
@@ -7983,13 +8184,20 @@ async function runExpertLoop(
         .filter((modifier) => !candidateProducts.some((product) =>
           productSupportsGroundedAxis(product, modifier)
         ));
-      // A helper-selected spelling whose source vocabulary is still reported
-      // as unmatched is evidence of a related direction, never proof of an
-      // exact customer request. Only an independently missing modifier can
-      // form a labelled split; an associative candidate with all modifiers
-      // (for example a different E27 lamp) must remain honest-empty.
-      if (jargonResult.partial_match) {
-        if (matchedQuery && candidateProducts.length > 0 && unresolvedModifiers.length > 0) {
+      const jargonEvidenceMode = classifyGroundedJargonEvidence(
+        Boolean(jargonResult.partial_match),
+        matchedQuery,
+        candidateProducts.length,
+        unresolvedModifiers,
+      );
+      // An independently missing modifier forms a labelled split and can
+      // never be hidden by a related candidate. With no modifiers,
+      // `partial_match` merely records that the customer's unknown source word
+      // differs from the translated live-title token. The category boundary,
+      // exact matched-query title proof and selection target below provide the
+      // same independent evidence as the normal in-loop jargon finalizer.
+      if (jargonEvidenceMode === "axis_split") {
+        if (matchedQuery && candidateProducts.length > 0) {
           return {
             kind: "partial",
             split: {
@@ -8003,6 +8211,7 @@ async function runExpertLoop(
         }
         return null;
       }
+      if (jargonEvidenceMode === "empty") return null;
       const safeIds = guardFinalRenderIds( filterProductIdsByBudgetCap(
         candidateProducts
           .map((product) => product.id)
@@ -8317,9 +8526,10 @@ async function runExpertLoop(
       anchorMissingRecoveryPool
     ) {
       const explicitRequirements = portableReplacementRequirements();
-      const mandatoryCriteria = latestRenderCriteria.filter((criterion) =>
-        (criterion.level ?? "A") === "A"
-      );
+      const mandatoryCriteria = restoreSelectionTargetBackingCriteria(
+        latestRenderCriteria,
+        [...targetBackedRenderCriteria, ...literalBackedRenderCriteria],
+      ).filter((criterion) => (criterion.level ?? "A") === "A");
       let poolTotal = anchorMissingRecoveryPool.total;
       let products = anchorMissingRecoveryPool.ids
         .map((id) => ctx.cache.get(id))
@@ -8336,6 +8546,13 @@ async function runExpertLoop(
           productTitleSupportsPortableRequirements(product.pagetitle, explicitRequirements)
         );
       if (mandatoryCriteria.length > 0) {
+        if (lastDiscover) {
+          products = filterProductsByMandatoryFacetTitleContradictions(
+            products,
+            mandatoryCriteria,
+            lastDiscover.facets,
+          ).products;
+        }
         const gate = applyCriteriaGate(products, mandatoryCriteria);
         const passed = new Set(gate.passed_ids);
         products = products.filter((product) => passed.has(product.id));
@@ -8373,7 +8590,7 @@ async function runExpertLoop(
           for (const args of attempts) {
             const recovered = await runTool("search_catalog", args, ctx);
             if (!recovered.ok || recovered.tool !== "search_catalog") continue;
-            const recoveredProducts = recovered.results
+            let recoveredProducts = recovered.results
               .map((product) => ctx.cache.get(String(product.id)))
               .filter((product): product is ProductFull => Boolean(product && product.price > 0))
               .filter((product) =>
@@ -8387,6 +8604,11 @@ async function runExpertLoop(
                 explicitRequirements.length === 0 ||
                 productTitleSupportsPortableRequirements(product.pagetitle, explicitRequirements)
               );
+            recoveredProducts = filterProductsByMandatoryFacetTitleContradictions(
+              recoveredProducts,
+              mandatoryCriteria,
+              lastDiscover.facets,
+            ).products;
             const targetReport = verifySelectionTargetWithVisibleTitle(
               anchorMissingRecoveryPool.target,
               recoveredProducts,
@@ -8606,6 +8828,7 @@ async function runExpertLoop(
             if (rescued.ok) {
               const rendered = rescued as { markdown: string; rendered_count: number; };
               for (const id of safeIds) shownIds.add(id);
+              ensureVisibleTerminalSelectionCaption(terminalCriteria, "v3_measured_reasoning_terminal_recovery");
               send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: recovered.total });
               productsRendered += rendered.rendered_count;
               steps.push({
@@ -8682,6 +8905,7 @@ async function runExpertLoop(
           if (rescued.ok) {
             const rendered = rescued as { markdown: string; rendered_count: number; };
             for (const id of budgetSafeIds) shownIds.add(id);
+            ensureVisibleTerminalSelectionCaption(terminalCriteria, "v3_terminal_reasoning_query_recovery");
             send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: totalAvailable || budgetSafeIds.length });
             productsRendered += rendered.rendered_count;
             steps.push({

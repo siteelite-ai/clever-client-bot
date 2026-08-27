@@ -110,6 +110,44 @@ Deno.test("два диапазона одной единицы не проеци
   assertEquals(projected.added, []);
 });
 
+Deno.test("локальное состояние диапазона не переносится на противоположный параметр", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "Для свободной посадки внутренний диаметр до усадки должен быть 12–20 мм, а после усадки — меньше 10 мм.",
+    [
+      {
+        key: "before_diameter",
+        caption: "Внутренний диаметр до термоусадки, мм",
+        type: "checkbox",
+        unit: "мм",
+        values: [{ value: "12" }, { value: "20" }],
+      },
+      {
+        key: "after_diameter",
+        caption: "Внутренний диаметр после термоусадки, мм",
+        type: "checkbox",
+        unit: "мм",
+        values: [{ value: "6" }, { value: "10" }],
+      },
+      {
+        key: "wall_after",
+        caption: "Толщина стенки после усадки, мм",
+        type: "checkbox",
+        unit: "мм",
+        values: [{ value: "1" }, { value: "2" }],
+      },
+    ],
+  );
+
+  assertEquals(projected.added, [{
+    key: "Внутренний диаметр до термоусадки, мм",
+    op: "range",
+    value: [12, 20],
+    unit: "мм",
+    level: "A",
+  }]);
+});
+
 Deno.test("существующий критерий модели разрешает неоднозначность фасетов с одной единицей", () => {
   const projected = projectReasoningRangeCriteria(
     [{ key: "Световой поток, Лм", op: "min", value: 3750, unit: "лм", level: "A" }],

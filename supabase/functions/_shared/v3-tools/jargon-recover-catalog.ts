@@ -14,6 +14,8 @@ export interface JargonRecoverCatalogInput {
   category?: string;
   /** Exact live leaves injected by the orchestrator after discovery. */
   category_in?: string[];
+  /** Require descriptive modifiers to participate in one model-owned title token. */
+  require_semantic_bridge?: boolean;
 }
 
 export interface JargonRecoverCatalogDeps extends CatalogClientDeps {
@@ -130,6 +132,20 @@ export function splitSemanticJargonModifiers(modifiers: string[]): { semantic: s
     (descriptive ? semantic : structural).push(value);
   }
   return { semantic, structural };
+}
+
+/** Keeps terminal lexical recovery consistent with the normal in-loop path.
+ * A source word differing from a category-scoped, title-proven translation is
+ * expected for jargon and is not an unresolved product constraint. Only
+ * independently requested modifiers require a labelled axis split. */
+export function classifyGroundedJargonEvidence(
+  partialMatch: boolean,
+  matchedQuery: string,
+  candidateCount: number,
+  unresolvedModifiers: string[],
+): "empty" | "exact" | "axis_split" {
+  if (!matchedQuery.trim() || candidateCount <= 0) return "empty";
+  return partialMatch && unresolvedModifiers.length > 0 ? "axis_split" : "exact";
 }
 
 function productHaystack(p: ProductRef): string {
@@ -294,17 +310,18 @@ export async function executeJargonRecoverCatalog(
         : normalize(candidate).replace(/\s+/gu, "").length;
       if (candidateScore <= 0) continue;
       const scopedInput: JargonRecoverCatalogInput = input;
+      const categoryScope = categoryLeaves.length > 0
+        ? { category_in: categoryLeaves }
+        : input.category
+          ? { category: input.category }
+          : {};
       const result = await executeSearchCatalog({
         mode: "by_query",
         query: candidate,
         // The discovered category is a hard relevance boundary, not merely an
         // LLM hint. Without it a plausible lexical candidate can return an
         // unrelated product from another catalog branch.
-        ...(categoryLeaves.length > 0
-          ? { category_in: categoryLeaves }
-          : input.category
-            ? { category: input.category }
-            : {}),
+        ...categoryScope,
         min_price: input.min_price,
         max_price: input.max_price,
         per_page: perPage,
@@ -347,7 +364,54 @@ export async function executeJargonRecoverCatalog(
           );
         }
       }
-      const filtered = groundedResults.filter((p) => productMatchesModifiers(p, activeModifiers));
+      let filtered = groundedResults.filter((p) => productMatchesModifiers(p, activeModifiers));
+
+      // The catalog returns only one bounded page for a lexical candidate.
+      // When an independently proven structural value (E27, IP65, N×S, etc.)
+      // is outside that first page, local filtering can falsely report an
+      // empty intersection. Retry the SAME model-owned candidate with only the
+      // structural modifiers appended to the catalog query, then keep the
+      // original title and modifier proofs. Descriptive properties are never
+      // appended here: they must first be translated by the semantic bridge.
+      const structuralModifiers = splitSemanticJargonModifiers(activeModifiers).structural
+        .filter((modifier) => !normalizeCodeLike(candidate).includes(normalizeCodeLike(modifier)));
+      if (filtered.length === 0 && structuralModifiers.length > 0) {
+        const combinedQuery = [candidate, ...structuralModifiers].join(" ").replace(/\s+/gu, " ").trim();
+        const combined = await executeSearchCatalog({
+          mode: "by_query",
+          query: combinedQuery,
+          ...categoryScope,
+          min_price: input.min_price,
+          max_price: input.max_price,
+          per_page: perPage,
+        }, deps, cache);
+        let combinedGrounded = combined.ok
+          ? combined.results.filter((product) =>
+            titleSupportsGroundedJargonQuery(product.pagetitle, candidate)
+          )
+          : [];
+        if (combinedGrounded.length === 0 && liveCategoryNames.size > 0) {
+          const unscopedCombined = await executeSearchCatalog({
+            mode: "by_query",
+            query: combinedQuery,
+            min_price: input.min_price,
+            max_price: input.max_price,
+            per_page: perPage,
+          }, deps, cache);
+          if (unscopedCombined.ok) {
+            combinedGrounded = unscopedCombined.results.filter((product) =>
+              titleSupportsGroundedJargonQuery(product.pagetitle, candidate) &&
+              (
+                liveCategoryNames.has(normalize(product.leaf_category ?? "")) ||
+                [input.category, ...categoryLeaves].some((category) =>
+                  titleSupportsLiveCategoryLabel(product.pagetitle, String(category ?? ""))
+                )
+              )
+            );
+          }
+        }
+        filtered = combinedGrounded.filter((product) => productMatchesModifiers(product, activeModifiers));
+      }
       if (filtered.length > 0 && candidateScore > matchedScore) {
         matched = { candidate, filtered, evidenceScore: candidateScore };
         matchedScore = candidateScore;
@@ -370,6 +434,7 @@ export async function executeJargonRecoverCatalog(
   const initial = await tryCandidates(candidates, modifiers);
   let matched = initial.matched;
   let axialFallback = initial.axial;
+  let semanticBridgeMatched = false;
 
   // A lexical helper often returns a translated phrase while live titles mix
   // languages (for example a Russian class noun plus a Latin family token).
@@ -421,7 +486,7 @@ export async function executeJargonRecoverCatalog(
   // If literal modifier matching is empty, translate the consultant's own
   // descriptive modifiers together with its query. Numeric/code-like axes stay
   // independent, and the caller still verifies matched_query in live titles.
-  if (!matched) {
+  if (!matched || input.require_semantic_bridge) {
     const bridged = splitSemanticJargonModifiers(modifiers);
     const bridgeSource = [source, ...bridged.semantic].join(" ").replace(/\s+/gu, " ").trim();
     if (bridged.semantic.length > 0 && normalize(bridgeSource) !== normalize(source)) {
@@ -441,7 +506,10 @@ export async function executeJargonRecoverCatalog(
         if (!allCandidates.some((known) => normalize(known) === normalize(candidate))) allCandidates.push(candidate);
       }
       const bridge = await tryCandidates(bridgeCandidates, bridged.structural);
-      matched = bridge.matched;
+      if (bridge.matched) {
+        matched = bridge.matched;
+        semanticBridgeMatched = true;
+      }
       axialFallback ??= bridge.axial;
     }
   }
@@ -469,6 +537,7 @@ export async function executeJargonRecoverCatalog(
         total: matched.filtered.length,
         partial_match,
         unmatched_tokens,
+        semantic_bridge_matched: semanticBridgeMatched,
       };
     }
   }
@@ -494,6 +563,7 @@ export async function executeJargonRecoverCatalog(
       total: sliced.length,
       partial_match: true,
       unmatched_tokens,
+      semantic_bridge_matched: false,
     };
   }
 
@@ -507,5 +577,6 @@ export async function executeJargonRecoverCatalog(
     total: 0,
     partial_match: false,
     unmatched_tokens: [],
+    semantic_bridge_matched: false,
   };
 }
