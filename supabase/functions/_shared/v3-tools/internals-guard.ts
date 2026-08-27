@@ -143,6 +143,8 @@ const MISSING_ANCHOR_TASK_RE =
   /(?:аналог\p{L}*|альтернатив\p{L}*|замен\p{L}*|ищ(?:у|ем|ешь|ете)|нужн\p{L}*\s+найт\p{L}*|подобр\p{L}*)/iu;
 const MISSING_ANCHOR_SPECULATION_RE =
   /(?:судя\s+по|скорее\s+всего|вероятн\p{L}*|предполож\p{L}*|похож\p{L}*\s+на|можно\s+вывест\p{L}*\s+из\s+код\p{L}*)/iu;
+const MISSING_ANCHOR_DEFINITION_TAIL_RE =
+  /\s+[—–-]\s+(?:это|тот\s+же\s+класс|те\s+же\s+ключев\p{L}*\s+параметр\p{L}*|ключев\p{L}*\s+параметр\p{L}*)(?!\p{L})[\s\S]*$/iu;
 
 /**
  * Before the source card is found, no attribute or brand inferred from its
@@ -171,7 +173,7 @@ export function replaceUngroundedMissingAnchorIntro(
       // source definition such as “— это релейный …” or “— тот же класс (…)”:
       // the absent card cannot prove that tail.
       grounded: sentence
-        .replace(/\s+[—–-]\s+(?:это|тот\s+же\s+класс)(?!\p{L})[\s\S]*$/iu, ".")
+        .replace(MISSING_ANCHOR_DEFINITION_TAIL_RE, ".")
         .replace(/\s+/gu, " ")
         .trim(),
     }))
@@ -188,8 +190,13 @@ export function replaceUngroundedMissingAnchorIntro(
   // unrequested mounting type or guessed phase count is discarded.
   const customerCompact = normalizeCompactCode(customerText);
   const customerNumbers = new Set(String(customerText ?? "").match(/\d+(?:[.,]\d+)?/gu) ?? []);
-  const backedExplanations = [...String(taskSentence ?? "").matchAll(/\(([^()]{2,160})\)/gu)]
-    .flatMap((match) => String(match[1] ?? "").split(/[,;]+/gu))
+  const definitionTail = String(taskSentence ?? "").match(MISSING_ANCHOR_DEFINITION_TAIL_RE)?.[0] ?? "";
+  const explanationSources = [
+    ...[...String(taskSentence ?? "").matchAll(/\(([^()]{2,160})\)/gu)].map((match) => String(match[1] ?? "")),
+    definitionTail.replace(/^\s*[—–-]\s*[^:()]{0,80}:?\s*/u, ""),
+  ].filter(Boolean);
+  const backedExplanations = explanationSources
+    .flatMap((source) => source.split(/[,;]+/gu))
     .map((part) => part.trim())
     .filter(Boolean)
     .filter((part) => {

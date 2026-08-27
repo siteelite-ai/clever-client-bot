@@ -53,6 +53,14 @@ Deno.test("missing-anchor intro keeps model-owned class reasoning and literal cu
   assertStringIncludes(explicitAxes, "альтернативы автомату Schneider Acti9 1P 16A C");
   assertStringIncludes(explicitAxes, "1 полюс, 16 А, характеристика C");
   assertEquals(/din-рейк/iu.test(explicitAxes), false);
+
+  const colonAxes = replaceUngroundedMissingAnchorIntro(
+    "Ищем более бюджетные аналоги автомата Schneider Acti9 1P 16A C — те же ключевые параметры: " +
+      "1 полюс, номинал 16А, характеристика C, модульный на DIN-рейку, но другой бренд.",
+    "Подбери более дешевые аналоги автомата Schneider Acti9 1P 16A C",
+  ).text;
+  assertStringIncludes(colonAxes, "1 полюс, номинал 16А, характеристика C");
+  assertEquals(/din-рейк|другой бренд/iu.test(colonAxes), false);
 });
 
 Deno.test("missing-anchor intro sanitizer is idempotent and does not invent a bubble from silence", () => {
