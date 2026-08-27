@@ -122,7 +122,7 @@ export function containsUnrenderedCatalogFacts(text: string): boolean {
     // Availability is also a catalog fact even when the model omits price,
     // article and URL. Questions/future intent such as «проверю, есть ли» do
     // not match because the assertion must begin with «в каталоге ...».
-    /(?<![а-яa-z])в\s+каталог\p{L}*\s+(?:[^.!?\r\n]{0,80}\s+)?(?:есть|имеются|нашл\p{L}*|представл\p{L}*|доступн\p{L}*|видн\p{L}*|проход\p{L}*\s+как|называ\p{L}*|относят\p{L}*)(?![а-яa-z])/iu.test(raw)
+    /(?<![а-яa-z])в\s+каталог\p{L}*\s+(?:[^.!?\r\n]{0,80}\s+)?(?:есть|имеются|нет|нашл\p{L}*|представл\p{L}*|доступн\p{L}*|видн\p{L}*|отсутств\p{L}*|не\s+(?:знач\p{L}*|найд\p{L}*|вид\p{L}*)|проход\p{L}*\s+как|называ\p{L}*|относят\p{L}*)(?![а-яa-z])/iu.test(raw)
   );
 }
 

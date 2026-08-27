@@ -15,6 +15,7 @@ Deno.test("catalog facts detector catches price, article, availability, and prod
   assert(containsUnrenderedCatalogFacts("[Товар](https://220volt.kz/catalog/a/b/c/)"));
   assert(containsUnrenderedCatalogFacts("В каталоге есть лампы с цоколем E27 и E40."));
   assert(containsUnrenderedCatalogFacts('В каталоге такие товары обычно проходят как другая форма.'));
+  assert(containsUnrenderedCatalogFacts('В каталоге такого значения сейчас нет.'));
   assertEquals(containsUnrenderedCatalogFacts("Сейчас проверю, есть ли такие лампы в каталоге."), false);
   assertEquals(containsUnrenderedCatalogFacts("Для этой линии нужен автомат на 16 А."), false);
 });

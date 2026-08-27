@@ -4009,6 +4009,20 @@ async function runExpertLoop(
           throw error;
         }
       }
+      const introSafetyApplies = step === 0 && intentMode === "select" &&
+        !resp.toolCalls.some((toolCall) => toolCall.name === "render_products");
+      const introAttributeGuard = introSafetyApplies
+        ? stripUngroundedIntroTechnicalAttributes(resp.text, userMessage)
+        : { text: resp.text, removed: [] as string[] };
+      const introFactGuard = introSafetyApplies && containsUnrenderedCatalogFacts(introAttributeGuard.text)
+        ? stripUnrenderedCatalogFactSegments(introAttributeGuard.text)
+        : { text: introAttributeGuard.text, removed: [] as string[] };
+      if (introSafetyApplies && introFactGuard.text !== resp.text) {
+        // Apply the evidence boundary before any phase, selection-target or
+        // criteria logic inspects the model text. The customer-visible bubble
+        // and the machine proof contract must be derived from the same prose.
+        resp = { ...resp, text: introFactGuard.text };
+      }
       steps.push({
         step: "v3_llm_call",
         ms: now(),
@@ -4061,18 +4075,11 @@ async function runExpertLoop(
       //    (важно для предупреждений о несоответствии параметров: цоколь, мощность и т.п.)
       //  • промежуточная болтовня между тулами → глушим
       if (resp.text.trim()) {
-        const isUngroundedIntro = isFirstTurn && !hasRender && !isFinalTurn;
-        const introAttributes = isUngroundedIntro
-          ? stripUngroundedIntroTechnicalAttributes(resp.text, userMessage)
-          : { text: resp.text, removed: [] as string[] };
-        const introFacts = isUngroundedIntro && containsUnrenderedCatalogFacts(introAttributes.text)
-          ? stripUnrenderedCatalogFactSegments(introAttributes.text)
-          : { text: introAttributes.text, removed: [] as string[] };
         // The same evidence-safe text drives both the visible bubble and all
         // downstream proof contracts. Otherwise a hidden, unrequested code in
         // raw model prose could still become a search/filter obligation even
         // after being removed from the UI.
-        const reasoningTextForContracts = introFacts.text;
+        const reasoningTextForContracts = resp.text;
         assistantReasoning += `\n${reasoningTextForContracts}`;
         declaredAliasQuery ??= extractDeclaredCatalogAlias(userMessage, assistantReasoning);
         if (isFirstTurn && !hasRender && !isFinalTurn) {
@@ -4085,26 +4092,24 @@ async function runExpertLoop(
               meta: { fragment_index: step, matched: safeReasoning.matched },
             });
           }
-          if (introAttributes.removed.length > 0) {
+          if (introAttributeGuard.removed.length > 0) {
             steps.push({
               step: "v3_guard_ungrounded_intro_attributes",
               ms: now(),
               meta: {
                 fragment_index: step,
-                original_text: resp.text,
-                removed_segments: introAttributes.removed,
+                removed_segments: introAttributeGuard.removed,
                 kept_chars: introText.length,
               },
             });
           }
-          if (introFacts.removed.length > 0) {
+          if (introFactGuard.removed.length > 0) {
             steps.push({
               step: "v3_guard_premature_text_facts",
               ms: now(),
               meta: {
                 fragment_index: step,
-                original_text: resp.text,
-                removed_segments: introFacts.removed,
+                removed_segments: introFactGuard.removed,
                 kept_chars: introText.length,
               },
             });
