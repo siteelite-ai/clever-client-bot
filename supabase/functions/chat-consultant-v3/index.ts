@@ -3284,6 +3284,7 @@ async function runExpertLoop(
   let replacementRequiredAxes: ReplacementAxis[] = [];
   let replacementTitleAxes: ReplacementAxis[] = [];
   let targetBackedRenderCriteria: Criterion[] = [];
+  let literalBackedRenderCriteria: Criterion[] = [];
   let replacementSplitFallback: {
     axes: ReplacementAxis[];
     candidates: RankedReplacementCandidate[];
@@ -4459,7 +4460,6 @@ async function runExpertLoop(
           if (
             !initialSelectionDiscoveryNoun &&
             intentMode === "select" &&
-            !replacementIntent &&
             typeof tc.args.noun === "string" &&
             tc.args.noun.trim()
           ) {
@@ -4817,6 +4817,21 @@ async function runExpertLoop(
               replacementEvidenceMessage,
               selectionPlan?.anchor_state === "anchor_missing",
             ).map((axis) => ({ ...axis, isDiameter: isDiameterFacet(axis) }));
+            if (selectionPlan?.anchor_state === "anchor_missing") {
+              const literalAxisKeys = new Set(renderTitleAxes.map((axis) => axis.key));
+              const literalCriteria = identityCriteria.criteria.filter((criterion) => {
+                const label = normalizeForMatch(criterion.key);
+                const facet = lastDiscover?.facets.find((candidate) =>
+                  normalizeForMatch(candidate.key) === label ||
+                  normalizeForMatch(candidate.caption ?? "") === label
+                );
+                return Boolean(facet && literalAxisKeys.has(facet.key));
+              }).map((criterion) => ({ ...criterion, level: "A" as const }));
+              literalBackedRenderCriteria = restoreSelectionTargetBackingCriteria(
+                literalBackedRenderCriteria,
+                literalCriteria,
+              );
+            }
             for (const axis of renderTitleAxes) {
               if (!replacementTitleAxes.some((candidate) => candidate.key === axis.key)) {
                 replacementTitleAxes.push(axis);
@@ -5851,11 +5866,17 @@ async function runExpertLoop(
               };
             const identityFreeTargetBacking = lastDiscover
               ? dropImplicitReplacementIdentityCriteria(
-                targetBackedRenderCriteria,
+                [
+                  ...targetBackedRenderCriteria,
+                  ...literalBackedRenderCriteria,
+                ],
                 lastDiscover.facets,
                 replacementEvidenceMessage,
               ).criteria
-              : targetBackedRenderCriteria;
+              : [
+                ...targetBackedRenderCriteria,
+                ...literalBackedRenderCriteria,
+              ];
             criteria = restoreSelectionTargetBackingCriteria(
               targetCriteriaPromotion.criteria,
               identityFreeTargetBacking,
