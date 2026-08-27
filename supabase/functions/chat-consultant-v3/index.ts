@@ -4018,16 +4018,31 @@ async function runExpertLoop(
         firstAssistantText,
         hasRenderCall: resp.toolCalls.some((toolCall) => toolCall.name === "render_products"),
       });
+      if (introSafetyApplies) {
+        // Preserve only the customer-owned side of the model's metalinguistic
+        // reasoning as a proof obligation. The invented definition is removed
+        // below, but the system must still search and title-prove the exact
+        // nickname the consultant said it understood.
+        const customerOwnedAlias = extractDeclaredCatalogAlias(userMessage, rawModelResponseText);
+        if (customerOwnedAlias && !declaredAliasQuery) {
+          declaredAliasQuery = customerOwnedAlias;
+          steps.push({
+            step: "v3_intro_alias_obligation_preserved",
+            ms: now(),
+            meta: { fragment_index: step, alias: customerOwnedAlias },
+          });
+        }
+      }
       const introAliasGuard = introSafetyApplies
         ? stripUngroundedIntroAliasDefinitions(resp.text)
         : { text: resp.text, removed: [] as string[] };
       const introAttributeGuard = introSafetyApplies
         ? stripUngroundedIntroTechnicalAttributes(introAliasGuard.text, userMessage)
         : { text: resp.text, removed: [] as string[] };
-      // Before any live discovery/search, catalog assertions are ungrounded.
-      // After a successful discovery they may be legitimate evidence for the
-      // deferred intro, while unrequested technical codes remain excluded.
-      const introFactSafetyApplies = introSafetyApplies && !lastDiscover && !catalogSearchAttempted;
+      // Taxonomy discovery proves that a broad category exists, not that the
+      // customer's exact subtype is available. Keep catalog assertions closed
+      // until an actual product search has run.
+      const introFactSafetyApplies = introSafetyApplies && !(freshSearch?.ids.length);
       const introFactGuard = introFactSafetyApplies && containsUnrenderedCatalogFacts(introAttributeGuard.text)
         ? stripUnrenderedCatalogFactSegments(introAttributeGuard.text)
         : { text: introAttributeGuard.text, removed: [] as string[] };
