@@ -140,6 +140,16 @@ Deno.test("intro reasoning retains customer codes and explicit derived criteria"
   );
 });
 
+Deno.test("alias generalization drops unrequested codes in parenthetical prose", () => {
+  assertEquals(
+    stripUngroundedIntroTechnicalAttributes(
+      "Чаще всего их берут для нестандартных патронов (E27, E40) или для подсветки.",
+      "А у вас есть лампы кукуруза?",
+    ).text,
+    "Чаще всего их берут для нестандартных патронов или для подсветки.",
+  );
+});
+
 Deno.test("first visible reasoning guard is independent of the agent step", () => {
   assertEquals(shouldGuardFirstVisibleReasoning({
     productsRendered: 0,

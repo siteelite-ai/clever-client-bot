@@ -33,7 +33,7 @@ import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract, shouldContinueSelectionPastOptionalClarification } from "../_shared/v3-tools/selection-actionability.ts";
 import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, projectSelectionTargetFacetCriteria, promoteSelectionTargetBackingCriteria, restoreSelectionTargetBackingCriteria, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
-import { aliasDuplicatesIndependentCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
+import { aliasDuplicatesIndependentCatalogClass, declaredAliasIsStructurallyCustomerOwned, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
   commonCompatibilityReference,
@@ -4484,9 +4484,6 @@ async function runExpertLoop(
             tc.args.noun.trim()
           ) {
             initialSelectionDiscoveryNoun = tc.args.noun.trim();
-            const qualifier = extractPostNominalCatalogQualifier(userMessage, initialSelectionDiscoveryNoun);
-            declaredAliasQuery ??= qualifier;
-            requiredCatalogAlias ??= qualifier;
           }
         }
         if (tc.name === "search_catalog") {
@@ -5356,6 +5353,23 @@ async function runExpertLoop(
             `${firstAssistantText}\n${assistantReasoning}`,
           );
           let lexicalClaim: string | null = aliasClaim ?? declaredAliasQuery;
+          if (
+            lexicalClaim && liveTaxonomyDeclaration &&
+            !declaredAliasIsStructurallyCustomerOwned(
+              lexicalClaim,
+              userMessage,
+              liveTaxonomyDeclaration,
+            )
+          ) {
+            steps.push({
+              step: "v3_declared_alias_not_customer_bound",
+              ms: now(),
+              meta: { alias: lexicalClaim, live_class: liveTaxonomyDeclaration },
+            });
+            declaredAliasQuery = null;
+            requiredCatalogAlias = null;
+            lexicalClaim = null;
+          }
           // Only independent taxonomy/discovery evidence may show that the
           // alleged alias is merely an inflection of the product class. The
           // model's later selection_target can itself contain the alias and
@@ -7291,6 +7305,14 @@ async function runExpertLoop(
             addToWhitelist(lastDiscover.category?.pagetitle);
             for (const leaf of lastDiscover.leaf_categories ?? []) {
               addToWhitelist(leaf.pagetitle);
+            }
+            if (intentMode === "select") {
+              const qualifier = extractPostNominalCatalogQualifier(
+                userMessage,
+                lastDiscover.category?.pagetitle ?? "",
+              );
+              declaredAliasQuery ??= qualifier;
+              requiredCatalogAlias ??= qualifier;
             }
             if (replacementIntent) {
               const sourceIdentity = explicitReplacementIdentityValues(

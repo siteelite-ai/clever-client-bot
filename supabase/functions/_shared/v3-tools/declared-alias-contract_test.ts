@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   aliasDuplicatesCatalogClass,
   aliasDuplicatesIndependentCatalogClass,
+  declaredAliasIsStructurallyCustomerOwned,
   extractDeclaredCatalogAlias,
   extractPostNominalCatalogQualifier,
   filterProductsByDeclaredAlias,
@@ -83,4 +84,22 @@ Deno.test("a post-nominal customer qualifier is lexical evidence, not applicatio
   assertEquals(extractPostNominalCatalogQualifier("покажи прожекторы мощностью от 100 Вт", "прожекторы"), null);
   assertEquals(extractPostNominalCatalogQualifier("нужен провод длиной 50 м", "провод"), null);
   assertEquals(extractPostNominalCatalogQualifier("покажи розетки серии Гармония", "розетки"), null);
+});
+
+Deno.test("live taxonomy separates a customer alias from application wording", () => {
+  assertEquals(declaredAliasIsStructurallyCustomerOwned(
+    "кукуруза",
+    "а у тебя есть лампы кукуруза?",
+    "Лампы",
+  ), true);
+  assertEquals(declaredAliasIsStructurallyCustomerOwned(
+    "кукуруза",
+    "есть кукуруза?",
+    "Лампы",
+  ), true);
+  assertEquals(declaredAliasIsStructurallyCustomerOwned(
+    "освещение",
+    "Хочу заменить люстру на светодиодное освещение в гостиной 25 м²",
+    "Светильники",
+  ), false);
 });

@@ -270,7 +270,7 @@ export function stripUnrenderedCatalogFactSegments(text: string): CatalogFactStr
 
 const COMPACT_TECHNICAL_CODE_RE = /(?<![\p{L}\p{N}])(?=[\p{L}\p{N}.-]{2,18}(?![\p{L}\p{N}]))(?=[\p{L}\p{N}.-]*\p{L})(?=[\p{L}\p{N}.-]*\d)[\p{L}\p{N}][\p{L}\p{N}.-]{1,17}(?![\p{L}\p{N}])/gu;
 const ALIAS_OR_GENERALIZATION_RE = /(?:\bэто\b|названи\p{L}*|обычно|как\s+правило|чаще\s+всего|проход\p{L}*\s+как)/iu;
-const EXPLICIT_CRITERION_RE = /(?:нуж\p{L}*|треб\p{L}*|беру|закладыва\p{L}*|долж\p{L}*|не\s+(?:ниже|менее|выше|более))/iu;
+const EXPLICIT_CRITERION_RE = /(?:нуж\p{L}*|треб\p{L}*|беру(?!\p{L})|закладыва\p{L}*|долж\p{L}*|не\s+(?:ниже|менее|выше|более))/iu;
 const TECHNICAL_ATTRIBUTE_CODE_LIST_RE = /((?:,\s*)?(?:обычно\s+)?(?:с|на|под)\s+(?:[\p{L}-]{2,32}\s+){1,3})((?:[\p{L}]*\d[\p{L}\d.-]*)(?:\s*(?:,|\/|или)\s*(?:[\p{L}]*\d[\p{L}\d.-]*))*)/giu;
 const UNGROUNDED_ALIAS_DEFINITION_RE = /(?:(?:(?:народн|разговорн|бытов|жаргонн|неофициальн)\p{L}*\s+)+(?:названи\p{L}*|обозначени\p{L}*|термин\p{L}*)|так\s+(?:в\s+народе\s+)?называ\p{L}*|(?:по\s+смыслу\s+)?это\s+чаще\s+всего|это\s+оно\s+и\s+есть|это\s+ближе\s+всего|ближе\s+всего\s+к|проход\p{L}*\s+как)/iu;
 const ALIAS_GENERALIZATION_FOLLOWUP_RE = /^\s*(?:обычно|как\s+правило|чаще\s+всего)\s+(?:это|такие|они)(?!\p{L})/iu;
@@ -299,7 +299,7 @@ export function stripUngroundedIntroTechnicalAttributes(
     const sentences = paragraph.match(/[^.!?]+(?:[.!?]+|$)/gu) ?? [paragraph];
     return sentences.map((sentence) => {
       if (!ALIAS_OR_GENERALIZATION_RE.test(sentence) || EXPLICIT_CRITERION_RE.test(sentence)) return sentence.trim();
-      return sentence.replace(
+      const withoutAttributeLists = sentence.replace(
         TECHNICAL_ATTRIBUTE_CODE_LIST_RE,
         (whole, prefix: string, codeList: string) => {
           const trailingPunctuation = codeList.match(/[.!?]+$/u)?.[0] ?? "";
@@ -311,7 +311,23 @@ export function stripUngroundedIntroTechnicalAttributes(
           if (kept.length === 0) return trailingPunctuation;
           return `${prefix}${kept.join(" или ")}${trailingPunctuation}`;
         },
-      ).replace(/\s+,/gu, ",").replace(/[ \t]{2,}/gu, " ").trim();
+      );
+      // Generalisations can also place codes in parentheses or after a
+      // different preposition ("для патронов (E27, E40)"). The evidence rule
+      // is the same: an unrequested compact code must not become visible just
+      // because the model chose another sentence shape.
+      return withoutAttributeLists.replace(
+        COMPACT_TECHNICAL_CODE_RE,
+        (code) => {
+          if (requestedCodes.has(normalizeCompactCode(code))) return code;
+          removed.push(String(code).trim());
+          return "";
+        },
+      )
+        .replace(/\(\s*(?:(?:,|\/|или)\s*)*\)/giu, "")
+        .replace(/\s+,/gu, ",")
+        .replace(/[ \t]{2,}/gu, " ")
+        .trim();
     }).filter(Boolean).join(" ");
   }).map((paragraph) => paragraph.trim()).filter(Boolean);
   return { text: cleanedParagraphs.join("\n\n"), removed };

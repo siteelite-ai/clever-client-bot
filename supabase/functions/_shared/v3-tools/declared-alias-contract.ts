@@ -134,3 +134,33 @@ export function extractPostNominalCatalogQualifier(
   }
   return null;
 }
+
+const REQUEST_SCAFFOLD = new Set([
+  ...POST_NOMINAL_STOP,
+  "а", "у", "ты", "тебя", "вы", "вас", "мне", "нам", "ли", "это", "такой", "такая", "такие",
+  "мой", "моя", "для", "заменить", "замени", "хочу", "можно", "пожалуйста",
+]);
+
+/** A consultant declaration may preserve customer vocabulary, but it cannot
+ * turn an application phrase into a catalog alias. Once live taxonomy is
+ * available, a genuine alias must either be the qualifier immediately bound
+ * to that customer-stated class ("лампа кукуруза") or be the only substantive
+ * phrase in a short standalone request ("есть кукуруза?"). */
+export function declaredAliasIsStructurallyCustomerOwned(
+  alias: string,
+  customerText: string,
+  discoveredClass: string,
+): boolean {
+  const wanted = normalize(alias);
+  if (!wanted) return false;
+  const qualifier = extractPostNominalCatalogQualifier(customerText, discoveredClass);
+  if (normalize(qualifier ?? "") === wanted) return true;
+
+  const substantive = normalize(customerText).split(" ").filter((token) =>
+    token &&
+    !REQUEST_SCAFFOLD.has(token) &&
+    !/^\d/u.test(token) &&
+    !/^(?:м|мм|см|м2|м3|вт|квт|а|в|лм|тг|тенге)$/u.test(token)
+  );
+  return substantive.join(" ") === wanted;
+}
