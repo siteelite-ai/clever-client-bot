@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   buildCanonicalEntityRecoveryInput,
   buildFacetConsistencyRecoveryInput,
+  buildGroundedNamedSeriesSearchInput,
   classifyCatalogSearchOutcome,
   findNamedSeriesFacetEvidence,
   searchInputUsesNamedSeriesFacet,
@@ -143,4 +144,32 @@ Deno.test("a model-authored named-series facet survives only with live key/value
     mode: "by_filter",
     options: { invented_key: ["Гармония"] },
   }, facets, "Гармония"), false);
+});
+
+Deno.test("named-series search keeps customer filters and drops model-only narrowing", () => {
+  assertEquals(buildGroundedNamedSeriesSearchInput(
+    { key: "collection", value: "Гармония", products_count: 12 },
+    {
+      mode: "by_filter",
+      category_in: ["Розетки"],
+      options: {
+        collection: ["Гармония"],
+        socket_type: ["электрическая с USB"],
+        color: ["Белый"],
+      },
+      per_page: 100,
+    },
+    [
+      { key: "collection", value: "Гармония" },
+      { key: "color", value: "Белый" },
+    ],
+  ), {
+    mode: "by_filter",
+    category_in: ["Розетки"],
+    options: {
+      color: ["Белый"],
+      collection: ["Гармония"],
+    },
+    per_page: 50,
+  });
 });

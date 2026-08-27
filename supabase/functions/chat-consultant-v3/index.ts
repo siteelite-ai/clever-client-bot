@@ -81,10 +81,10 @@ import {
 import {
   buildCanonicalEntityRecoveryInput,
   buildFacetConsistencyRecoveryInput,
+  buildGroundedNamedSeriesSearchInput,
   classifyCatalogSearchOutcome,
   type CatalogSearchState,
   findNamedSeriesFacetEvidence,
-  searchInputUsesNamedSeriesFacet,
 } from "../_shared/v3-tools/catalog-search-outcome.ts";
 import { detectUserIntentMode, requiresCatalogGroundingForInquiry, resolveNamedSeriesToken, shouldSuppressNegativeSuitabilityCard } from "../_shared/v3-tools/intent-mode.ts";
 import {
@@ -3150,6 +3150,7 @@ async function runExpertLoop(
   // the cards cannot silently diverge from the preceding reasoning.
   let enforcedSearchCriteria: Criterion[] = [];
   let userBackedSearchCriteria: Criterion[] = [];
+  const userBackedSearchFacetValues: Array<{ key: string; value: string }> = [];
   let reasoningProjectedSearchCriteria: Criterion[] = [];
   let latestRenderCriteria: Criterion[] = [];
   let activeSelectionTarget: string | null = null;
@@ -4609,6 +4610,11 @@ async function runExpertLoop(
             userBackedSearchCriteria,
             guardedUserBackedCriteria,
           );
+          for (const item of effectiveUserBacked) {
+            if (!userBackedSearchFacetValues.some((known) => known.key === item.key && known.value === item.value)) {
+              userBackedSearchFacetValues.push({ key: item.key, value: item.value });
+            }
+          }
 
           // A missing source card does not erase the consultant's own
           // replacement analysis. Compile its declared key parameters into
@@ -6188,12 +6194,17 @@ async function runExpertLoop(
 
         if (tc.name === "search_catalog" && namedSeriesToken && !seriesGroundingSatisfied) {
           const requested = tc.args as Record<string, unknown>;
-          const groundedFacetSearch = searchInputUsesNamedSeriesFacet(
-            requested as Partial<SearchCatalogInput>,
+          const facetEvidence = findNamedSeriesFacetEvidence(
             lastDiscover?.facets ?? [],
             namedSeriesToken,
           );
-          if (!groundedFacetSearch) {
+          if (facetEvidence) {
+            tc.args = buildGroundedNamedSeriesSearchInput(
+              facetEvidence,
+              requested as Partial<SearchCatalogInput>,
+              userBackedSearchFacetValues,
+            ) as unknown as Record<string, unknown>;
+          } else {
             const exactSeriesArgs: Record<string, unknown> = {
               mode: "by_query",
               query: namedSeriesToken,
@@ -6206,11 +6217,16 @@ async function runExpertLoop(
             tc.args = exactSeriesArgs;
           }
           steps.push({
-            step: groundedFacetSearch
-              ? "v3_named_series_live_facet_preserved"
+            step: facetEvidence
+              ? "v3_named_series_user_contract_enforced"
               : "v3_named_series_exact_query_enforced",
             ms: now(),
-            meta: { series: namedSeriesToken, requested: summariseToolArgs("search_catalog", requested) },
+            meta: {
+              series: namedSeriesToken,
+              requested: summariseToolArgs("search_catalog", requested),
+              enforced: summariseToolArgs("search_catalog", tc.args as Record<string, unknown>),
+              user_backed: userBackedSearchFacetValues,
+            },
           });
         }
 

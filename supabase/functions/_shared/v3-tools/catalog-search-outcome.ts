@@ -21,6 +21,11 @@ export interface NamedSeriesFacetEvidence {
   products_count: number;
 }
 
+export interface UserBackedFacetValue {
+  key: string;
+  value: string;
+}
+
 function normalize(value: string): string {
   return String(value ?? "")
     .toLocaleLowerCase("ru-RU")
@@ -108,6 +113,48 @@ export function searchInputUsesNamedSeriesFacet(
       requested.some((value) => normalize(String(value)) === normalize(candidate.value))
     );
   });
+}
+
+/**
+ * Rebuilds an exact named-series search from catalog-proven identity plus only
+ * the facet values literally backed by the customer. Model-only preferences
+ * are deliberately discarded: an invented colour/type/material must not turn
+ * a valid series browse into a false empty. The already validated category
+ * scope is retained so the recovery does not confuse sibling product classes.
+ */
+export function buildGroundedNamedSeriesSearchInput(
+  evidence: NamedSeriesFacetEvidence,
+  requested: Partial<SearchCatalogInput>,
+  userBacked: UserBackedFacetValue[],
+): SearchCatalogInput {
+  const options: Record<string, string[]> = {};
+  for (const item of userBacked) {
+    const key = String(item?.key ?? "").trim();
+    const value = String(item?.value ?? "").trim();
+    if (!key || !value || key === evidence.key) continue;
+    const values = options[key] ?? [];
+    if (!values.includes(value)) values.push(value);
+    options[key] = values;
+  }
+  options[evidence.key] = [evidence.value];
+
+  const perPage = Number(requested.per_page);
+  const category = typeof requested.category === "string" && requested.category.trim()
+    ? requested.category.trim()
+    : null;
+  const categoryIn = Array.isArray(requested.category_in)
+    ? requested.category_in.map(String).map((value) => value.trim()).filter(Boolean).slice(0, 24)
+    : [];
+  return {
+    mode: "by_filter",
+    options,
+    per_page: Number.isFinite(perPage) ? Math.max(5, Math.min(50, perPage)) : 8,
+    ...(categoryIn.length > 0 ? { category_in: categoryIn } : category ? { category } : {}),
+    ...(Number.isFinite(requested.min_price) ? { min_price: requested.min_price } : {}),
+    ...(Number.isFinite(requested.max_price) ? { max_price: requested.max_price } : {}),
+    ...(requested.sort_cheapest === true ? { sort_cheapest: true } : {}),
+    ...(requested.sort_expensive === true ? { sort_expensive: true } : {}),
+  };
 }
 
 /**
