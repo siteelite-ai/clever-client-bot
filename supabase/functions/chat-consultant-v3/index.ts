@@ -4629,6 +4629,7 @@ async function runExpertLoop(
               declaredReasoning,
               userEvidence,
               replacementEvidenceMessage,
+              userBackedSearchCriteria,
             );
             replacementTitleAxes = replacementContract.title_axes.map((axis) => ({
               ...axis,

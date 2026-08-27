@@ -29,6 +29,7 @@ Deno.test("измеримое рассуждение требует машинн
   assertEquals(hasMeasuredSelectionRequirement("покажи кабель ВВГ 2×1,5"), false);
   assertEquals(hasMeasuredSelectionRequirement("Обычно такие лампы имеют E27 или E14 и часто работают на 220 В."), false);
   assertEquals(hasMeasuredSelectionRequirement("Считаем: площадь 25 м² × 175 лк, итого 4375 лм."), true);
+  assertEquals(hasMeasuredSelectionRequirement("ДКУ-LED-03-100W — исходная модель; подбираю замену."), false);
 });
 
 Deno.test("числовой диапазон из рассуждения проецируется на уникальный живой фасет", () => {
@@ -37,6 +38,21 @@ Deno.test("числовой диапазон из рассуждения про�
     { key: "power", caption: "Мощность", type: "number", unit: "Вт" },
   ]);
   assertEquals(projected.added, [{ key: "Световой поток", op: "range", value: [3750, 5000], unit: "лм", level: "A" }]);
+});
+
+Deno.test("дефисы артикула не превращаются в диапазон измеримого фасета", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "ДКУ-LED-03-100W — исходная модель; подбираю замену.",
+    [{
+      key: "power",
+      caption: "Мощность ламп, Вт",
+      type: "number",
+      unit: "Вт",
+      values: [{ value: "3" }, { value: "100" }],
+    }],
+  );
+  assertEquals(projected.added, []);
 });
 
 Deno.test("ключевые параметры замены обязательны, вероятная характеристика остаётся рекомендацией", () => {

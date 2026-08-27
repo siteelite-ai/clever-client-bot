@@ -204,7 +204,10 @@ export function compileMeasuredReasoningSearchContract(
  * existing exact-compound policy. */
 export function hasMeasuredSelectionRequirement(text: string): boolean {
   const value = String(text ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е");
-  const re = new RegExp(String.raw`\d+(?:[.,]\d+)?(?:\s*[–—-]\s*\d+(?:[.,]\d+)?)?\s*(${UNIT})(?![a-zа-я])`, "giu");
+  // Do not reinterpret a numeric suffix inside a hyphenated model identifier
+  // (`ABC-03-100W`) as a measured requirement. Standalone `100W` remains a
+  // valid customer literal and is handled by the ordinary quantity projector.
+  const re = new RegExp(String.raw`(?<![a-zа-я0-9-])\d+(?:[.,]\d+)?(?:\s*[–—-]\s*\d+(?:[.,]\d+)?)?\s*(${UNIT})(?![a-zа-я])`, "giu");
   for (let match; (match = re.exec(value)) !== null;) {
     const unit = normalizeUnit(match[1]);
     if (!unit || /^(шт|штук|раз|года?|лет|мин|сек)$/u.test(unit)) continue;
@@ -309,7 +312,7 @@ export function projectReasoningRangeCriteria(
   const text = String(reasoningText ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е");
   const ranges: Array<{ low: number; high: number; unit: string; context: string }> = [];
   const rangePatterns = [
-    new RegExp(String.raw`(${NUM})\s*[–—-]\s*(${NUM})\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])`, "giu"),
+    new RegExp(String.raw`(?<![a-zа-я0-9-])(${NUM})\s*[–—-]\s*(${NUM})\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])`, "giu"),
     new RegExp(String.raw`от\s+(${NUM})\s+до\s+(${NUM})\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])`, "giu"),
   ];
   for (const re of rangePatterns) {

@@ -133,6 +133,24 @@ Deno.test("literal customer requirements remain hard without a source card", () 
   ]));
 });
 
+Deno.test("a frozen literal measurement shapes missing-anchor retrieval", () => {
+  const contract = compileReplacementReasoningContract([
+    { key: "lamp_type", caption: "Тип лампы", unit: null, values: [{ value: "LED" }] },
+    { key: "power", caption: "Мощность ламп, Вт", unit: "Вт", values: [{ value: "70" }, { value: "100" }] },
+  ],
+  "Ищу светильник с типом лампы LED.",
+  "ДКУ-LED-03-100W предложи близкую замену",
+  "ДКУ-LED-03-100W предложи близкую замену",
+  [{ key: "Мощность ламп, Вт", op: "eq", value: "100", unit: "Вт", level: "A" }]);
+
+  assertEquals(contract.options, { lamp_type: ["LED"], power: ["100"] });
+  assertEquals(contract.criteria.map((criterion) => criterion.key), [
+    "Тип лампы",
+    "Мощность ламп, Вт",
+  ]);
+  assertEquals(contract.title_axes.map((axis) => axis.key), ["lamp_type", "power"]);
+});
+
 Deno.test("final structured criteria supply title axes without restoring source identity", () => {
   const facets = [
     { key: "brand", caption: "Бренд", unit: null, values: [{ value: "Schneider" }] },

@@ -256,6 +256,7 @@ export function compileReplacementReasoningContract(
   reasoningText: string,
   userEvidence: string,
   sourceMessage: string,
+  frozenUserCriteria: Criterion[] = [],
 ): ReplacementReasoningContract {
   const guarded = guardSearchFilters(
     { mode: "by_filter" },
@@ -315,8 +316,23 @@ export function compileReplacementReasoningContract(
     });
     return Boolean(facet && provenKeys.has(facet.key));
   });
-  const projected = projectCriteriaFacetOptions(mandatory, facets);
-  const titleOptions = pickOptions(options, provenKeys);
+  const frozenIdentityFree = dropImplicitReplacementIdentityCriteria(
+    Array.isArray(frozenUserCriteria) ? frozenUserCriteria : [],
+    facets,
+    sourceMessage,
+  ).criteria.filter((criterion) => (criterion.level ?? "A") === "A");
+  // The same proof-qualified contract must shape retrieval, rendering and
+  // title verification. This prevents a literal customer requirement from
+  // being enforced only after broad retrieval has already discarded it.
+  const projected = projectCriteriaFacetOptions(
+    [...mandatory, ...frozenIdentityFree],
+    facets,
+  );
+  const literalTitleOptions = pickOptions(options, provenKeys);
+  const titleOptions = {
+    ...literalTitleOptions,
+    ...projected.options,
+  };
   const unproven = criteria.flatMap((criterion) => {
     const facet = facets.find((candidate) => {
       const label = normalizeWords(criterion.key);
@@ -331,8 +347,9 @@ export function compileReplacementReasoningContract(
     demoted: [...new Set([...importance.demoted, ...unproven])],
     axes: compileAxes(projected.options, facets),
     // Advisory axes can become title obligations only when the customer's own
-    // wording/code structurally contains them. Live facet vocabulary alone is
-    // not evidence about an unavailable source SKU.
+    // wording/code structurally contains them. Frozen customer criteria join
+    // those literal axes, but live facet vocabulary alone remains insufficient
+    // evidence about an unavailable source SKU.
     title_axes: compileAxes(titleOptions, facets),
   };
 }
