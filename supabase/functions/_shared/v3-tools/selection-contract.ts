@@ -357,7 +357,7 @@ export function promoteSelectionTargetBackingCriteria(
   baseTarget: string | null,
   targetValue: unknown,
   criteria: Criterion[],
-): { criteria: Criterion[]; promoted: Criterion[] } {
+): { criteria: Criterion[]; promoted: Criterion[]; backing: Criterion[] } {
   const base = String(baseTarget ?? "").trim();
   const target = parseSelectionTarget(targetValue);
   if (
@@ -367,6 +367,7 @@ export function promoteSelectionTargetBackingCriteria(
     return {
       criteria: (Array.isArray(criteria) ? criteria : []).map((criterion) => ({ ...criterion })),
       promoted: [],
+      backing: [],
     };
   }
   const baseTokens = new Set(meaningfulTokens(base));
@@ -374,8 +375,8 @@ export function promoteSelectionTargetBackingCriteria(
     `${target.product_class}\n${target.application_context.join("\n")}`,
   ).filter((token) => !baseTokens.has(token)));
   const promoted: Criterion[] = [];
+  const backing: Criterion[] = [];
   const next = (Array.isArray(criteria) ? criteria : []).map((criterion) => {
-    if ((criterion.level ?? "A") !== "B") return { ...criterion };
     const rawValues = Array.isArray(criterion.value)
       ? criterion.value
       : [criterion.value];
@@ -384,10 +385,38 @@ export function promoteSelectionTargetBackingCriteria(
       return { ...criterion };
     }
     const upgraded = { ...criterion, level: "A" as const };
-    promoted.push(upgraded);
+    backing.push(upgraded);
+    if ((criterion.level ?? "A") === "B") promoted.push(upgraded);
     return upgraded;
   });
-  return { criteria: next, promoted };
+  return { criteria: next, promoted, backing };
+}
+
+/** Restore an earlier proof-qualified class criterion after later compatibility
+ * normalization. Same-key replacements are intentional: an accidental scalar
+ * relation must not overwrite the live facet value that defined the target. */
+export function restoreSelectionTargetBackingCriteria(
+  criteria: Criterion[],
+  backing: Criterion[],
+): Criterion[] {
+  const normalizeKey = (value: string) => String(value ?? "")
+    .toLocaleLowerCase("ru-RU")
+    .replace(/ё/gu, "е")
+    .replace(/[^a-zа-я0-9]+/giu, " ")
+    .trim();
+  const restored = (Array.isArray(backing) ? backing : [])
+    .filter((criterion) => criterion?.key)
+    .map((criterion) => ({ ...criterion, level: "A" as const }));
+  if (restored.length === 0) {
+    return (Array.isArray(criteria) ? criteria : []).map((criterion) => ({ ...criterion }));
+  }
+  const restoredKeys = new Set(restored.map((criterion) => normalizeKey(criterion.key)));
+  return [
+    ...(Array.isArray(criteria) ? criteria : [])
+      .filter((criterion) => !restoredKeys.has(normalizeKey(criterion.key)))
+      .map((criterion) => ({ ...criterion })),
+    ...restored,
+  ];
 }
 
 /**

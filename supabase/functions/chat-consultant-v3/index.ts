@@ -32,7 +32,7 @@ import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-le
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract, shouldContinueSelectionPastOptionalClarification } from "../_shared/v3-tools/selection-actionability.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, promoteSelectionTargetBackingCriteria, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, promoteSelectionTargetBackingCriteria, restoreSelectionTargetBackingCriteria, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
@@ -3283,6 +3283,7 @@ async function runExpertLoop(
   const prioritySplitAxisIdSets = new Map<string, Set<string>>();
   let replacementRequiredAxes: ReplacementAxis[] = [];
   let replacementTitleAxes: ReplacementAxis[] = [];
+  let targetBackedRenderCriteria: Criterion[] = [];
   let replacementSplitFallback: {
     axes: ReplacementAxis[];
     candidates: RankedReplacementCandidate[];
@@ -5101,6 +5102,10 @@ async function runExpertLoop(
             tc.args.selection_target,
             renderRawCriteria,
           );
+          targetBackedRenderCriteria = restoreSelectionTargetBackingCriteria(
+            targetBackedRenderCriteria,
+            targetBackedCriteria.backing,
+          );
           if (targetBackedCriteria.promoted.length > 0) {
             renderRawCriteria = targetBackedCriteria.criteria;
             (tc.args as Record<string, unknown>).criteria = renderRawCriteria;
@@ -5825,14 +5830,29 @@ async function runExpertLoop(
                 tc.args.selection_target,
                 frozenRender.criteria,
               )
-              : { criteria: frozenRender.criteria, promoted: [] as Criterion[] };
-            criteria = targetCriteriaPromotion.criteria;
+              : {
+                criteria: frozenRender.criteria,
+                promoted: [] as Criterion[],
+                backing: [] as Criterion[],
+              };
+            const identityFreeTargetBacking = lastDiscover
+              ? dropImplicitReplacementIdentityCriteria(
+                targetBackedRenderCriteria,
+                lastDiscover.facets,
+                replacementEvidenceMessage,
+              ).criteria
+              : targetBackedRenderCriteria;
+            criteria = restoreSelectionTargetBackingCriteria(
+              targetCriteriaPromotion.criteria,
+              identityFreeTargetBacking,
+            );
 
             if (
               aligned.alignments.length > 0 ||
               promoted.promoted.length > 0 ||
               fallbackMeasured.promoted.length > 0 ||
               targetCriteriaPromotion.promoted.length > 0 ||
+              identityFreeTargetBacking.length > 0 ||
               importance.demoted.length > 0 ||
               frozenRender.demoted.length > 0
             ) {
@@ -5844,6 +5864,7 @@ async function runExpertLoop(
                   alignments: aligned.alignments,
                   promoted: promoted.promoted,
                   target_promoted: targetCriteriaPromotion.promoted,
+                  target_backing_restored: identityFreeTargetBacking,
                   fallback_promoted: fallbackMeasured.promoted,
                   demoted_advisory: importance.demoted,
                   demoted_late: frozenRender.demoted,

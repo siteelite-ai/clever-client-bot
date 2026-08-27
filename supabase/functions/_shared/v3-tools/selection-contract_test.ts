@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, promoteSelectionTargetBackingCriteria, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, promoteSelectionTargetBackingCriteria, restoreSelectionTargetBackingCriteria, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
@@ -353,6 +353,10 @@ Deno.test("structured target promotes only its repeated class-defining advisory 
     "Вид светильника",
     "Способ монтажа",
   ]);
+  assertEquals(promoted.backing.map((criterion) => criterion.key), [
+    "Вид светильника",
+    "Способ монтажа",
+  ]);
 });
 
 Deno.test("an unrelated advisory value cannot strengthen a structured target", () => {
@@ -362,7 +366,21 @@ Deno.test("an unrelated advisory value cannot strengthen a structured target", (
     [{ key: "Цвет", op: "eq", value: "чёрный", level: "B" }],
   );
   assertEquals(promoted.promoted, []);
+  assertEquals(promoted.backing, []);
   assertEquals(promoted.criteria[0].level, "B");
+});
+
+Deno.test("later scalar normalization cannot overwrite a target-backing facet value", () => {
+  assertEquals(restoreSelectionTargetBackingCriteria(
+    [
+      { key: "Мощность", op: "eq", value: "100", level: "A" },
+      { key: "Способ монтажа", op: "eq", value: 1, level: "B" },
+    ],
+    [{ key: "Способ монтажа", op: "eq", value: "консольный", level: "A" }],
+  ), [
+    { key: "Мощность", op: "eq", value: "100", level: "A" },
+    { key: "Способ монтажа", op: "eq", value: "консольный", level: "A" },
+  ]);
 });
 
 Deno.test("an exact named entity may discard a model-only class adjective but never switch siblings", () => {
