@@ -4584,11 +4584,18 @@ async function runExpertLoop(
               ...axis,
               isDiameter: isDiameterFacet(axis),
             }));
-            if (replacementContract.criteria.length >= 2) {
-              replacementRequiredAxes = replacementContract.axes.map((axis) => ({
+            replacementRequiredAxes = replacementContract.criteria.length >= 2
+              ? replacementContract.axes.map((axis) => ({
                 ...axis,
                 isDiameter: isDiameterFacet(axis),
-              }));
+              }))
+              : [];
+            // With no source card, model-decoded properties are advisory until
+            // the customer's literal wording/code proves them. Always rebuild
+            // the search from the proof-qualified contract; otherwise the raw
+            // model tool arguments can silently restore an unverified strict
+            // intersection even when the compiler correctly demoted it.
+            {
               const current = tc.args as Record<string, unknown>;
               const {
                 query: _query,
@@ -4606,7 +4613,9 @@ async function runExpertLoop(
                 ...(leaves.length > 0
                   ? { category_in: leaves }
                   : { category: lastDiscover.category.pagetitle }),
-                options: replacementContract.options,
+                ...(Object.keys(replacementContract.options).length > 0
+                  ? { options: replacementContract.options }
+                  : {}),
               };
               enforcedSearchCriteria = replacementContract.criteria.map((criterion) => ({ ...criterion }));
               reasoningProjectedSearchCriteria = replacementContract.criteria.map((criterion) => ({ ...criterion }));
@@ -4754,6 +4763,7 @@ async function runExpertLoop(
               lastDiscover.facets,
               identityCriteria.criteria,
               replacementEvidenceMessage,
+              selectionPlan?.anchor_state === "anchor_missing",
             ).map((axis) => ({ ...axis, isDiameter: isDiameterFacet(axis) }));
             for (const axis of renderTitleAxes) {
               if (!replacementTitleAxes.some((candidate) => candidate.key === axis.key)) {

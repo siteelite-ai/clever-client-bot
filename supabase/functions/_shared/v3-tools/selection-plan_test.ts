@@ -63,7 +63,7 @@ Deno.test("replacement reasoning compiles portable live facets and drops source 
     { caption: "Номинальный ток", values: ["16"], unit: "А" },
     { caption: "Характеристика срабатывания", values: ["Тип C"], unit: null },
   ]);
-  assertEquals(contract.title_axes.length, 3);
+  assertEquals(contract.title_axes.length, 2);
 });
 
 Deno.test("a short followup compiles the prior replacement reasoning into the same live contract", () => {
@@ -96,6 +96,43 @@ Deno.test("advisory retrieval axes still preserve explicit compact title codes",
   assertEquals(contract.title_axes.map((axis) => axis.values), [["16"], ["C"]]);
 });
 
+Deno.test("missing anchor does not promote characteristics guessed from a model identifier", () => {
+  const contract = compileReplacementReasoningContract([
+    { key: "power", caption: "Номинальная мощность, кВа", unit: "кВа", values: [{ value: "5" }, { value: "10" }] },
+    { key: "stabilization", caption: "Тип стабилизации", unit: null, values: [{ value: "релейный" }, { value: "электронный" }] },
+    { key: "mount", caption: "Исполнение", unit: null, values: [{ value: "напольный" }, { value: "настенный" }] },
+  ],
+  "ACH-10001-C, судя по обозначению, должен иметь параметры: Номинальная мощность, кВа: 10; Тип стабилизации: релейный; Исполнение: напольный. Это ключевые параметры аналога.",
+  "подбери аналоги для Стабилизатора ACH-10001-C",
+  "подбери аналоги для Стабилизатора ACH-10001-C");
+
+  assertEquals(contract.criteria, []);
+  assertEquals(contract.options, {});
+  assertEquals(contract.axes, []);
+  assertEquals(contract.title_axes, []);
+  assertEquals(new Set(contract.demoted), new Set([
+    "Номинальная мощность, кВа",
+    "Тип стабилизации",
+    "Исполнение",
+  ]));
+});
+
+Deno.test("literal customer requirements remain hard without a source card", () => {
+  const contract = compileReplacementReasoningContract([
+    { key: "power", caption: "Номинальная мощность, кВа", unit: "кВа", values: [{ value: "5" }, { value: "10" }] },
+    { key: "stabilization", caption: "Тип стабилизации", unit: null, values: [{ value: "релейный" }, { value: "электронный" }] },
+  ],
+  "Ключевые параметры: Номинальная мощность, кВа: 10; Тип стабилизации: релейный.",
+  "Нужен аналог AX-900: обязательно 10 кВА и релейный.",
+  "Нужен аналог AX-900: обязательно 10 кВА и релейный.");
+
+  assertEquals(contract.options, { power: ["10"], stabilization: ["релейный"] });
+  assertEquals(new Set(contract.criteria.map((criterion) => criterion.key)), new Set([
+    "Номинальная мощность, кВа",
+    "Тип стабилизации",
+  ]));
+});
+
 Deno.test("final structured criteria supply title axes without restoring source identity", () => {
   const facets = [
     { key: "brand", caption: "Бренд", unit: null, values: [{ value: "Schneider" }] },
@@ -114,4 +151,22 @@ Deno.test("final structured criteria supply title axes without restoring source 
     { key: "current", values: ["16"] },
     { key: "curve", values: ["C"] },
   ]);
+});
+
+Deno.test("missing-anchor render axes require literal customer proof", () => {
+  const facets = [
+    { key: "power", caption: "Номинальная мощность, кВа", unit: "кВа", values: [{ value: "10" }] },
+    { key: "stabilization", caption: "Тип стабилизации", unit: null, values: [{ value: "релейный" }] },
+  ];
+  const inferred = compileReplacementRenderTitleAxes(facets, [
+    { key: "Номинальная мощность, кВа", op: "eq", value: "10", unit: "кВа", level: "A" },
+    { key: "Тип стабилизации", op: "eq", value: "релейный", level: "A" },
+  ], "подбери аналоги для Стабилизатора ACH-10001-C", true);
+  assertEquals(inferred, []);
+
+  const explicit = compileReplacementRenderTitleAxes(facets, [
+    { key: "Номинальная мощность, кВа", op: "eq", value: "10", unit: "кВа", level: "A" },
+    { key: "Тип стабилизации", op: "eq", value: "релейный", level: "A" },
+  ], "Нужен аналог AX-900: 10 кВА, релейный", true);
+  assertEquals(explicit.map((axis) => axis.key), ["power", "stabilization"]);
 });
