@@ -4919,9 +4919,15 @@ async function runExpertLoop(
             const cachedProducts = originalIds
               .map((id) => ctx.cache.get(id))
               .filter((product): product is ProductFull => Boolean(product));
-            const targetIds = activeSelectionTarget
-              ? new Set(verifySelectionTargetWithVisibleTitle(activeSelectionTarget, cachedProducts).passed_ids)
-              : new Set(cachedProducts.map((product) => product.id));
+            // Do not apply a second class gate using the provisional target
+            // here. It may be a short discovery noun (for example, the model's
+            // “автомат”), while the authoritative render contract immediately
+            // below carries the complete class (“автоматический выключатель”)
+            // and understands live-title abbreviations. Applying both made the
+            // same card pass or fail depending on which provisional wording the
+            // model emitted. Identity and price remain guarded here; product
+            // class is checked once by v3_selection_target_gate.
+            const targetIds = new Set(cachedProducts.map((product) => product.id));
             const safeIds = originalIds
               .filter((id) => targetIds.has(id))
               .filter((id) => {
@@ -4938,7 +4944,12 @@ async function runExpertLoop(
             steps.push({
               step: "v3_guard_anchor_missing_class_only_render",
               ms: now(),
-              meta: { before: originalIds.length, after: safeIds.length, target: activeSelectionTarget },
+              meta: {
+                before: originalIds.length,
+                after: safeIds.length,
+                provisional_target: activeSelectionTarget,
+                class_gate: "deferred_to_selection_target_contract",
+              },
             });
           }
         }
