@@ -6,6 +6,7 @@ import {
   productSupportsGroundedAxis,
   selectGroundedJargonCacheFallback,
   splitSemanticJargonModifiers,
+  titleSupportsLiveCategoryLabel,
   titleSupportsGroundedJargonQuery,
 } from "./jargon-recover-catalog.ts";
 import type { ProductCache, ProductRef } from "./types.ts";
@@ -92,6 +93,12 @@ Deno.test("grounded jargon title evidence rejects unrelated and overly broad mat
   );
   assertEquals(titleSupportsGroundedJargonQuery("Лампа LED стандартная", "лампа"), false);
   assertEquals(titleSupportsGroundedJargonQuery("ЛАМПА LED стандартная", "ЛАМПА"), false);
+});
+
+Deno.test("live category title proof tolerates inflection but rejects sibling classes", () => {
+  assertEquals(titleSupportsLiveCategoryLabel("Лампа LED CORN 5Вт G4", "Лампы"), true);
+  assertEquals(titleSupportsLiveCategoryLabel("Лампа светодиодная CORN", "Светодиодные лампы"), true);
+  assertEquals(titleSupportsLiveCategoryLabel("Средство для удаления наклеек LABEL OFF", "Лампы"), false);
 });
 
 Deno.test("jargon recovery decomposes an ungrounded translated phrase into a title-proven token", async () => {
@@ -376,7 +383,6 @@ Deno.test("taxonomy shape drift retries a distinctive candidate and keeps only t
             pagetitle: "Лампа LED CORN 5Вт G4",
             price: 476,
             url: "https://220volt.kz/catalog/light/lamps/24780/",
-            category: { pagetitle: "Лампы" },
             options: [],
           }]
           : [];

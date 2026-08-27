@@ -94,6 +94,25 @@ function tokenize(s: string): string[] {
   return normalize(s).split(/\s+/).filter((t) => t.length >= 3);
 }
 
+function inflectionStem(token: string): string {
+  if (/^[a-z0-9]+$/u.test(token)) return token;
+  if (token.length >= 7) return token.slice(0, 5);
+  if (token.length >= 5) return token.slice(0, 4);
+  return token;
+}
+
+/**
+ * When the API omits a product's category object, the already discovered live
+ * category may still be proved by the card title itself. Morphology is handled
+ * mechanically (лампы ↔ лампа); no taxonomy or product vocabulary is stored.
+ */
+export function titleSupportsLiveCategoryLabel(title: string, categoryLabel: string): boolean {
+  const categoryTokens = tokenize(categoryLabel).map(inflectionStem);
+  if (categoryTokens.length === 0) return false;
+  const titleTokens = tokenize(title).map(inflectionStem);
+  return categoryTokens.every((token) => titleTokens.includes(token));
+}
+
 /**
  * Lets the lexical helper see descriptive axes that may change the catalog
  * term, while keeping numeric/code-like modifiers as independent constraints.
@@ -287,7 +306,12 @@ export async function executeJargonRecoverCatalog(
         if (unscoped.ok) {
           groundedResults = unscoped.results.filter((product) =>
             titleSupportsGroundedJargonQuery(product.pagetitle, candidate) &&
-            liveCategoryNames.has(normalize(product.leaf_category ?? ""))
+            (
+              liveCategoryNames.has(normalize(product.leaf_category ?? "")) ||
+              [input.category, ...categoryLeaves].some((category) =>
+                titleSupportsLiveCategoryLabel(product.pagetitle, String(category ?? ""))
+              )
+            )
           );
         }
       }
