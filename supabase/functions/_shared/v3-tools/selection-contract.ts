@@ -346,6 +346,26 @@ export function selectionTargetExtensionIsCriterionBacked(
   return mandatoryEvidence.size > 0 && extraTokens.every((token) => mandatoryEvidence.has(token));
 }
 
+/**
+ * Decides whether render verification may return to an already grounded base
+ * class after the model emitted a richer class phrase. The projection never
+ * authorizes a sibling: the base must still be declared inside the proposed
+ * target. Exact named-entity browsing is allowed to discard model-only class
+ * adjectives because identity is proven independently by the entity token and
+ * live category; ordinary selection still requires mandatory criterion proof.
+ */
+export function selectionTargetMayUseGroundedBase(
+  baseTarget: string,
+  extendedTarget: string,
+  criteria: Criterion[],
+  options: { replacement: boolean; exact_named_entity_grounded: boolean },
+): boolean {
+  if (!selectionTargetIsDeclared(baseTarget, extendedTarget)) return false;
+  return options.replacement ||
+    options.exact_named_entity_grounded ||
+    selectionTargetExtensionIsCriterionBacked(baseTarget, extendedTarget, criteria);
+}
+
 function productEvidence(product: ProductRef): string {
   return [
     product.pagetitle,

@@ -115,6 +115,9 @@ export interface RedactResult {
  * This detector is deliberately structural: it knows catalog-shaped facts,
  * not product names, categories, brands, or jargon.
  */
+const MODEL_AUTHORED_PRODUCT_LIST_RE =
+  /(?:^|\n)\s*\d+[.)]\s+\*\*[^*\r\n]{2,160}\*\*\s*[—–-]/u;
+
 export function containsUnrenderedCatalogFacts(text: string): boolean {
   const raw = String(text ?? "");
   if (!raw.trim()) return false;
@@ -123,6 +126,11 @@ export function containsUnrenderedCatalogFacts(text: string): boolean {
     /\[[^\]]+\]\(https?:\/\/[^\s)]+\)/u.test(raw) ||
     /\d[\d\s.,]{0,}\s*(?:₸|тг(?:\.|\b)|тенге\b)/iu.test(raw) ||
     /(?:^|[\s*_-])(?:арт(?:икул)?\.?|наличие|цена)\s*:\s*\S/imu.test(raw) ||
+    /(?:^|[\s*_-])(?:в\s+наличии|остаток\p{L}*)\s*:\s*\S/imu.test(raw) ||
+    // A numbered bold item followed by a dash is a model-authored product
+    // list masquerading as cards. Product facts must remain behind the
+    // deterministic renderer even when price/URL is omitted.
+    MODEL_AUTHORED_PRODUCT_LIST_RE.test(raw) ||
     // Availability is also a catalog fact even when the model omits price,
     // article and URL. Questions/future intent such as «проверю, есть ли» do
     // not match because the assertion must begin with «в каталоге ...».
@@ -238,6 +246,10 @@ export function stripUnrenderedCatalogFactSegments(text: string): CatalogFactStr
   const kept: string[] = [];
   const removed: string[] = [];
   for (const paragraph of paragraphs) {
+    if (MODEL_AUTHORED_PRODUCT_LIST_RE.test(paragraph)) {
+      removed.push(paragraph);
+      continue;
+    }
     if (!containsUnrenderedCatalogFacts(paragraph)) {
       kept.push(paragraph);
       continue;

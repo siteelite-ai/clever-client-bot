@@ -32,7 +32,7 @@ import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-le
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract, shouldContinueSelectionPastOptionalClarification } from "../_shared/v3-tools/selection-actionability.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
@@ -5214,14 +5214,14 @@ async function runExpertLoop(
             if (
               targetReport.passed_ids.length === 0 &&
               priorActiveSelectionTarget &&
-              selectionTargetIsDeclared(priorActiveSelectionTarget, target) &&
-              (
-                replacementIntent ||
-                selectionTargetExtensionIsCriterionBacked(
-                  priorActiveSelectionTarget,
-                  target,
-                  renderRawCriteria,
-                )
+              selectionTargetMayUseGroundedBase(
+                priorActiveSelectionTarget,
+                target,
+                renderRawCriteria,
+                {
+                  replacement: replacementIntent,
+                  exact_named_entity_grounded: Boolean(seriesGroundingSatisfied && namedSeriesToken),
+                },
               )
             ) {
               const baseReport = semanticBackedSearch && lastDiscover

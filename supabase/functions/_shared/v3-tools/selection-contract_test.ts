@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
@@ -328,6 +328,27 @@ Deno.test("a richer target falls back to its base only through mandatory criteri
     "светильник",
     "уличный светильник",
     [{ key: "Уличное исполнение", op: "eq", value: "Да", level: "B" }],
+  ), false);
+});
+
+Deno.test("an exact named entity may discard a model-only class adjective but never switch siblings", () => {
+  assertEquals(selectionTargetMayUseGroundedBase(
+    "розетка",
+    "розетка электрическая",
+    [],
+    { replacement: false, exact_named_entity_grounded: true },
+  ), true);
+  assertEquals(selectionTargetMayUseGroundedBase(
+    "розетка",
+    "выключатель электрический",
+    [],
+    { replacement: false, exact_named_entity_grounded: true },
+  ), false);
+  assertEquals(selectionTargetMayUseGroundedBase(
+    "розетка",
+    "розетка электрическая",
+    [],
+    { replacement: false, exact_named_entity_grounded: false },
   ), false);
 });
 

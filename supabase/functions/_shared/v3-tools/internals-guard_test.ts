@@ -79,8 +79,20 @@ Deno.test("catalog facts detector catches price, article, availability, and prod
   assert(containsUnrenderedCatalogFacts('В каталоге такие товары обычно проходят как другая форма.'));
   assert(containsUnrenderedCatalogFacts('В каталоге такого значения сейчас нет.'));
   assert(containsUnrenderedCatalogFacts('В каталоге такой тип должен быть.'));
+  assert(containsUnrenderedCatalogFacts("1. **Товар AX-10** — одинарный, белый, скрытого монтажа."));
+  assert(containsUnrenderedCatalogFacts("В наличии: Алматы (12 шт)."));
   assertEquals(containsUnrenderedCatalogFacts("Сейчас проверю, есть ли такие лампы в каталоге."), false);
   assertEquals(containsUnrenderedCatalogFacts("Для этой линии нужен автомат на 16 А."), false);
+});
+
+Deno.test("catalog fact sanitizer removes model-authored pseudo cards without deterministic rendering", () => {
+  const result = stripUnrenderedCatalogFactSegments(
+    "Вот что нашлось.\n\n1. **Товар AX-10** — белый, скрытого монтажа. В наличии: Алматы (12 шт).\n\nМогу уточнить параметры.",
+  );
+  assertEquals(result.text, "Вот что нашлось.\n\nМогу уточнить параметры.");
+  assertEquals(result.removed, [
+    "1. **Товар AX-10** — белый, скрытого монтажа. В наличии: Алматы (12 шт).",
+  ]);
 });
 
 Deno.test("catalog fact sanitizer removes only unsafe paragraphs", () => {
