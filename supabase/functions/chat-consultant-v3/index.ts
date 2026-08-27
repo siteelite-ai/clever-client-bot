@@ -3267,7 +3267,7 @@ async function runExpertLoop(
   // A grounded pool recovered after an absent source SKU must survive a bad
   // final model pick (for example, selecting only cards from the source
   // family). A dedicated terminal finalizer rechecks this pool.
-  let anchorMissingRecoveryPool: { ids: string[]; total: number } | null = null;
+  let anchorMissingRecoveryPool: { ids: string[]; total: number; target: string } | null = null;
   // Priority pool from v3_guard_split_fallback — survives across LLM steps.
   // Preferred over freshSearch in render fallback, because subsequent broad
   // by_query calls can overwrite freshSearch with off-target results
@@ -3307,6 +3307,14 @@ async function runExpertLoop(
       meta: { target: bootstrapped, source },
     });
     return activeSelectionTarget;
+  };
+  const resolveAnchorMissingClassTarget = (): string | null => {
+    if (!lastDiscover) return activeSelectionTarget;
+    return bootstrapSelectionTargetFromDiscovery(
+      `${userMessage}\n${initialSelectionDiscoveryNoun ?? ""}\n${initialSelectionDeclaration(firstAssistantText || assistantReasoning)}`,
+      lastDiscover.resolved_from ?? "",
+      lastDiscover.category?.pagetitle ?? "",
+    ) ?? activeSelectionTarget;
   };
   const triedSelfRequeries = new Set<string>();
   // Бюджет тупика по критериям: если сервер уже сам сходил в каталог по
@@ -6661,11 +6669,15 @@ async function runExpertLoop(
             break;
           }
           if (recoveredResult) {
+            const target = resolveAnchorMissingClassTarget();
             result = recoveredResult;
-            anchorMissingRecoveryPool = {
-              ids: recoveredResult.results.map((product) => String(product.id)),
-              total: recoveredResult.total,
-            };
+            if (target) {
+              anchorMissingRecoveryPool = {
+                ids: recoveredResult.results.map((product) => String(product.id)),
+                total: recoveredResult.total,
+                target,
+              };
+            }
           }
           steps.push({
             step: "v3_anchor_missing_reasoning_recovery",
@@ -6997,6 +7009,63 @@ async function runExpertLoop(
                   },
                 });
               }
+            }
+          }
+        }
+        // A proof-qualified missing-anchor search may be non-empty even when
+        // the model's subsequent render choice is rejected. Preserve the first
+        // same-class pool now; waiting for a zero-result recovery made terminal
+        // finalization probabilistic and lost valid candidates after repeated
+        // bad ID selections. The terminal path rechecks identity, literal
+        // requirements and budget again before rendering.
+        if (
+          replacementIntent &&
+          selectionPlan?.anchor_state === "anchor_missing" &&
+          tc.name === "search_catalog" &&
+          result.ok &&
+          result.tool === "search_catalog" &&
+          runArgs.mode !== "by_article" &&
+          runArgs.mode !== "by_pagetitle" &&
+          !anchorMissingRecoveryPool &&
+          lastDiscover
+        ) {
+          const target = resolveAnchorMissingClassTarget() ??
+            ensureActiveSelectionTarget(
+              `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
+              "anchor_missing_search_pool",
+            );
+          if (target) {
+            const catalogResult = result as SearchCatalogOk & { tool: "search_catalog" };
+            const requirements = portableReplacementRequirements();
+            const candidates = catalogResult.results
+              .map((product) => ctx.cache.get(String(product.id)))
+              .filter((product): product is ProductFull => Boolean(product && product.price > 0))
+              .filter((product) =>
+                requirements.length === 0 ||
+                productTitleSupportsPortableRequirements(product.pagetitle, requirements)
+              );
+            const targetIds = new Set(
+              verifySelectionTargetWithVisibleTitle(target, candidates).passed_ids,
+            );
+            const groundedIds = candidates
+              .map((product) => product.id)
+              .filter((id) => targetIds.has(id));
+            if (groundedIds.length > 0) {
+              anchorMissingRecoveryPool = {
+                ids: groundedIds,
+                total: catalogResult.total,
+                target,
+              };
+              steps.push({
+                step: "v3_anchor_missing_pool_preserved",
+                ms: now(),
+                meta: {
+                  target,
+                  candidates: catalogResult.results.length,
+                  grounded: groundedIds.length,
+                  literal_requirements: requirements,
+                },
+              });
             }
           }
         }
@@ -7989,8 +8058,7 @@ async function runExpertLoop(
       replacementIntent &&
       selectionPlan?.anchor_state === "anchor_missing" &&
       !equivalentReplacementRequested &&
-      anchorMissingRecoveryPool &&
-      activeSelectionTarget
+      anchorMissingRecoveryPool
     ) {
       const explicitRequirements = portableReplacementRequirements();
       const products = anchorMissingRecoveryPool.ids
@@ -8007,7 +8075,7 @@ async function runExpertLoop(
           explicitRequirements.length === 0 ||
           productTitleSupportsPortableRequirements(product.pagetitle, explicitRequirements)
         );
-      const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, products);
+      const targetReport = verifySelectionTargetWithVisibleTitle(anchorMissingRecoveryPool.target, products);
       const targetIds = new Set(targetReport.passed_ids);
       let safeIds = products.map((product) => product.id).filter((id) => targetIds.has(id));
       if (replacementRequiredAxes.length >= 2) {
@@ -8051,6 +8119,7 @@ async function runExpertLoop(
             ms: now(),
             meta: {
               recovered_pool: anchorMissingRecoveryPool.ids.length,
+              target: anchorMissingRecoveryPool.target,
               target_candidates: targetIds.size,
               rendered: rendered.rendered_count,
               explicit_requirements: explicitRequirements,
@@ -8065,6 +8134,7 @@ async function runExpertLoop(
         ms: now(),
         meta: {
           recovered_pool: anchorMissingRecoveryPool.ids.length,
+          target: anchorMissingRecoveryPool.target,
           target_candidates: targetIds.size,
           explicit_requirements: explicitRequirements,
         },
