@@ -5,6 +5,7 @@ import {
   isMetaSelfQuestion,
   redactInternals,
   sanitizeIntermediateReasoning,
+  shouldGuardFirstVisibleReasoning,
   stripUngroundedIntroTechnicalAttributes,
   stripUnrenderedCatalogFactSegments,
 } from "./internals-guard.ts";
@@ -63,6 +64,30 @@ Deno.test("intro reasoning retains customer codes and explicit derived criteria"
     ).text,
     "Для улицы нужен класс защиты IP65, поэтому проверяю его.",
   );
+});
+
+Deno.test("first visible reasoning guard is independent of the agent step", () => {
+  assertEquals(shouldGuardFirstVisibleReasoning({
+    productsRendered: 0,
+    firstAssistantText: "",
+    hasRenderCall: false,
+  }), true);
+  // This is the deferred-inquiry state after discovery: still no visible intro.
+  assertEquals(shouldGuardFirstVisibleReasoning({
+    productsRendered: 0,
+    firstAssistantText: "   ",
+    hasRenderCall: false,
+  }), true);
+  assertEquals(shouldGuardFirstVisibleReasoning({
+    productsRendered: 0,
+    firstAssistantText: "Проверяю нужный тип.",
+    hasRenderCall: false,
+  }), false);
+  assertEquals(shouldGuardFirstVisibleReasoning({
+    productsRendered: 0,
+    firstAssistantText: "",
+    hasRenderCall: true,
+  }), false);
 });
 
 Deno.test("meta: вопрос про платформу перехватывается", () => {

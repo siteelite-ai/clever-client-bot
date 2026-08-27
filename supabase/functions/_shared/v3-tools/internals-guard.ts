@@ -131,6 +131,15 @@ export interface CatalogFactStripResult {
   removed: string[];
 }
 
+/** The intro boundary follows what the customer has seen, not an agent step. */
+export function shouldGuardFirstVisibleReasoning(input: {
+  productsRendered: number;
+  firstAssistantText: string;
+  hasRenderCall: boolean;
+}): boolean {
+  return input.productsRendered === 0 && !String(input.firstAssistantText ?? "").trim() && !input.hasRenderCall;
+}
+
 /**
  * Preserve a grounded explanatory answer while removing whole paragraphs that
  * contain card-only facts such as prices, articles, availability or product

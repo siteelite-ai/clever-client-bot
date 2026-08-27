@@ -102,7 +102,7 @@ import {
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
 import { containsUnrenderedCatalogFacts, isMetaSelfQuestion,
-  META_DECLINE_TEXT, redactInternals, sanitizeIntermediateReasoning, stripUngroundedIntroTechnicalAttributes, stripUnrenderedCatalogFactSegments } from "../_shared/v3-tools/internals-guard.ts";
+  META_DECLINE_TEXT, redactInternals, sanitizeIntermediateReasoning, shouldGuardFirstVisibleReasoning, stripUngroundedIntroTechnicalAttributes, stripUnrenderedCatalogFactSegments } from "../_shared/v3-tools/internals-guard.ts";
 import {
   type AgentPhase,
   boundedAgentStepTimeout,
@@ -4009,12 +4009,23 @@ async function runExpertLoop(
           throw error;
         }
       }
-      const introSafetyApplies = step === 0 && intentMode === "select" &&
-        !resp.toolCalls.some((toolCall) => toolCall.name === "render_products");
+      const rawModelResponseText = resp.text;
+      // Inquiry-mode intros can be deliberately deferred until after category
+      // discovery. Therefore the safety boundary is semantic (the first
+      // customer-visible reasoning has not been emitted yet), not `step === 0`.
+      const introSafetyApplies = shouldGuardFirstVisibleReasoning({
+        productsRendered,
+        firstAssistantText,
+        hasRenderCall: resp.toolCalls.some((toolCall) => toolCall.name === "render_products"),
+      });
       const introAttributeGuard = introSafetyApplies
         ? stripUngroundedIntroTechnicalAttributes(resp.text, userMessage)
         : { text: resp.text, removed: [] as string[] };
-      const introFactGuard = introSafetyApplies && containsUnrenderedCatalogFacts(introAttributeGuard.text)
+      // Before any live discovery/search, catalog assertions are ungrounded.
+      // After a successful discovery they may be legitimate evidence for the
+      // deferred intro, while unrequested technical codes remain excluded.
+      const introFactSafetyApplies = introSafetyApplies && !lastDiscover && !catalogSearchAttempted;
+      const introFactGuard = introFactSafetyApplies && containsUnrenderedCatalogFacts(introAttributeGuard.text)
         ? stripUnrenderedCatalogFactSegments(introAttributeGuard.text)
         : { text: introAttributeGuard.text, removed: [] as string[] };
       if (introSafetyApplies && introFactGuard.text !== resp.text) {
@@ -4022,6 +4033,30 @@ async function runExpertLoop(
         // criteria logic inspects the model text. The customer-visible bubble
         // and the machine proof contract must be derived from the same prose.
         resp = { ...resp, text: introFactGuard.text };
+      }
+      if (introAttributeGuard.removed.length > 0) {
+        steps.push({
+          step: "v3_guard_ungrounded_intro_attributes",
+          ms: now(),
+          meta: {
+            fragment_index: step,
+            original_text: rawModelResponseText,
+            removed_segments: introAttributeGuard.removed,
+            kept_chars: resp.text.length,
+          },
+        });
+      }
+      if (introFactGuard.removed.length > 0) {
+        steps.push({
+          step: "v3_guard_premature_text_facts",
+          ms: now(),
+          meta: {
+            fragment_index: step,
+            original_text: rawModelResponseText,
+            removed_segments: introFactGuard.removed,
+            kept_chars: resp.text.length,
+          },
+        });
       }
       steps.push({
         step: "v3_llm_call",
@@ -4090,28 +4125,6 @@ async function runExpertLoop(
               step: "v3_assistant_text_suppressed_internals",
               ms: now(),
               meta: { fragment_index: step, matched: safeReasoning.matched },
-            });
-          }
-          if (introAttributeGuard.removed.length > 0) {
-            steps.push({
-              step: "v3_guard_ungrounded_intro_attributes",
-              ms: now(),
-              meta: {
-                fragment_index: step,
-                removed_segments: introAttributeGuard.removed,
-                kept_chars: introText.length,
-              },
-            });
-          }
-          if (introFactGuard.removed.length > 0) {
-            steps.push({
-              step: "v3_guard_premature_text_facts",
-              ms: now(),
-              meta: {
-                fragment_index: step,
-                removed_segments: introFactGuard.removed,
-                kept_chars: introText.length,
-              },
             });
           }
           if (shouldDeferInquiryIntro(intentMode, isFirstTurn, hasRender, isFinalTurn)) {
