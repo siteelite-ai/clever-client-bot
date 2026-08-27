@@ -74,7 +74,7 @@ Deno.test("jargon recovery applies discovered category to the actual catalog que
   assertEquals(result.ok ? result.total : 0, 1);
   assertEquals(result.ok ? result.results[0]?.pagetitle : null, "Лампа LED CORN капсула 5Вт 230В 4000К G4 ИЭК");
   const catalogUrls = requestedUrls.filter((url) => url.includes("catalog.test"));
-  assertEquals(catalogUrls.map((url) => new URL(url).searchParams.get("category")), ["Светодиодные лампы", "Светодиодные лампы"]);
+  assertEquals(catalogUrls.map((url) => new URL(url).searchParams.get("category")), ["Светодиодные лампы", null, "Светодиодные лампы"]);
   assertEquals(helperPrompt.includes("Категория каталога: «Лампы»"), true);
 });
 
@@ -134,7 +134,9 @@ Deno.test("jargon recovery decomposes an ungrounded translated phrase into a tit
   }, new Map());
 
   assertEquals(result.ok ? result.matched_query : null, "corn");
-  assertEquals(catalogQueries.slice(0, 3), ["LED corn lamp", "кукуруза", "corn"]);
+  assertEquals(catalogQueries[0], "LED corn lamp");
+  assertEquals(catalogQueries.includes("кукуруза"), true);
+  assertEquals(catalogQueries.includes("corn"), true);
 });
 
 Deno.test("cached jargon fallback keeps only candidate and caller-proven title evidence", () => {
@@ -342,4 +344,62 @@ Deno.test("literal title-token retry recovers when the broad lexical answer is e
   assertEquals(result.ok ? result.matched_query : null, "CORN");
   assertEquals(result.ok ? result.partial_match : false, true);
   assertEquals(result.ok ? result.results.length : 0, 1);
+});
+
+Deno.test("taxonomy shape drift retries a distinctive candidate and keeps only the live umbrella category", async () => {
+  const catalogCategories: Array<string | null> = [];
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("openrouter.ai")) {
+      return new Response(JSON.stringify({
+        choices: [{ message: { tool_calls: [{ function: { arguments: JSON.stringify({ candidates: ["LABEL OFF", "CORN"] }) } }] } }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    const parsed = new URL(url);
+    const query = parsed.searchParams.get("query");
+    const category = parsed.searchParams.get("category");
+    catalogCategories.push(category);
+    const results = category
+      ? []
+      : query === "LABEL OFF"
+        ? [{
+          id: 999,
+          pagetitle: "Средство для удаления наклеек LABEL OFF",
+          price: 1000,
+          url: "https://220volt.kz/catalog/auto/chemistry/999/",
+          category: { pagetitle: "Автохимия" },
+          options: [],
+        }]
+        : query === "CORN"
+          ? [{
+            id: 24780,
+            pagetitle: "Лампа LED CORN 5Вт G4",
+            price: 476,
+            url: "https://220volt.kz/catalog/light/lamps/24780/",
+            category: { pagetitle: "Лампы" },
+            options: [],
+          }]
+          : [];
+    return new Response(JSON.stringify({ data: { results, pagination: { total: results.length } } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const result = await executeJargonRecoverCatalog({
+    query: "кукуруза",
+    modifiers: ["E27"],
+    category: "Лампы",
+    category_in: ["Светодиодные лампы"],
+  }, {
+    baseUrl: "https://catalog.test/api",
+    apiToken: "catalog-token",
+    openrouterApiKey: "router-token",
+    fetchImpl,
+  }, new Map());
+
+  assertEquals(result.ok ? result.matched_query : null, "CORN");
+  assertEquals(result.ok ? result.results.map((product) => product.id) : [], ["24780"]);
+  assertEquals(result.ok ? result.partial_match : false, true);
+  assertEquals(catalogCategories.includes(null), true);
 });

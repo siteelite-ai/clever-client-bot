@@ -232,10 +232,16 @@ export async function executeJargonRecoverCatalog(
   };
   const tryCandidates = async (values: string[], activeModifiers: string[]): Promise<CandidateAttempt> => {
     let axial: CandidateAttempt["axial"] = null;
+    const liveCategoryNames = new Set(
+      [input.category, ...categoryLeaves]
+        .map((value) => normalize(String(value ?? "")))
+        .filter(Boolean),
+    );
     for (const candidate of values.slice(0, 4)) {
       const candidateKey = normalize(candidate);
       if (!candidateKey || attemptedCandidates.has(candidateKey)) continue;
       attemptedCandidates.add(candidateKey);
+      const scopedInput: JargonRecoverCatalogInput = input;
       const result = await executeSearchCatalog({
         mode: "by_query",
         query: candidate,
@@ -257,9 +263,33 @@ export async function executeJargonRecoverCatalog(
       // broaden or tokenize a candidate and return products that contain only
       // its generic part. Keep walking the helper's candidates until the
       // complete selected term is visible in live titles.
-      const groundedResults = result.results.filter((product) =>
+      let groundedResults = result.results.filter((product) =>
         titleSupportsGroundedJargonQuery(product.pagetitle, candidate)
       );
+      // Some catalog nodes returned by taxonomy are parents while /products
+      // filters only by an immediate category name. If every live leaf probe
+      // is empty, retry the SAME distinctive candidate once without the HTTP
+      // category parameter, then retain only cards whose own live category is
+      // the discovered umbrella/leaf. This repairs taxonomy/API shape drift
+      // without opening a cross-category lexical fallback (LABEL OFF remains
+      // outside the lamp branch, while a CORN card classified as «Лампы» is
+      // admitted). Broad one-word candidates are still rejected by the title
+      // proof above.
+      if (result.results.length === 0 && liveCategoryNames.size > 0) {
+        const unscoped = await executeSearchCatalog({
+          mode: "by_query",
+          query: candidate,
+          min_price: scopedInput.min_price,
+          max_price: scopedInput.max_price,
+          per_page: perPage,
+        }, deps, cache);
+        if (unscoped.ok) {
+          groundedResults = unscoped.results.filter((product) =>
+            titleSupportsGroundedJargonQuery(product.pagetitle, candidate) &&
+            liveCategoryNames.has(normalize(product.leaf_category ?? ""))
+          );
+        }
+      }
       const filtered = groundedResults.filter((p) => productMatchesModifiers(p, activeModifiers));
       if (filtered.length > 0) return { matched: { candidate, filtered }, axial };
       // Preserve live evidence for the base lexical class even when an
