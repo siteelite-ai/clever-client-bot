@@ -142,6 +142,7 @@ import {
   resolveReplacementIntent,
   resolveReplacementSourceMessage,
   selectExplicitAnchorAxes,
+  shouldApplyReplacementExclusionGuard,
 } from "../_shared/v3-tools/replacement-preflight.ts";
 import {
   buildReplacementSelectionPlan,
@@ -155,6 +156,8 @@ import {
   HOUSEHOLD_MOTION_LIGHT_EMPTY,
   HOUSEHOLD_MOTION_LIGHT_GENERIC_INTRO,
   HOUSEHOLD_MOTION_LIGHT_INTRO,
+  MOTION_LIGHT_GENERIC_EMPTY,
+  MOTION_LIGHT_GENERIC_INTRO,
   verifiedHouseholdMotionLights,
 } from "../_shared/v3-tools/household-motion-light-policy.ts";
 import {
@@ -2903,6 +2906,7 @@ async function selectVerifiedHouseholdMotionLights(
   t0: number,
   maxPrice: number | null,
   surfaceMountedRequired: boolean,
+  householdRequired: boolean,
 ): Promise<ProductFull[]> {
   const started = Date.now();
   const searches = await Promise.all(
@@ -2915,7 +2919,13 @@ async function selectVerifiedHouseholdMotionLights(
     }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache)),
   );
   const candidates: ProductRef[] = searches.flatMap((result) => result.ok ? result.results : []);
-  const verified = verifiedHouseholdMotionLights(candidates, maxPrice, 4, surfaceMountedRequired);
+  const verified = verifiedHouseholdMotionLights(
+    candidates,
+    maxPrice,
+    4,
+    surfaceMountedRequired,
+    householdRequired,
+  );
   const elapsed = Date.now() - started;
 
   send({
@@ -2927,7 +2937,12 @@ async function selectVerifiedHouseholdMotionLights(
   });
 
   if (verified.length === 0) {
-    send({ type: "delta", content: HOUSEHOLD_MOTION_LIGHT_EMPTY });
+    send({
+      type: "delta",
+      content: householdRequired
+        ? HOUSEHOLD_MOTION_LIGHT_EMPTY
+        : MOTION_LIGHT_GENERIC_EMPTY,
+    });
     steps.push({
       step: "v3_household_motion_light_empty",
       ms: Date.now() - t0,
@@ -2945,7 +2960,12 @@ async function selectVerifiedHouseholdMotionLights(
   const ids = verified.map((product) => product.id);
   const rendered = executeRenderProducts({ product_ids: ids, total_available: verified.length }, ctx.cache);
   if (!rendered.ok) {
-    send({ type: "delta", content: HOUSEHOLD_MOTION_LIGHT_EMPTY });
+    send({
+      type: "delta",
+      content: householdRequired
+        ? HOUSEHOLD_MOTION_LIGHT_EMPTY
+        : MOTION_LIGHT_GENERIC_EMPTY,
+    });
     steps.push({ step: "v3_household_motion_light_render_failed", ms: Date.now() - t0, meta: { error_code: rendered.error_code } });
     return [];
   }
@@ -4883,7 +4903,11 @@ async function runExpertLoop(
           const hasIdentityExclusions = replacementExcludedIdentityValues.size > 0 || replacementSourceModelCodes.length > 0 ||
             preExcludedReplacementIdSet.size > 0 ||
             portableRequirements.length >= 2;
-          if (hasAnchor || hasIdentityExclusions) {
+          if (shouldApplyReplacementExclusionGuard(
+            replacementIntent,
+            hasAnchor,
+            hasIdentityExclusions,
+          )) {
             const origIds = Array.isArray(tc.args.product_ids) ? (tc.args.product_ids as unknown[]).map(String) : [];
             let filtered = origIds.filter((id) => {
               if (id === anchorId || familyExclude.has(id) ||
@@ -9547,9 +9571,11 @@ Deno.serve(async (req) => {
         } else if (householdMotionLightRequest) {
           send({
             type: "delta",
-            content: householdMotionLightRequest.surfaceMountedRequired
-              ? HOUSEHOLD_MOTION_LIGHT_INTRO
-              : HOUSEHOLD_MOTION_LIGHT_GENERIC_INTRO,
+            content: householdMotionLightRequest.householdRequired
+              ? householdMotionLightRequest.surfaceMountedRequired
+                ? HOUSEHOLD_MOTION_LIGHT_INTRO
+                : HOUSEHOLD_MOTION_LIGHT_GENERIC_INTRO
+              : MOTION_LIGHT_GENERIC_INTRO,
           });
           const selectedProducts = await selectVerifiedHouseholdMotionLights(
             ctx,
@@ -9558,6 +9584,7 @@ Deno.serve(async (req) => {
             t0,
             householdMotionLightRequest.maxPrice,
             householdMotionLightRequest.surfaceMountedRequired,
+            householdMotionLightRequest.householdRequired,
           );
           productsCount = selectedProducts.length;
           await persistRecentProductEvidence(supabase, effectiveSessionId, selectedProducts);

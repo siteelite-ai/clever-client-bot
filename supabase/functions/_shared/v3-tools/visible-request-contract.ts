@@ -48,6 +48,11 @@ function canonicalUnit(raw: string): string {
   return aliases[unit] ?? unit;
 }
 
+function isCurrencyUnit(raw: string): boolean {
+  const unit = normalizeToken(raw);
+  return /^(?:тенге|тг|kzt|руб(?:ль|ля|лей)?|rub|доллар(?:а|ов)?|usd|евро|eur)$/u.test(unit);
+}
+
 function titleSatisfiesBound(
   title: string,
   expected: { value: number; unit: string; direction: "min" | "max"; exclusive: boolean },
@@ -170,7 +175,10 @@ export function buildVisibleRequestContract(
     const marker = match[1].toLocaleLowerCase("ru-RU").replace(/ё/g, "е").replace(/\s+/g, " ");
     const value = Number(match[2].replace(",", "."));
     const unit = canonicalUnit(match[3]);
-    if (!Number.isFinite(value) || !unit || /[²³]/u.test(unit)) continue;
+    // Price is first-class catalog evidence and is guarded independently.
+    // Requiring a currency amount in a product title would reject every valid
+    // card even when its structured price satisfies the customer's ceiling.
+    if (!Number.isFinite(value) || !unit || /[²³]/u.test(unit) || isCurrencyUnit(unit)) continue;
     const direction = /^(?:не менее|минимум|от|больше|свыше)$/u.test(marker) ? "min" : "max";
     const exclusive = /^(?:больше|свыше|меньше|менее)$/u.test(marker);
     const label = `${marker} ${match[2]} ${match[3]}`;

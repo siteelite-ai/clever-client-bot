@@ -3,6 +3,7 @@ import type { ProductRef } from "./types.ts";
 export interface HouseholdMotionLightRequest {
   maxPrice: number | null;
   surfaceMountedRequired: boolean;
+  householdRequired: boolean;
 }
 
 function norm(value: string): string {
@@ -19,8 +20,11 @@ function parseNumber(value: string): number | null {
 }
 
 /**
- * Route only an explicit, fully constrained request. Ambiguous light-fixture
- * questions remain in the expert loop so the model can reason and clarify.
+ * Route an explicit product-class + motion-feature request through one
+ * evidence verifier. "Household" and "surface mounted" strengthen that same
+ * contract when the customer states them; their absence must not prevent the
+ * requested motion feature from being verified. Ambiguous light-fixture
+ * questions without an explicit motion feature remain in the expert loop.
  */
 export function classifyHouseholdMotionLightRequest(
   message: string,
@@ -32,7 +36,7 @@ export function classifyHouseholdMotionLightRequest(
   const motionSensor =
     /(?:датчик\p{L}*\s+движени\p{L}*|микроволнов\p{L}*\s+сенсор\p{L}*|сенсор\p{L}*)/u
       .test(current);
-  if (!household || !fixture || !motionSensor) return null;
+  if (!fixture || !motionSensor) return null;
 
   const budgetMatch = current.match(
     /(?:не\s+более|до|максимум)\s*([\d\s\u00a0]+(?:[.,]\d+)?)\s*(?:₸|тг|тенге)?/u,
@@ -40,6 +44,7 @@ export function classifyHouseholdMotionLightRequest(
   return {
     maxPrice: budgetMatch ? parseNumber(budgetMatch[1]) : null,
     surfaceMountedRequired: surfaceMounted,
+    householdRequired: household,
   };
 }
 
@@ -61,6 +66,7 @@ export function isVerifiedHouseholdMotionLight(
   product: ProductRef,
   maxPrice: number | null,
   surfaceMountedRequired = true,
+  householdRequired = true,
 ): boolean {
   const title = norm(product.pagetitle);
   const facts = evidence(product);
@@ -78,8 +84,9 @@ export function isVerifiedHouseholdMotionLight(
   const wrongUseClass = /для\s+жкх|промышлен\p{L}*|уличн\p{L}*|дпп/u.test(
     title,
   );
-  return priceFits && fixture && sensor && householdSurface &&
-    (!surfaceMountedRequired || surfaceMounted) && !wrongUseClass;
+  return priceFits && fixture && sensor &&
+    (!householdRequired || (householdSurface && !wrongUseClass)) &&
+    (!surfaceMountedRequired || surfaceMounted);
 }
 
 export function verifiedHouseholdMotionLights(
@@ -87,10 +94,16 @@ export function verifiedHouseholdMotionLights(
   maxPrice: number | null,
   limit = 4,
   surfaceMountedRequired = true,
+  householdRequired = true,
 ): ProductRef[] {
   const seen = new Set<string>();
   return products
-    .filter((product) => isVerifiedHouseholdMotionLight(product, maxPrice, surfaceMountedRequired))
+    .filter((product) => isVerifiedHouseholdMotionLight(
+      product,
+      maxPrice,
+      surfaceMountedRequired,
+      householdRequired,
+    ))
     .sort((left, right) => {
       const leftTitle = norm(left.pagetitle);
       const rightTitle = norm(right.pagetitle);
@@ -116,5 +129,11 @@ export const HOUSEHOLD_MOTION_LIGHT_INTRO =
 export const HOUSEHOLD_MOTION_LIGHT_GENERIC_INTRO =
   "Подбираю бытовой светильник со встроенным датчиком движения и проверяю цену по каталогу; варианты для ЖКХ, промышленные и уличные модели исключаю.";
 
+export const MOTION_LIGHT_GENERIC_INTRO =
+  "Подбираю светильник со встроенным датчиком движения и проверяю заданный бюджет; карточки без подтверждённого датчика не показываю.";
+
 export const HOUSEHOLD_MOTION_LIGHT_EMPTY =
   "В текущей выдаче каталога не удалось одновременно подтвердить бытовое накладное исполнение, датчик движения и заданный бюджет. Не буду заменять запрос обычным светильником или моделью для ЖКХ; наличие подходящего варианта уточнит менеджер.";
+
+export const MOTION_LIGHT_GENERIC_EMPTY =
+  "В текущей выдаче каталога не удалось одновременно подтвердить светильник, датчик движения и заданный бюджет. Не буду заменять запрос обычным светильником; наличие подходящего варианта уточнит менеджер.";

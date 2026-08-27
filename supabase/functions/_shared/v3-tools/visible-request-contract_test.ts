@@ -40,6 +40,21 @@ Deno.test("strict directional measurements do not accept their boundary", () => 
   assertEquals(titleSupportsVisibleRequestContract("Товар 10 А", contract), false);
 });
 
+Deno.test("currency ceilings stay in the structured price guard, not the title contract", () => {
+  const contract = buildVisibleRequestContract(
+    "Найди автомат до 1000 тенге 1 полюсной, 16 А характеристика C",
+    {
+      productClass: "автоматический выключатель",
+      candidateTitles: ["Автомат 1Р 16 А х-ка С"],
+    },
+  );
+  assertEquals(contract.some((requirement) => requirement.label.includes("1000")), false);
+  assertEquals(
+    titleSupportsVisibleRequestContract("Автомат 1Р 16 А х-ка С", contract),
+    true,
+  );
+});
+
 Deno.test("a live literal class modifier survives a later mixed recovery pool", () => {
   const contract = buildVisibleRequestContract(
     "Покажите светодиодные прожекторы мощностью от 100 Вт",

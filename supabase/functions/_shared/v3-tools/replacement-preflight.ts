@@ -55,6 +55,18 @@ export function isReplacementIntent(message: string): boolean {
   return hasAlphaNumericAnchor || /\b\d{4,}\b/u.test(value) || /«[^»]{2,}»|"[^"]{2,}"/u.test(message);
 }
 
+/** Replacement-only exclusions must never run merely because an ordinary
+ * product request contains two technical codes. Those codes are positive
+ * selection criteria outside replacement mode, not evidence of a source SKU
+ * that should be removed from the result. */
+export function shouldApplyReplacementExclusionGuard(
+  replacementIntent: boolean,
+  hasAnchor: boolean,
+  hasIdentityExclusions: boolean,
+): boolean {
+  return replacementIntent && (hasAnchor || hasIdentityExclusions);
+}
+
 /** Carry replacement mode through a short confirmation/show command only.
  * Substantive new wording breaks inheritance and starts ordinary routing. */
 export function resolveReplacementIntent(
