@@ -102,7 +102,7 @@ import {
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
 import { containsUnrenderedCatalogFacts, isMetaSelfQuestion,
-  META_DECLINE_TEXT, redactInternals, sanitizeIntermediateReasoning, shouldGuardFirstVisibleReasoning, stripUngroundedIntroTechnicalAttributes, stripUnrenderedCatalogFactSegments } from "../_shared/v3-tools/internals-guard.ts";
+  META_DECLINE_TEXT, redactInternals, sanitizeIntermediateReasoning, shouldGuardFirstVisibleReasoning, stripUngroundedIntroAliasDefinitions, stripUngroundedIntroTechnicalAttributes, stripUnrenderedCatalogFactSegments } from "../_shared/v3-tools/internals-guard.ts";
 import {
   type AgentPhase,
   boundedAgentStepTimeout,
@@ -4018,8 +4018,11 @@ async function runExpertLoop(
         firstAssistantText,
         hasRenderCall: resp.toolCalls.some((toolCall) => toolCall.name === "render_products"),
       });
+      const introAliasGuard = introSafetyApplies
+        ? stripUngroundedIntroAliasDefinitions(resp.text)
+        : { text: resp.text, removed: [] as string[] };
       const introAttributeGuard = introSafetyApplies
-        ? stripUngroundedIntroTechnicalAttributes(resp.text, userMessage)
+        ? stripUngroundedIntroTechnicalAttributes(introAliasGuard.text, userMessage)
         : { text: resp.text, removed: [] as string[] };
       // Before any live discovery/search, catalog assertions are ungrounded.
       // After a successful discovery they may be legitimate evidence for the
@@ -4033,6 +4036,18 @@ async function runExpertLoop(
         // criteria logic inspects the model text. The customer-visible bubble
         // and the machine proof contract must be derived from the same prose.
         resp = { ...resp, text: introFactGuard.text };
+      }
+      if (introAliasGuard.removed.length > 0) {
+        steps.push({
+          step: "v3_guard_ungrounded_intro_alias",
+          ms: now(),
+          meta: {
+            fragment_index: step,
+            original_text: rawModelResponseText,
+            removed_segments: introAliasGuard.removed,
+            kept_chars: resp.text.length,
+          },
+        });
       }
       if (introAttributeGuard.removed.length > 0) {
         steps.push({

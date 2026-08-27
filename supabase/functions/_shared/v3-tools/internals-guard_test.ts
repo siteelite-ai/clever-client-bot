@@ -6,6 +6,7 @@ import {
   redactInternals,
   sanitizeIntermediateReasoning,
   shouldGuardFirstVisibleReasoning,
+  stripUngroundedIntroAliasDefinitions,
   stripUngroundedIntroTechnicalAttributes,
   stripUnrenderedCatalogFactSegments,
 } from "./internals-guard.ts";
@@ -88,6 +89,25 @@ Deno.test("first visible reasoning guard is independent of the agent step", () =
     firstAssistantText: "",
     hasRenderCall: true,
   }), false);
+});
+
+Deno.test("intro reasoning removes unsupported alias definitions but keeps actions", () => {
+  const result = stripUngroundedIntroAliasDefinitions(
+    '«Кукуруза» — это народное название ламп-капсул. Обычно это лампы с прозрачной колбой. Смотрю точное обозначение в каталоге.',
+  );
+  assertEquals(result.text, "Смотрю точное обозначение в каталоге.");
+  assertEquals(result.removed, [
+    '«Кукуруза» — это народное название ламп-капсул.',
+    "Обычно это лампы с прозрачной колбой.",
+  ]);
+});
+
+Deno.test("intro alias guard rejects post-discovery class equivalence and preserves criteria", () => {
+  const result = stripUngroundedIntroAliasDefinitions(
+    'В характеристике есть «капсула» — это оно и есть. Для улицы нужен класс защиты IP65, поэтому проверяю его.',
+  );
+  assertEquals(result.text, "Для улицы нужен класс защиты IP65, поэтому проверяю его.");
+  assertEquals(result.removed, ['В характеристике есть «капсула» — это оно и есть.']);
 });
 
 Deno.test("meta: вопрос про платформу перехватывается", () => {
