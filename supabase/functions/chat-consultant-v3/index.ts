@@ -32,7 +32,7 @@ import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-le
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract, shouldContinueSelectionPastOptionalClarification } from "../_shared/v3-tools/selection-actionability.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
@@ -5194,6 +5194,14 @@ async function runExpertLoop(
             });
           } else if (products.length > 0) {
             let verificationTarget = target;
+            const verifyVisibleTarget = (candidateTarget: string, candidateProducts: ProductRef[]) =>
+              seriesGroundingSatisfied && namedSeriesToken
+                ? verifySelectionTargetWithNamedEntityCategory({
+                  target: candidateTarget,
+                  products: candidateProducts,
+                  named_entity: namedSeriesToken,
+                })
+                : verifySelectionTargetWithVisibleTitle(candidateTarget, candidateProducts);
             let targetReport = semanticBackedSearch && lastDiscover
               ? verifySelectionTargetWithGroundedSearch({
                 target,
@@ -5202,7 +5210,7 @@ async function runExpertLoop(
                 grounded_label: semanticBackedSearch.label,
                 grounded_ids: semanticBackedSearch.ids,
               })
-              : verifySelectionTargetWithVisibleTitle(target, products);
+              : verifyVisibleTarget(target, products);
             if (
               targetReport.passed_ids.length === 0 &&
               priorActiveSelectionTarget &&
@@ -5224,7 +5232,7 @@ async function runExpertLoop(
                   grounded_label: semanticBackedSearch.label,
                   grounded_ids: semanticBackedSearch.ids,
                 })
-                : verifySelectionTargetWithVisibleTitle(priorActiveSelectionTarget, products);
+                : verifyVisibleTarget(priorActiveSelectionTarget, products);
               if (baseReport.passed_ids.length > 0) {
                 verificationTarget = priorActiveSelectionTarget;
                 targetReport = baseReport;

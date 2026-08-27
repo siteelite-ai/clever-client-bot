@@ -436,6 +436,41 @@ export function verifySelectionTargetWithVisibleTitle(
 }
 
 /**
+ * Named-series browsing has two independent identity proofs: the exact series
+ * token is visible in the card title, while the exact filtered leaf category
+ * proves the product class. Some valid cards omit the generic noun from their
+ * title (for example, title = collection + configuration only). Combine those
+ * proofs without allowing a hidden category to rescue a card that does not
+ * visibly prove the requested named entity.
+ */
+export function verifySelectionTargetWithNamedEntityCategory(input: {
+  target: string;
+  products: ProductRef[];
+  named_entity: string;
+}): SelectionTargetReport {
+  const ordinary = verifySelectionTargetWithVisibleTitle(input.target, input.products);
+  const entityTokens = meaningfulRawTokens(input.named_entity);
+  if (entityTokens.length === 0) return ordinary;
+
+  const categoryReport = verifySelectionTarget(input.target, input.products);
+  const ordinaryPassed = new Set(ordinary.passed_ids);
+  const categoryPassed = new Set(categoryReport.passed_ids);
+  const accepted = new Set(input.products.filter((product) => {
+    if (ordinaryPassed.has(product.id)) return true;
+    if (!categoryPassed.has(product.id)) return false;
+    const titleOnly = { ...product, leaf_category: null };
+    return entityTokens.every((token) => productEvidenceMatchesToken(titleOnly, token));
+  }).map((product) => product.id));
+  if (accepted.size === ordinaryPassed.size) return ordinary;
+
+  return {
+    ...ordinary,
+    passed_ids: input.products.filter((product) => accepted.has(product.id)).map((product) => product.id),
+    rejected_ids: input.products.filter((product) => !accepted.has(product.id)).map((product) => product.id),
+  };
+}
+
+/**
  * A model-owned, title-grounded search label may prove a subtype whose wording
  * differs from the structured target, while the live taxonomy proves the base
  * class. This does not introduce aliases: the distinctive label must occur

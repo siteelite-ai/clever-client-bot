@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
@@ -344,4 +344,19 @@ Deno.test("a single-token class must be visible in the final card title", () => 
   ];
   assertEquals(verifySelectionTarget("прожектор", products).passed_ids, ["visible", "hidden"]);
   assertEquals(verifySelectionTargetWithVisibleTitle("прожектор", products).passed_ids, ["visible"]);
+});
+
+Deno.test("a visible named entity plus exact live category proves a class omitted from the title", () => {
+  const products = [
+    product("grounded", "Гармония, механизм с накладкой", "Розетки"),
+    product("wrong-series", "Другая коллекция, механизм с накладкой", "Розетки"),
+    product("wrong-class", "Гармония, механизм с накладкой", "Выключатели"),
+  ];
+  const report = verifySelectionTargetWithNamedEntityCategory({
+    target: "розетка",
+    products,
+    named_entity: "Гармония",
+  });
+  assertEquals(report.passed_ids, ["grounded"]);
+  assertEquals(report.rejected_ids, ["wrong-series", "wrong-class"]);
 });
