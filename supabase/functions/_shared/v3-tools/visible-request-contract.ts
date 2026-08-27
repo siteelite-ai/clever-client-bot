@@ -1,4 +1,5 @@
 import { extractClientQuantities, normalizeUnit } from "./criteria-consistency.ts";
+import { selectionTargetIsDeclared } from "./selection-contract.ts";
 
 export interface VisibleRequestRequirement {
   kind: "linear_measurement" | "bounded_measurement" | "count" | "literal_modifier";
@@ -9,6 +10,8 @@ export interface VisibleRequestRequirement {
 export interface VisibleRequestContractContext {
   /** Frozen product class established by the selection-target gate. */
   productClass?: string | null;
+  /** Live catalog taxonomy that independently proves the complete class. */
+  taxonomyClass?: string | null;
   /** All live titles observed in this turn, not only the latest recovery pool. */
   candidateTitles?: string[];
 }
@@ -78,6 +81,20 @@ function literalRequestModifiers(
   // not disappear merely because a model repeated them inside product_class.
   const classHead = tokenStem(classTokens.at(-1) ?? "");
   if (classHead.length < 3) return [];
+  // If live taxonomy independently declares the complete selected class, its
+  // preceding words are class identity rather than customer modifiers. This
+  // keeps abbreviated titles valid (for example, a catalog acronym) while a
+  // genuine refinement absent from taxonomy (LED, double, colour, etc.) stays
+  // visible. The decision uses the same data-agnostic class contract as the
+  // final selection gate; no category vocabulary is duplicated here.
+  const taxonomyProvesCompleteClass = Boolean(
+    context.productClass &&
+    context.taxonomyClass &&
+    selectionTargetIsDeclared(context.productClass, context.taxonomyClass),
+  );
+  const taxonomyBackedClassStems = taxonomyProvesCompleteClass
+    ? new Set(classTokens.map(tokenStem).filter(Boolean))
+    : new Set([classHead]);
   const sourceTokens = source.match(/[a-zа-я0-9]+/giu) ?? [];
   const liveTitleStems = new Set(
     (context.candidateTitles ?? [])
@@ -98,6 +115,7 @@ function literalRequestModifiers(
       const stem = tokenStem(token);
       if (
         !stem || stem.length < 4 || stem === classHead ||
+        taxonomyBackedClassStems.has(stem) ||
         WORKFLOW_WORDS.has(token) || /^\d/u.test(token) ||
         precedesDirectionalMeasurement(modifierIndex) ||
         !liveTitleStems.has(stem)

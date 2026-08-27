@@ -72,6 +72,31 @@ Deno.test("a live literal class modifier survives a later mixed recovery pool", 
   assertEquals(titleSupportsVisibleRequestContract("Прожектор ИО 150Вт", contract), false);
 });
 
+Deno.test("a complete class proven by live taxonomy is not duplicated as a title modifier", () => {
+  const contract = buildVisibleRequestContract(
+    "подбери термоусадочную трубку для кабеля диаметром 12 мм",
+    {
+      productClass: "термоусадочная трубка",
+      taxonomyClass: "Трубки термоусаживаемые",
+      candidateTitles: ["Трубка ТТУ 16/8 мм", "Трубка термоусаживаемая 16/8 мм"],
+    },
+  );
+  assertEquals(contract.map((requirement) => requirement.label), []);
+  assertEquals(titleSupportsVisibleRequestContract("Трубка ТТУ 16/8 мм", contract), true);
+});
+
+Deno.test("a refinement absent from live taxonomy remains a visible title modifier", () => {
+  const contract = buildVisibleRequestContract(
+    "покажи светодиодные прожекторы мощностью от 100 Вт",
+    {
+      productClass: "светодиодные прожекторы",
+      taxonomyClass: "Прожекторы",
+      candidateTitles: ["Прожектор светодиодный 150Вт", "Прожектор ИО 150Вт"],
+    },
+  );
+  assertEquals(contract.map((requirement) => requirement.label), ["от 100 Вт", "светодиодные"]);
+});
+
 Deno.test("a measurement descriptor is not duplicated as a literal title modifier", () => {
   const contract = buildVisibleRequestContract(
     "Покажите светодиодные прожекторы мощностью от 100 Вт",

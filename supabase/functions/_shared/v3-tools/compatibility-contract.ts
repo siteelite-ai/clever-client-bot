@@ -198,7 +198,13 @@ export function subsumeCriteriaProvenByPairedTitleRatio<T extends ProductRef>(
   };
 }
 
-const MEASURED = String.raw`\d+(?:[.,]\d+)?(?:\s*[–—-]\s*\d+(?:[.,]\d+)?)?\s*[a-zа-я°]{1,10}[²³]?\d?`;
+// A measurement must be a standalone numeric token followed by a unit.
+// Without Unicode token boundaries, identifiers such as `Acti9 на 16 А` were
+// parsed as two measurements (`9 на` and `16 А`). In prose containing a word
+// such as `исходную`, that manufactured a paired-state compatibility problem
+// which the customer never requested. Keep the contract category-neutral:
+// reject digits embedded in identifiers rather than enumerating product names.
+const MEASURED = String.raw`(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?(?:\s*[–—-]\s*\d+(?:[.,]\d+)?)?\s*\p{L}{1,10}[²³]?\d?(?=$|[^\p{L}\p{N}])`;
 
 /**
  * Detects the SHAPE of a relational compatibility argument, never its domain:

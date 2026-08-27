@@ -197,7 +197,30 @@ export function derivePortableAxisTitleRequirements(
 ): string[] {
   const explicitSingleCodes = new Set(extractExplicitSingleLetterCodes(reasoningText));
   const reasoningCodes = extractPortableTechnicalRequirements(reasoningText);
+  const compactReasoningCodes = new Set(
+    (String(reasoningText).match(/(?<![\p{L}\p{N}])(?=[\p{L}\p{N}.-]{2,24}(?![\p{L}\p{N}]))(?=[\p{L}\p{N}.-]*\p{L})(?=[\p{L}\p{N}.-]*\d)[\p{L}\p{N}][\p{L}\p{N}.-]{1,23}(?![\p{L}\p{N}])/gu) ?? [])
+      .map(visualCodeNorm)
+      .filter(Boolean),
+  );
   const requirements: string[] = [];
+  const axisFragments = (axis: PortableReplacementAxis): Array<{ fragment: string; requirement: string | null }> => {
+    const unit = axis.unit ?? axis.caption.match(/(?:,|\()\s*([a-zа-я]{1,5})\)?$/iu)?.[1] ?? null;
+    return (axis.values ?? []).flatMap((rawValue) => {
+      const value = String(rawValue).trim();
+      const normalized = visualCodeNorm(value);
+      if (!normalized) return [];
+      const numericOnly = /^\d+(?:[.,]\d+)?$/u.test(value);
+      const requirement = numericOnly
+        ? unit && /\p{L}/u.test(unit) ? `${value}${unit}` : null
+        : value;
+      const fragments = new Set([normalized]);
+      if (/^\d+(?:[.,]\d+)?$/u.test(value) && unit) {
+        fragments.add(visualCodeNorm(`${value}${unit}`));
+        fragments.add(visualCodeNorm(`${unit}${value}`));
+      }
+      return [...fragments].map((fragment) => ({ fragment, requirement }));
+    });
+  };
   for (const axis of axes ?? []) {
     const captionUnit = axis.caption.match(/(?:,|\()\s*([a-zа-я]{1,5})\)?$/iu)?.[1] ?? null;
     const unit = axis.unit ?? captionUnit;
@@ -226,6 +249,25 @@ export function derivePortableAxisTitleRequirements(
         return Boolean(match && Number(match[1]) === numeric);
       });
       if (groundedCodes.length === 1) requirements.push(groundedCodes[0]);
+    }
+  }
+  // Some customer-visible catalog codes encode two independent live axes in
+  // one token (letter+number or number+letter). Accept the decomposition only
+  // when the complete normalized token equals the concatenation of one exact
+  // value from each axis. A digit occurring inside a longer SKU is therefore
+  // insufficient and cannot manufacture an obligation.
+  for (let leftIndex = 0; leftIndex < (axes ?? []).length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < axes.length; rightIndex += 1) {
+      for (const left of axisFragments(axes[leftIndex])) {
+        for (const right of axisFragments(axes[rightIndex])) {
+          if (
+            !compactReasoningCodes.has(`${left.fragment}${right.fragment}`) &&
+            !compactReasoningCodes.has(`${right.fragment}${left.fragment}`)
+          ) continue;
+          if (left.requirement) requirements.push(left.requirement);
+          if (right.requirement) requirements.push(right.requirement);
+        }
+      }
     }
   }
   return [...new Map(requirements.map((value) => [visualCodeNorm(value), value])).values()];

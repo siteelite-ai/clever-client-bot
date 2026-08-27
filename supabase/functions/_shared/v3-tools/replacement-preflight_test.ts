@@ -296,6 +296,23 @@ Deno.test("final replacement title contract requires every portable code", () =>
   );
 });
 
+Deno.test("a complete compact customer code preserves both decoded live axes", () => {
+  assertEquals(derivePortableAxisTitleRequirements([
+    { caption: "Номинальный ток", unit: "А", values: ["16"] },
+    { caption: "Характеристика срабатывания", unit: null, values: ["C"] },
+  ], "Подбери аналог Schneider Acti9 C16"), ["16А", "C"]);
+
+  assertEquals(derivePortableAxisTitleRequirements([
+    { caption: "Номинальная мощность", unit: "кВА", values: ["10"] },
+    { caption: "Характеристика", unit: null, values: ["C"] },
+  ], "Стабилизатор ACH-10001-C"), ["10кВА"]);
+
+  assertEquals(derivePortableAxisTitleRequirements([
+    { caption: "Номинальный ток", unit: null, values: ["16"] },
+    { caption: "Характеристика срабатывания", unit: null, values: ["C"] },
+  ], "Подбери аналог Schneider Acti9 C16"), ["C"]);
+});
+
 Deno.test("live numeric axes inherit a unique explicit reasoning unit for title proof", () => {
   assertEquals(derivePortableAxisTitleRequirements([
     { caption: "Характеристика срабатывания", values: ["C"], unit: null },

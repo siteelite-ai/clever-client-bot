@@ -336,6 +336,21 @@ Deno.test("compatibility detection is based on relation shape, not product names
   assertEquals(reasoningNeedsCompatibilityRelations("До установки диапазон 15–20 мм, после установки 6–8 мм"), false);
 });
 
+Deno.test("digits embedded in product identifiers do not manufacture compatibility measurements", () => {
+  const ordinaryReplacement =
+    "Ищу аналог Schneider Acti9 на 16 А, характеристика C. Сначала проверю исходную модель в каталоге.";
+  assertEquals(reasoningNeedsCompatibilityRelations(ordinaryReplacement), false);
+  assertEquals(minimumCompatibilityRelationCount(ordinaryReplacement), 0);
+  assertEquals(
+    reasoningNeedsCompatibilityRelations("Исходный размер 15 мм, конечный размер 8 мм"),
+    true,
+  );
+  assertEquals(
+    minimumCompatibilityRelationCount("Исходный размер 15 мм, конечный размер 8 мм"),
+    2,
+  );
+});
+
 Deno.test("all directional prose bounds must be represented", () => {
   const reasoning = "параметр до установки больше 12 мм, после установки меньше 12 мм";
   const one = parseCompatibilityRelations([

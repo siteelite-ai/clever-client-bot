@@ -3201,6 +3201,7 @@ async function runExpertLoop(
   const guardVisibleCardinality = (ids: string[]) => {
     const visibleRequestContract = buildVisibleRequestContract(userMessage, {
       productClass: activeSelectionTarget ?? lastDiscover?.category?.pagetitle ?? "",
+      taxonomyClass: lastDiscover?.category?.pagetitle ?? "",
       // A modifier proven by an earlier narrow pool remains monotonic even if
       // a later recovery pool contains only broader sibling cards.
       candidateTitles: [...ctx.cache.values()].map((product) => product.pagetitle),
@@ -3697,9 +3698,23 @@ async function runExpertLoop(
 
   const portableReplacementRequirements = (): string[] => {
     const portableCodes = effectiveCodeConstraints;
-    const reasoningEvidence = `${priorReplacementReasoning}\n${firstAssistantText}\n${assistantReasoning}`;
+    const reasoningEvidence = `${replacementEvidenceMessage}\n${priorReplacementReasoning}\n${firstAssistantText}\n${assistantReasoning}`;
+    const evidenceCriteria = [
+      ...latestRenderCriteria,
+      ...targetBackedRenderCriteria,
+      ...literalBackedRenderCriteria,
+    ];
+    const withProvenUnits = (axes: ReplacementAxis[]): ReplacementAxis[] => axes.map((axis) => {
+      if (axis.unit) return axis;
+      const axisLabels = [axis.key, axis.caption].map(normalizeForMatch).filter(Boolean);
+      const criterion = evidenceCriteria.find((candidate) => {
+        const label = normalizeForMatch(candidate.key);
+        return Boolean(candidate.unit && axisLabels.includes(label));
+      });
+      return criterion?.unit ? { ...axis, unit: criterion.unit } : axis;
+    });
     const explicitTitleAxisCodes = derivePortableAxisTitleRequirements(
-      replacementTitleAxes,
+      withProvenUnits(replacementTitleAxes),
       reasoningEvidence,
     );
     // A disclosed near-match may relax model-inferred source properties, but
@@ -3711,8 +3726,10 @@ async function runExpertLoop(
         [...portableCodes, ...explicitTitleAxisCodes].map((value) => [normalizeCodeLike(value), value]),
       ).values()];
     }
-    const titleAxes = [...replacementRequiredAxes, ...replacementTitleAxes]
-      .filter((axis, index, all) => all.findIndex((candidate) => candidate.key === axis.key) === index);
+    const titleAxes = withProvenUnits(
+      [...replacementRequiredAxes, ...replacementTitleAxes]
+        .filter((axis, index, all) => all.findIndex((candidate) => candidate.key === axis.key) === index),
+    );
     const provenAxisCodes = derivePortableAxisTitleRequirements(
       titleAxes,
       reasoningEvidence,
@@ -6310,6 +6327,33 @@ async function runExpertLoop(
               } as unknown as ToolResult;
             }
           }
+          // Criteria and compatibility recoveries above may replace or expand
+          // the ID set after the early visibility guard has already run. The
+          // final invariant therefore applies to every selection, not only to
+          // replacements: a facet requery may prove a compact value in hidden
+          // traits, but it must not reintroduce a card whose title omits the
+          // literal code the customer asked to see. Replacement identity and
+          // portable-axis checks remain part of the same final composition.
+          const beforeFinalVisibility = Array.isArray(tc.args.product_ids)
+            ? (tc.args.product_ids as unknown[]).map(String)
+            : [];
+          const afterFinalVisibility = guardFinalRenderIds(beforeFinalVisibility);
+          if (afterFinalVisibility.length !== beforeFinalVisibility.length) {
+            (tc.args as Record<string, unknown>).product_ids = afterFinalVisibility;
+            steps.push({
+              step: replacementIntent
+                ? "v3_final_replacement_render_gate"
+                : "v3_final_render_visibility_gate",
+              ms: now(),
+              meta: {
+                before: beforeFinalVisibility.length,
+                after: afterFinalVisibility.length,
+                ...(replacementIntent
+                  ? { title_requirements: portableReplacementRequirements() }
+                  : {}),
+              },
+            });
+          }
           activeSelectionContractComplete = gateShortCircuit === null;
         }
 
@@ -8388,6 +8432,7 @@ async function runExpertLoop(
         );
         if (rankedNearIds.length > 0) safeIds = rankedNearIds;
       }
+      safeIds = guardFinalRenderIds(safeIds);
       safeIds = filterProductIdsByBudgetCap(
         safeIds,
         ctx.cache,
