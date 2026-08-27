@@ -5331,7 +5331,7 @@ async function runExpertLoop(
             userMessage,
             `${firstAssistantText}\n${assistantReasoning}`,
           );
-          let lexicalClaim = aliasClaim ?? declaredAliasQuery;
+          let lexicalClaim: string | null = aliasClaim ?? declaredAliasQuery;
           // Only independent taxonomy/discovery evidence may show that the
           // alleged alias is merely an inflection of the product class. The
           // model's later selection_target can itself contain the alias and

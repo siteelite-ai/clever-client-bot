@@ -139,6 +139,16 @@ function normalize(value: string): string {
     .trim();
 }
 
+/** Item identity fields describe one source record, not a reusable product
+ * class. This is a schema-role boundary (not a product vocabulary): a source
+ * brand, model, localized title, article or catalog code can never prove that
+ * an analog belongs to the requested class. Explicit same-identity wishes are
+ * handled by the ordinary user-backed criteria contract instead. */
+function isItemIdentityLabel(value: string): boolean {
+  const label = ` ${normalize(value)} `;
+  return /(?:^| )(?:brand|vendor|manufacturer|producer|trademark|бренд|производител\p{L}*|торгов\p{L}* марк\p{L}*|марка|model|series|collection|модел\p{L}*|сери\p{L}*|коллекц\p{L}*|name|title|наименован\p{L}*|назван\p{L}*|article|артикул|sku|код номенклатур\p{L}*|идентификатор|barcode|штрихкод)(?: |$)/u.test(label);
+}
+
 function stem(token: string): string {
   if (/^[a-z0-9]+$/u.test(token)) return token;
   if (token.length >= 7) return token.slice(0, 5);
@@ -349,9 +359,12 @@ export function selectionTargetExtensionIsCriterionBacked(
 /**
  * A provider may correctly describe a class-defining facet in the structured
  * selection target but leave the matching criterion advisory. Promote only
- * values explicitly repeated in that same structured target/context. The
- * resulting criterion is still verified against live catalog evidence before
- * any card is rendered, so model prose cannot prove itself or rename a sibling.
+ * values explicitly repeated in the product-class part of that structured
+ * target. Application context is deliberately excluded: it may contain the
+ * source SKU, brand or use case and therefore cannot define replacement
+ * identity. The resulting criterion is still verified against live catalog
+ * evidence before any card is rendered, so model prose cannot prove itself or
+ * rename a sibling.
  */
 export function promoteSelectionTargetBackingCriteria(
   baseTarget: string | null,
@@ -371,12 +384,13 @@ export function promoteSelectionTargetBackingCriteria(
     };
   }
   const baseTokens = new Set(meaningfulTokens(base));
-  const targetTokens = new Set(meaningfulTokens(
-    `${target.product_class}\n${target.application_context.join("\n")}`,
-  ).filter((token) => !baseTokens.has(token)));
+  const targetTokens = new Set(
+    meaningfulTokens(target.product_class).filter((token) => !baseTokens.has(token)),
+  );
   const promoted: Criterion[] = [];
   const backing: Criterion[] = [];
   const next = (Array.isArray(criteria) ? criteria : []).map((criterion) => {
+    if (isItemIdentityLabel(criterion.key)) return { ...criterion };
     const rawValues = Array.isArray(criterion.value)
       ? criterion.value
       : [criterion.value];
@@ -420,10 +434,13 @@ export function restoreSelectionTargetBackingCriteria(
 }
 
 /**
- * Compile a structured target refinement into a unique live facet value when
- * the provider omitted the equivalent criterion. Matching is literal and
- * value-driven: captions, category names and the facet vocabulary itself
- * cannot self-authorize a class. Ambiguous values are ignored.
+ * Compile a structured product-class refinement into a unique live facet
+ * value when the provider omitted the equivalent criterion. Matching is
+ * literal and value-driven: captions, category names, application context and
+ * the facet vocabulary itself cannot self-authorize a class. In particular,
+ * source SKUs and brands commonly repeated in application_context must never
+ * become mandatory characteristics of an analog. Ambiguous values are
+ * ignored.
  */
 export function projectSelectionTargetFacetCriteria(
   baseTarget: string | null,
@@ -442,12 +459,13 @@ export function projectSelectionTargetFacetCriteria(
     !selectionTargetIsDeclared(base, target.product_class)
   ) return [];
   const baseTokens = new Set(meaningfulTokens(base));
-  const targetTokens = new Set(meaningfulTokens(
-    `${target.product_class}\n${target.application_context.join("\n")}`,
-  ).filter((token) => !baseTokens.has(token)));
+  const targetTokens = new Set(
+    meaningfulTokens(target.product_class).filter((token) => !baseTokens.has(token)),
+  );
   if (targetTokens.size === 0) return [];
 
   return (Array.isArray(facets) ? facets : []).flatMap((facet) => {
+    if (isItemIdentityLabel(`${facet.key} ${facet.caption ?? ""}`)) return [];
     const matches = (Array.isArray(facet.values) ? facet.values : [])
       .map(({ value }) => String(value ?? "").trim())
       .filter(Boolean)

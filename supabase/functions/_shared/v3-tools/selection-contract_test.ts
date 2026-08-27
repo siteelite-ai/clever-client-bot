@@ -345,18 +345,56 @@ Deno.test("structured target promotes only its repeated class-defining advisory 
     ],
   );
   assertEquals(promoted.criteria.map((criterion) => [criterion.key, criterion.level]), [
-    ["Вид светильника", "A"],
+    ["Вид светильника", "B"],
     ["Способ монтажа", "A"],
     ["Степень защиты", "B"],
   ]);
   assertEquals(promoted.promoted.map((criterion) => criterion.key), [
-    "Вид светильника",
     "Способ монтажа",
   ]);
   assertEquals(promoted.backing.map((criterion) => criterion.key), [
-    "Вид светильника",
     "Способ монтажа",
   ]);
+});
+
+Deno.test("replacement application context cannot turn source identity into target criteria", () => {
+  const target = {
+    product_class: "LED консольный светильник",
+    application_context: ["уличное освещение", "замена ДКУ-LED-03-100W ЭТФ"],
+  };
+  const facets = [
+    { key: "brand", caption: "Бренд", values: [{ value: "ЭТФ" }, { value: "Gauss" }] },
+    {
+      key: "name_kz",
+      caption: "Наименование на казахском языке",
+      values: [{ value: "50163/1 LED ақ" }],
+    },
+    {
+      key: "mount",
+      caption: "Способ монтажа",
+      values: [{ value: "консольный" }, { value: "потолочный" }],
+    },
+  ];
+
+  assertEquals(projectSelectionTargetFacetCriteria("светильник", target, facets), [{
+    key: "Способ монтажа",
+    op: "eq",
+    value: "консольный",
+    unit: undefined,
+    level: "A",
+  }]);
+
+  const promoted = promoteSelectionTargetBackingCriteria(
+    "светильник",
+    target,
+    [
+      { key: "Бренд", op: "eq", value: "ЭТФ", level: "B" },
+      { key: "Наименование на казахском языке", op: "eq", value: "50163/1 LED ақ", level: "B" },
+      { key: "Способ монтажа", op: "eq", value: "консольный", level: "B" },
+    ],
+  );
+  assertEquals(promoted.promoted.map((criterion) => criterion.key), ["Способ монтажа"]);
+  assertEquals(promoted.backing.map((criterion) => criterion.key), ["Способ монтажа"]);
 });
 
 Deno.test("an unrelated advisory value cannot strengthen a structured target", () => {
