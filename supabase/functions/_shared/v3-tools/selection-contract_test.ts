@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, promoteSelectionTargetBackingCriteria, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
@@ -329,6 +329,40 @@ Deno.test("a richer target falls back to its base only through mandatory criteri
     "уличный светильник",
     [{ key: "Уличное исполнение", op: "eq", value: "Да", level: "B" }],
   ), false);
+});
+
+Deno.test("structured target promotes only its repeated class-defining advisory values", () => {
+  const promoted = promoteSelectionTargetBackingCriteria(
+    "светильник",
+    {
+      product_class: "уличный консольный светильник",
+      application_context: ["наружное освещение улиц"],
+    },
+    [
+      { key: "Вид светильника", op: "eq", value: "для освещения улиц", level: "B" },
+      { key: "Способ монтажа", op: "eq", value: "консольный", level: "B" },
+      { key: "Степень защиты", op: "min", value: "65", level: "B" },
+    ],
+  );
+  assertEquals(promoted.criteria.map((criterion) => [criterion.key, criterion.level]), [
+    ["Вид светильника", "A"],
+    ["Способ монтажа", "A"],
+    ["Степень защиты", "B"],
+  ]);
+  assertEquals(promoted.promoted.map((criterion) => criterion.key), [
+    "Вид светильника",
+    "Способ монтажа",
+  ]);
+});
+
+Deno.test("an unrelated advisory value cannot strengthen a structured target", () => {
+  const promoted = promoteSelectionTargetBackingCriteria(
+    "светильник",
+    { product_class: "уличный светильник", application_context: [] },
+    [{ key: "Цвет", op: "eq", value: "чёрный", level: "B" }],
+  );
+  assertEquals(promoted.promoted, []);
+  assertEquals(promoted.criteria[0].level, "B");
 });
 
 Deno.test("an exact named entity may discard a model-only class adjective but never switch siblings", () => {

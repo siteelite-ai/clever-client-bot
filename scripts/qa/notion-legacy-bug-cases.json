@@ -293,7 +293,7 @@
         "message": "ДКУ-LED-03-100W (ЭТФ) предложи самую близкую замену на этот светильник по характеристикам",
         "expect": {
           "min_products": 1,
-          "require_every_product_title_any": ["ДКУ", "улич", "консоль", "100W", "100Вт", "100 Вт"],
+          "require_every_product_title_groups": [["ДКУ", "улич", "консоль"], ["100W", "100Вт", "100 Вт"]],
           "forbid_product_title": ["ДКУ-LED-03-100W"]
         }
       }]

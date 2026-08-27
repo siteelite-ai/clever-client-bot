@@ -347,6 +347,50 @@ export function selectionTargetExtensionIsCriterionBacked(
 }
 
 /**
+ * A provider may correctly describe a class-defining facet in the structured
+ * selection target but leave the matching criterion advisory. Promote only
+ * values explicitly repeated in that same structured target/context. The
+ * resulting criterion is still verified against live catalog evidence before
+ * any card is rendered, so model prose cannot prove itself or rename a sibling.
+ */
+export function promoteSelectionTargetBackingCriteria(
+  baseTarget: string | null,
+  targetValue: unknown,
+  criteria: Criterion[],
+): { criteria: Criterion[]; promoted: Criterion[] } {
+  const base = String(baseTarget ?? "").trim();
+  const target = parseSelectionTarget(targetValue);
+  if (
+    !base || !target.product_class ||
+    !selectionTargetIsDeclared(base, target.product_class)
+  ) {
+    return {
+      criteria: (Array.isArray(criteria) ? criteria : []).map((criterion) => ({ ...criterion })),
+      promoted: [],
+    };
+  }
+  const baseTokens = new Set(meaningfulTokens(base));
+  const targetTokens = new Set(meaningfulTokens(
+    `${target.product_class}\n${target.application_context.join("\n")}`,
+  ).filter((token) => !baseTokens.has(token)));
+  const promoted: Criterion[] = [];
+  const next = (Array.isArray(criteria) ? criteria : []).map((criterion) => {
+    if ((criterion.level ?? "A") !== "B") return { ...criterion };
+    const rawValues = Array.isArray(criterion.value)
+      ? criterion.value
+      : [criterion.value];
+    const valueTokens = meaningfulTokens(rawValues.map(String).join(" "));
+    if (!valueTokens.some((token) => targetTokens.has(token))) {
+      return { ...criterion };
+    }
+    const upgraded = { ...criterion, level: "A" as const };
+    promoted.push(upgraded);
+    return upgraded;
+  });
+  return { criteria: next, promoted };
+}
+
+/**
  * Decides whether render verification may return to an already grounded base
  * class after the model emitted a richer class phrase. The projection never
  * authorizes a sibling: the base must still be declared inside the proposed

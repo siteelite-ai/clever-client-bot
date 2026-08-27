@@ -32,7 +32,7 @@ import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-le
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { hasActionableSelectionContract, shouldContinueSelectionPastOptionalClarification } from "../_shared/v3-tools/selection-actionability.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, initialSelectionDeclaration, parseSelectionTarget, promoteSelectionTargetBackingCriteria, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
@@ -5088,7 +5088,7 @@ async function runExpertLoop(
         // Product-class contract: the model's own initial interpretation is a
         // mandatory render input. It is checked against live catalog evidence
         // before criteria and before any markdown reaches the customer.
-        const renderRawCriteria = tc.name === "render_products" && Array.isArray((tc.args as Record<string, unknown>).criteria)
+        let renderRawCriteria = tc.name === "render_products" && Array.isArray((tc.args as Record<string, unknown>).criteria)
           ? ((tc.args as Record<string, unknown>).criteria as Criterion[])
           : [];
         if (tc.name === "render_products") {
@@ -5096,6 +5096,23 @@ async function runExpertLoop(
           const targetProjection = parseSelectionTarget(tc.args.selection_target);
           const target = targetProjection.product_class;
           const priorActiveSelectionTarget = activeSelectionTarget;
+          const targetBackedCriteria = promoteSelectionTargetBackingCriteria(
+            priorActiveSelectionTarget,
+            tc.args.selection_target,
+            renderRawCriteria,
+          );
+          if (targetBackedCriteria.promoted.length > 0) {
+            renderRawCriteria = targetBackedCriteria.criteria;
+            (tc.args as Record<string, unknown>).criteria = renderRawCriteria;
+            steps.push({
+              step: "v3_selection_target_criteria_promoted",
+              ms: now(),
+              meta: {
+                target,
+                promoted: targetBackedCriteria.promoted,
+              },
+            });
+          }
           const initialReasoningDeclaration = initialSelectionDeclaration(firstAssistantText);
           // Only the discovered umbrella may complete the initial class name.
           // Leaves are excluded: otherwise a later sibling search could
@@ -8145,7 +8162,11 @@ async function runExpertLoop(
       anchorMissingRecoveryPool
     ) {
       const explicitRequirements = portableReplacementRequirements();
-      const products = anchorMissingRecoveryPool.ids
+      const mandatoryCriteria = latestRenderCriteria.filter((criterion) =>
+        (criterion.level ?? "A") === "A"
+      );
+      let poolTotal = anchorMissingRecoveryPool.total;
+      let products = anchorMissingRecoveryPool.ids
         .map((id) => ctx.cache.get(id))
         .filter((product): product is ProductFull => Boolean(product && product.price > 0))
         .filter((product) =>
@@ -8159,6 +8180,89 @@ async function runExpertLoop(
           explicitRequirements.length === 0 ||
           productTitleSupportsPortableRequirements(product.pagetitle, explicitRequirements)
         );
+      if (mandatoryCriteria.length > 0) {
+        const gate = applyCriteriaGate(products, mandatoryCriteria);
+        const passed = new Set(gate.passed_ids);
+        products = products.filter((product) => passed.has(product.id));
+      }
+
+      // A preserved broad pool may predate the model's final structured class
+      // reasoning. Never render that pool after the model has declared a
+      // live-verifiable target facet: re-run the complete mandatory contract
+      // once, then require the same criteria and source exclusions locally.
+      if (products.length === 0 && lastDiscover && mandatoryCriteria.length > 0) {
+        const projected = projectCriteriaFacetOptions(
+          mandatoryCriteria,
+          lastDiscover.facets,
+        );
+        if (Object.keys(projected.options).length > 0) {
+          const leaves = lastDiscover.leaf_categories
+            .map((category) => category.pagetitle)
+            .filter(Boolean);
+          const attempts: Array<Record<string, unknown>> = [
+            {
+              mode: "by_filter",
+              ...(leaves.length > 0
+                ? { category_in: leaves }
+                : { category: lastDiscover.category.pagetitle }),
+              options: projected.options,
+              per_page: 50,
+            },
+            {
+              mode: "by_filter",
+              options: projected.options,
+              per_page: 50,
+            },
+          ];
+          let recoveredCount = 0;
+          for (const args of attempts) {
+            const recovered = await runTool("search_catalog", args, ctx);
+            if (!recovered.ok || recovered.tool !== "search_catalog") continue;
+            const recoveredProducts = recovered.results
+              .map((product) => ctx.cache.get(String(product.id)))
+              .filter((product): product is ProductFull => Boolean(product && product.price > 0))
+              .filter((product) =>
+                !selectionPlan.source_identifiers.some((identifier) =>
+                  productContainsSourceModel(product, [identifier])
+                ) &&
+                !productMatchesExcludedReplacementIdentity(product, replacementExcludedIdentityValues) &&
+                !replacementSourceModelCodes.some((code) => productMatchesCodeConstraint(product, code))
+              )
+              .filter((product) =>
+                explicitRequirements.length === 0 ||
+                productTitleSupportsPortableRequirements(product.pagetitle, explicitRequirements)
+              );
+            const targetReport = verifySelectionTargetWithVisibleTitle(
+              anchorMissingRecoveryPool.target,
+              recoveredProducts,
+            );
+            const targetIds = new Set(targetReport.passed_ids);
+            const targetProducts = recoveredProducts.filter((product) => targetIds.has(product.id));
+            const evidenced = projectCatalogFilterEvidence(
+              targetProducts,
+              projected.proven_criteria,
+            );
+            const gate = applyCriteriaGate(evidenced, mandatoryCriteria);
+            const passed = new Set(gate.passed_ids);
+            products = targetProducts.filter((product) => passed.has(product.id));
+            recoveredCount = recovered.results.length;
+            if (products.length > 0) {
+              poolTotal = recovered.total;
+              break;
+            }
+          }
+          steps.push({
+            step: "v3_terminal_anchor_missing_contract_requery",
+            ms: now(),
+            meta: {
+              options: projected.options,
+              criteria: mandatoryCriteria,
+              found: recoveredCount,
+              proven: products.length,
+            },
+          });
+        }
+      }
       const targetReport = verifySelectionTargetWithVisibleTitle(anchorMissingRecoveryPool.target, products);
       const targetIds = new Set(targetReport.passed_ids);
       let safeIds = products.map((product) => product.id).filter((id) => targetIds.has(id));
@@ -8180,7 +8284,7 @@ async function runExpertLoop(
       ).ids.slice(0, 4);
       if (safeIds.length > 0) {
         const rendered = executeRenderProducts(
-          { product_ids: safeIds, total_available: anchorMissingRecoveryPool.total },
+          { product_ids: safeIds, total_available: poolTotal },
           ctx.cache,
         );
         if (rendered.ok) {
@@ -8194,7 +8298,7 @@ async function runExpertLoop(
             type: "products_block",
             markdown: rendered.markdown,
             count: rendered.rendered_count,
-            total_available: anchorMissingRecoveryPool.total,
+            total_available: poolTotal,
           });
           for (const id of safeIds) shownIds.add(id);
           productsRendered += rendered.rendered_count;
