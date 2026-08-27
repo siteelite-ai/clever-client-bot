@@ -6057,6 +6057,19 @@ async function runExpertLoop(
           });
         }
 
+        if (tc.name === "jargon_recover_catalog" && lastDiscover) {
+          const exactLeaves = lastDiscover.leaf_categories
+            .map((category) => category.pagetitle)
+            .filter(Boolean);
+          if (exactLeaves.length > 0) {
+            tc.args = {
+              ...tc.args,
+              category: lastDiscover.category.pagetitle,
+              category_in: exactLeaves,
+            };
+          }
+        }
+
         const runArgs: Record<string, unknown> = tc.args;
 
 

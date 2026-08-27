@@ -12,6 +12,8 @@ export interface JargonRecoverCatalogInput {
   max_price?: number;
   per_page?: number;
   category?: string;
+  /** Exact live leaves injected by the orchestrator after discovery. */
+  category_in?: string[];
 }
 
 export interface JargonRecoverCatalogDeps extends CatalogClientDeps {
@@ -158,6 +160,9 @@ export async function executeJargonRecoverCatalog(
   const modifiers = input.modifiers ?? [];
   const perPage = input.per_page ?? 10;
   const categoryHint = deps.categoryContextEnabled && input.category ? input.category.trim() : undefined;
+  const categoryLeaves = Array.isArray(input.category_in)
+    ? [...new Set(input.category_in.map(String).map((value) => value.trim()).filter(Boolean))]
+    : [];
 
   const jargon = await tryJargonFallback(source, {
     apiKey: deps.openrouterApiKey,
@@ -188,7 +193,11 @@ export async function executeJargonRecoverCatalog(
         // The discovered category is a hard relevance boundary, not merely an
         // LLM hint. Without it a plausible lexical candidate can return an
         // unrelated product from another catalog branch.
-        category: input.category,
+        ...(categoryLeaves.length > 0
+          ? { category_in: categoryLeaves }
+          : input.category
+            ? { category: input.category }
+            : {}),
         min_price: input.min_price,
         max_price: input.max_price,
         per_page: perPage,

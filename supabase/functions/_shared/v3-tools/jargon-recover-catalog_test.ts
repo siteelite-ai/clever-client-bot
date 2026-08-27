@@ -25,7 +25,7 @@ Deno.test("jargon recovery applies discovered category to the actual catalog que
     const parsed = new URL(url);
     const category = parsed.searchParams.get("category");
     const query = parsed.searchParams.get("query");
-    const results = category === "Лампы" && query === "CORN"
+    const results = category === "Светодиодные лампы" && query === "CORN"
       ? [{
         id: 24780,
         pagetitle: "Лампа LED CORN капсула 5Вт 230В 4000К G4 ИЭК",
@@ -34,7 +34,7 @@ Deno.test("jargon recovery applies discovered category to the actual catalog que
         category: { pagetitle: "Лампы" },
         options: [],
       }]
-      : category !== "Лампы" && query === "LABEL OFF"
+      : !category && query === "LABEL OFF"
         ? [{
           id: 999,
           pagetitle: "Средство для удаления наклеек LABEL OFF, аэрозоль REXANT",
@@ -53,6 +53,7 @@ Deno.test("jargon recovery applies discovered category to the actual catalog que
   const result = await executeJargonRecoverCatalog({
     query: "кукуруза",
     category: "Лампы",
+    category_in: ["Светодиодные лампы"],
     per_page: 5,
   }, {
     baseUrl: "https://catalog.test/api",
@@ -66,7 +67,7 @@ Deno.test("jargon recovery applies discovered category to the actual catalog que
   assertEquals(result.ok ? result.total : 0, 1);
   assertEquals(result.ok ? result.results[0]?.pagetitle : null, "Лампа LED CORN капсула 5Вт 230В 4000К G4 ИЭК");
   const catalogUrls = requestedUrls.filter((url) => url.includes("catalog.test"));
-  assertEquals(catalogUrls.map((url) => new URL(url).searchParams.get("category")), ["Лампы", "Лампы"]);
+  assertEquals(catalogUrls.map((url) => new URL(url).searchParams.get("category")), ["Светодиодные лампы", "Светодиодные лампы"]);
 });
 
 Deno.test("grounded jargon title evidence accepts compact codes without a product dictionary", () => {
