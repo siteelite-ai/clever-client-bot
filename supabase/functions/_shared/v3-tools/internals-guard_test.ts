@@ -1,15 +1,41 @@
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   INTERNALS_REDACTED_TEXT,
+  MISSING_ANCHOR_SAFE_INTRO,
   containsUnrenderedCatalogFacts,
   isMetaSelfQuestion,
   redactInternals,
+  replaceUngroundedMissingAnchorIntro,
   sanitizeIntermediateReasoning,
   shouldGuardFirstVisibleReasoning,
   stripUngroundedIntroAliasDefinitions,
   stripUngroundedIntroTechnicalAttributes,
   stripUnrenderedCatalogFactSegments,
 } from "./internals-guard.ts";
+
+Deno.test("missing-anchor intro preserves the verification plan and removes inferred source facts", () => {
+  const guesses = [
+    "Судя по названию, это релейный стабилизатор на 10 кВА, однофазный, 220 В. Сначала найду исходную карточку.",
+    "Это, скорее всего, устройство бренда GENERICA и серии AX. Проверяю каталог.",
+    "Смотрю варианты с параметрами, которые можно вывести из кода QX-10001-C.",
+  ];
+  for (const guess of guesses) {
+    const result = replaceUngroundedMissingAnchorIntro(guess);
+    assertEquals(result.text, MISSING_ANCHOR_SAFE_INTRO);
+    assertEquals(result.removed, [guess]);
+  }
+  assertEquals(/10\s*ква|220\s*в|generica|qx-10001/iu.test(MISSING_ANCHOR_SAFE_INTRO), false);
+  assertStringIncludes(MISSING_ANCHOR_SAFE_INTRO, "проверю исходную модель");
+  assertStringIncludes(MISSING_ANCHOR_SAFE_INTRO, "подтверждённого класса");
+});
+
+Deno.test("missing-anchor intro sanitizer is idempotent and does not invent a bubble from silence", () => {
+  assertEquals(replaceUngroundedMissingAnchorIntro(""), { text: "", removed: [] });
+  assertEquals(
+    replaceUngroundedMissingAnchorIntro(MISSING_ANCHOR_SAFE_INTRO),
+    { text: MISSING_ANCHOR_SAFE_INTRO, removed: [] },
+  );
+});
 
 Deno.test("catalog facts detector catches price, article, availability, and product links", () => {
   assert(containsUnrenderedCatalogFacts("Товар — 477 ₸/шт. Арт.: ABC-123. Наличие: Алматы."));

@@ -135,6 +135,27 @@ export interface CatalogFactStripResult {
   removed: string[];
 }
 
+export const MISSING_ANCHOR_SAFE_INTRO =
+  "Понял задачу. Сначала проверю исходную модель в актуальном каталоге, чтобы не переносить в подбор неподтверждённые характеристики. " +
+  "Если карточка не найдётся, покажу только товары подтверждённого класса и отдельно отмечу границы сравнения.";
+
+/**
+ * Before the source card is found, no attribute or brand inferred from its
+ * opaque identifier is evidence. Keep the useful, visible reasoning as a
+ * deterministic verification plan instead of exposing model guesses that may
+ * later be (correctly) ignored by the search contract.
+ *
+ * The caller activates this only for a confirmed missing-anchor replacement;
+ * ordinary selections and replacements with a grounded source card retain the
+ * consultant's own reasoning.
+ */
+export function replaceUngroundedMissingAnchorIntro(text: string): CatalogFactStripResult {
+  const original = String(text ?? "").trim();
+  if (!original) return { text: original, removed: [] };
+  if (original === MISSING_ANCHOR_SAFE_INTRO) return { text: original, removed: [] };
+  return { text: MISSING_ANCHOR_SAFE_INTRO, removed: [original] };
+}
+
 /** The intro boundary follows what the customer has seen, not an agent step. */
 export function shouldGuardFirstVisibleReasoning(input: {
   productsRendered: number;

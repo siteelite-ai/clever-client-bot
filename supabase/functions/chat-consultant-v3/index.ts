@@ -102,7 +102,7 @@ import {
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
 import { containsUnrenderedCatalogFacts, isMetaSelfQuestion,
-  META_DECLINE_TEXT, redactInternals, sanitizeIntermediateReasoning, shouldGuardFirstVisibleReasoning, stripUngroundedIntroAliasDefinitions, stripUngroundedIntroTechnicalAttributes, stripUnrenderedCatalogFactSegments } from "../_shared/v3-tools/internals-guard.ts";
+  META_DECLINE_TEXT, redactInternals, replaceUngroundedMissingAnchorIntro, sanitizeIntermediateReasoning, shouldGuardFirstVisibleReasoning, stripUngroundedIntroAliasDefinitions, stripUngroundedIntroTechnicalAttributes, stripUnrenderedCatalogFactSegments } from "../_shared/v3-tools/internals-guard.ts";
 import {
   type AgentPhase,
   boundedAgentStepTimeout,
@@ -4046,9 +4046,13 @@ async function runExpertLoop(
           });
         }
       }
-      const introAliasGuard = introSafetyApplies
-        ? stripUngroundedIntroAliasDefinitions(resp.text, userMessage)
+      const missingAnchorIntroGuard = introSafetyApplies && replacementIntent &&
+          selectionPlan?.anchor_state === "anchor_missing"
+        ? replaceUngroundedMissingAnchorIntro(resp.text)
         : { text: resp.text, removed: [] as string[] };
+      const introAliasGuard = introSafetyApplies
+        ? stripUngroundedIntroAliasDefinitions(missingAnchorIntroGuard.text, userMessage)
+        : { text: missingAnchorIntroGuard.text, removed: [] as string[] };
       const introAttributeGuard = introSafetyApplies
         ? stripUngroundedIntroTechnicalAttributes(introAliasGuard.text, userMessage)
         : { text: resp.text, removed: [] as string[] };
@@ -4064,6 +4068,17 @@ async function runExpertLoop(
         // criteria logic inspects the model text. The customer-visible bubble
         // and the machine proof contract must be derived from the same prose.
         resp = { ...resp, text: introFactGuard.text };
+      }
+      if (missingAnchorIntroGuard.removed.length > 0) {
+        steps.push({
+          step: "v3_guard_missing_anchor_intro_claims",
+          ms: now(),
+          meta: {
+            fragment_index: step,
+            original_text: rawModelResponseText,
+            replacement_text: missingAnchorIntroGuard.text,
+          },
+        });
       }
       if (introAliasGuard.removed.length > 0) {
         steps.push({
