@@ -2,10 +2,16 @@ import type { Facet } from "./discover-category.ts";
 import type { Criterion } from "./criteria-gate.ts";
 import { projectCriteriaFacetOptions } from "./criteria-gate.ts";
 import { dropAffirmativeBooleanFilters } from "./search-filter-guard.ts";
+import {
+  type DiscoveredCategoryScope,
+  groundedCategoryRecoveryQueries,
+  groundedTokenRecoveryQueries,
+} from "./category-reasoning-guard.ts";
 
 export type SelectionSearchRecoveryKind =
   | "preserve_filters_expand_category_scope"
   | "preserve_scope_verify_sparse_boolean_as_evidence"
+  | "verify_compatibility_in_grounded_category"
   | "project_reasoning_ranges_in_category"
   | "project_reasoning_ranges_expand_category_scope";
 
@@ -39,11 +45,60 @@ export interface PendingSelectionFinalizationInput {
   intent_mode: "select" | "inquire";
   has_discovery: boolean;
   has_selection_target: boolean;
+  has_search_attempt: boolean;
   mandatory_criteria_count: number;
   replacement_intent: boolean;
   series_grounding_required: boolean;
   compatibility_relation_count: number;
   compatibility_required: boolean;
+}
+
+export interface CatalogEmptyDecisionInput {
+  products_rendered: number;
+  intent_mode: "select" | "inquire";
+  final_text: string;
+}
+
+export interface MissingAnchorReplacementFinalizationInput {
+  products_rendered: number;
+  replacement_intent: boolean;
+  anchor_state: string | null | undefined;
+  preserved_pool_size: number;
+}
+
+/** A missing-anchor replacement with a preserved same-class pool is already
+ * actionable. Provider prose or a rejected ID subset must converge on the
+ * deterministic terminal proof path instead of reopening model decisions. */
+export function shouldFinalizeMissingAnchorReplacement(
+  input: MissingAnchorReplacementFinalizationInput,
+): boolean {
+  return input.products_rendered === 0 &&
+    input.replacement_intent &&
+    input.anchor_state === "anchor_missing" &&
+    input.preserved_pool_size > 0;
+}
+
+/**
+ * A cold or inconsistent facet endpoint can report an empty intersection even
+ * though the already-grounded live category contains valid products. Fetch a
+ * bounded category candidate pool and let the caller revalidate the complete
+ * target/criteria/compatibility/budget contract locally. No filter is claimed
+ * as proven by this retrieval step.
+ */
+export function buildCategoryVerificationSearchInput(
+  leafCategories: string[],
+): Record<string, unknown> | null {
+  const categories = [...new Set(
+    (Array.isArray(leafCategories) ? leafCategories : [])
+      .map((category) => String(category ?? "").trim())
+      .filter(Boolean),
+  )];
+  if (categories.length === 0) return null;
+  return {
+    mode: "by_filter",
+    category_in: categories,
+    per_page: 50,
+  };
 }
 
 /**
@@ -58,11 +113,20 @@ export function shouldFinalizePendingSelection(input: PendingSelectionFinalizati
     input.intent_mode === "select" &&
     input.has_discovery &&
     input.has_selection_target &&
-    input.mandatory_criteria_count > 0 &&
+    (input.mandatory_criteria_count > 0 || input.has_search_attempt) &&
     !input.replacement_intent &&
     !input.series_grounding_required &&
     input.compatibility_relation_count < 2 &&
     !input.compatibility_required;
+}
+
+/** A product-selection turn must close an empty catalog attempt explicitly.
+ * An inquiry that already produced a substantive evidence-backed answer must
+ * not append the contradictory phrase “no suitable products found”. */
+export function shouldAppendCatalogEmpty(input: CatalogEmptyDecisionInput): boolean {
+  if (input.products_rendered > 0) return false;
+  if (input.intent_mode === "select") return true;
+  return String(input.final_text ?? "").trim().length === 0;
 }
 
 function normalizeQuery(value: string): string {
@@ -94,6 +158,42 @@ export function rankReasoningSearchQueries(values: Array<string | null | undefin
       return rightTokens - leftTokens || right.length - left.length;
     })
     .slice(0, Math.max(1, limit));
+}
+
+/**
+ * When an exact source SKU is absent, derive a bounded search ladder only from
+ * live taxonomy names already supported by the consultant's reasoning. Token
+ * fallbacks remain safe because the caller must revalidate every candidate
+ * against the complete grounded category targets and final selection contract.
+ */
+export function buildAnchorMissingRecoveryQueries(
+  discovered: DiscoveredCategoryScope | null,
+  declaredReasoning: string,
+  literalRequirements: string[] = [],
+  limit = 4,
+): { targets: string[]; queries: string[] } {
+  const targets = groundedCategoryRecoveryQueries(
+    discovered,
+    declaredReasoning,
+    20,
+  );
+  const tokens = targets.flatMap((target) =>
+    groundedTokenRecoveryQueries(target, 4)
+  );
+  const requirementQuery = literalRequirements
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .join(" ");
+  const combined = targets.map((target) =>
+    [target, requirementQuery].filter(Boolean).join(" ")
+  );
+  return {
+    targets,
+    queries: rankReasoningSearchQueries(
+      [...combined, requirementQuery, ...targets, ...tokens],
+      limit,
+    ),
+  };
 }
 
 /**
@@ -201,6 +301,24 @@ export function buildSelectionSearchRecoveryPlan(
       proven_criteria: [],
       revalidate: [...REVALIDATE],
     });
+  }
+
+  // A paired/relational selection can be reasoned correctly while the model
+  // serializes the threshold as an exact facet value. After that intersection
+  // is empty, fetch only a bounded pool from the already-grounded live
+  // category. This retrieval proves no filter: the caller must rebuild and
+  // enforce the full compatibility relation before rendering any card.
+  if (input.compatibility_shaped) {
+    const args = buildCategoryVerificationSearchInput(input.leaf_categories);
+    if (args) {
+      add({
+        kind: "verify_compatibility_in_grounded_category",
+        args,
+        relaxed_inputs: ["model_filter_serialization"],
+        proven_criteria: [],
+        revalidate: [...REVALIDATE],
+      });
+    }
   }
 
   // Paired-state compatibility has its own two-sided projection. A scalar

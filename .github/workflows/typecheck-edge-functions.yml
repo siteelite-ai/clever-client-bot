@@ -75,4 +75,4 @@ jobs:
         run: node --test scripts/qa/run-customer-acceptance.test.mjs scripts/qa/widget-browser-smoke.test.mjs scripts/qa/widget-session-state.test.mjs
 
       - name: Test shared v3 safeguards
-        run: deno test supabase/functions/_shared/v3-tools/*_test.ts
+        run: deno test --allow-read supabase/functions/_shared/v3-tools/*_test.ts

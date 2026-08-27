@@ -4,9 +4,12 @@ import {
   classifyExactCompoundMarkingRequest,
   compoundRecoveryQueries,
   extractExplicitCompoundMarking,
+  isExhaustiveCompoundRequest,
+  partitionSemanticCompoundSourceByLiveTaxonomy,
   productTitleMatchesExplicitCompoundMarking,
   requiresSemanticCompoundEvidence,
   semanticCompoundSourceQuery,
+  selectBestMatchingSemanticCompoundCategories,
   selectExactCompoundMarkedProducts,
   shouldTerminateAfterGroundedCompoundSearch,
   subsumeCriteriaProvenByExplicitCompound,
@@ -46,6 +49,54 @@ Deno.test("compound semantic evidence classifier is structural and product-agnos
     semanticCompoundSourceQuery("Нужен медный кабель негорючий 2*1,5, пожалуйста!"),
     "медный кабель негорючий",
   );
+  assertEquals(
+    semanticCompoundSourceQuery("какой есть кабель ввг 3*1,5 негорючий покажи все позиции"),
+    "кабель ввг негорючий",
+  );
+});
+
+Deno.test("semantic compound source is partitioned by live taxonomy without a product dictionary", () => {
+  assertEquals(partitionSemanticCompoundSourceByLiveTaxonomy(
+    "медный кабель негорючий",
+    ["Кабели силовые", "Кабели монтажные"],
+  ), {
+    query: "кабель",
+    semanticModifiers: ["медный", "негорючий"],
+  });
+  assertEquals(partitionSemanticCompoundSourceByLiveTaxonomy(
+    "кабель ввг негорючий",
+    ["Кабели силовые"],
+  ), {
+    query: "кабель",
+    semanticModifiers: ["ввг", "негорючий"],
+  });
+});
+
+Deno.test("semantic compound partition fails closed when live taxonomy has no class anchor", () => {
+  assertEquals(partitionSemanticCompoundSourceByLiveTaxonomy(
+    "изделие стойкое для улицы",
+    ["Кабели силовые"],
+  ), {
+    query: "изделие стойкое для улицы",
+    semanticModifiers: [],
+  });
+});
+
+Deno.test("semantic compound category scope keeps the most specific live class and drops same-size siblings", () => {
+  assertEquals(selectBestMatchingSemanticCompoundCategories(
+    "кабель ввг негорючий",
+    [
+      "Кабель ВВГ",
+      "Удлинители",
+      "Кабель и провод разного назначения",
+      "Кабель КГ",
+      "Провод ПВС",
+    ],
+  ), ["Кабель ВВГ"]);
+  assertEquals(selectBestMatchingSemanticCompoundCategories(
+    "медный кабель негорючий",
+    ["Кабель ВВГ", "Кабель КГ", "Удлинители"],
+  ), ["Кабель ВВГ", "Кабель КГ"]);
 });
 
 Deno.test("exact compound route rejects a nearby size and returns the cheapest exact match", () => {
@@ -113,6 +164,12 @@ Deno.test("grounded compound search terminates only a non-exhaustive exact-title
     ["Кабель ВВГ нг 4*1,5"],
     marking,
   ), false);
+});
+
+Deno.test("exhaustive compound intent bypasses bounded direct selection", () => {
+  assertEquals(isExhaustiveCompoundRequest("покажи все позиции кабеля 3*1,5"), true);
+  assertEquals(isExhaustiveCompoundRequest("нужен полный список кабелей 3×1,5"), true);
+  assertEquals(isExhaustiveCompoundRequest("покажи кабель 3*1,5"), false);
 });
 
 Deno.test("compound catalog syntax changes punctuation without changing the model's words", () => {

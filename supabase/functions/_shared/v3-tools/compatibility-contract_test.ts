@@ -10,6 +10,7 @@ import {
   hasOppositeCompatibilityDirections,
   mergeCompatibilityCriteria,
   minimumCompatibilityRelationCount,
+  pairedStateCriterionReference,
   parseCompatibilityRelations,
   projectPairedTitleEvidence,
   projectCompatibilityFacetOptions,
@@ -121,6 +122,51 @@ Deno.test("missing paired relation stays missing when live state facets are ambi
     { value: 12, unit: "мм" },
   );
   assertEquals(completed.relations, []);
+});
+
+Deno.test("a strict one-sided criterion exposes a live opposite-state fit contract", () => {
+  const facets = [
+    {
+      key: "before_diameter",
+      caption: "Внутренний диаметр до изменения, мм",
+      unit: null,
+      values: [{ value: "12" }, { value: "16" }],
+    },
+    {
+      key: "after_diameter",
+      caption: "Внутренний диаметр после изменения, мм",
+      unit: null,
+      values: [{ value: "6" }, { value: "8" }],
+    },
+    {
+      key: "after_wall",
+      caption: "Толщина стенки после изменения, мм",
+      unit: null,
+      values: [{ value: "1" }, { value: "2" }],
+    },
+  ];
+  assertEquals(pairedStateCriterionReference([
+    { key: "before_diameter", op: "min", value: 10, unit: "мм", level: "B", exclusive: true },
+  ], facets), {
+    value: 10,
+    unit: "мм",
+    criterion_key: "before_diameter",
+    opposite_facet_key: "after_diameter",
+  });
+  assertEquals(pairedStateCriterionReference([
+    { key: "before_diameter", op: "min", value: 10, unit: "мм", level: "B" },
+  ], facets), null);
+  assertEquals(pairedStateCriterionReference([
+    { key: "before_diameter", op: "eq", value: 10, unit: "мм", level: "A" },
+  ], facets, "До изменения размер должен быть больше 10 мм."), {
+    value: 10,
+    unit: "мм",
+    criterion_key: "before_diameter",
+    opposite_facet_key: "after_diameter",
+  });
+  assertEquals(pairedStateCriterionReference([
+    { key: "before_diameter", op: "max", value: 10, unit: "мм", level: "B", exclusive: true },
+  ], facets), null);
 });
 
 Deno.test("relative equality is resolved from the opposite relation and qualitative fit", () => {
@@ -334,6 +380,21 @@ Deno.test("compatibility detection is based on relation shape, not product names
   assertEquals(reasoningNeedsCompatibilityRelations("Устройство должно выдерживать нагрузку не менее 250 Вт"), true);
   assertEquals(reasoningNeedsCompatibilityRelations("Для комнаты нужен поток 3750–5000 лм"), false);
   assertEquals(reasoningNeedsCompatibilityRelations("До установки диапазон 15–20 мм, после установки 6–8 мм"), false);
+});
+
+Deno.test("digits embedded in product identifiers do not manufacture compatibility measurements", () => {
+  const ordinaryReplacement =
+    "Ищу аналог Schneider Acti9 на 16 А, характеристика C. Сначала проверю исходную модель в каталоге.";
+  assertEquals(reasoningNeedsCompatibilityRelations(ordinaryReplacement), false);
+  assertEquals(minimumCompatibilityRelationCount(ordinaryReplacement), 0);
+  assertEquals(
+    reasoningNeedsCompatibilityRelations("Исходный размер 15 мм, конечный размер 8 мм"),
+    true,
+  );
+  assertEquals(
+    minimumCompatibilityRelationCount("Исходный размер 15 мм, конечный размер 8 мм"),
+    2,
+  );
 });
 
 Deno.test("all directional prose bounds must be represented", () => {

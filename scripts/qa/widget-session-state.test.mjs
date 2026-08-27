@@ -160,3 +160,33 @@ test('server boundary automatically isolates a self-contained new topic without 
   assert.match(visibleMessages(dom), /Новая тема/u);
   dom.window.close();
 });
+
+test('widget renders user and assistant HTML as inert text', async () => {
+  const maliciousAssistant = '<img src=x onerror=alert(1)> [click](javascript:alert(2))';
+  const sse = [
+    `data: ${JSON.stringify({ choices: [{ delta: { content: maliciousAssistant } }] })}`,
+    `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'xss-test', phase: 'complete', products_count: 0 } })}`,
+    'data: [DONE]',
+    '',
+  ].join('\n\n');
+  const dom = bootWidget({
+    fetchImpl: async () => new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } }),
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = '<svg onload=alert(3)>найди лампу</svg>';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  const deadline = Date.now() + 2_000;
+  while (readState(dom)?.history?.at(-1)?.content !== maliciousAssistant && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  const messages = dom.window.document.querySelector('#volt-widget-messages');
+  assert.equal(messages.querySelectorAll('img, svg').length, 0);
+  assert.equal(messages.querySelectorAll('a[href^="javascript:"]').length, 0);
+  assert.match(messages.textContent, /<svg onload=alert\(3\)>найди лампу<\/svg>/u);
+  assert.match(messages.textContent, /<img src=x onerror=alert\(1\)>/u);
+  dom.window.close();
+});

@@ -3,8 +3,10 @@ import {
   buildDeterministicEvidenceAnswer,
   buildRecentProductEvidencePrompt,
   compactRecentProducts,
+  extractPriorAssistantProse,
   extractRenderedProductTitles,
   isEvidenceOnlyFollowup,
+  isRecentProductShowFollowup,
   isRecentProductPriceSelectionFollowup,
   latestRecentProductEvidenceSet,
 } from "./recent-product-evidence.ts";
@@ -44,6 +46,13 @@ Deno.test("evidence follow-up classifier separates questions from a new selectio
   assertEquals(isEvidenceOnlyFollowup("Они точно подходят для 30 квадратных метров?"), true);
   assertEquals(isEvidenceOnlyFollowup("Почему варианты отличаются по цене? Сравни характеристики."), true);
   assertEquals(isEvidenceOnlyFollowup("Тогда подбери подходящий кабель"), false);
+});
+
+Deno.test("recent-product show classifier accepts only a short reference to the shown batch", () => {
+  assertEquals(isRecentProductShowFollowup("покажи"), true);
+  assertEquals(isRecentProductShowFollowup("давай покажи эти варианты"), true);
+  assertEquals(isRecentProductShowFollowup("покажи кабель 3×1,5"), false);
+  assertEquals(isRecentProductShowFollowup("найди другие варианты"), false);
 });
 
 Deno.test("price follow-up classifier requires both a superlative and a reference to the shown set", () => {
@@ -114,4 +123,18 @@ Deno.test("rendered product titles are only lookup hints from controlled product
     },
   ]);
   assertEquals(titles, ["Gauss HALL с сенсором"]);
+});
+
+Deno.test("prior reasoning excludes rendered product blocks and their numeric metadata", () => {
+  const prose = extractPriorAssistantProse([{
+    role: "assistant",
+    content: [
+      "Ключевые параметры аналога: номинальный ток 16 А, характеристика C.",
+      "",
+      "- **[Автомат M06N 1P 16A C](https://220volt.kz/catalog/electrics/item/)**",
+      "  Цена: *4 500* ₸",
+      "  Наличие: Алматы (4 шт)",
+    ].join("\n"),
+  }]);
+  assertEquals(prose, "Ключевые параметры аналога: номинальный ток 16 А, характеристика C.");
 });

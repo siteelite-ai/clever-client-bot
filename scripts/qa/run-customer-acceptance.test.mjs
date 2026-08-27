@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { DEFAULT_ENDPOINT, evaluate, parseSse, resolveEndpoint } from './run-customer-acceptance.mjs';
+import { DEFAULT_ENDPOINT, evaluate, fetchAcceptanceTurn, parseSse, resolveEndpoint } from './run-customer-acceptance.mjs';
 
 function data(payload) {
   return `data: ${JSON.stringify(payload)}`;
@@ -24,6 +24,26 @@ test('resolveEndpoint rejects unsafe or non-function targets', () => {
     () => resolveEndpoint(['node', 'runner', '--endpoint=https://example.com/not-a-function']),
     /one Edge Function/,
   );
+});
+
+test('acceptance transport retries one transient stream interruption with the same payload', async () => {
+  const calls = [];
+  const payload = { message: 'test', messageId: 'stable-id' };
+  const result = await fetchAcceptanceTurn(payload, {
+    retryDelayMs: 0,
+    fetchImpl: async (_url, init) => {
+      calls.push(JSON.parse(init.body));
+      if (calls.length === 1) {
+        const error = new TypeError('terminated');
+        error.cause = Object.assign(new Error('read ETIMEDOUT'), { code: 'ETIMEDOUT' });
+        throw error;
+      }
+      return new Response('data: [DONE]\n\n', { status: 200 });
+    },
+  });
+  assert.equal(result.attempts, 2);
+  assert.equal(result.raw, 'data: [DONE]\n\n');
+  assert.deepEqual(calls, [payload, payload]);
 });
 
 test('parseSse keeps pre-product text and parses card prices', () => {
@@ -122,6 +142,57 @@ test('evaluate checks every product title group and maximum price', () => {
   assert(failures.some((failure) => failure.startsWith('product price exceeds 1000')));
 });
 
+test('evaluate accepts either a true exact intersection or an explicitly labelled axis split', () => {
+  const contract = {
+    require_exact_or_split: {
+      exact_title_groups: [['CORN'], ['E27']],
+      split_title_groups: [['CORN'], ['E27']],
+      split_text_groups: [['одновременно'], ['не нашлось'], ['отдельно']],
+    },
+  };
+  const base = {
+    textBeforeProducts: '',
+    productsMarkdown: '',
+    completed: true,
+    diagnosticError: null,
+  };
+  assert.deepEqual(evaluate(contract, {
+    ...base,
+    text: 'Нашёл точное сочетание.',
+    links: [{ title: 'Лампа LED CORN E27' }],
+    serverProductsCount: 1,
+  }), []);
+  assert.deepEqual(evaluate(contract, {
+    ...base,
+    text: 'Одновременно условий не нашлось, поэтому показываю отдельно.',
+    links: [{ title: 'Лампа LED CORN G4' }, { title: 'Лампа LED A60 E27' }],
+    serverProductsCount: 2,
+  }), []);
+  assert(evaluate(contract, {
+    ...base,
+    text: 'Показываю варианты.',
+    links: [{ title: 'Лампа LED CORN G4' }, { title: 'Лампа LED A60 E27' }],
+    serverProductsCount: 2,
+  }).includes('neither exact product nor evidence-labelled split alternatives were returned'));
+});
+
+test('evaluate can forbid unsupported prose without rejecting evidence in product titles', () => {
+  const response = {
+    text: 'Показываю подтверждённые варианты.',
+    textBeforeProducts: 'Показываю подтверждённые варианты.',
+    productsMarkdown: '',
+    links: [{ title: 'Лампа LED CORN E27' }],
+    completed: true,
+    diagnosticError: null,
+    serverProductsCount: 1,
+  };
+  assert.deepEqual(evaluate({ forbid_assistant_text: ['E27'] }, response), []);
+  assert(evaluate({ forbid_assistant_text: ['E27'] }, {
+    ...response,
+    text: 'В каталоге есть E27.',
+  }).includes('forbidden assistant text: E27'));
+});
+
 test('evaluate validates a generic strict numeric pair around the object size', () => {
   const base = {
     text: '',
@@ -144,6 +215,31 @@ test('evaluate validates a generic strict numeric pair around the object size', 
     links: [{ title: 'Изделие 12/6 мм' }],
   });
   assert(failures.some((failure) => failure.includes('does not strictly surround 12')));
+});
+
+test('evaluate enforces a measured lower bound in every product title', () => {
+  const base = {
+    text: '',
+    textBeforeProducts: '',
+    productsMarkdown: '',
+    completed: true,
+    diagnosticError: null,
+    serverProductsCount: 2,
+  };
+  const contract = { require_every_product_measurement: { min: 100, units: ['Вт', 'W'], allow_compact_numeric: true } };
+  assert.deepEqual(evaluate(contract, {
+    ...base,
+    links: [{ title: 'Изделие 100 Вт' }, { title: 'Изделие 06-150' }],
+  }), []);
+  assert.deepEqual(evaluate(contract, {
+    ...base,
+    links: [{ title: 'Изделие 06-100' }, { title: 'Изделие 2x50' }],
+  }), []);
+  const failures = evaluate(contract, {
+    ...base,
+    links: [{ title: 'Изделие 06-100 10 Вт' }, { title: 'Изделие без мощности' }],
+  });
+  assert(failures.some((failure) => failure.startsWith('product title measurement violates contract')));
 });
 
 test('forbidden product nominal is matched as a token, not inside another nominal', () => {

@@ -1,5 +1,12 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { extractExplicitSingleLetterCodes, extractReplacementLookupKeys, productContainsSourceModel, selectExplicitAnchorAxes } from "./replacement-preflight.ts";
+import {
+  derivePortableAxisTitleRequirements, excludeMandatoryAxisCodesFromSourceModels, extractExplicitSingleLetterCodes, extractReplacementLookupKeys,
+  extractPortableTechnicalRequirements,
+  isReplacementIntent,
+  portableTechnicalCodeMatchesText, productContainsSourceModel,
+  productTitleSupportsMandatoryAxes,
+  productTitleSupportsPortableRequirements, resolveReplacementIntent, resolveReplacementSourceMessage, selectExplicitAnchorAxes,
+  shouldApplyReplacementExclusionGuard } from "./replacement-preflight.ts";
 import type { ProductRef } from "./types.ts";
 
 const anchor: ProductRef = {
@@ -26,12 +33,52 @@ Deno.test("replacement preflight extracts article and source model without measu
   });
 });
 
+Deno.test("replacement intent requires a source identifier and survives only a short continuation", () => {
+  const history = [
+    { role: "user" as const, content: "Подбери аналог Schneider Acti9 C16" },
+    { role: "assistant" as const, content: "Проверяю технические параметры замены." },
+  ];
+  assertEquals(isReplacementIntent(history[0].content), true);
+  assertEquals(isReplacementIntent("Хочу заменить люстру на светодиодное освещение"), false);
+  assertEquals(resolveReplacementIntent("покажи", history), true);
+  assertEquals(resolveReplacementSourceMessage("покажи", history), history[0].content);
+  assertEquals(resolveReplacementIntent("да, покажите варианты", history), true);
+  assertEquals(resolveReplacementIntent("покажи кабель ВВГ 3×1,5", history), false);
+  assertEquals(resolveReplacementSourceMessage("покажи кабель ВВГ 3×1,5", history), null);
+});
+
+Deno.test("replacement exclusions cannot consume technical codes from an ordinary selection", () => {
+  assertEquals(shouldApplyReplacementExclusionGuard(false, false, true), false);
+  assertEquals(shouldApplyReplacementExclusionGuard(false, true, true), false);
+  assertEquals(shouldApplyReplacementExclusionGuard(true, false, true), true);
+  assertEquals(shouldApplyReplacementExclusionGuard(true, true, false), true);
+  assertEquals(shouldApplyReplacementExclusionGuard(true, false, false), false);
+});
+
 Deno.test("replacement preflight recognizes a spaced letter-number model code", () => {
   const lookup = extractReplacementLookupKeys(
     "Модель АБ 47-29 16 А 4,5 кА — предложи равноценную замену",
   );
   assertEquals(lookup.modelCodes.includes("АБ47-29"), true);
   assertEquals(lookup.modelCodes.some((value) => /16|4,?5/u.test(value)), false);
+});
+
+Deno.test("structural lookup preserves a complete exact product identifier", () => {
+  assertEquals(extractReplacementLookupKeys(
+    "Сколько стоит батарейка NBT-CR2025-BP5 и цена указана за штуку или упаковку?",
+  ), {
+    articles: [],
+    modelCodes: ["NBT-CR2025-BP5"],
+  });
+});
+
+Deno.test("equivalent replacement preserves every portable request code across Cyrillic notation", () => {
+  assertEquals(extractPortableTechnicalRequirements(
+    "Автомат 1Р ВА 47-29 16 А 4,5кА характеристика С — предложи равноценную замену",
+  ), ["1Р", "16А", "4.5кА"]);
+  assertEquals(extractExplicitSingleLetterCodes(
+    "Автомат 1Р ВА 47-29 16 А 4,5кА характеристика С — предложи равноценную замену",
+  ), ["c"]);
 });
 
 Deno.test("replacement preflight selects only explicit live non-identity facets", () => {
@@ -98,4 +145,181 @@ Deno.test("standalone code after a parameter label becomes visible replacement e
     ["c"],
   );
   assertEquals(extractExplicitSingleLetterCodes("бренд CHINT"), []);
+});
+
+Deno.test("portable replacement requirements do not fuse adjacent measurements", () => {
+  assertEquals(
+    extractPortableTechnicalRequirements(
+      "Автомат 1Р ВА 47-29 16 А 4,5кА характеристика С до 1000 тг",
+    ),
+    ["1Р", "16А", "4.5кА"],
+  );
+  assertEquals(
+    extractPortableTechnicalRequirements("Замена лампы GX53 12Вт 220В"),
+    ["12Вт", "220В", "GX53"],
+  );
+});
+
+Deno.test("explicit live technical codes become mandatory replacement axes", () => {
+  const product: ProductRef = {
+    id: "anchor",
+    pagetitle: "Лампа ECO T75 таблетка GX53 10Вт",
+    vendor: "Vendor",
+    price: 900,
+    stock: "in_stock",
+    short_traits: ["Тип цоколя: GX53", "Форма колбы: T75", "Мощность: 10"],
+  };
+  const axes = selectExplicitAnchorAxes(product, [
+    {
+      key: "socket",
+      caption: "Тип цоколя",
+      type: "string",
+      unit: null,
+      values: [{ value: "GX53", products_count: 30 }],
+    },
+    {
+      key: "shape",
+      caption: "Форма колбы",
+      type: "string",
+      unit: null,
+      values: [{ value: "T75", products_count: 4 }],
+    },
+    {
+      key: "power",
+      caption: "Мощность",
+      type: "number",
+      unit: "Вт",
+      values: [{ value: "10", products_count: 2 }],
+    },
+  ], "Подбери аналоги для лампы ECO T75 таблетка GX53");
+
+  assertEquals(axes, [
+    {
+      key: "shape",
+      caption: "Форма колбы",
+      value: "T75",
+      total: 4,
+      mandatory: true,
+    },
+    {
+      key: "socket",
+      caption: "Тип цоколя",
+      value: "GX53",
+      total: 30,
+      mandatory: true,
+    },
+    { key: "power", caption: "Мощность", value: "10", total: 2 },
+  ]);
+});
+
+Deno.test("portable technical codes compare as whole codes, not by their digits", () => {
+  assertEquals(
+    portableTechnicalCodeMatchesText("GX53", "Лампа NLL-GX53-13-230"),
+    true,
+  );
+  assertEquals(
+    portableTechnicalCodeMatchesText(
+      "GX53",
+      "Лампа NLL-GX70-13-230; поток 1053 лм",
+    ),
+    false,
+  );
+  assertEquals(portableTechnicalCodeMatchesText("IP 44", "защита IP44"), true);
+  assertEquals(portableTechnicalCodeMatchesText("C16", "автомат С16"), true);
+  assertEquals(portableTechnicalCodeMatchesText("100W", "светильник 100Вт"), true);
+  assertEquals(portableTechnicalCodeMatchesText("220V", "напряжение 220В"), true);
+});
+
+Deno.test("near replacement cannot relax a mandatory title code", () => {
+  const axes = [
+    {
+      key: "socket",
+      caption: "Тип цоколя",
+      value: "GX53",
+      total: 30,
+      mandatory: true as const,
+    },
+    { key: "power", caption: "Мощность", value: "12", total: 8 },
+  ];
+  assertEquals(
+    productTitleSupportsMandatoryAxes("Лампа NLL-GX53-12-230", axes),
+    true,
+  );
+  assertEquals(
+    productTitleSupportsMandatoryAxes(
+      "Лампа NLL-GX70-12-230; поток 1053 лм",
+      axes,
+    ),
+    false,
+  );
+});
+
+Deno.test("a live compatibility code is not also a source-model exclusion", () => {
+  const axes = [
+    {
+      key: "socket",
+      caption: "Тип цоколя",
+      value: "GX53",
+      total: 30,
+      mandatory: true as const,
+    },
+    { key: "power", caption: "Мощность", value: "12", total: 8 },
+  ];
+  assertEquals(
+    excludeMandatoryAxisCodesFromSourceModels(["GX53", "DN027B"], axes),
+    ["DN027B"],
+  );
+});
+
+Deno.test("final replacement title contract requires every portable code", () => {
+  const requirements = ["1P", "16A", "C"];
+  assertEquals(
+    productTitleSupportsPortableRequirements(
+      "Автоматический выключатель M06N 1P 16A C ARMAT ИЭК",
+      ["1Р", "16А", "С"],
+    ),
+    true,
+  );
+  assertEquals(
+    productTitleSupportsPortableRequirements(
+      "Авт.выкл-ль iC60N 3П 16А С /A9F79316/",
+      requirements,
+    ),
+    false,
+  );
+  assertEquals(
+    productTitleSupportsPortableRequirements(
+      "Авт.выкл-ль iC60N 1П 32А С /A9F79132/",
+      requirements,
+    ),
+    false,
+  );
+});
+
+Deno.test("a complete compact customer code preserves both decoded live axes", () => {
+  assertEquals(derivePortableAxisTitleRequirements([
+    { caption: "Номинальный ток", unit: "А", values: ["16"] },
+    { caption: "Характеристика срабатывания", unit: null, values: ["C"] },
+  ], "Подбери аналог Schneider Acti9 C16"), ["16А", "C"]);
+
+  assertEquals(derivePortableAxisTitleRequirements([
+    { caption: "Номинальная мощность", unit: "кВА", values: ["10"] },
+    { caption: "Характеристика", unit: null, values: ["C"] },
+  ], "Стабилизатор ACH-10001-C"), ["10кВА"]);
+
+  assertEquals(derivePortableAxisTitleRequirements([
+    { caption: "Номинальный ток", unit: null, values: ["16"] },
+    { caption: "Характеристика срабатывания", unit: null, values: ["C"] },
+  ], "Подбери аналог Schneider Acti9 C16"), ["C"]);
+});
+
+Deno.test("live numeric axes inherit a unique explicit reasoning unit for title proof", () => {
+  assertEquals(derivePortableAxisTitleRequirements([
+    { caption: "Характеристика срабатывания", values: ["C"], unit: null },
+    { caption: "Номинальный ток", values: ["16"], unit: null },
+  ], "Ключевые параметры: характеристика С, номинальный ток 16 А."), ["C", "16А"]);
+
+  assertEquals(derivePortableAxisTitleRequirements([
+    { caption: "Номинальный ток", values: ["16"], unit: null },
+  ], "Возможны 16 А и 16 кА для разных параметров."), []);
 });

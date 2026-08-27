@@ -5,7 +5,10 @@ import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(here, '../..');
-const casesPath = path.join(here, 'customer-acceptance-cases.json');
+const casesFileArg = process.argv.find((arg) => arg.startsWith('--cases-file='))?.slice('--cases-file='.length).trim();
+const casesPath = casesFileArg
+  ? path.resolve(process.cwd(), casesFileArg)
+  : path.join(here, 'customer-acceptance-cases.json');
 export const DEFAULT_ENDPOINT = 'https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3';
 
 export function resolveEndpoint(argv = process.argv) {
@@ -45,6 +48,8 @@ const repeatOverrideRaw = process.argv.find((arg) => arg.startsWith('--repeat=')
 const repeatOverride = repeatOverrideRaw ? Number(repeatOverrideRaw) : null;
 const compactOutput = process.argv.includes('--compact');
 const minimalOutput = process.argv.includes('--minimal');
+const failuresOnlyOutput = process.argv.includes('--failures-only');
+const stopOnFailure = process.argv.includes('--stop-on-failure');
 const selected = onlyIds?.length ? suite.cases.filter((item) => onlyIds.includes(item.id)) : suite.cases;
 const missingIds = onlyIds?.filter((id) => !selected.some((item) => item.id === id)) ?? [];
 if (missingIds.length > 0) throw new Error(`Unknown case: ${missingIds.join(', ')}`);
@@ -138,6 +143,34 @@ function parseTitleNumericPair(title) {
   return { high: Math.max(first, second), low: Math.min(first, second) };
 }
 
+function titleMeasurements(title, units, allowCompactNumeric = false) {
+  const aliases = (Array.isArray(units) ? units : [])
+    .map((unit) => String(unit).trim())
+    .filter(Boolean)
+    .map((unit) => unit.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+  if (aliases.length === 0) return [];
+  const values = [];
+  const pattern = new RegExp(`(-?\\d+(?:[.,]\\d+)?)\\s*(?:${aliases.join('|')})(?![\\p{L}\\p{N}])`, 'giu');
+  for (let match; (match = pattern.exec(String(title ?? ''))) !== null;) {
+    const value = Number(match[1].replace(',', '.'));
+    if (Number.isFinite(value)) values.push(value);
+  }
+  if (values.length > 0 || !allowCompactNumeric) return values;
+  const source = String(title ?? '');
+  const multiplication = /(\d+(?:[.,]\d+)?)\s*[xх×*]\s*(\d+(?:[.,]\d+)?)/giu;
+  for (let match; (match = multiplication.exec(source)) !== null;) {
+    const left = Number(match[1].replace(',', '.'));
+    const right = Number(match[2].replace(',', '.'));
+    if (Number.isFinite(left) && Number.isFinite(right)) values.push(left * right);
+  }
+  const compact = /-(\d{2,5})(?=$|[\s/),])/gu;
+  for (let match; (match = compact.exec(source)) !== null;) {
+    const value = Number(match[1]);
+    if (Number.isFinite(value)) values.push(value);
+  }
+  return values;
+}
+
 export function evaluate(expect = {}, response) {
   const failures = [];
   const productTitles = response.links.map((link) => link.title).join('\n');
@@ -156,6 +189,9 @@ export function evaluate(expect = {}, response) {
   }
   for (const phrase of expect.forbid_text ?? []) {
     if (includesAny(allOutput, [phrase])) failures.push(`forbidden text: ${phrase}`);
+  }
+  for (const phrase of expect.forbid_assistant_text ?? []) {
+    if (includesAny(response.text, [phrase])) failures.push(`forbidden assistant text: ${phrase}`);
   }
   for (const phrase of expect.forbid_product_title ?? []) {
     if (response.links.some((link) => includesStandalonePhrase(link.title, phrase))) {
@@ -180,6 +216,19 @@ export function evaluate(expect = {}, response) {
       .map((link) => link.title);
     if (invalidTitles.length > 0) failures.push(`product titles violate required groups: ${invalidTitles.join(' | ')}`);
   }
+  if (expect.require_exact_or_split && typeof expect.require_exact_or_split === 'object') {
+    const contract = expect.require_exact_or_split;
+    const exact = Array.isArray(contract.exact_title_groups) && response.links.some((link) =>
+      matchesEveryGroup(link.title, contract.exact_title_groups)
+    );
+    const splitTitles = Array.isArray(contract.split_title_groups) && contract.split_title_groups.every((group) =>
+      Array.isArray(group) && group.length > 0 && response.links.some((link) => includesAny(link.title, group))
+    );
+    const splitText = Array.isArray(contract.split_text_groups) && matchesEveryGroup(response.text, contract.split_text_groups);
+    if (!exact && !(splitTitles && splitText)) {
+      failures.push('neither exact product nor evidence-labelled split alternatives were returned');
+    }
+  }
   if (Array.isArray(expect.forbid_every_product_title_any)) {
     const invalidTitles = response.links
       .filter((link) => includesAny(link.title, expect.forbid_every_product_title_any))
@@ -194,6 +243,19 @@ export function evaluate(expect = {}, response) {
     }).map((link) => link.title);
     if (invalidTitles.length > 0) {
       failures.push(`product title pair does not strictly surround ${reference}: ${invalidTitles.join(' | ')}`);
+    }
+  }
+  if (expect.require_every_product_measurement && typeof expect.require_every_product_measurement === 'object') {
+    const contract = expect.require_every_product_measurement;
+    const invalidTitles = response.links.filter((link) => {
+      const values = titleMeasurements(link.title, contract.units, contract.allow_compact_numeric === true);
+      return values.length === 0 || !values.some((value) =>
+        (!Number.isFinite(contract.min) || value >= contract.min) &&
+        (!Number.isFinite(contract.max) || value <= contract.max)
+      );
+    }).map((link) => link.title);
+    if (invalidTitles.length > 0) {
+      failures.push(`product title measurement violates contract: ${invalidTitles.join(' | ')}`);
     }
   }
   if (Array.isArray(expect.deprioritized_warehouses)) {
@@ -242,25 +304,61 @@ export function evaluate(expect = {}, response) {
   return failures;
 }
 
+const TRANSIENT_NETWORK_CODES = new Set([
+  'ECONNRESET',
+  'ETIMEDOUT',
+  'EAI_AGAIN',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_SOCKET',
+]);
+
+function isTransientNetworkError(error) {
+  const code = error?.code ?? error?.cause?.code;
+  return TRANSIENT_NETWORK_CODES.has(code) || /(?:terminated|fetch failed|socket|timeout)/iu.test(String(error?.message ?? ''));
+}
+
+export async function fetchAcceptanceTurn(payload, {
+  fetchImpl = fetch,
+  maxAttempts = 2,
+  retryDelayMs = 500,
+} = {}) {
+  let lastError;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetchImpl(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+          apikey: apiKey,
+        },
+        body: JSON.stringify(payload),
+      });
+      const raw = await response.text();
+      return { response, raw, attempts: attempt };
+    } catch (error) {
+      lastError = error;
+      if (attempt >= maxAttempts || !isTransientNetworkError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs * attempt));
+    }
+  }
+  throw lastError;
+}
+
 async function runTurn({ message, expect }, state) {
   const startedAt = Date.now();
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-      apikey: apiKey,
-    },
-    body: JSON.stringify({
-      message,
-      messageId: crypto.randomUUID(),
-      sessionId: state.sessionId,
-      history: state.history.slice(-10),
-      stream: true,
-      dialogSlots: {},
-    }),
+  const payload = {
+    message,
+    messageId: crypto.randomUUID(),
+    sessionId: state.sessionId,
+    history: state.history.slice(-10),
+    stream: true,
+    dialogSlots: {},
+  };
+  const { response, raw, attempts } = await fetchAcceptanceTurn(payload, {
+    maxAttempts: 2,
+    retryDelayMs: 500,
   });
-  const raw = await response.text();
   const parsed = parseSse(raw);
   const failures = response.ok ? evaluate(expect, parsed) : [`HTTP ${response.status}`];
   const combined = [parsed.text, parsed.productsMarkdown].filter(Boolean).join('\n\n');
@@ -273,6 +371,7 @@ async function runTurn({ message, expect }, state) {
     message,
     status: response.status,
     duration_ms: Date.now() - startedAt,
+    network_attempts: attempts,
     log_id: parsed.logId,
     diagnostic_error: parsed.diagnosticError,
     products_count: parsed.links.length,
@@ -305,10 +404,12 @@ export async function main() {
       const turns = [];
       for (const turn of testCase.turns) turns.push(await runTurn(turn, state));
       caseResult.repeats.push({ run, session_id: state.sessionId, turns, passed: turns.every((turn) => turn.passed) });
+      if (stopOnFailure && !caseResult.repeats.at(-1).passed) break;
     }
     caseResult.passed = caseResult.repeats.every((run) => run.passed);
     report.cases.push(caseResult);
     process.stderr.write(`${testCase.id}: ${caseResult.passed ? 'PASS' : 'FAIL'}\n`);
+    if (stopOnFailure && !caseResult.passed) break;
   }
 
   report.finished_at = new Date().toISOString();
@@ -355,6 +456,14 @@ export async function main() {
         })),
       }
     : report;
+  if (failuresOnlyOutput) {
+    output.cases = output.cases
+      .filter((testCase) => !testCase.passed)
+      .map((testCase) => ({
+        ...testCase,
+        repeats: testCase.repeats.filter((repeat) => !repeat.passed),
+      }));
+  }
   console.log(JSON.stringify(output, null, 2));
   if (!report.passed) process.exitCode = 1;
 }

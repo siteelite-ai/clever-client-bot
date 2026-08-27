@@ -1,7 +1,12 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  aliasDuplicatesCatalogClass,
+  aliasDuplicatesIndependentCatalogClass,
+  declaredAliasIsStructurallyCustomerOwned,
   extractDeclaredCatalogAlias,
   extractPostNominalCatalogQualifier,
+  filterProductsByDeclaredAlias,
+  retainRequiredCatalogAlias,
   titleContainsDeclaredAlias,
 } from "./declared-alias-contract.ts";
 
@@ -47,9 +52,54 @@ Deno.test("literal alias proof uses complete title words", () => {
   assertEquals(titleContainsDeclaredAlias("Лампа кукурузная LED", "кукуруза"), false);
 });
 
+Deno.test("a mixed pool keeps only cards with literal qualifier evidence", () => {
+  const products = [
+    { id: "proved", pagetitle: "Generic component AX 12/6" },
+    { id: "sibling", pagetitle: "Generic component BX 12/6" },
+  ];
+  assertEquals(filterProductsByDeclaredAlias(products, "AX").map((item) => item.id), ["proved"]);
+});
+
+Deno.test("a grounded lexical spelling remains required through later criteria gates", () => {
+  assertEquals(retainRequiredCatalogAlias(null, "CORN"), "CORN");
+  assertEquals(retainRequiredCatalogAlias("кукуруза", "CORN"), "кукуруза");
+  assertEquals(retainRequiredCatalogAlias(null, "  "), null);
+});
+
+Deno.test("an inflected product class is not treated as a separate alias", () => {
+  assertEquals(aliasDuplicatesCatalogClass("прожекторы", ["Прожекторы", "прожектор"]), true);
+  assertEquals(aliasDuplicatesCatalogClass("кукуруза", ["Лампы", "светодиодная лампа"]), false);
+});
+
+Deno.test("a model-expanded target cannot discharge its own alias", () => {
+  assertEquals(aliasDuplicatesCatalogClass("кукуруза", ["лампа кукуруза"]), true);
+  assertEquals(aliasDuplicatesIndependentCatalogClass("кукуруза", "Лампы", "лампа"), false);
+});
+
 Deno.test("a post-nominal customer qualifier is lexical evidence, not application context", () => {
   assertEquals(extractPostNominalCatalogQualifier("а у тебя есть лампы кукуруза?", "лампа"), "кукуруза");
   assertEquals(extractPostNominalCatalogQualifier("покажи кабели VVGng", "кабель"), "vvgng");
   assertEquals(extractPostNominalCatalogQualifier("нужен светильник для гостиной", "светильник"), null);
   assertEquals(extractPostNominalCatalogQualifier("найди термоусадку 12 мм", "термоусадка"), null);
+  assertEquals(extractPostNominalCatalogQualifier("покажи прожекторы мощностью от 100 Вт", "прожекторы"), null);
+  assertEquals(extractPostNominalCatalogQualifier("нужен провод длиной 50 м", "провод"), null);
+  assertEquals(extractPostNominalCatalogQualifier("покажи розетки серии Гармония", "розетки"), null);
+});
+
+Deno.test("live taxonomy separates a customer alias from application wording", () => {
+  assertEquals(declaredAliasIsStructurallyCustomerOwned(
+    "кукуруза",
+    "а у тебя есть лампы кукуруза?",
+    "Лампы",
+  ), true);
+  assertEquals(declaredAliasIsStructurallyCustomerOwned(
+    "кукуруза",
+    "есть кукуруза?",
+    "Лампы",
+  ), true);
+  assertEquals(declaredAliasIsStructurallyCustomerOwned(
+    "освещение",
+    "Хочу заменить люстру на светодиодное освещение в гостиной 25 м²",
+    "Светильники",
+  ), false);
 });

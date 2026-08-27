@@ -55,11 +55,41 @@ export function extractRenderedProductTitles(
   return out;
 }
 
+/**
+ * Keep prior consultant reasoning separate from rendered catalog data. The
+ * client stores both in one assistant history message; feeding card titles,
+ * prices and stock lines back into a reasoning compiler can manufacture new
+ * criteria from SKU digits. Only controlled 220volt product blocks and their
+ * indented metadata are removed; ordinary prose is preserved verbatim.
+ */
+export function extractPriorAssistantProse(
+  history: EvidenceHistoryMessage[],
+  limit = 4,
+): string {
+  return history
+    .filter((message) => message.role === "assistant")
+    .slice(-Math.max(1, limit))
+    .map((message) => message.content.replace(
+      /(?:^|\n)-\s+\*\*\[[^\]\r\n]{1,300}\]\(https:\/\/220volt\.kz\/catalog\/[^)\s]+\)\*\*(?:\n {2}[^\r\n]*)*/giu,
+      "\n",
+    ).replace(/\n{3,}/gu, "\n\n").trim())
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function isEvidenceOnlyFollowup(message: string): boolean {
   const normalized = cleanText(message, 800).toLowerCase().replace(/ё/g, "е");
   if (!normalized) return false;
   if (/(?:^|\s)(?:подбери|подобрать|найди|найти|покажи|предложи|добавь)(?:\s|$)/u.test(normalized)) return false;
   return /(?:почему|точно|сравн|характерист|единиц|цена|остат|подход|этот|эта|эти|вариант)/u.test(normalized);
+}
+
+/** A short imperative that refers to the already rendered batch. It is kept
+ * separate from a new catalog selection: callers must have recent server-side
+ * evidence and must refresh every card before rendering it again. */
+export function isRecentProductShowFollowup(message: string): boolean {
+  const normalized = cleanText(message, 800).toLowerCase().replace(/ё/g, "е");
+  return /^(?:(?:да|хорошо|ладно|ок|давай|тогда|ну|пожалуйста|можно)\s+)*(?:покаж\p{L}*|вывед\p{L}*)(?:\s+(?:(?:их|эти|те)(?:\s+(?:варианты|товары|ссылки?))?|варианты|товары|найденные|предложенные|ссылки?))?$/u.test(normalized);
 }
 
 /**

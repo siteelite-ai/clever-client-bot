@@ -229,10 +229,16 @@ export function shouldAllowCorrectiveDiscovery(input: {
   phase: AgentPhase;
   alreadyUsed: boolean;
   hasFreshSearch: boolean;
+  previousCategoryGrounded?: boolean;
   previousNoun: string;
   requestedNoun: string;
 }): boolean {
-  if (input.phase !== "search_after_discovery" || input.alreadyUsed || input.hasFreshSearch) return false;
+  if (
+    input.phase !== "search_after_discovery" ||
+    input.alreadyUsed ||
+    input.hasFreshSearch ||
+    input.previousCategoryGrounded
+  ) return false;
   const previous = normalize(input.previousNoun);
   const requested = normalize(input.requestedNoun);
   return Boolean(previous && requested && previous !== requested);

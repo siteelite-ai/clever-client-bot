@@ -332,6 +332,60 @@ const MAX_SORT_FETCH = 200; // 4 страницы × 50 — потолок за�
 const MAX_OPTION_ALTERNATIVE_REQUESTS = 24;
 
 /**
+ * The upstream pagination total counts raw rows, while the tool contract only
+ * exposes cards that can actually be rendered (positive price, stable id/title
+ * and a controlled deep link). A page can therefore report `total > 0` and
+ * still materialise zero products. Treating that as a successful pool makes
+ * the agent loop over empty render calls.
+ *
+ * On that mismatch, scan a bounded 200-row window. If a later page contains
+ * usable cards, return them with the upstream total. If the whole window is
+ * unusable, expose total=0 so the ordinary query/category recovery can run.
+ */
+async function recoverUnmaterializedCatalogWindow(
+  input: SearchCatalogInput,
+  primary: Extract<SingleSearchResult, { ok: true }>,
+  deps: CatalogClientDeps,
+  cache: ProductCache,
+  categoryOverride: string | undefined,
+  warnings: string[],
+): Promise<SingleSearchResult> {
+  if (primary.total <= 0 || primary.results.length > 0) return primary;
+
+  const requestedPerPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
+  const pagesToScan = Math.max(1, Math.ceil(Math.min(primary.total, MAX_SORT_FETCH) / SORT_PAGE_SIZE));
+  const recoveredById = new Map<string, ProductRef>();
+
+  // Use a stable 50-row page size for the recovery window. Requests are
+  // sequential and stop on the first page with usable cards, so a malformed
+  // category cannot create an unbounded fan-out or add avoidable latency.
+  for (let page = 1; page <= pagesToScan && recoveredById.size === 0; page++) {
+    const candidatePage = await singleSearch(
+      { ...input, per_page: SORT_PAGE_SIZE, page },
+      deps,
+      cache,
+      categoryOverride,
+    );
+    if (!candidatePage.ok) {
+      if (candidatePage.error_code === "rate_limited") break;
+      continue;
+    }
+    for (const product of candidatePage.results) {
+      if (!recoveredById.has(product.id)) recoveredById.set(product.id, product);
+    }
+  }
+
+  const recovered = [...recoveredById.values()].slice(0, requestedPerPage);
+  if (recovered.length > 0) {
+    warnings.push(`catalog_materialization_recovered:${recovered.length}/${primary.total}`);
+    return { ok: true, total: primary.total, results: recovered };
+  }
+
+  warnings.push(`catalog_unmaterialized_total:${primary.total}`);
+  return { ok: true, total: 0, results: [] };
+}
+
+/**
  * The catalog endpoint does not reliably implement OR for repeated
  * `options[key][]` values: an exact range compiled from live facet values can
  * return zero although every individual value exists. Compile OR-within-a-
@@ -363,7 +417,16 @@ async function singleSearchSorted(
   warnings: string[],
 ): Promise<SingleSearchResult> {
   if (!input.sort_cheapest && !input.sort_expensive) {
-    return singleSearch(input, deps, cache, categoryOverride);
+    const primary = await singleSearch(input, deps, cache, categoryOverride);
+    if (!primary.ok) return primary;
+    return recoverUnmaterializedCatalogWindow(
+      input,
+      primary,
+      deps,
+      cache,
+      categoryOverride,
+      warnings,
+    );
   }
   const requestedPerPage = Math.min(Math.max(input.per_page ?? 10, 1), 50);
   // Первая страница — узнаём total.
@@ -397,6 +460,10 @@ async function singleSearchSorted(
   const sorted = [...byId.values()].sort(cmp);
   if (totalApi > MAX_SORT_FETCH) {
     warnings.push(`sort_truncated:${totalApi}>${MAX_SORT_FETCH}`);
+  }
+  if (totalApi > 0 && sorted.length === 0) {
+    warnings.push(`catalog_unmaterialized_total:${totalApi}`);
+    return { ok: true, total: 0, results: [] };
   }
   return { ok: true, total: totalApi, results: sorted.slice(0, requestedPerPage) };
 }

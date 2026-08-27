@@ -41,10 +41,58 @@ export function titleContainsDeclaredAlias(title: string, alias: string): boolea
   return Boolean(needle && haystack.includes(` ${needle} `));
 }
 
+/** A mixed candidate pool must be narrowed to the cards that independently
+ * prove the customer's literal qualifier; one unrelated neighbour must not
+ * invalidate the proven subset. */
+export function filterProductsByDeclaredAlias<T extends { pagetitle: string }>(
+  products: T[],
+  alias: string,
+): T[] {
+  return (Array.isArray(products) ? products : []).filter((product) =>
+    titleContainsDeclaredAlias(product.pagetitle, alias)
+  );
+}
+
+/** A grounded canonical spelling remains mandatory until final cards pass all
+ * independent criteria; an earlier invariant outranks a later helper result. */
+export function retainRequiredCatalogAlias(current: string | null, matchedQuery: string): string | null {
+  const retained = String(current ?? "").trim();
+  if (retained) return retained;
+  const grounded = String(matchedQuery ?? "").trim();
+  return grounded || null;
+}
+
+/** A qualifier is not an alias when it merely repeats the already grounded
+ * product class with another inflection (for example plural customer wording
+ * versus singular catalog titles). Real colloquial names remain distinct. */
+export function aliasDuplicatesCatalogClass(alias: string, classes: Array<string | null | undefined>): boolean {
+  const aliasTokens = normalize(alias).split(" ").filter(Boolean);
+  if (aliasTokens.length === 0) return false;
+  return classes.some((value) => {
+    const classTokens = normalize(String(value ?? "")).split(" ").filter(Boolean);
+    return classTokens.length > 0 && aliasTokens.every((aliasToken) =>
+      classTokens.some((classToken) => inflectionStem(aliasToken) === inflectionStem(classToken))
+    );
+  });
+}
+
+/** Only independently discovered class labels may discharge an alias. A
+ * model-generated selection target is intentionally not accepted here. */
+export function aliasDuplicatesIndependentCatalogClass(
+  alias: string,
+  liveTaxonomy: string | null | undefined,
+  discoveryNoun: string | null | undefined,
+): boolean {
+  return aliasDuplicatesCatalogClass(alias, [liveTaxonomy, discoveryNoun]);
+}
+
 const POST_NOMINAL_STOP = new Set([
   "для", "под", "с", "со", "без", "на", "в", "во", "из", "к", "по", "до", "от",
   "есть", "имеется", "нужен", "нужна", "нужно", "нужны", "покажи", "найди", "ищу",
   "самый", "самая", "дешевый", "дешевая", "дешевые",
+  // Relational markers introduce a separately parsed entity; they are not a
+  // customer nickname for the product class itself.
+  "серия", "серии", "серий", "коллекция", "коллекции", "линейка", "линейки",
 ]);
 
 function inflectionStem(token: string): string {
@@ -71,13 +119,48 @@ export function extractPostNominalCatalogQualifier(
   for (let index = 0; index < tokens.length - 1; index += 1) {
     if (inflectionStem(tokens[index]) !== nounStem) continue;
     const candidate = tokens[index + 1];
+    const following = tokens.slice(index + 2, index + 5);
+    const measurementTail = /^\d/u.test(following[0] ?? "") ||
+      /^(?:от|до|более|менее|свыше|не)$/u.test(following[0] ?? "") &&
+        following.slice(1).some((token) => /^\d/u.test(token));
     if (
       candidate.length < 3 ||
       /^\d/u.test(candidate) ||
       POST_NOMINAL_STOP.has(candidate) ||
-      inflectionStem(candidate) === nounStem
+      inflectionStem(candidate) === nounStem ||
+      measurementTail
     ) continue;
     return candidate;
   }
   return null;
+}
+
+const REQUEST_SCAFFOLD = new Set([
+  ...POST_NOMINAL_STOP,
+  "а", "у", "ты", "тебя", "вы", "вас", "мне", "нам", "ли", "это", "такой", "такая", "такие",
+  "мой", "моя", "для", "заменить", "замени", "хочу", "можно", "пожалуйста",
+]);
+
+/** A consultant declaration may preserve customer vocabulary, but it cannot
+ * turn an application phrase into a catalog alias. Once live taxonomy is
+ * available, a genuine alias must either be the qualifier immediately bound
+ * to that customer-stated class ("лампа кукуруза") or be the only substantive
+ * phrase in a short standalone request ("есть кукуруза?"). */
+export function declaredAliasIsStructurallyCustomerOwned(
+  alias: string,
+  customerText: string,
+  discoveredClass: string,
+): boolean {
+  const wanted = normalize(alias);
+  if (!wanted) return false;
+  const qualifier = extractPostNominalCatalogQualifier(customerText, discoveredClass);
+  if (normalize(qualifier ?? "") === wanted) return true;
+
+  const substantive = normalize(customerText).split(" ").filter((token) =>
+    token &&
+    !REQUEST_SCAFFOLD.has(token) &&
+    !/^\d/u.test(token) &&
+    !/^(?:м|мм|см|м2|м3|вт|квт|а|в|лм|тг|тенге)$/u.test(token)
+  );
+  return substantive.join(" ") === wanted;
 }

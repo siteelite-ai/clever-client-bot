@@ -1,11 +1,14 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   dropAffirmativeBooleanFilters,
+  dropImplicitReplacementIdentityCriteria,
   dropImplicitReplacementIdentityFilters,
+  explicitReplacementIdentityValues,
   explicitReplacementModelValues,
-  inferReplacementIdentityValues,
-  productMatchesExcludedReplacementIdentity,
   guardSearchFilters,
+  inferReplacementIdentityValues,
+  isReplacementIdentityFacet,
+  productMatchesExcludedReplacementIdentity,
 } from "./search-filter-guard.ts";
 
 const facets = [
@@ -60,6 +63,27 @@ Deno.test("filter guard drops unknown facet keys and values", () => {
   );
   assertEquals(result.args, { mode: "by_filter" });
   assertEquals(result.dropped.map((item) => item.reason), ["unknown_facet", "unknown_value"]);
+});
+
+Deno.test("list-like catalog metadata cannot become a product filter", () => {
+  const keywordDump = Array.from(
+    { length: 12 },
+    (_, index) => `стабилизатор вариант ${index + 1}`,
+  ).join(",");
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { keywords: [keywordDump] } },
+    [{
+      key: "keywords",
+      caption: "Поисковый запрос",
+      values: [{ value: keywordDump }],
+    }],
+    `В данных кандидата встретилось поле «Поисковый запрос»: ${keywordDump}`,
+    "Подбери аналог модели AX-100",
+  );
+
+  assertEquals(result.args, { mode: "by_filter" });
+  assertEquals(result.dropped.map((item) => item.reason), ["non_atomic_value"]);
+  assertEquals(result.inferred, []);
 });
 
 Deno.test("filter guard accepts a criterion declared by the consultant", () => {
@@ -369,4 +393,260 @@ Deno.test("analog render excludes identity values removed from search even witho
     vendor: "CHINT",
     short_traits: ["Характеристика: C"],
   }, ["GENERICA"]), false);
+});
+
+Deno.test("analog render criteria drop source brand and collection", () => {
+  const result = dropImplicitReplacementIdentityCriteria([
+    { key: "Количество полюсов", value: "1" },
+    { key: "Коллекция", value: "Acti9" },
+    { key: "Бренд", value: "Schneider Electric" },
+    { key: "Номинальный ток", value: "16" },
+  ], [
+    { key: "poles", caption: "Количество полюсов", values: [{ value: "1" }] },
+    { key: "collection", caption: "Коллекция", values: [{ value: "Acti9" }] },
+    {
+      key: "brand",
+      caption: "Бренд",
+      values: [{ value: "Schneider Electric" }],
+    },
+    { key: "current", caption: "Номинальный ток", values: [{ value: "16" }] },
+  ], "Подбери более дешевые аналоги Schneider Electric Acti9 1P 16A C");
+
+  assertEquals(result.criteria, [
+    { key: "Количество полюсов", value: "1" },
+    { key: "Номинальный ток", value: "16" },
+  ]);
+  assertEquals(result.removed.map((criterion) => criterion.key), [
+    "Коллекция",
+    "Бренд",
+  ]);
+});
+
+Deno.test("localized live identity captions are recognized without English machine keys", () => {
+  assertEquals(isReplacementIdentityFacet({ key: "kollekciya__seriya", caption: "Коллекция (серия)" }), true);
+  assertEquals(isReplacementIdentityFacet({ key: "proizvoditel", caption: "Производитель товара" }), true);
+
+  const result = dropImplicitReplacementIdentityCriteria([
+    { key: "Коллекция (серия)", value: "Acti9" },
+    { key: "Номинальный ток", value: "16" },
+  ], [
+    { key: "kollekciya__seriya", caption: "Коллекция (серия)", values: [{ value: "Acti9" }] },
+    { key: "nominalnyj_tok", caption: "Номинальный ток", values: [{ value: "16" }] },
+  ], "Подбери аналог Schneider Acti9 C16");
+
+  assertEquals(result.criteria, [{ key: "Номинальный ток", value: "16" }]);
+  assertEquals(result.removed, [{ key: "Коллекция (серия)", value: "Acti9" }]);
+});
+
+Deno.test("explicit reasoning completes omitted live technical filters but not identity", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { collection: ["Acti9"] } },
+    [
+      {
+        key: "poles",
+        caption: "Количество полюсов",
+        values: [{ value: "1" }, { value: "2" }, { value: "3" }],
+      },
+      {
+        key: "current",
+        caption: "Номинальный ток",
+        values: [{ value: "10" }, { value: "16" }, { value: "25" }],
+      },
+      {
+        key: "curve",
+        caption: "Характеристика срабатывания",
+        values: [{ value: "B" }, { value: "C" }, { value: "D" }],
+      },
+      { key: "collection", caption: "Коллекция", values: [{ value: "Acti9" }] },
+    ],
+    "Ключевые параметры: 1 полюс, номинальный ток 16 А, характеристика срабатывания C. Коллекция Acti9 — источник.",
+    "Подбери аналоги Schneider Electric Acti9 1P 16A C",
+  );
+
+  assertEquals(result.args.options, {
+    collection: ["Acti9"],
+    poles: ["1"],
+    current: ["16"],
+    curve: ["C"],
+  });
+  assertEquals(result.inferred, [
+    { key: "curve", value: "C" },
+    { key: "poles", value: "1" },
+    { key: "current", value: "16" },
+  ]);
+});
+
+Deno.test("one measured number cannot populate a different numeric facet", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { power: ["10"] } },
+    [
+      { key: "power", caption: "Номинальная мощность, кВа", values: [{ value: "10" }] },
+      { key: "current", caption: "Номинальный ток, А", values: [{ value: "10" }] },
+    ],
+    "Ключевой параметр — номинальная мощность 10 кВА.",
+    "Подбери аналог модели AX-100.",
+  );
+
+  assertEquals(result.args.options, { power: ["10"] });
+  assertEquals(result.inferred, []);
+});
+
+Deno.test("an area value cannot become power even near product wording", () => {
+  const lightFacets = [{
+    key: "power",
+    caption: "Мощность ламп, Вт",
+    unit: "Вт",
+    values: [{ value: "25" }, { value: "40" }],
+  }];
+  const reasoning = "Для комнаты 25 м² рассчитываю 3750–5000 лм и выбираю светильник без сменных ламп.";
+
+  assertEquals(guardSearchFilters(
+    { mode: "by_filter", options: { power: ["25"] } },
+    lightFacets,
+    reasoning,
+    "Комната 25 м²",
+  ).args.options, undefined);
+  assertEquals(guardSearchFilters(
+    { mode: "by_filter" },
+    lightFacets,
+    reasoning,
+    "Комната 25 м²",
+  ).args.options, undefined);
+});
+
+Deno.test("a measured lighting target cannot become a later unitless lamp count", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { lamp_count: ["150"] } },
+    [{ key: "lamp_count", caption: "Количество ламп", values: [{ value: "1" }, { value: "150" }] }],
+    "Для гостиной базовый ориентир 150–200 лк, нужен световой поток 3750–5000 лм. Тип лампы — LED.",
+    "Гостиная 25 м².",
+  );
+  assertEquals(result.args.options, undefined);
+  assertEquals(result.dropped, [{ key: "lamp_count", value: "150", reason: "not_declared_in_reasoning" }]);
+});
+
+Deno.test("a matching measurement unit proves an exact numeric facet value", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { current: ["16"] } },
+    [{ key: "current", caption: "Номинальный ток, А", unit: "А", values: [{ value: "16" }] }],
+    "Для нагрузки выбираю 16 А.",
+    "Нужно 16 А.",
+  );
+  assertEquals(result.args.options, { current: ["16"] });
+});
+
+Deno.test("directional reasoning rejects equality to the measured reference", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { before: ["12"] } },
+    [{ key: "before", caption: "Размер до изменения, мм", unit: "мм", values: [{ value: "12" }, { value: "16" }] }],
+    "Изделие до изменения должно быть строго больше 12 мм.",
+    "Объект размером 12 мм.",
+  );
+  assertEquals(result.args.options, undefined);
+  assertEquals(result.dropped, [{ key: "before", value: "12", reason: "not_declared_in_reasoning" }]);
+});
+
+Deno.test("discovery cannot copy an application measurement into product-state facets before reasoning", () => {
+  const user = "Подбери изделие на объект диаметром 10 мм.";
+  const result = guardSearchFilters(
+    { mode: "by_filter" },
+    [
+      { key: "before", caption: "Внутренний диаметр до изменения, мм", unit: "мм", values: [{ value: "10" }, { value: "12" }] },
+      { key: "after", caption: "Внутренний диаметр после изменения, мм", unit: "мм", values: [{ value: "6" }, { value: "10" }] },
+    ],
+    user,
+    user,
+    "",
+  );
+  assertEquals(result.args.options, undefined);
+  assertEquals(result.inferred, []);
+});
+
+Deno.test("an application measurement cannot become a user-backed product-state equality", () => {
+  const facets = [{
+    key: "before",
+    caption: "Внутренний диаметр до изменения, мм",
+    unit: "мм",
+    values: [{ value: "10" }, { value: "12" }],
+  }];
+  const inferred = guardSearchFilters(
+    { mode: "by_filter", options: { before: ["10"] } },
+    facets,
+    "Для свободной посадки сначала проверю внутренний диаметр до изменения 10 мм.",
+    "Объект диаметром 10 мм.",
+  );
+  assertEquals(inferred.args.options, { before: ["10"] });
+  assertEquals(inferred.user_backed, []);
+
+  const explicit = guardSearchFilters(
+    { mode: "by_filter", options: { before: ["10"] } },
+    facets,
+    "Нужен внутренний диаметр до изменения 10 мм.",
+    "Нужен внутренний диаметр до изменения 10 мм.",
+  );
+  assertEquals(explicit.user_backed, [{ key: "before", value: "10" }]);
+});
+
+Deno.test("one-letter technical value is inferred only with its facet meaning", () => {
+  const facets = [{
+    key: "curve",
+    caption: "Характеристика срабатывания",
+    values: [{ value: "Тип B" }, { value: "Тип C" }, { value: "Тип D" }],
+  }];
+  assertEquals(guardSearchFilters(
+    { mode: "by_filter" },
+    facets,
+    "Ключевой параметр: характеристика С.",
+    "Подбери аналог QX-20",
+  ).args.options, { curve: ["Тип C"] });
+  assertEquals(guardSearchFilters(
+    { mode: "by_filter" },
+    facets,
+    "Подбираю автомат с хорошим запасом.",
+    "Подбери аналог QX-20",
+  ).args.options, undefined);
+});
+
+Deno.test("an explicit unitless number is completed only for its locally named facet", () => {
+  const user = "Найди автомат 1 полюсной на 16 А, характеристика C";
+  const result = guardSearchFilters(
+    { mode: "by_filter" },
+    [
+      {
+        key: "poles",
+        caption: "Количество полюсов",
+        values: [{ value: "1" }, { value: "2" }, { value: "3" }],
+      },
+      {
+        key: "pack",
+        caption: "Количество в упаковке",
+        values: [{ value: "1" }, { value: "10" }],
+      },
+    ],
+    user,
+    user,
+    "",
+  );
+
+  assertEquals(result.args.options, { poles: ["1"] });
+  assertEquals(result.user_backed, [{ key: "poles", value: "1" }]);
+  assertEquals(result.inferred, [{ key: "poles", value: "1" }]);
+});
+
+Deno.test("ordinary replacement excludes explicitly named source brand and collection", () => {
+  assertEquals(
+    explicitReplacementIdentityValues([
+      {
+        key: "brand",
+        caption: "Бренд",
+        values: [{ value: "Schneider Electric" }, { value: "IEK" }],
+      },
+      {
+        key: "collection",
+        caption: "Коллекция",
+        values: [{ value: "Acti9" }, { value: "EASY9" }],
+      },
+    ], "Подбери аналоги Schneider Electric Acti9 1P 16A C"),
+    ["Schneider Electric", "Acti9"],
+  );
 });

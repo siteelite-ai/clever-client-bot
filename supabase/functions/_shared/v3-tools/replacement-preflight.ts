@@ -7,11 +7,90 @@ export interface ExplicitReplacementAxis {
   caption: string;
   value: string;
   total: number;
+  /** A customer-visible technical code that must survive near-match recovery. */
+  mandatory?: true;
+}
+
+export function productTitleSupportsMandatoryAxes(
+  productTitle: string,
+  axes: ExplicitReplacementAxis[],
+): boolean {
+  return axes
+    .filter((axis) => axis.mandatory)
+    .every((axis) =>
+      portableTechnicalCodeMatchesText(axis.value, productTitle)
+    );
+}
+
+export function excludeMandatoryAxisCodesFromSourceModels(
+  modelCodes: string[],
+  axes: ExplicitReplacementAxis[],
+): string[] {
+  const mandatory = axes.filter((axis) => axis.mandatory);
+  return modelCodes.filter((code) =>
+    !mandatory.some((axis) =>
+      portableTechnicalCodeMatchesText(axis.value, code)
+    )
+  );
 }
 
 export interface ReplacementLookupKeys {
   articles: string[];
   modelCodes: string[];
+}
+
+export interface ReplacementDialogueMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/** Detect an alternative request only when the same phrase also identifies
+ * the source product structurally. Broad redesign requests stay ordinary. */
+export function isReplacementIntent(message: string): boolean {
+  const value = norm(message);
+  const trigger = /(?:^| )(?:аналог\p{L}*|альтернатив\p{L}*|похож\p{L}*|замен\p{L}*|вместо|взамен)(?: |$)/u.test(value);
+  if (!trigger) return false;
+  const tokens = String(message).match(/[a-zа-я0-9][a-zа-я0-9-]{2,}/giu) ?? [];
+  const hasAlphaNumericAnchor = tokens.some((token) => /\p{L}/u.test(token) && /\d/u.test(token));
+  return hasAlphaNumericAnchor || /\b\d{4,}\b/u.test(value) || /«[^»]{2,}»|"[^"]{2,}"/u.test(message);
+}
+
+/** Replacement-only exclusions must never run merely because an ordinary
+ * product request contains two technical codes. Those codes are positive
+ * selection criteria outside replacement mode, not evidence of a source SKU
+ * that should be removed from the result. */
+export function shouldApplyReplacementExclusionGuard(
+  replacementIntent: boolean,
+  hasAnchor: boolean,
+  hasIdentityExclusions: boolean,
+): boolean {
+  return replacementIntent && (hasAnchor || hasIdentityExclusions);
+}
+
+/** Carry replacement mode through a short confirmation/show command only.
+ * Substantive new wording breaks inheritance and starts ordinary routing. */
+export function resolveReplacementIntent(
+  message: string,
+  recentDialogue: ReplacementDialogueMessage[],
+): boolean {
+  return resolveReplacementSourceMessage(message, recentDialogue) !== null;
+}
+
+/** Returns the authoritative source request for replacement guards. */
+export function resolveReplacementSourceMessage(
+  message: string,
+  recentDialogue: ReplacementDialogueMessage[],
+): string | null {
+  if (isReplacementIntent(message)) return message;
+  const followup = norm(message);
+  if (!/^(?:(?:да|хорошо|ладно|ок|okay|давай|тогда|ну|пожалуйста|можно) )*(?:покаж\p{L}*|предлож\p{L}*|давай|продолж\p{L}*)(?: (?:их|эти|варианты|товары|подходящие|найденные|предложенные|ссылки?))?$/u.test(followup)) {
+    return null;
+  }
+  for (const fragment of [...recentDialogue].reverse()) {
+    if (fragment.role !== "user") continue;
+    return isReplacementIntent(fragment.content) ? fragment.content : null;
+  }
+  return null;
 }
 
 /** Compact variant/curve/class codes are often visible in titles even when
@@ -21,7 +100,43 @@ export function extractExplicitSingleLetterCodes(message: string): string[] {
   const matches = [...String(message ?? "").matchAll(
     /(?<![\p{L}\p{N}])\p{L}{4,}(?:\s+\p{L}{4,}){0,2}\s*[:=–—-]?\s+([A-ZА-ЯЁ])(?![\p{L}\p{N}])/gu,
   )];
-  return distinct(matches.map((match) => codeNorm(match[1])));
+  return distinct(matches.map((match) => visualCodeNorm(match[1])));
+}
+
+/**
+ * Extracts technical requirements that can legitimately survive a change of
+ * product identity. The grammar accepts compact letter/number standards and
+ * numeric values with units, but rejects SKU-shaped codes and a false code
+ * formed across two adjacent measurements (for example `16 А 4,5 кА`).
+ */
+export function extractPortableTechnicalRequirements(message: string): string[] {
+  const source = String(message ?? "");
+  const out: string[] = [];
+  const add = (raw: string) => {
+    const clean = raw.replace(/\s+/gu, "").replace(/,/gu, ".").trim();
+    const normalized = codeNorm(clean);
+    if (!normalized || normalized.includes("-")) return;
+    if (!/\p{L}/u.test(normalized) || !/\d/u.test(normalized)) return;
+    if (/^\d+(?:\.\d+)?(?:тг|тенге|kzt)$/iu.test(normalized)) return;
+    if (/^\d+(?:\.\d+)?\p{L}{1,5}$/u.test(normalized) || normalized.length <= 4) {
+      out.push(clean);
+    }
+  };
+
+  for (const match of source.matchAll(
+    /(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?\s*(?:[\p{L}]{1,5}|мм²|мм2)(?![\p{L}\p{N}])/giu,
+  )) add(match[0]);
+
+  for (const match of source.matchAll(
+    /(?<![\p{L}\p{N}])[\p{L}]{1,5}\s*\d{1,5}[\p{L}\d.-]*(?![\p{L}\p{N}])/giu,
+  )) {
+    const prefix = source.slice(0, match.index ?? 0);
+    if (/\d+(?:[.,]\d+)?\s*$/u.test(prefix)) continue;
+    add(match[0]);
+  }
+  return distinct(out.map((value) => codeNorm(value)))
+    .map((normalized) => out.find((value) => codeNorm(value) === normalized)!)
+    .filter(Boolean);
 }
 
 function norm(value: string): string {
@@ -35,6 +150,164 @@ function norm(value: string): string {
 
 function codeNorm(value: string): string {
   return norm(value).replace(/\s+/gu, "");
+}
+
+function visualCodeNorm(value: string): string {
+  const lookalikes: Record<string, string> = {
+    а: "a",
+    в: "b",
+    е: "e",
+    к: "k",
+    м: "m",
+    н: "h",
+    о: "o",
+    р: "p",
+    с: "c",
+    т: "t",
+    у: "y",
+    х: "x",
+  };
+  return codeNorm(value).replace(
+    /[авекмнорстух]/gu,
+    (char) => lookalikes[char] ?? char,
+  )
+    // Standard electrical units may be written as Latin symbols or Russian
+    // abbreviations. Normalize only terminal unit suffixes, never prose.
+    .replace(/(?<=\d)kbt$/u, "kw")
+    .replace(/(?<=\d)bt$/u, "w")
+    .replace(/(?<=\d)b$/u, "v");
+}
+
+export interface PortableReplacementAxis {
+  caption: string;
+  values: string[];
+  unit: string | null;
+}
+
+/**
+ * Compiles live replacement axes into title-visible proof obligations. A live
+ * facet may omit its unit even though the consultant states it explicitly
+ * (`Номинальный ток: 16 А`). In that case the number is accepted only when a
+ * unique number+unit code in the reasoning has the same live numeric value.
+ * Model-only codes without a matching live axis never enter the result.
+ */
+export function derivePortableAxisTitleRequirements(
+  axes: PortableReplacementAxis[],
+  reasoningText: string,
+): string[] {
+  const explicitSingleCodes = new Set(extractExplicitSingleLetterCodes(reasoningText));
+  const reasoningCodes = extractPortableTechnicalRequirements(reasoningText);
+  const compactReasoningCodes = new Set(
+    (String(reasoningText).match(/(?<![\p{L}\p{N}])(?=[\p{L}\p{N}.-]{2,24}(?![\p{L}\p{N}]))(?=[\p{L}\p{N}.-]*\p{L})(?=[\p{L}\p{N}.-]*\d)[\p{L}\p{N}][\p{L}\p{N}.-]{1,23}(?![\p{L}\p{N}])/gu) ?? [])
+      .map(visualCodeNorm)
+      .filter(Boolean),
+  );
+  const requirements: string[] = [];
+  const axisFragments = (axis: PortableReplacementAxis): Array<{ fragment: string; requirement: string | null }> => {
+    const unit = axis.unit ?? axis.caption.match(/(?:,|\()\s*([a-zа-я]{1,5})\)?$/iu)?.[1] ?? null;
+    return (axis.values ?? []).flatMap((rawValue) => {
+      const value = String(rawValue).trim();
+      const normalized = visualCodeNorm(value);
+      if (!normalized) return [];
+      const numericOnly = /^\d+(?:[.,]\d+)?$/u.test(value);
+      const requirement = numericOnly
+        ? unit && /\p{L}/u.test(unit) ? `${value}${unit}` : null
+        : value;
+      const fragments = new Set([normalized]);
+      if (/^\d+(?:[.,]\d+)?$/u.test(value) && unit) {
+        fragments.add(visualCodeNorm(`${value}${unit}`));
+        fragments.add(visualCodeNorm(`${unit}${value}`));
+      }
+      return [...fragments].map((fragment) => ({ fragment, requirement }));
+    });
+  };
+  for (const axis of axes ?? []) {
+    const captionUnit = axis.caption.match(/(?:,|\()\s*([a-zа-я]{1,5})\)?$/iu)?.[1] ?? null;
+    const unit = axis.unit ?? captionUnit;
+    for (const value of axis.values ?? []) {
+      const shortCode = value.split(/[^\p{L}\p{N}]+/gu)
+        .find((token) => {
+          const normalized = visualCodeNorm(token);
+          return normalized.length === 1 && explicitSingleCodes.has(normalized);
+        });
+      if (shortCode) {
+        requirements.push(shortCode);
+        continue;
+      }
+      if (/\d/u.test(value) && /\p{L}/u.test(value)) {
+        requirements.push(value);
+        continue;
+      }
+      if (!/^\d+(?:[.,]\d+)?$/u.test(value)) continue;
+      if (unit && /\p{L}/u.test(unit)) {
+        requirements.push(`${value}${unit}`);
+        continue;
+      }
+      const numeric = Number(value.replace(",", "."));
+      const groundedCodes = reasoningCodes.filter((code) => {
+        const match = visualCodeNorm(code).match(/^(\d+(?:\.\d+)?)(\p{L}{1,5})$/u);
+        return Boolean(match && Number(match[1]) === numeric);
+      });
+      if (groundedCodes.length === 1) requirements.push(groundedCodes[0]);
+    }
+  }
+  // Some customer-visible catalog codes encode two independent live axes in
+  // one token (letter+number or number+letter). Accept the decomposition only
+  // when the complete normalized token equals the concatenation of one exact
+  // value from each axis. A digit occurring inside a longer SKU is therefore
+  // insufficient and cannot manufacture an obligation.
+  for (let leftIndex = 0; leftIndex < (axes ?? []).length; leftIndex += 1) {
+    for (let rightIndex = leftIndex + 1; rightIndex < axes.length; rightIndex += 1) {
+      for (const left of axisFragments(axes[leftIndex])) {
+        for (const right of axisFragments(axes[rightIndex])) {
+          if (
+            !compactReasoningCodes.has(`${left.fragment}${right.fragment}`) &&
+            !compactReasoningCodes.has(`${right.fragment}${left.fragment}`)
+          ) continue;
+          if (left.requirement) requirements.push(left.requirement);
+          if (right.requirement) requirements.push(right.requirement);
+        }
+      }
+    }
+  }
+  return [...new Map(requirements.map((value) => [visualCodeNorm(value), value])).values()];
+}
+
+/** Exact comparison for mixed letter/digit codes such as GX53, IP44 or 16A. */
+export function portableTechnicalCodeMatchesText(
+  target: string,
+  text: string,
+): boolean {
+  const wanted = visualCodeNorm(target);
+  if (!wanted || !/\p{L}/u.test(wanted) || !/\d/u.test(wanted)) return false;
+  const candidates = [
+    ...(String(text).match(/[\p{L}\p{N}]+/gu) ?? []),
+    ...(String(text).match(/[\p{L}]{1,12}\s*[-_/]?\s*\d{1,12}/gu) ?? []),
+    ...(String(text).match(/\d{1,12}(?:[.,-]\d{1,12})*\s*[\p{L}]{1,6}/gu) ??
+      []),
+  ];
+  return candidates.some((candidate) => visualCodeNorm(candidate) === wanted);
+}
+
+/**
+ * Final title-level compatibility contract for replacement cards. This is
+ * deliberately independent from categories, brands and product dictionaries:
+ * every portable requirement came either from the customer's request or from
+ * a live facet value explicitly selected in the consultant's reasoning.
+ */
+export function productTitleSupportsPortableRequirements(
+  productTitle: string,
+  requirements: string[],
+): boolean {
+  const titleTokens = new Set(
+    (String(productTitle).match(/[\p{L}\p{N}]+/gu) ?? []).map(visualCodeNorm),
+  );
+  return requirements.every((requirement) => {
+    const normalized = visualCodeNorm(requirement);
+    return normalized.length === 1
+      ? titleTokens.has(normalized)
+      : portableTechnicalCodeMatchesText(requirement, productTitle);
+  });
 }
 
 function distinct(values: string[]): string[] {
@@ -123,6 +396,24 @@ function compactSingleCodes(value: string): string[] {
 }
 
 /**
+ * Detect a portable technical code from live catalog evidence rather than a
+ * product dictionary. The value must mix letters and digits, and the exact
+ * canonical value must be visible both in the customer's request and in the
+ * source card. Model/series facets are removed by the caller before this runs.
+ */
+function isExplicitPortableTechnicalCode(
+  value: string,
+  userMessage: string,
+  productTitle: string,
+): boolean {
+  const compact = visualCodeNorm(value);
+  return compact.length >= 2 && compact.length <= 24 &&
+    /\p{L}/u.test(compact) && /\d/u.test(compact) &&
+    portableTechnicalCodeMatchesText(value, userMessage) &&
+    portableTechnicalCodeMatchesText(value, productTitle);
+}
+
+/**
  * Builds a compact search plan only from live anchor traits, live facet values,
  * and literals present in the customer's anchor description. No category or
  * product dictionaries are used. Identity facets never become analogue axes.
@@ -169,11 +460,21 @@ export function selectExplicitAnchorAxes(
     const facetIsBinary = (facet.values ?? []).length > 0 && (facet.values ?? []).every(({ value }) =>
       /^[01](?:[.,]0+)?$/u.test(String(value).trim())
     );
-    if (facetIsBinary && !captionIsEvidenced(facet.caption, userMessage)) continue;
-    axes.push({ key: facet.key, caption: facet.caption, value: canonical.value, total: canonical.total });
+    if (facetIsBinary && !captionIsEvidenced(facet.caption, userMessage)) { continue;
+    }
+    const mandatory = isExplicitPortableTechnicalCode(
+      canonical.value,
+      userMessage,
+      product.pagetitle,
+    );
+    axes.push({ key: facet.key, caption: facet.caption, value: canonical.value, total: canonical.total,
+      ...(mandatory ? { mandatory: true as const } : {}),
+    });
   }
   return axes
-    .sort((left, right) => left.total - right.total || left.caption.localeCompare(right.caption, "ru"))
+    .sort((left, right) =>
+      Number(Boolean(right.mandatory)) - Number(Boolean( left.mandatory)) ||
+      left.total - right.total || left.caption.localeCompare(right.caption, "ru"))
     .slice(0, Math.max(2, limit));
 }
 

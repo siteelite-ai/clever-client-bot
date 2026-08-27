@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { validateWidgetSnapshot } from './widget-browser-smoke.mjs';
+import { validateAssistantProse, validateWidgetSnapshot } from './widget-browser-smoke.mjs';
 
 const query = 'а у тебя есть лампы кукуруза?';
 const successfulSnapshot = `
@@ -33,5 +33,16 @@ test('widget browser smoke rejects generic fallback and inactive controls', () =
   assert.throws(
     () => validateWidgetSnapshot(successfulSnapshot.replace('- button "Новый диалог":\n', ''), { query }),
     /new-dialog control/,
+  );
+});
+
+test('widget browser smoke rejects unsupported technical claims only in assistant prose', () => {
+  assert.equal(
+    validateAssistantProse(['Смотрю, есть ли такие в каталоге.'], /(?:E27|E40)/iu),
+    'Смотрю, есть ли такие в каталоге.',
+  );
+  assert.throws(
+    () => validateAssistantProse(['Обычно такие лампы бывают с E27 или E40.'], /(?:E27|E40)/iu),
+    /Forbidden unsupported claim/,
   );
 });

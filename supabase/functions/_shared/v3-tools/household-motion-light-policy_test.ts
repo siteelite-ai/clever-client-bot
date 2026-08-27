@@ -19,18 +19,24 @@ const valid: ProductRef = {
   short_traits: ["Тип установки: накладной"],
 };
 
-Deno.test("household motion-light policy recognizes only a fully explicit request", () => {
+Deno.test("motion-light policy preserves optional household and mount constraints", () => {
   assertEquals(
     classifyHouseholdMotionLightRequest(
       "мне нужен бытовой накладной светильник с датчиком движения с ценой не более 4000 тенге",
     ),
-    { maxPrice: 4000, surfaceMountedRequired: true },
+    { maxPrice: 4000, surfaceMountedRequired: true, householdRequired: true },
   );
   assertEquals(
     classifyHouseholdMotionLightRequest(
       "мне нужен бытовой светильник с датчиком движения с ценой не более 4000 тенге",
     ),
-    { maxPrice: 4000, surfaceMountedRequired: false },
+    { maxPrice: 4000, surfaceMountedRequired: false, householdRequired: true },
+  );
+  assertEquals(
+    classifyHouseholdMotionLightRequest(
+      "мне нужен светильник с датчиком движения с ценой не более 4000 тенге",
+    ),
+    { maxPrice: 4000, surfaceMountedRequired: false, householdRequired: false },
   );
   assertEquals(
     classifyHouseholdMotionLightRequest("покажи светильник с датчиком"),
@@ -78,4 +84,21 @@ Deno.test("household motion-light policy ranks exact evidence and deduplicates",
     ),
     ["hall", "generic"],
   );
+});
+
+Deno.test("generic motion-light policy requires the feature without inventing a use class", () => {
+  const utilitySensor = {
+    ...valid,
+    id: "utility",
+    pagetitle: "Светильник для ЖКХ с датчиком движения SNR",
+    leaf_category: "Светильники",
+    short_traits: [],
+    price: 2500,
+  };
+  assertEquals(isVerifiedHouseholdMotionLight(utilitySensor, 4000, false, false), true);
+  assertEquals(isVerifiedHouseholdMotionLight(utilitySensor, 4000, false, true), false);
+  assertEquals(isVerifiedHouseholdMotionLight({
+    ...utilitySensor,
+    pagetitle: "Обычный светильник",
+  }, 4000, false, false), false);
 });

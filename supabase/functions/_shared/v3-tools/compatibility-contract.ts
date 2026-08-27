@@ -49,6 +49,13 @@ export interface CompletedCompatibilityRelations {
   added: CompatibilityRelation[];
 }
 
+export interface PairedStateCriterionReference {
+  value: number;
+  unit: string;
+  criterion_key: string;
+  opposite_facet_key: string;
+}
+
 function canonicalUnit(value: string | null | undefined): string {
   const unit = normalizeUnit(value ?? "");
   const aliases: Record<string, string> = {
@@ -198,7 +205,13 @@ export function subsumeCriteriaProvenByPairedTitleRatio<T extends ProductRef>(
   };
 }
 
-const MEASURED = String.raw`\d+(?:[.,]\d+)?(?:\s*[–—-]\s*\d+(?:[.,]\d+)?)?\s*[a-zа-я°]{1,10}[²³]?\d?`;
+// A measurement must be a standalone numeric token followed by a unit.
+// Without Unicode token boundaries, identifiers such as `Acti9 на 16 А` were
+// parsed as two measurements (`9 на` and `16 А`). In prose containing a word
+// such as `исходную`, that manufactured a paired-state compatibility problem
+// which the customer never requested. Keep the contract category-neutral:
+// reject digits embedded in identifiers rather than enumerating product names.
+const MEASURED = String.raw`(?<![\p{L}\p{N}])\d+(?:[.,]\d+)?(?:\s*[–—-]\s*\d+(?:[.,]\d+)?)?\s*\p{L}{1,10}[²³]?\d?(?=$|[^\p{L}\p{N}])`;
 
 /**
  * Detects the SHAPE of a relational compatibility argument, never its domain:
@@ -317,6 +330,90 @@ export function hasOppositeCompatibilityDirections(relations: CompatibilityRelat
   const hasUpper = relations.some((relation) => relation.relation === "gt" || relation.relation === "gte");
   const hasLower = relations.some((relation) => relation.relation === "lt" || relation.relation === "lte");
   return hasUpper && hasLower;
+}
+
+/**
+ * Detects a two-sided fit contract from live schema rather than product names.
+ * A model may serialize only the installation side it explained (for example
+ * a strict lower bound on a "before" dimension). When the live taxonomy also
+ * exposes the opposite state of the same measured property, that one-sided
+ * criterion is enough to require a final visible high/reference/low proof.
+ *
+ * The caller still has to bind the returned scalar to the customer's own
+ * measured reference. This helper never invents a number or a product class.
+ */
+export function pairedStateCriterionReference(
+  criteria: Criterion[],
+  facets: CompatibilityFacet[],
+  reasoningText = "",
+): PairedStateCriterionReference | null {
+  const stateOf = (value: string): "upper" | "lower" | null => {
+    const key = normalizeKey(value);
+    if (/(?:^| )(?:до|исходн\p{L}*|начальн\p{L}*|входн\p{L}*)(?: |$)/u.test(key)) return "upper";
+    if (/(?:^| )(?:после|конечн\p{L}*|финальн\p{L}*|выходн\p{L}*)(?: |$)/u.test(key)) return "lower";
+    return null;
+  };
+  const propertyTokens = (value: string): string[] => normalizeKey(value)
+    .split(" ")
+    .filter((token) => token.length >= 4 &&
+      !/^(?:до|после|исходн\p{L}*|конечн\p{L}*|начальн\p{L}*|финальн\p{L}*|входн\p{L}*|выходн\p{L}*|термо\p{L}*)$/u.test(token));
+  const scalar = (criterion: Criterion): number | null => {
+    if (typeof criterion.value === "number" && Number.isFinite(criterion.value)) return criterion.value;
+    if (typeof criterion.value !== "string") return null;
+    const parsed = Number(criterion.value.replace(",", "."));
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const facetPhysicalUnit = (facet: CompatibilityFacet): string => {
+    const declared = canonicalUnit(facet.unit);
+    if (declared) return declared;
+    const suffix = String(facet.caption ?? "").match(/(?:,|\s)([a-zа-я°]{1,10}[²³]?\d?)\s*$/iu)?.[1] ?? "";
+    return canonicalUnit(suffix);
+  };
+
+  for (const criterion of Array.isArray(criteria) ? criteria : []) {
+    const value = scalar(criterion);
+    if (value === null || !["eq", "min", "max"].includes(criterion.op)) continue;
+    const wanted = normalizeKey(criterion.key);
+    const matching = facets.filter((facet) => {
+      const labels = [normalizeKey(facet.key), normalizeKey(facet.caption)];
+      return labels.includes(wanted) || wanted.length >= 5 && labels.some((label) => label.includes(wanted) || wanted.includes(label));
+    });
+    if (matching.length !== 1) continue;
+    const facet = matching[0];
+    const state = stateOf(`${facet.key} ${facet.caption}`);
+    const unit = canonicalUnit(criterion.unit) || facetPhysicalUnit(facet);
+    if (!unit) continue;
+    const proseBound = extractReasoningBounds(reasoningText).find((bound) =>
+      bound.value === value && canonicalUnit(bound.unit) === unit && bound.strict
+    );
+    const effectiveOp = proseBound?.op ?? criterion.op;
+    const strict = Boolean(proseBound?.strict || criterion.exclusive);
+    if (
+      !state || !strict ||
+      state === "upper" && effectiveOp !== "min" ||
+      state === "lower" && effectiveOp !== "max"
+    ) continue;
+    const tokens = propertyTokens(`${facet.key} ${facet.caption}`);
+    if (tokens.length === 0) continue;
+    const oppositeScores = facets.flatMap((candidate) => {
+      if (stateOf(`${candidate.key} ${candidate.caption}`) === state) return [];
+      if (stateOf(`${candidate.key} ${candidate.caption}`) === null) return [];
+      if (facetPhysicalUnit(candidate) !== unit) return [];
+      const candidateTokens = propertyTokens(`${candidate.key} ${candidate.caption}`);
+      const score = tokens.filter((token) => candidateTokens.includes(token)).length;
+      return score > 0 ? [{ facet: candidate, score }] : [];
+    });
+    const bestScore = Math.max(0, ...oppositeScores.map(({ score }) => score));
+    const opposite = oppositeScores.filter(({ score }) => score === bestScore).map(({ facet }) => facet);
+    if (opposite.length !== 1) continue;
+    return {
+      value,
+      unit,
+      criterion_key: criterion.key,
+      opposite_facet_key: opposite[0].key,
+    };
+  }
+  return null;
 }
 
 /**

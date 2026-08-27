@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>220VOLT widget preview QA</title>
+    <style>
+      body { margin: 0; min-height: 100vh; background: #f5f5f5; }
+    </style>
+    <script>
+      (() => {
+        const preview = 'https://yngoixmvmxdfxokuafjp.supabase.co/functions/v1/chat-consultant-v3-preview';
+        const nativeFetch = window.fetch.bind(window);
+        window.fetch = (input, init) => {
+          const url = typeof input === 'string' ? input : input.url;
+          if (/\/functions\/v1\/chat-consultant-v3(?:$|[?#])/u.test(url)) {
+            return nativeFetch(preview, init);
+          }
+          return nativeFetch(input, init);
+        };
+      })();
+    </script>
+  </head>
+  <body>
+    <script src="/public/widget.js"></script>
+  </body>
+</html>

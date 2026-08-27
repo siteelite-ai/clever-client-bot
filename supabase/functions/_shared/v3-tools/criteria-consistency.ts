@@ -40,8 +40,23 @@ export function normalizeUnit(raw: string): string {
   return String(raw ?? "")
     .toLowerCase()
     .replace(/ё/g, "е")
+    .replace(/([a-zа-я])2\b/gi, "$1²")
+    .replace(/([a-zа-я])3\b/gi, "$1³")
     .replace(/[^a-zа-я²³/]+/gi, "")
     .trim();
+}
+
+/** Normalizes common natural-language measurement spellings before generic
+ * number+unit extraction. This is linguistic normalization only: no catalog,
+ * category or product vocabulary is involved. */
+export function normalizeMeasurementText(raw: string): string {
+  return String(raw ?? "")
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(
+      /(\d+(?:[.,]\d+)?)\s*(?:квадрат(?:а|ов)?|квадратн(?:ый|ая|ое|ые|ых|ого|ому|ыми)?\s+метр(?:а|ов|е|у|ы)?|кв\.?\s*м(?:етр(?:а|ов|е|у|ы)?)?)(?![a-zа-я])/giu,
+      "$1 м²",
+    );
 }
 
 /**
@@ -51,9 +66,12 @@ export function normalizeUnit(raw: string): string {
  * с критерием невозможно и было бы догадкой.
  */
 export function extractClientQuantities(text: string): ClientQuantity[] {
-  const s = String(text ?? "").toLowerCase().replace(/ё/g, "е");
+  const s = normalizeMeasurementText(text);
   const out: ClientQuantity[] = [];
-  const re = new RegExp(String.raw`(${NUM})\s*([a-zа-я°]{1,6}[²³]?\d?)(?![a-zа-я])`, "gu");
+  // A number embedded in a product/model identifier is not a measurement:
+  // `Acti9 C16` must not become `9 C`, just as `IP65` is not `65` of an
+  // arbitrary unit. An explicit quantity still works (`C16, ток 16 А`).
+  const re = new RegExp(String.raw`(?<![a-zа-я])(${NUM})\s*([a-zа-я°]{1,6}[²³]?\d?)(?![a-zа-я])`, "gu");
   let m: RegExpExecArray | null;
   while ((m = re.exec(s)) !== null) {
     const value = Number(m[1].replace(",", "."));
@@ -131,4 +149,3 @@ export function correctCriteria(criteria: Criterion[], violations: CriterionViol
     return { ...c, value: v.client };
   });
 }
-

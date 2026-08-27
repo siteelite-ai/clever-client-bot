@@ -9,11 +9,14 @@ import {
   filterProductIdsByBudgetCap,
   findTrait,
   mergeFacetOptionConstraints,
+  mergeUserBackedCriteria,
   parseNumSpan,
   projectCatalogFilterEvidence,
   projectCriteriaFacetOptions,
   resolveRenderCriteria,
+  resolveTerminalSelectionCriteria,
   titleProvesCompactCriterion,
+  isLiteralUserCompactCriterion,
   type Criterion,
 } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
@@ -27,7 +30,22 @@ Deno.test("render criteria: named entity browse keeps only user-backed filters",
   const raw = [{ key: "Мощность", op: "min", value: 100, level: "A" }] as Criterion[];
   const userBacked = [{ key: "Цвет", op: "eq", value: "белый", level: "A" }] as Criterion[];
   assertEquals(resolveRenderCriteria(inferred, raw, userBacked, true), userBacked);
-  assertEquals(resolveRenderCriteria(inferred, raw, userBacked, false), [...inferred, ...raw]);
+  assertEquals(resolveRenderCriteria(inferred, raw, userBacked, false), [...userBacked, ...inferred, ...raw]);
+});
+
+Deno.test("render criteria: explicit user filters override inferred filters on the same facet", () => {
+  const inferred = [{ key: "Connector", op: "eq", value: "B", level: "A" }] as Criterion[];
+  const raw = [{ key: "Connector", op: "eq", value: "C", level: "A" }] as Criterion[];
+  const userBacked = [{ key: "Connector", op: "eq", value: "A", level: "A" }] as Criterion[];
+  assertEquals(resolveRenderCriteria(inferred, raw, userBacked, false), userBacked);
+});
+
+Deno.test("user-backed criteria accumulate monotonically across fallback searches", () => {
+  const first = [{ key: "Connector", op: "eq", value: "A", level: "A" }] as Criterion[];
+  const second = [{ key: "Count", op: "eq", value: "3", level: "A" }] as Criterion[];
+  assertEquals(mergeUserBackedCriteria(first, []), first);
+  assertEquals(mergeUserBackedCriteria(first, second), [...first, ...second]);
+  assertEquals(mergeUserBackedCriteria([...first, ...second], first), [...first, ...second]);
 });
 
 Deno.test("a broad semantic recovery cannot discard the latest mandatory contract", () => {
@@ -42,6 +60,16 @@ Deno.test("a broad semantic recovery cannot discard the latest mandatory contrac
   ], recovered).passed_ids, []);
 });
 
+Deno.test("terminal recovery preserves frozen user criteria omitted by the model", () => {
+  const projected = [{ key: "Power", op: "min", value: 100, unit: "W", level: "A" }] as Criterion[];
+  const latest = [{ key: "Curve", op: "eq", value: "C", level: "A" }] as Criterion[];
+  const userBacked = [{ key: "Current", op: "eq", value: "16 A", level: "A" }] as Criterion[];
+  assertEquals(
+    resolveTerminalSelectionCriteria(projected, latest, userBacked),
+    [...userBacked, ...projected, ...latest],
+  );
+});
+
 Deno.test("compact code criterion must be visible in the product title", () => {
   const criterion = { key: "Характеристика", op: "eq", value: "C", level: "A" } as Criterion;
   assertEquals(titleProvesCompactCriterion("Автомат 1P 16A характеристика C", criterion), true);
@@ -50,6 +78,12 @@ Deno.test("compact code criterion must be visible in the product title", () => {
   assertEquals(titleProvesCompactCriterion("Автомат 1P 16A CHINT", criterion), false);
   assertEquals(titleProvesCompactCriterion("Товар белый", { ...criterion, value: "белый" }), true);
   assertEquals(titleProvesCompactCriterion("Кабель ВВГнг 2×1,5", { ...criterion, value: "медь" }), true);
+});
+
+Deno.test("a projected compact facet is literal only when the customer typed the code", () => {
+  const led = { key: "Технология", op: "eq", value: "LED", level: "A" } as Criterion;
+  assertEquals(isLiteralUserCompactCriterion("светодиодный прожектор", led), false);
+  assertEquals(isLiteralUserCompactCriterion("LED прожектор", led), true);
 });
 
 Deno.test("parseNumSpan: scalar, decimal comma", () => {
@@ -142,6 +176,13 @@ Deno.test("checkCriterion: string eq — нормализованное вхож
   const p = product("1", ["Параметр строковый: Значение Икс"]);
   assertEquals(checkCriterion(p, { key: "параметр строковый", op: "eq", value: "значение икс" }).verdict, "pass");
   assertEquals(checkCriterion(p, { key: "параметр строковый", op: "eq", value: "значение игрек" }).verdict, "fail");
+});
+
+Deno.test("numeric string equality does not match longer numbers by substring", () => {
+  const criterion: Criterion = { key: "Параметр", op: "eq", value: "16", unit: "А", level: "A" };
+  assertEquals(checkCriterion(product("exact", ["Параметр: 16"]), criterion).verdict, "pass");
+  assertEquals(checkCriterion(product("large", ["Параметр: 1600"]), criterion).verdict, "fail");
+  assertEquals(checkCriterion(product("range", ["Параметр: 0.1-0.16"]), criterion).verdict, "fail");
 });
 
 Deno.test("checkCriterion: отсутствие характеристики = unknown, не fail", () => {
@@ -244,6 +285,20 @@ Deno.test("mandatory criteria compile into live facet OR values and numeric boun
     { key: "flow", caption: "Световой поток", unit: "лм", values: [{ value: "3000" }, { value: "4000" }, { value: "5000" }] },
   ]);
   assertEquals(projection.options, { power: ["20", "50"], ip: ["IP65"], flow: ["4000", "5000"] });
+  assertEquals(projection.unmatched_keys, []);
+});
+
+Deno.test("short facet codes remain exact while Cyrillic and Latin glyphs interoperate", () => {
+  const projection = projectCriteriaFacetOptions([
+    { key: "Характеристика срабатывания", op: "eq", value: "Тип C", level: "A" },
+  ], [{
+    key: "curve",
+    caption: "Характеристика срабатывания",
+    unit: null,
+    values: [{ value: "Тип B" }, { value: "Тип \u0421" }, { value: "Тип D" }],
+  }]);
+  assertEquals(projection.options, { curve: ["Тип \u0421"] });
+  assertEquals(projection.proven_criteria.length, 1);
   assertEquals(projection.unmatched_keys, []);
 });
 

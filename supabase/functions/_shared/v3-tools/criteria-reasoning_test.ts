@@ -2,7 +2,7 @@
 // Data-agnostic: абстрактные имена параметров.
 
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
-import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, extractReasoningBounds, hasMeasuredSelectionRequirement, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "./criteria-reasoning.ts";
+import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, demoteUnfrozenRenderCriteria, extractReasoningBounds, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "./criteria-reasoning.ts";
 import { checkCriterion, type Criterion } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
 
@@ -29,6 +29,7 @@ Deno.test("измеримое рассуждение требует машинн
   assertEquals(hasMeasuredSelectionRequirement("покажи кабель ВВГ 2×1,5"), false);
   assertEquals(hasMeasuredSelectionRequirement("Обычно такие лампы имеют E27 или E14 и часто работают на 220 В."), false);
   assertEquals(hasMeasuredSelectionRequirement("Считаем: площадь 25 м² × 175 лк, итого 4375 лм."), true);
+  assertEquals(hasMeasuredSelectionRequirement("ДКУ-LED-03-100W — исходная модель; подбираю замену."), false);
 });
 
 Deno.test("числовой диапазон из рассуждения проецируется на уникальный живой фасет", () => {
@@ -37,6 +38,34 @@ Deno.test("числовой диапазон из рассуждения про�
     { key: "power", caption: "Мощность", type: "number", unit: "Вт" },
   ]);
   assertEquals(projected.added, [{ key: "Световой поток", op: "range", value: [3750, 5000], unit: "лм", level: "A" }]);
+});
+
+Deno.test("дефисы артикула не превращаются в диапазон измеримого фасета", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "ДКУ-LED-03-100W — исходная модель; подбираю замену.",
+    [{
+      key: "power",
+      caption: "Мощность ламп, Вт",
+      type: "number",
+      unit: "Вт",
+      values: [{ value: "3" }, { value: "100" }],
+    }],
+  );
+  assertEquals(projected.added, []);
+});
+
+Deno.test("ключевые параметры замены обязательны, вероятная характеристика остаётся рекомендацией", () => {
+  const aligned = alignCriteriaImportanceWithReasoning([
+    { key: "Количество полюсов", op: "eq", value: "1", level: "A" },
+    { key: "Номинальный ток", op: "eq", value: "16", level: "A" },
+    { key: "Характеристика", op: "eq", value: "C", level: "A" },
+  ], "1-полюсный скорее всего. Ключевые параметры: номинальный ток 16 А, характеристика C.");
+  assertEquals(aligned.criteria.map((criterion) => [criterion.key, criterion.level]), [
+    ["Количество полюсов", "B"],
+    ["Номинальный ток", "A"],
+    ["Характеристика", "A"],
+  ]);
 });
 
 Deno.test("русский диапазон от X до Y проецируется так же, как запись через тире", () => {
@@ -79,6 +108,44 @@ Deno.test("два диапазона одной единицы не проеци
     { key: "size", caption: "Размер", type: "number", unit: "мм" },
   ]);
   assertEquals(projected.added, []);
+});
+
+Deno.test("локальное состояние диапазона не переносится на противоположный параметр", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "Для свободной посадки внутренний диаметр до усадки должен быть 12–20 мм, а после усадки — меньше 10 мм.",
+    [
+      {
+        key: "before_diameter",
+        caption: "Внутренний диаметр до термоусадки, мм",
+        type: "checkbox",
+        unit: "мм",
+        values: [{ value: "12" }, { value: "20" }],
+      },
+      {
+        key: "after_diameter",
+        caption: "Внутренний диаметр после термоусадки, мм",
+        type: "checkbox",
+        unit: "мм",
+        values: [{ value: "6" }, { value: "10" }],
+      },
+      {
+        key: "wall_after",
+        caption: "Толщина стенки после усадки, мм",
+        type: "checkbox",
+        unit: "мм",
+        values: [{ value: "1" }, { value: "2" }],
+      },
+    ],
+  );
+
+  assertEquals(projected.added, [{
+    key: "Внутренний диаметр до термоусадки, мм",
+    op: "range",
+    value: [12, 20],
+    unit: "мм",
+    level: "A",
+  }]);
 });
 
 Deno.test("существующий критерий модели разрешает неоднозначность фасетов с одной единицей", () => {
@@ -135,6 +202,135 @@ Deno.test("единица из live-подписи компенсирует пу
   assertEquals(projected.added, [
     { key: "Световой поток, Лм", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
   ]);
+});
+
+Deno.test("machine-key suffix cannot override the public physical unit", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "Для стабилизатора нужен диапазон входного напряжения 140–260 В.",
+    [
+      {
+        key: "moschnosty__vt__quat__v",
+        caption: "Мощность, Вт",
+        type: "number",
+        unit: null,
+        values: [{ value: "8000-9000" }],
+      },
+      {
+        key: "vhodnoe_napryaghenie__v__kirmeli_kerneui__v",
+        caption: "Входное напряжение, В",
+        type: "checkbox",
+        unit: null,
+        values: [{ value: "140-260" }],
+      },
+    ],
+  );
+  assertEquals(projected.added, [{
+    key: "Входное напряжение, В",
+    op: "range",
+    value: [140, 260],
+    unit: "в",
+    level: "A",
+  }]);
+});
+
+Deno.test("точное число клиента проецируется на разделенный live-фасет", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Нужен аппарат 16 А",
+    "Подбираю аппарат на 16 А.",
+    [{
+      key: "rated_current",
+      caption: "Номинальный ток, А",
+      type: "checkbox",
+      unit: "А",
+      values: [{ value: "6" }, { value: "16" }],
+    }],
+  );
+  assertEquals(projected.added, [{
+    key: "Номинальный ток, А",
+    op: "eq",
+    value: "16",
+    unit: "А",
+    level: "A",
+  }]);
+});
+
+Deno.test("unitless live-фасет выбирается только после исключения явно другой шкалы", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Нужен аппарат 16 А",
+    "Подбираю аппарат на 16 А.",
+    [
+      { key: "cable_section", caption: "Макс. сечение кабеля, мм2", type: "checkbox", unit: null, values: [{ value: "6" }, { value: "16" }] },
+      { key: "rated_current", caption: "Номинальный ток", type: "checkbox", unit: null, values: [{ value: "6" }, { value: "16" }] },
+    ],
+  );
+  assertEquals(projected.added, [{
+    key: "Номинальный ток",
+    op: "eq",
+    value: "16",
+    unit: "а",
+    level: "A",
+  }]);
+});
+
+Deno.test("natural customer area projects onto an ASCII-square live facet", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Зал 30 квадратов",
+    "Подбираю современный вариант для зала.",
+    [{
+      key: "max_area",
+      caption: "Максимальная площадь освещения, м2",
+      type: "checkbox",
+      unit: null,
+      values: [{ value: "25" }, { value: "30" }, { value: "35" }],
+    }],
+  );
+  assertEquals(projected.added, [{
+    key: "Максимальная площадь освещения, м2",
+    op: "eq",
+    value: "30",
+    unit: "м²",
+    level: "A",
+  }]);
+});
+
+Deno.test("направленная величина клиента не сужается до точного равенства", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Нужна мощность от 100 Вт",
+    "Требуется не менее 100 Вт.",
+    [{ key: "power", caption: "Мощность, Вт", type: "number", unit: "Вт", values: [{ value: "100" }, { value: "150" }] }],
+  );
+  assertEquals(projected.added, []);
+});
+
+Deno.test("противоположные направления одного размера не превращаются в eq", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Размер детали 10 мм",
+    "До установки нужен размер больше 10 мм, после установки — меньше 10 мм.",
+    [
+      { key: "before", caption: "Размер до установки", type: "number", unit: "мм", values: [{ value: "10" }] },
+      { key: "after", caption: "Размер после установки", type: "number", unit: "мм", values: [{ value: "10" }] },
+    ],
+  );
+  assertEquals(projected.added, []);
+});
+
+Deno.test("два равноправных live-фасета одной единицы не выбираются наугад", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Нужен параметр 10 мм",
+    "Подбираю значение 10 мм.",
+    [
+      { key: "alpha", caption: "Параметр альфа", type: "number", unit: "мм", values: [{ value: "10" }] },
+      { key: "beta", caption: "Параметр бета", type: "number", unit: "мм", values: [{ value: "10" }] },
+    ],
+  );
+  assertEquals(projected.added, []);
 });
 
 Deno.test("числовой критерий из рассуждения повышается с B до обязательного A", () => {
@@ -363,6 +559,25 @@ Deno.test("projected measured range is not demoted by comfort wording", () => {
   assertEquals(contract.options, { svetovoy_potok: ["3750", "4000", "5000"] });
 });
 
+Deno.test("advisory catalog filters are removed even when no measured range can be projected", () => {
+  const contract = compileMeasuredReasoningSearchContract(
+    [
+      { key: "Protection", op: "eq", value: "IP65", level: "A" },
+      { key: "Material", op: "eq", value: "aluminium", level: "A" },
+    ],
+    "For this use I first look at protection IP65. Aluminium is a useful housing material.",
+    [],
+    [
+      { key: "protection", caption: "Protection", type: "checkbox", unit: null, values: [{ value: "IP65" }] },
+      { key: "material", caption: "Material", type: "checkbox", unit: null, values: [{ value: "aluminium" }] },
+    ],
+  );
+  assertEquals(contract.projected_criteria, []);
+  assertEquals(contract.mandatory_criteria, []);
+  assertEquals(contract.options, {});
+  assertEquals(contract.demoted, ["Protection", "Material"]);
+});
+
 Deno.test("an otherwise unbounded selection promotes only projectable measured criteria", () => {
   const aligned = promoteProjectableMeasuredFallbackCriteria([
     { key: "Measured output", op: "min", value: 3750, unit: "lm", level: "B" },
@@ -375,6 +590,61 @@ Deno.test("an otherwise unbounded selection promotes only projectable measured c
   }]);
   assertEquals(aligned.criteria.map((criterion) => criterion.level), ["A", "B"]);
   assertEquals(aligned.promoted, ["Measured output"]);
+});
+
+Deno.test("a measured preference already demoted as advisory cannot be promoted again", () => {
+  const criteria: Criterion[] = [
+    { key: "Measured output", op: "min", value: 3750, unit: "lm", level: "A" },
+  ];
+  const importance = alignCriteriaImportanceWithReasoning(
+    criteria,
+    "Measured output 3750 lm is one possible reference point.",
+  );
+  const aligned = promoteProjectableMeasuredFallbackCriteria(
+    importance.criteria,
+    [{
+      key: "measured_output",
+      caption: "Measured output",
+      unit: "lm",
+      values: [{ value: "4000" }],
+    }],
+    importance.demoted,
+  );
+  assertEquals(importance.demoted, ["Measured output"]);
+  assertEquals(aligned.criteria.map((criterion) => criterion.level), ["B"]);
+  assertEquals(aligned.promoted, []);
+});
+
+Deno.test("render-only model criteria cannot retroactively strengthen an ordinary search", () => {
+  const frozen: Criterion[] = [
+    { key: "Measured output", op: "range", value: [3750, 5000], unit: "lm", level: "A" },
+  ];
+  const aligned = demoteUnfrozenRenderCriteria([
+    ...frozen,
+    { key: "Implementation count", op: "eq", value: 5, level: "A" },
+  ], frozen);
+  assertEquals(aligned.criteria, [
+    frozen[0],
+    { key: "Implementation count", op: "eq", value: 5, level: "B" },
+  ]);
+  assertEquals(aligned.demoted, ["Implementation count"]);
+});
+
+Deno.test("render-only replacement criteria cannot strengthen a compiled retrieval contract", () => {
+  const frozen: Criterion[] = [
+    { key: "Номинальный ток", op: "eq", value: 16, unit: "А", level: "A" },
+    { key: "Характеристика срабатывания", op: "eq", value: "Тип C", level: "A" },
+  ];
+  const aligned = demoteUnfrozenRenderCriteria([
+    ...frozen,
+    { key: "Вес", op: "max", value: 1, unit: "кг", level: "A" },
+  ], frozen);
+  assertEquals(aligned.criteria.map((criterion) => [criterion.key, criterion.level]), [
+    ["Номинальный ток", "A"],
+    ["Характеристика срабатывания", "A"],
+    ["Вес", "B"],
+  ]);
+  assertEquals(aligned.demoted, ["Вес"]);
 });
 
 Deno.test("fallback promotion preserves an existing mandatory contract", () => {

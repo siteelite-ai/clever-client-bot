@@ -10,6 +10,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "qa:customer-evaluator": "node --test scripts/qa/run-customer-acceptance.test.mjs",
+    "qa:security-smoke": "node scripts/qa/run-security-smoke.mjs",
     "qa:widget-contract": "node scripts/qa/check-widget-release-contract.mjs",
     "test": "vitest run",
     "test:watch": "vitest"

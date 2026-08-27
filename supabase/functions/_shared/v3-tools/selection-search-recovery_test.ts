@@ -1,5 +1,5 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldFinalizePendingSelection } from "./selection-search-recovery.ts";
+import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "./selection-search-recovery.ts";
 
 const facets = [
   { key: "feature", caption: "Функция", type: "string", unit: null, values: [{ value: "Да" }] },
@@ -50,7 +50,7 @@ Deno.test("reasoning criteria create bounded scoped then unscoped attempts", () 
   assert(plan.length <= 4);
 });
 
-Deno.test("paired compatibility cannot be replaced by scalar range recovery", () => {
+Deno.test("paired compatibility verifies the grounded category without scalar substitution", () => {
   const plan = buildSelectionSearchRecoveryPlan({
     failed_args: { mode: "by_filter", category_in: ["Live leaf"], per_page: 20 },
     facets,
@@ -58,7 +58,14 @@ Deno.test("paired compatibility cannot be replaced by scalar range recovery", ()
     reasoning_criteria: [{ key: "Поток", op: "range", value: [1, 2], unit: "лм", level: "A" }],
     compatibility_shaped: true,
   });
-  assertEquals(plan, []);
+  assertEquals(plan.map(({ kind }) => kind), ["verify_compatibility_in_grounded_category"]);
+  assertEquals(plan[0].args, {
+    mode: "by_filter",
+    category_in: ["Live leaf"],
+    per_page: 50,
+  });
+  assertEquals(plan[0].proven_criteria, []);
+  assertEquals(plan[0].revalidate, ["selection_target", "mandatory_criteria", "compatibility", "budget"]);
 });
 
 Deno.test("policy contains no product vocabulary or hard-coded taxonomy", () => {
@@ -104,6 +111,7 @@ Deno.test("an ordinary pending contract reaches the deterministic finalizer", ()
     intent_mode: "select" as const,
     has_discovery: true,
     has_selection_target: true,
+    has_search_attempt: false,
     mandatory_criteria_count: 1,
     replacement_intent: false,
     series_grounding_required: false,
@@ -115,6 +123,35 @@ Deno.test("an ordinary pending contract reaches the deterministic finalizer", ()
   assertEquals(shouldFinalizePendingSelection({ ...pending, intent_mode: "inquire" }), false);
   assertEquals(shouldFinalizePendingSelection({ ...pending, replacement_intent: true }), false);
   assertEquals(shouldFinalizePendingSelection({ ...pending, compatibility_required: true }), false);
+  assertEquals(shouldFinalizePendingSelection({ ...pending, mandatory_criteria_count: 0 }), false);
+  assertEquals(shouldFinalizePendingSelection({ ...pending, mandatory_criteria_count: 0, has_search_attempt: true }), true);
+});
+
+Deno.test("substantive inquiries do not receive a contradictory catalog-empty suffix", () => {
+  assertEquals(shouldAppendCatalogEmpty({ products_rendered: 0, intent_mode: "inquire", final_text: "Цена подтверждена каталогом." }), false);
+  assertEquals(shouldAppendCatalogEmpty({ products_rendered: 0, intent_mode: "inquire", final_text: "" }), true);
+  assertEquals(shouldAppendCatalogEmpty({ products_rendered: 0, intent_mode: "select", final_text: "Ищу варианты." }), true);
+});
+
+Deno.test("a preserved missing-anchor class pool always reaches terminal finalization", () => {
+  assertEquals(shouldFinalizeMissingAnchorReplacement({
+    products_rendered: 0,
+    replacement_intent: true,
+    anchor_state: "anchor_missing",
+    preserved_pool_size: 4,
+  }), true);
+  assertEquals(shouldFinalizeMissingAnchorReplacement({
+    products_rendered: 0,
+    replacement_intent: true,
+    anchor_state: "anchor_missing",
+    preserved_pool_size: 0,
+  }), false);
+  assertEquals(shouldFinalizeMissingAnchorReplacement({
+    products_rendered: 1,
+    replacement_intent: true,
+    anchor_state: "anchor_missing",
+    preserved_pool_size: 4,
+  }), false);
 });
 
 Deno.test("reasoning query plan is deduplicated, specific-first and bounded", () => {
@@ -128,4 +165,30 @@ Deno.test("reasoning query plan is deduplicated, specific-first and bounded", ()
     "Detailed model owned class with trait",
     "Detailed model owned class",
   ]);
+});
+
+Deno.test("missing-anchor recovery is derived only from live grounded taxonomy", () => {
+  const recovery = buildAnchorMissingRecoveryQueries(
+    {
+      category: { pagetitle: "Power devices" },
+      leaf_categories: [
+        { pagetitle: "Portable power devices" },
+        { pagetitle: "Industrial power devices" },
+      ],
+    },
+    "The consultant selected portable power devices for this request",
+    ["100W"],
+  );
+  assertEquals(recovery.targets, ["Portable power devices"]);
+  assertEquals(recovery.queries[0], "Portable power devices 100W");
+  assert(recovery.queries.length <= 4);
+});
+
+Deno.test("category verification fetches candidates without claiming facet proof", () => {
+  assertEquals(buildCategoryVerificationSearchInput(["Live leaf", "Live leaf", "  Another leaf  "]), {
+    mode: "by_filter",
+    category_in: ["Live leaf", "Another leaf"],
+    per_page: 50,
+  });
+  assertEquals(buildCategoryVerificationSearchInput([]), null);
 });

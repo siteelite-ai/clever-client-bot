@@ -105,6 +105,37 @@ export function mergeFacetOptionConstraints(
   };
 }
 
+/**
+ * User-backed criteria are turn invariants. A later fallback may contribute
+ * more explicit constraints, but it must never erase constraints proved by an
+ * earlier strict search. Equality values for one facet are kept as separate
+ * entries because the criteria gate interprets them as an OR group.
+ */
+export function mergeUserBackedCriteria(
+  existing: Criterion[],
+  incoming: Criterion[],
+): Criterion[] {
+  const merged: Criterion[] = [];
+  const seen = new Set<string>();
+  for (const criterion of [...(existing ?? []), ...(incoming ?? [])]) {
+    if (!criterion?.key || criterion.value === undefined) continue;
+    const value = Array.isArray(criterion.value)
+      ? criterion.value.map((item) => String(item)).join("\u0000")
+      : String(criterion.value);
+    const signature = [
+      normalizeKey(criterion.key),
+      criterion.op,
+      value,
+      normalizeKey(String(criterion.unit ?? "")),
+      criterion.exclusive === true ? "exclusive" : "inclusive",
+    ].join("\u0001");
+    if (seen.has(signature)) continue;
+    seen.add(signature);
+    merged.push({ ...criterion, level: "A" });
+  }
+  return merged;
+}
+
 // ─── Нормализация ────────────────────────────────────────────────────────────
 
 export function normalizeKey(s: string): string {
@@ -169,7 +200,13 @@ export function resolveRenderCriteria(
   userBacked: Criterion[],
   strictUserEvidenceOnly: boolean,
 ): Criterion[] {
-  const base = strictUserEvidenceOnly ? userBacked : enforced;
+  const userKeys = new Set(userBacked.map((criterion) => normalizeKey(criterion.key)));
+  const base = strictUserEvidenceOnly
+    ? userBacked
+    : [
+      ...userBacked,
+      ...enforced.filter((criterion) => !userKeys.has(normalizeKey(criterion.key))),
+    ];
   const baseKeys = new Set(base.map((criterion) => normalizeKey(criterion.key)));
   return [
     ...base,
@@ -178,6 +215,26 @@ export function resolveRenderCriteria(
       : raw.filter((criterion) => !baseKeys.has(normalizeKey(String(criterion?.key ?? ""))))),
   ].filter((criterion) => criterion && typeof criterion.key === "string" && criterion.value !== undefined)
     .map((criterion) => ({ ...criterion }));
+}
+
+/**
+ * The deterministic finalizer must enforce the same monotonic contract as a
+ * normal render. In particular, a broad recovery may not forget literals that
+ * were frozen from the customer's request before the model built its latest
+ * criteria array.
+ */
+export function resolveTerminalSelectionCriteria(
+  projected: Criterion[],
+  latest: Criterion[],
+  userBacked: Criterion[],
+  strictUserEvidenceOnly = false,
+): Criterion[] {
+  return resolveRenderCriteria(
+    projected,
+    latest,
+    userBacked,
+    strictUserEvidenceOnly,
+  ).filter((criterion) => (criterion.level ?? "A") === "A");
 }
 
 /** Compact letter/code values are unsafe when they only exist in hidden
@@ -192,6 +249,20 @@ export function titleProvesCompactCriterion(title: string, criterion: Criterion)
   const foldCode = (token: string) => token === "С" ? "c" : normalizeKey(token);
   const titleTokens = title.match(/[a-zа-я0-9]+/giu)?.map(foldCode) ?? [];
   return titleTokens.includes(foldCode(rawValue));
+}
+
+/**
+ * A compact live facet value is a card-visible literal requirement only when
+ * the customer actually typed that code. Semantic customer wording may map to
+ * a compact catalog value (for example a localized technology name → `LED`),
+ * but that internal projection must not force the projected code into a title.
+ */
+export function isLiteralUserCompactCriterion(
+  userMessage: string,
+  criterion: Criterion,
+): boolean {
+  return !titleProvesCompactCriterion("", criterion) &&
+    titleProvesCompactCriterion(userMessage, criterion);
 }
 
 /** Числовой интервал, к которому сводится любое распознанное значение характеристики. */
@@ -299,11 +370,37 @@ function semanticStem(token: string): string {
   return stem;
 }
 
+function foldVisualCodeToken(token: string): string {
+  return token.replace(/[\u0430\u0432\u0441\u0435\u043d\u043a\u043c\u043e\u0440\u0442\u0445\u0443]/gu, (letter) => ({
+    "\u0430": "a",
+    "\u0432": "b",
+    "\u0441": "c",
+    "\u0435": "e",
+    "\u043d": "h",
+    "\u043a": "k",
+    "\u043c": "m",
+    "\u043e": "o",
+    "\u0440": "p",
+    "\u0442": "t",
+    "\u0445": "x",
+    "\u0443": "y",
+  }[letter] ?? letter));
+}
+
 function stringEvidenceMatches(wanted: string, evidence: string): boolean {
   const want = normalizeKey(wanted);
   const got = normalizeKey(evidence);
   if (!want || !got) return false;
   if (got.includes(want) || want.includes(got)) return true;
+  // One-letter tokens are meaningful catalog codes in otherwise descriptive
+  // values (`Тип C`, `кривая B`). The semantic stem matcher below deliberately
+  // ignores short words, so require these distinguishing codes explicitly.
+  // Fold only visually equivalent Cyrillic/Latin glyphs; B/C/D remain distinct.
+  const gotTokens = new Set(got.split(/\s+/u).map(foldVisualCodeToken));
+  const wantedCodes = want.split(/\s+/u)
+    .filter((token) => /^\p{L}$/u.test(token))
+    .map(foldVisualCodeToken);
+  if (wantedCodes.some((token) => !gotTokens.has(token))) return false;
   const gotStems = got.split(/\s+/u).filter((x) => x.length >= 3).map(semanticStem);
   const wantStems = want.split(/\s+/u).filter((x) => x.length >= 3).map(semanticStem);
   return wantStems.length > 0 && wantStems.every((stem) => gotStems.some((actual) => {
@@ -366,6 +463,27 @@ export function checkCriterion(product: ProductRef, c: Criterion): CriterionChec
     return { key: c.key, verdict: "unknown", expected, actual: null };
   }
   const actual = trait.value;
+
+  // Catalog facet values are strings even when they represent measurements.
+  // Numeric equality must therefore use numeric spans, not substring matching:
+  // `16` is not equal to `160`, `1600` or `0.1-0.16`. Keep mixed letter-number
+  // codes (1P, E27, IP65) on the string path unless an explicit unit proves
+  // that the criterion is measured.
+  if (c.op === "eq" && typeof c.value === "string") {
+    const valueIsPlainNumeric = /^\s*-?\d+(?:[.,]\d+)?\s*$/u.test(c.value);
+    const wantedNumeric = c.unit || valueIsPlainNumeric ? parseNumSpan(c.value) : null;
+    if (wantedNumeric) {
+      const actualNumeric = parseNumSpan(actual);
+      return {
+        key: c.key,
+        verdict: actualNumeric && spansOverlap(actualNumeric, wantedNumeric)
+          ? "pass"
+          : actualNumeric ? "fail" : "unknown",
+        expected,
+        actual,
+      };
+    }
+  }
 
   // Строковый критерий
   if (c.op === "eq" && typeof c.value === "string") {
