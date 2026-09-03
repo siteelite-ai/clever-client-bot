@@ -9,6 +9,7 @@ import {
   nextAgentPhase,
   shouldDeferInquiryIntro,
   shouldDeferNoProgressForKnowledge,
+  shouldRecoverInquiryNoProgressWithKnowledge,
   shouldAllowCorrectiveDiscovery,
   toolNamesForAgentPhase,
 } from "./agent-performance.ts";
@@ -41,6 +42,33 @@ Deno.test("agent no-progress: successful knowledge lookup gets one synthesis ste
     breakRequested: false,
     knowledgeHits: 5,
     alreadyDeferred: false,
+  }));
+});
+
+Deno.test("agent no-progress: inquiry routes once to grounded knowledge", () => {
+  assert(shouldRecoverInquiryNoProgressWithKnowledge({
+    breakRequested: true,
+    intentMode: "inquire",
+    productsRendered: 0,
+    alreadyRecovered: false,
+  }));
+  assert(!shouldRecoverInquiryNoProgressWithKnowledge({
+    breakRequested: true,
+    intentMode: "select",
+    productsRendered: 0,
+    alreadyRecovered: false,
+  }));
+  assert(!shouldRecoverInquiryNoProgressWithKnowledge({
+    breakRequested: true,
+    intentMode: "inquire",
+    productsRendered: 1,
+    alreadyRecovered: false,
+  }));
+  assert(!shouldRecoverInquiryNoProgressWithKnowledge({
+    breakRequested: true,
+    intentMode: "inquire",
+    productsRendered: 0,
+    alreadyRecovered: true,
   }));
 });
 

@@ -116,6 +116,7 @@ import {
   shouldAllowCorrectiveDiscovery,
   shouldDeferInquiryIntro,
   shouldDeferNoProgressForKnowledge,
+  shouldRecoverInquiryNoProgressWithKnowledge,
   toolNamesForAgentPhase,
 } from "../_shared/v3-tools/agent-performance.ts";
 import { CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest } from "../_shared/v3-tools/clean-power-safety.ts";
@@ -3518,6 +3519,8 @@ async function runExpertLoop(
   let noProgressStreak = 0;
   let noProgressBreak = false;
   let knowledgeSynthesisContinuationUsed = false;
+  let inquiryKnowledgeRecoveryUsed = false;
+  let finalizeFromRecoveredKnowledge = false;
   let lastToolErrorCode: string | null = null;
   let repeatedToolErrorStreak = 0;
   let optionalClarificationRejected = false;
@@ -4102,8 +4105,12 @@ async function runExpertLoop(
         correctiveDiscoveryAvailable: agentPhase === "search_after_discovery" &&
           !correctiveDiscoveryUsed && !freshSearch,
       };
-      const availableToolNames = toolNamesForAgentPhase(agentPhase, agentToolPolicy);
-      const forcedToolName = forcedToolNameForAgentPhase(agentPhase, agentToolPolicy);
+      const availableToolNames = finalizeFromRecoveredKnowledge
+        ? []
+        : toolNamesForAgentPhase(agentPhase, agentToolPolicy);
+      const forcedToolName = finalizeFromRecoveredKnowledge
+        ? null
+        : forcedToolNameForAgentPhase(agentPhase, agentToolPolicy);
       let resp: ORResponse;
       try {
         if (agentPhase === "inquiry_explanation_ready") {
@@ -8153,6 +8160,75 @@ async function runExpertLoop(
       if (groundedJargonTerminal || groundedCompoundSearchTerminal) break;
       if (rejectedRenderFinalizeBreak) break;
       if (noProgressBreak) {
+        const recoverInquiryWithKnowledge = shouldRecoverInquiryNoProgressWithKnowledge({
+          breakRequested: true,
+          intentMode,
+          productsRendered,
+          alreadyRecovered: inquiryKnowledgeRecoveryUsed,
+        });
+        if (recoverInquiryWithKnowledge) {
+          inquiryKnowledgeRecoveryUsed = true;
+          const toolCallId = crypto.randomUUID();
+          const recoveryArgs = { query: userMessage, top_k: 5 };
+          send({
+            type: "tool_event",
+            tool: "lookup_knowledge",
+            phase: "start",
+            summary: "Проверяю справочную информацию…",
+          });
+          const recoveryStarted = Date.now();
+          const recoveryResult = await runTool("lookup_knowledge", recoveryArgs, ctx);
+          const recoveryDurationMs = Date.now() - recoveryStarted;
+          send({
+            type: "tool_event",
+            tool: "lookup_knowledge",
+            phase: "result",
+            duration_ms: recoveryDurationMs,
+            summary: summariseToolResult("lookup_knowledge", recoveryResult),
+          });
+          messages.push({
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: toolCallId,
+              type: "function",
+              function: { name: "lookup_knowledge", arguments: JSON.stringify(recoveryArgs) },
+            }],
+          });
+          const recoveryReply = toolResultForLlm(
+            recoveryResult,
+            recoveryArgs,
+            userMessage,
+            assistantReasoning,
+          ) as Record<string, unknown>;
+          messages.push({
+            role: "tool",
+            tool_call_id: toolCallId,
+            name: "lookup_knowledge",
+            content: JSON.stringify({
+              ...recoveryReply,
+              _server_hint: "Каталожный поиск повторил тот же пул. Используй найденные справочные фрагменты и дай прямой законченный ответ на исходный вопрос; новых поисков и обещаний продолжить не делай.",
+            }),
+          });
+          const recoveryHits = recoveryResult.ok && Array.isArray((recoveryResult as { hits?: unknown[] }).hits)
+            ? (recoveryResult as { hits: unknown[] }).hits.length
+            : 0;
+          steps.push({
+            step: "v3_inquiry_no_progress_knowledge_recovery",
+            ms: now(),
+            meta: {
+              ok: recoveryResult.ok,
+              knowledge_hits: recoveryHits,
+              duration_ms: recoveryDurationMs,
+              step_index: step,
+            },
+          });
+          if (recoveryResult.ok && recoveryHits > 0) {
+            finalizeFromRecoveredKnowledge = true;
+            noProgressBreak = false;
+            continue;
+          }
+        }
         const deferForKnowledge = shouldDeferNoProgressForKnowledge({
           breakRequested: true,
           knowledgeHits: knowledgeHitsThisStep,

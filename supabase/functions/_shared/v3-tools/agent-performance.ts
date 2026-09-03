@@ -44,6 +44,25 @@ export function shouldDeferNoProgressForKnowledge(input: {
   return input.breakRequested && input.knowledgeHits > 0 && !input.alreadyDeferred;
 }
 
+/**
+ * A repeated catalog pool can be a routing dead-end rather than an empty
+ * answer for an informational question. In that case the controller may run
+ * one lookup with the customer's original wording, then close tool access so
+ * the model must synthesize the grounded answer. Selection turns keep their
+ * existing catalog recovery and the one-shot flag preserves the loop guard.
+ */
+export function shouldRecoverInquiryNoProgressWithKnowledge(input: {
+  breakRequested: boolean;
+  intentMode: "select" | "inquire";
+  productsRendered: number;
+  alreadyRecovered: boolean;
+}): boolean {
+  return input.breakRequested &&
+    input.intentMode === "inquire" &&
+    input.productsRendered === 0 &&
+    !input.alreadyRecovered;
+}
+
 export interface DeterministicIntroToolCall {
   name: "discover_category";
   args: { noun: string; semantic_query: string };
