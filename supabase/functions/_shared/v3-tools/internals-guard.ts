@@ -110,6 +110,29 @@ export interface RedactResult {
   matched: string[];
 }
 
+export interface SerializedToolCallStripResult {
+  text: string;
+  removed: boolean;
+}
+
+/**
+ * Some OpenAI-compatible providers can serialize a tool call into the message
+ * text when tools are deliberately closed for the final synthesis step. That
+ * markup is never customer content. Remove the machine-only suffix before the
+ * ordinary internals guard runs, preserving the grounded prose that preceded
+ * it. A short trailing colon paragraph is the provider's introduction to the
+ * serialized call and is removed with the block.
+ */
+export function stripSerializedToolCallMarkup(text: string): SerializedToolCallStripResult {
+  const raw = String(text ?? "");
+  const marker = raw.match(/<(?:｜|\|)DSML(?:｜|\|)tool_calls>/iu);
+  if (marker?.index === undefined) return { text: raw, removed: false };
+  const safePrefix = raw.slice(0, marker.index)
+    .replace(/\n\s*\n[^\n.!?]{1,200}:\s*$/u, "")
+    .trim();
+  return { text: safePrefix, removed: true };
+}
+
 /**
  * Product facts must be emitted by the deterministic product-card renderer.
  * This detector is deliberately structural: it knows catalog-shaped facts,
@@ -378,7 +401,9 @@ export function stripUngroundedIntroAliasDefinitions(
  * размазана по всему абзацу). Самокритичные ярлыки чистятся без подмены.
  */
 export function redactInternals(text: string): RedactResult {
-  const raw = text ?? "";
+  const original = text ?? "";
+  const serializedToolCall = stripSerializedToolCallMarkup(original);
+  const raw = serializedToolCall.text;
   if (!raw.trim()) return { text: raw, redacted: false, matched: [] };
   const customerFacing = rewriteCustomerFacingServiceTerms(raw);
   const n = norm(customerFacing);
@@ -396,8 +421,8 @@ export function redactInternals(text: string): RedactResult {
   const withoutSelfFlagellation = customerFacing.replace(SELF_FLAGELLATION_RE, "")
     .replace(/[ \t]{2,}/g, " ").trim();
   const cleaned = correctCustomerTextTypos(withoutSelfFlagellation);
-  if (cleaned !== raw.trim()) {
-    const softMatches: string[] = [];
+  if (cleaned !== original.trim()) {
+    const softMatches: string[] = serializedToolCall.removed ? ["serialized_tool_call"] : [];
     if (withoutSelfFlagellation !== customerFacing.trim()) {
       softMatches.push("self_flagellation");
     }
