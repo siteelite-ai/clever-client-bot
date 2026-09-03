@@ -115,6 +115,7 @@ import {
   nextAgentPhase,
   shouldAllowCorrectiveDiscovery,
   shouldDeferInquiryIntro,
+  shouldDeferNoProgressForKnowledge,
   toolNamesForAgentPhase,
 } from "../_shared/v3-tools/agent-performance.ts";
 import { CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest } from "../_shared/v3-tools/clean-power-safety.ts";
@@ -3516,6 +3517,7 @@ async function runExpertLoop(
   let lastSearchSignature: string | null = null;
   let noProgressStreak = 0;
   let noProgressBreak = false;
+  let knowledgeSynthesisContinuationUsed = false;
   let lastToolErrorCode: string | null = null;
   let repeatedToolErrorStreak = 0;
   let optionalClarificationRejected = false;
@@ -4049,6 +4051,7 @@ async function runExpertLoop(
 
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
+      let knowledgeHitsThisStep = 0;
       // Классификация фазы для выбора таймаута. Эвристика:
       //  • step 0 — всегда intro (LLM ещё не видел tool_results).
       //  • последний msg = tool_result И контекст «тяжёлый» (>15KB JSON) —
@@ -6679,6 +6682,15 @@ async function runExpertLoop(
         if (tc.name === "search_catalog") catalogSearchAttempted = true;
         let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
 
+        if (tc.name === "lookup_knowledge" && result.ok) {
+          knowledgeHitsThisStep = Math.max(
+            knowledgeHitsThisStep,
+            Array.isArray((result as { hits?: unknown[] }).hits)
+              ? (result as { hits: unknown[] }).hits.length
+              : 0,
+          );
+        }
+
         if (tc.name === "search_catalog" && !result.ok) {
           const code = result.error_code;
           if (code === lastToolErrorCode) repeatedToolErrorStreak += 1;
@@ -8140,7 +8152,21 @@ async function runExpertLoop(
       // No-progress detector — выходим в forced-finalize, не сжигая остаток бюджета.
       if (groundedJargonTerminal || groundedCompoundSearchTerminal) break;
       if (rejectedRenderFinalizeBreak) break;
-      if (noProgressBreak) break;
+      if (noProgressBreak) {
+        const deferForKnowledge = shouldDeferNoProgressForKnowledge({
+          breakRequested: true,
+          knowledgeHits: knowledgeHitsThisStep,
+          alreadyDeferred: knowledgeSynthesisContinuationUsed,
+        });
+        if (!deferForKnowledge) break;
+        knowledgeSynthesisContinuationUsed = true;
+        noProgressBreak = false;
+        steps.push({
+          step: "v3_no_progress_deferred_for_knowledge",
+          ms: now(),
+          meta: { knowledge_hits: knowledgeHitsThisStep, step_index: step },
+        });
+      }
       // Тупик по критериям: сервер сам дважды сходил в каталог по формулировке
       // модели и не нашёл ничего — новых сигналов не будет, честно завершаем.
       if (criteriaDeadEndBreak) break;

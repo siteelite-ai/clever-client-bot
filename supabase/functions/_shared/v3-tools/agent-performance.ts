@@ -30,6 +30,20 @@ export function boundedAgentStepTimeout(
   return Math.min(requested, remaining);
 }
 
+/**
+ * A repeated catalog pool is not the end of an inquiry when the same model
+ * step has just produced grounded knowledge evidence. Allow exactly one more
+ * model call to turn those retrieved fragments into the visible answer; the
+ * one-shot guard keeps the original loop protection intact.
+ */
+export function shouldDeferNoProgressForKnowledge(input: {
+  breakRequested: boolean;
+  knowledgeHits: number;
+  alreadyDeferred: boolean;
+}): boolean {
+  return input.breakRequested && input.knowledgeHits > 0 && !input.alreadyDeferred;
+}
+
 export interface DeterministicIntroToolCall {
   name: "discover_category";
   args: { noun: string; semantic_query: string };

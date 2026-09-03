@@ -8,6 +8,7 @@ import {
   isToolAllowedInAgentPhase,
   nextAgentPhase,
   shouldDeferInquiryIntro,
+  shouldDeferNoProgressForKnowledge,
   shouldAllowCorrectiveDiscovery,
   toolNamesForAgentPhase,
 } from "./agent-performance.ts";
@@ -18,6 +19,29 @@ Deno.test("agent deadline: remote steps are bounded and reserve finalization tim
   assertEquals(boundedAgentStepTimeout(110_000, 90_000, 105_000, 5_000), 15_000);
   assertEquals(boundedAgentStepTimeout(30_000, 100_001, 105_000, 5_000), null);
   assertEquals(boundedAgentStepTimeout(30_000, 105_000, 105_000, 5_000), null);
+});
+
+Deno.test("agent no-progress: successful knowledge lookup gets one synthesis step", () => {
+  assert(shouldDeferNoProgressForKnowledge({
+    breakRequested: true,
+    knowledgeHits: 5,
+    alreadyDeferred: false,
+  }));
+  assert(!shouldDeferNoProgressForKnowledge({
+    breakRequested: true,
+    knowledgeHits: 0,
+    alreadyDeferred: false,
+  }));
+  assert(!shouldDeferNoProgressForKnowledge({
+    breakRequested: true,
+    knowledgeHits: 5,
+    alreadyDeferred: true,
+  }));
+  assert(!shouldDeferNoProgressForKnowledge({
+    breakRequested: false,
+    knowledgeHits: 5,
+    alreadyDeferred: false,
+  }));
 });
 
 Deno.test("forced discovery timeout falls back to live taxonomy without product rules", () => {
