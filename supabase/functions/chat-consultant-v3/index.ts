@@ -258,6 +258,19 @@ function encodeSse(ev: SseEvent): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify({ v3_event: ev })}\n\n`);
 }
 
+const SSE_EVENT_TYPES = new Set<SseEvent["type"]>([
+  "delta", "diagnostic", "conversation_boundary", "assistant_turn_break",
+  "tool_event", "products_block", "contacts", "quick_replies", "slot_update", "done",
+]);
+
+function replayableSseEvents(value: unknown): SseEvent[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((event): event is SseEvent => Boolean(
+    event && typeof event === "object" &&
+      SSE_EVENT_TYPES.has((event as { type?: SseEvent["type"] }).type as SseEvent["type"]),
+  ));
+}
+
 // ─── Settings ───────────────────────────────────────────────────────────────
 
 interface AppSettings {
@@ -3159,21 +3172,59 @@ async function selectVerifiedOutdoorPoeProducts(
     .filter((product): product is ProductFull => Boolean(product));
 }
 
-async function insertTurnLogStart(
+interface ReplayLogRow {
+  id: string;
+  session_id: string | null;
+  user_query: string | null;
+  error: string | null;
+  response_events: unknown;
+}
+
+type TurnClaim =
+  | { kind: "created"; id: string }
+  | { kind: "existing"; row: ReplayLogRow }
+  | { kind: "missing" }
+  | { kind: "unavailable" };
+
+async function readReplayLog(
+  supabase: SupabaseClient,
+  messageId: string,
+): Promise<ReplayLogRow | null> {
+  const { data, error } = await supabase
+    .from("chat_request_logs")
+    .select("id,session_id,user_query,error,response_events")
+    .eq("message_id", messageId)
+    .maybeSingle();
+  if (error) {
+    console.error("[v3] replay log read failed:", error.message);
+    return null;
+  }
+  return data as ReplayLogRow | null;
+}
+
+async function claimTurnLogStart(
   supabase: SupabaseClient,
   sessionId: string,
+  messageId: string,
   userQuery: string,
   initialSteps: StepLog[],
-): Promise<string | null> {
+  resumeOnly: boolean,
+): Promise<TurnClaim> {
   try {
+    if (resumeOnly) {
+      const existing = await readReplayLog(supabase, messageId);
+      return existing ? { kind: "existing", row: existing } : { kind: "missing" };
+    }
     const { data, error } = await supabase
       .from("chat_request_logs")
       .insert({
         session_id: sessionId,
+        message_id: messageId,
         user_query: userQuery,
         pipeline: "v3",
         branch: "v3_expert",
         steps: initialSteps,
+        response_events: [],
         final_products_count: 0,
         final_response: null,
         total_ms: 0,
@@ -3181,15 +3232,36 @@ async function insertTurnLogStart(
       })
       .select("id")
       .single();
+    if (error && error.code === "23505") {
+      const existing = await readReplayLog(supabase, messageId);
+      return existing ? { kind: "existing", row: existing } : { kind: "unavailable" };
+    }
     if (error) {
       console.error("[v3] log start insert failed:", error.message);
-      return null;
+      return { kind: "unavailable" };
     }
-    return (data as { id: string } | null)?.id ?? null;
+    const id = (data as { id: string } | null)?.id;
+    return id ? { kind: "created", id } : { kind: "unavailable" };
   } catch (e) {
     console.error("[v3] log start exception:", e);
-    return null;
+    return { kind: "unavailable" };
   }
+}
+
+async function waitForReplayCompletion(
+  supabase: SupabaseClient,
+  messageId: string,
+  initial: ReplayLogRow,
+  timeoutMs = 85_000,
+): Promise<ReplayLogRow> {
+  let current = initial;
+  const deadline = Date.now() + timeoutMs;
+  while (current.error === "in_progress" && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    const refreshed = await readReplayLog(supabase, messageId);
+    if (refreshed) current = refreshed;
+  }
+  return current;
 }
 
 async function updateTurnLogEnd(
@@ -3200,6 +3272,7 @@ async function updateTurnLogEnd(
   finalResponse: string,
   finalProductsCount: number,
   errorMsg: string | null,
+  responseEvents: SseEvent[],
 ) {
   try {
     const { error } = await supabase
@@ -3210,6 +3283,7 @@ async function updateTurnLogEnd(
         final_response: finalResponse || null,
         total_ms: totalMs,
         error: errorMsg,
+        response_events: responseEvents,
       })
       .eq("id", logId);
     if (error) console.error("[v3] log update failed:", error.message);
@@ -9528,27 +9602,32 @@ Deno.serve(async (req) => {
   let publicDiagnosticError: string | null = null;
   let finalTextAccum = "";
   let productsCount = 0;
+  const responseEvents: SseEvent[] = [];
 
   const stream = new ReadableStream({
     async start(controller) {
+      const emit = (ev: SseEvent) => {
+        try { controller.enqueue(encodeSse(ev)); } catch (e) {
+          console.error("[v3] enqueue failed:", e);
+        }
+      };
       const send = (ev: SseEvent) => {
-        try {
-          // GUARD: единственный выход текста наружу. Служебная лексика механики
-          // (имена инструментов, поля каталога, модели/провайдеры, промпт) режется
-          // здесь, а не в каждом call-site — иначе новая ветка вывода снова течёт.
-          let out = ev;
-          if (ev.type === "delta") {
-            const r = redactInternals(ev.content);
-            if (r.redacted) {
-              steps.push({ step: "v3_internals_redacted", ms: Date.now() - t0, meta: { matched: r.matched, original: ev.content } });
-              out = { type: "delta", content: r.text };
-            } else if (r.text !== ev.content) {
-              out = { type: "delta", content: r.text };
-            }
-            finalTextAccum += (out as { content: string }).content;
+        // GUARD: единственный выход текста наружу. Служебная лексика механики
+        // (имена инструментов, поля каталога, модели/провайдеры, промпт) режется
+        // здесь, а не в каждом call-site — иначе новая ветка вывода снова течёт.
+        let out = ev;
+        if (ev.type === "delta") {
+          const r = redactInternals(ev.content);
+          if (r.redacted) {
+            steps.push({ step: "v3_internals_redacted", ms: Date.now() - t0, meta: { matched: r.matched, original: ev.content } });
+            out = { type: "delta", content: r.text };
+          } else if (r.text !== ev.content) {
+            out = { type: "delta", content: r.text };
           }
-          controller.enqueue(encodeSse(out));
-        } catch (e) { console.error("[v3] enqueue failed:", e); }
+          finalTextAccum += (out as { content: string }).content;
+        }
+        responseEvents.push(out);
+        emit(out);
       };
 
       // Open the SSE transport before any settings/database dependency. When
@@ -9561,70 +9640,98 @@ Deno.serve(async (req) => {
         try { controller.enqueue(keepAliveBytes); } catch { /* stream already closed */ }
       }, 10_000);
 
-      const settings = await loadSettings(supabase);
-      if (!settings.openrouter_api_key || !settings.volt220_api_token) {
-        errorMsg = !settings.openrouter_api_key ? "missing_openrouter_key" : "missing_catalog_token";
-        publicDiagnosticError = "internal_error";
-        send({ type: "delta", content: "Не удалось запустить подбор из-за внутренней ошибки. Повторите запрос позже или свяжитесь с менеджером." });
-        send({ type: "diagnostic", log_id: null, phase: "complete", products_count: 0, error: publicDiagnosticError });
+      steps.push({ step: "v3_turn_start", ms: 0, meta: { user_message: userMessage, session_id: sessionId, message_id: body.messageId } });
+      const claim = await claimTurnLogStart(
+        supabase,
+        sessionId,
+        body.messageId,
+        userMessage,
+        [...steps],
+        body.resumeOnly,
+      );
+
+      if (claim.kind === "missing" || claim.kind === "unavailable") {
+        send({
+          type: "delta",
+          content: claim.kind === "missing"
+            ? "Не удалось восстановить этот запрос. Отправьте сообщение ещё раз."
+            : "Не удалось безопасно запустить запрос. Повторите попытку позже.",
+        });
+        send({ type: "diagnostic", log_id: null, phase: "complete", products_count: 0, error: "request_unavailable" });
         clearInterval(keepAliveTimer);
         try { send({ type: "done" }); } catch { /* ignore */ }
         try { controller.close(); } catch { /* already closed */ }
         return;
       }
 
-      steps.push({ step: "v3_turn_start", ms: 0, meta: { user_message: userMessage, session_id: sessionId, message_id: body.messageId } });
+      if (claim.kind === "existing") {
+        if (claim.row.session_id !== sessionId || claim.row.user_query !== userMessage) {
+          send({ type: "delta", content: "Не удалось безопасно восстановить запрос: идентификатор уже используется." });
+          send({ type: "diagnostic", log_id: claim.row.id, phase: "complete", products_count: 0, error: "request_conflict" });
+          clearInterval(keepAliveTimer);
+          try { send({ type: "done" }); } catch { /* ignore */ }
+          try { controller.close(); } catch { /* already closed */ }
+          return;
+        }
+        const replay = await waitForReplayCompletion(supabase, body.messageId, claim.row);
+        const events = replayableSseEvents(replay.response_events);
+        clearInterval(keepAliveTimer);
+        if (events.length > 0 && replay.error !== "in_progress") {
+          for (const event of events) emit(event);
+        } else {
+          emit({ type: "delta", content: "Запрос ещё обрабатывается, но соединение не удалось восстановить. Повторите попытку позже." });
+          emit({ type: "diagnostic", log_id: replay.id, phase: "complete", products_count: 0, error: "request_pending" });
+          emit({ type: "done" });
+        }
+        try { controller.close(); } catch { /* already closed */ }
+        return;
+      }
 
-      // Two-phase logging: вставляем row сразу (видим запрос даже при abort/timeout/crash),
-      // в finally апдейтим финальные поля. Update оборачиваем в EdgeRuntime.waitUntil,
-      // чтобы воркер не убили до завершения insert/update при abort стрима.
-      const logId = await insertTurnLogStart(supabase, sessionId, userMessage, [...steps]);
+      // Строка лога одновременно служит блокировкой по messageId и хранилищем
+      // финальных SSE-событий: повторное подключение читает готовый ответ, а не
+      // запускает каталог и LLM ещё раз.
+      const logId = claim.id;
       send({ type: "diagnostic", log_id: logId, phase: "start" });
 
-      // Systemic protection against hard worker kills (Edge Runtime SIGKILL via req.signal).
-      // try/catch/finally может НЕ выполниться, если рантайм убивает воркер до return.
-      // Поэтому регистрируем abort-listener сразу и заворачиваем финализацию в EdgeRuntime.waitUntil,
-      // чтобы UPDATE chat_request_logs гарантированно ушёл в БД.
+      // The client transport and the accepted pipeline have different
+      // lifecycles. A browser/proxy disconnect must not cancel paid catalog and
+      // model work: a resume-only request will replay the persisted result.
+      const executionController = new AbortController();
+      const executionTimer = setTimeout(() => executionController.abort(), TURN_TIMEOUT_MS + 10_000);
       let logFinalized = false;
-      const rt = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void }; }).EdgeRuntime;
 
-      // Async-версия для штатного finally: дожидаемся UPDATE до закрытия стрима,
-      // чтобы воркер не уехал в idle/shutdown до завершения запроса к PostgREST.
-      const finalizeLogAwait = async (reason: "ok" | "error", errOverride?: string | null) => {
-        if (!logId || logFinalized) return;
+      const finalizeLogAwait = async (errOverride?: string | null) => {
+        if (logFinalized) return;
         logFinalized = true;
         const snapshotSteps = [...steps];
         const finalErr = errOverride !== undefined ? errOverride : errorMsg;
         try {
-          await updateTurnLogEnd(supabase, logId, snapshotSteps, Date.now() - t0, finalTextAccum, productsCount, finalErr);
+          await updateTurnLogEnd(
+            supabase, logId, snapshotSteps, Date.now() - t0,
+            finalTextAccum, productsCount, finalErr, [...responseEvents],
+          );
         } catch (e) {
           console.error("[v3] finalizeLogAwait failed:", e);
         }
       };
 
-      // Fire-and-forget версия для abort-листенера: стрим уже закрыт runtime'ом,
-      // ждать нельзя — пробуем через waitUntil как best-effort.
-      const finalizeLogAbort = () => {
-        if (!logId || logFinalized) return;
-        logFinalized = true;
-        const snapshotSteps = [...steps];
-        snapshotSteps.push({
-          step: "v3_turn_end",
-          ms: Date.now() - t0,
-          meta: { reason: "aborted_by_runtime", error: "worker killed by edge runtime (req.signal abort)" },
-        });
-        const persist = updateTurnLogEnd(supabase, logId, snapshotSteps, Date.now() - t0, finalTextAccum, productsCount, "aborted_by_runtime");
-        if (rt?.waitUntil) rt.waitUntil(persist);
-        else void persist;
-      };
+      const settings = await loadSettings(supabase);
+      if (!settings.openrouter_api_key || !settings.volt220_api_token) {
+        errorMsg = !settings.openrouter_api_key ? "missing_openrouter_key" : "missing_catalog_token";
+        publicDiagnosticError = "internal_error";
+        send({ type: "delta", content: "Не удалось запустить подбор из-за внутренней ошибки. Повторите запрос позже или свяжитесь с менеджером." });
+        const completeEvent: SseEvent = { type: "diagnostic", log_id: logId, phase: "complete", products_count: 0, error: publicDiagnosticError };
+        responseEvents.push(completeEvent, { type: "done" });
+        await finalizeLogAwait();
+        clearInterval(keepAliveTimer);
+        clearTimeout(executionTimer);
+        emit(completeEvent);
+        emit({ type: "done" });
+        try { controller.close(); } catch { /* already closed */ }
+        return;
+      }
 
-      const onRuntimeAbort = () => {
-        console.error("[v3] req.signal aborted by runtime — finalizing log (best-effort)");
-        finalizeLogAbort();
-      };
-      if (req.signal.aborted) onRuntimeAbort();
-      else req.signal.addEventListener("abort", onRuntimeAbort, { once: true });
-
+      try {
       const priorHistory = stripCurrentUserEcho(history, userMessage);
       const boundary = await classifyConversationBoundary(
         userMessage,
@@ -9634,7 +9741,7 @@ Deno.serve(async (req) => {
           apiKey: settings.openrouter_api_key!,
           model: settings.classifier_model,
         },
-        req.signal,
+        executionController.signal,
       );
       const startsNewTask = shouldStartNewConversation(boundary);
       const effectiveSessionId = startsNewTask ? `session_${crypto.randomUUID()}` : sessionId;
@@ -9700,7 +9807,6 @@ Deno.serve(async (req) => {
         steps.push({ step: "v3_recent_product_evidence_loaded", ms: Date.now() - t0, meta: { count: recentProductEvidence.length } });
       }
 
-      try {
         const outdoorPoeIntent = classifyOutdoorPoeIntent(userMessage, effectiveHistory);
         const householdMotionLightRequest = classifyHouseholdMotionLightRequest(userMessage);
         const exactCompoundMarkingRequest = classifyExactCompoundMarkingRequest(userMessage);
@@ -9769,7 +9875,7 @@ Deno.serve(async (req) => {
             send,
             steps,
             t0,
-            req.signal,
+            executionController.signal,
           );
           if (direct.handled) {
             productsCount = direct.products.length;
@@ -9795,7 +9901,7 @@ Deno.serve(async (req) => {
             send,
             steps,
             t0,
-            req.signal,
+            executionController.signal,
           );
           productsCount = 0;
         } else if (recentProductEvidence.length > 0 && isRecentProductShowFollowup(userMessage)) {
@@ -9972,22 +10078,24 @@ Deno.serve(async (req) => {
         } catch { /* stream may be closed */ }
       } finally {
         clearInterval(keepAliveTimer);
-        try { req.signal.removeEventListener("abort", onRuntimeAbort); } catch { /* ignore */ }
+        clearTimeout(executionTimer);
+        const completeEvent: SseEvent = {
+          type: "diagnostic",
+          log_id: logId,
+          phase: "complete",
+          products_count: productsCount,
+          error: publicDiagnosticError,
+        };
+        // Persist the exact public protocol before closing the live stream, so
+        // a reconnect can reproduce the completed answer without re-execution.
+        responseEvents.push(completeEvent, { type: "done" });
         // КРИТИЧНО: сначала дожидаемся UPDATE'а лога, пока стрим ещё открыт и воркер жив.
         // После controller.close() Supabase Edge Runtime может убить воркера, не дождавшись
         // никаких pending-промисов (в т.ч. EdgeRuntime.waitUntil после закрытия стрима).
-        await finalizeLogAwait(errorMsg ? "error" : "ok");
-        try {
-          send({
-            type: "diagnostic",
-            log_id: logId,
-            phase: "complete",
-            products_count: productsCount,
-            error: publicDiagnosticError,
-          });
-        } catch { /* stream may be closed */ }
+        await finalizeLogAwait();
+        emit(completeEvent);
         // Только теперь безопасно закрывать стрим — UPDATE уже долетел до БД.
-        try { send({ type: "done" }); } catch { /* ignore */ }
+        emit({ type: "done" });
         try { controller.close(); } catch { /* already closed */ }
       }
 

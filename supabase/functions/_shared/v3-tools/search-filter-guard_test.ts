@@ -535,6 +535,48 @@ Deno.test("a matching measurement unit proves an exact numeric facet value", () 
   assertEquals(result.args.options, { current: ["16"] });
 });
 
+Deno.test("a user measurement cannot be relabelled as another physical unit", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { power: ["1000"] } },
+    [{
+      key: "power",
+      caption: "Мощность, Вт",
+      unit: "Вт",
+      values: [{ value: "100" }, { value: "1000" }],
+    }],
+    "Ищу прожектор мощностью 1000 Вт для указанного светового потока.",
+    "Какая мощность у светодиодного прожектора на 1000 люмен?",
+  );
+
+  assertEquals(result.args.options, undefined);
+  assertEquals(result.dropped, [{
+    key: "power",
+    value: "1000",
+    reason: "unit_conflict",
+  }]);
+});
+
+Deno.test("matching unit aliases and genuinely computed values remain selectable", () => {
+  const facets = [{
+    key: "power",
+    caption: "Мощность, Вт",
+    unit: "Вт",
+    values: [{ value: "100" }, { value: "1000" }],
+  }];
+  assertEquals(guardSearchFilters(
+    { mode: "by_filter", options: { power: ["1000"] } },
+    facets,
+    "Нужна мощность 1000 Вт.",
+    "Нужен прожектор на 1000 ватт.",
+  ).args.options, { power: ["1000"] });
+  assertEquals(guardSearchFilters(
+    { mode: "by_filter", options: { power: ["100"] } },
+    facets,
+    "Для светового потока 1000 люмен ориентир по мощности — 100 Вт.",
+    "Нужен прожектор на 1000 люмен.",
+  ).args.options, { power: ["100"] });
+});
+
 Deno.test("directional reasoning rejects equality to the measured reference", () => {
   const result = guardSearchFilters(
     { mode: "by_filter", options: { before: ["12"] } },

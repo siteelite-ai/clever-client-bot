@@ -9,8 +9,8 @@
 // explicit negation always wins. Unproven filters are removed; the catalog can
 // still search the discovered category and the evidence gate validates cards.
 
-import { normalizeUnit } from "./criteria-consistency.ts";
-import { extractReasoningBounds } from "./criteria-reasoning.ts";
+import { extractClientQuantities, normalizeUnit } from "./criteria-consistency.ts";
+import { canonicalMeasurementUnit, extractReasoningBounds } from "./criteria-reasoning.ts";
 
 export interface SearchFacetValue {
   value: string;
@@ -28,7 +28,7 @@ export interface DroppedSearchFilter {
   value: string;
   reason:
     | "unknown_facet" | "unknown_value" | "not_declared_in_reasoning" | "negated_by_user"
-    | "non_atomic_value";
+    | "non_atomic_value" | "unit_conflict";
 }
 
 export interface SearchFilterGuardResult {
@@ -290,6 +290,33 @@ function tokensMatchByStem(left: string, right: string): boolean {
     if (differences === 1) return true;
   }
   return false;
+}
+
+/** Prevent a model from reusing a customer's exact scalar under another
+ * physical unit. The rule is dimension-agnostic: it compares only canonical
+ * units exposed by the live facet with explicit number+unit pairs in the
+ * customer's own text. Different computed values remain valid. */
+function numericFacetValueConflictsWithUserMeasurement(
+  value: string,
+  facet: SearchFacet,
+  userEvidence: string,
+): boolean {
+  const exactNumber = norm(value).match(/^\d+(?:[.,]\d+)?$/u)?.[0];
+  if (!exactNumber) return false;
+  const scalar = Number(exactNumber.replace(",", "."));
+  if (!Number.isFinite(scalar)) return false;
+  const expectedUnits = new Set([
+    facet.unit ?? "",
+    ...String(facet.caption ?? "").split(",").slice(1)
+      .flatMap((suffix) => suffix.match(/[a-zа-я°]{1,10}[²³]?\d?/giu) ?? []),
+  ].map(canonicalMeasurementUnit).filter(Boolean));
+  if (expectedUnits.size === 0) return false;
+  const sameScalar = extractClientQuantities(userEvidence)
+    .filter((quantity) => quantity.value === scalar);
+  if (sameScalar.length === 0) return false;
+  return sameScalar.every((quantity) =>
+    !expectedUnits.has(canonicalMeasurementUnit(quantity.unit))
+  );
 }
 
 function sameFacetValue(left: string, right: string): boolean {
@@ -571,6 +598,7 @@ export function guardSearchFilters(
   const inferred: Array<{ key: string; value: string }> = [];
   const subsumed: Array<{ key: string; value: string; by_key: string; by_value: string }> = [];
   const dropped: DroppedSearchFilter[] = [];
+  const unitConflictKeys = new Set<string>();
   const requestedOptions = args.options && typeof args.options === "object"
     ? args.options as Record<string, unknown>
     : {};
@@ -595,6 +623,11 @@ export function guardSearchFilters(
       }
       if (!isAtomicFacetValue(canonical)) {
         dropped.push({ key, value: canonical, reason: "non_atomic_value" });
+        continue;
+      }
+      if (numericFacetValueConflictsWithUserMeasurement(canonical, facet, userEvidence)) {
+        unitConflictKeys.add(canonicalKey);
+        dropped.push({ key, value: canonical, reason: "unit_conflict" });
         continue;
       }
       if (!numericFacetValueIsLocallyEvidenced(canonical, facet, declaredReasoning)) {
@@ -673,6 +706,7 @@ export function guardSearchFilters(
     const evidenced = facet.values.filter((candidate) => {
       const normalized = norm(candidate.value);
       if (!isAtomicFacetValue(candidate.value)) return false;
+      if (numericFacetValueConflictsWithUserMeasurement(candidate.value, facet, userEvidence)) return false;
       if (!normalized || ["да", "нет", "есть", "отсутствует"].includes(normalized)) return false;
       if (!/[a-zа-я]/iu.test(normalized)) {
         return /^\d+(?:[.,]\d+)?$/u.test(normalized) &&
@@ -696,7 +730,7 @@ export function guardSearchFilters(
   // intersection. Keep the richer value and remove only a strictly subsumed
   // option; the richer value remains an enforced render criterion.
   for (const facet of facets) {
-    if (nextOptions [facet.key]?.length || isReplacementIdentityFacet(facet)) {
+    if (nextOptions [facet.key]?.length || unitConflictKeys.has(facet.key) || isReplacementIdentityFacet(facet)) {
       continue;
     }
     // Missing numeric/options may be completed only from actual consultant
@@ -714,6 +748,7 @@ export function guardSearchFilters(
       if (!numericFacetValueIsLocallyEvidenced(candidate.value, facet, inferenceEvidence)) {
         return false;
       }
+      if (numericFacetValueConflictsWithUserMeasurement(candidate.value, facet, userEvidence)) return false;
       return explicitlyAffirmedByFacetReasoning(candidate.value, inferenceEvidence);
     });
     if (evidenced.length !== 1) continue;

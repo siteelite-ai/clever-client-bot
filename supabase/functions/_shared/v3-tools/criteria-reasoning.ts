@@ -231,7 +231,7 @@ export function hasMeasuredSelectionRequirement(text: string): boolean {
   return false;
 }
 
-function canonicalMeasurementUnit(raw: string): string {
+export function canonicalMeasurementUnit(raw: string): string {
   const unit = normalizeUnit(raw);
   const aliases: Record<string, string> = {
     ватт: "вт", ватта: "вт", ваттов: "вт", watt: "вт", watts: "вт", w: "вт",

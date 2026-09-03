@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-721b29a413855247';
+  var WIDGET_VERSION = 'widget-d8da5cc307f128a5';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -994,7 +994,7 @@
   // Try streaming from a single endpoint, updating msgEl progressively
   // onFirstToken — вызывается при первом токене (убрать typing).
   // onProductsBlock — возвращает НОВЫЙ пузырь для карточек (разделение intro и списка).
-  async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken, onProductsBlock) {
+  async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken, onProductsBlock, resumeOnly) {
     if (!activePipelineReady) await fetchActivePipeline();
     var url = baseUrl + pipelinePath();
     var controller = new AbortController();
@@ -1023,29 +1023,46 @@
         messageId: currentMessageId,
         history: conversationHistory.slice(-10),
         stream: true,
+        resumeOnly: Boolean(resumeOnly),
         dialogSlots: activeSlots
       }),
       signal: controller.signal
     });
 
-    clearTimeout(timer);
-
-    if (!response.ok) throw await createHttpError(response, label);
+    if (!response.ok) {
+      clearTimeout(timer);
+      throw await createHttpError(response, label);
+    }
 
     // Check if we actually got a streaming response
     var contentType = response.headers.get('content-type') || '';
+    var reader;
     if (contentType.indexOf('event-stream') === -1) {
-      // Non-streaming response (proxy might not support SSE) — parse as JSON
+      // Some intermediaries preserve the SSE payload but rewrite its content
+      // type. Detect the protocol from the body before treating it as JSON.
       var text = await response.text();
-      var data;
-      try { data = JSON.parse(text); } catch(e) { throw new Error(label + ' invalid JSON'); }
-      if (data.error) throw new Error(label + ': ' + data.error);
-      if (!data.content) throw new Error(label + ': empty content');
-      onFirstToken();
-      return { content: data.content, contacts: data.contacts || null };
+      if (!/^\s*(?::[^\n]*\n|data:\s*)/u.test(text)) {
+        clearTimeout(timer);
+        var data;
+        try { data = JSON.parse(text); } catch(e) { throw new Error(label + ' invalid JSON'); }
+        if (data.error) throw new Error(label + ': ' + data.error);
+        if (!data.content) throw new Error(label + ': empty content');
+        onFirstToken();
+        return { content: data.content, contacts: data.contacts || null };
+      }
+      var preloaded = text;
+      reader = {
+        read: async function() {
+          if (preloaded === null) return { done: true, value: undefined };
+          var value = preloaded;
+          preloaded = null;
+          return { done: false, value: value };
+        }
+      };
+    } else {
+      reader = response.body.getReader();
     }
 
-    var reader = response.body.getReader();
     var decoder = new TextDecoder();
     var textBuffer = '';
     var introContent = '';
@@ -1084,15 +1101,19 @@
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
     }
 
-    while (!done) {
-      var chunk = await reader.read();
-      if (chunk.done) break;
-      textBuffer += decoder.decode(chunk.value, { stream: true });
+    var streamReadError = null;
+    try {
+      while (!done) {
+        var chunk = await reader.read();
+        if (chunk.done) break;
+        textBuffer += typeof chunk.value === 'string'
+          ? chunk.value
+          : decoder.decode(chunk.value, { stream: true });
 
-      var parsed = parseSSELines(textBuffer);
-      textBuffer = parsed.remaining;
+        var parsed = parseSSELines(textBuffer);
+        textBuffer = parsed.remaining;
 
-      for (var i = 0; i < parsed.lines.length; i++) {
+        for (var i = 0; i < parsed.lines.length; i++) {
         var line = parsed.lines[i];
         if (line.startsWith(':') || line.trim() === '') continue;
         if (!line.startsWith('data: ')) continue;
@@ -1151,8 +1172,12 @@
           textBuffer = remainingLines + (textBuffer ? '\n' + textBuffer : '');
           break;
         }
+        }
       }
+    } catch (readError) {
+      streamReadError = readError;
     }
+    clearTimeout(timer);
 
     // Final flush
     try {
@@ -1203,6 +1228,23 @@
 
     var combined = [introContent, productsContent].filter(function(s){ return s && s.trim(); }).join('\n\n');
     if (!combined) {
+      // A diagnostic start is an explicit server acknowledgement. Retrying the
+      // same message through another route would start a second catalog/LLM
+      // execution and can return a contradictory answer. Surface one traceable
+      // partial result instead; retries remain allowed only before acceptance.
+      if (diagnosticLogId) {
+        return {
+          content: '',
+          contacts: contacts,
+          partial: true,
+          accepted: true,
+          split: true,
+          logId: diagnosticLogId,
+          serverProductsCount: diagnosticProductsCount,
+          transportError: streamReadError ? String(streamReadError.message || streamReadError) : null
+        };
+      }
+      if (streamReadError) throw streamReadError;
       if (!firstTokenReceived) throw new Error(label + ': empty streaming content');
       return { content: '', contacts: contacts, partial: true, split: true };
     }
@@ -1218,46 +1260,7 @@
     };
   }
 
-
-  // Fallback: non-streaming fetch
-  async function tryNonStreamEndpoint(baseUrl, message, label) {
-    if (!activePipelineReady) await fetchActivePipeline();
-    var url = baseUrl + pipelinePath();
-    var controller = new AbortController();
-    var timer = setTimeout(function() { controller.abort(); }, 60000);
-
-    var response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + CONFIG.supabaseKey,
-        'apikey': CONFIG.supabaseKey
-      },
-      body: JSON.stringify({
-        message: message,
-        sessionId: sessionId,
-        messageId: currentMessageId,
-        history: conversationHistory.slice(-10),
-        stream: false,
-        dialogSlots: dialogSlots
-      }),
-      signal: controller.signal
-    });
-
-    clearTimeout(timer);
-
-    if (!response.ok) throw await createHttpError(response, label);
-
-    var text = await response.text();
-    var data;
-    try { data = JSON.parse(text); } catch(e) { throw new Error(label + ' invalid JSON'); }
-    if (data.error) throw new Error(label + ': ' + data.error);
-    if (!data.content) throw new Error(label + ': empty content');
-    if (data.slot_update) { dialogSlots = data.slot_update; saveState(); }
-    return { content: data.content, contacts: data.contacts || null };
-  }
-
-  // Send message with streaming + fallback
+  // Send one message with streaming + idempotent replay recovery
   async function sendMessage() {
     if (isLoading) return;
     expireConversationIfNeeded(true);
@@ -1288,10 +1291,6 @@
     var streamEndpoints = [
       { url: 'https://yngoixmvmxdfxokuafjp.supabase.co', label: 'direct' },
       { url: CONFIG.supabaseUrl, label: 'proxy' }
-    ];
-    var fallbackEndpoints = [
-      { url: CONFIG.supabaseUrl, label: 'proxy' },
-      { url: 'https://yngoixmvmxdfxokuafjp.supabase.co', label: 'direct' }
     ];
 
     // Create assistant message element for streaming (intro-пузырь)
@@ -1366,7 +1365,8 @@
                 messagesContainer.scrollTop = messagesContainer.scrollHeight;
               }
             },
-            openProductsBubble
+            openProductsBubble,
+            false
           );
           return;
         } catch (err) {
@@ -1382,17 +1382,40 @@
     // Wait for stream to complete
     await streamPromise;
 
-    // Fallback to non-streaming — только если стрим вообще ничего не отдал
-    if (!result && !firstTokenArrived) {
-      for (var k = 0; k < fallbackEndpoints.length; k++) {
+    // If the server acknowledged the request but the transport broke before
+    // any answer text arrived, reconnect in replay-only mode. The backend uses
+    // the same messageId as an idempotency key and is forbidden to start a
+    // second catalog/model execution.
+    if (result && result.accepted && result.partial && !result.content) {
+      var acceptedPartial = result;
+      var resumeEndpoints = [streamEndpoints[1], streamEndpoints[0]];
+      for (var r = 0; r < resumeEndpoints.length; r++) {
         try {
-          result = await tryNonStreamEndpoint(fallbackEndpoints[k].url, message, fallbackEndpoints[k].label);
-          break;
-        } catch (err) {
-          lastError = err;
-          try { console.warn('[Widget] fallback ' + fallbackEndpoints[k].label + ' failed: ' + (err && err.message)); } catch(e) {}
+          var replayed = await tryStreamEndpoint(
+            resumeEndpoints[r].url, message, resumeEndpoints[r].label + '-resume', assistantMsg,
+            function() {
+              firstTokenArrived = true;
+              var typingElReplay = document.getElementById('volt-typing-indicator');
+              if (typingElReplay) typingElReplay.remove();
+              if (!msgInserted) {
+                messagesContainer.appendChild(assistantMsg);
+                assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                msgInserted = true;
+              }
+            },
+            openProductsBubble,
+            true
+          );
+          if (replayed && replayed.content) {
+            result = replayed;
+            break;
+          }
+        } catch (resumeError) {
+          lastError = resumeError;
+          try { console.warn('[Widget] resume ' + resumeEndpoints[r].label + ' failed: ' + (resumeError && resumeError.message)); } catch(e) {}
         }
       }
+      if (!result || !result.content) result = acceptedPartial;
     }
 
     // Стрим завершён — блокируем отложенное появление live-typing и снимаем все индикаторы
@@ -1426,8 +1449,9 @@
 
     if (result) {
       var cleanContent = stripGreeting(result.content);
+      var hasContent = Boolean(cleanContent && cleanContent.trim());
       // Если стрим НЕ дал split (non-stream fallback) — рендерим всё в один пузырь.
-      if (!result.split || !firstTokenArrived) {
+      if (hasContent && (!result.split || !firstTokenArrived)) {
         if (!msgInserted) {
           messagesContainer.appendChild(assistantMsg);
           msgInserted = true;
@@ -1436,15 +1460,21 @@
         assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
       // Если split уже произошёл — пузыри уже отрисованы прогрессивно, не перерисовываем.
-      conversationHistory.push({ role: 'assistant', content: cleanContent });
-      saveState();
+      if (hasContent) {
+        conversationHistory.push({ role: 'assistant', content: cleanContent });
+        saveState();
+      }
 
       if (result.contacts) {
         addMessage(result.contacts, 'assistant');
       }
-      var diagnosticTarget = (productsMsg && productsMsg.parentNode) ? productsMsg : assistantMsg;
+      var diagnosticTarget = (productsMsg && productsMsg.parentNode) ? productsMsg : (hasContent ? assistantMsg : null);
+      if (result.partial && !hasContent) {
+        if (assistantMsg.parentNode) assistantMsg.remove();
+        diagnosticTarget = addMessage('Сервер принял запрос, но соединение прервалось до получения ответа. Повторите запрос и сообщите менеджеру код запроса ниже.', 'assistant');
+      }
       addDiagnosticLabel(diagnosticTarget, result.logId, result.partial);
-      if (result.partial) {
+      if (result.partial && hasContent) {
         addMessage('Соединение прервалось до завершения ответа. Повторите запрос и сообщите менеджеру код запроса, указанный выше.', 'assistant');
       } else if (typeof result.serverProductsCount === 'number' && result.serverProductsCount > 0 && !result.productsContent) {
         addMessage('Сервер нашёл товары, но карточки не отобразились. Повторите запрос и сообщите менеджеру код запроса, указанный выше.', 'assistant');
