@@ -13,6 +13,7 @@ import {
   shouldDeferNoProgressForKnowledge,
   shouldFinalizeInquiryFromKnowledge,
   shouldRecoverInquiryNoProgressWithKnowledge,
+  shouldRequestReasoningOnlyAfterIncompleteSearch,
   shouldContinueSelectionUntilCatalogAttempt,
   shouldAllowCorrectiveDiscovery,
   toolNamesForAgentPhase,
@@ -176,6 +177,29 @@ Deno.test("agent phase: only a completed catalog result establishes an attempt",
   assert(establishesCatalogAttempt({ tool: "search_catalog", ok: true }));
   assert(!establishesCatalogAttempt({ tool: "search_catalog", ok: false }));
   assert(!establishesCatalogAttempt({ tool: "discover_category", ok: true }));
+});
+
+Deno.test("agent phase: an evidence-empty filter gets one prose-only reasoning step", () => {
+  assert(shouldRequestReasoningOnlyAfterIncompleteSearch({
+    intentMode: "select",
+    errorCode: "incomplete_filter",
+    catalogSearchAttempted: false,
+  }));
+  assert(!shouldRequestReasoningOnlyAfterIncompleteSearch({
+    intentMode: "select",
+    errorCode: "upstream_error",
+    catalogSearchAttempted: false,
+  }));
+  assert(!shouldRequestReasoningOnlyAfterIncompleteSearch({
+    intentMode: "inquire",
+    errorCode: "incomplete_filter",
+    catalogSearchAttempted: false,
+  }));
+  assert(!shouldRequestReasoningOnlyAfterIncompleteSearch({
+    intentMode: "select",
+    errorCode: "incomplete_filter",
+    catalogSearchAttempted: true,
+  }));
 });
 
 Deno.test("agent phase: jargon helper stays closed until the bounded taxonomy retry also fails", () => {

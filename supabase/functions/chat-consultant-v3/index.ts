@@ -121,6 +121,7 @@ import {
   shouldDeferNoProgressForKnowledge,
   shouldFinalizeInquiryFromKnowledge,
   shouldRecoverInquiryNoProgressWithKnowledge,
+  shouldRequestReasoningOnlyAfterIncompleteSearch,
   shouldContinueSelectionUntilCatalogAttempt,
   toolNamesForAgentPhase,
 } from "../_shared/v3-tools/agent-performance.ts";
@@ -3483,6 +3484,10 @@ async function runExpertLoop(
   // phase. This preserves one opportunity for a model-owned category
   // correction while preventing taxonomy-only answers with zero products.
   let selectionCatalogContinuationRequired = false;
+  // One bounded prose-only continuation lets the same consultant expose a
+  // calculation that was present only in rejected tool arguments. The next
+  // iteration returns to the ordinary forced catalog phase.
+  let selectionReasoningOnlyRequired = false;
   // Последний осмысленный поисковый запрос — нужен как «существительное» для
   // self-requery: критерии сами по себе («не менее 40 мм») не запрос, они
   // обретают смысл только вместе с предметом текущего поиска.
@@ -4116,10 +4121,10 @@ async function runExpertLoop(
         correctiveDiscoveryAvailable: agentPhase === "search_after_discovery" &&
           !selectionCatalogContinuationRequired && !correctiveDiscoveryUsed && !freshSearch,
       };
-      const availableToolNames = finalizeFromRecoveredKnowledge
+      const availableToolNames = finalizeFromRecoveredKnowledge || selectionReasoningOnlyRequired
         ? []
         : toolNamesForAgentPhase(agentPhase, agentToolPolicy);
-      const forcedToolName = finalizeFromRecoveredKnowledge
+      const forcedToolName = finalizeFromRecoveredKnowledge || selectionReasoningOnlyRequired
         ? null
         : forcedToolNameForAgentPhase(agentPhase, agentToolPolicy);
       let resp: ORResponse;
@@ -4556,6 +4561,9 @@ async function runExpertLoop(
           break;
         }
         if (requiresToolContinuation) {
+          if (selectionReasoningOnlyRequired) {
+            selectionReasoningOnlyRequired = false;
+          }
           if (shouldContinueSelectionUntilCatalogAttempt({
             intentMode,
             phase: agentPhase,
@@ -6716,6 +6724,7 @@ async function runExpertLoop(
         if (establishesCatalogAttempt({ tool: tc.name, ok: result.ok })) {
           catalogSearchAttempted = true;
           selectionCatalogContinuationRequired = false;
+          selectionReasoningOnlyRequired = false;
         } else if (
           tc.name === "search_catalog" &&
           !result.ok &&
@@ -6732,6 +6741,11 @@ async function runExpertLoop(
             ...result,
             message: "Поиск не выполнен: после проверки аргументов не осталось подтверждённой категории или фильтров. Явно сформулируй клиенту своё расчётное рассуждение и критерии, затем повтори search_catalog с теми же обоснованными параметрами.",
           };
+          selectionReasoningOnlyRequired = shouldRequestReasoningOnlyAfterIncompleteSearch({
+            intentMode,
+            errorCode: result.error_code,
+            catalogSearchAttempted,
+          });
           steps.push({
             step: "v3_incomplete_search_requires_reasoning",
             ms: now(),

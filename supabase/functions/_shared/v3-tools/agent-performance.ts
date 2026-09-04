@@ -109,6 +109,22 @@ export function establishesCatalogAttempt(input: {
   return input.tool === "search_catalog" && input.ok;
 }
 
+/**
+ * When every model-proposed filter was removed by the evidence guard, the
+ * consultant must expose the reasoning behind those values before it may try
+ * to serialize them again. Closing tools for one bounded model call prevents
+ * forced tool choice from suppressing that customer-visible explanation.
+ */
+export function shouldRequestReasoningOnlyAfterIncompleteSearch(input: {
+  intentMode: "select" | "inquire";
+  errorCode?: string;
+  catalogSearchAttempted: boolean;
+}): boolean {
+  return input.intentMode === "select" &&
+    input.errorCode === "incomplete_filter" &&
+    !input.catalogSearchAttempted;
+}
+
 export function buildInquiryKnowledgeSynthesisMessages(
   userMessage: string,
   knowledge: unknown,
