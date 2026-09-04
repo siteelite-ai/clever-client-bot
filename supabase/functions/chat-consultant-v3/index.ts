@@ -33,7 +33,7 @@ import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-le
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { buildDerivedSelectionReasoningMessages, hasActionableSelectionContract, measuredSelectionContractEvidence, shouldContinueSelectionPastOptionalClarification, shouldRequireDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, initialSelectionDeclaration, parseSelectionTarget, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, initialSelectionDeclaration, parseSelectionTarget, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, declaredAliasIsStructurallyCustomerOwned, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
@@ -8436,6 +8436,14 @@ async function runExpertLoop(
       `${terminalReasoningEvidence}\n${assistantReasoning}`,
       "terminal_accumulated_reasoning",
     );
+    // All terminal paths share one class contract. A failed first render may
+    // leave `activeSelectionTarget` at its broader verified base; a more
+    // specific declaration that already passed grounding must nevertheless
+    // constrain every recovery pool.
+    const terminalSelectionTarget = resolveTerminalSelectionTarget(
+      activeSelectionTarget,
+      groundedSelectionTargetHint,
+    );
     const terminalCategoryEvidence = [
       userMessage,
       initialSelectionDiscoveryNoun,
@@ -8469,7 +8477,7 @@ async function runExpertLoop(
       products_rendered: productsRendered,
       intent_mode: intentMode,
       has_discovery: Boolean(terminalDiscover),
-      has_selection_target: Boolean(activeSelectionTarget),
+      has_selection_target: Boolean(terminalSelectionTarget),
       has_search_attempt: catalogSearchAttempted,
       mandatory_criteria_count: terminalSelectionCriteria.length,
       replacement_intent: replacementIntent,
@@ -8490,7 +8498,7 @@ async function runExpertLoop(
       | { kind: "partial"; split: PendingJargonAxisSplit }
       | null
     > => {
-      if (!terminalDiscover || !activeSelectionTarget || !source.trim()) { return null;
+      if (!terminalDiscover || !terminalSelectionTarget || !source.trim()) { return null;
       }
       const terminalCriteria = resolveRenderCriteria(
         [],
@@ -8526,7 +8534,7 @@ async function runExpertLoop(
         .filter((product): product is ProductFull => Boolean(
           product && matchedQuery && titleSupportsGroundedJargonQuery(product.pagetitle, matchedQuery)
         ));
-      const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, candidateProducts);
+      const targetReport = verifySelectionTargetWithVisibleTitle(terminalSelectionTarget, candidateProducts);
       const gate = applyCriteriaGate(candidateProducts, terminalCriteria);
       const unresolvedModifiers = modifiers
         .filter((modifier, index, values) =>
@@ -8584,8 +8592,8 @@ async function runExpertLoop(
     };
 
     const renderJargonAxisSplit = async (split: PendingJargonAxisSplit): Promise<boolean> => {
-      if (!terminalDiscover || !activeSelectionTarget || split.modifiers.length === 0) return false;
-      const target = activeSelectionTarget;
+      if (!terminalDiscover || !terminalSelectionTarget || split.modifiers.length === 0) return false;
+      const target = terminalSelectionTarget;
       const budgetCap = extractBudgetCap(userMessage);
       const baseProducts = split.baseIds
         .map((id) => ctx.cache.get(id))
@@ -8724,7 +8732,7 @@ async function runExpertLoop(
     if (
       productsRendered === 0 &&
       terminalCompatibilityDiscover &&
-      activeSelectionTarget &&
+      terminalSelectionTarget &&
       terminalCompatibilityReference &&
       minimumCompatibilityRelationCount(terminalCompatibilityEvidence) >= 2
     ) {
@@ -8740,7 +8748,7 @@ async function runExpertLoop(
           terminalCompatibilityReference.value,
         );
         const target = verifySelectionTargetWithVisibleTitle(
-          activeSelectionTarget!,
+          terminalSelectionTarget,
           paired.products,
         );
         const targetIds = new Set(target.passed_ids);
@@ -8763,7 +8771,7 @@ async function runExpertLoop(
       if (safeIds.length === 0) {
         const semanticPool = await runTool("search_catalog", {
           mode: "by_query",
-          query: activeSelectionTarget,
+          query: terminalSelectionTarget,
           per_page: 50,
         }, ctx);
         if (semanticPool.ok && semanticPool.tool === "search_catalog") {
@@ -8803,7 +8811,7 @@ async function runExpertLoop(
             step: "v3_terminal_compatibility_pair_recovery",
             ms: now(),
             meta: {
-              target: activeSelectionTarget,
+              target: terminalSelectionTarget,
               reference: terminalCompatibilityReference,
               rendered: rendered.rendered_count,
             },
@@ -8814,7 +8822,7 @@ async function runExpertLoop(
       steps.push({
         step: "v3_terminal_compatibility_pair_recovery_empty",
         ms: now(),
-        meta: { target: activeSelectionTarget, reference: terminalCompatibilityReference },
+        meta: { target: terminalSelectionTarget, reference: terminalCompatibilityReference },
       });
     }
     if (
@@ -9057,7 +9065,7 @@ async function runExpertLoop(
         },
       });
     }
-    if (!terminalAliasRequirement && terminalFinalizationRequired && terminalDiscover && activeSelectionTarget) {
+    if (!terminalAliasRequirement && terminalFinalizationRequired && terminalDiscover && terminalSelectionTarget) {
       const terminalCriteria = terminalSelectionCriteria;
       const facetProjection = projectCriteriaFacetOptions(terminalCriteria, terminalDiscover.facets);
       if (terminalCriteria.length > 0 && Object.keys(facetProjection.options).length > 0) {
@@ -9096,7 +9104,7 @@ async function runExpertLoop(
           }
         }
         if (recovered.ok && recovered.tool === "search_catalog") {
-          const terminalTarget = activeSelectionTarget;
+          const terminalTarget = terminalSelectionTarget;
           const evaluateTerminalPool = (
             pool: SearchCatalogOk,
             provenCriteria: Criterion[] = facetProjection.proven_criteria,
@@ -9201,7 +9209,7 @@ async function runExpertLoop(
     // lookup aligned with the explanation and avoids both a product dictionary
     // and an expensive scan of unrelated catalog pages. Every returned card is
     // still revalidated against the complete target/criteria/budget contract.
-    if (!terminalAliasRequirement && terminalFinalizationRequired && terminalDiscover && activeSelectionTarget) {
+    if (!terminalAliasRequirement && terminalFinalizationRequired && terminalDiscover && terminalSelectionTarget) {
       const terminalCriteria = terminalSelectionCriteria;
       if (terminalCriteria.length > 0) {
         send({ type: "tool_event", tool: "search_catalog", phase: "start", summary: "Сверяю поиск с выбранным типом товара…" });
@@ -9212,7 +9220,7 @@ async function runExpertLoop(
         for (const query of rankReasoningSearchQueries([
           ...compoundRecoveryHints,
           lastSearchNoun,
-          activeSelectionTarget,
+          terminalSelectionTarget,
         ])) {
           attemptedQueries.push(query);
           const queryResult = await runTool("search_catalog", { mode: "by_query", query, per_page: 50 }, ctx);
@@ -9228,7 +9236,7 @@ async function runExpertLoop(
             terminalDiscover.category.pagetitle,
             terminalCategoryEvidence,
           );
-          const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, categoryGroundedProducts);
+          const targetReport = verifySelectionTargetWithVisibleTitle(terminalSelectionTarget, categoryGroundedProducts);
           const targetIds = new Set(targetReport.passed_ids);
           const criteriaReport = applyCriteriaGate(categoryGroundedProducts, terminalCriteria);
           for (const product of categoryGroundedProducts) {
@@ -9283,7 +9291,7 @@ async function runExpertLoop(
       productsRendered === 0 &&
       !terminalAliasRequirement &&
       reasoningBackedSearch &&
-      activeSelectionTarget &&
+      terminalSelectionTarget &&
       reasoningBackedSearch.criteria.length > 0 &&
       (!seriesTurnRequiresGrounding || seriesGroundingSatisfied)
     ) {
@@ -9322,7 +9330,7 @@ async function runExpertLoop(
         }
       }
       const groundedIds = new Set(terminalTargetProducts.map((product) => product.id));
-      const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, terminalTargetProducts);
+      const targetReport = verifySelectionTargetWithVisibleTitle(terminalSelectionTarget, terminalTargetProducts);
       safeIds = safeIds.filter((id) => groundedIds.has(id) && targetReport.passed_ids.includes(id));
       if (replacementIntent) {
         const anchorId = getAnchorExcludeId();
@@ -9408,7 +9416,7 @@ async function runExpertLoop(
       !seriesTurnRequiresGrounding &&
       !semanticCompoundEvidenceRequired &&
       terminalDiscover &&
-      activeSelectionTarget &&
+      terminalSelectionTarget &&
       triedLadderQueries.size >= 2 &&
       lastSearchNoun.trim()
     ) {
@@ -9494,7 +9502,7 @@ async function runExpertLoop(
       productsRendered === 0 &&
       !terminalAliasRequirement &&
       semanticBackedSearch &&
-      activeSelectionTarget &&
+      terminalSelectionTarget &&
       terminalFinalizationRequired &&
       !replacementIntent &&
       intentMode === "select" &&
@@ -9534,7 +9542,7 @@ async function runExpertLoop(
         semanticBackedSearch.ids.filter((id) => gate.passed_ids.includes(id)),
       ).ids;
       const groundedIds = new Set(categoryGroundedProducts.map((product) => product.id));
-      const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, categoryGroundedProducts);
+      const targetReport = verifySelectionTargetWithVisibleTitle(terminalSelectionTarget, categoryGroundedProducts);
       safeIds = safeIds.filter((id) => groundedIds.has(id) && targetReport.passed_ids.includes(id));
       const budgetGuard = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage));
       safeIds = budgetGuard.ids;
@@ -9598,11 +9606,11 @@ async function runExpertLoop(
       intentMode === "select" &&
       !seriesTurnRequiresGrounding &&
       terminalDiscover &&
-      activeSelectionTarget &&
+      terminalSelectionTarget &&
       !broadAssortmentRequest
     ) {
       const visibleContract = buildVisibleRequestContract(userMessage, {
-        productClass: activeSelectionTarget,
+        productClass: terminalSelectionTarget,
         candidateTitles: [...ctx.cache.values()].map((product) => product.pagetitle),
       });
       if (visibleContract.length > 0) {
@@ -9645,7 +9653,7 @@ async function runExpertLoop(
             )
             : products;
           const targetReport = verifySelectionTargetWithVisibleTitle(
-            activeSelectionTarget,
+            terminalSelectionTarget,
             groundedProducts,
           );
           let targetIds = new Set(targetReport.passed_ids);
@@ -9673,7 +9681,7 @@ async function runExpertLoop(
             for (let page = 1; page <= maxQueryPages; page += 1) {
               const queryRecovered = await runTool("search_catalog", {
                 mode: "by_query",
-                query: activeSelectionTarget,
+                query: terminalSelectionTarget,
                 page,
                 per_page: 50,
               }, ctx);
@@ -9694,7 +9702,7 @@ async function runExpertLoop(
                 )
                 : queryProducts;
               const queryTargetReport = verifySelectionTargetWithVisibleTitle(
-                activeSelectionTarget,
+                terminalSelectionTarget,
                 queryGroundedProducts,
               );
               const queryTargetIds = new Set(queryTargetReport.passed_ids);

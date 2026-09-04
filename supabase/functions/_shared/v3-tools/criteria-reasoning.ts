@@ -71,7 +71,7 @@ const SIMPLE_UNIT = String.raw`[a-zа-я°]{1,6}[²³]?\d?`;
 // Truncating it at the slash makes an input density indistinguishable from
 // the derived product quantity and falsely marks a sound calculation as
 // ambiguous.
-const UNIT = String.raw`${SIMPLE_UNIT}(?:\/${SIMPLE_UNIT})?`;
+const UNIT = String.raw`${SIMPLE_UNIT}(?:(?:\/|\s+на\s+)${SIMPLE_UNIT})?`;
 
 function normalizeEvidence(value: unknown): string {
   return String(value ?? "")
@@ -237,7 +237,10 @@ export function hasMeasuredSelectionRequirement(text: string): boolean {
 }
 
 export function canonicalMeasurementUnit(raw: string): string {
-  const unit = normalizeUnit(raw);
+  // Natural-language rates and densities use both `лм/м²` and
+  // `лм на м²`. Preserve either spelling as one physical scale so an input
+  // density cannot become a second, conflicting range of the result unit.
+  const unit = normalizeUnit(String(raw ?? "").replace(/\s+на\s+/giu, "/"));
   const aliases: Record<string, string> = {
     ватт: "вт", ватта: "вт", ваттов: "вт", watt: "вт", watts: "вт", w: "вт",
     люмен: "лм", люмена: "лм", люменов: "лм", lumen: "лм", lumens: "лм", lm: "лм",

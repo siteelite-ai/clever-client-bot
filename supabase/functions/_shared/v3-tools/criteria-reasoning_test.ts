@@ -40,6 +40,20 @@ Deno.test("числовой диапазон из рассуждения про�
   assertEquals(projected.added, [{ key: "Световой поток", op: "range", value: [3750, 5000], unit: "лм", level: "A" }]);
 });
 
+Deno.test("словесная составная единица не конфликтует с производным диапазоном", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "Для комнаты нужен поток 3750–5000 лм (из расчёта 150–200 лм на м²).",
+    [
+      { key: "flow", caption: "Световой поток", type: "number", unit: "лм" },
+      { key: "power", caption: "Мощность", type: "number", unit: "Вт" },
+    ],
+  );
+  assertEquals(projected.added, [
+    { key: "Световой поток", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
+  ]);
+});
+
 Deno.test("дефисы артикула не превращаются в диапазон измеримого фасета", () => {
   const projected = projectReasoningRangeCriteria(
     [],
