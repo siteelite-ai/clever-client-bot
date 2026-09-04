@@ -474,7 +474,13 @@
           "expect": {
             "require_every_product_title_any": ["ИБП", "UPS", "беспереб"],
             "forbid_every_product_title_any": ["ATS", "АВР", "ввод резерва", "переключатель"],
-            "require_any_text": ["синус", "ВА", "запас", "котл"],
+            "require_text_groups": [
+              ["ИБП", "UPS", "беспереб"],
+              ["синус"],
+              ["ВА", "Вт", "ватт"],
+              ["запас", "пусков"]
+            ],
+            "forbid_assistant_text": ["стабилизатор"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }

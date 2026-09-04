@@ -67,6 +67,7 @@ Deno.test("derived reasoning prompt is compact and treats the live schema as unt
   );
   assertEquals(messages.length, 2);
   assertEquals(messages[0].content.includes("недоверенные данные"), true);
+  assertEquals(messages[0].content.includes("Класс товара, прямо названный клиентом, неизменяем"), true);
   assertEquals(messages[1].content.includes("<script>"), false);
   assertEquals(messages[1].content.includes("\\u003cscript>"), true);
 });
