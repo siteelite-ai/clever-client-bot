@@ -4588,7 +4588,8 @@ async function runExpertLoop(
           break;
         }
         if (requiresToolContinuation) {
-          if (selectionReasoningOnlyRequired) {
+          const derivedSelectionReasoningCompleted = selectionReasoningOnlyRequired;
+          if (derivedSelectionReasoningCompleted) {
             selectionReasoningOnlyRequired = false;
           }
           if (shouldContinueSelectionUntilCatalogAttempt({
@@ -4596,12 +4597,19 @@ async function runExpertLoop(
             phase: agentPhase,
             catalogSearchAttempted,
           })) {
-            selectionCatalogContinuationRequired = true;
+            // The compact derivation can expose that the first taxonomy
+            // branch is a sibling of the customer-requested class. Keep the
+            // one model-owned corrective discovery available before forcing
+            // catalog search; otherwise a correct plan is trapped inside the
+            // wrong category and can only end in an honest-empty response.
+            selectionCatalogContinuationRequired = !derivedSelectionReasoningCompleted;
           }
           messages.push({ role: "assistant", content: resp.text || null });
           messages.push({
             role: "system",
-            content: agentPhase === "terminal_after_search"
+            content: derivedSelectionReasoningCompleted && agentPhase === "search_after_discovery" && !catalogSearchAttempted
+              ? "Фазовый контракт: сопоставь прямо названный клиентом класс товара из своего обоснования с уже открытой категорией. Если категория относится к соседнему классу, один раз вызови discover_category с точным запрошенным классом; если совпадает — выполни search_catalog по сформулированным критериям. Не меняй класс товара и не заканчивай ход текстом."
+              : agentPhase === "terminal_after_search"
               ? "Фазовый контракт: ненулевой пул уже найден. Не заканчивай ход текстом. Вызови render_products, перенеся в criteria требования из своего рассуждения; серверный criteria gate сам отклонит неподтверждённые карточки."
               : seriesTurnRequiresGrounding && !seriesGroundingSatisfied
               ? "Фазовый контракт: пользователь спрашивает о конкретно названной серии. Не делай вывод о бренде, наличии или свойствах только по памяти либо списку характеристик категории. Выполни search_catalog по названию серии; затем отвечай по найденным карточкам и базе знаний."
