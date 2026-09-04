@@ -82,6 +82,17 @@ Deno.test("ключевые параметры замены обязательн
   ]);
 });
 
+Deno.test("явно заявленная пригодность для применения остаётся обязательной", () => {
+  const aligned = alignCriteriaImportanceWithReasoning([
+    { key: "Способ монтажа", op: "eq", value: "потолочный", level: "A" },
+    { key: "Цвет", op: "eq", value: "белый", level: "A" },
+  ], "Модель должна подходить для потолочного монтажа. Белый цвет — по желанию.");
+  assertEquals(aligned.criteria.map((criterion) => [criterion.key, criterion.level]), [
+    ["Способ монтажа", "A"],
+    ["Цвет", "B"],
+  ]);
+});
+
 Deno.test("русский диапазон от X до Y проецируется так же, как запись через тире", () => {
   const projected = projectReasoningRangeCriteria([], "нужно от 3500 до 5000 люмен", [
     { key: "flow", caption: "Поток", type: "number", unit: "лм" },

@@ -94,10 +94,18 @@ function criteriaIdentityMatches(left: Criterion, right: Criterion): boolean {
 function clauseSupportsCriterion(clause: string, criterion: Criterion): boolean {
   const normalizedClause = normalizeEvidence(clause);
   if (!normalizedClause) return false;
+  const clauseTokens = normalizedClause.split(" ").filter(Boolean);
   const rawValues = Array.isArray(criterion.value) ? criterion.value : [criterion.value];
   const valueSupported = rawValues.some((value) => {
     const normalized = normalizeEvidence(value);
-    return normalized.length >= 2 && normalizedClause.includes(normalized);
+    if (normalized.length < 2) return false;
+    if (normalizedClause.includes(normalized)) return true;
+    const valueTokens = normalized.split(" ").filter((token) => /^\p{L}{5,}$/u.test(token));
+    return valueTokens.length > 0 && valueTokens.every((token) =>
+      clauseTokens.some((candidate) =>
+        /^\p{L}{5,}$/u.test(candidate) && candidate.slice(0, 4) === token.slice(0, 4)
+      )
+    );
   });
   if (valueSupported) return true;
   const keyTokens = normalizeEvidence(criterion.key).split(" ").filter((token) => token.length >= 4);
@@ -126,7 +134,7 @@ export function alignCriteriaImportanceWithReasoning(
   protectedReasoningCriteria: Criterion[] = [],
 ): CriteriaImportanceAlignment {
   const clauses = String(reasoningText ?? "").split(/(?<=[.!?;])|\n+/u).map((clause) => clause.trim()).filter(Boolean);
-  const mandatory = /(?:обязат|необходим|нуж(?:ен|на|но|ны)|треб(?:уется|уем|ование)|долж(?:ен|на|но|ны)|ключев\p{L}*\s+параметр\p{L}*|не\s+менее|не\s+более|минимум|максимум|точно|значит|счита|расчет|получа|итого|составля|[=×])/iu;
+  const mandatory = /(?:обязат|необходим|нуж(?:ен|на|но|ны)|треб(?:уется|уем|ование)|долж(?:ен|на|но|ны)|подход\p{L}*\s+(?:для|под)|ключев\p{L}*\s+параметр\p{L}*|не\s+менее|не\s+более|минимум|максимум|точно|значит|счита|расчет|получа|итого|составля|[=×])/iu;
   const advisory = /(?:логичн|предпочт|скорее\s+всего|желатель|комфортн|уютн|можно|например|по\s+желанию|кому\s+как)/iu;
   const demoted: string[] = [];
   const aligned = (Array.isArray(criteria) ? criteria : []).map((criterion) => {
