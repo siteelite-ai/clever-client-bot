@@ -10,6 +10,7 @@ import {
   nextAgentPhase,
   shouldDeferInquiryIntro,
   shouldDeferNoProgressForKnowledge,
+  shouldFinalizeInquiryFromKnowledge,
   shouldRecoverInquiryNoProgressWithKnowledge,
   shouldAllowCorrectiveDiscovery,
   toolNamesForAgentPhase,
@@ -70,6 +71,39 @@ Deno.test("agent no-progress: inquiry routes once to grounded knowledge", () => 
     intentMode: "inquire",
     productsRendered: 0,
     alreadyRecovered: true,
+  }));
+});
+
+Deno.test("successful model-chosen knowledge lookup finalizes only a general inquiry", () => {
+  assert(shouldFinalizeInquiryFromKnowledge({
+    intentMode: "inquire",
+    knowledgeHits: 5,
+    catalogGroundingRequired: false,
+    alreadyFinalizing: false,
+  }));
+  assert(!shouldFinalizeInquiryFromKnowledge({
+    intentMode: "select",
+    knowledgeHits: 5,
+    catalogGroundingRequired: false,
+    alreadyFinalizing: false,
+  }));
+  assert(!shouldFinalizeInquiryFromKnowledge({
+    intentMode: "inquire",
+    knowledgeHits: 5,
+    catalogGroundingRequired: true,
+    alreadyFinalizing: false,
+  }));
+  assert(!shouldFinalizeInquiryFromKnowledge({
+    intentMode: "inquire",
+    knowledgeHits: 0,
+    catalogGroundingRequired: false,
+    alreadyFinalizing: false,
+  }));
+  assert(!shouldFinalizeInquiryFromKnowledge({
+    intentMode: "inquire",
+    knowledgeHits: 5,
+    catalogGroundingRequired: false,
+    alreadyFinalizing: true,
   }));
 });
 

@@ -63,6 +63,24 @@ export function shouldRecoverInquiryNoProgressWithKnowledge(input: {
     !input.alreadyRecovered;
 }
 
+/**
+ * Respect the model's own decision to consult the knowledge base. Once that
+ * decision produced evidence for a general inquiry, additional catalog steps
+ * only add latency and can pull unrelated product facts into the answer.
+ * Named-series questions retain their separate catalog-grounding contract.
+ */
+export function shouldFinalizeInquiryFromKnowledge(input: {
+  intentMode: "select" | "inquire";
+  knowledgeHits: number;
+  catalogGroundingRequired: boolean;
+  alreadyFinalizing: boolean;
+}): boolean {
+  return input.intentMode === "inquire" &&
+    input.knowledgeHits > 0 &&
+    !input.catalogGroundingRequired &&
+    !input.alreadyFinalizing;
+}
+
 export function buildInquiryKnowledgeSynthesisMessages(
   userMessage: string,
   knowledge: unknown,

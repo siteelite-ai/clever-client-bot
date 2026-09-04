@@ -117,6 +117,7 @@ import {
   shouldAllowCorrectiveDiscovery,
   shouldDeferInquiryIntro,
   shouldDeferNoProgressForKnowledge,
+  shouldFinalizeInquiryFromKnowledge,
   shouldRecoverInquiryNoProgressWithKnowledge,
   toolNamesForAgentPhase,
 } from "../_shared/v3-tools/agent-performance.ts";
@@ -8142,9 +8143,33 @@ async function runExpertLoop(
             ? "Сервер уже выполнил поиск по твоей же формулировке критериев и проверил результаты гейтом. Вызови render_products с _self_requery_ids и теми же criteria — новые поиски не нужны."
             : "Сервер выполнил поиск по твоей же формулировке критериев — подходящих позиций в каталоге нет. Скажи клиенту это честно и дай контакты менеджера, не подставляй заведомо не подходящие карточки.";
         }
-
-
-
+        const finalizeFromCurrentKnowledge = tc.name === "lookup_knowledge" &&
+          shouldFinalizeInquiryFromKnowledge({
+            intentMode,
+            knowledgeHits: knowledgeHitsThisStep,
+            catalogGroundingRequired: inquiryRequiresCatalogGrounding || seriesTurnRequiresGrounding,
+            alreadyFinalizing: finalizeFromRecoveredKnowledge,
+          });
+        if (finalizeFromCurrentKnowledge) {
+          messages.splice(
+            0,
+            messages.length,
+            ...buildInquiryKnowledgeSynthesisMessages(userMessage, replyObj),
+          );
+          inquiryKnowledgeRecoveryUsed = true;
+          finalizeFromRecoveredKnowledge = true;
+          noProgressBreak = false;
+          steps.push({
+            step: "v3_inquiry_knowledge_direct_finalization",
+            ms: now(),
+            meta: {
+              knowledge_hits: knowledgeHitsThisStep,
+              context_bytes: JSON.stringify(messages).length,
+              step_index: step,
+            },
+          });
+          break;
+        }
 
         messages.push({
           role: "tool",
