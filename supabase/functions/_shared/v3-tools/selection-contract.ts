@@ -356,6 +356,20 @@ export function bootstrapSelectionTargetFromDiscovery(
   const rawTokenCount = normalize(resolved).split(/\s+/u).filter(Boolean).length;
   const taxonomyBase = bootstrapSelectionTargetFromTaxonomy(initialEvidence, liveClass);
   const taxonomyTokens = meaningfulTokens(taxonomyBase ?? "");
+  // Discovery may resolve a customer modifier or jargon token to a broader
+  // live class that the same customer message independently names. When the
+  // two are lexically disjoint, freeze the proven taxonomy class and leave
+  // the discovery token available for semantic/alias search; treating that
+  // token as the product class would make a later canonical query look like
+  // forbidden class drift.
+  if (
+    taxonomyBase &&
+    resolvedTokens.length > 0 &&
+    !selectionTargetIsDeclared(taxonomyBase, resolved) &&
+    !selectionTargetIsDeclared(resolved, taxonomyBase)
+  ) {
+    return taxonomyBase;
+  }
   if (
     taxonomyBase &&
     taxonomyTokens.length > 0 &&

@@ -305,6 +305,14 @@ Deno.test("live declared base class stays separate from discovery modifiers", ()
     ),
     "автомат",
   );
+  assertEquals(
+    bootstrapSelectionTargetFromDiscovery(
+      "Покажи изделия с названием Альфа.",
+      "Альфа",
+      "Изделия",
+    ),
+    "Изделия",
+  );
 });
 
 Deno.test("a safely bootstrapped short noun may authorize its formal class extension", () => {
