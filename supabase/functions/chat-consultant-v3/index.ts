@@ -6190,7 +6190,11 @@ async function runExpertLoop(
             // равенство недопустимо ровно так же.
             const measuredReasoning = `${userMessage}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
             const aligned = alignCriteriaWithReasoning(criteria, measuredReasoning);
-            const promoted = promoteMeasuredReasoningCriteria(aligned.criteria, measuredReasoning);
+            const promoted = promoteMeasuredReasoningCriteria(
+              aligned.criteria,
+              measuredReasoning,
+              lastDiscover?.facets ?? [],
+            );
             const importance = alignCriteriaImportanceWithReasoning(
               promoted.criteria,
               measuredReasoning,

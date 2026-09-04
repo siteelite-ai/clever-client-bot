@@ -345,6 +345,48 @@ Deno.test("числовой критерий из рассуждения пов�
   assertEquals(result.promoted, ["Световой поток"]);
 });
 
+Deno.test("составная входная единица не конфликтует с производной товарной единицей", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "25 м² × 150–200 лм/м² = 3750–5000 лм",
+    [{
+      key: "output_flow",
+      caption: "Выходной поток, лм",
+      type: "number",
+      unit: "лм",
+      values: [{ value: "3750" }, { value: "4000" }, { value: "5000" }],
+    }],
+  );
+  assertEquals(projected.added, [{
+    key: "Выходной поток, лм",
+    op: "range",
+    value: [3750, 5000],
+    unit: "лм",
+    level: "A",
+  }]);
+});
+
+Deno.test("живой фасет восстанавливает пропущенную моделью единицу обязательного критерия", () => {
+  const result = promoteMeasuredReasoningCriteria(
+    [{ key: "output_flow", op: "range", value: [3750, 5000], level: "B" }],
+    "Нужен диапазон 3750–5000 лм",
+    [{
+      key: "output_flow",
+      caption: "Выходной поток, лм",
+      unit: "лм",
+      values: [{ value: "4000" }],
+    }],
+  );
+  assertEquals(result.criteria, [{
+    key: "output_flow",
+    op: "range",
+    value: [3750, 5000],
+    unit: "лм",
+    level: "A",
+  }]);
+  assertEquals(result.promoted, ["output_flow"]);
+});
+
 Deno.test("alignCriteriaWithReasoning: eq на числе клиента → min по прозе", () => {
   const criteria: Criterion[] = [
     { key: "Параметр альфа", op: "eq", value: 12, unit: "мм", level: "A" },

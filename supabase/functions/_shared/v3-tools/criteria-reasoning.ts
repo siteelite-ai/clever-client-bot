@@ -66,7 +66,12 @@ export interface MeasuredReasoningSearchContract {
 }
 
 const NUM = String.raw`\d+(?:[.,]\d+)?`;
-const UNIT = String.raw`[a-zа-я°]{1,6}[²³]?\d?`;
+const SIMPLE_UNIT = String.raw`[a-zа-я°]{1,6}[²³]?\d?`;
+// Preserve a rate/density unit as one scale (`лм/м²`, `м/с`, `Вт/м`).
+// Truncating it at the slash makes an input density indistinguishable from
+// the derived product quantity and falsely marks a sound calculation as
+// ambiguous.
+const UNIT = String.raw`${SIMPLE_UNIT}(?:\/${SIMPLE_UNIT})?`;
 
 function normalizeEvidence(value: unknown): string {
   return String(value ?? "")
@@ -247,6 +252,7 @@ export function canonicalMeasurementUnit(raw: string): string {
 export function promoteMeasuredReasoningCriteria(
   criteria: Criterion[],
   reasoningText: string,
+  facets: CriteriaFacet[] = [],
 ): { criteria: Criterion[]; promoted: string[] } {
   const reasoningUnits = new Set(
     extractClientQuantities(reasoningText).map((quantity) => canonicalMeasurementUnit(quantity.unit)),
@@ -255,10 +261,41 @@ export function promoteMeasuredReasoningCriteria(
   const next = (Array.isArray(criteria) ? criteria : []).map((criterion) => {
     const numeric = typeof criterion.value === "number" ||
       Array.isArray(criterion.value) && criterion.value.every((value) => Number.isFinite(Number(value)));
-    const unit = canonicalMeasurementUnit(criterion.unit ?? "");
+    let unit = canonicalMeasurementUnit(criterion.unit ?? "");
+    let inheritedUnit: string | null = null;
+    if (!unit && facets.length > 0) {
+      const wanted = normalizeEvidence(criterion.key);
+      const exactFacets = facets.filter((facet) =>
+        [facet.key, facet.caption].some((label) => normalizeEvidence(label) === wanted)
+      );
+      const looseFacets = exactFacets.length > 0 ? exactFacets : facets.filter((facet) =>
+        [facet.key, facet.caption].some((label) => {
+          const known = normalizeEvidence(label);
+          return wanted.length >= 4 && known.length >= 4 && (known.includes(wanted) || wanted.includes(known));
+        })
+      );
+      if (looseFacets.length === 1) {
+        const facet = looseFacets[0];
+        const liveUnits = new Set(
+          [
+            canonicalMeasurementUnit(facet.unit ?? ""),
+            ...(`${facet.caption} ${facet.key}`.match(new RegExp(UNIT, "giu")) ?? [])
+              .map(canonicalMeasurementUnit),
+          ].filter((candidate) => candidate && reasoningUnits.has(candidate)),
+        );
+        if (liveUnits.size === 1) {
+          inheritedUnit = [...liveUnits][0];
+          unit = inheritedUnit;
+        }
+      }
+    }
     if ((criterion.level ?? "A") !== "B" || !numeric || !unit || !reasoningUnits.has(unit)) return { ...criterion };
     promoted.push(criterion.key);
-    return { ...criterion, level: "A" as const };
+    return {
+      ...criterion,
+      ...(inheritedUnit ? { unit: inheritedUnit } : {}),
+      level: "A" as const,
+    };
   });
   return { criteria: next, promoted };
 }
@@ -342,8 +379,8 @@ export function projectReasoningRangeCriteria(
     return states;
   };
   const rangePatterns = [
-    new RegExp(String.raw`(?<![a-zа-я0-9-])(${NUM})\s*[–—-]\s*(${NUM})\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])`, "giu"),
-    new RegExp(String.raw`от\s+(${NUM})\s+до\s+(${NUM})\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])`, "giu"),
+    new RegExp(String.raw`(?<![a-zа-я0-9-])(${NUM})\s*[–—-]\s*(${NUM})\s*(${UNIT})(?![a-zа-я])`, "giu"),
+    new RegExp(String.raw`от\s+(${NUM})\s+до\s+(${NUM})\s*(${UNIT})(?![a-zа-я])`, "giu"),
   ];
   for (const re of rangePatterns) {
     for (let match; (match = re.exec(text)) !== null;) {
