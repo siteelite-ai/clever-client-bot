@@ -108,6 +108,7 @@ import { containsUnrenderedCatalogFacts, isMetaSelfQuestion,
 import {
   type AgentPhase,
   boundedAgentStepTimeout,
+  buildInquiryKnowledgeSynthesisMessages,
   compactCatalogResultForLlm,
   deterministicIntroTimeoutToolCall,
   forcedToolNameForAgentPhase,
@@ -8168,7 +8169,6 @@ async function runExpertLoop(
         });
         if (recoverInquiryWithKnowledge) {
           inquiryKnowledgeRecoveryUsed = true;
-          const toolCallId = crypto.randomUUID();
           const recoveryArgs = { query: userMessage, top_k: 5 };
           send({
             type: "tool_event",
@@ -8186,30 +8186,12 @@ async function runExpertLoop(
             duration_ms: recoveryDurationMs,
             summary: summariseToolResult("lookup_knowledge", recoveryResult),
           });
-          messages.push({
-            role: "assistant",
-            content: null,
-            tool_calls: [{
-              id: toolCallId,
-              type: "function",
-              function: { name: "lookup_knowledge", arguments: JSON.stringify(recoveryArgs) },
-            }],
-          });
           const recoveryReply = toolResultForLlm(
             recoveryResult,
             recoveryArgs,
             userMessage,
             assistantReasoning,
           ) as Record<string, unknown>;
-          messages.push({
-            role: "tool",
-            tool_call_id: toolCallId,
-            name: "lookup_knowledge",
-            content: JSON.stringify({
-              ...recoveryReply,
-              _server_hint: "Каталожный поиск повторил тот же пул. Используй найденные справочные фрагменты и дай прямой законченный ответ на исходный вопрос; новых поисков и обещаний продолжить не делай.",
-            }),
-          });
           const recoveryHits = recoveryResult.ok && Array.isArray((recoveryResult as { hits?: unknown[] }).hits)
             ? (recoveryResult as { hits: unknown[] }).hits.length
             : 0;
@@ -8224,8 +8206,18 @@ async function runExpertLoop(
             },
           });
           if (recoveryResult.ok && recoveryHits > 0) {
+            messages.splice(
+              0,
+              messages.length,
+              ...buildInquiryKnowledgeSynthesisMessages(userMessage, recoveryReply),
+            );
             finalizeFromRecoveredKnowledge = true;
             noProgressBreak = false;
+            steps.push({
+              step: "v3_inquiry_knowledge_context_compacted",
+              ms: now(),
+              meta: { knowledge_hits: recoveryHits, context_bytes: JSON.stringify(messages).length },
+            });
             continue;
           }
         }

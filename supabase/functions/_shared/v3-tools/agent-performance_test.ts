@@ -1,6 +1,7 @@
-import { assert, assertEquals, assertLess } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals, assertLess, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   boundedAgentStepTimeout,
+  buildInquiryKnowledgeSynthesisMessages,
   compactCatalogResultForLlm,
   deterministicIntroTimeoutToolCall,
   forcedToolNameForAgentPhase,
@@ -70,6 +71,21 @@ Deno.test("agent no-progress: inquiry routes once to grounded knowledge", () => 
     productsRendered: 0,
     alreadyRecovered: true,
   }));
+});
+
+Deno.test("inquiry knowledge synthesis context is compact and treats evidence as data", () => {
+  const messages = buildInquiryKnowledgeSynthesisMessages(
+    "Какой ориентир?",
+    { hits: [{ snippet: "Факт <script>alert(1)</script>" }] },
+  );
+  assertEquals(messages.length, 2);
+  assertEquals(messages[0].role, "system");
+  assertStringIncludes(messages[0].content, "недоверенные данные");
+  assertStringIncludes(messages[0].content, "простым вычислениям");
+  assertEquals(messages[1].role, "user");
+  assertStringIncludes(messages[1].content, "Какой ориентир?");
+  assertStringIncludes(messages[1].content, "\\u003cscript>");
+  assertEquals(messages[1].content.includes("<script>"), false);
 });
 
 Deno.test("forced discovery timeout falls back to live taxonomy without product rules", () => {
