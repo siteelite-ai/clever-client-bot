@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>220VOLT widget release</title>
+</head>
+<body>
+<script>
+(function () {
+  'use strict';
+  var version = 'widget-d8da5cc307f128a5';
+  var channel = '';
+  var targetOrigin = '';
+  try {
+    channel = decodeURIComponent(location.hash.slice(1));
+    targetOrigin = new URL(location.href).searchParams.get('parentOrigin') ||
+      new URL(document.referrer).origin;
+    if (new URL(targetOrigin).origin !== targetOrigin) return;
+  } catch (e) {
+    return;
+  }
+  if (!channel || !targetOrigin || parent === window) return;
+  parent.postMessage({
+    type: 'volt-widget-version',
+    channel: channel,
+    version: version
+  }, targetOrigin);
+})();
+</script>
+</body>
+</html>
