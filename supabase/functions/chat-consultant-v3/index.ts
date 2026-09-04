@@ -32,7 +32,7 @@ import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compi
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
-import { hasActionableSelectionContract, shouldContinueSelectionPastOptionalClarification } from "../_shared/v3-tools/selection-actionability.ts";
+import { buildDerivedSelectionReasoningMessages, hasActionableSelectionContract, shouldContinueSelectionPastOptionalClarification, shouldRequireDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
 import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, initialSelectionDeclaration, parseSelectionTarget, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, declaredAliasIsStructurallyCustomerOwned, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
@@ -4134,6 +4134,33 @@ async function runExpertLoop(
             .map((id) => ctx.cache.get(id))
             .filter((product): product is ProductFull => Boolean(product));
           resp = await callOpenRouterSeriesExplanation(apiKey, userMessage, evidenceProducts, turnController.signal, phaseTimeoutMs);
+        } else if (selectionReasoningOnlyRequired && lastDiscover) {
+          // A compact, explicit prose call is intentional here. A generic call
+          // over the full tool transcript can legally finish with reasoning
+          // tokens but empty visible content, which leaves the later machine
+          // criteria unsupported. The same model now states its derivation in
+          // customer-visible prose before catalog retrieval continues.
+          resp = await callOpenRouter(
+            apiKey,
+            buildDerivedSelectionReasoningMessages(
+              userMessage,
+              lastDiscover.category?.pagetitle ?? "",
+              lastDiscover.facets ?? [],
+            ),
+            turnController.signal,
+            phaseTimeoutMs,
+            "tool_decision",
+            [],
+            null,
+          );
+          if (!resp.text.trim()) {
+            throw new Error("derived_selection_reasoning_empty");
+          }
+          steps.push({
+            step: "v3_derived_selection_reasoning_requested",
+            ms: now(),
+            meta: { category: lastDiscover.category?.pagetitle ?? "", facets: lastDiscover.facets?.length ?? 0 },
+          });
         } else {
           resp = await callOpenRouter(apiKey, messages, turnController.signal, phaseTimeoutMs, phase, availableToolNames, forcedToolName);
         }
@@ -7744,6 +7771,12 @@ async function runExpertLoop(
                 userMessage,
                 lastDiscover.facets,
               ).added.map((criterion) => ({ ...criterion, level: "A" as const }));
+              const directLiteralMeasuredCriteria = projectLiteralMeasuredCriteria(
+                [],
+                userMessage,
+                `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
+                lastDiscover.facets,
+              ).added;
               const literalMeasuredCriteria = projectLiteralMeasuredCriteria(
                 [...explicitCriteria, ...measuredCriteria],
                 userMessage,
@@ -7762,6 +7795,27 @@ async function runExpertLoop(
                   meta: {
                     added: userBackedSearchCriteria.slice(before),
                     total: userBackedSearchCriteria.length,
+                  },
+                });
+              }
+              if (shouldRequireDerivedSelectionReasoning({
+                intentMode,
+                // This branch runs while the successful discovery result is
+                // being committed; the phase transition is applied below.
+                phase: "search_after_discovery",
+                catalogSearchAttempted,
+                directMeasuredCriteriaCount: measuredCriteria.length + directLiteralMeasuredCriteria.length,
+                userMessage,
+                reasoningText: `${firstAssistantText}\n${assistantReasoning}`,
+              })) {
+                selectionReasoningOnlyRequired = true;
+                steps.push({
+                  step: "v3_unprojected_measurement_requires_reasoning",
+                  ms: now(),
+                  meta: {
+                    category: lastDiscover.category?.pagetitle ?? "",
+                    measured_contexts: true,
+                    direct_measured_criteria: measuredCriteria.length + directLiteralMeasuredCriteria.length,
                   },
                 });
               }
