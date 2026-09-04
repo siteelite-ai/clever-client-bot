@@ -294,7 +294,7 @@ export function stripUnrenderedCatalogFactSegments(text: string): CatalogFactStr
 const COMPACT_TECHNICAL_CODE_RE = /(?<![\p{L}\p{N}])(?=[\p{L}\p{N}.-]{2,18}(?![\p{L}\p{N}]))(?=[\p{L}\p{N}.-]*\p{L})(?=[\p{L}\p{N}.-]*\d)[\p{L}\p{N}][\p{L}\p{N}.-]{1,17}(?![\p{L}\p{N}])/gu;
 // JavaScript's `\b` is ASCII-centric even with /u, so it cannot be used as a
 // Cyrillic word boundary. Use Unicode-letter boundaries for Russian prose.
-const ALIAS_OR_GENERALIZATION_RE = /(?:(?<!\p{L})это(?!\p{L})|названи\p{L}*|обычно|как\s+правило|чаще\s+всего|проход\p{L}*\s+как)/iu;
+const ALIAS_OR_GENERALIZATION_RE = /(?:(?<!\p{L})это(?!\p{L})|названи\p{L}*|обычно|как\s+правило|чаще\s+всего|речь\s+(?:идет\s+)?про|проход\p{L}*\s+как)/iu;
 const EXPLICIT_CRITERION_RE = /(?:нуж\p{L}*|треб\p{L}*|беру(?!\p{L})|закладыва\p{L}*|долж\p{L}*|не\s+(?:ниже|менее|выше|более))/iu;
 const TECHNICAL_ATTRIBUTE_CODE_LIST_RE = /((?:,\s*)?(?:обычно\s+)?(?:с|на|под)\s+(?:[\p{L}-]{2,32}\s+){1,3})((?:[\p{L}]*\d[\p{L}\d.-]*)(?:\s*(?:,|\/|или)\s*(?:[\p{L}]*\d[\p{L}\d.-]*))*)/giu;
 const UNGROUNDED_ALIAS_DEFINITION_RE = /(?:(?:(?:народн|разговорн|бытов|жаргонн|неофициальн)\p{L}*\s+)+(?:названи\p{L}*|обозначени\p{L}*|термин\p{L}*)|так\s+(?:в\s+народе\s+)?называ\p{L}*|(?:по\s+смыслу\s+)?это\s+чаще\s+всего|это\s+оно\s+и\s+есть|это\s+ближе\s+всего|ближе\s+всего\s+к|проход\p{L}*\s+как)/iu;

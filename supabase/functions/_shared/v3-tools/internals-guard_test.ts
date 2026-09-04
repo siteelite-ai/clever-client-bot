@@ -161,6 +161,24 @@ Deno.test("Cyrillic alias definition drops unrequested codes after the word эт
   );
 });
 
+Deno.test("alias explanation phrased as речь про drops unrequested codes", () => {
+  const result = stripUngroundedIntroTechnicalAttributes(
+    "«Лампы кукуруза» — понял, речь про светодиодные лампы с цоколем E27 или E40, похожие на початок.",
+    "а у тебя есть лампы кукуруза?",
+  );
+  assertEquals(
+    result.text,
+    "«Лампы кукуруза» — понял, речь про светодиодные лампы, похожие на початок.",
+  );
+  assertEquals(result.removed, ["с цоколем E27 или E40"]);
+
+  const customerBacked = stripUngroundedIntroTechnicalAttributes(
+    "Понял, речь про лампу с цоколем E27 или E40.",
+    "Нужна лампа кукуруза E27",
+  );
+  assertEquals(customerBacked.text, "Понял, речь про лампу с цоколем E27.");
+});
+
 Deno.test("first visible reasoning guard is independent of the agent step", () => {
   assertEquals(shouldGuardFirstVisibleReasoning({
     productsRendered: 0,
