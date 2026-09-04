@@ -66,7 +66,12 @@ export interface MeasuredReasoningSearchContract {
 }
 
 const NUM = String.raw`\d+(?:[.,]\d+)?`;
-const UNIT = String.raw`[a-zа-я°]{1,6}[²³]?\d?`;
+const SIMPLE_UNIT = String.raw`[a-zа-я°]{1,6}[²³]?\d?`;
+// Preserve a rate/density unit as one scale (`лм/м²`, `м/с`, `Вт/м`).
+// Truncating it at the slash makes an input density indistinguishable from
+// the derived product quantity and falsely marks a sound calculation as
+// ambiguous.
+const UNIT = String.raw`${SIMPLE_UNIT}(?:(?:\/|\s+на\s+)${SIMPLE_UNIT})?`;
 
 function normalizeEvidence(value: unknown): string {
   return String(value ?? "")
@@ -89,10 +94,18 @@ function criteriaIdentityMatches(left: Criterion, right: Criterion): boolean {
 function clauseSupportsCriterion(clause: string, criterion: Criterion): boolean {
   const normalizedClause = normalizeEvidence(clause);
   if (!normalizedClause) return false;
+  const clauseTokens = normalizedClause.split(" ").filter(Boolean);
   const rawValues = Array.isArray(criterion.value) ? criterion.value : [criterion.value];
   const valueSupported = rawValues.some((value) => {
     const normalized = normalizeEvidence(value);
-    return normalized.length >= 2 && normalizedClause.includes(normalized);
+    if (normalized.length < 2) return false;
+    if (normalizedClause.includes(normalized)) return true;
+    const valueTokens = normalized.split(" ").filter((token) => /^\p{L}{5,}$/u.test(token));
+    return valueTokens.length > 0 && valueTokens.every((token) =>
+      clauseTokens.some((candidate) =>
+        /^\p{L}{5,}$/u.test(candidate) && candidate.slice(0, 4) === token.slice(0, 4)
+      )
+    );
   });
   if (valueSupported) return true;
   const keyTokens = normalizeEvidence(criterion.key).split(" ").filter((token) => token.length >= 4);
@@ -121,7 +134,7 @@ export function alignCriteriaImportanceWithReasoning(
   protectedReasoningCriteria: Criterion[] = [],
 ): CriteriaImportanceAlignment {
   const clauses = String(reasoningText ?? "").split(/(?<=[.!?;])|\n+/u).map((clause) => clause.trim()).filter(Boolean);
-  const mandatory = /(?:обязат|необходим|нуж(?:ен|на|но|ны)|треб(?:уется|уем|ование)|долж(?:ен|на|но|ны)|ключев\p{L}*\s+параметр\p{L}*|не\s+менее|не\s+более|минимум|максимум|точно|значит|счита|расчет|получа|итого|составля|[=×])/iu;
+  const mandatory = /(?:обязат|необходим|нуж(?:ен|на|но|ны)|треб(?:уется|уем|ование)|долж(?:ен|на|но|ны)|подход\p{L}*\s+(?:для|под)|ключев\p{L}*\s+параметр\p{L}*|не\s+менее|не\s+более|минимум|максимум|точно|значит|счита|расчет|получа|итого|составля|[=×])/iu;
   const advisory = /(?:логичн|предпочт|скорее\s+всего|желатель|комфортн|уютн|можно|например|по\s+желанию|кому\s+как)/iu;
   const demoted: string[] = [];
   const aligned = (Array.isArray(criteria) ? criteria : []).map((criterion) => {
@@ -231,8 +244,11 @@ export function hasMeasuredSelectionRequirement(text: string): boolean {
   return false;
 }
 
-function canonicalMeasurementUnit(raw: string): string {
-  const unit = normalizeUnit(raw);
+export function canonicalMeasurementUnit(raw: string): string {
+  // Natural-language rates and densities use both `лм/м²` and
+  // `лм на м²`. Preserve either spelling as one physical scale so an input
+  // density cannot become a second, conflicting range of the result unit.
+  const unit = normalizeUnit(String(raw ?? "").replace(/\s+на\s+/giu, "/"));
   const aliases: Record<string, string> = {
     ватт: "вт", ватта: "вт", ваттов: "вт", watt: "вт", watts: "вт", w: "вт",
     люмен: "лм", люмена: "лм", люменов: "лм", lumen: "лм", lumens: "лм", lm: "лм",
@@ -247,6 +263,7 @@ function canonicalMeasurementUnit(raw: string): string {
 export function promoteMeasuredReasoningCriteria(
   criteria: Criterion[],
   reasoningText: string,
+  facets: CriteriaFacet[] = [],
 ): { criteria: Criterion[]; promoted: string[] } {
   const reasoningUnits = new Set(
     extractClientQuantities(reasoningText).map((quantity) => canonicalMeasurementUnit(quantity.unit)),
@@ -255,10 +272,41 @@ export function promoteMeasuredReasoningCriteria(
   const next = (Array.isArray(criteria) ? criteria : []).map((criterion) => {
     const numeric = typeof criterion.value === "number" ||
       Array.isArray(criterion.value) && criterion.value.every((value) => Number.isFinite(Number(value)));
-    const unit = canonicalMeasurementUnit(criterion.unit ?? "");
+    let unit = canonicalMeasurementUnit(criterion.unit ?? "");
+    let inheritedUnit: string | null = null;
+    if (!unit && facets.length > 0) {
+      const wanted = normalizeEvidence(criterion.key);
+      const exactFacets = facets.filter((facet) =>
+        [facet.key, facet.caption].some((label) => normalizeEvidence(label) === wanted)
+      );
+      const looseFacets = exactFacets.length > 0 ? exactFacets : facets.filter((facet) =>
+        [facet.key, facet.caption].some((label) => {
+          const known = normalizeEvidence(label);
+          return wanted.length >= 4 && known.length >= 4 && (known.includes(wanted) || wanted.includes(known));
+        })
+      );
+      if (looseFacets.length === 1) {
+        const facet = looseFacets[0];
+        const liveUnits = new Set(
+          [
+            canonicalMeasurementUnit(facet.unit ?? ""),
+            ...(`${facet.caption} ${facet.key}`.match(new RegExp(UNIT, "giu")) ?? [])
+              .map(canonicalMeasurementUnit),
+          ].filter((candidate) => candidate && reasoningUnits.has(candidate)),
+        );
+        if (liveUnits.size === 1) {
+          inheritedUnit = [...liveUnits][0];
+          unit = inheritedUnit;
+        }
+      }
+    }
     if ((criterion.level ?? "A") !== "B" || !numeric || !unit || !reasoningUnits.has(unit)) return { ...criterion };
     promoted.push(criterion.key);
-    return { ...criterion, level: "A" as const };
+    return {
+      ...criterion,
+      ...(inheritedUnit ? { unit: inheritedUnit } : {}),
+      level: "A" as const,
+    };
   });
   return { criteria: next, promoted };
 }
@@ -342,8 +390,8 @@ export function projectReasoningRangeCriteria(
     return states;
   };
   const rangePatterns = [
-    new RegExp(String.raw`(?<![a-zа-я0-9-])(${NUM})\s*[–—-]\s*(${NUM})\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])`, "giu"),
-    new RegExp(String.raw`от\s+(${NUM})\s+до\s+(${NUM})\s*([a-zа-я°]{1,10}[²³]?\d?)(?![a-zа-я])`, "giu"),
+    new RegExp(String.raw`(?<![a-zа-я0-9-])(${NUM})\s*[–—-]\s*(${NUM})\s*(${UNIT})(?![a-zа-я])`, "giu"),
+    new RegExp(String.raw`от\s+(${NUM})\s+до\s+(${NUM})\s*(${UNIT})(?![a-zа-я])`, "giu"),
   ];
   for (const re of rangePatterns) {
     for (let match; (match = re.exec(text)) !== null;) {

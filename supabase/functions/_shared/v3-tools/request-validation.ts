@@ -24,6 +24,7 @@ const TOP_LEVEL_FIELDS = new Set([
   "sessionId",
   "history",
   "stream",
+  "resumeOnly",
   "slots",
   "dialogSlots",
 ]);
@@ -41,6 +42,7 @@ export interface ValidatedChatRequest {
   sessionId?: string;
   history: ChatHistoryMessage[];
   stream: boolean;
+  resumeOnly: boolean;
   slots?: JsonRecord;
   dialogSlots?: JsonRecord;
 }
@@ -228,6 +230,11 @@ export function validateChatRequestBody(
     addIssue(issues, "stream", "expected_boolean");
   }
 
+  const resumeOnly = input.resumeOnly;
+  if (resumeOnly !== undefined && typeof resumeOnly !== "boolean") {
+    addIssue(issues, "resumeOnly", "expected_boolean");
+  }
+
   let slots: JsonRecord | undefined;
   let dialogSlots: JsonRecord | undefined;
   if (input.slots !== undefined && input.dialogSlots !== undefined) {
@@ -258,6 +265,7 @@ export function validateChatRequestBody(
       ...(typeof sessionId === "string" ? { sessionId } : {}),
       history,
       stream: typeof stream === "boolean" ? stream : true,
+      resumeOnly: typeof resumeOnly === "boolean" ? resumeOnly : false,
       ...(slots ? { slots } : {}),
       ...(dialogSlots ? { dialogSlots } : {}),
     },

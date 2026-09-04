@@ -32,8 +32,8 @@ import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compi
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
-import { hasActionableSelectionContract, shouldContinueSelectionPastOptionalClarification } from "../_shared/v3-tools/selection-actionability.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, initialSelectionDeclaration, parseSelectionTarget, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
+import { buildDerivedSelectionReasoningMessages, hasActionableSelectionContract, hasSelectionMeasurementContext, measuredSelectionContractEvidence, shouldContinueSelectionPastOptionalClarification, shouldRequireDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, initialSelectionDeclaration, parseSelectionTarget, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, declaredAliasIsStructurallyCustomerOwned, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
@@ -71,6 +71,7 @@ import {
   productMatchesExcludedReplacementIdentity,
 } from "../_shared/v3-tools/search-filter-guard.ts";
 import {
+  categoryLabelIsAffirmedAsTarget,
   filterProductsByGroundedCategoryTargets,
   filterProductsByNamedSeries,
   groundedCategoryRecoveryQueries,
@@ -108,13 +109,20 @@ import { containsUnrenderedCatalogFacts, isMetaSelfQuestion,
 import {
   type AgentPhase,
   boundedAgentStepTimeout,
+  buildInquiryKnowledgeSynthesisMessages,
   compactCatalogResultForLlm,
   deterministicIntroTimeoutToolCall,
+  establishesCatalogAttempt,
   forcedToolNameForAgentPhase,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
   shouldAllowCorrectiveDiscovery,
   shouldDeferInquiryIntro,
+  shouldDeferNoProgressForKnowledge,
+  shouldFinalizeInquiryFromKnowledge,
+  shouldRecoverInquiryNoProgressWithKnowledge,
+  shouldRequestReasoningOnlyAfterIncompleteSearch,
+  shouldContinueSelectionUntilCatalogAttempt,
   toolNamesForAgentPhase,
 } from "../_shared/v3-tools/agent-performance.ts";
 import { CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest } from "../_shared/v3-tools/clean-power-safety.ts";
@@ -256,6 +264,19 @@ function encodeSse(ev: SseEvent): Uint8Array {
   }
   if (ev.type === "done") return new TextEncoder().encode(`data: [DONE]\n\n`);
   return new TextEncoder().encode(`data: ${JSON.stringify({ v3_event: ev })}\n\n`);
+}
+
+const SSE_EVENT_TYPES = new Set<SseEvent["type"]>([
+  "delta", "diagnostic", "conversation_boundary", "assistant_turn_break",
+  "tool_event", "products_block", "contacts", "quick_replies", "slot_update", "done",
+]);
+
+function replayableSseEvents(value: unknown): SseEvent[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((event): event is SseEvent => Boolean(
+    event && typeof event === "object" &&
+      SSE_EVENT_TYPES.has((event as { type?: SseEvent["type"] }).type as SseEvent["type"]),
+  ));
 }
 
 // ─── Settings ───────────────────────────────────────────────────────────────
@@ -3159,21 +3180,59 @@ async function selectVerifiedOutdoorPoeProducts(
     .filter((product): product is ProductFull => Boolean(product));
 }
 
-async function insertTurnLogStart(
+interface ReplayLogRow {
+  id: string;
+  session_id: string | null;
+  user_query: string | null;
+  error: string | null;
+  response_events: unknown;
+}
+
+type TurnClaim =
+  | { kind: "created"; id: string }
+  | { kind: "existing"; row: ReplayLogRow }
+  | { kind: "missing" }
+  | { kind: "unavailable" };
+
+async function readReplayLog(
+  supabase: SupabaseClient,
+  messageId: string,
+): Promise<ReplayLogRow | null> {
+  const { data, error } = await supabase
+    .from("chat_request_logs")
+    .select("id,session_id,user_query,error,response_events")
+    .eq("message_id", messageId)
+    .maybeSingle();
+  if (error) {
+    console.error("[v3] replay log read failed:", error.message);
+    return null;
+  }
+  return data as ReplayLogRow | null;
+}
+
+async function claimTurnLogStart(
   supabase: SupabaseClient,
   sessionId: string,
+  messageId: string,
   userQuery: string,
   initialSteps: StepLog[],
-): Promise<string | null> {
+  resumeOnly: boolean,
+): Promise<TurnClaim> {
   try {
+    if (resumeOnly) {
+      const existing = await readReplayLog(supabase, messageId);
+      return existing ? { kind: "existing", row: existing } : { kind: "missing" };
+    }
     const { data, error } = await supabase
       .from("chat_request_logs")
       .insert({
         session_id: sessionId,
+        message_id: messageId,
         user_query: userQuery,
         pipeline: "v3",
         branch: "v3_expert",
         steps: initialSteps,
+        response_events: [],
         final_products_count: 0,
         final_response: null,
         total_ms: 0,
@@ -3181,15 +3240,36 @@ async function insertTurnLogStart(
       })
       .select("id")
       .single();
+    if (error && error.code === "23505") {
+      const existing = await readReplayLog(supabase, messageId);
+      return existing ? { kind: "existing", row: existing } : { kind: "unavailable" };
+    }
     if (error) {
       console.error("[v3] log start insert failed:", error.message);
-      return null;
+      return { kind: "unavailable" };
     }
-    return (data as { id: string } | null)?.id ?? null;
+    const id = (data as { id: string } | null)?.id;
+    return id ? { kind: "created", id } : { kind: "unavailable" };
   } catch (e) {
     console.error("[v3] log start exception:", e);
-    return null;
+    return { kind: "unavailable" };
   }
+}
+
+async function waitForReplayCompletion(
+  supabase: SupabaseClient,
+  messageId: string,
+  initial: ReplayLogRow,
+  timeoutMs = 85_000,
+): Promise<ReplayLogRow> {
+  let current = initial;
+  const deadline = Date.now() + timeoutMs;
+  while (current.error === "in_progress" && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 750));
+    const refreshed = await readReplayLog(supabase, messageId);
+    if (refreshed) current = refreshed;
+  }
+  return current;
 }
 
 async function updateTurnLogEnd(
@@ -3200,6 +3280,7 @@ async function updateTurnLogEnd(
   finalResponse: string,
   finalProductsCount: number,
   errorMsg: string | null,
+  responseEvents: SseEvent[],
 ) {
   try {
     const { error } = await supabase
@@ -3210,6 +3291,7 @@ async function updateTurnLogEnd(
         final_response: finalResponse || null,
         total_ms: totalMs,
         error: errorMsg,
+        response_events: responseEvents,
       })
       .eq("id", logId);
     if (error) console.error("[v3] log update failed:", error.message);
@@ -3244,6 +3326,7 @@ async function runExpertLoop(
   // для Слоя 5: направление подбора берём из рассуждения, а не из сырого числа
   // в реплике клиента.
   let assistantReasoning = "";
+  let derivedSelectionReasoningEvidence = "";
   let lastDiscover: DiscoverCategoryOk | null = null;
   const selectionDiscoveries: DiscoverCategoryOk[] = [];
   // Machine-readable projection of the facet values the consultant declared
@@ -3397,6 +3480,15 @@ async function runExpertLoop(
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
   let catalogSearchAttempted = false;
+  // If the model tries to finish immediately after a successful discovery,
+  // give its reasoning one continuation and then force the existing catalog
+  // phase. This preserves one opportunity for a model-owned category
+  // correction while preventing taxonomy-only answers with zero products.
+  let selectionCatalogContinuationRequired = false;
+  // One bounded prose-only continuation lets the same consultant expose a
+  // calculation that was present only in rejected tool arguments. The next
+  // iteration returns to the ordinary forced catalog phase.
+  let selectionReasoningOnlyRequired = false;
   // Последний осмысленный поисковый запрос — нужен как «существительное» для
   // self-requery: критерии сами по себе («не менее 40 мм») не запрос, они
   // обретают смысл только вместе с предметом текущего поиска.
@@ -3442,6 +3534,9 @@ async function runExpertLoop(
   let lastSearchSignature: string | null = null;
   let noProgressStreak = 0;
   let noProgressBreak = false;
+  let knowledgeSynthesisContinuationUsed = false;
+  let inquiryKnowledgeRecoveryUsed = false;
+  let finalizeFromRecoveredKnowledge = false;
   let lastToolErrorCode: string | null = null;
   let repeatedToolErrorStreak = 0;
   let optionalClarificationRejected = false;
@@ -3975,6 +4070,7 @@ async function runExpertLoop(
 
   try {
     for (let step = 0; step < MAX_STEPS; step++) {
+      let knowledgeHitsThisStep = 0;
       // Классификация фазы для выбора таймаута. Эвристика:
       //  • step 0 — всегда intro (LLM ещё не видел tool_results).
       //  • последний msg = tool_result И контекст «тяжёлый» (>15KB JSON) —
@@ -4016,17 +4112,22 @@ async function runExpertLoop(
 
       const llmStart = Date.now();
       const agentToolPolicy = {
-        reasoningRequiresCatalog: seriesTurnRequiresGrounding && !seriesGroundingSatisfied || (
+        reasoningRequiresCatalog: selectionCatalogContinuationRequired ||
+          seriesTurnRequiresGrounding && !seriesGroundingSatisfied || (
           intentMode === "select" && hasActionableSelectionContract(
             `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
           )
         ) || optionalClarificationRejected,
         selectionRequiresInitialDiscovery: intentMode === "select" && agentPhase === "open" && !lastDiscover,
         correctiveDiscoveryAvailable: agentPhase === "search_after_discovery" &&
-          !correctiveDiscoveryUsed && !freshSearch,
+          !selectionCatalogContinuationRequired && !correctiveDiscoveryUsed && !freshSearch,
       };
-      const availableToolNames = toolNamesForAgentPhase(agentPhase, agentToolPolicy);
-      const forcedToolName = forcedToolNameForAgentPhase(agentPhase, agentToolPolicy);
+      const availableToolNames = finalizeFromRecoveredKnowledge || selectionReasoningOnlyRequired
+        ? []
+        : toolNamesForAgentPhase(agentPhase, agentToolPolicy);
+      const forcedToolName = finalizeFromRecoveredKnowledge || selectionReasoningOnlyRequired
+        ? null
+        : forcedToolNameForAgentPhase(agentPhase, agentToolPolicy);
       let resp: ORResponse;
       try {
         if (agentPhase === "inquiry_explanation_ready") {
@@ -4034,6 +4135,33 @@ async function runExpertLoop(
             .map((id) => ctx.cache.get(id))
             .filter((product): product is ProductFull => Boolean(product));
           resp = await callOpenRouterSeriesExplanation(apiKey, userMessage, evidenceProducts, turnController.signal, phaseTimeoutMs);
+        } else if (selectionReasoningOnlyRequired && lastDiscover) {
+          // A compact, explicit prose call is intentional here. A generic call
+          // over the full tool transcript can legally finish with reasoning
+          // tokens but empty visible content, which leaves the later machine
+          // criteria unsupported. The same model now states its derivation in
+          // customer-visible prose before catalog retrieval continues.
+          resp = await callOpenRouter(
+            apiKey,
+            buildDerivedSelectionReasoningMessages(
+              userMessage,
+              lastDiscover.category?.pagetitle ?? "",
+              lastDiscover.facets ?? [],
+            ),
+            turnController.signal,
+            phaseTimeoutMs,
+            "tool_decision",
+            [],
+            null,
+          );
+          if (!resp.text.trim()) {
+            throw new Error("derived_selection_reasoning_empty");
+          }
+          steps.push({
+            step: "v3_derived_selection_reasoning_requested",
+            ms: now(),
+            meta: { category: lastDiscover.category?.pagetitle ?? "", facets: lastDiscover.facets?.length ?? 0 },
+          });
         } else {
           resp = await callOpenRouter(apiKey, messages, turnController.signal, phaseTimeoutMs, phase, availableToolNames, forcedToolName);
         }
@@ -4273,7 +4401,12 @@ async function runExpertLoop(
         intentMode === "select" && (
           agentPhase === "terminal_after_search" ||
           responseHasActionableReasoning ||
-          agentToolPolicy.selectionRequiresInitialDiscovery
+          agentToolPolicy.selectionRequiresInitialDiscovery ||
+          shouldContinueSelectionUntilCatalogAttempt({
+            intentMode,
+            phase: agentPhase,
+            catalogSearchAttempted,
+          })
         ) || seriesTurnRequiresGrounding && !seriesGroundingSatisfied
       );
       ensureActiveSelectionTarget(
@@ -4411,6 +4544,31 @@ async function runExpertLoop(
             meta: { chars: resp.text.length, fragment_index: step, text: resp.text },
           });
           }
+        } else if (selectionReasoningOnlyRequired) {
+          // A derived plan is a customer-visible proof obligation, even when
+          // an earlier generic intro bubble already exists. Hiding this text
+          // while using its numbers for retrieval would make the machine
+          // contract unverifiable from the conversation.
+          const safeReasoning = sanitizeIntermediateReasoning(resp.text);
+          const derivedText = safeReasoning.text.trim();
+          if (derivedText) {
+            send({ type: "assistant_turn_break", reason: "intro_late" });
+            send({ type: "delta", content: derivedText });
+            finalText += derivedText;
+            if (!firstAssistantText) firstAssistantText = derivedText;
+            derivedSelectionReasoningEvidence = derivedText;
+            steps.push({
+              step: "v3_assistant_text",
+              ms: now(),
+              meta: { chars: derivedText.length, fragment_index: step, text: derivedText, derived_selection: true },
+            });
+          } else {
+            steps.push({
+              step: "v3_assistant_text_suppressed_internals",
+              ms: now(),
+              meta: { fragment_index: step, matched: safeReasoning.matched, derived_selection: true },
+            });
+          }
         } else if (!firstAssistantText) {
           // Intro-пузырь ещё не показывали (на шаге 0 LLM ушёл сразу в тул без
           // текста), а сейчас наконец появилось «размышление» перед следующим
@@ -4456,13 +4614,33 @@ async function runExpertLoop(
           break;
         }
         if (requiresToolContinuation) {
+          const derivedSelectionReasoningCompleted = selectionReasoningOnlyRequired;
+          if (derivedSelectionReasoningCompleted) {
+            selectionReasoningOnlyRequired = false;
+          }
+          if (shouldContinueSelectionUntilCatalogAttempt({
+            intentMode,
+            phase: agentPhase,
+            catalogSearchAttempted,
+          })) {
+            // The compact derivation can expose that the first taxonomy
+            // branch is a sibling of the customer-requested class. Keep the
+            // one model-owned corrective discovery available before forcing
+            // catalog search; otherwise a correct plan is trapped inside the
+            // wrong category and can only end in an honest-empty response.
+            selectionCatalogContinuationRequired = !derivedSelectionReasoningCompleted;
+          }
           messages.push({ role: "assistant", content: resp.text || null });
           messages.push({
             role: "system",
-            content: agentPhase === "terminal_after_search"
+            content: derivedSelectionReasoningCompleted && agentPhase === "search_after_discovery" && !catalogSearchAttempted
+              ? "Фазовый контракт: сопоставь прямо названный клиентом класс товара из своего обоснования с уже открытой категорией. Если категория относится к соседнему классу, один раз вызови discover_category с точным запрошенным классом; если совпадает — выполни search_catalog по сформулированным критериям. Не меняй класс товара и не заканчивай ход текстом."
+              : agentPhase === "terminal_after_search"
               ? "Фазовый контракт: ненулевой пул уже найден. Не заканчивай ход текстом. Вызови render_products, перенеся в criteria требования из своего рассуждения; серверный criteria gate сам отклонит неподтверждённые карточки."
               : seriesTurnRequiresGrounding && !seriesGroundingSatisfied
               ? "Фазовый контракт: пользователь спрашивает о конкретно названной серии. Не делай вывод о бренде, наличии или свойствах только по памяти либо списку характеристик категории. Выполни search_catalog по названию серии; затем отвечай по найденным карточкам и базе знаний."
+              : agentPhase === "search_after_discovery" && !catalogSearchAttempted
+              ? "Фазовый контракт: категория уже открыта, но наличие и точный подтип ещё не проверены. Не заканчивай ход текстом. Выполни search_catalog с каноническим термином из своего рассуждения."
               : "Фазовый контракт: ты уже сформулировал несколько измеримых критериев подбора. Не заканчивай ход текстом и не спрашивай предпочтения, которые можешь выбрать как эксперт. Выполни discover_category/search_catalog и доведи найденный пул до render_products.",
           });
           steps.push({
@@ -4514,7 +4692,7 @@ async function runExpertLoop(
           hasFreshSearch: Boolean(freshSearch),
           previousCategoryGrounded: Boolean(
             lastDiscover?.category?.pagetitle &&
-            selectionTargetIsDeclared(
+            categoryLabelIsAffirmedAsTarget(
               lastDiscover.category.pagetitle,
               `${userMessage}\n${initialSelectionDeclaration(firstAssistantText)}`,
             )
@@ -4827,9 +5005,13 @@ async function runExpertLoop(
             !seriesTurnRequiresGrounding &&
             !reasoningNeedsCompatibilityRelations(`${userMessage}\n${firstAssistantText}`);
           if (ordinaryMeasuredSelection) {
+            const measuredContractReasoning = measuredSelectionContractEvidence(
+              derivedSelectionReasoningEvidence,
+              declaredReasoning,
+            );
             const measuredContract = compileMeasuredReasoningSearchContract(
               guardedSearchCriteria,
-              declaredReasoning,
+              measuredContractReasoning,
               guardedUserBackedCriteria,
               lastDiscover.facets,
             );
@@ -6046,7 +6228,11 @@ async function runExpertLoop(
             // равенство недопустимо ровно так же.
             const measuredReasoning = `${userMessage}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
             const aligned = alignCriteriaWithReasoning(criteria, measuredReasoning);
-            const promoted = promoteMeasuredReasoningCriteria(aligned.criteria, measuredReasoning);
+            const promoted = promoteMeasuredReasoningCriteria(
+              aligned.criteria,
+              measuredReasoning,
+              lastDiscover?.facets ?? [],
+            );
             const importance = alignCriteriaImportanceWithReasoning(
               promoted.criteria,
               measuredReasoning,
@@ -6602,8 +6788,54 @@ async function runExpertLoop(
 
 
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
-        if (tc.name === "search_catalog") catalogSearchAttempted = true;
         let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
+
+        if (establishesCatalogAttempt({ tool: tc.name, ok: result.ok })) {
+          catalogSearchAttempted = true;
+          selectionCatalogContinuationRequired = false;
+          selectionReasoningOnlyRequired = false;
+        } else if (
+          tc.name === "search_catalog" &&
+          !result.ok &&
+          result.error_code === "incomplete_filter" &&
+          intentMode === "select" &&
+          lastDiscover
+        ) {
+          // The provider may have calculated useful filter values but omitted
+          // the prose that proves them. The evidence guard correctly removes
+          // those values; keep the phase open and ask the same consultant to
+          // state its calculation before retrying instead of treating the
+          // malformed empty filter as catalog progress.
+          const hasReasoningObligation = hasSelectionMeasurementContext(userMessage) ||
+            hasMeasuredSelectionRequirement(`${firstAssistantText}\n${assistantReasoning}`) ||
+            reasoningNeedsCompatibilityRelations(`${userMessage}\n${firstAssistantText}\n${assistantReasoning}`);
+          selectionReasoningOnlyRequired = shouldRequestReasoningOnlyAfterIncompleteSearch({
+            intentMode,
+            errorCode: result.error_code,
+            catalogSearchAttempted,
+            hasReasoningObligation,
+          });
+          result = {
+            ...result,
+            message: selectionReasoningOnlyRequired
+              ? "Поиск не выполнен: после проверки аргументов не осталось подтверждённой категории или фильтров. Явно сформулируй клиенту своё расчётное рассуждение и критерии, затем повтори search_catalog с теми же обоснованными параметрами."
+              : "Поиск не выполнен: после проверки аргументов не осталось подтверждённой категории или фильтров. Не придумывай новые характеристики. Повтори search_catalog в режиме by_query с точным классом, названием или пользовательским термином из исходного запроса.",
+          };
+          steps.push({
+            step: "v3_incomplete_search_requires_reasoning",
+            ms: now(),
+            meta: { phase: agentPhase, retryable: true, reasoning_required: selectionReasoningOnlyRequired },
+          });
+        }
+
+        if (tc.name === "lookup_knowledge" && result.ok) {
+          knowledgeHitsThisStep = Math.max(
+            knowledgeHitsThisStep,
+            Array.isArray((result as { hits?: unknown[] }).hits)
+              ? (result as { hits: unknown[] }).hits.length
+              : 0,
+          );
+        }
 
         if (tc.name === "search_catalog" && !result.ok) {
           const code = result.error_code;
@@ -7587,6 +7819,12 @@ async function runExpertLoop(
                 userMessage,
                 lastDiscover.facets,
               ).added.map((criterion) => ({ ...criterion, level: "A" as const }));
+              const directLiteralMeasuredCriteria = projectLiteralMeasuredCriteria(
+                [],
+                userMessage,
+                `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
+                lastDiscover.facets,
+              ).added;
               const literalMeasuredCriteria = projectLiteralMeasuredCriteria(
                 [...explicitCriteria, ...measuredCriteria],
                 userMessage,
@@ -7605,6 +7843,27 @@ async function runExpertLoop(
                   meta: {
                     added: userBackedSearchCriteria.slice(before),
                     total: userBackedSearchCriteria.length,
+                  },
+                });
+              }
+              if (shouldRequireDerivedSelectionReasoning({
+                intentMode,
+                // This branch runs while the successful discovery result is
+                // being committed; the phase transition is applied below.
+                phase: "search_after_discovery",
+                catalogSearchAttempted,
+                directMeasuredCriteriaCount: measuredCriteria.length + directLiteralMeasuredCriteria.length,
+                userMessage,
+                reasoningText: `${firstAssistantText}\n${assistantReasoning}`,
+              })) {
+                selectionReasoningOnlyRequired = true;
+                steps.push({
+                  step: "v3_unprojected_measurement_requires_reasoning",
+                  ms: now(),
+                  meta: {
+                    category: lastDiscover.category?.pagetitle ?? "",
+                    measured_contexts: true,
+                    direct_measured_criteria: measuredCriteria.length + directLiteralMeasuredCriteria.length,
                   },
                 });
               }
@@ -8048,9 +8307,33 @@ async function runExpertLoop(
             ? "Сервер уже выполнил поиск по твоей же формулировке критериев и проверил результаты гейтом. Вызови render_products с _self_requery_ids и теми же criteria — новые поиски не нужны."
             : "Сервер выполнил поиск по твоей же формулировке критериев — подходящих позиций в каталоге нет. Скажи клиенту это честно и дай контакты менеджера, не подставляй заведомо не подходящие карточки.";
         }
-
-
-
+        const finalizeFromCurrentKnowledge = tc.name === "lookup_knowledge" &&
+          shouldFinalizeInquiryFromKnowledge({
+            intentMode,
+            knowledgeHits: knowledgeHitsThisStep,
+            catalogGroundingRequired: inquiryRequiresCatalogGrounding || seriesTurnRequiresGrounding,
+            alreadyFinalizing: finalizeFromRecoveredKnowledge,
+          });
+        if (finalizeFromCurrentKnowledge) {
+          messages.splice(
+            0,
+            messages.length,
+            ...buildInquiryKnowledgeSynthesisMessages(userMessage, replyObj),
+          );
+          inquiryKnowledgeRecoveryUsed = true;
+          finalizeFromRecoveredKnowledge = true;
+          noProgressBreak = false;
+          steps.push({
+            step: "v3_inquiry_knowledge_direct_finalization",
+            ms: now(),
+            meta: {
+              knowledge_hits: knowledgeHitsThisStep,
+              context_bytes: JSON.stringify(messages).length,
+              step_index: step,
+            },
+          });
+          break;
+        }
 
         messages.push({
           role: "tool",
@@ -8066,7 +8349,81 @@ async function runExpertLoop(
       // No-progress detector — выходим в forced-finalize, не сжигая остаток бюджета.
       if (groundedJargonTerminal || groundedCompoundSearchTerminal) break;
       if (rejectedRenderFinalizeBreak) break;
-      if (noProgressBreak) break;
+      if (noProgressBreak) {
+        const recoverInquiryWithKnowledge = shouldRecoverInquiryNoProgressWithKnowledge({
+          breakRequested: true,
+          intentMode,
+          productsRendered,
+          alreadyRecovered: inquiryKnowledgeRecoveryUsed,
+        });
+        if (recoverInquiryWithKnowledge) {
+          inquiryKnowledgeRecoveryUsed = true;
+          const recoveryArgs = { query: userMessage, top_k: 5 };
+          send({
+            type: "tool_event",
+            tool: "lookup_knowledge",
+            phase: "start",
+            summary: "Проверяю справочную информацию…",
+          });
+          const recoveryStarted = Date.now();
+          const recoveryResult = await runTool("lookup_knowledge", recoveryArgs, ctx);
+          const recoveryDurationMs = Date.now() - recoveryStarted;
+          send({
+            type: "tool_event",
+            tool: "lookup_knowledge",
+            phase: "result",
+            duration_ms: recoveryDurationMs,
+            summary: summariseToolResult("lookup_knowledge", recoveryResult),
+          });
+          const recoveryReply = toolResultForLlm(
+            recoveryResult,
+            recoveryArgs,
+            userMessage,
+            assistantReasoning,
+          ) as Record<string, unknown>;
+          const recoveryHits = recoveryResult.ok && Array.isArray((recoveryResult as { hits?: unknown[] }).hits)
+            ? (recoveryResult as { hits: unknown[] }).hits.length
+            : 0;
+          steps.push({
+            step: "v3_inquiry_no_progress_knowledge_recovery",
+            ms: now(),
+            meta: {
+              ok: recoveryResult.ok,
+              knowledge_hits: recoveryHits,
+              duration_ms: recoveryDurationMs,
+              step_index: step,
+            },
+          });
+          if (recoveryResult.ok && recoveryHits > 0) {
+            messages.splice(
+              0,
+              messages.length,
+              ...buildInquiryKnowledgeSynthesisMessages(userMessage, recoveryReply),
+            );
+            finalizeFromRecoveredKnowledge = true;
+            noProgressBreak = false;
+            steps.push({
+              step: "v3_inquiry_knowledge_context_compacted",
+              ms: now(),
+              meta: { knowledge_hits: recoveryHits, context_bytes: JSON.stringify(messages).length },
+            });
+            continue;
+          }
+        }
+        const deferForKnowledge = shouldDeferNoProgressForKnowledge({
+          breakRequested: true,
+          knowledgeHits: knowledgeHitsThisStep,
+          alreadyDeferred: knowledgeSynthesisContinuationUsed,
+        });
+        if (!deferForKnowledge) break;
+        knowledgeSynthesisContinuationUsed = true;
+        noProgressBreak = false;
+        steps.push({
+          step: "v3_no_progress_deferred_for_knowledge",
+          ms: now(),
+          meta: { knowledge_hits: knowledgeHitsThisStep, step_index: step },
+        });
+      }
       // Тупик по критериям: сервер сам дважды сходил в каталог по формулировке
       // модели и не нашёл ничего — новых сигналов не будет, честно завершаем.
       if (criteriaDeadEndBreak) break;
@@ -8084,6 +8441,14 @@ async function runExpertLoop(
     ensureActiveSelectionTarget(
       `${terminalReasoningEvidence}\n${assistantReasoning}`,
       "terminal_accumulated_reasoning",
+    );
+    // All terminal paths share one class contract. A failed first render may
+    // leave `activeSelectionTarget` at its broader verified base; a more
+    // specific declaration that already passed grounding must nevertheless
+    // constrain every recovery pool.
+    const terminalSelectionTarget = resolveTerminalSelectionTarget(
+      activeSelectionTarget,
+      groundedSelectionTargetHint,
     );
     const terminalCategoryEvidence = [
       userMessage,
@@ -8118,7 +8483,7 @@ async function runExpertLoop(
       products_rendered: productsRendered,
       intent_mode: intentMode,
       has_discovery: Boolean(terminalDiscover),
-      has_selection_target: Boolean(activeSelectionTarget),
+      has_selection_target: Boolean(terminalSelectionTarget),
       has_search_attempt: catalogSearchAttempted,
       mandatory_criteria_count: terminalSelectionCriteria.length,
       replacement_intent: replacementIntent,
@@ -8139,7 +8504,7 @@ async function runExpertLoop(
       | { kind: "partial"; split: PendingJargonAxisSplit }
       | null
     > => {
-      if (!terminalDiscover || !activeSelectionTarget || !source.trim()) { return null;
+      if (!terminalDiscover || !terminalSelectionTarget || !source.trim()) { return null;
       }
       const terminalCriteria = resolveRenderCriteria(
         [],
@@ -8175,7 +8540,7 @@ async function runExpertLoop(
         .filter((product): product is ProductFull => Boolean(
           product && matchedQuery && titleSupportsGroundedJargonQuery(product.pagetitle, matchedQuery)
         ));
-      const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, candidateProducts);
+      const targetReport = verifySelectionTargetWithVisibleTitle(terminalSelectionTarget, candidateProducts);
       const gate = applyCriteriaGate(candidateProducts, terminalCriteria);
       const unresolvedModifiers = modifiers
         .filter((modifier, index, values) =>
@@ -8233,8 +8598,8 @@ async function runExpertLoop(
     };
 
     const renderJargonAxisSplit = async (split: PendingJargonAxisSplit): Promise<boolean> => {
-      if (!terminalDiscover || !activeSelectionTarget || split.modifiers.length === 0) return false;
-      const target = activeSelectionTarget;
+      if (!terminalDiscover || !terminalSelectionTarget || split.modifiers.length === 0) return false;
+      const target = terminalSelectionTarget;
       const budgetCap = extractBudgetCap(userMessage);
       const baseProducts = split.baseIds
         .map((id) => ctx.cache.get(id))
@@ -8373,7 +8738,7 @@ async function runExpertLoop(
     if (
       productsRendered === 0 &&
       terminalCompatibilityDiscover &&
-      activeSelectionTarget &&
+      terminalSelectionTarget &&
       terminalCompatibilityReference &&
       minimumCompatibilityRelationCount(terminalCompatibilityEvidence) >= 2
     ) {
@@ -8389,7 +8754,7 @@ async function runExpertLoop(
           terminalCompatibilityReference.value,
         );
         const target = verifySelectionTargetWithVisibleTitle(
-          activeSelectionTarget!,
+          terminalSelectionTarget,
           paired.products,
         );
         const targetIds = new Set(target.passed_ids);
@@ -8412,7 +8777,7 @@ async function runExpertLoop(
       if (safeIds.length === 0) {
         const semanticPool = await runTool("search_catalog", {
           mode: "by_query",
-          query: activeSelectionTarget,
+          query: terminalSelectionTarget,
           per_page: 50,
         }, ctx);
         if (semanticPool.ok && semanticPool.tool === "search_catalog") {
@@ -8452,7 +8817,7 @@ async function runExpertLoop(
             step: "v3_terminal_compatibility_pair_recovery",
             ms: now(),
             meta: {
-              target: activeSelectionTarget,
+              target: terminalSelectionTarget,
               reference: terminalCompatibilityReference,
               rendered: rendered.rendered_count,
             },
@@ -8463,7 +8828,7 @@ async function runExpertLoop(
       steps.push({
         step: "v3_terminal_compatibility_pair_recovery_empty",
         ms: now(),
-        meta: { target: activeSelectionTarget, reference: terminalCompatibilityReference },
+        meta: { target: terminalSelectionTarget, reference: terminalCompatibilityReference },
       });
     }
     if (
@@ -8706,7 +9071,7 @@ async function runExpertLoop(
         },
       });
     }
-    if (!terminalAliasRequirement && terminalFinalizationRequired && terminalDiscover && activeSelectionTarget) {
+    if (!terminalAliasRequirement && terminalFinalizationRequired && terminalDiscover && terminalSelectionTarget) {
       const terminalCriteria = terminalSelectionCriteria;
       const facetProjection = projectCriteriaFacetOptions(terminalCriteria, terminalDiscover.facets);
       if (terminalCriteria.length > 0 && Object.keys(facetProjection.options).length > 0) {
@@ -8745,7 +9110,7 @@ async function runExpertLoop(
           }
         }
         if (recovered.ok && recovered.tool === "search_catalog") {
-          const terminalTarget = activeSelectionTarget;
+          const terminalTarget = terminalSelectionTarget;
           const evaluateTerminalPool = (
             pool: SearchCatalogOk,
             provenCriteria: Criterion[] = facetProjection.proven_criteria,
@@ -8850,7 +9215,7 @@ async function runExpertLoop(
     // lookup aligned with the explanation and avoids both a product dictionary
     // and an expensive scan of unrelated catalog pages. Every returned card is
     // still revalidated against the complete target/criteria/budget contract.
-    if (!terminalAliasRequirement && terminalFinalizationRequired && terminalDiscover && activeSelectionTarget) {
+    if (!terminalAliasRequirement && terminalFinalizationRequired && terminalDiscover && terminalSelectionTarget) {
       const terminalCriteria = terminalSelectionCriteria;
       if (terminalCriteria.length > 0) {
         send({ type: "tool_event", tool: "search_catalog", phase: "start", summary: "Сверяю поиск с выбранным типом товара…" });
@@ -8861,7 +9226,7 @@ async function runExpertLoop(
         for (const query of rankReasoningSearchQueries([
           ...compoundRecoveryHints,
           lastSearchNoun,
-          activeSelectionTarget,
+          terminalSelectionTarget,
         ])) {
           attemptedQueries.push(query);
           const queryResult = await runTool("search_catalog", { mode: "by_query", query, per_page: 50 }, ctx);
@@ -8877,7 +9242,7 @@ async function runExpertLoop(
             terminalDiscover.category.pagetitle,
             terminalCategoryEvidence,
           );
-          const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, categoryGroundedProducts);
+          const targetReport = verifySelectionTargetWithVisibleTitle(terminalSelectionTarget, categoryGroundedProducts);
           const targetIds = new Set(targetReport.passed_ids);
           const criteriaReport = applyCriteriaGate(categoryGroundedProducts, terminalCriteria);
           for (const product of categoryGroundedProducts) {
@@ -8932,7 +9297,7 @@ async function runExpertLoop(
       productsRendered === 0 &&
       !terminalAliasRequirement &&
       reasoningBackedSearch &&
-      activeSelectionTarget &&
+      terminalSelectionTarget &&
       reasoningBackedSearch.criteria.length > 0 &&
       (!seriesTurnRequiresGrounding || seriesGroundingSatisfied)
     ) {
@@ -8971,7 +9336,7 @@ async function runExpertLoop(
         }
       }
       const groundedIds = new Set(terminalTargetProducts.map((product) => product.id));
-      const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, terminalTargetProducts);
+      const targetReport = verifySelectionTargetWithVisibleTitle(terminalSelectionTarget, terminalTargetProducts);
       safeIds = safeIds.filter((id) => groundedIds.has(id) && targetReport.passed_ids.includes(id));
       if (replacementIntent) {
         const anchorId = getAnchorExcludeId();
@@ -9017,6 +9382,7 @@ async function runExpertLoop(
         if (rescued.ok) {
           const rendered = rescued as { markdown: string; rendered_count: number; };
           for (const id of safeIds.slice(0, 5)) shownIds.add(id);
+          ensureVisibleTerminalSelectionCaption(adjusted.criteria, "v3_semantic_render_recovery");
           send({
             type: "products_block",
             markdown: rendered.markdown,
@@ -9056,7 +9422,7 @@ async function runExpertLoop(
       !seriesTurnRequiresGrounding &&
       !semanticCompoundEvidenceRequired &&
       terminalDiscover &&
-      activeSelectionTarget &&
+      terminalSelectionTarget &&
       triedLadderQueries.size >= 2 &&
       lastSearchNoun.trim()
     ) {
@@ -9142,7 +9508,7 @@ async function runExpertLoop(
       productsRendered === 0 &&
       !terminalAliasRequirement &&
       semanticBackedSearch &&
-      activeSelectionTarget &&
+      terminalSelectionTarget &&
       terminalFinalizationRequired &&
       !replacementIntent &&
       intentMode === "select" &&
@@ -9182,7 +9548,7 @@ async function runExpertLoop(
         semanticBackedSearch.ids.filter((id) => gate.passed_ids.includes(id)),
       ).ids;
       const groundedIds = new Set(categoryGroundedProducts.map((product) => product.id));
-      const targetReport = verifySelectionTargetWithVisibleTitle(activeSelectionTarget, categoryGroundedProducts);
+      const targetReport = verifySelectionTargetWithVisibleTitle(terminalSelectionTarget, categoryGroundedProducts);
       safeIds = safeIds.filter((id) => groundedIds.has(id) && targetReport.passed_ids.includes(id));
       const budgetGuard = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage));
       safeIds = budgetGuard.ids;
@@ -9246,11 +9612,11 @@ async function runExpertLoop(
       intentMode === "select" &&
       !seriesTurnRequiresGrounding &&
       terminalDiscover &&
-      activeSelectionTarget &&
+      terminalSelectionTarget &&
       !broadAssortmentRequest
     ) {
       const visibleContract = buildVisibleRequestContract(userMessage, {
-        productClass: activeSelectionTarget,
+        productClass: terminalSelectionTarget,
         candidateTitles: [...ctx.cache.values()].map((product) => product.pagetitle),
       });
       if (visibleContract.length > 0) {
@@ -9293,7 +9659,7 @@ async function runExpertLoop(
             )
             : products;
           const targetReport = verifySelectionTargetWithVisibleTitle(
-            activeSelectionTarget,
+            terminalSelectionTarget,
             groundedProducts,
           );
           let targetIds = new Set(targetReport.passed_ids);
@@ -9321,7 +9687,7 @@ async function runExpertLoop(
             for (let page = 1; page <= maxQueryPages; page += 1) {
               const queryRecovered = await runTool("search_catalog", {
                 mode: "by_query",
-                query: activeSelectionTarget,
+                query: terminalSelectionTarget,
                 page,
                 per_page: 50,
               }, ctx);
@@ -9342,7 +9708,7 @@ async function runExpertLoop(
                 )
                 : queryProducts;
               const queryTargetReport = verifySelectionTargetWithVisibleTitle(
-                activeSelectionTarget,
+                terminalSelectionTarget,
                 queryGroundedProducts,
               );
               const queryTargetIds = new Set(queryTargetReport.passed_ids);
@@ -9528,27 +9894,32 @@ Deno.serve(async (req) => {
   let publicDiagnosticError: string | null = null;
   let finalTextAccum = "";
   let productsCount = 0;
+  const responseEvents: SseEvent[] = [];
 
   const stream = new ReadableStream({
     async start(controller) {
+      const emit = (ev: SseEvent) => {
+        try { controller.enqueue(encodeSse(ev)); } catch (e) {
+          console.error("[v3] enqueue failed:", e);
+        }
+      };
       const send = (ev: SseEvent) => {
-        try {
-          // GUARD: единственный выход текста наружу. Служебная лексика механики
-          // (имена инструментов, поля каталога, модели/провайдеры, промпт) режется
-          // здесь, а не в каждом call-site — иначе новая ветка вывода снова течёт.
-          let out = ev;
-          if (ev.type === "delta") {
-            const r = redactInternals(ev.content);
-            if (r.redacted) {
-              steps.push({ step: "v3_internals_redacted", ms: Date.now() - t0, meta: { matched: r.matched, original: ev.content } });
-              out = { type: "delta", content: r.text };
-            } else if (r.text !== ev.content) {
-              out = { type: "delta", content: r.text };
-            }
-            finalTextAccum += (out as { content: string }).content;
+        // GUARD: единственный выход текста наружу. Служебная лексика механики
+        // (имена инструментов, поля каталога, модели/провайдеры, промпт) режется
+        // здесь, а не в каждом call-site — иначе новая ветка вывода снова течёт.
+        let out = ev;
+        if (ev.type === "delta") {
+          const r = redactInternals(ev.content);
+          if (r.redacted) {
+            steps.push({ step: "v3_internals_redacted", ms: Date.now() - t0, meta: { matched: r.matched, original: ev.content } });
+            out = { type: "delta", content: r.text };
+          } else if (r.text !== ev.content) {
+            out = { type: "delta", content: r.text };
           }
-          controller.enqueue(encodeSse(out));
-        } catch (e) { console.error("[v3] enqueue failed:", e); }
+          finalTextAccum += (out as { content: string }).content;
+        }
+        responseEvents.push(out);
+        emit(out);
       };
 
       // Open the SSE transport before any settings/database dependency. When
@@ -9561,70 +9932,98 @@ Deno.serve(async (req) => {
         try { controller.enqueue(keepAliveBytes); } catch { /* stream already closed */ }
       }, 10_000);
 
-      const settings = await loadSettings(supabase);
-      if (!settings.openrouter_api_key || !settings.volt220_api_token) {
-        errorMsg = !settings.openrouter_api_key ? "missing_openrouter_key" : "missing_catalog_token";
-        publicDiagnosticError = "internal_error";
-        send({ type: "delta", content: "Не удалось запустить подбор из-за внутренней ошибки. Повторите запрос позже или свяжитесь с менеджером." });
-        send({ type: "diagnostic", log_id: null, phase: "complete", products_count: 0, error: publicDiagnosticError });
+      steps.push({ step: "v3_turn_start", ms: 0, meta: { user_message: userMessage, session_id: sessionId, message_id: body.messageId } });
+      const claim = await claimTurnLogStart(
+        supabase,
+        sessionId,
+        body.messageId,
+        userMessage,
+        [...steps],
+        body.resumeOnly,
+      );
+
+      if (claim.kind === "missing" || claim.kind === "unavailable") {
+        send({
+          type: "delta",
+          content: claim.kind === "missing"
+            ? "Не удалось восстановить этот запрос. Отправьте сообщение ещё раз."
+            : "Не удалось безопасно запустить запрос. Повторите попытку позже.",
+        });
+        send({ type: "diagnostic", log_id: null, phase: "complete", products_count: 0, error: "request_unavailable" });
         clearInterval(keepAliveTimer);
         try { send({ type: "done" }); } catch { /* ignore */ }
         try { controller.close(); } catch { /* already closed */ }
         return;
       }
 
-      steps.push({ step: "v3_turn_start", ms: 0, meta: { user_message: userMessage, session_id: sessionId, message_id: body.messageId } });
+      if (claim.kind === "existing") {
+        if (claim.row.session_id !== sessionId || claim.row.user_query !== userMessage) {
+          send({ type: "delta", content: "Не удалось безопасно восстановить запрос: идентификатор уже используется." });
+          send({ type: "diagnostic", log_id: claim.row.id, phase: "complete", products_count: 0, error: "request_conflict" });
+          clearInterval(keepAliveTimer);
+          try { send({ type: "done" }); } catch { /* ignore */ }
+          try { controller.close(); } catch { /* already closed */ }
+          return;
+        }
+        const replay = await waitForReplayCompletion(supabase, body.messageId, claim.row);
+        const events = replayableSseEvents(replay.response_events);
+        clearInterval(keepAliveTimer);
+        if (events.length > 0 && replay.error !== "in_progress") {
+          for (const event of events) emit(event);
+        } else {
+          emit({ type: "delta", content: "Запрос ещё обрабатывается, но соединение не удалось восстановить. Повторите попытку позже." });
+          emit({ type: "diagnostic", log_id: replay.id, phase: "complete", products_count: 0, error: "request_pending" });
+          emit({ type: "done" });
+        }
+        try { controller.close(); } catch { /* already closed */ }
+        return;
+      }
 
-      // Two-phase logging: вставляем row сразу (видим запрос даже при abort/timeout/crash),
-      // в finally апдейтим финальные поля. Update оборачиваем в EdgeRuntime.waitUntil,
-      // чтобы воркер не убили до завершения insert/update при abort стрима.
-      const logId = await insertTurnLogStart(supabase, sessionId, userMessage, [...steps]);
+      // Строка лога одновременно служит блокировкой по messageId и хранилищем
+      // финальных SSE-событий: повторное подключение читает готовый ответ, а не
+      // запускает каталог и LLM ещё раз.
+      const logId = claim.id;
       send({ type: "diagnostic", log_id: logId, phase: "start" });
 
-      // Systemic protection against hard worker kills (Edge Runtime SIGKILL via req.signal).
-      // try/catch/finally может НЕ выполниться, если рантайм убивает воркер до return.
-      // Поэтому регистрируем abort-listener сразу и заворачиваем финализацию в EdgeRuntime.waitUntil,
-      // чтобы UPDATE chat_request_logs гарантированно ушёл в БД.
+      // The client transport and the accepted pipeline have different
+      // lifecycles. A browser/proxy disconnect must not cancel paid catalog and
+      // model work: a resume-only request will replay the persisted result.
+      const executionController = new AbortController();
+      const executionTimer = setTimeout(() => executionController.abort(), TURN_TIMEOUT_MS + 10_000);
       let logFinalized = false;
-      const rt = (globalThis as { EdgeRuntime?: { waitUntil?: (p: Promise<unknown>) => void }; }).EdgeRuntime;
 
-      // Async-версия для штатного finally: дожидаемся UPDATE до закрытия стрима,
-      // чтобы воркер не уехал в idle/shutdown до завершения запроса к PostgREST.
-      const finalizeLogAwait = async (reason: "ok" | "error", errOverride?: string | null) => {
-        if (!logId || logFinalized) return;
+      const finalizeLogAwait = async (errOverride?: string | null) => {
+        if (logFinalized) return;
         logFinalized = true;
         const snapshotSteps = [...steps];
         const finalErr = errOverride !== undefined ? errOverride : errorMsg;
         try {
-          await updateTurnLogEnd(supabase, logId, snapshotSteps, Date.now() - t0, finalTextAccum, productsCount, finalErr);
+          await updateTurnLogEnd(
+            supabase, logId, snapshotSteps, Date.now() - t0,
+            finalTextAccum, productsCount, finalErr, [...responseEvents],
+          );
         } catch (e) {
           console.error("[v3] finalizeLogAwait failed:", e);
         }
       };
 
-      // Fire-and-forget версия для abort-листенера: стрим уже закрыт runtime'ом,
-      // ждать нельзя — пробуем через waitUntil как best-effort.
-      const finalizeLogAbort = () => {
-        if (!logId || logFinalized) return;
-        logFinalized = true;
-        const snapshotSteps = [...steps];
-        snapshotSteps.push({
-          step: "v3_turn_end",
-          ms: Date.now() - t0,
-          meta: { reason: "aborted_by_runtime", error: "worker killed by edge runtime (req.signal abort)" },
-        });
-        const persist = updateTurnLogEnd(supabase, logId, snapshotSteps, Date.now() - t0, finalTextAccum, productsCount, "aborted_by_runtime");
-        if (rt?.waitUntil) rt.waitUntil(persist);
-        else void persist;
-      };
+      const settings = await loadSettings(supabase);
+      if (!settings.openrouter_api_key || !settings.volt220_api_token) {
+        errorMsg = !settings.openrouter_api_key ? "missing_openrouter_key" : "missing_catalog_token";
+        publicDiagnosticError = "internal_error";
+        send({ type: "delta", content: "Не удалось запустить подбор из-за внутренней ошибки. Повторите запрос позже или свяжитесь с менеджером." });
+        const completeEvent: SseEvent = { type: "diagnostic", log_id: logId, phase: "complete", products_count: 0, error: publicDiagnosticError };
+        responseEvents.push(completeEvent, { type: "done" });
+        await finalizeLogAwait();
+        clearInterval(keepAliveTimer);
+        clearTimeout(executionTimer);
+        emit(completeEvent);
+        emit({ type: "done" });
+        try { controller.close(); } catch { /* already closed */ }
+        return;
+      }
 
-      const onRuntimeAbort = () => {
-        console.error("[v3] req.signal aborted by runtime — finalizing log (best-effort)");
-        finalizeLogAbort();
-      };
-      if (req.signal.aborted) onRuntimeAbort();
-      else req.signal.addEventListener("abort", onRuntimeAbort, { once: true });
-
+      try {
       const priorHistory = stripCurrentUserEcho(history, userMessage);
       const boundary = await classifyConversationBoundary(
         userMessage,
@@ -9634,7 +10033,7 @@ Deno.serve(async (req) => {
           apiKey: settings.openrouter_api_key!,
           model: settings.classifier_model,
         },
-        req.signal,
+        executionController.signal,
       );
       const startsNewTask = shouldStartNewConversation(boundary);
       const effectiveSessionId = startsNewTask ? `session_${crypto.randomUUID()}` : sessionId;
@@ -9700,7 +10099,6 @@ Deno.serve(async (req) => {
         steps.push({ step: "v3_recent_product_evidence_loaded", ms: Date.now() - t0, meta: { count: recentProductEvidence.length } });
       }
 
-      try {
         const outdoorPoeIntent = classifyOutdoorPoeIntent(userMessage, effectiveHistory);
         const householdMotionLightRequest = classifyHouseholdMotionLightRequest(userMessage);
         const exactCompoundMarkingRequest = classifyExactCompoundMarkingRequest(userMessage);
@@ -9769,7 +10167,7 @@ Deno.serve(async (req) => {
             send,
             steps,
             t0,
-            req.signal,
+            executionController.signal,
           );
           if (direct.handled) {
             productsCount = direct.products.length;
@@ -9795,7 +10193,7 @@ Deno.serve(async (req) => {
             send,
             steps,
             t0,
-            req.signal,
+            executionController.signal,
           );
           productsCount = 0;
         } else if (recentProductEvidence.length > 0 && isRecentProductShowFollowup(userMessage)) {
@@ -9972,22 +10370,24 @@ Deno.serve(async (req) => {
         } catch { /* stream may be closed */ }
       } finally {
         clearInterval(keepAliveTimer);
-        try { req.signal.removeEventListener("abort", onRuntimeAbort); } catch { /* ignore */ }
+        clearTimeout(executionTimer);
+        const completeEvent: SseEvent = {
+          type: "diagnostic",
+          log_id: logId,
+          phase: "complete",
+          products_count: productsCount,
+          error: publicDiagnosticError,
+        };
+        // Persist the exact public protocol before closing the live stream, so
+        // a reconnect can reproduce the completed answer without re-execution.
+        responseEvents.push(completeEvent, { type: "done" });
         // КРИТИЧНО: сначала дожидаемся UPDATE'а лога, пока стрим ещё открыт и воркер жив.
         // После controller.close() Supabase Edge Runtime может убить воркера, не дождавшись
         // никаких pending-промисов (в т.ч. EdgeRuntime.waitUntil после закрытия стрима).
-        await finalizeLogAwait(errorMsg ? "error" : "ok");
-        try {
-          send({
-            type: "diagnostic",
-            log_id: logId,
-            phase: "complete",
-            products_count: productsCount,
-            error: publicDiagnosticError,
-          });
-        } catch { /* stream may be closed */ }
+        await finalizeLogAwait();
+        emit(completeEvent);
         // Только теперь безопасно закрывать стрим — UPDATE уже долетел до БД.
-        try { send({ type: "done" }); } catch { /* ignore */ }
+        emit({ type: "done" });
         try { controller.close(); } catch { /* already closed */ }
       }
 

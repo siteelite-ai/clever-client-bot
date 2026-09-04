@@ -190,3 +190,92 @@ test('widget renders user and assistant HTML as inert text', async () => {
   assert.match(messages.textContent, /<img src=x onerror=alert\(1\)>/u);
   dom.window.close();
 });
+
+test('accepted request is never executed again when its SSE connection breaks', async () => {
+  let fetchCount = 0;
+  let executionCount = 0;
+  let firstMessageId = null;
+  const logId = 'accepted-request-log';
+  const dom = bootWidget({
+    fetchImpl: async (_url, init) => {
+      fetchCount += 1;
+      const payload = JSON.parse(init.body);
+      if (!payload.resumeOnly) {
+        executionCount += 1;
+        firstMessageId = payload.messageId;
+      } else {
+        assert.equal(payload.messageId, firstMessageId);
+        const replay = [
+          `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+          `data: ${JSON.stringify({ choices: [{ delta: { content: 'Восстановленный ответ.' } }] })}`,
+          `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'complete', products_count: 0 } })}`,
+          'data: [DONE]',
+          '',
+        ].join('\n\n');
+        return new Response(replay, { headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      let pullCount = 0;
+      const body = new ReadableStream({
+        pull(controller) {
+          pullCount += 1;
+          if (pullCount === 1) {
+            controller.enqueue(new TextEncoder().encode(
+              `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}\n\n`,
+            ));
+            return;
+          }
+          controller.error(new Error('simulated transport break'));
+        },
+      });
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Какой ИБП подойдет для газового котла мощностью 250 ватт?';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  const deadline = Date.now() + 2_000;
+  while (!visibleMessages(dom).includes('Восстановленный ответ.') && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  assert.equal(fetchCount, 2, 'one execution plus one replay-only transport request is expected');
+  assert.equal(executionCount, 1, 'an accepted message must have exactly one server execution');
+  assert.match(visibleMessages(dom), /Восстановленный ответ\./u);
+  assert.match(visibleMessages(dom), new RegExp(logId, 'u'));
+  assert.doesNotMatch(visibleMessages(dom), /произошла ошибка соединения/iu);
+  dom.window.close();
+});
+
+test('SSE is parsed by payload when an intermediary rewrites content-type', async () => {
+  let fetchCount = 0;
+  const sse = [
+    `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'proxy-sse-log', phase: 'start' } })}`,
+    `data: ${JSON.stringify({ choices: [{ delta: { content: 'Подходящий ответ.' } }] })}`,
+    `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'proxy-sse-log', phase: 'complete', products_count: 0 } })}`,
+    'data: [DONE]',
+    '',
+  ].join('\n\n');
+  const dom = bootWidget({
+    fetchImpl: async () => {
+      fetchCount += 1;
+      return new Response(sse, { headers: { 'Content-Type': 'text/plain' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Тест ответа через посредника';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  const deadline = Date.now() + 2_000;
+  while (!visibleMessages(dom).includes('Подходящий ответ.') && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  assert.equal(fetchCount, 1);
+  assert.match(visibleMessages(dom), /Подходящий ответ\./u);
+  dom.window.close();
+});

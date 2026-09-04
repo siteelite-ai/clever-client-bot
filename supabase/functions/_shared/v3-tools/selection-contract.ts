@@ -41,6 +41,23 @@ export function advanceSelectionTarget(
 }
 
 /**
+ * Terminal recovery must enforce the most specific class that already passed
+ * declaration grounding, even when the first candidate pool could not prove
+ * it. The caller supplies only a previously validated hint; the lexical base
+ * check here prevents a sibling class from replacing the frozen target.
+ */
+export function resolveTerminalSelectionTarget(
+  currentTarget: string | null,
+  groundedDeclaredHint: string | null,
+): string | null {
+  const current = String(currentTarget ?? "").trim();
+  const hint = String(groundedDeclaredHint ?? "").trim();
+  if (!hint) return current || null;
+  if (!current) return hint;
+  return selectionTargetPreservesGroundedBase(current, hint) ? hint : current;
+}
+
+/**
  * A later model turn may refine the already grounded class, but it cannot
  * replace it with a sibling merely because the new pool proves that sibling.
  * This is intentionally lexical and category-neutral: the frozen base token
@@ -339,6 +356,20 @@ export function bootstrapSelectionTargetFromDiscovery(
   const rawTokenCount = normalize(resolved).split(/\s+/u).filter(Boolean).length;
   const taxonomyBase = bootstrapSelectionTargetFromTaxonomy(initialEvidence, liveClass);
   const taxonomyTokens = meaningfulTokens(taxonomyBase ?? "");
+  // Discovery may resolve a customer modifier or jargon token to a broader
+  // live class that the same customer message independently names. When the
+  // two are lexically disjoint, freeze the proven taxonomy class and leave
+  // the discovery token available for semantic/alias search; treating that
+  // token as the product class would make a later canonical query look like
+  // forbidden class drift.
+  if (
+    taxonomyBase &&
+    resolvedTokens.length > 0 &&
+    !selectionTargetIsDeclared(taxonomyBase, resolved) &&
+    !selectionTargetIsDeclared(resolved, taxonomyBase)
+  ) {
+    return taxonomyBase;
+  }
   if (
     taxonomyBase &&
     taxonomyTokens.length > 0 &&

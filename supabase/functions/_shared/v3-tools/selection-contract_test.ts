@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, initialSelectionDeclaration, parseSelectionTarget, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, initialSelectionDeclaration, parseSelectionTarget, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
@@ -304,6 +304,14 @@ Deno.test("live declared base class stays separate from discovery modifiers", ()
       "Автоматические выключатели",
     ),
     "автомат",
+  );
+  assertEquals(
+    bootstrapSelectionTargetFromDiscovery(
+      "Покажи изделия с названием Альфа.",
+      "Альфа",
+      "Изделия",
+    ),
+    "Изделия",
   );
 });
 
@@ -641,6 +649,18 @@ Deno.test("a failed render cannot replace an already grounded selection target",
   assertEquals(advanceSelectionTarget("Светильники", "Потолочные светильники", 3), "Потолочные светильники");
   assertEquals(advanceSelectionTarget("ИБП", "Стабилизатор напряжения", 4), "ИБП");
   assertEquals(advanceSelectionTarget(null, "Потолочные светильники", 0), "Потолочные светильники");
+});
+
+Deno.test("terminal recovery keeps a grounded refinement but rejects a sibling hint", () => {
+  assertEquals(
+    resolveTerminalSelectionTarget("светильник", "светодиодный светильник"),
+    "светодиодный светильник",
+  );
+  assertEquals(
+    resolveTerminalSelectionTarget("ИБП", "стабилизатор напряжения"),
+    "ИБП",
+  );
+  assertEquals(resolveTerminalSelectionTarget("кабель", null), "кабель");
 });
 
 Deno.test("a later class may refine but never replace the grounded base", () => {

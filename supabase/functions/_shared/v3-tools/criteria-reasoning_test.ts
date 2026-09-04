@@ -40,6 +40,20 @@ Deno.test("числовой диапазон из рассуждения про�
   assertEquals(projected.added, [{ key: "Световой поток", op: "range", value: [3750, 5000], unit: "лм", level: "A" }]);
 });
 
+Deno.test("словесная составная единица не конфликтует с производным диапазоном", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "Для комнаты нужен поток 3750–5000 лм (из расчёта 150–200 лм на м²).",
+    [
+      { key: "flow", caption: "Световой поток", type: "number", unit: "лм" },
+      { key: "power", caption: "Мощность", type: "number", unit: "Вт" },
+    ],
+  );
+  assertEquals(projected.added, [
+    { key: "Световой поток", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
+  ]);
+});
+
 Deno.test("дефисы артикула не превращаются в диапазон измеримого фасета", () => {
   const projected = projectReasoningRangeCriteria(
     [],
@@ -65,6 +79,17 @@ Deno.test("ключевые параметры замены обязательн
     ["Количество полюсов", "B"],
     ["Номинальный ток", "A"],
     ["Характеристика", "A"],
+  ]);
+});
+
+Deno.test("явно заявленная пригодность для применения остаётся обязательной", () => {
+  const aligned = alignCriteriaImportanceWithReasoning([
+    { key: "Способ монтажа", op: "eq", value: "потолочный", level: "A" },
+    { key: "Цвет", op: "eq", value: "белый", level: "A" },
+  ], "Модель должна подходить для потолочного монтажа. Белый цвет — по желанию.");
+  assertEquals(aligned.criteria.map((criterion) => [criterion.key, criterion.level]), [
+    ["Способ монтажа", "A"],
+    ["Цвет", "B"],
   ]);
 });
 
@@ -343,6 +368,48 @@ Deno.test("числовой критерий из рассуждения пов�
     { key: "Цвет", op: "eq", value: "белый", level: "B" },
   ]);
   assertEquals(result.promoted, ["Световой поток"]);
+});
+
+Deno.test("составная входная единица не конфликтует с производной товарной единицей", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "25 м² × 150–200 лм/м² = 3750–5000 лм",
+    [{
+      key: "output_flow",
+      caption: "Выходной поток, лм",
+      type: "number",
+      unit: "лм",
+      values: [{ value: "3750" }, { value: "4000" }, { value: "5000" }],
+    }],
+  );
+  assertEquals(projected.added, [{
+    key: "Выходной поток, лм",
+    op: "range",
+    value: [3750, 5000],
+    unit: "лм",
+    level: "A",
+  }]);
+});
+
+Deno.test("живой фасет восстанавливает пропущенную моделью единицу обязательного критерия", () => {
+  const result = promoteMeasuredReasoningCriteria(
+    [{ key: "output_flow", op: "range", value: [3750, 5000], level: "B" }],
+    "Нужен диапазон 3750–5000 лм",
+    [{
+      key: "output_flow",
+      caption: "Выходной поток, лм",
+      unit: "лм",
+      values: [{ value: "4000" }],
+    }],
+  );
+  assertEquals(result.criteria, [{
+    key: "output_flow",
+    op: "range",
+    value: [3750, 5000],
+    unit: "лм",
+    level: "A",
+  }]);
+  assertEquals(result.promoted, ["output_flow"]);
 });
 
 Deno.test("alignCriteriaWithReasoning: eq на числе клиента → min по прозе", () => {

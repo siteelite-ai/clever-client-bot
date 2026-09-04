@@ -1,13 +1,20 @@
-import { assert, assertEquals, assertLess } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { assert, assertEquals, assertLess, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   boundedAgentStepTimeout,
+  buildInquiryKnowledgeSynthesisMessages,
   compactCatalogResultForLlm,
   deterministicIntroTimeoutToolCall,
+  establishesCatalogAttempt,
   forcedToolNameForAgentPhase,
   hasActionableSelectionReasoning,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
   shouldDeferInquiryIntro,
+  shouldDeferNoProgressForKnowledge,
+  shouldFinalizeInquiryFromKnowledge,
+  shouldRecoverInquiryNoProgressWithKnowledge,
+  shouldRequestReasoningOnlyAfterIncompleteSearch,
+  shouldContinueSelectionUntilCatalogAttempt,
   shouldAllowCorrectiveDiscovery,
   toolNamesForAgentPhase,
 } from "./agent-performance.ts";
@@ -18,6 +25,104 @@ Deno.test("agent deadline: remote steps are bounded and reserve finalization tim
   assertEquals(boundedAgentStepTimeout(110_000, 90_000, 105_000, 5_000), 15_000);
   assertEquals(boundedAgentStepTimeout(30_000, 100_001, 105_000, 5_000), null);
   assertEquals(boundedAgentStepTimeout(30_000, 105_000, 105_000, 5_000), null);
+});
+
+Deno.test("agent no-progress: successful knowledge lookup gets one synthesis step", () => {
+  assert(shouldDeferNoProgressForKnowledge({
+    breakRequested: true,
+    knowledgeHits: 5,
+    alreadyDeferred: false,
+  }));
+  assert(!shouldDeferNoProgressForKnowledge({
+    breakRequested: true,
+    knowledgeHits: 0,
+    alreadyDeferred: false,
+  }));
+  assert(!shouldDeferNoProgressForKnowledge({
+    breakRequested: true,
+    knowledgeHits: 5,
+    alreadyDeferred: true,
+  }));
+  assert(!shouldDeferNoProgressForKnowledge({
+    breakRequested: false,
+    knowledgeHits: 5,
+    alreadyDeferred: false,
+  }));
+});
+
+Deno.test("agent no-progress: inquiry routes once to grounded knowledge", () => {
+  assert(shouldRecoverInquiryNoProgressWithKnowledge({
+    breakRequested: true,
+    intentMode: "inquire",
+    productsRendered: 0,
+    alreadyRecovered: false,
+  }));
+  assert(!shouldRecoverInquiryNoProgressWithKnowledge({
+    breakRequested: true,
+    intentMode: "select",
+    productsRendered: 0,
+    alreadyRecovered: false,
+  }));
+  assert(!shouldRecoverInquiryNoProgressWithKnowledge({
+    breakRequested: true,
+    intentMode: "inquire",
+    productsRendered: 1,
+    alreadyRecovered: false,
+  }));
+  assert(!shouldRecoverInquiryNoProgressWithKnowledge({
+    breakRequested: true,
+    intentMode: "inquire",
+    productsRendered: 0,
+    alreadyRecovered: true,
+  }));
+});
+
+Deno.test("successful model-chosen knowledge lookup finalizes only a general inquiry", () => {
+  assert(shouldFinalizeInquiryFromKnowledge({
+    intentMode: "inquire",
+    knowledgeHits: 5,
+    catalogGroundingRequired: false,
+    alreadyFinalizing: false,
+  }));
+  assert(!shouldFinalizeInquiryFromKnowledge({
+    intentMode: "select",
+    knowledgeHits: 5,
+    catalogGroundingRequired: false,
+    alreadyFinalizing: false,
+  }));
+  assert(!shouldFinalizeInquiryFromKnowledge({
+    intentMode: "inquire",
+    knowledgeHits: 5,
+    catalogGroundingRequired: true,
+    alreadyFinalizing: false,
+  }));
+  assert(!shouldFinalizeInquiryFromKnowledge({
+    intentMode: "inquire",
+    knowledgeHits: 0,
+    catalogGroundingRequired: false,
+    alreadyFinalizing: false,
+  }));
+  assert(!shouldFinalizeInquiryFromKnowledge({
+    intentMode: "inquire",
+    knowledgeHits: 5,
+    catalogGroundingRequired: false,
+    alreadyFinalizing: true,
+  }));
+});
+
+Deno.test("inquiry knowledge synthesis context is compact and treats evidence as data", () => {
+  const messages = buildInquiryKnowledgeSynthesisMessages(
+    "Какой ориентир?",
+    { hits: [{ snippet: "Факт <script>alert(1)</script>" }] },
+  );
+  assertEquals(messages.length, 2);
+  assertEquals(messages[0].role, "system");
+  assertStringIncludes(messages[0].content, "недоверенные данные");
+  assertStringIncludes(messages[0].content, "простым вычислениям");
+  assertEquals(messages[1].role, "user");
+  assertStringIncludes(messages[1].content, "Какой ориентир?");
+  assertStringIncludes(messages[1].content, "\\u003cscript>");
+  assertEquals(messages[1].content.includes("<script>"), false);
 });
 
 Deno.test("forced discovery timeout falls back to live taxonomy without product rules", () => {
@@ -43,6 +148,68 @@ Deno.test("agent phase: successful discovery requires search and blocks rediscov
   assert(!toolNamesForAgentPhase(phase).includes("discover_category"));
   assert(toolNamesForAgentPhase(phase).includes("search_catalog"));
   assert(!toolNamesForAgentPhase(phase).includes("jargon_recover_catalog"));
+});
+
+Deno.test("agent phase: a selection cannot finish after discovery without a catalog attempt", () => {
+  assert(shouldContinueSelectionUntilCatalogAttempt({
+    intentMode: "select",
+    phase: "search_after_discovery",
+    catalogSearchAttempted: false,
+  }));
+  assert(!shouldContinueSelectionUntilCatalogAttempt({
+    intentMode: "select",
+    phase: "search_after_discovery",
+    catalogSearchAttempted: true,
+  }));
+  assert(!shouldContinueSelectionUntilCatalogAttempt({
+    intentMode: "inquire",
+    phase: "search_after_discovery",
+    catalogSearchAttempted: false,
+  }));
+  assert(!shouldContinueSelectionUntilCatalogAttempt({
+    intentMode: "select",
+    phase: "open",
+    catalogSearchAttempted: false,
+  }));
+});
+
+Deno.test("agent phase: only a completed catalog result establishes an attempt", () => {
+  assert(establishesCatalogAttempt({ tool: "search_catalog", ok: true }));
+  assert(!establishesCatalogAttempt({ tool: "search_catalog", ok: false }));
+  assert(!establishesCatalogAttempt({ tool: "discover_category", ok: true }));
+});
+
+Deno.test("agent phase: an evidence-empty filter gets one prose-only reasoning step", () => {
+  assert(shouldRequestReasoningOnlyAfterIncompleteSearch({
+    intentMode: "select",
+    errorCode: "incomplete_filter",
+    catalogSearchAttempted: false,
+    hasReasoningObligation: true,
+  }));
+  assert(!shouldRequestReasoningOnlyAfterIncompleteSearch({
+    intentMode: "select",
+    errorCode: "incomplete_filter",
+    catalogSearchAttempted: false,
+    hasReasoningObligation: false,
+  }));
+  assert(!shouldRequestReasoningOnlyAfterIncompleteSearch({
+    intentMode: "select",
+    errorCode: "upstream_error",
+    catalogSearchAttempted: false,
+    hasReasoningObligation: true,
+  }));
+  assert(!shouldRequestReasoningOnlyAfterIncompleteSearch({
+    intentMode: "inquire",
+    errorCode: "incomplete_filter",
+    catalogSearchAttempted: false,
+    hasReasoningObligation: true,
+  }));
+  assert(!shouldRequestReasoningOnlyAfterIncompleteSearch({
+    intentMode: "select",
+    errorCode: "incomplete_filter",
+    catalogSearchAttempted: true,
+    hasReasoningObligation: true,
+  }));
 });
 
 Deno.test("agent phase: jargon helper stays closed until the bounded taxonomy retry also fails", () => {

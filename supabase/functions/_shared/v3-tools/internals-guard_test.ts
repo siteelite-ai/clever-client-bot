@@ -8,6 +8,7 @@ import {
   replaceUngroundedMissingAnchorIntro,
   sanitizeIntermediateReasoning,
   shouldGuardFirstVisibleReasoning,
+  stripSerializedToolCallMarkup,
   stripUngroundedIntroAliasDefinitions,
   stripUngroundedIntroTechnicalAttributes,
   stripUnrenderedCatalogFactSegments,
@@ -160,6 +161,24 @@ Deno.test("Cyrillic alias definition drops unrequested codes after the word эт
   );
 });
 
+Deno.test("alias explanation phrased as речь про drops unrequested codes", () => {
+  const result = stripUngroundedIntroTechnicalAttributes(
+    "«Лампы кукуруза» — понял, речь про светодиодные лампы с цоколем E27 или E40, похожие на початок.",
+    "а у тебя есть лампы кукуруза?",
+  );
+  assertEquals(
+    result.text,
+    "«Лампы кукуруза» — понял, речь про светодиодные лампы, похожие на початок.",
+  );
+  assertEquals(result.removed, ["с цоколем E27 или E40"]);
+
+  const customerBacked = stripUngroundedIntroTechnicalAttributes(
+    "Понял, речь про лампу с цоколем E27 или E40.",
+    "Нужна лампа кукуруза E27",
+  );
+  assertEquals(customerBacked.text, "Понял, речь про лампу с цоколем E27.");
+});
+
 Deno.test("first visible reasoning guard is independent of the agent step", () => {
   assertEquals(shouldGuardFirstVisibleReasoning({
     productsRendered: 0,
@@ -278,6 +297,25 @@ Deno.test("redact: нормальные товарные ответы не тр�
     assertEquals(r.redacted, false, `ложное срабатывание: ${c}`);
     assertEquals(r.text, c);
   }
+});
+
+Deno.test("serialized provider tool call is removed without hiding grounded prose", () => {
+  const input = "На 1000 лм мощность обычно около 12–13 Вт. Для общего света это примерно 6–7 м².\n\n" +
+    "Вот ближайший вариант:\n\n" +
+    '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="render_products">\n' +
+    '<｜DSML｜parameter name="product_ids">["123"]</｜DSML｜parameter>\n' +
+    "</｜DSML｜invoke>\n</｜DSML｜tool_calls>";
+  const stripped = stripSerializedToolCallMarkup(input);
+  assertEquals(stripped.removed, true);
+  assertEquals(
+    stripped.text,
+    "На 1000 лм мощность обычно около 12–13 Вт. Для общего света это примерно 6–7 м².",
+  );
+  const guarded = redactInternals(input);
+  assertEquals(guarded.redacted, false);
+  assertEquals(guarded.text, stripped.text);
+  assert(guarded.matched.includes("serialized_tool_call"));
+  assertEquals(/DSML|product_ids|render_products/u.test(guarded.text), false);
 });
 
 Deno.test("intermediate reasoning keeps the product correction without exposing tool names", () => {

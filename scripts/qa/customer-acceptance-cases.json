@@ -392,6 +392,10 @@
           "expect": {
             "min_products": 1,
             "require_every_product_title_any": ["светильник", "панель", "люстра"],
+            "require_every_product_measurement": {
+              "units": ["Вт", "W", "ватт"],
+              "min": 25
+            },
             "forbid_every_product_title_any": ["улич", "прожектор", "Avenue", "E40"],
             "require_any_text": ["лм", "люмен", "гостин", "основн"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
@@ -470,7 +474,13 @@
           "expect": {
             "require_every_product_title_any": ["ИБП", "UPS", "беспереб"],
             "forbid_every_product_title_any": ["ATS", "АВР", "ввод резерва", "переключатель"],
-            "require_any_text": ["синус", "ВА", "запас", "котл"],
+            "require_text_groups": [
+              ["ИБП", "UPS", "беспереб"],
+              ["синус"],
+              ["ВА", "Вт", "ватт"],
+              ["запас", "пусков"]
+            ],
+            "forbid_assistant_text": ["стабилизатор"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }

@@ -110,6 +110,29 @@ export interface RedactResult {
   matched: string[];
 }
 
+export interface SerializedToolCallStripResult {
+  text: string;
+  removed: boolean;
+}
+
+/**
+ * Some OpenAI-compatible providers can serialize a tool call into the message
+ * text when tools are deliberately closed for the final synthesis step. That
+ * markup is never customer content. Remove the machine-only suffix before the
+ * ordinary internals guard runs, preserving the grounded prose that preceded
+ * it. A short trailing colon paragraph is the provider's introduction to the
+ * serialized call and is removed with the block.
+ */
+export function stripSerializedToolCallMarkup(text: string): SerializedToolCallStripResult {
+  const raw = String(text ?? "");
+  const marker = raw.match(/<(?:｜|\|)DSML(?:｜|\|)tool_calls>/iu);
+  if (marker?.index === undefined) return { text: raw, removed: false };
+  const safePrefix = raw.slice(0, marker.index)
+    .replace(/\n\s*\n[^\n.!?]{1,200}:\s*$/u, "")
+    .trim();
+  return { text: safePrefix, removed: true };
+}
+
 /**
  * Product facts must be emitted by the deterministic product-card renderer.
  * This detector is deliberately structural: it knows catalog-shaped facts,
@@ -271,7 +294,7 @@ export function stripUnrenderedCatalogFactSegments(text: string): CatalogFactStr
 const COMPACT_TECHNICAL_CODE_RE = /(?<![\p{L}\p{N}])(?=[\p{L}\p{N}.-]{2,18}(?![\p{L}\p{N}]))(?=[\p{L}\p{N}.-]*\p{L})(?=[\p{L}\p{N}.-]*\d)[\p{L}\p{N}][\p{L}\p{N}.-]{1,17}(?![\p{L}\p{N}])/gu;
 // JavaScript's `\b` is ASCII-centric even with /u, so it cannot be used as a
 // Cyrillic word boundary. Use Unicode-letter boundaries for Russian prose.
-const ALIAS_OR_GENERALIZATION_RE = /(?:(?<!\p{L})это(?!\p{L})|названи\p{L}*|обычно|как\s+правило|чаще\s+всего|проход\p{L}*\s+как)/iu;
+const ALIAS_OR_GENERALIZATION_RE = /(?:(?<!\p{L})это(?!\p{L})|названи\p{L}*|обычно|как\s+правило|чаще\s+всего|речь\s+(?:идет\s+)?про|проход\p{L}*\s+как)/iu;
 const EXPLICIT_CRITERION_RE = /(?:нуж\p{L}*|треб\p{L}*|беру(?!\p{L})|закладыва\p{L}*|долж\p{L}*|не\s+(?:ниже|менее|выше|более))/iu;
 const TECHNICAL_ATTRIBUTE_CODE_LIST_RE = /((?:,\s*)?(?:обычно\s+)?(?:с|на|под)\s+(?:[\p{L}-]{2,32}\s+){1,3})((?:[\p{L}]*\d[\p{L}\d.-]*)(?:\s*(?:,|\/|или)\s*(?:[\p{L}]*\d[\p{L}\d.-]*))*)/giu;
 const UNGROUNDED_ALIAS_DEFINITION_RE = /(?:(?:(?:народн|разговорн|бытов|жаргонн|неофициальн)\p{L}*\s+)+(?:названи\p{L}*|обозначени\p{L}*|термин\p{L}*)|так\s+(?:в\s+народе\s+)?называ\p{L}*|(?:по\s+смыслу\s+)?это\s+чаще\s+всего|это\s+оно\s+и\s+есть|это\s+ближе\s+всего|ближе\s+всего\s+к|проход\p{L}*\s+как)/iu;
@@ -378,7 +401,9 @@ export function stripUngroundedIntroAliasDefinitions(
  * размазана по всему абзацу). Самокритичные ярлыки чистятся без подмены.
  */
 export function redactInternals(text: string): RedactResult {
-  const raw = text ?? "";
+  const original = text ?? "";
+  const serializedToolCall = stripSerializedToolCallMarkup(original);
+  const raw = serializedToolCall.text;
   if (!raw.trim()) return { text: raw, redacted: false, matched: [] };
   const customerFacing = rewriteCustomerFacingServiceTerms(raw);
   const n = norm(customerFacing);
@@ -396,8 +421,8 @@ export function redactInternals(text: string): RedactResult {
   const withoutSelfFlagellation = customerFacing.replace(SELF_FLAGELLATION_RE, "")
     .replace(/[ \t]{2,}/g, " ").trim();
   const cleaned = correctCustomerTextTypos(withoutSelfFlagellation);
-  if (cleaned !== raw.trim()) {
-    const softMatches: string[] = [];
+  if (cleaned !== original.trim()) {
+    const softMatches: string[] = serializedToolCall.removed ? ["serialized_tool_call"] : [];
     if (withoutSelfFlagellation !== customerFacing.trim()) {
       softMatches.push("self_flagellation");
     }

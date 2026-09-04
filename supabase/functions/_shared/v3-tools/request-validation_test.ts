@@ -36,6 +36,18 @@ Deno.test("request validation: accepts the current widget payload", () => {
   assertEquals(result.value.message, "Нужен автомат C16");
   assertEquals(result.value.history.length, 2);
   assertEquals(result.value.stream, true);
+  assertEquals(result.value.resumeOnly, false);
+});
+
+Deno.test("request validation: accepts only a boolean resume-only flag", () => {
+  const resumed = validateChatRequestBody(validRequest({ resumeOnly: true }));
+  assert(resumed.ok);
+  assertEquals(resumed.value.resumeOnly, true);
+  assert(
+    issueCodes(validRequest({ resumeOnly: "true" })).includes(
+      "resumeOnly:expected_boolean",
+    ),
+  );
 });
 
 Deno.test("request validation: trims message and history content", () => {
