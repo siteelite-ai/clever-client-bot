@@ -57,6 +57,9 @@ if (!loader.includes("encodeURIComponent(location.origin)")) {
 if (!bootstrap.includes("parent.postMessage") || !bootstrap.includes("new URL(targetOrigin).origin !== targetOrigin")) {
   throw new Error('Widget bootstrap must use a validated exact postMessage target origin');
 }
+if (!bootstrap.includes("window.stop()")) {
+  throw new Error('Root HTML bootstrap must stop the admin application bundle');
+}
 if (!loader.includes("/^widget-[a-f0-9]{16}$/")) {
   throw new Error('Widget loader must validate content-hash release versions');
 }
