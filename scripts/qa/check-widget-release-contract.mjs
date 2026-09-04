@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 const widgetPath = new URL('../../public/widget.js', import.meta.url);
 const manifestPath = new URL('../../public/widget-version.js', import.meta.url);
 const jsonManifestPath = new URL('../../public/widget-version.json', import.meta.url);
-const bootstrapPath = new URL('../../public/widget-bootstrap.html', import.meta.url);
+const bootstrapPath = new URL('../../index.html', import.meta.url);
 const loaderPath = new URL('../../public/embed.js', import.meta.url);
 const [widget, manifest, jsonManifestRaw, bootstrap, loader] = await Promise.all([
   readFile(widgetPath, 'utf8'),

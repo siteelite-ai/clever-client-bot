@@ -3,6 +3,30 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <script>
+      (function () {
+        'use strict';
+        var params = new URL(location.href).searchParams;
+        if (params.get('voltWidgetBootstrap') !== '1' || parent === window) return;
+        var version = 'widget-d8da5cc307f128a5';
+        var channel = '';
+        var targetOrigin = '';
+        try {
+          channel = decodeURIComponent(location.hash.slice(1));
+          targetOrigin = params.get('parentOrigin') || new URL(document.referrer).origin;
+          if (new URL(targetOrigin).origin !== targetOrigin) return;
+        } catch (e) {
+          return;
+        }
+        if (!channel || !targetOrigin) return;
+        parent.postMessage({
+          type: 'volt-widget-version',
+          channel: channel,
+          version: version
+        }, targetOrigin);
+        setTimeout(function () { window.stop(); }, 0);
+      })();
+    </script>
     <!-- TODO: Set the document title to the name of your application -->
     <title>220volt - AI Амин-панель</title>
     <meta name="description" content="AI Админ-панель">

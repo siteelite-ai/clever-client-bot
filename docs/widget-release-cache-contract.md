@@ -14,9 +14,11 @@
    <script src="https://clever-client-bot.lovable.app/embed.js?v=2026-09-04-loader-2" async></script>
    ```
 
-2. `embed.js` создаёт скрытый `widget-bootstrap.html` в sandboxed iframe.
-3. Lovable отдаёт HTML с `Cache-Control: no-cache, must-revalidate, max-age=0`,
-   поэтому браузер ревалидирует bootstrap даже при сохранённом кеше статических JS.
+2. `embed.js` открывает корневой HTML в специальном bootstrap-режиме внутри
+   sandboxed iframe.
+3. Lovable отдаёт корневой HTML с `Cache-Control: no-cache, must-revalidate,
+   max-age=0`, поэтому браузер ревалидирует bootstrap даже при сохранённом кеше
+   статических JS. Отдельные статические `.html` этого заголовка не получают.
 4. Bootstrap возвращает content-hash версии через `postMessage`.
 5. Загрузчик проверяет окно iframe, одноразовый channel и формат версии, после чего
    подключает `widget.js?v=widget-<content-hash>`.
@@ -30,7 +32,7 @@
 - загрузчик принимает сообщение только от созданного им iframe и с одноразовым channel;
 - принимается только версия формата `widget-[a-f0-9]{16}`;
 - все четыре release-артефакта должны содержать один content hash:
-  `widget.js`, `widget-version.js`, `widget-version.json`, `widget-bootstrap.html`.
+  `widget.js`, `widget-version.js`, `widget-version.json`, `index.html`.
 
 ## Обязательные проверки релиза
 
