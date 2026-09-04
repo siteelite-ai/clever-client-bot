@@ -71,6 +71,7 @@ import {
   productMatchesExcludedReplacementIdentity,
 } from "../_shared/v3-tools/search-filter-guard.ts";
 import {
+  categoryLabelIsAffirmedAsTarget,
   filterProductsByGroundedCategoryTargets,
   filterProductsByNamedSeries,
   groundedCategoryRecoveryQueries,
@@ -4622,7 +4623,7 @@ async function runExpertLoop(
           hasFreshSearch: Boolean(freshSearch),
           previousCategoryGrounded: Boolean(
             lastDiscover?.category?.pagetitle &&
-            selectionTargetIsDeclared(
+            categoryLabelIsAffirmedAsTarget(
               lastDiscover.category.pagetitle,
               `${userMessage}\n${initialSelectionDeclaration(firstAssistantText)}`,
             )

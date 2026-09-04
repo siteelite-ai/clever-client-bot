@@ -90,6 +90,17 @@ function evidenceAffirmsToken(evidence: string, token: string): boolean {
   return false;
 }
 
+/**
+ * Checks whether a complete live category label is affirmed on the target
+ * side of the customer's request. Unlike plain token overlap, a mention on
+ * the source side of a `replace X with Y` transformation is not positive
+ * evidence for keeping X as the destination category.
+ */
+export function categoryLabelIsAffirmedAsTarget(label: string, evidence: string): boolean {
+  const tokens = significantTokens(label);
+  return tokens.length > 0 && tokens.every((token) => evidenceAffirmsToken(evidence, token));
+}
+
 function leafSupported(leaf: string, umbrella: string, evidence: string): boolean {
   const distinctive = distinctiveLeafTokens(leaf, umbrella);
   // A leaf whose name is indistinguishable from the umbrella provides no

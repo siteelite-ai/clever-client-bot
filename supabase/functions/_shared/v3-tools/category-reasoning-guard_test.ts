@@ -1,5 +1,6 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  categoryLabelIsAffirmedAsTarget,
   filterProductsByGroundedCategoryTargets,
   groundedCategoryRecoveryQueries,
   groundedTokenRecoveryQueries,
@@ -187,6 +188,30 @@ Deno.test("the source side of replace X with Y does not ground the target catego
       "Хочу заменить старое исходное устройство на новое исходное устройство",
     ),
     ["Исходные устройства"],
+  );
+});
+
+Deno.test("category affirmation distinguishes the source and target sides of a transformation", () => {
+  assertEquals(
+    categoryLabelIsAffirmedAsTarget(
+      "Исходные устройства",
+      "Хочу заменить исходное устройство на целевое устройство",
+    ),
+    false,
+  );
+  assertEquals(
+    categoryLabelIsAffirmedAsTarget(
+      "Целевые устройства",
+      "Хочу заменить исходное устройство на целевое устройство",
+    ),
+    true,
+  );
+  assertEquals(
+    categoryLabelIsAffirmedAsTarget(
+      "Исходные устройства",
+      "Хочу заменить старое исходное устройство на новое исходное устройство",
+    ),
+    true,
   );
 });
 
