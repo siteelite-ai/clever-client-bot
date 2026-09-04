@@ -32,7 +32,7 @@ import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compi
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
-import { buildDerivedSelectionReasoningMessages, hasActionableSelectionContract, measuredSelectionContractEvidence, shouldContinueSelectionPastOptionalClarification, shouldRequireDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
+import { buildDerivedSelectionReasoningMessages, hasActionableSelectionContract, hasSelectionMeasurementContext, measuredSelectionContractEvidence, shouldContinueSelectionPastOptionalClarification, shouldRequireDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
 import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, initialSelectionDeclaration, parseSelectionTarget, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, declaredAliasIsStructurallyCustomerOwned, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
@@ -6806,19 +6806,25 @@ async function runExpertLoop(
           // those values; keep the phase open and ask the same consultant to
           // state its calculation before retrying instead of treating the
           // malformed empty filter as catalog progress.
-          result = {
-            ...result,
-            message: "Поиск не выполнен: после проверки аргументов не осталось подтверждённой категории или фильтров. Явно сформулируй клиенту своё расчётное рассуждение и критерии, затем повтори search_catalog с теми же обоснованными параметрами.",
-          };
+          const hasReasoningObligation = hasSelectionMeasurementContext(userMessage) ||
+            hasMeasuredSelectionRequirement(`${firstAssistantText}\n${assistantReasoning}`) ||
+            reasoningNeedsCompatibilityRelations(`${userMessage}\n${firstAssistantText}\n${assistantReasoning}`);
           selectionReasoningOnlyRequired = shouldRequestReasoningOnlyAfterIncompleteSearch({
             intentMode,
             errorCode: result.error_code,
             catalogSearchAttempted,
+            hasReasoningObligation,
           });
+          result = {
+            ...result,
+            message: selectionReasoningOnlyRequired
+              ? "Поиск не выполнен: после проверки аргументов не осталось подтверждённой категории или фильтров. Явно сформулируй клиенту своё расчётное рассуждение и критерии, затем повтори search_catalog с теми же обоснованными параметрами."
+              : "Поиск не выполнен: после проверки аргументов не осталось подтверждённой категории или фильтров. Не придумывай новые характеристики. Повтори search_catalog в режиме by_query с точным классом, названием или пользовательским термином из исходного запроса.",
+          };
           steps.push({
             step: "v3_incomplete_search_requires_reasoning",
             ms: now(),
-            meta: { phase: agentPhase, retryable: true },
+            meta: { phase: agentPhase, retryable: true, reasoning_required: selectionReasoningOnlyRequired },
           });
         }
 

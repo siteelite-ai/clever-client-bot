@@ -119,10 +119,12 @@ export function shouldRequestReasoningOnlyAfterIncompleteSearch(input: {
   intentMode: "select" | "inquire";
   errorCode?: string;
   catalogSearchAttempted: boolean;
+  hasReasoningObligation: boolean;
 }): boolean {
   return input.intentMode === "select" &&
     input.errorCode === "incomplete_filter" &&
-    !input.catalogSearchAttempted;
+    !input.catalogSearchAttempted &&
+    input.hasReasoningObligation;
 }
 
 export function buildInquiryKnowledgeSynthesisMessages(

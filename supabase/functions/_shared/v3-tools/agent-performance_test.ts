@@ -184,21 +184,31 @@ Deno.test("agent phase: an evidence-empty filter gets one prose-only reasoning s
     intentMode: "select",
     errorCode: "incomplete_filter",
     catalogSearchAttempted: false,
+    hasReasoningObligation: true,
+  }));
+  assert(!shouldRequestReasoningOnlyAfterIncompleteSearch({
+    intentMode: "select",
+    errorCode: "incomplete_filter",
+    catalogSearchAttempted: false,
+    hasReasoningObligation: false,
   }));
   assert(!shouldRequestReasoningOnlyAfterIncompleteSearch({
     intentMode: "select",
     errorCode: "upstream_error",
     catalogSearchAttempted: false,
+    hasReasoningObligation: true,
   }));
   assert(!shouldRequestReasoningOnlyAfterIncompleteSearch({
     intentMode: "inquire",
     errorCode: "incomplete_filter",
     catalogSearchAttempted: false,
+    hasReasoningObligation: true,
   }));
   assert(!shouldRequestReasoningOnlyAfterIncompleteSearch({
     intentMode: "select",
     errorCode: "incomplete_filter",
     catalogSearchAttempted: true,
+    hasReasoningObligation: true,
   }));
 });
 
