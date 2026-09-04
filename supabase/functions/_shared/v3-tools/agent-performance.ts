@@ -98,6 +98,17 @@ export function shouldContinueSelectionUntilCatalogAttempt(input: {
     !input.catalogSearchAttempted;
 }
 
+/** A syntactically emitted tool call is not catalog progress. Only a completed
+ * search result (including a truthful zero-result response) may unlock final
+ * selection text or terminal rendering. Invalid arguments and upstream errors
+ * must remain retryable inside the same phase. */
+export function establishesCatalogAttempt(input: {
+  tool: string;
+  ok: boolean;
+}): boolean {
+  return input.tool === "search_catalog" && input.ok;
+}
+
 export function buildInquiryKnowledgeSynthesisMessages(
   userMessage: string,
   knowledge: unknown,

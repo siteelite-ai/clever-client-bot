@@ -111,6 +111,7 @@ import {
   buildInquiryKnowledgeSynthesisMessages,
   compactCatalogResultForLlm,
   deterministicIntroTimeoutToolCall,
+  establishesCatalogAttempt,
   forcedToolNameForAgentPhase,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
@@ -6709,11 +6710,33 @@ async function runExpertLoop(
 
 
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
-        if (tc.name === "search_catalog") {
+        let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
+
+        if (establishesCatalogAttempt({ tool: tc.name, ok: result.ok })) {
           catalogSearchAttempted = true;
           selectionCatalogContinuationRequired = false;
+        } else if (
+          tc.name === "search_catalog" &&
+          !result.ok &&
+          result.error_code === "incomplete_filter" &&
+          intentMode === "select" &&
+          lastDiscover
+        ) {
+          // The provider may have calculated useful filter values but omitted
+          // the prose that proves them. The evidence guard correctly removes
+          // those values; keep the phase open and ask the same consultant to
+          // state its calculation before retrying instead of treating the
+          // malformed empty filter as catalog progress.
+          result = {
+            ...result,
+            message: "Поиск не выполнен: после проверки аргументов не осталось подтверждённой категории или фильтров. Явно сформулируй клиенту своё расчётное рассуждение и критерии, затем повтори search_catalog с теми же обоснованными параметрами.",
+          };
+          steps.push({
+            step: "v3_incomplete_search_requires_reasoning",
+            ms: now(),
+            meta: { phase: agentPhase, retryable: true },
+          });
         }
-        let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
 
         if (tc.name === "lookup_knowledge" && result.ok) {
           knowledgeHitsThisStep = Math.max(
@@ -9234,6 +9257,7 @@ async function runExpertLoop(
         if (rescued.ok) {
           const rendered = rescued as { markdown: string; rendered_count: number; };
           for (const id of safeIds.slice(0, 5)) shownIds.add(id);
+          ensureVisibleTerminalSelectionCaption(adjusted.criteria, "v3_semantic_render_recovery");
           send({
             type: "products_block",
             markdown: rendered.markdown,

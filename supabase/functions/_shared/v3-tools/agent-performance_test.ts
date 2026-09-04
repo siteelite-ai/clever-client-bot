@@ -4,6 +4,7 @@ import {
   buildInquiryKnowledgeSynthesisMessages,
   compactCatalogResultForLlm,
   deterministicIntroTimeoutToolCall,
+  establishesCatalogAttempt,
   forcedToolNameForAgentPhase,
   hasActionableSelectionReasoning,
   isToolAllowedInAgentPhase,
@@ -169,6 +170,12 @@ Deno.test("agent phase: a selection cannot finish after discovery without a cata
     phase: "open",
     catalogSearchAttempted: false,
   }));
+});
+
+Deno.test("agent phase: only a completed catalog result establishes an attempt", () => {
+  assert(establishesCatalogAttempt({ tool: "search_catalog", ok: true }));
+  assert(!establishesCatalogAttempt({ tool: "search_catalog", ok: false }));
+  assert(!establishesCatalogAttempt({ tool: "discover_category", ok: true }));
 });
 
 Deno.test("agent phase: jargon helper stays closed until the bounded taxonomy retry also fails", () => {
