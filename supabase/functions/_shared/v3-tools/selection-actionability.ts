@@ -58,6 +58,19 @@ export function shouldRequireDerivedSelectionReasoning(
     !hasActionableSelectionContract(input.reasoningText);
 }
 
+/**
+ * Once a derived plan has been shown to the customer, later hidden tool-step
+ * prose cannot silently replace it. The visible statement is the retrieval
+ * contract until a new customer-visible correction is emitted.
+ */
+export function measuredSelectionContractEvidence(
+  visibleDerivedReasoning: string,
+  accumulatedReasoning: string,
+): string {
+  const visible = String(visibleDerivedReasoning ?? "").trim();
+  return visible || String(accumulatedReasoning ?? "");
+}
+
 export function buildDerivedSelectionReasoningMessages(
   userMessage: string,
   category: string,

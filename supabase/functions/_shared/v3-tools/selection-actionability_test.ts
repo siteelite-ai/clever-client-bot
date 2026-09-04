@@ -3,6 +3,7 @@ import {
   buildDerivedSelectionReasoningMessages,
   hasActionableSelectionContract,
   hasSelectionMeasurementContext,
+  measuredSelectionContractEvidence,
   shouldContinueSelectionPastOptionalClarification,
   shouldRequireDerivedSelectionReasoning,
 } from "./selection-actionability.ts";
@@ -57,6 +58,20 @@ Deno.test("direct live projection or prior derivation does not add a reasoning d
     intentMode: "inquire",
     directMeasuredCriteriaCount: 0,
   }), false);
+});
+
+Deno.test("visible derived reasoning cannot be replaced by hidden later tool prose", () => {
+  assertEquals(
+    measuredSelectionContractEvidence(
+      "Публичный расчёт: 5000–7500 лм",
+      "Публичный расчёт: 5000–7500 лм\nСкрытая поздняя версия: 3750–5000 лм",
+    ),
+    "Публичный расчёт: 5000–7500 лм",
+  );
+  assertEquals(
+    measuredSelectionContractEvidence("", "Первичное рассуждение 40 Вт"),
+    "Первичное рассуждение 40 Вт",
+  );
 });
 
 Deno.test("derived reasoning prompt is compact and treats the live schema as untrusted data", () => {

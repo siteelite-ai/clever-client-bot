@@ -32,7 +32,7 @@ import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compi
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
-import { buildDerivedSelectionReasoningMessages, hasActionableSelectionContract, shouldContinueSelectionPastOptionalClarification, shouldRequireDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
+import { buildDerivedSelectionReasoningMessages, hasActionableSelectionContract, measuredSelectionContractEvidence, shouldContinueSelectionPastOptionalClarification, shouldRequireDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
 import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, initialSelectionDeclaration, parseSelectionTarget, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, declaredAliasIsStructurallyCustomerOwned, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
@@ -3326,6 +3326,7 @@ async function runExpertLoop(
   // для Слоя 5: направление подбора берём из рассуждения, а не из сырого числа
   // в реплике клиента.
   let assistantReasoning = "";
+  let derivedSelectionReasoningEvidence = "";
   let lastDiscover: DiscoverCategoryOk | null = null;
   const selectionDiscoveries: DiscoverCategoryOk[] = [];
   // Machine-readable projection of the facet values the consultant declared
@@ -4543,6 +4544,31 @@ async function runExpertLoop(
             meta: { chars: resp.text.length, fragment_index: step, text: resp.text },
           });
           }
+        } else if (selectionReasoningOnlyRequired) {
+          // A derived plan is a customer-visible proof obligation, even when
+          // an earlier generic intro bubble already exists. Hiding this text
+          // while using its numbers for retrieval would make the machine
+          // contract unverifiable from the conversation.
+          const safeReasoning = sanitizeIntermediateReasoning(resp.text);
+          const derivedText = safeReasoning.text.trim();
+          if (derivedText) {
+            send({ type: "assistant_turn_break", reason: "intro_late" });
+            send({ type: "delta", content: derivedText });
+            finalText += derivedText;
+            if (!firstAssistantText) firstAssistantText = derivedText;
+            derivedSelectionReasoningEvidence = derivedText;
+            steps.push({
+              step: "v3_assistant_text",
+              ms: now(),
+              meta: { chars: derivedText.length, fragment_index: step, text: derivedText, derived_selection: true },
+            });
+          } else {
+            steps.push({
+              step: "v3_assistant_text_suppressed_internals",
+              ms: now(),
+              meta: { fragment_index: step, matched: safeReasoning.matched, derived_selection: true },
+            });
+          }
         } else if (!firstAssistantText) {
           // Intro-пузырь ещё не показывали (на шаге 0 LLM ушёл сразу в тул без
           // текста), а сейчас наконец появилось «размышление» перед следующим
@@ -4979,9 +5005,13 @@ async function runExpertLoop(
             !seriesTurnRequiresGrounding &&
             !reasoningNeedsCompatibilityRelations(`${userMessage}\n${firstAssistantText}`);
           if (ordinaryMeasuredSelection) {
+            const measuredContractReasoning = measuredSelectionContractEvidence(
+              derivedSelectionReasoningEvidence,
+              declaredReasoning,
+            );
             const measuredContract = compileMeasuredReasoningSearchContract(
               guardedSearchCriteria,
-              declaredReasoning,
+              measuredContractReasoning,
               guardedUserBackedCriteria,
               lastDiscover.facets,
             );
