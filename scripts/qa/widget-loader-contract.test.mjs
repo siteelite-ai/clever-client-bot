@@ -107,6 +107,7 @@ function createHarness() {
 test('HTML bootstrap wins and loads the content-addressed widget', () => {
   const harness = createHarness();
   assert.equal(harness.iframe.attributes.sandbox, 'allow-scripts');
+  assert.match(harness.iframe.src, /\?voltWidgetBootstrap=1&/);
   assert.match(harness.iframe.src, /parentOrigin=https%3A%2F%2Fshop\.example\.test/);
   const channel = decodeURIComponent(new URL(harness.iframe.src).hash.slice(1));
 

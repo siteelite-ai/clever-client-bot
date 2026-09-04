@@ -112,7 +112,7 @@
   bootstrapFrame.setAttribute('aria-hidden', 'true');
   bootstrapFrame.tabIndex = -1;
   bootstrapFrame.style.display = 'none';
-  bootstrapFrame.src = base + '/widget-bootstrap.html?ts=' + Date.now() +
+  bootstrapFrame.src = base + '/?voltWidgetBootstrap=1&ts=' + Date.now() +
     '&parentOrigin=' + encodeURIComponent(location.origin) + '#' + encodeURIComponent(channel);
   (document.body || document.head || document.documentElement).appendChild(bootstrapFrame);
 
