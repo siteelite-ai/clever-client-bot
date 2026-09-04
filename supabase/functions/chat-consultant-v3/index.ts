@@ -119,6 +119,7 @@ import {
   shouldDeferNoProgressForKnowledge,
   shouldFinalizeInquiryFromKnowledge,
   shouldRecoverInquiryNoProgressWithKnowledge,
+  shouldContinueSelectionUntilCatalogAttempt,
   toolNamesForAgentPhase,
 } from "../_shared/v3-tools/agent-performance.ts";
 import { CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest } from "../_shared/v3-tools/clean-power-safety.ts";
@@ -3475,6 +3476,11 @@ async function runExpertLoop(
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
   let catalogSearchAttempted = false;
+  // If the model tries to finish immediately after a successful discovery,
+  // give its reasoning one continuation and then force the existing catalog
+  // phase. This preserves one opportunity for a model-owned category
+  // correction while preventing taxonomy-only answers with zero products.
+  let selectionCatalogContinuationRequired = false;
   // Последний осмысленный поисковый запрос — нужен как «существительное» для
   // self-requery: критерии сами по себе («не менее 40 мм») не запрос, они
   // обретают смысл только вместе с предметом текущего поиска.
@@ -4098,14 +4104,15 @@ async function runExpertLoop(
 
       const llmStart = Date.now();
       const agentToolPolicy = {
-        reasoningRequiresCatalog: seriesTurnRequiresGrounding && !seriesGroundingSatisfied || (
+        reasoningRequiresCatalog: selectionCatalogContinuationRequired ||
+          seriesTurnRequiresGrounding && !seriesGroundingSatisfied || (
           intentMode === "select" && hasActionableSelectionContract(
             `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
           )
         ) || optionalClarificationRejected,
         selectionRequiresInitialDiscovery: intentMode === "select" && agentPhase === "open" && !lastDiscover,
         correctiveDiscoveryAvailable: agentPhase === "search_after_discovery" &&
-          !correctiveDiscoveryUsed && !freshSearch,
+          !selectionCatalogContinuationRequired && !correctiveDiscoveryUsed && !freshSearch,
       };
       const availableToolNames = finalizeFromRecoveredKnowledge
         ? []
@@ -4359,7 +4366,12 @@ async function runExpertLoop(
         intentMode === "select" && (
           agentPhase === "terminal_after_search" ||
           responseHasActionableReasoning ||
-          agentToolPolicy.selectionRequiresInitialDiscovery
+          agentToolPolicy.selectionRequiresInitialDiscovery ||
+          shouldContinueSelectionUntilCatalogAttempt({
+            intentMode,
+            phase: agentPhase,
+            catalogSearchAttempted,
+          })
         ) || seriesTurnRequiresGrounding && !seriesGroundingSatisfied
       );
       ensureActiveSelectionTarget(
@@ -4542,6 +4554,13 @@ async function runExpertLoop(
           break;
         }
         if (requiresToolContinuation) {
+          if (shouldContinueSelectionUntilCatalogAttempt({
+            intentMode,
+            phase: agentPhase,
+            catalogSearchAttempted,
+          })) {
+            selectionCatalogContinuationRequired = true;
+          }
           messages.push({ role: "assistant", content: resp.text || null });
           messages.push({
             role: "system",
@@ -4549,6 +4568,8 @@ async function runExpertLoop(
               ? "Фазовый контракт: ненулевой пул уже найден. Не заканчивай ход текстом. Вызови render_products, перенеся в criteria требования из своего рассуждения; серверный criteria gate сам отклонит неподтверждённые карточки."
               : seriesTurnRequiresGrounding && !seriesGroundingSatisfied
               ? "Фазовый контракт: пользователь спрашивает о конкретно названной серии. Не делай вывод о бренде, наличии или свойствах только по памяти либо списку характеристик категории. Выполни search_catalog по названию серии; затем отвечай по найденным карточкам и базе знаний."
+              : agentPhase === "search_after_discovery" && !catalogSearchAttempted
+              ? "Фазовый контракт: категория уже открыта, но наличие и точный подтип ещё не проверены. Не заканчивай ход текстом. Выполни search_catalog с каноническим термином из своего рассуждения."
               : "Фазовый контракт: ты уже сформулировал несколько измеримых критериев подбора. Не заканчивай ход текстом и не спрашивай предпочтения, которые можешь выбрать как эксперт. Выполни discover_category/search_catalog и доведи найденный пул до render_products.",
           });
           steps.push({
@@ -6688,7 +6709,10 @@ async function runExpertLoop(
 
 
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
-        if (tc.name === "search_catalog") catalogSearchAttempted = true;
+        if (tc.name === "search_catalog") {
+          catalogSearchAttempted = true;
+          selectionCatalogContinuationRequired = false;
+        }
         let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
 
         if (tc.name === "lookup_knowledge" && result.ok) {

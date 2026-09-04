@@ -12,6 +12,7 @@ import {
   shouldDeferNoProgressForKnowledge,
   shouldFinalizeInquiryFromKnowledge,
   shouldRecoverInquiryNoProgressWithKnowledge,
+  shouldContinueSelectionUntilCatalogAttempt,
   shouldAllowCorrectiveDiscovery,
   toolNamesForAgentPhase,
 } from "./agent-performance.ts";
@@ -145,6 +146,29 @@ Deno.test("agent phase: successful discovery requires search and blocks rediscov
   assert(!toolNamesForAgentPhase(phase).includes("discover_category"));
   assert(toolNamesForAgentPhase(phase).includes("search_catalog"));
   assert(!toolNamesForAgentPhase(phase).includes("jargon_recover_catalog"));
+});
+
+Deno.test("agent phase: a selection cannot finish after discovery without a catalog attempt", () => {
+  assert(shouldContinueSelectionUntilCatalogAttempt({
+    intentMode: "select",
+    phase: "search_after_discovery",
+    catalogSearchAttempted: false,
+  }));
+  assert(!shouldContinueSelectionUntilCatalogAttempt({
+    intentMode: "select",
+    phase: "search_after_discovery",
+    catalogSearchAttempted: true,
+  }));
+  assert(!shouldContinueSelectionUntilCatalogAttempt({
+    intentMode: "inquire",
+    phase: "search_after_discovery",
+    catalogSearchAttempted: false,
+  }));
+  assert(!shouldContinueSelectionUntilCatalogAttempt({
+    intentMode: "select",
+    phase: "open",
+    catalogSearchAttempted: false,
+  }));
 });
 
 Deno.test("agent phase: jargon helper stays closed until the bounded taxonomy retry also fails", () => {

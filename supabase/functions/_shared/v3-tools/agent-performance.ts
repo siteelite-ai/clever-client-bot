@@ -81,6 +81,23 @@ export function shouldFinalizeInquiryFromKnowledge(input: {
     !input.alreadyFinalizing;
 }
 
+/**
+ * A product-selection turn cannot end after taxonomy discovery alone.
+ * Discovery proves that a category exists, but it proves neither assortment
+ * nor the customer's requested subtype. Keep the turn alive until the
+ * consultant has made at least one real catalog attempt. This is deliberately
+ * phase-based and contains no product, category, or jargon vocabulary.
+ */
+export function shouldContinueSelectionUntilCatalogAttempt(input: {
+  intentMode: "select" | "inquire";
+  phase: AgentPhase;
+  catalogSearchAttempted: boolean;
+}): boolean {
+  return input.intentMode === "select" &&
+    input.phase === "search_after_discovery" &&
+    !input.catalogSearchAttempted;
+}
+
 export function buildInquiryKnowledgeSynthesisMessages(
   userMessage: string,
   knowledge: unknown,
