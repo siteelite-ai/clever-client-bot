@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-ba5b61ddd1c81769';
+  var WIDGET_VERSION = 'widget-238458f8fcae34d8';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -28,8 +28,16 @@
   // connect timeout enables fast route failover, the idle timeout is refreshed by
   // every byte/heartbeat, and one shared deadline bounds the complete user turn.
   var STREAM_CONNECT_TIMEOUT_MS = 15000;
+  // Transport comments prove only that a socket is open. They do not prove
+  // that the application accepted the turn. Bound that pre-acceptance phase
+  // independently so a comments-only proxy cannot consume the whole deadline.
+  var STREAM_ACCEPT_TIMEOUT_MS = 15000;
   var STREAM_IDLE_TIMEOUT_MS = 30000;
   var STREAM_TOTAL_TIMEOUT_MS = 155000;
+  // The edge function rejects request bodies above 64 KiB. Keep explicit
+  // headroom for UTF-8 expansion and future protocol fields.
+  var REQUEST_BODY_BUDGET_BYTES = 56 * 1024;
+  var REQUEST_HISTORY_MAX_ITEMS = 10;
 
   // Initial greeting message
   const initialGreeting = 'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?';
@@ -43,6 +51,10 @@
   let sessionId;
   let conversationHistory;
   let dialogSlots = {};
+  // Persisted only after a real application-level SSE event. This lets a
+  // follow-up retain an accepted-but-undelivered question while excluding a
+  // user bubble left by a crash before server acceptance.
+  let acceptedPendingTurn = null;
   let lastActivityAt = 0;
   // Стабильный UUID одного сообщения для валидации, журналирования и будущей дедупликации.
   let currentMessageId = '';
@@ -85,21 +97,89 @@
     var proto = Object.getPrototypeOf(value);
     return proto === Object.prototype || proto === null;
   }
-  function sanitizeHistory(value) {
-    if (!Array.isArray(value)) return [];
-    var cleaned = [];
-    var totalChars = 0;
-    for (var i = value.length - 1; i >= 0 && cleaned.length < 20; i--) {
-      var item = value[i];
-      if (!isPlainRecord(item) || (item.role !== 'user' && item.role !== 'assistant') ||
-          typeof item.content !== 'string') continue;
-      var content = item.content.trim();
-      var maxChars = item.role === 'user' ? 2000 : 8000;
-      if (!content || content.length > maxChars || totalChars + content.length > 32000) continue;
-      cleaned.unshift({ role: item.role, content: content });
-      totalChars += content.length;
+  function isValidMessageId(value) {
+    return typeof value === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+  }
+  function normalizeHistoryMessage(item) {
+    if (!isPlainRecord(item) || (item.role !== 'user' && item.role !== 'assistant') ||
+        typeof item.content !== 'string') return null;
+    var content = item.content.trim();
+    var maxChars = item.role === 'user' ? 2000 : 8000;
+    if (!content || content.length > maxChars) return null;
+    var normalized = { role: item.role, content: content };
+    // This identifier is local persistence metadata. It disambiguates an
+    // accepted turn from an identical retry that crashed before acceptance.
+    // createRequestPayloads strips it before sending history to the server.
+    if (item.role === 'user' && isValidMessageId(item.messageId)) {
+      normalized.messageId = item.messageId;
     }
-    return cleaned;
+    return normalized;
+  }
+  function groupHistoryTurns(value) {
+    if (!Array.isArray(value)) return { preamble: [], turns: [] };
+    var preamble = [];
+    var turns = [];
+    var currentTurn = null;
+    var sawUser = false;
+    for (var i = 0; i < value.length; i++) {
+      var item = normalizeHistoryMessage(value[i]);
+      if (!item) {
+        if (currentTurn && currentTurn.length > 1) turns.push(currentTurn);
+        currentTurn = null;
+        continue;
+      }
+      if (item.role === 'user') {
+        // Consecutive user messages belong to one semantic block until the
+        // assistant answers. This matters when an accepted answer was lost:
+        // the follow-up and its eventual answer must close the whole chain,
+        // not silently orphan the first accepted question.
+        var currentHasAssistant = currentTurn && currentTurn.some(function(message) {
+          return message.role === 'assistant';
+        });
+        if (currentHasAssistant) {
+          turns.push(currentTurn);
+          currentTurn = [item];
+        } else if (currentTurn) {
+          currentTurn.push(item);
+        } else {
+          currentTurn = [item];
+        }
+        sawUser = true;
+      } else if (currentTurn) {
+        currentTurn.push(item);
+      } else if (!sawUser) {
+        preamble.push(item);
+      }
+    }
+    if (currentTurn) turns.push(currentTurn);
+    return { preamble: preamble, turns: turns };
+  }
+  function sanitizeHistory(value) {
+    var grouped = groupHistoryTurns(value);
+    var selected = [];
+    var totalChars = 0;
+    for (var i = grouped.turns.length - 1; i >= 0; i--) {
+      var turn = grouped.turns[i];
+      var turnChars = turn.reduce(function(sum, item) { return sum + item.content.length; }, 0);
+      if (selected.length + turn.length > 20 || totalChars + turnChars > 32000) break;
+      selected = turn.concat(selected);
+      totalChars += turnChars;
+    }
+    for (var j = grouped.preamble.length - 1; j >= 0; j--) {
+      var preambleItem = grouped.preamble[j];
+      if (selected.length + 1 > 20 || totalChars + preambleItem.content.length > 32000) break;
+      selected.unshift(preambleItem);
+      totalChars += preambleItem.content.length;
+    }
+    return selected;
+  }
+  function sanitizeAcceptedPendingTurn(value) {
+    if (!isPlainRecord(value) || !isValidMessageId(value.messageId) ||
+        typeof value.content !== 'string') return null;
+    var content = value.content.trim();
+    if (!content || content.length > 2000) return null;
+    return { messageId: value.messageId, content: content };
   }
   function sanitizeDialogSlots(value) {
     if (!isPlainRecord(value)) return {};
@@ -132,6 +212,105 @@
       return {};
     }
   }
+  function utf8ByteLength(value) {
+    if (typeof TextEncoder === 'function') return new TextEncoder().encode(value).byteLength;
+    if (typeof Blob === 'function') return new Blob([value]).size;
+    // Last-resort compatibility path for obsolete webviews. encodeURIComponent
+    // measures UTF-8 percent-encoded bytes without assuming one char = one byte.
+    return encodeURIComponent(value).replace(/%[0-9A-F]{2}|./gi, 'x').length;
+  }
+  function snapshotActiveSlots(value) {
+    var safeSlots = sanitizeDialogSlots(value);
+    var activeSlots = {};
+    var slotCount = 0;
+    for (var key in safeSlots) {
+      if (isPlainRecord(safeSlots[key]) && safeSlots[key].status === 'pending' && slotCount < 3) {
+        activeSlots[key] = safeSlots[key];
+        slotCount++;
+      }
+    }
+    return activeSlots;
+  }
+  // The request context contains complete user/assistant turns plus, at most,
+  // the latest accepted user turn whose answer could not be delivered. Known
+  // pre-acceptance failures are rolled back below. Old context is evicted by
+  // whole turn groups instead of individual messages.
+  function completeHistoryTurns(value, pendingTurn) {
+    var grouped = groupHistoryTurns(value);
+    var turns = [];
+    var pendingStart = grouped.turns.length;
+    var lastTurn = grouped.turns[grouped.turns.length - 1];
+    var lastPendingMessage = lastTurn && lastTurn[lastTurn.length - 1];
+    var lastTurnIsUnanswered = lastTurn && lastTurn.every(function(message) {
+      return message.role === 'user';
+    });
+    if (pendingTurn && lastTurnIsUnanswered && lastPendingMessage &&
+        lastPendingMessage.messageId === pendingTurn.messageId &&
+        lastPendingMessage.content === pendingTurn.content) {
+      pendingStart = grouped.turns.length - 1;
+    }
+    for (var i = 0; i < pendingStart; i++) {
+      var turn = grouped.turns[i];
+      if (turn.some(function(historyMessage) { return historyMessage.role === 'assistant'; })) {
+        turns.push(turn);
+      }
+    }
+    if (pendingStart < grouped.turns.length) {
+      var acceptedPendingChain = [];
+      for (var pendingIndex = pendingStart; pendingIndex < grouped.turns.length; pendingIndex++) {
+        acceptedPendingChain = acceptedPendingChain.concat(grouped.turns[pendingIndex]);
+      }
+      turns.push(acceptedPendingChain);
+    }
+    return turns;
+  }
+  function createRequestPayloads(message, requestSessionId, requestMessageId, history, slots, pendingTurn) {
+    var activeSlots = snapshotActiveSlots(slots);
+    var turns = completeHistoryTurns(history, pendingTurn);
+    var selectedHistory = [];
+
+    function serialize(resumeOnly, requestHistory, requestSlots) {
+      return JSON.stringify({
+        message: message,
+        sessionId: requestSessionId,
+        messageId: requestMessageId,
+        history: requestHistory.map(function(historyMessage) {
+          return { role: historyMessage.role, content: historyMessage.content };
+        }),
+        stream: true,
+        resumeOnly: Boolean(resumeOnly),
+        dialogSlots: requestSlots
+      });
+    }
+    function fits(requestHistory, requestSlots) {
+      return utf8ByteLength(serialize(false, requestHistory, requestSlots)) <= REQUEST_BODY_BUDGET_BYTES &&
+        utf8ByteLength(serialize(true, requestHistory, requestSlots)) <= REQUEST_BODY_BUDGET_BYTES;
+    }
+
+    // Reserve space for the latest semantic turn before optional slot state.
+    // A large but valid slot must not evict the answer/question that explains
+    // what the follow-up refers to.
+    var turnIndex = turns.length - 1;
+    if (turnIndex >= 0 && turns[turnIndex].length <= REQUEST_HISTORY_MAX_ITEMS &&
+        fits(turns[turnIndex], {})) {
+      selectedHistory = turns[turnIndex];
+      turnIndex--;
+    }
+    if (!fits(selectedHistory, activeSlots)) activeSlots = {};
+
+    for (; turnIndex >= 0; turnIndex--) {
+      var candidate = turns[turnIndex].concat(selectedHistory);
+      if (candidate.length > REQUEST_HISTORY_MAX_ITEMS || !fits(candidate, activeSlots)) break;
+      selectedHistory = candidate;
+    }
+
+    return {
+      normalBody: serialize(false, selectedHistory, activeSlots),
+      resumeBody: serialize(true, selectedHistory, activeSlots),
+      messageId: requestMessageId,
+      sessionId: requestSessionId
+    };
+  }
   function hasUserMessages(history) {
     return Array.isArray(history) && history.some(function(message) {
       return message && message.role === 'user';
@@ -146,6 +325,7 @@
     sessionId = newSessionId();
     conversationHistory = [{ role: 'assistant', content: initialGreeting }];
     dialogSlots = {};
+    acceptedPendingTurn = null;
     currentMessageId = '';
     lastActivityAt = Date.now();
   }
@@ -159,6 +339,22 @@
         sessionId = parsed.sessionId;
         conversationHistory = sanitizeHistory(parsed.history);
         dialogSlots = sanitizeDialogSlots(parsed.dialogSlots);
+        acceptedPendingTurn = sanitizeAcceptedPendingTurn(parsed.acceptedPendingTurn);
+        // A saved trailing user without the matching acceptance marker means
+        // the page closed between rendering the bubble and server acceptance.
+        // Remove that crash residue before it can become hidden model context.
+        var restoredLast = conversationHistory[conversationHistory.length - 1];
+        while (restoredLast && restoredLast.role === 'user' &&
+            (!acceptedPendingTurn || restoredLast.messageId !== acceptedPendingTurn.messageId ||
+             restoredLast.content !== acceptedPendingTurn.content)) {
+          conversationHistory.pop();
+          restoredLast = conversationHistory[conversationHistory.length - 1];
+        }
+        if (!restoredLast || restoredLast.role !== 'user' || !acceptedPendingTurn ||
+            restoredLast.messageId !== acceptedPendingTurn.messageId ||
+            restoredLast.content !== acceptedPendingTurn.content) {
+          acceptedPendingTurn = null;
+        }
         lastActivityAt = parsed.updatedAt;
         if (!conversationHistory.length || !hasUserMessages(conversationHistory)) {
           resetConversationState();
@@ -203,14 +399,22 @@
     try {
       conversationHistory = sanitizeHistory(conversationHistory);
       dialogSlots = sanitizeDialogSlots(dialogSlots);
+      acceptedPendingTurn = sanitizeAcceptedPendingTurn(acceptedPendingTurn);
       lastActivityAt = Date.now();
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify({
         sessionId: sessionId,
         history: conversationHistory.slice(-20),
         dialogSlots: dialogSlots,
+        acceptedPendingTurn: acceptedPendingTurn,
         updatedAt: lastActivityAt
       }));
     } catch(e) {}
+  }
+
+  function markPendingTurnAccepted(messageId, content) {
+    if (acceptedPendingTurn && acceptedPendingTurn.messageId === messageId) return;
+    acceptedPendingTurn = { messageId: messageId, content: content };
+    saveState();
   }
 
   async function createHttpError(response, label) {
@@ -920,13 +1124,13 @@
   // The server can isolate a self-contained new request before routing it.
   // Keep old bubbles visible for orientation, but persist and send only the new
   // topic. The user does not need to close incognito or press "Новый диалог".
-  function applyAutomaticConversationBoundary(nextSessionId, currentMessage) {
+  function applyAutomaticConversationBoundary(nextSessionId, currentMessage, messageId) {
     if (!isValidSessionId(nextSessionId) || nextSessionId === sessionId) return false;
     sessionId = nextSessionId;
     dialogSlots = {};
     conversationHistory = [
       { role: 'assistant', content: initialGreeting },
-      { role: 'user', content: currentMessage }
+      { role: 'user', content: currentMessage, messageId: messageId }
     ];
     saveState();
 
@@ -961,12 +1165,20 @@
   function addDiagnosticLabel(target, logId, isPartial) {
     if (!target || (!logId && !isPartial)) return;
     var label = document.createElement('div');
-    label.style.cssText = 'margin-top:8px;padding-top:6px;border-top:1px solid rgba(0,0,0,.08);font-size:10px;line-height:1.3;color:#777;user-select:text;';
+    label.style.cssText = 'margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,.12);font-size:10px;line-height:1.3;color:#b8b8b8;user-select:text;';
     var parts = [];
     if (isPartial) parts.push('Ответ получен не полностью');
     parts.push('Версия: ' + WIDGET_VERSION);
     if (logId) parts.push('Код запроса: ' + logId);
     label.textContent = parts.join(' · ');
+    target.appendChild(label);
+  }
+
+  function addAttemptLabel(target, messageId) {
+    if (!target || !messageId) return;
+    var label = document.createElement('div');
+    label.style.cssText = 'margin-top:8px;padding-top:6px;border-top:1px solid rgba(255,255,255,.12);font-size:10px;line-height:1.3;color:#b8b8b8;user-select:text;';
+    label.textContent = 'Версия: ' + WIDGET_VERSION + ' · Код попытки: ' + messageId;
     target.appendChild(label);
   }
 
@@ -1003,7 +1215,7 @@
   // Try streaming from a single endpoint, updating msgEl progressively
   // onFirstToken — вызывается при первом токене (убрать typing).
   // onProductsBlock — возвращает НОВЫЙ пузырь для карточек (разделение intro и списка).
-  async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken, onProductsBlock, resumeOnly, requestDeadlineAt, requestSessionId) {
+  async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken, onProductsBlock, resumeOnly, requestDeadlineAt, requestPayloads) {
     if (!activePipelineReady) await fetchActivePipeline();
     var url = baseUrl + pipelinePath();
     var controller = new AbortController();
@@ -1013,6 +1225,7 @@
     var remainingAtStart = deadlineAt - Date.now();
     if (remainingAtStart <= 0) throw new Error(label + ': request deadline exceeded');
     var connectTimer = null;
+    var acceptTimer = null;
     var idleTimer = null;
     var totalTimer = null;
     var transportAbortReason = null;
@@ -1031,11 +1244,25 @@
 
     function clearTransportTimers() {
       if (connectTimer) clearTimeout(connectTimer);
+      if (acceptTimer) clearTimeout(acceptTimer);
       if (idleTimer) clearTimeout(idleTimer);
       if (totalTimer) clearTimeout(totalTimer);
       connectTimer = null;
+      acceptTimer = null;
       idleTimer = null;
       totalTimer = null;
+    }
+
+    function markProtocolAccepted() {
+      if (acceptTimer) clearTimeout(acceptTimer);
+      acceptTimer = null;
+    }
+
+    function markTurnDurablyAccepted(diagnosticEvent) {
+      markProtocolAccepted();
+      if (diagnosticEvent && diagnosticEvent.log_id && diagnosticEvent.error !== 'request_conflict') {
+        markPendingTurnAccepted(requestPayloads.messageId, message);
+      }
     }
 
     function armIdleTimer() {
@@ -1049,17 +1276,8 @@
     }
 
     connectTimer = setTimeout(function() { abortTransport('connect_timeout'); }, Math.min(STREAM_CONNECT_TIMEOUT_MS, remainingAtStart));
+    acceptTimer = setTimeout(function() { abortTransport('protocol_accept_timeout'); }, Math.min(STREAM_ACCEPT_TIMEOUT_MS, remainingAtStart));
     totalTimer = setTimeout(function() { abortTransport('request_deadline'); }, remainingAtStart);
-
-    // Clean slots: only send pending, max 3
-    var activeSlots = {};
-    var slotCount = 0;
-    for (var sk in dialogSlots) {
-      if (isPlainRecord(dialogSlots[sk]) && dialogSlots[sk].status === 'pending' && slotCount < 3) {
-        activeSlots[sk] = dialogSlots[sk];
-        slotCount++;
-      }
-    }
 
     try {
     var response = await fetch(url, {
@@ -1069,18 +1287,10 @@
         'Authorization': 'Bearer ' + CONFIG.supabaseKey,
         'apikey': CONFIG.supabaseKey
       },
-      body: JSON.stringify({
-        message: message,
-        // A conversation_boundary may rotate the visible session while this
-        // response is streaming. Every delivery/replay attempt for the same
-        // messageId must nevertheless keep the session that claimed the turn.
-        sessionId: requestSessionId || sessionId,
-        messageId: currentMessageId,
-        history: conversationHistory.slice(-10),
-        stream: true,
-        resumeOnly: Boolean(resumeOnly),
-        dialogSlots: activeSlots
-      }),
+      // Payloads are frozen once per user turn. A conversation boundary may
+      // rotate global state while streaming, but every route/replay must keep
+      // the same byte-bounded history, slots, session and idempotency key.
+      body: resumeOnly ? requestPayloads.resumeBody : requestPayloads.normalBody,
       signal: controller.signal
     });
 
@@ -1184,6 +1394,7 @@
 
         var jsonStr = line.slice(5).trim();
         if (jsonStr === '[DONE]') {
+          markProtocolAccepted();
           done = true;
           // [DONE] is the application-level terminator. Do not wait for an
           // intermediary to close the underlying keep-alive connection.
@@ -1206,6 +1417,7 @@
           if (obj.v3_event) {
             var ev = obj.v3_event;
             if (ev.type === 'diagnostic') {
+              markTurnDurablyAccepted(ev);
               diagnosticLogId = ev.log_id || diagnosticLogId;
               if (ev.phase === 'complete') {
                 diagnosticComplete = true;
@@ -1215,23 +1427,29 @@
               try { console.info('[Widget] request=' + (diagnosticLogId || 'unavailable') + ' phase=' + ev.phase + ' products=' + (diagnosticProductsCount == null ? '?' : diagnosticProductsCount)); } catch(e) {}
               continue;
             }
-            if (ev.type === 'contacts') { contacts = ev.html; continue; }
+            if (ev.type === 'contacts') { markProtocolAccepted(); contacts = ev.html; continue; }
             if (ev.type === 'conversation_boundary' && ev.mode === 'new_task') {
-              applyAutomaticConversationBoundary(ev.session_id, message);
+              markProtocolAccepted();
+              applyAutomaticConversationBoundary(ev.session_id, message, requestPayloads.messageId);
               continue;
             }
-            if (ev.type === 'slot_update') { dialogSlots = ev.slots || {}; saveState(); continue; }
+            if (ev.type === 'slot_update') { markProtocolAccepted(); dialogSlots = ev.slots || {}; saveState(); continue; }
             if (ev.type === 'products_block' && ev.markdown) {
+              markProtocolAccepted();
               if (!firstTokenReceived) { firstTokenReceived = true; onFirstToken(); }
               handleProductsBlock(ev.markdown);
               continue;
             }
-            if (ev.type === 'assistant_turn_break' || ev.type === 'tool_event' || ev.type === 'quick_replies') continue;
+            if (ev.type === 'assistant_turn_break' || ev.type === 'tool_event' || ev.type === 'quick_replies') {
+              markProtocolAccepted();
+              continue;
+            }
           }
-          if (obj.contacts) { contacts = obj.contacts; continue; }
-          if (obj.slot_update) { dialogSlots = obj.slot_update; saveState(); continue; }
+          if (obj.contacts) { markProtocolAccepted(); contacts = obj.contacts; continue; }
+          if (obj.slot_update) { markProtocolAccepted(); dialogSlots = obj.slot_update; saveState(); continue; }
           var delta = obj.choices && obj.choices[0] && obj.choices[0].delta && obj.choices[0].delta.content;
           if (delta) {
+            markProtocolAccepted();
             if (!firstTokenReceived) { firstTokenReceived = true; onFirstToken(); }
             appendDelta(delta);
             var now = Date.now();
@@ -1257,12 +1475,13 @@
           if (!raw.startsWith('data:')) continue;
           sawSseData = true;
           var js2 = raw.slice(5).trim();
-          if (js2 === '[DONE]') { done = true; break; }
+          if (js2 === '[DONE]') { markProtocolAccepted(); done = true; break; }
           try {
             var o2 = JSON.parse(js2);
             if (o2.v3_event) {
               var ev2 = o2.v3_event;
               if (ev2.type === 'diagnostic') {
+                markTurnDurablyAccepted(ev2);
                 diagnosticLogId = ev2.log_id || diagnosticLogId;
                 if (ev2.phase === 'complete') {
                   diagnosticComplete = true;
@@ -1271,22 +1490,27 @@
                 }
                 continue;
               }
-              if (ev2.type === 'contacts') { contacts = ev2.html; continue; }
+              if (ev2.type === 'contacts') { markProtocolAccepted(); contacts = ev2.html; continue; }
               if (ev2.type === 'conversation_boundary' && ev2.mode === 'new_task') {
-                applyAutomaticConversationBoundary(ev2.session_id, message);
+                markProtocolAccepted();
+                applyAutomaticConversationBoundary(ev2.session_id, message, requestPayloads.messageId);
                 continue;
               }
-              if (ev2.type === 'slot_update') { dialogSlots = ev2.slots || {}; saveState(); continue; }
+              if (ev2.type === 'slot_update') { markProtocolAccepted(); dialogSlots = ev2.slots || {}; saveState(); continue; }
               if (ev2.type === 'products_block' && ev2.markdown) {
+                markProtocolAccepted();
                 handleProductsBlock(ev2.markdown);
                 continue;
               }
-              if (ev2.type === 'assistant_turn_break' || ev2.type === 'tool_event' || ev2.type === 'quick_replies') continue;
+              if (ev2.type === 'assistant_turn_break' || ev2.type === 'tool_event' || ev2.type === 'quick_replies') {
+                markProtocolAccepted();
+                continue;
+              }
             }
-            if (o2.contacts) { contacts = o2.contacts; continue; }
-            if (o2.slot_update) { dialogSlots = o2.slot_update; saveState(); continue; }
+            if (o2.contacts) { markProtocolAccepted(); contacts = o2.contacts; continue; }
+            if (o2.slot_update) { markProtocolAccepted(); dialogSlots = o2.slot_update; saveState(); continue; }
             var d2 = o2.choices && o2.choices[0] && o2.choices[0].delta && o2.choices[0].delta.content;
-            if (d2) appendDelta(d2);
+            if (d2) { markProtocolAccepted(); appendDelta(d2); }
           } catch(e) {}
         }
       }
@@ -1302,6 +1526,7 @@
       try { data = JSON.parse(nonSsePayload); } catch(e) { throw new Error(label + ' invalid JSON'); }
       if (data.error) throw new Error(label + ': ' + data.error);
       if (!data.content) throw new Error(label + ': empty content');
+      markProtocolAccepted();
       onFirstToken();
       return { content: data.content, contacts: data.contacts || null };
     }
@@ -1367,10 +1592,21 @@
 
     // При любом ретрае в рамках одного sendMessage отправляется тот же UUID.
     currentMessageId = generateMessageId();
+    var requestMessageId = currentMessageId;
     var requestSessionId = sessionId;
+    // Freeze the model context before adding the current bubble. The current
+    // query belongs in `message` only, never twice in message + history.
+    var requestPayloads = createRequestPayloads(
+      message,
+      requestSessionId,
+      requestMessageId,
+      conversationHistory,
+      dialogSlots,
+      acceptedPendingTurn
+    );
 
     addMessage(message, 'user');
-    conversationHistory.push({ role: 'user', content: message });
+    conversationHistory.push({ role: 'user', content: message, messageId: requestMessageId });
     saveState();
 
     // Показываем typing-точки. Никаких «Сейчас подберу варианты» — LLM сама пишет вступление.
@@ -1437,6 +1673,7 @@
 
     var result = null;
     var lastError = null;
+    var routeFailures = [];
 
     // Fire API request immediately (typing-точки уже крутятся)
     var streamPromise = (async function() {
@@ -1467,12 +1704,18 @@
             openProductsBubble,
             false,
             requestDeadlineAt,
-            requestSessionId
+            requestPayloads
           );
           return;
         } catch (err) {
           lastError = err;
-          try { console.warn('[Widget] stream ' + streamEndpoints[i].label + ' failed: ' + (err && err.message)); } catch(e) {}
+          routeFailures.push({
+            route: streamEndpoints[i].label,
+            status: err && typeof err.status === 'number' ? err.status : null,
+            code: err && typeof err.code === 'string' ? err.code : '',
+            message: err && err.message ? String(err.message) : String(err)
+          });
+          try { console.warn('[Widget] attempt=' + requestMessageId + ' stream ' + streamEndpoints[i].label + ' failed: ' + (err && err.message)); } catch(e) {}
           if (firstTokenArrived) break;
           if (assistantMsg.parentNode && !assistantMsg.innerHTML) assistantMsg.remove();
           msgInserted = false;
@@ -1526,7 +1769,7 @@
             },
             true,
             requestDeadlineAt,
-            requestSessionId
+            requestPayloads
           );
           if (replayed && !replayed.partial) {
             completedReplay = {
@@ -1547,7 +1790,13 @@
           }
         } catch (resumeError) {
           lastError = resumeError;
-          try { console.warn('[Widget] resume ' + resumeEndpoints[r].label + ' failed: ' + (resumeError && resumeError.message)); } catch(e) {}
+          routeFailures.push({
+            route: resumeEndpoints[r].label + '-resume',
+            status: resumeError && typeof resumeError.status === 'number' ? resumeError.status : null,
+            code: resumeError && typeof resumeError.code === 'string' ? resumeError.code : '',
+            message: resumeError && resumeError.message ? String(resumeError.message) : String(resumeError)
+          });
+          try { console.warn('[Widget] attempt=' + requestMessageId + ' resume ' + resumeEndpoints[r].label + ' failed: ' + (resumeError && resumeError.message)); } catch(e) {}
         }
       }
       var selectedReplay = completedReplay || bestPartialReplay;
@@ -1611,6 +1860,7 @@
     if (stale1) stale1.remove();
     // Двойная страховка: если какой-то таймер всё же успел вставить live-typing позже — снять на следующем тике
     setTimeout(function() {
+      if (currentMessageId !== requestMessageId || isLoading) return;
       var late = document.getElementById('volt-live-typing');
       if (late) late.remove();
       var lateProducts = document.getElementById('volt-products-typing');
@@ -1631,6 +1881,7 @@
       }
       // Если split уже произошёл — пузыри уже отрисованы прогрессивно, не перерисовываем.
       if (hasContent) {
+        acceptedPendingTurn = null;
         conversationHistory.push({ role: 'assistant', content: cleanContent });
         saveState();
       }
@@ -1653,16 +1904,30 @@
       // Стрим оборвался посреди ответа, но в UI уже есть текст — сохраняем его в историю
       // вместо показа «ошибки соединения». Лучше частичный ответ, чем пустота.
       var partialContent = stripGreeting(assistantMsg.textContent);
+      acceptedPendingTurn = null;
       conversationHistory.push({ role: 'assistant', content: partialContent });
       saveState();
-      try { console.warn('[Widget] showing partial stream content (no fallback triggered)'); } catch(e) {}
+      addAttemptLabel(assistantMsg, requestMessageId);
+      try { console.warn('[Widget] attempt=' + requestMessageId + ' showing partial stream content (no fallback triggered)'); } catch(e) {}
     } else {
       hideTyping();
-      if (lastError && lastError.status === 400) {
-        addMessage('Не удалось продолжить диалог из-за некорректных или устаревших данных. Обновите страницу и повторите запрос.', 'assistant');
-      } else {
-        addMessage('Извините, произошла ошибка соединения. Попробуйте позже.', 'assistant');
+      // The request was never accepted at protocol level. Do not leak this
+      // failed user turn into the next model context.
+      var lastHistoryItem = conversationHistory[conversationHistory.length - 1];
+      var currentTurnWasAccepted = acceptedPendingTurn && acceptedPendingTurn.messageId === requestMessageId;
+      if (!currentTurnWasAccepted && lastHistoryItem && lastHistoryItem.role === 'user' &&
+          lastHistoryItem.messageId === requestMessageId && lastHistoryItem.content === message) {
+        conversationHistory.pop();
+        saveState();
       }
+      var failureMessage;
+      if (lastError && lastError.status === 400) {
+        failureMessage = addMessage('Не удалось продолжить диалог из-за некорректных или устаревших данных. Обновите страницу и повторите запрос.', 'assistant');
+      } else {
+        failureMessage = addMessage('Извините, произошла ошибка соединения. Попробуйте позже.', 'assistant');
+      }
+      addAttemptLabel(failureMessage, requestMessageId);
+      try { console.warn('[Widget] attempt=' + requestMessageId + ' route failures: ' + JSON.stringify(routeFailures)); } catch(e) {}
     }
 
     isLoading = false;
