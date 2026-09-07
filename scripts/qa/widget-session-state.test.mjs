@@ -24,14 +24,14 @@ function savedDialogue(updatedAt) {
   };
 }
 
-function bootWidget({ state, now = Date.now(), confirmResult = true, fetchImpl, source = widgetSource } = {}) {
+function bootWidget({ state, now, confirmResult = true, fetchImpl, source = widgetSource } = {}) {
   const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', {
     runScripts: 'outside-only',
     url: 'https://220volt.testdevops.ru/',
   });
   dom.window.HTMLElement.prototype.scrollIntoView = function() {};
   dom.window.confirm = () => confirmResult;
-  dom.window.Date.now = () => now;
+  if (Number.isFinite(now)) dom.window.Date.now = () => now;
   dom.window.TextDecoder = TextDecoder;
   dom.window.fetch = fetchImpl ?? (async () => {
     throw new Error('Unexpected fetch in widget session-state test');
@@ -168,6 +168,67 @@ test('server boundary automatically isolates a self-contained new topic without 
   dom.window.close();
 });
 
+test('replay keeps the request session immutable after a conversation boundary rotates the visible session', async () => {
+  const originalSessionId = 'session_saved_customer_test';
+  const boundarySessionId = 'session_boundary_during_partial';
+  const logId = 'boundary-replay-log';
+  const payloads = [];
+  const dom = bootWidget({
+    state: savedDialogue(Date.now() - 1_000),
+    fetchImpl: async (_url, init) => {
+      const payload = JSON.parse(init.body);
+      payloads.push(payload);
+      if (!payload.resumeOnly) {
+        let pulls = 0;
+        const body = new ReadableStream({
+          pull(controller) {
+            pulls += 1;
+            if (pulls === 1) {
+              controller.enqueue(new TextEncoder().encode([
+                `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+                `data: ${JSON.stringify({ v3_event: { type: 'conversation_boundary', mode: 'new_task', session_id: boundarySessionId } })}`,
+                `data: ${JSON.stringify({ choices: [{ delta: { content: 'Начинаю новую тему.' } }] })}`,
+                '',
+              ].join('\n\n')));
+              return;
+            }
+            controller.error(new Error('boundary stream interruption'));
+          },
+        });
+        return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      const replay = [
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'conversation_boundary', mode: 'new_task', session_id: boundarySessionId } })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'Новая тема восстановлена.' } }] })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'complete', products_count: 0 } })}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return new Response(replay, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Новый самостоятельный вопрос';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  const deadline = Date.now() + 2_000;
+  while (!visibleMessages(dom).includes('Новая тема восстановлена.') && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  assert.equal(payloads.length, 2);
+  assert.equal(payloads[0].sessionId, originalSessionId);
+  assert.equal(payloads[1].sessionId, originalSessionId, 'same messageId must replay against its claiming session');
+  assert.equal(payloads[1].messageId, payloads[0].messageId);
+  assert.equal(readState(dom).sessionId, boundarySessionId, 'new session remains active for the next user turn');
+  assert.match(visibleMessages(dom), /Новая тема восстановлена\./u);
+  assert.doesNotMatch(visibleMessages(dom), /request_conflict|ошибка соединения/iu);
+  dom.window.close();
+});
+
 test('widget renders user and assistant HTML as inert text', async () => {
   const maliciousAssistant = '<img src=x onerror=alert(1)> [click](javascript:alert(2))';
   const sse = [
@@ -202,10 +263,12 @@ test('accepted request is never executed again when its SSE connection breaks', 
   let fetchCount = 0;
   let executionCount = 0;
   let firstMessageId = null;
+  const urls = [];
   const logId = 'accepted-request-log';
   const dom = bootWidget({
-    fetchImpl: async (_url, init) => {
+    fetchImpl: async (url, init) => {
       fetchCount += 1;
+      urls.push(String(url));
       const payload = JSON.parse(init.body);
       if (!payload.resumeOnly) {
         executionCount += 1;
@@ -250,9 +313,82 @@ test('accepted request is never executed again when its SSE connection breaks', 
 
   assert.equal(fetchCount, 2, 'one execution plus one replay-only transport request is expected');
   assert.equal(executionCount, 1, 'an accepted message must have exactly one server execution');
+  assert.match(urls[0], /supabase-proxy\.bold-dawn-058f\.workers\.dev/u);
+  assert.match(urls[1], /yngoixmvmxdfxokuafjp\.supabase\.co/u, 'replay should start on the alternative route');
   assert.match(visibleMessages(dom), /Восстановленный ответ\./u);
   assert.match(visibleMessages(dom), new RegExp(logId, 'u'));
   assert.doesNotMatch(visibleMessages(dom), /произошла ошибка соединения/iu);
+  dom.window.close();
+});
+
+test('request_pending replay continues on the next route instead of replacing the answer', async () => {
+  let fetchCount = 0;
+  let executionCount = 0;
+  const urls = [];
+  const logId = 'pending-then-complete-log';
+  const dom = bootWidget({
+    fetchImpl: async (url, init) => {
+      fetchCount += 1;
+      urls.push(String(url));
+      const payload = JSON.parse(init.body);
+      if (!payload.resumeOnly) {
+        executionCount += 1;
+        let pulls = 0;
+        const body = new ReadableStream({
+          pull(controller) {
+            pulls += 1;
+            if (pulls === 1) {
+              controller.enqueue(new TextEncoder().encode([
+                `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+                `data: ${JSON.stringify({ choices: [{ delta: { content: 'Начинаю подбор.' } }] })}`,
+                '',
+              ].join('\n\n')));
+              return;
+            }
+            controller.error(new Error('initial transport interruption'));
+          },
+        });
+        return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      if (fetchCount === 2) {
+        const pending = [
+          `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+          `data: ${JSON.stringify({ choices: [{ delta: { content: 'Запрос ещё обрабатывается.' } }] })}`,
+          `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'complete', products_count: 0, error: 'request_pending' } })}`,
+          'data: [DONE]',
+          '',
+        ].join('\n\n');
+        return new Response(pending, { headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      const complete = [
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'Канонический завершённый ответ.' } }] })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'complete', products_count: 0 } })}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return new Response(complete, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Проверка восстановления незавершённого запроса';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  const deadline = Date.now() + 2_000;
+  while (!visibleMessages(dom).includes('Канонический завершённый ответ.') && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  const visible = visibleMessages(dom);
+  assert.equal(fetchCount, 3);
+  assert.equal(executionCount, 1);
+  assert.match(urls[0], /supabase-proxy\.bold-dawn-058f\.workers\.dev/u);
+  assert.match(urls[1], /yngoixmvmxdfxokuafjp\.supabase\.co/u);
+  assert.match(urls[2], /supabase-proxy\.bold-dawn-058f\.workers\.dev/u);
+  assert.match(visible, /Канонический завершённый ответ\./u);
+  assert.doesNotMatch(visible, /Запрос ещё обрабатывается|Ответ получен не полностью|ошибка соединения/iu);
   dom.window.close();
 });
 
@@ -317,14 +453,153 @@ test('accepted request is replayed after an intro was delivered but products wer
   dom.window.close();
 });
 
+test('two resume routes commit only the complete replay and never duplicate product cards', async () => {
+  let fetchCount = 0;
+  let executionCount = 0;
+  const logId = 'multi-resume-log';
+  const productName = 'UNIQUE PRODUCT CARD';
+  const productMarkdown = `- **[${productName}](https://220volt.kz/product)**\n  Цена: *999* ₸`;
+
+  function interruptedStream(events, delay = 0) {
+    return new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(events));
+        setTimeout(() => controller.error(new Error('simulated partial resume')), delay);
+      },
+    });
+  }
+
+  const dom = bootWidget({
+    fetchImpl: async (_url, init) => {
+      fetchCount += 1;
+      const payload = JSON.parse(init.body);
+      const partial = [
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'Проверяю каталог.' } }] })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'products_block', markdown: productMarkdown, count: 1 } })}`,
+        '',
+      ].join('\n\n');
+
+      if (!payload.resumeOnly) {
+        executionCount += 1;
+        return new Response(interruptedStream(partial), { headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      if (fetchCount === 2) {
+        // Longer than the public 350 ms card insertion delay: the previous
+        // implementation visibly committed this partial replay, then appended
+        // the second route's canonical card as a duplicate.
+        return new Response(interruptedStream(partial, 380), { headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      const complete = [
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'Проверяю каталог.' } }] })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'products_block', markdown: productMarkdown, count: 1 } })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'complete', products_count: 1 } })}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return new Response(complete, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Проверка нескольких маршрутов восстановления';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  const deadline = Date.now() + 2_000;
+  while (fetchCount < 3 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const visible = visibleMessages(dom);
+  assert.equal(fetchCount, 3, 'one execution and two resume routes are expected');
+  assert.equal(executionCount, 1, 'resume routes must never execute product search again');
+  assert.equal(visible.split(productName).length - 1, 1, 'only the canonical product card may be visible');
+  assert.doesNotMatch(visible, /Ответ получен не полностью|ошибка соединения|Соединение прервалось/iu);
+  dom.window.close();
+});
+
+test('best partial replay is preserved when no route reaches diagnostic complete', async () => {
+  let fetchCount = 0;
+  let executionCount = 0;
+  const logId = 'best-partial-replay-log';
+  const productName = 'RECOVERED PARTIAL PRODUCT';
+  const productMarkdown = `- **[${productName}](https://220volt.kz/recovered)**\n  Цена: *777* ₸`;
+  const dom = bootWidget({
+    fetchImpl: async (_url, init) => {
+      fetchCount += 1;
+      const payload = JSON.parse(init.body);
+      if (!payload.resumeOnly) {
+        executionCount += 1;
+        let pulls = 0;
+        const body = new ReadableStream({
+          pull(controller) {
+            pulls += 1;
+            if (pulls === 1) {
+              controller.enqueue(new TextEncoder().encode(
+                `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}\n\n`,
+              ));
+              return;
+            }
+            controller.error(new Error('ack-only interruption'));
+          },
+        });
+        return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      if (fetchCount === 2) {
+        let pulls = 0;
+        const body = new ReadableStream({
+          pull(controller) {
+            pulls += 1;
+            if (pulls === 1) {
+              controller.enqueue(new TextEncoder().encode([
+                `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+                `data: ${JSON.stringify({ choices: [{ delta: { content: 'Удалось восстановить часть ответа.' } }] })}`,
+                `data: ${JSON.stringify({ v3_event: { type: 'products_block', markdown: productMarkdown, count: 1 } })}`,
+                '',
+              ].join('\n\n')));
+              return;
+            }
+            controller.error(new Error('partial replay interruption'));
+          },
+        });
+        return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      throw new Error('second resume route unavailable');
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Проверка сохранения частично восстановленных карточек';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  const deadline = Date.now() + 2_000;
+  while (!visibleMessages(dom).includes(productName) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  const visible = visibleMessages(dom);
+  assert.equal(fetchCount, 3);
+  assert.equal(executionCount, 1);
+  assert.equal(visible.split(productName).length - 1, 1);
+  assert.match(visible, /Ответ получен не полностью|Соединение прервалось/iu);
+  assert.doesNotMatch(visible, /Сервер принял запрос, но соединение прервалось до получения ответа/iu);
+  dom.window.close();
+});
+
 test('SSE heartbeats keep a healthy response alive beyond one idle interval', async () => {
   const logId = 'heartbeat-long-stream-log';
   let interval = null;
   const dom = bootWidget({
     source: withTransportTimeouts({ connect: 15, idle: 30, total: 250 }),
-    fetchImpl: async () => {
+    fetchImpl: async (_url, init) => {
+      let streamController = null;
       const body = new ReadableStream({
         start(controller) {
+          streamController = controller;
           controller.enqueue(new TextEncoder().encode(': stream-open\n\n'));
           let ticks = 0;
           interval = setInterval(() => {
@@ -347,6 +622,10 @@ test('SSE heartbeats keep a healthy response alive beyond one idle interval', as
           if (interval) clearInterval(interval);
         },
       });
+      init.signal.addEventListener('abort', () => {
+        if (interval) clearInterval(interval);
+        try { streamController?.error(new DOMException('Aborted', 'AbortError')); } catch {}
+      }, { once: true });
       return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
     },
   });
@@ -363,6 +642,94 @@ test('SSE heartbeats keep a healthy response alive beyond one idle interval', as
 
   assert.match(visibleMessages(dom), /Долгий ответ завершён\./u);
   assert.doesNotMatch(visibleMessages(dom), /ошибка соединения|Соединение прервалось/iu);
+  dom.window.close();
+});
+
+test('heartbeats also refresh idle timeout when a proxy rewrites SSE as text/plain', async () => {
+  let interval = null;
+  const dom = bootWidget({
+    source: withTransportTimeouts({ connect: 15, idle: 30, total: 250 }),
+    fetchImpl: async (_url, init) => {
+      let streamController = null;
+      const body = new ReadableStream({
+        start(controller) {
+          streamController = controller;
+          controller.enqueue(new TextEncoder().encode(': stream-open\n\n'));
+          let ticks = 0;
+          interval = setInterval(() => {
+            ticks += 1;
+            if (ticks < 6) {
+              controller.enqueue(new TextEncoder().encode(': keep-alive\n\n'));
+              return;
+            }
+            clearInterval(interval);
+            controller.enqueue(new TextEncoder().encode([
+              `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'text-plain-heartbeat-log', phase: 'start' } })}`,
+              `data: ${JSON.stringify({ choices: [{ delta: { content: 'Ответ через переписанный Content-Type.' } }] })}`,
+              `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'text-plain-heartbeat-log', phase: 'complete', products_count: 0 } })}`,
+              'data: [DONE]',
+              '',
+            ].join('\n\n')));
+          }, 15);
+        },
+        cancel() {
+          if (interval) clearInterval(interval);
+        },
+      });
+      init.signal.addEventListener('abort', () => {
+        if (interval) clearInterval(interval);
+        try { streamController?.error(new DOMException('Aborted', 'AbortError')); } catch {}
+      }, { once: true });
+      return new Response(body, { headers: { 'Content-Type': 'text/plain' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Проверка прокси с text/plain';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  const deadline = Date.now() + 1_000;
+  while (!visibleMessages(dom).includes('Ответ через переписанный Content-Type.') && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  assert.match(visibleMessages(dom), /Ответ через переписанный Content-Type\./u);
+  assert.doesNotMatch(visibleMessages(dom), /ошибка соединения|Соединение прервалось/iu);
+  dom.window.close();
+});
+
+test('a stream with no bytes is aborted by the idle timeout on both routes', async () => {
+  let fetchCount = 0;
+  const dom = bootWidget({
+    source: withTransportTimeouts({ connect: 15, idle: 25, total: 120 }),
+    fetchImpl: async (_url, init) => {
+      fetchCount += 1;
+      let streamController = null;
+      const body = new ReadableStream({
+        start(controller) { streamController = controller; },
+      });
+      init.signal.addEventListener('abort', () => {
+        try { streamController?.error(new DOMException('Aborted', 'AbortError')); } catch {}
+      }, { once: true });
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const started = Date.now();
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Проверка зависшего потока';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  const deadline = Date.now() + 500;
+  while (!/ошибка соединения/iu.test(visibleMessages(dom)) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  assert.equal(fetchCount, 2);
+  assert.ok(Date.now() - started < 110, 'idle failures should not consume the whole turn budget');
+  assert.match(visibleMessages(dom), /ошибка соединения/iu);
   dom.window.close();
 });
 

@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-153773f46c695844';
+  var WIDGET_VERSION = 'widget-ba5b61ddd1c81769';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -1003,7 +1003,7 @@
   // Try streaming from a single endpoint, updating msgEl progressively
   // onFirstToken — вызывается при первом токене (убрать typing).
   // onProductsBlock — возвращает НОВЫЙ пузырь для карточек (разделение intro и списка).
-  async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken, onProductsBlock, resumeOnly, requestDeadlineAt) {
+  async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken, onProductsBlock, resumeOnly, requestDeadlineAt, requestSessionId) {
     if (!activePipelineReady) await fetchActivePipeline();
     var url = baseUrl + pipelinePath();
     var controller = new AbortController();
@@ -1071,7 +1071,10 @@
       },
       body: JSON.stringify({
         message: message,
-        sessionId: sessionId,
+        // A conversation_boundary may rotate the visible session while this
+        // response is streaming. Every delivery/replay attempt for the same
+        // messageId must nevertheless keep the session that claimed the turn.
+        sessionId: requestSessionId || sessionId,
         messageId: currentMessageId,
         history: conversationHistory.slice(-10),
         stream: true,
@@ -1091,22 +1094,16 @@
       throw await createHttpError(response, label);
     }
 
-    // Check if we actually got a streaming response
+    // Read incrementally even when an intermediary rewrites Content-Type.
+    // Calling response.text() here would hide heartbeat bytes from the idle
+    // watchdog and could abort a healthy long-running SSE response.
     var contentType = response.headers.get('content-type') || '';
     var reader;
-    if (contentType.indexOf('event-stream') === -1) {
-      // Some intermediaries preserve the SSE payload but rewrite its content
-      // type. Detect the protocol from the body before treating it as JSON.
-      var text = await response.text();
-      if (!/^\s*(?::[^\n]*\n|data:\s*)/u.test(text)) {
-        var data;
-        try { data = JSON.parse(text); } catch(e) { throw new Error(label + ' invalid JSON'); }
-        if (data.error) throw new Error(label + ': ' + data.error);
-        if (!data.content) throw new Error(label + ': empty content');
-        onFirstToken();
-        return { content: data.content, contacts: data.contacts || null };
-      }
-      var preloaded = text;
+    var nonSsePayload = contentType.indexOf('event-stream') === -1 ? '' : null;
+    if (response.body && typeof response.body.getReader === 'function') {
+      reader = response.body.getReader();
+    } else {
+      var preloaded = await response.text();
       reader = {
         read: async function() {
           if (preloaded === null) return { done: true, value: undefined };
@@ -1115,8 +1112,6 @@
           return { done: false, value: value };
         }
       };
-    } else {
-      reader = response.body.getReader();
     }
 
     var decoder = new TextDecoder();
@@ -1132,6 +1127,8 @@
     var diagnosticLogId = null;
     var diagnosticComplete = false;
     var diagnosticProductsCount = null;
+    var diagnosticError = null;
+    var sawSseData = false;
 
     function appendDelta(delta) {
       if (mode === 'intro') {
@@ -1161,11 +1158,20 @@
     try {
       while (!done) {
         var chunk = await reader.read();
-        if (chunk.done) break;
+        if (chunk.done) {
+          var decoderTail = decoder.decode();
+          if (decoderTail) {
+            textBuffer += decoderTail;
+            if (nonSsePayload !== null) nonSsePayload += decoderTail;
+          }
+          break;
+        }
         armIdleTimer();
-        textBuffer += typeof chunk.value === 'string'
+        var chunkText = typeof chunk.value === 'string'
           ? chunk.value
           : decoder.decode(chunk.value, { stream: true });
+        textBuffer += chunkText;
+        if (nonSsePayload !== null) nonSsePayload += chunkText;
 
         var parsed = parseSSELines(textBuffer);
         textBuffer = parsed.remaining;
@@ -1174,6 +1180,7 @@
         var line = parsed.lines[i];
         if (line.startsWith(':') || line.trim() === '') continue;
         if (!line.startsWith('data:')) continue;
+        sawSseData = true;
 
         var jsonStr = line.slice(5).trim();
         if (jsonStr === '[DONE]') {
@@ -1203,6 +1210,7 @@
               if (ev.phase === 'complete') {
                 diagnosticComplete = true;
                 diagnosticProductsCount = typeof ev.products_count === 'number' ? ev.products_count : null;
+                diagnosticError = typeof ev.error === 'string' ? ev.error : null;
               }
               try { console.info('[Widget] request=' + (diagnosticLogId || 'unavailable') + ' phase=' + ev.phase + ' products=' + (diagnosticProductsCount == null ? '?' : diagnosticProductsCount)); } catch(e) {}
               continue;
@@ -1247,6 +1255,7 @@
           if (raw.endsWith('\r')) raw = raw.slice(0, -1);
           if (raw.startsWith(':') || raw.trim() === '') continue;
           if (!raw.startsWith('data:')) continue;
+          sawSseData = true;
           var js2 = raw.slice(5).trim();
           if (js2 === '[DONE]') { done = true; break; }
           try {
@@ -1258,6 +1267,7 @@
                 if (ev2.phase === 'complete') {
                   diagnosticComplete = true;
                   diagnosticProductsCount = typeof ev2.products_count === 'number' ? ev2.products_count : null;
+                  diagnosticError = typeof ev2.error === 'string' ? ev2.error : null;
                 }
                 continue;
               }
@@ -1284,6 +1294,18 @@
       try { console.warn('[Widget] stream flush error: ' + (flushErr && flushErr.message)); } catch(e) {}
     }
 
+    // Preserve the non-streaming JSON fallback without sacrificing incremental
+    // liveness for proxies that deliver SSE under text/plain.
+    if (nonSsePayload !== null && !sawSseData) {
+      if (streamReadError) throw streamReadError;
+      var data;
+      try { data = JSON.parse(nonSsePayload); } catch(e) { throw new Error(label + ' invalid JSON'); }
+      if (data.error) throw new Error(label + ': ' + data.error);
+      if (!data.content) throw new Error(label + ': empty content');
+      onFirstToken();
+      return { content: data.content, contacts: data.contacts || null };
+    }
+
     var combined = [introContent, productsContent].filter(function(s){ return s && s.trim(); }).join('\n\n');
     if (!combined) {
       // A diagnostic start is an explicit server acknowledgement. Retrying the
@@ -1299,6 +1321,8 @@
           split: true,
           logId: diagnosticLogId,
           serverProductsCount: diagnosticProductsCount,
+          diagnosticError: diagnosticError,
+          routeLabel: label,
           transportError: streamReadError ? String(streamReadError.message || streamReadError) : null
         };
       }
@@ -1308,16 +1332,19 @@
     }
     var missingProducts = typeof diagnosticProductsCount === 'number' &&
       diagnosticProductsCount > 0 && !productsContent.trim();
+    var recoverableDiagnostic = diagnosticError === 'request_pending';
     return {
       content: combined,
       contacts: contacts,
-      partial: !diagnosticComplete || missingProducts,
+      partial: !diagnosticComplete || missingProducts || recoverableDiagnostic,
       accepted: Boolean(diagnosticLogId),
       split: true,
       introContent: introContent,
       productsContent: productsContent,
       logId: diagnosticLogId,
-      serverProductsCount: diagnosticProductsCount
+      serverProductsCount: diagnosticProductsCount,
+      diagnosticError: diagnosticError,
+      routeLabel: label
     };
     } catch (transportError) {
       throw describeTransportError(transportError);
@@ -1340,6 +1367,7 @@
 
     // При любом ретрае в рамках одного sendMessage отправляется тот же UUID.
     currentMessageId = generateMessageId();
+    var requestSessionId = sessionId;
 
     addMessage(message, 'user');
     conversationHistory.push({ role: 'user', content: message });
@@ -1384,15 +1412,16 @@
       messagesContainer.appendChild(pauseTyping);
       messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
-      productsMsg = document.createElement('div');
-      productsMsg.className = 'volt-message assistant';
-      productsMsg.innerHTML = '';
-      pendingProductsTimer = setTimeout(function() {
-        pendingProductsTimer = null;
+      var nextProductsMsg = document.createElement('div');
+      nextProductsMsg.className = 'volt-message assistant';
+      nextProductsMsg.innerHTML = '';
+      productsMsg = nextProductsMsg;
+      var insertionTimer = setTimeout(function() {
+        if (pendingProductsTimer === insertionTimer) pendingProductsTimer = null;
         var pt = document.getElementById('volt-products-typing');
         if (pt) pt.remove();
-        messagesContainer.appendChild(productsMsg);
-        productsMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        messagesContainer.appendChild(nextProductsMsg);
+        nextProductsMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
         // Live-typing под products-пузырём — только если стрим ещё не закончился
         if (!streamEnded) {
           var live2 = document.createElement('div');
@@ -1402,7 +1431,8 @@
           messagesContainer.appendChild(live2);
         }
       }, 350);
-      return productsMsg;
+      pendingProductsTimer = insertionTimer;
+      return nextProductsMsg;
     }
 
     var result = null;
@@ -1436,7 +1466,8 @@
             },
             openProductsBubble,
             false,
-            requestDeadlineAt
+            requestDeadlineAt,
+            requestSessionId
           );
           return;
         } catch (err) {
@@ -1452,62 +1483,109 @@
     // Wait for stream to complete
     await streamPromise;
 
-    // If the server acknowledged the request but the transport broke before
-    // any answer text arrived, reconnect in replay-only mode. The backend uses
-    // the same messageId as an idempotency key and is forbidden to start a
-    // second catalog/model execution.
+    // If the server acknowledged the request but delivery is incomplete,
+    // reconnect in replay-only mode. The backend uses the same messageId as an
+    // idempotency key and is forbidden to start a second catalog/model run.
     if (result && result.accepted && result.partial) {
       var acceptedPartial = result;
       var resumeEndpoints = streamEndpoints.slice();
-      var bestReplay = null;
-      var partialProductsMsg = productsMsg;
-      var partialProductsReplaced = false;
-      if (pendingProductsTimer) {
-        clearTimeout(pendingProductsTimer);
-        pendingProductsTimer = null;
-        if (partialProductsMsg && partialProductsMsg.innerHTML && !partialProductsMsg.parentNode) {
-          var partialTyping = document.getElementById('volt-products-typing');
-          if (partialTyping) partialTyping.remove();
-          messagesContainer.appendChild(partialProductsMsg);
-        }
+      if (acceptedPartial.routeLabel) {
+        resumeEndpoints = streamEndpoints.filter(function(endpoint) {
+          return endpoint.label !== acceptedPartial.routeLabel;
+        }).concat(streamEndpoints.filter(function(endpoint) {
+          return endpoint.label === acceptedPartial.routeLabel;
+        }));
       }
+      var completedReplay = null;
+      var bestPartialReplay = null;
+      function replayValueScore(candidate) {
+        if (!candidate || !candidate.content || candidate.diagnosticError === 'request_pending') return -1;
+        var contentLength = candidate.content.length;
+        if (candidate.productsContent) return 2000000 + contentLength;
+        if (candidate.introContent) return 1000000 + contentLength;
+        return contentLength;
+      }
+      var bestPartialScore = replayValueScore(acceptedPartial);
       for (var r = 0; r < resumeEndpoints.length; r++) {
+        // Replay is rendered off-screen per attempt. Only a complete canonical
+        // replay is committed atomically, so two partial resume routes cannot
+        // leave duplicate cards or race a shared insertion timer.
+        var replayIntroMsg = document.createElement('div');
+        replayIntroMsg.className = 'volt-message assistant';
+        replayIntroMsg.innerHTML = '';
+        var replayProductsMsg = null;
         try {
           var replayed = await tryStreamEndpoint(
-            resumeEndpoints[r].url, message, resumeEndpoints[r].label + '-resume', assistantMsg,
+            resumeEndpoints[r].url, message, resumeEndpoints[r].label + '-resume', replayIntroMsg,
+            function() {},
             function() {
-              firstTokenArrived = true;
-              var typingElReplay = document.getElementById('volt-typing-indicator');
-              if (typingElReplay) typingElReplay.remove();
-              if (!msgInserted) {
-                messagesContainer.appendChild(assistantMsg);
-                assistantMsg.scrollIntoView({ behavior: 'smooth', block: 'start' });
-                msgInserted = true;
-              }
-            },
-            function() {
-              // A replay contains the canonical full event sequence. Replace
-              // an already rendered partial products bubble at the first
-              // replayed products event instead of duplicating cards.
-              if (!partialProductsReplaced && partialProductsMsg && partialProductsMsg.parentNode) {
-                partialProductsMsg.remove();
-                partialProductsReplaced = true;
-              }
-              return openProductsBubble();
+              replayProductsMsg = document.createElement('div');
+              replayProductsMsg.className = 'volt-message assistant';
+              replayProductsMsg.innerHTML = '';
+              return replayProductsMsg;
             },
             true,
-            requestDeadlineAt
+            requestDeadlineAt,
+            requestSessionId
           );
-          if (replayed && replayed.content) {
-            bestReplay = replayed;
-            if (!replayed.partial) break;
+          if (replayed && !replayed.partial) {
+            completedReplay = {
+              result: replayed,
+              introMsg: replayIntroMsg,
+              productsMsg: replayProductsMsg
+            };
+            break;
+          }
+          var replayScore = replayValueScore(replayed);
+          if (replayScore > bestPartialScore) {
+            bestPartialScore = replayScore;
+            bestPartialReplay = {
+              result: replayed,
+              introMsg: replayIntroMsg,
+              productsMsg: replayProductsMsg
+            };
           }
         } catch (resumeError) {
           lastError = resumeError;
           try { console.warn('[Widget] resume ' + resumeEndpoints[r].label + ' failed: ' + (resumeError && resumeError.message)); } catch(e) {}
         }
       }
-      result = bestReplay || acceptedPartial;
+      var selectedReplay = completedReplay || bestPartialReplay;
+      if (selectedReplay) {
+        if (pendingProductsTimer) {
+          clearTimeout(pendingProductsTimer);
+          pendingProductsTimer = null;
+        }
+        var replayTyping = document.getElementById('volt-products-typing');
+        if (replayTyping) replayTyping.remove();
+
+        if (selectedReplay.introMsg.innerHTML) {
+          assistantMsg.innerHTML = selectedReplay.introMsg.innerHTML;
+          if (!assistantMsg.parentNode) {
+            messagesContainer.appendChild(assistantMsg);
+            msgInserted = true;
+          }
+        } else if (assistantMsg.parentNode) {
+          assistantMsg.remove();
+          msgInserted = false;
+        }
+
+        if (selectedReplay.productsMsg && selectedReplay.productsMsg.innerHTML) {
+          if (productsMsg && productsMsg.parentNode) {
+            productsMsg.parentNode.replaceChild(selectedReplay.productsMsg, productsMsg);
+          } else {
+            messagesContainer.appendChild(selectedReplay.productsMsg);
+          }
+          productsMsg = selectedReplay.productsMsg;
+        } else {
+          if (productsMsg && productsMsg.parentNode) productsMsg.remove();
+          productsMsg = null;
+        }
+        firstTokenArrived = Boolean(selectedReplay.result.content);
+        result = selectedReplay.result;
+      } else {
+        result = acceptedPartial;
+      }
     }
 
     // Стрим завершён — блокируем отложенное появление live-typing и снимаем все индикаторы
