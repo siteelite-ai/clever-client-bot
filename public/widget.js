@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-d8da5cc307f128a5';
+  var WIDGET_VERSION = 'widget-153773f46c695844';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -21,6 +21,15 @@
   var activePipelineReady = true;
   function pipelinePath() { return '/functions/v1/chat-consultant-v3'; }
   function fetchActivePipeline() { return Promise.resolve(); }
+
+  // Transport budgets are deliberately split by failure mode. The server emits
+  // a heartbeat every 10 seconds and may legitimately work for up to 140 seconds,
+  // so a single absolute 90-second abort would kill a healthy response. A short
+  // connect timeout enables fast route failover, the idle timeout is refreshed by
+  // every byte/heartbeat, and one shared deadline bounds the complete user turn.
+  var STREAM_CONNECT_TIMEOUT_MS = 15000;
+  var STREAM_IDLE_TIMEOUT_MS = 30000;
+  var STREAM_TOTAL_TIMEOUT_MS = 155000;
 
   // Initial greeting message
   const initialGreeting = 'Здравствуйте! 👋 Я AI-консультант 220volt.kz. Помогу подобрать электроинструменты, расскажу о доставке и оплате. Что вас интересует?';
@@ -994,11 +1003,53 @@
   // Try streaming from a single endpoint, updating msgEl progressively
   // onFirstToken — вызывается при первом токене (убрать typing).
   // onProductsBlock — возвращает НОВЫЙ пузырь для карточек (разделение intro и списка).
-  async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken, onProductsBlock, resumeOnly) {
+  async function tryStreamEndpoint(baseUrl, message, label, msgEl, onFirstToken, onProductsBlock, resumeOnly, requestDeadlineAt) {
     if (!activePipelineReady) await fetchActivePipeline();
     var url = baseUrl + pipelinePath();
     var controller = new AbortController();
-    var timer = setTimeout(function() { controller.abort(); }, 90000);
+    var deadlineAt = Number.isFinite(requestDeadlineAt)
+      ? requestDeadlineAt
+      : Date.now() + STREAM_TOTAL_TIMEOUT_MS;
+    var remainingAtStart = deadlineAt - Date.now();
+    if (remainingAtStart <= 0) throw new Error(label + ': request deadline exceeded');
+    var connectTimer = null;
+    var idleTimer = null;
+    var totalTimer = null;
+    var transportAbortReason = null;
+
+    function abortTransport(reason) {
+      transportAbortReason = transportAbortReason || reason || 'transport_aborted';
+      if (!controller.signal.aborted) controller.abort();
+    }
+
+    function describeTransportError(error) {
+      if (controller.signal.aborted && transportAbortReason) {
+        return new Error(label + ': ' + transportAbortReason);
+      }
+      return error;
+    }
+
+    function clearTransportTimers() {
+      if (connectTimer) clearTimeout(connectTimer);
+      if (idleTimer) clearTimeout(idleTimer);
+      if (totalTimer) clearTimeout(totalTimer);
+      connectTimer = null;
+      idleTimer = null;
+      totalTimer = null;
+    }
+
+    function armIdleTimer() {
+      if (idleTimer) clearTimeout(idleTimer);
+      var remaining = deadlineAt - Date.now();
+      if (remaining <= 0) {
+        abortTransport('request_deadline');
+        return;
+      }
+      idleTimer = setTimeout(function() { abortTransport('stream_idle_timeout'); }, Math.min(STREAM_IDLE_TIMEOUT_MS, remaining));
+    }
+
+    connectTimer = setTimeout(function() { abortTransport('connect_timeout'); }, Math.min(STREAM_CONNECT_TIMEOUT_MS, remainingAtStart));
+    totalTimer = setTimeout(function() { abortTransport('request_deadline'); }, remainingAtStart);
 
     // Clean slots: only send pending, max 3
     var activeSlots = {};
@@ -1010,6 +1061,7 @@
       }
     }
 
+    try {
     var response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -1029,8 +1081,13 @@
       signal: controller.signal
     });
 
+    // Headers/initial SSE bytes arrived: the connection budget no longer
+    // applies. From this point only a genuinely idle transport may time out.
+    if (connectTimer) clearTimeout(connectTimer);
+    connectTimer = null;
+    armIdleTimer();
+
     if (!response.ok) {
-      clearTimeout(timer);
       throw await createHttpError(response, label);
     }
 
@@ -1042,7 +1099,6 @@
       // type. Detect the protocol from the body before treating it as JSON.
       var text = await response.text();
       if (!/^\s*(?::[^\n]*\n|data:\s*)/u.test(text)) {
-        clearTimeout(timer);
         var data;
         try { data = JSON.parse(text); } catch(e) { throw new Error(label + ' invalid JSON'); }
         if (data.error) throw new Error(label + ': ' + data.error);
@@ -1106,6 +1162,7 @@
       while (!done) {
         var chunk = await reader.read();
         if (chunk.done) break;
+        armIdleTimer();
         textBuffer += typeof chunk.value === 'string'
           ? chunk.value
           : decoder.decode(chunk.value, { stream: true });
@@ -1116,21 +1173,29 @@
         for (var i = 0; i < parsed.lines.length; i++) {
         var line = parsed.lines[i];
         if (line.startsWith(':') || line.trim() === '') continue;
-        if (!line.startsWith('data: ')) continue;
+        if (!line.startsWith('data:')) continue;
 
-        var jsonStr = line.slice(6).trim();
+        var jsonStr = line.slice(5).trim();
         if (jsonStr === '[DONE]') {
           done = true;
-          while (true) {
-            var extra = await reader.read();
-            if (extra.done) break;
-            textBuffer += decoder.decode(extra.value, { stream: true });
+          // [DONE] is the application-level terminator. Do not wait for an
+          // intermediary to close the underlying keep-alive connection.
+          if (typeof reader.cancel === 'function') {
+            try {
+              var cancelResult = reader.cancel();
+              if (cancelResult && typeof cancelResult.catch === 'function') cancelResult.catch(function() {});
+            } catch(e) {}
           }
           break;
         }
 
+        var obj;
         try {
-          var obj = JSON.parse(jsonStr);
+          obj = JSON.parse(jsonStr);
+        } catch (parseError) {
+          try { console.warn('[Widget] ignored malformed SSE event'); } catch(e) {}
+          continue;
+        }
           if (obj.v3_event) {
             var ev = obj.v3_event;
             if (ev.type === 'diagnostic') {
@@ -1167,18 +1232,11 @@
               messagesContainer.scrollTop = messagesContainer.scrollHeight;
             }
           }
-        } catch (e) {
-          var remainingLines = parsed.lines.slice(i).join('\n');
-          textBuffer = remainingLines + (textBuffer ? '\n' + textBuffer : '');
-          break;
-        }
         }
       }
     } catch (readError) {
-      streamReadError = readError;
+      streamReadError = describeTransportError(readError);
     }
-    clearTimeout(timer);
-
     // Final flush
     try {
       if (textBuffer.trim()) {
@@ -1188,9 +1246,9 @@
           if (!raw) continue;
           if (raw.endsWith('\r')) raw = raw.slice(0, -1);
           if (raw.startsWith(':') || raw.trim() === '') continue;
-          if (!raw.startsWith('data: ')) continue;
-          var js2 = raw.slice(6).trim();
-          if (js2 === '[DONE]') continue;
+          if (!raw.startsWith('data:')) continue;
+          var js2 = raw.slice(5).trim();
+          if (js2 === '[DONE]') { done = true; break; }
           try {
             var o2 = JSON.parse(js2);
             if (o2.v3_event) {
@@ -1248,16 +1306,24 @@
       if (!firstTokenReceived) throw new Error(label + ': empty streaming content');
       return { content: '', contacts: contacts, partial: true, split: true };
     }
+    var missingProducts = typeof diagnosticProductsCount === 'number' &&
+      diagnosticProductsCount > 0 && !productsContent.trim();
     return {
       content: combined,
       contacts: contacts,
-      partial: !done || !diagnosticComplete,
+      partial: !diagnosticComplete || missingProducts,
+      accepted: Boolean(diagnosticLogId),
       split: true,
       introContent: introContent,
       productsContent: productsContent,
       logId: diagnosticLogId,
       serverProductsCount: diagnosticProductsCount
     };
+    } catch (transportError) {
+      throw describeTransportError(transportError);
+    } finally {
+      clearTransportTimers();
+    }
   }
 
   // Send one message with streaming + idempotent replay recovery
@@ -1287,11 +1353,14 @@
     messagesContainer.appendChild(typingIndicator);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 
-    // Streaming endpoints
+    // Prefer the Cloudflare route: it exists specifically for networks where
+    // the Supabase project hostname is slow or unreachable. Direct Supabase
+    // remains a fast fallback, and both attempts share one user-turn deadline.
     var streamEndpoints = [
-      { url: 'https://yngoixmvmxdfxokuafjp.supabase.co', label: 'direct' },
-      { url: CONFIG.supabaseUrl, label: 'proxy' }
+      { url: CONFIG.supabaseUrl, label: 'proxy' },
+      { url: 'https://yngoixmvmxdfxokuafjp.supabase.co', label: 'direct' }
     ];
+    var requestDeadlineAt = Date.now() + STREAM_TOTAL_TIMEOUT_MS;
 
     // Create assistant message element for streaming (intro-пузырь)
     var assistantMsg = document.createElement('div');
@@ -1366,7 +1435,8 @@
               }
             },
             openProductsBubble,
-            false
+            false,
+            requestDeadlineAt
           );
           return;
         } catch (err) {
@@ -1386,9 +1456,21 @@
     // any answer text arrived, reconnect in replay-only mode. The backend uses
     // the same messageId as an idempotency key and is forbidden to start a
     // second catalog/model execution.
-    if (result && result.accepted && result.partial && !result.content) {
+    if (result && result.accepted && result.partial) {
       var acceptedPartial = result;
-      var resumeEndpoints = [streamEndpoints[1], streamEndpoints[0]];
+      var resumeEndpoints = streamEndpoints.slice();
+      var bestReplay = null;
+      var partialProductsMsg = productsMsg;
+      var partialProductsReplaced = false;
+      if (pendingProductsTimer) {
+        clearTimeout(pendingProductsTimer);
+        pendingProductsTimer = null;
+        if (partialProductsMsg && partialProductsMsg.innerHTML && !partialProductsMsg.parentNode) {
+          var partialTyping = document.getElementById('volt-products-typing');
+          if (partialTyping) partialTyping.remove();
+          messagesContainer.appendChild(partialProductsMsg);
+        }
+      }
       for (var r = 0; r < resumeEndpoints.length; r++) {
         try {
           var replayed = await tryStreamEndpoint(
@@ -1403,19 +1485,29 @@
                 msgInserted = true;
               }
             },
-            openProductsBubble,
-            true
+            function() {
+              // A replay contains the canonical full event sequence. Replace
+              // an already rendered partial products bubble at the first
+              // replayed products event instead of duplicating cards.
+              if (!partialProductsReplaced && partialProductsMsg && partialProductsMsg.parentNode) {
+                partialProductsMsg.remove();
+                partialProductsReplaced = true;
+              }
+              return openProductsBubble();
+            },
+            true,
+            requestDeadlineAt
           );
           if (replayed && replayed.content) {
-            result = replayed;
-            break;
+            bestReplay = replayed;
+            if (!replayed.partial) break;
           }
         } catch (resumeError) {
           lastError = resumeError;
           try { console.warn('[Widget] resume ' + resumeEndpoints[r].label + ' failed: ' + (resumeError && resumeError.message)); } catch(e) {}
         }
       }
-      if (!result || !result.content) result = acceptedPartial;
+      result = bestReplay || acceptedPartial;
     }
 
     // Стрим завершён — блокируем отложенное появление live-typing и снимаем все индикаторы
