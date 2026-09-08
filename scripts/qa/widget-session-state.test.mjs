@@ -32,6 +32,7 @@ function bootWidget({ state, now, confirmResult = true, fetchImpl, source = widg
   dom.window.HTMLElement.prototype.scrollIntoView = function() {};
   dom.window.confirm = () => confirmResult;
   if (Number.isFinite(now)) dom.window.Date.now = () => now;
+  dom.window.TextEncoder = TextEncoder;
   dom.window.TextDecoder = TextDecoder;
   dom.window.fetch = fetchImpl ?? (async () => {
     throw new Error('Unexpected fetch in widget session-state test');
@@ -41,9 +42,10 @@ function bootWidget({ state, now, confirmResult = true, fetchImpl, source = widg
   return dom;
 }
 
-function withTransportTimeouts({ connect = 20, idle = 35, total = 250 } = {}) {
+function withTransportTimeouts({ connect = 20, accept = 200, idle = 35, total = 250 } = {}) {
   return widgetSource
     .replace('var STREAM_CONNECT_TIMEOUT_MS = 15000;', `var STREAM_CONNECT_TIMEOUT_MS = ${connect};`)
+    .replace('var STREAM_ACCEPT_TIMEOUT_MS = 15000;', `var STREAM_ACCEPT_TIMEOUT_MS = ${accept};`)
     .replace('var STREAM_IDLE_TIMEOUT_MS = 30000;', `var STREAM_IDLE_TIMEOUT_MS = ${idle};`)
     .replace('var STREAM_TOTAL_TIMEOUT_MS = 155000;', `var STREAM_TOTAL_TIMEOUT_MS = ${total};`);
 }
@@ -86,6 +88,73 @@ test('legacy dialogue without updatedAt is discarded', () => {
   assert.doesNotMatch(visibleMessages(dom), /старый вопрос/u);
   assert.match(visibleMessages(dom), new RegExp(GREETING_FRAGMENT, 'u'));
   assert.equal(readState(dom), null);
+  dom.window.close();
+});
+
+test('a trailing user bubble without an acceptance marker is discarded after a crash reload', () => {
+  const now = Date.now();
+  const state = savedDialogue(now - 1_000);
+  state.history.push({ role: 'user', content: 'реплика, оборванная до принятия сервером' });
+  const dom = bootWidget({ state, now });
+
+  assert.doesNotMatch(visibleMessages(dom), /оборванная до принятия/u);
+  assert.match(visibleMessages(dom), /старый ответ про кабель/u);
+  assert.equal(readState(dom).acceptedPendingTurn, undefined);
+  dom.window.close();
+});
+
+test('crash reload drops an unaccepted duplicate retry without losing the accepted original', async () => {
+  const repeatedQuery = 'найди кабель ввг 3*1,5 самый дешевый';
+  const acceptedMessageId = '123e4567-e89b-42d3-a456-426614174010';
+  const unacceptedMessageId = '123e4567-e89b-42d3-a456-426614174011';
+  const payloads = [];
+  const answer = 'Продолжаю исходный принятый запрос.';
+  const dom = bootWidget({
+    state: {
+      sessionId: 'session_duplicate_retry_crash',
+      history: [
+        { role: 'assistant', content: 'Здравствуйте!' },
+        { role: 'user', content: repeatedQuery, messageId: acceptedMessageId },
+        { role: 'user', content: repeatedQuery, messageId: unacceptedMessageId },
+      ],
+      dialogSlots: {},
+      acceptedPendingTurn: {
+        messageId: acceptedMessageId,
+        content: repeatedQuery,
+      },
+      updatedAt: Date.now(),
+    },
+    fetchImpl: async (_url, init) => {
+      payloads.push(JSON.parse(init.body));
+      const complete = [
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'duplicate-retry-crash-log', phase: 'start' } })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'duplicate-retry-crash-log', phase: 'complete', products_count: 0 } })}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return new Response(complete, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const restoredUsers = Array.from(dom.window.document.querySelectorAll('.volt-message.user'))
+    .map((element) => element.textContent.trim());
+  assert.deepEqual(restoredUsers, [repeatedQuery]);
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'продолжи этот подбор';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  const deadline = Date.now() + 500;
+  while (!visibleMessages(dom).includes(answer) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  assert.deepEqual(payloads[0].history, [{ role: 'user', content: repeatedQuery }]);
+  const persistedRepeatedUsers = readState(dom).history.filter((message) =>
+    message.role === 'user' && message.content === repeatedQuery);
+  assert.equal(persistedRepeatedUsers.length, 1);
+  assert.equal(persistedRepeatedUsers[0].messageId, acceptedMessageId);
   dom.window.close();
 });
 
@@ -587,6 +656,665 @@ test('best partial replay is preserved when no route reaches diagnostic complete
   assert.equal(visible.split(productName).length - 1, 1);
   assert.match(visible, /Ответ получен не полностью|Соединение прервалось/iu);
   assert.doesNotMatch(visible, /Сервер принял запрос, но соединение прервалось до получения ответа/iu);
+  dom.window.close();
+});
+
+test('an accepted unanswered turn remains available to the next follow-up', async () => {
+  let fetchCount = 0;
+  const firstQuery = 'покажи бытовые светильники с датчиком';
+  const followUp = 'а есть другие варианты?';
+  const followUpAnswer = 'Проверяю альтернативы по предыдущему запросу.';
+  const dom = bootWidget({
+    fetchImpl: async () => {
+      fetchCount += 1;
+      if (fetchCount === 1) {
+        let pulls = 0;
+        const body = new ReadableStream({
+          pull(controller) {
+            pulls += 1;
+            if (pulls === 1) {
+              controller.enqueue(new TextEncoder().encode(
+                `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'accepted-unanswered-log', phase: 'start' } })}\n\n`,
+              ));
+              return;
+            }
+            controller.error(new Error('accepted response became unavailable'));
+          },
+        });
+        return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      throw new Error('replay route unavailable');
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = firstQuery;
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  let deadline = Date.now() + 500;
+  while ((dom.window.document.querySelector('#volt-widget-send').disabled || fetchCount < 3) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  const persisted = readState(dom);
+  assert.equal(persisted.acceptedPendingTurn.content, firstQuery);
+  dom.window.close();
+
+  const followUpPayloads = [];
+  const followUpDom = bootWidget({
+    state: persisted,
+    fetchImpl: async (_url, init) => {
+      followUpPayloads.push(JSON.parse(init.body));
+      const complete = [
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'follow-up-log', phase: 'start' } })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: followUpAnswer } }] })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'follow-up-log', phase: 'complete', products_count: 0 } })}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return new Response(complete, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const followUpInput = followUpDom.window.document.querySelector('#volt-widget-input');
+  followUpInput.value = followUp;
+  followUpInput.dispatchEvent(new followUpDom.window.Event('input', { bubbles: true }));
+  followUpDom.window.document.querySelector('#volt-widget-send').click();
+  deadline = Date.now() + 500;
+  while (!visibleMessages(followUpDom).includes(followUpAnswer) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  assert.equal(followUpPayloads.length, 1);
+  assert.equal(followUpPayloads[0].resumeOnly, false);
+  assert.deepEqual(followUpPayloads[0].history, [{ role: 'user', content: firstQuery }]);
+  assert.equal(followUpPayloads[0].history.some((item) => item.content === followUp), false);
+  assert.match(visibleMessages(followUpDom), new RegExp(followUpAnswer, 'u'));
+  assert.equal(readState(followUpDom).acceptedPendingTurn, null);
+  followUpDom.window.close();
+});
+
+test('a resolved accepted-pending chain remains intact for the following turn', async () => {
+  const firstQuery = 'покажи светильники с датчиком движения до 4000 тенге';
+  const followUp = 'а есть другие варианты?';
+  const followUpAnswer = 'Нашёл ещё два подходящих варианта.';
+  const nextQuestion = 'а какой из них самый дешёвый?';
+  const nextAnswer = 'Самый дешёвый — первый вариант.';
+  const payloads = [];
+  let fetchCount = 0;
+  const dom = bootWidget({
+    state: {
+      sessionId: 'session_resolved_pending_chain',
+      history: [
+        { role: 'assistant', content: 'Здравствуйте!' },
+        { role: 'user', content: firstQuery, messageId: '123e4567-e89b-42d3-a456-426614174002' },
+      ],
+      dialogSlots: {},
+      acceptedPendingTurn: {
+        messageId: '123e4567-e89b-42d3-a456-426614174002',
+        content: firstQuery,
+      },
+      updatedAt: Date.now(),
+    },
+    fetchImpl: async (_url, init) => {
+      fetchCount += 1;
+      payloads.push(JSON.parse(init.body));
+      const answer = fetchCount === 1 ? followUpAnswer : nextAnswer;
+      const logId = fetchCount === 1 ? 'resolved-pending-follow-up-log' : 'resolved-pending-next-log';
+      const complete = [
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'complete', products_count: 0 } })}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return new Response(complete, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = followUp;
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  let deadline = Date.now() + 500;
+  while ((dom.window.document.querySelector('#volt-widget-send').disabled ||
+      !visibleMessages(dom).includes(followUpAnswer)) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  input.value = nextQuestion;
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  deadline = Date.now() + 500;
+  while ((payloads.length < 2 || dom.window.document.querySelector('#volt-widget-send').disabled ||
+      !visibleMessages(dom).includes(nextAnswer)) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  assert.deepEqual(payloads[0].history, [{ role: 'user', content: firstQuery }]);
+  assert.deepEqual(payloads[1].history, [
+    { role: 'user', content: firstQuery },
+    { role: 'user', content: followUp },
+    { role: 'assistant', content: followUpAnswer },
+  ]);
+  dom.window.close();
+});
+
+test('a later pre-acceptance failure does not erase the earlier accepted pending context', async () => {
+  const acceptedQuery = 'покажи светильники с датчиком движения';
+  const state = {
+    sessionId: 'session_accepted_then_failed',
+    history: [
+      { role: 'assistant', content: 'Здравствуйте!' },
+      { role: 'user', content: acceptedQuery, messageId: '123e4567-e89b-42d3-a456-426614174000' },
+    ],
+    dialogSlots: {},
+    acceptedPendingTurn: {
+      messageId: '123e4567-e89b-42d3-a456-426614174000',
+      content: acceptedQuery,
+    },
+    updatedAt: Date.now(),
+  };
+  const payloads = [];
+  let fetchCount = 0;
+  const finalAnswer = 'Предыдущий принятый контекст сохранён.';
+  const dom = bootWidget({
+    state,
+    fetchImpl: async (_url, init) => {
+      fetchCount += 1;
+      payloads.push(JSON.parse(init.body));
+      if (fetchCount <= 2) {
+        return new Response(JSON.stringify({ error: 'temporary_failure' }), {
+          status: 503,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      const complete = [
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'accepted-context-log', phase: 'start' } })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: finalAnswer } }] })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'accepted-context-log', phase: 'complete', products_count: 0 } })}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return new Response(complete, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'промежуточный запрос без принятия';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  let deadline = Date.now() + 500;
+  while (!/ошибка соединения/iu.test(visibleMessages(dom)) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  assert.equal(readState(dom).acceptedPendingTurn.content, acceptedQuery);
+  input.value = 'можешь продолжить исходный подбор?';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  deadline = Date.now() + 500;
+  while (!visibleMessages(dom).includes(finalAnswer) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  assert.equal(fetchCount, 3);
+  assert.deepEqual(payloads[2].history, [{ role: 'user', content: acceptedQuery }]);
+  assert.match(visibleMessages(dom), new RegExp(finalAnswer, 'u'));
+  dom.window.close();
+});
+
+test('consecutive accepted unanswered questions stay together as one pending context chain', async () => {
+  const first = 'покажи светильники с датчиком';
+  const second = 'а есть другие варианты?';
+  const payloads = [];
+  const state = {
+    sessionId: 'session_pending_chain',
+    history: [
+      { role: 'assistant', content: 'Здравствуйте!' },
+      { role: 'user', content: first, messageId: '123e4567-e89b-42d3-a456-426614174003' },
+      { role: 'user', content: second, messageId: '123e4567-e89b-42d3-a456-426614174001' },
+    ],
+    dialogSlots: {},
+    acceptedPendingTurn: {
+      messageId: '123e4567-e89b-42d3-a456-426614174001',
+      content: second,
+    },
+    updatedAt: Date.now(),
+  };
+  const answer = 'Цепочка уточнений сохранена.';
+  const dom = bootWidget({
+    state,
+    fetchImpl: async (_url, init) => {
+      payloads.push(JSON.parse(init.body));
+      const complete = [
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'pending-chain-log', phase: 'start' } })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'pending-chain-log', phase: 'complete', products_count: 0 } })}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return new Response(complete, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'продолжи, пожалуйста';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  const deadline = Date.now() + 500;
+  while (!visibleMessages(dom).includes(answer) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  assert.deepEqual(payloads[0].history, [
+    { role: 'user', content: first },
+    { role: 'user', content: second },
+  ]);
+  dom.window.close();
+});
+
+test('a user-only semantic block is not serialized after an oversized assistant is rejected', async () => {
+  const acceptedQuery = 'покажи светильники с датчиком движения';
+  const followUp = 'а есть другие варианты?';
+  const oversizedAssistant = `Начинаю ответ. ${'я'.repeat(8_100)}`;
+  const finalAnswer = 'Новый ответ без ложного контекста.';
+  const payloads = [];
+  let fetchCount = 0;
+  const dom = bootWidget({
+    state: {
+      sessionId: 'session_oversized_assistant',
+      history: [
+        { role: 'assistant', content: 'Здравствуйте!' },
+        {
+          role: 'user',
+          content: acceptedQuery,
+          messageId: '123e4567-e89b-42d3-a456-426614174012',
+        },
+      ],
+      dialogSlots: {},
+      acceptedPendingTurn: {
+        messageId: '123e4567-e89b-42d3-a456-426614174012',
+        content: acceptedQuery,
+      },
+      updatedAt: Date.now(),
+    },
+    fetchImpl: async (_url, init) => {
+      fetchCount += 1;
+      payloads.push(JSON.parse(init.body));
+      const content = fetchCount === 1 ? oversizedAssistant : finalAnswer;
+      const logId = fetchCount === 1 ? 'oversized-assistant-log' : 'post-oversized-log';
+      const complete = [
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'complete', products_count: 0 } })}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return new Response(complete, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = followUp;
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  let deadline = Date.now() + 500;
+  while (dom.window.document.querySelector('#volt-widget-send').disabled && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  input.value = 'начни новый поиск';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  deadline = Date.now() + 500;
+  while ((payloads.length < 2 || dom.window.document.querySelector('#volt-widget-send').disabled ||
+      !visibleMessages(dom).includes(finalAnswer)) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  assert.deepEqual(payloads[0].history, [{ role: 'user', content: acceptedQuery }]);
+  assert.deepEqual(payloads[1].history, [], 'user-only history must never be serialized as a completed semantic block');
+  dom.window.close();
+});
+
+test('request payload is bounded by UTF-8 bytes and keeps only recent complete turns', async () => {
+  const now = Date.now();
+  const history = [{ role: 'assistant', content: 'Здравствуйте! Старый диалог.' }];
+  for (let index = 1; index <= 5; index += 1) {
+    history.push({ role: 'user', content: `пользователь-${index} ${'у'.repeat(980)}` });
+    history.push({ role: 'assistant', content: `ответ-${index} ${'я'.repeat(4_980)}` });
+  }
+  const state = {
+    sessionId: 'session_large_utf8_history',
+    history,
+    dialogSlots: {
+      cable: { status: 'pending', value: `уточнение ${'щ'.repeat(5_000)}` },
+    },
+    updatedAt: now,
+  };
+  const payloads = [];
+  const bodySizes = [];
+  const answer = 'Контекст принят без переполнения запроса.';
+  const dom = bootWidget({
+    state,
+    now,
+    fetchImpl: async (_url, init) => {
+      const size = new TextEncoder().encode(init.body).byteLength;
+      bodySizes.push(size);
+      const payload = JSON.parse(init.body);
+      payloads.push(payload);
+      if (size > 64 * 1_024) {
+        return new Response(JSON.stringify({ error: 'payload_too_large' }), {
+          status: 413,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      const sse = [
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'utf8-budget-log', phase: 'start' } })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'utf8-budget-log', phase: 'complete', products_count: 0 } })}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const query = 'найди кабель ввг 3*1,5 самый дешевый';
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = query;
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  const deadline = Date.now() + 2_000;
+  while (!visibleMessages(dom).includes(answer) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  assert.equal(payloads.length, 1, 'a locally bounded request must not need a 413 route retry');
+  assert.ok(bodySizes.every((size) => size <= 56 * 1_024), `payload sizes: ${bodySizes.join(', ')}`);
+  assert.equal(payloads[0].message, query);
+  assert.equal(payloads[0].history.some((item) => item.content === query), false, 'current user message must not be duplicated in history');
+  assert.equal(payloads[0].history.length % 2, 0, 'request history contains complete user/assistant turns');
+  for (let index = 0; index < payloads[0].history.length; index += 2) {
+    assert.equal(payloads[0].history[index].role, 'user');
+    assert.equal(payloads[0].history[index + 1].role, 'assistant');
+  }
+  assert.match(payloads[0].history.at(-2).content, /^пользователь-5 /u);
+  assert.match(payloads[0].history.at(-1).content, /^ответ-5 /u);
+  assert.match(visibleMessages(dom), new RegExp(answer, 'u'));
+  assert.doesNotMatch(visibleMessages(dom), /ошибка соединения/iu);
+  dom.window.close();
+});
+
+test('character-budget eviction never separates a user message from its assistant answer', async () => {
+  const history = [
+    { role: 'user', content: `evicted-user ${'u'.repeat(990)}` },
+    { role: 'assistant', content: `ORPHAN_ASSISTANT ${'a'.repeat(85)}` },
+  ];
+  for (let index = 1; index <= 5; index += 1) {
+    history.push({ role: 'user', content: `kept-user-${index} ${'u'.repeat(1_484)}` });
+    history.push({ role: 'assistant', content: `kept-answer-${index} ${'a'.repeat(4_784)}` });
+  }
+  const payloads = [];
+  const dom = bootWidget({
+    state: {
+      sessionId: 'session_atomic_history',
+      history,
+      dialogSlots: {},
+      updatedAt: Date.now(),
+    },
+    fetchImpl: async (_url, init) => {
+      payloads.push(JSON.parse(init.body));
+      const complete = [
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'atomic-history-log', phase: 'start' } })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'История целостна.' } }] })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'atomic-history-log', phase: 'complete', products_count: 0 } })}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return new Response(complete, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'новый вопрос';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  const deadline = Date.now() + 500;
+  while (!visibleMessages(dom).includes('История целостна.') && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  const sent = payloads[0].history.map((item) => item.content.split(' ')[0]);
+  assert.equal(sent.includes('evicted-user'), false);
+  assert.equal(sent.includes('ORPHAN_ASSISTANT'), false);
+  assert.deepEqual(sent, [
+    'kept-user-1', 'kept-answer-1',
+    'kept-user-2', 'kept-answer-2',
+    'kept-user-3', 'kept-answer-3',
+    'kept-user-4', 'kept-answer-4',
+    'kept-user-5', 'kept-answer-5',
+  ]);
+  dom.window.close();
+});
+
+test('a large pending slot cannot evict the latest semantic turn', async () => {
+  const payloads = [];
+  const bodySizes = [];
+  const lastUser = `последний-вопрос ${'у'.repeat(1_780)}`;
+  const lastAssistant = `последний-ответ ${'я'.repeat(6_480)}`;
+  const dom = bootWidget({
+    state: {
+      sessionId: 'session_large_slot',
+      history: [
+        { role: 'assistant', content: 'Здравствуйте!' },
+        { role: 'user', content: lastUser },
+        { role: 'assistant', content: lastAssistant },
+      ],
+      dialogSlots: {
+        oversized: { status: 'pending', value: '界'.repeat(15_000) },
+      },
+      updatedAt: Date.now(),
+    },
+    fetchImpl: async (_url, init) => {
+      payloads.push(JSON.parse(init.body));
+      bodySizes.push(new TextEncoder().encode(init.body).byteLength);
+      const complete = [
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'large-slot-log', phase: 'start' } })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'Последний ход сохранён.' } }] })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'large-slot-log', phase: 'complete', products_count: 0 } })}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return new Response(complete, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'уточнение';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  const deadline = Date.now() + 500;
+  while (!visibleMessages(dom).includes('Последний ход сохранён.') && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  assert.deepEqual(payloads[0].history, [
+    { role: 'user', content: lastUser },
+    { role: 'assistant', content: lastAssistant },
+  ]);
+  assert.deepEqual(payloads[0].dialogSlots, {});
+  assert.ok(bodySizes[0] <= 56 * 1_024);
+  dom.window.close();
+});
+
+test('heartbeat comments without protocol acceptance fail over to the direct route', async () => {
+  const urls = [];
+  const payloads = [];
+  let heartbeatInterval = null;
+  let proxyAborted = false;
+  const answer = 'Ответ восстановлен через резервный маршрут.';
+  const dom = bootWidget({
+    source: withTransportTimeouts({ connect: 20, accept: 45, idle: 35, total: 220 }),
+    fetchImpl: async (url, init) => {
+      urls.push(String(url));
+      payloads.push(JSON.parse(init.body));
+      if (urls.length === 1) {
+        let streamController = null;
+        const body = new ReadableStream({
+          start(controller) {
+            streamController = controller;
+            controller.enqueue(new TextEncoder().encode(': stream-open\n\n'));
+            controller.enqueue(new TextEncoder().encode('data: {"unexpected":true}\n\n'));
+            heartbeatInterval = setInterval(() => {
+              controller.enqueue(new TextEncoder().encode(': keep-alive\n\n'));
+            }, 10);
+          },
+          cancel() {
+            if (heartbeatInterval) clearInterval(heartbeatInterval);
+          },
+        });
+        init.signal.addEventListener('abort', () => {
+          proxyAborted = true;
+          if (heartbeatInterval) clearInterval(heartbeatInterval);
+          try { streamController?.error(new DOMException('Aborted', 'AbortError')); } catch {}
+        }, { once: true });
+        return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      const sse = [
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'direct-failover-log', phase: 'start' } })}`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}`,
+        `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'direct-failover-log', phase: 'complete', products_count: 0 } })}`,
+        'data: [DONE]',
+        '',
+      ].join('\n\n');
+      return new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const started = Date.now();
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Проверка зависшего подтверждения';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  const deadline = Date.now() + 500;
+  while (!visibleMessages(dom).includes(answer) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  assert.equal(urls.length, 2);
+  assert.match(urls[0], /supabase-proxy\.bold-dawn-058f\.workers\.dev/u);
+  assert.match(urls[1], /yngoixmvmxdfxokuafjp\.supabase\.co/u);
+  assert.equal(proxyAborted, true);
+  assert.equal(payloads[0].messageId, payloads[1].messageId);
+  assert.equal(payloads[0].sessionId, payloads[1].sessionId);
+  assert.equal(payloads[0].resumeOnly, false);
+  assert.equal(payloads[1].resumeOnly, false);
+  assert.ok(Date.now() - started < 180, 'comments-only route must not consume the whole turn deadline');
+  assert.match(visibleMessages(dom), new RegExp(answer, 'u'));
+  assert.doesNotMatch(visibleMessages(dom), /ошибка соединения|Ответ получен не полностью/iu);
+  dom.window.close();
+});
+
+test('generic transport failures remain traceable and do not persist an orphan user turn', async () => {
+  const query = 'Запрос при временной недоступности сети';
+  const dom = bootWidget({
+    fetchImpl: async () => new Response(JSON.stringify({ error: 'temporarily_unavailable' }), {
+      status: 503,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = query;
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  const deadline = Date.now() + 500;
+  while (!/ошибка соединения/iu.test(visibleMessages(dom)) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  const visible = visibleMessages(dom);
+  assert.match(visible, /Версия: widget-/u);
+  assert.match(visible, /Код попытки: [0-9a-f-]{36}/u);
+  assert.equal(readState(dom).history.some((item) => item.content === query), false);
+  dom.window.close();
+});
+
+test('late cleanup from a completed turn cannot remove the next turn typing indicator', async () => {
+  let fetchCount = 0;
+  let secondTimer = null;
+  const dom = bootWidget({
+    source: withTransportTimeouts({ connect: 50, accept: 100, idle: 700, total: 1_000 }),
+    fetchImpl: async () => {
+      fetchCount += 1;
+      if (fetchCount === 1) {
+        const first = [
+          `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'first-fast-log', phase: 'start' } })}`,
+          `data: ${JSON.stringify({ choices: [{ delta: { content: 'Первый ответ готов.' } }] })}`,
+          `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'first-fast-log', phase: 'complete', products_count: 0 } })}`,
+          'data: [DONE]',
+          '',
+        ].join('\n\n');
+        return new Response(first, { headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      const body = new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode([
+            `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'second-slow-log', phase: 'start' } })}`,
+            `data: ${JSON.stringify({ choices: [{ delta: { content: 'Второй ответ начался.' } }] })}`,
+            '',
+          ].join('\n\n')));
+          secondTimer = setTimeout(() => {
+            controller.enqueue(new TextEncoder().encode([
+              `data: ${JSON.stringify({ choices: [{ delta: { content: ' Второй ответ готов.' } }] })}`,
+              `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: 'second-slow-log', phase: 'complete', products_count: 0 } })}`,
+              'data: [DONE]',
+              '',
+            ].join('\n\n')));
+          }, 600);
+        },
+        cancel() {
+          if (secondTimer) clearTimeout(secondTimer);
+        },
+      });
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Первый запрос';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  let deadline = Date.now() + 500;
+  while ((dom.window.document.querySelector('#volt-widget-send').disabled || !visibleMessages(dom).includes('Первый ответ готов.')) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  input.value = 'Второй запрос';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  deadline = Date.now() + 300;
+  while (!visibleMessages(dom).includes('Второй ответ начался.') && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 430));
+
+  assert.ok(dom.window.document.getElementById('volt-live-typing'), 'the active turn must retain its own progress indicator');
+
+  deadline = Date.now() + 500;
+  while (!visibleMessages(dom).includes('Второй ответ готов.') && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.equal(fetchCount, 2);
+  assert.match(visibleMessages(dom), /Второй ответ готов\./u);
   dom.window.close();
 });
 
