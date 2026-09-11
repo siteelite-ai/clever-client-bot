@@ -3112,6 +3112,14 @@ async function answerBroadAssortmentRequest(
   const suffix = leaves.length > 0 ? ` В каталоге уже видны разделы: ${leaves.slice(0, 5).join(", ")}.` : "";
   const answer = `Уточните, пожалуйста, какой раздел или тип товара показать: широкий ассортимент нельзя честно представить несколькими случайными карточками.${suffix}`;
   send({ type: "delta", content: answer });
+  if (leaves.length >= 2) {
+    const clarification = executeProposeClarification({
+      question: answer,
+      facet_key: "catalog_section",
+      options: leaves.slice(0, 5).map((value) => ({ value, label: value })),
+    });
+    emitSideEffects(clarification, send);
+  }
   steps.push({
     step: "v3_broad_assortment_preflight",
     ms: Date.now() - t0,
@@ -10182,7 +10190,12 @@ Deno.serve(async (req) => {
         },
         executionController.signal,
       );
-      const startsNewTask = shouldStartNewConversation(boundary);
+      const matchedPendingClarification = Boolean(
+        resolvePendingClarificationChoice(slots, userMessage),
+      );
+      const startsNewTask = shouldStartNewConversation(boundary, {
+        matchedPendingClarification,
+      });
       const effectiveSessionId = startsNewTask ? `session_${crypto.randomUUID()}` : sessionId;
       const effectiveHistory = startsNewTask ? [] : priorHistory;
       const effectiveSlots = startsNewTask ? {} : slots;
@@ -10195,11 +10208,18 @@ Deno.serve(async (req) => {
           confidence: boundary.confidence,
           source: boundary.source,
           reason: boundary.reason,
+          matched_pending_clarification: matchedPendingClarification,
           history_echo_removed: priorHistory.length !== history.length,
         },
       });
       if (startsNewTask) {
         send({ type: "conversation_boundary", mode: "new_task", session_id: effectiveSessionId });
+      } else if (matchedPendingClarification) {
+        // The current request still receives the original slot through
+        // `effectiveSlots`, but the browser must not carry that consumed
+        // choice into an unrelated future turn. A later clarification in this
+        // same response can establish a fresh slot normally.
+        send({ type: "slot_update", slots: {} });
       }
 
       const cache: ProductCache = new Map();
