@@ -9965,6 +9965,12 @@ Deno.serve(async (req) => {
           try { controller.close(); } catch { /* already closed */ }
           return;
         }
+        // This event acknowledges the replay connection itself. It is emitted,
+        // not persisted: the canonical response already owns its original
+        // diagnostic start. Without this acknowledgement the widget's short
+        // protocol-accept timeout can abort while this duplicate waits for the
+        // one in-progress execution to finish, even though heartbeats continue.
+        emit({ type: "diagnostic", log_id: claim.row.id, phase: "start" });
         const replay = await waitForReplayCompletion(supabase, body.messageId, claim.row);
         const events = replayableSseEvents(replay.response_events);
         clearInterval(keepAliveTimer);
