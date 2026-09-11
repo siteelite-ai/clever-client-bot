@@ -385,6 +385,42 @@ export function shouldFinalizeDerivedSelectionSearch(
     (input.provenCriteriaCount > 0 || input.pairedCompatibilityRequired === true);
 }
 
+export interface DirectCustomerFacetSearchInput {
+  intentMode: "select" | "inquire";
+  hasSelectionTarget: boolean;
+  replacementIntent: boolean;
+  namedSeriesRequiresGrounding: boolean;
+  broadAssortmentRequest: boolean;
+  derivedReasoningRequired: boolean;
+  exactCompoundEvidenceRequired: boolean;
+  projectedOptionCount: number;
+  mandatoryUserCriteriaCount: number;
+  unmatchedUserCriteriaCount: number;
+}
+
+/**
+ * Skip a redundant model decision only when the customer-owned contract has
+ * already compiled completely into exact values of the live schema. Product
+ * identity still comes from the grounded selection target, and every result
+ * goes through the normal criteria/title/render gates. Ambiguous, derived,
+ * series, replacement and broad-assortment requests stay on their dedicated
+ * paths.
+ */
+export function shouldQueueDirectCustomerFacetSearch(
+  input: DirectCustomerFacetSearchInput,
+): boolean {
+  return input.intentMode === "select" &&
+    input.hasSelectionTarget &&
+    !input.replacementIntent &&
+    !input.namedSeriesRequiresGrounding &&
+    !input.broadAssortmentRequest &&
+    !input.derivedReasoningRequired &&
+    !input.exactCompoundEvidenceRequired &&
+    input.projectedOptionCount > 0 &&
+    input.mandatoryUserCriteriaCount > 0 &&
+    input.unmatchedUserCriteriaCount === 0;
+}
+
 /**
  * A single object measurement must not be copied into a scalar product facet
  * when the visible derivation actually describes a two-sided fit. In that

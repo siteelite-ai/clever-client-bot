@@ -9,6 +9,7 @@ import {
   shouldContinueSelectionPastOptionalClarification,
   shouldFinalizeDerivedSelectionSearch,
   shouldProjectDerivedScalarMeasurement,
+  shouldQueueDirectCustomerFacetSearch,
   shouldRequireDerivedSelectionReasoning,
 } from "./selection-actionability.ts";
 
@@ -97,6 +98,26 @@ Deno.test("a proven server-issued structured search routes directly to determini
     pairedCompatibilityRequired: true,
   }), true);
   assertEquals(shouldFinalizeDerivedSelectionSearch({ ...base, searchOk: false }), false);
+});
+
+Deno.test("a complete customer-owned live facet contract skips a redundant model decision", () => {
+  const base = {
+    intentMode: "select" as const,
+    hasSelectionTarget: true,
+    replacementIntent: false,
+    namedSeriesRequiresGrounding: false,
+    broadAssortmentRequest: false,
+    derivedReasoningRequired: false,
+    exactCompoundEvidenceRequired: false,
+    projectedOptionCount: 3,
+    mandatoryUserCriteriaCount: 3,
+    unmatchedUserCriteriaCount: 0,
+  };
+  assertEquals(shouldQueueDirectCustomerFacetSearch(base), true);
+  assertEquals(shouldQueueDirectCustomerFacetSearch({ ...base, replacementIntent: true }), false);
+  assertEquals(shouldQueueDirectCustomerFacetSearch({ ...base, derivedReasoningRequired: true }), false);
+  assertEquals(shouldQueueDirectCustomerFacetSearch({ ...base, unmatchedUserCriteriaCount: 1 }), false);
+  assertEquals(shouldQueueDirectCustomerFacetSearch({ ...base, broadAssortmentRequest: true }), false);
 });
 
 Deno.test("two-sided fit reasoning cannot be projected as one scalar product measurement", () => {

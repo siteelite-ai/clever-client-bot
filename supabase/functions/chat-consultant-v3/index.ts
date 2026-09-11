@@ -32,7 +32,7 @@ import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compi
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCatalogEmptySynthesisMessages, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, resolveSelectionSearchEvidence, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection, type SelectionSearchRecoveryAttempt } from "../_shared/v3-tools/selection-search-recovery.ts";
-import { buildDerivedSelectionReasoningMessages, buildDerivedSelectionReasoningToolSchema, hasActionableSelectionContract, hasSelectionMeasurementContext, measuredSelectionContractEvidence, resolveDerivedSelectionReasoning, shouldContinueSelectionPastOptionalClarification, shouldFinalizeDerivedSelectionSearch, shouldProjectDerivedScalarMeasurement, shouldRequireDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
+import { buildDerivedSelectionReasoningMessages, buildDerivedSelectionReasoningToolSchema, hasActionableSelectionContract, hasSelectionMeasurementContext, measuredSelectionContractEvidence, resolveDerivedSelectionReasoning, shouldContinueSelectionPastOptionalClarification, shouldFinalizeDerivedSelectionSearch, shouldProjectDerivedScalarMeasurement, shouldQueueDirectCustomerFacetSearch, shouldRequireDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
 import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, groundSelectionApplicationContext, initialSelectionDeclaration, parseSelectionTarget, projectModelOnlySelectionTargetExtension, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, declaredAliasIsStructurallyCustomerOwned, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
@@ -3735,6 +3735,8 @@ async function runExpertLoop(
   let derivedStructuredSearchPairedCompatibility = false;
   let derivedStructuredSearchResult: (SearchCatalogOk & { tool: "search_catalog" }) | null = null;
   let derivedStructuredSearchFinalizationReady = false;
+  let queuedCustomerFacetSearch: ORToolCall | null = null;
+  let structuredSearchSource: "derived_reasoning" | "customer_facets" | null = null;
   let agentPhase: AgentPhase = "open";
   // A successful discovery may still resolve a broad noun to the wrong live
   // sibling. Let the consultant correct that diagnosis exactly once, before a
@@ -4440,7 +4442,15 @@ async function runExpertLoop(
         : forcedToolNameForAgentPhase(agentPhase, agentToolPolicy);
       let resp: ORResponse;
       try {
-        if (agentPhase === "inquiry_explanation_ready") {
+        if (queuedCustomerFacetSearch) {
+          const queued = queuedCustomerFacetSearch;
+          queuedCustomerFacetSearch = null;
+          resp = {
+            text: "",
+            toolCalls: [queued],
+            finishReason: "server_compiled_customer_facet_search",
+          };
+        } else if (agentPhase === "inquiry_explanation_ready") {
           const evidenceProducts = (freshSearch?.ids ?? [])
             .map((id) => ctx.cache.get(id))
             .filter((product): product is ProductFull => Boolean(product));
@@ -4589,6 +4599,7 @@ async function runExpertLoop(
           if (directSearchArgs) {
             derivedStructuredSearchCallId = crypto.randomUUID();
             derivedStructuredSearchPairedCompatibility = !derivedScalarProjectionAllowed;
+            structuredSearchSource = "derived_reasoning";
             resp.toolCalls = [{
               id: derivedStructuredSearchCallId,
               name: "search_catalog",
@@ -8627,6 +8638,78 @@ async function runExpertLoop(
                 });
               }
             }
+            if (intentMode === "select" && activeSelectionTarget) {
+              const explicitIdentity = !replacementIntent
+                ? explicitPostNominalIdentityFacet(
+                  lastDiscover.facets,
+                  userMessage,
+                  lastDiscover.category.pagetitle,
+                )
+                : null;
+              if (explicitIdentity) {
+                const identityFacet = lastDiscover.facets.find((facet) => facet.key === explicitIdentity.key);
+                const identityCriterion: Criterion = {
+                  key: identityFacet?.caption || explicitIdentity.key,
+                  op: "eq",
+                  value: explicitIdentity.value,
+                  level: "A",
+                };
+                userBackedSearchCriteria = mergeUserBackedCriteria(
+                  userBackedSearchCriteria,
+                  [identityCriterion],
+                );
+                enforcedSearchCriteria = freezeSelectionCriteria(
+                  [...enforcedSearchCriteria, identityCriterion],
+                  "reasoning_projection",
+                );
+                latestRenderCriteria = preserveFrozenSelectionCriteria(latestRenderCriteria);
+              }
+              const directCustomerCriteria = mergeMandatorySelectionCriteria(
+                userBackedSearchCriteria,
+              );
+              const directCustomerProjection = projectCriteriaFacetOptions(
+                directCustomerCriteria,
+                lastDiscover.facets,
+              );
+              const directOptionCount = Object.keys(directCustomerProjection.options).length;
+              if (shouldQueueDirectCustomerFacetSearch({
+                intentMode,
+                hasSelectionTarget: Boolean(activeSelectionTarget),
+                replacementIntent,
+                namedSeriesRequiresGrounding: seriesTurnRequiresGrounding,
+                broadAssortmentRequest,
+                derivedReasoningRequired: selectionReasoningOnlyRequired,
+                exactCompoundEvidenceRequired: Boolean(explicitCompoundMarking || semanticCompoundEvidenceRequired),
+                projectedOptionCount: directOptionCount,
+                mandatoryUserCriteriaCount: directCustomerCriteria.length,
+                unmatchedUserCriteriaCount: directCustomerProjection.unmatched_keys.length,
+              })) {
+                const callId = crypto.randomUUID();
+                derivedStructuredSearchCallId = callId;
+                derivedStructuredSearchPairedCompatibility = false;
+                structuredSearchSource = "customer_facets";
+                queuedCustomerFacetSearch = {
+                  id: callId,
+                  name: "search_catalog",
+                  args: {
+                    mode: "by_filter",
+                    ...(lastDiscover.leaf_categories.length > 0
+                      ? { category_in: lastDiscover.leaf_categories.map(({ pagetitle }) => pagetitle) }
+                      : { category: lastDiscover.category.pagetitle }),
+                    options: directCustomerProjection.options,
+                    per_page: 50,
+                  },
+                };
+                steps.push({
+                  step: "v3_customer_facet_search_queued",
+                  ms: now(),
+                  meta: {
+                    criteria: directCustomerCriteria,
+                    option_keys: Object.keys(directCustomerProjection.options),
+                  },
+                });
+              }
+            }
           }
         }
 
@@ -8824,6 +8907,7 @@ async function runExpertLoop(
                   candidates: ids.length,
                   criteria: provenSearchCriteria.length,
                   paired_compatibility: derivedStructuredSearchPairedCompatibility,
+                  source: structuredSearchSource,
                 },
               });
             }
