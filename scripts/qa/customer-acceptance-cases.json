@@ -518,9 +518,9 @@
             "require_selection_criteria_groups": [
               ["Бренд", "brand", "vendor"],
               ["Schneider"],
-              ["Номинальный ток", "current"],
+              ["Номинальный ток", "current", "ампер"],
               ["16"],
-              ["Количество полюсов", "poles"],
+              ["Количество полюсов", "poles", "полюс"],
               ["3"]
             ],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]

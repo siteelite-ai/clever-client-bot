@@ -81,6 +81,25 @@ Deno.test("rendered-card consensus never claims a trait that differs across card
   assertEquals(projectCommonRenderedUserCriteria(products, "Нужно 16 ампер"), []);
 });
 
+Deno.test("rendered-card consensus uses common title measurements when compact cards omit traits", () => {
+  const products = ["one", "two"].map((id) => ({
+    id,
+    pagetitle: `Device ${id} 3P 16A`,
+    vendor: "ACME Electric",
+    price: 100,
+    stock: "in_stock" as const,
+    short_traits: [],
+  }));
+  assertEquals(
+    projectCommonRenderedUserCriteria(products, "Покажи ACME на 16 ампер и на 3 полюса"),
+    [
+      { key: "Бренд", op: "eq", value: "ACME Electric", level: "A" },
+      { key: "ампер", op: "eq", value: 16, unit: "a", level: "A" },
+      { key: "полюса", op: "eq", value: 3, unit: "pole", level: "A" },
+    ],
+  );
+});
+
 Deno.test("selection criteria plan is immutable and cannot lose an earlier mandatory requirement", () => {
   const first = extendSelectionCriteriaPlan(null, [
     { key: "Live output facet", op: "range", value: [3750, 5000], unit: "lm", level: "A" },

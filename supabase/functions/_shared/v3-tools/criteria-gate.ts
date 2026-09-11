@@ -21,6 +21,7 @@
 //             для рекомендательного уровня B остаётся только в отчёте.
 
 import type { ProductRef } from "./types.ts";
+import { extractClientQuantities, normalizeUnit } from "./criteria-consistency.ts";
 
 export type CriteriaOp = "eq" | "min" | "max" | "range";
 
@@ -151,13 +152,15 @@ function parsedProductTraits(product: ProductRef): Array<{ label: string; value:
 
 function renderedValueIsCustomerOwned(label: string, value: string, userMessage: string): boolean {
   if (stringEvidenceMatches(value, userMessage)) return true;
+  const valueStems = normalizeKey(value).split(/\s+/u).map(looseStem).filter((stem) => stem.length >= 4);
+  const userStems = normalizeKey(userMessage).split(/\s+/u).map(looseStem);
+  if (valueStems.some((stem) => userStems.some((candidate) => candidate === stem))) return true;
   const valueSpan = parseNumSpan(value);
   if (!valueSpan || valueSpan.min !== valueSpan.max) return false;
   const numberPattern = String(valueSpan.min).replace(".", "[.,]");
   if (!new RegExp(`(?<!\\d)${numberPattern}(?!\\d)`, "u").test(userMessage)) return false;
 
   const genericLabelStems = new Set(["номинал", "максимал", "минимал", "количеств", "значен"]);
-  const userStems = normalizeKey(userMessage).split(/\s+/u).map(looseStem);
   const labelGrounded = normalizeKey(label).split(/\s+/u)
     .map(looseStem)
     .filter((stem) => stem.length >= 4 && !genericLabelStems.has(stem))
@@ -178,6 +181,17 @@ function renderedValueIsCustomerOwned(label: string, value: string, userMessage:
     family.some((unit) => valueTokens.some((token) => token === unit || token.startsWith(unit))) &&
     family.some((unit) => userTokens.some((token) => token === unit || token.startsWith(unit)))
   );
+}
+
+function canonicalRenderedUnit(value: string): string {
+  const unit = normalizeUnit(value);
+  const aliases: Record<string, string> = {
+    а: "a", amp: "a", amps: "a", ампер: "a", ампера: "a", амперов: "a",
+    в: "v", volt: "v", volts: "v", вольт: "v", вольта: "v", вольтов: "v",
+    вт: "w", watt: "w", watts: "w", ватт: "w", ватта: "w", ваттов: "w",
+    ва: "va", полюс: "pole", полюса: "pole", полюсов: "pole", p: "pole", п: "pole",
+  };
+  return aliases[unit] ?? unit;
 }
 
 /**
@@ -206,6 +220,31 @@ export function projectCommonRenderedUserCriteria(
       key: first.label,
       op: "eq",
       value: parseNumSpan(first.value)?.min ?? first.value,
+      level: "A",
+    });
+  }
+  for (const quantity of extractClientQuantities(userMessage)) {
+    if (criteria.some((criterion) =>
+      criterion.op === "eq" &&
+      !Array.isArray(criterion.value) &&
+      Number(criterion.value) === quantity.value
+    )) continue;
+    const expectedUnit = canonicalRenderedUnit(quantity.unit);
+    const shared = products.every((product) =>
+      extractClientQuantities([
+        product.pagetitle,
+        ...(product.short_traits ?? []),
+      ].join(" ")).some((candidate) =>
+        candidate.value === quantity.value &&
+        canonicalRenderedUnit(candidate.unit) === expectedUnit
+      )
+    );
+    if (!shared) continue;
+    criteria.push({
+      key: quantity.unit,
+      op: "eq",
+      value: quantity.value,
+      unit: expectedUnit,
       level: "A",
     });
   }
