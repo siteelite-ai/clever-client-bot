@@ -35,6 +35,20 @@ Deno.test("quoted requirements and application context do not become aliases", (
     ),
     null,
   );
+  assertEquals(
+    extractDeclaredCatalogAlias(
+      "Покажи автоматические выключатели Schneider на 16 ампер",
+      "Ищу автоматические выключатели бренда Schneider и проверяю номинал.",
+    ),
+    null,
+  );
+  assertEquals(
+    extractDeclaredCatalogAlias(
+      "Найди двойные черные розетки электрические",
+      "Ищу электрические розетки с двумя разъёмами чёрного цвета.",
+    ),
+    null,
+  );
 });
 
 Deno.test("the consultant cannot invent an alias phrase absent from the customer request", () => {
