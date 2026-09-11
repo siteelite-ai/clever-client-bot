@@ -1,5 +1,17 @@
-import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "./selection-search-recovery.ts";
+import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import { buildAnchorMissingRecoveryQueries, buildCatalogEmptySynthesisMessages, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "./selection-search-recovery.ts";
+
+Deno.test("catalog-empty synthesis preserves expert reasoning without authorizing product facts", () => {
+  const messages = buildCatalogEmptySynthesisMessages(
+    "Подбери устройство для моей задачи",
+    "Нужно проверить расчетную нагрузку и оставить запас.",
+  );
+  assertEquals(messages.length, 2);
+  assertStringIncludes(messages[0].content, "полезное экспертное объяснение");
+  assertStringIncludes(messages[0].content, "не называй цены, бренды, артикулы и ссылки");
+  assertStringIncludes(messages[1].content, "<customer_request>");
+  assertStringIncludes(messages[1].content, "<safe_reasoning_draft>");
+});
 
 const facets = [
   { key: "feature", caption: "Функция", type: "string", unit: null, values: [{ value: "Да" }] },

@@ -31,7 +31,7 @@ import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/cr
 import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, demoteUnfrozenRenderCriteria, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
-import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
+import { buildAnchorMissingRecoveryQueries, buildCatalogEmptySynthesisMessages, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { buildDerivedSelectionReasoningMessages, hasActionableSelectionContract, hasSelectionMeasurementContext, measuredSelectionContractEvidence, shouldContinueSelectionPastOptionalClarification, shouldRequireDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
 import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, groundSelectionApplicationContext, initialSelectionDeclaration, parseSelectionTarget, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, declaredAliasIsStructurallyCustomerOwned, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
@@ -1890,6 +1890,7 @@ const LLM_TIMEOUT_INTRO_MS = 30_000;
 const LLM_TIMEOUT_INTRO_RETRY_MS = 45_000;
 const LLM_TIMEOUT_TOOL_DECISION_MS = 30_000;
 const LLM_TIMEOUT_FINAL_RENDER_MS = 110_000;
+const LLM_TIMEOUT_EMPTY_SYNTHESIS_MS = 15_000;
 
 type LLMPhase = "intro" | "tool_decision" | "final_render";
 
@@ -10127,6 +10128,62 @@ async function runExpertLoop(
                 label: requirement.label,
               })),
             },
+          });
+        }
+      }
+    }
+
+    // A forced catalog phase may consume the complete agent loop without ever
+    // producing visible prose. Preserve the consultant role with one compact,
+    // tool-free synthesis. Product facts stay closed and the deterministic
+    // catalog-empty status is appended below.
+    if (
+      productsRendered === 0 &&
+      intentMode === "select" &&
+      catalogSearchAttempted &&
+      !finalText.trim() &&
+      !turnController.signal.aborted
+    ) {
+      const safeDraft = sanitizeIntermediateReasoning(assistantReasoning);
+      const catalogFreeDraft = safeDraft.suppressed
+        ? ""
+        : stripUnrenderedCatalogFactSegments(safeDraft.text).text;
+      const synthesisTimeoutMs = boundedAgentStepTimeout(
+        LLM_TIMEOUT_EMPTY_SYNTHESIS_MS,
+        now(),
+        TURN_SOFT_DEADLINE_MS,
+        MIN_AGENT_STEP_BUDGET_MS,
+      );
+      if (synthesisTimeoutMs !== null) {
+        try {
+          const synthesis = await callOpenRouter(
+            apiKey,
+            buildCatalogEmptySynthesisMessages(userMessage, catalogFreeDraft),
+            turnController.signal,
+            synthesisTimeoutMs,
+            "tool_decision",
+            [],
+            null,
+          );
+          const guarded = sanitizeIntermediateReasoning(synthesis.text);
+          const catalogFree = guarded.suppressed
+            ? { text: "", removed: [] as string[] }
+            : stripUnrenderedCatalogFactSegments(guarded.text);
+          const visibleReasoning = catalogFree.text.trim();
+          if (visibleReasoning) {
+            send({ type: "delta", content: visibleReasoning });
+            finalText = visibleReasoning;
+            steps.push({
+              step: "v3_catalog_empty_reasoning_synthesized",
+              ms: now(),
+              meta: { chars: visibleReasoning.length, removed_catalog_segments: catalogFree.removed.length },
+            });
+          }
+        } catch (error) {
+          steps.push({
+            step: "v3_catalog_empty_reasoning_synthesis_failed",
+            ms: now(),
+            meta: { error: String((error as Error)?.message ?? error) },
           });
         }
       }
