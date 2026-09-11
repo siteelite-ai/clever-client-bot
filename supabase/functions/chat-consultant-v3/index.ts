@@ -76,6 +76,7 @@ import {
 } from "../_shared/v3-tools/search-filter-guard.ts";
 import {
   categoryLabelIsAffirmedAsTarget,
+  discoveryNounIsGrounded,
   filterProductsByGroundedCategoryTargets,
   filterProductsByNamedSeries,
   groundedCategoryRecoveryQueries,
@@ -4889,6 +4890,7 @@ async function runExpertLoop(
         // canonical guards modify it. A later recovery may use these strings,
         // but live title/criteria evidence remains mandatory.
         if (tc.name === "discover_category") {
+          const discoveryEvidence = `${userMessage}\n${initialSelectionDeclaration(firstAssistantText || assistantReasoning)}`;
           if (intentMode === "select" && typeof tc.args.noun === "string") {
             const nounGuard = guardDiscoveryNounBySelectionTarget(
               tc.args.noun,
@@ -4908,12 +4910,18 @@ async function runExpertLoop(
               });
             }
           }
-          rememberCompoundRecoveryHint(tc.args.noun);
+          if (
+            typeof tc.args.noun === "string" &&
+            discoveryNounIsGrounded(tc.args.noun, discoveryEvidence)
+          ) {
+            rememberCompoundRecoveryHint(tc.args.noun);
+          }
           if (
             !initialSelectionDiscoveryNoun &&
             intentMode === "select" &&
             typeof tc.args.noun === "string" &&
-            tc.args.noun.trim()
+            tc.args.noun.trim() &&
+            discoveryNounIsGrounded(tc.args.noun, discoveryEvidence)
           ) {
             initialSelectionDiscoveryNoun = tc.args.noun.trim();
           }
@@ -5624,6 +5632,27 @@ async function runExpertLoop(
         let gateShortCircuit: ToolResult | null = null;
         let selfRequery:
           | { query: string; ids: string[]; total: number } | null = null;
+
+        if (
+          tc.name === "discover_category" &&
+          intentMode === "select" &&
+          typeof tc.args.noun === "string"
+        ) {
+          const discoveryEvidence = `${userMessage}\n${initialSelectionDeclaration(firstAssistantText || assistantReasoning)}`;
+          if (!discoveryNounIsGrounded(tc.args.noun, discoveryEvidence)) {
+            gateShortCircuit = {
+              tool: "discover_category",
+              ok: false,
+              error_code: "category_not_found",
+              message: "Категория отклонена: выбранный класс товара не заявлен пользователем и не следует из исходного рассуждения. Повтори discover_category с точным классом из запроса без подмены соседней категорией.",
+            } as unknown as ToolResult;
+            steps.push({
+              step: "v3_discovery_noun_not_grounded",
+              ms: now(),
+              meta: { rejected: tc.args.noun },
+            });
+          }
+        }
 
         if (tc.name === "propose_clarification") {
           const clarificationArgs = tc.args as Partial<ProposeClarificationInput>;
@@ -7032,6 +7061,31 @@ async function runExpertLoop(
 
         send({ type: "tool_event", tool: tc.name, phase: "start", summary: `${tc.name}…` });
         let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
+
+        if (tc.name === "discover_category" && result.ok && intentMode === "select") {
+          const discoveryEvidence = `${userMessage}\n${initialSelectionDeclaration(firstAssistantText || assistantReasoning)}`;
+          const requestedNoun = String(runArgs.noun ?? "").trim();
+          const resolvedCategory = (result as DiscoverCategoryOk).category?.pagetitle?.trim() ?? "";
+          const requestedGrounded = discoveryNounIsGrounded(requestedNoun, discoveryEvidence);
+          const resolvedGrounded = discoveryNounIsGrounded(resolvedCategory, discoveryEvidence);
+          const preservesRequested = !guardDiscoveryNounBySelectionTarget(
+            resolvedCategory,
+            requestedNoun,
+          ).changed;
+          if (!resolvedGrounded && !(requestedGrounded && preservesRequested)) {
+            result = {
+              tool: "discover_category",
+              ok: false,
+              error_code: "category_not_found",
+              message: "Каталог сопоставил запрос с соседней категорией, не подтвержденной запросом пользователя. Используй исходный класс товара или дай честный ответ без карточек.",
+            } as unknown as ToolResult;
+            steps.push({
+              step: "v3_discovery_result_target_mismatch",
+              ms: now(),
+              meta: { requested: requestedNoun, resolved: resolvedCategory },
+            });
+          }
+        }
 
         if (establishesCatalogAttempt({ tool: tc.name, ok: result.ok })) {
           catalogSearchAttempted = true;

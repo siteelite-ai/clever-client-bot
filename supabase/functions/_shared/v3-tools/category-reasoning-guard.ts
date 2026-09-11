@@ -133,6 +133,22 @@ export function categoryLabelIsAffirmedAsTarget(label: string, evidence: string)
   return tokens.length > 0 && tokens.every((token) => evidenceAffirmsToken(evidence, token));
 }
 
+/** A short product acronym is still a grounded class when it appears as one
+ * complete token in customer/consultant evidence. Longer labels retain the
+ * stricter morphological target-side check above. */
+export function discoveryNounIsGrounded(label: string, evidence: string): boolean {
+  if (categoryLabelIsAffirmedAsTarget(label, evidence)) return true;
+  const raw = String(label ?? "").trim();
+  const normalized = norm(label);
+  const acronymLike = normalized.length >= 2 &&
+    normalized.length <= 6 &&
+    !normalized.includes(" ") &&
+    raw === raw.toLocaleUpperCase("ru-RU") &&
+    raw !== raw.toLocaleLowerCase("ru-RU");
+  if (!acronymLike) return false;
+  return norm(evidence).split(" ").includes(normalized);
+}
+
 function leafSupported(leaf: string, umbrella: string, evidence: string): boolean {
   const distinctive = distinctiveLeafTokens(leaf, umbrella);
   // A leaf whose name is indistinguishable from the umbrella provides no

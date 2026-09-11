@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   categoryLabelIsAffirmedAsTarget,
+  discoveryNounIsGrounded,
   filterProductsByGroundedCategoryTargets,
   groundedCategoryRecoveryQueries,
   groundedTokenRecoveryQueries,
@@ -23,6 +24,24 @@ Deno.test("discovery noun may broaden while preserving the frozen class base", (
   assertEquals(
     guardDiscoveryNounBySelectionTarget("Светильники", "бытовой светильник"),
     { noun: "Светильники", changed: false, reason: "preserves_target" },
+  );
+});
+
+Deno.test("explicit product acronym grounds the discovery noun", () => {
+  assert(discoveryNounIsGrounded("ИБП", "Какой ИБП подойдет для газового котла?"));
+});
+
+Deno.test("related sibling category is not grounded by an acronym request", () => {
+  assertEquals(
+    discoveryNounIsGrounded("Стабилизаторы", "Какой ИБП подойдет для газового котла?"),
+    false,
+  );
+});
+
+Deno.test("a rejected category mention is not positive discovery evidence", () => {
+  assertEquals(
+    discoveryNounIsGrounded("Стабилизаторы", "Стабилизатор не подходит, нужен ИБП."),
+    false,
   );
 });
 
