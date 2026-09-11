@@ -51,6 +51,16 @@ export interface BooleanFilterFallbackResult {
   removed: Array<{ key: string; value: string }>;
 }
 
+/** A customer-owned scalar/cardinality requirement compiled by the visible
+ * request boundary. Keeping this as a structural interface avoids coupling
+ * the facet guard to any product vocabulary. */
+export interface ExplicitVisibleRequirement {
+  op?: "eq" | "min" | "max";
+  value?: string | number;
+  unit?: string;
+  matches: (evidence: string) => boolean;
+}
+
 export interface ReplacementIdentityFilterResult {
   args: Record<string, unknown>;
   removed: Array<{ key: string; values: string[]; kind: "brand" | "model" }>;
@@ -331,6 +341,7 @@ function numericFacetValueConflictsWithUserMeasurement(
   value: string,
   facet: SearchFacet,
   userEvidence: string,
+  declaredEvidence: string = userEvidence,
 ): boolean {
   const exactNumber = norm(value).match(/^\d+(?:[.,]\d+)?$/u)?.[0];
   if (!exactNumber) return false;
@@ -341,10 +352,26 @@ function numericFacetValueConflictsWithUserMeasurement(
     ...String(facet.caption ?? "").split(",").slice(1)
       .flatMap((suffix) => suffix.match(/[a-zа-я°]{1,10}[²³]?\d?/giu) ?? []),
   ].map(canonicalMeasurementUnit).filter(Boolean));
-  if (expectedUnits.size === 0) return false;
   const sameScalar = extractClientQuantities(userEvidence)
     .filter((quantity) => quantity.value === scalar);
   if (sameScalar.length === 0) return false;
+  // A scalar that the customer supplied only as a physical measurement may
+  // not be projected onto an unlabelled/unitless catalog axis. Otherwise a
+  // nearby product word can relabel `25 m²` as `25 LEDs`, poles, pieces, etc.
+  // Genuine unitless counts remain available because they are not returned by
+  // extractClientQuantities unless the number is followed by a measurement.
+  if (expectedUnits.size === 0) {
+    const facetTokens = norm(facet.caption ?? facet.key).split(" ").filter((token) => token.length >= 3);
+    const declaredUnitNamesTheFacet = extractClientQuantities(declaredEvidence)
+      .filter((quantity) => quantity.value === scalar)
+      .some((quantity) => {
+        const unit = norm(quantity.unit);
+        return facetTokens.some((token) =>
+          token === unit || tokensMatchByStem(token, unit)
+        );
+      });
+    return !facetMeaningIsFullyEvidenced(facet, declaredEvidence) && !declaredUnitNamesTheFacet;
+  }
   return sameScalar.every((quantity) =>
     !expectedUnits.has(canonicalMeasurementUnit(quantity.unit))
   );
@@ -353,6 +380,22 @@ function numericFacetValueConflictsWithUserMeasurement(
 function sameFacetValue(left: string, right: string): boolean {
   if (norm(left) === norm(right)) return true;
   return /\d/.test(left + right) && codeNorm(left) === codeNorm(right);
+}
+
+function visibleRequirementAuthorizesFacetValue(
+  facet: SearchFacet,
+  value: string,
+  requirements: ExplicitVisibleRequirement[],
+): boolean {
+  const canonical = norm(value);
+  if (!canonical) return false;
+  const evidence = `${facet.caption || facet.key}: ${value}${facet.unit ? ` ${facet.unit}` : ""}`;
+  return requirements.some((requirement) =>
+    requirement?.op === "eq" &&
+    requirement.value !== undefined &&
+    sameFacetValue(String(requirement.value), value) &&
+    requirement.matches(evidence)
+  );
 }
 
 /**
@@ -382,8 +425,16 @@ function evidenceStatus(value: string, userEvidence: string): "affirmed" | "nega
     from = index + Math.max(1, wanted.length);
   }
   if (occurrences.length === 0) {
-    const valueTokens = wanted.split(" ").filter((token) => token.length >= 4);
-    const evidenceTokens = evidence.split(" ").filter((token) => token.length >= 4);
+    const structuralTokens = new Set([
+      "для", "или", "and", "or", "with", "без", "при", "под", "над",
+      "тип", "вида", "вид", "класс", "серия", "вариант",
+    ]);
+    const valueTokens = wanted.split(" ").filter((token) =>
+      !structuralTokens.has(token) && (token.length >= 3 || /\d/u.test(token))
+    );
+    const evidenceTokens = evidence.split(" ").filter((token) =>
+      !structuralTokens.has(token) && (token.length >= 3 || /\d/u.test(token))
+    );
     if (
       valueTokens.length > 0 &&
       valueTokens.every((token) => evidenceTokens.some((candidate) => tokensMatchByStem(token, candidate)))
@@ -444,8 +495,20 @@ function visualSingleLetter(value: string): string {
 function explicitlyAffirmedByFacetReasoning(value: string, evidence: string): boolean {
   const normalized = norm(value);
   const evidenceTokens = norm(evidence).split(" ");
-  const shortCodes = normalized.split(" ").filter((token) => token.length === 1 && /\p{L}/u.test(token));
-  if (shortCodes.length > 0 && shortCodes.some((code) => {
+  const valueTokens = normalized.split(" ").filter(Boolean);
+  const shortCodes = valueTokens.filter((token) => token.length === 1 && /\p{L}/u.test(token));
+  const nonCodeTokens = valueTokens.filter((token) => !shortCodes.includes(token));
+  // A one-letter shortcut is valid only for a genuinely code-shaped value
+  // such as `Type C`. Previously any one-letter word inside a compound live
+  // value activated the shortcut: the conjunction `и` in a phrase like
+  // `настольные и напольные` was then mistaken for a technical code and the
+  // whole unrelated class became "proven". Structural code labels are the
+  // only allowed companions; descriptive compound values must pass the full
+  // token-by-token evidence check below.
+  const codeOnlyValue = shortCodes.length === 1 && nonCodeTokens.every((token) =>
+    /^(?:тип|type|класс|class|характеристика|curve)$/u.test(token)
+  );
+  if (codeOnlyValue && shortCodes.some((code) => {
     const wanted = visualSingleLetter(code);
     return evidenceTokens.some((token) => token.length === 1 && /\p{L}/u.test(token) && visualSingleLetter(token) === wanted);
   })) {
@@ -467,6 +530,19 @@ function facetMeaningIsEvidenced(
   );
   return facetTokens.some((facetToken) =>
     evidenceTokens.some((token) => tokensMatchByStem(facetToken, token))
+  );
+}
+
+function facetMeaningIsFullyEvidenced(
+  facet: SearchFacet,
+  evidence: string,
+): boolean {
+  const facetTokens = norm(facet.caption ?? facet.key)
+    .split(" ")
+    .filter((token) => token.length >= 4);
+  const evidenceTokens = norm(evidence).split(" ").filter((token) => token.length >= 4);
+  return facetTokens.length > 0 && facetTokens.every((facetToken) =>
+    evidenceTokens.some((token) => token === facetToken || tokensMatchByStem(facetToken, token))
   );
 }
 
@@ -497,7 +573,7 @@ export function projectExplicitReasoningFacetValues(
     const candidates = facet.values.filter((candidate) => {
       if (!isAtomicFacetValue(candidate.value)) return false;
       if (contradictedByUser(candidate.value, userEvidence)) return false;
-      if (numericFacetValueConflictsWithUserMeasurement(candidate.value, facet, userEvidence)) return false;
+      if (numericFacetValueConflictsWithUserMeasurement(candidate.value, facet, userEvidence, declaredReasoning)) return false;
       if (!numericFacetValueIsLocallyEvidenced(candidate.value, facet, declaredReasoning)) return false;
       if (!facetStateQualifierIsUserBacked(facet, declaredReasoning)) return false;
       return explicitlyAffirmedByFacetReasoning(candidate.value, declaredReasoning);
@@ -550,7 +626,11 @@ function numericFacetValueIsLocallyEvidenced(
     // contradictory even if the literal number appears in the request.
     if (directional) return false;
     const literal = exactNumber.replace(/[.,]/u, "[.,]");
-    const measurement = new RegExp(`(?<![a-zа-я0-9])${literal}\\s*([a-zа-я°]{1,10}[²³]?\\d?)(?![a-zа-я])`, "giu");
+    const simpleUnit = String.raw`[a-zа-я°]{1,10}[²³]?\d?`;
+    const measurement = new RegExp(
+      `(?<![a-zа-я0-9])${literal}\\s*(${simpleUnit}(?:(?:/|\\s+на\\s+)${simpleUnit})?)(?![a-zа-я])`,
+      "giu",
+    );
     for (let match; (match = measurement.exec(String(evidence ?? ""))) !== null;) {
       if (expectedUnits.has(normalizeUnit(match[1]))) return true;
     }
@@ -663,6 +743,7 @@ export function guardSearchFilters(
   declaredReasoning: string,
   userEvidence: string = declaredReasoning,
   inferenceEvidence: string = declaredReasoning,
+  explicitVisibleRequirements: ExplicitVisibleRequirement[] = [],
 ): SearchFilterGuardResult {
   if (args.mode !== "by_filter") {
     return { args, kept: [], user_backed: [], inferred: [], subsumed: [], dropped: [] };
@@ -701,12 +782,17 @@ export function guardSearchFilters(
         dropped.push({ key, value: canonical, reason: "non_atomic_value" });
         continue;
       }
-      if (numericFacetValueConflictsWithUserMeasurement(canonical, facet, userEvidence)) {
+      if (numericFacetValueConflictsWithUserMeasurement(canonical, facet, userEvidence, declaredReasoning)) {
         unitConflictKeys.add(canonicalKey);
         dropped.push({ key, value: canonical, reason: "unit_conflict" });
         continue;
       }
-      if (!numericFacetValueIsLocallyEvidenced(canonical, facet, declaredReasoning)) {
+      const visibleRequirementBacked = visibleRequirementAuthorizesFacetValue(
+        facet,
+        canonical,
+        explicitVisibleRequirements,
+      );
+      if (!visibleRequirementBacked && !numericFacetValueIsLocallyEvidenced(canonical, facet, declaredReasoning)) {
         dropped.push({ key, value: canonical, reason: "not_declared_in_reasoning" });
         continue;
       }
@@ -732,7 +818,7 @@ export function guardSearchFilters(
       const labelReasoningStatus = isAffirmativeBoolean
         ? evidenceStatus(facetLabel, declaredReasoning)
         : "absent";
-      const status = literalValueStatus === "affirmed" || labelReasoningStatus === "affirmed"
+      const status = visibleRequirementBacked || literalValueStatus === "affirmed" || labelReasoningStatus === "affirmed"
         ? "affirmed"
         : literalValueStatus === "negated" || labelReasoningStatus === "negated"
           ? "negated"
@@ -750,11 +836,38 @@ export function guardSearchFilters(
       }
       kept.push({ key: canonicalKey, value: canonical });
       if (
-        explicitlyAffirmedByUser(canonical, userEvidence) &&
-          facetStateQualifierIsUserBacked(facet, userEvidence) ||
-        isAffirmativeBoolean && labelUserStatus === "affirmed"
+        visibleRequirementBacked ||
+        (explicitlyAffirmedByUser(canonical, userEvidence) &&
+          facetStateQualifierIsUserBacked(facet, userEvidence)) ||
+        (isAffirmativeBoolean && labelUserStatus === "affirmed")
       ) userBacked.push({ key: canonicalKey, value: canonical });
     }
+  }
+
+
+  // Scalar language such as "double" is normalized before catalog discovery
+  // and therefore need not contain the literal stored value `2`. Project it
+  // only when the requirement's own matcher identifies exactly one live
+  // facet/value pair. This preserves omitted count/length filters without
+  // letting a bare number activate poles, pack size, power, or another axis.
+  for (const requirement of explicitVisibleRequirements) {
+    if (requirement?.op !== "eq" || requirement.value === undefined) continue;
+    const matches = facets.flatMap((facet) => {
+      if (nextOptions[facet.key]?.length || isReplacementIdentityFacet(facet)) return [];
+      return facet.values.flatMap(({ value }) =>
+        isAtomicFacetValue(value) &&
+          !numericFacetValueConflictsWithUserMeasurement(value, facet, userEvidence, declaredReasoning) &&
+          visibleRequirementAuthorizesFacetValue(facet, value, [requirement])
+          ? [{ key: facet.key, value }]
+          : []
+      );
+    });
+    if (matches.length !== 1) continue;
+    const item = matches[0];
+    nextOptions[item.key] = [item.value];
+    kept.push(item);
+    userBacked.push(item);
+    inferred.push(item);
   }
 
   // Complete, but never guess, facet filters that the customer stated
@@ -782,7 +895,7 @@ export function guardSearchFilters(
     const evidenced = facet.values.filter((candidate) => {
       const normalized = norm(candidate.value);
       if (!isAtomicFacetValue(candidate.value)) return false;
-      if (numericFacetValueConflictsWithUserMeasurement(candidate.value, facet, userEvidence)) return false;
+      if (numericFacetValueConflictsWithUserMeasurement(candidate.value, facet, userEvidence, declaredReasoning)) return false;
       if (!normalized || ["да", "нет", "есть", "отсутствует"].includes(normalized)) return false;
       if (!/[a-zа-я]/iu.test(normalized)) {
         return /^\d+(?:[.,]\d+)?$/u.test(normalized) &&
@@ -824,7 +937,7 @@ export function guardSearchFilters(
       if (!numericFacetValueIsLocallyEvidenced(candidate.value, facet, inferenceEvidence)) {
         return false;
       }
-      if (numericFacetValueConflictsWithUserMeasurement(candidate.value, facet, userEvidence)) return false;
+      if (numericFacetValueConflictsWithUserMeasurement(candidate.value, facet, userEvidence, inferenceEvidence)) return false;
       return explicitlyAffirmedByFacetReasoning(candidate.value, inferenceEvidence);
     });
     if (evidenced.length !== 1) continue;

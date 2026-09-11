@@ -429,6 +429,13 @@
           "expect": {
             "min_products": 2,
             "require_every_product_pair_around": 12,
+            "require_selection_criteria_groups": [
+              ["\"op\":\"min\""],
+              ["\"op\":\"max\""],
+              ["\"value\":12"],
+              ["\"exclusive\":true"]
+            ],
+            "forbid_assistant_text": ["24 мм", "36 мм", "среднестенн"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }
@@ -444,6 +451,12 @@
           "expect": {
             "min_products": 1,
             "require_every_product_pair_around": 10,
+            "require_selection_criteria_groups": [
+              ["\"op\":\"min\""],
+              ["\"op\":\"max\""],
+              ["\"value\":10"],
+              ["\"exclusive\":true"]
+            ],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }

@@ -626,6 +626,47 @@ Deno.test("projected measured range is not demoted by comfort wording", () => {
   assertEquals(contract.options, { svetovoy_potok: ["3750", "4000", "5000"] });
 });
 
+Deno.test("an exact live application class remains mandatory while colour stays advisory", () => {
+  const contract = compileMeasuredReasoningSearchContract(
+    [
+      { key: "Вид исполнения", op: "eq", value: "Внутренний класс", level: "A" },
+      { key: "Цвет", op: "eq", value: "Нейтральный", level: "A" },
+    ],
+    "Для указанного помещения рекомендую категорию «Внутренний класс» с нейтральным цветом.",
+    [],
+    [
+      { key: "kind", caption: "Вид исполнения", type: "checkbox", unit: null, values: [{ value: "Внутренний класс" }] },
+      { key: "colour", caption: "Цвет", type: "checkbox", unit: null, values: [{ value: "Нейтральный" }] },
+    ],
+  );
+
+  assertEquals(contract.mandatory_criteria, [
+    { key: "Вид исполнения", op: "eq", value: "Внутренний класс", level: "A" },
+  ]);
+  assertEquals(contract.options, { kind: ["Внутренний класс"] });
+  assertEquals(contract.demoted, ["Цвет"]);
+});
+
+Deno.test("a compound canonical class containing semicolons remains one obligation", () => {
+  const contract = compileMeasuredReasoningSearchContract(
+    [{ key: "Вид исполнения", op: "eq", value: "первый; второй; третий", level: "A" }],
+    "По классу «Вид исполнения» выбираю «первый; второй; третий».",
+    [],
+    [{
+      key: "kind",
+      caption: "Вид исполнения",
+      type: "checkbox",
+      unit: null,
+      values: [{ value: "первый; второй; третий" }],
+    }],
+  );
+
+  assertEquals(contract.mandatory_criteria, [
+    { key: "Вид исполнения", op: "eq", value: "первый; второй; третий", level: "A" },
+  ]);
+  assertEquals(contract.options, { kind: ["первый; второй; третий"] });
+});
+
 Deno.test("advisory catalog filters are removed even when no measured range can be projected", () => {
   const contract = compileMeasuredReasoningSearchContract(
     [

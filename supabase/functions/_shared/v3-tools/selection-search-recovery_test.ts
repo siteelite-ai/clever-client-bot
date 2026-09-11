@@ -1,5 +1,5 @@
 import { assert, assertEquals, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { buildAnchorMissingRecoveryQueries, buildCatalogEmptySynthesisMessages, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "./selection-search-recovery.ts";
+import { buildAnchorMissingRecoveryQueries, buildCatalogEmptySynthesisMessages, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, resolveSelectionSearchEvidence, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "./selection-search-recovery.ts";
 
 Deno.test("catalog-empty synthesis preserves expert reasoning without authorizing product facts", () => {
   const messages = buildCatalogEmptySynthesisMessages(
@@ -42,6 +42,25 @@ Deno.test("recovery plan first preserves exact filters and removes only category
     per_page: 10,
   });
   assertEquals(plan[0].revalidate, ["selection_target", "mandatory_criteria", "compatibility", "budget"]);
+});
+
+Deno.test("a recovery pool replaces rather than inherits the failed request evidence", () => {
+  const original = [{ key: "Форма", op: "eq" as const, value: "капсула", level: "A" as const }];
+  const attempt = buildSelectionSearchRecoveryPlan({
+    failed_args: {
+      mode: "by_filter",
+      category_in: ["Live leaf"],
+      options: { feature: ["Да"] },
+    },
+    facets,
+    leaf_categories: ["Live leaf"],
+    reasoning_criteria: original,
+    compatibility_shaped: false,
+  })[0];
+
+  assertEquals(resolveSelectionSearchEvidence(original, null), original);
+  assertEquals(attempt.proven_criteria, []);
+  assertEquals(resolveSelectionSearchEvidence(original, attempt), []);
 });
 
 Deno.test("reasoning criteria create bounded scoped then unscoped attempts", () => {

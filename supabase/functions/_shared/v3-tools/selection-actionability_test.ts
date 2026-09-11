@@ -1,10 +1,14 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   buildDerivedSelectionReasoningMessages,
+  buildDerivedSelectionReasoningToolSchema,
   hasActionableSelectionContract,
   hasSelectionMeasurementContext,
   measuredSelectionContractEvidence,
+  resolveDerivedSelectionReasoning,
   shouldContinueSelectionPastOptionalClarification,
+  shouldFinalizeDerivedSelectionSearch,
+  shouldProjectDerivedScalarMeasurement,
   shouldRequireDerivedSelectionReasoning,
 } from "./selection-actionability.ts";
 
@@ -74,18 +78,171 @@ Deno.test("visible derived reasoning cannot be replaced by hidden later tool pro
   );
 });
 
+Deno.test("a proven server-issued structured search routes directly to deterministic finalization", () => {
+  const base = {
+    expectedToolCallId: "derived-1",
+    actualToolCallId: "derived-1",
+    toolName: "search_catalog",
+    searchOk: true,
+    candidateCount: 7,
+    provenCriteriaCount: 3,
+  };
+  assertEquals(shouldFinalizeDerivedSelectionSearch(base), true);
+  assertEquals(shouldFinalizeDerivedSelectionSearch({ ...base, actualToolCallId: "model-search" }), false);
+  assertEquals(shouldFinalizeDerivedSelectionSearch({ ...base, candidateCount: 0 }), false);
+  assertEquals(shouldFinalizeDerivedSelectionSearch({ ...base, provenCriteriaCount: 0 }), false);
+  assertEquals(shouldFinalizeDerivedSelectionSearch({
+    ...base,
+    provenCriteriaCount: 0,
+    pairedCompatibilityRequired: true,
+  }), true);
+  assertEquals(shouldFinalizeDerivedSelectionSearch({ ...base, searchOk: false }), false);
+});
+
+Deno.test("two-sided fit reasoning cannot be projected as one scalar product measurement", () => {
+  assertEquals(
+    shouldProjectDerivedScalarMeasurement(
+      "Нужно изделие для объекта 10 мм",
+      "До установки внутренний размер должен быть больше 10 мм, а после преобразования — меньше 10 мм.",
+    ),
+    false,
+  );
+  assertEquals(
+    shouldProjectDerivedScalarMeasurement(
+      "Нужно изделие для помещения 25 м²",
+      "Расчётный показатель товара должен быть от 3750 до 5000 лм.",
+    ),
+    true,
+  );
+});
+
+Deno.test("an ungrounded execution variant is not offered as an application classification", () => {
+  const facets = [{
+    caption: "Модель или исполнение",
+    type: "string",
+    values: [{ value: "Первый вариант" }, { value: "Второй вариант" }],
+  }];
+  const schema = buildDerivedSelectionReasoningToolSchema(facets);
+  const properties = schema.function.parameters.properties as Record<string, { items?: { maxLength?: number } }>;
+  assertEquals(properties.compatible_classifications.items?.maxLength, 0);
+  assertEquals(resolveDerivedSelectionReasoning({
+    reasoning: "Расчёт даёт обязательный диапазон от 10 до 20 единиц.",
+    compatible_classifications: ["f0v0"],
+    excluded_classifications: [],
+  }, facets)?.compatible, []);
+});
+
 Deno.test("derived reasoning prompt is compact and treats the live schema as untrusted data", () => {
   const messages = buildDerivedSelectionReasoningMessages(
     "Что подойдет для 25 м²?",
     "Ветка <script>alert(1)</script>",
-    [{ caption: "Параметр", type: "number", unit: "лм" }],
+    [
+      { caption: "Параметр", type: "number", unit: "лм", values: [{ value: "<hidden-option>" }] },
+      { caption: "Вид исполнения", type: "string", unit: null, values: [{ value: "<option>" }] },
+    ],
   );
   assertEquals(messages.length, 2);
   assertEquals(messages[0].content.includes("недоверенные данные"), true);
   assertEquals(messages[0].content.includes("Класс товара, прямо названный клиентом, неизменяем"), true);
   assertEquals(messages[0].content.includes("качественные требования совместимости или безопасности"), true);
+  assertEquals(messages[0].content.includes("живых категориальных значений"), true);
   assertEquals(messages[1].content.includes("<script>"), false);
   assertEquals(messages[1].content.includes("\\u003cscript>"), true);
+  assertEquals(messages[1].content.includes("\\u003coption>"), true);
+  assertEquals(messages[1].content.includes("hidden-option"), false);
+});
+
+Deno.test("derived reasoning uses validated live classification IDs and makes the contract visible", () => {
+  const liveFacets = [{
+    caption: "Вид исполнения",
+    type: "string",
+    values: [{ value: "Первый класс" }, { value: "Второй класс" }],
+  }];
+  const schema = buildDerivedSelectionReasoningToolSchema(liveFacets);
+  const properties = (schema.function.parameters.properties ?? {}) as Record<string, {
+    items?: { enum?: string[] };
+  }>;
+  assertEquals(properties.compatible_classifications.items?.enum, ["f0v0", "f0v1"]);
+
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning: "Расчёт даёт требуемый диапазон от 10 до 20 единиц. Можно взять Второй класс как альтернативу.",
+    compatible_classifications: ["f0v0", "f0v1", "invented"],
+    excluded_classifications: ["f0v1", "invented"],
+  }, liveFacets);
+  assertEquals(resolved?.compatible, [{ key: "Вид исполнения", value: "Первый класс" }]);
+  assertEquals(resolved?.excluded, [{ key: "Вид исполнения", value: "Второй класс" }]);
+  assertEquals(resolved?.text.includes("По классу «Вид исполнения» выбираю «Первый класс»"), true);
+  assertEquals(resolved?.text.includes("Исключаю несовместимые классы: «Второй класс»"), true);
+  assertEquals(resolved?.text.includes("как альтернативу"), false);
+  assertEquals(resolved?.text.includes("invented"), false);
+});
+
+Deno.test("a uniquely customer-grounded live class overrides a broader model choice", () => {
+  const liveFacets = [{
+    caption: "Класс применения",
+    type: "string",
+    values: [
+      { value: "бытовые изделия накладные" },
+      { value: "подвесные изделия; бра; ночники" },
+      { value: "офисно-административное применение" },
+    ],
+  }];
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning: "Для помещения нужен расчётный диапазон 3000–4000 единиц.",
+    compatible_classifications: ["f0v0"],
+    excluded_classifications: [],
+  }, liveFacets, "Хочу заменить подвесное изделие на энергоэффективное для комнаты");
+
+  assertEquals(resolved?.compatible, [{
+    key: "Класс применения",
+    value: "подвесные изделия; бра; ночники",
+  }]);
+  assertEquals(resolved?.text.includes("подвесные изделия; бра; ночники"), true);
+  assertEquals(resolved?.text.includes("бытовые изделия накладные"), false);
+});
+
+Deno.test("a negated class term cannot become customer-grounded evidence", () => {
+  const liveFacets = [{
+    caption: "Класс применения",
+    type: "string",
+    values: [
+      { value: "подвесные изделия" },
+      { value: "накладные изделия" },
+    ],
+  }];
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning: "Выбираю подходящий вариант по указанному способу установки.",
+    compatible_classifications: ["f0v1"],
+    excluded_classifications: [],
+  }, liveFacets, "Нужно не подвесное, а накладное изделие");
+
+  assertEquals(resolved?.compatible, [{ key: "Класс применения", value: "накладные изделия" }]);
+});
+
+Deno.test("visible prose cannot contradict the customer-grounded live class", () => {
+  const liveFacets = [{
+    caption: "Класс применения",
+    type: "string",
+    values: [
+      { value: "подвесные изделия; бра; ночники" },
+      { value: "трековые изделия" },
+      { value: "бытовые изделия накладные" },
+    ],
+  }];
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning: "Расчёт даёт диапазон 3000–4000 единиц. Подойдут накладные или трековые системы, но не подвесные.",
+    compatible_classifications: ["f0v2"],
+    excluded_classifications: [],
+  }, liveFacets, "Заменить подвесное изделие на энергоэффективное");
+
+  assertEquals(resolved?.compatible, [{
+    key: "Класс применения",
+    value: "подвесные изделия; бра; ночники",
+  }]);
+  assertEquals(resolved?.text.includes("3000–4000"), true);
+  assertEquals(resolved?.text.includes("трековые"), false);
+  assertEquals(resolved?.text.includes("накладные"), false);
+  assertEquals(resolved?.text.includes("не подвесные"), false);
 });
 
 Deno.test("actionability policy contains no product vocabulary", () => {

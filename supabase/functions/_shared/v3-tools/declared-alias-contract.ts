@@ -9,6 +9,17 @@ function normalize(value: string): string {
 
 const ALIAS_DECLARATION = /(?:это\s+)?(?:(?:народн|разговорн|жаргонн|бытов|неофициальн)\p{L}*\s+)+(?:названи\p{L}*|обозначени\p{L}*|термин\p{L}*)/iu;
 
+function containsInflectedTokenSequence(haystack: string, needle: string): boolean {
+  const haystackTokens = normalize(haystack).split(" ").filter(Boolean);
+  const needleTokens = normalize(needle).split(" ").filter(Boolean);
+  if (needleTokens.length === 0 || needleTokens.length > haystackTokens.length) return false;
+  return haystackTokens.some((_, start) =>
+    needleTokens.every((token, offset) =>
+      inflectionStem(haystackTokens[start + offset] ?? "") === inflectionStem(token)
+    )
+  );
+}
+
 /**
  * Extracts a customer-owned phrase only when the consultant explicitly
  * declares it to be an alias. The relation is structural and vocabulary-free:
@@ -18,18 +29,31 @@ const ALIAS_DECLARATION = /(?:это\s+)?(?:(?:народн|разговорн|�
 export function extractDeclaredCatalogAlias(
   customerText: string,
   consultantReasoning: string,
+  discoveredClass = "",
 ): string | null {
   const customer = normalize(customerText);
   if (!customer) return null;
+  const customerQualifier = discoveredClass
+    ? extractPostNominalCatalogQualifier(customerText, discoveredClass)
+    : null;
   const reasoning = String(consultantReasoning ?? "");
   const quotePattern = /[«“"]([^»”"\r\n]{2,80})[»”"]/gu;
   for (let match; (match = quotePattern.exec(reasoning)) !== null;) {
     const phrase = String(match[1] ?? "").trim();
     const normalizedPhrase = normalize(phrase);
     if (!normalizedPhrase || normalizedPhrase.split(" ").length > 6) continue;
-    if (!(` ${customer} `.includes(` ${normalizedPhrase} `))) continue;
+    if (!containsInflectedTokenSequence(customer, normalizedPhrase)) continue;
     const relationWindow = reasoning.slice(quotePattern.lastIndex, quotePattern.lastIndex + 100);
-    if (ALIAS_DECLARATION.test(relationWindow)) return phrase;
+    if (!ALIAS_DECLARATION.test(relationWindow)) continue;
+    // When the model quotes "class + nickname", the lexical obligation is the
+    // customer's distinctive post-nominal qualifier. Keeping the broad class
+    // inside the alias would make literal title proof impossible after a
+    // canonical spelling is found (and would depend on Russian inflection).
+    if (
+      customerQualifier &&
+      containsInflectedTokenSequence(normalizedPhrase, customerQualifier)
+    ) return customerQualifier;
+    return phrase;
   }
   return null;
 }

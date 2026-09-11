@@ -56,6 +56,17 @@ export interface PairedStateCriterionReference {
   opposite_facet_key: string;
 }
 
+/**
+ * Visible explanation for a two-sided fit whose exact product keys are owned
+ * by the live schema. It states only the invariant that can be checked on
+ * every candidate and deliberately avoids guessing a ratio or preferred size.
+ */
+export function buildPairedCompatibilityReasoning(
+  reference: { value: number; unit: string },
+): string {
+  return `Для объекта размером ${reference.value} ${reference.unit} параметр изделия до установки должен быть строго больше ${reference.value} ${reference.unit}, чтобы изделие можно было установить, а после изменения — строго меньше ${reference.value} ${reference.unit}, чтобы обеспечить плотную фиксацию. Проверяю обе границы по данным каждой карточки, не задавая коэффициент или типоразмер заранее.`;
+}
+
 function canonicalUnit(value: string | null | undefined): string {
   const unit = normalizeUnit(value ?? "");
   const aliases: Record<string, string> = {
@@ -356,7 +367,7 @@ export function pairedStateCriterionReference(
   const propertyTokens = (value: string): string[] => normalizeKey(value)
     .split(" ")
     .filter((token) => token.length >= 4 &&
-      !/^(?:до|после|исходн\p{L}*|конечн\p{L}*|начальн\p{L}*|финальн\p{L}*|входн\p{L}*|выходн\p{L}*|термо\p{L}*)$/u.test(token));
+      !/^(?:до|после|исходн\p{L}*|конечн\p{L}*|начальн\p{L}*|финальн\p{L}*|входн\p{L}*|выходн\p{L}*|измен\p{L}*|преобраз\p{L}*|установ\p{L}*|термо\p{L}*)$/u.test(token));
   const scalar = (criterion: Criterion): number | null => {
     if (typeof criterion.value === "number" && Number.isFinite(criterion.value)) return criterion.value;
     if (typeof criterion.value !== "string") return null;
@@ -431,31 +442,104 @@ export function completePairedCompatibilityRelations(
   const added: CompatibilityRelation[] = [];
   if (!reference || minimumCompatibilityRelationCount(reasoningText) < 2) return { relations: next, added };
   const prose = String(reasoningText ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е");
-  const requiresClearance = /свободн/u.test(prose) && /(?:наде|проходи|входи|вмеща|охватыва)/u.test(prose);
-  const requiresCompression = /плотн/u.test(prose) && /(?:обж|обож|фиксир|садит|сесть|села|село)/u.test(prose);
   const unit = canonicalUnit(reference.unit);
+  const explicitBounds = extractReasoningBounds(reasoningText).filter((bound) =>
+    bound.value === reference.value &&
+    canonicalUnit(bound.unit) === unit &&
+    bound.strict
+  );
+  // Prefer explicit mathematical claims over particular wording. The same
+  // invariant may be phrased as "strictly greater", "must pass freely", or
+  // equivalent prose; none of those variants may change the machine contract.
+  const requiresClearance = explicitBounds.some((bound) => bound.op === "min") ||
+    (/свободн/u.test(prose) && /(?:наде|проходи|входи|вмеща|охватыва)/u.test(prose));
+  const requiresCompression = explicitBounds.some((bound) => bound.op === "max") ||
+    (/плотн/u.test(prose) && /(?:обж|обож|фиксир|садит|сесть|села|село)/u.test(prose));
+  const stateOf = (facet: CompatibilityFacet): "upper" | "lower" | null => {
+    const label = normalizeKey(`${facet.key} ${facet.caption}`);
+    if (/(?:^| )(?:до|исходн\p{L}*|начальн\p{L}*|входн\p{L}*)(?: |$)/u.test(label)) return "upper";
+    if (/(?:^| )(?:после|конечн\p{L}*|финальн\p{L}*|выходн\p{L}*)(?: |$)/u.test(label)) return "lower";
+    return null;
+  };
+  const physicalUnit = (facet: CompatibilityFacet): string => {
+    const declared = canonicalUnit(facet.unit);
+    if (declared) return declared;
+    const suffix = String(facet.caption ?? "").match(/(?:,|\s)([a-zа-я°]{1,10}[²³]?\d?)\s*$/iu)?.[1] ?? "";
+    return canonicalUnit(suffix);
+  };
+  const propertyTokens = (facet: CompatibilityFacet): string[] => normalizeKey(`${facet.key} ${facet.caption}`)
+    .split(" ")
+    .filter((token) => token.length >= 4 &&
+      !/^(?:до|после|исходн\p{L}*|конечн\p{L}*|начальн\p{L}*|финальн\p{L}*|входн\p{L}*|выходн\p{L}*|измен\p{L}*|преобраз\p{L}*|установ\p{L}*|термо\p{L}*)$/u.test(token));
+  const candidatesFor = (direction: "upper" | "lower") => facets.filter((facet) =>
+    stateOf(facet) === direction && (!unit || !physicalUnit(facet) || physicalUnit(facet) === unit)
+  );
+  const relationFor = (facet: CompatibilityFacet, direction: "upper" | "lower"): CompatibilityRelation => ({
+    product_key: facet.key || facet.caption,
+    relation: direction === "upper" ? "gt" : "lt",
+    reference_value: reference.value,
+    unit: facet.unit ?? reference.unit,
+    level: "A",
+  });
+  const directionPresent = (direction: "upper" | "lower") => next.some((relation) =>
+    relation.reference_value === reference.value &&
+    (!unit || !relation.unit || canonicalUnit(relation.unit) === unit) &&
+    (direction === "upper"
+      ? relation.relation === "gt" || relation.relation === "gte"
+      : relation.relation === "lt" || relation.relation === "lte")
+  );
+
+  // When neither side was serialized, seed the pair only if the live schema
+  // exposes one unambiguous before/after pair for the same measured property.
+  // Unique but unrelated state facets (for example width-before and
+  // thickness-after) must never be joined merely because their state differs.
+  if (requiresClearance && requiresCompression && !directionPresent("upper") && !directionPresent("lower")) {
+    const pairs = candidatesFor("upper").flatMap((upper) => candidatesFor("lower").flatMap((lower) => {
+      const lowerTokens = propertyTokens(lower);
+      const score = propertyTokens(upper).filter((token) => lowerTokens.includes(token)).length;
+      return score > 0 ? [{ upper, lower, score }] : [];
+    }));
+    const bestScore = Math.max(0, ...pairs.map((pair) => pair.score));
+    const best = pairs.filter((pair) => pair.score === bestScore);
+    if (best.length === 1) {
+      const upper = relationFor(best[0].upper, "upper");
+      const lower = relationFor(best[0].lower, "lower");
+      next.push(upper, lower);
+      added.push(upper, lower);
+    }
+    return { relations: next, added };
+  }
   const addUniqueState = (direction: "upper" | "lower", required: boolean) => {
     if (!required) return;
-    const alreadyPresent = next.some((relation) => direction === "upper"
-      ? relation.relation === "gt" || relation.relation === "gte"
-      : relation.relation === "lt" || relation.relation === "lte");
-    if (alreadyPresent) return;
-    const statePattern = direction === "upper"
-      ? /(?:^| )(?:до|исходн\p{L}*|начальн\p{L}*|входн\p{L}*)(?: |$)/u
-      : /(?:^| )(?:после|конечн\p{L}*|финальн\p{L}*|выходн\p{L}*)(?: |$)/u;
-    const candidates = facets.filter((facet) => {
-      const label = normalizeKey(`${facet.key} ${facet.caption}`);
-      return statePattern.test(label) && (!unit || !facet.unit || canonicalUnit(facet.unit) === unit);
+    if (directionPresent(direction)) return;
+    let candidates = candidatesFor(direction);
+    const oppositeDirection = direction === "upper" ? "lower" : "upper";
+    const oppositeRelations = next.filter((relation) =>
+      relation.reference_value === reference.value &&
+      (!unit || !relation.unit || canonicalUnit(relation.unit) === unit) &&
+      (oppositeDirection === "upper"
+        ? relation.relation === "gt" || relation.relation === "gte"
+        : relation.relation === "lt" || relation.relation === "lte")
+    );
+    const anchorFacets = oppositeRelations.flatMap((relation) => {
+      const wanted = normalizeKey(relation.product_key);
+      return facets.filter((facet) =>
+        [normalizeKey(facet.key), normalizeKey(facet.caption)].some((label) =>
+          label === wanted || wanted.length >= 5 && (label.includes(wanted) || wanted.includes(label))
+        )
+      );
     });
+    if (anchorFacets.length === 1 && candidates.length > 0) {
+      const anchorTokens = propertyTokens(anchorFacets[0]);
+      const scored = candidates.map((facet) => ({
+        facet,
+        score: propertyTokens(facet).filter((token) => anchorTokens.includes(token)).length,
+      })).filter(({ score }) => score > 0);
+      const bestScore = Math.max(0, ...scored.map(({ score }) => score));
+      candidates = scored.filter(({ score }) => score === bestScore).map(({ facet }) => facet);
+    }
     if (candidates.length !== 1) return;
-    const facet = candidates[0];
-    const relation: CompatibilityRelation = {
-      product_key: facet.key || facet.caption,
-      relation: direction === "upper" ? "gt" : "lt",
-      reference_value: reference.value,
-      unit: facet.unit ?? reference.unit,
-      level: "A",
-    };
+    const relation = relationFor(candidates[0], direction);
     next.push(relation);
     added.push(relation);
   };

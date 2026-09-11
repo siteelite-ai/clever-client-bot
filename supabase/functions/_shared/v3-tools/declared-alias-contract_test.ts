@@ -20,6 +20,17 @@ Deno.test("a consultant-declared colloquial name becomes a catalog alias obligat
   );
 });
 
+Deno.test("an inflected class plus nickname declaration preserves only the customer qualifier", () => {
+  assertEquals(
+    extractDeclaredCatalogAlias(
+      "а у тебя есть лампы кукуруза?",
+      "«Лампа кукуруза» — это народное название светодиодных ламп. Проверяю каталог.",
+      "Лампы",
+    ),
+    "кукуруза",
+  );
+});
+
 Deno.test("quoted requirements and application context do not become aliases", () => {
   assertEquals(
     extractDeclaredCatalogAlias(

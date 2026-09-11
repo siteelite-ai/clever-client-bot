@@ -12,6 +12,7 @@ import {
   projectExplicitReasoningFacetValues,
   productMatchesExcludedReplacementIdentity,
 } from "./search-filter-guard.ts";
+import { buildVisibleRequestContract } from "./visible-request-contract.ts";
 
 const facets = [
   { key: "kind", values: [{ value: "Светильники для ЖКХ" }, { value: "Бытовые светильники накладные" }] },
@@ -49,6 +50,40 @@ Deno.test("explicit reasoning is projected onto one exact live facet axis", () =
     { key: "color", value: "чёрный" },
   ]);
   assertEquals(result.user_backed, []);
+});
+
+Deno.test("a normalized visible count authorizes exactly one matching live facet", () => {
+  const user = "Найди двойные черные розетки электрические";
+  const live = [
+    { key: "outlet_count", caption: "Количество разъемов", values: [{ value: "1" }, { value: "2" }] },
+    { key: "pole_count", caption: "Количество полюсов", values: [{ value: "1" }, { value: "2" }] },
+    { key: "pack_count", caption: "Количество в упаковке", values: [{ value: "1" }, { value: "2" }] },
+  ];
+  const result = guardSearchFilters(
+    { mode: "by_filter" },
+    live,
+    user,
+    user,
+    "",
+    buildVisibleRequestContract(user),
+  );
+  assertEquals(result.args.options, { outlet_count: ["2"] });
+  assertEquals(result.user_backed, [{ key: "outlet_count", value: "2" }]);
+});
+
+Deno.test("a model-supplied count survives when the same visible contract proves it", () => {
+  const user = "Найди двойные розетки";
+  const result = guardSearchFilters(
+    { mode: "by_filter", options: { outlet_count: ["2"] } },
+    [{ key: "outlet_count", caption: "Количество разъемов", values: [{ value: "1" }, { value: "2" }] }],
+    user,
+    user,
+    user,
+    buildVisibleRequestContract(user),
+  );
+  assertEquals(result.args.options, { outlet_count: ["2"] });
+  assertEquals(result.dropped, []);
+  assertEquals(result.user_backed, [{ key: "outlet_count", value: "2" }]);
 });
 
 Deno.test("a loose number in reasoning cannot open an unnamed facet axis", () => {
@@ -124,6 +159,55 @@ Deno.test("filter guard accepts a criterion declared by the consultant", () => {
     "Нужен накладной светильник для дома",
   );
   assertEquals(result.args.options, { kind: ["Бытовые светильники накладные"] });
+});
+
+Deno.test("a shared class word cannot prove a compound value with an absent short code", () => {
+  const result = guardSearchFilters(
+    {
+      mode: "by_filter",
+      options: {
+        kind: ["Бытовые светильники накладные", "Светильники для ЖКХ"],
+      },
+    },
+    [{
+      key: "kind",
+      caption: "Вид светильника",
+      values: [
+        { value: "Бытовые светильники накладные" },
+        { value: "Светильники для ЖКХ" },
+      ],
+    }],
+    "Для жилой комнаты подойдут бытовые светильники накладные; несовместимые классы исключаю.",
+    "Нужен светильник для гостиной.",
+  );
+
+  assertEquals(result.args.options, { kind: ["Бытовые светильники накладные"] });
+  assertEquals(result.dropped, [{
+    key: "kind",
+    value: "Светильники для ЖКХ",
+    reason: "not_declared_in_reasoning",
+  }]);
+});
+
+Deno.test("a conjunction inside a compound value is not a one-letter technical code", () => {
+  const result = guardSearchFilters(
+    {
+      mode: "by_filter",
+      options: {
+        kind: ["Светильники настольные и напольные"],
+      },
+    },
+    [{
+      key: "kind",
+      caption: "Вид светильника",
+      values: [{ value: "Светильники настольные и напольные" }],
+    }],
+    "Для помещения выбираю потолочный светильник с нейтральным свечением.",
+    "Нужен светильник для помещения.",
+  );
+
+  assertEquals(result.args, { mode: "by_filter" });
+  assertEquals(result.inferred, []);
 });
 
 Deno.test("filter guard distinguishes user-backed constraints from model guidance", () => {
@@ -587,6 +671,46 @@ Deno.test("a measured lighting target cannot become a later unitless lamp count"
   );
   assertEquals(result.args.options, undefined);
   assertEquals(result.dropped, [{ key: "lamp_count", value: "150", reason: "not_declared_in_reasoning" }]);
+});
+
+Deno.test("a room-area scalar cannot become a nearby unitless product count", () => {
+  const countFacet = [{
+    key: "led_count",
+    caption: "Количество светодиодов",
+    values: [{ value: "20" }, { value: "25" }],
+  }];
+  const user = "Хочу заменить люстру на светодиодное освещение в гостиной 25 м².";
+  const reasoning = "Для гостиной 25 м² выбираю светодиодный светильник и рассчитываю общий световой поток.";
+
+  const guarded = guardSearchFilters(
+    { mode: "by_filter", options: { led_count: ["25"] } },
+    countFacet,
+    reasoning,
+    user,
+  );
+  assertEquals(guarded.args.options, undefined);
+  assertEquals(guarded.dropped, [{ key: "led_count", value: "25", reason: "unit_conflict" }]);
+  assertEquals(projectExplicitReasoningFacetValues(countFacet, reasoning, user).kept, []);
+});
+
+Deno.test("a density value cannot become the total product measurement", () => {
+  const fluxFacet = [{
+    key: "flux",
+    caption: "Световой поток, Лм",
+    unit: "лм",
+    values: [{ value: "200" }, { value: "4000" }],
+  }];
+  const reasoning = "Для помещения нужен поток 3750–5000 лм из расчёта 150–200 лм/м².";
+
+  const guarded = guardSearchFilters(
+    { mode: "by_filter", options: { flux: ["200"] } },
+    fluxFacet,
+    reasoning,
+    "Помещение 25 м².",
+  );
+  assertEquals(guarded.args.options, undefined);
+  assertEquals(guarded.dropped, [{ key: "flux", value: "200", reason: "not_declared_in_reasoning" }]);
+  assertEquals(projectExplicitReasoningFacetValues(fluxFacet, reasoning, "Помещение 25 м².").kept, []);
 });
 
 Deno.test("a matching measurement unit proves an exact numeric facet value", () => {

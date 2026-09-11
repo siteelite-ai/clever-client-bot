@@ -33,6 +33,21 @@ export interface SelectionSearchRecoveryPlanInput {
   compatibility_shaped: boolean;
 }
 
+/**
+ * Evidence belongs to the exact catalog request that produced a pool. Once a
+ * recovery attempt replaces that request, even an intentionally empty proof
+ * set must replace (not fall back to) the previous request's proofs.
+ */
+export function resolveSelectionSearchEvidence(
+  originalProofs: Criterion[],
+  selectedAttempt: SelectionSearchRecoveryAttempt | null,
+): Criterion[] {
+  const source = selectedAttempt === null
+    ? originalProofs
+    : selectedAttempt.proven_criteria;
+  return source.map((criterion) => ({ ...criterion }));
+}
+
 export interface SelectionSearchFailure {
   ok: boolean;
   total?: number;

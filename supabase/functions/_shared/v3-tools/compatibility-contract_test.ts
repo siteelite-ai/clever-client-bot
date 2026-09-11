@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.208.0/assert/mod.ts";
 import {
+  buildPairedCompatibilityReasoning,
   alignCompatibilityRelationsWithReasoning,
   compatibilityRelationsToCriteria,
   completePairedCompatibilityRelations,
@@ -26,6 +27,13 @@ import type { ProductRef } from "./types.ts";
 function product(id: string, pagetitle: string): ProductRef {
   return { id, pagetitle, vendor: null, price: 1, stock: "in_stock", short_traits: [] };
 }
+
+Deno.test("paired compatibility explanation preserves both strict directions without guessing a ratio", () => {
+  const text = buildPairedCompatibilityReasoning({ value: 10, unit: "мм" });
+  assertEquals(text.includes("строго больше 10 мм"), true);
+  assertEquals(text.includes("строго меньше 10 мм"), true);
+  assertEquals(text.includes("не задавая коэффициент"), true);
+});
 
 Deno.test("compatibility contract compiles generic strict relations", () => {
   const relations = parseCompatibilityRelations([
@@ -109,6 +117,35 @@ Deno.test("missing paired relation is completed only from a unique live state fa
     level: "A",
   }]);
   assertEquals(hasOppositeCompatibilityDirections(completed.relations), true);
+});
+
+Deno.test("explicit strict bounds seed one coherent live before/after pair", () => {
+  const completed = completePairedCompatibilityRelations(
+    [],
+    "До изменения размер должен быть строго больше 10 мм, а после изменения — строго меньше 10 мм.",
+    [
+      { key: "before", caption: "Внутренний размер до изменения", unit: "мм", values: [{ value: "12" }] },
+      { key: "after", caption: "Внутренний размер после изменения", unit: "мм", values: [{ value: "6" }] },
+    ],
+    { value: 10, unit: "мм" },
+  );
+  assertEquals(completed.added, [
+    { product_key: "before", relation: "gt", reference_value: 10, unit: "мм", level: "A" },
+    { product_key: "after", relation: "lt", reference_value: 10, unit: "мм", level: "A" },
+  ]);
+});
+
+Deno.test("unique but physically unrelated state facets never form a compatibility pair", () => {
+  const completed = completePairedCompatibilityRelations(
+    [],
+    "До изменения размер строго больше 10 мм, а после изменения — строго меньше 10 мм.",
+    [
+      { key: "before_width", caption: "Ширина до изменения", unit: "мм", values: [{ value: "12" }] },
+      { key: "after_thickness", caption: "Толщина после изменения", unit: "мм", values: [{ value: "6" }] },
+    ],
+    { value: 10, unit: "мм" },
+  );
+  assertEquals(completed.relations, []);
 });
 
 Deno.test("missing paired relation stays missing when live state facets are ambiguous", () => {

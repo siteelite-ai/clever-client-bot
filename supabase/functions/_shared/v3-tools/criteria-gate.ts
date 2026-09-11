@@ -137,6 +137,24 @@ export function mergeUserBackedCriteria(
   return merged;
 }
 
+/**
+ * Build a public/frozen selection contract from hard obligations only.
+ * `mergeUserBackedCriteria` intentionally upgrades its inputs because they
+ * are already proof-qualified; callers combining mixed render criteria must
+ * use this boundary so advisory level-B values cannot be relabelled as
+ * mandatory merely by serialization.
+ */
+export function mergeMandatorySelectionCriteria(
+  criteria: Criterion[],
+): Criterion[] {
+  return mergeUserBackedCriteria(
+    [],
+    (Array.isArray(criteria) ? criteria : []).filter((criterion) =>
+      criterion?.key && criterion.value !== undefined && (criterion.level ?? "A") === "A"
+    ),
+  );
+}
+
 function parsedProductTraits(product: ProductRef): Array<{ label: string; value: string }> {
   const traits = (product.short_traits ?? []).flatMap((line) => {
     const separator = String(line).indexOf(":");
@@ -627,6 +645,17 @@ function stringEvidenceMatches(wanted: string, evidence: string): boolean {
   const want = normalizeKey(wanted);
   const got = normalizeKey(evidence);
   if (!want || !got) return false;
+  if (/^-?\d+(?:[.,]\d+)?$/u.test(want)) {
+    const escaped = want.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&").replace(/[.,]/u, "[.,]");
+    return new RegExp(`(?<!\\d)${escaped}(?!\\d)`, "u").test(got);
+  }
+  // A one-character unit/code is meaningful only as a standalone token.
+  // Substring matching would otherwise claim that catalog unit `m`/`м` was
+  // explicitly requested in `mm`/`мм`, corrupting the public contract.
+  if (/^[\p{L}\p{N}]$/u.test(want)) {
+    const escaped = want.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "u").test(got);
+  }
   if (got.includes(want) || want.includes(got)) return true;
   // One-letter tokens are meaningful catalog codes in otherwise descriptive
   // values (`Тип C`, `кривая B`). The semantic stem matcher below deliberately

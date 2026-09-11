@@ -10,6 +10,7 @@ import {
   filterProductIdsByBudgetCap,
   findTrait,
   mergeFacetOptionConstraints,
+  mergeMandatorySelectionCriteria,
   mergeUserBackedCriteria,
   missingSelectionCriteria,
   parseNumSpan,
@@ -116,6 +117,36 @@ Deno.test("deterministic markdown cards preserve the same common emission contra
   );
 });
 
+Deno.test("a digit inside a larger customer number does not make an unrelated numeric trait customer-owned", () => {
+  const products = [{
+    id: "p1",
+    pagetitle: "Изделие 20/10",
+    vendor: null,
+    price: 100,
+    stock: "in_stock" as const,
+    short_traits: ["Популярный: 1"],
+  }];
+  assertEquals(
+    projectCommonRenderedUserCriteria(products, "Нужно изделие для объекта диаметром 12 мм"),
+    [],
+  );
+});
+
+Deno.test("a one-letter product unit does not match inside a longer customer unit", () => {
+  const products = [{
+    id: "p1",
+    pagetitle: "Generic item 20/10",
+    vendor: null,
+    price: 100,
+    stock: "in_stock" as const,
+    short_traits: ["Единица измерения: м"],
+  }];
+  assertEquals(
+    projectCommonRenderedUserCriteria(products, "Нужно изделие для объекта диаметром 10 мм"),
+    [],
+  );
+});
+
 Deno.test("selection criteria plan is immutable and cannot lose an earlier mandatory requirement", () => {
   const first = extendSelectionCriteriaPlan(null, [
     { key: "Live output facet", op: "range", value: [3750, 5000], unit: "lm", level: "A" },
@@ -131,6 +162,15 @@ Deno.test("selection criteria plan is immutable and cannot lose an earlier manda
     { key: "Live mounting facet", op: "eq", value: "surface", level: "A" },
   ]), [
     { key: "Live output facet", op: "range", value: [3750, 5000], unit: "lm", level: "A" },
+  ]);
+});
+
+Deno.test("public selection contract never upgrades advisory render criteria", () => {
+  assertEquals(mergeMandatorySelectionCriteria([
+    { key: "Required axis", op: "eq", value: "one", level: "A" },
+    { key: "Optional axis", op: "eq", value: "two", level: "B" },
+  ]), [
+    { key: "Required axis", op: "eq", value: "one", level: "A" },
   ]);
 });
 

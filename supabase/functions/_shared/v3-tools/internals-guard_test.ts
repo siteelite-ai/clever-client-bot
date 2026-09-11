@@ -214,6 +214,15 @@ Deno.test("intro reasoning removes unsupported alias definitions but keeps actio
   ]);
 });
 
+Deno.test("intro alias guard removes an ungrounded attribute plan left after the definition", () => {
+  const result = stripUngroundedIntroAliasDefinitions(
+    "«Лампа кукуруза» — это народное название светодиодных ламп. Смотрю по форме «цилиндрическая» и цоколям E27/E40. Проверяю точное каталожное название.",
+    "а у тебя есть лампы кукуруза?",
+  );
+  assertEquals(result.text, "Проверяю точное каталожное название.");
+  assertEquals(result.removed.length, 2);
+});
+
 Deno.test("intro alias guard rejects post-discovery class equivalence and preserves criteria", () => {
   const result = stripUngroundedIntroAliasDefinitions(
     'В характеристике есть «капсула» — это оно и есть. Для улицы нужен класс защиты IP65, поэтому проверяю его.',

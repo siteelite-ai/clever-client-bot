@@ -389,6 +389,25 @@ export function stripUngroundedIntroAliasDefinitions(
         aliasContext = true;
         return "";
       }
+      if (aliasContext && !EXPLICIT_CRITERION_RE.test(trimmed)) {
+        const hasUngroundedQuote = [...trimmed.matchAll(/[«“"]([^»”"\r\n]{2,80})[»”"]/gu)]
+          .some((match) => {
+            const phrase = norm(String(match[1] ?? ""))
+              .replace(/[^\p{L}\p{N}]+/gu, " ")
+              .replace(/\s+/gu, " ")
+              .trim();
+            return Boolean(phrase && !(` ${normalizedCustomer} `.includes(` ${phrase} `)));
+          });
+        const customerCodes = new Set(
+          (String(customerText ?? "").match(COMPACT_TECHNICAL_CODE_RE) ?? []).map(normalizeCompactCode),
+        );
+        const hasUngroundedCode = (trimmed.match(COMPACT_TECHNICAL_CODE_RE) ?? [])
+          .some((code) => !customerCodes.has(normalizeCompactCode(code)));
+        if (hasUngroundedQuote || hasUngroundedCode) {
+          removed.push(trimmed);
+          return "";
+        }
+      }
       return trimmed;
     }).filter(Boolean).join(" ");
   }).map((paragraph) => paragraph.trim()).filter(Boolean);
