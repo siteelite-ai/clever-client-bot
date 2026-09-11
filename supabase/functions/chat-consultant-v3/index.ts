@@ -2105,6 +2105,27 @@ async function callOpenRouterSeriesExplanation(
 
 interface StepLog { step: string; ms: number; meta?: Record<string, unknown>; }
 
+async function loadVerifiedNamedSeriesProducts(
+  seriesToken: string,
+  ctx: ToolContext,
+  perPage = 10,
+): Promise<{ catalogOk: boolean; catalogTotal: number; products: ProductFull[] }> {
+  const search = await executeSearchCatalog({
+    mode: "by_query",
+    query: seriesToken,
+    min_price: 1,
+    per_page: perPage,
+  }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
+  const groundedRefs = search.ok ? filterProductsByNamedSeries(search.results, seriesToken) : [];
+  return {
+    catalogOk: search.ok,
+    catalogTotal: search.ok ? search.total : 0,
+    products: groundedRefs
+      .map((product) => ctx.cache.get(String(product.id)))
+      .filter((product): product is ProductFull => Boolean(product)),
+  };
+}
+
 async function answerVerifiedNamedSeriesInquiry(
   seriesToken: string,
   userMessage: string,
@@ -2117,16 +2138,8 @@ async function answerVerifiedNamedSeriesInquiry(
 ): Promise<void> {
   const started = Date.now();
   send({ type: "tool_event", tool: "search_catalog", phase: "start", summary: "Проверяю серию в каталоге…" });
-  const search = await executeSearchCatalog({
-    mode: "by_query",
-    query: seriesToken,
-    min_price: 1,
-    per_page: 8,
-  }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache);
-  const groundedRefs = search.ok ? filterProductsByNamedSeries(search.results, seriesToken) : [];
-  const products = groundedRefs
-    .map((product) => ctx.cache.get(String(product.id)))
-    .filter((product): product is ProductFull => Boolean(product));
+  const grounded = await loadVerifiedNamedSeriesProducts(seriesToken, ctx, 8);
+  const products = grounded.products;
   const duration = Date.now() - started;
   send({
     type: "tool_event",
@@ -2140,8 +2153,8 @@ async function answerVerifiedNamedSeriesInquiry(
     ms: Date.now() - t0,
     meta: {
       series: seriesToken,
-      catalog_ok: search.ok,
-      catalog_total: search.ok ? search.total : 0,
+      catalog_ok: grounded.catalogOk,
+      catalog_total: grounded.catalogTotal,
       grounded_count: products.length,
       duration_ms: duration,
     },
@@ -2160,6 +2173,103 @@ async function answerVerifiedNamedSeriesInquiry(
     ms: Date.now() - t0,
     meta: { series: seriesToken, evidence_count: products.length, finish: explanation.finishReason },
   });
+}
+
+/**
+ * A selection that explicitly names a series, or deictically refers to one
+ * named by the customer in recent history, is an identity lookup rather than
+ * an open-ended category search. Refresh the live catalog and render only
+ * titles that independently prove that exact entity. This is generic for any
+ * series token and prevents a valid follow-up from being reinterpreted as a
+ * product category or lexical fallback.
+ */
+async function selectVerifiedNamedSeriesRequest(
+  seriesToken: string,
+  ctx: ToolContext,
+  send: (event: SseEvent) => void,
+  steps: StepLog[],
+  t0: number,
+): Promise<ProductFull[]> {
+  const started = Date.now();
+  send({ type: "tool_event", tool: "search_catalog", phase: "start", summary: "Проверяю товары серии в каталоге…" });
+  const grounded = await loadVerifiedNamedSeriesProducts(seriesToken, ctx, 10);
+  const products = grounded.products.slice(0, 10);
+  const duration = Date.now() - started;
+  send({
+    type: "tool_event",
+    tool: "search_catalog",
+    phase: "result",
+    duration_ms: duration,
+    summary: `Товаров подтверждённой серии: ${products.length}`,
+  });
+
+  if (products.length === 0) {
+    send({
+      type: "delta",
+      content: `Не смог подтвердить товары серии «${seriesToken}» по актуальным карточкам каталога. Уточните написание серии или тип товара.`,
+    });
+    steps.push({
+      step: "v3_named_series_selection_empty",
+      ms: Date.now() - t0,
+      meta: {
+        series: seriesToken,
+        catalog_ok: grounded.catalogOk,
+        catalog_total: grounded.catalogTotal,
+        duration_ms: duration,
+      },
+    });
+    return [];
+  }
+
+  const rendered = executeRenderProducts({
+    product_ids: products.map((product) => product.id),
+    total_available: products.length,
+  }, ctx.cache);
+  if (!rendered.ok) {
+    send({ type: "delta", content: "Подтверждённые товары не удалось вывести. Повторите запрос позже." });
+    steps.push({
+      step: "v3_named_series_selection_render_failed",
+      ms: Date.now() - t0,
+      meta: { series: seriesToken, error_code: rendered.error_code },
+    });
+    return [];
+  }
+
+  const plan = extendSelectionCriteriaPlan(null, [{
+    key: "Серия",
+    op: "eq",
+    value: seriesToken,
+    level: "A",
+  }], "selection_target");
+  send({
+    type: "products_block",
+    markdown: rendered.markdown,
+    count: rendered.rendered_count,
+    total_available: products.length,
+    selection_contract: {
+      hash: plan.hash,
+      mandatory_criteria: plan.mandatory_criteria.map(({ key, op, value, unit, exclusive }) => ({
+        key,
+        op,
+        value,
+        ...(unit ? { unit } : {}),
+        ...(exclusive ? { exclusive } : {}),
+      })),
+    },
+  });
+  steps.push({
+    step: "v3_named_series_selection_rendered",
+    ms: Date.now() - t0,
+    meta: {
+      series: seriesToken,
+      catalog_total: grounded.catalogTotal,
+      grounded_count: grounded.products.length,
+      rendered: rendered.rendered_count,
+      plan_hash: plan.hash,
+      duration_ms: duration,
+    },
+  });
+  return products.slice(0, rendered.rendered_count);
 }
 
 interface DirectExactInquiryResult {
@@ -10562,6 +10672,9 @@ Deno.serve(async (req) => {
         const namedSeriesInquiryToken = detectUserIntentMode(userMessage) === "inquire"
           ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8))
           : null;
+        const namedSeriesSelectionToken = detectUserIntentMode(userMessage) === "select"
+          ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8))
+          : null;
         const exactProductInquiryLookup = detectUserIntentMode(userMessage) === "inquire"
           ? extractReplacementLookupKeys(userMessage)
           : { articles: [], modelCodes: [] };
@@ -10646,6 +10759,16 @@ Deno.serve(async (req) => {
             executionController.signal,
           );
           productsCount = 0;
+        } else if (namedSeriesSelectionToken) {
+          const products = await selectVerifiedNamedSeriesRequest(
+            namedSeriesSelectionToken,
+            ctx,
+            send,
+            steps,
+            t0,
+          );
+          productsCount = products.length;
+          await persistRecentProductEvidence(supabase, effectiveSessionId, products);
         } else if (recentProductEvidence.length > 0 && isRecentProductShowFollowup(userMessage)) {
           const selection = await selectVerifiedRecentShowFollowup(
             userMessage,
