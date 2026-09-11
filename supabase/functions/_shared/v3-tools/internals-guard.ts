@@ -359,6 +359,51 @@ export function stripUngroundedIntroTechnicalAttributes(
 }
 
 /**
+ * Removes only the question/options coupled to a clarification call that the
+ * selection policy has already classified as non-blocking. Tool validation
+ * happens after model text is produced, so without this pre-emission guard a
+ * rejected call could still leak its invented alternatives into the visible
+ * reasoning. Earlier declarative reasoning is preserved sentence by sentence.
+ */
+export function stripRejectedClarificationText(
+  text: string,
+  question: string,
+  options: Array<{ value?: string; label?: string }>,
+): CatalogFactStripResult {
+  const removed: string[] = [];
+  const questionTokens = new Set(
+    norm(question).split(/[^\p{L}\p{N}]+/gu).filter((token) => token.length >= 4),
+  );
+  const optionTokens = options
+    .flatMap((option) => [option.value, option.label])
+    .map((value) => norm(String(value ?? "")).replace(/[^\p{L}\p{N}]+/gu, " ").trim())
+    .filter(Boolean);
+  const paragraphs = String(text ?? "").split(/\n\s*\n/u);
+  const cleaned = paragraphs.map((paragraph) => {
+    const sentences = paragraph.match(/[^.!?]+(?:[.!?]+|$)/gu) ?? [paragraph];
+    return sentences.map((sentence) => {
+      const trimmed = sentence.trim();
+      const normalized = norm(trimmed).replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+      const sentenceTokens = new Set(normalized.split(/\s+/u).filter(Boolean));
+      const questionOverlap = [...questionTokens].filter((token) => sentenceTokens.has(token)).length;
+      const mentionsOption = optionTokens.some((option) =>
+        option.length >= 2 && ` ${normalized} `.includes(` ${option} `)
+      );
+      const clarificationCue = /(?:уточн|какой|какого|какую|выбер|нужен|нужна|предпочит)/iu.test(trimmed);
+      if (
+        (/\?\s*$/u.test(trimmed) && (questionOverlap > 0 || mentionsOption || clarificationCue)) ||
+        (mentionsOption && clarificationCue)
+      ) {
+        removed.push(trimmed);
+        return "";
+      }
+      return trimmed;
+    }).filter(Boolean).join(" ");
+  }).map((paragraph) => paragraph.trim()).filter(Boolean);
+  return { text: cleaned.join("\n\n"), removed };
+}
+
+/**
  * Removes metalinguistic class substitutions from the first visible bubble.
  * A model may hypothesise that a customer's nickname is "usually" some other
  * class, but that relation is not evidence until live card titles prove it.

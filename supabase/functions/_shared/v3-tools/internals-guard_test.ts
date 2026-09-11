@@ -11,6 +11,7 @@ import {
   stripSerializedToolCallMarkup,
   stripUngroundedIntroAliasDefinitions,
   stripUngroundedIntroTechnicalAttributes,
+  stripRejectedClarificationText,
   stripUnrenderedCatalogFactSegments,
 } from "./internals-guard.ts";
 
@@ -122,6 +123,16 @@ Deno.test("intro reasoning drops unrequested technical codes from alias generali
     '«Кукуруза» — это обычно светодиодная лампа, похожая на початок. Проверяю сам тип.',
   );
   assertEquals(result.removed, ["с цоколем E27 или E40"]);
+});
+
+Deno.test("rejected clarification text cannot leak invented alternatives", () => {
+  const result = stripRejectedClarificationText(
+    "Проверяю названный тип по каталогу.\n\nДавайте уточню, какой разъём вам нужен — E27 или E40?",
+    "Какой разъём вам нужен?",
+    [{ value: "E27" }, { value: "E40" }],
+  );
+  assertEquals(result.text, "Проверяю названный тип по каталогу.");
+  assertEquals(result.removed, ["Давайте уточню, какой разъём вам нужен — E27 или E40?"]);
 });
 
 Deno.test("intro reasoning retains customer codes and explicit derived criteria", () => {

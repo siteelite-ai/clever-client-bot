@@ -495,13 +495,22 @@ export function shouldContinueSelectionPastOptionalClarification(
   input: ClarificationContinuationInput,
 ): boolean {
   if (input.intentMode !== "select" || !input.hasDiscovery) return false;
-  const questionAndFacet = `${input.question}\n${input.facetKey}`;
-  if (OBJECTIVE_CLARIFICATION.test(questionAndFacet)) return false;
-  if (!OPTIONAL_PREFERENCE_CLARIFICATION.test(input.question)) return false;
-
   const user = normalizePreference(input.userMessage);
   const explicitlyNamedOptions = input.options
     .map((option) => normalizePreference(option.value || option.label || ""))
     .filter((option) => option.length >= 2 && user.includes(option));
-  return new Set(explicitlyNamedOptions).size < 2;
+  if (new Set(explicitlyNamedOptions).size >= 2) return false;
+
+  // A plain availability question asks whether the already named class exists,
+  // not for the model to invent a new mandatory facet. In the absence of a
+  // measured application/fit context, even an otherwise objective live facet
+  // is an optional refinement: show the grounded assortment first and let the
+  // customer narrow it afterwards. This is linguistic and category-neutral.
+  const availabilityBrowse = /(?:есть\s+ли|у\s+(?:вас|тебя)\s+есть|име(?:ется|ются)|прода(?:е(?:те|шь)|ются)|быва(?:ет|ют)\s+ли)/iu.test(input.userMessage);
+  if (availabilityBrowse && !hasSelectionMeasurementContext(input.userMessage)) return true;
+
+  const questionAndFacet = `${input.question}\n${input.facetKey}`;
+  if (OBJECTIVE_CLARIFICATION.test(questionAndFacet)) return false;
+  if (!OPTIONAL_PREFERENCE_CLARIFICATION.test(input.question)) return false;
+  return true;
 }

@@ -284,6 +284,25 @@ Deno.test("optional preference after discovery cannot block a selection", () => 
   }), true);
 });
 
+Deno.test("an unrequested facet cannot block a plain availability browse", () => {
+  assertEquals(shouldContinueSelectionPastOptionalClarification({
+    intentMode: "select",
+    hasDiscovery: true,
+    userMessage: "А у вас есть такие изделия?",
+    question: "Какой цоколь вам нужен?",
+    facetKey: "tip_cokolya__s",
+    options: [{ value: "E27" }, { value: "E40" }],
+  }), true);
+  assertEquals(shouldContinueSelectionPastOptionalClarification({
+    intentMode: "select",
+    hasDiscovery: true,
+    userMessage: "Есть ли изделие для объекта диаметром 10 мм?",
+    question: "Какой диаметр изделия нужен?",
+    facetKey: "diametr__mm",
+    options: [{ value: "10" }, { value: "12" }],
+  }), false);
+});
+
 Deno.test("objective clarification remains allowed", () => {
   assertEquals(shouldContinueSelectionPastOptionalClarification({
     intentMode: "select",

@@ -116,7 +116,7 @@ import {
   type RecentProductEvidence,
 } from "../_shared/v3-tools/recent-product-evidence.ts";
 import { containsUnrenderedCatalogFacts, isMetaSelfQuestion,
-  META_DECLINE_TEXT, redactInternals, replaceUngroundedMissingAnchorIntro, sanitizeIntermediateReasoning, shouldGuardFirstVisibleReasoning, stripUngroundedIntroAliasDefinitions, stripUngroundedIntroTechnicalAttributes, stripUnrenderedCatalogFactSegments } from "../_shared/v3-tools/internals-guard.ts";
+  META_DECLINE_TEXT, redactInternals, replaceUngroundedMissingAnchorIntro, sanitizeIntermediateReasoning, shouldGuardFirstVisibleReasoning, stripRejectedClarificationText, stripUngroundedIntroAliasDefinitions, stripUngroundedIntroTechnicalAttributes, stripUnrenderedCatalogFactSegments } from "../_shared/v3-tools/internals-guard.ts";
 import {
   type AgentPhase,
   boundedAgentStepTimeout,
@@ -4754,6 +4754,34 @@ async function runExpertLoop(
         }
       }
       const rawModelResponseText = resp.text;
+      const rejectedClarificationCall = resp.toolCalls.find((toolCall) => {
+        if (toolCall.name !== "propose_clarification") return false;
+        const args = toolCall.args as Partial<ProposeClarificationInput>;
+        return shouldContinueSelectionPastOptionalClarification({
+          intentMode,
+          hasDiscovery: Boolean(lastDiscover),
+          userMessage,
+          question: typeof args.question === "string" ? args.question : "",
+          facetKey: typeof args.facet_key === "string" ? args.facet_key : "",
+          options: Array.isArray(args.options) ? args.options : [],
+        });
+      });
+      if (rejectedClarificationCall) {
+        const args = rejectedClarificationCall.args as Partial<ProposeClarificationInput>;
+        const guarded = stripRejectedClarificationText(
+          resp.text,
+          typeof args.question === "string" ? args.question : "",
+          Array.isArray(args.options) ? args.options : [],
+        );
+        if (guarded.text !== resp.text) {
+          resp = { ...resp, text: guarded.text };
+          steps.push({
+            step: "v3_rejected_optional_clarification_text",
+            ms: now(),
+            meta: { fragment_index: step, removed_segments: guarded.removed },
+          });
+        }
+      }
       // Inquiry-mode intros can be deliberately deferred until after category
       // discovery. Therefore the safety boundary is semantic (the first
       // customer-visible reasoning has not been emitted yet), not `step === 0`.
