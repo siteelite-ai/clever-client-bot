@@ -7772,14 +7772,11 @@ async function runExpertLoop(
             for (const leaf of lastDiscover.leaf_categories ?? []) {
               addToWhitelist(leaf.pagetitle);
             }
-            if (intentMode === "select") {
-              const qualifier = extractPostNominalCatalogQualifier(
-                userMessage,
-                lastDiscover.category?.pagetitle ?? "",
-              );
-              declaredAliasQuery ??= qualifier;
-              requiredCatalogAlias ??= qualifier;
-            }
+            // A token after the product noun can be a brand, series, colour or
+            // another ordinary catalog attribute. Discovery alone must not
+            // promote it to a jargon obligation. A lexical recovery is opened
+            // only by the consultant's explicit, customer-owned alias
+            // declaration captured before this tool call.
             if (replacementIntent) {
               const sourceIdentity = explicitReplacementIdentityValues(
                 lastDiscover.facets,
