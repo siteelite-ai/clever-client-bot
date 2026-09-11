@@ -14,6 +14,7 @@ import {
   missingSelectionCriteria,
   parseNumSpan,
   projectCatalogFilterEvidence,
+  projectCommonRenderedUserCriteria,
   projectCriteriaFacetOptions,
   resolveRenderCriteria,
   resolveTerminalSelectionCriteria,
@@ -48,6 +49,36 @@ Deno.test("user-backed criteria accumulate monotonically across fallback searche
   assertEquals(mergeUserBackedCriteria(first, []), first);
   assertEquals(mergeUserBackedCriteria(first, second), [...first, ...second]);
   assertEquals(mergeUserBackedCriteria([...first, ...second], first), [...first, ...second]);
+});
+
+Deno.test("rendered-card consensus restores a user-owned emission contract", () => {
+  const products = ["one", "two"].map((id) => ({
+    id,
+    pagetitle: `Item ${id}`,
+    vendor: "ACME",
+    price: 100,
+    stock: "in_stock" as const,
+    short_traits: ["Номинальный ток: 16 A", "Количество полюсов: 3"],
+  }));
+  assertEquals(
+    projectCommonRenderedUserCriteria(
+      products,
+      "Покажи ACME на 16 ампер и на 3 полюса",
+    ),
+    [
+      { key: "Бренд", op: "eq", value: "ACME", level: "A" },
+      { key: "Номинальный ток", op: "eq", value: 16, level: "A" },
+      { key: "Количество полюсов", op: "eq", value: 3, level: "A" },
+    ],
+  );
+});
+
+Deno.test("rendered-card consensus never claims a trait that differs across cards", () => {
+  const products = [
+    { id: "one", pagetitle: "Item one", vendor: null, price: 100, stock: "in_stock" as const, short_traits: ["Номинальный ток: 16 A"] },
+    { id: "two", pagetitle: "Item two", vendor: null, price: 100, stock: "in_stock" as const, short_traits: ["Номинальный ток: 20 A"] },
+  ];
+  assertEquals(projectCommonRenderedUserCriteria(products, "Нужно 16 ампер"), []);
 });
 
 Deno.test("selection criteria plan is immutable and cannot lose an earlier mandatory requirement", () => {

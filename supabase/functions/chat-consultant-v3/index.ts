@@ -26,7 +26,7 @@ import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
 import { applyCriteriaGate, buildCriteriaQuery, extendSelectionCriteriaPlan,
-  type Criterion, filterProductIdsByBudgetCap, isLiteralUserCompactCriterion, mergeFacetOptionConstraints, mergeUserBackedCriteria, missingSelectionCriteria, projectCatalogFilterEvidence, projectCriteriaFacetOptions, resolveRenderCriteria, resolveTerminalSelectionCriteria, type SelectionCriteriaPlan, type SelectionCriterionProvenance, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
+  type Criterion, filterProductIdsByBudgetCap, isLiteralUserCompactCriterion, mergeFacetOptionConstraints, mergeUserBackedCriteria, missingSelectionCriteria, projectCatalogFilterEvidence, projectCommonRenderedUserCriteria, projectCriteriaFacetOptions, resolveRenderCriteria, resolveTerminalSelectionCriteria, type SelectionCriteriaPlan, type SelectionCriterionProvenance, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, demoteUnfrozenRenderCriteria, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
@@ -131,7 +131,7 @@ import {
   shouldContinueSelectionUntilCatalogAttempt,
   toolNamesForAgentPhase,
 } from "../_shared/v3-tools/agent-performance.ts";
-import { CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest } from "../_shared/v3-tools/clean-power-safety.ts";
+import { buildSensitiveBackupPowerAnswer, CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest, isSensitiveBackupPowerRequest } from "../_shared/v3-tools/clean-power-safety.ts";
 import { ELECTRICAL_PROTECTION_TRIP_ANSWER, isElectricalProtectionTripDiagnostic } from "../_shared/v3-tools/electrical-trip-safety.ts";
 import {
   buildOpenRouterModelRouting,
@@ -3384,11 +3384,19 @@ async function runExpertLoop(
       return;
     }
     const plan = currentSelectionCriteriaPlan();
+    const renderedProducts = [...ctx.cache.values()].filter((product) =>
+      event.markdown.includes(`](${product.url})`)
+    );
+    const renderedUserCriteria = projectCommonRenderedUserCriteria(
+      renderedProducts,
+      userMessage,
+    );
     const emittedCriteria = mergeUserBackedCriteria([], [
       ...userBackedSearchCriteria,
       ...enforcedSearchCriteria,
       ...reasoningProjectedSearchCriteria,
       ...latestRenderCriteria,
+      ...renderedUserCriteria,
     ]);
     const emittedPlan = plan ?? (emittedCriteria.length > 0
       ? extendSelectionCriteriaPlan(null, emittedCriteria, "render_alignment")
@@ -10584,6 +10592,10 @@ Deno.serve(async (req) => {
         } else if (isCleanPowerSafetyRequest(userMessage)) {
           steps.push({ step: "v3_clean_power_safety_answer", ms: Date.now() - t0 });
           send({ type: "delta", content: CLEAN_POWER_SAFETY_ANSWER });
+          productsCount = 0;
+        } else if (isSensitiveBackupPowerRequest(userMessage)) {
+          steps.push({ step: "v3_sensitive_backup_power_answer", ms: Date.now() - t0 });
+          send({ type: "delta", content: buildSensitiveBackupPowerAnswer(userMessage) });
           productsCount = 0;
         } else if (isElectricalProtectionTripDiagnostic(userMessage)) {
           steps.push({ step: "v3_electrical_trip_safety_answer", ms: Date.now() - t0 });

@@ -136,6 +136,82 @@ export function mergeUserBackedCriteria(
   return merged;
 }
 
+function parsedProductTraits(product: ProductRef): Array<{ label: string; value: string }> {
+  const traits = (product.short_traits ?? []).flatMap((line) => {
+    const separator = String(line).indexOf(":");
+    if (separator <= 0) return [];
+    const label = String(line).slice(0, separator).trim();
+    const value = String(line).slice(separator + 1).trim();
+    return label && value ? [{ label, value }] : [];
+  });
+  return product.vendor?.trim()
+    ? [{ label: "Бренд", value: product.vendor.trim() }, ...traits]
+    : traits;
+}
+
+function renderedValueIsCustomerOwned(label: string, value: string, userMessage: string): boolean {
+  if (stringEvidenceMatches(value, userMessage)) return true;
+  const valueSpan = parseNumSpan(value);
+  if (!valueSpan || valueSpan.min !== valueSpan.max) return false;
+  const numberPattern = String(valueSpan.min).replace(".", "[.,]");
+  if (!new RegExp(`(?<!\\d)${numberPattern}(?!\\d)`, "u").test(userMessage)) return false;
+
+  const genericLabelStems = new Set(["номинал", "максимал", "минимал", "количеств", "значен"]);
+  const userStems = normalizeKey(userMessage).split(/\s+/u).map(looseStem);
+  const labelGrounded = normalizeKey(label).split(/\s+/u)
+    .map(looseStem)
+    .filter((stem) => stem.length >= 4 && !genericLabelStems.has(stem))
+    .some((stem) => userStems.some((candidate) => candidate === stem || candidate.startsWith(stem) || stem.startsWith(candidate)));
+  if (labelGrounded) return true;
+
+  const unitFamilies = [
+    ["а", "a", "amp", "ампер"],
+    ["в", "v", "volt", "вольт"],
+    ["вт", "w", "watt", "ватт"],
+    ["ва", "va", "вольтампер"],
+    ["лм", "lm", "люмен"],
+    ["м", "meter", "метр"],
+  ];
+  const valueTokens = normalizeKey(value).split(/\s+/u);
+  const userTokens = normalizeKey(userMessage).split(/\s+/u);
+  return unitFamilies.some((family) =>
+    family.some((unit) => valueTokens.some((token) => token === unit || token.startsWith(unit))) &&
+    family.some((unit) => userTokens.some((token) => token === unit || token.startsWith(unit)))
+  );
+}
+
+/**
+ * Recovers an emission-only machine contract from facts common to every
+ * rendered card. This does not authorize or filter products: it merely keeps
+ * already-proven user constraints traceable when a terminal recovery bypassed
+ * the model-authored render criteria.
+ */
+export function projectCommonRenderedUserCriteria(
+  products: ProductRef[],
+  userMessage: string,
+): Criterion[] {
+  if (!Array.isArray(products) || products.length === 0) return [];
+  const firstTraits = parsedProductTraits(products[0]);
+  const criteria: Criterion[] = [];
+  for (const first of firstTraits) {
+    if (!renderedValueIsCustomerOwned(first.label, first.value, userMessage)) continue;
+    const shared = products.slice(1).every((product) =>
+      parsedProductTraits(product).some((trait) =>
+        normalizeKey(trait.label) === normalizeKey(first.label) &&
+        stringEvidenceMatches(first.value, trait.value)
+      )
+    );
+    if (!shared) continue;
+    criteria.push({
+      key: first.label,
+      op: "eq",
+      value: parseNumSpan(first.value)?.min ?? first.value,
+      level: "A",
+    });
+  }
+  return mergeUserBackedCriteria([], criteria);
+}
+
 export type SelectionCriterionProvenance =
   | "guarded_search"
   | "reasoning_projection"
