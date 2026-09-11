@@ -44,6 +44,13 @@ Deno.test("new topic requires a high-confidence semantic decision", () => {
     ),
     false,
   );
+  assertEquals(
+    shouldStartNewConversation(
+      { mode: "new_task", confidence: 0.99, reason: "self-contained wording" },
+      { activeScopedClarification: true },
+    ),
+    false,
+  );
 });
 
 Deno.test("classifier prompt treats a complete new product request as a new task", async () => {
