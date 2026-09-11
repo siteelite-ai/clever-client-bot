@@ -6,10 +6,12 @@ import {
   applyCriteriaGate,
   buildCriteriaQuery,
   checkCriterion,
+  extendSelectionCriteriaPlan,
   filterProductIdsByBudgetCap,
   findTrait,
   mergeFacetOptionConstraints,
   mergeUserBackedCriteria,
+  missingSelectionCriteria,
   parseNumSpan,
   projectCatalogFilterEvidence,
   projectCriteriaFacetOptions,
@@ -46,6 +48,41 @@ Deno.test("user-backed criteria accumulate monotonically across fallback searche
   assertEquals(mergeUserBackedCriteria(first, []), first);
   assertEquals(mergeUserBackedCriteria(first, second), [...first, ...second]);
   assertEquals(mergeUserBackedCriteria([...first, ...second], first), [...first, ...second]);
+});
+
+Deno.test("selection criteria plan is immutable and cannot lose an earlier mandatory requirement", () => {
+  const first = extendSelectionCriteriaPlan(null, [
+    { key: "Live output facet", op: "range", value: [3750, 5000], unit: "lm", level: "A" },
+    { key: "Optional finish", op: "eq", value: "matte", level: "B" },
+  ], "reasoning_projection");
+  const extended = extendSelectionCriteriaPlan(first, [
+    { key: "Live mounting facet", op: "eq", value: "surface", level: "A" },
+  ], "guarded_search");
+
+  assertEquals(first.mandatory_criteria.length, 1);
+  assertEquals(extended.mandatory_criteria.length, 2);
+  assertEquals(missingSelectionCriteria(extended, [
+    { key: "Live mounting facet", op: "eq", value: "surface", level: "A" },
+  ]), [
+    { key: "Live output facet", op: "range", value: [3750, 5000], unit: "lm", level: "A" },
+  ]);
+});
+
+Deno.test("selection plan hash is order-independent and changes only when the hard contract changes", () => {
+  const left = extendSelectionCriteriaPlan(null, [
+    { key: "Facet A", op: "eq", value: "one", level: "A" },
+    { key: "Facet B", op: "min", value: 2, level: "A" },
+  ], "guarded_search");
+  const right = extendSelectionCriteriaPlan(null, [
+    { key: "Facet B", op: "min", value: 2, level: "A" },
+    { key: "Facet A", op: "eq", value: "one", level: "A" },
+  ], "reasoning_projection");
+  const changed = extendSelectionCriteriaPlan(right, [
+    { key: "Facet C", op: "max", value: 3, level: "A" },
+  ], "application_context");
+
+  assertEquals(left.hash, right.hash);
+  assertEquals(left.hash === changed.hash, false);
 });
 
 Deno.test("a broad semantic recovery cannot discard the latest mandatory contract", () => {

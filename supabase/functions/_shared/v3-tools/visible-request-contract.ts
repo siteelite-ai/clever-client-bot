@@ -7,6 +7,11 @@ export interface VisibleRequestRequirement {
   matches: (title: string) => boolean;
 }
 
+export interface VisibleRequestProductEvidence {
+  pagetitle: string;
+  short_traits?: string[];
+}
+
 export interface VisibleRequestContractContext {
   /** Frozen product class established by the selection-target gate. */
   productClass?: string | null;
@@ -168,10 +173,17 @@ export function buildVisibleRequestContract(
     add(`count:${count}`, {
       kind: "count",
       label: `${count} места/розетки/гнезда`,
-      matches: (title) => new RegExp(
-        `(?<!\\d)${count}\\s*(?:[-–—]?\\s*)?(?:мест\\p{L}*|розет\\p{L}*|гнезд\\p{L}*|гн\\.?)(?!\\p{L})`,
-        "iu",
-      ).test(title),
+      matches: (evidence) => {
+        const countFirst = new RegExp(
+          `(?<!\\d)${count}\\s*(?:[-–—]?\\s*)?(?:мест\\p{L}*|розет\\p{L}*|гнезд\\p{L}*|гн\\.?)(?!\\p{L})`,
+          "iu",
+        );
+        const labelFirst = new RegExp(
+          `(?:мест\\p{L}*|розет\\p{L}*|гнезд\\p{L}*|разъем\\p{L}*)\\s*(?::|=|-|–|—)?\\s*(?<!\\d)${count}(?!\\d)`,
+          "iu",
+        );
+        return countFirst.test(evidence) || labelFirst.test(evidence);
+      },
     });
   }
 
@@ -179,8 +191,9 @@ export function buildVisibleRequestContract(
     add("count:double-socket", {
       kind: "count",
       label: "двойная розетка",
-      matches: (title) =>
-        /двойн\p{L}*|(?<!\d)2\s*(?:[-–—]?\s*)?(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*|пост\p{L}*)(?!\p{L})/iu.test(title),
+      matches: (evidence) =>
+        /двойн\p{L}*|(?<!\d)2\s*(?:[-–—]?\s*)?(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*|разъем\p{L}*|пост\p{L}*)(?!\p{L})/iu.test(evidence) ||
+        /(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*|разъем\p{L}*|пост\p{L}*)\s*(?::|=|-|–|—)?\s*(?<!\d)2(?!\d)/iu.test(evidence),
     });
   }
 
@@ -227,6 +240,24 @@ export function titleSupportsVisibleRequestContract(
   requirements: VisibleRequestRequirement[],
 ): boolean {
   return requirements.every((requirement) => requirement.matches(title));
+}
+
+/**
+ * Final cards may omit a characteristic from the title even though the
+ * catalog exposes it in structured traits. Both fields are first-party,
+ * customer-visible evidence, so the final guard accepts either source. This
+ * prevents a correct facet search from being rejected merely because the
+ * title is abbreviated, without trusting model prose or adding product data.
+ */
+export function productSupportsVisibleRequestContract(
+  product: VisibleRequestProductEvidence,
+  requirements: VisibleRequestRequirement[],
+): boolean {
+  const evidence = [
+    String(product?.pagetitle ?? ""),
+    ...(Array.isArray(product?.short_traits) ? product.short_traits.map(String) : []),
+  ].join("\n");
+  return requirements.every((requirement) => requirement.matches(evidence));
 }
 
 /**

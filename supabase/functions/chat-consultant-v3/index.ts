@@ -25,15 +25,15 @@ import {
 import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3-tools/lookup-knowledge.ts";
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
-import { applyCriteriaGate, buildCriteriaQuery,
-  type Criterion, filterProductIdsByBudgetCap, isLiteralUserCompactCriterion, mergeFacetOptionConstraints, mergeUserBackedCriteria, projectCatalogFilterEvidence, projectCriteriaFacetOptions, resolveRenderCriteria, resolveTerminalSelectionCriteria, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
+import { applyCriteriaGate, buildCriteriaQuery, extendSelectionCriteriaPlan,
+  type Criterion, filterProductIdsByBudgetCap, isLiteralUserCompactCriterion, mergeFacetOptionConstraints, mergeUserBackedCriteria, missingSelectionCriteria, projectCatalogFilterEvidence, projectCriteriaFacetOptions, resolveRenderCriteria, resolveTerminalSelectionCriteria, type SelectionCriteriaPlan, type SelectionCriterionProvenance, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, demoteUnfrozenRenderCriteria, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { buildDerivedSelectionReasoningMessages, hasActionableSelectionContract, hasSelectionMeasurementContext, measuredSelectionContractEvidence, shouldContinueSelectionPastOptionalClarification, shouldRequireDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, initialSelectionDeclaration, parseSelectionTarget, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, groundSelectionApplicationContext, initialSelectionDeclaration, parseSelectionTarget, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, declaredAliasIsStructurallyCustomerOwned, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
@@ -199,9 +199,9 @@ import { executeProposeClarification, type ProposeClarificationInput } from "../
 import { selectReadinessClarification } from "../_shared/v3-tools/selection-readiness.ts";
 import {
   buildVisibleRequestContract,
+  productSupportsVisibleRequestContract,
   shouldContinueVisibleRecoveryPage,
   shouldExpandVisibleRecoverySearch,
-  titleSupportsVisibleRequestContract,
 } from "../_shared/v3-tools/visible-request-contract.ts";
 import { type EscalateInput,
   executeEscalate } from "../_shared/v3-tools/escalate.ts";
@@ -3337,6 +3337,47 @@ async function runExpertLoop(
   const userBackedSearchFacetValues: Array<{ key: string; value: string }> = [];
   let reasoningProjectedSearchCriteria: Criterion[] = [];
   let latestRenderCriteria: Criterion[] = [];
+  let selectionCriteriaPlan: SelectionCriteriaPlan | null = null;
+  const freezeSelectionCriteria = (
+    criteria: Criterion[],
+    provenance: SelectionCriterionProvenance,
+  ): Criterion[] => {
+    const mandatoryInput = criteria.filter((criterion) => (criterion.level ?? "A") === "A");
+    if (!selectionCriteriaPlan && mandatoryInput.length === 0) return [];
+    const next = extendSelectionCriteriaPlan(
+      selectionCriteriaPlan,
+      mandatoryInput,
+      provenance,
+    );
+    const omittedBeforeFreeze = missingSelectionCriteria(
+      selectionCriteriaPlan,
+      criteria,
+    );
+    const changed = next.hash !== selectionCriteriaPlan?.hash;
+    selectionCriteriaPlan = next;
+    if (changed || omittedBeforeFreeze.length > 0) {
+      steps.push({
+        step: "v3_selection_criteria_plan_extended",
+        ms: now(),
+        meta: {
+          plan_hash: next.hash,
+          provenance,
+          mandatory_count: next.mandatory_criteria.length,
+          restored_omissions: omittedBeforeFreeze,
+        },
+      });
+    }
+    return next.mandatory_criteria.map((criterion) => ({ ...criterion }));
+  };
+  const preserveFrozenSelectionCriteria = (criteria: Criterion[]): Criterion[] =>
+    selectionCriteriaPlan
+      ? resolveRenderCriteria(
+        selectionCriteriaPlan.mandatory_criteria.map((criterion) => ({ ...criterion })),
+        criteria,
+        [],
+        false,
+      )
+      : criteria.map((criterion) => ({ ...criterion }));
   let activeSelectionTarget: string | null = null;
   let groundedSelectionTargetHint: string | null = null;
   let initialSelectionDiscoveryNoun: string | null = null;
@@ -3384,8 +3425,8 @@ async function runExpertLoop(
     guarded = guarded.filter((id) => {
       const product = ctx.cache.get(id);
       return Boolean(
-        product && titleSupportsVisibleRequestContract(
-          product.pagetitle,
+        product && productSupportsVisibleRequestContract(
+          product,
           visibleRequestContract,
         ),
       );
@@ -4917,6 +4958,15 @@ async function runExpertLoop(
             const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
             return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
           });
+          const compatibilityShapedSearch =
+            minimumCompatibilityRelationCount(declaredReasoning) >= 2 ||
+            reasoningNeedsCompatibilityRelations(declaredReasoning);
+          // Paired compatibility owns a distinct relational contract. Its raw
+          // scalar serialization must never be frozen here: that would retain
+          // the exact defect where an object's diameter is copied onto a
+          // before/after product facet. Ordinary criteria are frozen only
+          // after the existing importance compiler separates obligations from
+          // advice below.
           enforcedSearchCriteria = guardedSearchCriteria;
           userBackedSearchCriteria = mergeUserBackedCriteria(
             userBackedSearchCriteria,
@@ -4980,9 +5030,12 @@ async function runExpertLoop(
                   ? { options: replacementContract.options }
                   : {}),
               };
-              enforcedSearchCriteria = replacementContract.criteria.map((criterion) => ({ ...criterion }));
-              reasoningProjectedSearchCriteria = replacementContract.criteria.map((criterion) => ({ ...criterion }));
-              latestRenderCriteria = replacementContract.criteria.map((criterion) => ({ ...criterion }));
+              enforcedSearchCriteria = freezeSelectionCriteria(
+                replacementContract.criteria,
+                "reasoning_projection",
+              );
+              reasoningProjectedSearchCriteria = enforcedSearchCriteria.map((criterion) => ({ ...criterion }));
+              latestRenderCriteria = enforcedSearchCriteria.map((criterion) => ({ ...criterion }));
               steps.push({
                 step: "v3_replacement_reasoning_search_compiled",
                 ms: now(),
@@ -5041,9 +5094,6 @@ async function runExpertLoop(
                   ? { options: measuredContract.options }
                   : {}),
               };
-              enforcedSearchCriteria = measuredContract.mandatory_criteria;
-              reasoningProjectedSearchCriteria = measuredContract.projected_criteria;
-              latestRenderCriteria = measuredContract.mandatory_criteria.map((criterion) => ({ ...criterion }));
               steps.push({
                 step: "v3_measured_reasoning_search_compiled",
                 ms: now(),
@@ -5056,6 +5106,66 @@ async function runExpertLoop(
                 },
               });
             }
+            enforcedSearchCriteria = freezeSelectionCriteria(
+              measuredContract.mandatory_criteria,
+              measuredContract.projected_criteria.length > 0
+                ? "reasoning_projection"
+                : "guarded_search",
+            );
+            reasoningProjectedSearchCriteria = mergeUserBackedCriteria(
+              reasoningProjectedSearchCriteria,
+              measuredContract.projected_criteria,
+            );
+            latestRenderCriteria = enforcedSearchCriteria.map((criterion) => ({ ...criterion }));
+          } else if (!replacementIntent && !compatibilityShapedSearch) {
+            const importance = alignCriteriaImportanceWithReasoning(
+              guardedSearchCriteria,
+              declaredReasoning,
+              guardedUserBackedCriteria,
+            );
+            enforcedSearchCriteria = freezeSelectionCriteria(
+              importance.criteria.filter((criterion) => (criterion.level ?? "A") === "A"),
+              "guarded_search",
+            );
+            latestRenderCriteria = enforcedSearchCriteria.map((criterion) => ({ ...criterion }));
+          }
+          // Search arguments are a projection of the frozen plan, never a new
+          // independently authored contract. A later model/recovery call may
+          // add filters, but cannot omit an earlier mandatory live facet.
+          if (selectionCriteriaPlan && !compatibilityShapedSearch) {
+            const planProjection = projectCriteriaFacetOptions(
+              selectionCriteriaPlan.mandatory_criteria.map((criterion) => ({ ...criterion })),
+              lastDiscover.facets,
+            );
+            const currentOptions = tc.args.options && typeof tc.args.options === "object"
+              ? tc.args.options as Record<string, string[]>
+              : {};
+            const mergedPlanOptions = mergeFacetOptionConstraints(
+              planProjection.options,
+              currentOptions,
+            );
+            const enforcedOptions = mergedPlanOptions.conflicting_keys.length > 0
+              ? planProjection.options
+              : mergedPlanOptions.options;
+            tc.args = {
+              ...(tc.args as Record<string, unknown>),
+              ...(Object.keys(enforcedOptions).length > 0
+                ? { options: enforcedOptions }
+                : {}),
+            };
+            enforcedSearchCriteria = selectionCriteriaPlan.mandatory_criteria.map((criterion) => ({ ...criterion }));
+            latestRenderCriteria = preserveFrozenSelectionCriteria(latestRenderCriteria);
+            steps.push({
+              step: "v3_selection_criteria_plan_enforced",
+              ms: now(),
+              meta: {
+                plan_hash: selectionCriteriaPlan.hash,
+                mandatory_count: selectionCriteriaPlan.mandatory_criteria.length,
+                option_keys: Object.keys(enforcedOptions),
+                conflicting_keys: mergedPlanOptions.conflicting_keys,
+                unmatched_keys: planProjection.unmatched_keys,
+              },
+            });
           }
           if (identityGuard.removed.length > 0) {
             steps.push({
@@ -5430,15 +5540,22 @@ async function runExpertLoop(
           activeSelectionContractComplete = false;
           const targetProjection = parseSelectionTarget(tc.args.selection_target);
           const target = targetProjection.product_class;
+          const groundedApplicationTarget = groundSelectionApplicationContext(
+            tc.args.selection_target,
+            `${history.filter((message) => message.role === "user").slice(-6).map((message) => message.content).join("\n")}\n${userMessage}\n${initialSelectionDeclaration(firstAssistantText)}`,
+          );
+          const applicationContractAllowed =
+            minimumCompatibilityRelationCount(`${userMessage}\n${firstAssistantText}`) < 2 &&
+            !reasoningNeedsCompatibilityRelations(`${userMessage}\n${firstAssistantText}`);
           const priorActiveSelectionTarget = activeSelectionTarget;
           const targetBackedCriteria = promoteSelectionTargetBackingCriteria(
             priorActiveSelectionTarget,
             tc.args.selection_target,
             renderRawCriteria,
           );
-          const applicationBackedCriteria = replacementIntent
+          const applicationBackedCriteria = applicationContractAllowed
             ? promoteSelectionApplicationBackingCriteria(
-              tc.args.selection_target,
+              groundedApplicationTarget,
               targetBackedCriteria.criteria,
             )
             : {
@@ -5453,9 +5570,9 @@ async function runExpertLoop(
               lastDiscover.facets,
             )
             : [];
-          const applicationFacetCriteria = replacementIntent && lastDiscover
+          const applicationFacetCriteria = applicationContractAllowed && lastDiscover
             ? projectSelectionApplicationFacetCriteria(
-              tc.args.selection_target,
+              groundedApplicationTarget,
               lastDiscover.facets,
             )
             : [];
@@ -5468,6 +5585,16 @@ async function runExpertLoop(
               ...applicationFacetCriteria,
             ],
           );
+          if (applicationBackedCriteria.backing.length > 0 || applicationFacetCriteria.length > 0) {
+            enforcedSearchCriteria = freezeSelectionCriteria(
+              [
+                ...applicationBackedCriteria.backing,
+                ...applicationFacetCriteria,
+              ],
+              "application_context",
+            );
+            latestRenderCriteria = preserveFrozenSelectionCriteria(latestRenderCriteria);
+          }
           if (targetFacetCriteria.length > 0 || applicationFacetCriteria.length > 0) {
             steps.push({
               step: "v3_selection_target_facets_compiled",
@@ -6109,7 +6236,7 @@ async function runExpertLoop(
               steps.push({ step: "v3_reasoning_ranges_projected", ms: now(), meta: { added: projected.added } });
             }
           }
-          latestRenderCriteria = criteria.map((criterion) => ({ ...criterion }));
+          latestRenderCriteria = preserveFrozenSelectionCriteria(criteria);
           const unresolvedRelativeEquality = compatibilityRequired && compatibilityRelations.some((relation) => relation.relation === "eq");
           const uncoveredRelations = compatibilityRequired
             ? uncoveredReasoningBounds(compatibilityRelations, initialCompatibilityEvidence)
@@ -6380,7 +6507,7 @@ async function runExpertLoop(
             // Terminal recovery must see the final corrected contract, not the
             // model's pre-alignment draft. This value is only consumed behind
             // the same target, compatibility, criteria and budget gates.
-            latestRenderCriteria = criteria.map((criterion) => ({ ...criterion }));
+            latestRenderCriteria = preserveFrozenSelectionCriteria(criteria);
             const report = compoundAdjusted.report;
             let passed = ids.filter((id) => report.passed_ids.includes(id));
             const meta = {
@@ -7111,11 +7238,14 @@ async function runExpertLoop(
           const rangeCriteria = mayProjectReasoning && lastDiscover
             ? projectReasoningRangeCriteria([], reasoningEvidence, lastDiscover.facets).added
             : [];
+          const recoveryReasoningCriteria = selectionCriteriaPlan
+            ? selectionCriteriaPlan.mandatory_criteria.map((criterion) => ({ ...criterion }))
+            : rangeCriteria;
           const recoveryPlan = buildSelectionSearchRecoveryPlan({
             failed_args: runArgs,
             facets: lastDiscover?.facets ?? [],
             leaf_categories: lastDiscover?.leaf_categories.map((category) => category.pagetitle) ?? [],
-            reasoning_criteria: rangeCriteria,
+            reasoning_criteria: recoveryReasoningCriteria,
             compatibility_shaped: minimumCompatibilityRelationCount(reasoningEvidence) >= 2 ||
               reasoningNeedsCompatibilityRelations(reasoningEvidence),
           });
@@ -7129,6 +7259,7 @@ async function runExpertLoop(
               ms: now(),
               meta: {
                 kind: attempt.kind,
+                plan_hash: selectionCriteriaPlan?.hash ?? null,
                 relaxed_inputs: attempt.relaxed_inputs,
                 revalidate: attempt.revalidate,
                 option_keys: attempt.args.options && typeof attempt.args.options === "object"
@@ -8468,9 +8599,10 @@ async function runExpertLoop(
     const terminalDiscover = terminalRecoveryScope?.discovery ??
       (selectionDiscoveries.length === 0 ? lastDiscover : null);
     const terminalGroundedTargets = terminalRecoveryScope?.targets ?? [];
+    const terminalCriteriaBase = preserveFrozenSelectionCriteria(latestRenderCriteria);
     const terminalProjectedRange = terminalDiscover
-      ? projectReasoningRangeCriteria(latestRenderCriteria, terminalReasoningEvidence, terminalDiscover.facets)
-      : { criteria: latestRenderCriteria.map((criterion) => ({ ...criterion })), added: [] };
+      ? projectReasoningRangeCriteria(terminalCriteriaBase, terminalReasoningEvidence, terminalDiscover.facets)
+      : { criteria: terminalCriteriaBase, added: [] };
     const terminalSelectionCriteria = terminalDiscover
       ? resolveTerminalSelectionCriteria(
         terminalProjectedRange.criteria,
@@ -9737,7 +9869,10 @@ async function runExpertLoop(
           const requirementCoverage = diagnosticGuard.visibleRequestContract.map((requirement) => {
             const matched = diagnosticCandidateIds.filter((id) => {
               const product = ctx.cache.get(id);
-              return Boolean(product && requirement.matches(product.pagetitle));
+              return Boolean(product && requirement.matches([
+                product.pagetitle,
+                ...(product.short_traits ?? []),
+              ].join("\n")));
             }).length;
             return `${requirement.label}:${matched}/${diagnosticCandidateIds.length}`;
           });
