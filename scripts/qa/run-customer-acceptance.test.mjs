@@ -175,6 +175,33 @@ test('evaluate can verify identity from the complete rendered card', () => {
     .some((failure) => failure.startsWith('product cards violate required groups')));
 });
 
+test('parseSse and evaluate preserve the server selection contract', () => {
+  const contract = {
+    hash: 'selection-test',
+    mandatory_criteria: [
+      { key: 'Количество разъемов', op: 'eq', value: '2' },
+      { key: 'Цвет', op: 'eq', value: 'черный' },
+    ],
+  };
+  const parsed = parseSse([
+    data({ v3_event: {
+      type: 'products_block',
+      markdown: '- **[Розетка РС 16-343 черный](https://220volt.kz/catalog/item/)**\n  Цена: *900* ₸',
+      selection_contract: contract,
+    } }),
+    data({ v3_event: { type: 'diagnostic', phase: 'complete', products_count: 1 } }),
+    'data: [DONE]',
+  ].join('\n'));
+  assert.deepEqual(parsed.selectionContract, contract);
+  assert.deepEqual(evaluate({
+    require_selection_criteria_groups: [
+      ['Количество разъемов'], ['"value":"2"'], ['Цвет'], ['черный'],
+    ],
+  }, parsed), []);
+  assert(evaluate({ require_selection_criteria_groups: [['Количество разъемов'], ['"value":"1"']] }, parsed)
+    .some((failure) => failure.startsWith('selection contract misses required groups')));
+});
+
 test('evaluate accepts either a true exact intersection or an explicitly labelled axis split', () => {
   const contract = {
     require_exact_or_split: {

@@ -65,6 +65,7 @@ export function parseSse(body) {
   let diagnosticError = null;
   let conversationBoundary = null;
   let dialogSlots = null;
+  let selectionContract = null;
   const toolEvents = [];
   for (const line of body.split(/\r?\n/)) {
     if (!line.startsWith('data: ')) continue;
@@ -79,6 +80,9 @@ export function parseSse(body) {
     if (event?.type === 'products_block' && typeof event.markdown === 'string') {
       productsStarted = true;
       productsMarkdown += `${productsMarkdown ? '\n\n' : ''}${event.markdown}`;
+      if (event.selection_contract && typeof event.selection_contract === 'object') {
+        selectionContract = event.selection_contract;
+      }
     }
     if (event?.type === 'diagnostic') {
       logId = event.log_id || logId;
@@ -122,7 +126,7 @@ export function parseSse(body) {
       cardText: block,
     });
   }
-  return { text, textBeforeProducts, productsMarkdown, links, logId, completed, serverProductsCount, diagnosticError, conversationBoundary, dialogSlots, toolEvents };
+  return { text, textBeforeProducts, productsMarkdown, links, logId, completed, serverProductsCount, diagnosticError, conversationBoundary, dialogSlots, selectionContract, toolEvents };
 }
 
 function includesAny(haystack, needles) {
@@ -226,6 +230,12 @@ export function evaluate(expect = {}, response) {
       .filter((link) => !matchesEveryGroup(link.cardText ?? link.title, expect.require_every_product_card_groups))
       .map((link) => link.title);
     if (invalidCards.length > 0) failures.push(`product cards violate required groups: ${invalidCards.join(' | ')}`);
+  }
+  if (Array.isArray(expect.require_selection_criteria_groups)) {
+    const criteriaText = JSON.stringify(response.selectionContract?.mandatory_criteria ?? []);
+    if (!matchesEveryGroup(criteriaText, expect.require_selection_criteria_groups)) {
+      failures.push(`selection contract misses required groups: ${expect.require_selection_criteria_groups.map((group) => `[${group.join(', ')}]`).join(' ')}`);
+    }
   }
   if (expect.require_exact_or_split && typeof expect.require_exact_or_split === 'object') {
     const contract = expect.require_exact_or_split;
