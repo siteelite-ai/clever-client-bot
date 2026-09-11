@@ -253,6 +253,56 @@ Deno.test("empty literal intersection retries the model's semantic modifier as o
   assertEquals(catalogQueries.includes("кабель ВВГнг"), true);
 });
 
+Deno.test("a repeated title token is re-evaluated under its semantic bridge contract", async () => {
+  const helperQueries: string[] = [];
+  const catalogQueries: string[] = [];
+  const fetchImpl: typeof fetch = async (input, init) => {
+    const url = String(input);
+    if (url.includes("openrouter.ai")) {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ content?: string }> };
+      helperQueries.push(body.messages?.at(-1)?.content ?? "");
+      return new Response(JSON.stringify({
+        choices: [{ message: { tool_calls: [{ function: { arguments: JSON.stringify({ candidates: ["кабель ВВГнг"] }) } }] } }],
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+
+    const query = new URL(url).searchParams.get("query") ?? "";
+    catalogQueries.push(query);
+    const results = query.startsWith("кабель ВВГнг")
+      ? [{
+        id: 150,
+        pagetitle: "Кабель силовой ВВГнг 2*1,5",
+        price: 320,
+        url: "https://220volt.kz/catalog/cables/vvg/150/",
+        category: { pagetitle: "Кабель" },
+        options: [],
+      }]
+      : [];
+    return new Response(JSON.stringify({
+      data: { results, pagination: { total: results.length } },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+
+  const result = await executeJargonRecoverCatalog({
+    query: "кабель",
+    modifiers: ["медный", "негорючий", "2*1.5"],
+    require_semantic_bridge: true,
+    per_page: 5,
+  }, {
+    baseUrl: "https://catalog.test/api",
+    apiToken: "catalog-token",
+    openrouterApiKey: "router-token",
+    fetchImpl,
+  }, new Map());
+
+  assertEquals(helperQueries.length, 2);
+  assertEquals(helperQueries[1].includes("кабель медный негорючий"), true);
+  assertEquals(catalogQueries.filter((query) => query === "кабель ВВГнг").length, 2);
+  assertEquals(result.ok ? result.matched_query : null, "кабель ВВГнг");
+  assertEquals(result.ok ? result.results.map((product) => product.id) : [], ["150"]);
+  assertEquals(result.ok ? result.semantic_bridge_matched : false, true);
+});
+
 Deno.test("semantic jargon recovery appends structural axes when the exact card is beyond the base page", async () => {
   const catalogQueries: string[] = [];
   const fetchImpl: typeof fetch = async (input, init) => {

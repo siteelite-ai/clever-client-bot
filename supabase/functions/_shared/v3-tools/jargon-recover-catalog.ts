@@ -268,7 +268,15 @@ export async function executeJargonRecoverCatalog(
     source,
   ].map((c) => c.trim()).filter(Boolean).filter((c, i, arr) => arr.findIndex((x) => normalize(x) === normalize(c)) === i);
   const allCandidates = [...candidates];
-  const attemptedCandidates = new Set<string>();
+  // A title token may legitimately participate in more than one proof stage:
+  // first against the customer's literal descriptors, then against only the
+  // structural axes after the semantic helper has mapped the complete phrase
+  // to that same token. Deduplicating by token alone erased this provenance
+  // and made a repeated, correctly grounded bridge look unproven. Keep the
+  // modifier contract (and axial role) in the identity; this still suppresses
+  // duplicate catalog calls inside one proof context without conflating two
+  // different claims.
+  const attemptedCandidateContracts = new Set<string>();
 
   type CandidateAttempt = {
     matched: { candidate: string; filtered: ProductRef[]; evidenceScore: number } | null;
@@ -295,8 +303,14 @@ export async function executeJargonRecoverCatalog(
     );
     for (const candidate of values.slice(0, 4)) {
       const candidateKey = normalize(candidate);
-      if (!candidateKey || attemptedCandidates.has(candidateKey)) continue;
-      attemptedCandidates.add(candidateKey);
+      const modifierContract = activeModifiers
+        .map(normalize)
+        .filter(Boolean)
+        .sort()
+        .join("\u0001");
+      const attemptContract = `${candidateKey}\u0000${modifierContract}\u0000${allowAxial ? "axial" : "strict"}`;
+      if (!candidateKey || attemptedCandidateContracts.has(attemptContract)) continue;
+      attemptedCandidateContracts.add(attemptContract);
       // A candidate which merely repeats the already discovered live taxonomy
       // adds no evidence for the customer's unknown word. This rejects a
       // stochastic translation such as «светодиодная лампа» inside the live
