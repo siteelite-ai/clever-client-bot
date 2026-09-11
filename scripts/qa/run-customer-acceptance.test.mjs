@@ -64,6 +64,7 @@ test('parseSse keeps pre-product text and parses card prices', () => {
     url: 'https://220volt.kz/catalog/a/b/item-%28x%29/',
     price: 1234,
     stockLine: null,
+    cardText: '- **[Товар 1P 16А х-ка C](https://220volt.kz/catalog/a/b/item-%28x%29/)**\n  Цена: *1 234* ₸/уп',
   }]);
   assert.equal(parsed.completed, true);
   assert.equal(parsed.serverProductsCount, 1);
@@ -154,6 +155,24 @@ test('evaluate checks every product title group and maximum price', () => {
   }, response);
   assert(failures.some((failure) => failure.startsWith('product titles violate required groups')));
   assert(failures.some((failure) => failure.startsWith('product price exceeds 1000')));
+});
+
+test('evaluate can verify identity from the complete rendered card', () => {
+  const response = {
+    text: '',
+    textBeforeProducts: '',
+    productsMarkdown: '',
+    links: [{
+      title: 'Автомат 3P 16A',
+      cardText: 'Автомат 3P 16A\nБренд: Schneider Electric',
+    }],
+    completed: true,
+    diagnosticError: null,
+    serverProductsCount: 1,
+  };
+  assert.deepEqual(evaluate({ require_every_product_card_groups: [['Schneider'], ['3P'], ['16A']] }, response), []);
+  assert(evaluate({ require_every_product_card_groups: [['IEK'], ['3P'], ['16A']] }, response)
+    .some((failure) => failure.startsWith('product cards violate required groups')));
 });
 
 test('evaluate accepts either a true exact intersection or an explicitly labelled axis split', () => {

@@ -488,7 +488,7 @@
             "min_products": 1,
             "require_every_product_title_groups": [
               ["розет"],
-              ["двойн", "2 мест", "2-мест", "2 пост"],
+              ["двойн", "2-я", "2 мест", "2-мест", "2 пост"],
               ["черн", "графит"]
             ],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
@@ -505,7 +505,7 @@
           "message": "Покажи все автоматические выключатели Schneider на 16 ампер, на 3 полюса",
           "expect": {
             "min_products": 1,
-            "require_every_product_title_groups": [
+            "require_every_product_card_groups": [
               ["Schneider"],
               ["16A", "16 A", "16А", "16 А"],
               ["3P", "3Р", "3-пол", "3 полюс"]
