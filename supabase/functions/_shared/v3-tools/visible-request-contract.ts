@@ -196,7 +196,10 @@ export function buildVisibleRequestContract(
     });
   }
 
-  if (/двойн\p{L}*\s+розет\p{L}*|розет\p{L}*\s+двойн\p{L}*/iu.test(source)) {
+  if (
+    /двойн\p{L}*(?:\s+\p{L}+){0,1}\s+розет\p{L}*|розет\p{L}*(?:\s+\p{L}+){0,1}\s+двойн\p{L}*/iu
+      .test(source)
+  ) {
     add("count:double-socket", {
       kind: "count",
       label: "двойная розетка",

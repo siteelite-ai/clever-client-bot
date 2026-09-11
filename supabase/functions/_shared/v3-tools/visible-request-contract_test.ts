@@ -22,13 +22,14 @@ Deno.test("explicit place count and double socket stay visible", () => {
   assertEquals(titleSupportsVisibleRequestContract("Удлинитель У03 3 места", places), true);
   assertEquals(titleSupportsVisibleRequestContract("Удлинитель 4 гн.", places), false);
 
-  const doubleSocket = buildVisibleRequestContract("черная двойная розетка");
+  const doubleSocket = buildVisibleRequestContract("двойные черные розетки электрические");
   assertEquals(
     doubleSocket.map(({ kind, label, op, value }) => ({ kind, label, op, value })),
     [{ kind: "count", label: "двойная розетка", op: "eq", value: 2 }],
   );
   assertEquals(titleSupportsVisibleRequestContract("Розетка двойная, цвет черный", doubleSocket), true);
   assertEquals(titleSupportsVisibleRequestContract("Розетка одинарная, цвет черный", doubleSocket), false);
+  assertEquals(buildVisibleRequestContract("двойная рамка для розетки").length, 0);
 });
 
 Deno.test("structured catalog traits prove a card attribute omitted from its title", () => {
