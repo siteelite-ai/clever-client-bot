@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   buildVisibleRequestContract,
+  productSupportsVisibleRequestContract,
   shouldContinueVisibleRecoveryPage,
   shouldExpandVisibleRecoverySearch,
   titleSupportsVisibleRequestContract,
@@ -24,6 +25,48 @@ Deno.test("explicit place count and double socket stay visible", () => {
   const doubleSocket = buildVisibleRequestContract("черная двойная розетка");
   assertEquals(titleSupportsVisibleRequestContract("Розетка двойная, цвет черный", doubleSocket), true);
   assertEquals(titleSupportsVisibleRequestContract("Розетка одинарная, цвет черный", doubleSocket), false);
+});
+
+Deno.test("structured catalog traits prove a card attribute omitted from its title", () => {
+  const contract = buildVisibleRequestContract("удлинитель на 3 места", {
+    productClass: "удлинитель",
+    candidateTitles: ["Удлинитель серии A"],
+  });
+  assertEquals(
+    productSupportsVisibleRequestContract({
+      pagetitle: "Удлинитель серии A",
+      short_traits: ["Количество розеток: 3"],
+    }, contract),
+    true,
+  );
+  assertEquals(
+    productSupportsVisibleRequestContract({
+      pagetitle: "Удлинитель серии B",
+      short_traits: ["Количество розеток: 4"],
+    }, contract),
+    false,
+  );
+});
+
+Deno.test("structured outlet count proves a double socket without title wording", () => {
+  const contract = buildVisibleRequestContract("двойные розетки", {
+    productClass: "розетки",
+    candidateTitles: ["Розетка серии G"],
+  });
+  assertEquals(
+    productSupportsVisibleRequestContract({
+      pagetitle: "Розетка серии G",
+      short_traits: ["Количество разъемов: 2"],
+    }, contract),
+    true,
+  );
+  assertEquals(
+    productSupportsVisibleRequestContract({
+      pagetitle: "Розетка серии G",
+      short_traits: ["Количество разъемов: 1"],
+    }, contract),
+    false,
+  );
 });
 
 Deno.test("directional measurements remain visible and preserve their bound", () => {

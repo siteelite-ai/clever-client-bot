@@ -165,6 +165,33 @@ export function parseSelectionTarget(value: unknown): SelectionTargetProjection 
   };
 }
 
+/**
+ * Application context may become a hard live-facet obligation only when the
+ * customer or the first visible expert reasoning already declared it. This
+ * prevents a late model tool call from inventing a use case that then filters
+ * the catalog, while allowing ordinary selections (not only replacements) to
+ * preserve a genuinely stated room, environment or mounting context.
+ */
+export function groundSelectionApplicationContext(
+  targetValue: unknown,
+  declarationEvidence: string,
+): SelectionTargetProjection {
+  const target = parseSelectionTarget(targetValue);
+  const evidence = normalize(declarationEvidence);
+  const evidenceTokens = new Set(meaningfulTokens(declarationEvidence));
+  const applicationContext = target.application_context.filter((item) => {
+    const normalized = normalize(item);
+    if (!normalized) return false;
+    if (` ${evidence} `.includes(` ${normalized} `)) return true;
+    const tokens = meaningfulTokens(item);
+    return tokens.length > 0 && tokens.every((token) => evidenceTokens.has(token));
+  });
+  return {
+    product_class: target.product_class,
+    application_context: applicationContext,
+  };
+}
+
 const META_WORDS = new Set([
   "товар", "товары", "товара", "вариант", "варианты", "модель", "модели",
   "оборудование", "решение", "подходящий", "подходящие", "нужный", "нужные",

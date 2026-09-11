@@ -136,6 +136,103 @@ export function mergeUserBackedCriteria(
   return merged;
 }
 
+export type SelectionCriterionProvenance =
+  | "guarded_search"
+  | "reasoning_projection"
+  | "selection_target"
+  | "application_context"
+  | "render_alignment";
+
+/**
+ * Immutable mandatory selection contract accumulated during one logical turn.
+ * Search, render and recovery receive the same criteria snapshot instead of
+ * rebuilding independent subsets from the latest model tool call.
+ */
+export interface SelectionCriteriaPlan {
+  readonly mandatory_criteria: readonly Criterion[];
+  readonly criterion_sources: Readonly<Record<string, readonly SelectionCriterionProvenance[]>>;
+  readonly hash: string;
+}
+
+function mandatoryCriterionSignature(criterion: Criterion): string {
+  const value = Array.isArray(criterion.value)
+    ? criterion.value.map((item) => String(item)).join("\u0000")
+    : String(criterion.value);
+  return [
+    normalizeKey(criterion.key),
+    criterion.op,
+    value,
+    normalizeKey(String(criterion.unit ?? "")),
+    criterion.exclusive === true ? "exclusive" : "inclusive",
+  ].join("\u0001");
+}
+
+function selectionCriteriaPlanHash(criteria: readonly Criterion[]): string {
+  const canonical = criteria.map(mandatoryCriterionSignature).sort().join("\u0002");
+  // Deterministic FNV-1a is sufficient here: this is a traceable contract id,
+  // not a security primitive. Keeping it synchronous also makes the plan safe
+  // to use in every search/render branch.
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < canonical.length; index += 1) {
+    hash ^= canonical.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `selection-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+/**
+ * Extends, but never shrinks, a turn's mandatory criteria. Level-B advice is
+ * intentionally excluded. Reordering or repeating equivalent criteria keeps
+ * the same hash; adding a new obligation necessarily changes it.
+ */
+export function extendSelectionCriteriaPlan(
+  current: SelectionCriteriaPlan | null,
+  incoming: Criterion[],
+  provenance: SelectionCriterionProvenance,
+): SelectionCriteriaPlan {
+  const additions = (Array.isArray(incoming) ? incoming : [])
+    .filter((criterion) => criterion?.key && criterion.value !== undefined && (criterion.level ?? "A") === "A")
+    .map((criterion) => ({ ...criterion, level: "A" as const }));
+  const existing = current?.mandatory_criteria.map((criterion) => ({ ...criterion })) ?? [];
+  const mandatory = mergeUserBackedCriteria(existing, additions);
+  const sourceSets = new Map<string, Set<SelectionCriterionProvenance>>();
+  for (const [signature, sources] of Object.entries(current?.criterion_sources ?? {})) {
+    sourceSets.set(signature, new Set(sources));
+  }
+  for (const criterion of additions) {
+    const signature = mandatoryCriterionSignature(criterion);
+    const sources = sourceSets.get(signature) ?? new Set<SelectionCriterionProvenance>();
+    sources.add(provenance);
+    sourceSets.set(signature, sources);
+  }
+  const criterionSources = Object.fromEntries(
+    [...sourceSets.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([signature, sources]) => [signature, [...sources].sort()]),
+  );
+  return Object.freeze({
+    mandatory_criteria: Object.freeze(mandatory.map((criterion) => Object.freeze({ ...criterion }))),
+    criterion_sources: Object.freeze(criterionSources),
+    hash: selectionCriteriaPlanHash(mandatory),
+  });
+}
+
+/** Returns obligations from the frozen plan that a later contract omitted. */
+export function missingSelectionCriteria(
+  plan: SelectionCriteriaPlan | null,
+  candidateCriteria: Criterion[],
+): Criterion[] {
+  if (!plan) return [];
+  const present = new Set(
+    (Array.isArray(candidateCriteria) ? candidateCriteria : [])
+      .filter((criterion) => (criterion.level ?? "A") === "A")
+      .map(mandatoryCriterionSignature),
+  );
+  return plan.mandatory_criteria
+    .filter((criterion) => !present.has(mandatoryCriterionSignature(criterion)))
+    .map((criterion) => ({ ...criterion }));
+}
+
 // ─── Нормализация ────────────────────────────────────────────────────────────
 
 export function normalizeKey(s: string): string {
