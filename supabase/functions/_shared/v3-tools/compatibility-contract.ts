@@ -549,7 +549,7 @@ export function completePairedCompatibilityRelations(
 }
 
 function titlePair(title: string): { high: number; low: number } | null {
-  const match = String(title ?? "").match(/(\d+(?:[.,]\d+)?)\s*[\/]\s*(\d+(?:[.,]\d+)?)/u);
+  const match = String(title ?? "").match(/(\d+(?:[.,]\d+)?)\s*\/\s*(\d+(?:[.,]\d+)?)/u);
   if (!match) return null;
   const first = Number(match[1].replace(",", "."));
   const second = Number(match[2].replace(",", "."));
