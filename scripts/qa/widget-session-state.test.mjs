@@ -5,6 +5,7 @@ import test from 'node:test';
 import { JSDOM } from 'jsdom';
 
 const widgetSource = await readFile(new URL('../../public/widget.js', import.meta.url), 'utf8');
+const chatV3Source = await readFile(new URL('../../supabase/functions/chat-consultant-v3/index.ts', import.meta.url), 'utf8');
 const STORAGE_KEY = 'volt_widget_state';
 const SESSION_TTL_MS = 30 * 60 * 1000;
 const GREETING_FRAGMENT = 'Я AI-консультант 220volt.kz';
@@ -58,6 +59,22 @@ function readState(dom) {
 function visibleMessages(dom) {
   return dom.window.document.querySelector('#volt-widget-messages')?.textContent ?? '';
 }
+
+test('an existing in-progress request is accepted before the backend waits for replay completion', () => {
+  const existingBranch = chatV3Source.indexOf('if (claim.kind === "existing")');
+  const replayAcceptance = chatV3Source.indexOf(
+    'emit({ type: "diagnostic", log_id: claim.row.id, phase: "start" });',
+    existingBranch,
+  );
+  const replayWait = chatV3Source.indexOf(
+    'const replay = await waitForReplayCompletion(supabase, body.messageId, claim.row);',
+    existingBranch,
+  );
+
+  assert.ok(existingBranch >= 0, 'existing replay branch must remain present');
+  assert.ok(replayAcceptance > existingBranch, 'existing request must emit protocol acceptance');
+  assert.ok(replayAcceptance < replayWait, 'protocol acceptance must precede the potentially long replay wait');
+});
 
 test('recent stored dialogue is restored visibly instead of becoming hidden model context', () => {
   const now = 1_800_000_000_000;
@@ -1216,6 +1233,105 @@ test('heartbeat comments without protocol acceptance fail over to the direct rou
   assert.equal(payloads[0].resumeOnly, false);
   assert.equal(payloads[1].resumeOnly, false);
   assert.ok(Date.now() - started < 180, 'comments-only route must not consume the whole turn deadline');
+  assert.match(visibleMessages(dom), new RegExp(answer, 'u'));
+  assert.doesNotMatch(visibleMessages(dom), /ошибка соединения|Ответ получен не полностью/iu);
+  dom.window.close();
+});
+
+test('duplicate acceptance keeps fallback alive until the single in-progress execution can be replayed', async () => {
+  const urls = [];
+  const payloads = [];
+  const intervals = new Set();
+  let backendExecutions = 0;
+  let finishExecution;
+  const executionFinished = new Promise((resolve) => { finishExecution = resolve; });
+  const answer = 'Единственный серверный ответ восстановлен после ожидания.';
+  const logId = 'existing-in-progress-replay-log';
+  const completionTimer = setTimeout(() => finishExecution(), 115);
+
+  const dom = bootWidget({
+    source: withTransportTimeouts({ connect: 20, accept: 40, idle: 35, total: 280 }),
+    fetchImpl: async (url, init) => {
+      urls.push(String(url));
+      const payload = JSON.parse(init.body);
+      payloads.push(payload);
+
+      if (urls.length === 1) {
+        backendExecutions += 1;
+        let streamController = null;
+        const body = new ReadableStream({
+          start(controller) {
+            streamController = controller;
+            controller.enqueue(new TextEncoder().encode(': stream-open\n\n'));
+            const interval = setInterval(() => {
+              try { controller.enqueue(new TextEncoder().encode(': keep-alive\n\n')); } catch {}
+            }, 10);
+            intervals.add(interval);
+          },
+          cancel() {
+            for (const interval of intervals) clearInterval(interval);
+            intervals.clear();
+          },
+        });
+        init.signal.addEventListener('abort', () => {
+          for (const interval of intervals) clearInterval(interval);
+          intervals.clear();
+          try { streamController?.error(new DOMException('Aborted', 'AbortError')); } catch {}
+        }, { once: true });
+        return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+      }
+
+      // This is the real duplicate-claim shape: the second normal route must
+      // acknowledge the existing messageId immediately, then wait while the
+      // original execution continues independently of the abandoned stream.
+      const body = new ReadableStream({
+        async start(controller) {
+          controller.enqueue(new TextEncoder().encode([
+            ': stream-open',
+            `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+            '',
+          ].join('\n\n')));
+          const interval = setInterval(() => {
+            try { controller.enqueue(new TextEncoder().encode(': keep-alive\n\n')); } catch {}
+          }, 10);
+          intervals.add(interval);
+          await executionFinished;
+          clearInterval(interval);
+          intervals.delete(interval);
+          controller.enqueue(new TextEncoder().encode([
+            `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } })}`,
+            `data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}`,
+            `data: ${JSON.stringify({ v3_event: { type: 'diagnostic', log_id: logId, phase: 'complete', products_count: 0 } })}`,
+            'data: [DONE]',
+            '',
+          ].join('\n\n')));
+        },
+        cancel() {
+          for (const interval of intervals) clearInterval(interval);
+          intervals.clear();
+        },
+      });
+      return new Response(body, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'Проверка долгого существующего запроса';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+
+  const deadline = Date.now() + 500;
+  while (!visibleMessages(dom).includes(answer) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  clearTimeout(completionTimer);
+  for (const interval of intervals) clearInterval(interval);
+  assert.equal(urls.length, 2);
+  assert.equal(backendExecutions, 1);
+  assert.equal(payloads[0].messageId, payloads[1].messageId);
+  assert.equal(payloads[0].resumeOnly, false);
+  assert.equal(payloads[1].resumeOnly, false);
   assert.match(visibleMessages(dom), new RegExp(answer, 'u'));
   assert.doesNotMatch(visibleMessages(dom), /ошибка соединения|Ответ получен не полностью/iu);
   dom.window.close();
