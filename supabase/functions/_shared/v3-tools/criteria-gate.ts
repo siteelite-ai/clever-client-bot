@@ -251,6 +251,30 @@ export function projectCommonRenderedUserCriteria(
   return mergeUserBackedCriteria([], criteria);
 }
 
+/** Reconstructs the same emission-only proof from the deterministic Markdown
+ * card boundary. This covers recovery paths whose cache URL representation no
+ * longer matches the normalized URL emitted by the renderer. */
+export function projectCommonRenderedMarkdownUserCriteria(
+  markdown: string,
+  userMessage: string,
+): Criterion[] {
+  const products: ProductRef[] = [];
+  const cardPattern = /- \*\*\[([^\]\r\n]+)\]\([^\r\n]+\)\*\*[\s\S]*?(?=\n\n- \*\*\[|$)/gu;
+  for (const match of String(markdown ?? "").matchAll(cardPattern)) {
+    const block = match[0];
+    const vendor = block.match(/\n\s+Бренд:\s*([^\r\n]+)/u)?.[1]?.trim() ?? null;
+    products.push({
+      id: String(products.length + 1),
+      pagetitle: match[1].trim(),
+      vendor,
+      price: 1,
+      stock: "unknown",
+      short_traits: [],
+    });
+  }
+  return projectCommonRenderedUserCriteria(products, userMessage);
+}
+
 export type SelectionCriterionProvenance =
   | "guarded_search"
   | "reasoning_projection"

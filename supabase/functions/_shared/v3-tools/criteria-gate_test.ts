@@ -15,6 +15,7 @@ import {
   parseNumSpan,
   projectCatalogFilterEvidence,
   projectCommonRenderedUserCriteria,
+  projectCommonRenderedMarkdownUserCriteria,
   projectCriteriaFacetOptions,
   resolveRenderCriteria,
   resolveTerminalSelectionCriteria,
@@ -92,6 +93,21 @@ Deno.test("rendered-card consensus uses common title measurements when compact c
   }));
   assertEquals(
     projectCommonRenderedUserCriteria(products, "Покажи ACME на 16 ампер и на 3 полюса"),
+    [
+      { key: "Бренд", op: "eq", value: "ACME Electric", level: "A" },
+      { key: "ампер", op: "eq", value: 16, unit: "a", level: "A" },
+      { key: "полюса", op: "eq", value: 3, unit: "pole", level: "A" },
+    ],
+  );
+});
+
+Deno.test("deterministic markdown cards preserve the same common emission contract", () => {
+  const markdown = [
+    "- **[Device one 3P 16A](https://example.test/one)**\n  Цена: *100* ₸\n  Бренд: ACME Electric",
+    "- **[Device two 3P 16A](https://example.test/two)**\n  Цена: *200* ₸\n  Бренд: ACME Electric",
+  ].join("\n\n");
+  assertEquals(
+    projectCommonRenderedMarkdownUserCriteria(markdown, "Покажи ACME на 16 ампер и на 3 полюса"),
     [
       { key: "Бренд", op: "eq", value: "ACME Electric", level: "A" },
       { key: "ампер", op: "eq", value: 16, unit: "a", level: "A" },
