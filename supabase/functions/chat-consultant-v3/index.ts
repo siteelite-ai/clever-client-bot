@@ -67,6 +67,7 @@ import {
   dropImplicitReplacementIdentityFilters,
   explicitReplacementIdentityValues,
   explicitReplacementModelValues,
+  explicitPostNominalIdentityFacet,
   guardSearchFilters,
   inferReplacementIdentityValues,
   isReplacementIdentityFacet,
@@ -4967,13 +4968,31 @@ async function runExpertLoop(
           const userEvidence = `${history.filter((message) => message.role === "user").slice(-6).map((message) => message.content).join("\n")}\n${userMessage}`;
           const declaredReasoning = `${userEvidence}\n${priorReplacementReasoning}\n${initialSelectionDiscoveryNoun ?? ""}\n${firstAssistantText}\n${assistantReasoning}\n${resp.text}`;
           const guarded = guardSearchFilters(tc.args as Record<string, unknown>, lastDiscover.facets, declaredReasoning, userEvidence);
+          const explicitIdentity = intentMode === "select" && !replacementIntent && guarded.args.mode === "by_filter"
+            ? explicitPostNominalIdentityFacet(lastDiscover.facets, userMessage, lastDiscover.category.pagetitle)
+            : null;
+          const identityCompletion = explicitIdentity && !guarded.kept.some((item) =>
+              item.key === explicitIdentity.key && item.value === explicitIdentity.value)
+            ? [explicitIdentity]
+            : [];
+          const guardedArgs = explicitIdentity
+            ? {
+              ...guarded.args,
+              options: {
+                ...(guarded.args.options && typeof guarded.args.options === "object"
+                  ? guarded.args.options as Record<string, string[]>
+                  : {}),
+                [explicitIdentity.key]: [explicitIdentity.value],
+              },
+            }
+            : guarded.args;
           const identityGuard = replacementIntent
-            ? dropImplicitReplacementIdentityFilters(guarded.args, lastDiscover.facets, replacementEvidenceMessage)
-            : { args: guarded.args, removed: [] };
+            ? dropImplicitReplacementIdentityFilters(guardedArgs, lastDiscover.facets, replacementEvidenceMessage)
+            : { args: guardedArgs, removed: [] };
           const removedIdentityKeys = new Set(identityGuard.removed.map((item) => item.key));
-          const effectiveKept = guarded.kept.filter((item) => !removedIdentityKeys.has(item.key));
-          const effectiveUserBacked = guarded.user_backed.filter((item) => !removedIdentityKeys.has(item.key));
-          const effectiveInferred = guarded.inferred.filter((item) => !removedIdentityKeys.has(item.key));
+          const effectiveKept = [...guarded.kept, ...identityCompletion].filter((item) => !removedIdentityKeys.has(item.key));
+          const effectiveUserBacked = [...guarded.user_backed, ...identityCompletion].filter((item) => !removedIdentityKeys.has(item.key));
+          const effectiveInferred = [...guarded.inferred, ...identityCompletion].filter((item) => !removedIdentityKeys.has(item.key));
           tc.args = identityGuard.args;
           for (const removed of identityGuard.removed) {
             for (const value of removed.values) {

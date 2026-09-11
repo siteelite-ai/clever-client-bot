@@ -5,6 +5,7 @@ import {
   dropImplicitReplacementIdentityFilters,
   explicitReplacementIdentityValues,
   explicitReplacementModelValues,
+  explicitPostNominalIdentityFacet,
   guardSearchFilters,
   inferReplacementIdentityValues,
   isReplacementIdentityFacet,
@@ -252,6 +253,40 @@ Deno.test("filter guard never infers a brand from an ordinary word in free prose
 
   assertEquals(result.args, { mode: "by_filter", category: "Светильники" });
   assertEquals(result.inferred, []);
+});
+
+Deno.test("post-nominal identity resolves one canonical live value without a brand dictionary", () => {
+  const identityFacets = [
+    { key: "brand", caption: "Бренд", values: [{ value: "Schneider Electric" }, { value: "IEK" }] },
+    { key: "poles", caption: "Количество полюсов", values: [{ value: "3" }] },
+  ];
+  assertEquals(
+    explicitPostNominalIdentityFacet(
+      identityFacets,
+      "Покажи автоматические выключатели Schneider на 16 ампер",
+      "Автоматические выключатели",
+    ),
+    { key: "brand", value: "Schneider Electric" },
+  );
+  assertEquals(
+    explicitPostNominalIdentityFacet(
+      identityFacets,
+      "Для гостиной нужен общий свет",
+      "Светильники",
+    ),
+    null,
+  );
+});
+
+Deno.test("ambiguous live identity prefixes fail closed", () => {
+  assertEquals(
+    explicitPostNominalIdentityFacet(
+      [{ key: "brand", caption: "Бренд", values: [{ value: "Example Electric" }, { value: "Example System" }] }],
+      "Покажи автоматы Example на 16 ампер",
+      "Автоматы",
+    ),
+    null,
+  );
 });
 
 Deno.test("filter guard does not guess when several values are explicit", () => {
