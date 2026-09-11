@@ -58,7 +58,9 @@ import {
 import {
   broadAssortmentNeedsClarification,
   buildBroadAssortmentClarification,
+  extractBroadAssortmentScope,
   isBroadAssortmentRequest,
+  resolvePendingBroadAssortmentScope,
 } from "../_shared/v3-tools/broad-assortment.ts";
 import {
   dropImplicitReplacementIdentityCriteria,
@@ -3117,8 +3119,24 @@ async function answerBroadAssortmentRequest(
       question: answer,
       facet_key: "catalog_section",
       options: leaves.slice(0, 5).map((value) => ({ value, label: value })),
+      ...(seriesToken ? { scope: { kind: "broad_assortment", token: seriesToken } } : {}),
     });
     emitSideEffects(clarification, send);
+  } else if (seriesToken) {
+    // Free-form refinements still inherit the catalog entity even when there
+    // are not enough leaf categories to offer quick replies.
+    send({
+      type: "slot_update",
+      slots: {
+        pending_clarification: {
+          slot_id: crypto.randomUUID(),
+          facet_key: "catalog_section",
+          question: answer,
+          options: leaves,
+          scope: { kind: "broad_assortment", token: seriesToken },
+        },
+      },
+    });
   }
   steps.push({
     step: "v3_broad_assortment_preflight",
@@ -3659,7 +3677,8 @@ async function runExpertLoop(
     });
   };
   const broadAssortmentRequest = isBroadAssortmentRequest(userMessage);
-  const namedSeriesToken = resolveNamedSeriesToken(userMessage, history.slice(-8));
+  const namedSeriesToken = resolveNamedSeriesToken(userMessage, history.slice(-8)) ??
+    resolvePendingBroadAssortmentScope(slots, history.slice(-8));
   const inquiryRequiresCatalogGrounding = intentMode === "inquire" && requiresCatalogGroundingForInquiry(userMessage);
   const seriesTurnRequiresGrounding = Boolean(namedSeriesToken);
   const codeConstraints = extractCodeConstraints(userMessage);
@@ -10193,8 +10212,10 @@ Deno.serve(async (req) => {
       const matchedPendingClarification = Boolean(
         resolvePendingClarificationChoice(slots, userMessage),
       );
+      const pendingBroadAssortmentScope = resolvePendingBroadAssortmentScope(slots, priorHistory);
       const startsNewTask = shouldStartNewConversation(boundary, {
         matchedPendingClarification,
+        activeScopedClarification: Boolean(pendingBroadAssortmentScope),
       });
       const effectiveSessionId = startsNewTask ? `session_${crypto.randomUUID()}` : sessionId;
       const effectiveHistory = startsNewTask ? [] : priorHistory;
@@ -10209,12 +10230,13 @@ Deno.serve(async (req) => {
           source: boundary.source,
           reason: boundary.reason,
           matched_pending_clarification: matchedPendingClarification,
+          pending_broad_assortment_scope: pendingBroadAssortmentScope,
           history_echo_removed: priorHistory.length !== history.length,
         },
       });
       if (startsNewTask) {
         send({ type: "conversation_boundary", mode: "new_task", session_id: effectiveSessionId });
-      } else if (matchedPendingClarification) {
+      } else if (matchedPendingClarification || pendingBroadAssortmentScope) {
         // The current request still receives the original slot through
         // `effectiveSlots`, but the browser must not carry that consumed
         // choice into an unrelated future turn. A later clarification in this
@@ -10290,7 +10312,7 @@ Deno.serve(async (req) => {
           (exactProductInquiryLookup.articles.length > 0 || exactProductInquiryLookup.modelCodes.length > 0);
         const broadAssortmentRequest = isBroadAssortmentRequest(userMessage);
         const broadAssortmentToken = broadAssortmentRequest
-          ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8))
+          ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8)) ?? extractBroadAssortmentScope(userMessage)
           : null;
         const readinessClarification = selectReadinessClarification(
           userMessage,

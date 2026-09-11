@@ -14,6 +14,7 @@ export interface ProposeClarificationInput {
   question: string;
   facet_key: string;
   options: Array<{ value: string; label?: string; count?: number }>;
+  scope?: { kind: string; token: string };
 }
 
 export function executeProposeClarification(
@@ -59,6 +60,7 @@ export function executeProposeClarification(
           facet_key,
           question,
           options: replies,
+          ...(input.scope?.kind && input.scope?.token ? { scope: input.scope } : {}),
         },
       },
     },

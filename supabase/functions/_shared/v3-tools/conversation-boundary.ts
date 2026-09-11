@@ -79,13 +79,13 @@ export function parseConversationBoundaryDecision(raw: string): ConversationBoun
 
 export function shouldStartNewConversation(
   decision: ConversationBoundaryDecision,
-  context: { matchedPendingClarification?: boolean } = {},
+  context: { matchedPendingClarification?: boolean; activeScopedClarification?: boolean } = {},
 ): boolean {
   // A reply that matches a server-issued clarification option is structurally
   // dependent on the preceding turn even when the words could form a valid
   // standalone request. The model boundary classifier must not erase the
   // entity/series and constraints that the server explicitly asked to refine.
-  if (context.matchedPendingClarification) return false;
+  if (context.matchedPendingClarification || context.activeScopedClarification) return false;
   return decision.mode === "new_task" && decision.confidence >= NEW_TASK_THRESHOLD;
 }
 
