@@ -5,11 +5,26 @@ import {
   groundedCategoryRecoveryQueries,
   groundedTokenRecoveryQueries,
   guardCategoryScopeByReasoning,
+  guardDiscoveryNounBySelectionTarget,
   filterProductsByNamedSeries,
   rankGroundedCategoryRecoveryScopes,
   selectGroundedTokenRecoveryCandidate,
   titleContainsLiteralToken,
 } from "./category-reasoning-guard.ts";
+
+Deno.test("discovery noun cannot replace a frozen class with a sibling", () => {
+  assertEquals(
+    guardDiscoveryNounBySelectionTarget("Стабилизаторы", "ИБП"),
+    { noun: "ИБП", changed: true, reason: "sibling_substitution" },
+  );
+});
+
+Deno.test("discovery noun may broaden while preserving the frozen class base", () => {
+  assertEquals(
+    guardDiscoveryNounBySelectionTarget("Светильники", "бытовой светильник"),
+    { noun: "Светильники", changed: false, reason: "preserves_target" },
+  );
+});
 
 const discovered = {
   category: { pagetitle: "Светильники" },

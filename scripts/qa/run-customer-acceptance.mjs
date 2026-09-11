@@ -203,6 +203,11 @@ export function evaluate(expect = {}, response) {
   for (const phrase of expect.forbid_assistant_text ?? []) {
     if (includesAny(response.text, [phrase])) failures.push(`forbidden assistant text: ${phrase}`);
   }
+  for (const phrase of expect.forbid_tool_summary ?? []) {
+    if ((response.toolEvents ?? []).some((event) => includesAny(event.summary ?? '', [phrase]))) {
+      failures.push(`forbidden tool summary: ${phrase}`);
+    }
+  }
   for (const phrase of expect.forbid_product_title ?? []) {
     if (response.links.some((link) => includesStandalonePhrase(link.title, phrase))) {
       failures.push(`forbidden product title: ${phrase}`);

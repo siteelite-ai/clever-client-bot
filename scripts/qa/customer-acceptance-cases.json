@@ -545,6 +545,7 @@
               ["запас", "пусков"]
             ],
             "forbid_assistant_text": ["стабилизатор"],
+            "forbid_tool_summary": ["Стабилизаторы"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }

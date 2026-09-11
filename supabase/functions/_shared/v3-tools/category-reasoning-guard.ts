@@ -3,6 +3,8 @@
 // sibling. Unsupported leaf categories are removed instead of guessed/replaced;
 // the remaining facet filters then perform the safe category-wide search.
 
+import { selectionTargetIsDeclared } from "./selection-contract.ts";
+
 export interface DiscoveredCategoryScope {
   category?: { pagetitle?: string | null } | null;
   leaf_categories?: Array<{ pagetitle?: string | null }> | null;
@@ -17,6 +19,36 @@ export interface CategoryReasoningGuardResult {
 export interface GroundedCategoryRecoveryScope<T extends DiscoveredCategoryScope> {
   discovery: T;
   targets: string[];
+}
+
+export interface DiscoveryNounGuardResult {
+  noun: string;
+  changed: boolean;
+  reason: "empty" | "preserves_target" | "sibling_substitution";
+}
+
+/**
+ * A discovery request may broaden or formalize the frozen product class, but
+ * it may not replace it with a related sibling. This guard is deliberately
+ * vocabulary-free: at least one class direction must preserve the same
+ * lexical base according to the ordinary selection-target contract.
+ */
+export function guardDiscoveryNounBySelectionTarget(
+  requestedNoun: string,
+  frozenTarget: string | null,
+): DiscoveryNounGuardResult {
+  const requested = String(requestedNoun ?? "").trim();
+  const target = String(frozenTarget ?? "").trim();
+  if (!requested || !target) {
+    return { noun: requested || target, changed: false, reason: "empty" };
+  }
+  if (
+    selectionTargetIsDeclared(target, requested) ||
+    selectionTargetIsDeclared(requested, target)
+  ) {
+    return { noun: requested, changed: false, reason: "preserves_target" };
+  }
+  return { noun: target, changed: true, reason: "sibling_substitution" };
 }
 
 const RU_SUFFIXES = [

@@ -80,6 +80,7 @@ import {
   filterProductsByNamedSeries,
   groundedCategoryRecoveryQueries,
   groundedTokenRecoveryQueries,
+  guardDiscoveryNounBySelectionTarget,
   guardCategoryScopeByReasoning,
   rankGroundedCategoryRecoveryScopes,
   selectGroundedTokenRecoveryCandidate,
@@ -4888,6 +4889,25 @@ async function runExpertLoop(
         // canonical guards modify it. A later recovery may use these strings,
         // but live title/criteria evidence remains mandatory.
         if (tc.name === "discover_category") {
+          if (intentMode === "select" && typeof tc.args.noun === "string") {
+            const nounGuard = guardDiscoveryNounBySelectionTarget(
+              tc.args.noun,
+              activeSelectionTarget,
+            );
+            if (nounGuard.changed) {
+              const requestedNoun = tc.args.noun;
+              tc.args = { ...tc.args, noun: nounGuard.noun };
+              steps.push({
+                step: "v3_discovery_noun_target_enforced",
+                ms: now(),
+                meta: {
+                  requested: requestedNoun,
+                  enforced: nounGuard.noun,
+                  reason: nounGuard.reason,
+                },
+              });
+            }
+          }
           rememberCompoundRecoveryHint(tc.args.noun);
           if (
             !initialSelectionDiscoveryNoun &&

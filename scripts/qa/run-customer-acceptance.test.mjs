@@ -259,6 +259,21 @@ test('evaluate can forbid unsupported prose without rejecting evidence in produc
   }).includes('forbidden assistant text: E27'));
 });
 
+test('evaluate rejects a sibling taxonomy branch hidden from user-facing prose', () => {
+  const response = {
+    text: 'Подбираю ИБП.',
+    textBeforeProducts: 'Подбираю ИБП.',
+    productsMarkdown: '',
+    links: [],
+    completed: true,
+    diagnosticError: null,
+    serverProductsCount: 0,
+    toolEvents: [{ tool: 'discover_category', phase: 'result', summary: 'категория «Стабилизаторы»: 112 тов.' }],
+  };
+  assert(evaluate({ forbid_tool_summary: ['Стабилизаторы'] }, response)
+    .includes('forbidden tool summary: Стабилизаторы'));
+});
+
 test('evaluate validates a generic strict numeric pair around the object size', () => {
   const base = {
     text: '',
