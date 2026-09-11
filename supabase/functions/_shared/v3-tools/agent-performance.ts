@@ -43,6 +43,7 @@ export interface TerminalLexicalRecoveryInput {
   recoverySourceAvailable: boolean;
   noProgressBreak: boolean;
   deadlineFinalizeBreak: boolean;
+  pendingSelectionFinalizeBreak: boolean;
   triedLadderQueryCount: number;
 }
 
@@ -80,6 +81,7 @@ export function shouldAttemptTerminalLexicalRecovery(
     !input.recoverySourceAvailable
   ) return false;
   if (input.deadlineFinalizeBreak) return true;
+  if (input.pendingSelectionFinalizeBreak && input.triedLadderQueryCount >= 1) return true;
   return input.noProgressBreak && input.triedLadderQueryCount >= 2;
 }
 

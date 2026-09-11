@@ -43,10 +43,23 @@ Deno.test("timed-out selection uses the existing proof-gated lexical finalizer",
     recoverySourceAvailable: true,
     noProgressBreak: false,
     deadlineFinalizeBreak: true,
+    pendingSelectionFinalizeBreak: false,
     triedLadderQueryCount: 0,
   };
   assert(shouldAttemptTerminalLexicalRecovery(base));
   assert(!shouldAttemptTerminalLexicalRecovery({ ...base, deadlineFinalizeBreak: false }));
+  assert(shouldAttemptTerminalLexicalRecovery({
+    ...base,
+    deadlineFinalizeBreak: false,
+    pendingSelectionFinalizeBreak: true,
+    triedLadderQueryCount: 1,
+  }));
+  assert(!shouldAttemptTerminalLexicalRecovery({
+    ...base,
+    deadlineFinalizeBreak: false,
+    pendingSelectionFinalizeBreak: true,
+    triedLadderQueryCount: 0,
+  }));
   assert(shouldAttemptTerminalLexicalRecovery({
     ...base,
     deadlineFinalizeBreak: false,

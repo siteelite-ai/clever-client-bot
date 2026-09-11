@@ -3839,6 +3839,7 @@ async function runExpertLoop(
   let criteriaDeadEndBreak = false;
   let rejectedRenderFinalizeBreak = false;
   let deadlineFinalizeBreak = false;
+  let pendingSelectionFinalizeBreak = false;
 
   // No-progress detector: подряд два search_catalog с тем же сигнатурным
   // набором id (или пусто) → дальнейшие итерации не дадут нового сигнала,
@@ -5122,6 +5123,7 @@ async function runExpertLoop(
           continue;
         }
         if (routesPendingSelectionToFinalizer) {
+          pendingSelectionFinalizeBreak = true;
           steps.push({
             step: "v3_pending_selection_routed_to_finalizer",
             ms: now(),
@@ -10312,12 +10314,12 @@ async function runExpertLoop(
 
     // A successful broad category discovery does not prove that the user's
     // colloquial noun is literal catalog vocabulary. After two distinct empty
-    // model-owned semantic queries, or when the tool-decision times out after
-    // grounded discovery but before it can emit the first query, route once
-    // through the existing lexical helper. This is a state transition, not a
-    // synonym table: the helper's candidate must occur literally in every
-    // accepted live title, and the original selection target/criteria/budget
-    // gates still apply.
+    // model-owned semantic queries, when the tool-decision times out after
+    // grounded discovery, or when the model explicitly finishes after one
+    // empty search, route once through the existing lexical helper. This is a
+    // state transition, not a synonym table: the helper's candidate must occur
+    // literally in every accepted live title, and the original selection
+    // target/criteria/budget gates still apply.
     const terminalLexicalRecoverySource = resolveTerminalLexicalRecoverySource(
       lastSearchNoun,
       initialSelectionDiscoveryNoun,
@@ -10336,6 +10338,7 @@ async function runExpertLoop(
       recoverySourceAvailable: Boolean(terminalLexicalRecoverySource),
       noProgressBreak,
       deadlineFinalizeBreak,
+      pendingSelectionFinalizeBreak,
       triedLadderQueryCount: triedLadderQueries.size,
     })) {
       const recoveredJargon = await attemptTerminalJargonRecovery(terminalLexicalRecoverySource);
