@@ -9602,6 +9602,23 @@ async function runExpertLoop(
     // generic facet/search recovery. Resolve that claim first, or keep the turn
     // empty; otherwise the system would knowingly render a broad sibling pool.
     const terminalAliasRequirement = declaredAliasQuery ?? requiredCatalogAlias;
+    // A model-selected semantic pool becomes authoritative only when every
+    // cached card literally proves the distinctive search label. Generic
+    // category/criteria recovery must never replace that narrower evidence:
+    // doing so can preserve broad facets while silently discarding the user's
+    // lexical intent. The semantic recovery below still revalidates the full
+    // target, criteria, compatibility and budget contract before rendering.
+    const terminalTitleGroundedSemanticPool = Boolean(
+      semanticBackedSearch?.label?.trim() &&
+      semanticBackedSearch.ids.length > 0 &&
+      semanticBackedSearch.ids.every((id) => {
+        const product = ctx.cache.get(id);
+        return Boolean(
+          product &&
+          titleSupportsGroundedJargonQuery(product.pagetitle, semanticBackedSearch!.label),
+        );
+      }),
+    );
     const terminalCompatibilityEvidence = `${terminalReasoningEvidence}\n${assistantReasoning}`;
     const terminalCompatibilityReference = extractSingleMeasuredReference(userMessage);
     const terminalCompatibilityDiscover = terminalDiscover ?? lastDiscover;
@@ -9952,7 +9969,7 @@ async function runExpertLoop(
         },
       });
     }
-    if (!derivedStructuredSearchFinalizationReady && !terminalAliasRequirement && terminalFinalizationRequired && terminalDiscover && terminalSelectionTarget) {
+    if (!derivedStructuredSearchFinalizationReady && !terminalAliasRequirement && !terminalTitleGroundedSemanticPool && terminalFinalizationRequired && terminalDiscover && terminalSelectionTarget) {
       const terminalCriteria = terminalSelectionCriteria;
       const facetProjection = projectCriteriaFacetOptions(terminalCriteria, terminalDiscover.facets);
       if (terminalCriteria.length > 0 && Object.keys(facetProjection.options).length > 0) {
@@ -10101,7 +10118,7 @@ async function runExpertLoop(
     // lookup aligned with the explanation and avoids both a product dictionary
     // and an expensive scan of unrelated catalog pages. Every returned card is
     // still revalidated against the complete target/criteria/budget contract.
-    if (!derivedStructuredSearchFinalizationReady && !terminalAliasRequirement && terminalFinalizationRequired && terminalDiscover && terminalSelectionTarget) {
+    if (!derivedStructuredSearchFinalizationReady && !terminalAliasRequirement && !terminalTitleGroundedSemanticPool && terminalFinalizationRequired && terminalDiscover && terminalSelectionTarget) {
       const terminalCriteria = terminalSelectionCriteria;
       if (terminalCriteria.length > 0) {
         send({ type: "tool_event", tool: "search_catalog", phase: "start", summary: "Сверяю поиск с выбранным типом товара…" });
@@ -10182,6 +10199,7 @@ async function runExpertLoop(
     if (
       productsRendered === 0 &&
       !terminalAliasRequirement &&
+      !terminalTitleGroundedSemanticPool &&
       reasoningBackedSearch &&
       terminalSelectionTarget &&
       reasoningBackedSearch.criteria.length > 0 &&
@@ -10502,6 +10520,7 @@ async function runExpertLoop(
     if (
       productsRendered === 0 &&
       !terminalAliasRequirement &&
+      !terminalTitleGroundedSemanticPool &&
       !replacementIntent &&
       intentMode === "select" &&
       !seriesTurnRequiresGrounding &&
