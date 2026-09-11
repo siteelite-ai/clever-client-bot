@@ -3384,6 +3384,15 @@ async function runExpertLoop(
       return;
     }
     const plan = currentSelectionCriteriaPlan();
+    const emittedCriteria = mergeUserBackedCriteria([], [
+      ...userBackedSearchCriteria,
+      ...enforcedSearchCriteria,
+      ...reasoningProjectedSearchCriteria,
+      ...latestRenderCriteria,
+    ]);
+    const emittedPlan = plan ?? (emittedCriteria.length > 0
+      ? extendSelectionCriteriaPlan(null, emittedCriteria, "render_alignment")
+      : null);
     const visibleRequirements = buildVisibleRequestContract(userMessage, {
       productClass: activeSelectionTarget ?? lastDiscover?.category?.pagetitle ?? "",
       taxonomyClass: lastDiscover?.category?.pagetitle ?? "",
@@ -3398,11 +3407,11 @@ async function runExpertLoop(
     }));
     rawSend({
       ...event,
-      ...(plan
+      ...(emittedPlan
         ? {
           selection_contract: {
-            hash: plan.hash,
-            mandatory_criteria: plan.mandatory_criteria.map(({ key, op, value, unit, exclusive }) => ({
+            hash: emittedPlan.hash,
+            mandatory_criteria: emittedPlan.mandatory_criteria.map(({ key, op, value, unit, exclusive }) => ({
               key,
               op,
               value,
@@ -3600,6 +3609,7 @@ async function runExpertLoop(
   const shownIds = new Set<string>();
   const triedLadderQueries = new Set<string>();
   let catalogSearchAttempted = false;
+  let catalogLookupCompleted = false;
   // If the model tries to finish immediately after a successful discovery,
   // give its reasoning one continuation and then force the existing catalog
   // phase. This preserves one opportunity for a model-owned category
@@ -7088,6 +7098,13 @@ async function runExpertLoop(
           }
         }
 
+        if (
+          result.ok &&
+          (tc.name === "search_catalog" || tc.name === "jargon_recover_catalog")
+        ) {
+          catalogLookupCompleted = true;
+        }
+
         if (establishesCatalogAttempt({ tool: tc.name, ok: result.ok })) {
           catalogSearchAttempted = true;
           selectionCatalogContinuationRequired = false;
@@ -10140,7 +10157,7 @@ async function runExpertLoop(
     if (
       productsRendered === 0 &&
       intentMode === "select" &&
-      catalogSearchAttempted &&
+      catalogLookupCompleted &&
       !finalText.trim() &&
       !turnController.signal.aborted
     ) {
