@@ -4,6 +4,7 @@ import {
   alignCompatibilityRelationsWithReasoning,
   compatibilityRelationsToCriteria,
   completePairedCompatibilityRelations,
+  completeSchemaBackedCompatibilityRelations,
   commonCompatibilityReference,
   enforceFinalPairedCompatibility,
   extractSingleMeasuredReference,
@@ -194,6 +195,14 @@ Deno.test("a strict one-sided criterion exposes a live opposite-state fit contra
     { key: "before_diameter", op: "min", value: 10, unit: "мм", level: "B" },
   ], facets), null);
   assertEquals(pairedStateCriterionReference([
+    { key: "before_diameter", op: "min", value: 10, unit: "мм", level: "A" },
+  ], facets, "Размер до изменения должен позволять объекту 10 мм свободно проходить."), {
+    value: 10,
+    unit: "мм",
+    criterion_key: "before_diameter",
+    opposite_facet_key: "after_diameter",
+  });
+  assertEquals(pairedStateCriterionReference([
     { key: "before_diameter", op: "eq", value: 10, unit: "мм", level: "A" },
   ], facets, "До изменения размер должен быть больше 10 мм."), {
     value: 10,
@@ -204,6 +213,34 @@ Deno.test("a strict one-sided criterion exposes a live opposite-state fit contra
   assertEquals(pairedStateCriterionReference([
     { key: "before_diameter", op: "max", value: 10, unit: "мм", level: "B", exclusive: true },
   ], facets), null);
+});
+
+Deno.test("schema-backed completion applies both live states before rendering", () => {
+  const facets = [
+    { key: "before_size", caption: "Внутренний размер до изменения, мм", unit: null, values: [{ value: "12" }] },
+    { key: "after_size", caption: "Внутренний размер после изменения, мм", unit: null, values: [{ value: "6" }] },
+  ];
+  const completed = completeSchemaBackedCompatibilityRelations(
+    [{ product_key: "before_size", relation: "gt", reference_value: 10, unit: "мм", level: "A" }],
+    [{ key: "before_size", op: "min", value: 10, unit: "мм", level: "A" }],
+    "До изменения объект 10 мм должен свободно проходить.",
+    facets,
+    { value: 10, unit: "мм" },
+  );
+
+  assertEquals(completed.paired_reference, {
+    value: 10,
+    unit: "мм",
+    criterion_key: "before_size",
+    opposite_facet_key: "after_size",
+  });
+  assertEquals(completed.relations.map(({ product_key, relation }) => ({ product_key, relation })), [
+    { product_key: "before_size", relation: "gt" },
+    { product_key: "after_size", relation: "lt" },
+  ]);
+  assertEquals(completed.added.map(({ product_key, relation }) => ({ product_key, relation })), [
+    { product_key: "after_size", relation: "lt" },
+  ]);
 });
 
 Deno.test("relative equality is resolved from the opposite relation and qualitative fit", () => {

@@ -41,13 +41,13 @@ import {
   commonCompatibilityReference,
   compatibilityRelationsToCriteria,
   completePairedCompatibilityRelations,
+  completeSchemaBackedCompatibilityRelations,
   enforceFinalPairedCompatibility,
   extractSingleMeasuredReference,
   filterProductsByPairedTitleFit,
   hasOppositeCompatibilityDirections,
   mergeCompatibilityCriteria,
   minimumCompatibilityRelationCount,
-  pairedStateCriterionReference,
   parseCompatibilityRelations,
   projectCompatibilityFacetOptions,
   projectPairedTitleEvidence,
@@ -6495,11 +6495,14 @@ async function runExpertLoop(
             parsedCompatibilityRelations,
             initialCompatibilityEvidence,
           );
-          const completedCompatibility = completePairedCompatibilityRelations(
+          const rawCriteria = renderRawCriteria;
+          const customerMeasuredReference = extractSingleMeasuredReference(userMessage);
+          const completedCompatibility = completeSchemaBackedCompatibilityRelations(
             alignedCompatibility.relations,
+            rawCriteria,
             initialCompatibilityEvidence,
             lastDiscover?.facets ?? [],
-            extractSingleMeasuredReference(userMessage),
+            customerMeasuredReference,
           );
           const compatibilityRelations = completedCompatibility.relations;
           activeCompatibilityRelations = compatibilityRelations;
@@ -6511,18 +6514,8 @@ async function runExpertLoop(
               meta: { alignments: alignedCompatibility.alignments, completed: completedCompatibility.added },
             });
           }
-          const rawCriteria = renderRawCriteria;
-          const customerMeasuredReference = extractSingleMeasuredReference(userMessage);
-          const livePairedCriterion = pairedStateCriterionReference(
-            rawCriteria,
-            lastDiscover?.facets ?? [],
-            initialCompatibilityEvidence,
-          );
-          const schemaBackedPairedReference = livePairedCriterion && customerMeasuredReference &&
-              livePairedCriterion.value === customerMeasuredReference.value &&
-              livePairedCriterion.unit === customerMeasuredReference.unit
-            ? customerMeasuredReference
-            : null;
+          const livePairedCriterion = completedCompatibility.paired_reference;
+          const schemaBackedPairedReference = livePairedCriterion ? customerMeasuredReference : null;
           // Named-series browsing is entity retrieval, not a fit calculation.
           // Prices, voltage ranges and temperatures in grounded series prose
           // must not manufacture compatibility obligations the customer never

@@ -56,6 +56,10 @@ export interface PairedStateCriterionReference {
   opposite_facet_key: string;
 }
 
+export interface SchemaBackedCompatibilityContract extends CompletedCompatibilityRelations {
+  paired_reference: PairedStateCriterionReference | null;
+}
+
 /**
  * Visible explanation for a two-sided fit whose exact product keys are owned
  * by the live schema. It states only the invariant that can be checked on
@@ -380,6 +384,9 @@ export function pairedStateCriterionReference(
     const suffix = String(facet.caption ?? "").match(/(?:,|\s)([a-zа-я°]{1,10}[²³]?\d?)\s*$/iu)?.[1] ?? "";
     return canonicalUnit(suffix);
   };
+  const prose = String(reasoningText ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е");
+  const requiresClearance = /свободн/u.test(prose) && /(?:наде|проходи|входи|вмеща|охватыва)/u.test(prose);
+  const requiresCompression = /плотн/u.test(prose) && /(?:обж|обож|фиксир|садит|сесть|села|село)/u.test(prose);
 
   for (const criterion of Array.isArray(criteria) ? criteria : []) {
     const value = scalar(criterion);
@@ -398,7 +405,12 @@ export function pairedStateCriterionReference(
       bound.value === value && canonicalUnit(bound.unit) === unit && bound.strict
     );
     const effectiveOp = proseBound?.op ?? criterion.op;
-    const strict = Boolean(proseBound?.strict || criterion.exclusive);
+    const strict = Boolean(
+      proseBound?.strict ||
+      criterion.exclusive ||
+      state === "upper" && requiresClearance ||
+      state === "lower" && requiresCompression
+    );
     if (
       !state || !strict ||
       state === "upper" && effectiveOp !== "min" ||
@@ -425,6 +437,39 @@ export function pairedStateCriterionReference(
     };
   }
   return null;
+}
+
+/**
+ * Compiles one compatibility contract in causal order. A strict one-sided
+ * model criterion may expose an unambiguous opposite live state; that schema
+ * evidence must participate before relation completion, otherwise the public
+ * contract can become stricter than the criteria actually applied to cards.
+ * The generated pair is category-neutral and uses only the customer's scalar,
+ * the consultant's reasoning and the live before/after facet graph.
+ */
+export function completeSchemaBackedCompatibilityRelations(
+  relations: CompatibilityRelation[],
+  criteria: Criterion[],
+  reasoningText: string,
+  facets: CompatibilityFacet[],
+  customerReference: { value: number; unit: string } | null,
+): SchemaBackedCompatibilityContract {
+  const discovered = pairedStateCriterionReference(criteria, facets, reasoningText);
+  const pairedReference = discovered && customerReference &&
+      discovered.value === customerReference.value &&
+      canonicalUnit(discovered.unit) === canonicalUnit(customerReference.unit)
+    ? discovered
+    : null;
+  const completionEvidence = pairedReference && customerReference
+    ? `${reasoningText}\n${buildPairedCompatibilityReasoning(customerReference)}`
+    : reasoningText;
+  const completed = completePairedCompatibilityRelations(
+    relations,
+    completionEvidence,
+    facets,
+    customerReference,
+  );
+  return { ...completed, paired_reference: pairedReference };
 }
 
 /**
