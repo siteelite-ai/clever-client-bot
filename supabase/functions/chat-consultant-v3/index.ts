@@ -33,7 +33,7 @@ import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-le
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCatalogEmptySynthesisMessages, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { buildDerivedSelectionReasoningMessages, hasActionableSelectionContract, hasSelectionMeasurementContext, measuredSelectionContractEvidence, shouldContinueSelectionPastOptionalClarification, shouldRequireDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, groundSelectionApplicationContext, initialSelectionDeclaration, parseSelectionTarget, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, groundSelectionApplicationContext, initialSelectionDeclaration, parseSelectionTarget, projectModelOnlySelectionTargetExtension, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, declaredAliasIsStructurallyCustomerOwned, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
@@ -5919,10 +5919,6 @@ async function runExpertLoop(
             ) &&
               selectionTargetIsDeclared(liveTaxonomyDeclaration, target),
           );
-          const bootstrappedTargetExtensionDeclared = Boolean(
-            activeSelectionTarget &&
-            selectionTargetIsDeclared(activeSelectionTarget, target),
-          );
           const replacementContinuationClassDeclared = Boolean(
             replacementIntent &&
             target &&
@@ -5947,16 +5943,27 @@ async function runExpertLoop(
               liveTaxonomyDeclaration,
             )
             : false;
-          const targetDeclared = target
-            ? (selectionTargetPreservesGroundedBase(priorActiveSelectionTarget, target) || groundedAliasExpansion) && (
-              selectionTargetDeclarationIsGrounded(
+          const projectedGroundedTarget = target
+            ? projectModelOnlySelectionTargetExtension(
+              priorActiveSelectionTarget,
               target,
               `${userMessage}\n${initialSelectionDiscoveryNoun ?? ""}\n${initialReasoningDeclaration}`,
               liveTaxonomyDeclaration,
-              ) || namedSeriesBaseClassDeclared || bootstrappedTargetExtensionDeclared || replacementContinuationClassDeclared
+              renderRawCriteria,
+            )
+            : null;
+          const targetDeclared = target
+            ? Boolean(projectedGroundedTarget) || (
+              (selectionTargetPreservesGroundedBase(priorActiveSelectionTarget, target) || groundedAliasExpansion) && (
+                selectionTargetDeclarationIsGrounded(
+                  target,
+                  `${userMessage}\n${initialSelectionDiscoveryNoun ?? ""}\n${initialReasoningDeclaration}`,
+                  liveTaxonomyDeclaration,
+                ) || namedSeriesBaseClassDeclared || replacementContinuationClassDeclared
+              )
             )
             : false;
-          if (targetDeclared) groundedSelectionTargetHint = target;
+          if (targetDeclared) groundedSelectionTargetHint = projectedGroundedTarget ?? target;
           let ids = Array.isArray(tc.args.product_ids)
             ? (tc.args.product_ids as unknown[]).map(String)
             : [];
@@ -6018,7 +6025,7 @@ async function runExpertLoop(
               meta: { target, grounded_target: priorActiveSelectionTarget, initial_reasoning: initialReasoningDeclaration },
             });
           } else if (products.length > 0) {
-            let verificationTarget = target;
+            let verificationTarget = projectedGroundedTarget ?? target;
             const verifyVisibleTarget = (candidateTarget: string, candidateProducts: ProductRef[]) =>
               seriesGroundingSatisfied && namedSeriesToken
                 ? verifySelectionTargetWithNamedEntityCategory({
@@ -6029,13 +6036,20 @@ async function runExpertLoop(
                 : verifySelectionTargetWithVisibleTitle(candidateTarget, candidateProducts);
             let targetReport = semanticBackedSearch && lastDiscover
               ? verifySelectionTargetWithGroundedSearch({
-                target,
+                target: verificationTarget,
                 products,
                 live_class: lastDiscover.category.pagetitle,
                 grounded_label: semanticBackedSearch.label,
                 grounded_ids: semanticBackedSearch.ids,
               })
-              : verifyVisibleTarget(target, products);
+              : verifyVisibleTarget(verificationTarget, products);
+            if (projectedGroundedTarget) {
+              steps.push({
+                step: "v3_selection_target_model_extension_projected",
+                ms: now(),
+                meta: { declared_target: target, verified_base: projectedGroundedTarget },
+              });
+            }
             if (
               targetReport.passed_ids.length === 0 &&
               priorActiveSelectionTarget &&

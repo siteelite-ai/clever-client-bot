@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, groundSelectionApplicationContext, initialSelectionDeclaration, parseSelectionTarget, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, groundSelectionApplicationContext, initialSelectionDeclaration, parseSelectionTarget, projectModelOnlySelectionTargetExtension, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
@@ -335,6 +335,56 @@ Deno.test("live declared base class stays separate from discovery modifiers", ()
 Deno.test("a safely bootstrapped short noun may authorize its formal class extension", () => {
   assertEquals(selectionTargetIsDeclared("автомат", "Автоматический выключатель"), true);
   assertEquals(selectionTargetIsDeclared("ИБП", "Стабилизатор напряжения"), false);
+});
+
+Deno.test("a model-only class adjective projects to the customer-grounded live base", () => {
+  const evidence = "какой есть кабель ввг 3*1,5 негорючий\nИщем кабель ВВГ 3×1,5 в негорючем исполнении";
+  assertEquals(
+    projectModelOnlySelectionTargetExtension(
+      "кабель",
+      "кабель силовой ВВГ",
+      evidence,
+      "Кабель ВВГ",
+      [{ key: "Негорючесть", op: "eq", value: "Да", level: "A" }],
+    ),
+    "Кабель ВВГ",
+  );
+});
+
+Deno.test("a customer or criterion-backed target extension is never projected away", () => {
+  assertEquals(
+    projectModelOnlySelectionTargetExtension(
+      "кабель",
+      "кабель огнестойкий",
+      "Нужен огнестойкий кабель",
+      "Кабель",
+      [],
+    ),
+    null,
+  );
+  assertEquals(
+    projectModelOnlySelectionTargetExtension(
+      "кабель",
+      "кабель FRLS",
+      "Нужен кабель",
+      "Кабель",
+      [{ key: "Исполнение", op: "eq", value: "FRLS", level: "A" }],
+    ),
+    null,
+  );
+});
+
+Deno.test("a sibling class cannot project through a shared umbrella noun", () => {
+  assertEquals(
+    projectModelOnlySelectionTargetExtension(
+      "Кабель ВВГ",
+      "Оптический кабель",
+      "Нужен кабель ВВГ",
+      "Кабель ВВГ",
+      [],
+    ),
+    null,
+  );
 });
 
 Deno.test("a continuation class requires both prior cards and matching live taxonomy", () => {
