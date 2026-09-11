@@ -20,6 +20,17 @@ Deno.test("a consultant-declared colloquial name becomes a catalog alias obligat
   );
 });
 
+Deno.test("a structural 'this is what people call it' explanation also becomes an alias obligation", () => {
+  assertEquals(
+    extractDeclaredCatalogAlias(
+      "а у тебя есть лампы кукуруза?",
+      "Понял, «кукуруза» — так лампочки с торчащими светодиодами называют за характерную форму.",
+      "Лампы",
+    ),
+    "кукуруза",
+  );
+});
+
 Deno.test("an inflected class plus nickname declaration preserves only the customer qualifier", () => {
   assertEquals(
     extractDeclaredCatalogAlias(

@@ -30,6 +30,59 @@ export function boundedAgentStepTimeout(
   return Math.min(requested, remaining);
 }
 
+export interface TerminalLexicalRecoveryInput {
+  productsRendered: number;
+  intentMode: "select" | "inquire";
+  replacementIntent: boolean;
+  aliasRequirement: boolean;
+  semanticSearchAvailable: boolean;
+  seriesGroundingRequired: boolean;
+  compoundEvidenceRequired: boolean;
+  groundedDiscoveryAvailable: boolean;
+  selectionTargetAvailable: boolean;
+  recoverySourceAvailable: boolean;
+  noProgressBreak: boolean;
+  deadlineFinalizeBreak: boolean;
+  triedLadderQueryCount: number;
+}
+
+export function resolveTerminalLexicalRecoverySource(
+  lastSearchNoun: string,
+  initialSelectionDiscoveryNoun: string | null,
+  deadlineFinalizeBreak: boolean,
+): string {
+  const searched = lastSearchNoun.trim();
+  if (searched) return searched;
+  return deadlineFinalizeBreak ? initialSelectionDiscoveryNoun?.trim() ?? "" : "";
+}
+
+/**
+ * A timed-out tool-decision must not discard a grounded selection merely
+ * because the model did not get far enough to emit two failed search calls.
+ * The same terminal lexical recovery is safe in both cases: live taxonomy,
+ * title evidence, the frozen target and every mandatory criterion still gate
+ * all rendered products. Requests with stronger dedicated contracts remain
+ * excluded.
+ */
+export function shouldAttemptTerminalLexicalRecovery(
+  input: TerminalLexicalRecoveryInput,
+): boolean {
+  if (
+    input.productsRendered > 0 ||
+    input.intentMode !== "select" ||
+    input.replacementIntent ||
+    input.aliasRequirement ||
+    input.semanticSearchAvailable ||
+    input.seriesGroundingRequired ||
+    input.compoundEvidenceRequired ||
+    !input.groundedDiscoveryAvailable ||
+    !input.selectionTargetAvailable ||
+    !input.recoverySourceAvailable
+  ) return false;
+  if (input.deadlineFinalizeBreak) return true;
+  return input.noProgressBreak && input.triedLadderQueryCount >= 2;
+}
+
 /**
  * A repeated catalog pool is not the end of an inquiry when the same model
  * step has just produced grounded knowledge evidence. Allow exactly one more

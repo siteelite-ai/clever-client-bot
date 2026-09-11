@@ -127,12 +127,14 @@ import {
   forcedToolNameForAgentPhase,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
+  resolveTerminalLexicalRecoverySource,
   shouldAllowCorrectiveDiscovery,
   shouldDeferInquiryIntro,
   shouldDeferNoProgressForKnowledge,
   shouldFinalizeInquiryFromKnowledge,
   shouldRecoverInquiryNoProgressWithKnowledge,
   shouldRequestReasoningOnlyAfterIncompleteSearch,
+  shouldAttemptTerminalLexicalRecovery,
   shouldContinueSelectionUntilCatalogAttempt,
   toolNamesForAgentPhase,
 } from "../_shared/v3-tools/agent-performance.ts";
@@ -10292,25 +10294,33 @@ async function runExpertLoop(
 
     // A successful broad category discovery does not prove that the user's
     // colloquial noun is literal catalog vocabulary. After two distinct empty
-    // model-owned semantic queries, route once through the existing LLM lexical
-    // helper. This is a state transition, not a synonym table: the helper's
-    // candidate must occur literally in every accepted live title, and the
-    // original selection target/criteria/budget gates still apply.
-    if (
-      productsRendered === 0 &&
-      !terminalAliasRequirement &&
-      noProgressBreak &&
-      !semanticBackedSearch &&
-      !replacementIntent &&
-      intentMode === "select" &&
-      !seriesTurnRequiresGrounding &&
-      !semanticCompoundEvidenceRequired &&
-      terminalDiscover &&
-      terminalSelectionTarget &&
-      triedLadderQueries.size >= 2 &&
-      lastSearchNoun.trim()
-    ) {
-      const recoveredJargon = await attemptTerminalJargonRecovery(lastSearchNoun);
+    // model-owned semantic queries, or when the tool-decision times out after
+    // grounded discovery but before it can emit the first query, route once
+    // through the existing lexical helper. This is a state transition, not a
+    // synonym table: the helper's candidate must occur literally in every
+    // accepted live title, and the original selection target/criteria/budget
+    // gates still apply.
+    const terminalLexicalRecoverySource = resolveTerminalLexicalRecoverySource(
+      lastSearchNoun,
+      initialSelectionDiscoveryNoun,
+      deadlineFinalizeBreak,
+    );
+    if (shouldAttemptTerminalLexicalRecovery({
+      productsRendered,
+      intentMode,
+      replacementIntent,
+      aliasRequirement: Boolean(terminalAliasRequirement),
+      semanticSearchAvailable: Boolean(semanticBackedSearch),
+      seriesGroundingRequired: seriesTurnRequiresGrounding,
+      compoundEvidenceRequired: semanticCompoundEvidenceRequired,
+      groundedDiscoveryAvailable: Boolean(terminalDiscover),
+      selectionTargetAvailable: Boolean(terminalSelectionTarget),
+      recoverySourceAvailable: Boolean(terminalLexicalRecoverySource),
+      noProgressBreak,
+      deadlineFinalizeBreak,
+      triedLadderQueryCount: triedLadderQueries.size,
+    })) {
+      const recoveredJargon = await attemptTerminalJargonRecovery(terminalLexicalRecoverySource);
       if (recoveredJargon?.kind === "partial" && await renderJargonAxisSplit(recoveredJargon.split)) {
         return { finalText, productsRendered, shownProductIds: [...shownIds] };
       }
@@ -10335,7 +10345,7 @@ async function runExpertLoop(
           step: "v3_terminal_jargon_recovery",
           ms: now(),
           meta: {
-            source: lastSearchNoun,
+            source: terminalLexicalRecoverySource,
             matched_query: recoveredJargon.matchedQuery,
             candidates: recoveredJargon.candidateCount,
             rendered: recoveredJargon.rendered.rendered_count,
@@ -10346,7 +10356,7 @@ async function runExpertLoop(
       steps.push({
         step: "v3_terminal_jargon_recovery_empty",
         ms: now(),
-        meta: { source: lastSearchNoun },
+        meta: { source: terminalLexicalRecoverySource },
       });
     }
 
@@ -10988,9 +10998,15 @@ Deno.serve(async (req) => {
         resolvePendingClarificationChoice(slots, userMessage),
       );
       const pendingBroadAssortmentScope = resolvePendingBroadAssortmentScope(slots, priorHistory);
+      const referencesRenderedProducts = extractRenderedProductTitles(priorHistory, 1).length > 0 && (
+        isEvidenceOnlyFollowup(userMessage) ||
+        isRecentProductShowFollowup(userMessage) ||
+        isRecentProductPriceSelectionFollowup(userMessage)
+      );
       const startsNewTask = shouldStartNewConversation(boundary, {
         matchedPendingClarification,
         activeScopedClarification: Boolean(pendingBroadAssortmentScope),
+        referencesRenderedProducts,
       });
       const effectiveSessionId = startsNewTask ? `session_${crypto.randomUUID()}` : sessionId;
       const effectiveHistory = startsNewTask ? [] : priorHistory;
@@ -11006,6 +11022,7 @@ Deno.serve(async (req) => {
           reason: boundary.reason,
           matched_pending_clarification: matchedPendingClarification,
           pending_broad_assortment_scope: pendingBroadAssortmentScope,
+          references_rendered_products: referencesRenderedProducts,
           history_echo_removed: priorHistory.length !== history.length,
         },
       });

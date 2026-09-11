@@ -9,12 +9,14 @@ import {
   hasActionableSelectionReasoning,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
+  resolveTerminalLexicalRecoverySource,
   shouldDeferInquiryIntro,
   shouldDeferNoProgressForKnowledge,
   shouldFinalizeInquiryFromKnowledge,
   shouldRecoverInquiryNoProgressWithKnowledge,
   shouldRequestReasoningOnlyAfterIncompleteSearch,
   shouldContinueSelectionUntilCatalogAttempt,
+  shouldAttemptTerminalLexicalRecovery,
   shouldAllowCorrectiveDiscovery,
   toolNamesForAgentPhase,
 } from "./agent-performance.ts";
@@ -25,6 +27,39 @@ Deno.test("agent deadline: remote steps are bounded and reserve finalization tim
   assertEquals(boundedAgentStepTimeout(110_000, 90_000, 105_000, 5_000), 15_000);
   assertEquals(boundedAgentStepTimeout(30_000, 100_001, 105_000, 5_000), null);
   assertEquals(boundedAgentStepTimeout(30_000, 105_000, 105_000, 5_000), null);
+});
+
+Deno.test("timed-out selection uses the existing proof-gated lexical finalizer", () => {
+  const base = {
+    productsRendered: 0,
+    intentMode: "select" as const,
+    replacementIntent: false,
+    aliasRequirement: false,
+    semanticSearchAvailable: false,
+    seriesGroundingRequired: false,
+    compoundEvidenceRequired: false,
+    groundedDiscoveryAvailable: true,
+    selectionTargetAvailable: true,
+    recoverySourceAvailable: true,
+    noProgressBreak: false,
+    deadlineFinalizeBreak: true,
+    triedLadderQueryCount: 0,
+  };
+  assert(shouldAttemptTerminalLexicalRecovery(base));
+  assert(!shouldAttemptTerminalLexicalRecovery({ ...base, deadlineFinalizeBreak: false }));
+  assert(shouldAttemptTerminalLexicalRecovery({
+    ...base,
+    deadlineFinalizeBreak: false,
+    noProgressBreak: true,
+    triedLadderQueryCount: 2,
+  }));
+  assert(!shouldAttemptTerminalLexicalRecovery({ ...base, replacementIntent: true }));
+  assert(!shouldAttemptTerminalLexicalRecovery({ ...base, compoundEvidenceRequired: true }));
+  assert(!shouldAttemptTerminalLexicalRecovery({ ...base, groundedDiscoveryAvailable: false }));
+  assert(!shouldAttemptTerminalLexicalRecovery({ ...base, recoverySourceAvailable: false }));
+  assertEquals(resolveTerminalLexicalRecoverySource("live query", "initial noun", true), "live query");
+  assertEquals(resolveTerminalLexicalRecoverySource("", "initial noun", true), "initial noun");
+  assertEquals(resolveTerminalLexicalRecoverySource("", "initial noun", false), "");
 });
 
 Deno.test("agent no-progress: successful knowledge lookup gets one synthesis step", () => {

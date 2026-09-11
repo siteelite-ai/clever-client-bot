@@ -7,7 +7,7 @@ function normalize(value: string): string {
     .trim();
 }
 
-const ALIAS_DECLARATION = /(?:это\s+)?(?:(?:народн|разговорн|жаргонн|бытов|неофициальн)\p{L}*\s+)+(?:названи\p{L}*|обозначени\p{L}*|термин\p{L}*)/iu;
+const ALIAS_DECLARATION = /(?:(?:это\s+)?(?:(?:народн|разговорн|жаргонн|бытов|неофициальн)\p{L}*\s+)+(?:названи\p{L}*|обозначени\p{L}*|термин\p{L}*)|так.{0,80}называ\p{L}*)/iu;
 
 function containsInflectedTokenSequence(haystack: string, needle: string): boolean {
   const haystackTokens = normalize(haystack).split(" ").filter(Boolean);
