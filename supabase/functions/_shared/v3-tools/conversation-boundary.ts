@@ -77,7 +77,15 @@ export function parseConversationBoundaryDecision(raw: string): ConversationBoun
   return { mode: row.mode, confidence, reason };
 }
 
-export function shouldStartNewConversation(decision: ConversationBoundaryDecision): boolean {
+export function shouldStartNewConversation(
+  decision: ConversationBoundaryDecision,
+  context: { matchedPendingClarification?: boolean } = {},
+): boolean {
+  // A reply that matches a server-issued clarification option is structurally
+  // dependent on the preceding turn even when the words could form a valid
+  // standalone request. The model boundary classifier must not erase the
+  // entity/series and constraints that the server explicitly asked to refine.
+  if (context.matchedPendingClarification) return false;
   return decision.mode === "new_task" && decision.confidence >= NEW_TASK_THRESHOLD;
 }
 

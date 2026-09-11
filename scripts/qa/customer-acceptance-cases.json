@@ -461,6 +461,19 @@
             "require_any_text": ["уточните", "раздел", "товарн", "групп", "розет", "выключател"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
+        },
+        {
+          "message": "двойные электрические розетки",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 1,
+            "require_every_product_title_groups": [
+              ["Gallant", "Галант"],
+              ["розет"],
+              ["двойн", "2 мест", "2-мест", "2 пост"]
+            ],
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
         }
       ]
     },
