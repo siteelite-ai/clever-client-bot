@@ -117,6 +117,20 @@ test('parseSse exposes automatic conversation boundaries', () => {
   assert(evaluate({ conversation_boundary: 'continuation' }, parsed).includes('unexpected conversation boundary: new_task'));
 });
 
+test('parseSse preserves server-issued slots for the next acceptance turn', () => {
+  const slots = {
+    pending_clarification: {
+      facet_key: 'catalog_section',
+      scope: { kind: 'broad_assortment', token: 'Example' },
+    },
+  };
+  const result = parseSse([
+    `data: ${JSON.stringify({ v3_event: { type: 'slot_update', slots } })}`,
+    'data: [DONE]',
+  ].join('\n'));
+  assert.deepEqual(result.dialogSlots, slots);
+});
+
 test('evaluate checks every product title group and maximum price', () => {
   const response = {
     text: '',

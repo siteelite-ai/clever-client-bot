@@ -64,6 +64,7 @@ export function parseSse(body) {
   let serverProductsCount = null;
   let diagnosticError = null;
   let conversationBoundary = null;
+  let dialogSlots = null;
   const toolEvents = [];
   for (const line of body.split(/\r?\n/)) {
     if (!line.startsWith('data: ')) continue;
@@ -88,6 +89,9 @@ export function parseSse(body) {
     }
     if (event?.type === 'conversation_boundary' && event.mode === 'new_task' && typeof event.session_id === 'string') {
       conversationBoundary = { mode: event.mode, sessionId: event.session_id };
+    }
+    if (event?.type === 'slot_update' && event.slots && typeof event.slots === 'object' && !Array.isArray(event.slots)) {
+      dialogSlots = event.slots;
     }
     if (event?.type === 'tool_event') {
       toolEvents.push({
@@ -117,7 +121,7 @@ export function parseSse(body) {
       stockLine,
     });
   }
-  return { text, textBeforeProducts, productsMarkdown, links, logId, completed, serverProductsCount, diagnosticError, conversationBoundary, toolEvents };
+  return { text, textBeforeProducts, productsMarkdown, links, logId, completed, serverProductsCount, diagnosticError, conversationBoundary, dialogSlots, toolEvents };
 }
 
 function includesAny(haystack, needles) {
@@ -353,7 +357,7 @@ async function runTurn({ message, expect }, state) {
     sessionId: state.sessionId,
     history: state.history.slice(-10),
     stream: true,
-    dialogSlots: {},
+    dialogSlots: state.dialogSlots,
   };
   const { response, raw, attempts } = await fetchAcceptanceTurn(payload, {
     maxAttempts: 2,
@@ -365,7 +369,9 @@ async function runTurn({ message, expect }, state) {
   if (parsed.conversationBoundary?.sessionId) {
     state.sessionId = parsed.conversationBoundary.sessionId;
     state.history = [];
+    state.dialogSlots = {};
   }
+  if (parsed.dialogSlots !== null) state.dialogSlots = parsed.dialogSlots;
   state.history.push({ role: 'user', content: message }, { role: 'assistant', content: combined });
   return {
     message,
@@ -400,6 +406,7 @@ export async function main() {
       const state = {
         sessionId: `customer_acceptance_${testCase.id.replace(/[^a-z0-9_-]/gi, '_')}_${Date.now()}_${run}`.slice(0, 120),
         history: [],
+        dialogSlots: {},
       };
       const turns = [];
       for (const turn of testCase.turns) turns.push(await runTurn(turn, state));
