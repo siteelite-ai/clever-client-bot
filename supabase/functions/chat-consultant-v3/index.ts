@@ -3403,9 +3403,9 @@ async function runExpertLoop(
       ...renderedUserCriteria,
       ...renderedMarkdownCriteria,
     ]);
-    const emittedPlan = plan ?? (emittedCriteria.length > 0
-      ? extendSelectionCriteriaPlan(null, emittedCriteria, "render_alignment")
-      : null);
+    const emittedPlan = emittedCriteria.length > 0
+      ? extendSelectionCriteriaPlan(plan, emittedCriteria, "render_alignment")
+      : plan;
     const visibleRequirements = buildVisibleRequestContract(userMessage, {
       productClass: activeSelectionTarget ?? lastDiscover?.category?.pagetitle ?? "",
       taxonomyClass: lastDiscover?.category?.pagetitle ?? "",
