@@ -115,6 +115,7 @@ export function parseSse(body) {
       url: match[2],
       price: Number.isFinite(parsedPrice) && parsedPrice > 0 ? parsedPrice : null,
       stockLine,
+      cardText: block,
     });
   }
   return { text, textBeforeProducts, productsMarkdown, links, logId, completed, serverProductsCount, diagnosticError, conversationBoundary, toolEvents };
@@ -215,6 +216,12 @@ export function evaluate(expect = {}, response) {
       .filter((link) => !matchesEveryGroup(link.title, expect.require_every_product_title_groups))
       .map((link) => link.title);
     if (invalidTitles.length > 0) failures.push(`product titles violate required groups: ${invalidTitles.join(' | ')}`);
+  }
+  if (Array.isArray(expect.require_every_product_card_groups)) {
+    const invalidCards = response.links
+      .filter((link) => !matchesEveryGroup(link.cardText ?? link.title, expect.require_every_product_card_groups))
+      .map((link) => link.title);
+    if (invalidCards.length > 0) failures.push(`product cards violate required groups: ${invalidCards.join(' | ')}`);
   }
   if (expect.require_exact_or_split && typeof expect.require_exact_or_split === 'object') {
     const contract = expect.require_exact_or_split;
