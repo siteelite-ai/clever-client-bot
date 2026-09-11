@@ -257,6 +257,7 @@ type SseEvent =
   | { type: "products_block"; markdown: string; count: number; total_available?: number; selection_contract?: {
       hash: string;
       mandatory_criteria: Array<{ key: string; op: string; value: string | number | [number, number]; unit?: string | null; exclusive?: boolean; }>;
+      visible_requirements?: Array<{ kind: string; label: string; op?: string; value?: string | number; unit?: string; exclusive?: boolean; }>;
     }; }
   | { type: "contacts"; html: string }
   | { type: "quick_replies"; replies: Array<{ value: string; label: string }>; facet_key: string; }
@@ -3380,6 +3381,18 @@ async function runExpertLoop(
       return;
     }
     const plan = currentSelectionCriteriaPlan();
+    const visibleRequirements = buildVisibleRequestContract(userMessage, {
+      productClass: activeSelectionTarget ?? lastDiscover?.category?.pagetitle ?? "",
+      taxonomyClass: lastDiscover?.category?.pagetitle ?? "",
+      candidateTitles: [...ctx.cache.values()].map((product) => product.pagetitle),
+    }).map(({ kind, label, op, value, unit, exclusive }) => ({
+      kind,
+      label,
+      ...(op ? { op } : {}),
+      ...(value !== undefined ? { value } : {}),
+      ...(unit ? { unit } : {}),
+      ...(exclusive ? { exclusive } : {}),
+    }));
     rawSend({
       ...event,
       ...(plan
@@ -3393,6 +3406,9 @@ async function runExpertLoop(
               ...(unit ? { unit } : {}),
               ...(exclusive ? { exclusive } : {}),
             })),
+            ...(visibleRequirements.length > 0
+              ? { visible_requirements: visibleRequirements }
+              : {}),
           },
         }
         : {}),

@@ -182,6 +182,9 @@ test('parseSse and evaluate preserve the server selection contract', () => {
       { key: 'Количество разъемов', op: 'eq', value: '2' },
       { key: 'Цвет', op: 'eq', value: 'чёрный' },
     ],
+    visible_requirements: [
+      { kind: 'count', label: 'двойная розетка', op: 'eq', value: 2 },
+    ],
   };
   const parsed = parseSse([
     data({ v3_event: {
@@ -197,6 +200,9 @@ test('parseSse and evaluate preserve the server selection contract', () => {
     require_selection_criteria_groups: [
       ['Количество разъемов'], ['"value":"2"'], ['Цвет'], ['черн'],
     ],
+  }, parsed), []);
+  assert.deepEqual(evaluate({
+    require_selection_criteria_groups: [['"kind":"count"'], ['"value":2']],
   }, parsed), []);
   assert(evaluate({ require_selection_criteria_groups: [['Количество разъемов'], ['"value":"1"']] }, parsed)
     .some((failure) => failure.startsWith('selection contract misses required groups')));

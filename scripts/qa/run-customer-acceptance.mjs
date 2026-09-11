@@ -233,7 +233,7 @@ export function evaluate(expect = {}, response) {
     if (invalidCards.length > 0) failures.push(`product cards violate required groups: ${invalidCards.join(' | ')}`);
   }
   if (Array.isArray(expect.require_selection_criteria_groups)) {
-    const criteriaText = JSON.stringify(response.selectionContract?.mandatory_criteria ?? []);
+    const criteriaText = JSON.stringify(response.selectionContract ?? {});
     if (!matchesEveryGroup(criteriaText, expect.require_selection_criteria_groups)) {
       failures.push(`selection contract misses required groups: ${expect.require_selection_criteria_groups.map((group) => `[${group.join(', ')}]`).join(' ')}`);
     }

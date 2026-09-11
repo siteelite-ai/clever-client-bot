@@ -4,6 +4,10 @@ import { selectionTargetIsDeclared } from "./selection-contract.ts";
 export interface VisibleRequestRequirement {
   kind: "linear_measurement" | "bounded_measurement" | "count" | "literal_modifier";
   label: string;
+  op?: "eq" | "min" | "max";
+  value?: string | number;
+  unit?: string;
+  exclusive?: boolean;
   matches: (title: string) => boolean;
 }
 
@@ -161,6 +165,9 @@ export function buildVisibleRequestContract(
     add(`length:${canonical}`, {
       kind: "linear_measurement",
       label: `${raw} м`,
+      op: "eq",
+      value: Number(canonical),
+      unit: "м",
       matches: (title) => new RegExp(
         `(?<!\\d)${escaped}\\s*(?:м|m)(?![\\p{L}\\p{N}²³])`,
         "iu",
@@ -173,6 +180,8 @@ export function buildVisibleRequestContract(
     add(`count:${count}`, {
       kind: "count",
       label: `${count} места/розетки/гнезда`,
+      op: "eq",
+      value: Number(count),
       matches: (evidence) => {
         const countFirst = new RegExp(
           `(?<!\\d)${count}\\s*(?:[-–—]?\\s*)?(?:мест\\p{L}*|розет\\p{L}*|гнезд\\p{L}*|гн\\.?)(?!\\p{L})`,
@@ -191,6 +200,8 @@ export function buildVisibleRequestContract(
     add("count:double-socket", {
       kind: "count",
       label: "двойная розетка",
+      op: "eq",
+      value: 2,
       matches: (evidence) =>
         /двойн\p{L}*|(?<!\d)2\s*(?:[-–—]?\s*)?(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*|разъем\p{L}*|пост\p{L}*)(?!\p{L})/iu.test(evidence) ||
         /(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*|разъем\p{L}*|пост\p{L}*)\s*(?::|=|-|–|—)?\s*(?<!\d)2(?!\d)/iu.test(evidence),
@@ -216,6 +227,10 @@ export function buildVisibleRequestContract(
     add(`bound:${direction}:${exclusive}:${value}:${unit}`, {
       kind: "bounded_measurement",
       label,
+      op: direction,
+      value,
+      unit,
+      exclusive,
       matches: (title) => titleSatisfiesBound(title, { value, unit, direction, exclusive }),
     });
   }
@@ -228,6 +243,8 @@ export function buildVisibleRequestContract(
     add(`modifier:${modifier.stem}`, {
       kind: "literal_modifier",
       label: modifier.label,
+      op: "eq",
+      value: modifier.label,
       matches: (title) => (title.match(/[a-zа-я0-9]+/giu) ?? []).some((token) => tokenStem(token) === modifier.stem),
     });
   }
