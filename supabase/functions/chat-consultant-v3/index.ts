@@ -8438,6 +8438,19 @@ async function runExpertLoop(
             });
           }
 
+          // The successful render gate is the last authoritative projection
+          // of the consultant's reasoning onto live catalog evidence. Freeze
+          // that exact verified contract before emitting cards: a model may
+          // legitimately complete an omitted search-axis in render_products,
+          // and the client/test trace must describe every criterion that the
+          // server actually enforced. Failed renders never reach this point.
+          const verifiedRenderCriteria = Array.isArray(
+              (tc.args as Record<string, unknown>).criteria,
+            )
+            ? (tc.args as Record<string, unknown>).criteria as Criterion[]
+            : [];
+          freezeSelectionCriteria(verifiedRenderCriteria, "render_alignment");
+
           // ── Step 3: Promise-Reality Audit
           const audit = promiseRealityCheck(firstAssistantText, renderedIds, ctx.cache, lastDiscover);
           if (audit) {

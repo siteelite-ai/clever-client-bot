@@ -180,7 +180,7 @@ test('parseSse and evaluate preserve the server selection contract', () => {
     hash: 'selection-test',
     mandatory_criteria: [
       { key: 'Количество разъемов', op: 'eq', value: '2' },
-      { key: 'Цвет', op: 'eq', value: 'черный' },
+      { key: 'Цвет', op: 'eq', value: 'чёрный' },
     ],
   };
   const parsed = parseSse([
@@ -195,7 +195,7 @@ test('parseSse and evaluate preserve the server selection contract', () => {
   assert.deepEqual(parsed.selectionContract, contract);
   assert.deepEqual(evaluate({
     require_selection_criteria_groups: [
-      ['Количество разъемов'], ['"value":"2"'], ['Цвет'], ['черный'],
+      ['Количество разъемов'], ['"value":"2"'], ['Цвет'], ['черн'],
     ],
   }, parsed), []);
   assert(evaluate({ require_selection_criteria_groups: [['Количество разъемов'], ['"value":"1"']] }, parsed)

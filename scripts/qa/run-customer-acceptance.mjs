@@ -130,8 +130,9 @@ export function parseSse(body) {
 }
 
 function includesAny(haystack, needles) {
-  const lower = haystack.toLocaleLowerCase('ru-RU');
-  return needles.some((needle) => lower.includes(String(needle).toLocaleLowerCase('ru-RU')));
+  const normalize = (value) => String(value).toLocaleLowerCase('ru-RU').replaceAll('ё', 'е');
+  const lower = normalize(haystack);
+  return needles.some((needle) => lower.includes(normalize(needle)));
 }
 
 function matchesEveryGroup(value, groups) {
@@ -402,6 +403,7 @@ async function runTurn({ message, expect }, state) {
     text: parsed.text,
     completed: parsed.completed,
     conversation_boundary: parsed.conversationBoundary,
+    selection_contract: parsed.selectionContract,
     tool_events: parsed.toolEvents,
     passed: failures.length === 0,
     failures,
@@ -474,6 +476,7 @@ export async function main() {
               text: turn.text,
               failures: turn.failures,
               diagnostic_error: turn.diagnostic_error,
+              selection_contract: turn.selection_contract,
               tool_events: turn.tool_events,
             })),
           })),
