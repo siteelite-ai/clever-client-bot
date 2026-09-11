@@ -71,6 +71,7 @@ import {
   guardSearchFilters,
   inferReplacementIdentityValues,
   isReplacementIdentityFacet,
+  projectExplicitReasoningFacetValues,
   productMatchesExcludedReplacementIdentity,
 } from "../_shared/v3-tools/search-filter-guard.ts";
 import {
@@ -8018,7 +8019,24 @@ async function runExpertLoop(
                 userMessage,
                 `${firstAssistantText}\n${assistantReasoning}`,
               );
-              const explicitCriteria: Criterion[] = explicit.kept.map(({ key, value }) => {
+              const reasoningProjection = projectExplicitReasoningFacetValues(
+                lastDiscover.facets,
+                `${firstAssistantText}\n${assistantReasoning}`,
+                userMessage,
+              );
+              const explicitKept = [...explicit.kept, ...reasoningProjection.kept]
+                .filter((item, index, all) => all.findIndex((candidate) =>
+                  candidate.key === item.key && candidate.value === item.value
+                ) === index);
+              const explicitUserBacked = [...explicit.user_backed, ...reasoningProjection.user_backed]
+                .filter((item, index, all) => all.findIndex((candidate) =>
+                  candidate.key === item.key && candidate.value === item.value
+                ) === index);
+              const explicitCriteria: Criterion[] = explicitKept.map(({ key, value }) => {
+                const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
+                return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
+              });
+              const explicitUserBackedCriteria: Criterion[] = explicitUserBacked.map(({ key, value }) => {
                 const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
                 return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
               });
@@ -8042,8 +8060,13 @@ async function runExpertLoop(
               const before = userBackedSearchCriteria.length;
               userBackedSearchCriteria = mergeUserBackedCriteria(
                 userBackedSearchCriteria,
-                [...explicitCriteria, ...measuredCriteria, ...literalMeasuredCriteria],
+                [...explicitUserBackedCriteria, ...measuredCriteria, ...literalMeasuredCriteria],
               );
+              enforcedSearchCriteria = freezeSelectionCriteria(
+                [...explicitCriteria, ...measuredCriteria, ...literalMeasuredCriteria],
+                "reasoning_projection",
+              );
+              latestRenderCriteria = enforcedSearchCriteria.map((criterion) => ({ ...criterion }));
               if (userBackedSearchCriteria.length > before) {
                 steps.push({
                   step: "v3_user_constraints_frozen",

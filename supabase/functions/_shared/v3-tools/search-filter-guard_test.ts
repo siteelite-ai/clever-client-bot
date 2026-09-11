@@ -9,6 +9,7 @@ import {
   guardSearchFilters,
   inferReplacementIdentityValues,
   isReplacementIdentityFacet,
+  projectExplicitReasoningFacetValues,
   productMatchesExcludedReplacementIdentity,
 } from "./search-filter-guard.ts";
 
@@ -31,6 +32,34 @@ Deno.test("filter guard removes a valid but unrequested catalog value", () => {
   });
   assertEquals(result.dropped[0].reason, "negated_by_user");
   assertEquals(result.inferred, [{ key: "kind", value: "Бытовые светильники накладные" }]);
+});
+
+Deno.test("explicit reasoning is projected onto one exact live facet axis", () => {
+  const result = projectExplicitReasoningFacetValues(
+    [
+      { key: "outlet_count", caption: "Количество разъемов", values: [{ value: "1" }, { value: "2" }] },
+      { key: "lamp_count", caption: "Количество ламп", values: [{ value: "1" }, { value: "2" }] },
+      { key: "color", caption: "Цвет", values: [{ value: "белый" }, { value: "чёрный" }] },
+    ],
+    "Критерии: Количество разъемов — 2; Цвет — чёрный.",
+    "Найди двойные черные розетки электрические",
+  );
+  assertEquals(result.kept, [
+    { key: "outlet_count", value: "2" },
+    { key: "color", value: "чёрный" },
+  ]);
+  assertEquals(result.user_backed, []);
+});
+
+Deno.test("a loose number in reasoning cannot open an unnamed facet axis", () => {
+  assertEquals(
+    projectExplicitReasoningFacetValues(
+      [{ key: "lamp_count", caption: "Количество ламп", values: [{ value: "1" }, { value: "2" }] }],
+      "Покажу 2 подходящих варианта.",
+      "Подбери светильник",
+    ),
+    { kept: [], user_backed: [] },
+  );
 });
 
 Deno.test("filter guard canonicalizes and keeps a user-affirmed value", () => {

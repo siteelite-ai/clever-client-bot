@@ -41,6 +41,11 @@ export interface SearchFilterGuardResult {
   dropped: DroppedSearchFilter[];
 }
 
+export interface ReasoningFacetProjection {
+  kept: Array<{ key: string; value: string }>;
+  user_backed: Array<{ key: string; value: string }>;
+}
+
 export interface BooleanFilterFallbackResult {
   args: Record<string, unknown>;
   removed: Array<{ key: string; value: string }>;
@@ -463,6 +468,50 @@ function facetMeaningIsEvidenced(
   return facetTokens.some((facetToken) =>
     evidenceTokens.some((token) => tokensMatchByStem(facetToken, token))
   );
+}
+
+/**
+ * Projects an explicit consultant statement onto the live catalog schema even
+ * when the following tool call omits that option. Only a complete facet label
+ * (not one loose word) can open an axis, and exactly one canonical live value
+ * must be evidenced on it. This makes the machine contract follow the visible
+ * reasoning without guessing from product vocabulary or maintaining aliases.
+ */
+export function projectExplicitReasoningFacetValues(
+  facets: SearchFacet[],
+  declaredReasoning: string,
+  userEvidence: string,
+): ReasoningFacetProjection {
+  const reasoning = ` ${norm(declaredReasoning)} `;
+  const kept: ReasoningFacetProjection["kept"] = [];
+  const userBacked: ReasoningFacetProjection["user_backed"] = [];
+
+  for (const facet of facets) {
+    if (isReplacementIdentityFacet(facet)) continue;
+    const labels = [facet.caption ?? "", facet.key]
+      .map(norm)
+      .filter((label) => /[a-zа-я]/iu.test(label) && label.length >= 3);
+    if (!labels.some((label) => reasoning.includes(` ${label} `))) continue;
+
+    const candidates = facet.values.filter((candidate) => {
+      if (!isAtomicFacetValue(candidate.value)) return false;
+      if (contradictedByUser(candidate.value, userEvidence)) return false;
+      if (numericFacetValueConflictsWithUserMeasurement(candidate.value, facet, userEvidence)) return false;
+      if (!numericFacetValueIsLocallyEvidenced(candidate.value, facet, declaredReasoning)) return false;
+      if (!facetStateQualifierIsUserBacked(facet, declaredReasoning)) return false;
+      return explicitlyAffirmedByFacetReasoning(candidate.value, declaredReasoning);
+    });
+    if (candidates.length !== 1) continue;
+
+    const item = { key: facet.key, value: candidates[0].value };
+    kept.push(item);
+    if (
+      explicitlyAffirmedByUser(candidates[0].value, userEvidence) &&
+      facetMeaningIsEvidenced(facet, userEvidence)
+    ) userBacked.push(item);
+  }
+
+  return { kept, user_backed: userBacked };
 }
 
 function numericFacetValueIsLocallyEvidenced(
