@@ -11,6 +11,7 @@
 
 import { extractClientQuantities, normalizeUnit } from "./criteria-consistency.ts";
 import { canonicalMeasurementUnit, extractReasoningBounds } from "./criteria-reasoning.ts";
+import { extractPostNominalCatalogQualifier } from "./declared-alias-contract.ts";
 
 export interface SearchFacetValue {
   value: string;
@@ -70,6 +71,31 @@ function replacementIdentityKind(facet: Pick<SearchFacet, "key" | "caption">): "
 
 export function isReplacementIdentityFacet(facet: Pick<SearchFacet, "key" | "caption">): boolean {
   return replacementIdentityKind(facet) !== null;
+}
+
+/**
+ * Resolves an omitted brand/series filter only from a structural relation in
+ * the customer's request: the identity immediately follows the discovered
+ * product class. A canonical live value may extend that token, but it must be
+ * the only matching identity value. This prevents free-prose brand collisions.
+ */
+export function explicitPostNominalIdentityFacet(
+  facets: SearchFacet[],
+  userMessage: string,
+  discoveredClass: string,
+): { key: string; value: string } | null {
+  const qualifier = extractPostNominalCatalogQualifier(userMessage, discoveredClass);
+  const wanted = norm(qualifier ?? "");
+  if (!wanted) return null;
+  const matches = facets.flatMap((facet) => {
+    if (!isReplacementIdentityFacet(facet)) return [];
+    return facet.values.flatMap(({ value }) => {
+      const canonical = norm(value);
+      if (!canonical || !(canonical === wanted || canonical.startsWith(`${wanted} `))) return [];
+      return [{ key: facet.key, value }];
+    });
+  });
+  return matches.length === 1 ? matches[0] : null;
 }
 
 /**
