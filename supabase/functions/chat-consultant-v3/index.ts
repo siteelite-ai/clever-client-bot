@@ -3338,6 +3338,10 @@ async function runExpertLoop(
   let reasoningProjectedSearchCriteria: Criterion[] = [];
   let latestRenderCriteria: Criterion[] = [];
   let selectionCriteriaPlan: SelectionCriteriaPlan | null = null;
+  // The plan is mutated inside the freeze helper. Reading it through a small
+  // accessor prevents TypeScript control-flow analysis from treating the
+  // outer variable as permanently null.
+  const currentSelectionCriteriaPlan = (): SelectionCriteriaPlan | null => selectionCriteriaPlan;
   const freezeSelectionCriteria = (
     criteria: Criterion[],
     provenance: SelectionCriterionProvenance,
@@ -5132,9 +5136,10 @@ async function runExpertLoop(
           // Search arguments are a projection of the frozen plan, never a new
           // independently authored contract. A later model/recovery call may
           // add filters, but cannot omit an earlier mandatory live facet.
-          if (selectionCriteriaPlan && !compatibilityShapedSearch) {
+          const frozenPlan = currentSelectionCriteriaPlan();
+          if (frozenPlan && !compatibilityShapedSearch) {
             const planProjection = projectCriteriaFacetOptions(
-              selectionCriteriaPlan.mandatory_criteria.map((criterion) => ({ ...criterion })),
+              frozenPlan.mandatory_criteria.map((criterion) => ({ ...criterion })),
               lastDiscover.facets,
             );
             const currentOptions = tc.args.options && typeof tc.args.options === "object"
@@ -5153,14 +5158,14 @@ async function runExpertLoop(
                 ? { options: enforcedOptions }
                 : {}),
             };
-            enforcedSearchCriteria = selectionCriteriaPlan.mandatory_criteria.map((criterion) => ({ ...criterion }));
+            enforcedSearchCriteria = frozenPlan.mandatory_criteria.map((criterion) => ({ ...criterion }));
             latestRenderCriteria = preserveFrozenSelectionCriteria(latestRenderCriteria);
             steps.push({
               step: "v3_selection_criteria_plan_enforced",
               ms: now(),
               meta: {
-                plan_hash: selectionCriteriaPlan.hash,
-                mandatory_count: selectionCriteriaPlan.mandatory_criteria.length,
+                plan_hash: frozenPlan.hash,
+                mandatory_count: frozenPlan.mandatory_criteria.length,
                 option_keys: Object.keys(enforcedOptions),
                 conflicting_keys: mergedPlanOptions.conflicting_keys,
                 unmatched_keys: planProjection.unmatched_keys,
@@ -7238,8 +7243,9 @@ async function runExpertLoop(
           const rangeCriteria = mayProjectReasoning && lastDiscover
             ? projectReasoningRangeCriteria([], reasoningEvidence, lastDiscover.facets).added
             : [];
-          const recoveryReasoningCriteria = selectionCriteriaPlan
-            ? selectionCriteriaPlan.mandatory_criteria.map((criterion) => ({ ...criterion }))
+          const frozenRecoveryPlan = currentSelectionCriteriaPlan();
+          const recoveryReasoningCriteria = frozenRecoveryPlan
+            ? frozenRecoveryPlan.mandatory_criteria.map((criterion) => ({ ...criterion }))
             : rangeCriteria;
           const recoveryPlan = buildSelectionSearchRecoveryPlan({
             failed_args: runArgs,
@@ -7259,7 +7265,7 @@ async function runExpertLoop(
               ms: now(),
               meta: {
                 kind: attempt.kind,
-                plan_hash: selectionCriteriaPlan?.hash ?? null,
+                plan_hash: frozenRecoveryPlan?.hash ?? null,
                 relaxed_inputs: attempt.relaxed_inputs,
                 revalidate: attempt.revalidate,
                 option_keys: attempt.args.options && typeof attempt.args.options === "object"
