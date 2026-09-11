@@ -37,7 +37,7 @@ Deno.test("filter guard removes a valid but unrequested catalog value", () => {
 Deno.test("explicit reasoning is projected onto one exact live facet axis", () => {
   const result = projectExplicitReasoningFacetValues(
     [
-      { key: "outlet_count", caption: "Количество разъемов", values: [{ value: "1" }, { value: "2" }] },
+      { key: "outlet_count", caption: "Количество разъемов, шт.", values: [{ value: "1" }, { value: "2" }] },
       { key: "lamp_count", caption: "Количество ламп", values: [{ value: "1" }, { value: "2" }] },
       { key: "color", caption: "Цвет", values: [{ value: "белый" }, { value: "чёрный" }] },
     ],

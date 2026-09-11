@@ -488,7 +488,8 @@ export function projectExplicitReasoningFacetValues(
 
   for (const facet of facets) {
     if (isReplacementIdentityFacet(facet)) continue;
-    const labels = [facet.caption ?? "", facet.key]
+    const publicCaption = facet.caption ?? "";
+    const labels = [publicCaption, publicCaption.split(",")[0], facet.key]
       .map(norm)
       .filter((label) => /[a-zа-я]/iu.test(label) && label.length >= 3);
     if (!labels.some((label) => reasoning.includes(` ${label} `))) continue;
