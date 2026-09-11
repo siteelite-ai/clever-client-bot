@@ -250,7 +250,10 @@ type SseEvent =
   | { type: "assistant_turn_break"; reason:
       | "tool_pending" | "after_render" | "final_text" | "text_before_render" | "intro_late"; }
   | { type: "tool_event"; tool: string; phase: "start" | "result"; duration_ms?: number; summary?: string; }
-  | { type: "products_block"; markdown: string; count: number; total_available?: number; }
+  | { type: "products_block"; markdown: string; count: number; total_available?: number; selection_contract?: {
+      hash: string;
+      mandatory_criteria: Array<{ key: string; op: string; value: string | number | [number, number]; unit?: string | null; exclusive?: boolean; }>;
+    }; }
   | { type: "contacts"; html: string }
   | { type: "quick_replies"; replies: Array<{ value: string; label: string }>; facet_key: string; }
   | { type: "slot_update"; slots: Record<string, unknown> }
@@ -3342,6 +3345,31 @@ async function runExpertLoop(
   // accessor prevents TypeScript control-flow analysis from treating the
   // outer variable as permanently null.
   const currentSelectionCriteriaPlan = (): SelectionCriteriaPlan | null => selectionCriteriaPlan;
+  const rawSend = send;
+  send = (event: SseEvent) => {
+    if (event.type !== "products_block") {
+      rawSend(event);
+      return;
+    }
+    const plan = currentSelectionCriteriaPlan();
+    rawSend({
+      ...event,
+      ...(plan
+        ? {
+          selection_contract: {
+            hash: plan.hash,
+            mandatory_criteria: plan.mandatory_criteria.map(({ key, op, value, unit, exclusive }) => ({
+              key,
+              op,
+              value,
+              ...(unit ? { unit } : {}),
+              ...(exclusive ? { exclusive } : {}),
+            })),
+          },
+        }
+        : {}),
+    });
+  };
   const freezeSelectionCriteria = (
     criteria: Criterion[],
     provenance: SelectionCriterionProvenance,
