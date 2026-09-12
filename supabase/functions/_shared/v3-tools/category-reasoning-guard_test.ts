@@ -11,6 +11,7 @@ import {
   guardCategoryScopeByReasoning,
   guardDiscoveryNounBySelectionTarget,
   filterProductsByNamedSeries,
+  filterProductIdsByNamedSeries,
   rankGroundedCategoryRecoveryScopes,
   selectGroundedTokenRecoveryCandidate,
   titleContainsLiteralToken,
@@ -388,4 +389,19 @@ Deno.test("named series guard removes a non-empty but unrelated collection pool"
     { pagetitle: "Розетка Gallant с защитными шторками" },
   ], "Галант");
   assertEquals(products, [{ pagetitle: "Розетка Gallant с защитными шторками" }]);
+});
+
+Deno.test("named entity proof remains mandatory after a later recovery replaces the ID pool", () => {
+  const products = new Map([
+    ["kept", { pagetitle: "Generic connector SERIESX double" }],
+    ["late", { pagetitle: "Generic connector OTHER double" }],
+  ]);
+  assertEquals(
+    filterProductIdsByNamedSeries(["late", "kept"], products, "SERIESX"),
+    ["kept"],
+  );
+  assertEquals(
+    filterProductIdsByNamedSeries(["late", "kept"], products, null),
+    ["late", "kept"],
+  );
 });

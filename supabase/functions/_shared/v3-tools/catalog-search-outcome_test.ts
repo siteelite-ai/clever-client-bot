@@ -54,6 +54,7 @@ Deno.test("named series recovery requires an exact live identity facet", () => {
   ];
   assertEquals(findNamedSeriesFacetEvidence(facets, "гармония"), {
     key: "collection",
+    caption: "Коллекция (серия)",
     value: "Гармония",
     products_count: 12,
   });
@@ -75,6 +76,7 @@ Deno.test("named entity recovery tolerates branch-specific non-brand facet schem
   ];
   assertEquals(findNamedSeriesFacetEvidence(facets, "гармония"), {
     key: "option_147",
+    caption: "Товарная линейка",
     value: "Bylectrica Гармония",
     products_count: 12,
   });

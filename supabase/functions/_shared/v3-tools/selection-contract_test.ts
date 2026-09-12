@@ -567,6 +567,27 @@ Deno.test("a compact application constraint compiles through one unique live fac
   }]);
 });
 
+Deno.test("application projection cannot derive a subtype from a repeated class noun", () => {
+  assertEquals(projectSelectionApplicationFacetCriteria(
+    {
+      product_class: "generic connector double",
+      application_context: ["double connector SERIESX"],
+    },
+    [
+      {
+        key: "kind",
+        caption: "Connector kind",
+        values: [{ value: "connector media" }, { value: "connector power" }],
+      },
+      {
+        key: "collection",
+        caption: "Collection",
+        values: [{ value: "SERIESX" }],
+      },
+    ],
+  ), []);
+});
+
 Deno.test("application context never promotes source identity fields", () => {
   const promoted = promoteSelectionApplicationBackingCriteria(
     {

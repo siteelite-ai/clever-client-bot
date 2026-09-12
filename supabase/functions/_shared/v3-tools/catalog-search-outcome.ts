@@ -17,6 +17,7 @@ export interface CatalogSearchOutcome {
 
 export interface NamedSeriesFacetEvidence {
   key: string;
+  caption?: string;
   value: string;
   products_count: number;
 }
@@ -77,6 +78,7 @@ export function findNamedSeriesFacetEvidence(
       );
       return {
         key: facet.key,
+        caption: String(facet.caption || facet.key),
         value: match.value,
         products_count: Number.isFinite(productsCount) && productsCount > 0
           ? productsCount

@@ -81,6 +81,7 @@ import {
   discoveryNounIsGrounded,
   discoveryResultPreservesCustomerIntent,
   extractCustomerOwnedDiscoveryTarget,
+  filterProductIdsByNamedSeries,
   groundDiscoveryNounToCustomerTarget,
   filterProductsByGroundedCategoryTargets,
   filterProductsByNamedSeries,
@@ -3559,9 +3560,21 @@ async function runExpertLoop(
         subsumeCriteriaProvenByCompatibility(accumulatedCriteria, activeCompatibilityRelations),
       )
       : accumulatedCriteria;
+    const namedSeriesEvidence = namedSeriesToken && renderedProducts.length > 0 &&
+        renderedProducts.every((product) => titleContainsLiteralToken(product.pagetitle, namedSeriesToken))
+      ? findNamedSeriesFacetEvidence(lastDiscover?.facets ?? [], namedSeriesToken)
+      : null;
     const emittedCriteria = mergeMandatorySelectionCriteria([
       ...evidenceCriteria,
       ...compatibilityCriteria,
+      ...(namedSeriesEvidence
+        ? [{
+          key: namedSeriesEvidence.caption || namedSeriesEvidence.key,
+          op: "eq" as const,
+          value: namedSeriesEvidence.value,
+          level: "A" as const,
+        }]
+        : []),
     ]);
     const emittedPlan = emittedCriteria.length > 0
       ? extendSelectionCriteriaPlan(
@@ -4303,7 +4316,11 @@ async function runExpertLoop(
   };
 
   const guardFinalRenderIds = (ids: string[]): string[] =>
-    guardReplacementRenderIds(guardVisibleCardinality(ids).ids);
+    guardReplacementRenderIds(filterProductIdsByNamedSeries(
+      guardVisibleCardinality(ids).ids,
+      ctx.cache,
+      namedSeriesToken,
+    ));
 
   const attemptPortableReplacementTitleRecovery = async (
     runArgs: Record<string, unknown>,

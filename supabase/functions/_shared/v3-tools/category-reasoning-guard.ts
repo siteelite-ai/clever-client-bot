@@ -445,6 +445,25 @@ export function filterProductsByNamedSeries<T extends { pagetitle: string }>(pro
 }
 
 /**
+ * Applies the same visible named-entity proof to an ID pool. Search and
+ * recovery may materialize different candidate sets, but a later path must
+ * never replace an already required entity with cards that no longer prove
+ * its token. The map is supplied by the caller, so this remains independent
+ * of catalog schemas and product vocabulary.
+ */
+export function filterProductIdsByNamedSeries<T extends { pagetitle: string }>(
+  ids: string[],
+  products: ReadonlyMap<string, T>,
+  seriesToken: string | null,
+): string[] {
+  if (!seriesToken) return [...ids];
+  return ids.filter((id) => {
+    const product = products.get(id);
+    return Boolean(product && titleContainsLiteralToken(product.pagetitle, seriesToken));
+  });
+}
+
+/**
  * Select a literal title-token retry only when it is materially narrower than
  * the discovered category. This lets the consultant's own multiword canonical
  * query recover from catalog AND semantics without turning a generic token
