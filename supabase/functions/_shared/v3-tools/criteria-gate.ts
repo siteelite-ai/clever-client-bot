@@ -21,6 +21,7 @@
 //             для рекомендательного уровня B остаётся только в отчёте.
 
 import type { ProductRef } from "./types.ts";
+import { extractClientQuantities, normalizeUnit } from "./criteria-consistency.ts";
 
 export type CriteriaOp = "eq" | "min" | "max" | "range";
 
@@ -134,6 +135,259 @@ export function mergeUserBackedCriteria(
     merged.push({ ...criterion, level: "A" });
   }
   return merged;
+}
+
+/**
+ * Build a public/frozen selection contract from hard obligations only.
+ * `mergeUserBackedCriteria` intentionally upgrades its inputs because they
+ * are already proof-qualified; callers combining mixed render criteria must
+ * use this boundary so advisory level-B values cannot be relabelled as
+ * mandatory merely by serialization.
+ */
+export function mergeMandatorySelectionCriteria(
+  criteria: Criterion[],
+): Criterion[] {
+  return mergeUserBackedCriteria(
+    [],
+    (Array.isArray(criteria) ? criteria : []).filter((criterion) =>
+      criterion?.key && criterion.value !== undefined && (criterion.level ?? "A") === "A"
+    ),
+  );
+}
+
+function parsedProductTraits(product: ProductRef): Array<{ label: string; value: string }> {
+  const traits = (product.short_traits ?? []).flatMap((line) => {
+    const separator = String(line).indexOf(":");
+    if (separator <= 0) return [];
+    const label = String(line).slice(0, separator).trim();
+    const value = String(line).slice(separator + 1).trim();
+    return label && value ? [{ label, value }] : [];
+  });
+  return product.vendor?.trim()
+    ? [{ label: "Бренд", value: product.vendor.trim() }, ...traits]
+    : traits;
+}
+
+function renderedValueIsCustomerOwned(label: string, value: string, userMessage: string): boolean {
+  if (stringEvidenceMatches(value, userMessage)) return true;
+  const valueStems = normalizeKey(value).split(/\s+/u).map(looseStem).filter((stem) => stem.length >= 4);
+  const userStems = normalizeKey(userMessage).split(/\s+/u).map(looseStem);
+  if (valueStems.some((stem) => userStems.some((candidate) => candidate === stem))) return true;
+  const valueSpan = parseNumSpan(value);
+  if (!valueSpan || valueSpan.min !== valueSpan.max) return false;
+  const numberPattern = String(valueSpan.min).replace(".", "[.,]");
+  if (!new RegExp(`(?<!\\d)${numberPattern}(?!\\d)`, "u").test(userMessage)) return false;
+
+  const genericLabelStems = new Set(["номинал", "максимал", "минимал", "количеств", "значен"]);
+  const labelGrounded = normalizeKey(label).split(/\s+/u)
+    .map(looseStem)
+    .filter((stem) => stem.length >= 4 && !genericLabelStems.has(stem))
+    .some((stem) => userStems.some((candidate) => candidate === stem || candidate.startsWith(stem) || stem.startsWith(candidate)));
+  if (labelGrounded) return true;
+
+  const unitFamilies = [
+    ["а", "a", "amp", "ампер"],
+    ["в", "v", "volt", "вольт"],
+    ["вт", "w", "watt", "ватт"],
+    ["ва", "va", "вольтампер"],
+    ["лм", "lm", "люмен"],
+    ["м", "meter", "метр"],
+  ];
+  const valueTokens = normalizeKey(value).split(/\s+/u);
+  const userTokens = normalizeKey(userMessage).split(/\s+/u);
+  return unitFamilies.some((family) =>
+    family.some((unit) => valueTokens.some((token) => token === unit || token.startsWith(unit))) &&
+    family.some((unit) => userTokens.some((token) => token === unit || token.startsWith(unit)))
+  );
+}
+
+function canonicalRenderedUnit(value: string): string {
+  const unit = normalizeUnit(value);
+  const aliases: Record<string, string> = {
+    а: "a", amp: "a", amps: "a", ампер: "a", ампера: "a", амперов: "a",
+    в: "v", volt: "v", volts: "v", вольт: "v", вольта: "v", вольтов: "v",
+    вт: "w", watt: "w", watts: "w", ватт: "w", ватта: "w", ваттов: "w",
+    ва: "va", полюс: "pole", полюса: "pole", полюсов: "pole", p: "pole", п: "pole",
+  };
+  return aliases[unit] ?? unit;
+}
+
+/**
+ * Recovers an emission-only machine contract from facts common to every
+ * rendered card. This does not authorize or filter products: it merely keeps
+ * already-proven user constraints traceable when a terminal recovery bypassed
+ * the model-authored render criteria.
+ */
+export function projectCommonRenderedUserCriteria(
+  products: ProductRef[],
+  userMessage: string,
+): Criterion[] {
+  if (!Array.isArray(products) || products.length === 0) return [];
+  const firstTraits = parsedProductTraits(products[0]);
+  const criteria: Criterion[] = [];
+  for (const first of firstTraits) {
+    if (!renderedValueIsCustomerOwned(first.label, first.value, userMessage)) continue;
+    const shared = products.slice(1).every((product) =>
+      parsedProductTraits(product).some((trait) =>
+        normalizeKey(trait.label) === normalizeKey(first.label) &&
+        stringEvidenceMatches(first.value, trait.value)
+      )
+    );
+    if (!shared) continue;
+    criteria.push({
+      key: first.label,
+      op: "eq",
+      value: parseNumSpan(first.value)?.min ?? first.value,
+      level: "A",
+    });
+  }
+  for (const quantity of extractClientQuantities(userMessage)) {
+    if (criteria.some((criterion) =>
+      criterion.op === "eq" &&
+      !Array.isArray(criterion.value) &&
+      Number(criterion.value) === quantity.value
+    )) continue;
+    const expectedUnit = canonicalRenderedUnit(quantity.unit);
+    const shared = products.every((product) =>
+      extractClientQuantities([
+        product.pagetitle,
+        ...(product.short_traits ?? []),
+      ].join(" ")).some((candidate) =>
+        candidate.value === quantity.value &&
+        canonicalRenderedUnit(candidate.unit) === expectedUnit
+      )
+    );
+    if (!shared) continue;
+    criteria.push({
+      key: quantity.unit,
+      op: "eq",
+      value: quantity.value,
+      unit: expectedUnit,
+      level: "A",
+    });
+  }
+  return mergeUserBackedCriteria([], criteria);
+}
+
+/** Reconstructs the same emission-only proof from the deterministic Markdown
+ * card boundary. This covers recovery paths whose cache URL representation no
+ * longer matches the normalized URL emitted by the renderer. */
+export function projectCommonRenderedMarkdownUserCriteria(
+  markdown: string,
+  userMessage: string,
+): Criterion[] {
+  const products: ProductRef[] = [];
+  const cardPattern = /- \*\*\[([^\]\r\n]+)\]\([^\r\n]+\)\*\*[\s\S]*?(?=\n\n- \*\*\[|$)/gu;
+  for (const match of String(markdown ?? "").matchAll(cardPattern)) {
+    const block = match[0];
+    const vendor = block.match(/\n\s+Бренд:\s*([^\r\n]+)/u)?.[1]?.trim() ?? null;
+    products.push({
+      id: String(products.length + 1),
+      pagetitle: match[1].trim(),
+      vendor,
+      price: 1,
+      stock: "unknown",
+      short_traits: [],
+    });
+  }
+  return projectCommonRenderedUserCriteria(products, userMessage);
+}
+
+export type SelectionCriterionProvenance =
+  | "guarded_search"
+  | "reasoning_projection"
+  | "selection_target"
+  | "application_context"
+  | "render_alignment";
+
+/**
+ * Immutable mandatory selection contract accumulated during one logical turn.
+ * Search, render and recovery receive the same criteria snapshot instead of
+ * rebuilding independent subsets from the latest model tool call.
+ */
+export interface SelectionCriteriaPlan {
+  readonly mandatory_criteria: readonly Criterion[];
+  readonly criterion_sources: Readonly<Record<string, readonly SelectionCriterionProvenance[]>>;
+  readonly hash: string;
+}
+
+function mandatoryCriterionSignature(criterion: Criterion): string {
+  const value = Array.isArray(criterion.value)
+    ? criterion.value.map((item) => String(item)).join("\u0000")
+    : String(criterion.value);
+  return [
+    normalizeKey(criterion.key),
+    criterion.op,
+    value,
+    normalizeKey(String(criterion.unit ?? "")),
+    criterion.exclusive === true ? "exclusive" : "inclusive",
+  ].join("\u0001");
+}
+
+function selectionCriteriaPlanHash(criteria: readonly Criterion[]): string {
+  const canonical = criteria.map(mandatoryCriterionSignature).sort().join("\u0002");
+  // Deterministic FNV-1a is sufficient here: this is a traceable contract id,
+  // not a security primitive. Keeping it synchronous also makes the plan safe
+  // to use in every search/render branch.
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < canonical.length; index += 1) {
+    hash ^= canonical.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return `selection-${(hash >>> 0).toString(16).padStart(8, "0")}`;
+}
+
+/**
+ * Extends, but never shrinks, a turn's mandatory criteria. Level-B advice is
+ * intentionally excluded. Reordering or repeating equivalent criteria keeps
+ * the same hash; adding a new obligation necessarily changes it.
+ */
+export function extendSelectionCriteriaPlan(
+  current: SelectionCriteriaPlan | null,
+  incoming: Criterion[],
+  provenance: SelectionCriterionProvenance,
+): SelectionCriteriaPlan {
+  const additions = (Array.isArray(incoming) ? incoming : [])
+    .filter((criterion) => criterion?.key && criterion.value !== undefined && (criterion.level ?? "A") === "A")
+    .map((criterion) => ({ ...criterion, level: "A" as const }));
+  const existing = current?.mandatory_criteria.map((criterion) => ({ ...criterion })) ?? [];
+  const mandatory = mergeUserBackedCriteria(existing, additions);
+  const sourceSets = new Map<string, Set<SelectionCriterionProvenance>>();
+  for (const [signature, sources] of Object.entries(current?.criterion_sources ?? {})) {
+    sourceSets.set(signature, new Set(sources));
+  }
+  for (const criterion of additions) {
+    const signature = mandatoryCriterionSignature(criterion);
+    const sources = sourceSets.get(signature) ?? new Set<SelectionCriterionProvenance>();
+    sources.add(provenance);
+    sourceSets.set(signature, sources);
+  }
+  const criterionSources = Object.fromEntries(
+    [...sourceSets.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([signature, sources]) => [signature, [...sources].sort()]),
+  );
+  return Object.freeze({
+    mandatory_criteria: Object.freeze(mandatory.map((criterion) => Object.freeze({ ...criterion }))),
+    criterion_sources: Object.freeze(criterionSources),
+    hash: selectionCriteriaPlanHash(mandatory),
+  });
+}
+
+/** Returns obligations from the frozen plan that a later contract omitted. */
+export function missingSelectionCriteria(
+  plan: SelectionCriteriaPlan | null,
+  candidateCriteria: Criterion[],
+): Criterion[] {
+  if (!plan) return [];
+  const present = new Set(
+    (Array.isArray(candidateCriteria) ? candidateCriteria : [])
+      .filter((criterion) => (criterion.level ?? "A") === "A")
+      .map(mandatoryCriterionSignature),
+  );
+  return plan.mandatory_criteria
+    .filter((criterion) => !present.has(mandatoryCriterionSignature(criterion)))
+    .map((criterion) => ({ ...criterion }));
 }
 
 // ─── Нормализация ────────────────────────────────────────────────────────────
@@ -391,6 +645,17 @@ function stringEvidenceMatches(wanted: string, evidence: string): boolean {
   const want = normalizeKey(wanted);
   const got = normalizeKey(evidence);
   if (!want || !got) return false;
+  if (/^-?\d+(?:[.,]\d+)?$/u.test(want)) {
+    const escaped = want.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&").replace(/[.,]/u, "[.,]");
+    return new RegExp(`(?<!\\d)${escaped}(?!\\d)`, "u").test(got);
+  }
+  // A one-character unit/code is meaningful only as a standalone token.
+  // Substring matching would otherwise claim that catalog unit `m`/`м` was
+  // explicitly requested in `mm`/`мм`, corrupting the public contract.
+  if (/^[\p{L}\p{N}]$/u.test(want)) {
+    const escaped = want.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    return new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, "u").test(got);
+  }
   if (got.includes(want) || want.includes(got)) return true;
   // One-letter tokens are meaningful catalog codes in otherwise descriptive
   // values (`Тип C`, `кривая B`). The semantic stem matcher below deliberately

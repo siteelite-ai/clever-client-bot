@@ -194,11 +194,33 @@ export function compileMeasuredReasoningSearchContract(
   facets: Array<CriteriaFacet & { type: string }>,
 ): MeasuredReasoningSearchContract {
   const projected = projectReasoningRangeCriteria(criteria, reasoningText, facets);
+  const classificationMarker = /(?:категор\p{L}*|класс\p{L}*|вид\p{L}*|назначен\p{L}*|применен\p{L}*|исполнен\p{L}*)/iu;
+  const reasoningClauses = String(reasoningText ?? "")
+    // A semicolon may be part of one canonical live value (an enum group),
+    // not a boundary between two reasoning claims. Sentence punctuation and
+    // newlines are sufficient to keep the classification marker local.
+    .split(/(?<=[.!?])|\n+/u)
+    .map((clause) => clause.trim())
+    .filter(Boolean);
+  // An exact live categorical value explicitly selected as a class/type for
+  // the stated application is not an aesthetic preference merely because the
+  // consultant phrased it as a recommendation. Protect only clauses that name
+  // the schema role (class/category/type/purpose); colours and other ordinary
+  // preferences remain eligible for demotion.
+  const applicationClassCriteria = projected.criteria.filter((criterion) => {
+    if (criterion.op !== "eq" || typeof criterion.value !== "string") return false;
+    const value = normalizeEvidence(criterion.value);
+    if (!value) return false;
+    return reasoningClauses.some((clause) =>
+      classificationMarker.test(clause) &&
+      normalizeEvidence(clause).includes(value)
+    );
+  });
   const importance = alignCriteriaImportanceWithReasoning(
     projected.criteria,
     reasoningText,
     userBackedCriteria,
-    projected.added,
+    [...projected.added, ...applicationClassCriteria],
   );
   const mandatory = importance.criteria.filter((criterion) => (criterion.level ?? "A") === "A");
   const facetProjection = projectCriteriaFacetOptions(mandatory, facets);

@@ -11,6 +11,7 @@ import {
   stripSerializedToolCallMarkup,
   stripUngroundedIntroAliasDefinitions,
   stripUngroundedIntroTechnicalAttributes,
+  stripRejectedClarificationText,
   stripUnrenderedCatalogFactSegments,
 } from "./internals-guard.ts";
 
@@ -124,6 +125,16 @@ Deno.test("intro reasoning drops unrequested technical codes from alias generali
   assertEquals(result.removed, ["с цоколем E27 или E40"]);
 });
 
+Deno.test("rejected clarification text cannot leak invented alternatives", () => {
+  const result = stripRejectedClarificationText(
+    "Проверяю названный тип по каталогу.\n\nДавайте уточню, какой разъём вам нужен — E27 или E40?",
+    "Какой разъём вам нужен?",
+    [{ value: "E27" }, { value: "E40" }],
+  );
+  assertEquals(result.text, "Проверяю названный тип по каталогу.");
+  assertEquals(result.removed, ["Давайте уточню, какой разъём вам нужен — E27 или E40?"]);
+});
+
 Deno.test("intro reasoning retains customer codes and explicit derived criteria", () => {
   assertEquals(
     stripUngroundedIntroTechnicalAttributes(
@@ -212,6 +223,15 @@ Deno.test("intro reasoning removes unsupported alias definitions but keeps actio
     '«Кукуруза» — это народное название ламп-капсул.',
     "Обычно это лампы с прозрачной колбой.",
   ]);
+});
+
+Deno.test("intro alias guard removes an ungrounded attribute plan left after the definition", () => {
+  const result = stripUngroundedIntroAliasDefinitions(
+    "«Лампа кукуруза» — это народное название светодиодных ламп. Смотрю по форме «цилиндрическая» и цоколям E27/E40. Проверяю точное каталожное название.",
+    "а у тебя есть лампы кукуруза?",
+  );
+  assertEquals(result.text, "Проверяю точное каталожное название.");
+  assertEquals(result.removed.length, 2);
 });
 
 Deno.test("intro alias guard rejects post-discovery class equivalence and preserves criteria", () => {

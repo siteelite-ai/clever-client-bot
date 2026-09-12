@@ -20,6 +20,28 @@ Deno.test("a consultant-declared colloquial name becomes a catalog alias obligat
   );
 });
 
+Deno.test("a structural 'this is what people call it' explanation also becomes an alias obligation", () => {
+  assertEquals(
+    extractDeclaredCatalogAlias(
+      "а у тебя есть лампы кукуруза?",
+      "Понял, «кукуруза» — так лампочки с торчащими светодиодами называют за характерную форму.",
+      "Лампы",
+    ),
+    "кукуруза",
+  );
+});
+
+Deno.test("an inflected class plus nickname declaration preserves only the customer qualifier", () => {
+  assertEquals(
+    extractDeclaredCatalogAlias(
+      "а у тебя есть лампы кукуруза?",
+      "«Лампа кукуруза» — это народное название светодиодных ламп. Проверяю каталог.",
+      "Лампы",
+    ),
+    "кукуруза",
+  );
+});
+
 Deno.test("quoted requirements and application context do not become aliases", () => {
   assertEquals(
     extractDeclaredCatalogAlias(
@@ -32,6 +54,20 @@ Deno.test("quoted requirements and application context do not become aliases", (
     extractDeclaredCatalogAlias(
       "Нужен светильник в гостиную",
       "Для «гостиной» подойдёт равномерный основной свет.",
+    ),
+    null,
+  );
+  assertEquals(
+    extractDeclaredCatalogAlias(
+      "Покажи автоматические выключатели Schneider на 16 ампер",
+      "Ищу автоматические выключатели бренда Schneider и проверяю номинал.",
+    ),
+    null,
+  );
+  assertEquals(
+    extractDeclaredCatalogAlias(
+      "Найди двойные черные розетки электрические",
+      "Ищу электрические розетки с двумя разъёмами чёрного цвета.",
     ),
     null,
   );

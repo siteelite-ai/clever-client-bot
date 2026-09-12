@@ -81,6 +81,7 @@
           "expect": {
             "min_products": 1,
             "require_product_title": ["CORN"],
+            "require_every_product_title_any": ["CORN"],
             "forbid_product_title": ["LABEL OFF", "удаления наклеек", "аэрозоль"],
             "forbid_assistant_text": ["E27", "E40"],
             "forbid_text": ["search_catalog", "discover_category", "jargon_recover_catalog", "render_products"]
@@ -108,6 +109,7 @@
           "expect": {
             "min_products": 1,
             "require_product_title": ["CORN"],
+            "require_every_product_title_any": ["CORN"],
             "forbid_product_title": ["LABEL OFF", "удаления наклеек", "аэрозоль"],
             "forbid_assistant_text": ["E27", "E40"],
             "conversation_boundary": "new_task",
@@ -396,7 +398,7 @@
               "units": ["Вт", "W", "ватт"],
               "min": 25
             },
-            "forbid_every_product_title_any": ["улич", "прожектор", "Avenue", "E40"],
+            "forbid_every_product_title_any": ["улич", "прожектор", "Avenue", "E40", "6500K", "ДПО", "ДВО", "линейный", "prismatic"],
             "require_any_text": ["лм", "люмен", "гостин", "основн"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
@@ -427,8 +429,15 @@
         {
           "message": "подбери термоусадочную трубку для кабеля диаметром 12 мм",
           "expect": {
-            "min_products": 1,
+            "min_products": 2,
             "require_every_product_pair_around": 12,
+            "require_selection_criteria_groups": [
+              ["\"op\":\"min\""],
+              ["\"op\":\"max\""],
+              ["\"value\":12"],
+              ["\"exclusive\":true"]
+            ],
+            "forbid_assistant_text": ["24 мм", "36 мм", "среднестенн"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }
@@ -444,6 +453,12 @@
           "expect": {
             "min_products": 1,
             "require_every_product_pair_around": 10,
+            "require_selection_criteria_groups": [
+              ["\"op\":\"min\""],
+              ["\"op\":\"max\""],
+              ["\"value\":10"],
+              ["\"exclusive\":true"]
+            ],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }
@@ -459,6 +474,70 @@
           "expect": {
             "max_products": 0,
             "require_any_text": ["уточните", "раздел", "товарн", "групп", "розет", "выключател"],
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        },
+        {
+          "message": "двойные электрические розетки",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 1,
+            "require_every_product_title_groups": [
+              ["Gallant", "Галант"],
+              ["розет"],
+              ["двойн", "2 мест", "2-мест", "2 пост"]
+            ],
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-new-black-double-sockets",
+      "title": "Чёрные двойные электрические розетки сохраняют оба признака",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "Найди двойные черные розетки электрические",
+          "expect": {
+            "min_products": 1,
+            "require_every_product_title_groups": [
+              ["розет"],
+              ["черн", "графит"]
+            ],
+            "require_selection_criteria_groups": [
+              ["Количество разъемов", "Количество разъёмов", "\"kind\":\"count\""],
+              ["\"value\":2", "\"value\":\"2\""],
+              ["Цвет"],
+              ["черн"]
+            ],
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "customer-new-schneider-breaker-3p-16a",
+      "title": "Автоматы Schneider 16 А на три полюса сохраняют все обязательные оси",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "Покажи все автоматические выключатели Schneider на 16 ампер, на 3 полюса",
+          "expect": {
+            "min_products": 1,
+            "require_every_product_card_groups": [
+              ["Schneider"],
+              ["16A", "16 A", "16А", "16 А"],
+              ["3P", "3Р", "3-пол", "3 полюс"]
+            ],
+            "require_selection_criteria_groups": [
+              ["Бренд", "brand", "vendor"],
+              ["Schneider"],
+              ["Номинальный ток", "current", "ампер"],
+              ["16"],
+              ["Количество полюсов", "poles", "полюс"],
+              ["3"]
+            ],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }
@@ -481,6 +560,7 @@
               ["запас", "пусков"]
             ],
             "forbid_assistant_text": ["стабилизатор"],
+            "forbid_tool_summary": ["Стабилизаторы"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }

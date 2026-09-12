@@ -4,7 +4,16 @@ import { selectionTargetIsDeclared } from "./selection-contract.ts";
 export interface VisibleRequestRequirement {
   kind: "linear_measurement" | "bounded_measurement" | "count" | "literal_modifier";
   label: string;
+  op?: "eq" | "min" | "max";
+  value?: string | number;
+  unit?: string;
+  exclusive?: boolean;
   matches: (title: string) => boolean;
+}
+
+export interface VisibleRequestProductEvidence {
+  pagetitle: string;
+  short_traits?: string[];
 }
 
 export interface VisibleRequestContractContext {
@@ -156,6 +165,9 @@ export function buildVisibleRequestContract(
     add(`length:${canonical}`, {
       kind: "linear_measurement",
       label: `${raw} м`,
+      op: "eq",
+      value: Number(canonical),
+      unit: "м",
       matches: (title) => new RegExp(
         `(?<!\\d)${escaped}\\s*(?:м|m)(?![\\p{L}\\p{N}²³])`,
         "iu",
@@ -168,19 +180,34 @@ export function buildVisibleRequestContract(
     add(`count:${count}`, {
       kind: "count",
       label: `${count} места/розетки/гнезда`,
-      matches: (title) => new RegExp(
-        `(?<!\\d)${count}\\s*(?:[-–—]?\\s*)?(?:мест\\p{L}*|розет\\p{L}*|гнезд\\p{L}*|гн\\.?)(?!\\p{L})`,
-        "iu",
-      ).test(title),
+      op: "eq",
+      value: Number(count),
+      matches: (evidence) => {
+        const countFirst = new RegExp(
+          `(?<!\\d)${count}\\s*(?:[-–—]?\\s*)?(?:мест\\p{L}*|розет\\p{L}*|гнезд\\p{L}*|гн\\.?)(?!\\p{L})`,
+          "iu",
+        );
+        const labelFirst = new RegExp(
+          `(?:мест\\p{L}*|розет\\p{L}*|гнезд\\p{L}*|разъем\\p{L}*)\\s*(?::|=|-|–|—)?\\s*(?<!\\d)${count}(?!\\d)`,
+          "iu",
+        );
+        return countFirst.test(evidence) || labelFirst.test(evidence);
+      },
     });
   }
 
-  if (/двойн\p{L}*\s+розет\p{L}*|розет\p{L}*\s+двойн\p{L}*/iu.test(source)) {
+  if (
+    /двойн\p{L}*(?:\s+\p{L}+){0,1}\s+розет\p{L}*|розет\p{L}*(?:\s+\p{L}+){0,1}\s+двойн\p{L}*/iu
+      .test(source)
+  ) {
     add("count:double-socket", {
       kind: "count",
       label: "двойная розетка",
-      matches: (title) =>
-        /двойн\p{L}*|(?<!\d)2\s*(?:[-–—]?\s*)?(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*|пост\p{L}*)(?!\p{L})/iu.test(title),
+      op: "eq",
+      value: 2,
+      matches: (evidence) =>
+        /двойн\p{L}*|(?<!\d)2\s*(?:[-–—]?\s*)?(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*|разъем\p{L}*|пост\p{L}*)(?!\p{L})/iu.test(evidence) ||
+        /(?:мест\p{L}*|розет\p{L}*|гнезд\p{L}*|разъем\p{L}*|пост\p{L}*)\s*(?::|=|-|–|—)?\s*(?<!\d)2(?!\d)/iu.test(evidence),
     });
   }
 
@@ -203,6 +230,10 @@ export function buildVisibleRequestContract(
     add(`bound:${direction}:${exclusive}:${value}:${unit}`, {
       kind: "bounded_measurement",
       label,
+      op: direction,
+      value,
+      unit,
+      exclusive,
       matches: (title) => titleSatisfiesBound(title, { value, unit, direction, exclusive }),
     });
   }
@@ -215,6 +246,8 @@ export function buildVisibleRequestContract(
     add(`modifier:${modifier.stem}`, {
       kind: "literal_modifier",
       label: modifier.label,
+      op: "eq",
+      value: modifier.label,
       matches: (title) => (title.match(/[a-zа-я0-9]+/giu) ?? []).some((token) => tokenStem(token) === modifier.stem),
     });
   }
@@ -227,6 +260,24 @@ export function titleSupportsVisibleRequestContract(
   requirements: VisibleRequestRequirement[],
 ): boolean {
   return requirements.every((requirement) => requirement.matches(title));
+}
+
+/**
+ * Final cards may omit a characteristic from the title even though the
+ * catalog exposes it in structured traits. Both fields are first-party,
+ * customer-visible evidence, so the final guard accepts either source. This
+ * prevents a correct facet search from being rejected merely because the
+ * title is abbreviated, without trusting model prose or adding product data.
+ */
+export function productSupportsVisibleRequestContract(
+  product: VisibleRequestProductEvidence,
+  requirements: VisibleRequestRequirement[],
+): boolean {
+  const evidence = [
+    String(product?.pagetitle ?? ""),
+    ...(Array.isArray(product?.short_traits) ? product.short_traits.map(String) : []),
+  ].join("\n");
+  return requirements.every((requirement) => requirement.matches(evidence));
 }
 
 /**

@@ -64,6 +64,8 @@ export function parseSse(body) {
   let serverProductsCount = null;
   let diagnosticError = null;
   let conversationBoundary = null;
+  let dialogSlots = null;
+  let selectionContract = null;
   const toolEvents = [];
   for (const line of body.split(/\r?\n/)) {
     if (!line.startsWith('data: ')) continue;
@@ -78,6 +80,9 @@ export function parseSse(body) {
     if (event?.type === 'products_block' && typeof event.markdown === 'string') {
       productsStarted = true;
       productsMarkdown += `${productsMarkdown ? '\n\n' : ''}${event.markdown}`;
+      if (event.selection_contract && typeof event.selection_contract === 'object') {
+        selectionContract = event.selection_contract;
+      }
     }
     if (event?.type === 'diagnostic') {
       logId = event.log_id || logId;
@@ -88,6 +93,9 @@ export function parseSse(body) {
     }
     if (event?.type === 'conversation_boundary' && event.mode === 'new_task' && typeof event.session_id === 'string') {
       conversationBoundary = { mode: event.mode, sessionId: event.session_id };
+    }
+    if (event?.type === 'slot_update' && event.slots && typeof event.slots === 'object' && !Array.isArray(event.slots)) {
+      dialogSlots = event.slots;
     }
     if (event?.type === 'tool_event') {
       toolEvents.push({
@@ -115,14 +123,16 @@ export function parseSse(body) {
       url: match[2],
       price: Number.isFinite(parsedPrice) && parsedPrice > 0 ? parsedPrice : null,
       stockLine,
+      cardText: block,
     });
   }
-  return { text, textBeforeProducts, productsMarkdown, links, logId, completed, serverProductsCount, diagnosticError, conversationBoundary, toolEvents };
+  return { text, textBeforeProducts, productsMarkdown, links, logId, completed, serverProductsCount, diagnosticError, conversationBoundary, dialogSlots, selectionContract, toolEvents };
 }
 
 function includesAny(haystack, needles) {
-  const lower = haystack.toLocaleLowerCase('ru-RU');
-  return needles.some((needle) => lower.includes(String(needle).toLocaleLowerCase('ru-RU')));
+  const normalize = (value) => String(value).toLocaleLowerCase('ru-RU').replaceAll('ё', 'е');
+  const lower = normalize(haystack);
+  return needles.some((needle) => lower.includes(normalize(needle)));
 }
 
 function matchesEveryGroup(value, groups) {
@@ -193,6 +203,11 @@ export function evaluate(expect = {}, response) {
   for (const phrase of expect.forbid_assistant_text ?? []) {
     if (includesAny(response.text, [phrase])) failures.push(`forbidden assistant text: ${phrase}`);
   }
+  for (const phrase of expect.forbid_tool_summary ?? []) {
+    if ((response.toolEvents ?? []).some((event) => includesAny(event.summary ?? '', [phrase]))) {
+      failures.push(`forbidden tool summary: ${phrase}`);
+    }
+  }
   for (const phrase of expect.forbid_product_title ?? []) {
     if (response.links.some((link) => includesStandalonePhrase(link.title, phrase))) {
       failures.push(`forbidden product title: ${phrase}`);
@@ -215,6 +230,18 @@ export function evaluate(expect = {}, response) {
       .filter((link) => !matchesEveryGroup(link.title, expect.require_every_product_title_groups))
       .map((link) => link.title);
     if (invalidTitles.length > 0) failures.push(`product titles violate required groups: ${invalidTitles.join(' | ')}`);
+  }
+  if (Array.isArray(expect.require_every_product_card_groups)) {
+    const invalidCards = response.links
+      .filter((link) => !matchesEveryGroup(link.cardText ?? link.title, expect.require_every_product_card_groups))
+      .map((link) => link.title);
+    if (invalidCards.length > 0) failures.push(`product cards violate required groups: ${invalidCards.join(' | ')}`);
+  }
+  if (Array.isArray(expect.require_selection_criteria_groups)) {
+    const criteriaText = JSON.stringify(response.selectionContract ?? {});
+    if (!matchesEveryGroup(criteriaText, expect.require_selection_criteria_groups)) {
+      failures.push(`selection contract misses required groups: ${expect.require_selection_criteria_groups.map((group) => `[${group.join(', ')}]`).join(' ')}`);
+    }
   }
   if (expect.require_exact_or_split && typeof expect.require_exact_or_split === 'object') {
     const contract = expect.require_exact_or_split;
@@ -353,7 +380,7 @@ async function runTurn({ message, expect }, state) {
     sessionId: state.sessionId,
     history: state.history.slice(-10),
     stream: true,
-    dialogSlots: {},
+    dialogSlots: state.dialogSlots,
   };
   const { response, raw, attempts } = await fetchAcceptanceTurn(payload, {
     maxAttempts: 2,
@@ -365,7 +392,9 @@ async function runTurn({ message, expect }, state) {
   if (parsed.conversationBoundary?.sessionId) {
     state.sessionId = parsed.conversationBoundary.sessionId;
     state.history = [];
+    state.dialogSlots = {};
   }
+  if (parsed.dialogSlots !== null) state.dialogSlots = parsed.dialogSlots;
   state.history.push({ role: 'user', content: message }, { role: 'assistant', content: combined });
   return {
     message,
@@ -379,6 +408,7 @@ async function runTurn({ message, expect }, state) {
     text: parsed.text,
     completed: parsed.completed,
     conversation_boundary: parsed.conversationBoundary,
+    selection_contract: parsed.selectionContract,
     tool_events: parsed.toolEvents,
     passed: failures.length === 0,
     failures,
@@ -400,6 +430,7 @@ export async function main() {
       const state = {
         sessionId: `customer_acceptance_${testCase.id.replace(/[^a-z0-9_-]/gi, '_')}_${Date.now()}_${run}`.slice(0, 120),
         history: [],
+        dialogSlots: {},
       };
       const turns = [];
       for (const turn of testCase.turns) turns.push(await runTurn(turn, state));
@@ -450,6 +481,7 @@ export async function main() {
               text: turn.text,
               failures: turn.failures,
               diagnostic_error: turn.diagnostic_error,
+              selection_contract: turn.selection_contract,
               tool_events: turn.tool_events,
             })),
           })),

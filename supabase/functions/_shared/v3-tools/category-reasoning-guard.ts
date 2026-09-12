@@ -3,6 +3,8 @@
 // sibling. Unsupported leaf categories are removed instead of guessed/replaced;
 // the remaining facet filters then perform the safe category-wide search.
 
+import { selectionTargetIsDeclared } from "./selection-contract.ts";
+
 export interface DiscoveredCategoryScope {
   category?: { pagetitle?: string | null } | null;
   leaf_categories?: Array<{ pagetitle?: string | null }> | null;
@@ -17,6 +19,36 @@ export interface CategoryReasoningGuardResult {
 export interface GroundedCategoryRecoveryScope<T extends DiscoveredCategoryScope> {
   discovery: T;
   targets: string[];
+}
+
+export interface DiscoveryNounGuardResult {
+  noun: string;
+  changed: boolean;
+  reason: "empty" | "preserves_target" | "sibling_substitution";
+}
+
+/**
+ * A discovery request may broaden or formalize the frozen product class, but
+ * it may not replace it with a related sibling. This guard is deliberately
+ * vocabulary-free: at least one class direction must preserve the same
+ * lexical base according to the ordinary selection-target contract.
+ */
+export function guardDiscoveryNounBySelectionTarget(
+  requestedNoun: string,
+  frozenTarget: string | null,
+): DiscoveryNounGuardResult {
+  const requested = String(requestedNoun ?? "").trim();
+  const target = String(frozenTarget ?? "").trim();
+  if (!requested || !target) {
+    return { noun: requested || target, changed: false, reason: "empty" };
+  }
+  if (
+    selectionTargetIsDeclared(target, requested) ||
+    selectionTargetIsDeclared(requested, target)
+  ) {
+    return { noun: requested, changed: false, reason: "preserves_target" };
+  }
+  return { noun: target, changed: true, reason: "sibling_substitution" };
 }
 
 const RU_SUFFIXES = [
@@ -72,6 +104,11 @@ function evidenceAffirmsToken(evidence: string, token: string): boolean {
   const tokens = norm(evidence).split(" ").filter(Boolean);
   for (let index = 0; index < tokens.length; index += 1) {
     if (!tokenMatches(token, tokens[index])) continue;
+    // A category word explicitly negated by the customer/consultant is
+    // exclusion evidence, not affirmation. Check the local token relation
+    // before the broader context heuristic so phrases such as "not a
+    // decorative element" cannot lock the controller into that branch.
+    if (tokens[index - 1] === "не" || tokens[index - 1] === "без") continue;
     // In a transformation request (`replace X with Y`) X is the source being
     // removed, not positive evidence for the target category. A later mention
     // after `with/на` can still affirm the same class independently.
@@ -99,6 +136,110 @@ function evidenceAffirmsToken(evidence: string, token: string): boolean {
 export function categoryLabelIsAffirmedAsTarget(label: string, evidence: string): boolean {
   const tokens = significantTokens(label);
   return tokens.length > 0 && tokens.every((token) => evidenceAffirmsToken(evidence, token));
+}
+
+/** A short product acronym is still a grounded class when it appears as one
+ * complete token in customer/consultant evidence. Longer labels retain the
+ * stricter morphological target-side check above. */
+export function discoveryNounIsGrounded(label: string, evidence: string): boolean {
+  if (categoryLabelIsAffirmedAsTarget(label, evidence)) return true;
+  const raw = String(label ?? "").trim();
+  const normalized = norm(label);
+  const acronymLike = normalized.length >= 2 &&
+    normalized.length <= 6 &&
+    !normalized.includes(" ") &&
+    raw === raw.toLocaleUpperCase("ru-RU") &&
+    raw !== raw.toLocaleLowerCase("ru-RU");
+  if (!acronymLike) return false;
+  return norm(evidence).split(" ").includes(normalized);
+}
+
+/**
+ * Extracts the customer-owned destination phrase from an explicit
+ * transformation ("replace X with Y"). It is a safe semantic-discovery input
+ * when the provider's first tool call invented a catalog noun before emitting
+ * any reasoning. Numeric targets are excluded because "replace ... with 16 A"
+ * describes a parameter, not a product class.
+ */
+export function extractCustomerOwnedDiscoveryTarget(customerText: string): string | null {
+  const source = String(customerText ?? "").trim();
+  const match = source.match(
+    /(?:замен\p{L}*|поменя\p{L}*|смен\p{L}*)[^.!?\n]{0,100}?\s+на\s+([^.!?\n]{2,100})/iu,
+  );
+  if (!match) return null;
+  const destination = String(match[1] ?? "")
+    .split(/\s+(?:в|во|для|под|при|с|со)\s+/iu, 1)[0]
+    .replace(/\s+(?:что|котор\p{L}*|како\p{L}*)\s*$/iu, "")
+    .trim();
+  const tokens = norm(destination).split(" ").filter(Boolean);
+  if (
+    tokens.length === 0 ||
+    tokens.length > 6 ||
+    tokens.every((token) => /^\d/u.test(token) || /^(?:мм|см|м|вт|квт|а|в)$/u.test(token))
+  ) return null;
+  return destination;
+}
+
+/**
+ * Reduces a model-proposed taxonomy noun to only the lexical base already
+ * present in the customer's transformation destination. This keeps useful
+ * class reasoning (`ceiling fixture` -> `fixture`) without allowing an
+ * unrequested sibling/modifier to become its own proof. No product vocabulary
+ * is embedded: the relation is derived from the two live phrases.
+ */
+export function groundDiscoveryNounToCustomerTarget(
+  proposedNoun: string,
+  customerTarget: string,
+): string | null {
+  const targetTokens = norm(customerTarget).split(" ").filter(Boolean);
+  const sharesStableRoot = (candidate: string, target: string): boolean => {
+    if (tokenMatches(candidate, target)) return true;
+    const left = stemRu(candidate);
+    const right = stemRu(target);
+    let shared = 0;
+    while (shared < Math.min(left.length, right.length) && left[shared] === right[shared]) shared += 1;
+    // Restricted to long words so a four-letter derivational root can bridge
+    // ordinary noun/adjective forms without making short generic tokens proof.
+    return shared >= 4 && left.length >= 6 && right.length >= 6;
+  };
+  const grounded = String(proposedNoun ?? "")
+    .trim()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .filter((token) => {
+      const normalized = norm(token);
+      return normalized.length >= 4 && targetTokens.some((target) => sharesStableRoot(normalized, target));
+    });
+  return grounded.length > 0 ? grounded.join(" ") : null;
+}
+
+/**
+ * A live semantic resolver may bridge ordinary customer wording to a formal
+ * taxonomy class only when its input was replaced with the customer's exact
+ * destination phrase. Otherwise the ordinary lexical sibling guard remains
+ * mandatory. Product cards are still checked later against the frozen target.
+ */
+export function discoveryResultPreservesCustomerIntent(
+  requestedNoun: string,
+  resolvedCategory: string,
+  evidence: string,
+  customerOwnedSemanticResolution: boolean,
+): boolean {
+  const requestedGrounded = discoveryNounIsGrounded(requestedNoun, evidence);
+  const resolvedGrounded = discoveryNounIsGrounded(resolvedCategory, evidence);
+  const sharesRequestedBase = significantTokens(requestedNoun).some((requested) =>
+    significantTokens(resolvedCategory).some((resolved) => tokenMatches(requested, resolved))
+  );
+  const preservesRequested = !guardDiscoveryNounBySelectionTarget(
+    resolvedCategory,
+    requestedNoun,
+  ).changed;
+  // Sending the exact customer phrase to a semantic resolver does not make
+  // every returned category correct. The live result must still preserve the
+  // grounded requested base (or be independently grounded in the evidence).
+  return resolvedGrounded ||
+    preservesRequested && (requestedGrounded || customerOwnedSemanticResolution) ||
+    sharesRequestedBase && (requestedGrounded || customerOwnedSemanticResolution);
 }
 
 function leafSupported(leaf: string, umbrella: string, evidence: string): boolean {

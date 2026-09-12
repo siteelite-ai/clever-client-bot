@@ -64,6 +64,7 @@ test('parseSse keeps pre-product text and parses card prices', () => {
     url: 'https://220volt.kz/catalog/a/b/item-%28x%29/',
     price: 1234,
     stockLine: null,
+    cardText: '- **[Товар 1P 16А х-ка C](https://220volt.kz/catalog/a/b/item-%28x%29/)**\n  Цена: *1 234* ₸/уп',
   }]);
   assert.equal(parsed.completed, true);
   assert.equal(parsed.serverProductsCount, 1);
@@ -117,6 +118,20 @@ test('parseSse exposes automatic conversation boundaries', () => {
   assert(evaluate({ conversation_boundary: 'continuation' }, parsed).includes('unexpected conversation boundary: new_task'));
 });
 
+test('parseSse preserves server-issued slots for the next acceptance turn', () => {
+  const slots = {
+    pending_clarification: {
+      facet_key: 'catalog_section',
+      scope: { kind: 'broad_assortment', token: 'Example' },
+    },
+  };
+  const result = parseSse([
+    `data: ${JSON.stringify({ v3_event: { type: 'slot_update', slots } })}`,
+    'data: [DONE]',
+  ].join('\n'));
+  assert.deepEqual(result.dialogSlots, slots);
+});
+
 test('evaluate checks every product title group and maximum price', () => {
   const response = {
     text: '',
@@ -140,6 +155,57 @@ test('evaluate checks every product title group and maximum price', () => {
   }, response);
   assert(failures.some((failure) => failure.startsWith('product titles violate required groups')));
   assert(failures.some((failure) => failure.startsWith('product price exceeds 1000')));
+});
+
+test('evaluate can verify identity from the complete rendered card', () => {
+  const response = {
+    text: '',
+    textBeforeProducts: '',
+    productsMarkdown: '',
+    links: [{
+      title: 'Автомат 3P 16A',
+      cardText: 'Автомат 3P 16A\nБренд: Schneider Electric',
+    }],
+    completed: true,
+    diagnosticError: null,
+    serverProductsCount: 1,
+  };
+  assert.deepEqual(evaluate({ require_every_product_card_groups: [['Schneider'], ['3P'], ['16A']] }, response), []);
+  assert(evaluate({ require_every_product_card_groups: [['IEK'], ['3P'], ['16A']] }, response)
+    .some((failure) => failure.startsWith('product cards violate required groups')));
+});
+
+test('parseSse and evaluate preserve the server selection contract', () => {
+  const contract = {
+    hash: 'selection-test',
+    mandatory_criteria: [
+      { key: 'Количество разъемов', op: 'eq', value: '2' },
+      { key: 'Цвет', op: 'eq', value: 'чёрный' },
+    ],
+    visible_requirements: [
+      { kind: 'count', label: 'двойная розетка', op: 'eq', value: 2 },
+    ],
+  };
+  const parsed = parseSse([
+    data({ v3_event: {
+      type: 'products_block',
+      markdown: '- **[Розетка РС 16-343 черный](https://220volt.kz/catalog/item/)**\n  Цена: *900* ₸',
+      selection_contract: contract,
+    } }),
+    data({ v3_event: { type: 'diagnostic', phase: 'complete', products_count: 1 } }),
+    'data: [DONE]',
+  ].join('\n'));
+  assert.deepEqual(parsed.selectionContract, contract);
+  assert.deepEqual(evaluate({
+    require_selection_criteria_groups: [
+      ['Количество разъемов'], ['"value":"2"'], ['Цвет'], ['черн'],
+    ],
+  }, parsed), []);
+  assert.deepEqual(evaluate({
+    require_selection_criteria_groups: [['"kind":"count"'], ['"value":2']],
+  }, parsed), []);
+  assert(evaluate({ require_selection_criteria_groups: [['Количество разъемов'], ['"value":"1"']] }, parsed)
+    .some((failure) => failure.startsWith('selection contract misses required groups')));
 });
 
 test('evaluate accepts either a true exact intersection or an explicitly labelled axis split', () => {
@@ -191,6 +257,21 @@ test('evaluate can forbid unsupported prose without rejecting evidence in produc
     ...response,
     text: 'В каталоге есть E27.',
   }).includes('forbidden assistant text: E27'));
+});
+
+test('evaluate rejects a sibling taxonomy branch hidden from user-facing prose', () => {
+  const response = {
+    text: 'Подбираю ИБП.',
+    textBeforeProducts: 'Подбираю ИБП.',
+    productsMarkdown: '',
+    links: [],
+    completed: true,
+    diagnosticError: null,
+    serverProductsCount: 0,
+    toolEvents: [{ tool: 'discover_category', phase: 'result', summary: 'категория «Стабилизаторы»: 112 тов.' }],
+  };
+  assert(evaluate({ forbid_tool_summary: ['Стабилизаторы'] }, response)
+    .includes('forbidden tool summary: Стабилизаторы'));
 });
 
 test('evaluate validates a generic strict numeric pair around the object size', () => {

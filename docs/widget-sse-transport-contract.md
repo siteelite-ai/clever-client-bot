@@ -7,6 +7,9 @@ selection and replay must never be re-executed merely because delivery failed.
 
 - Connection: 15 seconds per route. This covers DNS/TLS/headers and enables a
   quick fallback when one hostname is unreachable from the customer's network.
+- Protocol acceptance: 15 seconds per route. SSE comments prove byte-level
+  liveness but do not prove that the backend durably claimed the logical turn.
+  A diagnostic carrying the request log id is the durable acceptance signal.
 - Inactivity: 30 seconds, refreshed by every response byte, including SSE
   comments. The v3 backend sends a heartbeat every 10 seconds, so a healthy
   long-running request is not aborted.
@@ -28,6 +31,10 @@ fallback.
 - Once a diagnostic log id has been received, retry is always `resumeOnly` with
   the same `messageId`. It replays persisted events and must not execute catalog
   search or the model again.
+- When a second route finds that same `messageId` already in progress, it emits
+  a non-persisted diagnostic acceptance before waiting for completion. This
+  keeps the replay connection alive without creating a second execution or
+  changing the canonical stored response.
 - The claiming `sessionId` is immutable for every transport attempt of that
   message, even if a conversation-boundary event rotates the visible session
   for the next user turn.
@@ -55,5 +62,7 @@ fallback.
 - idle abort when no response bytes arrive;
 - `[DONE]` on a transport that remains physically open;
 - fast proxy-to-direct failover;
+- an existing in-progress request accepting the replay connection before its
+  potentially long completion wait;
 - one shared deadline when both routes are unavailable;
 - SSE bodies whose content type was rewritten by an intermediary.

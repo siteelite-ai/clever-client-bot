@@ -165,6 +165,33 @@ export function parseSelectionTarget(value: unknown): SelectionTargetProjection 
   };
 }
 
+/**
+ * Application context may become a hard live-facet obligation only when the
+ * customer or the first visible expert reasoning already declared it. This
+ * prevents a late model tool call from inventing a use case that then filters
+ * the catalog, while allowing ordinary selections (not only replacements) to
+ * preserve a genuinely stated room, environment or mounting context.
+ */
+export function groundSelectionApplicationContext(
+  targetValue: unknown,
+  declarationEvidence: string,
+): SelectionTargetProjection {
+  const target = parseSelectionTarget(targetValue);
+  const evidence = normalize(declarationEvidence);
+  const evidenceTokens = new Set(meaningfulTokens(declarationEvidence));
+  const applicationContext = target.application_context.filter((item) => {
+    const normalized = normalize(item);
+    if (!normalized) return false;
+    if (` ${evidence} `.includes(` ${normalized} `)) return true;
+    const tokens = meaningfulTokens(item);
+    return tokens.length > 0 && tokens.every((token) => evidenceTokens.has(token));
+  });
+  return {
+    product_class: target.product_class,
+    application_context: applicationContext,
+  };
+}
+
 const META_WORDS = new Set([
   "товар", "товары", "товара", "вариант", "варианты", "модель", "модели",
   "оборудование", "решение", "подходящий", "подходящие", "нужный", "нужные",
@@ -413,9 +440,43 @@ export function selectionTargetDeclarationIsGrounded(
   const targetTokens = meaningfulTokens(target);
   const initialTokens = new Set(meaningfulTokens(initialEvidence));
   const leadingTargetIsGrounded = targetTokens.length >= 2 && initialTokens.has(targetTokens[0]);
-  const targetMatchesLiveClass = selectionTargetIsDeclared(target, liveClass) ||
-    selectionTargetIsDeclared(liveClass, target);
+  // The complete proposed target must be contained in live taxonomy. The
+  // reverse direction is unsafe: a short live base occurring inside a richer
+  // model phrase would let the model append an arbitrary class adjective and
+  // then reject every otherwise valid card against its own invention.
+  const targetMatchesLiveClass = selectionTargetIsDeclared(target, liveClass);
   return leadingTargetIsGrounded && targetMatchesLiveClass;
+}
+
+/**
+ * Drops only a model-authored class extension that has no independent source
+ * of truth. The replacement base is the customer-grounded live taxonomy when
+ * available, otherwise the already frozen class. Any extra token present in
+ * customer/initial reasoning or in a mandatory criterion remains binding and
+ * therefore cannot be projected away.
+ */
+export function projectModelOnlySelectionTargetExtension(
+  currentTarget: string | null,
+  declaredTarget: string,
+  initialEvidence: string,
+  liveClass: string,
+  criteria: Criterion[],
+): string | null {
+  const groundedLiveBase = bootstrapSelectionTargetFromTaxonomy(initialEvidence, liveClass);
+  const base = groundedLiveBase ?? String(currentTarget ?? "").trim();
+  const declared = String(declaredTarget ?? "").trim();
+  if (!base || !declared || !selectionTargetIsDeclared(base, declared)) return null;
+  if (selectionTargetDeclarationIsGrounded(declared, initialEvidence, liveClass)) return null;
+
+  const baseTokens = new Set(meaningfulTokens(base));
+  const extraTokens = meaningfulTokens(declared).filter((token) => !baseTokens.has(token));
+  if (extraTokens.length === 0) return null;
+  const declaredEvidence = new Set(meaningfulTokens(initialEvidence));
+  const mandatoryEvidence = new Set((Array.isArray(criteria) ? criteria : [])
+    .filter((criterion) => criterion?.key && (criterion.level ?? "A") === "A")
+    .flatMap((criterion) => meaningfulTokens(`${criterion.key} ${String(criterion.value ?? "")}`)));
+  if (extraTokens.some((token) => declaredEvidence.has(token) || mandatoryEvidence.has(token))) return null;
+  return base;
 }
 
 /**

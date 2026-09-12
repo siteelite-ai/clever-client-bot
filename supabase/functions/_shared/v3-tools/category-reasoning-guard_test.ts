@@ -1,15 +1,52 @@
 import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   categoryLabelIsAffirmedAsTarget,
+  discoveryNounIsGrounded,
+  discoveryResultPreservesCustomerIntent,
+  extractCustomerOwnedDiscoveryTarget,
+  groundDiscoveryNounToCustomerTarget,
   filterProductsByGroundedCategoryTargets,
   groundedCategoryRecoveryQueries,
   groundedTokenRecoveryQueries,
   guardCategoryScopeByReasoning,
+  guardDiscoveryNounBySelectionTarget,
   filterProductsByNamedSeries,
   rankGroundedCategoryRecoveryScopes,
   selectGroundedTokenRecoveryCandidate,
   titleContainsLiteralToken,
 } from "./category-reasoning-guard.ts";
+
+Deno.test("discovery noun cannot replace a frozen class with a sibling", () => {
+  assertEquals(
+    guardDiscoveryNounBySelectionTarget("Стабилизаторы", "ИБП"),
+    { noun: "ИБП", changed: true, reason: "sibling_substitution" },
+  );
+});
+
+Deno.test("discovery noun may broaden while preserving the frozen class base", () => {
+  assertEquals(
+    guardDiscoveryNounBySelectionTarget("Светильники", "бытовой светильник"),
+    { noun: "Светильники", changed: false, reason: "preserves_target" },
+  );
+});
+
+Deno.test("explicit product acronym grounds the discovery noun", () => {
+  assert(discoveryNounIsGrounded("ИБП", "Какой ИБП подойдет для газового котла?"));
+});
+
+Deno.test("related sibling category is not grounded by an acronym request", () => {
+  assertEquals(
+    discoveryNounIsGrounded("Стабилизаторы", "Какой ИБП подойдет для газового котла?"),
+    false,
+  );
+});
+
+Deno.test("a rejected category mention is not positive discovery evidence", () => {
+  assertEquals(
+    discoveryNounIsGrounded("Стабилизаторы", "Стабилизатор не подходит, нужен ИБП."),
+    false,
+  );
+});
 
 const discovered = {
   category: { pagetitle: "Светильники" },
@@ -212,6 +249,92 @@ Deno.test("category affirmation distinguishes the source and target sides of a t
       "Хочу заменить старое исходное устройство на новое исходное устройство",
     ),
     true,
+  );
+});
+
+Deno.test("a directly negated category word is exclusion rather than affirmation", () => {
+  assertEquals(
+    categoryLabelIsAffirmedAsTarget(
+      "Декоративное освещение",
+      "Нужен светодиодный светильник — не декоративный элемент, а полноценное освещение.",
+    ),
+    false,
+  );
+});
+
+Deno.test("semantic discovery uses only the explicit customer destination of a transformation", () => {
+  const request = "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?";
+  assertEquals(extractCustomerOwnedDiscoveryTarget(request), "светодиодное освещение");
+  assertEquals(extractCustomerOwnedDiscoveryTarget("Заменить автомат на 16 А"), null);
+  assertEquals(
+    groundDiscoveryNounToCustomerTarget("светильник потолочный", "светодиодное освещение"),
+    "светильник",
+  );
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      "светодиодное освещение",
+      "Светильники",
+      request,
+      true,
+    ),
+    false,
+  );
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      "светильник",
+      "Светильники",
+      request,
+      true,
+    ),
+    true,
+  );
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      "люстра",
+      "Светильники",
+      request,
+      true,
+    ),
+    false,
+  );
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      "стабилизатор",
+      "Стабилизаторы напряжения",
+      "Какой ИБП подойдет для котла?",
+      false,
+    ),
+    false,
+  );
+});
+
+Deno.test("customer-owned semantic discovery may formalize a qualified noun without losing its base class", () => {
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      "оболочка ABC",
+      "Оболочки формуемые",
+      "Подбери оболочку ABC размером 10 мм",
+      true,
+    ),
+    true,
+  );
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      "оболочка ABC",
+      "Оболочки формуемые",
+      "Подбери оболочку ABC размером 10 мм",
+      false,
+    ),
+    true,
+  );
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      "оболочка ABC",
+      "Соседние устройства",
+      "Подбери оболочку ABC размером 10 мм",
+      true,
+    ),
+    false,
   );
 });
 

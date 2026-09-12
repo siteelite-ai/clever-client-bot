@@ -6,12 +6,17 @@ import {
   applyCriteriaGate,
   buildCriteriaQuery,
   checkCriterion,
+  extendSelectionCriteriaPlan,
   filterProductIdsByBudgetCap,
   findTrait,
   mergeFacetOptionConstraints,
+  mergeMandatorySelectionCriteria,
   mergeUserBackedCriteria,
+  missingSelectionCriteria,
   parseNumSpan,
   projectCatalogFilterEvidence,
+  projectCommonRenderedUserCriteria,
+  projectCommonRenderedMarkdownUserCriteria,
   projectCriteriaFacetOptions,
   resolveRenderCriteria,
   resolveTerminalSelectionCriteria,
@@ -46,6 +51,144 @@ Deno.test("user-backed criteria accumulate monotonically across fallback searche
   assertEquals(mergeUserBackedCriteria(first, []), first);
   assertEquals(mergeUserBackedCriteria(first, second), [...first, ...second]);
   assertEquals(mergeUserBackedCriteria([...first, ...second], first), [...first, ...second]);
+});
+
+Deno.test("rendered-card consensus restores a user-owned emission contract", () => {
+  const products = ["one", "two"].map((id) => ({
+    id,
+    pagetitle: `Item ${id}`,
+    vendor: "ACME",
+    price: 100,
+    stock: "in_stock" as const,
+    short_traits: ["Номинальный ток: 16 A", "Количество полюсов: 3"],
+  }));
+  assertEquals(
+    projectCommonRenderedUserCriteria(
+      products,
+      "Покажи ACME на 16 ампер и на 3 полюса",
+    ),
+    [
+      { key: "Бренд", op: "eq", value: "ACME", level: "A" },
+      { key: "Номинальный ток", op: "eq", value: 16, level: "A" },
+      { key: "Количество полюсов", op: "eq", value: 3, level: "A" },
+    ],
+  );
+});
+
+Deno.test("rendered-card consensus never claims a trait that differs across cards", () => {
+  const products = [
+    { id: "one", pagetitle: "Item one", vendor: null, price: 100, stock: "in_stock" as const, short_traits: ["Номинальный ток: 16 A"] },
+    { id: "two", pagetitle: "Item two", vendor: null, price: 100, stock: "in_stock" as const, short_traits: ["Номинальный ток: 20 A"] },
+  ];
+  assertEquals(projectCommonRenderedUserCriteria(products, "Нужно 16 ампер"), []);
+});
+
+Deno.test("rendered-card consensus uses common title measurements when compact cards omit traits", () => {
+  const products = ["one", "two"].map((id) => ({
+    id,
+    pagetitle: `Device ${id} 3P 16A`,
+    vendor: "ACME Electric",
+    price: 100,
+    stock: "in_stock" as const,
+    short_traits: [],
+  }));
+  assertEquals(
+    projectCommonRenderedUserCriteria(products, "Покажи ACME на 16 ампер и на 3 полюса"),
+    [
+      { key: "Бренд", op: "eq", value: "ACME Electric", level: "A" },
+      { key: "ампер", op: "eq", value: 16, unit: "a", level: "A" },
+      { key: "полюса", op: "eq", value: 3, unit: "pole", level: "A" },
+    ],
+  );
+});
+
+Deno.test("deterministic markdown cards preserve the same common emission contract", () => {
+  const markdown = [
+    "- **[Device one 3P 16A](https://example.test/one)**\n  Цена: *100* ₸\n  Бренд: ACME Electric",
+    "- **[Device two 3P 16A](https://example.test/two)**\n  Цена: *200* ₸\n  Бренд: ACME Electric",
+  ].join("\n\n");
+  assertEquals(
+    projectCommonRenderedMarkdownUserCriteria(markdown, "Покажи ACME на 16 ампер и на 3 полюса"),
+    [
+      { key: "Бренд", op: "eq", value: "ACME Electric", level: "A" },
+      { key: "ампер", op: "eq", value: 16, unit: "a", level: "A" },
+      { key: "полюса", op: "eq", value: 3, unit: "pole", level: "A" },
+    ],
+  );
+});
+
+Deno.test("a digit inside a larger customer number does not make an unrelated numeric trait customer-owned", () => {
+  const products = [{
+    id: "p1",
+    pagetitle: "Изделие 20/10",
+    vendor: null,
+    price: 100,
+    stock: "in_stock" as const,
+    short_traits: ["Популярный: 1"],
+  }];
+  assertEquals(
+    projectCommonRenderedUserCriteria(products, "Нужно изделие для объекта диаметром 12 мм"),
+    [],
+  );
+});
+
+Deno.test("a one-letter product unit does not match inside a longer customer unit", () => {
+  const products = [{
+    id: "p1",
+    pagetitle: "Generic item 20/10",
+    vendor: null,
+    price: 100,
+    stock: "in_stock" as const,
+    short_traits: ["Единица измерения: м"],
+  }];
+  assertEquals(
+    projectCommonRenderedUserCriteria(products, "Нужно изделие для объекта диаметром 10 мм"),
+    [],
+  );
+});
+
+Deno.test("selection criteria plan is immutable and cannot lose an earlier mandatory requirement", () => {
+  const first = extendSelectionCriteriaPlan(null, [
+    { key: "Live output facet", op: "range", value: [3750, 5000], unit: "lm", level: "A" },
+    { key: "Optional finish", op: "eq", value: "matte", level: "B" },
+  ], "reasoning_projection");
+  const extended = extendSelectionCriteriaPlan(first, [
+    { key: "Live mounting facet", op: "eq", value: "surface", level: "A" },
+  ], "guarded_search");
+
+  assertEquals(first.mandatory_criteria.length, 1);
+  assertEquals(extended.mandatory_criteria.length, 2);
+  assertEquals(missingSelectionCriteria(extended, [
+    { key: "Live mounting facet", op: "eq", value: "surface", level: "A" },
+  ]), [
+    { key: "Live output facet", op: "range", value: [3750, 5000], unit: "lm", level: "A" },
+  ]);
+});
+
+Deno.test("public selection contract never upgrades advisory render criteria", () => {
+  assertEquals(mergeMandatorySelectionCriteria([
+    { key: "Required axis", op: "eq", value: "one", level: "A" },
+    { key: "Optional axis", op: "eq", value: "two", level: "B" },
+  ]), [
+    { key: "Required axis", op: "eq", value: "one", level: "A" },
+  ]);
+});
+
+Deno.test("selection plan hash is order-independent and changes only when the hard contract changes", () => {
+  const left = extendSelectionCriteriaPlan(null, [
+    { key: "Facet A", op: "eq", value: "one", level: "A" },
+    { key: "Facet B", op: "min", value: 2, level: "A" },
+  ], "guarded_search");
+  const right = extendSelectionCriteriaPlan(null, [
+    { key: "Facet B", op: "min", value: 2, level: "A" },
+    { key: "Facet A", op: "eq", value: "one", level: "A" },
+  ], "reasoning_projection");
+  const changed = extendSelectionCriteriaPlan(right, [
+    { key: "Facet C", op: "max", value: 3, level: "A" },
+  ], "application_context");
+
+  assertEquals(left.hash, right.hash);
+  assertEquals(left.hash === changed.hash, false);
 });
 
 Deno.test("a broad semantic recovery cannot discard the latest mandatory contract", () => {
