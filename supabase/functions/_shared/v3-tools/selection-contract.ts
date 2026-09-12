@@ -824,10 +824,22 @@ export function projectSelectionApplicationFacetCriteria(
   const target = parseSelectionTarget(targetValue);
   if (!target.product_class || target.application_context.length === 0) return [];
 
+  const productClassTokens = new Set(meaningfulTokens(target.product_class));
   const compactContexts = target.application_context
     .filter((item) => normalize(item).split(/\s+/u).filter(Boolean).length <= 4)
-    .map((item) => ({ raw: normalize(item), tokens: meaningfulTokens(item) }))
-    .filter((item) => item.tokens.length > 0);
+    .map((item) => {
+      const tokens = meaningfulTokens(item);
+      return {
+        raw: normalize(item),
+        tokens,
+        // A generic class word repeated in application_context is not a
+        // suitability constraint. Only the remaining qualifier may project
+        // to a live facet; otherwise a broad noun can accidentally select one
+        // arbitrary subtype that happens to share that noun.
+        qualifierTokens: tokens.filter((token) => !productClassTokens.has(token)),
+      };
+    })
+    .filter((item) => item.qualifierTokens.length > 0);
   if (compactContexts.length === 0) return [];
 
   const editDistanceAtMostOne = (left: string, right: string) => {
@@ -866,7 +878,7 @@ export function projectSelectionApplicationFacetCriteria(
         return compactContexts.some((context) =>
           context.raw === normalizedValue ||
           valueTokens.every((valueToken) =>
-            context.tokens.some((contextToken) =>
+            context.qualifierTokens.some((contextToken) =>
               valueToken === contextToken ||
               Math.min(valueToken.length, contextToken.length) >= 4 &&
                 editDistanceAtMostOne(valueToken, contextToken)

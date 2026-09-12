@@ -487,6 +487,10 @@
               ["розет"],
               ["двойн", "2 мест", "2-мест", "2 пост"]
             ],
+            "require_selection_criteria_groups": [
+              ["Коллекц", "серия", "линейк"],
+              ["Gallant", "Галант"]
+            ],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }

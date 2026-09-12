@@ -997,6 +997,66 @@ test('a user-only semantic block is not serialized after an oversized assistant 
   dom.window.close();
 });
 
+test('a server pending clarification is carried into the next browser request', async () => {
+  const payloads = [];
+  let fetchCount = 0;
+  const legacyPendingSlot = {
+    pending_clarification: {
+      slot_id: 'clarification-slot-1',
+      facet_key: 'catalog_section',
+      question: 'Какой раздел показать?',
+      options: [
+        { value: 'Раздел А', label: 'Раздел А' },
+        { value: 'Раздел Б', label: 'Раздел Б' },
+      ],
+      scope: { kind: 'broad_assortment', token: 'SERIESX' },
+    },
+  };
+  const dom = bootWidget({
+    fetchImpl: async (_url, init) => {
+      fetchCount += 1;
+      payloads.push(JSON.parse(init.body));
+      const logId = `pending-slot-log-${fetchCount}`;
+      const events = fetchCount === 1
+        ? [
+            { v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } },
+            { choices: [{ delta: { content: 'Какой раздел показать?' } }] },
+            { v3_event: { type: 'slot_update', slots: legacyPendingSlot } },
+            { v3_event: { type: 'diagnostic', log_id: logId, phase: 'complete', products_count: 0 } },
+          ]
+        : [
+            { v3_event: { type: 'diagnostic', log_id: logId, phase: 'start' } },
+            { choices: [{ delta: { content: 'Уточнение принято.' } }] },
+            { v3_event: { type: 'diagnostic', log_id: logId, phase: 'complete', products_count: 0 } },
+          ];
+      const sse = events.map((event) => `data: ${JSON.stringify(event)}`).concat('data: [DONE]', '').join('\n\n');
+      return new Response(sse, { headers: { 'Content-Type': 'text/event-stream' } });
+    },
+  });
+
+  const input = dom.window.document.querySelector('#volt-widget-input');
+  input.value = 'покажи ассортимент SERIESX';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  let deadline = Date.now() + 500;
+  while (dom.window.document.querySelector('#volt-widget-send').disabled && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  input.value = 'Раздел А';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  dom.window.document.querySelector('#volt-widget-send').click();
+  deadline = Date.now() + 500;
+  while ((payloads.length < 2 || dom.window.document.querySelector('#volt-widget-send').disabled) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+
+  assert.equal(payloads.length, 2);
+  assert.deepEqual(payloads[1].dialogSlots, legacyPendingSlot);
+  assert.equal(readState(dom).dialogSlots.pending_clarification.scope.token, 'SERIESX');
+  dom.window.close();
+});
+
 test('request payload is bounded by UTF-8 bytes and keeps only recent complete turns', async () => {
   const now = Date.now();
   const history = [{ role: 'assistant', content: 'Здравствуйте! Старый диалог.' }];

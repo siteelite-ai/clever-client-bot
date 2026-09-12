@@ -2,7 +2,7 @@
   'use strict';
 
   // Widget version — для диагностики устаревших встраиваний на чужих сайтах
-  var WIDGET_VERSION = 'widget-238458f8fcae34d8';
+  var WIDGET_VERSION = 'widget-9ed958efa52536eb';
   try { console.info('[Widget] v=' + WIDGET_VERSION); } catch(e) {}
 
   // Configuration
@@ -224,7 +224,14 @@
     var activeSlots = {};
     var slotCount = 0;
     for (var key in safeSlots) {
-      if (isPlainRecord(safeSlots[key]) && safeSlots[key].status === 'pending' && slotCount < 3) {
+      // `pending_clarification` is itself a protocol-level pending marker.
+      // Older server/replay events did not include an explicit status field,
+      // so requiring status === 'pending' silently dropped the clarification
+      // between consecutive browser requests. Keep that canonical slot active
+      // for backwards-compatible replays; all other slot kinds remain explicit.
+      var isPendingClarification = key === 'pending_clarification';
+      if (isPlainRecord(safeSlots[key]) &&
+          (safeSlots[key].status === 'pending' || isPendingClarification) && slotCount < 3) {
         activeSlots[key] = safeSlots[key];
         slotCount++;
       }
