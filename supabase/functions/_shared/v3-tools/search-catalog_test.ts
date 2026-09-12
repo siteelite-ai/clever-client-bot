@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { executeSearchCatalog } from "./search-catalog.ts";
+import { executeSearchCatalog, isRestrictedCatalogProduct } from "./search-catalog.ts";
 import type { ProductCache } from "./types.ts";
 
 Deno.test("incomplete by-filter input exposes a structured recovery code", async () => {
@@ -20,6 +20,60 @@ Deno.test("incomplete by-filter input exposes a structured recovery code", async
   assertEquals(result.ok, false);
   if (result.ok) return;
   assertEquals(result.error_code, "incomplete_filter");
+});
+
+Deno.test("catalog visibility policy fails closed only when the stable flag is present", () => {
+  assertEquals(isRestrictedCatalogProduct({ options: [] }), false);
+  assertEquals(isRestrictedCatalogProduct({
+    options: [{ key: "ogranichennyy_prosmotr", value_ru: "Нет", value_kz: "Жоқ" }],
+  }), false);
+  assertEquals(isRestrictedCatalogProduct({
+    options: [{ key: "ogranichennyy_prosmotr", value_ru: "Да" }],
+  }), true);
+  assertEquals(isRestrictedCatalogProduct({
+    options: [{ key: "ogranichennyy_prosmotr", value: true }],
+  }), true);
+  assertEquals(isRestrictedCatalogProduct({
+    options: [{ key: "ogranichennyy_prosmotr", value_ru: "" }],
+  }), true);
+});
+
+Deno.test("restricted catalog products never enter search results or the product cache", async () => {
+  const product = (id: string, options: unknown[]) => ({
+    id,
+    pagetitle: `Product ${id}`,
+    price: 100,
+    url: `https://220volt.kz/catalog/test/products/${id}/`,
+    options,
+  });
+  const fetchImpl: typeof fetch = () => Promise.resolve(new Response(JSON.stringify({
+    data: {
+      results: [
+        product("public-explicit", [{ key: "ogranichennyy_prosmotr", value_ru: "Нет" }]),
+        product("public-unmarked", []),
+        product("restricted-yes", [{ key: "ogranichennyy_prosmotr", value_ru: "Да" }]),
+        product("restricted-boolean", [{ key: "ogranichennyy_prosmotr", value: true }]),
+        product("restricted-unknown", [{ key: "ogranichennyy_prosmotr", value_ru: "pending" }]),
+      ],
+      pagination: { total: 5 },
+    },
+  }), { status: 200, headers: { "content-type": "application/json" } }));
+  const cache: ProductCache = new Map();
+
+  const result = await executeSearchCatalog({
+    mode: "by_query",
+    query: "product",
+    per_page: 10,
+  }, {
+    baseUrl: "https://catalog.test",
+    apiToken: "test",
+    fetchImpl,
+  }, cache);
+
+  assertEquals(result.ok, true);
+  if (!result.ok) return;
+  assertEquals(result.results.map((entry) => entry.id), ["public-explicit", "public-unmarked"]);
+  assertEquals([...cache.keys()], ["public-explicit", "public-unmarked"]);
 });
 
 Deno.test("catalog retries an equivalent compound spelling only after an empty result", async () => {

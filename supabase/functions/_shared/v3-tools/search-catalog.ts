@@ -5,6 +5,50 @@ import type { ProductCache, ProductRef, SearchCatalogOk, ToolError } from "./typ
 import { canonicalizeCompoundMarkingForCatalog } from "./exact-compound-marking-policy.ts";
 
 const PRODUCT_DESCRIPTION_MAX_CHARS = 1_200;
+const RESTRICTED_VIEW_OPTION_KEY = "ogranichennyy_prosmotr";
+const EXPLICITLY_UNRESTRICTED_VALUES = new Set([
+  "0",
+  "false",
+  "no",
+  "жок",
+  "жоқ",
+  "нет",
+]);
+
+function normalizeCatalogFlagValue(raw: unknown): string {
+  if (typeof raw === "boolean") return raw ? "true" : "false";
+  if (typeof raw === "number") return String(raw);
+  return typeof raw === "string"
+    ? raw.normalize("NFKC").trim().toLocaleLowerCase("ru-RU").replace(/ё/gu, "е")
+    : "";
+}
+
+/**
+ * `Ограниченный просмотр` is an access-policy flag, not a product facet.
+ * Filter it at the catalog boundary so restricted cards never enter the
+ * request cache and therefore cannot reach reasoning, recovery or rendering.
+ *
+ * Missing flag means the API did not mark the product as restricted. If the
+ * stable flag key is present, only explicit negative values are allowed; an
+ * empty or new/unknown value fails closed.
+ */
+export function isRestrictedCatalogProduct(product: Record<string, unknown>): boolean {
+  if (!Array.isArray(product.options)) return false;
+  const policyOptions = (product.options as Array<Record<string, unknown>>).filter((option) =>
+    String(option?.key ?? "").trim().toLowerCase() === RESTRICTED_VIEW_OPTION_KEY
+  );
+  if (policyOptions.length === 0) return false;
+
+  return policyOptions.some((option) => {
+    const localizedValues = [option.value_ru, option.value_kz]
+      .map(normalizeCatalogFlagValue)
+      .filter(Boolean);
+    const values = localizedValues.length > 0
+      ? localizedValues
+      : [normalizeCatalogFlagValue(option.value)].filter(Boolean);
+    return values.length === 0 || values.some((value) => !EXPLICITLY_UNRESTRICTED_VALUES.has(value));
+  });
+}
 
 /**
  * Каталожное описание приходит как HTML. В модель передаём только короткий
@@ -280,6 +324,7 @@ async function singleSearch(
 
     const results: ProductRef[] = [];
     for (const raw of rawResults as Array<Record<string, unknown>>) {
+      if (isRestrictedCatalogProduct(raw)) continue;
       const price = Number(raw.price);
       if (!Number.isFinite(price) || price <= 0) continue;
       const id = String(raw.id ?? "");
