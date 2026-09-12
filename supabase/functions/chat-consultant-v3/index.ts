@@ -3271,6 +3271,7 @@ async function answerBroadAssortmentRequest(
       type: "slot_update",
       slots: {
         pending_clarification: {
+          status: "pending",
           slot_id: crypto.randomUUID(),
           facet_key: "catalog_section",
           question: answer,

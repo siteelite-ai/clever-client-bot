@@ -56,6 +56,7 @@ export function executeProposeClarification(
       type: "slot_update",
       slots: {
         pending_clarification: {
+          status: "pending",
           slot_id,
           facet_key,
           question,
