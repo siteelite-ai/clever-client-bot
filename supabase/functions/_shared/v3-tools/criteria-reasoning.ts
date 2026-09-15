@@ -539,6 +539,52 @@ export function projectReasoningRangeCriteria(
     next.push(criterion);
     added.push(criterion);
   }
+
+  // A derived requirement may be directional rather than a closed interval
+  // (for example “not less than X”, while a higher comfort target remains
+  // advisory). Project it only when its unit identifies exactly one live
+  // numeric facet. Bounds that merely restate an explicit interval are already
+  // owned by the range projection above and must not be duplicated.
+  const directionalBounds = collapseBounds(extractReasoningBounds(reasoningText));
+  for (const bound of directionalBounds) {
+    const unit = canonicalMeasurementUnit(bound.unit);
+    if (!unit) continue;
+    if (ranges.some((range) =>
+      range.unit === unit && (range.low === bound.value || range.high === bound.value)
+    )) continue;
+    if (next.some((criterion) => {
+      const sameUnit = canonicalMeasurementUnit(criterion.unit ?? "") === unit;
+      const value = typeof criterion.value === "number" ? criterion.value : Number(criterion.value);
+      return sameUnit && criterion.op === bound.op && value === bound.value;
+    })) continue;
+    const unitFacets = (facets ?? []).filter((facet) => {
+      const hasNumericLiveValues = (facet.values ?? []).some(({ value }) =>
+        /\d+(?:[.,]\d+)?/u.test(String(value ?? ""))
+      );
+      const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
+      const labelHasUnit = String(facet.caption || facet.key)
+        .match(/[a-zа-я°]{1,10}[²³]?\d?/giu)
+        ?.some((token) => canonicalMeasurementUnit(token) === unit) ?? false;
+      return (facet.type === "number" || hasNumericLiveValues) &&
+        (declaredUnit === unit || labelHasUnit);
+    });
+    // A bare directional bound does not carry enough local state to choose
+    // between two facets with the same unit (for example size before/after a
+    // transformation). Existing criteria are not a safe hint: they may name
+    // the opposite state. Require true unit-level uniqueness.
+    if (unitFacets.length !== 1) continue;
+    const facet = unitFacets[0];
+    const criterion: Criterion = {
+      key: facet.caption || facet.key,
+      op: bound.op,
+      value: bound.value,
+      unit: facet.unit ?? unit,
+      level: "A",
+      ...(bound.strict ? { exclusive: true } : {}),
+    };
+    next.push(criterion);
+    added.push(criterion);
+  }
   return { criteria: next, added };
 }
 

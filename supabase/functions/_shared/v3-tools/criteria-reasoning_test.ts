@@ -107,6 +107,20 @@ Deno.test("русский диапазон от X до Y проецируетс�
   assertEquals(projected.added, [{ key: "Поток", op: "range", value: [3500, 5000], unit: "лм", level: "A" }]);
 });
 
+Deno.test("явная производная нижняя граница проецируется без выдуманного максимума", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "Нужен световой поток не менее 3750 лм; около 5000 лм — лишь комфортный ориентир.",
+    [
+      { key: "flow", caption: "Световой поток", type: "number", unit: "лм" },
+      { key: "power", caption: "Мощность", type: "number", unit: "Вт" },
+    ],
+  );
+  assertEquals(projected.added, [
+    { key: "Световой поток", op: "min", value: 3750, unit: "лм", level: "A" },
+  ]);
+});
+
 Deno.test("проверенный средний расчёт сохраняет исходный диапазон результата", () => {
   const projected = projectReasoningRangeCriteria(
     [],
