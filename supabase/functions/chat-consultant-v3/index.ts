@@ -3826,8 +3826,13 @@ async function runExpertLoop(
   const equivalentReplacementRequested = replacementIntent && /равноцен\p{L}*/iu.test(replacementEvidenceMessage);
   const replacementExcludedIdentityValues = new Set<string>();
   const intentMode = detectUserIntentMode(userMessage);
+  const directProductLookup = extractReplacementLookupKeys(userMessage);
   const resultCardinality = resolveResultCardinality(userMessage, {
     selection: intentMode === "select",
+    exactLookup: !replacementIntent && (
+      directProductLookup.articles.length > 0 ||
+      directProductLookup.modelCodes.length > 0
+    ),
     superlative: detectPriceDirection(userMessage)?.kind === "superlative",
   });
   let resultCardinalityShortfallAnnounced = false;

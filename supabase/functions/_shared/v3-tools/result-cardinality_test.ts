@@ -53,7 +53,7 @@ Deno.test("single-result intents remain single", () => {
     { target: 1, minimum: 1, mode: "single", explicit: true },
   );
   assertEquals(
-    resolveResultCardinality("цена товара по артикулу", {
+    resolveResultCardinality("покажи товар по артикулу 929002070102", {
       selection: true,
       exactLookup: true,
     }),
