@@ -212,6 +212,7 @@ export interface ResolvedDerivedSelectionReasoning {
   text: string;
   compatible: Array<{ key: string; value: string }>;
   customerGroundedCompatible: Array<{ key: string; value: string }>;
+  familyCompatibleFacetKeys: string[];
   excluded: Array<{ key: string; value: string }>;
 }
 
@@ -263,6 +264,14 @@ export function resolveDerivedSelectionReasoning(
     seenCompatibleFacets.add(facetIdentity);
     compatibleChoices.push(choice);
   }
+  const compatibleCountsByFacet = new Map<string, number>();
+  for (const choice of compatibleChoices) {
+    const facetIdentity = choice.facet.toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim();
+    compatibleCountsByFacet.set(facetIdentity, (compatibleCountsByFacet.get(facetIdentity) ?? 0) + 1);
+  }
+  const familyCompatibleFacetKeys = [...compatibleCountsByFacet]
+    .filter(([, count]) => count > 1)
+    .map(([facetIdentity]) => facetIdentity);
   const compatibleIds = new Set(compatibleChoices.map(({ id }) => id));
   const excludedChoices = resolveIds(args.excluded_classifications, 8)
     .filter(({ id }) => !compatibleIds.has(id));
@@ -309,12 +318,26 @@ export function resolveDerivedSelectionReasoning(
     }
   }
 
+  const normalizedFamilyFacetKeys = new Set(familyCompatibleFacetKeys);
+  const exactCompatibleChoices = compatibleChoices.filter(({ facet }) =>
+    !normalizedFamilyFacetKeys.has(facet.toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim())
+  );
+  const familyCompatibleChoices = compatibleChoices.filter(({ facet }) =>
+    normalizedFamilyFacetKeys.has(facet.toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim())
+  );
   const sentences = [reasoning.replace(/[.!?…]+$/u, "") + "."];
-  if (compatibleChoices.length > 0) {
+  if (exactCompatibleChoices.length > 0) {
     sentences.push(
-      `По классу ${compatibleChoices.map(({ facet, value }) =>
+      `По классу ${exactCompatibleChoices.map(({ facet, value }) =>
         `«${visibleFacetText(facet)}» выбираю «${visibleFacetText(value)}»`
       ).join("; ")}.`,
+    );
+  }
+  if (familyCompatibleChoices.length > 0) {
+    sentences.push(
+      `По классу ${familyCompatibleChoices.map(({ facet, value }) =>
+        `«${visibleFacetText(facet)}» в первую очередь проверяю «${visibleFacetText(value)}»`
+      ).join("; ")}; другие значения этого класса исключаю только при доказанной несовместимости.`,
     );
   }
   if (excludedChoices.length > 0) {
@@ -330,6 +353,7 @@ export function resolveDerivedSelectionReasoning(
     customerGroundedCompatible: compatibleChoices
       .filter(({ id }) => groundedIds.has(id))
       .map(({ facet, value }) => ({ key: facet, value })),
+    familyCompatibleFacetKeys,
     excluded: excludedChoices.map(({ facet, value }) => ({ key: facet, value })),
   };
 }

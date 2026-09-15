@@ -26,7 +26,7 @@ import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
 import { applyCriteriaGate, buildCriteriaQuery, extendSelectionCriteriaPlan,
-  type Criterion, filterProductIdsByBudgetCap, isLiteralUserCompactCriterion, mergeFacetOptionConstraints, mergeMandatorySelectionCriteria, mergeUserBackedCriteria, missingSelectionCriteria, projectCatalogFilterEvidence, projectCommonRenderedMarkdownUserCriteria, projectCommonRenderedUserCriteria, projectCriteriaFacetOptions, resolveRenderCriteria, resolveTerminalSelectionCriteria, type SelectionCriteriaPlan, type SelectionCriterionProvenance, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
+  type Criterion, filterProductIdsByBudgetCap, filterProductsByExcludedCriteria, isLiteralUserCompactCriterion, mergeFacetOptionConstraints, mergeMandatorySelectionCriteria, mergeUserBackedCriteria, missingSelectionCriteria, projectCatalogFilterEvidence, projectCommonRenderedMarkdownUserCriteria, projectCommonRenderedUserCriteria, projectCriteriaFacetOptions, resolveRenderCriteria, resolveTerminalSelectionCriteria, type SelectionCriteriaPlan, type SelectionCriterionProvenance, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, demoteUnfrozenRenderCriteria, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
@@ -3408,6 +3408,10 @@ async function runExpertLoop(
   // в реплике клиента.
   let assistantReasoning = "";
   let derivedSelectionReasoningEvidence = "";
+  // A compatible family is retrieval guidance, not an exhaustive allow-list.
+  // Only values the reasoning explicitly marks incompatible may eliminate a
+  // card, and only when that value is positively proved by live product data.
+  let derivedExcludedClassificationCriteria: Criterion[] = [];
   let lastDiscover: DiscoverCategoryOk | null = null;
   const selectionDiscoveries: DiscoverCategoryOk[] = [];
   // Machine-readable projection of the facet values the consultant declared
@@ -4471,14 +4475,29 @@ async function runExpertLoop(
           // deadline may otherwise route directly to terminal recovery; that
           // recovery must inherit the same class obligations instead of
           // rebuilding only the numeric part of the prose.
-          const proposedClassificationCriteria: Criterion[] = declaration.compatible.map(({ key, value }) => ({
-            key,
-            op: "eq",
-            value,
-            level: "A",
-          }));
+          const familyCompatibleFacetKeys = new Set(declaration.familyCompatibleFacetKeys);
+          const isFamilyCompatibleFacet = (key: string): boolean =>
+            familyCompatibleFacetKeys.has(key.toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim());
+          const proposedClassificationCriteria: Criterion[] = declaration.compatible
+            .filter(({ key }) => !isFamilyCompatibleFacet(key))
+            .map(({ key, value }) => ({
+              key,
+              op: "eq",
+              value,
+              level: "A",
+            }));
           const customerGroundedClassificationCriteria: Criterion[] = declaration.customerGroundedCompatible
+            .filter(({ key }) => !isFamilyCompatibleFacet(key))
             .map(({ key, value }) => ({ key, op: "eq", value, level: "A" }));
+          derivedExcludedClassificationCriteria = mergeMandatorySelectionCriteria([
+            ...derivedExcludedClassificationCriteria,
+            ...declaration.excluded.map(({ key, value }) => ({
+              key,
+              op: "eq" as const,
+              value,
+              level: "A" as const,
+            })),
+          ]);
           const classificationImportance = alignCriteriaImportanceWithReasoning(
             proposedClassificationCriteria,
             visibleDeclarationText,
@@ -4587,6 +4606,7 @@ async function runExpertLoop(
               category: lastDiscover.category?.pagetitle ?? "",
               facets: lastDiscover.facets?.length ?? 0,
               compatible_classifications: declaration.compatible,
+              compatible_family_facets: declaration.familyCompatibleFacetKeys,
               excluded_classifications: declaration.excluded,
               reasoning_model: ctx.selectionReasoningModel,
               direct_search: resp.toolCalls.some(({ name }) => name === "search_catalog"),
@@ -6275,6 +6295,28 @@ async function runExpertLoop(
           let products = ids
             .map((id) => ctx.cache.get(id))
             .filter((product): product is ProductFull => Boolean(product));
+          if (products.length > 0 && derivedExcludedClassificationCriteria.length > 0) {
+            const eligibleProducts = filterProductsByExcludedCriteria(
+              products,
+              derivedExcludedClassificationCriteria,
+            );
+            const eligibleIds = new Set(eligibleProducts.map(({ id }) => id));
+            const filteredIds = ids.filter((id) => eligibleIds.has(id));
+            if (filteredIds.length !== ids.length) {
+              steps.push({
+                step: "v3_render_declared_classification_exclusion_gate",
+                ms: now(),
+                meta: {
+                  before: ids.length,
+                  after: filteredIds.length,
+                  excluded_criteria: derivedExcludedClassificationCriteria,
+                },
+              });
+              ids = filteredIds;
+              products = eligibleProducts;
+              (tc.args as Record<string, unknown>).product_ids = filteredIds;
+            }
+          }
           let liveCategoryGroundedForRender = false;
           if (
             intentMode === "select" &&

@@ -7,6 +7,7 @@ import {
   buildCriteriaQuery,
   checkCriterion,
   extendSelectionCriteriaPlan,
+  filterProductsByExcludedCriteria,
   filterProductIdsByBudgetCap,
   findTrait,
   mergeFacetOptionConstraints,
@@ -29,6 +30,23 @@ import type { ProductRef } from "./types.ts";
 function product(id: string, traits: string[]): ProductRef {
   return { id, pagetitle: `P-${id}`, vendor: null, price: 100, stock: "unknown", short_traits: traits };
 }
+
+Deno.test("declared exclusions remove only positively proven incompatible values", () => {
+  const products = [
+    product("compatible", ["Класс применения: внутреннее исполнение"]),
+    product("incompatible", ["Класс применения: наружное исполнение"]),
+    product("unknown", ["Материал: композит"]),
+  ];
+  assertEquals(
+    filterProductsByExcludedCriteria(products, [{
+      key: "Класс применения",
+      op: "eq",
+      value: "наружное исполнение",
+      level: "A",
+    }]).map(({ id }) => id),
+    ["compatible", "unknown"],
+  );
+});
 
 Deno.test("render criteria: named entity browse keeps only user-backed filters", () => {
   const inferred = [{ key: "Тип", op: "eq", value: "ошибочный", level: "A" }] as Criterion[];

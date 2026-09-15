@@ -267,6 +267,24 @@ Deno.test("a customer-grounded class family preserves all matching live variants
     { key: "Класс применения", value: "бытовые изделия подвесные" },
   ]);
   assertEquals(resolved?.customerGroundedCompatible, resolved?.compatible);
+  assertEquals(resolved?.familyCompatibleFacetKeys, ["класс применения"]);
+  assertEquals(resolved?.text.includes("в первую очередь проверяю"), true);
+  assertEquals(resolved?.text.includes("исключаю только при доказанной несовместимости"), true);
+});
+
+Deno.test("a unique customer-grounded class remains an exact classification obligation", () => {
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning: "Подбираю исполнение по прямо указанному месту применения.",
+    compatible_classifications: ["f0v0"],
+    excluded_classifications: ["f0v1"],
+  }, [{
+    caption: "Класс применения",
+    type: "string",
+    values: [{ value: "внутреннее исполнение" }, { value: "наружное исполнение" }],
+  }], "Нужно внутреннее исполнение");
+
+  assertEquals(resolved?.familyCompatibleFacetKeys, []);
+  assertEquals(resolved?.compatible, [{ key: "Класс применения", value: "внутреннее исполнение" }]);
 });
 
 Deno.test("a negated class term cannot become customer-grounded evidence", () => {

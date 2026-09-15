@@ -887,6 +887,25 @@ export function applyCriteriaGate(
   return report;
 }
 
+/**
+ * Removes only products that positively prove a model-declared incompatible
+ * equality value. Missing or ambiguous traits stay eligible: an exclusion is
+ * a deny-list, so lack of evidence must not be inverted into a hidden
+ * allow-list. The function is deliberately category-agnostic.
+ */
+export function filterProductsByExcludedCriteria<T extends ProductRef>(
+  products: T[],
+  excludedCriteria: Criterion[],
+): T[] {
+  const active = (Array.isArray(excludedCriteria) ? excludedCriteria : []).filter((criterion) =>
+    criterion?.key && criterion.op === "eq" && (criterion.level ?? "A") === "A"
+  );
+  if (active.length === 0) return products;
+  return products.filter((product) =>
+    !active.some((criterion) => checkCriterion(product, criterion).verdict === "pass")
+  );
+}
+
 /** Compile mandatory criteria into exact values of uniquely matching live
  * facets. Repeated equality criteria for one key become OR values; different
  * constraints on one facet intersect. Product and category names are absent. */
