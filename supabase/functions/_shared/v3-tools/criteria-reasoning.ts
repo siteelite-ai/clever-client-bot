@@ -263,10 +263,12 @@ export function hasMeasuredSelectionRequirement(text: string): boolean {
     const clauseEnd = nextStops.length > 0 ? Math.min(...nextStops) : value.length;
     const clause = value.slice(clauseStart, clauseEnd);
     const explicitRange = /\d+(?:[.,]\d+)?\s*[–—-]\s*\d+(?:[.,]\d+)?/u.test(match[0]);
-    const obligation = /(?:нуж|необходим|долж|треб|минимум|максимум|не\s+менее|не\s+более|больше|меньше|свыше|до\s+\d|от\s+\d|ориентир|диапазон|расчет|счита|получа|итого|составля|подбира|выбира|[≈=×])/iu.test(clause);
+    const obligation = /(?:нуж|необходим|долж|треб|минимум|максимум|не\s+менее|не\s+более|больше|меньше|свыше|до\s+\d|от\s+\d|ориентир|диапазон|расчет|счита|получа|итого|составля|покаж|найд|ищ|подбира|выбира|[≈=×])/iu.test(clause);
+    const illustrativeRange = /(?:например|к\s+примеру|вариант\p{L}*\s+на\s+любой|от\s+прост\p{L}*.+\s+до\s+|обычно|часто|бывают)/iu.test(clause);
     // Measurements used only to describe a typical product ("обычно 220 В",
-    // "часто 10 Вт") are catalog narration, not selection requirements.
-    if (explicitRange || obligation) return true;
+    // "часто 10 Вт") or to illustrate assortment breadth ("от простых на
+    // 3–5 м до усиленных") are catalog narration, not selection requirements.
+    if (obligation || (explicitRange && !illustrativeRange)) return true;
   }
   return false;
 }

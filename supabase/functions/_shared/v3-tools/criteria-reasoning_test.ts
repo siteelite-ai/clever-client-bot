@@ -30,6 +30,13 @@ Deno.test("измеримое рассуждение требует машинн
   assertEquals(hasMeasuredSelectionRequirement("Обычно такие лампы имеют E27 или E14 и часто работают на 220 В."), false);
   assertEquals(hasMeasuredSelectionRequirement("Считаем: площадь 25 м² × 175 лк, итого 4375 лм."), true);
   assertEquals(hasMeasuredSelectionRequirement("ДКУ-LED-03-100W — исходная модель; подбираю замену."), false);
+  assertEquals(
+    hasMeasuredSelectionRequirement(
+      "Посмотрю несколько вариантов на любой кошелёк: от простых бытовых на 3–5 метров до усиленных.",
+    ),
+    false,
+  );
+  assertEquals(hasMeasuredSelectionRequirement("Покажи удлинители длиной 3–5 метров"), true);
 });
 
 Deno.test("числовой диапазон из рассуждения проецируется на уникальный живой фасет", () => {
