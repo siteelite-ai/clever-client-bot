@@ -100,7 +100,7 @@ export function resolveResultCardinality(
 export function expandResultCandidateIds(
   selectedIds: string[],
   candidateIds: string[],
-  target: number,
+  limit: number,
 ): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -109,9 +109,30 @@ export function expandResultCandidateIds(
     if (!id || seen.has(id)) continue;
     seen.add(id);
     out.push(id);
-    if (out.length >= clamp(target)) break;
+    if (out.length >= clamp(limit)) break;
   }
   return out;
+}
+
+/**
+ * Evaluate more candidates than will be rendered. Final eligibility gates can
+ * reject products whose hidden traits contradict the customer contract; if we
+ * gated only the first target-sized slice, later valid cards would never get a
+ * chance to backfill the selection.
+ */
+export function resultCardinalityCandidateWindow(
+  contract: ResultCardinalityContract,
+): number {
+  if (contract.target <= 1) return 1;
+  return Math.min(50, Math.max(10, contract.target * 3));
+}
+
+/** Final rendering is capped only after every ordinary eligibility gate. */
+export function capResultCandidateIds(
+  eligibleIds: string[],
+  contract: ResultCardinalityContract,
+): string[] {
+  return expandResultCandidateIds([], eligibleIds, contract.target);
 }
 
 export function ensureSearchCapacity(
@@ -128,7 +149,7 @@ export function ensureSearchCapacity(
   const requested = Number.isFinite(current) && current > 0
     ? Math.trunc(current)
     : 0;
-  const required = Math.min(50, Math.max(10, contract.target * 3));
+  const required = resultCardinalityCandidateWindow(contract);
   return requested >= required ? args : { ...args, per_page: required };
 }
 

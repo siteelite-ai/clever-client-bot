@@ -1,8 +1,10 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  capResultCandidateIds,
   ensureSearchCapacity,
   expandResultCandidateIds,
   resolveResultCardinality,
+  resultCardinalityCandidateWindow,
   resultCardinalityShortfallText,
 } from "./result-cardinality.ts";
 
@@ -66,6 +68,17 @@ Deno.test("candidate expansion preserves the model choice and fills from the sam
   );
   assertEquals(
     expandResultCandidateIds(["a", "b", "c", "d", "e", "f", "g"], [], 5),
+    ["a", "b", "c", "d", "e"],
+  );
+});
+
+Deno.test("candidate window is gated before the final target-sized cap", () => {
+  const contract = resolveResultCardinality("дай несколько вариантов", {
+    selection: true,
+  });
+  assertEquals(resultCardinalityCandidateWindow(contract), 15);
+  assertEquals(
+    capResultCandidateIds(["a", "b", "c", "d", "e", "f"], contract),
     ["a", "b", "c", "d", "e"],
   );
 });

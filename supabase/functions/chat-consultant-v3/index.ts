@@ -177,9 +177,11 @@ import {
   selectionPlanSystemHint,
 } from "../_shared/v3-tools/selection-plan.ts";
 import {
+  capResultCandidateIds,
   ensureSearchCapacity,
   expandResultCandidateIds,
   resolveResultCardinality,
+  resultCardinalityCandidateWindow,
   resultCardinalityShortfallText,
   resultCardinalitySystemHint,
 } from "../_shared/v3-tools/result-cardinality.ts";
@@ -5160,7 +5162,8 @@ async function runExpertLoop(
             const selectedIds = Array.isArray(tc.args.product_ids)
               ? (tc.args.product_ids as unknown[]).map(String)
               : [];
-            const expandedIds = expandResultCandidateIds(selectedIds, freshSearch.ids, resultCardinality.target);
+            const candidateWindow = resultCardinalityCandidateWindow(resultCardinality);
+            const expandedIds = expandResultCandidateIds(selectedIds, freshSearch.ids, candidateWindow);
             if (
               expandedIds.length !== selectedIds.length ||
               expandedIds.some((id, index) => id !== selectedIds[index])
@@ -5172,6 +5175,7 @@ async function runExpertLoop(
                 meta: {
                   mode: resultCardinality.mode,
                   target: resultCardinality.target,
+                  candidate_window: candidateWindow,
                   before: selectedIds.length,
                   after: expandedIds.length,
                   search_pool: freshSearch.ids.length,
@@ -7453,6 +7457,30 @@ async function runExpertLoop(
                 ...(replacementIntent
                   ? { title_requirements: portableReplacementRequirements() }
                   : {}),
+              },
+            });
+          }
+          // All ordinary eligibility gates above inspect the wider candidate
+          // window. Only now do we cap the proven survivors to the requested
+          // number, so rejected early candidates can be backfilled by later
+          // valid products from the same fresh catalog pool.
+          const beforeFinalCardinalityCap = Array.isArray(tc.args.product_ids)
+            ? (tc.args.product_ids as unknown[]).map(String)
+            : [];
+          const afterFinalCardinalityCap = capResultCandidateIds(
+            beforeFinalCardinalityCap,
+            resultCardinality,
+          );
+          if (afterFinalCardinalityCap.length !== beforeFinalCardinalityCap.length) {
+            (tc.args as Record<string, unknown>).product_ids = afterFinalCardinalityCap;
+            steps.push({
+              step: "v3_result_cardinality_final_cap",
+              ms: now(),
+              meta: {
+                mode: resultCardinality.mode,
+                target: resultCardinality.target,
+                before: beforeFinalCardinalityCap.length,
+                after: afterFinalCardinalityCap.length,
               },
             });
           }
