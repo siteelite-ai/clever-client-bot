@@ -77,6 +77,18 @@ Deno.test("candidate window is gated before the final target-sized cap", () => {
     selection: true,
   });
   assertEquals(resultCardinalityCandidateWindow(contract), 15);
+  const candidateIds = Array.from(
+    { length: 20 },
+    (_, index) => String(index + 1),
+  );
+  assertEquals(
+    expandResultCandidateIds(
+      [],
+      candidateIds,
+      resultCardinalityCandidateWindow(contract),
+    ).length,
+    15,
+  );
   assertEquals(
     capResultCandidateIds(["a", "b", "c", "d", "e", "f"], contract),
     ["a", "b", "c", "d", "e"],

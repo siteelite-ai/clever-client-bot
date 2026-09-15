@@ -12,6 +12,7 @@ export interface ResultCardinalityContext {
 }
 
 const MAX_RENDERED_PRODUCTS = 10;
+const MAX_CANDIDATE_WINDOW = 50;
 const DEFAULT_SELECTION_TARGET = 4;
 const EXPLICIT_ALTERNATIVES_TARGET = 5;
 const EXHAUSTIVE_PREVIEW_TARGET = 8;
@@ -21,8 +22,12 @@ function normalize(value: string): string {
     .replace(/ё/gu, "е").replace(/\s+/gu, " ").trim();
 }
 
-function clamp(value: number): number {
+function clampRenderedCount(value: number): number {
   return Math.max(1, Math.min(MAX_RENDERED_PRODUCTS, Math.trunc(value)));
+}
+
+function clampCandidateWindow(value: number): number {
+  return Math.max(1, Math.min(MAX_CANDIDATE_WINDOW, Math.trunc(value)));
 }
 
 function explicitRequestedCount(message: string): number | null {
@@ -31,7 +36,7 @@ function explicitRequestedCount(message: string): number | null {
   );
   if (!match) return null;
   const count = Number(match[1]);
-  return Number.isFinite(count) && count > 0 ? clamp(count) : null;
+  return Number.isFinite(count) && count > 0 ? clampRenderedCount(count) : null;
 }
 
 /**
@@ -109,7 +114,7 @@ export function expandResultCandidateIds(
     if (!id || seen.has(id)) continue;
     seen.add(id);
     out.push(id);
-    if (out.length >= clamp(limit)) break;
+    if (out.length >= clampCandidateWindow(limit)) break;
   }
   return out;
 }
@@ -132,7 +137,7 @@ export function capResultCandidateIds(
   eligibleIds: string[],
   contract: ResultCardinalityContract,
 ): string[] {
-  return expandResultCandidateIds([], eligibleIds, contract.target);
+  return eligibleIds.slice(0, clampRenderedCount(contract.target));
 }
 
 export function ensureSearchCapacity(
