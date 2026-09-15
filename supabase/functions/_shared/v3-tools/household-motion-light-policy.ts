@@ -6,6 +6,18 @@ export interface HouseholdMotionLightRequest {
   householdRequired: boolean;
 }
 
+/**
+ * Search by the customer-visible product class and feature, never by a known
+ * brand or series. The broad last query recovers cards whose title omits the
+ * class wording; the evidence verifier below is the only authority that may
+ * admit them.
+ */
+export const HOUSEHOLD_MOTION_LIGHT_CATALOG_QUERIES = [
+  "светильник с датчиком",
+  "светильник с микроволновым сенсором",
+  "датчик движения",
+];
+
 function norm(value: string): string {
   return String(value ?? "").toLowerCase().replace(/ё/g, "е").replace(
     /\s+/g,
@@ -57,6 +69,36 @@ function evidence(product: ProductRef): string {
   ].join(" "));
 }
 
+function hasMotionSensorEvidence(value: string): boolean {
+  return /датчик\p{L}*\s+движени\p{L}*|микроволнов\p{L}*\s+сенсор\p{L}*|сенсор\p{L}*\s+движени\p{L}*/u
+    .test(value);
+}
+
+function hasHouseholdUseEvidence(value: string): boolean {
+  return /бытов\p{L}*|жил\p{L}*|квартир\p{L}*|для\s+дома|(?:^|[^a-z])hall(?:[^a-z]|$)/u
+    .test(value);
+}
+
+function hasIncompatibleHouseholdUse(value: string): boolean {
+  return /для\s+жкх|\bдпп\b|промышлен\p{L}*|производствен\p{L}*|уличн\p{L}*|наружн\p{L}*|складск\p{L}*|парков\p{L}*|техническ\p{L}*/u
+    .test(value);
+}
+
+function householdMotionLightScore(product: ProductRef): number {
+  const title = norm(product.pagetitle);
+  const traits = norm((product.short_traits ?? []).join(" "));
+  const useEvidence = norm([
+    product.pagetitle,
+    product.leaf_category ?? "",
+    product.description_excerpt ?? "",
+  ].join(" "));
+  return Number(hasMotionSensorEvidence(title)) * 8 +
+    Number(hasMotionSensorEvidence(traits)) * 6 +
+    Number(hasHouseholdUseEvidence(title)) * 4 +
+    Number(hasHouseholdUseEvidence(useEvidence)) * 2 +
+    Number(/накладн\p{L}*/u.test(traits));
+}
+
 /**
  * Enforce the user's declared axes after search. A broad catalog hit is never
  * enough: utility/industrial/outdoor fixtures are rejected even if they have a
@@ -68,24 +110,30 @@ export function isVerifiedHouseholdMotionLight(
   surfaceMountedRequired = true,
   householdRequired = true,
 ): boolean {
-  const title = norm(product.pagetitle);
   const facts = evidence(product);
+  const identity = norm([
+    product.pagetitle,
+    product.leaf_category ?? "",
+  ].join(" "));
+  const structuralFacts = norm([
+    product.pagetitle,
+    product.leaf_category ?? "",
+    ...(product.short_traits ?? []),
+  ].join(" "));
   const priceFits = Number.isFinite(product.price) && product.price > 0 &&
     (maxPrice === null || product.price <= maxPrice);
-  const fixture = /светильник\p{L}*/u.test(facts);
-  const sensor =
-    /датчик\p{L}*\s+движени\p{L}*|микроволнов\p{L}*\s+сенсор\p{L}*|сенсор\p{L}*/u
-      .test(facts);
-  // HALL is the catalog's visible household surface-fixture series marker;
-  // normally the same fact is also present in the leaf category/description.
-  const householdSurface =
-    /бытов\p{L}*|накладн\p{L}*|(?:^|[^a-z])hall(?:[^a-z]|$)/u.test(facts);
-  const surfaceMounted = /накладн\p{L}*|(?:^|[^a-z])hall(?:[^a-z]|$)/u.test(facts);
-  const wrongUseClass = /для\s+жкх|промышлен\p{L}*|уличн\p{L}*|дпп/u.test(
-    title,
-  );
+  // Product class must come from the title/category. A standalone motion
+  // sensor can mention the controlled fixture in its description.
+  const fixture = /светильник\p{L}*/u.test(identity);
+  const sensor = hasMotionSensorEvidence(facts);
+  // Use class and mounting method are independent axes. A surface-mounted
+  // industrial fixture is not household merely because it is "накладной".
+  const householdUse = hasHouseholdUseEvidence(facts) &&
+    !hasIncompatibleHouseholdUse(facts);
+  const surfaceMounted = /накладн\p{L}*|настенн\p{L}*[-\s]+потолочн\p{L}*|(?:^|[^a-z])hall(?:[^a-z]|$)/u
+    .test(structuralFacts);
   return priceFits && fixture && sensor &&
-    (!householdRequired || (householdSurface && !wrongUseClass)) &&
+    (!householdRequired || householdUse) &&
     (!surfaceMountedRequired || surfaceMounted);
 }
 
@@ -105,14 +153,8 @@ export function verifiedHouseholdMotionLights(
       householdRequired,
     ))
     .sort((left, right) => {
-      const leftTitle = norm(left.pagetitle);
-      const rightTitle = norm(right.pagetitle);
-      const leftScore = Number(leftTitle.includes("hall")) * 4 +
-        Number(leftTitle.includes("gauss")) * 2 +
-        Number(leftTitle.includes("сенсор"));
-      const rightScore = Number(rightTitle.includes("hall")) * 4 +
-        Number(rightTitle.includes("gauss")) * 2 +
-        Number(rightTitle.includes("сенсор"));
+      const leftScore = householdMotionLightScore(left);
+      const rightScore = householdMotionLightScore(right);
       return rightScore - leftScore || left.price - right.price;
     })
     .filter((product) => {

@@ -178,6 +178,7 @@ import {
 } from "../_shared/v3-tools/selection-plan.ts";
 import {
   classifyHouseholdMotionLightRequest,
+  HOUSEHOLD_MOTION_LIGHT_CATALOG_QUERIES,
   HOUSEHOLD_MOTION_LIGHT_EMPTY,
   HOUSEHOLD_MOTION_LIGHT_GENERIC_INTRO,
   HOUSEHOLD_MOTION_LIGHT_INTRO,
@@ -2417,13 +2418,6 @@ const OUTDOOR_POE_CATALOG_QUERIES = [
   "кабель витая пара LDPE",
   "кабель Cat.5E LDPE",
   "кабель витая пара Cat.5E",
-];
-
-const HOUSEHOLD_MOTION_LIGHT_CATALOG_QUERIES = [
-  "Gauss HALL",
-  "светильник Gauss HALL",
-  "накладной светильник с датчиком движения",
-  "светильник с микроволновым сенсором",
 ];
 
 interface DirectReplacementResult {
