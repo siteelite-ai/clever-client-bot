@@ -363,7 +363,10 @@
             "min_products": 3,
             "max_products": 5,
             "max_product_price": 4000,
-            "require_every_product_title_any": ["датчик", "сенсор", "HALL"],
+            "require_selection_criteria_groups": [
+              ["С датчиком движения"],
+              ["\"value\":\"да\""]
+            ],
             "forbid_every_product_title_any": ["ДПП", "уличный", "промышленный"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }

@@ -3841,6 +3841,24 @@ async function runExpertLoop(
     superlative: detectPriceDirection(userMessage)?.kind === "superlative",
   });
   let resultCardinalityShortfallAnnounced = false;
+  const announceResultCardinalityShortfall = (actual: number, source: string) => {
+    const shortfall = resultCardinalityShortfallText(actual, resultCardinality);
+    if (!shortfall || resultCardinalityShortfallAnnounced) return;
+    send({ type: "delta", content: `${finalText ? "\n\n" : ""}${shortfall}` });
+    finalText += `${finalText ? "\n\n" : ""}${shortfall}`;
+    resultCardinalityShortfallAnnounced = true;
+    steps.push({
+      step: "v3_result_cardinality_shortfall",
+      ms: now(),
+      meta: {
+        mode: resultCardinality.mode,
+        target: resultCardinality.target,
+        minimum: resultCardinality.minimum,
+        actual,
+        source,
+      },
+    });
+  };
   const ensureVisibleTerminalSelectionCaption = (
     criteria: Criterion[],
     recoveryStep: string,
@@ -4242,12 +4260,24 @@ async function runExpertLoop(
     return guarded;
   };
 
-  const guardFinalRenderIds = (ids: string[]): string[] =>
-    guardReplacementRenderIds(filterProductIdsByNamedSeries(
+  const guardFinalRenderIds = (ids: string[]): string[] => {
+    const structurallySafe = guardReplacementRenderIds(filterProductIdsByNamedSeries(
       guardVisibleCardinality(ids).ids,
       ctx.cache,
       namedSeriesToken,
     ));
+    if (derivedExcludedClassificationCriteria.length === 0) return structurallySafe;
+    const eligible = new Set(filterProductsByExcludedCriteria(
+      structurallySafe
+        .map((id) => ctx.cache.get(id))
+        .filter((product): product is ProductFull => Boolean(product)),
+      derivedExcludedClassificationCriteria,
+    ).map(({ id }) => id));
+    return structurallySafe.filter((id) => eligible.has(id));
+  };
+
+  const finalizeTerminalRenderIds = (ids: string[]): string[] =>
+    capResultCandidateIds(guardFinalRenderIds(ids), resultCardinality);
 
   const attemptPortableReplacementTitleRecovery = async (
     runArgs: Record<string, unknown>,
@@ -7541,21 +7571,8 @@ async function runExpertLoop(
           const finalCardinalityIds = Array.isArray(tc.args.product_ids)
             ? (tc.args.product_ids as unknown[]).map(String)
             : [];
-          const cardinalityShortfall = resultCardinalityShortfallText(finalCardinalityIds.length, resultCardinality);
-          if (cardinalityShortfall && gateShortCircuit === null && !resultCardinalityShortfallAnnounced) {
-            send({ type: "delta", content: `${finalText ? "\n\n" : ""}${cardinalityShortfall}` });
-            finalText += `${finalText ? "\n\n" : ""}${cardinalityShortfall}`;
-            resultCardinalityShortfallAnnounced = true;
-            steps.push({
-              step: "v3_result_cardinality_shortfall",
-              ms: now(),
-              meta: {
-                mode: resultCardinality.mode,
-                target: resultCardinality.target,
-                minimum: resultCardinality.minimum,
-                actual: finalCardinalityIds.length,
-              },
-            });
+          if (gateShortCircuit === null) {
+            announceResultCardinalityShortfall(finalCardinalityIds.length, "model_render");
           }
         }
 
@@ -9906,7 +9923,7 @@ async function runExpertLoop(
           }
         }
       }
-      safeIds = guardFinalRenderIds(safeIds).slice(0, 10);
+      safeIds = finalizeTerminalRenderIds(safeIds);
       if (
         safeIds.length > 0 &&
         compatibilityPool.ok &&
@@ -10139,12 +10156,12 @@ async function runExpertLoop(
         );
         if (rankedNearIds.length > 0) safeIds = rankedNearIds;
       }
-      safeIds = guardFinalRenderIds(safeIds);
       safeIds = filterProductIdsByBudgetCap(
-        safeIds,
+        guardFinalRenderIds(safeIds),
         ctx.cache,
         extractBudgetCap(userMessage),
-      ).ids.slice(0, 4);
+      ).ids;
+      safeIds = capResultCandidateIds(safeIds, resultCardinality);
       if (safeIds.length > 0) {
         const rendered = executeRenderProducts(
           { product_ids: safeIds, total_available: poolTotal },
@@ -10312,7 +10329,7 @@ async function runExpertLoop(
             }
           }
           safeIds = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage)).ids;
-          safeIds = guardFinalRenderIds(safeIds).slice(0, 10);
+          safeIds = finalizeTerminalRenderIds(safeIds);
           send({
             type: "tool_event",
             tool: "search_catalog",
@@ -10320,6 +10337,7 @@ async function runExpertLoop(
             summary: `Итоговая перепроверка: подтверждено ${safeIds.length}`,
           });
           if (safeIds.length > 0) {
+            announceResultCardinalityShortfall(safeIds.length, "measured_terminal_recovery");
             const rescued = await runTool("render_products", {
               product_ids: safeIds,
               criteria: terminalCriteria,
@@ -10384,11 +10402,12 @@ async function runExpertLoop(
             if (seen.has(product.id) || !targetIds.has(product.id) || !criteriaReport.passed_ids.includes(product.id)) continue;
             seen.add(product.id);
             recoveredIds.push(product.id);
-            if (recoveredIds.length >= 5) break;
+            if (recoveredIds.length >= resultCardinality.target) break;
           }
-          if (recoveredIds.length >= 5) break;
+          if (recoveredIds.length >= resultCardinality.target) break;
         }
-        const budgetSafeIds = guardFinalRenderIds( filterProductIdsByBudgetCap(recoveredIds, ctx.cache, extractBudgetCap(userMessage)).ids,
+        const budgetSafeIds = finalizeTerminalRenderIds(
+          filterProductIdsByBudgetCap(recoveredIds, ctx.cache, extractBudgetCap(userMessage)).ids,
         );
         send({
           type: "tool_event",
@@ -10397,6 +10416,7 @@ async function runExpertLoop(
           summary: `Сверка по выбранному типу: подтверждено ${budgetSafeIds.length}`,
         });
         if (budgetSafeIds.length > 0) {
+          announceResultCardinalityShortfall(budgetSafeIds.length, "reasoning_query_terminal_recovery");
           const rescued = await runTool("render_products", {
             product_ids: budgetSafeIds,
             criteria: terminalCriteria,
@@ -10501,7 +10521,7 @@ async function runExpertLoop(
       safeIds = guardVisibleCardinality(safeIds).ids;
       const budgetGuard = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage));
       safeIds = budgetGuard.ids;
-      safeIds = guardFinalRenderIds(safeIds);
+      safeIds = finalizeTerminalRenderIds(safeIds);
       if (budgetGuard.dropped > 0) {
         steps.push({
           step: "v3_guard_budget_cap_recovery",
@@ -10510,14 +10530,15 @@ async function runExpertLoop(
         });
       }
       if (safeIds.length > 0) {
+        announceResultCardinalityShortfall(safeIds.length, "reasoning_backed_terminal_recovery");
         const rescued = await runTool("render_products", {
-          product_ids: safeIds.slice(0, 5),
+          product_ids: safeIds,
           criteria: adjusted.criteria,
           total_available: reasoningBackedSearch.total,
         }, ctx);
         if (rescued.ok) {
           const rendered = rescued as { markdown: string; rendered_count: number; };
-          for (const id of safeIds.slice(0, 5)) shownIds.add(id);
+          for (const id of safeIds) shownIds.add(id);
           ensureVisibleTerminalSelectionCaption(adjusted.criteria, "v3_semantic_render_recovery");
           send({
             type: "products_block",
@@ -10697,7 +10718,7 @@ async function runExpertLoop(
       safeIds = safeIds.filter((id) => groundedIds.has(id) && targetReport.passed_ids.includes(id));
       const budgetGuard = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage));
       safeIds = budgetGuard.ids;
-      safeIds = guardFinalRenderIds(safeIds);
+      safeIds = finalizeTerminalRenderIds(safeIds);
       if (budgetGuard.dropped > 0) {
         steps.push({
           step: "v3_guard_budget_cap_recovery",
@@ -10706,14 +10727,15 @@ async function runExpertLoop(
         });
       }
       if (safeIds.length > 0) {
+        announceResultCardinalityShortfall(safeIds.length, "semantic_terminal_recovery");
         const rescued = await runTool("render_products", {
-          product_ids: safeIds.slice(0, 5),
+          product_ids: safeIds,
           criteria: adjusted.criteria,
           total_available: semanticBackedSearch.total,
         }, ctx);
         if (rescued.ok) {
           const rendered = rescued as { markdown: string; rendered_count: number; };
-          for (const id of safeIds.slice(0, 5)) shownIds.add(id);
+          for (const id of safeIds) shownIds.add(id);
           send({
             type: "products_block",
             markdown: rendered.markdown,
@@ -10821,7 +10843,8 @@ async function runExpertLoop(
             safeIds,
             ctx.cache,
             extractBudgetCap(userMessage),
-          ).ids.slice(0, 10);
+          ).ids;
+          safeIds = capResultCandidateIds(safeIds, resultCardinality);
 
           // `category=` is exact-leaf-only in the catalog API. A non-empty leaf
           // still is not a successful recovery when no card satisfies the
@@ -10873,7 +10896,8 @@ async function runExpertLoop(
                 querySafeIds,
                 ctx.cache,
                 extractBudgetCap(userMessage),
-              ).ids.slice(0, 10);
+              ).ids;
+              querySafeIds = capResultCandidateIds(querySafeIds, resultCardinality);
               targetIds = queryTargetIds;
               criteriaIds = queryCriteriaIds;
               diagnosticCandidateIds = queryCandidateIds;
