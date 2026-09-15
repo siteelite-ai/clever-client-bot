@@ -198,6 +198,25 @@ Deno.test("derived reasoning uses validated live classification IDs and makes th
   assertEquals(resolved?.text.includes("invented"), false);
 });
 
+Deno.test("classification schema excludes metadata whose word only starts with a class token", () => {
+  const schema = buildDerivedSelectionReasoningToolSchema([
+    {
+      caption: "Видеофайлы",
+      type: "string",
+      values: [{ value: "Демонстрационный ролик" }],
+    },
+    {
+      caption: "Вид изделия",
+      type: "string",
+      values: [{ value: "Первый класс" }],
+    },
+  ]);
+  const properties = (schema.function.parameters.properties ?? {}) as Record<string, {
+    items?: { enum?: string[] };
+  }>;
+  assertEquals(properties.compatible_classifications.items?.enum, ["f1v0"]);
+});
+
 Deno.test("a uniquely customer-grounded live class overrides a broader model choice", () => {
   const liveFacets = [{
     caption: "Класс применения",
@@ -218,8 +237,36 @@ Deno.test("a uniquely customer-grounded live class overrides a broader model cho
     key: "Класс применения",
     value: "подвесные изделия; бра; ночники",
   }]);
+  assertEquals(resolved?.customerGroundedCompatible, [{
+    key: "Класс применения",
+    value: "подвесные изделия; бра; ночники",
+  }]);
   assertEquals(resolved?.text.includes("подвесные изделия; бра; ночники"), true);
   assertEquals(resolved?.text.includes("бытовые изделия накладные"), false);
+});
+
+Deno.test("a customer-grounded class family preserves all matching live variants", () => {
+  const liveFacets = [{
+    caption: "Класс применения",
+    type: "string",
+    values: [
+      { value: "бытовые изделия накладные" },
+      { value: "бытовые изделия подвесные" },
+      { value: "промышленные изделия" },
+      { value: "офисные изделия" },
+    ],
+  }];
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning: "Подбираю подходящий вариант по явно указанному применению.",
+    compatible_classifications: ["f0v2"],
+    excluded_classifications: [],
+  }, liveFacets, "Нужны бытовые изделия");
+
+  assertEquals(resolved?.compatible, [
+    { key: "Класс применения", value: "бытовые изделия накладные" },
+    { key: "Класс применения", value: "бытовые изделия подвесные" },
+  ]);
+  assertEquals(resolved?.customerGroundedCompatible, resolved?.compatible);
 });
 
 Deno.test("a negated class term cannot become customer-grounded evidence", () => {

@@ -361,10 +361,21 @@ Deno.test("checkCriterion: affirmative boolean feature is proven by catalog desc
 Deno.test("checkCriterion: affirmative boolean remains unknown without feature evidence", () => {
   const p = {
     ...product("1", []),
-    description_excerpt: "Обычный потолочный светильник для сухих помещений.",
+    description_excerpt: "Обычный товар продаётся в магазине и подходит для сухих помещений.",
   };
   assertEquals(
     checkCriterion(p, { key: "С датчиком движения", op: "eq", value: "да", level: "A" }).verdict,
+    "unknown",
+  );
+});
+
+Deno.test("checkCriterion: an omitted negative boolean is not proven by unrelated prose", () => {
+  const p = {
+    ...product("1", []),
+    description_excerpt: "Интернет-магазин предлагает стандартную модель.",
+  };
+  assertEquals(
+    checkCriterion(p, { key: "Диммирование", op: "eq", value: "нет", level: "A" }).verdict,
     "unknown",
   );
 });

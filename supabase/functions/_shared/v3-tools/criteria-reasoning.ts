@@ -209,6 +209,11 @@ export function compileMeasuredReasoningSearchContract(
   // preferences remain eligible for demotion.
   const applicationClassCriteria = projected.criteria.filter((criterion) => {
     if (criterion.op !== "eq" || typeof criterion.value !== "string") return false;
+    // A classification word elsewhere in the same sentence must not promote
+    // an adjacent preference (for example colour or housing material) into a
+    // hard filter. Both the live facet itself and the reasoning clause must
+    // identify this criterion as a class/type/purpose decision.
+    if (!classificationMarker.test(criterion.key)) return false;
     const value = normalizeEvidence(criterion.value);
     if (!value) return false;
     return reasoningClauses.some((clause) =>

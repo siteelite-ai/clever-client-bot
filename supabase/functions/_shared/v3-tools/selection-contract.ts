@@ -475,7 +475,16 @@ export function projectModelOnlySelectionTargetExtension(
   const mandatoryEvidence = new Set((Array.isArray(criteria) ? criteria : [])
     .filter((criterion) => criterion?.key && (criterion.level ?? "A") === "A")
     .flatMap((criterion) => meaningfulTokens(`${criterion.key} ${String(criterion.value ?? "")}`)));
-  if (extraTokens.some((token) => declaredEvidence.has(token) || mandatoryEvidence.has(token))) return null;
+  const inventedExtras = extraTokens.filter((token) =>
+    !declaredEvidence.has(token) && !mandatoryEvidence.has(token)
+  );
+  if (inventedExtras.length === 0) return null;
+  // A mixed extension can contain both a genuine customer modifier and a
+  // model-only adjective. Falling back to the base is safe only when every
+  // genuine modifier is already represented by the mandatory criteria gate;
+  // that gate keeps it binding after the invented adjective is discarded.
+  const groundedExtras = extraTokens.filter((token) => declaredEvidence.has(token));
+  if (groundedExtras.some((token) => !mandatoryEvidence.has(token))) return null;
   return base;
 }
 

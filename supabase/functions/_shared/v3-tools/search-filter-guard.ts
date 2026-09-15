@@ -870,6 +870,27 @@ export function guardSearchFilters(
     inferred.push(item);
   }
 
+  // An explicitly named affirmative feature is stronger than a bare
+  // conversational "да". When the live facet itself is present verbatim in
+  // the customer's request and exposes exactly one affirmative value, project
+  // that value even if the model omitted it. This is category-neutral and
+  // cannot activate unrelated booleans because the facet label, not the stored
+  // value, must be customer-backed.
+  for (const facet of facets) {
+    if (nextOptions[facet.key]?.length || isReplacementIdentityFacet(facet)) continue;
+    const affirmative = facet.values.filter((candidate) =>
+      isAtomicFacetValue(candidate.value) && AFFIRMATIVE_VALUES.has(norm(candidate.value))
+    );
+    if (affirmative.length !== 1) continue;
+    const label = facet.caption || facet.key;
+    if (evidenceStatus(label, userEvidence) !== "affirmed") continue;
+    const item = { key: facet.key, value: affirmative[0].value };
+    nextOptions[item.key] = [item.value];
+    kept.push(item);
+    userBacked.push(item);
+    inferred.push(item);
+  }
+
   // Complete, but never guess, facet filters that the customer stated
   // explicitly. LLM tool arguments are probabilistic and may omit one of the
   // constraints it correctly described (for example, household use while

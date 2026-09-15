@@ -647,6 +647,39 @@ Deno.test("an exact live application class remains mandatory while colour stays 
   assertEquals(contract.demoted, ["Цвет"]);
 });
 
+Deno.test("classification wording cannot promote an adjacent exact colour value", () => {
+  const contract = compileMeasuredReasoningSearchContract(
+    [
+      { key: "Вид светильника", op: "eq", value: "бытовые светильники накладные", level: "A" },
+      { key: "Цвет корпуса", op: "eq", value: "белый", level: "A" },
+    ],
+    "По классу «Вид светильника» выбираю «бытовые светильники накладные», цвет корпуса — белый.",
+    [],
+    [
+      {
+        key: "kind",
+        caption: "Вид светильника",
+        type: "checkbox",
+        unit: null,
+        values: [{ value: "бытовые светильники накладные" }],
+      },
+      {
+        key: "colour",
+        caption: "Цвет корпуса",
+        type: "checkbox",
+        unit: null,
+        values: [{ value: "белый" }],
+      },
+    ],
+  );
+
+  assertEquals(contract.mandatory_criteria, [
+    { key: "Вид светильника", op: "eq", value: "бытовые светильники накладные", level: "A" },
+  ]);
+  assertEquals(contract.options, { kind: ["бытовые светильники накладные"] });
+  assertEquals(contract.demoted, ["Цвет корпуса"]);
+});
+
 Deno.test("a compound canonical class containing semicolons remains one obligation", () => {
   const contract = compileMeasuredReasoningSearchContract(
     [{ key: "Вид исполнения", op: "eq", value: "первый; второй; третий", level: "A" }],

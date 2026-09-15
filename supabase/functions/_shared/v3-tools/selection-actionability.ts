@@ -54,7 +54,7 @@ interface DerivedClassificationChoice {
   value: string;
 }
 
-const CLASSIFICATION_FACET = /(?:категор\p{L}*|класс\p{L}*|вид\p{L}*|тип\p{L}*|назначен\p{L}*|применен\p{L}*)/iu;
+const CLASSIFICATION_FACET = /(?:^|[^\p{L}])(?:категори\p{L}*|класс\p{L}*|вид(?:а|ы|ов|у|ом|е)?|тип\p{L}*|назначен\p{L}*|применен\p{L}*)(?:$|[^\p{L}])/iu;
 
 function derivedClassificationChoices(
   facets: DerivedSelectionFacet[],
@@ -137,18 +137,19 @@ function customerGroundedClassificationChoices(
 
   const grounded: DerivedClassificationChoice[] = [];
   for (const choices of byFacet.values()) {
-    const documentFrequency = new Map<string, number>();
-    for (const choice of choices) {
-      for (const token of new Set(classificationLexicalTokens(choice.value))) {
-        documentFrequency.set(token, (documentFrequency.get(token) ?? 0) + 1);
-      }
+    // A customer term can legitimately name a family of sibling live values
+    // (for example one use class with several mounting variants). Preserve
+    // that family as OR alternatives instead of either guessing one subtype or
+    // discarding the customer's explicit qualifier. Generic words shared by
+    // every value are non-selective and therefore cannot ground the facet.
+    const selectiveGroups = [...positiveStems]
+      .map((stem) => choices.filter((choice) => classificationLexicalTokens(choice.value).includes(stem)))
+      .filter((matches) => matches.length > 0 && matches.length < choices.length)
+      .sort((left, right) => left.length - right.length);
+    const mostSelective = selectiveGroups[0] ?? [];
+    for (const choice of mostSelective) {
+      if (!grounded.some(({ id }) => id === choice.id)) grounded.push(choice);
     }
-    const matches = choices.filter((choice) =>
-      classificationLexicalTokens(choice.value).some((token) =>
-        positiveStems.has(token) && (documentFrequency.get(token) ?? 0) === 1
-      )
-    );
-    if (matches.length === 1) grounded.push(matches[0]);
   }
   return grounded;
 }
@@ -210,6 +211,7 @@ export function buildDerivedSelectionReasoningToolSchema(
 export interface ResolvedDerivedSelectionReasoning {
   text: string;
   compatible: Array<{ key: string; value: string }>;
+  customerGroundedCompatible: Array<{ key: string; value: string }>;
   excluded: Array<{ key: string; value: string }>;
 }
 
@@ -247,12 +249,15 @@ export function resolveDerivedSelectionReasoning(
   // Customer-grounded live values are considered before the provider's
   // declaration. They therefore replace a conflicting broader choice in the
   // same facet instead of being diluted into an OR-list.
+  const groundedChoices = customerGroundedClassificationChoices(customerEvidence, facets);
+  const groundedIds = new Set(groundedChoices.map(({ id }) => id));
   const compatibleChoices: DerivedClassificationChoice[] = [];
   const seenCompatibleFacets = new Set<string>();
-  for (const choice of [
-    ...customerGroundedClassificationChoices(customerEvidence, facets),
-    ...resolveIds(args.compatible_classifications, 6),
-  ]) {
+  for (const choice of groundedChoices) {
+    if (!compatibleChoices.some(({ id }) => id === choice.id)) compatibleChoices.push(choice);
+    seenCompatibleFacets.add(choice.facet.toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim());
+  }
+  for (const choice of resolveIds(args.compatible_classifications, 6)) {
     const facetIdentity = choice.facet.toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim();
     if (seenCompatibleFacets.has(facetIdentity)) continue;
     seenCompatibleFacets.add(facetIdentity);
@@ -322,6 +327,9 @@ export function resolveDerivedSelectionReasoning(
   return {
     text: sentences.join(" "),
     compatible: compatibleChoices.map(({ facet, value }) => ({ key: facet, value })),
+    customerGroundedCompatible: compatibleChoices
+      .filter(({ id }) => groundedIds.has(id))
+      .map(({ facet, value }) => ({ key: facet, value })),
     excluded: excludedChoices.map(({ facet, value }) => ({ key: facet, value })),
   };
 }

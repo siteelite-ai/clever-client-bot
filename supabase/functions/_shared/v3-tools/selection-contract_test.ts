@@ -374,6 +374,35 @@ Deno.test("a customer or criterion-backed target extension is never projected aw
   );
 });
 
+Deno.test("a mixed target drops only the model invention when the customer modifier stays gated", () => {
+  assertEquals(
+    projectModelOnlySelectionTargetExtension(
+      "Светильники",
+      "светодиодный накладной светильник",
+      "Нужен бытовой накладной светильник с датчиком движения",
+      "Светильники",
+      [
+        { key: "Способ монтажа", op: "eq", value: "накладной", level: "A" },
+        { key: "С датчиком движения", op: "eq", value: "да", level: "A" },
+      ],
+    ),
+    "Светильники",
+  );
+
+  // Without an independent mandatory gate, projecting the customer's own
+  // modifier away would weaken the request, so the drift remains blocked.
+  assertEquals(
+    projectModelOnlySelectionTargetExtension(
+      "Светильники",
+      "светодиодный накладной светильник",
+      "Нужен бытовой накладной светильник с датчиком движения",
+      "Светильники",
+      [{ key: "С датчиком движения", op: "eq", value: "да", level: "A" }],
+    ),
+    null,
+  );
+});
+
 Deno.test("a sibling class cannot project through a shared umbrella noun", () => {
   assertEquals(
     projectModelOnlySelectionTargetExtension(

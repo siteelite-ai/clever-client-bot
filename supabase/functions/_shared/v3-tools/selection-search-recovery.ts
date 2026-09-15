@@ -1,7 +1,11 @@
 import type { Facet } from "./discover-category.ts";
 import type { Criterion } from "./criteria-gate.ts";
-import { projectCriteriaFacetOptions } from "./criteria-gate.ts";
+import {
+  applyCriteriaGate,
+  projectCriteriaFacetOptions,
+} from "./criteria-gate.ts";
 import { dropAffirmativeBooleanFilters } from "./search-filter-guard.ts";
+import type { ProductRef } from "./types.ts";
 import {
   type DiscoveredCategoryScope,
   groundedCategoryRecoveryQueries,
@@ -21,8 +25,33 @@ export interface SelectionSearchRecoveryAttempt {
   relaxed_inputs: string[];
   /** Mandatory criteria proved by this exact catalog filter. */
   proven_criteria: Criterion[];
+  /**
+   * Criteria removed only to compensate for sparse upstream metadata. They
+   * are not optional: a recovered card must prove them positively in its
+   * own title, traits or description before the pool can reach the model.
+   */
+  evidence_required_criteria: Criterion[];
   /** Every recovery pool must be rechecked by these contracts before render. */
-  revalidate: Array<"selection_target" | "mandatory_criteria" | "compatibility" | "budget">;
+  revalidate: Array<
+    "selection_target" | "mandatory_criteria" | "compatibility" | "budget"
+  >;
+}
+
+/**
+ * A recovery may widen retrieval, never product eligibility. In particular,
+ * removing a sparse affirmative boolean from the HTTP request must not turn
+ * an unknown/empty facet into proof that the feature exists. This filter is
+ * category-neutral: its criteria are compiled from the exact live facet that
+ * the recovery removed.
+ */
+export function filterSelectionRecoveryPool<T extends ProductRef>(
+  products: T[],
+  attempt: SelectionSearchRecoveryAttempt | null,
+): T[] {
+  const required = attempt?.evidence_required_criteria ?? [];
+  if (required.length === 0) return [...products];
+  const safe = new Set(applyCriteriaGate(products, required).passed_ids);
+  return products.filter((product) => safe.has(String(product.id)));
 }
 
 export interface SelectionSearchRecoveryPlanInput {
@@ -102,7 +131,11 @@ export function buildCatalogEmptySynthesisMessages(
     },
     {
       role: "user",
-      content: `<customer_request>\n${request}\n</customer_request>${reasoning ? `\n<safe_reasoning_draft>\n${reasoning}\n</safe_reasoning_draft>` : ""}`,
+      content: `<customer_request>\n${request}\n</customer_request>${
+        reasoning
+          ? `\n<safe_reasoning_draft>\n${reasoning}\n</safe_reasoning_draft>`
+          : ""
+      }`,
     },
   ];
 }
@@ -136,11 +169,13 @@ export function shouldFinalizeMissingAnchorReplacement(
 export function buildCategoryVerificationSearchInput(
   leafCategories: string[],
 ): Record<string, unknown> | null {
-  const categories = [...new Set(
-    (Array.isArray(leafCategories) ? leafCategories : [])
-      .map((category) => String(category ?? "").trim())
-      .filter(Boolean),
-  )];
+  const categories = [
+    ...new Set(
+      (Array.isArray(leafCategories) ? leafCategories : [])
+        .map((category) => String(category ?? "").trim())
+        .filter(Boolean),
+    ),
+  ];
   if (categories.length === 0) return null;
   return {
     mode: "by_filter",
@@ -156,7 +191,9 @@ export function buildCategoryVerificationSearchInput(
  * Compatibility, replacement and named-series modes retain their specialised
  * proof controllers and therefore fail closed here.
  */
-export function shouldFinalizePendingSelection(input: PendingSelectionFinalizationInput): boolean {
+export function shouldFinalizePendingSelection(
+  input: PendingSelectionFinalizationInput,
+): boolean {
   return input.products_rendered === 0 &&
     input.intent_mode === "select" &&
     input.has_discovery &&
@@ -171,7 +208,9 @@ export function shouldFinalizePendingSelection(input: PendingSelectionFinalizati
 /** A product-selection turn must close an empty catalog attempt explicitly.
  * An inquiry that already produced a substantive evidence-backed answer must
  * not append the contradictory phrase “no suitable products found”. */
-export function shouldAppendCatalogEmpty(input: CatalogEmptyDecisionInput): boolean {
+export function shouldAppendCatalogEmpty(
+  input: CatalogEmptyDecisionInput,
+): boolean {
   if (input.products_rendered > 0) return false;
   if (input.intent_mode === "select") return true;
   return String(input.final_text ?? "").trim().length === 0;
@@ -191,7 +230,10 @@ function normalizeQuery(value: string): string {
  * consultant. More specific phrases run first; no product vocabulary or
  * synthetic dictionary is introduced by the server.
  */
-export function rankReasoningSearchQueries(values: Array<string | null | undefined>, limit = 4): string[] {
+export function rankReasoningSearchQueries(
+  values: Array<string | null | undefined>,
+  limit = 4,
+): string[] {
   const unique = new Map<string, string>();
   for (const raw of values) {
     const query = String(raw ?? "").trim();
@@ -202,7 +244,8 @@ export function rankReasoningSearchQueries(values: Array<string | null | undefin
   return [...unique.values()]
     .sort((left, right) => {
       const leftTokens = normalizeQuery(left).split(" ").filter(Boolean).length;
-      const rightTokens = normalizeQuery(right).split(" ").filter(Boolean).length;
+      const rightTokens =
+        normalizeQuery(right).split(" ").filter(Boolean).length;
       return rightTokens - leftTokens || right.length - left.length;
     })
     .slice(0, Math.max(1, limit));
@@ -266,7 +309,9 @@ const REVALIDATE: SelectionSearchRecoveryAttempt["revalidate"] = [
 ];
 
 function signature(args: Record<string, unknown>): string {
-  const sorted = Object.fromEntries(Object.entries(args).sort(([a], [b]) => a.localeCompare(b)));
+  const sorted = Object.fromEntries(
+    Object.entries(args).sort(([a], [b]) => a.localeCompare(b)),
+  );
   return JSON.stringify(sorted);
 }
 
@@ -284,8 +329,12 @@ function projectedFilterArgs(
     mode: "by_filter",
     ...(leafCategories.length > 0 ? { category_in: [...leafCategories] } : {}),
     options,
-    ...(typeof original.min_price === "number" ? { min_price: original.min_price } : {}),
-    ...(typeof original.max_price === "number" ? { max_price: original.max_price } : {}),
+    ...(typeof original.min_price === "number"
+      ? { min_price: original.min_price }
+      : {}),
+    ...(typeof original.max_price === "number"
+      ? { max_price: original.max_price }
+      : {}),
     ...(original.sort_cheapest === true ? { sort_cheapest: true } : {}),
     ...(original.sort_expensive === true ? { sort_expensive: true } : {}),
     per_page: pageSize(original),
@@ -315,7 +364,8 @@ export function buildSelectionSearchRecoveryPlan(
   const options = original.options && typeof original.options === "object"
     ? original.options as Record<string, unknown>
     : {};
-  const hasScope = typeof original.category === "string" || Array.isArray(original.category_in);
+  const hasScope = typeof original.category === "string" ||
+    Array.isArray(original.category_in);
   if (hasScope && Object.keys(options).length > 0) {
     const args = { ...original };
     delete args.category;
@@ -325,6 +375,7 @@ export function buildSelectionSearchRecoveryPlan(
       args,
       relaxed_inputs: ["category_scope"],
       proven_criteria: [],
+      evidence_required_criteria: [],
       revalidate: [...REVALIDATE],
     });
   }
@@ -336,8 +387,8 @@ export function buildSelectionSearchRecoveryPlan(
       per_page: pageSize(booleanFallback.args),
       ...(
         typeof booleanFallback.args.max_price === "number" &&
-        booleanFallback.args.sort_cheapest !== true &&
-        booleanFallback.args.sort_expensive !== true
+          booleanFallback.args.sort_cheapest !== true &&
+          booleanFallback.args.sort_expensive !== true
           ? { sort_expensive: true }
           : {}
       ),
@@ -345,8 +396,21 @@ export function buildSelectionSearchRecoveryPlan(
     add({
       kind: "preserve_scope_verify_sparse_boolean_as_evidence",
       args,
-      relaxed_inputs: booleanFallback.removed.map(({ key }) => `boolean:${key}`),
+      relaxed_inputs: booleanFallback.removed.map(({ key }) =>
+        `boolean:${key}`
+      ),
       proven_criteria: [],
+      evidence_required_criteria: booleanFallback.removed.map(
+        ({ key, value }) => {
+          const facet = input.facets.find((candidate) => candidate.key === key);
+          return {
+            key: facet?.caption?.trim() || key,
+            op: "eq" as const,
+            value,
+            level: "A" as const,
+          };
+        },
+      ),
       revalidate: [...REVALIDATE],
     });
   }
@@ -364,6 +428,7 @@ export function buildSelectionSearchRecoveryPlan(
         args,
         relaxed_inputs: ["model_filter_serialization"],
         proven_criteria: [],
+        evidence_required_criteria: [],
         revalidate: [...REVALIDATE],
       });
     }
@@ -372,14 +437,25 @@ export function buildSelectionSearchRecoveryPlan(
   // Paired-state compatibility has its own two-sided projection. A scalar
   // range recovery must never pre-empt or weaken that contract.
   if (!input.compatibility_shaped) {
-    const projection = projectCriteriaFacetOptions(input.reasoning_criteria, input.facets);
-    if (Object.keys(projection.options).length > 0 && projection.proven_criteria.length > 0) {
-      const scoped = projectedFilterArgs(original, projection.options, input.leaf_categories);
+    const projection = projectCriteriaFacetOptions(
+      input.reasoning_criteria,
+      input.facets,
+    );
+    if (
+      Object.keys(projection.options).length > 0 &&
+      projection.proven_criteria.length > 0
+    ) {
+      const scoped = projectedFilterArgs(
+        original,
+        projection.options,
+        input.leaf_categories,
+      );
       add({
         kind: "project_reasoning_ranges_in_category",
         args: scoped,
         relaxed_inputs: ["model_filter_serialization"],
         proven_criteria: projection.proven_criteria,
+        evidence_required_criteria: [],
         revalidate: [...REVALIDATE],
       });
       if (Array.isArray(scoped.category_in)) {
@@ -390,6 +466,7 @@ export function buildSelectionSearchRecoveryPlan(
           args: unscoped,
           relaxed_inputs: ["model_filter_serialization", "category_scope"],
           proven_criteria: projection.proven_criteria,
+          evidence_required_criteria: [],
           revalidate: [...REVALIDATE],
         });
       }

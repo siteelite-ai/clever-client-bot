@@ -29,6 +29,11 @@ Deno.test("explicit place count and double socket stay visible", () => {
   );
   assertEquals(titleSupportsVisibleRequestContract("Розетка двойная, цвет черный", doubleSocket), true);
   assertEquals(titleSupportsVisibleRequestContract("Розетка одинарная, цвет черный", doubleSocket), false);
+  assertEquals(
+    buildVisibleRequestContract("несколько двойных черных электрических розеток")
+      .map(({ kind, value }) => ({ kind, value })),
+    [{ kind: "count", value: 2 }],
+  );
   assertEquals(buildVisibleRequestContract("двойная рамка для розетки").length, 0);
 });
 

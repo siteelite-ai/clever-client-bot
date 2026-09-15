@@ -35,6 +35,13 @@ Deno.test("explicit product acronym grounds the discovery noun", () => {
   assert(discoveryNounIsGrounded("ИБП", "Какой ИБП подойдет для газового котла?"));
 });
 
+Deno.test("a product noun remains grounded after several triggers genitive plural", () => {
+  assert(discoveryNounIsGrounded(
+    "розетка электрическая",
+    "Найди несколько двойных черных электрических розеток",
+  ));
+});
+
 Deno.test("related sibling category is not grounded by an acronym request", () => {
   assertEquals(
     discoveryNounIsGrounded("Стабилизаторы", "Какой ИБП подойдет для газового котла?"),
