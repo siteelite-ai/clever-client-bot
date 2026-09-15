@@ -87,6 +87,11 @@ function classificationLexicalTokens(value: string): string[] {
     .filter(Boolean);
 }
 
+const CLASSIFICATION_GLUE_STEMS = new Set([
+  "для", "без", "при", "под", "над", "или", "как",
+  "for", "with", "and", "the",
+]);
+
 function classificationDiscriminativeStems(
   choice: DerivedClassificationChoice,
   allChoices: DerivedClassificationChoice[],
@@ -102,7 +107,27 @@ function classificationDiscriminativeStems(
     }
   }
   return [...new Set(classificationLexicalTokens(choice.value))]
-    .filter((token) => (frequency.get(token) ?? 0) === 1);
+    .filter((token) =>
+      !CLASSIFICATION_GLUE_STEMS.has(token) &&
+      (frequency.get(token) ?? 0) === 1
+    );
+}
+
+function classificationHasOnlyOpaqueDiscriminators(
+  choice: DerivedClassificationChoice,
+  allChoices: DerivedClassificationChoice[],
+): boolean {
+  const discriminators = classificationDiscriminativeStems(choice, allChoices);
+  if (discriminators.length === 0) return true;
+  const rawTokens = String(choice.value ?? "").match(/[a-zа-я0-9]{3,}/giu) ?? [];
+  const transparentStems = new Set(rawTokens
+    .filter((token) => {
+      const hasLetter = /[a-zа-яё]/iu.test(token);
+      const isAllCaps = hasLetter && token === token.toLocaleUpperCase("ru-RU");
+      return !isAllCaps;
+    })
+    .map(classificationLexicalStem));
+  return discriminators.every((stem) => !transparentStems.has(stem));
 }
 
 /**
@@ -274,8 +299,12 @@ export function resolveDerivedSelectionReasoning(
     .filter(([, count]) => count > 1)
     .map(([facetIdentity]) => facetIdentity);
   const compatibleIds = new Set(compatibleChoices.map(({ id }) => id));
+  const allLiveChoices = [...byId.values()];
   const excludedChoices = resolveIds(args.excluded_classifications, 8)
-    .filter(({ id }) => !compatibleIds.has(id));
+    .filter((choice) =>
+      !compatibleIds.has(choice.id) &&
+      !classificationHasOnlyOpaqueDiscriminators(choice, allLiveChoices)
+    );
 
   // The structured fields own classification. A prose sentence that also
   // names a different live value would silently re-open the same facet during
@@ -283,7 +312,6 @@ export function resolveDerivedSelectionReasoning(
   // engineering explanation is still meaningful; otherwise redact only the
   // exact unselected value. This does not classify products itself — it merely
   // enforces the model's first validated decision per live facet.
-  const allLiveChoices = [...byId.values()];
   const unselectedChoices = allLiveChoices.filter(({ id, value }) =>
     !compatibleIds.has(id) && visibleFacetText(value).length >= 4
   );

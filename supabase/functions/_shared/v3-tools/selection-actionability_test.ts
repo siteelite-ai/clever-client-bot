@@ -291,6 +291,26 @@ Deno.test("a unique customer-grounded class remains an exact classification obli
   assertEquals(resolved?.compatible, [{ key: "Класс применения", value: "внутреннее исполнение" }]);
 });
 
+Deno.test("an opaque live abbreviation cannot become a hard model-only exclusion", () => {
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning: "Подбираю решение по заявленному назначению и обязательным параметрам.",
+    compatible_classifications: [],
+    excluded_classifications: ["f0v0", "f0v1"],
+  }, [{
+    caption: "Класс применения",
+    type: "string",
+    values: [
+      { value: "изделия для ЖКХ" },
+      { value: "промышленные изделия" },
+      { value: "бытовые изделия" },
+    ],
+  }]);
+
+  assertEquals(resolved?.excluded, [{ key: "Класс применения", value: "промышленные изделия" }]);
+  assertEquals(resolved?.text.includes("ЖКХ"), false);
+  assertEquals(resolved?.text.includes("промышленные изделия"), true);
+});
+
 Deno.test("a negated class term cannot become customer-grounded evidence", () => {
   const liveFacets = [{
     caption: "Класс применения",
