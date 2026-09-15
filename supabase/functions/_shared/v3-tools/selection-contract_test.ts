@@ -786,6 +786,21 @@ Deno.test("an exact named entity may discard a model-only class adjective but ne
   ), false);
 });
 
+Deno.test("an independently grounded live category may discard a model-only class adjective but never switch siblings", () => {
+  assertEquals(selectionTargetMayUseGroundedBase(
+    "Удлинители",
+    "электрический удлинитель",
+    [],
+    { replacement: false, exact_named_entity_grounded: false, live_category_grounded: true },
+  ), true);
+  assertEquals(selectionTargetMayUseGroundedBase(
+    "Розетки",
+    "электрический выключатель",
+    [],
+    { replacement: false, exact_named_entity_grounded: false, live_category_grounded: true },
+  ), false);
+});
+
 Deno.test("a failed render cannot replace an already grounded selection target", () => {
   assertEquals(advanceSelectionTarget("Светильники", "Потолочные светильники", 0), "Светильники");
   assertEquals(advanceSelectionTarget("Светильники", "Потолочные светильники", 3), "Потолочные светильники");

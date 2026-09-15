@@ -27,6 +27,12 @@ export interface DiscoveryNounGuardResult {
   reason: "empty" | "preserves_target" | "sibling_substitution";
 }
 
+export interface GroundedClassQueryScopeResult {
+  args: Record<string, unknown>;
+  changed: boolean;
+  categories: string[];
+}
+
 /**
  * A discovery request may broaden or formalize the frozen product class, but
  * it may not replace it with a related sibling. This guard is deliberately
@@ -275,6 +281,52 @@ export function groundedCategoryRecoveryQueries(
     (token) => evidenceTokens.some((candidate) => tokenMatches(token, candidate)),
   );
   return umbrellaGrounded ? [umbrella] : [];
+}
+
+/**
+ * Keeps a free-text search inside the live taxonomy when the query merely
+ * repeats the already frozen product class. The query itself is preserved, so
+ * customer modifiers are never silently discarded. Only positively grounded
+ * leaf categories are injected; an umbrella is not used because the catalog
+ * API accepts only direct parent categories for product filtering.
+ */
+export function scopeGroundedClassQueryToLiveLeaves(
+  args: Record<string, unknown>,
+  discovered: DiscoveredCategoryScope | null,
+  frozenTarget: string | null,
+  declaredReasoning: string,
+): GroundedClassQueryScopeResult {
+  if (
+    !discovered ||
+    args.mode !== "by_query" ||
+    typeof args.query !== "string" ||
+    !args.query.trim() ||
+    !frozenTarget?.trim() ||
+    typeof args.category === "string" ||
+    Array.isArray(args.category_in)
+  ) {
+    return { args, changed: false, categories: [] };
+  }
+  const query = args.query.trim();
+  const sameFrozenClass = selectionTargetIsDeclared(query, frozenTarget) &&
+    selectionTargetIsDeclared(frozenTarget, query);
+  if (!sameFrozenClass) return { args, changed: false, categories: [] };
+
+  const knownLeaves = new Map(
+    (discovered.leaf_categories ?? [])
+      .map((leaf) => leaf.pagetitle?.trim() ?? "")
+      .filter(Boolean)
+      .map((leaf) => [norm(leaf), leaf]),
+  );
+  const categories = groundedCategoryRecoveryQueries(discovered, declaredReasoning, 20)
+    .map((category) => knownLeaves.get(norm(category)))
+    .filter((category): category is string => Boolean(category));
+  const unique = [...new Map(categories.map((category) => [norm(category), category])).values()];
+  if (unique.length === 0) return { args, changed: false, categories: [] };
+  const scopedArgs = unique.length === 1
+    ? { ...args, category: unique[0] }
+    : { ...args, category_in: unique };
+  return { args: scopedArgs, changed: true, categories: unique };
 }
 
 /**

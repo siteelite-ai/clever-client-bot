@@ -90,6 +90,7 @@ import {
   guardDiscoveryNounBySelectionTarget,
   guardCategoryScopeByReasoning,
   rankGroundedCategoryRecoveryScopes,
+  scopeGroundedClassQueryToLiveLeaves,
   selectGroundedTokenRecoveryCandidate,
   titleContainsLiteralToken,
 } from "../_shared/v3-tools/category-reasoning-guard.ts";
@@ -6274,6 +6275,7 @@ async function runExpertLoop(
           let products = ids
             .map((id) => ctx.cache.get(id))
             .filter((product): product is ProductFull => Boolean(product));
+          let liveCategoryGroundedForRender = false;
           if (
             intentMode === "select" &&
             !replacementIntent &&
@@ -6294,6 +6296,7 @@ async function runExpertLoop(
                 lastDiscover.category.pagetitle,
                 categoryEvidence,
               );
+              liveCategoryGroundedForRender = groundedProducts.length > 0;
               const groundedIds = new Set(groundedProducts.map((product) => product.id));
               const filteredIds = ids.filter((id) => groundedIds.has(id));
               if (filteredIds.length !== ids.length) {
@@ -6364,6 +6367,7 @@ async function runExpertLoop(
                 {
                   replacement: replacementIntent,
                   exact_named_entity_grounded: Boolean(seriesGroundingSatisfied && namedSeriesToken),
+                  live_category_grounded: liveCategoryGroundedForRender,
                 },
               )
             ) {
@@ -7561,6 +7565,45 @@ async function runExpertLoop(
               category: lastDiscover.category.pagetitle,
               category_in: exactLeaves,
             };
+          }
+        }
+
+        if (
+          tc.name === "search_catalog" &&
+          lastDiscover &&
+          !replacementIntent &&
+          !namedSeriesToken &&
+          !requiredCatalogAlias &&
+          !declaredAliasQuery &&
+          !explicitCompoundMarking &&
+          !semanticCompoundEvidenceRequired &&
+          directProductLookup.articles.length === 0 &&
+          directProductLookup.modelCodes.length === 0
+        ) {
+          const scopedClassQuery = scopeGroundedClassQueryToLiveLeaves(
+            tc.args,
+            lastDiscover,
+            activeSelectionTarget,
+            [
+              userMessage,
+              initialSelectionDiscoveryNoun ?? "",
+              firstAssistantText,
+              assistantReasoning,
+              resp.text,
+              activeSelectionTarget ?? "",
+            ].join("\n"),
+          );
+          if (scopedClassQuery.changed) {
+            tc.args = scopedClassQuery.args;
+            steps.push({
+              step: "v3_grounded_class_query_scoped_to_live_category",
+              ms: now(),
+              meta: {
+                query: tc.args.query,
+                target: activeSelectionTarget,
+                categories: scopedClassQuery.categories,
+              },
+            });
           }
         }
 

@@ -13,9 +13,46 @@ import {
   filterProductsByNamedSeries,
   filterProductIdsByNamedSeries,
   rankGroundedCategoryRecoveryScopes,
+  scopeGroundedClassQueryToLiveLeaves,
   selectGroundedTokenRecoveryCandidate,
   titleContainsLiteralToken,
 } from "./category-reasoning-guard.ts";
+
+Deno.test("a class-equivalent free-text search is scoped to positively grounded live leaves", () => {
+  const result = scopeGroundedClassQueryToLiveLeaves(
+    { mode: "by_query", query: "электрический удлинитель", per_page: 15 },
+    {
+      category: { pagetitle: "Удлинители" },
+      leaf_categories: [
+        { pagetitle: "Удлинители" },
+        { pagetitle: "Удлинители на катушке" },
+      ],
+    },
+    "электрический удлинитель",
+    "Предложи несколько электрических удлинителей на выбор",
+  );
+  assertEquals(result.args, {
+    mode: "by_query",
+    query: "электрический удлинитель",
+    per_page: 15,
+    category: "Удлинители",
+  });
+  assertEquals(result.changed, true);
+});
+
+Deno.test("a semantic or marked query is not collapsed into the frozen product class", () => {
+  const result = scopeGroundedClassQueryToLiveLeaves(
+    { mode: "by_query", query: "korn", per_page: 15 },
+    {
+      category: { pagetitle: "Лампы" },
+      leaf_categories: [{ pagetitle: "Светодиодные лампы" }],
+    },
+    "лампа",
+    "Нужна лампа",
+  );
+  assertEquals(result.changed, false);
+  assertEquals(result.args, { mode: "by_query", query: "korn", per_page: 15 });
+});
 
 Deno.test("discovery noun cannot replace a frozen class with a sibling", () => {
   assertEquals(

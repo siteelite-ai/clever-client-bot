@@ -936,11 +936,16 @@ export function selectionTargetMayUseGroundedBase(
   baseTarget: string,
   extendedTarget: string,
   criteria: Criterion[],
-  options: { replacement: boolean; exact_named_entity_grounded: boolean },
+  options: {
+    replacement: boolean;
+    exact_named_entity_grounded: boolean;
+    live_category_grounded?: boolean;
+  },
 ): boolean {
   if (!selectionTargetIsDeclared(baseTarget, extendedTarget)) return false;
   return options.replacement ||
     options.exact_named_entity_grounded ||
+    options.live_category_grounded ||
     selectionTargetExtensionIsCriterionBacked(baseTarget, extendedTarget, criteria);
 }
 
