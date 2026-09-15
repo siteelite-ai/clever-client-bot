@@ -272,6 +272,8 @@ Deno.test("a customer-grounded class family preserves all matching live variants
   assertEquals(resolved?.familyCompatibleFacetKeys, ["класс применения"]);
   assertEquals(resolved?.text.includes("в первую очередь проверяю"), true);
   assertEquals(resolved?.text.includes("исключаю только при доказанной несовместимости"), true);
+  assertEquals(resolved?.measurementEvidence, "Подбираю подходящий вариант по явно указанному применению.");
+  assertEquals(resolved?.measurementEvidence.includes("бытовые изделия"), false);
 });
 
 Deno.test("a unique customer-grounded class remains an exact classification obligation", () => {

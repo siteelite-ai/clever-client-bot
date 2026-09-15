@@ -210,6 +210,7 @@ export function buildDerivedSelectionReasoningToolSchema(
 
 export interface ResolvedDerivedSelectionReasoning {
   text: string;
+  measurementEvidence: string;
   compatible: Array<{ key: string; value: string }>;
   customerGroundedCompatible: Array<{ key: string; value: string }>;
   familyCompatibleFacetKeys: string[];
@@ -349,6 +350,10 @@ export function resolveDerivedSelectionReasoning(
   }
   return {
     text: sentences.join(" "),
+    // Structured classification choices are enforced separately. Keep them
+    // out of the generic prose-to-criteria compiler: sibling values from one
+    // facet are an OR family, while that compiler can only express AND.
+    measurementEvidence: reasoning,
     compatible: compatibleChoices.map(({ facet, value }) => ({ key: facet, value })),
     customerGroundedCompatible: compatibleChoices
       .filter(({ id }) => groundedIds.has(id))

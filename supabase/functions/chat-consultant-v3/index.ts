@@ -3408,6 +3408,7 @@ async function runExpertLoop(
   // в реплике клиента.
   let assistantReasoning = "";
   let derivedSelectionReasoningEvidence = "";
+  let pendingDerivedSelectionMeasurementEvidence = "";
   // A compatible family is retrieval guidance, not an exhaustive allow-list.
   // Only values the reasoning explicitly marks incompatible may eliminate a
   // card, and only when that value is positively proved by live product data.
@@ -4491,6 +4492,10 @@ async function runExpertLoop(
           const visibleDeclarationText = !derivedScalarProjectionAllowed && measuredReference
             ? buildPairedCompatibilityReasoning(measuredReference)
             : declaration.text;
+          const measurementDeclarationEvidence = !derivedScalarProjectionAllowed && measuredReference
+            ? visibleDeclarationText
+            : declaration.measurementEvidence;
+          pendingDerivedSelectionMeasurementEvidence = measurementDeclarationEvidence;
           // The model's structured declaration is immediately rendered back
           // to visible prose and the internal function call is consumed here.
           // Downstream search therefore reads exactly the same classification
@@ -4544,7 +4549,7 @@ async function runExpertLoop(
           }
           const derivedMeasuredContract = compileMeasuredReasoningSearchContract(
             [],
-            visibleDeclarationText,
+            measurementDeclarationEvidence,
             [],
             lastDiscover.facets ?? [],
           );
@@ -5077,7 +5082,8 @@ async function runExpertLoop(
             send({ type: "delta", content: derivedText });
             finalText += derivedText;
             if (!firstAssistantText) firstAssistantText = derivedText;
-            derivedSelectionReasoningEvidence = derivedText;
+            derivedSelectionReasoningEvidence = pendingDerivedSelectionMeasurementEvidence || derivedText;
+            pendingDerivedSelectionMeasurementEvidence = "";
             steps.push({
               step: "v3_assistant_text",
               ms: now(),
