@@ -695,9 +695,18 @@ export function projectLiteralMeasuredCriteria(
       return criterion.op === "eq" && String(criterion.value) === String(liveValue);
     });
     if (alreadyRepresented) continue;
+    const facetMeaning = normalizeEvidence(facet.caption || facet.key);
+    const facetDirection = /(?:^| )(?:максимал\p{L}*|maximum|max)(?: |$)/iu.test(facetMeaning)
+      ? "min" as const
+      : /(?:^| )(?:минимал\p{L}*|minimum|min)(?: |$)/iu.test(facetMeaning)
+      ? "max" as const
+      : "eq" as const;
     const criterion: Criterion = {
       key: facet.caption || facet.key,
-      op: "eq",
+      // The customer's application size is a required capacity, not an exact
+      // product identity. A product's declared maximum must cover at least the
+      // application value; conversely its declared minimum must not exceed it.
+      op: facetDirection,
       value: liveValue,
       unit: facet.unit ?? unit,
       level: "A",

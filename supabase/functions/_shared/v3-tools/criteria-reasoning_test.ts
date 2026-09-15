@@ -336,7 +336,7 @@ Deno.test("natural customer area projects onto an ASCII-square live facet", () =
   );
   assertEquals(projected.added, [{
     key: "Максимальная площадь освещения, м2",
-    op: "eq",
+    op: "min",
     value: "30",
     unit: "м²",
     level: "A",

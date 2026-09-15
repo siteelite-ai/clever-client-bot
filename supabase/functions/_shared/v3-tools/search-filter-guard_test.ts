@@ -890,6 +890,32 @@ Deno.test("an explicit unitless number is completed only for its locally named f
   assertEquals(result.inferred, [{ key: "poles", value: "1" }]);
 });
 
+Deno.test("a measurement noun cannot silently become a categorical shape", () => {
+  const facets = [{
+    key: "shape",
+    caption: "Форма изделия",
+    values: [{ value: "квадрат" }, { value: "круг" }],
+  }];
+  const measured = guardSearchFilters(
+    { mode: "by_filter" },
+    facets,
+    "Нужно изделие для помещения 30 квадратов",
+    "Нужно изделие для помещения 30 квадратов",
+    "",
+  );
+  assertEquals(measured.args.options, undefined);
+  assertEquals(measured.user_backed, []);
+
+  const explicit = guardSearchFilters(
+    { mode: "by_filter" },
+    facets,
+    "Нужна форма квадрат для помещения 30 квадратов",
+    "Нужна форма квадрат для помещения 30 квадратов",
+    "",
+  );
+  assertEquals(explicit.args.options, { shape: ["квадрат"] });
+});
+
 Deno.test("ordinary replacement excludes explicitly named source brand and collection", () => {
   assertEquals(
     explicitReplacementIdentityValues([
