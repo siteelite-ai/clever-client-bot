@@ -75,27 +75,39 @@ function hasMotionSensorEvidence(value: string): boolean {
 }
 
 function hasHouseholdUseEvidence(value: string): boolean {
-  return /бытов\p{L}*|жил\p{L}*|квартир\p{L}*|для\s+дома|(?:^|[^a-z])hall(?:[^a-z]|$)/u
+  return /бытов\p{L}*|жил\p{L}*|квартир\p{L}*|для\s+дома/u
     .test(value);
 }
 
 function hasIncompatibleHouseholdUse(value: string): boolean {
-  return /для\s+жкх|\bдпп\b|промышлен\p{L}*|производствен\p{L}*|уличн\p{L}*|наружн\p{L}*|складск\p{L}*|парков\p{L}*|техническ\p{L}*/u
+  return /для\s+жкх|(?:^|[^\p{L}\p{N}])дпп(?:[^\p{L}\p{N}]|$)|промышлен\p{L}*|производствен\p{L}*|уличн\p{L}*|наружн\p{L}*|складск\p{L}*|парков\p{L}*|техническ\p{L}*/u
     .test(value);
+}
+
+function primaryUseEvidence(product: ProductRef): string {
+  return norm([
+    product.pagetitle,
+    product.leaf_category ?? "",
+    product.description_excerpt ?? "",
+  ].join(" "));
+}
+
+function structuredUseEvidence(product: ProductRef): string {
+  return norm((product.short_traits ?? []).filter((trait) =>
+    /^(?:вид|тип)\s+светильника\s*:|^назначение\s*:|^область\s+применения\s*:/iu.test(trait)
+  ).join(" "));
 }
 
 function householdMotionLightScore(product: ProductRef): number {
   const title = norm(product.pagetitle);
   const traits = norm((product.short_traits ?? []).join(" "));
-  const useEvidence = norm([
-    product.pagetitle,
-    product.leaf_category ?? "",
-    product.description_excerpt ?? "",
-  ].join(" "));
+  const useEvidence = primaryUseEvidence(product);
+  const useFacets = structuredUseEvidence(product);
   return Number(hasMotionSensorEvidence(title)) * 8 +
     Number(hasMotionSensorEvidence(traits)) * 6 +
     Number(hasHouseholdUseEvidence(title)) * 4 +
     Number(hasHouseholdUseEvidence(useEvidence)) * 2 +
+    Number(hasHouseholdUseEvidence(useFacets)) * 3 +
     Number(/накладн\p{L}*/u.test(traits));
 }
 
@@ -128,9 +140,17 @@ export function isVerifiedHouseholdMotionLight(
   const sensor = hasMotionSensorEvidence(facts);
   // Use class and mounting method are independent axes. A surface-mounted
   // industrial fixture is not household merely because it is "накладной".
-  const householdUse = hasHouseholdUseEvidence(facts) &&
-    !hasIncompatibleHouseholdUse(facts);
-  const surfaceMounted = /накладн\p{L}*|настенн\p{L}*[-\s]+потолочн\p{L}*|(?:^|[^a-z])hall(?:[^a-z]|$)/u
+  // A broad merchandising bucket (for example ЖКХ) is not treated as an
+  // application veto when the primary product description explicitly proves
+  // residential use. Direct incompatible claims in title/description and an
+  // explicit industrial-use facet remain hard exclusions.
+  const useEvidence = primaryUseEvidence(product);
+  const useFacets = structuredUseEvidence(product);
+  const householdUse = (
+    hasHouseholdUseEvidence(useEvidence) || hasHouseholdUseEvidence(useFacets)
+  ) && !hasIncompatibleHouseholdUse(useEvidence) &&
+    !/промышлен\p{L}*|производствен\p{L}*|уличн\p{L}*|наружн\p{L}*/u.test(useFacets);
+  const surfaceMounted = /накладн\p{L}*|настенн\p{L}*[-\s]+потолочн\p{L}*/u
     .test(structuralFacts);
   return priceFits && fixture && sensor &&
     (!householdRequired || householdUse) &&
@@ -166,16 +186,16 @@ export function verifiedHouseholdMotionLights(
 }
 
 export const HOUSEHOLD_MOTION_LIGHT_INTRO =
-  "Подбираю бытовой накладной светильник со встроенным датчиком движения и проверяю цену по каталогу; варианты для ЖКХ, промышленные и уличные модели исключаю.";
+  "Подбираю бытовой накладной светильник со встроенным датчиком движения и проверяю цену по каталогу; модели без подтверждённого бытового или жилого применения не показываю.";
 
 export const HOUSEHOLD_MOTION_LIGHT_GENERIC_INTRO =
-  "Подбираю бытовой светильник со встроенным датчиком движения и проверяю цену по каталогу; варианты для ЖКХ, промышленные и уличные модели исключаю.";
+  "Подбираю бытовой светильник со встроенным датчиком движения и проверяю цену по каталогу; модели без подтверждённого бытового или жилого применения не показываю.";
 
 export const MOTION_LIGHT_GENERIC_INTRO =
   "Подбираю светильник со встроенным датчиком движения и проверяю заданный бюджет; карточки без подтверждённого датчика не показываю.";
 
 export const HOUSEHOLD_MOTION_LIGHT_EMPTY =
-  "В текущей выдаче каталога не удалось одновременно подтвердить бытовое накладное исполнение, датчик движения и заданный бюджет. Не буду заменять запрос обычным светильником или моделью для ЖКХ; наличие подходящего варианта уточнит менеджер.";
+  "В текущей выдаче каталога не удалось одновременно подтвердить бытовое накладное исполнение, датчик движения и заданный бюджет. Не буду заменять запрос обычным светильником или моделью без подтверждённого жилого применения; наличие подходящего варианта уточнит менеджер.";
 
 export const MOTION_LIGHT_GENERIC_EMPTY =
   "В текущей выдаче каталога не удалось одновременно подтвердить светильник, датчик движения и заданный бюджет. Не буду заменять запрос обычным светильником; наличие подходящего варианта уточнит менеджер.";

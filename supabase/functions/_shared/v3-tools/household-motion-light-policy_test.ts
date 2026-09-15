@@ -101,7 +101,11 @@ Deno.test("household motion-light policy ranks exact evidence and deduplicates",
     id: "residential",
     pagetitle: "Светильник настенно-потолочный с датчиком движения",
     leaf_category: "Светильники",
-    short_traits: ["Способ монтажа: настенно-потолочный", "С датчиком движения: да"],
+    short_traits: [
+      "Способ монтажа: настенно-потолочный",
+      "С датчиком движения: да",
+      "Вид светильника: светильники для ЖКХ",
+    ],
     description_excerpt: "Для внутреннего освещения жилых и общественных помещений.",
     price: 3719,
   };
