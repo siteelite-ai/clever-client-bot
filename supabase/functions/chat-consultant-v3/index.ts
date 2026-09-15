@@ -6243,6 +6243,7 @@ async function runExpertLoop(
                 ...enforcedSearchCriteria,
                 ...reasoningProjectedSearchCriteria,
               ],
+              lastDiscover?.resolved_from ?? "",
             )
             : null;
           const criterionBackedTargetExtensionDeclared = Boolean(

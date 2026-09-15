@@ -374,6 +374,31 @@ Deno.test("a customer or criterion-backed target extension is never projected aw
   );
 });
 
+Deno.test("a live discovery query alias projects back to its canonical class", () => {
+  assertEquals(
+    projectModelOnlySelectionTargetExtension(
+      "Удлинители",
+      "удлинитель электрический",
+      "Предложи несколько электрических удлинителей на выбор",
+      "Удлинители",
+      [],
+      "удлинитель электрический",
+    ),
+    "Удлинители",
+  );
+  assertEquals(
+    projectModelOnlySelectionTargetExtension(
+      "Удлинители",
+      "удлинитель электрический",
+      "Предложи несколько электрических удлинителей на выбор",
+      "Удлинители",
+      [{ key: "Тип питания", op: "eq", value: "электрический", level: "A" }],
+      "удлинитель электрический",
+    ),
+    null,
+  );
+});
+
 Deno.test("a mixed target drops only the model invention when the customer modifier stays gated", () => {
   assertEquals(
     projectModelOnlySelectionTargetExtension(

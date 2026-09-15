@@ -461,20 +461,37 @@ export function projectModelOnlySelectionTargetExtension(
   initialEvidence: string,
   liveClass: string,
   criteria: Criterion[],
+  resolvedFrom = "",
 ): string | null {
   const groundedLiveBase = bootstrapSelectionTargetFromTaxonomy(initialEvidence, liveClass);
   const base = groundedLiveBase ?? String(currentTarget ?? "").trim();
   const declared = String(declaredTarget ?? "").trim();
   if (!base || !declared || !selectionTargetIsDeclared(base, declared)) return null;
-  if (selectionTargetDeclarationIsGrounded(declared, initialEvidence, liveClass)) return null;
 
   const baseTokens = new Set(meaningfulTokens(base));
   const extraTokens = meaningfulTokens(declared).filter((token) => !baseTokens.has(token));
   if (extraTokens.length === 0) return null;
-  const declaredEvidence = new Set(meaningfulTokens(initialEvidence));
   const mandatoryEvidence = new Set((Array.isArray(criteria) ? criteria : [])
     .filter((criterion) => criterion?.key && (criterion.level ?? "A") === "A")
     .flatMap((criterion) => meaningfulTokens(`${criterion.key} ${String(criterion.value ?? "")}`)));
+  const discoveryProjectedBase = resolvedFrom
+    ? bootstrapSelectionTargetFromDiscovery(initialEvidence, resolvedFrom, liveClass)
+    : null;
+  const declaredMatchesResolvedQuery = Boolean(
+    discoveryProjectedBase &&
+    selectionTargetIsDeclared(discoveryProjectedBase, base) &&
+    selectionTargetIsDeclared(base, discoveryProjectedBase) &&
+    selectionTargetIsDeclared(declared, resolvedFrom) &&
+    selectionTargetIsDeclared(resolvedFrom, declared),
+  );
+  if (
+    declaredMatchesResolvedQuery &&
+    extraTokens.every((token) => !mandatoryEvidence.has(token))
+  ) return base;
+
+  if (selectionTargetDeclarationIsGrounded(declared, initialEvidence, liveClass)) return null;
+
+  const declaredEvidence = new Set(meaningfulTokens(initialEvidence));
   const inventedExtras = extraTokens.filter((token) =>
     !declaredEvidence.has(token) && !mandatoryEvidence.has(token)
   );
