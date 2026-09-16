@@ -436,16 +436,27 @@
     },
     {
       "id": "customer-new-outdoor-floodlight-warehouse-priority",
-      "title": "Уличный прожектор и бизнес-приоритет складов",
+      "title": "Уличный прожектор для двора сначала уточняет параметры подбора",
       "repeat": 3,
       "turns": [
         {
           "message": "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома",
           "expect": {
+            "max_products": 0,
+            "require_text_groups": [
+              ["площад", "размер"],
+              ["высот", "монтаж", "установ"]
+            ],
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        },
+        {
+          "message": "Площадь около 120 м², высота установки 4 м",
+          "expect": {
+            "conversation_boundary": "continuation",
             "min_products": 3,
             "max_products": 5,
             "require_every_product_title_any": ["прожектор"],
-            "deprioritized_warehouses": ["Иргели", "Чинт Астана"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }

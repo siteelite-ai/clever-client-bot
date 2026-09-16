@@ -215,7 +215,10 @@ import {
   subsumeCriteriaProvenByExplicitCompound,
 } from "../_shared/v3-tools/exact-compound-marking-policy.ts";
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
-import { selectReadinessClarification } from "../_shared/v3-tools/selection-readiness.ts";
+import {
+  resolveSelectionReadinessRequest,
+  selectReadinessClarification,
+} from "../_shared/v3-tools/selection-readiness.ts";
 import {
   buildVisibleRequestContract,
   productSupportsVisibleRequestContract,
@@ -11320,6 +11323,7 @@ Deno.serve(async (req) => {
 
       try {
       const priorHistory = stripCurrentUserEcho(history, userMessage);
+      const scopedSelectionRequest = resolveSelectionReadinessRequest(userMessage, slots);
       const boundary = await classifyConversationBoundary(
         userMessage,
         priorHistory,
@@ -11341,7 +11345,7 @@ Deno.serve(async (req) => {
       );
       const startsNewTask = shouldStartNewConversation(boundary, {
         matchedPendingClarification,
-        activeScopedClarification: Boolean(pendingBroadAssortmentScope),
+        activeScopedClarification: Boolean(pendingBroadAssortmentScope || scopedSelectionRequest.scoped),
         referencesRenderedProducts,
       });
       const effectiveSessionId = startsNewTask ? `session_${crypto.randomUUID()}` : sessionId;
@@ -11364,7 +11368,7 @@ Deno.serve(async (req) => {
       });
       if (startsNewTask) {
         send({ type: "conversation_boundary", mode: "new_task", session_id: effectiveSessionId });
-      } else if (matchedPendingClarification || pendingBroadAssortmentScope) {
+      } else if (matchedPendingClarification || pendingBroadAssortmentScope || scopedSelectionRequest.scoped) {
         // The current request still receives the original slot through
         // `effectiveSlots`, but the browser must not carry that consumed
         // choice into an unrelated future turn. A later clarification in this
@@ -11446,7 +11450,7 @@ Deno.serve(async (req) => {
           ? resolveNamedSeriesToken(userMessage, effectiveHistory.slice(-8)) ?? extractBroadAssortmentScope(userMessage)
           : null;
         const readinessClarification = selectReadinessClarification(
-          userMessage,
+          scopedSelectionRequest.message,
           effectiveHistory.slice(-8).map((message) => message.content).join("\n"),
         );
         // GUARD v3_meta_question_declined: вопрос про устройство сервиса
@@ -11497,7 +11501,7 @@ Deno.serve(async (req) => {
             productsCount = direct.products.length;
             await persistRecentProductEvidence(supabase, effectiveSessionId, direct.products);
           } else {
-            const out = await runExpertLoop(userMessage, effectiveHistory, effectiveSlots, settings.openrouter_api_key!, ctx, send, steps, t0, {
+            const out = await runExpertLoop(scopedSelectionRequest.message, effectiveHistory, effectiveSlots, settings.openrouter_api_key!, ctx, send, steps, t0, {
               anchorFilterEnabled: settings.v3_anchor_filter_enabled,
               relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
               criteriaGateEnabled: true,
@@ -11569,7 +11573,7 @@ Deno.serve(async (req) => {
             productsCount = direct.products.length;
             await persistRecentProductEvidence(supabase, effectiveSessionId, direct.products);
           } else {
-            const out = await runExpertLoop(userMessage, effectiveHistory, effectiveSlots, settings.openrouter_api_key!, ctx, send, steps, t0, {
+            const out = await runExpertLoop(scopedSelectionRequest.message, effectiveHistory, effectiveSlots, settings.openrouter_api_key!, ctx, send, steps, t0, {
               anchorFilterEnabled: settings.v3_anchor_filter_enabled,
               relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
               criteriaGateEnabled: true,
@@ -11631,7 +11635,7 @@ Deno.serve(async (req) => {
               replacementSourceRequest,
               direct.outcome,
             );
-            const out = await runExpertLoop(userMessage, effectiveHistory, effectiveSlots, settings.openrouter_api_key!, ctx, send, steps, t0, {
+            const out = await runExpertLoop(scopedSelectionRequest.message, effectiveHistory, effectiveSlots, settings.openrouter_api_key!, ctx, send, steps, t0, {
               anchorFilterEnabled: settings.v3_anchor_filter_enabled,
               relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
               criteriaGateEnabled: true,
@@ -11645,7 +11649,7 @@ Deno.serve(async (req) => {
             await persistRecentProductEvidence(supabase, effectiveSessionId, shownProducts);
           }
         } else {
-          const out = await runExpertLoop(userMessage, effectiveHistory, effectiveSlots, settings.openrouter_api_key!, ctx, send, steps, t0, {
+          const out = await runExpertLoop(scopedSelectionRequest.message, effectiveHistory, effectiveSlots, settings.openrouter_api_key!, ctx, send, steps, t0, {
             anchorFilterEnabled: settings.v3_anchor_filter_enabled,
             relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
             // Criteria gate — production-инвариант доказательности, а не

@@ -1,5 +1,7 @@
 import type { ProposeClarificationInput } from "./propose-clarification.ts";
 
+const SELECTION_READINESS_SCOPE = "selection_readiness";
+
 export interface SelectionReadinessClarification extends ProposeClarificationInput {
   profile: string;
 }
@@ -10,9 +12,6 @@ interface ReadinessProfile {
   required: RegExp[];
   /** Resolve overlapping profiles without relying on declaration order. */
   priority?: number;
-  /** Broad browsing may start with application context even when exact sizing
-   * still needs more data. Profiles without this contract remain strict. */
-  exploratory_minimum?: RegExp[];
   question: string;
   facet_key: string;
   options: ProposeClarificationInput["options"];
@@ -151,10 +150,8 @@ const PROFILES: ReadinessProfile[] = [
     required: [
       /(?:площад\p{L}*|размер\p{L}*|территор\p{L}*)/iu,
       /(?:высот\p{L}*|установ\p{L}*|монтаж\p{L}*)/iu,
-      /(?:ярк\p{L}*|мощн\p{L}*|люмен\p{L}*|\d+(?:[.,]\d+)?\s*(?:вт|w|лм)\b)/iu,
     ],
-    exploratory_minimum: [/(?:двор\p{L}*|участ\p{L}*|территор\p{L}*|частн\p{L}*\s+дом\p{L}*)/iu],
-    question: "Для уличного прожектора сначала уточните площадь или размеры территории, высоту установки и требуемую яркость/мощность в люменах или ваттах. Какая площадь и на какой высоте будет установлен прожектор?",
+    question: "Чтобы подобрать уличный прожектор по задаче, уточните площадь или примерные размеры территории и высоту установки. Какая площадь двора и на какой высоте будет установлен прожектор?",
     facet_key: "mounting_height",
     options: [
       { value: "До 4 м", label: "До 4 м" },
@@ -196,15 +193,36 @@ export function selectReadinessClarification(
     )[0]?.candidate;
   if (!profile) return null;
   if (profile.required.every((requirement) => requirement.test(evidence))) return null;
-  const exploratoryIntent = /(?:предлож\p{L}*|покаж\p{L}*|подбер\p{L}*)[^.!?\n]{0,40}вариант\p{L}*/iu.test(current);
-  if (
-    exploratoryIntent && profile.exploratory_minimum?.length &&
-    profile.exploratory_minimum.every((requirement) => requirement.test(evidence))
-  ) return null;
   return {
     profile: profile.id,
     question: profile.question,
     facet_key: profile.facet_key,
     options: profile.options,
+    scope: { kind: SELECTION_READINESS_SCOPE, token: current.slice(0, 500) },
+  };
+}
+
+/** Rebuilds one actionable selection request from the original scoped turn
+ * and a free-form answer to its clarification. This avoids asking a useful
+ * question and then making the model infer the product class from an answer
+ * such as "120 m², height 4 m" alone. */
+export function resolveSelectionReadinessRequest(
+  currentMessage: string,
+  slots: Record<string, unknown>,
+): { message: string; scoped: boolean } {
+  const current = String(currentMessage ?? "").trim();
+  const pending = slots?.pending_clarification;
+  if (!pending || typeof pending !== "object") return { message: current, scoped: false };
+  const scope = (pending as { scope?: unknown }).scope;
+  if (!scope || typeof scope !== "object") return { message: current, scoped: false };
+  const record = scope as { kind?: unknown; token?: unknown };
+  if (record.kind !== SELECTION_READINESS_SCOPE || typeof record.token !== "string") {
+    return { message: current, scoped: false };
+  }
+  const original = record.token.trim().slice(0, 500);
+  if (!original || !current) return { message: current, scoped: false };
+  return {
+    message: `${original}\nУточнение клиента: ${current}`,
+    scoped: true,
   };
 }

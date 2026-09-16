@@ -17,6 +17,18 @@ Deno.test("room area is not treated as a product length", () => {
   assertEquals(buildVisibleRequestContract("светильник для гостиной 25 м²").length, 0);
 });
 
+Deno.test("installation height is application context, not exact product length", () => {
+  assertEquals(
+    buildVisibleRequestContract("Нужен товар для площадки, высота установки 4 м").length,
+    0,
+  );
+  assertEquals(
+    buildVisibleRequestContract("Нужен товар для монтажа на высоте 6 м").length,
+    0,
+  );
+  assertEquals(buildVisibleRequestContract("удлинитель на 4 м").length, 1);
+});
+
 Deno.test("explicit place count and double socket stay visible", () => {
   const places = buildVisibleRequestContract("удлинитель на 3 места");
   assertEquals(titleSupportsVisibleRequestContract("Удлинитель У03 3 места", places), true);
