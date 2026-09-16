@@ -1,5 +1,7 @@
 import type { ProposeClarificationInput } from "./propose-clarification.ts";
 
+const SELECTION_READINESS_SCOPE = "selection_readiness";
+
 export interface SelectionReadinessClarification extends ProposeClarificationInput {
   profile: string;
 }
@@ -196,5 +198,31 @@ export function selectReadinessClarification(
     question: profile.question,
     facet_key: profile.facet_key,
     options: profile.options,
+    scope: { kind: SELECTION_READINESS_SCOPE, token: current.slice(0, 500) },
+  };
+}
+
+/** Rebuilds one actionable selection request from the original scoped turn
+ * and a free-form answer to its clarification. This avoids asking a useful
+ * question and then making the model infer the product class from an answer
+ * such as "120 m², height 4 m" alone. */
+export function resolveSelectionReadinessRequest(
+  currentMessage: string,
+  slots: Record<string, unknown>,
+): { message: string; scoped: boolean } {
+  const current = String(currentMessage ?? "").trim();
+  const pending = slots?.pending_clarification;
+  if (!pending || typeof pending !== "object") return { message: current, scoped: false };
+  const scope = (pending as { scope?: unknown }).scope;
+  if (!scope || typeof scope !== "object") return { message: current, scoped: false };
+  const record = scope as { kind?: unknown; token?: unknown };
+  if (record.kind !== SELECTION_READINESS_SCOPE || typeof record.token !== "string") {
+    return { message: current, scoped: false };
+  }
+  const original = record.token.trim().slice(0, 500);
+  if (!original || !current) return { message: current, scoped: false };
+  return {
+    message: `${original}\nУточнение клиента: ${current}`,
+    scoped: true,
   };
 }

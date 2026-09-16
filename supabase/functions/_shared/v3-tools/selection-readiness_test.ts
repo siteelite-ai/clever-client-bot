@@ -1,5 +1,8 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { selectReadinessClarification } from "./selection-readiness.ts";
+import {
+  resolveSelectionReadinessRequest,
+  selectReadinessClarification,
+} from "./selection-readiness.ts";
 
 const cases = [
   ["Мне нужен кабель для насоса", "pump_cable"],
@@ -38,12 +41,11 @@ Deno.test("selection readiness does not block a precise floodlight search", () =
 });
 
 Deno.test("asking for variants does not bypass missing selection parameters", () => {
-  assertEquals(
-    selectReadinessClarification(
-      "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома",
-    )?.profile,
-    "outdoor_floodlight",
+  const clarification = selectReadinessClarification(
+    "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома",
   );
+  assertEquals(clarification?.profile, "outdoor_floodlight");
+  assertEquals(clarification?.scope?.kind, "selection_readiness");
 });
 
 Deno.test("variant wording does not bypass readiness in another product domain", () => {
@@ -60,6 +62,22 @@ Deno.test("selection readiness allows a completed outdoor-floodlight context", (
     ),
     null,
   );
+});
+
+Deno.test("free-form clarification answer retains the original selection request", () => {
+  const original = "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома";
+  const resolved = resolveSelectionReadinessRequest(
+    "Площадь около 120 м², высота установки 4 м",
+    {
+      pending_clarification: {
+        scope: { kind: "selection_readiness", token: original },
+      },
+    },
+  );
+  assertEquals(resolved, {
+    message: `${original}\nУточнение клиента: Площадь около 120 м², высота установки 4 м`,
+    scoped: true,
+  });
 });
 
 Deno.test("specific readiness profile wins over an overlapping generic profile", () => {

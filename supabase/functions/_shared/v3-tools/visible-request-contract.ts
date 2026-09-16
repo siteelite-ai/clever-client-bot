@@ -75,6 +75,14 @@ function isCurrencyUnit(raw: string): boolean {
   return /^(?:тенге|тг|kzt|руб(?:ль|ля|лей)?|rub|доллар(?:а|ов)?|usd|евро|eur)$/u.test(unit);
 }
 
+/** A physical number can describe the environment rather than the product.
+ * Placement height is input for the consultant's sizing calculation and must
+ * not become an exact length that every product card has to contain. */
+function isPlacementContextMeasurement(source: string, measurementIndex: number): boolean {
+  const prefix = source.slice(Math.max(0, measurementIndex - 64), measurementIndex);
+  return /(?:высот\p{L}*(?:\s+(?:установ\p{L}*|монтаж\p{L}*))?|(?:установ\p{L}*|монтаж\p{L}*)\s+на\s+высот\p{L}*)[^.!?\n]{0,24}$/iu.test(prefix);
+}
+
 function titleSatisfiesBound(
   title: string,
   expected: { value: number; unit: string; direction: "min" | "max"; exclusive: boolean },
@@ -165,6 +173,7 @@ export function buildVisibleRequestContract(
   };
 
   for (const match of source.matchAll(/(?<!\d)(\d+(?:[.,]\d+)?)\s*(?:м|m)(?![\p{L}\p{N}²³])/giu)) {
+    if (isPlacementContextMeasurement(source, match.index ?? 0)) continue;
     const prefix = source.slice(Math.max(0, (match.index ?? 0) - 24), match.index ?? 0);
     if (/(?:не\s+менее|минимум|от|не\s+более|максимум|до|больше|свыше|меньше|менее)\s*$/iu.test(prefix)) {
       continue;
