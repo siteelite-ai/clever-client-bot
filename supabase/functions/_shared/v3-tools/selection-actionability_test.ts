@@ -33,6 +33,8 @@ Deno.test("an isolated measurement may still require an objective clarification"
 Deno.test("an unprojected physical context requires reasoning before catalog search", () => {
   assertEquals(hasSelectionMeasurementContext("Нужно решение для комнаты 25 м²"), true);
   assertEquals(hasSelectionMeasurementContext("Нужно 3 штуки через 2 дня"), false);
+  assertEquals(hasSelectionMeasurementContext("Нужно не дороже 4000 тенге"), false);
+  assertEquals(hasSelectionMeasurementContext("Бюджет 4000 тг"), false);
   assertEquals(shouldRequireDerivedSelectionReasoning({
     intentMode: "select",
     phase: "search_after_discovery",

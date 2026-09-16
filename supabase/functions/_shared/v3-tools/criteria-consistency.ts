@@ -46,6 +46,18 @@ export function normalizeUnit(raw: string): string {
     .trim();
 }
 
+// Counts, durations and money are quantities, but they are not physical
+// dimensions of the object being selected. Keeping this distinction next to
+// unit normalization gives every compatibility path the same category-agnostic
+// guard (instead of teaching individual product branches about currencies).
+const NON_PHYSICAL_QUANTITY_UNIT = /^(?:шт|штук|штука|штуки|раз|раза|сек|секунд|секунда|секунды|мин|минут|минута|минуты|час|часа|часов|дн|день|дня|дней|мес|месяц|месяца|месяцев|год|года|лет|тенге|тг|тнг|kzt|руб|рубль|рубля|рублей|rub|rur|доллар|доллара|долларов|usd|евро|eur|сом|сома|сомов|kgs|сум|сума|сумов|uzs|гривна|гривны|гривен|uah)$/iu;
+
+/** True only for units that can describe a physical/electrical product fit. */
+export function isPhysicalMeasurementUnit(raw: string): boolean {
+  const unit = normalizeUnit(raw);
+  return Boolean(unit) && !NON_PHYSICAL_QUANTITY_UNIT.test(unit);
+}
+
 /** Normalizes common natural-language measurement spellings before generic
  * number+unit extraction. This is linguistic normalization only: no catalog,
  * category or product vocabulary is involved. */

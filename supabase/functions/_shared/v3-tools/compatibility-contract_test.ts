@@ -349,6 +349,8 @@ Deno.test("title pair is ignored without a complete opposite relation pair", () 
 Deno.test("paired title fit follows a single user reference without domain vocabulary", () => {
   assertEquals(extractSingleMeasuredReference("подбери изделие для объекта диаметром 12 мм"), { value: 12, unit: "мм" });
   assertEquals(extractSingleMeasuredReference("нужно 12 мм и длина 1 м"), null);
+  assertEquals(extractSingleMeasuredReference("нужно не дороже 4000 тенге"), null);
+  assertEquals(extractSingleMeasuredReference("диаметр 12 мм, бюджет до 4000 тенге"), { value: 12, unit: "мм" });
   const products: ProductRef[] = [
     { id: "edge", pagetitle: "Изделие 12/6", vendor: null, price: 100, stock: "unknown", short_traits: [] },
     { id: "ok", pagetitle: "Изделие 13,0/6,5", vendor: null, price: 100, stock: "unknown", short_traits: [] },

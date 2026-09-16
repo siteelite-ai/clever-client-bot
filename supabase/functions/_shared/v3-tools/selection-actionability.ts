@@ -1,5 +1,8 @@
 import { hasActionableSelectionReasoning } from "./agent-performance.ts";
-import { extractClientQuantities } from "./criteria-consistency.ts";
+import {
+  extractClientQuantities,
+  isPhysicalMeasurementUnit,
+} from "./criteria-consistency.ts";
 import {
   minimumCompatibilityRelationCount,
   reasoningNeedsCompatibilityRelations,
@@ -17,8 +20,6 @@ export function hasActionableSelectionContract(text: string): boolean {
     reasoningNeedsCompatibilityRelations(text);
 }
 
-const NON_SELECTION_MEASUREMENT_UNIT = /^(?:шт|штук|штука|штуки|раз|раза|сек|секунд|секунда|секунды|мин|минут|минута|минуты|час|часа|часов|дн|день|дня|дней|мес|месяц|месяца|месяцев|год|года|лет)$/iu;
-
 /**
  * Whether the customer's selection request contains a physical quantity that
  * may need translating from application context into a product-side
@@ -26,9 +27,7 @@ const NON_SELECTION_MEASUREMENT_UNIT = /^(?:шт|штук|штука|штуки|
  * taxonomy decides whether the quantity maps directly to a facet.
  */
 export function hasSelectionMeasurementContext(text: string): boolean {
-  return extractClientQuantities(text).some(({ unit }) =>
-    Boolean(unit) && !NON_SELECTION_MEASUREMENT_UNIT.test(unit)
-  );
+  return extractClientQuantities(text).some(({ unit }) => isPhysicalMeasurementUnit(unit));
 }
 
 export interface DerivedSelectionReasoningInput {

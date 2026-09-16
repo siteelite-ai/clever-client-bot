@@ -3,6 +3,7 @@ import {
   correctCriteria,
   extractClientQuantities,
   findUnderstatedCriteria,
+  isPhysicalMeasurementUnit,
   normalizeUnit,
 } from "./criteria-consistency.ts";
 import type { Criterion } from "./criteria-gate.ts";
@@ -38,6 +39,16 @@ Deno.test("extract: product codes are not measurements", () => {
 Deno.test("normalizeUnit preserves ASCII square and cubic suffixes", () => {
   assertEquals(normalizeUnit("мм2"), "мм²");
   assertEquals(normalizeUnit("м3"), "м³");
+});
+
+Deno.test("physical measurements exclude money, counts and durations", () => {
+  assertEquals(isPhysicalMeasurementUnit("мм"), true);
+  assertEquals(isPhysicalMeasurementUnit("Вт"), true);
+  assertEquals(isPhysicalMeasurementUnit("тенге"), false);
+  assertEquals(isPhysicalMeasurementUnit("тг"), false);
+  assertEquals(isPhysicalMeasurementUnit("KZT"), false);
+  assertEquals(isPhysicalMeasurementUnit("штук"), false);
+  assertEquals(isPhysicalMeasurementUnit("дней"), false);
 });
 
 Deno.test("min-критерий ниже числа клиента → violation", () => {

@@ -7,7 +7,10 @@
 
 import { normalizeKey, type Criterion } from "./criteria-gate.ts";
 import { extractReasoningBounds } from "./criteria-reasoning.ts";
-import { normalizeUnit } from "./criteria-consistency.ts";
+import {
+  isPhysicalMeasurementUnit,
+  normalizeUnit,
+} from "./criteria-consistency.ts";
 import type { ProductRef } from "./types.ts";
 
 export type CompatibilityRelationOp = "gt" | "gte" | "lt" | "lte" | "eq";
@@ -682,7 +685,7 @@ export function extractSingleMeasuredReference(text: string): { value: number; u
   for (let match; (match = re.exec(source)) !== null;) {
     const value = Number(match[1].replace(",", "."));
     const unit = canonicalUnit(match[2]);
-    if (!Number.isFinite(value) || !unit || /^(шт|штук|раз|года?|лет|мин|сек)$/u.test(unit)) continue;
+    if (!Number.isFinite(value) || !isPhysicalMeasurementUnit(unit)) continue;
     found.set(`${value}|${unit}`, { value, unit });
   }
   return found.size === 1 ? [...found.values()][0] : null;
