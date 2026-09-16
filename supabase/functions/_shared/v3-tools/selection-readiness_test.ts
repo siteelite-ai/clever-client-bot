@@ -37,9 +37,27 @@ Deno.test("selection readiness does not block a precise floodlight search", () =
   );
 });
 
-Deno.test("explicit exploratory variants with application context may browse before exact sizing", () => {
+Deno.test("asking for variants does not bypass missing selection parameters", () => {
   assertEquals(
-    selectReadinessClarification("Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома"),
+    selectReadinessClarification(
+      "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома",
+    )?.profile,
+    "outdoor_floodlight",
+  );
+});
+
+Deno.test("variant wording does not bypass readiness in another product domain", () => {
+  assertEquals(
+    selectReadinessClarification("Предложи варианты кабеля для насоса")?.profile,
+    "pump_cable",
+  );
+});
+
+Deno.test("selection readiness allows a completed outdoor-floodlight context", () => {
+  assertEquals(
+    selectReadinessClarification(
+      "Нужен прожектор на улицу для двора площадью 120 м², высота установки 4 м",
+    ),
     null,
   );
 });
