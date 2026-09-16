@@ -368,7 +368,7 @@
               ["С датчиком движения"],
               ["\"value\":\"да\""]
             ],
-            "forbid_every_product_title_any": ["ДПП", "уличный", "промышленный"],
+            "forbid_every_product_title_any": ["ДПП", "уличный", "промышленный", "для ЖКХ"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }

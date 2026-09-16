@@ -445,6 +445,23 @@ Deno.test("repeated equality values of one facet are alternatives, not impossibl
   assertEquals(report.rejected.map((item) => item.id), ["75"]);
 });
 
+Deno.test("a customer-grounded class family is a mandatory OR allow-list", () => {
+  const items = [
+    product("household-overlay", ["Класс применения: бытовые изделия накладные"]),
+    product("household-pendant", ["Класс применения: бытовые изделия подвесные"]),
+    product("sibling", ["Класс применения: изделия другого назначения"]),
+  ];
+  const criteria: Criterion[] = [
+    { key: "Класс применения", op: "eq", value: "бытовые изделия накладные", level: "A" },
+    { key: "Класс применения", op: "eq", value: "бытовые изделия подвесные", level: "A" },
+  ];
+
+  const report = applyCriteriaGate(items, criteria);
+
+  assertEquals(report.passed_ids, ["household-overlay", "household-pendant"]);
+  assertEquals(report.rejected.map((item) => item.id), ["sibling"]);
+});
+
 Deno.test("mandatory criteria compile into live facet OR values and numeric bounds", () => {
   const projection = projectCriteriaFacetOptions([
     { key: "Мощность", op: "eq", value: 20, unit: "Вт", level: "A" },

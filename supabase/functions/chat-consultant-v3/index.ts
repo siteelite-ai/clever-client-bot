@@ -4510,11 +4510,14 @@ async function runExpertLoop(
           // deadline may otherwise route directly to terminal recovery; that
           // recovery must inherit the same class obligations instead of
           // rebuilding only the numeric part of the prose.
-          const familyCompatibleFacetKeys = new Set(declaration.familyCompatibleFacetKeys);
-          const isFamilyCompatibleFacet = (key: string): boolean =>
-            familyCompatibleFacetKeys.has(key.toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim());
+          // A customer-grounded family contains several live values from one
+          // facet that all carry the qualifier the customer actually supplied
+          // (for example, two mounting variants of one requested use class).
+          // Repeated equality criteria are an OR group in both projection and
+          // the criteria gate, so keep the whole family mandatory. Dropping it
+          // here lets terminal recovery backfill cards from unrelated sibling
+          // classes even though discovery understood the request correctly.
           const proposedClassificationCriteria: Criterion[] = declaration.compatible
-            .filter(({ key }) => !isFamilyCompatibleFacet(key))
             .map(({ key, value }) => ({
               key,
               op: "eq",
@@ -4522,7 +4525,6 @@ async function runExpertLoop(
               level: "A",
             }));
           const customerGroundedClassificationCriteria: Criterion[] = declaration.customerGroundedCompatible
-            .filter(({ key }) => !isFamilyCompatibleFacet(key))
             .map(({ key, value }) => ({ key, op: "eq", value, level: "A" }));
           derivedExcludedClassificationCriteria = mergeMandatorySelectionCriteria([
             ...derivedExcludedClassificationCriteria,
