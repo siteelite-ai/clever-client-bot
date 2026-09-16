@@ -30,7 +30,10 @@ import { applyCriteriaGate, buildCriteriaQuery, extendSelectionCriteriaPlan,
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, demoteUnfrozenRenderCriteria, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
-import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
+import {
+  enforceBudgetCapOnSelectionSearch,
+  extractBudgetCap,
+} from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCatalogEmptySynthesisMessages, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, filterSelectionRecoveryPool, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, resolveSelectionSearchEvidence, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection, type SelectionSearchRecoveryAttempt } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { buildDerivedSelectionReasoningMessages, buildDerivedSelectionReasoningToolSchema, hasActionableSelectionContract, hasSelectionMeasurementContext, measuredSelectionContractEvidence, resolveDerivedSelectionReasoning, shouldContinueSelectionPastOptionalClarification, shouldFinalizeDerivedSelectionSearch, shouldProjectDerivedScalarMeasurement, shouldQueueDirectCustomerFacetSearch, shouldRequireDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
 import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, groundSelectionApplicationContext, initialSelectionDeclaration, parseSelectionTarget, projectModelOnlySelectionTargetExtension, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
@@ -7673,6 +7676,20 @@ async function runExpertLoop(
         }
 
         if (tc.name === "search_catalog") {
+          const beforeBudgetCap = Number(tc.args.max_price) || null;
+          tc.args = enforceBudgetCapOnSelectionSearch(userMessage, tc.args);
+          const afterBudgetCap = Number(tc.args.max_price) || null;
+          if (afterBudgetCap !== beforeBudgetCap) {
+            steps.push({
+              step: "v3_budget_cap_search_enforced",
+              ms: now(),
+              meta: {
+                before: beforeBudgetCap,
+                after: afterBudgetCap,
+                mode: tc.args.mode,
+              },
+            });
+          }
           const beforeCapacity = Number(tc.args.per_page) || 0;
           tc.args = ensureSearchCapacity(tc.args, resultCardinality);
           const afterCapacity = Number(tc.args.per_page) || 0;
@@ -10486,6 +10503,7 @@ async function runExpertLoop(
       );
       const gate = adjusted.report;
       let safeIds = reasoningBackedSearch.ids.filter((id) => gate.passed_ids.includes(id));
+      const criteriaPassedCount = safeIds.length;
       let terminalTargetProducts = candidateProducts;
       if (intentMode === "select" && !replacementIntent && !seriesTurnRequiresGrounding && terminalDiscover) {
         if (terminalGroundedTargets.length > 0) {
@@ -10500,6 +10518,7 @@ async function runExpertLoop(
       const groundedIds = new Set(terminalTargetProducts.map((product) => product.id));
       const targetReport = verifySelectionTargetWithVisibleTitle(terminalSelectionTarget, terminalTargetProducts);
       safeIds = safeIds.filter((id) => groundedIds.has(id) && targetReport.passed_ids.includes(id));
+      const targetPassedCount = safeIds.length;
       if (replacementIntent) {
         const anchorId = getAnchorExcludeId();
         const familyExclude = getFamilyExcludeSet();
@@ -10524,10 +10543,36 @@ async function runExpertLoop(
             ).length > 0;
         });
       }
-      safeIds = guardVisibleCardinality(safeIds).ids;
+      const visibilityGuard = guardVisibleCardinality(safeIds);
+      safeIds = visibilityGuard.ids;
+      const beforeFinalRenderGuards = safeIds.length;
+      steps.push({
+        step: "v3_terminal_recovery_gate_summary",
+        ms: now(),
+        meta: {
+          candidates: reasoningBackedSearch.ids.length,
+          criteria_passed: criteriaPassedCount,
+          category_grounded: terminalTargetProducts.length,
+          target_passed: targetPassedCount,
+          visible_passed: safeIds.length,
+          cardinality_mode: resultCardinality.mode,
+          cardinality_target: resultCardinality.target,
+          visible_requirements: visibilityGuard.visibleRequestContract.map(({ kind, label }) => ({ kind, label })),
+        },
+      });
       const budgetGuard = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage));
       safeIds = budgetGuard.ids;
       safeIds = finalizeTerminalRenderIds(safeIds);
+      steps.push({
+        step: "v3_terminal_final_render_guard_summary",
+        ms: now(),
+        meta: {
+          before: beforeFinalRenderGuards,
+          after_budget: budgetGuard.ids.length,
+          after_final: safeIds.length,
+          excluded_classification_criteria: derivedExcludedClassificationCriteria,
+        },
+      });
       if (budgetGuard.dropped > 0) {
         steps.push({
           step: "v3_guard_budget_cap_recovery",
