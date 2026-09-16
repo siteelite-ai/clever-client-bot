@@ -25,6 +25,16 @@ export interface VisibleRequestContractContext {
   candidateTitles?: string[];
 }
 
+const RU_ADJECTIVE_TOKEN = String.raw`\p{L}{3,}(?:ыми|ими|ого|его|ому|ему|ая|яя|ое|ее|ой|ей|ом|ем|ую|юю|ый|ий|ые|ие|ых|их)`;
+
+function hasDoubleSocketPhrase(source: string): boolean {
+  const between = `(?:\\s+${RU_ADJECTIVE_TOKEN}){0,3}`;
+  return new RegExp(
+    `(?:двойн\\p{L}*${between}\\s+розет\\p{L}*|розет\\p{L}*${between}\\s+двойн\\p{L}*)`,
+    "iu",
+  ).test(source);
+}
+
 const WORKFLOW_WORDS = new Set([
   "покажи", "покажите", "найди", "найдите", "подбери", "подберите",
   "нужен", "нужна", "нужно", "нужны", "хочу", "ищу", "есть", "дайте",
@@ -196,10 +206,7 @@ export function buildVisibleRequestContract(
     });
   }
 
-  if (
-    /двойн\p{L}*(?:\s+\p{L}+){0,1}\s+розет\p{L}*|розет\p{L}*(?:\s+\p{L}+){0,1}\s+двойн\p{L}*/iu
-      .test(source)
-  ) {
+  if (hasDoubleSocketPhrase(source)) {
     add("count:double-socket", {
       kind: "count",
       label: "двойная розетка",

@@ -167,6 +167,9 @@ Deno.test("derived reasoning prompt is compact and treats the live schema as unt
   assertEquals(messages[0].content.includes("Класс товара, прямо названный клиентом, неизменяем"), true);
   assertEquals(messages[0].content.includes("качественные требования совместимости или безопасности"), true);
   assertEquals(messages[0].content.includes("живых категориальных значений"), true);
+  assertEquals(messages[0].content.includes("строгий порог доказательства"), true);
+  assertEquals(messages[0].content.includes("неопределёнными, а не несовместимыми"), true);
+  assertEquals(messages[0].content.includes("Никогда не выдумывай жёсткий максимум"), true);
   assertEquals(messages[1].content.includes("<script>"), false);
   assertEquals(messages[1].content.includes("\\u003cscript>"), true);
   assertEquals(messages[1].content.includes("\\u003coption>"), true);
@@ -198,6 +201,25 @@ Deno.test("derived reasoning uses validated live classification IDs and makes th
   assertEquals(resolved?.text.includes("invented"), false);
 });
 
+Deno.test("classification schema excludes metadata whose word only starts with a class token", () => {
+  const schema = buildDerivedSelectionReasoningToolSchema([
+    {
+      caption: "Видеофайлы",
+      type: "string",
+      values: [{ value: "Демонстрационный ролик" }],
+    },
+    {
+      caption: "Вид изделия",
+      type: "string",
+      values: [{ value: "Первый класс" }],
+    },
+  ]);
+  const properties = (schema.function.parameters.properties ?? {}) as Record<string, {
+    items?: { enum?: string[] };
+  }>;
+  assertEquals(properties.compatible_classifications.items?.enum, ["f1v0"]);
+});
+
 Deno.test("a uniquely customer-grounded live class overrides a broader model choice", () => {
   const liveFacets = [{
     caption: "Класс применения",
@@ -218,8 +240,76 @@ Deno.test("a uniquely customer-grounded live class overrides a broader model cho
     key: "Класс применения",
     value: "подвесные изделия; бра; ночники",
   }]);
+  assertEquals(resolved?.customerGroundedCompatible, [{
+    key: "Класс применения",
+    value: "подвесные изделия; бра; ночники",
+  }]);
   assertEquals(resolved?.text.includes("подвесные изделия; бра; ночники"), true);
   assertEquals(resolved?.text.includes("бытовые изделия накладные"), false);
+});
+
+Deno.test("a customer-grounded class family preserves all matching live variants", () => {
+  const liveFacets = [{
+    caption: "Класс применения",
+    type: "string",
+    values: [
+      { value: "бытовые изделия накладные" },
+      { value: "бытовые изделия подвесные" },
+      { value: "промышленные изделия" },
+      { value: "офисные изделия" },
+    ],
+  }];
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning: "Подбираю подходящий вариант по явно указанному применению.",
+    compatible_classifications: ["f0v2"],
+    excluded_classifications: [],
+  }, liveFacets, "Нужны бытовые изделия");
+
+  assertEquals(resolved?.compatible, [
+    { key: "Класс применения", value: "бытовые изделия накладные" },
+    { key: "Класс применения", value: "бытовые изделия подвесные" },
+  ]);
+  assertEquals(resolved?.customerGroundedCompatible, resolved?.compatible);
+  assertEquals(resolved?.familyCompatibleFacetKeys, ["класс применения"]);
+  assertEquals(resolved?.text.includes("в первую очередь проверяю"), true);
+  assertEquals(resolved?.text.includes("исключаю только при доказанной несовместимости"), true);
+  assertEquals(resolved?.measurementEvidence, "Подбираю подходящий вариант по явно указанному применению.");
+  assertEquals(resolved?.measurementEvidence.includes("бытовые изделия"), false);
+});
+
+Deno.test("a unique customer-grounded class remains an exact classification obligation", () => {
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning: "Подбираю исполнение по прямо указанному месту применения.",
+    compatible_classifications: ["f0v0"],
+    excluded_classifications: ["f0v1"],
+  }, [{
+    caption: "Класс применения",
+    type: "string",
+    values: [{ value: "внутреннее исполнение" }, { value: "наружное исполнение" }],
+  }], "Нужно внутреннее исполнение");
+
+  assertEquals(resolved?.familyCompatibleFacetKeys, []);
+  assertEquals(resolved?.compatible, [{ key: "Класс применения", value: "внутреннее исполнение" }]);
+});
+
+Deno.test("an opaque live abbreviation cannot become a hard model-only exclusion", () => {
+  const resolved = resolveDerivedSelectionReasoning({
+    reasoning: "Подбираю решение по заявленному назначению и обязательным параметрам.",
+    compatible_classifications: [],
+    excluded_classifications: ["f0v0", "f0v1"],
+  }, [{
+    caption: "Класс применения",
+    type: "string",
+    values: [
+      { value: "изделия для ЖКХ" },
+      { value: "промышленные изделия" },
+      { value: "бытовые изделия" },
+    ],
+  }]);
+
+  assertEquals(resolved?.excluded, [{ key: "Класс применения", value: "промышленные изделия" }]);
+  assertEquals(resolved?.text.includes("ЖКХ"), false);
+  assertEquals(resolved?.text.includes("промышленные изделия"), true);
 });
 
 Deno.test("a negated class term cannot become customer-grounded evidence", () => {

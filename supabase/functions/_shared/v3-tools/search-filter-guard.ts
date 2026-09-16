@@ -481,6 +481,24 @@ function explicitlyAffirmedByUser(value: string, userEvidence: string): boolean 
   )));
 }
 
+function facetValueAppearsOnlyAsMeasurementNoun(
+  value: string,
+  userEvidence: string,
+): boolean {
+  const valueTokens = norm(value).split(" ").filter(Boolean);
+  if (valueTokens.length !== 1 || /\d/u.test(valueTokens[0])) return false;
+  const evidenceTokens = norm(userEvidence).split(" ").filter(Boolean);
+  const matches: number[] = [];
+  for (const [index, token] of evidenceTokens.entries()) {
+    if (token === valueTokens[0] || tokensMatchByStem(token, valueTokens[0])) {
+      matches.push(index);
+    }
+  }
+  return matches.length > 0 && matches.every((index) =>
+    index > 0 && /^\d+(?:[.,]\d+)?$/u.test(evidenceTokens[index - 1])
+  );
+}
+
 function visualSingleLetter(value: string): string {
   const map: Record<string, string> = {
     а: "a", в: "b", е: "e", к: "k", м: "m", н: "h",
@@ -800,6 +818,10 @@ export function guardSearchFilters(
         dropped.push({ key, value: canonical, reason: "negated_by_user" });
         continue;
       }
+      if (facetValueAppearsOnlyAsMeasurementNoun(canonical, userEvidence)) {
+        dropped.push({ key, value: canonical, reason: "not_declared_in_reasoning" });
+        continue;
+      }
       const normalizedCanonical = norm(canonical);
       const isAffirmativeBoolean = AFFIRMATIVE_VALUES.has(normalizedCanonical);
       const facetLabel = facet.caption || facet.key;
@@ -870,6 +892,27 @@ export function guardSearchFilters(
     inferred.push(item);
   }
 
+  // An explicitly named affirmative feature is stronger than a bare
+  // conversational "да". When the live facet itself is present verbatim in
+  // the customer's request and exposes exactly one affirmative value, project
+  // that value even if the model omitted it. This is category-neutral and
+  // cannot activate unrelated booleans because the facet label, not the stored
+  // value, must be customer-backed.
+  for (const facet of facets) {
+    if (nextOptions[facet.key]?.length || isReplacementIdentityFacet(facet)) continue;
+    const affirmative = facet.values.filter((candidate) =>
+      isAtomicFacetValue(candidate.value) && AFFIRMATIVE_VALUES.has(norm(candidate.value))
+    );
+    if (affirmative.length !== 1) continue;
+    const label = facet.caption || facet.key;
+    if (evidenceStatus(label, userEvidence) !== "affirmed") continue;
+    const item = { key: facet.key, value: affirmative[0].value };
+    nextOptions[item.key] = [item.value];
+    kept.push(item);
+    userBacked.push(item);
+    inferred.push(item);
+  }
+
   // Complete, but never guess, facet filters that the customer stated
   // explicitly. LLM tool arguments are probabilistic and may omit one of the
   // constraints it correctly described (for example, household use while
@@ -897,6 +940,7 @@ export function guardSearchFilters(
       if (!isAtomicFacetValue(candidate.value)) return false;
       if (numericFacetValueConflictsWithUserMeasurement(candidate.value, facet, userEvidence, declaredReasoning)) return false;
       if (!normalized || ["да", "нет", "есть", "отсутствует"].includes(normalized)) return false;
+      if (facetValueAppearsOnlyAsMeasurementNoun(candidate.value, userEvidence)) return false;
       if (!/[a-zа-я]/iu.test(normalized)) {
         return /^\d+(?:[.,]\d+)?$/u.test(normalized) &&
           numericFacetValueIsLocallyEvidenced(candidate.value, facet, userEvidence) &&

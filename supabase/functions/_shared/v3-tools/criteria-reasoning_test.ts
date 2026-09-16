@@ -30,6 +30,13 @@ Deno.test("измеримое рассуждение требует машинн
   assertEquals(hasMeasuredSelectionRequirement("Обычно такие лампы имеют E27 или E14 и часто работают на 220 В."), false);
   assertEquals(hasMeasuredSelectionRequirement("Считаем: площадь 25 м² × 175 лк, итого 4375 лм."), true);
   assertEquals(hasMeasuredSelectionRequirement("ДКУ-LED-03-100W — исходная модель; подбираю замену."), false);
+  assertEquals(
+    hasMeasuredSelectionRequirement(
+      "Посмотрю несколько вариантов на любой кошелёк: от простых бытовых на 3–5 метров до усиленных.",
+    ),
+    false,
+  );
+  assertEquals(hasMeasuredSelectionRequirement("Покажи удлинители длиной 3–5 метров"), true);
 });
 
 Deno.test("числовой диапазон из рассуждения проецируется на уникальный живой фасет", () => {
@@ -98,6 +105,20 @@ Deno.test("русский диапазон от X до Y проецируетс�
     { key: "flow", caption: "Поток", type: "number", unit: "лм" },
   ]);
   assertEquals(projected.added, [{ key: "Поток", op: "range", value: [3500, 5000], unit: "лм", level: "A" }]);
+});
+
+Deno.test("явная производная нижняя граница проецируется без выдуманного максимума", () => {
+  const projected = projectReasoningRangeCriteria(
+    [],
+    "Нужен световой поток не менее 3750 лм; около 5000 лм — лишь комфортный ориентир.",
+    [
+      { key: "flow", caption: "Световой поток", type: "number", unit: "лм" },
+      { key: "power", caption: "Мощность", type: "number", unit: "Вт" },
+    ],
+  );
+  assertEquals(projected.added, [
+    { key: "Световой поток", op: "min", value: 3750, unit: "лм", level: "A" },
+  ]);
 });
 
 Deno.test("проверенный средний расчёт сохраняет исходный диапазон результата", () => {
@@ -315,7 +336,7 @@ Deno.test("natural customer area projects onto an ASCII-square live facet", () =
   );
   assertEquals(projected.added, [{
     key: "Максимальная площадь освещения, м2",
-    op: "eq",
+    op: "min",
     value: "30",
     unit: "м²",
     level: "A",
@@ -645,6 +666,39 @@ Deno.test("an exact live application class remains mandatory while colour stays 
   ]);
   assertEquals(contract.options, { kind: ["Внутренний класс"] });
   assertEquals(contract.demoted, ["Цвет"]);
+});
+
+Deno.test("classification wording cannot promote an adjacent exact colour value", () => {
+  const contract = compileMeasuredReasoningSearchContract(
+    [
+      { key: "Вид светильника", op: "eq", value: "бытовые светильники накладные", level: "A" },
+      { key: "Цвет корпуса", op: "eq", value: "белый", level: "A" },
+    ],
+    "По классу «Вид светильника» выбираю «бытовые светильники накладные», цвет корпуса — белый.",
+    [],
+    [
+      {
+        key: "kind",
+        caption: "Вид светильника",
+        type: "checkbox",
+        unit: null,
+        values: [{ value: "бытовые светильники накладные" }],
+      },
+      {
+        key: "colour",
+        caption: "Цвет корпуса",
+        type: "checkbox",
+        unit: null,
+        values: [{ value: "белый" }],
+      },
+    ],
+  );
+
+  assertEquals(contract.mandatory_criteria, [
+    { key: "Вид светильника", op: "eq", value: "бытовые светильники накладные", level: "A" },
+  ]);
+  assertEquals(contract.options, { kind: ["бытовые светильники накладные"] });
+  assertEquals(contract.demoted, ["Цвет корпуса"]);
 });
 
 Deno.test("a compound canonical class containing semicolons remains one obligation", () => {

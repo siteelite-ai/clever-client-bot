@@ -374,6 +374,60 @@ Deno.test("a customer or criterion-backed target extension is never projected aw
   );
 });
 
+Deno.test("a live discovery query alias projects back to its canonical class", () => {
+  assertEquals(
+    projectModelOnlySelectionTargetExtension(
+      "Удлинители",
+      "удлинитель электрический",
+      "Предложи несколько электрических удлинителей на выбор",
+      "Удлинители",
+      [],
+      "удлинитель электрический",
+    ),
+    "Удлинители",
+  );
+  assertEquals(
+    projectModelOnlySelectionTargetExtension(
+      "Удлинители",
+      "удлинитель электрический",
+      "Предложи несколько электрических удлинителей на выбор",
+      "Удлинители",
+      [{ key: "Тип питания", op: "eq", value: "электрический", level: "A" }],
+      "удлинитель электрический",
+    ),
+    null,
+  );
+});
+
+Deno.test("a mixed target drops only the model invention when the customer modifier stays gated", () => {
+  assertEquals(
+    projectModelOnlySelectionTargetExtension(
+      "Светильники",
+      "светодиодный накладной светильник",
+      "Нужен бытовой накладной светильник с датчиком движения",
+      "Светильники",
+      [
+        { key: "Способ монтажа", op: "eq", value: "накладной", level: "A" },
+        { key: "С датчиком движения", op: "eq", value: "да", level: "A" },
+      ],
+    ),
+    "Светильники",
+  );
+
+  // Without an independent mandatory gate, projecting the customer's own
+  // modifier away would weaken the request, so the drift remains blocked.
+  assertEquals(
+    projectModelOnlySelectionTargetExtension(
+      "Светильники",
+      "светодиодный накладной светильник",
+      "Нужен бытовой накладной светильник с датчиком движения",
+      "Светильники",
+      [{ key: "С датчиком движения", op: "eq", value: "да", level: "A" }],
+    ),
+    null,
+  );
+});
+
 Deno.test("a sibling class cannot project through a shared umbrella noun", () => {
   assertEquals(
     projectModelOnlySelectionTargetExtension(
@@ -729,6 +783,21 @@ Deno.test("an exact named entity may discard a model-only class adjective but ne
     "розетка электрическая",
     [],
     { replacement: false, exact_named_entity_grounded: false },
+  ), false);
+});
+
+Deno.test("an independently grounded live category may discard a model-only class adjective but never switch siblings", () => {
+  assertEquals(selectionTargetMayUseGroundedBase(
+    "Удлинители",
+    "электрический удлинитель",
+    [],
+    { replacement: false, exact_named_entity_grounded: false, live_category_grounded: true },
+  ), true);
+  assertEquals(selectionTargetMayUseGroundedBase(
+    "Розетки",
+    "электрический выключатель",
+    [],
+    { replacement: false, exact_named_entity_grounded: false, live_category_grounded: true },
   ), false);
 });
 

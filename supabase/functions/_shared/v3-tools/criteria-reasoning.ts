@@ -209,6 +209,11 @@ export function compileMeasuredReasoningSearchContract(
   // preferences remain eligible for demotion.
   const applicationClassCriteria = projected.criteria.filter((criterion) => {
     if (criterion.op !== "eq" || typeof criterion.value !== "string") return false;
+    // A classification word elsewhere in the same sentence must not promote
+    // an adjacent preference (for example colour or housing material) into a
+    // hard filter. Both the live facet itself and the reasoning clause must
+    // identify this criterion as a class/type/purpose decision.
+    if (!classificationMarker.test(criterion.key)) return false;
     const value = normalizeEvidence(criterion.value);
     if (!value) return false;
     return reasoningClauses.some((clause) =>
@@ -258,10 +263,12 @@ export function hasMeasuredSelectionRequirement(text: string): boolean {
     const clauseEnd = nextStops.length > 0 ? Math.min(...nextStops) : value.length;
     const clause = value.slice(clauseStart, clauseEnd);
     const explicitRange = /\d+(?:[.,]\d+)?\s*[–—-]\s*\d+(?:[.,]\d+)?/u.test(match[0]);
-    const obligation = /(?:нуж|необходим|долж|треб|минимум|максимум|не\s+менее|не\s+более|больше|меньше|свыше|до\s+\d|от\s+\d|ориентир|диапазон|расчет|счита|получа|итого|составля|подбира|выбира|[≈=×])/iu.test(clause);
+    const obligation = /(?:нуж|необходим|долж|треб|минимум|максимум|не\s+менее|не\s+более|больше|меньше|свыше|до\s+\d|от\s+\d|ориентир|диапазон|расчет|счита|получа|итого|составля|покаж|найд|ищ|подбира|выбира|[≈=×])/iu.test(clause);
+    const illustrativeRange = /(?:например|к\s+примеру|вариант\p{L}*\s+на\s+любой|от\s+прост\p{L}*.+\s+до\s+|обычно|часто|бывают)/iu.test(clause);
     // Measurements used only to describe a typical product ("обычно 220 В",
-    // "часто 10 Вт") are catalog narration, not selection requirements.
-    if (explicitRange || obligation) return true;
+    // "часто 10 Вт") or to illustrate assortment breadth ("от простых на
+    // 3–5 м до усиленных") are catalog narration, not selection requirements.
+    if (obligation || (explicitRange && !illustrativeRange)) return true;
   }
   return false;
 }
@@ -532,6 +539,52 @@ export function projectReasoningRangeCriteria(
     next.push(criterion);
     added.push(criterion);
   }
+
+  // A derived requirement may be directional rather than a closed interval
+  // (for example “not less than X”, while a higher comfort target remains
+  // advisory). Project it only when its unit identifies exactly one live
+  // numeric facet. Bounds that merely restate an explicit interval are already
+  // owned by the range projection above and must not be duplicated.
+  const directionalBounds = collapseBounds(extractReasoningBounds(reasoningText));
+  for (const bound of directionalBounds) {
+    const unit = canonicalMeasurementUnit(bound.unit);
+    if (!unit) continue;
+    if (ranges.some((range) =>
+      range.unit === unit && (range.low === bound.value || range.high === bound.value)
+    )) continue;
+    if (next.some((criterion) => {
+      const sameUnit = canonicalMeasurementUnit(criterion.unit ?? "") === unit;
+      const value = typeof criterion.value === "number" ? criterion.value : Number(criterion.value);
+      return sameUnit && criterion.op === bound.op && value === bound.value;
+    })) continue;
+    const unitFacets = (facets ?? []).filter((facet) => {
+      const hasNumericLiveValues = (facet.values ?? []).some(({ value }) =>
+        /\d+(?:[.,]\d+)?/u.test(String(value ?? ""))
+      );
+      const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
+      const labelHasUnit = String(facet.caption || facet.key)
+        .match(/[a-zа-я°]{1,10}[²³]?\d?/giu)
+        ?.some((token) => canonicalMeasurementUnit(token) === unit) ?? false;
+      return (facet.type === "number" || hasNumericLiveValues) &&
+        (declaredUnit === unit || labelHasUnit);
+    });
+    // A bare directional bound does not carry enough local state to choose
+    // between two facets with the same unit (for example size before/after a
+    // transformation). Existing criteria are not a safe hint: they may name
+    // the opposite state. Require true unit-level uniqueness.
+    if (unitFacets.length !== 1) continue;
+    const facet = unitFacets[0];
+    const criterion: Criterion = {
+      key: facet.caption || facet.key,
+      op: bound.op,
+      value: bound.value,
+      unit: facet.unit ?? unit,
+      level: "A",
+      ...(bound.strict ? { exclusive: true } : {}),
+    };
+    next.push(criterion);
+    added.push(criterion);
+  }
   return { criteria: next, added };
 }
 
@@ -642,9 +695,18 @@ export function projectLiteralMeasuredCriteria(
       return criterion.op === "eq" && String(criterion.value) === String(liveValue);
     });
     if (alreadyRepresented) continue;
+    const facetMeaning = normalizeEvidence(facet.caption || facet.key);
+    const facetDirection = /(?:^| )(?:максимал\p{L}*|maximum|max)(?: |$)/iu.test(facetMeaning)
+      ? "min" as const
+      : /(?:^| )(?:минимал\p{L}*|minimum|min)(?: |$)/iu.test(facetMeaning)
+      ? "max" as const
+      : "eq" as const;
     const criterion: Criterion = {
       key: facet.caption || facet.key,
-      op: "eq",
+      // The customer's application size is a required capacity, not an exact
+      // product identity. A product's declared maximum must cover at least the
+      // application value; conversely its declared minimum must not exceed it.
+      op: facetDirection,
       value: liveValue,
       unit: facet.unit ?? unit,
       level: "A",

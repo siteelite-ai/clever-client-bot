@@ -86,6 +86,33 @@ Deno.test("a model-supplied count survives when the same visible contract proves
   assertEquals(result.user_backed, [{ key: "outlet_count", value: "2" }]);
 });
 
+Deno.test("an explicitly named affirmative feature is recovered when the model omits it", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter" },
+    [{
+      key: "feature_enabled",
+      caption: "С датчиком движения",
+      values: [{ value: "да" }, { value: "нет" }],
+    }],
+    "Нужен прибор с датчиком движения",
+    "Нужен прибор с датчиком движения",
+  );
+  assertEquals(result.args.options, { feature_enabled: ["да"] });
+  assertEquals(result.user_backed, [{ key: "feature_enabled", value: "да" }]);
+  assertEquals(result.inferred, [{ key: "feature_enabled", value: "да" }]);
+});
+
+Deno.test("a bare yes cannot activate an unrelated boolean feature", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter" },
+    [{ key: "feature_enabled", caption: "Специальная функция", values: [{ value: "да" }, { value: "нет" }] }],
+    "Да, покажите варианты",
+    "Да, покажите варианты",
+  );
+  assertEquals(result.args, { mode: "by_filter" });
+  assertEquals(result.inferred, []);
+});
+
 Deno.test("a loose number in reasoning cannot open an unnamed facet axis", () => {
   assertEquals(
     projectExplicitReasoningFacetValues(
@@ -861,6 +888,32 @@ Deno.test("an explicit unitless number is completed only for its locally named f
   assertEquals(result.args.options, { poles: ["1"] });
   assertEquals(result.user_backed, [{ key: "poles", value: "1" }]);
   assertEquals(result.inferred, [{ key: "poles", value: "1" }]);
+});
+
+Deno.test("a measurement noun cannot silently become a categorical shape", () => {
+  const facets = [{
+    key: "shape",
+    caption: "Форма изделия",
+    values: [{ value: "квадрат" }, { value: "круг" }],
+  }];
+  const measured = guardSearchFilters(
+    { mode: "by_filter" },
+    facets,
+    "Нужно изделие для помещения 30 квадратов",
+    "Нужно изделие для помещения 30 квадратов",
+    "",
+  );
+  assertEquals(measured.args.options, undefined);
+  assertEquals(measured.user_backed, []);
+
+  const explicit = guardSearchFilters(
+    { mode: "by_filter" },
+    facets,
+    "Нужна форма квадрат для помещения 30 квадратов",
+    "Нужна форма квадрат для помещения 30 квадратов",
+    "",
+  );
+  assertEquals(explicit.args.options, { shape: ["квадрат"] });
 });
 
 Deno.test("ordinary replacement excludes explicitly named source brand and collection", () => {

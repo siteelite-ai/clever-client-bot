@@ -26,12 +26,12 @@ import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
 import { applyCriteriaGate, buildCriteriaQuery, extendSelectionCriteriaPlan,
-  type Criterion, filterProductIdsByBudgetCap, isLiteralUserCompactCriterion, mergeFacetOptionConstraints, mergeMandatorySelectionCriteria, mergeUserBackedCriteria, missingSelectionCriteria, projectCatalogFilterEvidence, projectCommonRenderedMarkdownUserCriteria, projectCommonRenderedUserCriteria, projectCriteriaFacetOptions, resolveRenderCriteria, resolveTerminalSelectionCriteria, type SelectionCriteriaPlan, type SelectionCriterionProvenance, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
+  type Criterion, filterProductIdsByBudgetCap, filterProductsByExcludedCriteria, isLiteralUserCompactCriterion, mergeFacetOptionConstraints, mergeMandatorySelectionCriteria, mergeUserBackedCriteria, missingSelectionCriteria, projectCatalogFilterEvidence, projectCommonRenderedMarkdownUserCriteria, projectCommonRenderedUserCriteria, projectCriteriaFacetOptions, resolveRenderCriteria, resolveTerminalSelectionCriteria, type SelectionCriteriaPlan, type SelectionCriterionProvenance, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, demoteUnfrozenRenderCriteria, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
 import { extractBudgetCap } from "../_shared/v3-tools/budget-cap.ts";
-import { buildAnchorMissingRecoveryQueries, buildCatalogEmptySynthesisMessages, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, resolveSelectionSearchEvidence, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection, type SelectionSearchRecoveryAttempt } from "../_shared/v3-tools/selection-search-recovery.ts";
+import { buildAnchorMissingRecoveryQueries, buildCatalogEmptySynthesisMessages, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, filterSelectionRecoveryPool, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, resolveSelectionSearchEvidence, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection, type SelectionSearchRecoveryAttempt } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { buildDerivedSelectionReasoningMessages, buildDerivedSelectionReasoningToolSchema, hasActionableSelectionContract, hasSelectionMeasurementContext, measuredSelectionContractEvidence, resolveDerivedSelectionReasoning, shouldContinueSelectionPastOptionalClarification, shouldFinalizeDerivedSelectionSearch, shouldProjectDerivedScalarMeasurement, shouldQueueDirectCustomerFacetSearch, shouldRequireDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
 import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, groundSelectionApplicationContext, initialSelectionDeclaration, parseSelectionTarget, projectModelOnlySelectionTargetExtension, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, declaredAliasIsStructurallyCustomerOwned, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
@@ -90,6 +90,7 @@ import {
   guardDiscoveryNounBySelectionTarget,
   guardCategoryScopeByReasoning,
   rankGroundedCategoryRecoveryScopes,
+  scopeGroundedClassQueryToLiveLeaves,
   selectGroundedTokenRecoveryCandidate,
   titleContainsLiteralToken,
 } from "../_shared/v3-tools/category-reasoning-guard.ts";
@@ -177,14 +178,14 @@ import {
   selectionPlanSystemHint,
 } from "../_shared/v3-tools/selection-plan.ts";
 import {
-  classifyHouseholdMotionLightRequest,
-  HOUSEHOLD_MOTION_LIGHT_EMPTY,
-  HOUSEHOLD_MOTION_LIGHT_GENERIC_INTRO,
-  HOUSEHOLD_MOTION_LIGHT_INTRO,
-  MOTION_LIGHT_GENERIC_EMPTY,
-  MOTION_LIGHT_GENERIC_INTRO,
-  verifiedHouseholdMotionLights,
-} from "../_shared/v3-tools/household-motion-light-policy.ts";
+  capResultCandidateIds,
+  ensureSearchCapacity,
+  expandResultCandidateIds,
+  resolveResultCardinality,
+  resultCardinalityCandidateWindow,
+  resultCardinalityShortfallText,
+  resultCardinalitySystemHint,
+} from "../_shared/v3-tools/result-cardinality.ts";
 import {
   classifyOutdoorPoeIntent,
   OUTDOOR_POE_ASSESSMENT_ANSWER,
@@ -2419,13 +2420,6 @@ const OUTDOOR_POE_CATALOG_QUERIES = [
   "кабель витая пара Cat.5E",
 ];
 
-const HOUSEHOLD_MOTION_LIGHT_CATALOG_QUERIES = [
-  "Gauss HALL",
-  "светильник Gauss HALL",
-  "накладной светильник с датчиком движения",
-  "светильник с микроволновым сенсором",
-];
-
 interface DirectReplacementResult {
   handled: boolean;
   products: ProductFull[];
@@ -3145,88 +3139,6 @@ async function selectVerifiedRecentPriceFollowup(
   return { handled: true, products: selected };
 }
 
-async function selectVerifiedHouseholdMotionLights(
-  ctx: ToolContext,
-  send: (event: SseEvent) => void,
-  steps: StepLog[],
-  t0: number,
-  maxPrice: number | null,
-  surfaceMountedRequired: boolean,
-  householdRequired: boolean,
-): Promise<ProductFull[]> {
-  const started = Date.now();
-  const searches = await Promise.all(
-    HOUSEHOLD_MOTION_LIGHT_CATALOG_QUERIES.map((query) => executeSearchCatalog({
-      mode: "by_query",
-      query,
-      min_price: 1,
-      ...(maxPrice === null ? {} : { max_price: maxPrice }),
-      per_page: 50,
-    }, { baseUrl: CATALOG_BASE_URL, apiToken: ctx.catalogToken }, ctx.cache)),
-  );
-  const candidates: ProductRef[] = searches.flatMap((result) => result.ok ? result.results : []);
-  const verified = verifiedHouseholdMotionLights(
-    candidates,
-    maxPrice,
-    4,
-    surfaceMountedRequired,
-    householdRequired,
-  );
-  const elapsed = Date.now() - started;
-
-  send({
-    type: "tool_event",
-    tool: "search_catalog",
-    phase: "result",
-    duration_ms: elapsed,
-    summary: `Household motion-light policy: подтверждено ${verified.length}`,
-  });
-
-  if (verified.length === 0) {
-    send({
-      type: "delta",
-      content: householdRequired
-        ? HOUSEHOLD_MOTION_LIGHT_EMPTY
-        : MOTION_LIGHT_GENERIC_EMPTY,
-    });
-    steps.push({
-      step: "v3_household_motion_light_empty",
-      ms: Date.now() - t0,
-      meta: {
-        queries: HOUSEHOLD_MOTION_LIGHT_CATALOG_QUERIES,
-        max_price: maxPrice,
-        catalog_totals: searches.map((result) => result.ok ? result.total : 0),
-        candidates: candidates.length,
-        duration_ms: elapsed,
-      },
-    });
-    return [];
-  }
-
-  const ids = verified.map((product) => product.id);
-  const rendered = executeRenderProducts({ product_ids: ids, total_available: verified.length }, ctx.cache);
-  if (!rendered.ok) {
-    send({
-      type: "delta",
-      content: householdRequired
-        ? HOUSEHOLD_MOTION_LIGHT_EMPTY
-        : MOTION_LIGHT_GENERIC_EMPTY,
-    });
-    steps.push({ step: "v3_household_motion_light_render_failed", ms: Date.now() - t0, meta: { error_code: rendered.error_code } });
-    return [];
-  }
-
-  send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: verified.length });
-  steps.push({
-    step: "v3_household_motion_light_rendered",
-    ms: Date.now() - t0,
-    meta: { candidates: candidates.length, verified: verified.length, rendered: rendered.rendered_count, duration_ms: elapsed, max_price: maxPrice },
-  });
-  return ids
-    .map((id) => ctx.cache.get(id))
-    .filter((product): product is ProductFull => Boolean(product));
-}
-
 async function answerBroadAssortmentRequest(
   seriesToken: string | null,
   ctx: ToolContext,
@@ -3496,6 +3408,11 @@ async function runExpertLoop(
   // в реплике клиента.
   let assistantReasoning = "";
   let derivedSelectionReasoningEvidence = "";
+  let pendingDerivedSelectionMeasurementEvidence = "";
+  // A compatible family is retrieval guidance, not an exhaustive allow-list.
+  // Only values the reasoning explicitly marks incompatible may eliminate a
+  // card, and only when that value is positively proved by live product data.
+  let derivedExcludedClassificationCriteria: Criterion[] = [];
   let lastDiscover: DiscoverCategoryOk | null = null;
   const selectionDiscoveries: DiscoverCategoryOk[] = [];
   // Machine-readable projection of the facet values the consultant declared
@@ -3776,7 +3693,7 @@ async function runExpertLoop(
   };
 
   // Step 6 state: fresh-but-unshown product pool from latest successful search.
-  let freshSearch: { tool: string; ids: string[]; total: number } | null = null;
+  let freshSearch: { tool: string; ids: string[]; total: number; mode?: string } | null = null;
   // First non-empty semantic search in an ordinary selection turn. Unlike
   // freshSearch, this pool cannot be overwritten by later broad retries. It is
   // eligible for terminal recovery only after the same server criteria gate.
@@ -3915,6 +3832,34 @@ async function runExpertLoop(
   const equivalentReplacementRequested = replacementIntent && /равноцен\p{L}*/iu.test(replacementEvidenceMessage);
   const replacementExcludedIdentityValues = new Set<string>();
   const intentMode = detectUserIntentMode(userMessage);
+  const directProductLookup = extractReplacementLookupKeys(userMessage);
+  const resultCardinality = resolveResultCardinality(userMessage, {
+    selection: intentMode === "select",
+    exactLookup: !replacementIntent && (
+      directProductLookup.articles.length > 0 ||
+      directProductLookup.modelCodes.length > 0
+    ),
+    superlative: detectPriceDirection(userMessage)?.kind === "superlative",
+  });
+  let resultCardinalityShortfallAnnounced = false;
+  const announceResultCardinalityShortfall = (actual: number, source: string) => {
+    const shortfall = resultCardinalityShortfallText(actual, resultCardinality);
+    if (!shortfall || resultCardinalityShortfallAnnounced) return;
+    send({ type: "delta", content: `${finalText ? "\n\n" : ""}${shortfall}` });
+    finalText += `${finalText ? "\n\n" : ""}${shortfall}`;
+    resultCardinalityShortfallAnnounced = true;
+    steps.push({
+      step: "v3_result_cardinality_shortfall",
+      ms: now(),
+      meta: {
+        mode: resultCardinality.mode,
+        target: resultCardinality.target,
+        minimum: resultCardinality.minimum,
+        actual,
+        source,
+      },
+    });
+  };
   const ensureVisibleTerminalSelectionCaption = (
     criteria: Criterion[],
     recoveryStep: string,
@@ -4316,12 +4261,24 @@ async function runExpertLoop(
     return guarded;
   };
 
-  const guardFinalRenderIds = (ids: string[]): string[] =>
-    guardReplacementRenderIds(filterProductIdsByNamedSeries(
+  const guardFinalRenderIds = (ids: string[]): string[] => {
+    const structurallySafe = guardReplacementRenderIds(filterProductIdsByNamedSeries(
       guardVisibleCardinality(ids).ids,
       ctx.cache,
       namedSeriesToken,
     ));
+    if (derivedExcludedClassificationCriteria.length === 0) return structurallySafe;
+    const eligible = new Set(filterProductsByExcludedCriteria(
+      structurallySafe
+        .map((id) => ctx.cache.get(id))
+        .filter((product): product is ProductFull => Boolean(product)),
+      derivedExcludedClassificationCriteria,
+    ).map(({ id }) => id));
+    return structurallySafe.filter((id) => eligible.has(id));
+  };
+
+  const finalizeTerminalRenderIds = (ids: string[]): string[] =>
+    capResultCandidateIds(guardFinalRenderIds(ids), resultCardinality);
 
   const attemptPortableReplacementTitleRecovery = async (
     runArgs: Record<string, unknown>,
@@ -4376,11 +4333,12 @@ async function runExpertLoop(
   const baseSystemPrompt = buildSystemPrompt(flags.relaxationHintsEnabled, flags.criteriaGateEnabled);
   const recentEvidencePrompt = buildRecentProductEvidencePrompt(recentProductEvidence);
   const selectionPlanPrompt = selectionPlanSystemHint(selectionPlan);
+  const cardinalityPrompt = resultCardinalitySystemHint(resultCardinality);
   const systemContent = dialogueChoice
-    ? `${baseSystemPrompt}\n\n${dialogueChoiceSystemHint(dialogueChoice)}${recentEvidencePrompt}${
+    ? `${baseSystemPrompt}\n\n${dialogueChoiceSystemHint(dialogueChoice)}${recentEvidencePrompt}\n\n${cardinalityPrompt}${
       selectionPlanPrompt ? `\n\n${selectionPlanPrompt}` : ""
     }`
-    : `${baseSystemPrompt}${recentEvidencePrompt}${
+    : `${baseSystemPrompt}${recentEvidencePrompt}\n\n${cardinalityPrompt}${
       selectionPlanPrompt ? `\n\n${selectionPlanPrompt}` : ""
     }`;
 
@@ -4534,6 +4492,10 @@ async function runExpertLoop(
           const visibleDeclarationText = !derivedScalarProjectionAllowed && measuredReference
             ? buildPairedCompatibilityReasoning(measuredReference)
             : declaration.text;
+          const measurementDeclarationEvidence = !derivedScalarProjectionAllowed && measuredReference
+            ? visibleDeclarationText
+            : declaration.measurementEvidence;
+          pendingDerivedSelectionMeasurementEvidence = measurementDeclarationEvidence;
           // The model's structured declaration is immediately rendered back
           // to visible prose and the internal function call is consumed here.
           // Downstream search therefore reads exactly the same classification
@@ -4548,15 +4510,46 @@ async function runExpertLoop(
           // deadline may otherwise route directly to terminal recovery; that
           // recovery must inherit the same class obligations instead of
           // rebuilding only the numeric part of the prose.
-          const declaredClassificationCriteria: Criterion[] = declaration.compatible.map(({ key, value }) => ({
-            key,
-            op: "eq",
-            value,
-            level: "A",
-          }));
+          const familyCompatibleFacetKeys = new Set(declaration.familyCompatibleFacetKeys);
+          const isFamilyCompatibleFacet = (key: string): boolean =>
+            familyCompatibleFacetKeys.has(key.toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim());
+          const proposedClassificationCriteria: Criterion[] = declaration.compatible
+            .filter(({ key }) => !isFamilyCompatibleFacet(key))
+            .map(({ key, value }) => ({
+              key,
+              op: "eq",
+              value,
+              level: "A",
+            }));
+          const customerGroundedClassificationCriteria: Criterion[] = declaration.customerGroundedCompatible
+            .filter(({ key }) => !isFamilyCompatibleFacet(key))
+            .map(({ key, value }) => ({ key, op: "eq", value, level: "A" }));
+          derivedExcludedClassificationCriteria = mergeMandatorySelectionCriteria([
+            ...derivedExcludedClassificationCriteria,
+            ...declaration.excluded.map(({ key, value }) => ({
+              key,
+              op: "eq" as const,
+              value,
+              level: "A" as const,
+            })),
+          ]);
+          const classificationImportance = alignCriteriaImportanceWithReasoning(
+            proposedClassificationCriteria,
+            visibleDeclarationText,
+            customerGroundedClassificationCriteria,
+          );
+          const declaredClassificationCriteria = classificationImportance.criteria
+            .filter((criterion) => (criterion.level ?? "A") === "A");
+          if (classificationImportance.demoted.length > 0) {
+            steps.push({
+              step: "v3_derived_classification_advice_demoted",
+              ms: now(),
+              meta: { keys: classificationImportance.demoted },
+            });
+          }
           const derivedMeasuredContract = compileMeasuredReasoningSearchContract(
             [],
-            visibleDeclarationText,
+            measurementDeclarationEvidence,
             [],
             lastDiscover.facets ?? [],
           );
@@ -4602,7 +4595,7 @@ async function runExpertLoop(
           const directSearchOptions = Object.keys(declaredClassificationProjection.options).length > 0
             ? declaredClassificationProjection.options
             : derivedFacetProjection.options;
-          const directSearchArgs: Record<string, unknown> | null = Object.keys(directSearchOptions).length > 0
+          const directSearchBase: Record<string, unknown> | null = Object.keys(directSearchOptions).length > 0
             ? {
               mode: "by_filter",
               options: directSearchOptions,
@@ -4617,6 +4610,20 @@ async function runExpertLoop(
               per_page: 50,
             }
             : null;
+          const directSearchArgs = directSearchBase
+            ? guardSearchFilters(
+              directSearchBase,
+              lastDiscover.facets ?? [],
+              `${userMessage}\n${visibleDeclarationText}`,
+              userMessage,
+              visibleDeclarationText,
+              buildVisibleRequestContract(userMessage),
+            ).args
+            : null;
+          const directBudgetCap = extractBudgetCap(userMessage);
+          if (directSearchArgs && directBudgetCap !== null) {
+            directSearchArgs.max_price = directBudgetCap;
+          }
           if (directSearchArgs) {
             derivedStructuredSearchCallId = crypto.randomUUID();
             derivedStructuredSearchPairedCompatibility = !derivedScalarProjectionAllowed;
@@ -4634,6 +4641,7 @@ async function runExpertLoop(
               category: lastDiscover.category?.pagetitle ?? "",
               facets: lastDiscover.facets?.length ?? 0,
               compatible_classifications: declaration.compatible,
+              compatible_family_facets: declaration.familyCompatibleFacetKeys,
               excluded_classifications: declaration.excluded,
               reasoning_model: ctx.selectionReasoningModel,
               direct_search: resp.toolCalls.some(({ name }) => name === "search_catalog"),
@@ -5074,7 +5082,8 @@ async function runExpertLoop(
             send({ type: "delta", content: derivedText });
             finalText += derivedText;
             if (!firstAssistantText) firstAssistantText = derivedText;
-            derivedSelectionReasoningEvidence = derivedText;
+            derivedSelectionReasoningEvidence = pendingDerivedSelectionMeasurementEvidence || derivedText;
+            pendingDerivedSelectionMeasurementEvidence = "";
             steps.push({
               step: "v3_assistant_text",
               ms: now(),
@@ -5204,6 +5213,39 @@ async function runExpertLoop(
       // Execute tools sequentially (parallel possible but keep simple).
       for (const tc of resp.toolCalls) {
         const toolStart = Date.now();
+
+        // Category-neutral cardinality contract: preserve the model's chosen
+        // IDs, then fill from the same materialized search pool. The expanded
+        // set still passes every ordinary render guard below, so quantity can
+        // never weaken price, compatibility or product-fit requirements.
+        if (tc.name === "render_products" && resultCardinality.target > 1 && freshSearch) {
+          const exactPool = freshSearch.mode === "by_article" || freshSearch.mode === "by_pagetitle";
+          if (!exactPool) {
+            const selectedIds = Array.isArray(tc.args.product_ids)
+              ? (tc.args.product_ids as unknown[]).map(String)
+              : [];
+            const candidateWindow = resultCardinalityCandidateWindow(resultCardinality);
+            const expandedIds = expandResultCandidateIds(selectedIds, freshSearch.ids, candidateWindow);
+            if (
+              expandedIds.length !== selectedIds.length ||
+              expandedIds.some((id, index) => id !== selectedIds[index])
+            ) {
+              tc.args = { ...tc.args, product_ids: expandedIds };
+              steps.push({
+                step: "v3_result_cardinality_pool_normalized",
+                ms: now(),
+                meta: {
+                  mode: resultCardinality.mode,
+                  target: resultCardinality.target,
+                  candidate_window: candidateWindow,
+                  before: selectedIds.length,
+                  after: expandedIds.length,
+                  search_pool: freshSearch.ids.length,
+                },
+              });
+            }
+          }
+        }
 
         const correctiveDiscovery = tc.name === "discover_category" && shouldAllowCorrectiveDiscovery({
           phase: agentPhase,
@@ -6247,9 +6289,18 @@ async function runExpertLoop(
             ? projectModelOnlySelectionTargetExtension(
               priorActiveSelectionTarget,
               target,
-              `${userMessage}\n${initialSelectionDiscoveryNoun ?? ""}\n${initialReasoningDeclaration}`,
+              // Prose may recommend an optional subtype and then repeat it in
+              // product_class. Only customer wording or an already frozen
+              // mandatory criterion may keep that extension binding.
+              userMessage,
               liveTaxonomyDeclaration,
-              renderRawCriteria,
+              [
+                ...renderRawCriteria,
+                ...userBackedSearchCriteria,
+                ...enforcedSearchCriteria,
+                ...reasoningProjectedSearchCriteria,
+              ],
+              lastDiscover?.resolved_from ?? "",
             )
             : null;
           const criterionBackedTargetExtensionDeclared = Boolean(
@@ -6280,6 +6331,29 @@ async function runExpertLoop(
           let products = ids
             .map((id) => ctx.cache.get(id))
             .filter((product): product is ProductFull => Boolean(product));
+          if (products.length > 0 && derivedExcludedClassificationCriteria.length > 0) {
+            const eligibleProducts = filterProductsByExcludedCriteria(
+              products,
+              derivedExcludedClassificationCriteria,
+            );
+            const eligibleIds = new Set(eligibleProducts.map(({ id }) => id));
+            const filteredIds = ids.filter((id) => eligibleIds.has(id));
+            if (filteredIds.length !== ids.length) {
+              steps.push({
+                step: "v3_render_declared_classification_exclusion_gate",
+                ms: now(),
+                meta: {
+                  before: ids.length,
+                  after: filteredIds.length,
+                  excluded_criteria: derivedExcludedClassificationCriteria,
+                },
+              });
+              ids = filteredIds;
+              products = eligibleProducts;
+              (tc.args as Record<string, unknown>).product_ids = filteredIds;
+            }
+          }
+          let liveCategoryGroundedForRender = false;
           if (
             intentMode === "select" &&
             !replacementIntent &&
@@ -6300,6 +6374,7 @@ async function runExpertLoop(
                 lastDiscover.category.pagetitle,
                 categoryEvidence,
               );
+              liveCategoryGroundedForRender = groundedProducts.length > 0;
               const groundedIds = new Set(groundedProducts.map((product) => product.id));
               const filteredIds = ids.filter((id) => groundedIds.has(id));
               if (filteredIds.length !== ids.length) {
@@ -6370,6 +6445,7 @@ async function runExpertLoop(
                 {
                   replacement: replacementIntent,
                   exact_named_entity_grounded: Boolean(seriesGroundingSatisfied && namedSeriesToken),
+                  live_category_grounded: liveCategoryGroundedForRender,
                 },
               )
             ) {
@@ -7186,6 +7262,9 @@ async function runExpertLoop(
                   });
                   for (const attempt of recoveryPlan) {
                     const attempted = await runTool("search_catalog", attempt.args, ctx);
+                    const evidenceSafeResults = attempted.ok && attempted.tool === "search_catalog"
+                      ? filterSelectionRecoveryPool(attempted.results, attempt)
+                      : [];
                     steps.push({
                       step: "v3_criteria_selection_search_recovery_attempt",
                       ms: now(),
@@ -7194,11 +7273,18 @@ async function runExpertLoop(
                         relaxed_inputs: attempt.relaxed_inputs,
                         revalidate: attempt.revalidate,
                         found: attempted.ok && attempted.tool === "search_catalog" ? attempted.results.length : 0,
+                        evidence_safe: evidenceSafeResults.length,
                         total: attempted.ok && attempted.tool === "search_catalog" ? attempted.total : 0,
                       },
                     });
-                    if (attempted.ok && attempted.tool === "search_catalog" && attempted.results.length > 0) {
-                      recovered = attempted;
+                    if (attempted.ok && attempted.tool === "search_catalog" && evidenceSafeResults.length > 0) {
+                      recovered = {
+                        ...attempted,
+                        results: evidenceSafeResults,
+                        total: attempt.evidence_required_criteria.length > 0
+                          ? evidenceSafeResults.length
+                          : attempted.total,
+                      };
                       recoverySearchArgs = attempt.args;
                       selectedRecoveryAttempt = attempt;
                       break;
@@ -7462,7 +7548,38 @@ async function runExpertLoop(
               },
             });
           }
+          // All ordinary eligibility gates above inspect the wider candidate
+          // window. Only now do we cap the proven survivors to the requested
+          // number, so rejected early candidates can be backfilled by later
+          // valid products from the same fresh catalog pool.
+          const beforeFinalCardinalityCap = Array.isArray(tc.args.product_ids)
+            ? (tc.args.product_ids as unknown[]).map(String)
+            : [];
+          const afterFinalCardinalityCap = capResultCandidateIds(
+            beforeFinalCardinalityCap,
+            resultCardinality,
+          );
+          if (afterFinalCardinalityCap.length !== beforeFinalCardinalityCap.length) {
+            (tc.args as Record<string, unknown>).product_ids = afterFinalCardinalityCap;
+            steps.push({
+              step: "v3_result_cardinality_final_cap",
+              ms: now(),
+              meta: {
+                mode: resultCardinality.mode,
+                target: resultCardinality.target,
+                before: beforeFinalCardinalityCap.length,
+                after: afterFinalCardinalityCap.length,
+              },
+            });
+          }
           activeSelectionContractComplete = gateShortCircuit === null;
+
+          const finalCardinalityIds = Array.isArray(tc.args.product_ids)
+            ? (tc.args.product_ids as unknown[]).map(String)
+            : [];
+          if (gateShortCircuit === null) {
+            announceResultCardinalityShortfall(finalCardinalityIds.length, "model_render");
+          }
         }
 
         if (tc.name === "search_catalog" && namedSeriesToken && !seriesGroundingSatisfied) {
@@ -7513,6 +7630,63 @@ async function runExpertLoop(
               category: lastDiscover.category.pagetitle,
               category_in: exactLeaves,
             };
+          }
+        }
+
+        if (
+          tc.name === "search_catalog" &&
+          lastDiscover &&
+          !replacementIntent &&
+          !namedSeriesToken &&
+          !requiredCatalogAlias &&
+          !declaredAliasQuery &&
+          !explicitCompoundMarking &&
+          !semanticCompoundEvidenceRequired &&
+          directProductLookup.articles.length === 0 &&
+          directProductLookup.modelCodes.length === 0
+        ) {
+          const scopedClassQuery = scopeGroundedClassQueryToLiveLeaves(
+            tc.args,
+            lastDiscover,
+            activeSelectionTarget,
+            [
+              userMessage,
+              initialSelectionDiscoveryNoun ?? "",
+              firstAssistantText,
+              assistantReasoning,
+              resp.text,
+              activeSelectionTarget ?? "",
+            ].join("\n"),
+          );
+          if (scopedClassQuery.changed) {
+            tc.args = scopedClassQuery.args;
+            steps.push({
+              step: "v3_grounded_class_query_scoped_to_live_category",
+              ms: now(),
+              meta: {
+                query: tc.args.query,
+                target: activeSelectionTarget,
+                categories: scopedClassQuery.categories,
+              },
+            });
+          }
+        }
+
+        if (tc.name === "search_catalog") {
+          const beforeCapacity = Number(tc.args.per_page) || 0;
+          tc.args = ensureSearchCapacity(tc.args, resultCardinality);
+          const afterCapacity = Number(tc.args.per_page) || 0;
+          if (afterCapacity !== beforeCapacity) {
+            steps.push({
+              step: "v3_result_cardinality_search_capacity",
+              ms: now(),
+              meta: {
+                mode: resultCardinality.mode,
+                target: resultCardinality.target,
+                before: beforeCapacity,
+                after: afterCapacity,
+              },
+            });
           }
         }
 
@@ -7900,6 +8074,9 @@ async function runExpertLoop(
             const recoveredTotal = recovered.ok && recovered.tool === "search_catalog"
               ? recovered.total
               : 0;
+            const evidenceSafeResults = recovered.ok && recovered.tool === "search_catalog"
+              ? filterSelectionRecoveryPool(recovered.results, attempt)
+              : [];
             steps.push({
               step: "v3_selection_search_recovery_attempt",
               ms: now(),
@@ -7912,10 +8089,11 @@ async function runExpertLoop(
                   ? Object.keys(attempt.args.options as Record<string, unknown>)
                   : [],
                 found: recovered.ok && recovered.tool === "search_catalog" ? recovered.results.length : 0,
+                evidence_safe: evidenceSafeResults.length,
                 total: recoveredTotal,
               },
             });
-            if (recovered.ok && recovered.tool === "search_catalog" && recovered.results.length > 0) {
+            if (recovered.ok && recovered.tool === "search_catalog" && evidenceSafeResults.length > 0) {
               for (const key of Object.keys(runArgs)) delete runArgs[key];
               Object.assign(runArgs, attempt.args);
               selectedSearchRecoveryAttempt = attempt;
@@ -7927,7 +8105,21 @@ async function runExpertLoop(
                 enforcedSearchCriteria = userBackedSearchCriteria.map((criterion) => ({ ...criterion }));
                 reasoningProjectedSearchCriteria = [];
               }
-              result = recovered;
+              result = {
+                ...recovered,
+                results: evidenceSafeResults,
+                // Once a relaxed input needs per-card proof, the upstream
+                // total no longer describes the eligible result set.
+                total: attempt.evidence_required_criteria.length > 0
+                  ? evidenceSafeResults.length
+                  : recovered.total,
+                warnings: [
+                  ...(recovered.warnings ?? []),
+                  ...(attempt.evidence_required_criteria.length > 0
+                    ? [`recovery_evidence_filtered:${evidenceSafeResults.length}/${recovered.results.length}`]
+                    : []),
+                ],
+              };
               break;
             }
           }
@@ -8794,7 +8986,12 @@ async function runExpertLoop(
               ? matchedQuery
               : (typeof r2.source_query === "string" && r2.source_query ? r2.source_query : typeof tc.args.query === "string" ? tc.args.query : "");
             semanticEvidenceSeen ??= { label: sourceLabel, total: r2.total };
-            freshSearch = { tool: tc.name, ids, total: r2.total };
+            freshSearch = {
+              tool: tc.name,
+              ids,
+              total: r2.total,
+              mode: typeof runArgs.mode === "string" ? runArgs.mode : undefined,
+            };
             if (tc.name === "jargon_recover_catalog" && r2.partial_match && matchedQuery) {
               const baseProducts = ids
                 .map((id) => ctx.cache.get(id))
@@ -8843,6 +9040,7 @@ async function runExpertLoop(
                 (userBackedSearchCriteria.length > 0 ? 1 : 0);
               if (
                 visibleSemanticIds.length > 0 &&
+                Boolean(sourceLabel.trim()) &&
                 (!semanticBackedSearch || candidateEvidenceStrength > semanticBackedSearch.evidenceStrength)
               ) {
                 const replacedWeakerPool = Boolean(semanticBackedSearch);
@@ -8890,7 +9088,13 @@ async function runExpertLoop(
               ? Object.keys(runArgs.options as Record<string, unknown>).length
               : 0;
             const provenSearchCriteria = resolveSelectionSearchEvidence(
-              enforcedSearchCriteria,
+              // A post-filter-only criterion did not shape this catalog
+              // request, so the resulting pool cannot inherit it as proven
+              // evidence. It remains mandatory in latestRenderCriteria and
+              // is checked against every materialized card before rendering.
+              enforcedSearchCriteria.filter((criterion) =>
+                !isPostFilterOnlyReasoningCriterion(criterion)
+              ),
               selectedSearchRecoveryAttempt,
             );
             if (tc.name === "search_catalog" && optionCount > 0 && provenSearchCriteria.length > 0) {
@@ -9725,7 +9929,7 @@ async function runExpertLoop(
           }
         }
       }
-      safeIds = guardFinalRenderIds(safeIds).slice(0, 10);
+      safeIds = finalizeTerminalRenderIds(safeIds);
       if (
         safeIds.length > 0 &&
         compatibilityPool.ok &&
@@ -9958,12 +10162,12 @@ async function runExpertLoop(
         );
         if (rankedNearIds.length > 0) safeIds = rankedNearIds;
       }
-      safeIds = guardFinalRenderIds(safeIds);
       safeIds = filterProductIdsByBudgetCap(
-        safeIds,
+        guardFinalRenderIds(safeIds),
         ctx.cache,
         extractBudgetCap(userMessage),
-      ).ids.slice(0, 4);
+      ).ids;
+      safeIds = capResultCandidateIds(safeIds, resultCardinality);
       if (safeIds.length > 0) {
         const rendered = executeRenderProducts(
           { product_ids: safeIds, total_available: poolTotal },
@@ -10033,6 +10237,9 @@ async function runExpertLoop(
           });
           for (const attempt of recoveryPlan) {
             const attempted = await runTool("search_catalog", attempt.args, ctx);
+            const evidenceSafeResults = attempted.ok && attempted.tool === "search_catalog"
+              ? filterSelectionRecoveryPool(attempted.results, attempt)
+              : [];
             steps.push({
               step: "v3_terminal_selection_search_recovery_attempt",
               ms: now(),
@@ -10041,10 +10248,17 @@ async function runExpertLoop(
                 relaxed_inputs: attempt.relaxed_inputs,
                 revalidate: attempt.revalidate,
                 found: attempted.ok && attempted.tool === "search_catalog" ? attempted.results.length : 0,
+                evidence_safe: evidenceSafeResults.length,
               },
             });
-            if (attempted.ok && attempted.tool === "search_catalog" && attempted.results.length > 0) {
-              recovered = attempted;
+            if (attempted.ok && attempted.tool === "search_catalog" && evidenceSafeResults.length > 0) {
+              recovered = {
+                ...attempted,
+                results: evidenceSafeResults,
+                total: attempt.evidence_required_criteria.length > 0
+                  ? evidenceSafeResults.length
+                  : attempted.total,
+              };
               selectedRecoveryAttempt = attempt;
               break;
             }
@@ -10121,7 +10335,7 @@ async function runExpertLoop(
             }
           }
           safeIds = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage)).ids;
-          safeIds = guardFinalRenderIds(safeIds).slice(0, 10);
+          safeIds = finalizeTerminalRenderIds(safeIds);
           send({
             type: "tool_event",
             tool: "search_catalog",
@@ -10129,6 +10343,7 @@ async function runExpertLoop(
             summary: `Итоговая перепроверка: подтверждено ${safeIds.length}`,
           });
           if (safeIds.length > 0) {
+            announceResultCardinalityShortfall(safeIds.length, "measured_terminal_recovery");
             const rescued = await runTool("render_products", {
               product_ids: safeIds,
               criteria: terminalCriteria,
@@ -10193,11 +10408,12 @@ async function runExpertLoop(
             if (seen.has(product.id) || !targetIds.has(product.id) || !criteriaReport.passed_ids.includes(product.id)) continue;
             seen.add(product.id);
             recoveredIds.push(product.id);
-            if (recoveredIds.length >= 5) break;
+            if (recoveredIds.length >= resultCardinality.target) break;
           }
-          if (recoveredIds.length >= 5) break;
+          if (recoveredIds.length >= resultCardinality.target) break;
         }
-        const budgetSafeIds = guardFinalRenderIds( filterProductIdsByBudgetCap(recoveredIds, ctx.cache, extractBudgetCap(userMessage)).ids,
+        const budgetSafeIds = finalizeTerminalRenderIds(
+          filterProductIdsByBudgetCap(recoveredIds, ctx.cache, extractBudgetCap(userMessage)).ids,
         );
         send({
           type: "tool_event",
@@ -10206,6 +10422,7 @@ async function runExpertLoop(
           summary: `Сверка по выбранному типу: подтверждено ${budgetSafeIds.length}`,
         });
         if (budgetSafeIds.length > 0) {
+          announceResultCardinalityShortfall(budgetSafeIds.length, "reasoning_query_terminal_recovery");
           const rescued = await runTool("render_products", {
             product_ids: budgetSafeIds,
             criteria: terminalCriteria,
@@ -10310,7 +10527,7 @@ async function runExpertLoop(
       safeIds = guardVisibleCardinality(safeIds).ids;
       const budgetGuard = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage));
       safeIds = budgetGuard.ids;
-      safeIds = guardFinalRenderIds(safeIds);
+      safeIds = finalizeTerminalRenderIds(safeIds);
       if (budgetGuard.dropped > 0) {
         steps.push({
           step: "v3_guard_budget_cap_recovery",
@@ -10319,14 +10536,15 @@ async function runExpertLoop(
         });
       }
       if (safeIds.length > 0) {
+        announceResultCardinalityShortfall(safeIds.length, "reasoning_backed_terminal_recovery");
         const rescued = await runTool("render_products", {
-          product_ids: safeIds.slice(0, 5),
+          product_ids: safeIds,
           criteria: adjusted.criteria,
           total_available: reasoningBackedSearch.total,
         }, ctx);
         if (rescued.ok) {
           const rendered = rescued as { markdown: string; rendered_count: number; };
-          for (const id of safeIds.slice(0, 5)) shownIds.add(id);
+          for (const id of safeIds) shownIds.add(id);
           ensureVisibleTerminalSelectionCaption(adjusted.criteria, "v3_semantic_render_recovery");
           send({
             type: "products_block",
@@ -10506,7 +10724,7 @@ async function runExpertLoop(
       safeIds = safeIds.filter((id) => groundedIds.has(id) && targetReport.passed_ids.includes(id));
       const budgetGuard = filterProductIdsByBudgetCap(safeIds, ctx.cache, extractBudgetCap(userMessage));
       safeIds = budgetGuard.ids;
-      safeIds = guardFinalRenderIds(safeIds);
+      safeIds = finalizeTerminalRenderIds(safeIds);
       if (budgetGuard.dropped > 0) {
         steps.push({
           step: "v3_guard_budget_cap_recovery",
@@ -10515,14 +10733,15 @@ async function runExpertLoop(
         });
       }
       if (safeIds.length > 0) {
+        announceResultCardinalityShortfall(safeIds.length, "semantic_terminal_recovery");
         const rescued = await runTool("render_products", {
-          product_ids: safeIds.slice(0, 5),
+          product_ids: safeIds,
           criteria: adjusted.criteria,
           total_available: semanticBackedSearch.total,
         }, ctx);
         if (rescued.ok) {
           const rendered = rescued as { markdown: string; rendered_count: number; };
-          for (const id of safeIds.slice(0, 5)) shownIds.add(id);
+          for (const id of safeIds) shownIds.add(id);
           send({
             type: "products_block",
             markdown: rendered.markdown,
@@ -10618,9 +10837,11 @@ async function runExpertLoop(
             groundedProducts,
           );
           let targetIds = new Set(targetReport.passed_ids);
+          const criteriaReport = applyCriteriaGate(groundedProducts, terminalSelectionCriteria);
+          let criteriaIds = new Set(criteriaReport.passed_ids);
           const candidateIds = groundedProducts
             .map((product) => product.id)
-            .filter((id) => targetIds.has(id));
+            .filter((id) => targetIds.has(id) && criteriaIds.has(id));
           let recoveredCandidateCount = recovered.results.length;
           let diagnosticCandidateIds = candidateIds;
           let safeIds = guardFinalRenderIds(candidateIds);
@@ -10628,7 +10849,8 @@ async function runExpertLoop(
             safeIds,
             ctx.cache,
             extractBudgetCap(userMessage),
-          ).ids.slice(0, 10);
+          ).ids;
+          safeIds = capResultCandidateIds(safeIds, resultCardinality);
 
           // `category=` is exact-leaf-only in the catalog API. A non-empty leaf
           // still is not a successful recovery when no card satisfies the
@@ -10667,16 +10889,23 @@ async function runExpertLoop(
                 queryGroundedProducts,
               );
               const queryTargetIds = new Set(queryTargetReport.passed_ids);
+              const queryCriteriaReport = applyCriteriaGate(
+                queryGroundedProducts,
+                terminalSelectionCriteria,
+              );
+              const queryCriteriaIds = new Set(queryCriteriaReport.passed_ids);
               const queryCandidateIds = queryGroundedProducts
                 .map((product) => product.id)
-                .filter((id) => queryTargetIds.has(id));
+                .filter((id) => queryTargetIds.has(id) && queryCriteriaIds.has(id));
               let querySafeIds = guardFinalRenderIds(queryCandidateIds);
               querySafeIds = filterProductIdsByBudgetCap(
                 querySafeIds,
                 ctx.cache,
                 extractBudgetCap(userMessage),
-              ).ids.slice(0, 10);
+              ).ids;
+              querySafeIds = capResultCandidateIds(querySafeIds, resultCardinality);
               targetIds = queryTargetIds;
+              criteriaIds = queryCriteriaIds;
               diagnosticCandidateIds = queryCandidateIds;
               safeIds = querySafeIds;
               if (!shouldContinueVisibleRecoveryPage({
@@ -10708,7 +10937,7 @@ async function runExpertLoop(
           if (safeIds.length > 0) {
             const rendered = await runTool("render_products", {
               product_ids: safeIds,
-              criteria: [],
+              criteria: terminalSelectionCriteria,
               total_available: recovered.total,
             }, ctx);
             if (rendered.ok && rendered.tool === "render_products") {
@@ -10726,6 +10955,7 @@ async function runExpertLoop(
                 meta: {
                   category_candidates: recovered.results.length,
                   target_candidates: targetIds.size,
+                  criteria_candidates: criteriaIds.size,
                   rendered: rendered.rendered_count,
                   requirements: visibleContract.map((requirement) => ({
                     kind: requirement.kind,
@@ -11143,7 +11373,6 @@ Deno.serve(async (req) => {
       }
 
         const outdoorPoeIntent = classifyOutdoorPoeIntent(userMessage, effectiveHistory);
-        const householdMotionLightRequest = classifyHouseholdMotionLightRequest(userMessage);
         const exactCompoundMarkingRequest = classifyExactCompoundMarkingRequest(userMessage);
         const explicitCompoundMarking = extractExplicitCompoundMarking(userMessage);
         const semanticCompoundMarking = explicitCompoundMarking && requiresSemanticCompoundEvidence(userMessage)
@@ -11314,26 +11543,6 @@ Deno.serve(async (req) => {
             send,
             steps,
             t0,
-          );
-          productsCount = selectedProducts.length;
-          await persistRecentProductEvidence(supabase, effectiveSessionId, selectedProducts);
-        } else if (householdMotionLightRequest) {
-          send({
-            type: "delta",
-            content: householdMotionLightRequest.householdRequired
-              ? householdMotionLightRequest.surfaceMountedRequired
-                ? HOUSEHOLD_MOTION_LIGHT_INTRO
-                : HOUSEHOLD_MOTION_LIGHT_GENERIC_INTRO
-              : MOTION_LIGHT_GENERIC_INTRO,
-          });
-          const selectedProducts = await selectVerifiedHouseholdMotionLights(
-            ctx,
-            send,
-            steps,
-            t0,
-            householdMotionLightRequest.maxPrice,
-            householdMotionLightRequest.surfaceMountedRequired,
-            householdMotionLightRequest.householdRequired,
           );
           productsCount = selectedProducts.length;
           await persistRecentProductEvidence(supabase, effectiveSessionId, selectedProducts);

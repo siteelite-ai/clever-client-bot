@@ -10,7 +10,8 @@
         {
           "message": "предложи аналоги на Светильник DN027B G2 LED6/NW 7W 220-240V D90 R; 929002070102/871869967897500",
           "expect": {
-            "min_products": 1,
+            "min_products": 3,
+            "max_products": 5,
             "forbid_text": ["свежих карточек", "search_catalog", "discover_category", "render_products"],
             "forbid_product_title": ["DN027B"]
           }
@@ -25,7 +26,8 @@
         {
           "message": "хочу поменять дома люстру в зале 30 квадратов. Что предложишь из современного?",
           "expect": {
-            "min_products": 1,
+            "min_products": 3,
+            "max_products": 5,
             "forbid_text": ["свежих карточек", "И ещё", "search_catalog", "render_products"]
           }
         },
@@ -357,12 +359,16 @@
       "repeat": 3,
       "turns": [
         {
-          "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000 тенге",
+          "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000 тенге. Дай несколько подходящих вариантов",
           "expect": {
-            "min_products": 1,
+            "min_products": 3,
+            "max_products": 5,
             "max_product_price": 4000,
-            "require_every_product_title_any": ["датчик", "сенсор", "HALL"],
-            "forbid_every_product_title_any": ["для ЖКХ", "ДПП", "уличный", "промышленный"],
+            "require_selection_criteria_groups": [
+              ["С датчиком движения"],
+              ["\"value\":\"да\""]
+            ],
+            "forbid_every_product_title_any": ["ДПП", "уличный", "промышленный"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
           }
         }
@@ -376,7 +382,8 @@
         {
           "message": "мне нужен светильник с датчиком движения с ценой не более 4000 тенге",
           "expect": {
-            "min_products": 1,
+            "min_products": 3,
+            "max_products": 5,
             "max_product_price": 4000,
             "require_every_product_title_any": ["датч", "сенсор", "SNR"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
@@ -392,7 +399,8 @@
         {
           "message": "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?",
           "expect": {
-            "min_products": 1,
+            "min_products": 3,
+            "max_products": 5,
             "require_every_product_title_any": ["светильник", "панель", "люстра"],
             "require_every_product_measurement": {
               "units": ["Вт", "W", "ватт"],
@@ -413,7 +421,8 @@
         {
           "message": "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома",
           "expect": {
-            "min_products": 1,
+            "min_products": 3,
+            "max_products": 5,
             "require_every_product_title_any": ["прожектор"],
             "deprioritized_warehouses": ["Иргели", "Чинт Астана"],
             "forbid_text": ["search_catalog", "discover_category", "render_products"]
@@ -429,7 +438,8 @@
         {
           "message": "подбери термоусадочную трубку для кабеля диаметром 12 мм",
           "expect": {
-            "min_products": 2,
+            "min_products": 3,
+            "max_products": 5,
             "require_every_product_pair_around": 12,
             "require_selection_criteria_groups": [
               ["\"op\":\"min\""],
@@ -451,7 +461,8 @@
         {
           "message": "подбери трубку ТТУ на кабель диаметром 10 мм",
           "expect": {
-            "min_products": 1,
+            "min_products": 3,
+            "max_products": 5,
             "require_every_product_pair_around": 10,
             "require_selection_criteria_groups": [
               ["\"op\":\"min\""],
@@ -481,7 +492,8 @@
           "message": "двойные электрические розетки",
           "expect": {
             "conversation_boundary": "continuation",
-            "min_products": 1,
+            "min_products": 3,
+            "max_products": 5,
             "require_every_product_title_groups": [
               ["Gallant", "Галант"],
               ["розет"],
@@ -504,7 +516,8 @@
         {
           "message": "Найди двойные черные розетки электрические",
           "expect": {
-            "min_products": 1,
+            "min_products": 3,
+            "max_products": 5,
             "require_every_product_title_groups": [
               ["розет"],
               ["черн", "графит"]
@@ -528,7 +541,8 @@
         {
           "message": "Покажи все автоматические выключатели Schneider на 16 ампер, на 3 полюса",
           "expect": {
-            "min_products": 1,
+            "min_products": 3,
+            "max_products": 8,
             "require_every_product_card_groups": [
               ["Schneider"],
               ["16A", "16 A", "16А", "16 А"],

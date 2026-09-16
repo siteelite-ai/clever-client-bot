@@ -461,21 +461,47 @@ export function projectModelOnlySelectionTargetExtension(
   initialEvidence: string,
   liveClass: string,
   criteria: Criterion[],
+  resolvedFrom = "",
 ): string | null {
   const groundedLiveBase = bootstrapSelectionTargetFromTaxonomy(initialEvidence, liveClass);
   const base = groundedLiveBase ?? String(currentTarget ?? "").trim();
   const declared = String(declaredTarget ?? "").trim();
   if (!base || !declared || !selectionTargetIsDeclared(base, declared)) return null;
-  if (selectionTargetDeclarationIsGrounded(declared, initialEvidence, liveClass)) return null;
 
   const baseTokens = new Set(meaningfulTokens(base));
   const extraTokens = meaningfulTokens(declared).filter((token) => !baseTokens.has(token));
   if (extraTokens.length === 0) return null;
-  const declaredEvidence = new Set(meaningfulTokens(initialEvidence));
   const mandatoryEvidence = new Set((Array.isArray(criteria) ? criteria : [])
     .filter((criterion) => criterion?.key && (criterion.level ?? "A") === "A")
     .flatMap((criterion) => meaningfulTokens(`${criterion.key} ${String(criterion.value ?? "")}`)));
-  if (extraTokens.some((token) => declaredEvidence.has(token) || mandatoryEvidence.has(token))) return null;
+  const discoveryProjectedBase = resolvedFrom
+    ? bootstrapSelectionTargetFromDiscovery(initialEvidence, resolvedFrom, liveClass)
+    : null;
+  const declaredMatchesResolvedQuery = Boolean(
+    discoveryProjectedBase &&
+    selectionTargetIsDeclared(discoveryProjectedBase, base) &&
+    selectionTargetIsDeclared(base, discoveryProjectedBase) &&
+    selectionTargetIsDeclared(declared, resolvedFrom) &&
+    selectionTargetIsDeclared(resolvedFrom, declared),
+  );
+  if (
+    declaredMatchesResolvedQuery &&
+    extraTokens.every((token) => !mandatoryEvidence.has(token))
+  ) return base;
+
+  if (selectionTargetDeclarationIsGrounded(declared, initialEvidence, liveClass)) return null;
+
+  const declaredEvidence = new Set(meaningfulTokens(initialEvidence));
+  const inventedExtras = extraTokens.filter((token) =>
+    !declaredEvidence.has(token) && !mandatoryEvidence.has(token)
+  );
+  if (inventedExtras.length === 0) return null;
+  // A mixed extension can contain both a genuine customer modifier and a
+  // model-only adjective. Falling back to the base is safe only when every
+  // genuine modifier is already represented by the mandatory criteria gate;
+  // that gate keeps it binding after the invented adjective is discarded.
+  const groundedExtras = extraTokens.filter((token) => declaredEvidence.has(token));
+  if (groundedExtras.some((token) => !mandatoryEvidence.has(token))) return null;
   return base;
 }
 
@@ -910,11 +936,16 @@ export function selectionTargetMayUseGroundedBase(
   baseTarget: string,
   extendedTarget: string,
   criteria: Criterion[],
-  options: { replacement: boolean; exact_named_entity_grounded: boolean },
+  options: {
+    replacement: boolean;
+    exact_named_entity_grounded: boolean;
+    live_category_grounded?: boolean;
+  },
 ): boolean {
   if (!selectionTargetIsDeclared(baseTarget, extendedTarget)) return false;
   return options.replacement ||
     options.exact_named_entity_grounded ||
+    options.live_category_grounded ||
     selectionTargetExtensionIsCriterionBacked(baseTarget, extendedTarget, criteria);
 }
 

@@ -7,6 +7,7 @@ import {
   buildCriteriaQuery,
   checkCriterion,
   extendSelectionCriteriaPlan,
+  filterProductsByExcludedCriteria,
   filterProductIdsByBudgetCap,
   findTrait,
   mergeFacetOptionConstraints,
@@ -29,6 +30,23 @@ import type { ProductRef } from "./types.ts";
 function product(id: string, traits: string[]): ProductRef {
   return { id, pagetitle: `P-${id}`, vendor: null, price: 100, stock: "unknown", short_traits: traits };
 }
+
+Deno.test("declared exclusions remove only positively proven incompatible values", () => {
+  const products = [
+    product("compatible", ["Класс применения: внутреннее исполнение"]),
+    product("incompatible", ["Класс применения: наружное исполнение"]),
+    product("unknown", ["Материал: композит"]),
+  ];
+  assertEquals(
+    filterProductsByExcludedCriteria(products, [{
+      key: "Класс применения",
+      op: "eq",
+      value: "наружное исполнение",
+      level: "A",
+    }]).map(({ id }) => id),
+    ["compatible", "unknown"],
+  );
+});
 
 Deno.test("render criteria: named entity browse keeps only user-backed filters", () => {
   const inferred = [{ key: "Тип", op: "eq", value: "ошибочный", level: "A" }] as Criterion[];
@@ -361,10 +379,21 @@ Deno.test("checkCriterion: affirmative boolean feature is proven by catalog desc
 Deno.test("checkCriterion: affirmative boolean remains unknown without feature evidence", () => {
   const p = {
     ...product("1", []),
-    description_excerpt: "Обычный потолочный светильник для сухих помещений.",
+    description_excerpt: "Обычный товар продаётся в магазине и подходит для сухих помещений.",
   };
   assertEquals(
     checkCriterion(p, { key: "С датчиком движения", op: "eq", value: "да", level: "A" }).verdict,
+    "unknown",
+  );
+});
+
+Deno.test("checkCriterion: an omitted negative boolean is not proven by unrelated prose", () => {
+  const p = {
+    ...product("1", []),
+    description_excerpt: "Интернет-магазин предлагает стандартную модель.",
+  };
+  assertEquals(
+    checkCriterion(p, { key: "Диммирование", op: "eq", value: "нет", level: "A" }).verdict,
     "unknown",
   );
 });

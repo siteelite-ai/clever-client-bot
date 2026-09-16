@@ -685,6 +685,10 @@ function isAffirmativeValue(value: string): boolean {
   return ["да", "есть", "имеется", "присутствует", "yes", "true"].includes(normalizeKey(value));
 }
 
+function isNegativeBooleanValue(value: string): boolean {
+  return ["нет", "отсутствует", "no", "false"].includes(normalizeKey(value));
+}
+
 function expectedLabel(c: Criterion): string {
   const unit = c.unit ? ` ${c.unit}` : "";
   if (c.op === "range" && Array.isArray(c.value)) return `${c.value[0]}–${c.value[1]}${unit}`;
@@ -718,8 +722,16 @@ export function checkCriterion(product: ProductRef, c: Criterion): CriterionChec
       // For an affirmative value, the criterion key carries the feature name
       // (e.g. "С датчиком движения"); require that full key to be evidenced
       // instead of looking for the uninformative word "да".
-      if (isAffirmativeValue(c.value) && stringEvidenceMatches(c.key, evidence)) {
-        return { key: c.key, verdict: "pass", expected, actual: c.key };
+      if (isAffirmativeValue(c.value)) {
+        return stringEvidenceMatches(c.key, evidence)
+          ? { key: c.key, verdict: "pass", expected, actual: c.key }
+          : { key: c.key, verdict: "unknown", expected, actual: null };
+      }
+      // An omitted negative boolean facet is not evidence of absence. More
+      // importantly, short literals such as Russian "нет" must never match
+      // incidentally inside unrelated catalogue prose.
+      if (isNegativeBooleanValue(c.value)) {
+        return { key: c.key, verdict: "unknown", expected, actual: null };
       }
       if (want && stringEvidenceMatches(want, evidence)) {
         return { key: c.key, verdict: "pass", expected, actual: c.value };
@@ -873,6 +885,25 @@ export function applyCriteriaGate(
     .map((group) => group.key);
 
   return report;
+}
+
+/**
+ * Removes only products that positively prove a model-declared incompatible
+ * equality value. Missing or ambiguous traits stay eligible: an exclusion is
+ * a deny-list, so lack of evidence must not be inverted into a hidden
+ * allow-list. The function is deliberately category-agnostic.
+ */
+export function filterProductsByExcludedCriteria<T extends ProductRef>(
+  products: T[],
+  excludedCriteria: Criterion[],
+): T[] {
+  const active = (Array.isArray(excludedCriteria) ? excludedCriteria : []).filter((criterion) =>
+    criterion?.key && criterion.op === "eq" && (criterion.level ?? "A") === "A"
+  );
+  if (active.length === 0) return products;
+  return products.filter((product) =>
+    !active.some((criterion) => checkCriterion(product, criterion).verdict === "pass")
+  );
 }
 
 /** Compile mandatory criteria into exact values of uniquely matching live
