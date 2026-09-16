@@ -327,7 +327,11 @@ export function extractReplacementLookupKeys(message: string): ReplacementLookup
   const modelCodes = distinct([...separatedModelCodes, ...tokens
     .map((token) => token.replace(/[^a-zа-я0-9-]/giu, ""))
     .filter((token) => token.length >= 4 && /\p{L}/u.test(token) && /\d/u.test(token))
-    .filter((token) => !/^\d+(?:[.,-]\d+)?[a-zа-я]{1,4}$/iu.test(token))
+    // A number followed only by a word is a quantity with a joined unit
+    // (`4000тенге`, `100ватт`, `250вольт`), not a product identifier. Unit
+    // names are deliberately not enumerated here: the structural distinction
+    // works for every category and for new natural-language spellings.
+    .filter((token) => !/^\d+(?:[.,-]\d+)?[a-zа-я]+$/iu.test(token))
   ].sort((left, right) => right.length - left.length));
   return { articles, modelCodes };
 }

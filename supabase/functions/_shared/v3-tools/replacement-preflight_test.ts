@@ -33,6 +33,30 @@ Deno.test("replacement preflight extracts article and source model without measu
   });
 });
 
+Deno.test("joined long-form quantity units never become exact product identifiers", () => {
+  assertEquals(extractReplacementLookupKeys(
+    "мне нужен бытовой светильник с датчиком движения не более 4000тенге, дай несколько вариантов",
+  ), {
+    articles: [],
+    modelCodes: [],
+  });
+  assertEquals(extractReplacementLookupKeys(
+    "подбери устройство мощностью 100ватт на 250вольт до 5000тенге",
+  ), {
+    articles: [],
+    modelCodes: [],
+  });
+});
+
+Deno.test("quantity exclusion preserves complete letter-led product identifiers", () => {
+  assertEquals(extractReplacementLookupKeys(
+    "покажи DN027B и батарейку NBT-CR2025-BP5",
+  ), {
+    articles: [],
+    modelCodes: ["NBT-CR2025-BP5", "DN027B"],
+  });
+});
+
 Deno.test("replacement intent requires a source identifier and survives only a short continuation", () => {
   const history = [
     { role: "user" as const, content: "Подбери аналог Schneider Acti9 C16" },

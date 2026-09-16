@@ -375,6 +375,27 @@
       ]
     },
     {
+      "id": "customer-new-household-motion-joined-currency",
+      "title": "Бюджет без пробела перед валютой не сужает окно кандидатов",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000тенге. Дай несколько подходящих вариантов",
+          "expect": {
+            "min_products": 3,
+            "max_products": 5,
+            "max_product_price": 4000,
+            "require_selection_criteria_groups": [
+              ["С датчиком движения"],
+              ["\"value\":\"да\""]
+            ],
+            "forbid_every_product_title_any": ["ДПП", "уличный", "промышленный"],
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
+    },
+    {
       "id": "customer-new-motion-generic",
       "title": "Обычный запрос светильника с датчиком сохраняет признак датчика",
       "repeat": 3,
