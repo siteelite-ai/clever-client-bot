@@ -695,6 +695,15 @@ export function projectLiteralMeasuredCriteria(
     const contextualFacets = contextualScores
       .filter(({ score }) => score > 0 && score === bestContextScore)
       .map(({ facet }) => facet);
+    const clausePrefix = occurrence >= 0
+      ? customer.slice(Math.max(0, customer.lastIndexOf(".", occurrence) + 1), occurrence)
+      : "";
+    const directProductMeasurement = Boolean(
+      occurrence >= 0 &&
+      !/[²³]/u.test(quantity.unit) &&
+      /(?:^|[^\p{L}])(?:нуж\p{L}*|найд\p{L}*|подбер\p{L}*|покаж\p{L}*|предлож\p{L}*|выбер\p{L}*|ищ\p{L}*|хоч\p{L}*)[^,;.!?]{0,120}\s(?:на|с)\s*$/iu.test(clausePrefix) &&
+      !/(?:^|\s)(?:для|под)\s+[^,;.!?]{0,80}\s(?:на|с)\s*$/iu.test(clausePrefix)
+    );
     // A lone numeric facet with no declared physical unit is not sufficient
     // evidence by itself.  The same scalar can describe an installation,
     // load, room, cable run or product property.  Require either an existing
@@ -710,7 +719,12 @@ export function projectLiteralMeasuredCriteria(
         ?.some((token) => canonicalMeasurementUnit(token) === unit) ?? false;
       return declaredUnit === unit || labelHasUnit;
     });
-    if (!hasSchemaUnitEvidence && hintedFacets.length === 0 && contextualFacets.length === 0) {
+    if (
+      !hasSchemaUnitEvidence &&
+      hintedFacets.length === 0 &&
+      contextualFacets.length === 0 &&
+      !directProductMeasurement
+    ) {
       continue;
     }
     const matchingFacets = hintedFacets.length === 1

@@ -736,9 +736,9 @@ Deno.test("explicit reasoning completes omitted live technical filters but not i
     curve: ["C"],
   });
   assertEquals(result.inferred, [
-    { key: "curve", value: "C" },
     { key: "poles", value: "1" },
     { key: "current", value: "16" },
+    { key: "curve", value: "C" },
   ]);
 });
 
@@ -979,6 +979,47 @@ Deno.test("an explicit unitless number is completed only for its locally named f
   assertEquals(result.args.options, { poles: ["1"] });
   assertEquals(result.user_backed, [{ key: "poles", value: "1" }]);
   assertEquals(result.inferred, [{ key: "poles", value: "1" }]);
+});
+
+Deno.test("one-letter customer code is projected only beside one unique live facet meaning", () => {
+  const result = guardSearchFilters(
+    { mode: "by_filter" },
+    [{
+      key: "curve",
+      caption: "Характеристика срабатывания",
+      values: [{ value: "B" }, { value: "C" }, { value: "D" }],
+    }],
+    "характеристика С, 1 полюс",
+    "характеристика С, 1 полюс",
+    "",
+  );
+  assertEquals(result.args.options, { curve: ["C"] });
+  assertEquals(result.user_backed, [{ key: "curve", value: "C" }]);
+});
+
+Deno.test("lowercase Cyrillic preposition and ambiguous axes cannot become a short code", () => {
+  assertEquals(guardSearchFilters(
+    { mode: "by_filter" },
+    [{
+      key: "curve",
+      caption: "Характеристика срабатывания",
+      values: [{ value: "B" }, { value: "C" }, { value: "D" }],
+    }],
+    "характеристика с задержкой",
+    "характеристика с задержкой",
+    "",
+  ).args.options, undefined);
+
+  assertEquals(guardSearchFilters(
+    { mode: "by_filter" },
+    [
+      { key: "curve_a", caption: "Характеристика A", values: [{ value: "C" }] },
+      { key: "curve_b", caption: "Характеристика B", values: [{ value: "C" }] },
+    ],
+    "характеристика C",
+    "характеристика C",
+    "",
+  ).args.options, undefined);
 });
 
 Deno.test("a measurement noun cannot silently become a categorical shape", () => {

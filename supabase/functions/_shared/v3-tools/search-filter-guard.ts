@@ -609,6 +609,32 @@ function facetMeaningIsEvidenced(
   );
 }
 
+function explicitShortFacetCodeIsLocallyEvidenced(
+  facet: SearchFacet,
+  value: string,
+  evidence: string,
+): boolean {
+  const canonical = visualSingleLetter(value);
+  if (canonical.length !== 1 || !/[a-z]/u.test(canonical)) return false;
+  const rawTokens = String(evidence ?? "").match(/\p{L}+/gu) ?? [];
+  const facetTokens = norm(`${facet.key} ${facet.caption ?? ""}`)
+    .split(" ")
+    .filter((token) => token.length >= 4);
+  if (facetTokens.length === 0) return false;
+  return rawTokens.some((raw, index) => {
+    if (raw.length !== 1 || visualSingleLetter(raw) !== canonical) return false;
+    // A lowercase Cyrillic one-letter word is normally a preposition (`с`),
+    // not a technical curve/code. Latin notation remains valid in either case;
+    // Cyrillic lookalikes must be visibly code-shaped (uppercase).
+    const codeShaped = /[a-z]/u.test(raw) || raw === raw.toLocaleUpperCase("ru-RU");
+    if (!codeShaped) return false;
+    const nearby = rawTokens.slice(Math.max(0, index - 3), index + 4).map(norm);
+    return facetTokens.some((facetToken) => nearby.some((token) =>
+      token === facetToken || tokensMatchByStem(facetToken, token)
+    ));
+  });
+}
+
 function facetMeaningIsFullyEvidenced(
   facet: SearchFacet,
   evidence: string,
@@ -999,6 +1025,10 @@ export function guardSearchFilters(
       if (numericFacetValueConflictsWithUserMeasurement(candidate.value, facet, userEvidence, declaredReasoning)) return false;
       if (!normalized || ["да", "нет", "есть", "отсутствует"].includes(normalized)) return false;
       if (facetValueAppearsOnlyAsMeasurementNoun(candidate.value, userEvidence)) return false;
+      // One-letter values need a unique live-axis proof below. Letting the
+      // generic token matcher handle them would apply the same `C` to every
+      // facet that happened to expose that code.
+      if (/^[a-zа-я]$/u.test(normalized)) return false;
       if (!/[a-zа-я]/iu.test(normalized)) {
         return /^\d+(?:[.,]\d+)?$/u.test(normalized) &&
           numericFacetValueIsLocallyEvidenced(candidate.value, facet, userEvidence) &&
@@ -1048,6 +1078,33 @@ export function guardSearchFilters(
     const item = { key: facet.key, value };
     kept.push(item);
     inferred.push(item);
+  }
+
+  // One-letter technical values are too short for ordinary free-text
+  // projection. Admit them only when the customer writes a code-shaped token
+  // next to the meaning of one unique live facet (`характеристика C`). This
+  // is live-schema driven and a lowercase Cyrillic preposition cannot open it.
+  // Run after reasoning projection so an already selected option keeps its
+  // stable order while gaining customer-owned provenance.
+  const shortCodeMatches = facets.flatMap((facet) => {
+    if (isReplacementIdentityFacet(facet)) return [];
+    return facet.values.flatMap(({ value }) =>
+      explicitShortFacetCodeIsLocallyEvidenced(facet, value, userEvidence)
+        ? [{ key: facet.key, value }]
+        : []
+    );
+  });
+  if (shortCodeMatches.length === 1) {
+    const item = shortCodeMatches[0];
+    const alreadySelected = nextOptions[item.key]?.includes(item.value) ?? false;
+    if (!alreadySelected) {
+      nextOptions[item.key] = [item.value];
+      kept.push(item);
+      inferred.push(item);
+    }
+    if (!userBacked.some((candidate) =>
+      candidate.key === item.key && candidate.value === item.value
+    )) userBacked.push(item);
   }
 
   // A compound canonical value can already encode another explicit filter

@@ -354,6 +354,44 @@ Deno.test("unitless live-фасет выбирается только после
   }]);
 });
 
+Deno.test("direct product measurement can bind one otherwise unitless live facet", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Мне нужен аппарат на 25 А",
+    "Мне нужен аппарат на 25 А",
+    [{
+      key: "rated_current",
+      caption: "Номинальный ток",
+      type: "checkbox",
+      unit: null,
+      values: [{ value: "16" }, { value: "25" }, { value: "32" }],
+    }],
+  );
+  assertEquals(projected.added, [{
+    key: "Номинальный ток",
+    op: "eq",
+    value: "25",
+    unit: "а",
+    level: "A",
+  }]);
+});
+
+Deno.test("application load after for-clause cannot bind a unitless product facet", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Нужен аппарат для нагрузки на 25 А",
+    "Нужен аппарат для нагрузки на 25 А",
+    [{
+      key: "rated_current",
+      caption: "Номинальный ток",
+      type: "checkbox",
+      unit: null,
+      values: [{ value: "16" }, { value: "25" }, { value: "32" }],
+    }],
+  );
+  assertEquals(projected.added, []);
+});
+
 Deno.test("application height cannot become a unitless product facet with the same scalar", () => {
   const projected = projectLiteralMeasuredCriteria(
     [],
