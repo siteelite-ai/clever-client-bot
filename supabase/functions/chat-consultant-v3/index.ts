@@ -255,7 +255,10 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const CATALOG_BASE_URL = Deno.env.get("CATALOG_API_BASE_URL") ?? "https://220volt.kz/api";
-const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY") ?? null;
+const LOVABLE_AGENT_FAILOVER_ENABLED = Deno.env.get("LOVABLE_AGENT_FAILOVER_ENABLED") === "true";
+const LOVABLE_API_KEY = LOVABLE_AGENT_FAILOVER_ENABLED
+  ? Deno.env.get("LOVABLE_API_KEY") ?? null
+  : null;
 const LOVABLE_AGENT_MODEL = Deno.env.get("LOVABLE_AGENT_MODEL") ?? "google/gemini-3-flash-preview";
 
 const MODEL = "deepseek/deepseek-v4-flash"; // MoE 284B/13B-active, 1M ctx, optimized for agent workflows. rollback: "deepseek/deepseek-v4-pro"
