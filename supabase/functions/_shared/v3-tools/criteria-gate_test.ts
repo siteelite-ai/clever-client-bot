@@ -171,6 +171,32 @@ Deno.test("equivalent numeric facet and emission proofs collapse into one public
   );
 });
 
+Deno.test("a unit-only emission proof collapses into a named live facet whose caption carries the unit", () => {
+  assertEquals(
+    mergeUserBackedCriteria([], [{
+      key: "Длина кабеля, м",
+      op: "eq",
+      value: "30",
+      level: "A",
+      evidence: "derived_required",
+    }, {
+      key: "м",
+      op: "eq",
+      value: 30,
+      unit: "м",
+      level: "A",
+      evidence: "user_explicit",
+    }]),
+    [{
+      key: "Длина кабеля, м",
+      op: "eq",
+      value: "30",
+      level: "A",
+      evidence: "derived_required",
+    }],
+  );
+});
+
 Deno.test("equal scalars on independently named axes are not collapsed", () => {
   const criteria = [
     {

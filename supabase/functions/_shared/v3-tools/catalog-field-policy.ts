@@ -23,7 +23,13 @@ export function isAdministrativeCatalogField(
     .replace(/[^a-zа-я0-9]+/giu, " ")
     .replace(/\s+/gu, " ")
     .trim();
-  if (/(?:^|_)(?:fayl|file)(?:_|$)/u.test(key) || /(?:^|\s)(?:файл|file)(?:\s|$)/u.test(caption)) {
+  if (
+    /(?:^|_)(?:(?:video|audio)_?)?(?:fayl(?:y|ov)?|files?)(?:_|$)/u.test(
+      key,
+    ) ||
+    /(?:^|\s)(?:(?:видео|аудио)\s*)?(?:файл(?:ы|ов|ами)?|files?)(?:\s|$)/u
+      .test(caption)
+  ) {
     return true;
   }
   if (

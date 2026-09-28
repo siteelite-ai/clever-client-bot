@@ -168,10 +168,18 @@ export function mergeUserBackedCriteria(
         }
         const knownKey = normalizeKey(known.key);
         const candidateKey = normalizeKey(criterion.key);
-        const knownUnit = canonicalRenderedUnit(String(known.unit ?? ""));
-        const candidateUnit = canonicalRenderedUnit(
-          String(criterion.unit ?? ""),
-        );
+        const criterionUnit = (candidate: Criterion): string => {
+          const explicit = canonicalRenderedUnit(
+            String(candidate.unit ?? ""),
+          );
+          if (explicit) return explicit;
+          const suffix = String(candidate.key ?? "").match(
+            /(?:,|\/|\()\s*([a-zа-я°]{1,8}[²³]?\d?)\)?\s*$/iu,
+          )?.[1] ?? "";
+          return canonicalRenderedUnit(suffix);
+        };
+        const knownUnit = criterionUnit(known);
+        const candidateUnit = criterionUnit(criterion);
         const unitsCompatible = !knownUnit || !candidateUnit ||
           knownUnit === candidateUnit;
         if (!unitsCompatible) return false;

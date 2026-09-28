@@ -128,6 +128,33 @@ Deno.test("filter guard removes a valid but unrequested catalog value", () => {
   assertEquals(result.inferred, [{ key: "kind", value: "Бытовые светильники накладные" }]);
 });
 
+Deno.test("administrative media facets never become customer filters", () => {
+  const live = [{
+    key: "videofayly",
+    caption: "Видеофайлы",
+    values: [{ value: "30" }],
+  }, {
+    key: "length",
+    caption: "Длина кабеля, м",
+    unit: "м",
+    values: [{ value: "30" }],
+  }];
+  const result = guardSearchFilters(
+    {
+      mode: "by_filter",
+      options: { videofayly: ["30"], length: ["30"] },
+    },
+    live,
+    "Длина кабеля — 30 м",
+    "Нужен кабель длиной 30 м",
+  );
+  assertEquals(result.kept, [{ key: "length", value: "30" }]);
+  assertEquals(result.args, {
+    mode: "by_filter",
+    options: { length: ["30"] },
+  });
+});
+
 Deno.test("explicit reasoning is projected onto one exact live facet axis", () => {
   const result = projectExplicitReasoningFacetValues(
     [
@@ -333,7 +360,7 @@ Deno.test("list-like catalog metadata cannot become a product filter", () => {
   );
 
   assertEquals(result.args, { mode: "by_filter" });
-  assertEquals(result.dropped.map((item) => item.reason), ["non_atomic_value"]);
+  assertEquals(result.dropped.map((item) => item.reason), ["unknown_facet"]);
   assertEquals(result.inferred, []);
 });
 

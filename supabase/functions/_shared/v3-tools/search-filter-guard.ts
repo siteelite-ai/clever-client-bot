@@ -17,6 +17,7 @@ import {
   resolveCompactFacetCodeEvidence,
   resolveCompoundFacetValueEvidence,
 } from "./compact-facet-code.ts";
+import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
 
 export interface SearchFacetValue {
   value: string;
@@ -1152,6 +1153,12 @@ export function guardSearchFilters(
       }
       continue;
     }
+    if (isAdministrativeCatalogField(facet)) {
+      for (const value of values) {
+        dropped.push({ key, value, reason: "unknown_facet" });
+      }
+      continue;
+    }
     const canonicalKey = facet.key;
 
     for (const rawValue of values) {
@@ -1239,7 +1246,10 @@ export function guardSearchFilters(
   for (const requirement of explicitVisibleRequirements) {
     if (requirement?.op !== "eq" || requirement.value === undefined) continue;
     const matches = facets.flatMap((facet) => {
-      if (nextOptions[facet.key]?.length || isReplacementIdentityFacet(facet)) return [];
+      if (
+        nextOptions[facet.key]?.length || isReplacementIdentityFacet(facet) ||
+        isAdministrativeCatalogField(facet)
+      ) return [];
       return facet.values.flatMap(({ value }) =>
         isAtomicFacetValue(value) &&
           !numericFacetValueConflictsWithUserMeasurement(value, facet, userEvidence, declaredReasoning) &&
@@ -1263,7 +1273,10 @@ export function guardSearchFilters(
   // cannot activate unrelated booleans because the facet label, not the stored
   // value, must be customer-backed.
   for (const facet of facets) {
-    if (nextOptions[facet.key]?.length || isReplacementIdentityFacet(facet)) continue;
+    if (
+      nextOptions[facet.key]?.length || isReplacementIdentityFacet(facet) ||
+      isAdministrativeCatalogField(facet)
+    ) continue;
     const affirmative = facet.values.filter((candidate) =>
       isAtomicFacetValue(candidate.value) && AFFIRMATIVE_VALUES.has(norm(candidate.value))
     );
@@ -1298,7 +1311,10 @@ export function guardSearchFilters(
     // a broad valid request into a permanently empty catalog intersection.
     // An identity option is still accepted when the model explicitly supplies
     // it and the normal evidence checks above confirm it.
-    if (isReplacementIdentityFacet(facet)) continue;
+    if (
+      isReplacementIdentityFacet(facet) ||
+      isAdministrativeCatalogField(facet)
+    ) continue;
     const evidenced = facet.values.filter((candidate) => {
       const normalized = norm(candidate.value);
       if (!isAtomicFacetValue(candidate.value)) return false;
@@ -1331,7 +1347,11 @@ export function guardSearchFilters(
   // intersection. Keep the richer value and remove only a strictly subsumed
   // option; the richer value remains an enforced render criterion.
   for (const facet of facets) {
-    if (nextOptions [facet.key]?.length || unitConflictKeys.has(facet.key) || isReplacementIdentityFacet(facet)) {
+    if (
+      nextOptions[facet.key]?.length || unitConflictKeys.has(facet.key) ||
+      isReplacementIdentityFacet(facet) ||
+      isAdministrativeCatalogField(facet)
+    ) {
       continue;
     }
     // Missing numeric/options may be completed only from actual consultant
@@ -1377,7 +1397,10 @@ export function guardSearchFilters(
   // Run after reasoning projection so an already selected option keeps its
   // stable order while gaining customer-owned provenance.
   const shortCodeMatches = facets.flatMap((facet) => {
-    if (isReplacementIdentityFacet(facet)) return [];
+    if (
+      isReplacementIdentityFacet(facet) ||
+      isAdministrativeCatalogField(facet)
+    ) return [];
     return facet.values.flatMap(({ value }) =>
       explicitShortFacetCodeIsLocallyEvidenced(facet, value, userEvidence)
         ? [{ key: facet.key, value }]
