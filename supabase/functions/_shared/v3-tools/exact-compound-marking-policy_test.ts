@@ -31,6 +31,7 @@ Deno.test("exact compound route extracts a price-sorted catalog query", () => {
     first: 2,
     second: 1.5,
     priceDirection: "cheapest",
+    exhaustive: false,
   });
   assertEquals(classifyExactCompoundMarkingRequest("Подойдёт ли кабель ВВГ 2×1,5?"), null);
 });
@@ -38,6 +39,19 @@ Deno.test("exact compound route extracts a price-sorted catalog query", () => {
 Deno.test("exact compound shortcut yields semantic multi-attribute requests to the consultant", () => {
   assertEquals(classifyExactCompoundMarkingRequest("какой есть кабель ввг 3*1,5 негорючий покажи все позиции"), null);
   assertEquals(classifyExactCompoundMarkingRequest("нужен медный кабель негорючий 2*1,5"), null);
+});
+
+Deno.test("exact compound route removes command language and preserves exhaustive cardinality", () => {
+  assertEquals(
+    classifyExactCompoundMarkingRequest("какой есть кабель ввг 3*1,5 покажи все позиции"),
+    {
+      query: "кабель ввг 3*1,5",
+      first: 3,
+      second: 1.5,
+      priceDirection: null,
+      exhaustive: true,
+    },
+  );
 });
 
 Deno.test("compound semantic evidence classifier is structural and product-agnostic", () => {
@@ -108,6 +122,14 @@ Deno.test("exact compound route rejects a nearby size and returns the cheapest e
   ], request);
 
   assertEquals(selected.map((item) => item.id), ["exact-cheapest"]);
+});
+
+Deno.test("exhaustive exact compound route keeps up to eight verified products", () => {
+  const request = classifyExactCompoundMarkingRequest("покажи все позиции кабеля ввг 3*1,5")!;
+  const products = Array.from({ length: 10 }, (_value, index) =>
+    product(String(index), `Кабель ВВГ 3*1,5 вариант ${index}`, 100 + index)
+  );
+  assertEquals(selectExactCompoundMarkedProducts(products, request).length, 8);
 });
 
 Deno.test("explicit compound marking is a generic final-render invariant", () => {

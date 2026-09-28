@@ -6,6 +6,7 @@ export interface ExactCompoundMarkingRequest {
   first: number;
   second: number;
   priceDirection: "cheapest" | "expensive" | null;
+  exhaustive: boolean;
 }
 
 export interface ExplicitCompoundMarking {
@@ -304,12 +305,9 @@ export function classifyExactCompoundMarkingRequest(message: string): ExactCompo
       ? "expensive"
       : null;
 
-  const query = input
-    .replace(/[?!]/gu, " ")
-    .replace(/(?:^|[^\p{L}])(?:найд\p{L}*|ищ\p{L}*|покаж\p{L}*|подбер\p{L}*|хоч\p{L}*|нуж\p{L}*|пожалуйста)(?=$|[^\p{L}])/gu, " ")
-    .replace(/(?:^|[^\p{L}])(?:сам\p{L}*|дешев\p{L}*|бюджетн\p{L}*|недорог\p{L}*|дорог\p{L}*|премиум\p{L}*)(?=$|[^\p{L}])/gu, " ")
-    .replace(/\s+/gu, " ")
-    .trim();
+  const sourceQuery = semanticCompoundSourceQuery(input);
+  const literal = `${first}*${String(second).replace(".", ",")}`;
+  const query = `${sourceQuery} ${literal}`.replace(/\s+/gu, " ").trim();
   if (!/\p{L}/u.test(query)) return null;
   // This shortcut is intentionally narrow. The catalog full-text endpoint has
   // AND semantics; three or more lexical terms usually mean the request also
@@ -318,7 +316,13 @@ export function classifyExactCompoundMarkingRequest(message: string): ExactCompo
   // that conversational phrase directly would turn a valid request into a
   // deterministic false empty. No product vocabulary is used here.
   if (requiresSemanticCompoundEvidence(message)) return null;
-  return { query, first, second, priceDirection };
+  return {
+    query,
+    first,
+    second,
+    priceDirection,
+    exhaustive: isExhaustiveCompoundRequest(message),
+  };
 }
 
 function hasExactCompound(evidence: string, request: ExactCompoundMarkingRequest): boolean {
@@ -328,7 +332,7 @@ function hasExactCompound(evidence: string, request: ExactCompoundMarkingRequest
 export function selectExactCompoundMarkedProducts(
   products: ProductRef[],
   request: ExactCompoundMarkingRequest,
-  limit = request.priceDirection ? 1 : 4,
+  limit = request.priceDirection ? 1 : request.exhaustive ? 8 : 4,
 ): ProductRef[] {
   const byId = new Map<string, ProductRef>();
   for (const product of products) {
