@@ -562,6 +562,32 @@ export function isLiteralUserCompactCriterion(
     titleProvesCompactCriterion(userMessage, criterion);
 }
 
+/**
+ * A live numeric count facet may legitimately report the number of primary
+ * elements while the visible marking declares an additional component
+ * (`1X+Y`). For an exact count this is a customer-visible contradiction, even
+ * if the structured facet itself equals the requested number. The rule is
+ * grammatical and category-neutral: only count captions and visible compact
+ * compositions are considered.
+ */
+export function titleContradictsExactCountCriterion(
+  title: string,
+  criterion: Criterion,
+): boolean {
+  if (criterion.op !== "eq") return false;
+  const key = normalizeKey(criterion.key);
+  if (!/(?:^|\s)(?:количеств\p{L}*|числ\p{L}*|кол\s*во)(?:\s|$)/iu.test(key)) return false;
+  const raw = typeof criterion.value === "number"
+    ? String(criterion.value)
+    : typeof criterion.value === "string" ? criterion.value.trim().replace(",", ".") : "";
+  if (!/^\d+$/u.test(raw) || Number(raw) < 1) return false;
+  const escaped = raw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `(?<!\\d)${escaped}\\s*[\\p{L}]{0,3}\\s*\\+\\s*(?:\\d+\\s*)?[\\p{L}]`,
+    "iu",
+  ).test(String(title ?? ""));
+}
+
 /** Числовой интервал, к которому сводится любое распознанное значение характеристики. */
 export interface NumSpan {
   min: number;

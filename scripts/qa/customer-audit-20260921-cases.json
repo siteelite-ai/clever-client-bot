@@ -179,7 +179,7 @@
             "conversation_boundary": "continuation",
             "min_products": 2,
             "max_products": 5,
-            "require_every_product_title_groups": [["1P", "1Р", "1 полюс"], ["25A", "25А", "25 А"], ["C", "С"]],
+            "require_every_product_title_groups": [["1P", "1Р", "1П", "1 полюс"], ["25A", "25А", "25 А"], ["C", "С"]],
             "forbid_product_title": ["1P+N", "1Р+N", "1П+Н"],
             "max_duration_ms": 30000
           }

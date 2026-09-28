@@ -22,6 +22,7 @@ import {
   resolveRenderCriteria,
   resolveTerminalSelectionCriteria,
   titleProvesCompactCriterion,
+  titleContradictsExactCountCriterion,
   isLiteralUserCompactCriterion,
   type Criterion,
 } from "./criteria-gate.ts";
@@ -285,6 +286,21 @@ Deno.test("a projected compact facet is literal only when the customer typed the
   const led = { key: "Технология", op: "eq", value: "LED", level: "A" } as Criterion;
   assertEquals(isLiteralUserCompactCriterion("светодиодный прожектор", led), false);
   assertEquals(isLiteralUserCompactCriterion("LED прожектор", led), true);
+});
+
+Deno.test("an exact count rejects a visible additional compact component", () => {
+  const exactOne = { key: "Количество полюсов", op: "eq", value: "1", level: "A" } as Criterion;
+  assertEquals(titleContradictsExactCountCriterion("Автомат iC60N 1П 25А C", exactOne), false);
+  assertEquals(titleContradictsExactCountCriterion("Автомат ВА63 1П+Н 25А C", exactOne), true);
+  assertEquals(titleContradictsExactCountCriterion("Автомат V63 1P + N 25A C", exactOne), true);
+  assertEquals(titleContradictsExactCountCriterion(
+    "Устройство 1P+N",
+    { ...exactOne, key: "Номинальный ток" },
+  ), false);
+  assertEquals(titleContradictsExactCountCriterion(
+    "Кабель 3×1,5",
+    { ...exactOne, key: "Количество жил", value: 3 },
+  ), false);
 });
 
 Deno.test("parseNumSpan: scalar, decimal comma", () => {

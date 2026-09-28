@@ -26,7 +26,7 @@ import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
 import { applyCriteriaGate, buildCriteriaQuery, extendSelectionCriteriaPlan,
-  type Criterion, type CriterionEvidence, filterProductIdsByBudgetCap, filterProductsByExcludedCriteria, isLiteralUserCompactCriterion, mergeFacetOptionConstraints, mergeMandatorySelectionCriteria, mergeUserBackedCriteria, missingSelectionCriteria, projectCatalogFilterEvidence, projectCommonRenderedMarkdownUserCriteria, projectCommonRenderedUserCriteria, projectCriteriaFacetOptions, resolveRenderCriteria, resolveTerminalSelectionCriteria, type SelectionCriteriaPlan, type SelectionCriterionProvenance, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
+  type Criterion, type CriterionEvidence, filterProductIdsByBudgetCap, filterProductsByExcludedCriteria, isLiteralUserCompactCriterion, mergeFacetOptionConstraints, mergeMandatorySelectionCriteria, mergeUserBackedCriteria, missingSelectionCriteria, projectCatalogFilterEvidence, projectCommonRenderedMarkdownUserCriteria, projectCommonRenderedUserCriteria, projectCriteriaFacetOptions, resolveRenderCriteria, resolveTerminalSelectionCriteria, type SelectionCriteriaPlan, type SelectionCriterionProvenance, titleContradictsExactCountCriterion, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, demoteUnfrozenRenderCriteria, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
@@ -3740,6 +3740,24 @@ async function runExpertLoop(
     });
     const compactRemoved = ids.length - guarded.length;
     const afterCompact = guarded.length;
+    const exactCountCriteria = [
+      ...userBackedSearchCriteria,
+      ...(selectionCriteriaPlan?.mandatory_criteria ?? []),
+    ].filter((criterion, index, all) =>
+      all.findIndex((candidate) =>
+        normalizeForMatch(candidate.key) === normalizeForMatch(criterion.key) &&
+        String(candidate.value) === String(criterion.value) &&
+        candidate.op === criterion.op
+      ) === index
+    );
+    guarded = guarded.filter((id) => {
+      const product = ctx.cache.get(id);
+      return Boolean(product && exactCountCriteria.every((criterion) =>
+        !titleContradictsExactCountCriterion(product.pagetitle, criterion)
+      ));
+    });
+    const exactCountRemoved = afterCompact - guarded.length;
+    const afterExactCount = guarded.length;
     guarded = guarded.filter((id) => {
       const product = ctx.cache.get(id);
       return Boolean(
@@ -3749,7 +3767,7 @@ async function runExpertLoop(
         ),
       );
     });
-    const visibleRequestRemoved = afterCompact - guarded.length;
+    const visibleRequestRemoved = afterExactCount - guarded.length;
     const afterVisibleRequest = guarded.length;
     if (explicitCompoundMarking) {
       guarded = guarded.filter((id) => {
@@ -3778,6 +3796,8 @@ async function runExpertLoop(
       ids: guarded,
       compactCriteria,
       compactRemoved,
+      exactCountCriteria,
+      exactCountRemoved,
       visibleRequestContract,
       visibleRequestRemoved,
       explicitCompoundMarking,
@@ -6210,12 +6230,24 @@ async function runExpertLoop(
               meta: { before: originalIds.length, after: originalIds.length - guarded.compactRemoved, criteria: guarded.compactCriteria },
             });
           }
+          if (guarded.exactCountCriteria.length > 0 && guarded.exactCountRemoved > 0) {
+            steps.push({
+              step: "v3_guard_exact_count_composition",
+              ms: now(),
+              meta: {
+                before: originalIds.length - guarded.compactRemoved,
+                after: originalIds.length - guarded.compactRemoved - guarded.exactCountRemoved,
+                removed: guarded.exactCountRemoved,
+                criteria: guarded.exactCountCriteria,
+              },
+            });
+          }
           if (guarded.visibleRequestContract.length > 0 && guarded.visibleRequestRemoved > 0) {
             steps.push({
               step: "v3_guard_visible_request_title_evidence",
               ms: now(),
               meta: {
-                before: originalIds.length - guarded.compactRemoved,
+                before: originalIds.length - guarded.compactRemoved - guarded.exactCountRemoved,
                 after: visibleIds.length + guarded.compoundRemoved,
                 removed: guarded.visibleRequestRemoved,
                 requirements: guarded.visibleRequestContract.map((requirement) => ({
@@ -6230,7 +6262,7 @@ async function runExpertLoop(
               step: "v3_guard_exact_compound_title_evidence",
               ms: now(),
               meta: {
-                before: originalIds.length - guarded.compactRemoved,
+                before: originalIds.length - guarded.compactRemoved - guarded.exactCountRemoved,
                 after: visibleIds.length,
                 removed: guarded.compoundRemoved,
                 marking: guarded.explicitCompoundMarking,
