@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   resolveSelectionReadinessRequest,
   selectReadinessClarification,
+  specifiedAvailabilityBrowseIsActionable,
 } from "./selection-readiness.ts";
 
 const cases = [
@@ -31,6 +32,18 @@ Deno.test("selection readiness allows a completed pump-cable context", () => {
     ),
     null,
   );
+});
+
+Deno.test("specified availability browse proceeds without optional preference questions", () => {
+  const message = "Есть ли светодиодные лампы с теплым светом 3000К? на цоколь Е27";
+  assertEquals(specifiedAvailabilityBrowseIsActionable(message), true);
+  assertEquals(selectReadinessClarification(message), null);
+});
+
+Deno.test("compatibility browse remains blocked despite several measurements", () => {
+  const message = "Есть ли кабель для насоса 2 кВт, длина 35 м?";
+  assertEquals(specifiedAvailabilityBrowseIsActionable(message), false);
+  assertEquals(selectReadinessClarification(message)?.profile, "pump_cable");
 });
 
 Deno.test("selection readiness does not block a precise floodlight search", () => {

@@ -17,6 +17,39 @@ interface ReadinessProfile {
   options: ProposeClarificationInput["options"];
 }
 
+function explicitCompactSpecificationTokens(value: string): string[] {
+  const source = String(value ?? "");
+  const matches = [
+    ...(source.match(/(?<![\p{L}\p{N}])[\p{L}]{1,8}\s*\d{1,8}(?:[.,-]\d{1,8})*(?![\p{L}\p{N}])/gu) ?? []),
+    ...(source.match(/(?<![\p{L}\p{N}])\d{1,8}(?:[.,-]\d{1,8})*\s*[\p{L}]{1,8}(?![\p{L}\p{N}])/gu) ?? []),
+  ];
+  const visual: Record<string, string> = {
+    а: "a", в: "b", е: "e", к: "k", м: "m", н: "h",
+    о: "o", р: "p", с: "c", т: "t", у: "y", х: "x",
+  };
+  return [...new Set(matches.map((token) =>
+    token.toLocaleLowerCase("ru-RU")
+      .replace(/ё/gu, "е")
+      .replace(/[авекмнорстух]/gu, (char) => visual[char] ?? char)
+      .replace(/\s+/gu, "")
+  ).filter(Boolean))];
+}
+
+/**
+ * A plain availability browse that already names several independently
+ * checkable product specifications must not be blocked by optional preference
+ * questions. Compatibility selections (`for/under/to another object`) remain
+ * protected by their readiness profile because missing data there can change
+ * safety or fit. This is grammatical and works for every product category.
+ */
+export function specifiedAvailabilityBrowseIsActionable(message: string): boolean {
+  const source = String(message ?? "").trim();
+  const availability = /(?:есть\s+ли|у\s+(?:вас|тебя)\s+есть|име(?:ется|ются)|прода(?:е(?:те|шь)|ются)|быва(?:ет|ют)\s+ли)/iu.test(source);
+  if (!availability) return false;
+  if (/(?:^|[\s,;])(?:для|под|к|ко)\s+\p{L}/iu.test(source)) return false;
+  return explicitCompactSpecificationTokens(source).length >= 2;
+}
+
 // These are reusable engineering-selection profiles, not catalog aliases or
 // product values. A profile only decides whether the request contains enough
 // input data to start a safe search; live discovery still owns all filters.
@@ -192,6 +225,7 @@ export function selectReadinessClarification(
       (right.candidate.priority ?? 0) - (left.candidate.priority ?? 0) || left.index - right.index
     )[0]?.candidate;
   if (!profile) return null;
+  if (specifiedAvailabilityBrowseIsActionable(current)) return null;
   if (profile.required.every((requirement) => requirement.test(evidence))) return null;
   return {
     profile: profile.id,
