@@ -135,6 +135,28 @@ Deno.test("selection readiness allows a completed outdoor-floodlight context", (
   );
 });
 
+Deno.test("numeric area and mounting height satisfy outdoor-floodlight readiness without repeated nouns", () => {
+  assertEquals(
+    selectReadinessClarification(
+      "Нужен прожектор на улицу для двора\nУточнение клиента: 35м2 и высота примерно 1,5м",
+      "Нужен прожектор на улицу для двора\n35м2 и высота примерно 1,5м",
+      { progressive: true },
+    ),
+    null,
+  );
+});
+
+Deno.test("apartment breaker proceeds after current, pole count and curve are customer-provided", () => {
+  assertEquals(
+    selectReadinessClarification(
+      "Мне нужен автоматический выключатель на 25 А для квартиры\nУточнение клиента: характеристика С, 1 полюс",
+      "Мне нужен автоматический выключатель на 25 А для квартиры\nхарактеристика С, 1 полюс",
+      { progressive: true },
+    ),
+    null,
+  );
+});
+
 Deno.test("outdoor protection is derived after the customer supplies parking geometry", () => {
   assertEquals(
     selectReadinessClarification(
