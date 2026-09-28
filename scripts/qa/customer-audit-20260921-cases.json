@@ -490,6 +490,7 @@
         "expect": {
           "min_products": 3,
           "max_products": 5,
+          "require_result_cardinality": { "target": 4, "minimum": 3, "mode": "selection", "explicit": false },
           "require_every_product_title_groups": [["Philips", "PHILIPS", "871869", "9290"], ["светильник", "панель", "CoreLine", "Ledinaire"]],
           "forbid_selection_criteria_any": ["ЖКХ", "улич"],
           "max_duration_ms": 30000

@@ -77,6 +77,26 @@
           }
         }
       ]
+    },
+    {
+      "id": "cardinality-plural-superlative",
+      "title": "Множественный суперлатив сохраняет подборку",
+      "repeat": 3,
+      "turns": [
+        {
+          "message": "Покажи самые дешевые светильники Philips для офиса",
+          "expect": {
+            "min_products": 3,
+            "max_products": 4,
+            "require_result_cardinality": { "target": 4, "minimum": 3, "mode": "selection", "explicit": false },
+            "require_every_product_card_groups": [
+              ["Philips", "PHILIPS", "871869", "9290"],
+              ["светильник", "панель", "CoreLine", "Ledinaire"]
+            ],
+            "forbid_text": ["search_catalog", "discover_category", "render_products"]
+          }
+        }
+      ]
     }
   ]
 }

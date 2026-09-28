@@ -3720,7 +3720,7 @@ async function runExpertLoop(
             ? rightPrice - leftPrice
             : leftPrice - rightPrice;
         })
-        .slice(0, 1);
+        .slice(0, resultCardinality.target);
     }
     return {
       ids: guarded,
@@ -6187,9 +6187,14 @@ async function runExpertLoop(
           }
           if (guarded.superlative && visibleIds.length > 0) {
             steps.push({
-              step: "v3_guard_superlative_single_product",
+              step: "v3_guard_superlative_price_order",
               ms: now(),
-              meta: { direction: guarded.superlative.direction, before: originalIds.length, after: visibleIds.length },
+              meta: {
+                direction: guarded.superlative.direction,
+                requested: resultCardinality.target,
+                before: originalIds.length,
+                after: visibleIds.length,
+              },
             });
           }
           if (visibleIds.length !== originalIds.length) {

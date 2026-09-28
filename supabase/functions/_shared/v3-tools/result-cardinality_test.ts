@@ -61,6 +61,30 @@ Deno.test("single-result intents remain single", () => {
   );
 });
 
+Deno.test("plural price superlatives sort a selection instead of collapsing it to one card", () => {
+  assertEquals(
+    resolveResultCardinality("Покажи самые дешевые светильники Philips для офиса", {
+      selection: true,
+      superlative: true,
+    }),
+    { target: 4, minimum: 3, mode: "selection", explicit: false },
+  );
+  assertEquals(
+    resolveResultCardinality("Покажи несколько самых дешевых вариантов", {
+      selection: true,
+      superlative: true,
+    }),
+    { target: 5, minimum: 3, mode: "alternatives", explicit: true },
+  );
+  assertEquals(
+    resolveResultCardinality("Покажи все самые дешевые модели", {
+      selection: true,
+      superlative: true,
+    }),
+    { target: 8, minimum: 3, mode: "exhaustive", explicit: true },
+  );
+});
+
 Deno.test("candidate expansion preserves the model choice and fills from the same pool", () => {
   assertEquals(
     expandResultCandidateIds(["b"], ["a", "b", "c", "d", "e"], 4),

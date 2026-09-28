@@ -66,7 +66,7 @@ export function resolveResultCardinality(
   const asksForOne =
     /(?:^|[^\p{L}\p{N}])(?:один|одну|одно|1)\s+(?:вариант\p{L}*|товар\p{L}*|позици\p{L}*|модел\p{L}*)/u
       .test(normalized);
-  if (asksForOne || context.superlative) {
+  if (asksForOne) {
     return { target: 1, minimum: 1, mode: "single", explicit: asksForOne };
   }
 
@@ -92,6 +92,19 @@ export function resolveResultCardinality(
       mode: "alternatives",
       explicit: true,
     };
+  }
+
+  // Price direction and result quantity are independent contracts. Russian
+  // singular superlatives ("самый дешёвый") request one extremum, while the
+  // plural forms ("самые/самых дешёвые") request an ordered selection. The
+  // caller still owns sorting; this controller owns only the number of cards.
+  const pluralSuperlative =
+    /(?:^|[^\p{L}\p{N}])сам(?:ые|ых|ими)\s+(?:деш\p{L}*|дорог\p{L}*|недорог\p{L}*|доступн\p{L}*)/u
+      .test(normalized) ||
+    /(?:^|[^\p{L}\p{N}])(?:бюджетн|премиальн|флагманск)(?:ые|ие|ых|их|ыми|ими)(?:$|[^\p{L}\p{N}])/u
+      .test(normalized);
+  if (context.superlative && !pluralSuperlative) {
+    return { target: 1, minimum: 1, mode: "single", explicit: false };
   }
 
   return {
