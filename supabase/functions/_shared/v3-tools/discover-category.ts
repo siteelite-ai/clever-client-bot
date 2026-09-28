@@ -149,11 +149,11 @@ function isLikelyRussianAdjective(token: string): boolean {
  * remains fail-closed for shared heads such as `кабель` and for phrases like
  * `для автоматического ...`; no product alias is encoded here.
  */
-function resolveUniqueHeadCategory(
+function collectHeadCategoryCandidates(
   rawQueryTokens: string[],
   pagetitles: string[],
 ): string[] {
-  const candidates = pagetitles.filter((pagetitle) => {
+  return pagetitles.filter((pagetitle) => {
     const categoryTokens = localCategoryTokens(pagetitle);
     if (categoryTokens.length < 2) return false;
     const categoryHead = categoryTokens[0];
@@ -168,7 +168,42 @@ function resolveUniqueHeadCategory(
       ))
     );
   });
+}
+
+function resolveUniqueHeadCategory(
+  rawQueryTokens: string[],
+  pagetitles: string[],
+): string[] {
+  const candidates = collectHeadCategoryCandidates(rawQueryTokens, pagetitles);
   return candidates.length === 1 ? candidates : [];
+}
+
+/**
+ * Disambiguate several live categories sharing the same customer head only by
+ * their own live facet captions. Two distinct query axes must support one
+ * candidate, and its score must be unique. A single generic word or a tie is
+ * insufficient, so semantic resolution remains fail-closed.
+ */
+export function resolveHeadCategoryByFacetEvidence(
+  queryText: string,
+  candidates: Array<{ pagetitle: string; facets: Array<Pick<Facet, "caption">> }>,
+): string | null {
+  const queryTokens = Array.from(new Set(localCategoryTokens(queryText).filter((token) => token.length >= 5)));
+  const scored = candidates.map((candidate) => {
+    const matchedAxes = queryTokens.filter((queryToken) =>
+      candidate.facets.some((facet) =>
+        localCategoryTokens(facet.caption).some((facetToken) =>
+          localCategoryTokenMatches(facetToken, queryToken)
+        )
+      )
+    );
+    return { pagetitle: candidate.pagetitle, score: matchedAxes.length };
+  }).sort((left, right) => right.score - left.score || left.pagetitle.localeCompare(right.pagetitle));
+  const best = scored[0];
+  if (!best || best.score < 2) return null;
+  return scored.filter((candidate) => candidate.score === best.score).length === 1
+    ? best.pagetitle
+    : null;
 }
 
 function orderedTokenStart(categoryTokens: string[], queryTokens: string[]): number | null {
@@ -394,7 +429,13 @@ function preferLeafWithinGroup(
 async function resolvePagetitle(
   input: DiscoverCategoryInput,
   deps: DiscoverCategoryDeps,
-): Promise<{ pagetitle: string; resolvedFrom?: string; candidates: string[]; cache: CategoriesCache } | null> {
+): Promise<{
+  pagetitle: string;
+  resolvedFrom?: string;
+  candidates: string[];
+  cache: CategoriesCache;
+  prefetched?: Map<string, DiscoverCategoryOk>;
+} | null> {
   const noun = input.noun.trim();
   const cache = await fetchCategories(deps);
   const flat = cache.flat;
@@ -408,6 +449,30 @@ async function resolvePagetitle(
       candidates: localCandidates,
       cache,
     };
+  }
+  const queryText = [input.semantic_query ?? "", input.noun].join(" ");
+  const rawQueryTokens = normalize(queryText).split(" ").filter(Boolean);
+  const headCandidates = collectHeadCategoryCandidates(
+    rawQueryTokens,
+    flat.map((candidate) => candidate.pagetitle),
+  );
+  if (headCandidates.length > 1 && headCandidates.length <= 6) {
+    const prefetched = new Map<string, DiscoverCategoryOk>();
+    await Promise.all(headCandidates.map(async (pagetitle) => {
+      const facets = await fetchFacetsForPagetitle(pagetitle, deps);
+      if (facets.ok && isUsefulDiscovery(facets.data)) prefetched.set(pagetitle, facets.data);
+    }));
+    const schemaWinner = resolveHeadCategoryByFacetEvidence(queryText, headCandidates
+      .map((pagetitle) => ({ pagetitle, facets: prefetched.get(pagetitle)?.facets ?? [] })));
+    if (schemaWinner) {
+      return {
+        pagetitle: schemaWinner,
+        resolvedFrom: noun,
+        candidates: [schemaWinner],
+        cache,
+        prefetched,
+      };
+    }
   }
   if (!deps.openrouterApiKey) return null;
 
@@ -591,7 +656,10 @@ export async function executeDiscoverCategory(
     }
 
     for (const pagetitle of resolved.candidates) {
-      const facets = await fetchFacetsForPagetitle(pagetitle, deps);
+      const prefetched = resolved.prefetched?.get(pagetitle);
+      const facets = prefetched
+        ? { ok: true as const, data: prefetched }
+        : await fetchFacetsForPagetitle(pagetitle, deps);
       if (facets.ok && isUsefulDiscovery(facets.data)) {
         const leaves = resolveLeafCategories(facets.data.category.pagetitle, facets.data.category.id, resolved.cache);
         return { tool: "discover_category", ...facets.data, leaf_categories: leaves, resolved_from: resolved.resolvedFrom };

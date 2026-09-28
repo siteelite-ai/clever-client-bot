@@ -1,5 +1,8 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { resolveLocalCategoryPagetitles } from "./discover-category.ts";
+import {
+  resolveHeadCategoryByFacetEvidence,
+  resolveLocalCategoryPagetitles,
+} from "./discover-category.ts";
 
 const LIVE_TITLES = [
   "Светильники",
@@ -70,6 +73,35 @@ Deno.test("partial live-taxonomy heads remain fail-closed for modifiers and ambi
     noun: "нужен кабель",
     semantic_query: "нужен кабель",
   }, ["Кабели силовые", "Кабели сигнальные"]), []);
+});
+
+Deno.test("ambiguous live heads require unique evidence from at least two facet axes", () => {
+  const candidates = [
+    {
+      pagetitle: "Автоматические выключатели",
+      facets: [
+        { caption: "Количество полюсов" },
+        { caption: "Характеристика срабатывания" },
+        { caption: "Номинальный ток" },
+      ],
+    },
+    {
+      pagetitle: "Автоматы защиты двигателя",
+      facets: [
+        { caption: "Номинальный ток" },
+        { caption: "Мощность двигателя" },
+      ],
+    },
+  ];
+  assertEquals(resolveHeadCategoryByFacetEvidence(
+    "Найди автомат 1 полюсной, 16 А характеристика С",
+    candidates,
+  ), "Автоматические выключатели");
+  assertEquals(resolveHeadCategoryByFacetEvidence("Найди автомат 16 А", candidates), null);
+  assertEquals(resolveHeadCategoryByFacetEvidence("Найди автомат по номинальному току", [
+    candidates[0],
+    { ...candidates[1], facets: [{ caption: "Номинальный ток" }, { caption: "Номинальная мощность" }] },
+  ]), null);
 });
 
 Deno.test("local live-taxonomy resolver does not translate jargon or invent a category", () => {
