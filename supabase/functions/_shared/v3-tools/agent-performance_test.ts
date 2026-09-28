@@ -3,7 +3,7 @@ import {
   boundedAgentStepTimeout,
   buildInquiryKnowledgeSynthesisMessages,
   compactCatalogResultForLlm,
-  deterministicIntroTimeoutToolCall,
+  deterministicInitialDiscoveryToolCall,
   establishesCatalogAttempt,
   forcedToolNameForAgentPhase,
   hasActionableSelectionReasoning,
@@ -173,16 +173,16 @@ Deno.test("inquiry knowledge synthesis context is compact and treats evidence as
   assertEquals(messages[1].content.includes("<script>"), false);
 });
 
-Deno.test("forced discovery timeout falls back to live taxonomy without product rules", () => {
-  assertEquals(deterministicIntroTimeoutToolCall("discover_category", "  Нужен товар 16 А  "), {
+Deno.test("forced initial discovery compiles directly to live taxonomy without product rules", () => {
+  assertEquals(deterministicInitialDiscoveryToolCall("discover_category", "  Нужен товар 16 А  "), {
     name: "discover_category",
     args: {
       noun: "Нужен товар 16 А",
       semantic_query: "Нужен товар 16 А",
     },
   });
-  assertEquals(deterministicIntroTimeoutToolCall("search_catalog", "Нужен товар"), null);
-  assertEquals(deterministicIntroTimeoutToolCall("discover_category", "   "), null);
+  assertEquals(deterministicInitialDiscoveryToolCall("search_catalog", "Нужен товар"), null);
+  assertEquals(deterministicInitialDiscoveryToolCall("discover_category", "   "), null);
 });
 
 Deno.test("agent phase: successful discovery requires search and blocks rediscovery", () => {

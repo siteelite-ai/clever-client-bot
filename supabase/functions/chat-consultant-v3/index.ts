@@ -127,7 +127,7 @@ import {
   boundedAgentStepTimeout,
   buildInquiryKnowledgeSynthesisMessages,
   compactCatalogResultForLlm,
-  deterministicIntroTimeoutToolCall,
+  deterministicInitialDiscoveryToolCall,
   establishesCatalogAttempt,
   forcedToolNameForAgentPhase,
   isToolAllowedInAgentPhase,
@@ -4490,6 +4490,9 @@ async function runExpertLoop(
       const forcedToolName = finalizeFromRecoveredKnowledge || selectionReasoningOnlyRequired
         ? null
         : forcedToolNameForAgentPhase(agentPhase, agentToolPolicy);
+      const compiledInitialDiscovery = step === 0 && agentPhase === "open"
+        ? deterministicInitialDiscoveryToolCall(forcedToolName, userMessage)
+        : null;
       let resp: ORResponse;
       try {
         if (queuedCustomerFacetSearch) {
@@ -4500,6 +4503,24 @@ async function runExpertLoop(
             toolCalls: [queued],
             finishReason: "server_compiled_customer_facet_search",
           };
+        } else if (compiledInitialDiscovery) {
+          resp = {
+            text: "",
+            toolCalls: [{
+              id: crypto.randomUUID(),
+              name: compiledInitialDiscovery.name,
+              args: compiledInitialDiscovery.args,
+            }],
+            finishReason: "server_compiled_initial_discovery",
+          };
+          steps.push({
+            step: "v3_initial_discovery_compiled",
+            ms: now(),
+            meta: {
+              strategy: "live_taxonomy_full_message",
+              forced_tool: forcedToolName,
+            },
+          });
         } else if (agentPhase === "inquiry_explanation_ready") {
           const evidenceProducts = (freshSearch?.ids ?? [])
             .map((id) => ctx.cache.get(id))
@@ -4750,7 +4771,7 @@ async function runExpertLoop(
       } catch (error) {
         const timeout = (error as Error)?.name === "TimeoutError" || String((error as Error)?.message ?? error).includes("llm_call_timeout:");
         if (step === 0 && timeout && !turnController.signal.aborted) {
-          const deterministicDiscovery = deterministicIntroTimeoutToolCall(forcedToolName, userMessage);
+          const deterministicDiscovery = deterministicInitialDiscoveryToolCall(forcedToolName, userMessage);
           if (deterministicDiscovery) {
             resp = {
               text: "",

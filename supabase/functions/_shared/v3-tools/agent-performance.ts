@@ -205,14 +205,15 @@ export interface DeterministicIntroToolCall {
 }
 
 /**
- * The first selection step is protocol-forced discovery. If the provider times
- * out before serializing that trivial tool call, retrying the same large model
- * wastes the turn budget and leaves no time for search. The live taxonomy
- * resolver already accepts a semantic query, so the complete customer message
- * is a safe, domain-agnostic fallback input. No category or product term is
- * inferred here; the resolver still chooses only from the live category tree.
+ * The first selection step is protocol-forced discovery. Calling the main
+ * consultant merely to serialize that already-fixed tool name adds a full
+ * remote round trip without adding customer-visible reasoning. Compile the
+ * call directly from the complete customer message; the live taxonomy resolver
+ * still chooses only from the live category tree, so no category vocabulary or
+ * product rule is duplicated here. The consultant remains responsible for all
+ * later reasoning, filters, clarification and rendering decisions.
  */
-export function deterministicIntroTimeoutToolCall(
+export function deterministicInitialDiscoveryToolCall(
   forcedToolName: ToolName | null,
   userMessage: string,
 ): DeterministicIntroToolCall | null {
