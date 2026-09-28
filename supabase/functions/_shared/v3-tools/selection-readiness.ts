@@ -2,6 +2,10 @@ import type { ProposeClarificationInput } from "./propose-clarification.ts";
 
 const SELECTION_READINESS_SCOPE = "selection_readiness";
 
+export function selectionReadinessScope(token: string): { kind: string; token: string } {
+  return { kind: SELECTION_READINESS_SCOPE, token: String(token ?? "").trim().slice(0, 500) };
+}
+
 export interface SelectionReadinessClarification extends ProposeClarificationInput {
   profile: string;
 }
@@ -95,6 +99,31 @@ export function measuredLoadGuidanceCanProceed(message: string): boolean {
 // product values. A profile only decides whether the request contains enough
 // input data to start a safe search; live discovery still owns all filters.
 const PROFILES: ReadinessProfile[] = [
+  {
+    id: "electrical_distribution_plan",
+    priority: 20,
+    // A request for the quantity/composition of protection devices in a
+    // distribution board is a project-sizing task, not a SKU search. Area by
+    // itself cannot determine circuit topology, so collect the three inputs
+    // that change the answer before any catalogue branch is allowed to run.
+    applies: /(?:скольк\p{L}*|количеств\p{L}*|состав\p{L}*)[^.!?\n]{0,90}(?:автомат\p{L}*|дифавтомат\p{L}*|узо)[^.!?\n]{0,90}(?:щит\p{L}*|дом\p{L}*)|(?:щит\p{L}*|дом\p{L}*)[^.!?\n]{0,90}(?:скольк\p{L}*|количеств\p{L}*)[^.!?\n]{0,90}(?:автомат\p{L}*|дифавтомат\p{L}*|узо)/iu,
+    required: [
+      /(?:однофаз\p{L}*|трехфаз\p{L}*|трёхфаз\p{L}*|\b(?:220|230|380|400)\s*в?\b)/iu,
+      /(?:мощн\p{L}*|выделен\p{L}*[^.!?\n]{0,20}\d+(?:[.,]\d+)?\s*к?вт|\d+(?:[.,]\d+)?\s*к?вт)/iu,
+      /(?:плит\p{L}*|бойлер\p{L}*|котел\p{L}*|котёл\p{L}*|тепл\p{L}*\s+пол\p{L}*|тёпл\p{L}*\s+пол\p{L}*|кондиционер\p{L}*|насос\p{L}*|саун\p{L}*|электромобил\p{L}*)/iu,
+    ],
+    missing_labels: [
+      "однофазный или трёхфазный ввод (220/380 В)",
+      "выделенную/расчётную мощность",
+      "перечень мощных нагрузок и отдельных линий",
+    ],
+    question: "Площадь дома сама по себе не определяет количество автоматов. Для расчёта щита уточните: ввод однофазный 220 В или трёхфазный 380 В; какая выделенная/расчётная мощность; какие мощные нагрузки нужны отдельными линиями — плита, бойлер/котёл, тёплый пол, кондиционеры, насос, сауна или зарядка электромобиля?",
+    facet_key: "supply_phase",
+    options: [
+      { value: "220 В, 1 фаза", label: "220 В, 1 фаза" },
+      { value: "380 В, 3 фазы", label: "380 В, 3 фазы" },
+    ],
+  },
   {
     id: "pump_cable",
     applies: /кабел\p{L}*[^.!?\n]{0,50}(?:для\s+)?насос\p{L}*/iu,
@@ -254,7 +283,7 @@ const PROFILES: ReadinessProfile[] = [
     required: [
       /(?:цифров\p{L}*|аналог\p{L}*|ip[- ]?камер)/iu,
       /(?:улиц\p{L}*|помещен\p{L}*)/iu,
-      /(?:poe|питан\p{L}*|расстоян\p{L}*)/iu,
+      /(?:poe|питан\p{L}*|расстоян\p{L}*|длин\p{L}*|трасс\p{L}*)/iu,
     ],
     missing_labels: [
       "тип системы — цифровая/IP или аналоговая",
@@ -291,7 +320,7 @@ const PROFILES: ReadinessProfile[] = [
   },
   {
     id: "outdoor_floodlight",
-    applies: /прожектор\p{L}*[^.!?\n]{0,80}(?:улиц\p{L}*|наруж\p{L}*)|(?:улиц\p{L}*|наруж\p{L}*)[^.!?\n]{0,80}прожектор\p{L}*/iu,
+    applies: /прожектор\p{L}*[^.!?\n]{0,80}(?:ули[цч]\p{L}*|наруж\p{L}*)|(?:ули[цч]\p{L}*|наруж\p{L}*)[^.!?\n]{0,80}прожектор\p{L}*/iu,
     required: [
       /(?:площад\p{L}*|размер\p{L}*|территор\p{L}*|\d+(?:[.,]\d+)?\s*(?:м2|м²|кв(?:\.|\s)*м))/iu,
       /(?:высот\p{L}*|установ\p{L}*|монтаж\p{L}*|\d+(?:[.,]\d+)?\s*м(?:етр\p{L}*)?(?=$|[^\p{L}\p{N}²]))/iu,
@@ -365,7 +394,7 @@ export function selectReadinessClarification(
       : profile.question,
     facet_key: followUp?.facet_key ?? profile.facet_key,
     options: followUp?.options ?? profile.options,
-    scope: { kind: SELECTION_READINESS_SCOPE, token: current.slice(0, 500) },
+    scope: selectionReadinessScope(current),
   };
 }
 

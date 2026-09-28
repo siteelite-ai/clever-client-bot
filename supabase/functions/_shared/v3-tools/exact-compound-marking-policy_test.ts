@@ -8,9 +8,9 @@ import {
   partitionSemanticCompoundSourceByLiveTaxonomy,
   productTitleMatchesExplicitCompoundMarking,
   requiresSemanticCompoundEvidence,
-  semanticCompoundSourceQuery,
   selectBestMatchingSemanticCompoundCategories,
   selectExactCompoundMarkedProducts,
+  semanticCompoundSourceQuery,
   shouldTerminateAfterGroundedCompoundSearch,
   subsumeCriteriaProvenByExplicitCompound,
 } from "./exact-compound-marking-policy.ts";
@@ -26,26 +26,54 @@ const product = (id: string, pagetitle: string, price: number): ProductRef => ({
 });
 
 Deno.test("exact compound route extracts a price-sorted catalog query", () => {
-  assertEquals(classifyExactCompoundMarkingRequest("найди кабель ввг 2*1,5 самый дешевый"), {
-    query: "кабель ввг 2*1,5",
-    first: 2,
-    second: 1.5,
-    priceDirection: "cheapest",
-    exhaustive: false,
-  });
-  assertEquals(classifyExactCompoundMarkingRequest("Подойдёт ли кабель ВВГ 2×1,5?"), null);
+  assertEquals(
+    classifyExactCompoundMarkingRequest("найди кабель ввг 2*1,5 самый дешевый"),
+    {
+      query: "кабель ввг 2*1,5",
+      first: 2,
+      second: 1.5,
+      priceDirection: "cheapest",
+      exhaustive: false,
+    },
+  );
+  assertEquals(
+    classifyExactCompoundMarkingRequest("Подойдёт ли кабель ВВГ 2×1,5?"),
+    null,
+  );
 });
 
 Deno.test("exact compound shortcut yields semantic multi-attribute requests to the consultant", () => {
-  assertEquals(classifyExactCompoundMarkingRequest("какой есть кабель ввг 3*1,5 негорючий покажи все позиции"), null);
-  assertEquals(classifyExactCompoundMarkingRequest("нужен медный кабель негорючий 2*1,5"), null);
+  assertEquals(
+    classifyExactCompoundMarkingRequest(
+      "какой есть кабель ввг 3*1,5 негорючий покажи все позиции",
+    ),
+    null,
+  );
+  assertEquals(
+    classifyExactCompoundMarkingRequest("нужен медный кабель негорючий 2*1,5"),
+    null,
+  );
 });
 
 Deno.test("exact compound route removes command language and preserves exhaustive cardinality", () => {
   assertEquals(
-    classifyExactCompoundMarkingRequest("какой есть кабель ввг 3*1,5 покажи все позиции"),
+    classifyExactCompoundMarkingRequest(
+      "какой есть кабель ввг 3*1,5 покажи все позиции",
+    ),
     {
       query: "кабель ввг 3*1,5",
+      first: 3,
+      second: 1.5,
+      priceDirection: null,
+      exhaustive: true,
+    },
+  );
+  assertEquals(
+    classifyExactCompoundMarkingRequest(
+      "Покажи все кабели ВВГ 3х1,5, которые есть",
+    ),
+    {
+      query: "кабели ввг 3*1,5",
       first: 3,
       second: 1.5,
       priceDirection: null,
@@ -55,66 +83,103 @@ Deno.test("exact compound route removes command language and preserves exhaustiv
 });
 
 Deno.test("compound semantic evidence classifier is structural and product-agnostic", () => {
-  assertEquals(requiresSemanticCompoundEvidence("найди кабель ВВГ 2*1,5"), false);
-  assertEquals(requiresSemanticCompoundEvidence("нужен медный кабель негорючий 2*1,5"), true);
-  assertEquals(requiresSemanticCompoundEvidence("покажи изделие для улицы стойкое 3×2,5"), true);
-  assertEquals(requiresSemanticCompoundEvidence("нужен товар без составного размера"), false);
   assertEquals(
-    semanticCompoundSourceQuery("Нужен медный кабель негорючий 2*1,5, пожалуйста!"),
+    requiresSemanticCompoundEvidence("найди кабель ВВГ 2*1,5"),
+    false,
+  );
+  assertEquals(
+    requiresSemanticCompoundEvidence("нужен медный кабель негорючий 2*1,5"),
+    true,
+  );
+  assertEquals(
+    requiresSemanticCompoundEvidence("покажи изделие для улицы стойкое 3×2,5"),
+    true,
+  );
+  assertEquals(
+    requiresSemanticCompoundEvidence("нужен товар без составного размера"),
+    false,
+  );
+  assertEquals(
+    semanticCompoundSourceQuery(
+      "Нужен медный кабель негорючий 2*1,5, пожалуйста!",
+    ),
     "медный кабель негорючий",
   );
   assertEquals(
-    semanticCompoundSourceQuery("какой есть кабель ввг 3*1,5 негорючий покажи все позиции"),
+    semanticCompoundSourceQuery(
+      "какой есть кабель ввг 3*1,5 негорючий покажи все позиции",
+    ),
     "кабель ввг негорючий",
+  );
+  assertEquals(
+    semanticCompoundSourceQuery("Покажи все кабели ВВГ 3х1,5, которые есть"),
+    "кабели ввг",
   );
 });
 
 Deno.test("semantic compound source is partitioned by live taxonomy without a product dictionary", () => {
-  assertEquals(partitionSemanticCompoundSourceByLiveTaxonomy(
-    "медный кабель негорючий",
-    ["Кабели силовые", "Кабели монтажные"],
-  ), {
-    query: "кабель",
-    semanticModifiers: ["медный", "негорючий"],
-  });
-  assertEquals(partitionSemanticCompoundSourceByLiveTaxonomy(
-    "кабель ввг негорючий",
-    ["Кабели силовые"],
-  ), {
-    query: "кабель",
-    semanticModifiers: ["ввг", "негорючий"],
-  });
+  assertEquals(
+    partitionSemanticCompoundSourceByLiveTaxonomy(
+      "медный кабель негорючий",
+      ["Кабели силовые", "Кабели монтажные"],
+    ),
+    {
+      query: "кабель",
+      semanticModifiers: ["медный", "негорючий"],
+    },
+  );
+  assertEquals(
+    partitionSemanticCompoundSourceByLiveTaxonomy(
+      "кабель ввг негорючий",
+      ["Кабели силовые"],
+    ),
+    {
+      query: "кабель",
+      semanticModifiers: ["ввг", "негорючий"],
+    },
+  );
 });
 
 Deno.test("semantic compound partition fails closed when live taxonomy has no class anchor", () => {
-  assertEquals(partitionSemanticCompoundSourceByLiveTaxonomy(
-    "изделие стойкое для улицы",
-    ["Кабели силовые"],
-  ), {
-    query: "изделие стойкое для улицы",
-    semanticModifiers: [],
-  });
+  assertEquals(
+    partitionSemanticCompoundSourceByLiveTaxonomy(
+      "изделие стойкое для улицы",
+      ["Кабели силовые"],
+    ),
+    {
+      query: "изделие стойкое для улицы",
+      semanticModifiers: [],
+    },
+  );
 });
 
 Deno.test("semantic compound category scope keeps the most specific live class and drops same-size siblings", () => {
-  assertEquals(selectBestMatchingSemanticCompoundCategories(
-    "кабель ввг негорючий",
-    [
-      "Кабель ВВГ",
-      "Удлинители",
-      "Кабель и провод разного назначения",
-      "Кабель КГ",
-      "Провод ПВС",
-    ],
-  ), ["Кабель ВВГ"]);
-  assertEquals(selectBestMatchingSemanticCompoundCategories(
-    "медный кабель негорючий",
-    ["Кабель ВВГ", "Кабель КГ", "Удлинители"],
-  ), ["Кабель ВВГ", "Кабель КГ"]);
+  assertEquals(
+    selectBestMatchingSemanticCompoundCategories(
+      "кабель ввг негорючий",
+      [
+        "Кабель ВВГ",
+        "Удлинители",
+        "Кабель и провод разного назначения",
+        "Кабель КГ",
+        "Провод ПВС",
+      ],
+    ),
+    ["Кабель ВВГ"],
+  );
+  assertEquals(
+    selectBestMatchingSemanticCompoundCategories(
+      "медный кабель негорючий",
+      ["Кабель ВВГ", "Кабель КГ", "Удлинители"],
+    ),
+    ["Кабель ВВГ", "Кабель КГ"],
+  );
 });
 
 Deno.test("exact compound route rejects a nearby size and returns the cheapest exact match", () => {
-  const request = classifyExactCompoundMarkingRequest("найди кабель ввг 2*1,5 самый дешевый")!;
+  const request = classifyExactCompoundMarkingRequest(
+    "найди кабель ввг 2*1,5 самый дешевый",
+  )!;
   const selected = selectExactCompoundMarkedProducts([
     product("wrong", "Кабель ВВГ нг 4*2,5", 100),
     product("exact-expensive", "Кабель ВВГ 2×1.5", 316),
@@ -125,26 +190,55 @@ Deno.test("exact compound route rejects a nearby size and returns the cheapest e
 });
 
 Deno.test("exhaustive exact compound route keeps up to eight verified products", () => {
-  const request = classifyExactCompoundMarkingRequest("покажи все позиции кабеля ввг 3*1,5")!;
-  const products = Array.from({ length: 10 }, (_value, index) =>
-    product(String(index), `Кабель ВВГ 3*1,5 вариант ${index}`, 100 + index)
+  const request = classifyExactCompoundMarkingRequest(
+    "покажи все позиции кабеля ввг 3*1,5",
+  )!;
+  const products = Array.from(
+    { length: 10 },
+    (_value, index) =>
+      product(String(index), `Кабель ВВГ 3*1,5 вариант ${index}`, 100 + index),
   );
   assertEquals(selectExactCompoundMarkedProducts(products, request).length, 8);
 });
 
 Deno.test("explicit compound marking is a generic final-render invariant", () => {
-  const marking = extractExplicitCompoundMarking("нужен медный огнестойкий кабель 2*1,5");
+  const marking = extractExplicitCompoundMarking(
+    "нужен медный огнестойкий кабель 2*1,5",
+  );
   assertEquals(marking, { first: 2, second: 1.5 });
 
-  assertEquals(productTitleMatchesExplicitCompoundMarking("Кабель ВВГнг 2×1.5", marking!), true);
-  assertEquals(productTitleMatchesExplicitCompoundMarking("Кабель КПСнг 2х1,50", marking!), true);
-  assertEquals(productTitleMatchesExplicitCompoundMarking("Кабель ВВГнг 4*1,5", marking!), false);
-  assertEquals(productTitleMatchesExplicitCompoundMarking("Провод СИП 2*16", marking!), false);
-  assertEquals(productTitleMatchesExplicitCompoundMarking("Кабель огнестойкий без размера в названии", marking!), false);
+  assertEquals(
+    productTitleMatchesExplicitCompoundMarking("Кабель ВВГнг 2×1.5", marking!),
+    true,
+  );
+  assertEquals(
+    productTitleMatchesExplicitCompoundMarking("Кабель КПСнг 2х1,50", marking!),
+    true,
+  );
+  assertEquals(
+    productTitleMatchesExplicitCompoundMarking("Кабель ВВГнг 4*1,5", marking!),
+    false,
+  );
+  assertEquals(
+    productTitleMatchesExplicitCompoundMarking("Провод СИП 2*16", marking!),
+    false,
+  );
+  assertEquals(
+    productTitleMatchesExplicitCompoundMarking(
+      "Кабель огнестойкий без размера в названии",
+      marking!,
+    ),
+    false,
+  );
 });
 
 Deno.test("ordinary numeric requirements do not become compound marking constraints", () => {
-  assertEquals(extractExplicitCompoundMarking("светильник для комнаты 25 м² до 5000 тенге"), null);
+  assertEquals(
+    extractExplicitCompoundMarking(
+      "светильник для комнаты 25 м² до 5000 тенге",
+    ),
+    null,
+  );
 });
 
 Deno.test("literal compound title evidence subsumes only its duplicate criteria", () => {
@@ -154,8 +248,13 @@ Deno.test("literal compound title evidence subsumes only its duplicate criteria"
     { key: "Сечение жилы", op: "eq", value: 1.5, unit: "мм²", level: "A" },
     { key: "Негорючесть", op: "eq", value: "Да", level: "A" },
   ], marking);
-  assertEquals(adjusted.subsumed.map((criterion) => criterion.key), ["Количество жил", "Сечение жилы"]);
-  assertEquals(adjusted.criteria.map((criterion) => criterion.key), ["Негорючесть"]);
+  assertEquals(adjusted.subsumed.map((criterion) => criterion.key), [
+    "Количество жил",
+    "Сечение жилы",
+  ]);
+  assertEquals(adjusted.criteria.map((criterion) => criterion.key), [
+    "Негорючесть",
+  ]);
 });
 
 Deno.test("compound criterion subsumption does not remove unrelated equal numbers", () => {
@@ -166,52 +265,92 @@ Deno.test("compound criterion subsumption does not remove unrelated equal number
     { key: "Размер", op: "eq", value: "3×1,5", level: "A" },
   ], marking);
   assertEquals(adjusted.subsumed.map((criterion) => criterion.key), ["Размер"]);
-  assertEquals(adjusted.criteria.map((criterion) => criterion.key), ["Количество", "Напряжение"]);
+  assertEquals(adjusted.criteria.map((criterion) => criterion.key), [
+    "Количество",
+    "Напряжение",
+  ]);
 });
 
 Deno.test("grounded compound search terminates only a non-exhaustive exact-title pool", () => {
-  const marking = extractExplicitCompoundMarking("нужен медный кабель негорючий 2*1,5")!;
-  assertEquals(shouldTerminateAfterGroundedCompoundSearch(
+  const marking = extractExplicitCompoundMarking(
     "нужен медный кабель негорючий 2*1,5",
-    ["Кабель ВВГ нг 2*1,5", "Кабель ВВГ нг LS 2×1.5"],
-    marking,
-  ), true);
-  assertEquals(shouldTerminateAfterGroundedCompoundSearch(
-    "покажи все позиции кабеля 2*1,5",
-    ["Кабель ВВГ нг 2*1,5"],
-    marking,
-  ), false);
-  assertEquals(shouldTerminateAfterGroundedCompoundSearch(
-    "нужен кабель 2*1,5",
-    ["Кабель ВВГ нг 4*1,5"],
-    marking,
-  ), false);
+  )!;
+  assertEquals(
+    shouldTerminateAfterGroundedCompoundSearch(
+      "нужен медный кабель негорючий 2*1,5",
+      ["Кабель ВВГ нг 2*1,5", "Кабель ВВГ нг LS 2×1.5"],
+      marking,
+    ),
+    true,
+  );
+  assertEquals(
+    shouldTerminateAfterGroundedCompoundSearch(
+      "покажи все позиции кабеля 2*1,5",
+      ["Кабель ВВГ нг 2*1,5"],
+      marking,
+    ),
+    false,
+  );
+  assertEquals(
+    shouldTerminateAfterGroundedCompoundSearch(
+      "нужен кабель 2*1,5",
+      ["Кабель ВВГ нг 4*1,5"],
+      marking,
+    ),
+    false,
+  );
 });
 
 Deno.test("exhaustive compound intent bypasses bounded direct selection", () => {
-  assertEquals(isExhaustiveCompoundRequest("покажи все позиции кабеля 3*1,5"), true);
-  assertEquals(isExhaustiveCompoundRequest("нужен полный список кабелей 3×1,5"), true);
+  assertEquals(
+    isExhaustiveCompoundRequest("покажи все позиции кабеля 3*1,5"),
+    true,
+  );
+  assertEquals(
+    isExhaustiveCompoundRequest("нужен полный список кабелей 3×1,5"),
+    true,
+  );
   assertEquals(isExhaustiveCompoundRequest("покажи кабель 3*1,5"), false);
 });
 
 Deno.test("compound catalog syntax changes punctuation without changing the model's words", () => {
-  assertEquals(canonicalizeCompoundMarkingForCatalog("ВВГнг 2х1.5"), "ВВГнг 2*1,5");
-  assertEquals(canonicalizeCompoundMarkingForCatalog("кабель ВВГ нг 2 × 1,50"), "кабель ВВГ нг 2*1,50");
-  assertEquals(canonicalizeCompoundMarkingForCatalog("светильник 5000 лм"), "светильник 5000 лм");
+  assertEquals(
+    canonicalizeCompoundMarkingForCatalog("ВВГнг 2х1.5"),
+    "ВВГнг 2*1,5",
+  );
+  assertEquals(
+    canonicalizeCompoundMarkingForCatalog("кабель ВВГ нг 2 × 1,50"),
+    "кабель ВВГ нг 2*1,50",
+  );
+  assertEquals(
+    canonicalizeCompoundMarkingForCatalog("светильник 5000 лм"),
+    "светильник 5000 лм",
+  );
 });
 
 Deno.test("compound recovery ladder uses only model wording plus the user's literal marking", () => {
   const marking = extractExplicitCompoundMarking("нужен кабель 2×1,5")!;
-  assertEquals(compoundRecoveryQueries(marking, [
-    "кабель",
-    "Кабель силовой с медными жилами",
-    "Кабель ВВГ",
-  ], 6), [
-    "кабель 2*1,5",
-    "кабель силовой с медными жилами 2*1,5",
-    "кабель ввг 2*1,5",
-    "силовой 2*1,5",
-    "медными 2*1,5",
-    "жилами 2*1,5",
-  ]);
+  assertEquals(
+    compoundRecoveryQueries(marking, [
+      "кабель",
+      "Кабель силовой с медными жилами",
+      "Кабель ВВГ",
+    ], 6),
+    [
+      "кабель 2*1,5",
+      "кабель силовой с медными жилами 2*1,5",
+      "кабель ввг 2*1,5",
+      "силовой 2*1,5",
+      "медными 2*1,5",
+      "жилами 2*1,5",
+    ],
+  );
+  assertEquals(
+    compoundRecoveryQueries(marking, ["изделия серия 2×1,5"], 4),
+    [
+      "изделия 2*1,5",
+      "изделия серия 2*1,5",
+      "серия 2*1,5",
+    ],
+  );
 });

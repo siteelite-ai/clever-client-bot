@@ -8,6 +8,7 @@ import {
 } from "./selection-readiness.ts";
 
 const cases = [
+  ["Сколько автоматов нужно поставить в щит для дома?", "electrical_distribution_plan"],
   ["Мне нужен кабель для насоса", "pump_cable"],
   ["Какой кабель подойдет для прокладки в земле?", "underground_cable"],
   ["Подберите автомат для двигателя", "motor_breaker"],
@@ -34,6 +35,27 @@ Deno.test("selection readiness allows a completed pump-cable context", () => {
     ),
     null,
   );
+});
+
+Deno.test("distribution-board sizing always asks for topology, power and major loads", () => {
+  for (const message of [
+    "Сколько автоматов нужно поставить в щит для частного дома площадью 180 квадратов?",
+    "Для коттеджа 240 м² какое количество автоматов должно быть в электрощите?",
+    "Щит дома: сколько УЗО и автоматов предусмотреть?",
+  ]) {
+    const clarification = selectReadinessClarification(message);
+    assertEquals(clarification?.profile, "electrical_distribution_plan");
+    assertEquals(/однофаз|трёхфаз|220|380/iu.test(clarification?.question ?? ""), true);
+    assertEquals(/мощн/iu.test(clarification?.question ?? ""), true);
+    assertEquals(/плит|бойлер|кот[её]л|насос|саун/iu.test(clarification?.question ?? ""), true);
+  }
+});
+
+Deno.test("distribution-board sizing can proceed only after all three input groups", () => {
+  assertEquals(selectReadinessClarification(
+    "Сколько автоматов нужно поставить в щит для дома?",
+    "Ввод 380 В трёхфазный, выделено 25 кВт, есть плита, бойлер и насос",
+  ), null);
 });
 
 Deno.test("selection readiness evidence never treats assistant prompts as customer facts", () => {
@@ -117,6 +139,12 @@ Deno.test("asking for variants does not bypass missing selection parameters", ()
   );
   assertEquals(clarification?.profile, "outdoor_floodlight");
   assertEquals(clarification?.scope?.kind, "selection_readiness");
+  assertEquals(
+    selectReadinessClarification(
+      "Подберите варианты уличного прожектора для двора частного дома",
+    )?.profile,
+    "outdoor_floodlight",
+  );
 });
 
 Deno.test("variant wording does not bypass readiness in another product domain", () => {
@@ -181,6 +209,17 @@ Deno.test("free-form clarification answer retains the original selection request
     message: `${original}\nУточнение клиента: Площадь около 120 м², высота установки 4 м`,
     scoped: true,
   });
+});
+
+Deno.test("surveillance route length satisfies the distance requirement", () => {
+  assertEquals(
+    selectReadinessClarification(
+      "Подберите кабель для камер видеонаблюдения\nУточнение клиента: Система аналоговая, улица, длина трассы 30 м",
+      "",
+      { progressive: true },
+    ),
+    null,
+  );
 });
 
 Deno.test("specific readiness profile wins over an overlapping generic profile", () => {

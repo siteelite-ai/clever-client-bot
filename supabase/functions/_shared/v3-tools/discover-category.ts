@@ -4,11 +4,24 @@
 // Data-agnostic: НИКАКИХ доменных списков категорий/фасетов в коде.
 
 import type { CatalogClientDeps } from "./search-catalog.ts";
+import {
+  compactFacetCodeSupportScore,
+  resolveCompoundFacetValueEvidence,
+  type CompactCodeFacet,
+} from "./compact-facet-code.ts";
+import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
 
 const CATEGORIES_TTL_MS = 60 * 60 * 1000;
 const MODEL = "google/gemini-2.5-flash";
 
 interface CategoryNode {
+  id: number;
+  pagetitle: string;
+  parentId: number | null;
+  childrenIds: number[];
+}
+
+export interface CategoryTreeNode {
   id: number;
   pagetitle: string;
   parentId: number | null;
@@ -72,6 +85,7 @@ export interface DiscoverCategoryOk {
    */
   leaf_categories: LeafCategory[];
   resolved_from?: string;
+  resolution_method?: "exact" | "live_taxonomy" | "live_facet_schema" | "model";
 }
 
 export interface DiscoverCategoryErr {
@@ -126,12 +140,28 @@ function localCategoryTokenMatches(left: string, right: string): boolean {
   let shared = 0;
   while (shared < a.length && shared < b.length && a[shared] === b[shared]) shared += 1;
   const shorter = Math.min(a.length, b.length);
-  return shared >= 5 && shared / shorter >= 0.6;
+  const longer = Math.max(a.length, b.length);
+  // Inflectional forms stay close in total stem length. A short standalone
+  // class head must not match a longer compound word merely because both
+  // begin alike (`кабель` vs `кабеленесущие`). That false prefix match can
+  // route an otherwise explicit product request into a sibling taxonomy.
+  return shared >= 5 && shared / shorter >= 0.6 && shared / longer >= 0.55;
 }
 
 function localCategoryTokens(value: string): string[] {
   return normalize(value).split(" ").filter((token) =>
-    token.length >= 3 && !LOCAL_CATEGORY_GRAMMAR_WORDS.has(token)
+    token.length >= 2 &&
+    token !== "и" &&
+    !LOCAL_CATEGORY_GRAMMAR_WORDS.has(token) &&
+    !LOCAL_CATEGORY_MODIFIER_PREPOSITIONS.has(token)
+  );
+}
+
+function categoryDiscriminatorTokens(value: string): string[] {
+  return normalize(value).split(" ").filter((token) =>
+    token.length >= 2 &&
+    token !== "и" &&
+    !LOCAL_CATEGORY_GRAMMAR_WORDS.has(token)
   );
 }
 
@@ -178,6 +208,68 @@ export function resolveGroundedCategoryHeadToken(
   );
 }
 
+/**
+ * A semantic matcher may correctly recognise the customer-owned product head
+ * but still guess an unrequested leaf below it. Application context alone is
+ * not proof of a catalogue subtype: selecting such a leaf makes every later
+ * reasoning/search step rationalise the same initial mistake. When the leaf
+ * adds a discriminator absent from the customer text, keep the nearest live
+ * ancestor that still owns the grounded head. The later reasoning step can
+ * then select a subtype from live facets or ask for a genuinely necessary
+ * clarification. Explicit leaf markings remain unchanged.
+ *
+ * This is taxonomy-only and category-neutral: the vocabulary is supplied by
+ * the current customer text and live tree.
+ */
+export function liftUngroundedLeafToCustomerHeadAncestor(
+  queryText: string,
+  winnerPagetitle: string,
+  nodes: Iterable<CategoryTreeNode>,
+): string {
+  const nodeList = [...nodes];
+  const byId = new Map(nodeList.map((node) => [node.id, node]));
+  const winner = nodeList.find((node) => normalize(node.pagetitle) === normalize(winnerPagetitle));
+  if (!winner || winner.childrenIds.length > 0) return winnerPagetitle;
+
+  const rawQueryTokens = normalize(queryText).split(" ").filter(Boolean);
+  const winnerTokens = categoryDiscriminatorTokens(winner.pagetitle);
+  const groundedHead = groundedHeadTokenForCategory(rawQueryTokens, winner.pagetitle) ?? (
+    winnerTokens.length >= 2
+      ? rawQueryTokens.find((queryToken, index) =>
+        queryToken.length >= 4 &&
+        !isLikelyRussianAdjective(queryToken) &&
+        localCategoryTokenMatches(winnerTokens[0], queryToken) &&
+        (index === 0 || (
+          !LOCAL_CATEGORY_MODIFIER_PREPOSITIONS.has(rawQueryTokens[index - 1]) &&
+          !rawQueryTokens.slice(Math.max(0, index - 3), index)
+            .some((token) => LOCAL_CATEGORY_NEGATION_WORDS.has(token))
+        ))
+      ) ?? null
+      : null
+  );
+  if (!groundedHead) return winnerPagetitle;
+
+  const discriminators = winnerTokens
+    .filter((token) => !localCategoryTokenMatches(token, groundedHead));
+  const discriminatorsGrounded = discriminators.length > 0 && discriminators.every((token) =>
+    rawQueryTokens.some((candidate) => localCategoryTokenMatches(token, candidate))
+  );
+  if (discriminatorsGrounded) return winnerPagetitle;
+
+  let parentId = winner.parentId;
+  const visited = new Set<number>();
+  while (parentId !== null && !visited.has(parentId)) {
+    visited.add(parentId);
+    const parent = byId.get(parentId);
+    if (!parent) break;
+    const preservesHead = categoryDiscriminatorTokens(parent.pagetitle)
+      .some((token) => localCategoryTokenMatches(token, groundedHead));
+    if (parent.childrenIds.length > 0 && preservesHead) return parent.pagetitle;
+    parentId = parent.parentId;
+  }
+  return winnerPagetitle;
+}
+
 function collectHeadCategoryCandidates(
   rawQueryTokens: string[],
   pagetitles: string[],
@@ -195,15 +287,29 @@ function resolveUniqueHeadCategory(
   return candidates.length === 1 ? candidates : [];
 }
 
+interface CategoryFacetEvidence extends CompactCodeFacet {
+  caption: string;
+}
+
+/**
+ * A compact customer code can encode values from two independent live axes
+ * (`C16` => value `C` on one facet plus value `16` on another). Recognise that
+ * relation from the candidate's live schema only: no category, brand or
+ * product vocabulary is embedded here. Both axes must be present, a lone
+ * mixed value is insufficient, and ambiguity between candidates remains a
+ * fail-closed tie.
+ */
 /**
  * Disambiguate several live categories sharing the same customer head only by
- * their own live facet captions. Two distinct query axes must support one
- * candidate, and its score must be unique. A single generic word or a tie is
- * insufficient, so semantic resolution remains fail-closed.
+ * their own live facet schema. Two distinct pieces of query evidence must
+ * support one candidate, and its score must be unique. Evidence may be an
+ * explicit facet caption or a compact code proven by values from two live
+ * facet axes. A single generic word or a tie is insufficient, so semantic
+ * resolution remains fail-closed.
  */
 export function resolveHeadCategoryByFacetEvidence(
   queryText: string,
-  candidates: Array<{ pagetitle: string; facets: Array<Pick<Facet, "caption">> }>,
+  candidates: Array<{ pagetitle: string; facets: CategoryFacetEvidence[] }>,
 ): string | null {
   const queryTokens = Array.from(new Set(localCategoryTokens(queryText).filter((token) => token.length >= 5)));
   const scored = candidates.map((candidate) => {
@@ -214,7 +320,12 @@ export function resolveHeadCategoryByFacetEvidence(
         )
       )
     );
-    return { pagetitle: candidate.pagetitle, score: matchedAxes.length };
+    const compactScore = compactFacetCodeSupportScore(queryText, candidate.facets);
+    const compoundScore = resolveCompoundFacetValueEvidence(queryText, candidate.facets).length * 2;
+    return {
+      pagetitle: candidate.pagetitle,
+      score: matchedAxes.length + compactScore + compoundScore,
+    };
   }).sort((left, right) => right.score - left.score || left.pagetitle.localeCompare(right.pagetitle));
   const best = scored[0];
   if (!best || best.score < 2) return null;
@@ -449,6 +560,7 @@ async function resolvePagetitle(
 ): Promise<{
   pagetitle: string;
   resolvedFrom?: string;
+  resolutionMethod: NonNullable<DiscoverCategoryOk["resolution_method"]>;
   candidates: string[];
   cache: CategoriesCache;
   prefetched?: Map<string, DiscoverCategoryOk>;
@@ -457,7 +569,14 @@ async function resolvePagetitle(
   const cache = await fetchCategories(deps);
   const flat = cache.flat;
   const exact = flat.find((c) => normalize(c.pagetitle) === normalize(noun));
-  if (exact) return { pagetitle: exact.pagetitle, candidates: [exact.pagetitle], cache };
+  if (exact) {
+    return {
+      pagetitle: exact.pagetitle,
+      resolutionMethod: "exact",
+      candidates: [exact.pagetitle],
+      cache,
+    };
+  }
   const queryText = [input.semantic_query ?? "", input.noun].join(" ");
   const rawQueryTokens = normalize(queryText).split(" ").filter(Boolean);
   const localCandidates = resolveLocalCategoryPagetitles(input, flat.map((candidate) => candidate.pagetitle));
@@ -465,6 +584,7 @@ async function resolvePagetitle(
     return {
       pagetitle: localCandidates[0],
       resolvedFrom: groundedHeadTokenForCategory(rawQueryTokens, localCandidates[0]) ?? noun,
+      resolutionMethod: "live_taxonomy",
       candidates: localCandidates,
       cache,
     };
@@ -485,6 +605,7 @@ async function resolvePagetitle(
       return {
         pagetitle: schemaWinner,
         resolvedFrom: groundedHeadTokenForCategory(rawQueryTokens, schemaWinner) ?? noun,
+        resolutionMethod: "live_facet_schema",
         candidates: [schemaWinner],
         cache,
         prefetched,
@@ -531,12 +652,25 @@ async function resolvePagetitle(
   if (usable.length === 0) return null;
   // Страховка: если победитель — GROUP, и среди его листьев есть более конкретный по токенам запроса — берём лист.
   const qTokens = tokensOf([input.semantic_query ?? "", noun].join(" "));
-  const refined = usable.map((p) => preferLeafWithinGroup(p, qTokens, cache));
+  const refined = usable.map((p) => {
+    const leafPreferred = preferLeafWithinGroup(p, qTokens, cache);
+    return liftUngroundedLeafToCustomerHeadAncestor(
+      [input.semantic_query ?? "", noun].join(" "),
+      leafPreferred,
+      cache.byId.values(),
+    );
+  });
   // Дедупликация с сохранением порядка.
   const seen = new Set<string>();
   const finalList: string[] = [];
   for (const p of refined) if (!seen.has(p)) { seen.add(p); finalList.push(p); }
-  return { pagetitle: finalList[0], resolvedFrom: noun, candidates: finalList, cache };
+  return {
+    pagetitle: finalList[0],
+    resolvedFrom: groundedHeadTokenForCategory(rawQueryTokens, finalList[0]) ?? noun,
+    resolutionMethod: "model",
+    candidates: finalList,
+    cache,
+  };
 }
 
 async function fetchFacetsForPagetitle(
@@ -592,6 +726,7 @@ async function fetchFacetsForPagetitle(
       const key = cleanText(o?.key);
       const caption = cleanText(o?.caption_ru);
       if (!key || !caption) continue;
+      if (isAdministrativeCatalogField({ key, caption })) continue;
       const values: FacetValue[] = [];
       if (Array.isArray(o.values)) {
         for (const v of o.values) {
@@ -679,7 +814,13 @@ export async function executeDiscoverCategory(
         : await fetchFacetsForPagetitle(pagetitle, deps);
       if (facets.ok && isUsefulDiscovery(facets.data)) {
         const leaves = resolveLeafCategories(facets.data.category.pagetitle, facets.data.category.id, resolved.cache);
-        return { tool: "discover_category", ...facets.data, leaf_categories: leaves, resolved_from: resolved.resolvedFrom };
+        return {
+          tool: "discover_category",
+          ...facets.data,
+          leaf_categories: leaves,
+          resolved_from: resolved.resolvedFrom,
+          resolution_method: resolved.resolutionMethod,
+        };
       }
     }
     return { tool: "discover_category", ok: false, error_code: "category_not_found", message: `no category facets for "${noun}"` };

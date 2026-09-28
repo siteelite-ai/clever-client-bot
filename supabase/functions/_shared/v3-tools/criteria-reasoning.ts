@@ -16,8 +16,15 @@
 // Модуль ЧИСТЫЙ и DATA-AGNOSTIC: только числа, единицы и направляющие слова —
 // никаких доменных ключей, категорий, брендов.
 
-import { projectCriteriaFacetOptions, type CriteriaFacet, type Criterion } from "./criteria-gate.ts";
-import { extractClientQuantities, normalizeUnit } from "./criteria-consistency.ts";
+import {
+  type CriteriaFacet,
+  type Criterion,
+  projectCriteriaFacetOptions,
+} from "./criteria-gate.ts";
+import {
+  extractClientQuantities,
+  normalizeUnit,
+} from "./criteria-consistency.ts";
 
 export interface ReasoningBound {
   op: "min" | "max";
@@ -77,6 +84,14 @@ const SIMPLE_UNIT = String.raw`[a-zа-я°]{1,6}[²³]?\d?`;
 // ambiguous.
 const UNIT = String.raw`${SIMPLE_UNIT}(?:(?:\/|\s+на\s+)${SIMPLE_UNIT})?`;
 
+function schemaMeasurementUnitTokens(value: string): string[] {
+  const pattern = new RegExp(
+    String.raw`(?<![a-zа-я])(${SIMPLE_UNIT})(?![a-zа-я])`,
+    "giu",
+  );
+  return [...String(value ?? "").matchAll(pattern)].map((match) => match[1]);
+}
+
 function normalizeEvidence(value: unknown): string {
   return String(value ?? "")
     .toLocaleLowerCase("ru-RU")
@@ -86,43 +101,109 @@ function normalizeEvidence(value: unknown): string {
     .trim();
 }
 
+/** A system-level measured total can guide the explanation but is not a
+ * scalar property of every individual catalog card. Require both an aggregate
+ * marker and explicit distribution across multiple units, so a total for one
+ * replacement fixture remains projectable. */
+function hasAggregateMeasurementMarker(text: string): boolean {
+  const normalized = String(text ?? "").toLocaleLowerCase("ru-RU").replace(
+    /ё/g,
+    "е",
+  );
+  return /(?:суммарн|совокупн|итогов\p{L}*\s+(?:поток|мощност|производительност)|общ\p{L}*\s+(?:светов\p{L}*\s+)?поток)/iu
+    .test(normalized);
+}
+
+function isDistributedAggregateMeasurement(text: string): boolean {
+  const normalized = String(text ?? "").toLocaleLowerCase("ru-RU").replace(
+    /ё/g,
+    "е",
+  );
+  const aggregate = hasAggregateMeasurementMarker(normalized);
+  const distributed =
+    /(?:нескольк\p{L}*|распредел\p{L}*|между\s+\p{L}+|по\s+периметр\p{L}*|равномер\p{L}*|групп\p{L}*|в\s+сумме\s+\p{L}+)/iu
+      .test(normalized);
+  return aggregate && distributed;
+}
+
 function criteriaIdentityMatches(left: Criterion, right: Criterion): boolean {
   const leftKey = normalizeEvidence(left.key);
   const rightKey = normalizeEvidence(right.key);
-  if (!leftKey || !rightKey || !(leftKey === rightKey || leftKey.includes(rightKey) || rightKey.includes(leftKey))) return false;
-  const leftValue = normalizeEvidence(Array.isArray(left.value) ? left.value.join(" ") : left.value);
-  const rightValue = normalizeEvidence(Array.isArray(right.value) ? right.value.join(" ") : right.value);
+  if (
+    !leftKey || !rightKey ||
+    !(leftKey === rightKey || leftKey.includes(rightKey) ||
+      rightKey.includes(leftKey))
+  ) return false;
+  const leftValue = normalizeEvidence(
+    Array.isArray(left.value) ? left.value.join(" ") : left.value,
+  );
+  const rightValue = normalizeEvidence(
+    Array.isArray(right.value) ? right.value.join(" ") : right.value,
+  );
   return !leftValue || !rightValue || leftValue === rightValue;
 }
 
-function clauseSupportsCriterion(clause: string, criterion: Criterion): boolean {
+function clauseSupportsCriterion(
+  clause: string,
+  criterion: Criterion,
+): boolean {
   const normalizedClause = normalizeEvidence(clause);
   if (!normalizedClause) return false;
   const clauseTokens = normalizedClause.split(" ").filter(Boolean);
-  const rawValues = Array.isArray(criterion.value) ? criterion.value : [criterion.value];
+  const rawValues = Array.isArray(criterion.value)
+    ? criterion.value
+    : [criterion.value];
   const valueSupported = rawValues.some((value) => {
     const normalized = normalizeEvidence(value);
     if (normalized.length < 2) return false;
     if (normalizedClause.includes(normalized)) return true;
-    const valueTokens = normalized.split(" ").filter((token) => /^\p{L}{5,}$/u.test(token));
-    return valueTokens.length > 0 && valueTokens.every((token) =>
-      clauseTokens.some((candidate) =>
-        /^\p{L}{5,}$/u.test(candidate) && candidate.slice(0, 4) === token.slice(0, 4)
-      )
+    const valueTokens = normalized.split(" ").filter((token) =>
+      /^\p{L}{5,}$/u.test(token)
     );
+    return valueTokens.length > 0 &&
+      valueTokens.every((token) =>
+        clauseTokens.some((candidate) =>
+          /^\p{L}{5,}$/u.test(candidate) &&
+          candidate.slice(0, 4) === token.slice(0, 4)
+        )
+      );
   });
   if (valueSupported) return true;
-  const keyTokens = normalizeEvidence(criterion.key).split(" ").filter((token) => token.length >= 4);
+  const keyTokens = normalizeEvidence(criterion.key).split(" ").filter((
+    token,
+  ) => token.length >= 4);
   const shortCodeSupported = rawValues.some((value) => {
     const normalized = normalizeEvidence(value);
-    const shortCodes = normalized.split(" ").filter((token) => token.length === 1 && /\p{L}/u.test(token));
+    const shortCodes = normalized.split(" ").filter((token) =>
+      token.length === 1 && /\p{L}/u.test(token)
+    );
     if (shortCodes.length === 0) return false;
-    const visual = (token: string) => ({ а: "a", в: "b", е: "e", к: "k", м: "m", н: "h", о: "o", р: "p", с: "c", т: "t", у: "y", х: "x" }[token] ?? token);
-    return shortCodes.some((code) => normalizedClause.split(" ").some((token) => token.length === 1 && visual(token) === visual(code))) &&
+    const visual = (
+      token: string,
+    ) => ({
+      а: "a",
+      в: "b",
+      е: "e",
+      к: "k",
+      м: "m",
+      н: "h",
+      о: "o",
+      р: "p",
+      с: "c",
+      т: "t",
+      у: "y",
+      х: "x",
+    }[token] ?? token);
+    return shortCodes.some((code) =>
+      normalizedClause.split(" ").some((token) =>
+        token.length === 1 && visual(token) === visual(code)
+      )
+    ) &&
       keyTokens.some((token) => normalizedClause.includes(token));
   });
   if (shortCodeSupported) return true;
-  return keyTokens.length > 0 && keyTokens.every((token) => normalizedClause.includes(token));
+  return keyTokens.length > 0 &&
+    keyTokens.every((token) => normalizedClause.includes(token));
 }
 
 /**
@@ -137,19 +218,35 @@ export function alignCriteriaImportanceWithReasoning(
   userBackedCriteria: Criterion[] = [],
   protectedReasoningCriteria: Criterion[] = [],
 ): CriteriaImportanceAlignment {
-  const clauses = String(reasoningText ?? "").split(/(?<=[.!?;])|\n+/u).map((clause) => clause.trim()).filter(Boolean);
-  const mandatory = /(?:обязат|необходим|нуж(?:ен|на|но|ны)|треб(?:уется|уем|ование)|долж(?:ен|на|но|ны)|подход\p{L}*\s+(?:для|под)|ключев\p{L}*\s+параметр\p{L}*|не\s+менее|не\s+более|минимум|максимум|точно|значит|счита|расчет|получа|итого|составля|[=×])/iu;
-  const advisory = /(?:логичн|предпочт|скорее\s+всего|желатель|комфортн|уютн|можно|например|по\s+желанию|кому\s+как)/iu;
+  const clauses = String(reasoningText ?? "").split(/(?<=[.!?;])|\n+/u).map((
+    clause,
+  ) => clause.trim()).filter(Boolean);
+  const mandatory =
+    /(?:обязат|необходим|нуж(?:ен|на|но|ны)|треб(?:уется|уем|ование)|долж(?:ен|на|но|ны)|подход\p{L}*\s+(?:для|под)|ключев\p{L}*\s+параметр\p{L}*|не\s+менее|не\s+более|минимум|максимум|точно|значит|счита|расчет|получа|итого|составля|[=×])/iu;
+  const advisory =
+    /(?:логичн|предпочт|скорее\s+всего|желатель|комфортн|уютн|можно|например|по\s+желанию|кому\s+как)/iu;
   const demoted: string[] = [];
   const aligned = (Array.isArray(criteria) ? criteria : []).map((criterion) => {
     if (!criterion || (criterion.level ?? "A") !== "A") return { ...criterion };
     if (
-      userBackedCriteria.some((candidate) => criteriaIdentityMatches(criterion, candidate)) ||
-      protectedReasoningCriteria.some((candidate) => criteriaIdentityMatches(criterion, candidate))
+      userBackedCriteria.some((candidate) =>
+        criteriaIdentityMatches(criterion, candidate)
+      ) ||
+      protectedReasoningCriteria.some((candidate) =>
+        criteriaIdentityMatches(criterion, candidate)
+      )
     ) return { ...criterion, level: "A" as const };
-    const relevant = clauses.filter((clause) => clauseSupportsCriterion(clause, criterion));
-    if (relevant.some((clause) => mandatory.test(clause))) return { ...criterion, level: "A" as const };
-    if (relevant.length === 0 || relevant.some((clause) => advisory.test(clause)) || !relevant.some((clause) => mandatory.test(clause))) {
+    const relevant = clauses.filter((clause) =>
+      clauseSupportsCriterion(clause, criterion)
+    );
+    if (relevant.some((clause) => mandatory.test(clause))) {
+      return { ...criterion, level: "A" as const };
+    }
+    if (
+      relevant.length === 0 || relevant.some((clause) =>
+        advisory.test(clause)
+      ) || !relevant.some((clause) => mandatory.test(clause))
+    ) {
       demoted.push(criterion.key);
       return { ...criterion, level: "B" as const };
     }
@@ -172,7 +269,9 @@ export function demoteUnfrozenRenderCriteria(
   const demoted: string[] = [];
   const aligned = (Array.isArray(criteria) ? criteria : []).map((criterion) => {
     if (!criterion || (criterion.level ?? "A") !== "A") return { ...criterion };
-    if (frozen.some((candidate) => criteriaIdentityMatches(criterion, candidate))) {
+    if (
+      frozen.some((candidate) => criteriaIdentityMatches(criterion, candidate))
+    ) {
       return { ...criterion, level: "A" as const };
     }
     demoted.push(criterion.key);
@@ -197,8 +296,55 @@ export function compileMeasuredReasoningSearchContract(
   userBackedCriteria: Criterion[],
   facets: Array<CriteriaFacet & { type: string }>,
 ): MeasuredReasoningSearchContract {
-  const projected = projectReasoningRangeCriteria(criteria, reasoningText, facets);
-  const classificationMarker = /(?:категор\p{L}*|класс\p{L}*|вид\p{L}*|назначен\p{L}*|применен\p{L}*|исполнен\p{L}*)/iu;
+  const projected = projectReasoningRangeCriteria(
+    criteria,
+    reasoningText,
+    facets,
+  );
+  const stronglyDeclaredMaximum = (criterion: Criterion): boolean => {
+    if (criterion.op !== "max" || Array.isArray(criterion.value)) return true;
+    const value = String(criterion.value).replace(
+      /[.*+?^${}()|[\]\\]/gu,
+      "\\$&",
+    ).replace(/[.,]/u, "[.,]");
+    const unit = String(criterion.unit ?? "").trim()
+      .replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+    if (!unit) return false;
+    const strongDirection = String
+      .raw`(?:не\s+(?:более|больше|выше)|максимум|меньше|ниже|at\s+most|maximum|less\s+than|<=|≤|<)`;
+    return new RegExp(
+      String
+        .raw`${strongDirection}\s*(?:чем\s+)?${value}\s*${unit}(?![a-zа-я])`,
+      "iu",
+    ).test(String(reasoningText ?? ""));
+  };
+  const customerOwnsSameMaximum = (criterion: Criterion): boolean =>
+    userBackedCriteria.some((candidate) =>
+      candidate.op === "max" &&
+      criteriaIdentityMatches(criterion, candidate) &&
+      canonicalMeasurementUnit(candidate.unit ?? "") ===
+        canonicalMeasurementUnit(criterion.unit ?? "")
+    );
+  // Bare `до X unit` is semantically ambiguous in derived prose: it often
+  // names an equipment class or capability (`rated for use up to ...`) rather
+  // than a customer-authored maximum for the selected product. Keep strict or
+  // explicit upper-bound language, and always preserve a matching customer
+  // maximum; otherwise do not freeze the derived scalar as a hard obligation.
+  const weakDerivedMaxima = new Set(
+    projected.added.filter((criterion) =>
+      criterion.op === "max" &&
+      !stronglyDeclaredMaximum(criterion) &&
+      !customerOwnsSameMaximum(criterion)
+    ),
+  );
+  const projectedCriteria = projected.criteria.filter((criterion) =>
+    !weakDerivedMaxima.has(criterion)
+  );
+  const projectedAdded = projected.added.filter((criterion) =>
+    !weakDerivedMaxima.has(criterion)
+  );
+  const classificationMarker =
+    /(?:категор\p{L}*|класс\p{L}*|вид\p{L}*|назначен\p{L}*|применен\p{L}*|исполнен\p{L}*)/iu;
   const reasoningClauses = String(reasoningText ?? "")
     // A semicolon may be part of one canonical live value (an enum group),
     // not a boundary between two reasoning claims. Sentence punctuation and
@@ -211,8 +357,10 @@ export function compileMeasuredReasoningSearchContract(
   // consultant phrased it as a recommendation. Protect only clauses that name
   // the schema role (class/category/type/purpose); colours and other ordinary
   // preferences remain eligible for demotion.
-  const applicationClassCriteria = projected.criteria.filter((criterion) => {
-    if (criterion.op !== "eq" || typeof criterion.value !== "string") return false;
+  const applicationClassCriteria = projectedCriteria.filter((criterion) => {
+    if (criterion.op !== "eq" || typeof criterion.value !== "string") {
+      return false;
+    }
     // A classification word elsewhere in the same sentence must not promote
     // an adjacent preference (for example colour or housing material) into a
     // hard filter. Both the live facet itself and the reasoning clause must
@@ -226,17 +374,19 @@ export function compileMeasuredReasoningSearchContract(
     );
   });
   const importance = alignCriteriaImportanceWithReasoning(
-    projected.criteria,
+    projectedCriteria,
     reasoningText,
     userBackedCriteria,
-    [...projected.added, ...applicationClassCriteria],
+    [...projectedAdded, ...applicationClassCriteria],
   );
-  const mandatory = importance.criteria.filter((criterion) => (criterion.level ?? "A") === "A");
+  const mandatory = importance.criteria.filter((criterion) =>
+    (criterion.level ?? "A") === "A"
+  );
   const facetProjection = projectCriteriaFacetOptions(mandatory, facets);
   return {
     criteria: importance.criteria,
     mandatory_criteria: mandatory,
-    projected_criteria: projected.added,
+    projected_criteria: projectedAdded,
     options: facetProjection.options,
     demoted: importance.demoted,
     unmatched_keys: facetProjection.unmatched_keys,
@@ -247,11 +397,19 @@ export function compileMeasuredReasoningSearchContract(
  * Bare structural markings such as 2×1.5 have no unit and remain under the
  * existing exact-compound policy. */
 export function hasMeasuredSelectionRequirement(text: string): boolean {
-  const value = String(text ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е");
+  const value = String(text ?? "").toLocaleLowerCase("ru-RU").replace(
+    /ё/g,
+    "е",
+  );
+  const distributedAggregate = isDistributedAggregateMeasurement(value);
   // Do not reinterpret a numeric suffix inside a hyphenated model identifier
   // (`ABC-03-100W`) as a measured requirement. Standalone `100W` remains a
   // valid customer literal and is handled by the ordinary quantity projector.
-  const re = new RegExp(String.raw`(?<![a-zа-я0-9-])\d+(?:[.,]\d+)?(?:\s*[–—-]\s*\d+(?:[.,]\d+)?)?\s*(${UNIT})(?![a-zа-я])`, "giu");
+  const re = new RegExp(
+    String
+      .raw`(?<![a-zа-я0-9-])\d+(?:[.,]\d+)?(?:\s*[–—-]\s*\d+(?:[.,]\d+)?)?\s*(${UNIT})(?![a-zа-я])`,
+    "giu",
+  );
   for (let match; (match = re.exec(value)) !== null;) {
     const unit = normalizeUnit(match[1]);
     if (!unit || /^(шт|штук|раз|года?|лет|мин|сек)$/u.test(unit)) continue;
@@ -264,14 +422,26 @@ export function hasMeasuredSelectionRequirement(text: string): boolean {
     const nextStops = [".", "!", "?", "\n"]
       .map((separator) => value.indexOf(separator, re.lastIndex))
       .filter((index) => index >= 0);
-    const clauseEnd = nextStops.length > 0 ? Math.min(...nextStops) : value.length;
+    const clauseEnd = nextStops.length > 0
+      ? Math.min(...nextStops)
+      : value.length;
     const clause = value.slice(clauseStart, clauseEnd);
-    const explicitRange = /\d+(?:[.,]\d+)?\s*[–—-]\s*\d+(?:[.,]\d+)?/u.test(match[0]);
-    const obligation = /(?:нуж|необходим|долж|треб|минимум|максимум|не\s+менее|не\s+более|больше|меньше|свыше|до\s+\d|от\s+\d|ориентир|диапазон|расчет|счита|получа|итого|составля|покаж|найд|ищ|подбира|выбира|[≈=×])/iu.test(clause);
-    const illustrativeRange = /(?:например|к\s+примеру|вариант\p{L}*\s+на\s+любой|от\s+прост\p{L}*.+\s+до\s+|обычно|часто|бывают)/iu.test(clause);
+    const explicitRange = /\d+(?:[.,]\d+)?\s*[–—-]\s*\d+(?:[.,]\d+)?/u.test(
+      match[0],
+    );
+    const obligation =
+      /(?:нуж|необходим|долж|треб|минимум|максимум|не\s+менее|не\s+более|больше|меньше|свыше|до\s+\d|от\s+\d|ориентир|диапазон|расчет|счита|получа|итого|составля|покаж|найд|ищ|подбира|выбира|[≈=×])/iu
+        .test(clause);
+    const illustrativeRange =
+      /(?:например|к\s+примеру|вариант\p{L}*\s+на\s+любой|от\s+прост\p{L}*.+\s+до\s+|обычно|часто|бывают)/iu
+        .test(clause);
     // Measurements used only to describe a typical product ("обычно 220 В",
     // "часто 10 Вт") or to illustrate assortment breadth ("от простых на
     // 3–5 м до усиленных") are catalog narration, not selection requirements.
+    if (
+      distributedAggregate && hasAggregateMeasurementMarker(clause) ||
+      isDistributedAggregateMeasurement(clause)
+    ) continue;
     if (obligation || (explicitRange && !illustrativeRange)) return true;
   }
   return false;
@@ -283,10 +453,47 @@ export function canonicalMeasurementUnit(raw: string): string {
   // density cannot become a second, conflicting range of the result unit.
   const unit = normalizeUnit(String(raw ?? "").replace(/\s+на\s+/giu, "/"));
   const aliases: Record<string, string> = {
-    ватт: "вт", ватта: "вт", ваттов: "вт", watt: "вт", watts: "вт", w: "вт",
-    люмен: "лм", люмена: "лм", люменов: "лм", lumen: "лм", lumens: "лм", lm: "лм",
-    вольт: "в", вольта: "в", вольтов: "в", volt: "в", volts: "в", v: "в",
-    ампер: "а", ампера: "а", амперов: "а", amp: "а", amps: "а",
+    ватт: "вт",
+    ватта: "вт",
+    ваттов: "вт",
+    watt: "вт",
+    watts: "вт",
+    w: "вт",
+    люмен: "лм",
+    люмена: "лм",
+    люменов: "лм",
+    lumen: "лм",
+    lumens: "лм",
+    lm: "лм",
+    вольт: "в",
+    вольта: "в",
+    вольтов: "в",
+    volt: "в",
+    volts: "в",
+    v: "в",
+    ампер: "а",
+    ампера: "а",
+    амперов: "а",
+    amp: "а",
+    amps: "а",
+    a: "а",
+    // Unit symbols are frequently mixed between visually identical Latin and
+    // Cyrillic glyphs (`3000 K` in the request, `3000 К` in the catalog).  A
+    // physical scale must have one canonical identity regardless of keyboard
+    // layout; otherwise an exact customer number silently degrades to a broad
+    // verbal class such as "warm".
+    k: "к",
+    kelvin: "к",
+    kelvins: "к",
+    c: "с",
+    m: "м",
+    mm: "мм",
+    cm: "см",
+    km: "км",
+    ma: "ма",
+    ka: "ка",
+    kv: "кв",
+    kw: "квт",
   };
   return aliases[unit] ?? unit;
 }
@@ -299,31 +506,39 @@ export function promoteMeasuredReasoningCriteria(
   facets: CriteriaFacet[] = [],
 ): { criteria: Criterion[]; promoted: string[] } {
   const reasoningUnits = new Set(
-    extractClientQuantities(reasoningText).map((quantity) => canonicalMeasurementUnit(quantity.unit)),
+    extractClientQuantities(reasoningText).map((quantity) =>
+      canonicalMeasurementUnit(quantity.unit)
+    ),
   );
   const promoted: string[] = [];
   const next = (Array.isArray(criteria) ? criteria : []).map((criterion) => {
     const numeric = typeof criterion.value === "number" ||
-      Array.isArray(criterion.value) && criterion.value.every((value) => Number.isFinite(Number(value)));
+      Array.isArray(criterion.value) &&
+        criterion.value.every((value) => Number.isFinite(Number(value)));
     let unit = canonicalMeasurementUnit(criterion.unit ?? "");
     let inheritedUnit: string | null = null;
     if (!unit && facets.length > 0) {
       const wanted = normalizeEvidence(criterion.key);
       const exactFacets = facets.filter((facet) =>
-        [facet.key, facet.caption].some((label) => normalizeEvidence(label) === wanted)
+        [facet.key, facet.caption].some((label) =>
+          normalizeEvidence(label) === wanted
+        )
       );
-      const looseFacets = exactFacets.length > 0 ? exactFacets : facets.filter((facet) =>
-        [facet.key, facet.caption].some((label) => {
-          const known = normalizeEvidence(label);
-          return wanted.length >= 4 && known.length >= 4 && (known.includes(wanted) || wanted.includes(known));
-        })
-      );
+      const looseFacets = exactFacets.length > 0
+        ? exactFacets
+        : facets.filter((facet) =>
+          [facet.key, facet.caption].some((label) => {
+            const known = normalizeEvidence(label);
+            return wanted.length >= 4 && known.length >= 4 &&
+              (known.includes(wanted) || wanted.includes(known));
+          })
+        );
       if (looseFacets.length === 1) {
         const facet = looseFacets[0];
         const liveUnits = new Set(
           [
             canonicalMeasurementUnit(facet.unit ?? ""),
-            ...(`${facet.caption} ${facet.key}`.match(new RegExp(UNIT, "giu")) ?? [])
+            ...schemaMeasurementUnitTokens(`${facet.caption} ${facet.key}`)
               .map(canonicalMeasurementUnit),
           ].filter((candidate) => candidate && reasoningUnits.has(candidate)),
         );
@@ -333,7 +548,10 @@ export function promoteMeasuredReasoningCriteria(
         }
       }
     }
-    if ((criterion.level ?? "A") !== "B" || !numeric || !unit || !reasoningUnits.has(unit)) return { ...criterion };
+    if (
+      (criterion.level ?? "A") !== "B" || !numeric || !unit ||
+      !reasoningUnits.has(unit)
+    ) return { ...criterion };
     promoted.push(criterion.key);
     return {
       ...criterion,
@@ -356,24 +574,34 @@ export function promoteProjectableMeasuredFallbackCriteria(
   facets: CriteriaFacet[],
   excludedCriteria: string[] = [],
 ): { criteria: Criterion[]; promoted: string[] } {
-  const source = (Array.isArray(criteria) ? criteria : []).map((criterion) => ({ ...criterion }));
+  const source = (Array.isArray(criteria) ? criteria : []).map((criterion) => ({
+    ...criterion,
+  }));
   if (source.some((criterion) => (criterion.level ?? "A") === "A")) {
     return { criteria: source, promoted: [] };
   }
   const excludedKeys = new Set(
-    (Array.isArray(excludedCriteria) ? excludedCriteria : []).map(normalizeEvidence).filter(Boolean),
+    (Array.isArray(excludedCriteria) ? excludedCriteria : []).map(
+      normalizeEvidence,
+    ).filter(Boolean),
   );
   const candidates = source
     .filter((criterion) => {
       const numeric = typeof criterion.value === "number" ||
-        Array.isArray(criterion.value) && criterion.value.every((value) => Number.isFinite(Number(value)));
-      return (criterion.level ?? "A") === "B" && numeric && !excludedKeys.has(normalizeEvidence(criterion.key));
+        Array.isArray(criterion.value) &&
+          criterion.value.every((value) => Number.isFinite(Number(value)));
+      return (criterion.level ?? "A") === "B" && numeric &&
+        !excludedKeys.has(normalizeEvidence(criterion.key));
     })
     .map((criterion) => ({ ...criterion, level: "A" as const }));
   const projection = projectCriteriaFacetOptions(candidates, facets);
   const promoted: string[] = [];
   const next = source.map((criterion) => {
-    if (!projection.proven_criteria.some((candidate) => criteriaIdentityMatches(criterion, candidate))) return criterion;
+    if (
+      !projection.proven_criteria.some((candidate) =>
+        criteriaIdentityMatches(criterion, candidate)
+      )
+    ) return criterion;
     promoted.push(criterion.key);
     return { ...criterion, level: "A" as const };
   });
@@ -386,12 +614,27 @@ export function promoteProjectableMeasuredFallbackCriteria(
 export function projectReasoningRangeCriteria(
   criteria: Criterion[],
   reasoningText: string,
-  facets: Array<{ key: string; caption: string; type: string; unit: string | null; values?: Array<{ value: string }> }>,
+  facets: Array<
+    {
+      key: string;
+      caption: string;
+      type: string;
+      unit: string | null;
+      values?: Array<{ value: string }>;
+    }
+  >,
 ): ReasoningRangeProjection {
-  const next = (Array.isArray(criteria) ? criteria : []).map((criterion) => ({ ...criterion }));
+  const next = (Array.isArray(criteria) ? criteria : []).map((criterion) => ({
+    ...criterion,
+  }));
   const added: Criterion[] = [];
-  const text = String(reasoningText ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е");
-  const ranges: Array<{ low: number; high: number; unit: string; context: string }> = [];
+  const text = String(reasoningText ?? "").toLocaleLowerCase("ru-RU").replace(
+    /ё/g,
+    "е",
+  );
+  const ranges: Array<
+    { low: number; high: number; unit: string; context: string }
+  > = [];
   const localMeasurementContext = (start: number, end: number): string => {
     const leftWindow = text.slice(Math.max(0, start - 120), start);
     const lastBoundary = Math.max(
@@ -404,41 +647,60 @@ export function projectReasoningRangeCriteria(
     const left = leftWindow.slice(lastBoundary + 1);
     const rightWindow = text.slice(end, Math.min(text.length, end + 80));
     const rightBoundary = rightWindow.search(/[,.;!?\n]|\s+(?:а|но|зато)\s/iu);
-    const right = rightBoundary >= 0 ? rightWindow.slice(0, rightBoundary) : rightWindow;
+    const right = rightBoundary >= 0
+      ? rightWindow.slice(0, rightBoundary)
+      : rightWindow;
     return `${left}${text.slice(start, end)}${right}`;
   };
   const measurementStates = (value: string): Set<string> => {
     const states = new Set<string>();
-    for (const token of String(value ?? "")
-      .toLocaleLowerCase("ru-RU")
-      .replace(/ё/g, "е")
-      .match(/[a-zа-я]+/giu) ?? []) {
+    for (
+      const token of String(value ?? "")
+        .toLocaleLowerCase("ru-RU")
+        .replace(/ё/g, "е")
+        .match(/[a-zа-я]+/giu) ?? []
+    ) {
       if (token === "до" || /^before$/u.test(token)) states.add("before");
       else if (token === "после" || /^after$/u.test(token)) states.add("after");
-      else if (/^(?:исходн|начальн|initial)/u.test(token)) states.add("initial");
-      else if (/^(?:конечн|финальн|final)/u.test(token)) states.add("final");
+      else if (/^(?:исходн|начальн|initial)/u.test(token)) {
+        states.add("initial");
+      } else if (/^(?:конечн|финальн|final)/u.test(token)) states.add("final");
       else if (/^(?:входн|input)/u.test(token)) states.add("input");
       else if (/^(?:выходн|output)/u.test(token)) states.add("output");
     }
     return states;
   };
   const rangePatterns = [
-    new RegExp(String.raw`(?<![a-zа-я0-9-])(${NUM})\s*[–—-]\s*(${NUM})\s*(${UNIT})(?![a-zа-я])`, "giu"),
-    new RegExp(String.raw`от\s+(${NUM})\s+до\s+(${NUM})\s*(${UNIT})(?![a-zа-я])`, "giu"),
+    new RegExp(
+      String
+        .raw`(?<![a-zа-я0-9-])(${NUM})\s*[–—-]\s*(${NUM})\s*(${UNIT})(?![a-zа-я])`,
+      "giu",
+    ),
+    new RegExp(
+      String.raw`от\s+(${NUM})\s+до\s+(${NUM})\s*(${UNIT})(?![a-zа-я])`,
+      "giu",
+    ),
   ];
   for (const re of rangePatterns) {
     for (let match; (match = re.exec(text)) !== null;) {
       const first = Number(match[1].replace(",", "."));
       const second = Number(match[2].replace(",", "."));
       const unit = canonicalMeasurementUnit(match[3]);
-      if (!Number.isFinite(first) || !Number.isFinite(second) || !unit) continue;
+      if (!Number.isFinite(first) || !Number.isFinite(second) || !unit) {
+        continue;
+      }
       const candidate = {
         low: Math.min(first, second),
         high: Math.max(first, second),
         unit,
         context: localMeasurementContext(match.index, re.lastIndex),
       };
-      if (!ranges.some((range) => range.low === candidate.low && range.high === candidate.high && range.unit === candidate.unit)) {
+      if (
+        !ranges.some((range) =>
+          range.low === candidate.low && range.high === candidate.high &&
+          range.unit === candidate.unit
+        )
+      ) {
         ranges.push(candidate);
       }
     }
@@ -451,7 +713,8 @@ export function projectReasoningRangeCriteria(
   // derive scalar×[low,high] in the result unit. This is unit/arithmetic based:
   // no category, product or parameter names are embedded.
   const calculations = new RegExp(
-    String.raw`(${NUM})\s*(${UNIT})\s*[×xх*]\s*(${NUM})\s*(${UNIT})[^\n]{0,60}?[≈=][\s*_~≈]*(${NUM})\s*(${UNIT})(?![a-zа-я])`,
+    String
+      .raw`(${NUM})\s*(${UNIT})\s*[×xх*]\s*(${NUM})\s*(${UNIT})[^\n]{0,60}?[≈=][\s*_~≈]*(${NUM})\s*(${UNIT})(?![a-zа-я])`,
     "giu",
   );
   for (let match; (match = calculations.exec(text)) !== null;) {
@@ -460,11 +723,18 @@ export function projectReasoningRangeCriteria(
     const statedResult = Number(match[5].replace(",", "."));
     const midpointUnit = canonicalMeasurementUnit(match[4]);
     const resultUnit = canonicalMeasurementUnit(match[6]);
-    if (![factor, midpoint, statedResult].every(Number.isFinite) || factor <= 0 || midpoint <= 0 || !midpointUnit || !resultUnit) continue;
+    if (
+      ![factor, midpoint, statedResult].every(Number.isFinite) || factor <= 0 ||
+      midpoint <= 0 || !midpointUnit || !resultUnit
+    ) continue;
     const expectedResult = factor * midpoint;
-    if (Math.abs(expectedResult - statedResult) > Math.max(1, expectedResult * 0.02)) continue;
+    if (
+      Math.abs(expectedResult - statedResult) >
+        Math.max(1, expectedResult * 0.02)
+    ) continue;
     const sourceRanges = ranges.filter((range) =>
-      range.unit === midpointUnit && midpoint >= range.low && midpoint <= range.high
+      range.unit === midpointUnit && midpoint >= range.low &&
+      midpoint <= range.high
     );
     if (sourceRanges.length !== 1) continue;
     const source = sourceRanges[0];
@@ -472,26 +742,77 @@ export function projectReasoningRangeCriteria(
       low: factor * source.low,
       high: factor * source.high,
       unit: resultUnit,
-      context: text.slice(Math.max(0, match.index - 60), Math.min(text.length, calculations.lastIndex + 30)),
+      context: text.slice(
+        Math.max(0, match.index - 60),
+        Math.min(text.length, calculations.lastIndex + 30),
+      ),
     };
-    if (!ranges.some((range) => range.low === candidate.low && range.high === candidate.high && range.unit === candidate.unit)) {
+    if (
+      !ranges.some((range) =>
+        range.low === candidate.low && range.high === candidate.high &&
+        range.unit === candidate.unit
+      )
+    ) {
       ranges.push(candidate);
     }
   }
+  const directionalBounds = collapseBounds(
+    extractReasoningBounds(reasoningText),
+  );
+  const projectedClosedRanges: typeof ranges = [];
+  const distributedAggregate = isDistributedAggregateMeasurement(text);
   for (const range of ranges) {
+    if (
+      distributedAggregate && hasAggregateMeasurementMarker(range.context) ||
+      isDistributedAggregateMeasurement(range.context)
+    ) continue;
+    // Typical/recommended capability ranges are advice, not customer-owned
+    // hard filters. They may guide ranking, but projecting them as mandatory
+    // can erase a valid exact request (for example an otherwise complete
+    // selection followed by “обычно хватает 4,5–6 кА”).
+    if (
+      /(?:(?<!\p{L})(?:обычно|часто|например)(?!\p{L})|как\s+правило)/iu.test(
+        range.context,
+      )
+    ) {
+      continue;
+    }
+    // A model may present a calculated comfort band and then state the actual
+    // compatibility obligation as one directional endpoint, for example
+    // `3750–5000 lm` followed by `not less than 3750 lm`. In that shape the
+    // other endpoint is an orientation target, not a hard rejection boundary.
+    // Prefer the explicit direction unless both endpoints are independently
+    // declared; a true two-sided interval therefore remains unchanged.
+    const endpointBounds = directionalBounds.filter((bound) =>
+      canonicalMeasurementUnit(bound.unit) === range.unit
+    );
+    const ownsLowerEndpoint = endpointBounds.some((bound) =>
+      bound.op === "min" && bound.value === range.low
+    );
+    const ownsUpperEndpoint = endpointBounds.some((bound) =>
+      bound.op === "max" && bound.value === range.high
+    );
+    const explicitlyTwoSided = new RegExp(
+      String.raw`(?:^|\s)от\s+${NUM}\s+до\s+${NUM}(?:\s|$)`,
+      "iu",
+    ).test(range.context);
+    if (!explicitlyTwoSided && ownsLowerEndpoint !== ownsUpperEndpoint) {
+      continue;
+    }
     // Multiple ranges with the same unit usually describe different product
     // parameters/states. Mapping both onto one facet would invent semantics;
     // the structured compatibility contract must identify their live keys.
-    if (ranges.filter((candidate) => candidate.unit === range.unit).length !== 1) continue;
+    if (
+      ranges.filter((candidate) => candidate.unit === range.unit).length !== 1
+    ) continue;
     const unitFacets = (facets ?? []).filter((facet) => {
       const hasNumericLiveValues = (facet.values ?? []).some(({ value }) =>
         /\d+(?:[.,]\d+)?/u.test(String(value ?? ""))
       );
       const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
       const publicLabel = String(facet.caption ?? "").trim() || facet.key;
-      const labelHasUnit = publicLabel
-        .match(/[a-zа-я°]{1,10}[²³]?\d?/giu)
-        ?.some((token) => canonicalMeasurementUnit(token) === range.unit) ?? false;
+      const labelHasUnit = schemaMeasurementUnitTokens(publicLabel)
+        .some((token) => canonicalMeasurementUnit(token) === range.unit);
       return (facet.type === "number" || hasNumericLiveValues) &&
         (declaredUnit === range.unit || labelHasUnit);
     });
@@ -500,48 +821,76 @@ export function projectReasoningRangeCriteria(
       ? unitFacets
       : unitFacets.filter((facet) => {
         const facetStates = measurementStates(`${facet.key} ${facet.caption}`);
-        return facetStates.size === 0 || [...facetStates].some((state) => rangeStates.has(state));
+        return facetStates.size === 0 ||
+          [...facetStates].some((state) => rangeStates.has(state));
       });
     const sameUnitHints = next.filter((criterion) =>
       canonicalMeasurementUnit(criterion.unit ?? "") === range.unit
     );
     const hintedFacets = stateCompatibleFacets.filter((facet) => {
       const labels = [facet.key, facet.caption].map((value) =>
-        String(value ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е").replace(/[^a-zа-я0-9]+/giu, " ").trim()
+        String(value ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е")
+          .replace(/[^a-zа-я0-9]+/giu, " ").trim()
       );
       return sameUnitHints.some((criterion) => {
-        const wanted = String(criterion.key ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е").replace(/[^a-zа-я0-9]+/giu, " ").trim();
-        return wanted.length >= 4 && labels.some((label) => label === wanted || label.includes(wanted) || wanted.includes(label));
+        const wanted = String(criterion.key ?? "").toLocaleLowerCase("ru-RU")
+          .replace(/ё/g, "е").replace(/[^a-zа-я0-9]+/giu, " ").trim();
+        return wanted.length >= 4 &&
+          labels.some((label) =>
+            label === wanted || label.includes(wanted) || wanted.includes(label)
+          );
       });
     });
     const contextTokens = new Set(
-      range.context.match(/[a-zа-я]{4,}/giu)?.map((token) => token.toLocaleLowerCase("ru-RU").replace(/ё/g, "е")) ?? [],
+      range.context.match(/[a-zа-я]{4,}/giu)?.map((token) =>
+        token.toLocaleLowerCase("ru-RU").replace(/ё/g, "е")
+      ) ?? [],
     );
     const contextualScores = stateCompatibleFacets.map((facet) => {
       const labelTokens = `${facet.key} ${facet.caption}`
-        .match(/[a-zа-я]{4,}/giu)?.map((token) => token.toLocaleLowerCase("ru-RU").replace(/ё/g, "е")) ?? [];
-      return { facet, score: labelTokens.filter((token) => contextTokens.has(token)).length };
+        .match(/[a-zа-я]{4,}/giu)?.map((token) =>
+          token.toLocaleLowerCase("ru-RU").replace(/ё/g, "е")
+        ) ?? [];
+      return {
+        facet,
+        score: labelTokens.filter((token) => contextTokens.has(token)).length,
+      };
     });
-    const bestContextScore = Math.max(0, ...contextualScores.map(({ score }) => score));
+    const bestContextScore = Math.max(
+      0,
+      ...contextualScores.map(({ score }) => score),
+    );
     const contextualFacets = contextualScores
       .filter(({ score }) => score > 0 && score === bestContextScore)
       .map(({ facet }) => facet);
     const matchingFacets = hintedFacets.length === 1
       ? hintedFacets
-      : contextualFacets.length === 1 ? contextualFacets : stateCompatibleFacets;
+      : contextualFacets.length === 1
+      ? contextualFacets
+      : stateCompatibleFacets;
     if (matchingFacets.length !== 1) continue;
     const alreadyRepresented = next.some((criterion) => {
-      if (canonicalMeasurementUnit(criterion.unit ?? "") !== range.unit) return false;
+      if (canonicalMeasurementUnit(criterion.unit ?? "") !== range.unit) {
+        return false;
+      }
       if (criterion.op === "range" && Array.isArray(criterion.value)) {
-        return Number(criterion.value[0]) === range.low && Number(criterion.value[1]) === range.high;
+        return Number(criterion.value[0]) === range.low &&
+          Number(criterion.value[1]) === range.high;
       }
       return false;
     });
     if (alreadyRepresented) continue;
     const facet = matchingFacets[0];
-    const criterion: Criterion = { key: facet.caption || facet.key, op: "range", value: [range.low, range.high], unit: facet.unit ?? range.unit, level: "A" };
+    const criterion: Criterion = {
+      key: facet.caption || facet.key,
+      op: "range",
+      value: [range.low, range.high],
+      unit: facet.unit ?? range.unit,
+      level: "A",
+    };
     next.push(criterion);
     added.push(criterion);
+    projectedClosedRanges.push(range);
   }
 
   // A derived requirement may be directional rather than a closed interval
@@ -549,26 +898,58 @@ export function projectReasoningRangeCriteria(
   // advisory). Project it only when its unit identifies exactly one live
   // numeric facet. Bounds that merely restate an explicit interval are already
   // owned by the range projection above and must not be duplicated.
-  const directionalBounds = collapseBounds(extractReasoningBounds(reasoningText));
   for (const bound of directionalBounds) {
     const unit = canonicalMeasurementUnit(bound.unit);
     if (!unit) continue;
-    if (ranges.some((range) =>
-      range.unit === unit && (range.low === bound.value || range.high === bound.value)
-    )) continue;
-    if (next.some((criterion) => {
-      const sameUnit = canonicalMeasurementUnit(criterion.unit ?? "") === unit;
-      const value = typeof criterion.value === "number" ? criterion.value : Number(criterion.value);
-      return sameUnit && criterion.op === bound.op && value === bound.value;
-    })) continue;
+    // A directional system total (`не менее 20 000 лм суммарно, распределить
+    // между несколькими приборами`) is no more a per-card facet than a closed
+    // aggregate range. Inspect the containing sentence before projecting it.
+    const escapedValue = String(bound.value).replace(".", "[.,]");
+    const escapedUnit = String(bound.unit).replace(
+      /[.*+?^${}()|[\]\\]/gu,
+      "\\$&",
+    );
+    const boundClause = String(reasoningText ?? "")
+      .split(/(?<=[.!?;])|\n+/u)
+      .find((clause) =>
+        new RegExp(`${escapedValue}\\s*${escapedUnit}(?![a-zа-я])`, "iu").test(
+          clause,
+        )
+      ) ?? "";
+    // The numeric sentence may say only "общий поток", while the immediately
+    // following machine-visible sentence explains that this total is shared
+    // between several units.  The scope belongs to the complete declaration,
+    // not to punctuation placement, so require the aggregate marker locally
+    // but allow distribution proof anywhere in the same reasoning contract.
+    if (
+      (distributedAggregate && hasAggregateMeasurementMarker(boundClause)) ||
+      isDistributedAggregateMeasurement(boundClause)
+    ) continue;
+    if (
+      projectedClosedRanges.some((range) =>
+        range.unit === unit &&
+        (range.low === bound.value || range.high === bound.value)
+      )
+    ) continue;
+    if (
+      next.some((criterion) => {
+        const sameUnit =
+          canonicalMeasurementUnit(criterion.unit ?? "") === unit;
+        const value = typeof criterion.value === "number"
+          ? criterion.value
+          : Number(criterion.value);
+        return sameUnit && criterion.op === bound.op && value === bound.value;
+      })
+    ) continue;
     const unitFacets = (facets ?? []).filter((facet) => {
       const hasNumericLiveValues = (facet.values ?? []).some(({ value }) =>
         /\d+(?:[.,]\d+)?/u.test(String(value ?? ""))
       );
       const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
-      const labelHasUnit = String(facet.caption || facet.key)
-        .match(/[a-zа-я°]{1,10}[²³]?\d?/giu)
-        ?.some((token) => canonicalMeasurementUnit(token) === unit) ?? false;
+      const labelHasUnit = schemaMeasurementUnitTokens(
+        String(facet.caption || facet.key),
+      )
+        .some((token) => canonicalMeasurementUnit(token) === unit);
       return (facet.type === "number" || hasNumericLiveValues) &&
         (declaredUnit === unit || labelHasUnit);
     });
@@ -609,10 +990,20 @@ export function projectLiteralMeasuredCriteria(
   criteria: Criterion[],
   customerText: string,
   reasoningText: string,
-  facets: Array<{ key: string; caption: string; type: string; unit: string | null; values?: Array<{ value: string }> }>,
+  facets: Array<
+    {
+      key: string;
+      caption: string;
+      type: string;
+      unit: string | null;
+      values?: Array<{ value: string }>;
+    }
+  >,
   userBackedAnchors: Criterion[] = criteria,
 ): LiteralMeasuredProjection {
-  const next = (Array.isArray(criteria) ? criteria : []).map((criterion) => ({ ...criterion }));
+  const next = (Array.isArray(criteria) ? criteria : []).map((criterion) => ({
+    ...criterion,
+  }));
   const added: Criterion[] = [];
   const matched: Criterion[] = [];
   const bounds = collapseBounds(extractReasoningBounds(reasoningText));
@@ -621,32 +1012,38 @@ export function projectLiteralMeasuredCriteria(
   for (const quantity of quantities) {
     const unit = canonicalMeasurementUnit(quantity.unit);
     if (!unit) continue;
-    if (bounds.some((bound) =>
-      canonicalMeasurementUnit(bound.unit) === unit && bound.value === quantity.value
-    )) continue;
+    if (
+      bounds.some((bound) =>
+        canonicalMeasurementUnit(bound.unit) === unit &&
+        bound.value === quantity.value
+      )
+    ) continue;
 
     const unitFacets = (facets ?? []).filter((facet) => {
       const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
       const publicLabel = String(facet.caption ?? "").trim() || facet.key;
-      const labelHasUnit = publicLabel
-        .match(/[a-zа-я°]{1,10}[²³]?\d?/giu)
-        ?.some((token) => canonicalMeasurementUnit(token) === unit) ?? false;
+      const labelHasUnit = schemaMeasurementUnitTokens(publicLabel)
+        .some((token) => canonicalMeasurementUnit(token) === unit);
       // Some catalog branches omit `unit` even for numeric facets. A unitless
       // fallback is safe only when no suffix declares another scale and the
       // remaining exact-value facet is unique. Example schema shape:
       // `Nominal current` values [6,16] vs `Cable section, mm2` values [6,16].
-      const captionSuffix = String(facet.caption ?? "").split(",").slice(1).join(" ");
-      const suffixDeclaresAnotherUnit = captionSuffix
-        .match(/[a-zа-я°]{1,10}[²³]?\d?/giu)
-        ?.some((token) => canonicalMeasurementUnit(token) !== unit) ?? false;
-      const hasExplicitUnitEvidence = Boolean(declaredUnit) || labelHasUnit || Boolean(captionSuffix.trim());
+      const captionSuffix = String(facet.caption ?? "").split(",").slice(1)
+        .join(" ");
+      const suffixDeclaresAnotherUnit = schemaMeasurementUnitTokens(
+        captionSuffix,
+      )
+        .some((token) => canonicalMeasurementUnit(token) !== unit);
+      const hasExplicitUnitEvidence = Boolean(declaredUnit) || labelHasUnit ||
+        Boolean(captionSuffix.trim());
       if (
         declaredUnit !== unit && !labelHasUnit &&
         (hasExplicitUnitEvidence || suffixDeclaresAnotherUnit)
       ) return false;
       return (facet.values ?? []).some(({ value }) => {
         const span = parseNumericFacetValue(value);
-        return span !== null && span.min === quantity.value && span.max === quantity.value;
+        return span !== null && span.min === quantity.value &&
+          span.max === quantity.value;
       });
     });
     if (unitFacets.length === 0) continue;
@@ -665,63 +1062,90 @@ export function projectLiteralMeasuredCriteria(
       const labels = [facet.key, facet.caption].map(normalizeEvidence);
       return sameUnitHints.some((criterion) => {
         const wanted = normalizeEvidence(criterion.key);
-        return wanted.length >= 4 && labels.some((label) =>
-          label === wanted || label.includes(wanted) || wanted.includes(label)
-        );
+        return wanted.length >= 4 &&
+          labels.some((label) =>
+            label === wanted || label.includes(wanted) || wanted.includes(label)
+          );
       });
     });
 
-    const customer = String(customerText ?? "").toLocaleLowerCase("ru-RU").replace(/ё/g, "е");
+    const customer = String(customerText ?? "").toLocaleLowerCase("ru-RU")
+      .replace(/ё/g, "е");
     const literal = String(quantity.value).replace(".", "[.,]");
-    const unitPattern = String(quantity.unit).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const occurrence = customer.search(new RegExp(`${literal}\\s*${unitPattern}(?![a-zа-я])`, "iu"));
+    const unitPattern = String(quantity.unit).replace(
+      /[.*+?^${}()|[\]\\]/g,
+      "\\$&",
+    );
+    const occurrence = customer.search(
+      new RegExp(`${literal}\\s*${unitPattern}(?![a-zа-я])`, "iu"),
+    );
     const context = occurrence >= 0
-      ? customer.slice(Math.max(0, occurrence - 60), Math.min(customer.length, occurrence + 80))
+      ? customer.slice(
+        Math.max(0, occurrence - 60),
+        Math.min(customer.length, occurrence + 80),
+      )
       : customer;
     const contextTokens = new Set(
-      context.match(/[a-zа-я]{4,}/giu)?.map((token) => normalizeEvidence(token)) ?? [],
+      context.match(/[a-zа-я]{4,}/giu)?.map((token) =>
+        normalizeEvidence(token)
+      ) ?? [],
     );
     const contextualScores = unitFacets.map((facet) => {
       const labelTokens = `${facet.key} ${facet.caption}`
-        .match(/[a-zа-я]{4,}/giu)?.map((token) => normalizeEvidence(token)) ?? [];
+        .match(/[a-zа-я]{4,}/giu)?.map((token) => normalizeEvidence(token)) ??
+        [];
       return {
         facet,
-        score: labelTokens.filter((token) => [...contextTokens].some((contextToken) =>
-          token === contextToken ||
-          token.length >= 5 && contextToken.length >= 5 && token.slice(0, 4) === contextToken.slice(0, 4)
-        )).length,
+        score: labelTokens.filter((token) =>
+          [...contextTokens].some((contextToken) =>
+            token === contextToken ||
+            token.length >= 5 && contextToken.length >= 5 &&
+              token.slice(0, 4) === contextToken.slice(0, 4)
+          )
+        ).length,
       };
     });
-    const bestContextScore = Math.max(0, ...contextualScores.map(({ score }) => score));
+    const bestContextScore = Math.max(
+      0,
+      ...contextualScores.map(({ score }) => score),
+    );
     const contextualFacets = contextualScores
       .filter(({ score }) => score > 0 && score === bestContextScore)
       .map(({ facet }) => facet);
     const clausePrefix = occurrence >= 0
-      ? customer.slice(Math.max(0, customer.lastIndexOf(".", occurrence) + 1), occurrence)
+      ? customer.slice(
+        Math.max(0, customer.lastIndexOf(".", occurrence) + 1),
+        occurrence,
+      )
       : "";
     const hasUserFacetAnchor = userBackedAnchors.some((criterion) => {
       if (criterion.evidence !== "user_explicit") return false;
       const criterionKey = normalizeEvidence(criterion.key);
       return facets.some((facet) => {
         const facetKey = normalizeEvidence(facet.caption || facet.key);
-        return criterionKey === facetKey || criterionKey.includes(facetKey) || facetKey.includes(criterionKey);
+        return criterionKey === facetKey || criterionKey.includes(facetKey) ||
+          facetKey.includes(criterionKey);
       });
     });
     const enumeratedProductMeasurement = Boolean(
       occurrence >= 0 &&
-      !/[²³]/u.test(quantity.unit) &&
-      hasUserFacetAnchor &&
-      /(?:^|[^\p{L}])(?:нуж\p{L}*|найд\p{L}*|подбер\p{L}*|покаж\p{L}*|предлож\p{L}*|выбер\p{L}*|ищ\p{L}*|хоч\p{L}*)[^.!?]{0,160}$/iu.test(clausePrefix) &&
-      /[,;]\s*$/u.test(clausePrefix) &&
-      !/(?:^|\s)(?:для|под)\s+[^.!?]{0,80}[,;]\s*$/iu.test(clausePrefix)
+        !/[²³]/u.test(quantity.unit) &&
+        hasUserFacetAnchor &&
+        /(?:^|[^\p{L}])(?:нуж\p{L}*|найд\p{L}*|подбер\p{L}*|покаж\p{L}*|предлож\p{L}*|выбер\p{L}*|ищ\p{L}*|хоч\p{L}*)[^.!?]{0,160}$/iu
+          .test(clausePrefix) &&
+        /[,;]\s*$/u.test(clausePrefix) &&
+        !/(?:^|\s)(?:для|под)\s+[^.!?]{0,80}[,;]\s*$/iu.test(clausePrefix),
     );
     const directProductMeasurement = Boolean(
       occurrence >= 0 &&
-      !/[²³]/u.test(quantity.unit) &&
-      (enumeratedProductMeasurement || (
-        /(?:^|[^\p{L}])(?:нуж\p{L}*|найд\p{L}*|подбер\p{L}*|покаж\p{L}*|предлож\p{L}*|выбер\p{L}*|ищ\p{L}*|хоч\p{L}*)[^,;.!?]{0,120}\s(?:на|с)\s*$/iu.test(clausePrefix) &&
-        !/(?:^|\s)(?:для|под)\s+[^,;.!?]{0,80}\s(?:на|с)\s*$/iu.test(clausePrefix)
-      ))
+        !/[²³]/u.test(quantity.unit) &&
+        (enumeratedProductMeasurement || (
+          /(?:^|[^\p{L}])(?:нуж\p{L}*|найд\p{L}*|подбер\p{L}*|покаж\p{L}*|предлож\p{L}*|выбер\p{L}*|ищ\p{L}*|хоч\p{L}*)[^,;.!?]{0,120}\s(?:на|с)\s*$/iu
+            .test(clausePrefix) &&
+          !/(?:^|\s)(?:для|под)\s+[^,;.!?]{0,80}\s(?:на|с)\s*$/iu.test(
+            clausePrefix,
+          )
+        )),
     );
     // A lone numeric facet with no declared physical unit is not sufficient
     // evidence by itself.  The same scalar can describe an installation,
@@ -733,9 +1157,10 @@ export function projectLiteralMeasuredCriteria(
     // merely because Weight is the only unitless live facet with that value.
     const hasSchemaUnitEvidence = unitFacets.some((facet) => {
       const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
-      const labelHasUnit = String(facet.caption ?? "")
-        .match(/[a-zа-я°]{1,10}[²³]?\d?/giu)
-        ?.some((token) => canonicalMeasurementUnit(token) === unit) ?? false;
+      const labelHasUnit = schemaMeasurementUnitTokens(
+        String(facet.caption ?? ""),
+      )
+        .some((token) => canonicalMeasurementUnit(token) === unit);
       return declaredUnit === unit || labelHasUnit;
     });
     if (
@@ -748,33 +1173,44 @@ export function projectLiteralMeasuredCriteria(
     }
     const matchingFacets = hintedFacets.length === 1
       ? hintedFacets
-      : contextualFacets.length === 1 ? contextualFacets : unitFacets;
+      : contextualFacets.length === 1
+      ? contextualFacets
+      : unitFacets;
     if (matchingFacets.length !== 1) continue;
 
     const facet = matchingFacets[0];
     const liveValue = (facet.values ?? []).find(({ value }) => {
       const span = parseNumericFacetValue(value);
-      return span !== null && span.min === quantity.value && span.max === quantity.value;
+      return span !== null && span.min === quantity.value &&
+        span.max === quantity.value;
     })?.value;
     if (liveValue === undefined) continue;
     const representedCriterion = next.find((criterion) => {
       const key = normalizeEvidence(criterion.key);
       const facetKey = normalizeEvidence(facet.caption || facet.key);
-      if (!(key === facetKey || key.includes(facetKey) || facetKey.includes(key))) return false;
-      return criterion.op === "eq" && String(criterion.value) === String(liveValue);
+      if (
+        !(key === facetKey || key.includes(facetKey) || facetKey.includes(key))
+      ) return false;
+      return criterion.op === "eq" &&
+        String(criterion.value) === String(liveValue);
     });
     if (representedCriterion) {
-      if (!matched.some((criterion) => criteriaIdentityMatches(criterion, representedCriterion))) {
+      if (
+        !matched.some((criterion) =>
+          criteriaIdentityMatches(criterion, representedCriterion)
+        )
+      ) {
         matched.push({ ...representedCriterion });
       }
       continue;
     }
     const facetMeaning = normalizeEvidence(facet.caption || facet.key);
-    const facetDirection = /(?:^| )(?:максимал\p{L}*|maximum|max)(?: |$)/iu.test(facetMeaning)
-      ? "min" as const
-      : /(?:^| )(?:минимал\p{L}*|minimum|min)(?: |$)/iu.test(facetMeaning)
-      ? "max" as const
-      : "eq" as const;
+    const facetDirection =
+      /(?:^| )(?:максимал\p{L}*|maximum|max)(?: |$)/iu.test(facetMeaning)
+        ? "min" as const
+        : /(?:^| )(?:минимал\p{L}*|minimum|min)(?: |$)/iu.test(facetMeaning)
+        ? "max" as const
+        : "eq" as const;
     const criterion: Criterion = {
       key: facet.caption || facet.key,
       // The customer's application size is a required capacity, not an exact
@@ -792,10 +1228,52 @@ export function projectLiteralMeasuredCriteria(
   return { criteria: next, added, matched };
 }
 
-function parseNumericFacetValue(raw: string): { min: number; max: number } | null {
+/**
+ * A derived declaration may resolve an otherwise ambiguous customer quantity
+ * to one exact live facet.  Treat that value as customer-owned only when the
+ * same number and physical unit are present in the customer's message and the
+ * generic literal projector can map them back to this exact criterion.  The
+ * model therefore supplies only the visible facet disambiguation; it cannot
+ * promote a number that it invented in reasoning.
+ */
+export function customerOwnsDerivedExactFacetValue(
+  criterion: Criterion,
+  customerText: string,
+  visibleReasoning: string,
+  facets: Array<
+    {
+      key: string;
+      caption: string;
+      type: string;
+      unit: string | null;
+      values?: Array<{ value: string }>;
+    }
+  >,
+): boolean {
+  if (!criterion || criterion.op !== "eq") return false;
+  const projection = projectLiteralMeasuredCriteria(
+    [criterion],
+    customerText,
+    visibleReasoning,
+    facets,
+    [],
+  );
+  return projection.matched.some((candidate) =>
+    criteriaIdentityMatches(candidate, criterion)
+  );
+}
+
+function parseNumericFacetValue(
+  raw: string,
+): { min: number; max: number } | null {
   const value = String(raw ?? "").trim();
   if (!value || /\d\s*[:xх×]\s*\d/iu.test(value)) return null;
-  const match = value.match(new RegExp(String.raw`^\s*(${NUM})(?:\s*[a-zа-я°]{1,10}[²³]?\d?)?\s*$`, "iu"));
+  const match = value.match(
+    new RegExp(
+      String.raw`^\s*(${NUM})(?:\s*[a-zа-я°]{1,10}[²³]?\d?)?\s*$`,
+      "iu",
+    ),
+  );
   if (!match) return null;
   const number = Number(match[1].replace(",", "."));
   return Number.isFinite(number) ? { min: number, max: number } : null;
@@ -804,9 +1282,21 @@ function parseNumericFacetValue(raw: string): { min: number; max: number } | nul
 // Порядок важен: сначала отрицательные формы («не более»), иначе «более»
 // перехватит их и направление получится обратным.
 const DIRECTIONS: Array<{ re: string; op: "min" | "max"; strict: boolean }> = [
-  { re: String.raw`не\s+менее|не\s+меньше|не\s+ниже|минимум|>=|≥`, op: "min", strict: false },
-  { re: String.raw`не\s+более|не\s+больше|не\s+выше|максимум|<=|≤`, op: "max", strict: false },
-  { re: String.raw`больше|более|свыше|выше|превыша\w*|>`, op: "min", strict: true },
+  {
+    re: String.raw`не\s+менее|не\s+меньше|не\s+ниже|минимум|>=|≥`,
+    op: "min",
+    strict: false,
+  },
+  {
+    re: String.raw`не\s+более|не\s+больше|не\s+выше|максимум|<=|≤`,
+    op: "max",
+    strict: false,
+  },
+  {
+    re: String.raw`больше|более|свыше|выше|превыша\w*|>`,
+    op: "min",
+    strict: true,
+  },
   { re: String.raw`меньше|менее|ниже|<`, op: "max", strict: true },
   { re: String.raw`от`, op: "min", strict: false },
   { re: String.raw`до`, op: "max", strict: false },
@@ -824,11 +1314,39 @@ export function extractReasoningBounds(text: string): ReasoningBound[] {
     const re = new RegExp(
       // Отрицательные формы («не более», «не больше») ловятся своим правилом
       // выше; сюда они попадать не должны — иначе направление перевернётся.
-      String.raw`(?:^|[^a-zа-я])(?<!не\s)(?:${dir.re})\s*(?:чем\s+)?(${NUM})\s*(${UNIT})(?![a-zа-я])`,
+      String
+        .raw`(?:^|[^a-zа-я])(?<!не\s)(?:${dir.re})\s*(?:чем\s+)?(${NUM})\s*(${UNIT})(?![a-zа-я])`,
       "gu",
     );
     let m: RegExpExecArray | null;
     while ((m = re.exec(s)) !== null) {
+      const fragmentStart = Math.max(
+        s.lastIndexOf(".", m.index),
+        s.lastIndexOf("!", m.index),
+        s.lastIndexOf("?", m.index),
+        s.lastIndexOf(";", m.index),
+        s.lastIndexOf(",", m.index),
+        s.lastIndexOf("\n", m.index),
+      ) + 1;
+      const fragmentTail = s.slice(re.lastIndex);
+      const nextBoundary = fragmentTail.search(/[.!?;,\n]/u);
+      const fragment = s.slice(
+        fragmentStart,
+        nextBoundary >= 0 ? re.lastIndex + nextBoundary : s.length,
+      );
+      // A consultant may state an orientation target as “optimally up to X”
+      // next to the actual one-sided requirement. That wording is not a hard
+      // maximum. Keep it only when the same local fragment independently says
+      // that the bound is required; explicit `from X to Y` remains a genuine
+      // closed interval and is handled by the range projector.
+      const advisoryBound =
+        /(?:оптимальн|комфортн|желательн|предпочтительн|ориентир)/iu.test(
+          fragment,
+        );
+      const locallyRequired =
+        /(?:нуж\p{L}*|необходим\p{L}*|долж\p{L}*|треб\p{L}*|не\s+более|не\s+выше|максимум)/iu
+          .test(fragment);
+      if (dir.op === "max" && advisoryBound && !locallyRequired) continue;
       const value = Number(m[1].replace(",", "."));
       const unit = normalizeUnit(m[2]);
       if (!Number.isFinite(value) || !unit) continue;
@@ -894,10 +1412,16 @@ export function collapseBounds(bounds: ReasoningBound[]): ReasoningBound[] {
 export function alignCriteriaWithReasoning(
   criteria: Criterion[],
   reasoningText: string,
-): { criteria: Criterion[]; alignments: ReasoningAlignment[]; ambiguities: ReasoningBound[] } {
+): {
+  criteria: Criterion[];
+  alignments: ReasoningAlignment[];
+  ambiguities: ReasoningBound[];
+} {
   const bounds = collapseBounds(extractReasoningBounds(reasoningText));
   const list = Array.isArray(criteria) ? criteria : [];
-  if (bounds.length === 0 || list.length === 0) return { criteria: list, alignments: [], ambiguities: [] };
+  if (bounds.length === 0 || list.length === 0) {
+    return { criteria: list, alignments: [], ambiguities: [] };
+  }
 
   const alignments: ReasoningAlignment[] = [];
   const ambiguities: ReasoningBound[] = [];
@@ -947,7 +1471,6 @@ export function alignCriteriaWithReasoning(
       strict,
     });
     return { ...c, op: bound.op, value: bound.value, exclusive: strict };
-
   });
 
   return { criteria: next, alignments, ambiguities };

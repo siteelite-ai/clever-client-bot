@@ -88,6 +88,11 @@ Deno.test("local boundary classifier preserves references and short clarificatio
     confidence: 0.98,
     reason: "local_elliptical_attribute",
   });
+  assertEquals(classifyConversationBoundaryLocally("А белого цвета есть?"), {
+    mode: "continuation",
+    confidence: 0.98,
+    reason: "local_elliptical_attribute",
+  });
   assertEquals(
     classifyConversationBoundaryLocally("покажи товары этой серии")?.mode,
     "continuation",

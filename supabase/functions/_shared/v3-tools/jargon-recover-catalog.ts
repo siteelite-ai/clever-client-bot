@@ -7,6 +7,12 @@ import type { JargonRecoverOk, ProductCache, ProductRef, ToolError } from "./typ
 
 export interface JargonRecoverCatalogInput {
   query: string;
+  /**
+   * The query is an atomic customer identifier and must be verified literally.
+   * Skips translation/model expansion; category, facets and render gates still
+   * provide the normal relevance and safety boundaries.
+   */
+  literal_only?: boolean;
   modifiers?: string[];
   min_price?: number;
   max_price?: number;
@@ -136,6 +142,34 @@ export function splitSemanticJargonModifiers(modifiers: string[]): { semantic: s
   return { semantic, structural };
 }
 
+/**
+ * A translation candidate must explain some part of the customer's unknown
+ * source word.  Repeating an already independent modifier (for example mapping
+ * «кукуруза» to E14 when E14 was supplied separately) proves only that
+ * modifier and silently drops the lexical request.  Category tokens are
+ * ignored because discovery has already proved them.
+ */
+export function candidateAddsIndependentLexicalEvidence(
+  source: string,
+  candidate: string,
+  modifiers: string[],
+  liveCategoryLabels: string[],
+): boolean {
+  if (normalize(candidate) === normalize(source)) return true;
+  const categoryStems = new Set(
+    liveCategoryLabels.flatMap(tokenize).map(inflectionStem),
+  );
+  const evidenceTokens = tokenize(candidate)
+    .filter((token) => !categoryStems.has(inflectionStem(token)))
+    .map(normalizeCodeLike)
+    .filter(Boolean);
+  if (evidenceTokens.length === 0) return false;
+  const modifierTokens = new Set(
+    modifiers.flatMap(tokenize).map(normalizeCodeLike).filter(Boolean),
+  );
+  return evidenceTokens.some((token) => !modifierTokens.has(token));
+}
+
 /** Keeps terminal lexical recovery consistent with the normal in-loop path.
  * A source word differing from a category-scoped, title-proven translation is
  * expected for jargon and is not an unresolved product constraint. Only
@@ -258,17 +292,19 @@ export async function executeJargonRecoverCatalog(
     ? [...new Set(input.category_in.map(String).map((value) => value.trim()).filter(Boolean))]
     : [];
 
-  const jargon = await tryJargonFallback(source, {
-    apiKey: deps.openrouterApiKey,
-    fallbackApiKey: deps.lovableApiKey,
-    fallbackModel: deps.lovableModel,
-    category: categoryHint,
-    strategy: "translation_only",
-    fetchImpl: deps.fetchImpl,
-    timeoutMs: deps.timeoutMs,
-  });
+  const jargon = input.literal_only
+    ? null
+    : await tryJargonFallback(source, {
+      apiKey: deps.openrouterApiKey,
+      fallbackApiKey: deps.lovableApiKey,
+      fallbackModel: deps.lovableModel,
+      category: categoryHint,
+      strategy: "translation_only",
+      fetchImpl: deps.fetchImpl,
+      timeoutMs: deps.timeoutMs,
+    });
   const candidates = [
-    ...(jargon.ok ? jargon.candidates : []),
+    ...(jargon?.ok ? jargon.candidates : []),
     source,
   ].map((c) => c.trim()).filter(Boolean).filter((c, i, arr) => arr.findIndex((x) => normalize(x) === normalize(c)) === i);
   const allCandidates = [...candidates];
@@ -315,6 +351,12 @@ export async function executeJargonRecoverCatalog(
       const attemptContract = `${candidateKey}\u0000${modifierContract}\u0000${allowAxial ? "axial" : "strict"}`;
       if (!candidateKey || attemptedCandidateContracts.has(attemptContract)) continue;
       attemptedCandidateContracts.add(attemptContract);
+      if (!candidateAddsIndependentLexicalEvidence(
+        source,
+        candidate,
+        activeModifiers,
+        [input.category, ...categoryLeaves].map((value) => String(value ?? "")),
+      )) continue;
       // A candidate which merely repeats the already discovered live taxonomy
       // adds no evidence for the customer's unknown word. This rejects a
       // stochastic translation such as «светодиодная лампа» inside the live
@@ -479,7 +521,7 @@ export async function executeJargonRecoverCatalog(
   // a professional title token. This weaker semantic route is never allowed to
   // create an axial split: an associated product with a missing modifier must
   // not be presented as one half of the customer's original combination.
-  if (!matched && !axialFallback) {
+  if (!input.literal_only && !matched && !axialFallback) {
     const translated = await tryJargonFallback(source, {
       apiKey: deps.openrouterApiKey,
       fallbackApiKey: deps.lovableApiKey,
@@ -506,7 +548,7 @@ export async function executeJargonRecoverCatalog(
   // If literal modifier matching is empty, translate the consultant's own
   // descriptive modifiers together with its query. Numeric/code-like axes stay
   // independent, and the caller still verifies matched_query in live titles.
-  if (!matched || input.require_semantic_bridge) {
+  if (!input.literal_only && (!matched || input.require_semantic_bridge)) {
     const bridged = splitSemanticJargonModifiers(modifiers);
     const bridgeSource = [source, ...bridged.semantic].join(" ").replace(/\s+/gu, " ").trim();
     if (bridged.semantic.length > 0 && normalize(bridgeSource) !== normalize(source)) {

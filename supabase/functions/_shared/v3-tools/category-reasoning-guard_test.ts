@@ -1,17 +1,20 @@
-import { assert, assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  assert,
+  assertEquals,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   categoryLabelIsAffirmedAsTarget,
   discoveryNounIsGrounded,
   discoveryResultPreservesCustomerIntent,
   extractCustomerOwnedDiscoveryTarget,
-  groundDiscoveryNounToCustomerTarget,
+  filterProductIdsByNamedSeries,
   filterProductsByGroundedCategoryTargets,
+  filterProductsByNamedSeries,
+  groundDiscoveryNounToCustomerTarget,
   groundedCategoryRecoveryQueries,
   groundedTokenRecoveryQueries,
   guardCategoryScopeByReasoning,
   guardDiscoveryNounBySelectionTarget,
-  filterProductsByNamedSeries,
-  filterProductIdsByNamedSeries,
   rankGroundedCategoryRecoveryScopes,
   scopeGroundedClassQueryToLiveLeaves,
   selectGroundedTokenRecoveryCandidate,
@@ -69,7 +72,9 @@ Deno.test("discovery noun may broaden while preserving the frozen class base", (
 });
 
 Deno.test("explicit product acronym grounds the discovery noun", () => {
-  assert(discoveryNounIsGrounded("ИБП", "Какой ИБП подойдет для газового котла?"));
+  assert(
+    discoveryNounIsGrounded("ИБП", "Какой ИБП подойдет для газового котла?"),
+  );
 });
 
 Deno.test("a product noun remains grounded after several triggers genitive plural", () => {
@@ -81,14 +86,20 @@ Deno.test("a product noun remains grounded after several triggers genitive plura
 
 Deno.test("related sibling category is not grounded by an acronym request", () => {
   assertEquals(
-    discoveryNounIsGrounded("Стабилизаторы", "Какой ИБП подойдет для газового котла?"),
+    discoveryNounIsGrounded(
+      "Стабилизаторы",
+      "Какой ИБП подойдет для газового котла?",
+    ),
     false,
   );
 });
 
 Deno.test("a rejected category mention is not positive discovery evidence", () => {
   assertEquals(
-    discoveryNounIsGrounded("Стабилизаторы", "Стабилизатор не подходит, нужен ИБП."),
+    discoveryNounIsGrounded(
+      "Стабилизаторы",
+      "Стабилизатор не подходит, нужен ИБП.",
+    ),
     false,
   );
 });
@@ -103,12 +114,22 @@ const discovered = {
 
 Deno.test("category reasoning guard drops a real but unsupported sibling leaf", () => {
   const result = guardCategoryScopeByReasoning(
-    { mode: "by_filter", category_in: ["Уличные светильники"], options: { mounting: ["Накладной"] } },
+    {
+      mode: "by_filter",
+      category_in: ["Уличные светильники"],
+      options: { mounting: ["Накладной"] },
+    },
     discovered,
     "Подбираю бытовой накладной светильник для дома, внутри помещения.",
   );
-  assertEquals(result.args, { mode: "by_filter", options: { mounting: ["Накладной"] } });
-  assertEquals(result.dropped, [{ category: "Уличные светильники", reason: "not_declared_in_reasoning" }]);
+  assertEquals(result.args, {
+    mode: "by_filter",
+    options: { mounting: ["Накладной"] },
+  });
+  assertEquals(result.dropped, [{
+    category: "Уличные светильники",
+    reason: "not_declared_in_reasoning",
+  }]);
 });
 
 Deno.test("category reasoning guard keeps a morphologically supported leaf", () => {
@@ -117,26 +138,40 @@ Deno.test("category reasoning guard keeps a morphologically supported leaf", () 
     discovered,
     "Нужен бытовой накладной светильник.",
   );
-  assertEquals(result.args, { mode: "by_filter", category_in: ["Бытовые светильники накладные"] });
+  assertEquals(result.args, {
+    mode: "by_filter",
+    category_in: ["Бытовые светильники накладные"],
+  });
   assertEquals(result.kept, ["Бытовые светильники накладные"]);
   assertEquals(result.dropped, []);
 });
 
 Deno.test("category reasoning guard preserves supported leaves and removes unsupported ones", () => {
   const result = guardCategoryScopeByReasoning(
-    { mode: "by_filter", category_in: ["Уличные светильники", "Бытовые светильники накладные"] },
+    {
+      mode: "by_filter",
+      category_in: ["Уличные светильники", "Бытовые светильники накладные"],
+    },
     discovered,
     "Ищу бытовой накладной светильник.",
   );
-  assertEquals(result.args, { mode: "by_filter", category: "Бытовые светильники накладные" });
+  assertEquals(result.args, {
+    mode: "by_filter",
+    category: "Бытовые светильники накладные",
+  });
 });
 
 Deno.test("category reasoning guard does not accept a wrong modifier through a shared feature", () => {
   const result = guardCategoryScopeByReasoning(
-    { mode: "by_filter", category_in: ["Уличные светильники с датчиком движения"] },
+    {
+      mode: "by_filter",
+      category_in: ["Уличные светильники с датчиком движения"],
+    },
     {
       category: { pagetitle: "Светильники" },
-      leaf_categories: [{ pagetitle: "Уличные светильники с датчиком движения" }],
+      leaf_categories: [{
+        pagetitle: "Уличные светильники с датчиком движения",
+      }],
     },
     "Нужен светильник с датчиком движения для дома, внутри помещения.",
   );
@@ -157,7 +192,10 @@ Deno.test("a rejected live branch cannot ground itself through a negative mentio
   );
   assertEquals(
     filterProductsByGroundedCategoryTargets(
-      [{ pagetitle: "Наружное базовое изделие", leaf_category: "Наружные базовые изделия" }],
+      [{
+        pagetitle: "Наружное базовое изделие",
+        leaf_category: "Наружные базовые изделия",
+      }],
       ["Базовые изделия"],
       "Базовые изделия",
       "Ветка наружных изделий неверная, требуется другой тип.",
@@ -180,7 +218,10 @@ Deno.test("category reasoning guard keeps the live umbrella when dropping the on
     "Нужно светодиодное освещение внутри жилой комнаты.",
   );
   assertEquals(result.args, { mode: "by_filter", category: "Светильники" });
-  assertEquals(result.dropped, [{ category: "Уличные светильники", reason: "not_declared_in_reasoning" }]);
+  assertEquals(result.dropped, [{
+    category: "Уличные светильники",
+    reason: "not_declared_in_reasoning",
+  }]);
 });
 
 Deno.test("terminal category retry uses only leaves grounded in the reasoning", () => {
@@ -195,43 +236,90 @@ Deno.test("terminal category retry uses only leaves grounded in the reasoning", 
 });
 
 Deno.test("terminal category target removes sibling product classes", () => {
-  const products = filterProductsByGroundedCategoryTargets([
-    { pagetitle: "Светильник потолочный LED 60W", leaf_category: "Потолочные светильники" },
-    { pagetitle: "Прожектор светодиодный IP65", leaf_category: "Прожекторы" },
-    { pagetitle: "Лампа светодиодная E27", leaf_category: "Светодиодные лампы" },
-  ], ["Потолочные светильники"], "Светильники");
+  const products = filterProductsByGroundedCategoryTargets(
+    [
+      {
+        pagetitle: "Светильник потолочный LED 60W",
+        leaf_category: "Потолочные светильники",
+      },
+      { pagetitle: "Прожектор светодиодный IP65", leaf_category: "Прожекторы" },
+      {
+        pagetitle: "Лампа светодиодная E27",
+        leaf_category: "Светодиодные лампы",
+      },
+    ],
+    ["Потолочные светильники"],
+    "Светильники",
+  );
   assertEquals(products, [
-    { pagetitle: "Светильник потолочный LED 60W", leaf_category: "Потолочные светильники" },
+    {
+      pagetitle: "Светильник потолочный LED 60W",
+      leaf_category: "Потолочные светильники",
+    },
   ]);
 });
 
 Deno.test("terminal category target treats supported leaf modifiers as alternatives", () => {
-  const products = filterProductsByGroundedCategoryTargets([
-    { pagetitle: "Светильник светодиодный потолочный 60W", leaf_category: null },
-    { pagetitle: "Прожектор светодиодный потолочный 60W", leaf_category: "Прожекторы" },
-  ], ["Светильники потолочные накладные", "Светильники встраиваемые"], "Светильники");
+  const products = filterProductsByGroundedCategoryTargets(
+    [
+      {
+        pagetitle: "Светильник светодиодный потолочный 60W",
+        leaf_category: null,
+      },
+      {
+        pagetitle: "Прожектор светодиодный потолочный 60W",
+        leaf_category: "Прожекторы",
+      },
+    ],
+    ["Светильники потолочные накладные", "Светильники встраиваемые"],
+    "Светильники",
+  );
   assertEquals(products, [
-    { pagetitle: "Светильник светодиодный потолочный 60W", leaf_category: null },
+    {
+      pagetitle: "Светильник светодиодный потолочный 60W",
+      leaf_category: null,
+    },
   ]);
 });
 
 Deno.test("terminal category target derives class from common leaf token when umbrella is broader", () => {
-  const products = filterProductsByGroundedCategoryTargets([
-    { pagetitle: "Светильник потолочный LED 60W", leaf_category: null },
-    { pagetitle: "Прожектор потолочный LED 60W", leaf_category: "Прожекторы" },
-  ], ["Потолочные светильники", "Накладные светильники"], "Освещение");
+  const products = filterProductsByGroundedCategoryTargets(
+    [
+      { pagetitle: "Светильник потолочный LED 60W", leaf_category: null },
+      {
+        pagetitle: "Прожектор потолочный LED 60W",
+        leaf_category: "Прожекторы",
+      },
+    ],
+    ["Потолочные светильники", "Накладные светильники"],
+    "Освещение",
+  );
   assertEquals(products, [
     { pagetitle: "Светильник потолочный LED 60W", leaf_category: null },
   ]);
 });
 
 Deno.test("terminal category target rejects a live leaf unsupported by initial reasoning", () => {
-  const products = filterProductsByGroundedCategoryTargets([
-    { pagetitle: "Светильник потолочный LED", leaf_category: "Потолочные светильники" },
-    { pagetitle: "Светильник уличный LED", leaf_category: "Уличные светильники" },
-  ], ["Светильники"], "Светильники", "Нужны потолочные светильники для жилой гостиной");
+  const products = filterProductsByGroundedCategoryTargets(
+    [
+      {
+        pagetitle: "Светильник потолочный LED",
+        leaf_category: "Потолочные светильники",
+      },
+      {
+        pagetitle: "Светильник уличный LED",
+        leaf_category: "Уличные светильники",
+      },
+    ],
+    ["Светильники"],
+    "Светильники",
+    "Нужны потолочные светильники для жилой гостиной",
+  );
   assertEquals(products, [
-    { pagetitle: "Светильник потолочный LED", leaf_category: "Потолочные светильники" },
+    {
+      pagetitle: "Светильник потолочный LED",
+      leaf_category: "Потолочные светильники",
+    },
   ]);
 });
 
@@ -248,7 +336,9 @@ Deno.test("an ungrounded corrective discovery cannot erase an earlier grounded s
     [broad, wrongCorrection],
     "Нужен потолочный светильник для гостиной",
   );
-  assertEquals(scopes.map(({ discovery }) => discovery.category?.pagetitle), ["Светильники"]);
+  assertEquals(scopes.map(({ discovery }) => discovery.category?.pagetitle), [
+    "Светильники",
+  ]);
   assertEquals(scopes[0]?.targets, ["Светильники"]);
 });
 
@@ -308,11 +398,21 @@ Deno.test("a directly negated category word is exclusion rather than affirmation
 });
 
 Deno.test("semantic discovery uses only the explicit customer destination of a transformation", () => {
-  const request = "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?";
-  assertEquals(extractCustomerOwnedDiscoveryTarget(request), "светодиодное освещение");
-  assertEquals(extractCustomerOwnedDiscoveryTarget("Заменить автомат на 16 А"), null);
+  const request =
+    "Хочу заменить люстру на светодиодное освещение в гостиной 25 м². Что подойдет?";
   assertEquals(
-    groundDiscoveryNounToCustomerTarget("светильник потолочный", "светодиодное освещение"),
+    extractCustomerOwnedDiscoveryTarget(request),
+    "светодиодное освещение",
+  );
+  assertEquals(
+    extractCustomerOwnedDiscoveryTarget("Заменить автомат на 16 А"),
+    null,
+  );
+  assertEquals(
+    groundDiscoveryNounToCustomerTarget(
+      "светильник потолочный",
+      "светодиодное освещение",
+    ),
     "светильник",
   );
   assertEquals(
@@ -383,6 +483,39 @@ Deno.test("customer-owned semantic discovery may formalize a qualified noun with
   );
 });
 
+Deno.test("unique live-facet resolution carries its proof through the category target guard", () => {
+  const request = "Найди однополюсный автомат C16 не дороже 1 000 тенге";
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      request,
+      "Автоматические выключатели",
+      request,
+      false,
+    ),
+    false,
+  );
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      request,
+      "Автоматические выключатели",
+      request,
+      false,
+      true,
+    ),
+    true,
+  );
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      "Нужен ИБП, не стабилизатор",
+      "Стабилизаторы напряжения",
+      "Нужен ИБП, не стабилизатор",
+      false,
+      true,
+    ),
+    false,
+  );
+});
+
 Deno.test("an exact umbrella leaf cannot self-ground from the source side of a transformation", () => {
   const targetScope = {
     category: { pagetitle: "Целевые устройства" },
@@ -396,11 +529,16 @@ Deno.test("an exact umbrella leaf cannot self-ground from the source side of a t
     [targetScope, sourceScope],
     "Хочу заменить исходное устройство на целевое устройство",
   );
-  assertEquals(scopes.map(({ discovery }) => discovery.category?.pagetitle), ["Целевые устройства"]);
+  assertEquals(scopes.map(({ discovery }) => discovery.category?.pagetitle), [
+    "Целевые устройства",
+  ]);
 });
 
 Deno.test("terminal token ladder decomposes a failed semantic phrase", () => {
-  assertEquals(groundedTokenRecoveryQueries("современные люстры"), ["современные", "люстры"]);
+  assertEquals(groundedTokenRecoveryQueries("современные люстры"), [
+    "современные",
+    "люстры",
+  ]);
 });
 
 Deno.test("token recovery keeps the consultant's selective title token and rejects a broad substitute", () => {
@@ -409,19 +547,31 @@ Deno.test("token recovery keeps the consultant's selective title token and rejec
     { query: "generic-type", total: 1 },
   ], 703);
   assertEquals(selected, { query: "canonical-form", total: 25 });
-  assertEquals(selectGroundedTokenRecoveryCandidate([
-    { query: "generic-a", total: 180 },
-    { query: "generic-b", total: 410 },
-  ], 703), null);
+  assertEquals(
+    selectGroundedTokenRecoveryCandidate([
+      { query: "generic-a", total: 180 },
+      { query: "generic-b", total: 410 },
+    ], 703),
+    null,
+  );
 });
 
 Deno.test("token recovery requires a complete title word, not a prefix inside another token", () => {
-  assert(titleContainsLiteralToken("Product LED DISTINCTIVE capsule", "distinctive"));
-  assert(!titleContainsLiteralToken("Product GENERICTOOL floodlight", "generic"));
+  assert(
+    titleContainsLiteralToken("Product LED DISTINCTIVE capsule", "distinctive"),
+  );
+  assert(
+    !titleContainsLiteralToken("Product GENERICTOOL floodlight", "generic"),
+  );
 });
 
 Deno.test("token recovery grounds a Cyrillic series name in a near-identical Latin title", () => {
-  assert(titleContainsLiteralToken("Розетка с заземлением Gallant /W5073135", "Галант"));
+  assert(
+    titleContainsLiteralToken(
+      "Розетка с заземлением Gallant /W5073135",
+      "Галант",
+    ),
+  );
   assert(!titleContainsLiteralToken("Розетка с заземлением Glossa", "Галант"));
   assert(!titleContainsLiteralToken("Средство LABEL OFF", "Галант"));
 });
@@ -432,7 +582,9 @@ Deno.test("named series guard removes a non-empty but unrelated collection pool"
     { pagetitle: "Выключатель BRITE двухклавишный" },
     { pagetitle: "Розетка Gallant с защитными шторками" },
   ], "Галант");
-  assertEquals(products, [{ pagetitle: "Розетка Gallant с защитными шторками" }]);
+  assertEquals(products, [{
+    pagetitle: "Розетка Gallant с защитными шторками",
+  }]);
 });
 
 Deno.test("named entity proof remains mandatory after a later recovery replaces the ID pool", () => {
@@ -447,5 +599,55 @@ Deno.test("named entity proof remains mandatory after a later recovery replaces 
   assertEquals(
     filterProductIdsByNamedSeries(["late", "kept"], products, null),
     ["late", "kept"],
+  );
+});
+
+Deno.test("server discovery validates formal taxonomy against a grounded customer head", () => {
+  const cableRequest = "Какой силовой кабель взять для кондиционера на 3 кВт?";
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      cableRequest,
+      "Кабель и провод",
+      cableRequest,
+      false,
+      false,
+      "кабель",
+    ),
+    true,
+  );
+  const breakerRequest =
+    "Какой автомат поставить в однофазной квартире при нагрузке 7 кВт?";
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      breakerRequest,
+      "Автоматические выключатели",
+      breakerRequest,
+      false,
+      false,
+      "автомат",
+    ),
+    true,
+  );
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      cableRequest,
+      "Кондиционеры",
+      cableRequest,
+      false,
+      false,
+      "кабель",
+    ),
+    false,
+  );
+  assertEquals(
+    discoveryResultPreservesCustomerIntent(
+      cableRequest,
+      "Кабель и провод",
+      cableRequest,
+      false,
+      false,
+      "проводка",
+    ),
+    false,
   );
 });

@@ -29,6 +29,20 @@ Deno.test("installation height is application context, not exact product length"
   assertEquals(buildVisibleRequestContract("удлинитель на 4 м").length, 1);
 });
 
+Deno.test("route length is application context while product length stays visible", () => {
+  assertEquals(
+    buildVisibleRequestContract(
+      "Система аналоговая, улица, длина трассы 30 м",
+    ).length,
+    0,
+  );
+  assertEquals(
+    buildVisibleRequestContract("расстояние до камеры 30 метров").length,
+    0,
+  );
+  assertEquals(buildVisibleRequestContract("кабель 30 м").length, 1);
+});
+
 Deno.test("explicit place count and double socket stay visible", () => {
   const places = buildVisibleRequestContract("удлинитель на 3 места");
   assertEquals(titleSupportsVisibleRequestContract("Удлинитель У03 3 места", places), true);
@@ -160,6 +174,20 @@ Deno.test("a refinement absent from live taxonomy remains a visible title modifi
     },
   );
   assertEquals(contract.map((requirement) => requirement.label), ["от 100 Вт", "светодиодные"]);
+});
+
+Deno.test("a validated semantic facet mapping replaces only the duplicate literal spelling gate", () => {
+  const contract = buildVisibleRequestContract(
+    "покажи люминесцентные приборы мощностью от 100 Вт",
+    {
+      productClass: "приборы",
+      taxonomyClass: "Приборы",
+      candidateTitles: ["Прибор люминесцентный 150 Вт", "Прибор LX 150 Вт"],
+      semanticallyMappedCustomerPhrases: ["люминесцентные"],
+    },
+  );
+  assertEquals(contract.map((requirement) => requirement.label), ["от 100 Вт"]);
+  assertEquals(titleSupportsVisibleRequestContract("Прибор LX 150 Вт", contract), true);
 });
 
 Deno.test("a measurement descriptor is not duplicated as a literal title modifier", () => {

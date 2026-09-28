@@ -32,6 +32,12 @@ export interface ProductRef {
 
 export interface ProductFull extends ProductRef {
   url: string;
+  /**
+   * Internal catalog evidence keyed by the same live facet keys returned by
+   * category discovery. Stored only in the request cache; omitted from tool
+   * results so it does not inflate or instruct the language model.
+   */
+  facet_values?: Record<string, string[]>;
 }
 
 export type ToolName =
@@ -92,6 +98,7 @@ export interface DiscoverCategoryOk {
   /** Листовые категории для search_catalog?category=. См. discover-category.ts. */
   leaf_categories: Array<{ id: number; pagetitle: string }>;
   resolved_from?: string;
+  resolution_method?: "exact" | "live_taxonomy" | "live_facet_schema" | "model";
   side_effects?: ToolSideEffect[];
 }
 

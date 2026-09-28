@@ -3,6 +3,7 @@
 
 import type { ProductCache, ProductRef, SearchCatalogOk, ToolError } from "./types.ts";
 import { canonicalizeCompoundMarkingForCatalog } from "./exact-compound-marking-policy.ts";
+import { isAdministrativeCatalogField } from "./catalog-field-policy.ts";
 
 const PRODUCT_DESCRIPTION_MAX_CHARS = 1_200;
 const RESTRICTED_VIEW_OPTION_KEY = "ogranichennyy_prosmotr";
@@ -176,18 +177,35 @@ function extractTraits(p: Record<string, unknown>): string[] {
   // Возвращаем ВСЕ характеристики (без лимита 5) — нужны для spec_query/compare,
   // чтобы LLM мог ответить на любой атрибут карточки. Фильтруем только пустые
   // и аномально длинные строки (шум/HTML).
-  const opts = p.options as Array<{ caption_ru?: string; value_ru?: string }> | undefined;
+  const opts = p.options as Array<{ key?: string; caption_ru?: string; value_ru?: string }> | undefined;
   if (!Array.isArray(opts)) return [];
   const out: string[] = [];
   for (const o of opts) {
     const cap = o?.caption_ru?.trim();
     const val = o?.value_ru?.trim();
     if (!cap || !val) continue;
+    if (isAdministrativeCatalogField({ key: o?.key, caption: cap })) continue;
     const line = `${cap}: ${val}`;
     if (line.length > 160) continue;
     out.push(line);
   }
   return out;
+}
+
+function extractFacetValues(p: Record<string, unknown>): Record<string, string[]> {
+  const opts = p.options as Array<{ key?: unknown; value_ru?: unknown; value?: unknown }> | undefined;
+  if (!Array.isArray(opts)) return {};
+  const collected = new Map<string, Set<string>>();
+  for (const option of opts) {
+    const key = String(option?.key ?? "").trim();
+    const value = String(option?.value_ru ?? option?.value ?? "").trim();
+    if (!key || !value || key.length > 240 || value.length > 240) continue;
+    if (isAdministrativeCatalogField({ key })) continue;
+    const values = collected.get(key) ?? new Set<string>();
+    values.add(value);
+    collected.set(key, values);
+  }
+  return Object.fromEntries([...collected].map(([key, values]) => [key, [...values]]));
 }
 
 /**
@@ -353,7 +371,12 @@ async function singleSearch(
         leaf_category: extractLeafCategory(raw) ?? categoryOverride ?? null,
         ...(warehouses.length > 0 ? { warehouses } : {}),
       };
-      cache.set(id, { ...ref, url: u });
+      const facetValues = extractFacetValues(raw);
+      cache.set(id, {
+        ...ref,
+        url: u,
+        ...(Object.keys(facetValues).length > 0 ? { facet_values: facetValues } : {}),
+      });
       results.push(ref);
     }
     return { ok: true, total, results };

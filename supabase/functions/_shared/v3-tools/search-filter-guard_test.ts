@@ -10,6 +10,7 @@ import {
   inferReplacementIdentityValues,
   isReplacementIdentityFacet,
   mergeFacetValuesWithCurrentOverrides,
+  projectExplicitCompactFacetValues,
   projectExplicitReasoningFacetValues,
   productMatchesExcludedReplacementIdentity,
 } from "./search-filter-guard.ts";
@@ -19,6 +20,41 @@ const facets = [
   { key: "kind", values: [{ value: "Светильники для ЖКХ" }, { value: "Бытовые светильники накладные" }] },
   { key: "brand", values: [{ value: "Gauss" }] },
 ];
+
+Deno.test("explicit compact codes project only through one unique live multi-axis proof", () => {
+  const live = [
+    { key: "curve", caption: "Характеристика", values: [{ value: "B" }, { value: "C" }] },
+    { key: "current", caption: "Номинальный ток", unit: "А", values: [{ value: "10" }, { value: "16" }] },
+    { key: "poles", caption: "Количество полюсов", values: [{ value: "1" }, { value: "3" }] },
+  ];
+  assertEquals(projectExplicitCompactFacetValues(live, "Найди однополюсный автомат C16"), {
+    kept: [{ key: "curve", value: "C" }, { key: "current", value: "16" }, { key: "poles", value: "1" }],
+    user_backed: [{ key: "curve", value: "C" }, { key: "current", value: "16" }, { key: "poles", value: "1" }],
+  });
+  assertEquals(projectExplicitCompactFacetValues([
+    ...live,
+    { key: "reserve_current", caption: "Резервный ток", values: [{ value: "16" }] },
+  ], "изделие C16"), { kept: [], user_backed: [] });
+});
+
+Deno.test("a unique numeric axis abbreviation remains customer-backed", () => {
+  const facets = [{
+    key: "kolichestvo_polyusov",
+    caption: "Количество полюсов",
+    values: [{ value: "1" }, { value: "2" }],
+  }, {
+    key: "curve",
+    caption: "Характеристика срабатывания",
+    values: [{ value: "C" }],
+  }];
+  assertEquals(projectExplicitCompactFacetValues(
+    facets,
+    "Нужен 1P, характеристика C",
+  ), {
+    kept: [{ key: "kolichestvo_polyusov", value: "1" }],
+    user_backed: [{ key: "kolichestvo_polyusov", value: "1" }],
+  });
+});
 
 Deno.test("current continuation facet replaces only the same inherited facet", () => {
   assertEquals(mergeFacetValuesWithCurrentOverrides(
@@ -107,6 +143,72 @@ Deno.test("explicit reasoning is projected onto one exact live facet axis", () =
     { key: "color", value: "чёрный" },
   ]);
   assertEquals(result.user_backed, []);
+});
+
+Deno.test("a compound counted adjective projects onto the matching live count facet", () => {
+  const facets = [
+    { key: "core_count", caption: "Количество жил", values: [{ value: "2" }, { value: "3" }, { value: "4" }] },
+    { key: "pole_count", caption: "Количество полюсов", values: [{ value: "2" }, { value: "3" }] },
+  ];
+  assertEquals(
+    projectExplicitReasoningFacetValues(
+      facets,
+      "Для подключения нужен медный трехжильный вариант.",
+      "Нужно подключить оборудование мощностью 3 кВт.",
+    ),
+    { kept: [{ key: "core_count", value: "3" }], user_backed: [] },
+  );
+});
+
+Deno.test("a customer-owned compound count retains user provenance", () => {
+  const facets = [{
+    key: "element_count",
+    caption: "Количество элементов",
+    values: [{ value: "2" }, { value: "3" }, { value: "4" }],
+  }];
+  assertEquals(
+    projectExplicitReasoningFacetValues(
+      facets,
+      "Выбираю трехэлементный вариант.",
+      "Покажи трехэлементный вариант.",
+    ),
+    {
+      kept: [{ key: "element_count", value: "3" }],
+      user_backed: [{ key: "element_count", value: "3" }],
+    },
+  );
+});
+
+Deno.test("an application measurement cannot become an unrelated count facet", () => {
+  const facets = [{
+    key: "element_count",
+    caption: "Количество элементов",
+    values: [{ value: "2" }, { value: "3" }, { value: "4" }],
+  }];
+  assertEquals(
+    projectExplicitReasoningFacetValues(
+      facets,
+      "Оборудование имеет мощность 3 кВт.",
+      "Нужно подключить оборудование мощностью 3 кВт.",
+    ),
+    { kept: [], user_backed: [] },
+  );
+});
+
+Deno.test("an explicitly labelled count in visible reasoning outranks the same application scalar", () => {
+  const facets = [{
+    key: "element_count",
+    caption: "Количество элементов",
+    values: [{ value: "2" }, { value: "3" }, { value: "4" }],
+  }];
+  assertEquals(
+    projectExplicitReasoningFacetValues(
+      facets,
+      "Для другого параметра нужно не менее 2,5 мм. Расчетная нагрузка 3 кВт. Количество элементов: 3.",
+      "Оборудование мощностью 3 кВт.",
+    ),
+    { kept: [{ key: "element_count", value: "3" }], user_backed: [] },
+  );
 });
 
 Deno.test("a normalized visible count authorizes exactly one matching live facet", () => {
@@ -839,6 +941,81 @@ Deno.test("a matching measurement unit proves an exact numeric facet value", () 
     "Нужно 16 А.",
   );
   assertEquals(result.args.options, { current: ["16"] });
+});
+
+Deno.test("a range endpoint and a number in another unit cannot become exact facet values", () => {
+  const live = [
+    {
+      key: "flux",
+      caption: "Световой поток, Лм",
+      unit: "лм",
+      values: [{ value: "4000" }, { value: "5000" }],
+    },
+    {
+      key: "temperature",
+      caption: "Цветовая температура, K",
+      unit: "K",
+      values: [{ value: "4000" }, { value: "5000" }],
+    },
+  ];
+  const reasoning =
+    "Для парковки нужен суммарный поток 20000–25000 лм, распределённый между несколькими приборами. Цветовая температура — 4000–5000 K.";
+
+  assertEquals(projectExplicitReasoningFacetValues(
+    live,
+    reasoning,
+    "Парковка 500 м², высота 3 м.",
+  ).kept, []);
+});
+
+Deno.test("a compound numeric enum requires every declared number in visible reasoning", () => {
+  const live = [{
+    key: "temperature_range",
+    caption: "Диапазон рабочих температур",
+    values: [
+      { value: "от -20 до +50 °C" },
+      { value: "от -40 до +50 °C" },
+    ],
+  }, {
+    key: "protection",
+    caption: "Степень защиты",
+    values: [{ value: "IP65" }],
+  }];
+  const reasoning =
+    "Для площадки ориентир освещённости 20–50 лк. Критичны диапазон рабочих температур от −25 °C и ниже и степень защиты IP65.";
+
+  assertEquals(projectExplicitReasoningFacetValues(
+    live,
+    reasoning,
+    "Нужен уличный прибор",
+  ).kept, [{ key: "protection", value: "IP65" }]);
+});
+
+Deno.test("a shared property root cannot bind a value to a sibling facet", () => {
+  const guarded = guardSearchFilters(
+    {
+      mode: "by_filter",
+      options: { protection: ["IP65"] },
+    },
+    [{
+      key: "body_color",
+      caption: "Цвет корпуса",
+      values: [{ value: "белый" }, { value: "чёрный" }],
+    }, {
+      key: "light_color",
+      caption: "Цвет свечения",
+      values: [{ value: "белый" }, { value: "жёлтый" }],
+    }, {
+      key: "protection",
+      caption: "Степень защиты",
+      values: [{ value: "IP65" }],
+    }],
+    "Критичны степень защиты IP65 и холодный белый или дневной свет.",
+    "Нужны варианты для парковки.",
+    "Критичны степень защиты IP65 и холодный белый или дневной свет.",
+  );
+
+  assertEquals(guarded.args.options, { protection: ["IP65"] });
 });
 
 Deno.test("a user measurement cannot be relabelled as another physical unit", () => {

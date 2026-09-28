@@ -6,30 +6,38 @@ import {
   applyCriteriaGate,
   buildCriteriaQuery,
   checkCriterion,
+  type Criterion,
   extendSelectionCriteriaPlan,
-  filterProductsByExcludedCriteria,
   filterProductIdsByBudgetCap,
+  filterProductsByExcludedCriteria,
   findTrait,
+  isLiteralUserCompactCriterion,
   mergeFacetOptionConstraints,
   mergeMandatorySelectionCriteria,
   mergeUserBackedCriteria,
   missingSelectionCriteria,
   parseNumSpan,
   projectCatalogFilterEvidence,
-  projectCommonRenderedUserCriteria,
   projectCommonRenderedMarkdownUserCriteria,
+  projectCommonRenderedUserCriteria,
   projectCriteriaFacetOptions,
+  projectAdvisoryCriteriaFacetOptions,
   resolveRenderCriteria,
   resolveTerminalSelectionCriteria,
-  titleProvesCompactCriterion,
   titleContradictsExactCountCriterion,
-  isLiteralUserCompactCriterion,
-  type Criterion,
+  titleProvesCompactCriterion,
 } from "./criteria-gate.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, traits: string[]): ProductRef {
-  return { id, pagetitle: `P-${id}`, vendor: null, price: 100, stock: "unknown", short_traits: traits };
+  return {
+    id,
+    pagetitle: `P-${id}`,
+    vendor: null,
+    price: 100,
+    stock: "unknown",
+    short_traits: traits,
+  };
 }
 
 Deno.test("declared exclusions remove only positively proven incompatible values", () => {
@@ -50,67 +58,137 @@ Deno.test("declared exclusions remove only positively proven incompatible values
 });
 
 Deno.test("render criteria: named entity browse keeps only user-backed filters", () => {
-  const inferred = [{ key: "Тип", op: "eq", value: "ошибочный", level: "A" }] as Criterion[];
-  const raw = [{ key: "Мощность", op: "min", value: 100, level: "A" }] as Criterion[];
-  const userBacked = [{ key: "Цвет", op: "eq", value: "белый", level: "A" }] as Criterion[];
-  assertEquals(resolveRenderCriteria(inferred, raw, userBacked, true), userBacked);
-  assertEquals(resolveRenderCriteria(inferred, raw, userBacked, false), [...userBacked, ...inferred, ...raw]);
+  const inferred = [{
+    key: "Тип",
+    op: "eq",
+    value: "ошибочный",
+    level: "A",
+  }] as Criterion[];
+  const raw = [{
+    key: "Мощность",
+    op: "min",
+    value: 100,
+    level: "A",
+  }] as Criterion[];
+  const userBacked = [{
+    key: "Цвет",
+    op: "eq",
+    value: "белый",
+    level: "A",
+  }] as Criterion[];
+  assertEquals(
+    resolveRenderCriteria(inferred, raw, userBacked, true),
+    userBacked,
+  );
+  assertEquals(resolveRenderCriteria(inferred, raw, userBacked, false), [
+    ...userBacked,
+    ...inferred,
+    ...raw,
+  ]);
 });
 
 Deno.test("render criteria: explicit user filters override inferred filters on the same facet", () => {
-  const inferred = [{ key: "Connector", op: "eq", value: "B", level: "A" }] as Criterion[];
-  const raw = [{ key: "Connector", op: "eq", value: "C", level: "A" }] as Criterion[];
-  const userBacked = [{ key: "Connector", op: "eq", value: "A", level: "A" }] as Criterion[];
-  assertEquals(resolveRenderCriteria(inferred, raw, userBacked, false), userBacked);
+  const inferred = [{
+    key: "Connector",
+    op: "eq",
+    value: "B",
+    level: "A",
+  }] as Criterion[];
+  const raw = [{
+    key: "Connector",
+    op: "eq",
+    value: "C",
+    level: "A",
+  }] as Criterion[];
+  const userBacked = [{
+    key: "Connector",
+    op: "eq",
+    value: "A",
+    level: "A",
+  }] as Criterion[];
+  assertEquals(
+    resolveRenderCriteria(inferred, raw, userBacked, false),
+    userBacked,
+  );
 });
 
 Deno.test("user-backed criteria accumulate monotonically across fallback searches", () => {
-  const first = [{ key: "Connector", op: "eq", value: "A", level: "A" }] as Criterion[];
-  const second = [{ key: "Count", op: "eq", value: "3", level: "A" }] as Criterion[];
+  const first = [{
+    key: "Connector",
+    op: "eq",
+    value: "A",
+    level: "A",
+  }] as Criterion[];
+  const second = [{
+    key: "Count",
+    op: "eq",
+    value: "3",
+    level: "A",
+  }] as Criterion[];
   assertEquals(mergeUserBackedCriteria(first, []), first);
   assertEquals(mergeUserBackedCriteria(first, second), [...first, ...second]);
-  assertEquals(mergeUserBackedCriteria([...first, ...second], first), [...first, ...second]);
+  assertEquals(mergeUserBackedCriteria([...first, ...second], first), [
+    ...first,
+    ...second,
+  ]);
 });
 
 Deno.test("equivalent numeric facet and emission proofs collapse into one public obligation", () => {
-  assertEquals(mergeUserBackedCriteria([], [
-    {
+  assertEquals(
+    mergeUserBackedCriteria([], [
+      {
+        key: "Номинальный ток",
+        op: "eq",
+        value: "25",
+        unit: "а",
+        level: "A",
+        evidence: "user_explicit",
+      },
+      {
+        key: "Номинальный ток",
+        op: "eq",
+        value: 25,
+        level: "A",
+        evidence: "user_explicit",
+      },
+      {
+        key: "А",
+        op: "eq",
+        value: 25,
+        unit: "a",
+        level: "A",
+        evidence: "user_explicit",
+      },
+    ]),
+    [{
       key: "Номинальный ток",
       op: "eq",
       value: "25",
       unit: "а",
       level: "A",
       evidence: "user_explicit",
-    },
-    {
-      key: "Номинальный ток",
-      op: "eq",
-      value: 25,
-      level: "A",
-      evidence: "user_explicit",
-    },
-    {
-      key: "А",
-      op: "eq",
-      value: 25,
-      unit: "a",
-      level: "A",
-      evidence: "user_explicit",
-    },
-  ]), [{
-    key: "Номинальный ток",
-    op: "eq",
-    value: "25",
-    unit: "а",
-    level: "A",
-    evidence: "user_explicit",
-  }]);
+    }],
+  );
 });
 
 Deno.test("equal scalars on independently named axes are not collapsed", () => {
   const criteria = [
-    { key: "Входная мощность", op: "eq" as const, value: 10, unit: "Вт", level: "A" as const, evidence: "user_explicit" as const },
-    { key: "Выходная мощность", op: "eq" as const, value: 10, unit: "Вт", level: "A" as const, evidence: "user_explicit" as const },
+    {
+      key: "Входная мощность",
+      op: "eq" as const,
+      value: 10,
+      unit: "Вт",
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+    },
+    {
+      key: "Выходная мощность",
+      op: "eq" as const,
+      value: 10,
+      unit: "Вт",
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+    },
   ];
   assertEquals(mergeUserBackedCriteria([], criteria), criteria);
 });
@@ -130,19 +208,54 @@ Deno.test("rendered-card consensus restores a user-owned emission contract", () 
       "Покажи ACME на 16 ампер и на 3 полюса",
     ),
     [
-      { key: "Бренд", op: "eq", value: "ACME", level: "A", evidence: "user_explicit" },
-      { key: "Номинальный ток", op: "eq", value: 16, level: "A", evidence: "user_explicit" },
-      { key: "Количество полюсов", op: "eq", value: 3, level: "A", evidence: "user_explicit" },
+      {
+        key: "Бренд",
+        op: "eq",
+        value: "ACME",
+        level: "A",
+        evidence: "user_explicit",
+      },
+      {
+        key: "Номинальный ток",
+        op: "eq",
+        value: 16,
+        level: "A",
+        evidence: "user_explicit",
+      },
+      {
+        key: "Количество полюсов",
+        op: "eq",
+        value: 3,
+        level: "A",
+        evidence: "user_explicit",
+      },
     ],
   );
 });
 
 Deno.test("rendered-card consensus never claims a trait that differs across cards", () => {
   const products = [
-    { id: "one", pagetitle: "Item one", vendor: null, price: 100, stock: "in_stock" as const, short_traits: ["Номинальный ток: 16 A"] },
-    { id: "two", pagetitle: "Item two", vendor: null, price: 100, stock: "in_stock" as const, short_traits: ["Номинальный ток: 20 A"] },
+    {
+      id: "one",
+      pagetitle: "Item one",
+      vendor: null,
+      price: 100,
+      stock: "in_stock" as const,
+      short_traits: ["Номинальный ток: 16 A"],
+    },
+    {
+      id: "two",
+      pagetitle: "Item two",
+      vendor: null,
+      price: 100,
+      stock: "in_stock" as const,
+      short_traits: ["Номинальный ток: 20 A"],
+    },
   ];
-  assertEquals(projectCommonRenderedUserCriteria(products, "Нужно 16 ампер"), []);
+  assertEquals(
+    projectCommonRenderedUserCriteria(products, "Нужно 16 ампер"),
+    [],
+  );
 });
 
 Deno.test("one shared class word cannot promote an unrequested compound catalog value", () => {
@@ -155,7 +268,10 @@ Deno.test("one shared class word cannot promote an unrequested compound catalog 
     short_traits: ["Тип товара: устройства для служебных зон"],
   }));
   assertEquals(
-    projectCommonRenderedUserCriteria(products, "Нужно бытовое устройство с датчиком"),
+    projectCommonRenderedUserCriteria(
+      products,
+      "Нужно бытовое устройство с датчиком",
+    ),
     [],
   );
 });
@@ -170,12 +286,53 @@ Deno.test("rendered-card consensus uses common title measurements when compact c
     short_traits: [],
   }));
   assertEquals(
-    projectCommonRenderedUserCriteria(products, "Покажи ACME на 16 ампер и на 3 полюса"),
+    projectCommonRenderedUserCriteria(
+      products,
+      "Покажи ACME на 16 ампер и на 3 полюса",
+    ),
     [
-      { key: "Бренд", op: "eq", value: "ACME Electric", level: "A", evidence: "user_explicit" },
-      { key: "ампер", op: "eq", value: 16, unit: "a", level: "A", evidence: "user_explicit" },
-      { key: "полюса", op: "eq", value: 3, unit: "pole", level: "A", evidence: "user_explicit" },
+      {
+        key: "Бренд",
+        op: "eq",
+        value: "ACME Electric",
+        level: "A",
+        evidence: "user_explicit",
+      },
+      {
+        key: "ампер",
+        op: "eq",
+        value: 16,
+        unit: "a",
+        level: "A",
+        evidence: "user_explicit",
+      },
+      {
+        key: "полюса",
+        op: "eq",
+        value: 3,
+        unit: "pole",
+        level: "A",
+        evidence: "user_explicit",
+      },
     ],
+  );
+});
+
+Deno.test("one generic class word cannot promote a compound rendered identity", () => {
+  const products = ["one", "two"].map((id) => ({
+    id,
+    pagetitle: `Generic item ${id}`,
+    vendor: "Кабель витой Ретро",
+    price: 100,
+    stock: "in_stock" as const,
+    short_traits: [],
+  }));
+  assertEquals(
+    projectCommonRenderedUserCriteria(
+      products,
+      "Нужен кабель для оборудования",
+    ),
+    [],
   );
 });
 
@@ -185,11 +342,34 @@ Deno.test("deterministic markdown cards preserve the same common emission contra
     "- **[Device two 3P 16A](https://example.test/two)**\n  Цена: *200* ₸\n  Бренд: ACME Electric",
   ].join("\n\n");
   assertEquals(
-    projectCommonRenderedMarkdownUserCriteria(markdown, "Покажи ACME на 16 ампер и на 3 полюса"),
+    projectCommonRenderedMarkdownUserCriteria(
+      markdown,
+      "Покажи ACME на 16 ампер и на 3 полюса",
+    ),
     [
-      { key: "Бренд", op: "eq", value: "ACME Electric", level: "A", evidence: "user_explicit" },
-      { key: "ампер", op: "eq", value: 16, unit: "a", level: "A", evidence: "user_explicit" },
-      { key: "полюса", op: "eq", value: 3, unit: "pole", level: "A", evidence: "user_explicit" },
+      {
+        key: "Бренд",
+        op: "eq",
+        value: "ACME Electric",
+        level: "A",
+        evidence: "user_explicit",
+      },
+      {
+        key: "ампер",
+        op: "eq",
+        value: 16,
+        unit: "a",
+        level: "A",
+        evidence: "user_explicit",
+      },
+      {
+        key: "полюса",
+        op: "eq",
+        value: 3,
+        unit: "pole",
+        level: "A",
+        evidence: "user_explicit",
+      },
     ],
   );
 });
@@ -204,8 +384,38 @@ Deno.test("a digit inside a larger customer number does not make an unrelated nu
     short_traits: ["Популярный: 1"],
   }];
   assertEquals(
-    projectCommonRenderedUserCriteria(products, "Нужно изделие для объекта диаметром 12 мм"),
+    projectCommonRenderedUserCriteria(
+      products,
+      "Нужно изделие для объекта диаметром 12 мм",
+    ),
     [],
+  );
+});
+
+Deno.test("an exact application scalar cannot promote an unrelated bare metadata value", () => {
+  const products = ["one", "two"].map((id) => ({
+    id,
+    pagetitle: `Кабель ${id} 3*2,5`,
+    vendor: null,
+    price: 100,
+    stock: "in_stock" as const,
+    short_traits: [
+      "Количество жил: 3",
+      "Наименование на казахском языке: 3",
+    ],
+  }));
+  assertEquals(
+    projectCommonRenderedUserCriteria(
+      products,
+      "Какой силовой кабель взять для кондиционера на 3 кВт? Количество жил: 3",
+    ),
+    [{
+      key: "Количество жил",
+      op: "eq",
+      value: 3,
+      level: "A",
+      evidence: "user_explicit",
+    }],
   );
 });
 
@@ -219,14 +429,23 @@ Deno.test("a one-letter product unit does not match inside a longer customer uni
     short_traits: ["Единица измерения: м"],
   }];
   assertEquals(
-    projectCommonRenderedUserCriteria(products, "Нужно изделие для объекта диаметром 10 мм"),
+    projectCommonRenderedUserCriteria(
+      products,
+      "Нужно изделие для объекта диаметром 10 мм",
+    ),
     [],
   );
 });
 
 Deno.test("selection criteria plan is immutable and cannot lose an earlier mandatory requirement", () => {
   const first = extendSelectionCriteriaPlan(null, [
-    { key: "Live output facet", op: "range", value: [3750, 5000], unit: "lm", level: "A" },
+    {
+      key: "Live output facet",
+      op: "range",
+      value: [3750, 5000],
+      unit: "lm",
+      level: "A",
+    },
     { key: "Optional finish", op: "eq", value: "matte", level: "B" },
   ], "reasoning_projection");
   const extended = extendSelectionCriteriaPlan(first, [
@@ -235,37 +454,68 @@ Deno.test("selection criteria plan is immutable and cannot lose an earlier manda
 
   assertEquals(first.mandatory_criteria.length, 1);
   assertEquals(extended.mandatory_criteria.length, 2);
-  assertEquals(missingSelectionCriteria(extended, [
-    { key: "Live mounting facet", op: "eq", value: "surface", level: "A" },
-  ]), [
-    { key: "Live output facet", op: "range", value: [3750, 5000], unit: "lm", level: "A" },
-  ]);
+  assertEquals(
+    missingSelectionCriteria(extended, [
+      { key: "Live mounting facet", op: "eq", value: "surface", level: "A" },
+    ]),
+    [
+      {
+        key: "Live output facet",
+        op: "range",
+        value: [3750, 5000],
+        unit: "lm",
+        level: "A",
+      },
+    ],
+  );
 });
 
 Deno.test("public selection contract never upgrades advisory render criteria", () => {
-  assertEquals(mergeMandatorySelectionCriteria([
-    { key: "Required axis", op: "eq", value: "one", level: "A" },
-    { key: "Optional axis", op: "eq", value: "two", level: "B" },
-  ]), [
-    { key: "Required axis", op: "eq", value: "one", level: "A" },
-  ]);
+  assertEquals(
+    mergeMandatorySelectionCriteria([
+      { key: "Required axis", op: "eq", value: "one", level: "A" },
+      { key: "Optional axis", op: "eq", value: "two", level: "B" },
+    ]),
+    [
+      { key: "Required axis", op: "eq", value: "one", level: "A" },
+    ],
+  );
 });
 
 Deno.test("model assumptions cannot enter the immutable mandatory contract", () => {
   const assumed = {
-    key: "Live application class", op: "eq" as const, value: "model-selected value",
-    level: "A" as const, evidence: "model_assumption" as const,
+    key: "Live application class",
+    op: "eq" as const,
+    value: "model-selected value",
+    level: "A" as const,
+    evidence: "model_assumption" as const,
   };
   const explicit = {
-    key: "Live customer facet", op: "eq" as const, value: "customer value",
-    level: "A" as const, evidence: "user_explicit" as const,
+    key: "Live customer facet",
+    op: "eq" as const,
+    value: "customer value",
+    level: "A" as const,
+    evidence: "user_explicit" as const,
   };
   const coincidentalCatalogFact = {
-    key: "Shared card metadata", op: "eq" as const, value: "same on every card",
-    level: "A" as const, evidence: "catalog_verified" as const,
+    key: "Shared card metadata",
+    op: "eq" as const,
+    value: "same on every card",
+    level: "A" as const,
+    evidence: "catalog_verified" as const,
   };
-  assertEquals(mergeMandatorySelectionCriteria([assumed, coincidentalCatalogFact, explicit]), [explicit]);
-  assertEquals(mergeUserBackedCriteria([], [assumed, coincidentalCatalogFact, explicit]), [explicit]);
+  assertEquals(
+    mergeMandatorySelectionCriteria([
+      assumed,
+      coincidentalCatalogFact,
+      explicit,
+    ]),
+    [explicit],
+  );
+  assertEquals(
+    mergeUserBackedCriteria([], [assumed, coincidentalCatalogFact, explicit]),
+    [explicit],
+  );
   assertEquals(
     extendSelectionCriteriaPlan(
       null,
@@ -300,15 +550,34 @@ Deno.test("a broad semantic recovery cannot discard the latest mandatory contrac
   ] as Criterion[];
   const recovered = resolveRenderCriteria([], latest, [], false);
   assertEquals(recovered, latest);
-  assertEquals(applyCriteriaGate([
-    product("weak", ["Мощность: 7 Вт"]),
-  ], recovered).passed_ids, []);
+  assertEquals(
+    applyCriteriaGate([
+      product("weak", ["Мощность: 7 Вт"]),
+    ], recovered).passed_ids,
+    [],
+  );
 });
 
 Deno.test("terminal recovery preserves frozen user criteria omitted by the model", () => {
-  const projected = [{ key: "Power", op: "min", value: 100, unit: "W", level: "A" }] as Criterion[];
-  const latest = [{ key: "Curve", op: "eq", value: "C", level: "A" }] as Criterion[];
-  const userBacked = [{ key: "Current", op: "eq", value: "16 A", level: "A" }] as Criterion[];
+  const projected = [{
+    key: "Power",
+    op: "min",
+    value: 100,
+    unit: "W",
+    level: "A",
+  }] as Criterion[];
+  const latest = [{
+    key: "Curve",
+    op: "eq",
+    value: "C",
+    level: "A",
+  }] as Criterion[];
+  const userBacked = [{
+    key: "Current",
+    op: "eq",
+    value: "16 A",
+    level: "A",
+  }] as Criterion[];
   assertEquals(
     resolveTerminalSelectionCriteria(projected, latest, userBacked),
     [...userBacked, ...projected, ...latest],
@@ -316,34 +585,91 @@ Deno.test("terminal recovery preserves frozen user criteria omitted by the model
 });
 
 Deno.test("compact code criterion must be visible in the product title", () => {
-  const criterion = { key: "Характеристика", op: "eq", value: "C", level: "A" } as Criterion;
-  assertEquals(titleProvesCompactCriterion("Автомат 1P 16A характеристика C", criterion), true);
-  assertEquals(titleProvesCompactCriterion("Автомат 1Р 16А х-ка С", criterion), true);
-  assertEquals(titleProvesCompactCriterion("Автомат с заземлением 1Р 16А", criterion), false);
-  assertEquals(titleProvesCompactCriterion("Автомат 1P 16A CHINT", criterion), false);
-  assertEquals(titleProvesCompactCriterion("Товар белый", { ...criterion, value: "белый" }), true);
-  assertEquals(titleProvesCompactCriterion("Кабель ВВГнг 2×1,5", { ...criterion, value: "медь" }), true);
+  const criterion = {
+    key: "Характеристика",
+    op: "eq",
+    value: "C",
+    level: "A",
+  } as Criterion;
+  assertEquals(
+    titleProvesCompactCriterion("Автомат 1P 16A характеристика C", criterion),
+    true,
+  );
+  assertEquals(
+    titleProvesCompactCriterion("Автомат 1Р 16А х-ка С", criterion),
+    true,
+  );
+  assertEquals(
+    titleProvesCompactCriterion("Автомат с заземлением 1Р 16А", criterion),
+    false,
+  );
+  assertEquals(
+    titleProvesCompactCriterion("Автомат 1P 16A CHINT", criterion),
+    false,
+  );
+  assertEquals(
+    titleProvesCompactCriterion("Товар белый", {
+      ...criterion,
+      value: "белый",
+    }),
+    true,
+  );
+  assertEquals(
+    titleProvesCompactCriterion("Кабель ВВГнг 2×1,5", {
+      ...criterion,
+      value: "медь",
+    }),
+    true,
+  );
 });
 
 Deno.test("a projected compact facet is literal only when the customer typed the code", () => {
-  const led = { key: "Технология", op: "eq", value: "LED", level: "A" } as Criterion;
-  assertEquals(isLiteralUserCompactCriterion("светодиодный прожектор", led), false);
+  const led = {
+    key: "Технология",
+    op: "eq",
+    value: "LED",
+    level: "A",
+  } as Criterion;
+  assertEquals(
+    isLiteralUserCompactCriterion("светодиодный прожектор", led),
+    false,
+  );
   assertEquals(isLiteralUserCompactCriterion("LED прожектор", led), true);
 });
 
 Deno.test("an exact count rejects a visible additional compact component", () => {
-  const exactOne = { key: "Количество полюсов", op: "eq", value: "1", level: "A" } as Criterion;
-  assertEquals(titleContradictsExactCountCriterion("Автомат iC60N 1П 25А C", exactOne), false);
-  assertEquals(titleContradictsExactCountCriterion("Автомат ВА63 1П+Н 25А C", exactOne), true);
-  assertEquals(titleContradictsExactCountCriterion("Автомат V63 1P + N 25A C", exactOne), true);
-  assertEquals(titleContradictsExactCountCriterion(
-    "Устройство 1P+N",
-    { ...exactOne, key: "Номинальный ток" },
-  ), false);
-  assertEquals(titleContradictsExactCountCriterion(
-    "Кабель 3×1,5",
-    { ...exactOne, key: "Количество жил", value: 3 },
-  ), false);
+  const exactOne = {
+    key: "Количество полюсов",
+    op: "eq",
+    value: "1",
+    level: "A",
+  } as Criterion;
+  assertEquals(
+    titleContradictsExactCountCriterion("Автомат iC60N 1П 25А C", exactOne),
+    false,
+  );
+  assertEquals(
+    titleContradictsExactCountCriterion("Автомат ВА63 1П+Н 25А C", exactOne),
+    true,
+  );
+  assertEquals(
+    titleContradictsExactCountCriterion("Автомат V63 1P + N 25A C", exactOne),
+    true,
+  );
+  assertEquals(
+    titleContradictsExactCountCriterion(
+      "Устройство 1P+N",
+      { ...exactOne, key: "Номинальный ток" },
+    ),
+    false,
+  );
+  assertEquals(
+    titleContradictsExactCountCriterion(
+      "Кабель 3×1,5",
+      { ...exactOne, key: "Количество жил", value: 3 },
+    ),
+    false,
+  );
 });
 
 Deno.test("parseNumSpan: scalar, decimal comma", () => {
@@ -359,8 +685,14 @@ Deno.test("parseNumSpan: ranges in all dash forms", () => {
 });
 
 Deno.test("parseNumSpan: open-ended", () => {
-  assertEquals(parseNumSpan("не менее 12"), { min: 12, max: Number.POSITIVE_INFINITY });
-  assertEquals(parseNumSpan("до 15"), { min: Number.NEGATIVE_INFINITY, max: 15 });
+  assertEquals(parseNumSpan("не менее 12"), {
+    min: 12,
+    max: Number.POSITIVE_INFINITY,
+  });
+  assertEquals(parseNumSpan("до 15"), {
+    min: Number.NEGATIVE_INFINITY,
+    max: 15,
+  });
 });
 
 Deno.test("parseNumSpan: proportions and versions are not sizes", () => {
@@ -371,7 +703,10 @@ Deno.test("parseNumSpan: proportions and versions are not sizes", () => {
 });
 
 Deno.test("findTrait: exact and partial label match, миссинг", () => {
-  const p = product("1", ["Параметр альфа: 10 ед", "Параметр бета расширенный: 20 ед"]);
+  const p = product("1", [
+    "Параметр альфа: 10 ед",
+    "Параметр бета расширенный: 20 ед",
+  ]);
   assertEquals(findTrait(p, "параметр альфа")?.value, "10 ед");
   assertEquals(findTrait(p, "Параметр бета")?.value, "20 ед");
   assertEquals(findTrait(p, "параметр гамма"), null);
@@ -387,7 +722,13 @@ Deno.test("findTrait: first-class catalog price is evidence for budget criteria"
 Deno.test("checkCriterion: price max uses ProductRef.price without a short trait", () => {
   const withinBudget = { ...product("1", []), price: 2800 };
   const overBudget = { ...product("2", []), price: 4300 };
-  const criterion: Criterion = { key: "Цена", op: "max", value: 4000, unit: "тенге", level: "A" };
+  const criterion: Criterion = {
+    key: "Цена",
+    op: "max",
+    value: 4000,
+    unit: "тенге",
+    level: "A",
+  };
 
   assertEquals(checkCriterion(withinBudget, criterion).verdict, "pass");
   assertEquals(checkCriterion(overBudget, criterion).verdict, "fail");
@@ -406,48 +747,113 @@ Deno.test("budget cap filters ordinary and recovery render ids by catalog price"
     ["over", { price: 1745 }],
     ["zero", { price: 0 }],
   ]);
-  assertEquals(filterProductIdsByBudgetCap(["within", "over", "zero", "missing"], products, 1000), {
-    ids: ["within"],
-    dropped: 3,
-  });
-  assertEquals(filterProductIdsByBudgetCap(["within", "over"], products, null), {
-    ids: ["within", "over"],
-    dropped: 0,
-  });
+  assertEquals(
+    filterProductIdsByBudgetCap(
+      ["within", "over", "zero", "missing"],
+      products,
+      1000,
+    ),
+    {
+      ids: ["within"],
+      dropped: 3,
+    },
+  );
+  assertEquals(
+    filterProductIdsByBudgetCap(["within", "over"], products, null),
+    {
+      ids: ["within", "over"],
+      dropped: 0,
+    },
+  );
 });
 
 Deno.test("checkCriterion: range overlap → pass, disjoint → fail", () => {
   const p = product("1", ["Параметр альфа: 12-15 ед"]);
-  const pass: Criterion = { key: "параметр альфа", op: "range", value: [12, 15], unit: "ед" };
-  const fail: Criterion = { key: "параметр альфа", op: "range", value: [20, 25], unit: "ед" };
+  const pass: Criterion = {
+    key: "параметр альфа",
+    op: "range",
+    value: [12, 15],
+    unit: "ед",
+  };
+  const fail: Criterion = {
+    key: "параметр альфа",
+    op: "range",
+    value: [20, 25],
+    unit: "ед",
+  };
   assertEquals(checkCriterion(p, pass).verdict, "pass");
   assertEquals(checkCriterion(p, fail).verdict, "fail");
 });
 
 Deno.test("checkCriterion: min/max operators", () => {
   const p = product("1", ["Параметр альфа: 10 ед"]);
-  assertEquals(checkCriterion(p, { key: "параметр альфа", op: "min", value: 8 }).verdict, "pass");
-  assertEquals(checkCriterion(p, { key: "параметр альфа", op: "min", value: 12 }).verdict, "fail");
-  assertEquals(checkCriterion(p, { key: "параметр альфа", op: "max", value: 12 }).verdict, "pass");
-  assertEquals(checkCriterion(p, { key: "параметр альфа", op: "max", value: 8 }).verdict, "fail");
+  assertEquals(
+    checkCriterion(p, { key: "параметр альфа", op: "min", value: 8 }).verdict,
+    "pass",
+  );
+  assertEquals(
+    checkCriterion(p, { key: "параметр альфа", op: "min", value: 12 }).verdict,
+    "fail",
+  );
+  assertEquals(
+    checkCriterion(p, { key: "параметр альфа", op: "max", value: 12 }).verdict,
+    "pass",
+  );
+  assertEquals(
+    checkCriterion(p, { key: "параметр альфа", op: "max", value: 8 }).verdict,
+    "fail",
+  );
 });
 
 Deno.test("checkCriterion: string eq — нормализованное вхождение", () => {
   const p = product("1", ["Параметр строковый: Значение Икс"]);
-  assertEquals(checkCriterion(p, { key: "параметр строковый", op: "eq", value: "значение икс" }).verdict, "pass");
-  assertEquals(checkCriterion(p, { key: "параметр строковый", op: "eq", value: "значение игрек" }).verdict, "fail");
+  assertEquals(
+    checkCriterion(p, {
+      key: "параметр строковый",
+      op: "eq",
+      value: "значение икс",
+    }).verdict,
+    "pass",
+  );
+  assertEquals(
+    checkCriterion(p, {
+      key: "параметр строковый",
+      op: "eq",
+      value: "значение игрек",
+    }).verdict,
+    "fail",
+  );
 });
 
 Deno.test("numeric string equality does not match longer numbers by substring", () => {
-  const criterion: Criterion = { key: "Параметр", op: "eq", value: "16", unit: "А", level: "A" };
-  assertEquals(checkCriterion(product("exact", ["Параметр: 16"]), criterion).verdict, "pass");
-  assertEquals(checkCriterion(product("large", ["Параметр: 1600"]), criterion).verdict, "fail");
-  assertEquals(checkCriterion(product("range", ["Параметр: 0.1-0.16"]), criterion).verdict, "fail");
+  const criterion: Criterion = {
+    key: "Параметр",
+    op: "eq",
+    value: "16",
+    unit: "А",
+    level: "A",
+  };
+  assertEquals(
+    checkCriterion(product("exact", ["Параметр: 16"]), criterion).verdict,
+    "pass",
+  );
+  assertEquals(
+    checkCriterion(product("large", ["Параметр: 1600"]), criterion).verdict,
+    "fail",
+  );
+  assertEquals(
+    checkCriterion(product("range", ["Параметр: 0.1-0.16"]), criterion).verdict,
+    "fail",
+  );
 });
 
 Deno.test("checkCriterion: отсутствие характеристики = unknown, не fail", () => {
   const p = product("1", ["Другой параметр: 5 ед"]);
-  const ch = checkCriterion(p, { key: "параметр альфа", op: "min", value: 100 });
+  const ch = checkCriterion(p, {
+    key: "параметр альфа",
+    op: "min",
+    value: 100,
+  });
   assertEquals(ch.verdict, "unknown");
   assertEquals(ch.actual, null);
 });
@@ -455,10 +861,15 @@ Deno.test("checkCriterion: отсутствие характеристики = u
 Deno.test("checkCriterion: строковый признак подтверждается описанием товара", () => {
   const p = {
     ...product("1", ["Вид: Бытовой светильник накладной"]),
-    description_excerpt: "Данная модель оборудована микроволновым сенсором движения.",
+    description_excerpt:
+      "Данная модель оборудована микроволновым сенсором движения.",
   };
   assertEquals(
-    checkCriterion(p, { key: "датчик движения", op: "eq", value: "микроволновый сенсор" }).verdict,
+    checkCriterion(p, {
+      key: "датчик движения",
+      op: "eq",
+      value: "микроволновый сенсор",
+    }).verdict,
     "pass",
   );
 });
@@ -467,10 +878,16 @@ Deno.test("checkCriterion: affirmative boolean feature is proven by catalog desc
   const p = {
     ...product("1", []),
     pagetitle: "Светильник с микроволновым сенсором",
-    description_excerpt: "Сенсор автоматически включает прибор при появлении движущихся объектов.",
+    description_excerpt:
+      "Сенсор автоматически включает прибор при появлении движущихся объектов.",
   };
   assertEquals(
-    checkCriterion(p, { key: "С датчиком движения", op: "eq", value: "да", level: "A" }).verdict,
+    checkCriterion(p, {
+      key: "С датчиком движения",
+      op: "eq",
+      value: "да",
+      level: "A",
+    }).verdict,
     "pass",
   );
 });
@@ -478,10 +895,16 @@ Deno.test("checkCriterion: affirmative boolean feature is proven by catalog desc
 Deno.test("checkCriterion: affirmative boolean remains unknown without feature evidence", () => {
   const p = {
     ...product("1", []),
-    description_excerpt: "Обычный товар продаётся в магазине и подходит для сухих помещений.",
+    description_excerpt:
+      "Обычный товар продаётся в магазине и подходит для сухих помещений.",
   };
   assertEquals(
-    checkCriterion(p, { key: "С датчиком движения", op: "eq", value: "да", level: "A" }).verdict,
+    checkCriterion(p, {
+      key: "С датчиком движения",
+      op: "eq",
+      value: "да",
+      level: "A",
+    }).verdict,
     "unknown",
   );
 });
@@ -492,7 +915,12 @@ Deno.test("checkCriterion: an omitted negative boolean is not proven by unrelate
     description_excerpt: "Интернет-магазин предлагает стандартную модель.",
   };
   assertEquals(
-    checkCriterion(p, { key: "Диммирование", op: "eq", value: "нет", level: "A" }).verdict,
+    checkCriterion(p, {
+      key: "Диммирование",
+      op: "eq",
+      value: "нет",
+      level: "A",
+    }).verdict,
     "unknown",
   );
 });
@@ -500,7 +928,11 @@ Deno.test("checkCriterion: an omitted negative boolean is not proven by unrelate
 Deno.test("checkCriterion: строковое противоречие в одноимённом фасете = fail", () => {
   const p = product("1", ["Вид светильника: Светильники для ЖКХ"]);
   assertEquals(
-    checkCriterion(p, { key: "Вид светильника", op: "eq", value: "Бытовые светильники накладные" }).verdict,
+    checkCriterion(p, {
+      key: "Вид светильника",
+      op: "eq",
+      value: "Бытовые светильники накладные",
+    }).verdict,
     "fail",
   );
 });
@@ -517,7 +949,12 @@ Deno.test("applyCriteriaGate: уровень A требует доказател
     product("2", ["Параметр альфа: 4-6 ед"]),
     product("3", ["Иной параметр: 1 ед"]),
   ];
-  const crit: Criterion[] = [{ key: "параметр альфа", op: "range", value: [12, 15], level: "A" }];
+  const crit: Criterion[] = [{
+    key: "параметр альфа",
+    op: "range",
+    value: [12, 15],
+    level: "A",
+  }];
   const r = applyCriteriaGate(items, crit);
   assertEquals(r.passed_ids, ["1"]);
   assertEquals(r.rejected, [
@@ -551,17 +988,82 @@ Deno.test("mandatory criteria compile into live facet OR values and numeric boun
     { key: "Степень защиты", op: "eq", value: "IP65", level: "A" },
     { key: "Световой поток", op: "min", value: 3750, unit: "лм", level: "A" },
   ], [
-    { key: "power", caption: "Мощность", unit: "Вт", values: [{ value: "20" }, { value: "30" }, { value: "50" }] },
-    { key: "ip", caption: "Степень защиты", unit: null, values: [{ value: "IP44" }, { value: "IP65" }] },
-    { key: "flow", caption: "Световой поток", unit: "лм", values: [{ value: "3000" }, { value: "4000" }, { value: "5000" }] },
+    {
+      key: "power",
+      caption: "Мощность",
+      unit: "Вт",
+      values: [{ value: "20" }, { value: "30" }, { value: "50" }],
+    },
+    {
+      key: "ip",
+      caption: "Степень защиты",
+      unit: null,
+      values: [{ value: "IP44" }, { value: "IP65" }],
+    },
+    {
+      key: "flow",
+      caption: "Световой поток",
+      unit: "лм",
+      values: [{ value: "3000" }, { value: "4000" }, { value: "5000" }],
+    },
   ]);
-  assertEquals(projection.options, { power: ["20", "50"], ip: ["IP65"], flow: ["4000", "5000"] });
+  assertEquals(projection.options, {
+    power: ["20", "50"],
+    ip: ["IP65"],
+    flow: ["4000", "5000"],
+  });
   assertEquals(projection.unmatched_keys, []);
+});
+
+Deno.test("advisory model classification guides retrieval without becoming mandatory", () => {
+  const facets = [{
+    key: "application",
+    caption: "Назначение",
+    type: "select",
+    unit: null,
+    values: [
+      { value: "Класс альфа" },
+      { value: "Класс бета" },
+    ],
+  }];
+  const criteria: Criterion[] = [{
+    key: "Назначение",
+    op: "eq",
+    value: "Класс альфа",
+    level: "B",
+    evidence: "model_assumption",
+  }];
+  assertEquals(projectCriteriaFacetOptions(criteria, facets).options, {});
+  assertEquals(projectAdvisoryCriteriaFacetOptions(criteria, facets).options, {
+    application: ["Класс альфа"],
+  });
+});
+
+Deno.test("exact numeric equality prefers an exact live value over containing ranges", () => {
+  const projection = projectCriteriaFacetOptions([{
+    key: "Номинальный ток",
+    op: "eq",
+    value: "25",
+    unit: "А",
+    level: "A",
+    evidence: "user_explicit",
+  }], [{
+    key: "rated_current",
+    caption: "Номинальный ток",
+    unit: null,
+    values: [{ value: "20-25" }, { value: "25" }, { value: "24-32" }],
+  }]);
+  assertEquals(projection.options, { rated_current: ["25"] });
 });
 
 Deno.test("short facet codes remain exact while Cyrillic and Latin glyphs interoperate", () => {
   const projection = projectCriteriaFacetOptions([
-    { key: "Характеристика срабатывания", op: "eq", value: "Тип C", level: "A" },
+    {
+      key: "Характеристика срабатывания",
+      op: "eq",
+      value: "Тип C",
+      level: "A",
+    },
   ], [{
     key: "curve",
     caption: "Характеристика срабатывания",
@@ -575,7 +1077,13 @@ Deno.test("short facet codes remain exact while Cyrillic and Latin glyphs intero
 
 Deno.test("machine facet key compiles through the same resolved live facet", () => {
   const projection = projectCriteriaFacetOptions([
-    { key: "measured_output__lm", op: "min", value: 3750, unit: "lm", level: "A" },
+    {
+      key: "measured_output__lm",
+      op: "min",
+      value: 3750,
+      unit: "lm",
+      level: "A",
+    },
   ], [{
     key: "measured_output__lm",
     caption: "Measured output, lm",
@@ -588,13 +1096,20 @@ Deno.test("machine facet key compiles through the same resolved live facet", () 
 });
 
 Deno.test("independent facet projections merge as one strict intersection", () => {
-  assertEquals(mergeFacetOptionConstraints(
-    { before: ["13", "14", "16"], after: ["4", "6", "7", "8"] },
-    { ratio: ["2:1"], before: ["14", "16"] },
-  ), {
-    options: { before: ["14", "16"], after: ["4", "6", "7", "8"], ratio: ["2:1"] },
-    conflicting_keys: [],
-  });
+  assertEquals(
+    mergeFacetOptionConstraints(
+      { before: ["13", "14", "16"], after: ["4", "6", "7", "8"] },
+      { ratio: ["2:1"], before: ["14", "16"] },
+    ),
+    {
+      options: {
+        before: ["14", "16"],
+        after: ["4", "6", "7", "8"],
+        ratio: ["2:1"],
+      },
+      conflicting_keys: [],
+    },
+  );
 });
 
 Deno.test("contradictory projections fail closed", () => {
@@ -613,8 +1128,15 @@ Deno.test("numeric bounds intersect before the live facet result is bounded", ()
     caption: "Световой поток",
     unit: "лм",
     values: [
-      ...Array.from({ length: 13 }, (_, index) => ({ value: String(6000 + index * 100) })),
-      { value: "3800" }, { value: "4000" }, { value: "4500" }, { value: "4800" }, { value: "5100" },
+      ...Array.from(
+        { length: 13 },
+        (_, index) => ({ value: String(6000 + index * 100) }),
+      ),
+      { value: "3800" },
+      { value: "4000" },
+      { value: "4500" },
+      { value: "4800" },
+      { value: "5100" },
     ],
   }]);
   assertEquals(projection.options, { flow: ["3800", "4000", "4500", "4800"] });
@@ -623,43 +1145,85 @@ Deno.test("numeric bounds intersect before the live facet result is bounded", ()
 });
 
 Deno.test("successful canonical filter lineage proves an omitted compact trait", () => {
-  const criterion: Criterion = { key: "Параметр каталога", op: "eq", value: "6,8–12", level: "A" };
+  const criterion: Criterion = {
+    key: "Параметр каталога",
+    op: "eq",
+    value: "6,8–12",
+    level: "A",
+  };
   const items = projectCatalogFilterEvidence([product("1", [])], [criterion]);
   assertEquals(applyCriteriaGate(items, [criterion]).passed_ids, ["1"]);
 });
 
 Deno.test("applyCriteriaGate: уровень B не отсеивает", () => {
   const items = [product("1", ["Параметр бета: 1 ед"])];
-  const r = applyCriteriaGate(items, [{ key: "параметр бета", op: "min", value: 100, level: "B" }]);
+  const r = applyCriteriaGate(items, [{
+    key: "параметр бета",
+    op: "min",
+    value: 100,
+    level: "B",
+  }]);
   assertEquals(r.passed_ids, ["1"]);
   assertEquals(r.rejected.length, 0);
 });
 
 Deno.test("applyCriteriaGate: unverifiable_keys когда данных нет ни в одной карточке", () => {
   const items = [product("1", ["Иной параметр: 1 ед"]), product("2", [])];
-  const r = applyCriteriaGate(items, [{ key: "параметр альфа", op: "min", value: 5 }]);
+  const r = applyCriteriaGate(items, [{
+    key: "параметр альфа",
+    op: "min",
+    value: 5,
+  }]);
   assertEquals(r.unverifiable_keys, ["параметр альфа"]);
   assertEquals(r.passed_ids, []);
 });
 
 Deno.test("applyCriteriaGate: все карточки провалились → honest-empty", () => {
-  const items = [product("1", ["Параметр альфа: 1 ед"]), product("2", ["Параметр альфа: 2 ед"])];
-  const r = applyCriteriaGate(items, [{ key: "параметр альфа", op: "min", value: 10 }]);
+  const items = [
+    product("1", ["Параметр альфа: 1 ед"]),
+    product("2", ["Параметр альфа: 2 ед"]),
+  ];
+  const r = applyCriteriaGate(items, [{
+    key: "параметр альфа",
+    op: "min",
+    value: 10,
+  }]);
   assertEquals(r.passed_ids, []);
   assertEquals(r.rejected.length, 2);
 });
 
 Deno.test("buildCriteriaQuery: формулировка модели превращается в текстовый запрос", () => {
   const q = buildCriteriaQuery("термоусаживаемая трубка", [
-    { key: "Внутренний диаметр до термоусадки", op: "min", value: 40, unit: "мм" },
+    {
+      key: "Внутренний диаметр до термоусадки",
+      op: "min",
+      value: 40,
+      unit: "мм",
+    },
     { key: "Цвет", op: "eq", value: "черный", level: "B" },
   ]);
-  assertEquals(q, "термоусаживаемая трубка Внутренний диаметр до термоусадки от 40 мм");
+  assertEquals(
+    q,
+    "термоусаживаемая трубка Внутренний диаметр до термоусадки от 40 мм",
+  );
 });
 
 Deno.test("op=min со строковым value сохраняет открытый интервал", () => {
-  const p = { id: "1", pagetitle: "x", url: "u", price: 1, stock: "unknown", short_traits: ["Внутр диаметр: 14"] } as never;
-  const check = checkCriterion(p, { key: "Внутр диаметр", op: "min", value: "12", unit: "мм", level: "A" });
+  const p = {
+    id: "1",
+    pagetitle: "x",
+    url: "u",
+    price: 1,
+    stock: "unknown",
+    short_traits: ["Внутр диаметр: 14"],
+  } as never;
+  const check = checkCriterion(p, {
+    key: "Внутр диаметр",
+    op: "min",
+    value: "12",
+    unit: "мм",
+    level: "A",
+  });
   assertEquals(check.verdict, "pass");
 });
 
@@ -667,8 +1231,17 @@ Deno.test("buildCriteriaQuery: многословное описание не п
   const q = buildCriteriaQuery("КГ 3*6", [
     { key: "Количество жил", op: "eq", value: "3", level: "A" },
     { key: "Сечение кабеля, мм2", op: "eq", value: "6", level: "A" },
-    { key: "Назначение", op: "eq", value: "Кабели силовые для нестационарной прокладки", level: "A" },
+    {
+      key: "Назначение",
+      op: "eq",
+      value: "Кабели силовые для нестационарной прокладки",
+      level: "A",
+    },
   ]);
-  if (q.includes("нестационарной")) throw new Error("verbose value leaked: " + q);
-  if (!q.includes("Количество жил 3")) throw new Error("compact criterion lost: " + q);
+  if (q.includes("нестационарной")) {
+    throw new Error("verbose value leaked: " + q);
+  }
+  if (!q.includes("Количество жил 3")) {
+    throw new Error("compact criterion lost: " + q);
+  }
 });

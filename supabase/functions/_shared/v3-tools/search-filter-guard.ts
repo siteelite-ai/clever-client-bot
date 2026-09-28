@@ -12,6 +12,11 @@
 import { extractClientQuantities, normalizeUnit } from "./criteria-consistency.ts";
 import { canonicalMeasurementUnit, extractReasoningBounds } from "./criteria-reasoning.ts";
 import { extractPostNominalCatalogQualifier } from "./declared-alias-contract.ts";
+import {
+  resolveAbbreviatedNumericFacetValueEvidence,
+  resolveCompactFacetCodeEvidence,
+  resolveCompoundFacetValueEvidence,
+} from "./compact-facet-code.ts";
 
 export interface SearchFacetValue {
   value: string;
@@ -66,6 +71,38 @@ export function mergeFacetValuesWithCurrentOverrides(
 export interface ReasoningFacetProjection {
   kept: Array<{ key: string; value: string }>;
   user_backed: Array<{ key: string; value: string }>;
+}
+
+/**
+ * Compile an explicit compact customer code into canonical live facet values.
+ * The shared resolver requires one unique full-code decomposition across at
+ * least two distinct axes. Conflicting codes for the same axis fail closed;
+ * model prose is deliberately absent from this proof path.
+ */
+export function projectExplicitCompactFacetValues(
+  facets: SearchFacet[],
+  userMessage: string,
+): ReasoningFacetProjection {
+  const resolved = resolveCompactFacetCodeEvidence(userMessage, facets)
+    .flatMap(({ axes }) => axes.map(({ key, value }) => ({ key, value })));
+  resolved.push(...resolveCompoundFacetValueEvidence(userMessage, facets)
+    .map(({ axis }) => ({ key: axis.key, value: axis.value })));
+  resolved.push(...resolveAbbreviatedNumericFacetValueEvidence(userMessage, facets)
+    .map(({ axis }) => ({ key: axis.key, value: axis.value })));
+  const valuesByKey = new Map<string, Set<string>>();
+  for (const { key, value } of resolved) {
+    const values = valuesByKey.get(key) ?? new Set<string>();
+    values.add(value);
+    valuesByKey.set(key, values);
+  }
+  if ([...valuesByKey.values()].some((values) => values.size !== 1)) {
+    return { kept: [], user_backed: [] };
+  }
+  const kept = [...valuesByKey].map(([key, values]) => ({
+    key,
+    value: [...values][0],
+  }));
+  return { kept, user_backed: kept.map((item) => ({ ...item })) };
 }
 
 export interface BooleanFilterFallbackResult {
@@ -654,6 +691,180 @@ function facetMeaningIsFullyEvidenced(
 }
 
 /**
+ * A partial facet label is sufficient only when it cannot refer to a sibling
+ * live axis exposing the same canonical value. For example, `белый свет`
+ * names neither `Цвет корпуса = белый` nor `Цвет свечения = белый` precisely:
+ * the shared word `цвет` must not arbitrarily select one of them. Conversely,
+ * `1 полюс` still proves `Количество полюсов = 1`, even if another count facet
+ * also exposes `1`, because the discriminating noun `полюсов` is present.
+ *
+ * This is deliberately driven by the current live schema and value, not by a
+ * product/category dictionary.
+ */
+function facetMeaningIsDisambiguatedForValue(
+  facet: SearchFacet,
+  value: string,
+  facets: SearchFacet[],
+  evidence: string,
+): boolean {
+  if (!facetMeaningIsEvidenced(facet, evidence)) return false;
+
+  const canonicalValue = norm(value);
+  const siblings = facets.filter((candidate) =>
+    candidate.key !== facet.key &&
+    candidate.values.some((item) => norm(item.value) === canonicalValue)
+  );
+  if (siblings.length === 0) return true;
+
+  const labelTokens = (candidate: SearchFacet) =>
+    norm(candidate.caption || candidate.key)
+      .split(" ")
+      .filter((token) => token.length >= 4);
+  const currentTokens = labelTokens(facet);
+  const siblingTokens = siblings.flatMap(labelTokens);
+  const evidenceTokens = norm(evidence).split(" ").filter((token) => token.length >= 4);
+  const discriminators = currentTokens.filter((token) =>
+    !siblingTokens.some((sibling) =>
+      token === sibling || tokensMatchByStem(token, sibling)
+    )
+  );
+  return discriminators.some((discriminator) =>
+    evidenceTokens.some((token) =>
+      token === discriminator || tokensMatchByStem(discriminator, token)
+    )
+  );
+}
+
+const COMPOUND_COUNT_PREFIXES: ReadonlyArray<readonly [string, number]> = [
+  ["одиннадцати", 11],
+  ["двенадцати", 12],
+  ["четырех", 4],
+  ["восьми", 8],
+  ["девяти", 9],
+  ["десяти", 10],
+  ["двух", 2],
+  ["трех", 3],
+  ["пяти", 5],
+  ["шести", 6],
+  ["семи", 7],
+  ["одно", 1],
+];
+
+const COUNT_FACET_MARKER = /^(?:количеств|числ|number|count)/u;
+const COUNT_ADJECTIVE_ENDINGS = [
+  "овыми", "евыми", "ового", "евого", "овому", "евому",
+  "ьными", "ными", "овый", "евый", "ьный", "ный",
+  "овая", "евая", "ьная", "ная", "овое", "евое", "ьное", "ное",
+  "овые", "евые", "ьные", "ные", "овых", "евых", "ьных", "ных",
+  "овым", "евым", "ьным", "ным", "овой", "евой", "ьной", "ной",
+  "овую", "евую", "ьную", "ную",
+] as const;
+
+function countedNounStem(fragment: string): string {
+  let stem = norm(fragment).replace(/\s+/gu, "");
+  for (const ending of COUNT_ADJECTIVE_ENDINGS) {
+    if (stem.endsWith(ending) && stem.length - ending.length >= 3) {
+      stem = stem.slice(0, -ending.length);
+      break;
+    }
+  }
+  return stem.replace(/ь$/u, "");
+}
+
+function compoundCountClaims(evidence: string): Array<{ count: number; nounStem: string }> {
+  const claims: Array<{ count: number; nounStem: string }> = [];
+  for (const token of norm(evidence).split(" ").filter(Boolean)) {
+    for (const [prefix, count] of COMPOUND_COUNT_PREFIXES) {
+      if (!token.startsWith(prefix) || token.length - prefix.length < 4) continue;
+      const nounStem = countedNounStem(token.slice(prefix.length));
+      if (nounStem.length >= 3) claims.push({ count, nounStem });
+      break;
+    }
+  }
+  return claims;
+}
+
+/**
+ * Resolve morphological cardinality such as `трехжильный`, `двухполюсный`
+ * or `четырехэлементный` against a live count facet. The product noun is not
+ * known here: the remainder of the compound adjective must match a noun in
+ * the facet caption, and the facet itself must explicitly be a count axis.
+ * Therefore unrelated measurements (`3 кВт`, `25 м²`) cannot open this path.
+ */
+function compoundCountFacetValue(
+  facet: SearchFacet,
+  evidence: string,
+): SearchFacetValue | null {
+  const labelTokens = norm(`${facet.caption ?? ""} ${facet.key}`)
+    .split(" ")
+    .filter(Boolean);
+  if (!labelTokens.some((token) => COUNT_FACET_MARKER.test(token))) return null;
+  const nounStems = labelTokens
+    .filter((token) => token.length >= 3 && !COUNT_FACET_MARKER.test(token))
+    .map((token) => countedNounStem(stemRu(token)))
+    .filter((token) => token.length >= 3);
+  if (nounStems.length === 0) return null;
+
+  const claims = compoundCountClaims(evidence).filter(({ nounStem }) =>
+    nounStems.some((facetStem) =>
+      facetStem === nounStem ||
+      Math.min(facetStem.length, nounStem.length) >= 3 &&
+        (facetStem.startsWith(nounStem) || nounStem.startsWith(facetStem))
+    )
+  );
+  const claimedCounts = [...new Set(claims.map(({ count }) => count))];
+  if (claimedCounts.length !== 1) return null;
+  const count = claimedCounts[0];
+  const candidates = facet.values.filter(({ value }) => {
+    if (!isAtomicFacetValue(value)) return false;
+    const scalar = norm(value).match(/^(\d+(?:[.,]\d+)?)(?:\s|$)/u)?.[1];
+    return scalar !== undefined && Number(scalar.replace(",", ".")) === count;
+  });
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
+/**
+ * A complete live label immediately followed by one of its exact values is a
+ * stronger local declaration than unrelated numbers in neighbouring clauses.
+ * This is intentionally token-adjacent: a label elsewhere in the paragraph
+ * cannot relabel an application measurement as a product property.
+ */
+function explicitlyLabelledFacetValue(
+  facet: SearchFacet,
+  evidence: string,
+): SearchFacetValue | null {
+  const evidenceTokens = norm(evidence).split(" ").filter(Boolean);
+  const labels = [facet.caption ?? "", String(facet.caption ?? "").split(",")[0], facet.key]
+    .map((label) => norm(label).split(" ").filter(Boolean))
+    .filter((tokens) => tokens.length > 0);
+  const matches: SearchFacetValue[] = [];
+  for (const labelTokens of labels) {
+    for (let index = 0; index <= evidenceTokens.length - labelTokens.length; index++) {
+      if (!labelTokens.every((token, offset) => evidenceTokens[index + offset] === token)) continue;
+      const valueStart = index + labelTokens.length;
+      for (const candidate of facet.values) {
+        if (!isAtomicFacetValue(candidate.value)) continue;
+        const valueTokens = norm(candidate.value).split(" ").filter(Boolean);
+        if (valueTokens.length === 0) continue;
+        if (valueTokens.every((token, offset) => evidenceTokens[valueStart + offset] === token)) {
+          // Normalization removes the dash in `label 4000–5000 K`. The first
+          // endpoint is adjacent to the label but it is not an exact enum
+          // declaration. Leave both endpoints to the range compiler.
+          const numericValue = valueTokens.every((token) => /^\d+(?:[.,]\d+)?$/u.test(token));
+          const followingToken = evidenceTokens[valueStart + valueTokens.length] ?? "";
+          if (numericValue && /^\d+(?:[.,]\d+)?$/u.test(followingToken)) continue;
+          matches.push(candidate);
+        }
+      }
+    }
+  }
+  const unique = matches.filter((candidate, index, all) =>
+    all.findIndex(({ value }) => norm(value) === norm(candidate.value)) === index
+  );
+  return unique.length === 1 ? unique[0] : null;
+}
+
+/**
  * Projects an explicit consultant statement onto the live catalog schema even
  * when the following tool call omits that option. Only a complete facet label
  * (not one loose word) can open an axis, and exactly one canonical live value
@@ -671,6 +882,24 @@ export function projectExplicitReasoningFacetValues(
 
   for (const facet of facets) {
     if (isReplacementIdentityFacet(facet)) continue;
+    const compoundCount = compoundCountFacetValue(facet, declaredReasoning);
+    if (compoundCount && !contradictedByUser(compoundCount.value, userEvidence)) {
+      const item = { key: facet.key, value: compoundCount.value };
+      kept.push(item);
+      if (compoundCountFacetValue(facet, userEvidence)?.value === compoundCount.value) {
+        userBacked.push(item);
+      }
+      continue;
+    }
+    const labelledValue = explicitlyLabelledFacetValue(facet, declaredReasoning);
+    if (labelledValue && !contradictedByUser(labelledValue.value, userEvidence)) {
+      const item = { key: facet.key, value: labelledValue.value };
+      kept.push(item);
+      if (explicitlyLabelledFacetValue(facet, userEvidence)?.value === labelledValue.value) {
+        userBacked.push(item);
+      }
+      continue;
+    }
     const publicCaption = facet.caption ?? "";
     const labels = [publicCaption, publicCaption.split(",")[0], facet.key]
       .map(norm)
@@ -704,16 +933,48 @@ function numericFacetValueIsLocallyEvidenced(
   evidence: string,
 ): boolean {
   const normalizedValue = norm(value);
-  if (!/\d/u.test(normalizedValue) || /[a-zа-я]/iu.test(normalizedValue)) return true;
+  if (!/\d/u.test(normalizedValue)) return true;
+  if (/[a-zа-я]/iu.test(normalizedValue)) {
+    // Compound numeric enums (`от -20 до +50 °C`, `220–240 V`, `IP65`) are
+    // categorical strings in the catalog, but their numbers remain part of
+    // the claim. A matching caption or shared word cannot authorize a value
+    // whose actual numbers were never stated in the reasoning.
+    const valueNumbers = normalizedValue.match(/\d+(?:[.,]\d+)?/gu) ?? [];
+    if (valueNumbers.length === 0) return false;
+    const evidenceTokens = norm(evidence).split(" ").filter(Boolean);
+    const labels = [
+      String(facet.caption ?? "").split(",")[0],
+      facet.caption ?? "",
+      facet.key,
+    ].map((label) => norm(label).split(" ").filter(Boolean))
+      .filter((tokens) => tokens.length > 0);
+    return labels.some((labelTokens) => {
+      for (
+        let index = 0;
+        index <= evidenceTokens.length - labelTokens.length;
+        index++
+      ) {
+        if (!labelTokens.every((token, offset) => evidenceTokens[index + offset] === token)) continue;
+        const localNumbers = new Set(
+          evidenceTokens.slice(index, index + labelTokens.length + 14)
+            .flatMap((token) => token.match(/\d+(?:[.,]\d+)?/gu) ?? [])
+            .map((number) => number.replace(",", ".")),
+        );
+        if (valueNumbers.every((number) => localNumbers.has(number.replace(",", ".")))) {
+          return true;
+        }
+      }
+      return false;
+    });
+  }
   const publicLabel = String(facet.caption ?? "").trim() || facet.key;
   const labelBase = publicLabel.split(",")[0];
   const labelTokens = norm(labelBase).split(" ").filter((token) => token.length >= 3);
   if (labelTokens.length === 0) return false;
-  // Captions often start with a generic qualifier ("nominal", "quantity")
-  // and then name the measured property. The first non-generic token is a
-  // stronger local anchor than a trailing product noun (for example the noun
-  // after "power" must not authorize a room-area number as wattage).
-  const anchor = labelTokens.find((token) =>
+  // Captions often start with a generic qualifier and end with the measured
+  // property. Prefer the last meaningful token: in `Световой поток` the word
+  // `поток`, not a nearby generic mention of `свет`, must anchor the number.
+  const anchor = [...labelTokens].reverse().find((token) =>
     !/^(?:номинал|максимал|минимал|рабоч|общ|количеств|числ)/u.test(token)
   ) ?? labelTokens.at(-1)!;
   const expectedUnits = new Set([
@@ -739,8 +1000,22 @@ function numericFacetValueIsLocallyEvidenced(
       "giu",
     );
     for (let match; (match = measurement.exec(String(evidence ?? ""))) !== null;) {
-      if (expectedUnits.has(normalizeUnit(match[1]))) return true;
+      if (!expectedUnits.has(normalizeUnit(match[1]))) continue;
+      const before = String(evidence ?? "").slice(Math.max(0, match.index - 48), match.index);
+      // An endpoint of a declared interval is not an exact product value.
+      // The range compiler owns `4000–5000 K`; the exact-facet projector must
+      // not independently freeze the upper endpoint as `= 5000 K`.
+      if (
+        /\d+(?:[.,]\d+)?\s*[–—-]\s*$/u.test(before) ||
+        /от\s+\d+(?:[.,]\d+)?\s+до\s*$/iu.test(before)
+      ) continue;
+      return true;
     }
+    // When the live facet declares a physical unit, a nearby word or a number
+    // measured in another unit is never enough. Explicit label-adjacent enum
+    // values were already handled above; falling through here caused a colour
+    // temperature such as 4000 K to become `Световой поток = 4000 лм`.
+    return false;
   }
   const evidenceTokens = norm(evidence).split(" ").filter(Boolean);
   const valueTokens = normalizedValue.split(" ").filter(Boolean);
@@ -1064,6 +1339,10 @@ export function guardSearchFilters(
     // the customer's application measurement (for example cable diameter),
     // which must not be copied into several product-state facets before the
     // consultant has expressed the directed compatibility relation.
+    // This is model-reasoning completion, not customer-owned projection. The
+    // facet meaning must be present, and candidate-level validation below
+    // rejects an ambiguous shared root when sibling axes expose the same value
+    // (`цвет корпуса` vs `цвет свечения`).
     if (!facetMeaningIsEvidenced(facet, inferenceEvidence)) continue;
     const evidenced = facet. values.filter((candidate) => {
       const value = norm(candidate.value);
@@ -1074,6 +1353,12 @@ export function guardSearchFilters(
       if (!numericFacetValueIsLocallyEvidenced(candidate.value, facet, inferenceEvidence)) {
         return false;
       }
+      if (!facetMeaningIsDisambiguatedForValue(
+        facet,
+        candidate.value,
+        facets,
+        inferenceEvidence,
+      )) return false;
       if (numericFacetValueConflictsWithUserMeasurement(candidate.value, facet, userEvidence, inferenceEvidence)) return false;
       return explicitlyAffirmedByFacetReasoning(candidate.value, inferenceEvidence);
     });

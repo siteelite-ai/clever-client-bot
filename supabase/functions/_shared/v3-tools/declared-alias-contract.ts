@@ -7,15 +7,22 @@ function normalize(value: string): string {
     .trim();
 }
 
-const ALIAS_DECLARATION = /(?:(?:это\s+)?(?:(?:народн|разговорн|жаргонн|бытов|неофициальн)\p{L}*\s+)+(?:названи\p{L}*|обозначени\p{L}*|термин\p{L}*)|так.{0,80}называ\p{L}*)/iu;
+const ALIAS_DECLARATION =
+  /(?:(?:это\s+)?(?:(?:народн|разговорн|жаргонн|бытов|неофициальн)\p{L}*\s+)+(?:названи\p{L}*|обозначени\p{L}*|термин\p{L}*)|так.{0,80}называ\p{L}*)/iu;
 
-function containsInflectedTokenSequence(haystack: string, needle: string): boolean {
+function containsInflectedTokenSequence(
+  haystack: string,
+  needle: string,
+): boolean {
   const haystackTokens = normalize(haystack).split(" ").filter(Boolean);
   const needleTokens = normalize(needle).split(" ").filter(Boolean);
-  if (needleTokens.length === 0 || needleTokens.length > haystackTokens.length) return false;
+  if (
+    needleTokens.length === 0 || needleTokens.length > haystackTokens.length
+  ) return false;
   return haystackTokens.some((_, start) =>
     needleTokens.every((token, offset) =>
-      inflectionStem(haystackTokens[start + offset] ?? "") === inflectionStem(token)
+      inflectionStem(haystackTokens[start + offset] ?? "") ===
+        inflectionStem(token)
     )
   );
 }
@@ -43,7 +50,10 @@ export function extractDeclaredCatalogAlias(
     const normalizedPhrase = normalize(phrase);
     if (!normalizedPhrase || normalizedPhrase.split(" ").length > 6) continue;
     if (!containsInflectedTokenSequence(customer, normalizedPhrase)) continue;
-    const relationWindow = reasoning.slice(quotePattern.lastIndex, quotePattern.lastIndex + 100);
+    const relationWindow = reasoning.slice(
+      quotePattern.lastIndex,
+      quotePattern.lastIndex + 100,
+    );
     if (!ALIAS_DECLARATION.test(relationWindow)) continue;
     // When the model quotes "class + nickname", the lexical obligation is the
     // customer's distinctive post-nominal qualifier. Keeping the broad class
@@ -59,7 +69,10 @@ export function extractDeclaredCatalogAlias(
 }
 
 /** Exact customer vocabulary may satisfy the alias contract without recovery. */
-export function titleContainsDeclaredAlias(title: string, alias: string): boolean {
+export function titleContainsDeclaredAlias(
+  title: string,
+  alias: string,
+): boolean {
   const haystack = ` ${normalize(title)} `;
   const needle = normalize(alias);
   return Boolean(needle && haystack.includes(` ${needle} `));
@@ -79,7 +92,10 @@ export function filterProductsByDeclaredAlias<T extends { pagetitle: string }>(
 
 /** A grounded canonical spelling remains mandatory until final cards pass all
  * independent criteria; an earlier invariant outranks a later helper result. */
-export function retainRequiredCatalogAlias(current: string | null, matchedQuery: string): string | null {
+export function retainRequiredCatalogAlias(
+  current: string | null,
+  matchedQuery: string,
+): string | null {
   const retained = String(current ?? "").trim();
   if (retained) return retained;
   const grounded = String(matchedQuery ?? "").trim();
@@ -89,14 +105,22 @@ export function retainRequiredCatalogAlias(current: string | null, matchedQuery:
 /** A qualifier is not an alias when it merely repeats the already grounded
  * product class with another inflection (for example plural customer wording
  * versus singular catalog titles). Real colloquial names remain distinct. */
-export function aliasDuplicatesCatalogClass(alias: string, classes: Array<string | null | undefined>): boolean {
+export function aliasDuplicatesCatalogClass(
+  alias: string,
+  classes: Array<string | null | undefined>,
+): boolean {
   const aliasTokens = normalize(alias).split(" ").filter(Boolean);
   if (aliasTokens.length === 0) return false;
   return classes.some((value) => {
-    const classTokens = normalize(String(value ?? "")).split(" ").filter(Boolean);
-    return classTokens.length > 0 && aliasTokens.every((aliasToken) =>
-      classTokens.some((classToken) => inflectionStem(aliasToken) === inflectionStem(classToken))
+    const classTokens = normalize(String(value ?? "")).split(" ").filter(
+      Boolean,
     );
+    return classTokens.length > 0 &&
+      aliasTokens.every((aliasToken) =>
+        classTokens.some((classToken) =>
+          inflectionStem(aliasToken) === inflectionStem(classToken)
+        )
+      );
   });
 }
 
@@ -111,12 +135,42 @@ export function aliasDuplicatesIndependentCatalogClass(
 }
 
 const POST_NOMINAL_STOP = new Set([
-  "для", "под", "с", "со", "без", "на", "в", "во", "из", "к", "по", "до", "от",
-  "есть", "имеется", "нужен", "нужна", "нужно", "нужны", "покажи", "найди", "ищу",
-  "самый", "самая", "дешевый", "дешевая", "дешевые",
+  "для",
+  "под",
+  "с",
+  "со",
+  "без",
+  "на",
+  "в",
+  "во",
+  "из",
+  "к",
+  "по",
+  "до",
+  "от",
+  "есть",
+  "имеется",
+  "нужен",
+  "нужна",
+  "нужно",
+  "нужны",
+  "покажи",
+  "найди",
+  "ищу",
+  "самый",
+  "самая",
+  "дешевый",
+  "дешевая",
+  "дешевые",
   // Relational markers introduce a separately parsed entity; they are not a
   // customer nickname for the product class itself.
-  "серия", "серии", "серий", "коллекция", "коллекции", "линейка", "линейки",
+  "серия",
+  "серии",
+  "серий",
+  "коллекция",
+  "коллекции",
+  "линейка",
+  "линейки",
 ]);
 
 function inflectionStem(token: string): string {
@@ -124,6 +178,15 @@ function inflectionStem(token: string): string {
   if (token.length >= 7) return token.slice(0, 5);
   if (token.length >= 5) return token.slice(0, 4);
   return token;
+}
+
+function isLikelyRussianInfinitive(token: string): boolean {
+  return /^[а-яё]{2,}(?:ться|ть|ти|чь)$/u.test(token);
+}
+
+function isLikelyRussianPredicate(token: string): boolean {
+  return isLikelyRussianInfinitive(token) ||
+    /^[а-яё]{4,}(?:ется|утся|ются|ится|атся|ятся|ет|ут|ют|ит|ат|ят|ал|ала|али|ел|ела|ели)$/u.test(token);
 }
 
 /**
@@ -147,9 +210,12 @@ export function extractPostNominalCatalogQualifier(
     const measurementTail = /^\d/u.test(following[0] ?? "") ||
       /^(?:от|до|более|менее|свыше|не)$/u.test(following[0] ?? "") &&
         following.slice(1).some((token) => /^\d/u.test(token));
+    const actionVerbBridge = isLikelyRussianPredicate(candidate) &&
+      POST_NOMINAL_STOP.has(following[0] ?? "");
     if (
       candidate.length < 3 ||
       /^\d/u.test(candidate) ||
+      actionVerbBridge ||
       POST_NOMINAL_STOP.has(candidate) ||
       nounStems.has(inflectionStem(candidate)) ||
       measurementTail
@@ -161,22 +227,36 @@ export function extractPostNominalCatalogQualifier(
 
 function normalizeVisualCode(value: string): string {
   const visual: Record<string, string> = {
-    а: "a", в: "b", е: "e", к: "k", м: "m", н: "h",
-    о: "o", р: "p", с: "c", т: "t", у: "y", х: "x",
+    а: "a",
+    в: "b",
+    е: "e",
+    к: "k",
+    м: "m",
+    н: "h",
+    о: "o",
+    р: "p",
+    с: "c",
+    т: "t",
+    у: "y",
+    х: "x",
   };
   return normalize(value)
     .replace(/[авекмнорстух]/gu, (char) => visual[char] ?? char)
     .replace(/\s+/gu, "");
 }
 
-function qualifierIsRepresentedByEvidence(qualifier: string, evidence: string[]): boolean {
+function qualifierIsRepresentedByEvidence(
+  qualifier: string,
+  evidence: string[],
+): boolean {
   if (aliasDuplicatesCatalogClass(qualifier, evidence)) return true;
   const compactQualifier = normalizeVisualCode(qualifier);
   if (!compactQualifier) return true;
   return evidence.some((value) => {
     const candidate = String(value ?? "");
     return containsInflectedTokenSequence(candidate, qualifier) ||
-      (/\d/u.test(compactQualifier) && normalizeVisualCode(candidate).includes(compactQualifier));
+      (/\d/u.test(compactQualifier) &&
+        normalizeVisualCode(candidate).includes(compactQualifier));
   });
 }
 
@@ -193,18 +273,45 @@ export function extractUnrepresentedPostNominalCatalogQualifier(
   discoveredNoun: string,
   representedEvidence: string[],
 ): string | null {
-  const qualifier = extractPostNominalCatalogQualifier(customerText, discoveredNoun);
+  const qualifier = extractPostNominalCatalogQualifier(
+    customerText,
+    discoveredNoun,
+  );
   if (!qualifier) return null;
-  const evidence = [discoveredNoun, ...(Array.isArray(representedEvidence) ? representedEvidence : [])]
+  const evidence = [
+    discoveredNoun,
+    ...(Array.isArray(representedEvidence) ? representedEvidence : []),
+  ]
     .map(String)
     .filter(Boolean);
-  return qualifierIsRepresentedByEvidence(qualifier, evidence) ? null : qualifier;
+  return qualifierIsRepresentedByEvidence(qualifier, evidence)
+    ? null
+    : qualifier;
 }
 
 const REQUEST_SCAFFOLD = new Set([
   ...POST_NOMINAL_STOP,
-  "а", "у", "ты", "тебя", "вы", "вас", "мне", "нам", "ли", "это", "такой", "такая", "такие",
-  "мой", "моя", "для", "заменить", "замени", "хочу", "можно", "пожалуйста",
+  "а",
+  "у",
+  "ты",
+  "тебя",
+  "вы",
+  "вас",
+  "мне",
+  "нам",
+  "ли",
+  "это",
+  "такой",
+  "такая",
+  "такие",
+  "мой",
+  "моя",
+  "для",
+  "заменить",
+  "замени",
+  "хочу",
+  "можно",
+  "пожалуйста",
 ]);
 
 /** A consultant declaration may preserve customer vocabulary, but it cannot
@@ -219,7 +326,10 @@ export function declaredAliasIsStructurallyCustomerOwned(
 ): boolean {
   const wanted = normalize(alias);
   if (!wanted) return false;
-  const qualifier = extractPostNominalCatalogQualifier(customerText, discoveredClass);
+  const qualifier = extractPostNominalCatalogQualifier(
+    customerText,
+    discoveredClass,
+  );
   if (normalize(qualifier ?? "") === wanted) return true;
 
   const substantive = normalize(customerText).split(" ").filter((token) =>

@@ -16,7 +16,9 @@ export interface CategoryReasoningGuardResult {
   dropped: Array<{ category: string; reason: "not_declared_in_reasoning" }>;
 }
 
-export interface GroundedCategoryRecoveryScope<T extends DiscoveredCategoryScope> {
+export interface GroundedCategoryRecoveryScope<
+  T extends DiscoveredCategoryScope,
+> {
   discovery: T;
   targets: string[];
 }
@@ -58,14 +60,55 @@ export function guardDiscoveryNounBySelectionTarget(
 }
 
 const RU_SUFFIXES = [
-  "ыми", "ими", "ого", "его", "ому", "ему",
-  "ая", "яя", "ое", "ее", "ой", "ей", "ом", "ем", "ую", "юю",
-  "ый", "ий", "ые", "ие", "ых", "их", "ам", "ям", "ах", "ях", "ов", "ев", "ок", "ек",
-  "у", "ю", "а", "я", "о", "е", "ы", "и",
+  "ыми",
+  "ими",
+  "ого",
+  "его",
+  "ому",
+  "ему",
+  "ая",
+  "яя",
+  "ое",
+  "ее",
+  "ой",
+  "ей",
+  "ом",
+  "ем",
+  "ую",
+  "юю",
+  "ый",
+  "ий",
+  "ые",
+  "ие",
+  "ых",
+  "их",
+  "ам",
+  "ям",
+  "ах",
+  "ях",
+  "ов",
+  "ев",
+  "ок",
+  "ек",
+  "у",
+  "ю",
+  "а",
+  "я",
+  "о",
+  "е",
+  "ы",
+  "и",
 ];
 
 const GENERIC_TOKENS = new Set([
-  "для", "товар", "товары", "категория", "категории", "оборудование", "изделие", "изделия",
+  "для",
+  "товар",
+  "товары",
+  "категория",
+  "категории",
+  "оборудование",
+  "изделие",
+  "изделия",
 ]);
 
 function norm(value: string): string {
@@ -92,17 +135,23 @@ function tokenMatches(left: string, right: string): boolean {
   const leftStem = stemRu(left);
   const rightStem = stemRu(right);
   const sharedLength = Math.min(leftStem.length, rightStem.length);
-  return sharedLength >= 4 && leftStem.slice(0, sharedLength) === rightStem.slice(0, sharedLength);
+  return sharedLength >= 4 &&
+    leftStem.slice(0, sharedLength) === rightStem.slice(0, sharedLength);
 }
 
 function significantTokens(value: string): string[] {
-  return norm(value).split(" ").filter((token) => token.length >= 4 && !GENERIC_TOKENS.has(token));
+  return norm(value).split(" ").filter((token) =>
+    token.length >= 4 && !GENERIC_TOKENS.has(token)
+  );
 }
 
 function distinctiveLeafTokens(leaf: string, umbrella: string): string[] {
   const umbrellaTokens = significantTokens(umbrella);
   return significantTokens(leaf).filter(
-    (token) => !umbrellaTokens.some((umbrellaToken) => tokenMatches(token, umbrellaToken)),
+    (token) =>
+      !umbrellaTokens.some((umbrellaToken) =>
+        tokenMatches(token, umbrellaToken)
+      ),
   );
 }
 
@@ -121,13 +170,23 @@ function evidenceAffirmsToken(evidence: string, token: string): boolean {
     let belongsToReplacementSource = false;
     for (let start = index - 1; start >= Math.max(0, index - 12); start -= 1) {
       if (!tokens[start].startsWith("замен")) continue;
-      const separator = tokens.slice(start + 1, Math.min(tokens.length, index + 13)).indexOf("на");
-      if (separator >= 0 && index < start + 1 + separator) belongsToReplacementSource = true;
+      const separator = tokens.slice(
+        start + 1,
+        Math.min(tokens.length, index + 13),
+      ).indexOf("на");
+      if (separator >= 0 && index < start + 1 + separator) {
+        belongsToReplacementSource = true;
+      }
       break;
     }
     if (belongsToReplacementSource) continue;
-    const context = tokens.slice(Math.max(0, index - 5), Math.min(tokens.length, index + 15)).join(" ");
-    const rejected = /(?:(?:^|\s)не\s+(?:то|подход\p{L}*|нуж\p{L}*|соответ\p{L}*|верн\p{L}*)|(?:^|\s)(?:ошибоч\p{L}*|неверн\p{L}*|отсеч\p{L}*|исключ\p{L}*|убра\p{L}*|лишн\p{L}*)|(?:^|\s)нуж\p{L}*\s+друг\p{L}*|(?:^|\s)треб\p{L}*\s+друг\p{L}*)/u.test(context);
+    const context = tokens.slice(
+      Math.max(0, index - 5),
+      Math.min(tokens.length, index + 15),
+    ).join(" ");
+    const rejected =
+      /(?:(?:^|\s)не\s+(?:то|подход\p{L}*|нуж\p{L}*|соответ\p{L}*|верн\p{L}*)|(?:^|\s)(?:ошибоч\p{L}*|неверн\p{L}*|отсеч\p{L}*|исключ\p{L}*|убра\p{L}*|лишн\p{L}*)|(?:^|\s)нуж\p{L}*\s+друг\p{L}*|(?:^|\s)треб\p{L}*\s+друг\p{L}*)/u
+        .test(context);
     if (!rejected) return true;
   }
   return false;
@@ -139,15 +198,22 @@ function evidenceAffirmsToken(evidence: string, token: string): boolean {
  * the source side of a `replace X with Y` transformation is not positive
  * evidence for keeping X as the destination category.
  */
-export function categoryLabelIsAffirmedAsTarget(label: string, evidence: string): boolean {
+export function categoryLabelIsAffirmedAsTarget(
+  label: string,
+  evidence: string,
+): boolean {
   const tokens = significantTokens(label);
-  return tokens.length > 0 && tokens.every((token) => evidenceAffirmsToken(evidence, token));
+  return tokens.length > 0 &&
+    tokens.every((token) => evidenceAffirmsToken(evidence, token));
 }
 
 /** A short product acronym is still a grounded class when it appears as one
  * complete token in customer/consultant evidence. Longer labels retain the
  * stricter morphological target-side check above. */
-export function discoveryNounIsGrounded(label: string, evidence: string): boolean {
+export function discoveryNounIsGrounded(
+  label: string,
+  evidence: string,
+): boolean {
   if (categoryLabelIsAffirmedAsTarget(label, evidence)) return true;
   const raw = String(label ?? "").trim();
   const normalized = norm(label);
@@ -167,7 +233,9 @@ export function discoveryNounIsGrounded(label: string, evidence: string): boolea
  * any reasoning. Numeric targets are excluded because "replace ... with 16 A"
  * describes a parameter, not a product class.
  */
-export function extractCustomerOwnedDiscoveryTarget(customerText: string): string | null {
+export function extractCustomerOwnedDiscoveryTarget(
+  customerText: string,
+): string | null {
   const source = String(customerText ?? "").trim();
   const match = source.match(
     /(?:замен\p{L}*|поменя\p{L}*|смен\p{L}*)[^.!?\n]{0,100}?\s+на\s+([^.!?\n]{2,100})/iu,
@@ -181,7 +249,9 @@ export function extractCustomerOwnedDiscoveryTarget(customerText: string): strin
   if (
     tokens.length === 0 ||
     tokens.length > 6 ||
-    tokens.every((token) => /^\d/u.test(token) || /^(?:мм|см|м|вт|квт|а|в)$/u.test(token))
+    tokens.every((token) =>
+      /^\d/u.test(token) || /^(?:мм|см|м|вт|квт|а|в)$/u.test(token)
+    )
   ) return null;
   return destination;
 }
@@ -203,7 +273,10 @@ export function groundDiscoveryNounToCustomerTarget(
     const left = stemRu(candidate);
     const right = stemRu(target);
     let shared = 0;
-    while (shared < Math.min(left.length, right.length) && left[shared] === right[shared]) shared += 1;
+    while (
+      shared < Math.min(left.length, right.length) &&
+      left[shared] === right[shared]
+    ) shared += 1;
     // Restricted to long words so a four-letter derivational root can bridge
     // ordinary noun/adjective forms without making short generic tokens proof.
     return shared >= 4 && left.length >= 6 && right.length >= 6;
@@ -214,7 +287,8 @@ export function groundDiscoveryNounToCustomerTarget(
     .filter(Boolean)
     .filter((token) => {
       const normalized = norm(token);
-      return normalized.length >= 4 && targetTokens.some((target) => sharesStableRoot(normalized, target));
+      return normalized.length >= 4 &&
+        targetTokens.some((target) => sharesStableRoot(normalized, target));
     });
   return grounded.length > 0 ? grounded.join(" ") : null;
 }
@@ -230,25 +304,45 @@ export function discoveryResultPreservesCustomerIntent(
   resolvedCategory: string,
   evidence: string,
   customerOwnedSemanticResolution: boolean,
+  liveFacetSchemaResolution = false,
+  resolverGroundedFrom = "",
 ): boolean {
-  const requestedGrounded = discoveryNounIsGrounded(requestedNoun, evidence);
+  // Server-compiled discovery sends the complete customer sentence so the
+  // live resolver can distinguish product class from application. When that
+  // resolver also reports a literal customer-owned head, compare the formal
+  // category with that proven head instead of the whole sentence.
+  const groundedResolverSource = resolverGroundedFrom.trim() &&
+      discoveryNounIsGrounded(resolverGroundedFrom, evidence)
+    ? resolverGroundedFrom.trim()
+    : "";
+  const proofNoun = groundedResolverSource || requestedNoun;
+  const requestedGrounded = discoveryNounIsGrounded(proofNoun, evidence);
   const resolvedGrounded = discoveryNounIsGrounded(resolvedCategory, evidence);
-  const sharesRequestedBase = significantTokens(requestedNoun).some((requested) =>
-    significantTokens(resolvedCategory).some((resolved) => tokenMatches(requested, resolved))
+  const resolvedTokens = significantTokens(resolvedCategory);
+  const sharesRequestedBase = significantTokens(proofNoun).some((requested) =>
+    resolvedTokens.some((resolved) => tokenMatches(requested, resolved)) &&
+    evidenceAffirmsToken(evidence, requested)
   );
   const preservesRequested = !guardDiscoveryNounBySelectionTarget(
     resolvedCategory,
-    requestedNoun,
+    proofNoun,
   ).changed;
   // Sending the exact customer phrase to a semantic resolver does not make
   // every returned category correct. The live result must still preserve the
   // grounded requested base (or be independently grounded in the evidence).
-  return resolvedGrounded ||
-    preservesRequested && (requestedGrounded || customerOwnedSemanticResolution) ||
-    sharesRequestedBase && (requestedGrounded || customerOwnedSemanticResolution);
+  return resolvedGrounded && (!groundedResolverSource || sharesRequestedBase) ||
+    preservesRequested &&
+      (requestedGrounded || customerOwnedSemanticResolution) ||
+    sharesRequestedBase &&
+      (requestedGrounded || customerOwnedSemanticResolution) ||
+    liveFacetSchemaResolution && sharesRequestedBase;
 }
 
-function leafSupported(leaf: string, umbrella: string, evidence: string): boolean {
+function leafSupported(
+  leaf: string,
+  umbrella: string,
+  evidence: string,
+): boolean {
   const distinctive = distinctiveLeafTokens(leaf, umbrella);
   // A leaf whose name is indistinguishable from the umbrella provides no
   // semantic assertion to verify and is safe to keep.
@@ -273,12 +367,15 @@ export function groundedCategoryRecoveryQueries(
     .map((leaf) => leaf.pagetitle?.trim() ?? "")
     .filter(Boolean)
     .filter((leaf) => leafSupported(leaf, umbrella, declaredReasoning));
-  const unique = [...new Map(leaves.map((leaf) => [norm(leaf), leaf])).values()];
+  const unique = [
+    ...new Map(leaves.map((leaf) => [norm(leaf), leaf])).values(),
+  ];
   if (unique.length > 0) return unique.slice(0, Math.max(1, limit));
   const umbrellaTokens = significantTokens(umbrella);
   const evidenceTokens = significantTokens(declaredReasoning);
   const umbrellaGrounded = umbrellaTokens.length > 0 && umbrellaTokens.every(
-    (token) => evidenceTokens.some((candidate) => tokenMatches(token, candidate)),
+    (token) =>
+      evidenceTokens.some((candidate) => tokenMatches(token, candidate)),
   );
   return umbrellaGrounded ? [umbrella] : [];
 }
@@ -318,10 +415,17 @@ export function scopeGroundedClassQueryToLiveLeaves(
       .filter(Boolean)
       .map((leaf) => [norm(leaf), leaf]),
   );
-  const categories = groundedCategoryRecoveryQueries(discovered, declaredReasoning, 20)
+  const categories = groundedCategoryRecoveryQueries(
+    discovered,
+    declaredReasoning,
+    20,
+  )
     .map((category) => knownLeaves.get(norm(category)))
     .filter((category): category is string => Boolean(category));
-  const unique = [...new Map(categories.map((category) => [norm(category), category])).values()];
+  const unique = [
+    ...new Map(categories.map((category) => [norm(category), category]))
+      .values(),
+  ];
   if (unique.length === 0) return { args, changed: false, categories: [] };
   const scopedArgs = unique.length === 1
     ? { ...args, category: unique[0] }
@@ -335,7 +439,9 @@ export function scopeGroundedClassQueryToLiveLeaves(
  * is grounded in the frozen selection evidence. Newer grounded scopes win;
  * an ungrounded corrective lookup cannot erase an earlier useful umbrella.
  */
-export function rankGroundedCategoryRecoveryScopes<T extends DiscoveredCategoryScope>(
+export function rankGroundedCategoryRecoveryScopes<
+  T extends DiscoveredCategoryScope,
+>(
   discoveries: readonly T[],
   declaredReasoning: string,
   limit = 4,
@@ -344,7 +450,11 @@ export function rankGroundedCategoryRecoveryScopes<T extends DiscoveredCategoryS
   const seen = new Set<string>();
   for (let index = discoveries.length - 1; index >= 0; index -= 1) {
     const discovery = discoveries[index];
-    const targets = groundedCategoryRecoveryQueries(discovery, declaredReasoning, 20);
+    const targets = groundedCategoryRecoveryQueries(
+      discovery,
+      declaredReasoning,
+      20,
+    );
     if (targets.length === 0) continue;
     const umbrella = discovery.category?.pagetitle?.trim() ?? "";
     const umbrellaGrounded = significantTokens(umbrella).every((token) =>
@@ -373,44 +483,67 @@ export function rankGroundedCategoryRecoveryScopes<T extends DiscoveredCategoryS
 /** Keep terminal candidates inside taxonomy leaves explicitly grounded by the
  * consultant's reasoning. Every significant token of a target leaf must be
  * evidenced by the product title or its live leaf category. */
-export function filterProductsByGroundedCategoryTargets<T extends { pagetitle: string; leaf_category?: string | null }>(
+export function filterProductsByGroundedCategoryTargets<
+  T extends { pagetitle: string; leaf_category?: string | null },
+>(
   products: T[],
   targets: string[],
   umbrella = "",
   declaredReasoning = "",
 ): T[] {
-  const grounded = [...new Set((targets ?? []).map((target) => target.trim()).filter(Boolean))];
+  const grounded = [
+    ...new Set((targets ?? []).map((target) => target.trim()).filter(Boolean)),
+  ];
   if (grounded.length === 0) return [];
   const umbrellaTokens = significantTokens(umbrella);
   const targetTokenSets = grounded.map((target) => significantTokens(target));
   const umbrellaClassTokens = umbrellaTokens.filter((token) =>
-    targetTokenSets.some((tokens) => tokens.some((candidate) => tokenMatches(token, candidate)))
+    targetTokenSets.some((tokens) =>
+      tokens.some((candidate) => tokenMatches(token, candidate))
+    )
   );
-  const recurringTargetTokens = targetTokenSets[0]?.filter((token) =>
-    targetTokenSets.slice(1).every((tokens) => tokens.some((candidate) => tokenMatches(token, candidate)))
-  ) ?? [];
-  const classTokens = umbrellaClassTokens.length > 0 ? umbrellaClassTokens : recurringTargetTokens;
+  const recurringTargetTokens =
+    targetTokenSets[0]?.filter((token) =>
+      targetTokenSets.slice(1).every((tokens) =>
+        tokens.some((candidate) => tokenMatches(token, candidate))
+      )
+    ) ?? [];
+  const classTokens = umbrellaClassTokens.length > 0
+    ? umbrellaClassTokens
+    : recurringTargetTokens;
   const distinctiveByTarget = grounded.map((target) =>
     significantTokens(target).filter((token) =>
       !classTokens.some((classToken) => tokenMatches(token, classToken))
     )
   );
-  const hasDistinctiveTargets = distinctiveByTarget.some((tokens) => tokens.length > 0);
+  const hasDistinctiveTargets = distinctiveByTarget.some((tokens) =>
+    tokens.length > 0
+  );
   return products.filter((product) => {
-    if (product.leaf_category && declaredReasoning && !leafSupported(product.leaf_category, umbrella, declaredReasoning)) {
+    if (
+      product.leaf_category && declaredReasoning &&
+      !leafSupported(product.leaf_category, umbrella, declaredReasoning)
+    ) {
       return false;
     }
     const exactLeaf = norm(product.leaf_category ?? "");
-    if (exactLeaf && grounded.some((target) => norm(target) === exactLeaf)) return true;
-    const evidenceTokens = significantTokens(`${product.pagetitle} ${product.leaf_category ?? ""}`);
-    const umbrellaMatched = classTokens.length === 0 || classTokens.every((token) =>
-      evidenceTokens.some((candidate) => tokenMatches(token, candidate))
+    if (exactLeaf && grounded.some((target) => norm(target) === exactLeaf)) {
+      return true;
+    }
+    const evidenceTokens = significantTokens(
+      `${product.pagetitle} ${product.leaf_category ?? ""}`,
     );
+    const umbrellaMatched = classTokens.length === 0 ||
+      classTokens.every((token) =>
+        evidenceTokens.some((candidate) => tokenMatches(token, candidate))
+      );
     if (!umbrellaMatched) return false;
     if (!hasDistinctiveTargets) return true;
-    return distinctiveByTarget.some((tokens) => tokens.some((token) =>
-      evidenceTokens.some((candidate) => tokenMatches(token, candidate))
-    ));
+    return distinctiveByTarget.some((tokens) =>
+      tokens.some((token) =>
+        evidenceTokens.some((candidate) => tokenMatches(token, candidate))
+      )
+    );
   });
 }
 
@@ -418,7 +551,10 @@ export function filterProductsByGroundedCategoryTargets<T extends { pagetitle: s
  * Last-resort query ladder for a failed multiword semantic query. Each token is
  * still only a hint; callers must require the same token in catalog evidence.
  */
-export function groundedTokenRecoveryQueries(searchQuery: string, limit = 8): string[] {
+export function groundedTokenRecoveryQueries(
+  searchQuery: string,
+  limit = 8,
+): string[] {
   const tokens = significantTokens(searchQuery);
   return [...new Set(tokens)].slice(0, Math.max(1, limit));
 }
@@ -430,10 +566,39 @@ export interface TokenRecoveryCandidate {
 
 function transliterateRuToken(value: string): string {
   const map: Record<string, string> = {
-    а: "a", б: "b", в: "v", г: "g", д: "d", е: "e", ё: "e", ж: "zh", з: "z",
-    и: "i", й: "i", к: "k", л: "l", м: "m", н: "n", о: "o", п: "p", р: "r",
-    с: "s", т: "t", у: "u", ф: "f", х: "kh", ц: "ts", ч: "ch", ш: "sh",
-    щ: "shch", ы: "y", э: "e", ю: "yu", я: "ya", ь: "", ъ: "",
+    а: "a",
+    б: "b",
+    в: "v",
+    г: "g",
+    д: "d",
+    е: "e",
+    ё: "e",
+    ж: "zh",
+    з: "z",
+    и: "i",
+    й: "i",
+    к: "k",
+    л: "l",
+    м: "m",
+    н: "n",
+    о: "o",
+    п: "p",
+    р: "r",
+    с: "s",
+    т: "t",
+    у: "u",
+    ф: "f",
+    х: "kh",
+    ц: "ts",
+    ч: "ch",
+    ш: "sh",
+    щ: "shch",
+    ы: "y",
+    э: "e",
+    ю: "yu",
+    я: "ya",
+    ь: "",
+    ъ: "",
   };
   return [...value].map((char) => map[char] ?? char).join("");
 }
@@ -473,14 +638,19 @@ function editDistanceAtMostOne(left: string, right: string): boolean {
  * so prefixes inside unrelated title tokens still do not count. This is an
  * alphabetic rule derived from current evidence, not a product-name dictionary.
  */
-export function titleContainsLiteralToken(title: string, token: string): boolean {
+export function titleContainsLiteralToken(
+  title: string,
+  token: string,
+): boolean {
   const normalizedToken = norm(token);
   if (!normalizedToken || normalizedToken.includes(" ")) return false;
   const titleTokens = norm(title).split(" ");
   if (titleTokens.includes(normalizedToken)) return true;
 
   const transliteratedToken = transliterateRuToken(normalizedToken);
-  if (transliteratedToken.length < 5 || !/^[a-z0-9]+$/u.test(transliteratedToken)) return false;
+  if (
+    transliteratedToken.length < 5 || !/^[a-z0-9]+$/u.test(transliteratedToken)
+  ) return false;
   return titleTokens.some((titleToken) => {
     const transliteratedTitle = transliterateRuToken(titleToken);
     return transliteratedTitle.length >= 5 &&
@@ -492,8 +662,13 @@ export function titleContainsLiteralToken(title: string, token: string): boolean
 }
 
 /** Keep only products whose title proves the current named series. */
-export function filterProductsByNamedSeries<T extends { pagetitle: string }>(products: T[], seriesToken: string): T[] {
-  return products.filter((product) => titleContainsLiteralToken(product.pagetitle, seriesToken));
+export function filterProductsByNamedSeries<T extends { pagetitle: string }>(
+  products: T[],
+  seriesToken: string,
+): T[] {
+  return products.filter((product) =>
+    titleContainsLiteralToken(product.pagetitle, seriesToken)
+  );
 }
 
 /**
@@ -511,7 +686,9 @@ export function filterProductIdsByNamedSeries<T extends { pagetitle: string }>(
   if (!seriesToken) return [...ids];
   return ids.filter((id) => {
     const product = products.get(id);
-    return Boolean(product && titleContainsLiteralToken(product.pagetitle, seriesToken));
+    return Boolean(
+      product && titleContainsLiteralToken(product.pagetitle, seriesToken),
+    );
   });
 }
 
@@ -521,14 +698,19 @@ export function filterProductIdsByNamedSeries<T extends { pagetitle: string }>(
  * query recover from catalog AND semantics without turning a generic token
  * into a broad substitution. No domain terms or translations live here.
  */
-export function selectGroundedTokenRecoveryCandidate<T extends TokenRecoveryCandidate>(
+export function selectGroundedTokenRecoveryCandidate<
+  T extends TokenRecoveryCandidate,
+>(
   candidates: T[],
   categoryTotal: number,
 ): T | null {
-  const normalizedCategoryTotal = Number.isFinite(categoryTotal) && categoryTotal > 0 ? categoryTotal : 0;
+  const normalizedCategoryTotal =
+    Number.isFinite(categoryTotal) && categoryTotal > 0 ? categoryTotal : 0;
   const selectiveLimit = Math.max(50, Math.ceil(normalizedCategoryTotal * 0.1));
   return candidates.find(
-    (candidate) => Number.isFinite(candidate.total) && candidate.total > 0 && candidate.total <= selectiveLimit,
+    (candidate) =>
+      Number.isFinite(candidate.total) && candidate.total > 0 &&
+      candidate.total <= selectiveLimit,
   ) ?? null;
 }
 
@@ -557,10 +739,15 @@ export function guardCategoryScopeByReasoning(
     .filter((category): category is string => Boolean(category));
   if (leafRequests.length === 0) return { args, kept: [], dropped: [] };
 
-  const kept = leafRequests.filter((leaf) => leafSupported(leaf, umbrella, declaredReasoning));
+  const kept = leafRequests.filter((leaf) =>
+    leafSupported(leaf, umbrella, declaredReasoning)
+  );
   const dropped = leafRequests
     .filter((leaf) => !kept.includes(leaf))
-    .map((category) => ({ category, reason: "not_declared_in_reasoning" as const }));
+    .map((category) => ({
+      category,
+      reason: "not_declared_in_reasoning" as const,
+    }));
   if (dropped.length === 0) return { args, kept, dropped };
 
   const { category: _category, category_in: _categoryIn, ...rest } = args;

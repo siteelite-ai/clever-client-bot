@@ -1,14 +1,25 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
-  derivePortableAxisTitleRequirements, excludeMandatoryAxisCodesFromSourceModels, extractExplicitSingleLetterCodes, extractReplacementLookupKeys,
-  extractReplacementSourceDescription,
+  compileLiveCompactReplacementContract,
+  derivePortableAxisTitleRequirements,
+  excludeMandatoryAxisCodesFromSourceModels,
+  extractExplicitSingleLetterCodes,
   extractPortableTechnicalRequirements,
+  extractReplacementLookupKeys,
+  extractReplacementSourceDescription,
+  inferLiveReplacementClarification,
   isReplacementIntent,
-  portableTechnicalCodeMatchesText, productContainsSourceModel,
+  portableTechnicalCodeMatchesText,
   productBelongsToReplacementSourceScope,
+  productContainsSourceModel,
   productTitleSupportsMandatoryAxes,
-  productTitleSupportsPortableRequirements, resolveReplacementIntent, resolveReplacementSourceMessage, selectExplicitAnchorAxes,
-  shouldApplyReplacementExclusionGuard } from "./replacement-preflight.ts";
+  productTitleSupportsPortableRequirements,
+  replacementClassIsGroundedByLiveIdentity,
+  resolveReplacementIntent,
+  resolveReplacementSourceMessage,
+  selectExplicitAnchorAxes,
+  shouldApplyReplacementExclusionGuard,
+} from "./replacement-preflight.ts";
 import type { ProductRef } from "./types.ts";
 
 const anchor: ProductRef = {
@@ -27,12 +38,15 @@ const anchor: ProductRef = {
 };
 
 Deno.test("replacement preflight extracts article and source model without measurement tokens", () => {
-  assertEquals(extractReplacementLookupKeys(
-    "предложи аналоги DN027B G2 LED6/NW 7W 220-240V; 929002070102/871869967897500",
-  ), {
-    articles: ["929002070102", "871869967897500"],
-    modelCodes: ["DN027B", "LED6NW"],
-  });
+  assertEquals(
+    extractReplacementLookupKeys(
+      "предложи аналоги DN027B G2 LED6/NW 7W 220-240V; 929002070102/871869967897500",
+    ),
+    {
+      articles: ["929002070102", "871869967897500"],
+      modelCodes: ["DN027B", "LED6NW"],
+    },
+  );
 });
 
 Deno.test("replacement source description follows grammatical request boundaries", () => {
@@ -49,56 +63,358 @@ Deno.test("replacement source description follows grammatical request boundaries
     "Светильник DN027B G2 LED6/NW 7W 220-240V D90 R",
   );
   assertEquals(
-    extractReplacementSourceDescription("предложи аналоги на Schneider Acti9 C16"),
+    extractReplacementSourceDescription(
+      "предложи аналоги на Schneider Acti9 C16",
+    ),
     "Schneider Acti9 C16",
+  );
+  assertEquals(
+    extractReplacementSourceDescription(
+      "Найди аналоги лампы «Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK»",
+    ),
+    "Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK",
+  );
+});
+
+Deno.test("compact replacement asks one missing structural axis from the live schema", () => {
+  const liveFacets = [
+    {
+      key: "curve",
+      caption: "Характеристика срабатывания",
+      type: "string",
+      unit: null,
+      values: [{ value: "B", products_count: 8 }, {
+        value: "C",
+        products_count: 12,
+      }],
+    },
+    {
+      key: "current",
+      caption: "Номинальный ток",
+      type: "number",
+      unit: "А",
+      values: [{ value: "10", products_count: 6 }, {
+        value: "16",
+        products_count: 14,
+      }],
+    },
+    {
+      key: "poles",
+      caption: "Количество полюсов",
+      type: "string",
+      unit: null,
+      values: [
+        { value: "1", products_count: 9 },
+        { value: "2", products_count: 7 },
+        { value: "3", products_count: 4 },
+      ],
+    },
+    {
+      key: "reserve_current",
+      caption: "Максимальный ток",
+      type: "number",
+      unit: "А",
+      values: [{ value: "16", products_count: 2 }],
+    },
+    {
+      key: "package_count",
+      caption: "Количество в групповой упаковке",
+      type: "number",
+      unit: null,
+      values: [{ value: "6", products_count: 8 }, {
+        value: "12",
+        products_count: 5,
+      }],
+    },
+    {
+      key: "brand",
+      caption: "Бренд",
+      type: "string",
+      unit: null,
+      values: [{ value: "A", products_count: 10 }, {
+        value: "B",
+        products_count: 10,
+      }],
+    },
+  ];
+  assertEquals(
+    inferLiveReplacementClarification(
+      "Есть ли аналог устройству серии ZX C16?",
+      liveFacets,
+    ),
+    {
+      facet_key: "poles",
+      caption: "Количество полюсов",
+      question:
+        "Чтобы подобрать совместимый аналог, уточните количество полюсов.",
+      options: [
+        { value: "1", label: "1", count: 9 },
+        { value: "2", label: "2", count: 7 },
+        { value: "3", label: "3", count: 4 },
+      ],
+    },
+  );
+  assertEquals(
+    inferLiveReplacementClarification(
+      "Есть ли аналог устройству серии ZX C16? 1 полюс",
+      liveFacets,
+    ),
+    null,
+  );
+});
+
+Deno.test("replacement clarification does not invent an axis without a live compact-code decode", () => {
+  assertEquals(
+    inferLiveReplacementClarification("Нужен аналог устройства ZX-100", [{
+      key: "count",
+      caption: "Количество контактов",
+      type: "string",
+      unit: null,
+      values: [{ value: "1" }, { value: "2" }],
+    }]),
+    null,
+  );
+});
+
+Deno.test("a model-proposed replacement class needs live series and multi-axis code proof", () => {
+  const facets = [
+    {
+      key: "collection",
+      caption: "Коллекция",
+      type: "string" as const,
+      unit: null,
+      values: [{ value: "Acti9", products_count: 20 }],
+    },
+    {
+      key: "curve",
+      caption: "Характеристика срабатывания",
+      type: "string" as const,
+      unit: null,
+      values: [{ value: "B", products_count: 8 }, {
+        value: "C",
+        products_count: 12,
+      }],
+    },
+    {
+      key: "current",
+      caption: "Номинальный ток",
+      type: "number" as const,
+      unit: "А",
+      values: [{ value: "10", products_count: 6 }, {
+        value: "16",
+        products_count: 14,
+      }],
+    },
+  ];
+  assertEquals(
+    replacementClassIsGroundedByLiveIdentity(
+      "Подберите аналог Schneider Electric Acti9 C16",
+      facets,
+    ),
+    true,
+  );
+  assertEquals(
+    replacementClassIsGroundedByLiveIdentity(
+      "Подберите аналог неизвестной серии C16",
+      facets,
+    ),
+    false,
+  );
+  assertEquals(
+    replacementClassIsGroundedByLiveIdentity(
+      "Подберите аналог Schneider Electric Acti9",
+      facets,
+    ),
+    false,
+  );
+});
+
+Deno.test("compact replacement continuation compiles only live product-proved and customer-labelled axes", () => {
+  const liveFacets = [
+    {
+      key: "curve",
+      caption: "Характеристика срабатывания",
+      type: "string",
+      unit: null,
+      values: [{ value: "B" }, { value: "C" }],
+    },
+    {
+      key: "current",
+      caption: "Номинальный ток",
+      type: "number",
+      unit: "А",
+      values: [{ value: "10" }, { value: "16" }],
+    },
+    {
+      key: "poles",
+      caption: "Количество полюсов",
+      type: "string",
+      unit: null,
+      values: [{ value: "1" }, { value: "2" }, { value: "3" }],
+    },
+    {
+      key: "package",
+      caption: "Количество в упаковке",
+      type: "number",
+      unit: null,
+      values: [{ value: "1" }, { value: "12" }],
+    },
+  ];
+  const products = [
+    {
+      facet_values: {
+        curve: ["C"],
+        current: ["16"],
+        poles: ["1"],
+        package: ["12"],
+      },
+    },
+    {
+      facet_values: {
+        curve: ["C"],
+        current: ["16"],
+        poles: ["2"],
+        package: ["1"],
+      },
+    },
+  ];
+  assertEquals(
+    compileLiveCompactReplacementContract(
+      "Есть ли аналог серии ZX C16?\nУточнение клиента: 1 полюс",
+      liveFacets,
+      products,
+    ),
+    {
+      compact_codes: ["c16"],
+      axes: [
+        { key: "curve", caption: "Характеристика срабатывания", value: "C" },
+        { key: "current", caption: "Номинальный ток", value: "16" },
+        { key: "poles", caption: "Количество полюсов", value: "1" },
+      ],
+    },
+  );
+  assertEquals(
+    compileLiveCompactReplacementContract(
+      "Есть ли аналог серии ZX C16?",
+      liveFacets,
+      products,
+    ),
+    null,
+  );
+  assertEquals(
+    compileLiveCompactReplacementContract(
+      "Есть ли аналог серии ZX C16?\nУточнение клиента: в упаковке 1",
+      liveFacets,
+      products,
+    ),
+    null,
   );
 });
 
 Deno.test("live source scope rejects a sibling that shares a compatibility code", () => {
   const scope = ["Лампы", "Светодиодные лампы"];
-  assertEquals(productBelongsToReplacementSourceScope({ leaf_category: "Лампы" }, scope), true);
-  assertEquals(productBelongsToReplacementSourceScope({ leaf_category: "Светодиодные лампы" }, scope), true);
-  assertEquals(productBelongsToReplacementSourceScope({ leaf_category: "Светильники" }, scope), false);
-  assertEquals(productBelongsToReplacementSourceScope({ leaf_category: null }, scope), false);
-  assertEquals(productBelongsToReplacementSourceScope({ leaf_category: "Любая категория" }, []), true);
+  assertEquals(
+    productBelongsToReplacementSourceScope({ leaf_category: "Лампы" }, scope),
+    true,
+  );
+  assertEquals(
+    productBelongsToReplacementSourceScope({
+      leaf_category: "Светодиодные лампы",
+    }, scope),
+    true,
+  );
+  assertEquals(
+    productBelongsToReplacementSourceScope(
+      { leaf_category: "Светильники" },
+      scope,
+    ),
+    false,
+  );
+  assertEquals(
+    productBelongsToReplacementSourceScope({ leaf_category: null }, scope),
+    false,
+  );
+  assertEquals(
+    productBelongsToReplacementSourceScope(
+      { leaf_category: "Любая категория" },
+      [],
+    ),
+    true,
+  );
 });
 
 Deno.test("joined long-form quantity units never become exact product identifiers", () => {
-  assertEquals(extractReplacementLookupKeys(
-    "мне нужен бытовой светильник с датчиком движения не более 4000тенге, дай несколько вариантов",
-  ), {
-    articles: [],
-    modelCodes: [],
-  });
-  assertEquals(extractReplacementLookupKeys(
-    "подбери устройство мощностью 100ватт на 250вольт до 5000тенге",
-  ), {
-    articles: [],
-    modelCodes: [],
-  });
+  assertEquals(
+    extractReplacementLookupKeys(
+      "мне нужен бытовой светильник с датчиком движения не более 4000тенге, дай несколько вариантов",
+    ),
+    {
+      articles: [],
+      modelCodes: [],
+    },
+  );
+  assertEquals(
+    extractReplacementLookupKeys(
+      "подбери устройство мощностью 100ватт на 250вольт до 5000тенге",
+    ),
+    {
+      articles: [],
+      modelCodes: [],
+    },
+  );
+  assertEquals(
+    extractReplacementLookupKeys(
+      "Площадь парковки 500м2, высота установки 3 метра",
+    ),
+    {
+      articles: [],
+      modelCodes: [],
+    },
+  );
 });
 
 Deno.test("quantity exclusion preserves complete letter-led product identifiers", () => {
-  assertEquals(extractReplacementLookupKeys(
-    "покажи DN027B и батарейку NBT-CR2025-BP5",
-  ), {
-    articles: [],
-    modelCodes: ["NBT-CR2025-BP5", "DN027B"],
-  });
+  assertEquals(
+    extractReplacementLookupKeys(
+      "покажи DN027B и батарейку NBT-CR2025-BP5",
+    ),
+    {
+      articles: [],
+      modelCodes: ["NBT-CR2025-BP5", "DN027B"],
+    },
+  );
 });
 
 Deno.test("replacement intent requires a source identifier and survives only a short continuation", () => {
   const history = [
     { role: "user" as const, content: "Подбери аналог Schneider Acti9 C16" },
-    { role: "assistant" as const, content: "Проверяю технические параметры замены." },
+    {
+      role: "assistant" as const,
+      content: "Проверяю технические параметры замены.",
+    },
   ];
   assertEquals(isReplacementIntent(history[0].content), true);
-  assertEquals(isReplacementIntent("Хочу заменить люстру на светодиодное освещение"), false);
+  assertEquals(
+    isReplacementIntent("Хочу заменить люстру на светодиодное освещение"),
+    false,
+  );
   assertEquals(resolveReplacementIntent("покажи", history), true);
-  assertEquals(resolveReplacementSourceMessage("покажи", history), history[0].content);
-  assertEquals(resolveReplacementIntent("да, покажите варианты", history), true);
-  assertEquals(resolveReplacementIntent("покажи кабель ВВГ 3×1,5", history), false);
-  assertEquals(resolveReplacementSourceMessage("покажи кабель ВВГ 3×1,5", history), null);
+  assertEquals(
+    resolveReplacementSourceMessage("покажи", history),
+    history[0].content,
+  );
+  assertEquals(
+    resolveReplacementIntent("да, покажите варианты", history),
+    true,
+  );
+  assertEquals(
+    resolveReplacementIntent("покажи кабель ВВГ 3×1,5", history),
+    false,
+  );
+  assertEquals(
+    resolveReplacementSourceMessage("покажи кабель ВВГ 3×1,5", history),
+    null,
+  );
 });
 
 Deno.test("replacement exclusions cannot consume technical codes from an ordinary selection", () => {
@@ -114,34 +430,76 @@ Deno.test("replacement preflight recognizes a spaced letter-number model code", 
     "Модель АБ 47-29 16 А 4,5 кА — предложи равноценную замену",
   );
   assertEquals(lookup.modelCodes.includes("АБ47-29"), true);
-  assertEquals(lookup.modelCodes.some((value) => /16|4,?5/u.test(value)), false);
+  assertEquals(
+    lookup.modelCodes.some((value) => /16|4,?5/u.test(value)),
+    false,
+  );
 });
 
 Deno.test("structural lookup preserves a complete exact product identifier", () => {
-  assertEquals(extractReplacementLookupKeys(
-    "Сколько стоит батарейка NBT-CR2025-BP5 и цена указана за штуку или упаковку?",
-  ), {
-    articles: [],
-    modelCodes: ["NBT-CR2025-BP5"],
-  });
+  assertEquals(
+    extractReplacementLookupKeys(
+      "Сколько стоит батарейка NBT-CR2025-BP5 и цена указана за штуку или упаковку?",
+    ),
+    {
+      articles: [],
+      modelCodes: ["NBT-CR2025-BP5"],
+    },
+  );
 });
 
 Deno.test("equivalent replacement preserves every portable request code across Cyrillic notation", () => {
-  assertEquals(extractPortableTechnicalRequirements(
-    "Автомат 1Р ВА 47-29 16 А 4,5кА характеристика С — предложи равноценную замену",
-  ), ["1Р", "16А", "4.5кА"]);
-  assertEquals(extractExplicitSingleLetterCodes(
-    "Автомат 1Р ВА 47-29 16 А 4,5кА характеристика С — предложи равноценную замену",
-  ), ["c"]);
+  assertEquals(
+    extractPortableTechnicalRequirements(
+      "Автомат 1Р ВА 47-29 16 А 4,5кА характеристика С — предложи равноценную замену",
+    ),
+    ["1Р", "16А", "4.5кА"],
+  );
+  assertEquals(
+    extractExplicitSingleLetterCodes(
+      "Автомат 1Р ВА 47-29 16 А 4,5кА характеристика С — предложи равноценную замену",
+    ),
+    ["c"],
+  );
 });
 
 Deno.test("replacement preflight selects only explicit live non-identity facets", () => {
   const axes = selectExplicitAnchorAxes(anchor, [
-    { key: "brand", caption: "Бренд", type: "string", unit: null, values: [{ value: "Philips", products_count: 20 }] },
-    { key: "power", caption: "Мощность ламп, Вт", type: "number", unit: "Вт", values: [{ value: "7", products_count: 30 }] },
-    { key: "voltage", caption: "Напряжение, В", type: "string", unit: "В", values: [{ value: "220-240", products_count: 500 }] },
-    { key: "diameter", caption: "Диаметр, см", type: "number", unit: "см", values: [{ value: "9", products_count: 2 }] },
-    { key: "color", caption: "Цвет свечения", type: "string", unit: null, values: [{ value: "нейтральный", products_count: 40 }] },
+    {
+      key: "brand",
+      caption: "Бренд",
+      type: "string",
+      unit: null,
+      values: [{ value: "Philips", products_count: 20 }],
+    },
+    {
+      key: "power",
+      caption: "Мощность ламп, Вт",
+      type: "number",
+      unit: "Вт",
+      values: [{ value: "7", products_count: 30 }],
+    },
+    {
+      key: "voltage",
+      caption: "Напряжение, В",
+      type: "string",
+      unit: "В",
+      values: [{ value: "220-240", products_count: 500 }],
+    },
+    {
+      key: "diameter",
+      caption: "Диаметр, см",
+      type: "number",
+      unit: "см",
+      values: [{ value: "9", products_count: 2 }],
+    },
+    {
+      key: "color",
+      caption: "Цвет свечения",
+      type: "string",
+      unit: null,
+      values: [{ value: "нейтральный", products_count: 40 }],
+    },
   ], "аналоги на DN027B 7W 220-240V");
 
   assertEquals(axes, [
@@ -152,7 +510,12 @@ Deno.test("replacement preflight selects only explicit live non-identity facets"
 
 Deno.test("source model exclusion is structural", () => {
   assertEquals(productContainsSourceModel(anchor, ["DN027B"]), true);
-  assertEquals(productContainsSourceModel({ pagetitle: "Светильник BN068C LED6/NW" }, ["DN027B"]), false);
+  assertEquals(
+    productContainsSourceModel({ pagetitle: "Светильник BN068C LED6/NW" }, [
+      "DN027B",
+    ]),
+    false,
+  );
 });
 
 Deno.test("bare binary merchandising values do not become replacement axes", () => {
@@ -163,12 +526,34 @@ Deno.test("bare binary merchandising values do not become replacement axes", () 
       vendor: "Vendor",
       price: 500,
       stock: "in_stock",
-      short_traits: ["Количество полюсов: 1", "Популярный: 1", "Номинальный ток: 16"],
+      short_traits: [
+        "Количество полюсов: 1",
+        "Популярный: 1",
+        "Номинальный ток: 16",
+      ],
     },
     [
-      { key: "poles", caption: "Количество полюсов", type: "string", unit: null, values: [{ value: "1", products_count: 5 }] },
-      { key: "popular", caption: "Популярный", type: "string", unit: null, values: [{ value: "1", products_count: 100 }] },
-      { key: "current", caption: "Номинальный ток", type: "number", unit: "А", values: [{ value: "16", products_count: 8 }] },
+      {
+        key: "poles",
+        caption: "Количество полюсов",
+        type: "string",
+        unit: null,
+        values: [{ value: "1", products_count: 5 }],
+      },
+      {
+        key: "popular",
+        caption: "Популярный",
+        type: "string",
+        unit: null,
+        values: [{ value: "1", products_count: 100 }],
+      },
+      {
+        key: "current",
+        caption: "Номинальный ток",
+        type: "number",
+        unit: "А",
+        values: [{ value: "16", products_count: 8 }],
+      },
     ],
     "Нужен аналог QX-20: 1 полюс, 16 А",
     6,
@@ -186,16 +571,35 @@ Deno.test("an explicit one-letter characteristic is a replacement axis only with
     short_traits: ["Характеристика срабатывания: Тип C", "Цвет: C"],
   };
   const facets = [
-    { key: "curve", caption: "Характеристика срабатывания", type: "string", unit: null, values: [{ value: "Тип C", products_count: 5 }] },
-    { key: "color", caption: "Цвет", type: "string", unit: null, values: [{ value: "C", products_count: 5 }] },
+    {
+      key: "curve",
+      caption: "Характеристика срабатывания",
+      type: "string",
+      unit: null,
+      values: [{ value: "Тип C", products_count: 5 }],
+    },
+    {
+      key: "color",
+      caption: "Цвет",
+      type: "string",
+      unit: null,
+      values: [{ value: "C", products_count: 5 }],
+    },
   ];
-  const axes = selectExplicitAnchorAxes(product, facets, "Нужна характеристика C", 6);
+  const axes = selectExplicitAnchorAxes(
+    product,
+    facets,
+    "Нужна характеристика C",
+    6,
+  );
   assertEquals(axes.map((axis) => axis.key), ["curve"]);
 });
 
 Deno.test("standalone code after a parameter label becomes visible replacement evidence", () => {
   assertEquals(
-    extractExplicitSingleLetterCodes("16 А, характеристика C, серия GENERICA ИЭК"),
+    extractExplicitSingleLetterCodes(
+      "16 А, характеристика C, серия GENERICA ИЭК",
+    ),
     ["c"],
   );
   assertEquals(extractExplicitSingleLetterCodes("бренд CHINT"), []);
@@ -280,8 +684,14 @@ Deno.test("portable technical codes compare as whole codes, not by their digits"
   );
   assertEquals(portableTechnicalCodeMatchesText("IP 44", "защита IP44"), true);
   assertEquals(portableTechnicalCodeMatchesText("C16", "автомат С16"), true);
-  assertEquals(portableTechnicalCodeMatchesText("100W", "светильник 100Вт"), true);
-  assertEquals(portableTechnicalCodeMatchesText("220V", "напряжение 220В"), true);
+  assertEquals(
+    portableTechnicalCodeMatchesText("100W", "светильник 100Вт"),
+    true,
+  );
+  assertEquals(
+    portableTechnicalCodeMatchesText("220V", "напряжение 220В"),
+    true,
+  );
 });
 
 Deno.test("near replacement cannot relax a mandatory title code", () => {
@@ -351,29 +761,44 @@ Deno.test("final replacement title contract requires every portable code", () =>
 });
 
 Deno.test("a complete compact customer code preserves both decoded live axes", () => {
-  assertEquals(derivePortableAxisTitleRequirements([
-    { caption: "Номинальный ток", unit: "А", values: ["16"] },
-    { caption: "Характеристика срабатывания", unit: null, values: ["C"] },
-  ], "Подбери аналог Schneider Acti9 C16"), ["16А", "C"]);
+  assertEquals(
+    derivePortableAxisTitleRequirements([
+      { caption: "Номинальный ток", unit: "А", values: ["16"] },
+      { caption: "Характеристика срабатывания", unit: null, values: ["C"] },
+    ], "Подбери аналог Schneider Acti9 C16"),
+    ["16А", "C"],
+  );
 
-  assertEquals(derivePortableAxisTitleRequirements([
-    { caption: "Номинальная мощность", unit: "кВА", values: ["10"] },
-    { caption: "Характеристика", unit: null, values: ["C"] },
-  ], "Стабилизатор ACH-10001-C"), ["10кВА"]);
+  assertEquals(
+    derivePortableAxisTitleRequirements([
+      { caption: "Номинальная мощность", unit: "кВА", values: ["10"] },
+      { caption: "Характеристика", unit: null, values: ["C"] },
+    ], "Стабилизатор ACH-10001-C"),
+    ["10кВА"],
+  );
 
-  assertEquals(derivePortableAxisTitleRequirements([
-    { caption: "Номинальный ток", unit: null, values: ["16"] },
-    { caption: "Характеристика срабатывания", unit: null, values: ["C"] },
-  ], "Подбери аналог Schneider Acti9 C16"), ["C"]);
+  assertEquals(
+    derivePortableAxisTitleRequirements([
+      { caption: "Номинальный ток", unit: null, values: ["16"] },
+      { caption: "Характеристика срабатывания", unit: null, values: ["C"] },
+    ], "Подбери аналог Schneider Acti9 C16"),
+    ["C"],
+  );
 });
 
 Deno.test("live numeric axes inherit a unique explicit reasoning unit for title proof", () => {
-  assertEquals(derivePortableAxisTitleRequirements([
-    { caption: "Характеристика срабатывания", values: ["C"], unit: null },
-    { caption: "Номинальный ток", values: ["16"], unit: null },
-  ], "Ключевые параметры: характеристика С, номинальный ток 16 А."), ["C", "16А"]);
+  assertEquals(
+    derivePortableAxisTitleRequirements([
+      { caption: "Характеристика срабатывания", values: ["C"], unit: null },
+      { caption: "Номинальный ток", values: ["16"], unit: null },
+    ], "Ключевые параметры: характеристика С, номинальный ток 16 А."),
+    ["C", "16А"],
+  );
 
-  assertEquals(derivePortableAxisTitleRequirements([
-    { caption: "Номинальный ток", values: ["16"], unit: null },
-  ], "Возможны 16 А и 16 кА для разных параметров."), []);
+  assertEquals(
+    derivePortableAxisTitleRequirements([
+      { caption: "Номинальный ток", values: ["16"], unit: null },
+    ], "Возможны 16 А и 16 кА для разных параметров."),
+    [],
+  );
 });

@@ -23,6 +23,10 @@ export interface VisibleRequestContractContext {
   taxonomyClass?: string | null;
   /** All live titles observed in this turn, not only the latest recovery pool. */
   candidateTitles?: string[];
+  /** Literal customer phrases whose exact live-facet meaning was declared by
+   * the bounded reasoning contract. They remain mandatory through that facet
+   * and must not also require one particular title-language spelling. */
+  semanticallyMappedCustomerPhrases?: string[];
 }
 
 const RU_ADJECTIVE_TOKEN = String.raw`\p{L}{3,}(?:ыми|ими|ого|его|ому|ему|ая|яя|ое|ее|ой|ей|ом|ем|ую|юю|ый|ий|ые|ие|ых|их)`;
@@ -83,6 +87,21 @@ function isPlacementContextMeasurement(source: string, measurementIndex: number)
   return /(?:высот\p{L}*(?:\s+(?:установ\p{L}*|монтаж\p{L}*))?|(?:установ\p{L}*|монтаж\p{L}*)\s+на\s+высот\p{L}*)[^.!?\n]{0,24}$/iu.test(prefix);
 }
 
+/** Route/line length describes the installation task, not the physical length
+ * encoded by every product card. Literal product length remains guarded when
+ * the customer names the product itself (`удлинитель на 50 м`). */
+function isRouteContextMeasurement(
+  source: string,
+  measurementIndex: number,
+): boolean {
+  const prefix = source.slice(
+    Math.max(0, measurementIndex - 72),
+    measurementIndex,
+  );
+  return /(?:расстоян\p{L}*|длин\p{L}*\s+(?:трасс\p{L}*|лини\p{L}*)|(?:трасс\p{L}*|лини\p{L}*)\s+(?:длин\p{L}*|протяжен\p{L}*))[^.!?\n]{0,28}$/iu
+    .test(prefix);
+}
+
 function titleSatisfiesBound(
   title: string,
   expected: { value: number; unit: string; direction: "min" | "max"; exclusive: boolean },
@@ -123,6 +142,12 @@ function literalRequestModifiers(
     ? new Set(classTokens.map(tokenStem).filter(Boolean))
     : new Set([classHead]);
   const sourceTokens = source.match(/[a-zа-я0-9]+/giu) ?? [];
+  const mappedStems = new Set(
+    (context.semanticallyMappedCustomerPhrases ?? [])
+      .flatMap((phrase) => String(phrase).match(/[a-zа-я0-9]+/giu) ?? [])
+      .map(tokenStem)
+      .filter(Boolean),
+  );
   const liveTitleStems = new Set(
     (context.candidateTitles ?? [])
       .flatMap((title) => title.match(/[a-zа-я0-9]+/giu) ?? [])
@@ -142,6 +167,7 @@ function literalRequestModifiers(
       const stem = tokenStem(token);
       if (
         !stem || stem.length < 4 || stem === classHead ||
+        mappedStems.has(stem) ||
         taxonomyBackedClassStems.has(stem) ||
         WORKFLOW_WORDS.has(token) || /^\d/u.test(token) ||
         precedesDirectionalMeasurement(modifierIndex) ||
@@ -173,7 +199,10 @@ export function buildVisibleRequestContract(
   };
 
   for (const match of source.matchAll(/(?<!\d)(\d+(?:[.,]\d+)?)\s*(?:м|m)(?![\p{L}\p{N}²³])/giu)) {
-    if (isPlacementContextMeasurement(source, match.index ?? 0)) continue;
+    if (
+      isPlacementContextMeasurement(source, match.index ?? 0) ||
+      isRouteContextMeasurement(source, match.index ?? 0)
+    ) continue;
     const prefix = source.slice(Math.max(0, (match.index ?? 0) - 24), match.index ?? 0);
     if (/(?:не\s+менее|минимум|от|не\s+более|максимум|до|больше|свыше|меньше|менее)\s*$/iu.test(prefix)) {
       continue;

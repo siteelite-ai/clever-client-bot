@@ -1,23 +1,75 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, extractCustomerApplicationContexts, filterProductsByMandatoryFacetTitleContradictions, groundSelectionApplicationContext, initialSelectionDeclaration, parseSelectionTarget, projectCustomerApplicationFacetCriteria, projectModelOnlySelectionTargetExtension, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
+import {
+  advanceSelectionTarget,
+  bootstrapSelectionTargetFromDiscovery,
+  bootstrapSelectionTargetFromTaxonomy,
+  buildSelectionEvidenceCaption,
+  buildSelectionRenderCaption,
+  continuedSelectionTargetIsGrounded,
+  extractCustomerApplicationContexts,
+  filterProductsByMandatoryFacetTitleContradictions,
+  groundSelectionApplicationContext,
+  initialSelectionDeclaration,
+  parseSelectionTarget,
+  projectCustomerApplicationFacetCriteria,
+  projectModelOnlySelectionTargetExtension,
+  projectSelectionApplicationFacetCriteria,
+  projectSelectionTargetFacetCriteria,
+  promoteSelectionApplicationBackingCriteria,
+  promoteSelectionTargetBackingCriteria,
+  resolveTerminalSelectionTarget,
+  restoreSelectionTargetBackingCriteria,
+  selectionTargetAliasExpansionIsGrounded,
+  selectionTargetDeclarationIsGrounded,
+  selectionTargetExtensionIsCriterionBacked,
+  selectionTargetIsDeclared,
+  selectionTargetMayUseGroundedBase,
+  selectionTargetPreservesGroundedBase,
+  verifySelectionTarget,
+  verifySelectionTargetWithExactLiveCategoryContract,
+  verifySelectionTargetWithGroundedSearch,
+  verifySelectionTargetWithNamedEntityCategory,
+  verifySelectionTargetWithVisibleTitle,
+} from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
-  return { id, pagetitle: title, leaf_category: leaf, vendor: null, price: 1, stock: "in_stock", short_traits: [] };
+  return {
+    id,
+    pagetitle: title,
+    leaf_category: leaf,
+    vendor: null,
+    price: 1,
+    stock: "in_stock",
+    short_traits: [],
+  };
 }
 
 Deno.test("selection target blocks a sibling class even when it serves a related task", () => {
   const report = verifySelectionTarget("источник бесперебойного питания ИБП", [
-    product("ups", "ИБП с чистой синусоидой 600 ВА", "Источники бесперебойного питания"),
-    product("ats", "Автоматический ввод резерва CHINT NXZM ATS", "Автоматические переключатели"),
+    product(
+      "ups",
+      "ИБП с чистой синусоидой 600 ВА",
+      "Источники бесперебойного питания",
+    ),
+    product(
+      "ats",
+      "Автоматический ввод резерва CHINT NXZM ATS",
+      "Автоматические переключатели",
+    ),
   ]);
   assertEquals(report.passed_ids, ["ups"]);
   assertEquals(report.rejected_ids, ["ats"]);
 });
 
 Deno.test("description cannot rename a sibling product class", () => {
-  const sibling = product("stabilizer", "Стабилизатор напряжения 500 ВА", "Стабилизаторы напряжения");
-  sibling.description_excerpt = "Может применяться совместно с ИБП для защиты оборудования";
+  const sibling = product(
+    "stabilizer",
+    "Стабилизатор напряжения 500 ВА",
+    "Стабилизаторы напряжения",
+  );
+  sibling.description_excerpt =
+    "Может применяться совместно с ИБП для защиты оборудования";
   sibling.short_traits = ["Назначение: резервное питание ИБП"];
   const report = verifySelectionTarget("ИБП", [sibling]);
   assertEquals(report.passed_ids, []);
@@ -34,8 +86,16 @@ Deno.test("selection projection separates product class from application context
     application_context: ["основное освещение гостиной"],
   });
   const report = verifySelectionTarget(projection.product_class, [
-    product("indoor", "Светодиодный светильник для гостиной", "Интерьерное освещение"),
-    product("street", "Светодиодный светильник Avenue IP65", "Уличное освещение"),
+    product(
+      "indoor",
+      "Светодиодный светильник для гостиной",
+      "Интерьерное освещение",
+    ),
+    product(
+      "street",
+      "Светодиодный светильник Avenue IP65",
+      "Уличное освещение",
+    ),
   ]);
   assertEquals(report.passed_ids, ["indoor", "street"]);
   assertEquals(report.rejected_ids, []);
@@ -76,19 +136,25 @@ Deno.test("two-token class requires both identity signals", () => {
 });
 
 Deno.test("an explicit bare class list accepts either class but rejects siblings", () => {
-  const report = verifySelectionTargetWithVisibleTitle("розетки и выключатели", [
-    product("socket", "Розетка Gallant с заземлением", "Розетки"),
-    product("switch", "Выключатель Gallant одноклавишный", "Выключатели"),
-    product("frame", "Рамка Gallant двухместная", "Рамки"),
-  ]);
+  const report = verifySelectionTargetWithVisibleTitle(
+    "розетки и выключатели",
+    [
+      product("socket", "Розетка Gallant с заземлением", "Розетки"),
+      product("switch", "Выключатель Gallant одноклавишный", "Выключатели"),
+      product("frame", "Рамка Gallant двухместная", "Рамки"),
+    ],
+  );
   assertEquals(report.passed_ids, ["socket", "switch"]);
   assertEquals(report.rejected_ids, ["frame"]);
 });
 
 Deno.test("an attribute conjunction is not weakened into class alternatives", () => {
-  const report = verifySelectionTargetWithVisibleTitle("датчик движения и освещенности", [
-    product("motion", "Датчик движения настенный", "Датчики движения"),
-  ]);
+  const report = verifySelectionTargetWithVisibleTitle(
+    "датчик движения и освещенности",
+    [
+      product("motion", "Датчик движения настенный", "Датчики движения"),
+    ],
+  );
   assertEquals(report.passed_ids, []);
   assertEquals(report.rejected_ids, ["motion"]);
 });
@@ -104,18 +170,33 @@ Deno.test("compact family code matches the same adjacent live-title tokens", () 
 });
 
 Deno.test("verified render contract becomes a visible data-agnostic caption", () => {
-  assertEquals(buildSelectionEvidenceCaption({
-    product_class: "Класс альфа",
-    application_context: ["комната 25 м²", "основное применение"],
-  }, [
-    { key: "Параметр потока", op: "range", value: [3750, 5000], unit: "лм", level: "A" },
-    { key: "Монтаж", op: "eq", value: "потолочный", level: "A" },
-    { key: "Цвет", op: "eq", value: "белый", level: "B" },
-  ]), "Для задачи «комната 25 м², основное применение» проверены обязательные параметры товара: Параметр потока — 3750–5000 лм; Монтаж — потолочный. Ниже — варианты, прошедшие эти условия.");
+  assertEquals(
+    buildSelectionEvidenceCaption({
+      product_class: "Класс альфа",
+      application_context: ["комната 25 м²", "основное применение"],
+    }, [
+      {
+        key: "Параметр потока",
+        op: "range",
+        value: [3750, 5000],
+        unit: "лм",
+        level: "A",
+      },
+      { key: "Монтаж", op: "eq", value: "потолочный", level: "A" },
+      { key: "Цвет", op: "eq", value: "белый", level: "B" },
+    ]),
+    "Для задачи «комната 25 м², основное применение» проверены обязательные параметры товара: Параметр потока — 3750–5000 лм; Монтаж — потолочный. Ниже — варианты, прошедшие эти условия.",
+  );
 });
 
 Deno.test("caption is absent without verified mandatory criteria", () => {
-  assertEquals(buildSelectionEvidenceCaption({ product_class: "Класс", application_context: ["контекст"] }, []), null);
+  assertEquals(
+    buildSelectionEvidenceCaption({
+      product_class: "Класс",
+      application_context: ["контекст"],
+    }, []),
+    null,
+  );
 });
 
 Deno.test("successful selection render keeps its verified context visible without mandatory criteria", () => {
@@ -141,68 +222,107 @@ Deno.test("render caption prefers verified mandatory criteria over the context-o
 });
 
 Deno.test("render target cannot drift to a sibling mentioned only by later search tactics", () => {
-  const initial = "Какой ИБП подойдет?\nВы ищете источник бесперебойного питания для котла.";
+  const initial =
+    "Какой ИБП подойдет?\nВы ищете источник бесперебойного питания для котла.";
   assertEquals(selectionTargetIsDeclared("ИБП", initial), true);
-  assertEquals(selectionTargetIsDeclared("источник бесперебойного питания", initial), true);
-  assertEquals(selectionTargetIsDeclared("стабилизатор напряжения", initial), false);
-  const prose = "Понял задачу. Для котла нужен источник бесперебойного питания с чистой синусоидой. По мощности нужен запас. Искать буду среди стабилизаторов и ИБП.";
+  assertEquals(
+    selectionTargetIsDeclared("источник бесперебойного питания", initial),
+    true,
+  );
+  assertEquals(
+    selectionTargetIsDeclared("стабилизатор напряжения", initial),
+    false,
+  );
+  const prose =
+    "Понял задачу. Для котла нужен источник бесперебойного питания с чистой синусоидой. По мощности нужен запас. Искать буду среди стабилизаторов и ИБП.";
   const declaration = initialSelectionDeclaration(prose);
-  assertEquals(declaration, "Понял задачу. Для котла нужен источник бесперебойного питания с чистой синусоидой. По мощности нужен запас.");
+  assertEquals(
+    declaration,
+    "Понял задачу. Для котла нужен источник бесперебойного питания с чистой синусоидой. По мощности нужен запас.",
+  );
   assertEquals(selectionTargetIsDeclared("стабилизатор", declaration), false);
   assertEquals(
-    initialSelectionDeclaration("Понял задачу. Нужен потолочный светильник для гостиной. Смотрю варианты в каталоге."),
+    initialSelectionDeclaration(
+      "Понял задачу. Нужен потолочный светильник для гостиной. Смотрю варианты в каталоге.",
+    ),
     "Понял задачу. Нужен потолочный светильник для гостиной.",
   );
 });
 
 Deno.test("live taxonomy may complete a partially declared class but cannot authorize a sibling", () => {
-  const initial = "Хочу заменить люстру на светодиодное освещение.\nПонял задачу: нужно светодиодное освещение для гостиной.";
-  assertEquals(selectionTargetIsDeclared(
-    "светодиодный светильник",
-    `${initial}\nСветильники\nПотолочные светильники`,
-  ), true);
-  assertEquals(selectionTargetIsDeclared(
-    "стабилизатор напряжения",
-    "Нужен ИБП для котла.\nИсточники бесперебойного питания",
-  ), false);
-  assertEquals(selectionTargetIsDeclared(
-    "уличный светильник",
-    `${initial}\nСветильники`,
-  ), false);
+  const initial =
+    "Хочу заменить люстру на светодиодное освещение.\nПонял задачу: нужно светодиодное освещение для гостиной.";
+  assertEquals(
+    selectionTargetIsDeclared(
+      "светодиодный светильник",
+      `${initial}\nСветильники\nПотолочные светильники`,
+    ),
+    true,
+  );
+  assertEquals(
+    selectionTargetIsDeclared(
+      "стабилизатор напряжения",
+      "Нужен ИБП для котла.\nИсточники бесперебойного питания",
+    ),
+    false,
+  );
+  assertEquals(
+    selectionTargetIsDeclared(
+      "уличный светильник",
+      `${initial}\nСветильники`,
+    ),
+    false,
+  );
 });
 
 Deno.test("a formal live class may complete a derived leading customer noun", () => {
-  assertEquals(selectionTargetDeclarationIsGrounded(
-    "автоматический выключатель",
-    "Найди однополюсный автомат на 16 А",
-    "Автоматические выключатели",
-  ), true);
-  assertEquals(selectionTargetDeclarationIsGrounded(
-    "настенный светильник",
-    "Нужен потолочный светильник",
-    "Настенные светильники",
-  ), false);
-  assertEquals(selectionTargetDeclarationIsGrounded(
-    "стабилизатор напряжения",
-    "Нужен ИБП для котла",
-    "Стабилизаторы напряжения",
-  ), false);
+  assertEquals(
+    selectionTargetDeclarationIsGrounded(
+      "автоматический выключатель",
+      "Найди однополюсный автомат на 16 А",
+      "Автоматические выключатели",
+    ),
+    true,
+  );
+  assertEquals(
+    selectionTargetDeclarationIsGrounded(
+      "настенный светильник",
+      "Нужен потолочный светильник",
+      "Настенные светильники",
+    ),
+    false,
+  );
+  assertEquals(
+    selectionTargetDeclarationIsGrounded(
+      "стабилизатор напряжения",
+      "Нужен ИБП для котла",
+      "Стабилизаторы напряжения",
+    ),
+    false,
+  );
 });
 
 Deno.test("short continuation bridges a prior ordinary class name only through the same live taxonomy", () => {
-  const prior = "Подбери аналог Schneider Acti9 C16\nИщу аналог модульного автомата на 16 А с характеристикой C.";
-  assertEquals(continuedSelectionTargetIsGrounded(
-    "автоматический выключатель",
-    prior,
-    "Автоматические выключатели",
-    "автомат",
-  ), true);
-  assertEquals(continuedSelectionTargetIsGrounded(
-    "стабилизатор напряжения",
-    prior,
-    "Стабилизаторы напряжения",
-    "автомат",
-  ), false);
+  const prior =
+    "Подбери аналог Schneider Acti9 C16\nИщу аналог модульного автомата на 16 А с характеристикой C.";
+  assertEquals(
+    continuedSelectionTargetIsGrounded(
+      "автоматический выключатель",
+      prior,
+      "Автоматические выключатели",
+      "автомат",
+    ),
+    true,
+  );
+  assertEquals(
+    continuedSelectionTargetIsGrounded(
+      "стабилизатор напряжения",
+      prior,
+      "Стабилизаторы напряжения",
+      "автомат",
+    ),
+    false,
+  );
 });
 
 Deno.test("literal model-owned search evidence can prove a subtype inside the live base class", () => {
@@ -254,7 +374,10 @@ Deno.test("live taxonomy bootstraps only a class declared before search planning
     "Светильники",
   );
   assertEquals(
-    bootstrapSelectionTargetFromTaxonomy("Нужен источник резервного питания.", "Стабилизаторы"),
+    bootstrapSelectionTargetFromTaxonomy(
+      "Нужен источник резервного питания.",
+      "Стабилизаторы",
+    ),
     null,
   );
 });
@@ -305,6 +428,25 @@ Deno.test("terminal target keeps a short declared discovery noun instead of a lo
   );
 });
 
+Deno.test("full-message discovery recovers a customer-owned class head from live taxonomy", () => {
+  assertEquals(
+    bootstrapSelectionTargetFromDiscovery(
+      "Что предложите из автоматов на 25 А для квартиры? Уточнение клиента: Нужен 1P, характеристика C",
+      "Что предложите из автоматов на 25 А для квартиры? Уточнение клиента: Нужен 1P, характеристика C",
+      "Автоматические выключатели",
+    ),
+    "автоматов",
+  );
+  assertEquals(
+    bootstrapSelectionTargetFromDiscovery(
+      "Нужен товар с несколькими условиями и точным цветом",
+      "Нужен товар с несколькими условиями и точным цветом",
+      "Случайная категория",
+    ),
+    null,
+  );
+});
+
 Deno.test("live declared base class stays separate from discovery modifiers", () => {
   assertEquals(
     bootstrapSelectionTargetFromDiscovery(
@@ -333,12 +475,19 @@ Deno.test("live declared base class stays separate from discovery modifiers", ()
 });
 
 Deno.test("a safely bootstrapped short noun may authorize its formal class extension", () => {
-  assertEquals(selectionTargetIsDeclared("автомат", "Автоматический выключатель"), true);
-  assertEquals(selectionTargetIsDeclared("ИБП", "Стабилизатор напряжения"), false);
+  assertEquals(
+    selectionTargetIsDeclared("автомат", "Автоматический выключатель"),
+    true,
+  );
+  assertEquals(
+    selectionTargetIsDeclared("ИБП", "Стабилизатор напряжения"),
+    false,
+  );
 });
 
 Deno.test("a model-only class adjective projects to the customer-grounded live base", () => {
-  const evidence = "какой есть кабель ввг 3*1,5 негорючий\nИщем кабель ВВГ 3×1,5 в негорючем исполнении";
+  const evidence =
+    "какой есть кабель ввг 3*1,5 негорючий\nИщем кабель ВВГ 3×1,5 в негорючем исполнении";
   assertEquals(
     projectModelOnlySelectionTargetExtension(
       "кабель",
@@ -443,39 +592,57 @@ Deno.test("a sibling class cannot project through a shared umbrella noun", () =>
 
 Deno.test("a continuation class requires both prior cards and matching live taxonomy", () => {
   const prior = "Автоматический выключатель M06N 1P 16A C ARMAT ИЭК";
-  assertEquals(continuedSelectionTargetIsGrounded(
-    "автоматический выключатель",
-    prior,
-    "Автоматические выключатели",
-  ), true);
-  assertEquals(continuedSelectionTargetIsGrounded(
-    "стабилизатор напряжения",
-    prior,
-    "Автоматические выключатели",
-  ), false);
-  assertEquals(continuedSelectionTargetIsGrounded(
-    "автоматический выключатель",
-    "Ранее ничего не показывали",
-    "Автоматические выключатели",
-  ), false);
+  assertEquals(
+    continuedSelectionTargetIsGrounded(
+      "автоматический выключатель",
+      prior,
+      "Автоматические выключатели",
+    ),
+    true,
+  );
+  assertEquals(
+    continuedSelectionTargetIsGrounded(
+      "стабилизатор напряжения",
+      prior,
+      "Автоматические выключатели",
+    ),
+    false,
+  );
+  assertEquals(
+    continuedSelectionTargetIsGrounded(
+      "автоматический выключатель",
+      "Ранее ничего не показывали",
+      "Автоматические выключатели",
+    ),
+    false,
+  );
 });
 
 Deno.test("a richer target falls back to its base only through mandatory criteria", () => {
-  assertEquals(selectionTargetExtensionIsCriterionBacked(
-    "кабель AB",
-    "кабель AB огнестойкий",
-    [{ key: "Огнестойкость", op: "eq", value: "Да", level: "A" }],
-  ), true);
-  assertEquals(selectionTargetExtensionIsCriterionBacked(
-    "светильник",
-    "уличный светильник",
-    [{ key: "Цвет", op: "eq", value: "чёрный", level: "A" }],
-  ), false);
-  assertEquals(selectionTargetExtensionIsCriterionBacked(
-    "светильник",
-    "уличный светильник",
-    [{ key: "Уличное исполнение", op: "eq", value: "Да", level: "B" }],
-  ), false);
+  assertEquals(
+    selectionTargetExtensionIsCriterionBacked(
+      "кабель AB",
+      "кабель AB огнестойкий",
+      [{ key: "Огнестойкость", op: "eq", value: "Да", level: "A" }],
+    ),
+    true,
+  );
+  assertEquals(
+    selectionTargetExtensionIsCriterionBacked(
+      "светильник",
+      "уличный светильник",
+      [{ key: "Цвет", op: "eq", value: "чёрный", level: "A" }],
+    ),
+    false,
+  );
+  assertEquals(
+    selectionTargetExtensionIsCriterionBacked(
+      "светильник",
+      "уличный светильник",
+      [{ key: "Уличное исполнение", op: "eq", value: "Да", level: "B" }],
+    ),
+    false,
+  );
 });
 
 Deno.test("structured target promotes only its repeated class-defining advisory values", () => {
@@ -486,16 +653,24 @@ Deno.test("structured target promotes only its repeated class-defining advisory 
       application_context: ["наружное освещение улиц"],
     },
     [
-      { key: "Вид светильника", op: "eq", value: "для освещения улиц", level: "B" },
+      {
+        key: "Вид светильника",
+        op: "eq",
+        value: "для освещения улиц",
+        level: "B",
+      },
       { key: "Способ монтажа", op: "eq", value: "консольный", level: "B" },
       { key: "Степень защиты", op: "min", value: "65", level: "B" },
     ],
   );
-  assertEquals(promoted.criteria.map((criterion) => [criterion.key, criterion.level]), [
-    ["Вид светильника", "B"],
-    ["Способ монтажа", "A"],
-    ["Степень защиты", "B"],
-  ]);
+  assertEquals(
+    promoted.criteria.map((criterion) => [criterion.key, criterion.level]),
+    [
+      ["Вид светильника", "B"],
+      ["Способ монтажа", "A"],
+      ["Степень защиты", "B"],
+    ],
+  );
   assertEquals(promoted.promoted.map((criterion) => criterion.key), [
     "Способ монтажа",
   ]);
@@ -510,7 +685,11 @@ Deno.test("replacement application context cannot turn source identity into targ
     application_context: ["уличное освещение", "замена ДКУ-LED-03-100W ЭТФ"],
   };
   const facets = [
-    { key: "brand", caption: "Бренд", values: [{ value: "ЭТФ" }, { value: "Gauss" }] },
+    {
+      key: "brand",
+      caption: "Бренд",
+      values: [{ value: "ЭТФ" }, { value: "Gauss" }],
+    },
     {
       key: "name_kz",
       caption: "Наименование на казахском языке",
@@ -523,32 +702,49 @@ Deno.test("replacement application context cannot turn source identity into targ
     },
   ];
 
-  assertEquals(projectSelectionTargetFacetCriteria("светильник", target, facets), [{
-    key: "Способ монтажа",
-    op: "eq",
-    value: "консольный",
-    unit: undefined,
-    level: "A",
-  }]);
+  assertEquals(
+    projectSelectionTargetFacetCriteria("светильник", target, facets),
+    [{
+      key: "Способ монтажа",
+      op: "eq",
+      value: "консольный",
+      unit: undefined,
+      level: "A",
+    }],
+  );
 
   const promoted = promoteSelectionTargetBackingCriteria(
     "светильник",
     target,
     [
       { key: "Бренд", op: "eq", value: "ЭТФ", level: "B" },
-      { key: "Наименование на казахском языке", op: "eq", value: "50163/1 LED ақ", level: "B" },
+      {
+        key: "Наименование на казахском языке",
+        op: "eq",
+        value: "50163/1 LED ақ",
+        level: "B",
+      },
       { key: "Способ монтажа", op: "eq", value: "консольный", level: "B" },
     ],
   );
-  assertEquals(promoted.promoted.map((criterion) => criterion.key), ["Способ монтажа"]);
-  assertEquals(promoted.backing.map((criterion) => criterion.key), ["Способ монтажа"]);
+  assertEquals(promoted.promoted.map((criterion) => criterion.key), [
+    "Способ монтажа",
+  ]);
+  assertEquals(promoted.backing.map((criterion) => criterion.key), [
+    "Способ монтажа",
+  ]);
 });
 
 Deno.test("structured application context preserves a proven replacement suitability facet", () => {
   const promoted = promoteSelectionApplicationBackingCriteria(
     {
       product_class: "светильник",
-      application_context: ["уличное освещение", "консольный монтаж", "100 Вт", "LED"],
+      application_context: [
+        "уличное освещение",
+        "консольный монтаж",
+        "100 Вт",
+        "LED",
+      ],
     },
     [
       { key: "Мощность ламп, Вт", op: "eq", value: "100", level: "A" },
@@ -557,13 +753,18 @@ Deno.test("structured application context preserves a proven replacement suitabi
       { key: "Тип лампы", op: "eq", value: "LED", level: "A" },
     ],
   );
-  assertEquals(promoted.criteria.map((criterion) => [criterion.key, criterion.level]), [
-    ["Мощность ламп, Вт", "A"],
-    ["Способ монтажа", "A"],
-    ["Степень защиты, IP", "B"],
-    ["Тип лампы", "A"],
+  assertEquals(
+    promoted.criteria.map((criterion) => [criterion.key, criterion.level]),
+    [
+      ["Мощность ламп, Вт", "A"],
+      ["Способ монтажа", "A"],
+      ["Степень защиты, IP", "B"],
+      ["Тип лампы", "A"],
+    ],
+  );
+  assertEquals(promoted.promoted.map((criterion) => criterion.key), [
+    "Способ монтажа",
   ]);
-  assertEquals(promoted.promoted.map((criterion) => criterion.key), ["Способ монтажа"]);
   assertEquals(promoted.backing.map((criterion) => criterion.key), [
     "Мощность ламп, Вт",
     "Способ монтажа",
@@ -578,109 +779,186 @@ Deno.test("structured application context links inflected wording only to an exi
       application_context: ["уличное освещение", "100 Вт"],
     },
     [
-      { key: "Вид светильника", op: "eq", value: "для освещения улиц", level: "B" },
+      {
+        key: "Вид светильника",
+        op: "eq",
+        value: "для освещения улиц",
+        level: "B",
+      },
       { key: "Цвет корпуса", op: "eq", value: "чёрный", level: "B" },
     ],
   );
-  assertEquals(promoted.promoted.map((criterion) => criterion.key), ["Вид светильника"]);
-  assertEquals(promoted.criteria.map((criterion) => [criterion.key, criterion.level]), [
-    ["Вид светильника", "A"],
-    ["Цвет корпуса", "B"],
+  assertEquals(promoted.promoted.map((criterion) => criterion.key), [
+    "Вид светильника",
   ]);
+  assertEquals(
+    promoted.criteria.map((criterion) => [criterion.key, criterion.level]),
+    [
+      ["Вид светильника", "A"],
+      ["Цвет корпуса", "B"],
+    ],
+  );
 });
 
 Deno.test("a compact application constraint compiles through one unique live facet value", () => {
-  assertEquals(projectSelectionApplicationFacetCriteria(
-    {
-      product_class: "светодиодный светильник",
-      application_context: ["уличный", "консольный", "100 Вт"],
-    },
-    [
+  assertEquals(
+    projectSelectionApplicationFacetCriteria(
       {
-        key: "mount",
-        caption: "Способ монтажа",
-        values: [{ value: "консольный" }, { value: "потолочный" }],
+        product_class: "светодиодный светильник",
+        application_context: ["уличный", "консольный", "100 Вт"],
       },
-      {
-        key: "brand",
-        caption: "Бренд",
-        values: [{ value: "уличный" }, { value: "ЭТФ" }],
-      },
-      {
-        key: "power",
-        caption: "Мощность",
-        values: [{ value: "100" }, { value: "120" }],
-      },
-    ],
-  ), [{
-    key: "Способ монтажа",
-    op: "eq",
-    value: "консольный",
-    unit: undefined,
-    level: "A",
-  }]);
+      [
+        {
+          key: "mount",
+          caption: "Способ монтажа",
+          values: [{ value: "консольный" }, { value: "потолочный" }],
+        },
+        {
+          key: "brand",
+          caption: "Бренд",
+          values: [{ value: "уличный" }, { value: "ЭТФ" }],
+        },
+        {
+          key: "power",
+          caption: "Мощность",
+          values: [{ value: "100" }, { value: "120" }],
+        },
+      ],
+    ),
+    [{
+      key: "Способ монтажа",
+      op: "eq",
+      value: "консольный",
+      unit: undefined,
+      level: "A",
+    }],
+  );
 });
 
 Deno.test("customer-owned application wording excludes trailing budget commands", () => {
   assertEquals(
-    extractCustomerApplicationContexts("Покажи светильники Philips для офиса до 20000 тенге"),
+    extractCustomerApplicationContexts(
+      "Покажи светильники Philips для офиса до 20000 тенге",
+    ),
     ["офиса"],
   );
   assertEquals(
-    extractCustomerApplicationContexts("Какой ИБП подойдёт для газового котла?"),
+    extractCustomerApplicationContexts(
+      "Какой ИБП подойдёт для газового котла?",
+    ),
     ["газового котла"],
+  );
+  assertEquals(
+    extractCustomerApplicationContexts(
+      "Подбери несколько самых недорогих офисных светильников Philips",
+      "светильники",
+    ),
+    ["офисных"],
   );
 });
 
 Deno.test("customer application compiles only through a unique live non-identity facet", () => {
-  assertEquals(projectCustomerApplicationFacetCriteria(
-    "светильник",
-    "Покажи светильники Philips для офиса",
-    [
-      { key: "use", caption: "Назначение", values: [{ value: "офисно-административное освещение" }, { value: "промышленный" }] },
-      { key: "brand", caption: "Бренд", values: [{ value: "офис" }, { value: "Philips" }] },
-    ],
-  ), [{
-    key: "Назначение",
-    op: "eq",
-    value: "офисно-административное освещение",
-    unit: undefined,
-    level: "A",
-    evidence: "user_explicit",
-  }]);
+  assertEquals(
+    projectCustomerApplicationFacetCriteria(
+      "светильник",
+      "Покажи светильники Philips для офиса",
+      [
+        {
+          key: "use",
+          caption: "Назначение",
+          values: [{ value: "офисно-административное освещение" }, {
+            value: "промышленный",
+          }],
+        },
+        {
+          key: "brand",
+          caption: "Бренд",
+          values: [{ value: "офис" }, { value: "Philips" }],
+        },
+      ],
+    ),
+    [{
+      key: "Назначение",
+      op: "eq",
+      value: "офисно-административное освещение",
+      unit: undefined,
+      level: "A",
+      evidence: "user_explicit",
+    }],
+  );
 
-  assertEquals(projectCustomerApplicationFacetCriteria(
-    "светильник",
-    "Покажи светильники для офиса",
-    [{ key: "use", caption: "Назначение", values: [{ value: "офис" }, { value: "для офиса" }] }],
-  ), []);
+  assertEquals(
+    projectCustomerApplicationFacetCriteria(
+      "светильник",
+      "Покажи светильники для офиса",
+      [{
+        key: "use",
+        caption: "Назначение",
+        values: [{ value: "офис" }, { value: "для офиса" }],
+      }],
+    ),
+    [],
+  );
 
-  assertEquals(projectCustomerApplicationFacetCriteria(
-    "светильник",
-    "Покажи светильники для офиса",
-    [{ key: "use", caption: "Назначение", values: [{ value: "не для офиса" }] }],
-  ), []);
+  assertEquals(
+    projectCustomerApplicationFacetCriteria(
+      "светильник",
+      "Покажи светильники для офиса",
+      [{
+        key: "use",
+        caption: "Назначение",
+        values: [{ value: "не для офиса" }],
+      }],
+    ),
+    [],
+  );
+
+  assertEquals(
+    projectCustomerApplicationFacetCriteria(
+      "светильники",
+      "Подбери несколько самых недорогих офисных светильников Philips",
+      [{
+        key: "use",
+        caption: "Вид светильника",
+        values: [
+          { value: "офисно-административное освещение" },
+          { value: "промышленное освещение" },
+        ],
+      }],
+    ),
+    [{
+      key: "Вид светильника",
+      op: "eq",
+      value: "офисно-административное освещение",
+      unit: undefined,
+      level: "A",
+      evidence: "user_explicit",
+    }],
+  );
 });
 
 Deno.test("application projection cannot derive a subtype from a repeated class noun", () => {
-  assertEquals(projectSelectionApplicationFacetCriteria(
-    {
-      product_class: "generic connector double",
-      application_context: ["double connector SERIESX"],
-    },
-    [
+  assertEquals(
+    projectSelectionApplicationFacetCriteria(
       {
-        key: "kind",
-        caption: "Connector kind",
-        values: [{ value: "connector media" }, { value: "connector power" }],
+        product_class: "generic connector double",
+        application_context: ["double connector SERIESX"],
       },
-      {
-        key: "collection",
-        caption: "Collection",
-        values: [{ value: "SERIESX" }],
-      },
-    ],
-  ), []);
+      [
+        {
+          key: "kind",
+          caption: "Connector kind",
+          values: [{ value: "connector media" }, { value: "connector power" }],
+        },
+        {
+          key: "collection",
+          caption: "Collection",
+          values: [{ value: "SERIESX" }],
+        },
+      ],
+    ),
+    [],
+  );
 });
 
 Deno.test("application context never promotes source identity fields", () => {
@@ -695,12 +973,17 @@ Deno.test("application context never promotes source identity fields", () => {
       { key: "Способ монтажа", op: "eq", value: "консольный", level: "B" },
     ],
   );
-  assertEquals(promoted.promoted.map((criterion) => criterion.key), ["Способ монтажа"]);
-  assertEquals(promoted.criteria.map((criterion) => [criterion.key, criterion.level]), [
-    ["Бренд", "B"],
-    ["Модель", "B"],
-    ["Способ монтажа", "A"],
+  assertEquals(promoted.promoted.map((criterion) => criterion.key), [
+    "Способ монтажа",
   ]);
+  assertEquals(
+    promoted.criteria.map((criterion) => [criterion.key, criterion.level]),
+    [
+      ["Бренд", "B"],
+      ["Модель", "B"],
+      ["Способ монтажа", "A"],
+    ],
+  );
 });
 
 Deno.test("a mandatory live facet rejects an explicit sibling value in the visible title", () => {
@@ -714,7 +997,9 @@ Deno.test("a mandatory live facet rejects an explicit sibling value in the visib
     [{
       key: "mount",
       caption: "Способ монтажа",
-      values: [{ value: "консольный" }, { value: "потолочный" }, { value: "подвесной" }],
+      values: [{ value: "консольный" }, { value: "потолочный" }, {
+        value: "подвесной",
+      }],
     }],
   );
   assertEquals(result.products.map((item) => item.id), ["console", "neutral"]);
@@ -723,16 +1008,30 @@ Deno.test("a mandatory live facet rejects an explicit sibling value in the visib
 
 Deno.test("advisory and identity facets cannot create visible-title contradiction gates", () => {
   const products = [product("candidate", "Светильник потолочный ЭТФ")];
-  assertEquals(filterProductsByMandatoryFacetTitleContradictions(
-    products,
-    [{ key: "Способ монтажа", op: "eq", value: "консольный", level: "B" }],
-    [{ key: "mount", caption: "Способ монтажа", values: [{ value: "консольный" }, { value: "потолочный" }] }],
-  ).rejected_ids, []);
-  assertEquals(filterProductsByMandatoryFacetTitleContradictions(
-    products,
-    [{ key: "Бренд", op: "eq", value: "Другой", level: "A" }],
-    [{ key: "brand", caption: "Бренд", values: [{ value: "Другой" }, { value: "ЭТФ" }] }],
-  ).rejected_ids, []);
+  assertEquals(
+    filterProductsByMandatoryFacetTitleContradictions(
+      products,
+      [{ key: "Способ монтажа", op: "eq", value: "консольный", level: "B" }],
+      [{
+        key: "mount",
+        caption: "Способ монтажа",
+        values: [{ value: "консольный" }, { value: "потолочный" }],
+      }],
+    ).rejected_ids,
+    [],
+  );
+  assertEquals(
+    filterProductsByMandatoryFacetTitleContradictions(
+      products,
+      [{ key: "Бренд", op: "eq", value: "Другой", level: "A" }],
+      [{
+        key: "brand",
+        caption: "Бренд",
+        values: [{ value: "Другой" }, { value: "ЭТФ" }],
+      }],
+    ).rejected_ids,
+    [],
+  );
 });
 
 Deno.test("an unrelated advisory value cannot strengthen a structured target", () => {
@@ -747,106 +1046,155 @@ Deno.test("an unrelated advisory value cannot strengthen a structured target", (
 });
 
 Deno.test("later scalar normalization cannot overwrite a target-backing facet value", () => {
-  assertEquals(restoreSelectionTargetBackingCriteria(
+  assertEquals(
+    restoreSelectionTargetBackingCriteria(
+      [
+        { key: "Мощность", op: "eq", value: "100", level: "A" },
+        { key: "Способ монтажа", op: "eq", value: 1, level: "B" },
+      ],
+      [{ key: "Способ монтажа", op: "eq", value: "консольный", level: "A" }],
+    ),
     [
       { key: "Мощность", op: "eq", value: "100", level: "A" },
-      { key: "Способ монтажа", op: "eq", value: 1, level: "B" },
+      { key: "Способ монтажа", op: "eq", value: "консольный", level: "A" },
     ],
-    [{ key: "Способ монтажа", op: "eq", value: "консольный", level: "A" }],
-  ), [
-    { key: "Мощность", op: "eq", value: "100", level: "A" },
-    { key: "Способ монтажа", op: "eq", value: "консольный", level: "A" },
-  ]);
+  );
 });
 
 Deno.test("a structured class refinement compiles into one literal live facet value", () => {
-  assertEquals(projectSelectionTargetFacetCriteria(
-    "светильник",
-    {
-      product_class: "консольный уличный светильник",
-      application_context: ["наружное освещение"],
-    },
-    [
+  assertEquals(
+    projectSelectionTargetFacetCriteria(
+      "светильник",
       {
-        key: "mount",
-        caption: "Способ монтажа",
-        unit: null,
-        values: [{ value: "консольный" }, { value: "потолочный" }],
+        product_class: "консольный уличный светильник",
+        application_context: ["наружное освещение"],
       },
-      {
-        key: "kind",
-        caption: "Вид",
-        unit: null,
-        values: [{ value: "настольные и напольные" }, { value: "для освещения улиц" }],
-      },
-    ],
-  ), [{
-    key: "Способ монтажа",
-    op: "eq",
-    value: "консольный",
-    unit: undefined,
-    level: "A",
-  }]);
+      [
+        {
+          key: "mount",
+          caption: "Способ монтажа",
+          unit: null,
+          values: [{ value: "консольный" }, { value: "потолочный" }],
+        },
+        {
+          key: "kind",
+          caption: "Вид",
+          unit: null,
+          values: [{ value: "настольные и напольные" }, {
+            value: "для освещения улиц",
+          }],
+        },
+      ],
+    ),
+    [{
+      key: "Способ монтажа",
+      op: "eq",
+      value: "консольный",
+      unit: undefined,
+      level: "A",
+    }],
+  );
 });
 
 Deno.test("ambiguous or undeclared live facet values cannot define the target", () => {
-  assertEquals(projectSelectionTargetFacetCriteria(
-    "устройство",
-    { product_class: "настенное устройство", application_context: [] },
-    [{
-      key: "mount",
-      caption: "Монтаж",
-      values: [{ value: "настенный" }, { value: "настенное" }],
-    }],
-  ), []);
-  assertEquals(projectSelectionTargetFacetCriteria(
-    "устройство",
-    { product_class: "настенное устройство", application_context: [] },
-    [{ key: "color", caption: "Цвет", values: [{ value: "чёрный" }] }],
-  ), []);
+  assertEquals(
+    projectSelectionTargetFacetCriteria(
+      "устройство",
+      { product_class: "настенное устройство", application_context: [] },
+      [{
+        key: "mount",
+        caption: "Монтаж",
+        values: [{ value: "настенный" }, { value: "настенное" }],
+      }],
+    ),
+    [],
+  );
+  assertEquals(
+    projectSelectionTargetFacetCriteria(
+      "устройство",
+      { product_class: "настенное устройство", application_context: [] },
+      [{ key: "color", caption: "Цвет", values: [{ value: "чёрный" }] }],
+    ),
+    [],
+  );
 });
 
 Deno.test("an exact named entity may discard a model-only class adjective but never switch siblings", () => {
-  assertEquals(selectionTargetMayUseGroundedBase(
-    "розетка",
-    "розетка электрическая",
-    [],
-    { replacement: false, exact_named_entity_grounded: true },
-  ), true);
-  assertEquals(selectionTargetMayUseGroundedBase(
-    "розетка",
-    "выключатель электрический",
-    [],
-    { replacement: false, exact_named_entity_grounded: true },
-  ), false);
-  assertEquals(selectionTargetMayUseGroundedBase(
-    "розетка",
-    "розетка электрическая",
-    [],
-    { replacement: false, exact_named_entity_grounded: false },
-  ), false);
+  assertEquals(
+    selectionTargetMayUseGroundedBase(
+      "розетка",
+      "розетка электрическая",
+      [],
+      { replacement: false, exact_named_entity_grounded: true },
+    ),
+    true,
+  );
+  assertEquals(
+    selectionTargetMayUseGroundedBase(
+      "розетка",
+      "выключатель электрический",
+      [],
+      { replacement: false, exact_named_entity_grounded: true },
+    ),
+    false,
+  );
+  assertEquals(
+    selectionTargetMayUseGroundedBase(
+      "розетка",
+      "розетка электрическая",
+      [],
+      { replacement: false, exact_named_entity_grounded: false },
+    ),
+    false,
+  );
 });
 
 Deno.test("an independently grounded live category may discard a model-only class adjective but never switch siblings", () => {
-  assertEquals(selectionTargetMayUseGroundedBase(
-    "Удлинители",
-    "электрический удлинитель",
-    [],
-    { replacement: false, exact_named_entity_grounded: false, live_category_grounded: true },
-  ), true);
-  assertEquals(selectionTargetMayUseGroundedBase(
-    "Розетки",
-    "электрический выключатель",
-    [],
-    { replacement: false, exact_named_entity_grounded: false, live_category_grounded: true },
-  ), false);
+  assertEquals(
+    selectionTargetMayUseGroundedBase(
+      "Удлинители",
+      "электрический удлинитель",
+      [],
+      {
+        replacement: false,
+        exact_named_entity_grounded: false,
+        live_category_grounded: true,
+      },
+    ),
+    true,
+  );
+  assertEquals(
+    selectionTargetMayUseGroundedBase(
+      "Розетки",
+      "электрический выключатель",
+      [],
+      {
+        replacement: false,
+        exact_named_entity_grounded: false,
+        live_category_grounded: true,
+      },
+    ),
+    false,
+  );
 });
 
 Deno.test("a failed render cannot replace an already grounded selection target", () => {
-  assertEquals(advanceSelectionTarget("Светильники", "Потолочные светильники", 0), "Светильники");
-  assertEquals(advanceSelectionTarget("Светильники", "Потолочные светильники", 3), "Потолочные светильники");
-  assertEquals(advanceSelectionTarget("ИБП", "Стабилизатор напряжения", 4), "ИБП");
-  assertEquals(advanceSelectionTarget(null, "Потолочные светильники", 0), "Потолочные светильники");
+  assertEquals(
+    advanceSelectionTarget("Светильники", "Потолочные светильники", 0),
+    "Светильники",
+  );
+  assertEquals(
+    advanceSelectionTarget("Светильники", "Потолочные светильники", 3),
+    "Потолочные светильники",
+  );
+  assertEquals(
+    advanceSelectionTarget("ИБП", "Стабилизатор напряжения", 4),
+    "ИБП",
+  );
+  assertEquals(
+    advanceSelectionTarget(null, "Потолочные светильники", 0),
+    "Потолочные светильники",
+  );
 });
 
 Deno.test("terminal recovery keeps a grounded refinement but rejects a sibling hint", () => {
@@ -862,26 +1210,50 @@ Deno.test("terminal recovery keeps a grounded refinement but rejects a sibling h
 });
 
 Deno.test("a later class may refine but never replace the grounded base", () => {
-  assertEquals(selectionTargetPreservesGroundedBase("автомат", "автоматический выключатель"), true);
-  assertEquals(selectionTargetPreservesGroundedBase("лампа", "LED-лампа KORN"), true);
-  assertEquals(selectionTargetPreservesGroundedBase("ИБП", "стабилизатор напряжения"), false);
-  assertEquals(selectionTargetPreservesGroundedBase("потолочный светильник", "светильник"), false);
+  assertEquals(
+    selectionTargetPreservesGroundedBase(
+      "автомат",
+      "автоматический выключатель",
+    ),
+    true,
+  );
+  assertEquals(
+    selectionTargetPreservesGroundedBase("лампа", "LED-лампа KORN"),
+    true,
+  );
+  assertEquals(
+    selectionTargetPreservesGroundedBase("ИБП", "стабилизатор напряжения"),
+    false,
+  );
+  assertEquals(
+    selectionTargetPreservesGroundedBase("потолочный светильник", "светильник"),
+    false,
+  );
 });
 
 Deno.test("only an explicit parenthetical alias may expand a frozen shorthand", () => {
-  assertEquals(selectionTargetAliasExpansionIsGrounded(
-    "трубка ТТУ",
+  assertEquals(
+    selectionTargetAliasExpansionIsGrounded(
+      "трубка ТТУ",
+      "трубка термоусаживаемая",
+      "Нужна трубка термоусаживаемая (ТТУ) для кабеля.",
+      "Трубки термоусаживаемые",
+    ),
+    true,
+  );
+  assertEquals(
+    selectionTargetAliasExpansionIsGrounded(
+      "ИБП",
+      "стабилизатор напряжения",
+      "Подбираю стабилизатор напряжения (ИБП).",
+      "Стабилизаторы напряжения",
+    ),
+    false,
+  );
+  assertEquals(
+    advanceSelectionTarget("трубка ТТУ", "трубка термоусаживаемая", 2, true),
     "трубка термоусаживаемая",
-    "Нужна трубка термоусаживаемая (ТТУ) для кабеля.",
-    "Трубки термоусаживаемые",
-  ), true);
-  assertEquals(selectionTargetAliasExpansionIsGrounded(
-    "ИБП",
-    "стабилизатор напряжения",
-    "Подбираю стабилизатор напряжения (ИБП).",
-    "Стабилизаторы напряжения",
-  ), false);
-  assertEquals(advanceSelectionTarget("трубка ТТУ", "трубка термоусаживаемая", 2, true), "трубка термоусаживаемая");
+  );
 });
 
 Deno.test("a single-token class must be visible in the final card title", () => {
@@ -889,14 +1261,103 @@ Deno.test("a single-token class must be visible in the final card title", () => 
     product("visible", "Прожектор ALPHA", "Прожекторы"),
     product("hidden", "Устройство ALPHA 50 Вт", "Прожекторы"),
   ];
-  assertEquals(verifySelectionTarget("прожектор", products).passed_ids, ["visible", "hidden"]);
-  assertEquals(verifySelectionTargetWithVisibleTitle("прожектор", products).passed_ids, ["visible"]);
+  assertEquals(verifySelectionTarget("прожектор", products).passed_ids, [
+    "visible",
+    "hidden",
+  ]);
+  assertEquals(
+    verifySelectionTargetWithVisibleTitle("прожектор", products).passed_ids,
+    ["visible"],
+  );
+});
+
+Deno.test("an exact live leaf can prove a one-token class only behind a complete passed criteria contract", () => {
+  const products = [
+    product("exact-leaf", "Катушка УК30 Professional", "Удлинители"),
+    product("visible", "Удлинитель 30 м", "Удлинители"),
+    product("wrong-leaf", "Катушка УК30 Professional", "Катушки кабельные"),
+  ];
+  const mandatory = [
+    {
+      key: "Длина кабеля, м",
+      op: "eq" as const,
+      value: "30",
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+    },
+    {
+      key: "Номинальный ток, А",
+      op: "eq" as const,
+      value: "16",
+      level: "A" as const,
+      evidence: "derived_required" as const,
+    },
+  ];
+  const report = verifySelectionTargetWithExactLiveCategoryContract({
+    target: "удлинитель",
+    products,
+    live_category: "Удлинители",
+    mandatory_criteria: mandatory,
+    criteria_passed_ids: ["exact-leaf", "visible", "wrong-leaf"],
+    contract_complete: true,
+  });
+  assertEquals(report.passed_ids, ["exact-leaf", "visible"]);
+  assertEquals(report.rejected_ids, ["wrong-leaf"]);
+});
+
+Deno.test("live taxonomy never bypasses title identity without complete and passed criteria proof", () => {
+  const products = [
+    product("exact-leaf", "Катушка УК30 Professional", "Удлинители"),
+    product("visible", "Удлинитель 30 м", "Удлинители"),
+  ];
+  const mandatory = [
+    {
+      key: "Длина кабеля, м",
+      op: "eq" as const,
+      value: "30",
+      level: "A" as const,
+      evidence: "user_explicit" as const,
+    },
+  ];
+  for (
+    const input of [
+      {
+        mandatory_criteria: mandatory,
+        criteria_passed_ids: ["visible"],
+        contract_complete: true,
+      },
+      {
+        mandatory_criteria: mandatory,
+        criteria_passed_ids: ["exact-leaf", "visible"],
+        contract_complete: false,
+      },
+      {
+        mandatory_criteria: [],
+        criteria_passed_ids: ["exact-leaf", "visible"],
+        contract_complete: true,
+      },
+    ]
+  ) {
+    assertEquals(
+      verifySelectionTargetWithExactLiveCategoryContract({
+        target: "удлинитель",
+        products,
+        live_category: "Удлинители",
+        ...input,
+      }).passed_ids,
+      ["visible"],
+    );
+  }
 });
 
 Deno.test("a visible named entity plus exact live category proves a class omitted from the title", () => {
   const products = [
     product("grounded", "Гармония, механизм с накладкой", "Розетки"),
-    product("wrong-series", "Другая коллекция, механизм с накладкой", "Розетки"),
+    product(
+      "wrong-series",
+      "Другая коллекция, механизм с накладкой",
+      "Розетки",
+    ),
     product("wrong-class", "Гармония, механизм с накладкой", "Выключатели"),
   ];
   const report = verifySelectionTargetWithNamedEntityCategory({

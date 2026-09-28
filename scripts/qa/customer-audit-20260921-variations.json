@@ -1,0 +1,183 @@
+{
+  "schema_version": 1,
+  "source_suite": "customer-audit-20260921-cases.json",
+  "variants": [
+    {
+      "case_id": "audit-01-vvg-3x1_5-cheapest",
+      "id": "word-order-and-cyrillic-size",
+      "messages": ["Найди самый дешёвый кабель ВВГ 3х1,5"]
+    },
+    {
+      "case_id": "audit-02-topic-boundary-cable-to-motion-light",
+      "id": "rephrased-independent-task",
+      "messages": [
+        "Найди самый дешёвый кабель ВВГ 3×1,5",
+        "Подбери несколько бытовых светильников с датчиком движения до 4 000 тенге",
+        "Подбери несколько бытовых светильников с датчиком движения до 4 000 тенге"
+      ]
+    },
+    {
+      "case_id": "audit-03-living-room-25m2",
+      "id": "area-unit-and-word-order",
+      "messages": ["Чем заменить люстру: нужен светодиодный светильник для гостиной площадью 25 кв. м?"]
+    },
+    {
+      "case_id": "audit-04-yard-floodlight-35m2",
+      "id": "explicit-installation-height",
+      "messages": [
+        "Подберите варианты уличного прожектора для двора частного дома",
+        "Площадь 35 м², высота установки около 1,5 м"
+      ]
+    },
+    {
+      "case_id": "audit-05-breaker-1p-16a-c-under-1000",
+      "id": "compact-c16",
+      "messages": ["Найди однополюсный автомат C16 не дороже 1 000 тенге"]
+    },
+    {
+      "case_id": "audit-06-corn-e14",
+      "id": "latin-series-with-russian-alias",
+      "messages": ["Нужна лампа CORN E14, то есть кукуруза"]
+    },
+    {
+      "case_id": "audit-07-vvg-3x1_5-all",
+      "id": "exhaustive-command-first",
+      "messages": ["Покажи все кабели ВВГ 3х1,5, которые есть"]
+    },
+    {
+      "case_id": "audit-08-gx53-lamp-analogs",
+      "id": "quoted-source-product",
+      "messages": ["Найди аналоги лампы «Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK»"]
+    },
+    {
+      "case_id": "audit-09-breaker-25a-apartment",
+      "id": "compact-followup-specification",
+      "messages": [
+        "Что предложите из автоматов на 25 А для квартиры?",
+        "Нужен 1P, характеристика C"
+      ]
+    },
+    {
+      "case_id": "audit-10-pump-cable-7kw",
+      "id": "load-before-environment",
+      "messages": [
+        "Подбери кабель для насоса",
+        "Насос поверхностный, 7 кВт, стационарно на улице"
+      ]
+    },
+    {
+      "case_id": "audit-11-motor-breaker-3kw",
+      "id": "natural-phase-answer",
+      "messages": [
+        "Нужен автомат для асинхронного двигателя мощностью 3 кВт",
+        "Питание трёхфазное"
+      ]
+    },
+    {
+      "case_id": "audit-12-air-conditioner-cable-3kw",
+      "id": "selection-question",
+      "messages": ["Какой силовой кабель взять для кондиционера на 3 кВт?"]
+    },
+    {
+      "case_id": "audit-13-boiler-breaker-trip",
+      "id": "trip-symptom-first",
+      "messages": [
+        "При запуске бойлера срабатывает автомат. Почему?",
+        "Бойлер 5 кВт, дифавтомата нет"
+      ]
+    },
+    {
+      "case_id": "audit-14-underground-power-cable",
+      "id": "ground-wording",
+      "messages": [
+        "Какой кабель используют под землёй?",
+        "Прокладка будет напрямую в грунте"
+      ]
+    },
+    {
+      "case_id": "audit-15-analog-cctv-outdoor-cable",
+      "id": "camera-and-route-wording",
+      "messages": [
+        "Подберите кабель для камер видеонаблюдения",
+        "Система аналоговая, улица, длина трассы 30 м"
+      ]
+    },
+    {
+      "case_id": "audit-16-warm-e27-lamps",
+      "id": "compact-led-specification",
+      "messages": ["Покажи LED-лампы E27 с тёплым светом 3000 K"]
+    },
+    {
+      "case_id": "audit-17-parking-floodlights",
+      "id": "geometry-with-punctuation",
+      "messages": [
+        "Какие прожекторы выбрать для парковки?",
+        "Площадь — 500 м², монтаж на высоте 3 м"
+      ]
+    },
+    {
+      "case_id": "audit-18-acti9-c16-analogs",
+      "id": "short-pole-followup",
+      "messages": [
+        "Подберите аналог Schneider Electric Acti9 C16",
+        "Однополюсный, покажи варианты из каталога"
+      ]
+    },
+    {
+      "case_id": "audit-19-apartment-breaker-7kw",
+      "id": "explicit-single-phase",
+      "messages": ["Какой автомат поставить в однофазной квартире при нагрузке 7 кВт?"]
+    },
+    {
+      "case_id": "audit-20-vvgng-vs-nym",
+      "id": "comparison-command",
+      "messages": ["Сравни ВВГнг и NYM: что лучше для квартирной проводки?"]
+    },
+    {
+      "case_id": "audit-21-floodlight-1000-lumen",
+      "id": "spaced-lumen-unit",
+      "messages": ["Сколько ватт обычно у LED-прожектора на 1 000 лм и какую площадь он освещает?"]
+    },
+    {
+      "case_id": "audit-22-voltage-stabilizer-170v",
+      "id": "voltage-sag-wording",
+      "messages": ["Посоветуйте стабилизатор для дома: входное напряжение проседает до 170 В"]
+    },
+    {
+      "case_id": "audit-23-welding-extension-30m",
+      "id": "length-before-purpose",
+      "messages": ["Нужен уличный удлинитель 30 м для сварочного аппарата. Подбери варианты"]
+    },
+    {
+      "case_id": "audit-24-three-phase-motor-on-220v",
+      "id": "how-to-question",
+      "messages": ["Как подключить трёхфазный двигатель к бытовой однофазной сети 220 В?"]
+    },
+    {
+      "case_id": "audit-25-black-hidden-sockets-white-followup",
+      "id": "installation-synonym-and-elliptical-color",
+      "messages": [
+        "Покажи чёрные розетки для скрытой установки",
+        "А белого цвета есть?"
+      ]
+    },
+    {
+      "case_id": "audit-26-philips-office-cheapest",
+      "id": "cardinality-before-price",
+      "messages": ["Подбери несколько самых недорогих офисных светильников Philips"],
+      "expect_overrides": [{
+        "require_result_cardinality": {
+          "target": 5,
+          "minimum": 3,
+          "mode": "alternatives",
+          "explicit": true
+        }
+      }]
+    },
+    {
+      "case_id": "audit-27-house-panel-180m2",
+      "id": "panel-planning-wording",
+      "messages": ["Сколько автоматов предусмотреть в щите дома площадью 180 м²?"]
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { DEFAULT_ENDPOINT, evaluate, fetchAcceptanceTurn, parseSse, resolveEndpoint, resolveExpectations } from './run-customer-acceptance.mjs';
+import { DEFAULT_ENDPOINT, evaluate, fetchAcceptanceTurn, parseSse, resolveCaseExecutions, resolveEndpoint, resolveExpectations, selectCaseExecutions } from './run-customer-acceptance.mjs';
 
 function data(payload) {
   return `data: ${JSON.stringify(payload)}`;
@@ -30,6 +30,67 @@ test('suite defaults are inherited and explicit turn expectations win', () => {
   assert.deepEqual(
     resolveExpectations({ max_duration_ms: 30_000, max_products: 5 }, { max_products: 1 }),
     { max_duration_ms: 30_000, max_products: 1 },
+  );
+});
+
+test('case variations reuse turn contracts without changing the base execution', () => {
+  const testCase = {
+    id: 'audit-example',
+    turns: [
+      { message: 'base first', expect: { max_products: 0 } },
+      { message: 'base second', expect: { min_products: 1 } },
+    ],
+  };
+  const executions = resolveCaseExecutions(testCase, [{
+    case_id: 'audit-example',
+    id: 'rephrased',
+    messages: ['variant first', 'variant second'],
+  }]);
+  assert.deepEqual(executions, [
+    { id: 'base', messages: ['base first', 'base second'] },
+    { id: 'rephrased', messages: ['variant first', 'variant second'] },
+  ]);
+});
+
+test('case variation must preserve the source turn count', () => {
+  assert.throws(
+    () => resolveCaseExecutions(
+      { id: 'audit-example', turns: [{ message: 'first' }, { message: 'second' }] },
+      [{ case_id: 'audit-example', id: 'broken', messages: ['only one'] }],
+    ),
+    /one message per turn/,
+  );
+});
+
+test('case variation may override only the expectations changed by its meaning', () => {
+  const testCase = {
+    id: 'audit-example',
+    turns: [{ message: 'show products', expect: { min_products: 1, require_result_cardinality: { target: 4 } } }],
+  };
+  assert.deepEqual(resolveCaseExecutions(testCase, [{
+    case_id: 'audit-example',
+    id: 'explicit-many',
+    messages: ['show several products'],
+    expect_overrides: [{ require_result_cardinality: { target: 5, explicit: true } }],
+  }]), [
+    { id: 'base', messages: ['show products'] },
+    {
+      id: 'explicit-many',
+      messages: ['show several products'],
+      expect_overrides: [{ require_result_cardinality: { target: 5, explicit: true } }],
+    },
+  ]);
+});
+
+test('one variation can be selected without rerunning the base case', () => {
+  const testCase = { id: 'audit-example', turns: [{ message: 'base' }] };
+  const variants = [{ case_id: 'audit-example', id: 'compact', messages: ['compact'] }];
+  assert.deepEqual(selectCaseExecutions(testCase, variants, ['compact']), [
+    { id: 'compact', messages: ['compact'] },
+  ]);
+  assert.throws(
+    () => selectCaseExecutions(testCase, variants, ['missing']),
+    /unknown variation missing/,
   );
 });
 

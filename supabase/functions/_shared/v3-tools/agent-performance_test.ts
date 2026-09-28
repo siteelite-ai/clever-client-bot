@@ -1,33 +1,140 @@
-import { assert, assertEquals, assertLess, assertStringIncludes } from "https://deno.land/std@0.224.0/assert/mod.ts";
+import {
+  assert,
+  assertEquals,
+  assertLess,
+  assertStringIncludes,
+} from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   boundedAgentStepTimeout,
   buildInquiryKnowledgeSynthesisMessages,
+  canFinalizeTimedOutAgentStep,
   compactCatalogResultForLlm,
   deterministicInitialDiscoveryToolCall,
+  isServerCompiledInitialDiscoveryCall,
   establishesCatalogAttempt,
   forcedToolNameForAgentPhase,
   hasActionableSelectionReasoning,
-  isToolAllowedInAgentPhase,
   isGroundedToolCallAllowed,
+  isToolAllowedInAgentPhase,
   nextAgentPhase,
+  requiresCatalogPlanningBudget,
   resolveTerminalLexicalRecoverySource,
+  shouldAllowCorrectiveDiscovery,
+  shouldAttemptTerminalLexicalRecovery,
+  shouldContinueSelectionUntilCatalogAttempt,
   shouldDeferInquiryIntro,
   shouldDeferNoProgressForKnowledge,
+  shouldFinalizeBeforeRemoteAgentStep,
   shouldFinalizeInquiryFromKnowledge,
   shouldRecoverInquiryNoProgressWithKnowledge,
   shouldRequestReasoningOnlyAfterIncompleteSearch,
-  shouldContinueSelectionUntilCatalogAttempt,
-  shouldAttemptTerminalLexicalRecovery,
-  shouldAllowCorrectiveDiscovery,
   toolNamesForAgentPhase,
 } from "./agent-performance.ts";
 import type { ProductRef } from "./types.ts";
 
 Deno.test("agent deadline: remote steps are bounded and reserve finalization time", () => {
   assertEquals(boundedAgentStepTimeout(30_000, 20_000, 105_000, 5_000), 30_000);
-  assertEquals(boundedAgentStepTimeout(110_000, 90_000, 105_000, 5_000), 15_000);
+  assertEquals(
+    boundedAgentStepTimeout(110_000, 90_000, 105_000, 5_000),
+    15_000,
+  );
   assertEquals(boundedAgentStepTimeout(30_000, 100_001, 105_000, 5_000), null);
   assertEquals(boundedAgentStepTimeout(30_000, 105_000, 105_000, 5_000), null);
+});
+
+Deno.test("agent timeout: deterministic finalization requires completed catalog evidence", () => {
+  assertEquals(
+    canFinalizeTimedOutAgentStep({
+      catalogLookupCompleted: false,
+      productsRendered: 0,
+      requiredReasoningPending: false,
+    }),
+    false,
+  );
+  assertEquals(
+    canFinalizeTimedOutAgentStep({
+      catalogLookupCompleted: true,
+      productsRendered: 0,
+      requiredReasoningPending: false,
+    }),
+    true,
+  );
+  assertEquals(
+    canFinalizeTimedOutAgentStep({
+      catalogLookupCompleted: false,
+      productsRendered: 2,
+      requiredReasoningPending: false,
+    }),
+    true,
+  );
+  assertEquals(
+    canFinalizeTimedOutAgentStep({
+      catalogLookupCompleted: true,
+      productsRendered: 2,
+      requiredReasoningPending: true,
+    }),
+    false,
+  );
+});
+
+Deno.test("agent deadline: selection search planning is a required bounded step", () => {
+  assert(requiresCatalogPlanningBudget({
+    intentMode: "select",
+    phase: "search_after_discovery",
+    catalogLookupCompleted: false,
+    requiredReasoningPending: false,
+  }));
+  assert(
+    !requiresCatalogPlanningBudget({
+      intentMode: "select",
+      phase: "search_after_discovery",
+      catalogLookupCompleted: true,
+      requiredReasoningPending: false,
+    }),
+  );
+  assert(
+    !requiresCatalogPlanningBudget({
+      intentMode: "select",
+      phase: "search_after_discovery",
+      catalogLookupCompleted: false,
+      requiredReasoningPending: true,
+    }),
+  );
+  assert(
+    !requiresCatalogPlanningBudget({
+      intentMode: "inquire",
+      phase: "search_after_discovery",
+      catalogLookupCompleted: false,
+      requiredReasoningPending: false,
+    }),
+  );
+});
+
+Deno.test("remote agent budget yields to deterministic finalization but not server steps", () => {
+  assertEquals(
+    shouldFinalizeBeforeRemoteAgentStep({
+      remoteAgentSteps: 1,
+      maxRemoteAgentSteps: 2,
+      serverCompiledStepAvailable: false,
+    }),
+    false,
+  );
+  assertEquals(
+    shouldFinalizeBeforeRemoteAgentStep({
+      remoteAgentSteps: 2,
+      maxRemoteAgentSteps: 2,
+      serverCompiledStepAvailable: false,
+    }),
+    true,
+  );
+  assertEquals(
+    shouldFinalizeBeforeRemoteAgentStep({
+      remoteAgentSteps: 20,
+      maxRemoteAgentSteps: 2,
+      serverCompiledStepAvailable: true,
+    }),
+    false,
+  );
 });
 
 Deno.test("timed-out selection uses the existing proof-gated lexical finalizer", () => {
@@ -48,32 +155,65 @@ Deno.test("timed-out selection uses the existing proof-gated lexical finalizer",
     triedLadderQueryCount: 0,
   };
   assert(shouldAttemptTerminalLexicalRecovery(base));
-  assert(!shouldAttemptTerminalLexicalRecovery({ ...base, deadlineFinalizeBreak: false }));
+  assert(
+    !shouldAttemptTerminalLexicalRecovery({
+      ...base,
+      deadlineFinalizeBreak: false,
+    }),
+  );
   assert(shouldAttemptTerminalLexicalRecovery({
     ...base,
     deadlineFinalizeBreak: false,
     pendingSelectionFinalizeBreak: true,
     triedLadderQueryCount: 1,
   }));
-  assert(!shouldAttemptTerminalLexicalRecovery({
-    ...base,
-    deadlineFinalizeBreak: false,
-    pendingSelectionFinalizeBreak: true,
-    triedLadderQueryCount: 0,
-  }));
+  assert(
+    !shouldAttemptTerminalLexicalRecovery({
+      ...base,
+      deadlineFinalizeBreak: false,
+      pendingSelectionFinalizeBreak: true,
+      triedLadderQueryCount: 0,
+    }),
+  );
   assert(shouldAttemptTerminalLexicalRecovery({
     ...base,
     deadlineFinalizeBreak: false,
     noProgressBreak: true,
     triedLadderQueryCount: 2,
   }));
-  assert(!shouldAttemptTerminalLexicalRecovery({ ...base, replacementIntent: true }));
-  assert(!shouldAttemptTerminalLexicalRecovery({ ...base, compoundEvidenceRequired: true }));
-  assert(!shouldAttemptTerminalLexicalRecovery({ ...base, groundedDiscoveryAvailable: false }));
-  assert(!shouldAttemptTerminalLexicalRecovery({ ...base, recoverySourceAvailable: false }));
-  assertEquals(resolveTerminalLexicalRecoverySource("live query", "initial noun", true), "live query");
-  assertEquals(resolveTerminalLexicalRecoverySource("", "initial noun", true), "initial noun");
-  assertEquals(resolveTerminalLexicalRecoverySource("", "initial noun", false), "");
+  assert(
+    !shouldAttemptTerminalLexicalRecovery({ ...base, replacementIntent: true }),
+  );
+  assert(
+    !shouldAttemptTerminalLexicalRecovery({
+      ...base,
+      compoundEvidenceRequired: true,
+    }),
+  );
+  assert(
+    !shouldAttemptTerminalLexicalRecovery({
+      ...base,
+      groundedDiscoveryAvailable: false,
+    }),
+  );
+  assert(
+    !shouldAttemptTerminalLexicalRecovery({
+      ...base,
+      recoverySourceAvailable: false,
+    }),
+  );
+  assertEquals(
+    resolveTerminalLexicalRecoverySource("live query", "initial noun", true),
+    "live query",
+  );
+  assertEquals(
+    resolveTerminalLexicalRecoverySource("", "initial noun", true),
+    "initial noun",
+  );
+  assertEquals(
+    resolveTerminalLexicalRecoverySource("", "initial noun", false),
+    "",
+  );
 });
 
 Deno.test("agent no-progress: successful knowledge lookup gets one synthesis step", () => {
@@ -82,21 +222,27 @@ Deno.test("agent no-progress: successful knowledge lookup gets one synthesis ste
     knowledgeHits: 5,
     alreadyDeferred: false,
   }));
-  assert(!shouldDeferNoProgressForKnowledge({
-    breakRequested: true,
-    knowledgeHits: 0,
-    alreadyDeferred: false,
-  }));
-  assert(!shouldDeferNoProgressForKnowledge({
-    breakRequested: true,
-    knowledgeHits: 5,
-    alreadyDeferred: true,
-  }));
-  assert(!shouldDeferNoProgressForKnowledge({
-    breakRequested: false,
-    knowledgeHits: 5,
-    alreadyDeferred: false,
-  }));
+  assert(
+    !shouldDeferNoProgressForKnowledge({
+      breakRequested: true,
+      knowledgeHits: 0,
+      alreadyDeferred: false,
+    }),
+  );
+  assert(
+    !shouldDeferNoProgressForKnowledge({
+      breakRequested: true,
+      knowledgeHits: 5,
+      alreadyDeferred: true,
+    }),
+  );
+  assert(
+    !shouldDeferNoProgressForKnowledge({
+      breakRequested: false,
+      knowledgeHits: 5,
+      alreadyDeferred: false,
+    }),
+  );
 });
 
 Deno.test("agent no-progress: inquiry routes once to grounded knowledge", () => {
@@ -106,24 +252,30 @@ Deno.test("agent no-progress: inquiry routes once to grounded knowledge", () => 
     productsRendered: 0,
     alreadyRecovered: false,
   }));
-  assert(!shouldRecoverInquiryNoProgressWithKnowledge({
-    breakRequested: true,
-    intentMode: "select",
-    productsRendered: 0,
-    alreadyRecovered: false,
-  }));
-  assert(!shouldRecoverInquiryNoProgressWithKnowledge({
-    breakRequested: true,
-    intentMode: "inquire",
-    productsRendered: 1,
-    alreadyRecovered: false,
-  }));
-  assert(!shouldRecoverInquiryNoProgressWithKnowledge({
-    breakRequested: true,
-    intentMode: "inquire",
-    productsRendered: 0,
-    alreadyRecovered: true,
-  }));
+  assert(
+    !shouldRecoverInquiryNoProgressWithKnowledge({
+      breakRequested: true,
+      intentMode: "select",
+      productsRendered: 0,
+      alreadyRecovered: false,
+    }),
+  );
+  assert(
+    !shouldRecoverInquiryNoProgressWithKnowledge({
+      breakRequested: true,
+      intentMode: "inquire",
+      productsRendered: 1,
+      alreadyRecovered: false,
+    }),
+  );
+  assert(
+    !shouldRecoverInquiryNoProgressWithKnowledge({
+      breakRequested: true,
+      intentMode: "inquire",
+      productsRendered: 0,
+      alreadyRecovered: true,
+    }),
+  );
 });
 
 Deno.test("successful model-chosen knowledge lookup finalizes only a general inquiry", () => {
@@ -133,30 +285,38 @@ Deno.test("successful model-chosen knowledge lookup finalizes only a general inq
     catalogGroundingRequired: false,
     alreadyFinalizing: false,
   }));
-  assert(!shouldFinalizeInquiryFromKnowledge({
-    intentMode: "select",
-    knowledgeHits: 5,
-    catalogGroundingRequired: false,
-    alreadyFinalizing: false,
-  }));
-  assert(!shouldFinalizeInquiryFromKnowledge({
-    intentMode: "inquire",
-    knowledgeHits: 5,
-    catalogGroundingRequired: true,
-    alreadyFinalizing: false,
-  }));
-  assert(!shouldFinalizeInquiryFromKnowledge({
-    intentMode: "inquire",
-    knowledgeHits: 0,
-    catalogGroundingRequired: false,
-    alreadyFinalizing: false,
-  }));
-  assert(!shouldFinalizeInquiryFromKnowledge({
-    intentMode: "inquire",
-    knowledgeHits: 5,
-    catalogGroundingRequired: false,
-    alreadyFinalizing: true,
-  }));
+  assert(
+    !shouldFinalizeInquiryFromKnowledge({
+      intentMode: "select",
+      knowledgeHits: 5,
+      catalogGroundingRequired: false,
+      alreadyFinalizing: false,
+    }),
+  );
+  assert(
+    !shouldFinalizeInquiryFromKnowledge({
+      intentMode: "inquire",
+      knowledgeHits: 5,
+      catalogGroundingRequired: true,
+      alreadyFinalizing: false,
+    }),
+  );
+  assert(
+    !shouldFinalizeInquiryFromKnowledge({
+      intentMode: "inquire",
+      knowledgeHits: 0,
+      catalogGroundingRequired: false,
+      alreadyFinalizing: false,
+    }),
+  );
+  assert(
+    !shouldFinalizeInquiryFromKnowledge({
+      intentMode: "inquire",
+      knowledgeHits: 5,
+      catalogGroundingRequired: false,
+      alreadyFinalizing: true,
+    }),
+  );
 });
 
 Deno.test("inquiry knowledge synthesis context is compact and treats evidence as data", () => {
@@ -175,15 +335,51 @@ Deno.test("inquiry knowledge synthesis context is compact and treats evidence as
 });
 
 Deno.test("forced initial discovery compiles directly to live taxonomy without product rules", () => {
-  assertEquals(deterministicInitialDiscoveryToolCall("discover_category", "  Нужен товар 16 А  "), {
-    name: "discover_category",
-    args: {
-      noun: "Нужен товар 16 А",
-      semantic_query: "Нужен товар 16 А",
+  assertEquals(
+    deterministicInitialDiscoveryToolCall(
+      "discover_category",
+      "  Нужен товар 16 А  ",
+    ),
+    {
+      name: "discover_category",
+      args: {
+        noun: "Нужен товар 16 А",
+        semantic_query: "Нужен товар 16 А",
+      },
     },
-  });
-  assertEquals(deterministicInitialDiscoveryToolCall("search_catalog", "Нужен товар"), null);
-  assertEquals(deterministicInitialDiscoveryToolCall("discover_category", "   "), null);
+  );
+  assertEquals(
+    deterministicInitialDiscoveryToolCall("search_catalog", "Нужен товар"),
+    null,
+  );
+  assertEquals(
+    deterministicInitialDiscoveryToolCall("discover_category", "   "),
+    null,
+  );
+});
+
+Deno.test("server-compiled discovery provenance survives optional argument normalization", () => {
+  const message = "Нужны прожекторы.\nУточнение клиента: 500 м², высота 3 м";
+  assertEquals(
+    isServerCompiledInitialDiscoveryCall(
+      "server_compiled_initial_discovery",
+      message.replace("\n", " "),
+      message,
+    ),
+    true,
+  );
+  assertEquals(
+    isServerCompiledInitialDiscoveryCall("tool_calls", message, message),
+    false,
+  );
+  assertEquals(
+    isServerCompiledInitialDiscoveryCall(
+      "server_compiled_initial_discovery",
+      "другая категория",
+      message,
+    ),
+    false,
+  );
 });
 
 Deno.test("agent phase: successful discovery requires search and blocks rediscovery", () => {
@@ -205,21 +401,27 @@ Deno.test("agent phase: a selection cannot finish after discovery without a cata
     phase: "search_after_discovery",
     catalogSearchAttempted: false,
   }));
-  assert(!shouldContinueSelectionUntilCatalogAttempt({
-    intentMode: "select",
-    phase: "search_after_discovery",
-    catalogSearchAttempted: true,
-  }));
-  assert(!shouldContinueSelectionUntilCatalogAttempt({
-    intentMode: "inquire",
-    phase: "search_after_discovery",
-    catalogSearchAttempted: false,
-  }));
-  assert(!shouldContinueSelectionUntilCatalogAttempt({
-    intentMode: "select",
-    phase: "open",
-    catalogSearchAttempted: false,
-  }));
+  assert(
+    !shouldContinueSelectionUntilCatalogAttempt({
+      intentMode: "select",
+      phase: "search_after_discovery",
+      catalogSearchAttempted: true,
+    }),
+  );
+  assert(
+    !shouldContinueSelectionUntilCatalogAttempt({
+      intentMode: "inquire",
+      phase: "search_after_discovery",
+      catalogSearchAttempted: false,
+    }),
+  );
+  assert(
+    !shouldContinueSelectionUntilCatalogAttempt({
+      intentMode: "select",
+      phase: "open",
+      catalogSearchAttempted: false,
+    }),
+  );
 });
 
 Deno.test("agent phase: only a completed catalog result establishes an attempt", () => {
@@ -235,30 +437,38 @@ Deno.test("agent phase: an evidence-empty filter gets one prose-only reasoning s
     catalogSearchAttempted: false,
     hasReasoningObligation: true,
   }));
-  assert(!shouldRequestReasoningOnlyAfterIncompleteSearch({
-    intentMode: "select",
-    errorCode: "incomplete_filter",
-    catalogSearchAttempted: false,
-    hasReasoningObligation: false,
-  }));
-  assert(!shouldRequestReasoningOnlyAfterIncompleteSearch({
-    intentMode: "select",
-    errorCode: "upstream_error",
-    catalogSearchAttempted: false,
-    hasReasoningObligation: true,
-  }));
-  assert(!shouldRequestReasoningOnlyAfterIncompleteSearch({
-    intentMode: "inquire",
-    errorCode: "incomplete_filter",
-    catalogSearchAttempted: false,
-    hasReasoningObligation: true,
-  }));
-  assert(!shouldRequestReasoningOnlyAfterIncompleteSearch({
-    intentMode: "select",
-    errorCode: "incomplete_filter",
-    catalogSearchAttempted: true,
-    hasReasoningObligation: true,
-  }));
+  assert(
+    !shouldRequestReasoningOnlyAfterIncompleteSearch({
+      intentMode: "select",
+      errorCode: "incomplete_filter",
+      catalogSearchAttempted: false,
+      hasReasoningObligation: false,
+    }),
+  );
+  assert(
+    !shouldRequestReasoningOnlyAfterIncompleteSearch({
+      intentMode: "select",
+      errorCode: "upstream_error",
+      catalogSearchAttempted: false,
+      hasReasoningObligation: true,
+    }),
+  );
+  assert(
+    !shouldRequestReasoningOnlyAfterIncompleteSearch({
+      intentMode: "inquire",
+      errorCode: "incomplete_filter",
+      catalogSearchAttempted: false,
+      hasReasoningObligation: true,
+    }),
+  );
+  assert(
+    !shouldRequestReasoningOnlyAfterIncompleteSearch({
+      intentMode: "select",
+      errorCode: "incomplete_filter",
+      catalogSearchAttempted: true,
+      hasReasoningObligation: true,
+    }),
+  );
 });
 
 Deno.test("agent phase: jargon helper stays closed until the bounded taxonomy retry also fails", () => {
@@ -271,54 +481,137 @@ Deno.test("agent phase: jargon helper stays closed until the bounded taxonomy re
     replacementIntent: false,
   });
   assertEquals(retryPhase, "rediscover_after_failed_discovery");
-  assert(!toolNamesForAgentPhase(retryPhase).includes("jargon_recover_catalog"));
-  assertEquals(nextAgentPhase(retryPhase, {
-    tool: "discover_category",
-    ok: false,
-    errorCode: "category_not_found",
-    intentMode: "select",
-    replacementIntent: false,
-  }), "jargon_after_failed_discovery");
-  assert(toolNamesForAgentPhase("jargon_after_failed_discovery").includes("jargon_recover_catalog"));
-  assertEquals(nextAgentPhase("open", {
-    tool: "discover_category",
-    ok: false,
-    errorCode: "upstream_error",
-    intentMode: "select",
-    replacementIntent: false,
-  }), "open");
+  assert(
+    !toolNamesForAgentPhase(retryPhase).includes("jargon_recover_catalog"),
+  );
+  assertEquals(
+    nextAgentPhase(retryPhase, {
+      tool: "discover_category",
+      ok: false,
+      errorCode: "category_not_found",
+      intentMode: "select",
+      replacementIntent: false,
+    }),
+    "jargon_after_failed_discovery",
+  );
+  assert(
+    toolNamesForAgentPhase("jargon_after_failed_discovery").includes(
+      "jargon_recover_catalog",
+    ),
+  );
+  assertEquals(
+    nextAgentPhase("open", {
+      tool: "discover_category",
+      ok: false,
+      errorCode: "upstream_error",
+      intentMode: "select",
+      replacementIntent: false,
+    }),
+    "open",
+  );
 });
 
 Deno.test("agent phase: clarification is available only after discovery and before a non-empty search", () => {
   assert(!toolNamesForAgentPhase("open").includes("propose_clarification"));
-  assert(toolNamesForAgentPhase("search_after_discovery").includes("propose_clarification"));
-  assert(!toolNamesForAgentPhase("terminal_after_search").includes("propose_clarification"));
+  assert(
+    toolNamesForAgentPhase("search_after_discovery").includes(
+      "propose_clarification",
+    ),
+  );
+  assert(
+    !toolNamesForAgentPhase("terminal_after_search").includes(
+      "propose_clarification",
+    ),
+  );
 });
 
 Deno.test("agent phase: quantified model reasoning removes optional clarification", () => {
-  const reasoning = "Для комнаты 25 м² нужен поток 3000–4000 люмен и около 30–40 Вт";
+  const reasoning =
+    "Для комнаты 25 м² нужен поток 3000–4000 люмен и около 30–40 Вт";
   assert(hasActionableSelectionReasoning(reasoning));
-  assert(!toolNamesForAgentPhase("search_after_discovery", { reasoningRequiresCatalog: true }).includes("propose_clarification"));
-  assert(!hasActionableSelectionReasoning("Нужен кабель длиной 100 м, остальных данных пока нет"));
-  assert(toolNamesForAgentPhase("search_after_discovery", { reasoningRequiresCatalog: false }).includes("propose_clarification"));
+  assert(
+    !toolNamesForAgentPhase("search_after_discovery", {
+      reasoningRequiresCatalog: true,
+    }).includes("propose_clarification"),
+  );
+  assert(
+    !hasActionableSelectionReasoning(
+      "Нужен кабель длиной 100 м, остальных данных пока нет",
+    ),
+  );
+  assert(
+    toolNamesForAgentPhase("search_after_discovery", {
+      reasoningRequiresCatalog: false,
+    }).includes("propose_clarification"),
+  );
 });
 
 Deno.test("agent phase: server rejects model-emitted tools outside the advertised phase", () => {
-  assert(!isToolAllowedInAgentPhase("search_after_discovery", "discover_category"));
+  assert(
+    !isToolAllowedInAgentPhase("search_after_discovery", "discover_category"),
+  );
   assert(!isToolAllowedInAgentPhase("terminal_after_search", "search_catalog"));
   assert(!isToolAllowedInAgentPhase("terminal_after_search", "unknown_tool"));
   assert(isToolAllowedInAgentPhase("terminal_after_search", "render_products"));
-  assert(!isToolAllowedInAgentPhase("search_after_discovery", "propose_clarification", { reasoningRequiresCatalog: true }));
+  assert(
+    !isToolAllowedInAgentPhase(
+      "search_after_discovery",
+      "propose_clarification",
+      { reasoningRequiresCatalog: true },
+    ),
+  );
 });
 
 Deno.test("a server-compiled lexical search cannot widen the phase exception to side effects", () => {
   const policy = {};
-  assert(isGroundedToolCallAllowed("search_after_discovery", "jargon_recover_catalog", policy, true));
-  assert(isGroundedToolCallAllowed("search_after_discovery", "search_catalog", policy, true));
-  assert(!isGroundedToolCallAllowed("search_after_discovery", "jargon_recover_catalog", policy, false));
-  assert(isGroundedToolCallAllowed("terminal_after_search", "jargon_recover_catalog", policy, true));
-  assert(!isGroundedToolCallAllowed("terminal_after_search", "note_state", policy, true));
-  assert(!isGroundedToolCallAllowed("terminal_after_search", "discover_category", policy, true));
+  assert(
+    isGroundedToolCallAllowed(
+      "search_after_discovery",
+      "jargon_recover_catalog",
+      policy,
+      true,
+    ),
+  );
+  assert(
+    isGroundedToolCallAllowed(
+      "search_after_discovery",
+      "search_catalog",
+      policy,
+      true,
+    ),
+  );
+  assert(
+    !isGroundedToolCallAllowed(
+      "search_after_discovery",
+      "jargon_recover_catalog",
+      policy,
+      false,
+    ),
+  );
+  assert(
+    isGroundedToolCallAllowed(
+      "terminal_after_search",
+      "jargon_recover_catalog",
+      policy,
+      true,
+    ),
+  );
+  assert(
+    !isGroundedToolCallAllowed(
+      "terminal_after_search",
+      "note_state",
+      policy,
+      true,
+    ),
+  );
+  assert(
+    !isGroundedToolCallAllowed(
+      "terminal_after_search",
+      "discover_category",
+      policy,
+      true,
+    ),
+  );
 });
 
 Deno.test("agent phase: non-empty ordinary selection search becomes terminal", () => {
@@ -336,13 +629,16 @@ Deno.test("agent phase: non-empty ordinary selection search becomes terminal", (
 });
 
 Deno.test("agent phase: non-empty replacement search must render instead of reopening search", () => {
-  assertEquals(nextAgentPhase("search_after_discovery", {
-    tool: "search_catalog",
-    ok: true,
-    total: 5,
-    intentMode: "select",
-    replacementIntent: true,
-  }), "terminal_after_search");
+  assertEquals(
+    nextAgentPhase("search_after_discovery", {
+      tool: "search_catalog",
+      ok: true,
+      total: 5,
+      intentMode: "select",
+      replacementIntent: true,
+    }),
+    "terminal_after_search",
+  );
 });
 
 Deno.test("agent phase: explanatory inquiry can render a previously found pool", () => {
@@ -362,13 +658,16 @@ Deno.test("agent phase: explanatory inquiry can render a previously found pool",
 });
 
 Deno.test("agent phase: further inquiry searches preserve render access", () => {
-  assertEquals(nextAgentPhase("inquiry_with_results", {
-    tool: "search_catalog",
-    ok: true,
-    total: 50,
-    intentMode: "inquire",
-    replacementIntent: false,
-  }), "inquiry_with_results");
+  assertEquals(
+    nextAgentPhase("inquiry_with_results", {
+      tool: "search_catalog",
+      ok: true,
+      total: 50,
+      intentMode: "inquire",
+      replacementIntent: false,
+    }),
+    "inquiry_with_results",
+  );
 });
 
 Deno.test("named-series explanation becomes a prose-only evidence phase", () => {
@@ -396,20 +695,35 @@ Deno.test("inquiry prose is deferred until evidence while selection reasoning st
 Deno.test("agent phase: quantified reasoning forces exactly the next phase tool", () => {
   const ready = { reasoningRequiresCatalog: true };
   assertEquals(forcedToolNameForAgentPhase("open", ready), "discover_category");
-  assertEquals(forcedToolNameForAgentPhase("search_after_discovery", ready), "search_catalog");
-  assertEquals(forcedToolNameForAgentPhase("terminal_after_search", ready), "render_products");
-  assertEquals(forcedToolNameForAgentPhase("open", { reasoningRequiresCatalog: false }), null);
+  assertEquals(
+    forcedToolNameForAgentPhase("search_after_discovery", ready),
+    "search_catalog",
+  );
+  assertEquals(
+    forcedToolNameForAgentPhase("terminal_after_search", ready),
+    "render_products",
+  );
+  assertEquals(
+    forcedToolNameForAgentPhase("open", { reasoningRequiresCatalog: false }),
+    null,
+  );
 });
 
 Deno.test("agent phase: every selection enters live taxonomy before it may finish", () => {
-  assertEquals(forcedToolNameForAgentPhase("open", {
-    reasoningRequiresCatalog: false,
-    selectionRequiresInitialDiscovery: true,
-  }), "discover_category");
-  assertEquals(forcedToolNameForAgentPhase("search_after_discovery", {
-    reasoningRequiresCatalog: false,
-    selectionRequiresInitialDiscovery: true,
-  }), null);
+  assertEquals(
+    forcedToolNameForAgentPhase("open", {
+      reasoningRequiresCatalog: false,
+      selectionRequiresInitialDiscovery: true,
+    }),
+    "discover_category",
+  );
+  assertEquals(
+    forcedToolNameForAgentPhase("search_after_discovery", {
+      reasoningRequiresCatalog: false,
+      selectionRequiresInitialDiscovery: true,
+    }),
+    null,
+  );
 });
 
 Deno.test("agent phase: failed discovery retries taxonomy once before forced jargon", () => {
@@ -431,7 +745,10 @@ Deno.test("agent phase: failed discovery retries taxonomy once before forced jar
     replacementIntent: false,
   });
   assertEquals(jargonPhase, "jargon_after_failed_discovery");
-  assertEquals(forcedToolNameForAgentPhase(jargonPhase), "jargon_recover_catalog");
+  assertEquals(
+    forcedToolNameForAgentPhase(jargonPhase),
+    "jargon_recover_catalog",
+  );
   const searchPhase = nextAgentPhase("jargon_after_failed_discovery", {
     tool: "jargon_recover_catalog",
     ok: true,
@@ -446,12 +763,15 @@ Deno.test("agent phase: failed discovery retries taxonomy once before forced jar
 });
 
 Deno.test("agent phase: successful taxonomy retry proceeds to ordinary search", () => {
-  assertEquals(nextAgentPhase("rediscover_after_failed_discovery", {
-    tool: "discover_category",
-    ok: true,
-    intentMode: "select",
-    replacementIntent: false,
-  }), "search_after_discovery");
+  assertEquals(
+    nextAgentPhase("rediscover_after_failed_discovery", {
+      tool: "discover_category",
+      ok: true,
+      intentMode: "select",
+      replacementIntent: false,
+    }),
+    "search_after_discovery",
+  );
 });
 
 Deno.test("agent phase: permits one new-noun correction only before search progress", () => {
@@ -465,62 +785,95 @@ Deno.test("agent phase: permits one new-noun correction only before search progr
   assert(shouldAllowCorrectiveDiscovery(base));
   assert(!shouldAllowCorrectiveDiscovery({ ...base, alreadyUsed: true }));
   assert(!shouldAllowCorrectiveDiscovery({ ...base, hasFreshSearch: true }));
-  assert(!shouldAllowCorrectiveDiscovery({ ...base, previousCategoryGrounded: true }));
+  assert(
+    !shouldAllowCorrectiveDiscovery({
+      ...base,
+      previousCategoryGrounded: true,
+    }),
+  );
   assert(!shouldAllowCorrectiveDiscovery({ ...base, requestedNoun: "кабель" }));
   assert(!shouldAllowCorrectiveDiscovery({ ...base, phase: "open" }));
-  assert(toolNamesForAgentPhase("search_after_discovery", {
-    correctiveDiscoveryAvailable: true,
-  }).includes("discover_category"));
-  assertEquals(forcedToolNameForAgentPhase("search_after_discovery", {
-    reasoningRequiresCatalog: true,
-    correctiveDiscoveryAvailable: true,
-  }), null);
-  assert(!toolNamesForAgentPhase("search_after_discovery").includes("discover_category"));
+  assert(
+    toolNamesForAgentPhase("search_after_discovery", {
+      correctiveDiscoveryAvailable: true,
+    }).includes("discover_category"),
+  );
+  assertEquals(
+    forcedToolNameForAgentPhase("search_after_discovery", {
+      reasoningRequiresCatalog: true,
+      correctiveDiscoveryAvailable: true,
+    }),
+    null,
+  );
+  assert(
+    !toolNamesForAgentPhase("search_after_discovery").includes(
+      "discover_category",
+    ),
+  );
 });
 
 Deno.test("agent phase: empty search keeps the established category and blocks lexical reinterpretation", () => {
-  assertEquals(nextAgentPhase("search_after_discovery", {
-    tool: "search_catalog",
-    ok: true,
-    total: 0,
-    intentMode: "select",
-    replacementIntent: false,
-  }), "search_after_discovery");
-  assert(!toolNamesForAgentPhase("search_after_discovery").includes("jargon_recover_catalog"));
-  assertEquals(nextAgentPhase("search_after_discovery", {
-    tool: "search_catalog",
-    ok: true,
-    total: 5,
-    intentMode: "select",
-    replacementIntent: true,
-  }), "terminal_after_search");
+  assertEquals(
+    nextAgentPhase("search_after_discovery", {
+      tool: "search_catalog",
+      ok: true,
+      total: 0,
+      intentMode: "select",
+      replacementIntent: false,
+    }),
+    "search_after_discovery",
+  );
+  assert(
+    !toolNamesForAgentPhase("search_after_discovery").includes(
+      "jargon_recover_catalog",
+    ),
+  );
+  assertEquals(
+    nextAgentPhase("search_after_discovery", {
+      tool: "search_catalog",
+      ok: true,
+      total: 5,
+      intentMode: "select",
+      replacementIntent: true,
+    }),
+    "terminal_after_search",
+  );
 });
 
 Deno.test("agent phase: partial jargon result requires catalog search before product rendering", () => {
-  assertEquals(nextAgentPhase("jargon_after_failed_discovery", {
-    tool: "jargon_recover_catalog",
-    ok: true,
-    total: 2,
-    partialMatch: true,
-    intentMode: "select",
-    replacementIntent: false,
-  }), "search_after_jargon");
-  assertEquals(nextAgentPhase("jargon_after_failed_discovery", {
-    tool: "jargon_recover_catalog",
-    ok: true,
-    total: 0,
-    partialMatch: false,
-    intentMode: "select",
-    replacementIntent: false,
-  }), "search_after_jargon");
-  assertEquals(nextAgentPhase("jargon_after_failed_discovery", {
-    tool: "jargon_recover_catalog",
-    ok: true,
-    total: 2,
-    partialMatch: false,
-    intentMode: "select",
-    replacementIntent: false,
-  }), "terminal_after_search");
+  assertEquals(
+    nextAgentPhase("jargon_after_failed_discovery", {
+      tool: "jargon_recover_catalog",
+      ok: true,
+      total: 2,
+      partialMatch: true,
+      intentMode: "select",
+      replacementIntent: false,
+    }),
+    "search_after_jargon",
+  );
+  assertEquals(
+    nextAgentPhase("jargon_after_failed_discovery", {
+      tool: "jargon_recover_catalog",
+      ok: true,
+      total: 0,
+      partialMatch: false,
+      intentMode: "select",
+      replacementIntent: false,
+    }),
+    "search_after_jargon",
+  );
+  assertEquals(
+    nextAgentPhase("jargon_after_failed_discovery", {
+      tool: "jargon_recover_catalog",
+      ok: true,
+      total: 2,
+      partialMatch: false,
+      intentMode: "select",
+      replacementIntent: false,
+    }),
+    "terminal_after_search",
+  );
 });
 
 Deno.test("LLM catalog view is bounded, relevance-ranked, and materially smaller", () => {
@@ -530,15 +883,28 @@ Deno.test("LLM catalog view is bounded, relevance-ranked, and materially smaller
     vendor: "Test",
     price: 1000 + index,
     stock: "in_stock",
-    short_traits: Array.from({ length: 30 }, (__, trait) => `Характеристика ${trait}: ${index + trait}`),
+    short_traits: Array.from(
+      { length: 30 },
+      (__, trait) => `Характеристика ${trait}: ${index + trait}`,
+    ),
     description_excerpt: "Описание ".repeat(200),
-    warehouses: Array.from({ length: 10 }, (__, city) => ({ city: `Город ${city}`, qty: city + 1 })),
+    warehouses: Array.from(
+      { length: 10 },
+      (__, city) => ({ city: `Город ${city}`, qty: city + 1 }),
+    ),
   }));
   products[25].short_traits.push("Световой поток: 5000 лм");
 
-  const compacted = compactCatalogResultForLlm({ results: products, total: 167 }, "нужно 5000 лм для гостиной");
+  const compacted = compactCatalogResultForLlm({
+    results: products,
+    total: 167,
+  }, "нужно 5000 лм для гостиной");
   assertEquals(compacted.result.results.length, 12);
   assertEquals(compacted.result.results[0].id, "25");
-  assertEquals(compacted.result._llm_view, { returned: 12, available_in_tool_result: 30, total: 167 });
+  assertEquals(compacted.result._llm_view, {
+    returned: 12,
+    available_in_tool_result: 30,
+    total: 167,
+  });
   assertLess(compacted.compactBytes, compacted.originalBytes * 0.35);
 });

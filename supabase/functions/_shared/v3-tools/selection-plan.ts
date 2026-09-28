@@ -9,6 +9,7 @@ import {
   dropImplicitReplacementIdentityCriteria,
   dropImplicitReplacementIdentityFilters,
   guardSearchFilters,
+  isReplacementIdentityFacet,
   type SearchFacet,
 } from "./search-filter-guard.ts";
 
@@ -341,10 +342,25 @@ export function compileReplacementReasoningContract(
     });
     return facet && provenKeys.has(facet.key) ? [] : [criterion.key];
   });
+  // A guessed facet can be rejected by the search guard before `criteria` is
+  // materialized (for example a number decoded only from a missing source
+  // model). Keep it in the audit trail as demoted when the consultant named
+  // the complete live caption, while still leaving retrieval/options empty.
+  const normalizedReasoning = ` ${normalizeWords(reasoningText)} `;
+  const rejectedDeclaredFacets = facets.flatMap((facet) => {
+    if (isReplacementIdentityFacet(facet) || provenKeys.has(facet.key)) return [];
+    const caption = normalizeWords(facet.caption || facet.key);
+    if (!caption || !normalizedReasoning.includes(` ${caption} `)) return [];
+    return [facet.caption || facet.key];
+  });
   return {
     criteria: projected.proven_criteria,
     options: projected.options,
-    demoted: [...new Set([...importance.demoted, ...unproven])],
+    demoted: [...new Set([
+      ...importance.demoted,
+      ...unproven,
+      ...rejectedDeclaredFacets,
+    ])],
     axes: compileAxes(projected.options, facets),
     // Advisory axes can become title obligations only when the customer's own
     // wording/code structurally contains them. Frozen customer criteria join

@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  candidateAddsIndependentLexicalEvidence,
   buildGroundedAxisSectionHeading,
   buildGroundedAxisSplitCaption,
   classifyGroundedJargonEvidence,
@@ -13,10 +14,71 @@ import {
 } from "./jargon-recover-catalog.ts";
 import type { ProductCache, ProductRef } from "./types.ts";
 
+Deno.test("a jargon translation cannot collapse into an independent modifier", () => {
+  assertEquals(
+    candidateAddsIndependentLexicalEvidence("кукуруза", "E14", ["E14"], ["Лампы"]),
+    false,
+  );
+  assertEquals(
+    candidateAddsIndependentLexicalEvidence("кукуруза", "Лампа E14", ["E14"], ["Лампы"]),
+    false,
+  );
+  assertEquals(
+    candidateAddsIndependentLexicalEvidence("кукуруза", "CORN", ["E14"], ["Лампы"]),
+    true,
+  );
+});
+
 Deno.test("translated title evidence is exact unless a separate modifier is unresolved", () => {
   assertEquals(classifyGroundedJargonEvidence(true, "CORN", 17, []), "exact");
   assertEquals(classifyGroundedJargonEvidence(true, "CORN", 17, ["E27"]), "axis_split");
   assertEquals(classifyGroundedJargonEvidence(false, "", 17, []), "empty");
+});
+
+Deno.test("literal compact recovery skips the language model and verifies the live title", async () => {
+  let modelCalls = 0;
+  const catalogQueries: string[] = [];
+  const fetchImpl: typeof fetch = async (input) => {
+    const url = String(input);
+    if (url.includes("openrouter.ai") || url.includes("lovable")) {
+      modelCalls += 1;
+      throw new Error("literal recovery must not call a language model");
+    }
+    const parsed = new URL(url);
+    const query = parsed.searchParams.get("query") ?? "";
+    catalogQueries.push(query);
+    const results = query === "C16"
+      ? [{
+        id: 16,
+        pagetitle: "Автоматический выключатель 1P C16 4,5kA",
+        price: 900,
+        url: "https://220volt.kz/catalog/elektrika/avtomaty/c16/",
+        category: { pagetitle: "Автоматические выключатели" },
+        options: [],
+      }]
+      : [];
+    return new Response(JSON.stringify({ data: { results, pagination: { total: results.length } } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+
+  const result = await executeJargonRecoverCatalog({
+    query: "C16",
+    literal_only: true,
+    category: "Автоматические выключатели",
+    per_page: 5,
+  }, {
+    baseUrl: "https://catalog.test/api",
+    apiToken: "catalog-token",
+    openrouterApiKey: "router-token",
+    fetchImpl,
+  }, new Map());
+
+  assertEquals(modelCalls, 0);
+  assertEquals(catalogQueries.includes("C16"), true);
+  assertEquals(result.ok ? result.total : 0, 1);
+  assertEquals(result.ok ? result.matched_query : null, "C16");
 });
 
 Deno.test("jargon recovery applies discovered category to the actual catalog query", async () => {

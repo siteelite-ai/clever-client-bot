@@ -34,7 +34,7 @@ const COMPLETE_REQUEST_RE =
 const EXPLICIT_NEW_TASK_RE =
   /^(?:новая\s+тема|новый\s+вопрос)(?=\s|[?!:;.,-]|$)/iu;
 const ELLIPTICAL_ATTRIBUTE_RE =
-  /^(?:а\s+)?(?:есть|покажи(?:те)?)\s+(?:ещ[её]\s+)?(?:более\s+)?[\p{L}-]*(?:ые|ие|ее|ой|ая|ое|ого|ую|ых)(?:\s+варианты?)?[?!.,]?$/iu;
+  /^(?:а\s+)?(?:(?:есть|покажи(?:те)?)\s+(?:ещ[её]\s+)?(?:более\s+)?[\p{L}-]*(?:ые|ие|ее|ой|ая|ое|ого|ую|ых)(?:\s+варианты?)?|[\p{L}-]*(?:ые|ие|ее|ой|ая|ое|ого|ую|ых)(?:\s+[\p{L}-]{3,}){0,2}\s+есть)[?!.,]?$/iu;
 
 /** A structurally incomplete attribute change such as «а есть белые?». */
 export function isEllipticalAttributeFollowup(userMessage: string): boolean {
