@@ -2,6 +2,7 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   resolveSelectionReadinessRequest,
   measuredLoadGuidanceCanProceed,
+  selectionReadinessEvidenceFromHistory,
   selectReadinessClarification,
   specifiedAvailabilityBrowseIsActionable,
 } from "./selection-readiness.ts";
@@ -33,6 +34,44 @@ Deno.test("selection readiness allows a completed pump-cable context", () => {
     ),
     null,
   );
+});
+
+Deno.test("selection readiness evidence never treats assistant prompts as customer facts", () => {
+  assertEquals(
+    selectionReadinessEvidenceFromHistory([
+      { role: "user", content: "Мне нужен кабель для насоса" },
+      {
+        role: "assistant",
+        content: "Уточните мощность, длину, напряжение, число фаз и способ прокладки",
+      },
+      { role: "user", content: "7 кВт, стационарно на улице" },
+    ]),
+    "Мне нужен кабель для насоса\n7 кВт, стационарно на улице",
+  );
+});
+
+Deno.test("progressive pump clarification asks only for customer facts still missing", () => {
+  const clarification = selectReadinessClarification(
+    "Мне нужен кабель для насоса\nУточнение клиента: поверхностный, стационарный, на улице, 7КВт",
+    "Мне нужен кабель для насоса\nповерхностный, стационарный, на улице, 7КВт",
+    { progressive: true },
+  );
+  assertEquals(clarification?.profile, "pump_cable");
+  assertEquals(clarification?.facet_key, "supply_phase");
+  assertEquals(/длин|расстоян/iu.test(clarification?.question ?? ""), true);
+  assertEquals(/напряж|фаз/iu.test(clarification?.question ?? ""), true);
+});
+
+Deno.test("progressive motor clarification advances from phase to nameplate current and start", () => {
+  const clarification = selectReadinessClarification(
+    "Подберите автомат для двигателя асинхронный 3 кВт\nУточнение клиента: 3 фазы",
+    "Подберите автомат для двигателя асинхронный 3 кВт\n3 фазы",
+    { progressive: true },
+  );
+  assertEquals(clarification?.profile, "motor_breaker");
+  assertEquals(clarification?.facet_key, "motor_start_method");
+  assertEquals(/номинальн|шильдик|рабоч/iu.test(clarification?.question ?? ""), true);
+  assertEquals(/пуск/iu.test(clarification?.question ?? ""), true);
 });
 
 Deno.test("a measured load guidance question reaches visible reasoning before catalog readiness", () => {

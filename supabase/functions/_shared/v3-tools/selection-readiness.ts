@@ -10,11 +10,34 @@ interface ReadinessProfile {
   id: string;
   applies: RegExp;
   required: RegExp[];
+  /** Human-readable counterparts of `required`, in the same order. */
+  missing_labels: string[];
+  /**
+   * Follow-up controls keyed by a still-missing requirement.  This lets one
+   * generic readiness engine advance a multi-turn clarification instead of
+   * repeating the profile's opening question or prematurely starting search.
+   */
+  follow_ups?: Array<{
+    requirement_index: number;
+    question: string;
+    facet_key: string;
+    options: ProposeClarificationInput["options"];
+  }>;
   /** Resolve overlapping profiles without relying on declaration order. */
   priority?: number;
   question: string;
   facet_key: string;
   options: ProposeClarificationInput["options"];
+}
+
+export function selectionReadinessEvidenceFromHistory(
+  history: Array<{ role: string; content: string }>,
+): string {
+  return history
+    .filter((message) => message.role === "user")
+    .map((message) => String(message.content ?? "").trim())
+    .filter(Boolean)
+    .join("\n");
 }
 
 function explicitCompactSpecificationTokens(value: string): string[] {
@@ -81,6 +104,33 @@ const PROFILES: ReadinessProfile[] = [
       /(?:напряж\p{L}*|фаз\p{L}*|\b(?:220|230|380|400)\s*в?\b)/iu,
       /(?:улиц\p{L}*|помещен\p{L}*|перенос\p{L}*|стационар\p{L}*|проклад\p{L}*)/iu,
     ],
+    missing_labels: [
+      "мощность или рабочий ток насоса",
+      "длину линии/расстояние",
+      "напряжение и число фаз",
+      "способ прокладки",
+    ],
+    follow_ups: [
+      {
+        requirement_index: 2,
+        question: "Какое питание у насоса?",
+        facet_key: "supply_phase",
+        options: [
+          { value: "220 В, 1 фаза", label: "220 В, 1 фаза" },
+          { value: "380 В, 3 фазы", label: "380 В, 3 фазы" },
+        ],
+      },
+      {
+        requirement_index: 1,
+        question: "Какая длина линии от источника питания до насоса?",
+        facet_key: "line_length",
+        options: [
+          { value: "До 25 м", label: "До 25 м" },
+          { value: "25–50 м", label: "25–50 м" },
+          { value: "Более 50 м", label: "Более 50 м" },
+        ],
+      },
+    ],
     question: "Чтобы безопасно подобрать кабель для насоса, уточните, пожалуйста: мощность или рабочий ток насоса; длину линии/расстояние; напряжение и число фаз; способ прокладки — в помещении, на улице, стационарно или как переносное подключение. С чего начнём?",
     facet_key: "supply_phase",
     options: [
@@ -97,6 +147,12 @@ const PROFILES: ReadinessProfile[] = [
       /(?:напряж\p{L}*|фаз\p{L}*|\b(?:220|230|380|400)\s*в?\b)/iu,
       /(?:жил\p{L}*|заземл\p{L}*)/iu,
     ],
+    missing_labels: [
+      "способ прокладки — в трубе/ПНД или прямо в земле",
+      "мощность или ток нагрузки",
+      "напряжение и число фаз",
+      "число жил и наличие заземления",
+    ],
     question: "Для подземной линии нужно уточнить: кабель пойдёт прямо в землю (тогда обычно рассматривают бронированный) или в трубе/ПНД; мощность либо ток нагрузки; напряжение и число фаз; требуемое число жил и наличие заземления. Как планируется прокладка?",
     facet_key: "installation_method",
     options: [
@@ -112,6 +168,22 @@ const PROFILES: ReadinessProfile[] = [
       /(?:напряж\p{L}*|фаз\p{L}*|\b(?:220|230|380|400)\s*в?\b)/iu,
       /(?:пуск\p{L}*|характерист\p{L}*|крив\p{L}*)/iu,
     ],
+    missing_labels: [
+      "мощность либо номинальный рабочий ток по шильдику",
+      "напряжение и число фаз",
+      "условия пуска и требуемую характеристику срабатывания",
+    ],
+    follow_ups: [
+      {
+        requirement_index: 2,
+        question: "Как запускается двигатель? Если известен номинальный рабочий ток по шильдику, укажите и его.",
+        facet_key: "motor_start_method",
+        options: [
+          { value: "Прямой пуск", label: "Прямой пуск" },
+          { value: "Через частотник/софтстартер", label: "Частотник/софтстартер" },
+        ],
+      },
+    ],
     question: "Для выбора автомата двигателя нужны мощность или рабочий ток, напряжение и число фаз, а также условия пуска/требуемая характеристика срабатывания. Какое питание у двигателя?",
     facet_key: "supply_phase",
     options: [
@@ -126,6 +198,11 @@ const PROFILES: ReadinessProfile[] = [
       /(?:полюс\p{L}*|\b[1234]\s*[pрп]\b|фаз\p{L}*)/iu,
       /(?:характерист\p{L}*|крив\p{L}*|(?:^|\s)[bcdвсд](?:\s|$))/iu,
       /(?:отключ\p{L}*|\d+(?:[.,]\d+)?\s*к?а\b)/iu,
+    ],
+    missing_labels: [
+      "полюсность или число фаз",
+      "характеристику B, C или D",
+      "отключающую способность в кА",
     ],
     question: "Номинал тока понятен. До подбора уточните полюсность/число фаз, характеристику (кривую B, C или D) и требуемую отключающую способность в кА. Какая полюсность нужна?",
     facet_key: "pole_count",
@@ -143,6 +220,11 @@ const PROFILES: ReadinessProfile[] = [
       /(?:сечен\p{L}*|\d+\s*[xх×*]\s*\d+(?:[.,]\d+)?|жил\p{L}*)/iu,
       /(?:гибк\p{L}*|стационар\p{L}*|подвиж\p{L}*)/iu,
     ],
+    missing_labels: [
+      "назначение и условия применения",
+      "сечение и число жил",
+      "подвижное или стационарное подключение",
+    ],
     question: "Замена КГ зависит от условий применения и назначения подключения. Уточните сечение и число жил, а также нужна ли гибкость для подвижного подключения или кабель будет проложен стационарно. Как он используется?",
     facet_key: "installation_mode",
     options: [
@@ -156,6 +238,10 @@ const PROFILES: ReadinessProfile[] = [
     required: [
       /(?:мед\p{L}*|алюмин\p{L}*)/iu,
       /(?:болт\p{L}*|клемм\p{L}*|отверст\p{L}*|тип\p{L}*)/iu,
+    ],
+    missing_labels: [
+      "материал жилы — медь или алюминий",
+      "тип присоединения и размер болта/отверстия",
     ],
     question: "Сечение кабеля понятно. Для выбора наконечника уточните материал жилы — медь или алюминий — и тип присоединения: под болт/размер отверстия либо в клемму. Какой материал жилы?",
     facet_key: "conductor_material",
@@ -172,6 +258,11 @@ const PROFILES: ReadinessProfile[] = [
       /(?:улиц\p{L}*|помещен\p{L}*)/iu,
       /(?:poe|питан\p{L}*|расстоян\p{L}*)/iu,
     ],
+    missing_labels: [
+      "тип системы — цифровая/IP или аналоговая",
+      "место прокладки — улица или помещение",
+      "PoE/способ питания и длину линии",
+    ],
     question: "Уточните систему видеонаблюдения: цифровая/IP или аналоговая; прокладка на улице или в помещении; нужны ли PoE/питание по кабелю и какая длина линии/расстояние. Какая система камер?",
     facet_key: "camera_system",
     options: [
@@ -187,6 +278,11 @@ const PROFILES: ReadinessProfile[] = [
       /(?:форм\p{L}*|колб\p{L}*)/iu,
       /(?:мощн\p{L}*|\d+(?:[.,]\d+)?\s*(?:вт|w)\b)/iu,
     ],
+    missing_labels: [
+      "тип цоколя",
+      "форму колбы",
+      "желаемую мощность",
+    ],
     question: "Тёплый свет 3000 К понятен. Чтобы выбрать лампу, уточните цоколь, форму колбы и желаемую мощность в ваттах. Какой цоколь нужен?",
     facet_key: "socket_type",
     options: [
@@ -201,6 +297,10 @@ const PROFILES: ReadinessProfile[] = [
     required: [
       /(?:площад\p{L}*|размер\p{L}*|территор\p{L}*)/iu,
       /(?:высот\p{L}*|установ\p{L}*|монтаж\p{L}*)/iu,
+    ],
+    missing_labels: [
+      "площадь или размеры территории",
+      "высоту установки",
     ],
     question: "Чтобы подобрать уличный прожектор по задаче, уточните площадь или примерные размеры территории и высоту установки. Какая площадь двора и на какой высоте будет установлен прожектор?",
     facet_key: "mounting_height",
@@ -218,6 +318,10 @@ const PROFILES: ReadinessProfile[] = [
       /(?:площад\p{L}*|размер\p{L}*|территор\p{L}*|\d+(?:[.,]\d+)?\s*(?:м2|м²|кв(?:\.|\s)*м))/iu,
       /(?:высот\p{L}*|установ\p{L}*|\d+(?:[.,]\d+)?\s*м(?:етр\p{L}*)?(?=$|[^\p{L}\p{N}²]))/iu,
     ],
+    missing_labels: [
+      "площадь или размеры парковки",
+      "высоту установки",
+    ],
     question: "Для парковки сначала нужны площадь территории и высота установки. Для улицы также уточним требуемую защиту, обычно рассматривают IP65/IP66. Какая площадь и высота монтажа?",
     facet_key: "mounting_height",
     options: [
@@ -231,6 +335,7 @@ const PROFILES: ReadinessProfile[] = [
 export function selectReadinessClarification(
   currentMessage: string,
   dialogueEvidence = "",
+  options: { progressive?: boolean } = {},
 ): SelectionReadinessClarification | null {
   const current = String(currentMessage ?? "").trim();
   if (!current) return null;
@@ -244,12 +349,24 @@ export function selectReadinessClarification(
   if (!profile) return null;
   if (specifiedAvailabilityBrowseIsActionable(current)) return null;
   if (measuredLoadGuidanceCanProceed(current)) return null;
-  if (profile.required.every((requirement) => requirement.test(evidence))) return null;
+  const missing = profile.required
+    .map((requirement, index) => requirement.test(evidence) ? -1 : index)
+    .filter((index) => index >= 0);
+  if (missing.length === 0) return null;
+  const followUp = options.progressive
+    ? profile.follow_ups?.find((candidate) => missing.includes(candidate.requirement_index))
+    : undefined;
+  const missingSummary = missing
+    .map((index) => profile.missing_labels[index])
+    .filter(Boolean)
+    .join("; ");
   return {
     profile: profile.id,
-    question: profile.question,
-    facet_key: profile.facet_key,
-    options: profile.options,
+    question: followUp
+      ? `Осталось уточнить: ${missingSummary}. ${followUp.question}`
+      : profile.question,
+    facet_key: followUp?.facet_key ?? profile.facet_key,
+    options: followUp?.options ?? profile.options,
     scope: { kind: SELECTION_READINESS_SCOPE, token: current.slice(0, 500) },
   };
 }

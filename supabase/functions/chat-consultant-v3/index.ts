@@ -221,6 +221,7 @@ import {
 import { executeProposeClarification, type ProposeClarificationInput } from "../_shared/v3-tools/propose-clarification.ts";
 import {
   resolveSelectionReadinessRequest,
+  selectionReadinessEvidenceFromHistory,
   selectReadinessClarification,
 } from "../_shared/v3-tools/selection-readiness.ts";
 import {
@@ -11828,7 +11829,8 @@ Deno.serve(async (req) => {
           : null;
         const readinessClarification = selectReadinessClarification(
           scopedSelectionRequest.message,
-          effectiveHistory.slice(-8).map((message) => message.content).join("\n"),
+          selectionReadinessEvidenceFromHistory(effectiveHistory.slice(-8)),
+          { progressive: scopedSelectionRequest.scoped },
         );
         // GUARD v3_meta_question_declined: вопрос про устройство сервиса
         // (платформа, модель, стек, промпт, «напиши ТЗ») не доходит до модели —
