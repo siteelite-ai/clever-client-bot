@@ -84,6 +84,100 @@ function normalize(s: string): string {
   return s.toLowerCase().replace(/ё/g, "е").replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
+const LOCAL_CATEGORY_GRAMMAR_WORDS = new Set([
+  "без", "для", "или", "над", "под", "при", "про", "через",
+]);
+
+const LOCAL_CATEGORY_RU_SUFFIXES = [
+  "ыми", "ими", "ого", "его", "ому", "ему",
+  "ая", "яя", "ое", "ее", "ой", "ей", "ом", "ем", "ую", "юю",
+  "ый", "ий", "ые", "ие", "ых", "их", "ам", "ям", "ах", "ях", "ов", "ев",
+  "у", "ю", "а", "я", "о", "е", "ы", "и",
+];
+
+function localCategoryStem(token: string): string {
+  if (!/^[а-я]+$/u.test(token) || token.length < 5) return token;
+  for (const suffix of LOCAL_CATEGORY_RU_SUFFIXES) {
+    if (token.endsWith(suffix) && token.length - suffix.length >= 4) {
+      return token.slice(0, -suffix.length);
+    }
+  }
+  return token;
+}
+
+function localCategoryTokenMatches(left: string, right: string): boolean {
+  if (left === right) return true;
+  if (left.length < 4 || right.length < 4) return false;
+  const a = localCategoryStem(left);
+  const b = localCategoryStem(right);
+  if (a === b) return true;
+  let shared = 0;
+  while (shared < a.length && shared < b.length && a[shared] === b[shared]) shared += 1;
+  const shorter = Math.min(a.length, b.length);
+  return shared >= 5 && shared / shorter >= 0.6;
+}
+
+function localCategoryTokens(value: string): string[] {
+  return normalize(value).split(" ").filter((token) =>
+    token.length >= 3 && !LOCAL_CATEGORY_GRAMMAR_WORDS.has(token)
+  );
+}
+
+function tokensAppearInOrder(categoryTokens: string[], queryTokens: string[]): boolean {
+  let queryIndex = 0;
+  for (const categoryToken of categoryTokens) {
+    while (
+      queryIndex < queryTokens.length &&
+      !localCategoryTokenMatches(categoryToken, queryTokens[queryIndex])
+    ) queryIndex += 1;
+    if (queryIndex >= queryTokens.length) return false;
+    queryIndex += 1;
+  }
+  return true;
+}
+
+/**
+ * Resolve an obvious category name without a model call, using only titles
+ * from the live taxonomy. Every meaningful category token must be present in
+ * the customer text (with conservative inflection matching), and a tied best
+ * match is rejected as ambiguous. This is a quota/speed fallback, not a
+ * product dictionary: jargon and semantic aliases still go to the resolver.
+ */
+export function resolveLocalCategoryPagetitles(
+  input: DiscoverCategoryInput,
+  pagetitles: string[],
+): string[] {
+  const queryTokens = localCategoryTokens([input.semantic_query ?? "", input.noun].join(" "));
+  if (queryTokens.length === 0) return [];
+
+  const ranked = pagetitles.map((pagetitle) => {
+    const categoryTokens = localCategoryTokens(pagetitle);
+    if (
+      categoryTokens.length === 0 ||
+      !categoryTokens.every((token) => queryTokens.some((queryToken) =>
+        localCategoryTokenMatches(token, queryToken)
+      ))
+    ) return null;
+    return {
+      pagetitle,
+      tokenCount: categoryTokens.length,
+      ordered: tokensAppearInOrder(categoryTokens, queryTokens) ? 1 : 0,
+    };
+  }).filter((candidate): candidate is { pagetitle: string; tokenCount: number; ordered: number } => Boolean(candidate));
+
+  ranked.sort((left, right) =>
+    right.tokenCount - left.tokenCount ||
+    right.ordered - left.ordered ||
+    left.pagetitle.localeCompare(right.pagetitle)
+  );
+  const best = ranked[0];
+  if (!best) return [];
+  const tied = ranked.filter((candidate) =>
+    candidate.tokenCount === best.tokenCount && candidate.ordered === best.ordered
+  );
+  return tied.length === 1 ? [best.pagetitle] : [];
+}
+
 function cleanText(v: unknown): string {
   return typeof v === "string" || typeof v === "number" ? String(v).trim() : "";
 }
@@ -240,6 +334,15 @@ async function resolvePagetitle(
   const flat = cache.flat;
   const exact = flat.find((c) => normalize(c.pagetitle) === normalize(noun));
   if (exact) return { pagetitle: exact.pagetitle, candidates: [exact.pagetitle], cache };
+  const localCandidates = resolveLocalCategoryPagetitles(input, flat.map((candidate) => candidate.pagetitle));
+  if (localCandidates.length > 0) {
+    return {
+      pagetitle: localCandidates[0],
+      resolvedFrom: noun,
+      candidates: localCandidates,
+      cache,
+    };
+  }
   if (!deps.openrouterApiKey) return null;
 
   const list = flat
