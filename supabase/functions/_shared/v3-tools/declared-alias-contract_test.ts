@@ -5,6 +5,7 @@ import {
   declaredAliasIsStructurallyCustomerOwned,
   extractDeclaredCatalogAlias,
   extractPostNominalCatalogQualifier,
+  extractUnrepresentedPostNominalCatalogQualifier,
   filterProductsByDeclaredAlias,
   retainRequiredCatalogAlias,
   titleContainsDeclaredAlias,
@@ -120,6 +121,36 @@ Deno.test("a post-nominal customer qualifier is lexical evidence, not applicatio
   assertEquals(extractPostNominalCatalogQualifier("покажи прожекторы мощностью от 100 Вт", "прожекторы"), null);
   assertEquals(extractPostNominalCatalogQualifier("нужен провод длиной 50 м", "провод"), null);
   assertEquals(extractPostNominalCatalogQualifier("покажи розетки серии Гармония", "розетки"), null);
+});
+
+Deno.test("an unrepresented bound qualifier survives a complete facet projection", () => {
+  assertEquals(
+    extractUnrepresentedPostNominalCatalogQualifier(
+      "подбери лампу кукуруза на цоколь е14",
+      "Лампы",
+      ["E14"],
+    ),
+    "кукуруза",
+  );
+});
+
+Deno.test("a qualifier already represented by live evidence is not recovered twice", () => {
+  assertEquals(
+    extractUnrepresentedPostNominalCatalogQualifier(
+      "подбери лампу светодиодную на цоколь е14",
+      "Лампы",
+      ["Светодиодная", "E14"],
+    ),
+    null,
+  );
+  assertEquals(
+    extractUnrepresentedPostNominalCatalogQualifier(
+      "подбери лампу е14",
+      "Лампы",
+      ["E14"],
+    ),
+    null,
+  );
 });
 
 Deno.test("live taxonomy separates a customer alias from application wording", () => {

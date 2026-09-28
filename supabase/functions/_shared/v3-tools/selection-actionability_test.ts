@@ -114,12 +114,14 @@ Deno.test("a complete customer-owned live facet contract skips a redundant model
     projectedOptionCount: 3,
     mandatoryUserCriteriaCount: 3,
     unmatchedUserCriteriaCount: 0,
+    unresolvedLexicalQualifier: false,
   };
   assertEquals(shouldQueueDirectCustomerFacetSearch(base), true);
   assertEquals(shouldQueueDirectCustomerFacetSearch({ ...base, replacementIntent: true }), false);
   assertEquals(shouldQueueDirectCustomerFacetSearch({ ...base, derivedReasoningRequired: true }), false);
   assertEquals(shouldQueueDirectCustomerFacetSearch({ ...base, unmatchedUserCriteriaCount: 1 }), false);
   assertEquals(shouldQueueDirectCustomerFacetSearch({ ...base, broadAssortmentRequest: true }), false);
+  assertEquals(shouldQueueDirectCustomerFacetSearch({ ...base, unresolvedLexicalQualifier: true }), false);
 });
 
 Deno.test("two-sided fit reasoning cannot be projected as one scalar product measurement", () => {

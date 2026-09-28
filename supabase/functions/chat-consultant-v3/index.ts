@@ -37,7 +37,7 @@ import {
 import { buildAnchorMissingRecoveryQueries, buildCatalogEmptySynthesisMessages, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, filterSelectionRecoveryPool, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, resolveSelectionSearchEvidence, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection, type SelectionSearchRecoveryAttempt } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { buildDerivedSelectionReasoningMessages, buildDerivedSelectionReasoningToolSchema, hasActionableSelectionContract, hasSelectionMeasurementContext, measuredSelectionContractEvidence, resolveDerivedSelectionReasoning, shouldContinueSelectionPastOptionalClarification, shouldFinalizeDerivedSelectionSearch, shouldProjectDerivedScalarMeasurement, shouldQueueDirectCustomerFacetSearch, shouldRequireDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
 import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, groundSelectionApplicationContext, initialSelectionDeclaration, parseSelectionTarget, projectCustomerApplicationFacetCriteria, projectModelOnlySelectionTargetExtension, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
-import { aliasDuplicatesIndependentCatalogClass, declaredAliasIsStructurallyCustomerOwned, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
+import { aliasDuplicatesIndependentCatalogClass, declaredAliasIsStructurallyCustomerOwned, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, extractUnrepresentedPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
   buildPairedCompatibilityReasoning,
@@ -3810,7 +3810,7 @@ async function runExpertLoop(
   let derivedStructuredSearchPairedCompatibility = false;
   let derivedStructuredSearchResult: (SearchCatalogOk & { tool: "search_catalog" }) | null = null;
   let derivedStructuredSearchFinalizationReady = false;
-  let queuedCustomerFacetSearch: ORToolCall | null = null;
+  let queuedServerGroundedSearch: ORToolCall | null = null;
   let structuredSearchSource: "derived_reasoning" | "customer_facets" | null = null;
   let agentPhase: AgentPhase = "open";
   // A successful discovery may still resolve a broad noun to the wrong live
@@ -4567,9 +4567,9 @@ async function runExpertLoop(
         : null;
       let resp: ORResponse;
       try {
-        if (queuedCustomerFacetSearch) {
-          const queued = queuedCustomerFacetSearch;
-          queuedCustomerFacetSearch = null;
+        if (queuedServerGroundedSearch) {
+          const queued = queuedServerGroundedSearch;
+          queuedServerGroundedSearch = null;
           resp = {
             text: "",
             toolCalls: [queued],
@@ -8993,10 +8993,10 @@ async function runExpertLoop(
               addToWhitelist(leaf.pagetitle);
             }
             // A token after the product noun can be a brand, series, colour or
-            // another ordinary catalog attribute. Discovery alone must not
-            // promote it to a jargon obligation. A lexical recovery is opened
-            // only by the consultant's explicit, customer-owned alias
-            // declaration captured before this tool call.
+            // a colloquial product name. Discovery alone does not classify it:
+            // below it is first compared with live, customer-backed facets. A
+            // still-unrepresented token becomes a lexical proof obligation so
+            // a broad facet search cannot silently discard customer wording.
             if (replacementIntent) {
               const sourceIdentity = explicitReplacementIdentityValues(
                 lastDiscover.facets,
@@ -9197,7 +9197,40 @@ async function runExpertLoop(
                 lastDiscover.facets,
               );
               const directOptionCount = Object.keys(directCustomerProjection.options).length;
-              if (shouldQueueDirectCustomerFacetSearch({
+              const representedCustomerEvidence = [
+                lastDiscover.category.pagetitle,
+                ...directCustomerCriteria.flatMap((criterion) =>
+                  Array.isArray(criterion.value) ? criterion.value.map(String) : [String(criterion.value)]
+                ),
+              ];
+              const unresolvedLexicalQualifier = extractUnrepresentedPostNominalCatalogQualifier(
+                userMessage,
+                initialSelectionDiscoveryNoun ?? lastDiscover.category.pagetitle,
+                representedCustomerEvidence,
+              );
+              if (unresolvedLexicalQualifier) {
+                declaredAliasQuery ??= unresolvedLexicalQualifier;
+                const callId = crypto.randomUUID();
+                queuedServerGroundedSearch = {
+                  id: callId,
+                  name: "jargon_recover_catalog",
+                  args: {
+                    query: unresolvedLexicalQualifier,
+                    modifiers: representedCustomerEvidence,
+                    category: lastDiscover.category.pagetitle,
+                    category_in: lastDiscover.leaf_categories.map(({ pagetitle }) => pagetitle),
+                    per_page: 50,
+                  },
+                };
+                steps.push({
+                  step: "v3_customer_lexical_qualifier_search_queued",
+                  ms: now(),
+                  meta: {
+                    qualifier: unresolvedLexicalQualifier,
+                    represented_evidence: representedCustomerEvidence,
+                  },
+                });
+              } else if (shouldQueueDirectCustomerFacetSearch({
                 intentMode,
                 hasSelectionTarget: Boolean(activeSelectionTarget),
                 replacementIntent,
@@ -9208,12 +9241,13 @@ async function runExpertLoop(
                 projectedOptionCount: directOptionCount,
                 mandatoryUserCriteriaCount: directCustomerCriteria.length,
                 unmatchedUserCriteriaCount: directCustomerProjection.unmatched_keys.length,
+                unresolvedLexicalQualifier: false,
               })) {
                 const callId = crypto.randomUUID();
                 derivedStructuredSearchCallId = callId;
                 derivedStructuredSearchPairedCompatibility = false;
                 structuredSearchSource = "customer_facets";
-                queuedCustomerFacetSearch = {
+                queuedServerGroundedSearch = {
                   id: callId,
                   name: "search_catalog",
                   args: {

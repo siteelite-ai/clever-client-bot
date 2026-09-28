@@ -50,6 +50,24 @@ export function specifiedAvailabilityBrowseIsActionable(message: string): boolea
   return explicitCompactSpecificationTokens(source).length >= 2;
 }
 
+/**
+ * A measured engineering question is not the same interaction as an order to
+ * select a purchasable SKU. When the customer explicitly supplies a load and
+ * asks what is needed, the consultant must first expose the calculation and
+ * its assumptions; demanding every final catalog attribute before that
+ * reasoning hides useful information and can even ask for a value that the
+ * supplied load is meant to derive. Explicit catalog imperatives remain under
+ * the strict readiness profiles below.
+ */
+export function measuredLoadGuidanceCanProceed(message: string): boolean {
+  const source = String(message ?? "").trim();
+  if (!source) return false;
+  const asksGuidance = /(?:какой|какая|какое|какие)[^.!?\n]{0,120}(?:нужен|нужна|нужно|нужны|подойдет|подойдут)/iu.test(source);
+  const measuredLoad = /нагрузк\p{L}*[^.!?\n]{0,40}\d+(?:[.,]\d+)?\s*(?:к?вт|а)(?=$|[^\p{L}\p{N}])|\d+(?:[.,]\d+)?\s*(?:к?вт|а)(?=$|[^\p{L}\p{N}])[^.!?\n]{0,40}нагрузк\p{L}*/iu.test(source);
+  const catalogImperative = /(?:^|[^\p{L}])(?:найд\p{L}*|подбер\p{L}*|покаж\p{L}*|предлож\p{L}*|выбер\p{L}*)(?=$|[^\p{L}])/iu.test(source);
+  return asksGuidance && measuredLoad && !catalogImperative;
+}
+
 // These are reusable engineering-selection profiles, not catalog aliases or
 // product values. A profile only decides whether the request contains enough
 // input data to start a safe search; live discovery still owns all filters.
@@ -226,6 +244,7 @@ export function selectReadinessClarification(
     )[0]?.candidate;
   if (!profile) return null;
   if (specifiedAvailabilityBrowseIsActionable(current)) return null;
+  if (measuredLoadGuidanceCanProceed(current)) return null;
   if (profile.required.every((requirement) => requirement.test(evidence))) return null;
   return {
     profile: profile.id,

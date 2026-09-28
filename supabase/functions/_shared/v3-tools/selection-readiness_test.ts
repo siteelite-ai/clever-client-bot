@@ -1,6 +1,7 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   resolveSelectionReadinessRequest,
+  measuredLoadGuidanceCanProceed,
   selectReadinessClarification,
   specifiedAvailabilityBrowseIsActionable,
 } from "./selection-readiness.ts";
@@ -32,6 +33,24 @@ Deno.test("selection readiness allows a completed pump-cable context", () => {
     ),
     null,
   );
+});
+
+Deno.test("a measured load guidance question reaches visible reasoning before catalog readiness", () => {
+  const message = "Какой автоматический выключатель мне нужен для квартиры с нагрузкой 7 кВт?";
+  assertEquals(measuredLoadGuidanceCanProceed(message), true);
+  assertEquals(selectReadinessClarification(message), null);
+});
+
+Deno.test("a direct catalog order with the same load remains readiness-protected", () => {
+  const message = "Подбери автомат для квартиры с нагрузкой 7 кВт";
+  assertEquals(measuredLoadGuidanceCanProceed(message), false);
+  assertEquals(selectReadinessClarification(message)?.profile, "apartment_breaker");
+});
+
+Deno.test("a question without a measured load still receives an essential clarification", () => {
+  const message = "Какой кабель подойдет для прокладки в земле?";
+  assertEquals(measuredLoadGuidanceCanProceed(message), false);
+  assertEquals(selectReadinessClarification(message)?.profile, "underground_cable");
 });
 
 Deno.test("specified availability browse proceeds without optional preference questions", () => {

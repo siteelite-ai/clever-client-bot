@@ -159,6 +159,48 @@ export function extractPostNominalCatalogQualifier(
   return null;
 }
 
+function normalizeVisualCode(value: string): string {
+  const visual: Record<string, string> = {
+    а: "a", в: "b", е: "e", к: "k", м: "m", н: "h",
+    о: "o", р: "p", с: "c", т: "t", у: "y", х: "x",
+  };
+  return normalize(value)
+    .replace(/[авекмнорстух]/gu, (char) => visual[char] ?? char)
+    .replace(/\s+/gu, "");
+}
+
+function qualifierIsRepresentedByEvidence(qualifier: string, evidence: string[]): boolean {
+  if (aliasDuplicatesCatalogClass(qualifier, evidence)) return true;
+  const compactQualifier = normalizeVisualCode(qualifier);
+  if (!compactQualifier) return true;
+  return evidence.some((value) => {
+    const candidate = String(value ?? "");
+    return containsInflectedTokenSequence(candidate, qualifier) ||
+      (/\d/u.test(compactQualifier) && normalizeVisualCode(candidate).includes(compactQualifier));
+  });
+}
+
+/**
+ * Returns a customer qualifier that would otherwise be lost between live
+ * taxonomy discovery and a facet-only search. The rule is category-agnostic:
+ * a word directly bound to the customer's product noun must be represented by
+ * either the discovered class or a grounded criterion. If neither represents
+ * it, the caller must preserve it as a lexical search obligation instead of
+ * silently rendering the broader facet pool.
+ */
+export function extractUnrepresentedPostNominalCatalogQualifier(
+  customerText: string,
+  discoveredNoun: string,
+  representedEvidence: string[],
+): string | null {
+  const qualifier = extractPostNominalCatalogQualifier(customerText, discoveredNoun);
+  if (!qualifier) return null;
+  const evidence = [discoveredNoun, ...(Array.isArray(representedEvidence) ? representedEvidence : [])]
+    .map(String)
+    .filter(Boolean);
+  return qualifierIsRepresentedByEvidence(qualifier, evidence) ? null : qualifier;
+}
+
 const REQUEST_SCAFFOLD = new Set([
   ...POST_NOMINAL_STOP,
   "а", "у", "ты", "тебя", "вы", "вас", "мне", "нам", "ли", "это", "такой", "такая", "такие",

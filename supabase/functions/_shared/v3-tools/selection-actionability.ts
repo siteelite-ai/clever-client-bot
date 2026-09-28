@@ -496,6 +496,7 @@ export interface DirectCustomerFacetSearchInput {
   projectedOptionCount: number;
   mandatoryUserCriteriaCount: number;
   unmatchedUserCriteriaCount: number;
+  unresolvedLexicalQualifier: boolean;
 }
 
 /**
@@ -516,6 +517,7 @@ export function shouldQueueDirectCustomerFacetSearch(
     !input.broadAssortmentRequest &&
     !input.derivedReasoningRequired &&
     !input.exactCompoundEvidenceRequired &&
+    !input.unresolvedLexicalQualifier &&
     input.projectedOptionCount > 0 &&
     input.mandatoryUserCriteriaCount > 0 &&
     input.unmatchedUserCriteriaCount === 0;
