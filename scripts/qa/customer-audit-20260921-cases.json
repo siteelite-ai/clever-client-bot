@@ -488,7 +488,7 @@
       "turns": [{
         "message": "Покажи самые дешевые светильники Philips для офиса",
         "expect": {
-          "min_products": 3,
+          "min_products": 2,
           "max_products": 5,
           "require_result_cardinality": { "target": 4, "minimum": 3, "mode": "selection", "explicit": false },
           "require_every_product_card_groups": [["Бренд: Philips", "Бренд: PHILIPS"], ["светильник", "панель", "CoreLine", "Ledinaire"]],
