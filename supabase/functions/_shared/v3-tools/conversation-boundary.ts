@@ -204,6 +204,16 @@ function compactPendingSlots(
   return pending;
 }
 
+function hasServerIssuedScopedClarification(slots: Record<string, unknown>): boolean {
+  const pending = slots?.pending_clarification;
+  if (!pending || typeof pending !== "object" || Array.isArray(pending)) return false;
+  const scope = (pending as Record<string, unknown>).scope;
+  if (!scope || typeof scope !== "object" || Array.isArray(scope)) return false;
+  const row = scope as Record<string, unknown>;
+  return (row.kind === "selection_readiness" || row.kind === "broad_assortment") &&
+    typeof row.token === "string" && row.token.trim().length > 0;
+}
+
 /**
  * Semantic boundary classifier. On any transport/model/parse failure it keeps
  * the context: a false reset is more damaging than a missed reset and would
@@ -216,6 +226,17 @@ export async function classifyConversationBoundary(
   deps: ConversationBoundaryDeps,
   signal?: AbortSignal,
 ): Promise<ConversationBoundaryResult> {
+  // A server-issued scoped clarification is stronger evidence than a semantic
+  // guess: the current turn is the answer to a known pending question. Avoid a
+  // remote call entirely so quota or classifier drift cannot erase that task.
+  if (hasServerIssuedScopedClarification(slots)) {
+    return {
+      mode: "continuation",
+      confidence: 1,
+      reason: "local_server_scoped_clarification",
+      source: "local",
+    };
+  }
   if (!hasPriorUserTurn(priorHistory)) {
     return {
       mode: "continuation",

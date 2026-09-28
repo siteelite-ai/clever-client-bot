@@ -132,6 +132,38 @@ Deno.test("complete local request does not spend a remote classifier call", asyn
   assertEquals(calls, 0);
 });
 
+Deno.test("a server-scoped clarification answer never spends a boundary-model call", async () => {
+  let calls = 0;
+  const result = await classifyConversationBoundary(
+    "35м2 и высота примерно 1,5м",
+    prior,
+    {
+      pending_clarification: {
+        status: "pending",
+        scope: {
+          kind: "selection_readiness",
+          token: "Нужен прожектор на улицу",
+        },
+      },
+    },
+    {
+      apiKey: "test",
+      model: "test-model",
+      fetchImpl: async () => {
+        calls += 1;
+        throw new Error("remote classifier must not be called");
+      },
+    },
+  );
+  assertEquals(result, {
+    mode: "continuation",
+    confidence: 1,
+    reason: "local_server_scoped_clarification",
+    source: "local",
+  });
+  assertEquals(calls, 0);
+});
+
 Deno.test("new topic requires a high-confidence semantic decision", () => {
   assertEquals(
     shouldStartNewConversation({

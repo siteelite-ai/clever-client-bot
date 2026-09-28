@@ -96,6 +96,16 @@ Deno.test("selection readiness allows a completed outdoor-floodlight context", (
   );
 });
 
+Deno.test("outdoor protection is derived after the customer supplies parking geometry", () => {
+  assertEquals(
+    selectReadinessClarification(
+      "Какие прожекторы подойдут для освещения парковки?",
+      "500 м², высота установки 3 м",
+    ),
+    null,
+  );
+});
+
 Deno.test("free-form clarification answer retains the original selection request", () => {
   const original = "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома";
   const resolved = resolveSelectionReadinessRequest(
