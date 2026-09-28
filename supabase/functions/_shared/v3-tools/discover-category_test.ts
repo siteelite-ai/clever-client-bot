@@ -5,6 +5,7 @@ const LIVE_TITLES = [
   "Светильники",
   "Уличные светильники",
   "Светильники для ЖКХ",
+  "Датчики",
   "Средства для удаления наклеек",
   "Прожекторы",
   "Кабели силовые",
@@ -17,6 +18,17 @@ Deno.test("local live-taxonomy resolver handles an obvious inflected class witho
     noun: "мне нужен бытовой светильник с датчиком движения",
     semantic_query: "мне нужен бытовой светильник с датчиком движения до 4000 тенге",
   }, LIVE_TITLES), ["Светильники"]);
+});
+
+Deno.test("local live-taxonomy resolver treats a prepositional class as a modifier, not the head product", () => {
+  assertEquals(resolveLocalCategoryPagetitles({
+    noun: "светильник с датчиком",
+    semantic_query: "мне нужен светильник с датчиком движения",
+  }, LIVE_TITLES), ["Светильники"]);
+  assertEquals(resolveLocalCategoryPagetitles({
+    noun: "датчик движения",
+    semantic_query: "мне нужен датчик движения",
+  }, LIVE_TITLES), ["Датчики"]);
 });
 
 Deno.test("local live-taxonomy resolver prefers a fully customer-grounded specific class", () => {

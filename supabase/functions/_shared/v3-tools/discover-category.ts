@@ -88,6 +88,10 @@ const LOCAL_CATEGORY_GRAMMAR_WORDS = new Set([
   "без", "для", "или", "над", "под", "при", "про", "через",
 ]);
 
+const LOCAL_CATEGORY_MODIFIER_PREPOSITIONS = new Set([
+  "без", "в", "во", "для", "до", "из", "к", "ко", "на", "над", "от", "под", "при", "про", "с", "со", "через",
+]);
+
 const LOCAL_CATEGORY_RU_SUFFIXES = [
   "ыми", "ими", "ого", "его", "ому", "ему",
   "ая", "яя", "ое", "ее", "ой", "ей", "ом", "ем", "ую", "юю",
@@ -123,17 +127,19 @@ function localCategoryTokens(value: string): string[] {
   );
 }
 
-function tokensAppearInOrder(categoryTokens: string[], queryTokens: string[]): boolean {
+function orderedTokenStart(categoryTokens: string[], queryTokens: string[]): number | null {
   let queryIndex = 0;
+  let start = -1;
   for (const categoryToken of categoryTokens) {
     while (
       queryIndex < queryTokens.length &&
       !localCategoryTokenMatches(categoryToken, queryTokens[queryIndex])
     ) queryIndex += 1;
-    if (queryIndex >= queryTokens.length) return false;
+    if (queryIndex >= queryTokens.length) return null;
+    if (start < 0) start = queryIndex;
     queryIndex += 1;
   }
-  return true;
+  return start;
 }
 
 /**
@@ -147,7 +153,9 @@ export function resolveLocalCategoryPagetitles(
   input: DiscoverCategoryInput,
   pagetitles: string[],
 ): string[] {
-  const queryTokens = localCategoryTokens([input.semantic_query ?? "", input.noun].join(" "));
+  const queryText = [input.semantic_query ?? "", input.noun].join(" ");
+  const rawQueryTokens = normalize(queryText).split(" ").filter(Boolean);
+  const queryTokens = localCategoryTokens(queryText);
   if (queryTokens.length === 0) return [];
 
   const ranked = pagetitles.map((pagetitle) => {
@@ -158,14 +166,26 @@ export function resolveLocalCategoryPagetitles(
         localCategoryTokenMatches(token, queryToken)
       ))
     ) return null;
+    const orderedStart = orderedTokenStart(categoryTokens, rawQueryTokens);
+    const relationRole = orderedStart !== null && orderedStart > 0 &&
+        LOCAL_CATEGORY_MODIFIER_PREPOSITIONS.has(rawQueryTokens[orderedStart - 1])
+      ? 0
+      : 1;
     return {
       pagetitle,
       tokenCount: categoryTokens.length,
-      ordered: tokensAppearInOrder(categoryTokens, queryTokens) ? 1 : 0,
+      relationRole,
+      ordered: orderedStart === null ? 0 : 1,
     };
-  }).filter((candidate): candidate is { pagetitle: string; tokenCount: number; ordered: number } => Boolean(candidate));
+  }).filter((candidate): candidate is {
+    pagetitle: string;
+    tokenCount: number;
+    relationRole: number;
+    ordered: number;
+  } => Boolean(candidate));
 
   ranked.sort((left, right) =>
+    right.relationRole - left.relationRole ||
     right.tokenCount - left.tokenCount ||
     right.ordered - left.ordered ||
     left.pagetitle.localeCompare(right.pagetitle)
@@ -173,7 +193,9 @@ export function resolveLocalCategoryPagetitles(
   const best = ranked[0];
   if (!best) return [];
   const tied = ranked.filter((candidate) =>
-    candidate.tokenCount === best.tokenCount && candidate.ordered === best.ordered
+    candidate.relationRole === best.relationRole &&
+    candidate.tokenCount === best.tokenCount &&
+    candidate.ordered === best.ordered
   );
   return tied.length === 1 ? [best.pagetitle] : [];
 }
