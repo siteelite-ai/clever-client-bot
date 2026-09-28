@@ -14,6 +14,13 @@ Deno.test("explicit catalog selection is not misclassified by a characteristic f
     "select",
   );
   assertEquals(detectUserIntentMode("Покажи товары этой серии"), "select");
+  assertEquals(
+    detectUserIntentMode("Есть ли светодиодные лампы 3000К на цоколь Е27?"),
+    "select",
+  );
+  assertEquals(detectUserIntentMode("Имеются кабели ВВГ 3×1,5?"), "select");
+  assertEquals(detectUserIntentMode("Есть ли разница между ВВГ и NYM?"), "inquire");
+  assertEquals(detectUserIntentMode("Есть ли гарантия на этот товар?"), "inquire");
 });
 
 Deno.test("series explanation remains inquiry mode so prose is preserved", () => {
