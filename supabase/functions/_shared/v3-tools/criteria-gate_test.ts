@@ -192,6 +192,23 @@ Deno.test("public selection contract never upgrades advisory render criteria", (
   ]);
 });
 
+Deno.test("model assumptions cannot enter the immutable mandatory contract", () => {
+  const assumed = {
+    key: "Live application class", op: "eq" as const, value: "model-selected value",
+    level: "A" as const, evidence: "model_assumption" as const,
+  };
+  const explicit = {
+    key: "Live customer facet", op: "eq" as const, value: "customer value",
+    level: "A" as const, evidence: "user_explicit" as const,
+  };
+  assertEquals(mergeMandatorySelectionCriteria([assumed, explicit]), [explicit]);
+  assertEquals(mergeUserBackedCriteria([], [assumed, explicit]), [explicit]);
+  assertEquals(
+    extendSelectionCriteriaPlan(null, [assumed, explicit], "reasoning_projection").mandatory_criteria,
+    [explicit],
+  );
+});
+
 Deno.test("selection plan hash is order-independent and changes only when the hard contract changes", () => {
   const left = extendSelectionCriteriaPlan(null, [
     { key: "Facet A", op: "eq", value: "one", level: "A" },

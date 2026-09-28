@@ -25,6 +25,13 @@ import { extractClientQuantities, normalizeUnit } from "./criteria-consistency.t
 
 export type CriteriaOp = "eq" | "min" | "max" | "range";
 
+/** Evidence authority, separate from the operational stage that found it. */
+export type CriterionEvidence =
+  | "user_explicit"
+  | "derived_required"
+  | "catalog_verified"
+  | "model_assumption";
+
 export interface Criterion {
   /** Имя параметра бытовыми словами или как в фасете — сверка по нормализованному вхождению. */
   key: string;
@@ -34,6 +41,8 @@ export interface Criterion {
   unit?: string | null;
   /** A — критический (отсев), B — вторичный (только отчёт). По умолчанию A. */
   level?: "A" | "B";
+  /** Why this criterion is allowed to influence the selection contract. */
+  evidence?: CriterionEvidence;
   /**
    * Строгое неравенство для min/max: «больше 12» (а не «не менее 12»).
    * Ставится Слоем 5 по прозе модели (criteria-reasoning.ts).
@@ -120,6 +129,9 @@ export function mergeUserBackedCriteria(
   const seen = new Set<string>();
   for (const criterion of [...(existing ?? []), ...(incoming ?? [])]) {
     if (!criterion?.key || criterion.value === undefined) continue;
+    // This is a hard-contract boundary: a model hypothesis cannot become a
+    // customer obligation merely because a later tool serialized it as A.
+    if (criterion.evidence === "model_assumption") continue;
     const value = Array.isArray(criterion.value)
       ? criterion.value.map((item) => String(item)).join("\u0000")
       : String(criterion.value);
@@ -150,7 +162,8 @@ export function mergeMandatorySelectionCriteria(
   return mergeUserBackedCriteria(
     [],
     (Array.isArray(criteria) ? criteria : []).filter((criterion) =>
-      criterion?.key && criterion.value !== undefined && (criterion.level ?? "A") === "A"
+      criterion?.key && criterion.value !== undefined && (criterion.level ?? "A") === "A" &&
+      criterion.evidence !== "model_assumption"
     ),
   );
 }
@@ -348,7 +361,8 @@ export function extendSelectionCriteriaPlan(
   provenance: SelectionCriterionProvenance,
 ): SelectionCriteriaPlan {
   const additions = (Array.isArray(incoming) ? incoming : [])
-    .filter((criterion) => criterion?.key && criterion.value !== undefined && (criterion.level ?? "A") === "A")
+    .filter((criterion) => criterion?.key && criterion.value !== undefined &&
+      (criterion.level ?? "A") === "A" && criterion.evidence !== "model_assumption")
     .map((criterion) => ({ ...criterion, level: "A" as const }));
   const existing = current?.mandatory_criteria.map((criterion) => ({ ...criterion })) ?? [];
   const mandatory = mergeUserBackedCriteria(existing, additions);

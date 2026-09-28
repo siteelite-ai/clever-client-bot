@@ -197,8 +197,11 @@ Deno.test("derived reasoning uses validated live classification IDs and makes th
   }, liveFacets);
   assertEquals(resolved?.compatible, [{ key: "Вид исполнения", value: "Первый класс" }]);
   assertEquals(resolved?.excluded, [{ key: "Вид исполнения", value: "Второй класс" }]);
-  assertEquals(resolved?.text.includes("По классу «Вид исполнения» выбираю «Первый класс»"), true);
-  assertEquals(resolved?.text.includes("Исключаю несовместимые классы: «Второй класс»"), true);
+  assertEquals(resolved?.customerGroundedCompatible, []);
+  assertEquals(resolved?.customerGroundedExcluded, []);
+  assertEquals(resolved?.text.includes("Как рабочую гипотезу"), true);
+  assertEquals(resolved?.text.includes("не становится обязательным фильтром"), true);
+  assertEquals(resolved?.text.includes("Исключаю несовместимые классы"), false);
   assertEquals(resolved?.text.includes("как альтернативу"), false);
   assertEquals(resolved?.text.includes("invented"), false);
 });
@@ -310,8 +313,9 @@ Deno.test("an opaque live abbreviation cannot become a hard model-only exclusion
   }]);
 
   assertEquals(resolved?.excluded, [{ key: "Класс применения", value: "промышленные изделия" }]);
+  assertEquals(resolved?.customerGroundedExcluded, []);
   assertEquals(resolved?.text.includes("ЖКХ"), false);
-  assertEquals(resolved?.text.includes("промышленные изделия"), true);
+  assertEquals(resolved?.text.includes("промышленные изделия"), false);
 });
 
 Deno.test("a negated class term cannot become customer-grounded evidence", () => {
@@ -330,6 +334,11 @@ Deno.test("a negated class term cannot become customer-grounded evidence", () =>
   }, liveFacets, "Нужно не подвесное, а накладное изделие");
 
   assertEquals(resolved?.compatible, [{ key: "Класс применения", value: "накладные изделия" }]);
+  assertEquals(resolved?.customerGroundedExcluded, [{
+    key: "Класс применения",
+    value: "подвесные изделия",
+  }]);
+  assertEquals(resolved?.text.includes("По вашему условию исключаю: «подвесные изделия»"), true);
 });
 
 Deno.test("visible prose cannot contradict the customer-grounded live class", () => {

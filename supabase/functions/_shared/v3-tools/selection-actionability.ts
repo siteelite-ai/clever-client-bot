@@ -178,6 +178,26 @@ function customerGroundedClassificationChoices(
   return grounded;
 }
 
+/** Only customer-owned negative class constraints may become hard exclusions. */
+function customerGroundedExcludedClassificationChoices(
+  customerEvidence: string,
+  facets: DerivedSelectionFacet[],
+): DerivedClassificationChoice[] {
+  const sourceTokens = String(customerEvidence ?? "").match(/[a-zа-я0-9]{2,}/giu) ?? [];
+  const negativeStems = new Set<string>();
+  for (const [index, token] of sourceTokens.entries()) {
+    const preceding = sourceTokens.slice(Math.max(0, index - 3), index)
+      .map((value) => value.toLocaleLowerCase("ru-RU").replace(/ё/gu, "е"));
+    if (!preceding.some((value) => ["не", "без", "кроме", "исключая"].includes(value))) continue;
+    negativeStems.add(classificationLexicalStem(token));
+  }
+  if (negativeStems.size === 0) return [];
+  const allChoices = derivedClassificationChoices(facets);
+  return allChoices.filter((choice) =>
+    classificationDiscriminativeStems(choice, allChoices).some((stem) => negativeStems.has(stem))
+  );
+}
+
 /**
  * A dedicated, forced reasoning declaration keeps the consultant's visible
  * explanation and the machine retrieval contract in one response. Opaque IDs
@@ -237,6 +257,7 @@ export interface ResolvedDerivedSelectionReasoning {
   measurementEvidence: string;
   compatible: Array<{ key: string; value: string }>;
   customerGroundedCompatible: Array<{ key: string; value: string }>;
+  customerGroundedExcluded: Array<{ key: string; value: string }>;
   familyCompatibleFacetKeys: string[];
   excluded: Array<{ key: string; value: string }>;
 }
@@ -299,11 +320,15 @@ export function resolveDerivedSelectionReasoning(
     .map(([facetIdentity]) => facetIdentity);
   const compatibleIds = new Set(compatibleChoices.map(({ id }) => id));
   const allLiveChoices = [...byId.values()];
-  const excludedChoices = resolveIds(args.excluded_classifications, 8)
+  const groundedExcludedChoices = customerGroundedExcludedClassificationChoices(customerEvidence, facets)
+    .filter((choice) => !compatibleIds.has(choice.id));
+  const groundedExcludedIds = new Set(groundedExcludedChoices.map(({ id }) => id));
+  const excludedChoices = [...groundedExcludedChoices, ...resolveIds(args.excluded_classifications, 8)]
     .filter((choice) =>
       !compatibleIds.has(choice.id) &&
-      !classificationHasOnlyOpaqueDiscriminators(choice, allLiveChoices)
-    );
+      (groundedExcludedIds.has(choice.id) || !classificationHasOnlyOpaqueDiscriminators(choice, allLiveChoices))
+    )
+    .filter((choice, index, all) => all.findIndex(({ id }) => id === choice.id) === index);
 
   // The structured fields own classification. A prose sentence that also
   // names a different live value would silently re-open the same facet during
@@ -350,15 +375,24 @@ export function resolveDerivedSelectionReasoning(
   const exactCompatibleChoices = compatibleChoices.filter(({ facet }) =>
     !normalizedFamilyFacetKeys.has(facet.toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim())
   );
+  const groundedExactCompatibleChoices = exactCompatibleChoices.filter(({ id }) => groundedIds.has(id));
+  const assumedExactCompatibleChoices = exactCompatibleChoices.filter(({ id }) => !groundedIds.has(id));
   const familyCompatibleChoices = compatibleChoices.filter(({ facet }) =>
     normalizedFamilyFacetKeys.has(facet.toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim())
   );
   const sentences = [reasoning.replace(/[.!?…]+$/u, "") + "."];
-  if (exactCompatibleChoices.length > 0) {
+  if (groundedExactCompatibleChoices.length > 0) {
     sentences.push(
-      `По классу ${exactCompatibleChoices.map(({ facet, value }) =>
+      `По классу ${groundedExactCompatibleChoices.map(({ facet, value }) =>
         `«${visibleFacetText(facet)}» выбираю «${visibleFacetText(value)}»`
       ).join("; ")}.`,
+    );
+  }
+  if (assumedExactCompatibleChoices.length > 0) {
+    sentences.push(
+      `Как рабочую гипотезу сначала проверяю ${assumedExactCompatibleChoices.map(({ facet, value }) =>
+        `«${visibleFacetText(facet)}: ${visibleFacetText(value)}»`
+      ).join("; ")}; без подтверждения клиента это не становится обязательным фильтром.`,
     );
   }
   if (familyCompatibleChoices.length > 0) {
@@ -368,9 +402,9 @@ export function resolveDerivedSelectionReasoning(
       ).join("; ")}; другие значения этого класса исключаю только при доказанной несовместимости.`,
     );
   }
-  if (excludedChoices.length > 0) {
+  if (groundedExcludedChoices.length > 0) {
     sentences.push(
-      `Исключаю несовместимые классы: ${excludedChoices.slice(0, 4).map(({ value }) =>
+      `По вашему условию исключаю: ${groundedExcludedChoices.slice(0, 4).map(({ value }) =>
         `«${visibleFacetText(value)}»`
       ).join(", ")}.`,
     );
@@ -384,6 +418,8 @@ export function resolveDerivedSelectionReasoning(
     compatible: compatibleChoices.map(({ facet, value }) => ({ key: facet, value })),
     customerGroundedCompatible: compatibleChoices
       .filter(({ id }) => groundedIds.has(id))
+      .map(({ facet, value }) => ({ key: facet, value })),
+    customerGroundedExcluded: groundedExcludedChoices
       .map(({ facet, value }) => ({ key: facet, value })),
     familyCompatibleFacetKeys,
     excluded: excludedChoices.map(({ facet, value }) => ({ key: facet, value })),

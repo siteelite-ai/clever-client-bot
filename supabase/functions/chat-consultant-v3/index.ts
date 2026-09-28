@@ -3427,6 +3427,7 @@ async function runExpertLoop(
   let enforcedSearchCriteria: Criterion[] = [];
   let userBackedSearchCriteria: Criterion[] = [];
   const userBackedSearchFacetValues: Array<{ key: string; value: string }> = [];
+  const modelAssumedSearchFacetValues: Array<{ key: string; value: string }> = [];
   let reasoningProjectedSearchCriteria: Criterion[] = [];
   // Some derived numeric obligations are reliably verifiable on materialized
   // cards but unsafe as first-pass catalog filters when a high-cardinality
@@ -4521,22 +4522,34 @@ async function runExpertLoop(
             familyCompatibleFacetKeys.has(key.toLocaleLowerCase("ru-RU").replace(/\s+/gu, " ").trim());
           const proposedClassificationCriteria: Criterion[] = declaration.compatible
             .filter(({ key }) => !isFamilyCompatibleFacet(key))
-            .map(({ key, value }) => ({
-              key,
-              op: "eq",
-              value,
-              level: "A",
-            }));
+            .map(({ key, value }) => {
+              const customerGrounded = declaration.customerGroundedCompatible.some((candidate) =>
+                candidate.key === key && candidate.value === value
+              );
+              if (!customerGrounded && !modelAssumedSearchFacetValues.some((candidate) =>
+                candidate.key === key && candidate.value === value
+              )) modelAssumedSearchFacetValues.push({ key, value });
+              return {
+                key,
+                op: "eq" as const,
+                value,
+                level: customerGrounded ? "A" as const : "B" as const,
+                evidence: customerGrounded ? "user_explicit" as const : "model_assumption" as const,
+              };
+            });
           const customerGroundedClassificationCriteria: Criterion[] = declaration.customerGroundedCompatible
             .filter(({ key }) => !isFamilyCompatibleFacet(key))
-            .map(({ key, value }) => ({ key, op: "eq", value, level: "A" }));
+            .map(({ key, value }) => ({
+              key, op: "eq", value, level: "A", evidence: "user_explicit",
+            }));
           derivedExcludedClassificationCriteria = mergeMandatorySelectionCriteria([
             ...derivedExcludedClassificationCriteria,
-            ...declaration.excluded.map(({ key, value }) => ({
+            ...declaration.customerGroundedExcluded.map(({ key, value }) => ({
               key,
               op: "eq" as const,
               value,
               level: "A" as const,
+              evidence: "user_explicit" as const,
             })),
           ]);
           const classificationImportance = alignCriteriaImportanceWithReasoning(
@@ -4575,6 +4588,10 @@ async function runExpertLoop(
             declaredClassificationCriteria,
             lastDiscover.facets ?? [],
           );
+          const advisoryClassificationProjection = projectCriteriaFacetOptions(
+            proposedClassificationCriteria.filter((criterion) => criterion.evidence === "model_assumption"),
+            lastDiscover.facets ?? [],
+          );
           postFilterOnlyReasoningCriteria = mergeMandatorySelectionCriteria([
             ...postFilterOnlyReasoningCriteria,
             ...(derivedScalarProjectionAllowed ? derivedMeasuredContract.projected_criteria : []),
@@ -4600,6 +4617,8 @@ async function runExpertLoop(
           // retain the ordinary agent continuation and fail closed there.
           const directSearchOptions = Object.keys(declaredClassificationProjection.options).length > 0
             ? declaredClassificationProjection.options
+            : Object.keys(advisoryClassificationProjection.options).length > 0
+            ? advisoryClassificationProjection.options
             : derivedFacetProjection.options;
           const directSearchBase: Record<string, unknown> | null = Object.keys(directSearchOptions).length > 0
             ? {
@@ -4647,8 +4666,11 @@ async function runExpertLoop(
               category: lastDiscover.category?.pagetitle ?? "",
               facets: lastDiscover.facets?.length ?? 0,
               compatible_classifications: declaration.compatible,
+              mandatory_compatible_classifications: declaration.customerGroundedCompatible,
+              advisory_compatible_classifications: modelAssumedSearchFacetValues,
               compatible_family_facets: declaration.familyCompatibleFacetKeys,
               excluded_classifications: declaration.excluded,
+              mandatory_excluded_classifications: declaration.customerGroundedExcluded,
               reasoning_model: ctx.selectionReasoningModel,
               direct_search: resp.toolCalls.some(({ name }) => name === "search_catalog"),
               projected_options: Object.keys(directSearchOptions),
@@ -5527,13 +5549,34 @@ async function runExpertLoop(
             }
           }
           }
+          const isModelAssumedFacetValue = (key: string, value: string): boolean => {
+            const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
+            const identities = [key, facet?.caption ?? ""].map(normalizeForMatch).filter(Boolean);
+            return modelAssumedSearchFacetValues.some((candidate) =>
+              identities.includes(normalizeForMatch(candidate.key)) &&
+              normalizeForMatch(candidate.value) === normalizeForMatch(value)
+            );
+          };
           const guardedSearchCriteria: Criterion[] = effectiveKept.map(({ key, value }) => {
             const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
-            return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
+            const modelAssumption = isModelAssumedFacetValue(key, value);
+            return {
+              key: facet?.caption || key,
+              op: "eq",
+              value,
+              level: modelAssumption ? "B" as const : "A" as const,
+              evidence: modelAssumption ? "model_assumption" as const : "derived_required" as const,
+            };
           });
           const guardedUserBackedCriteria: Criterion[] = effectiveUserBacked.map(({ key, value }) => {
             const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
-            return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
+            return {
+              key: facet?.caption || key,
+              op: "eq",
+              value,
+              level: "A" as const,
+              evidence: "user_explicit" as const,
+            };
           });
           const compatibilityShapedSearch =
             minimumCompatibilityRelationCount(declaredReasoning) >= 2 ||
