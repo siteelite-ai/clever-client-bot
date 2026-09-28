@@ -616,13 +616,18 @@ function explicitShortFacetCodeIsLocallyEvidenced(
 ): boolean {
   const canonical = visualSingleLetter(value);
   if (canonical.length !== 1 || !/[a-z]/u.test(canonical)) return false;
-  const rawTokens = String(evidence ?? "").match(/\p{L}+/gu) ?? [];
+  const rawTokens = String(evidence ?? "").match(/\d+(?:[.,]\d+)?|\p{L}+/gu) ?? [];
   const facetTokens = norm(`${facet.key} ${facet.caption ?? ""}`)
     .split(" ")
     .filter((token) => token.length >= 4);
   if (facetTokens.length === 0) return false;
   return rawTokens.some((raw, index) => {
     if (raw.length !== 1 || visualSingleLetter(raw) !== canonical) return false;
+    // In `16 А характеристика С`, the first lookalike is the physical unit,
+    // not curve A. Preserve the number in tokenization so a one-letter token
+    // directly following it cannot become a technical facet code merely
+    // because the actual facet label is nearby.
+    if (index > 0 && /^\d+(?:[.,]\d+)?$/u.test(rawTokens[index - 1])) return false;
     // A lowercase Cyrillic one-letter word is normally a preposition (`с`),
     // not a technical curve/code. Latin notation remains valid in either case;
     // Cyrillic lookalikes must be visibly code-shaped (uppercase).

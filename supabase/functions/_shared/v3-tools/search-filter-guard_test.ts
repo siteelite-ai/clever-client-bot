@@ -995,6 +995,20 @@ Deno.test("one-letter customer code is projected only beside one unique live fac
   );
   assertEquals(result.args.options, { curve: ["C"] });
   assertEquals(result.user_backed, [{ key: "curve", value: "C" }]);
+
+  const withPhysicalUnit = guardSearchFilters(
+    { mode: "by_filter" },
+    [{
+      key: "curve",
+      caption: "Характеристика срабатывания",
+      values: [{ value: "A" }, { value: "B" }, { value: "C" }, { value: "D" }],
+    }],
+    "16 А характеристика С, 1 полюс",
+    "16 А характеристика С, 1 полюс",
+    "",
+  );
+  assertEquals(withPhysicalUnit.args.options, { curve: ["C"] });
+  assertEquals(withPhysicalUnit.user_backed, [{ key: "curve", value: "C" }]);
 });
 
 Deno.test("lowercase Cyrillic preposition and ambiguous axes cannot become a short code", () => {
