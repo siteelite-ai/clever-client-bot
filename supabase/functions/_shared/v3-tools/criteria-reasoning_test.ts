@@ -338,7 +338,7 @@ Deno.test("guarded exact criterion disambiguates an otherwise ambiguous literal 
 Deno.test("unitless live-фасет выбирается только после исключения явно другой шкалы", () => {
   const projected = projectLiteralMeasuredCriteria(
     [],
-    "Нужен аппарат 16 А",
+    "Нужен аппарат с номинальным током 16 А",
     "Подбираю аппарат на 16 А.",
     [
       { key: "cable_section", caption: "Макс. сечение кабеля, мм2", type: "checkbox", unit: null, values: [{ value: "6" }, { value: "16" }] },
@@ -352,6 +352,23 @@ Deno.test("unitless live-фасет выбирается только после
     unit: "а",
     level: "A",
   }]);
+});
+
+Deno.test("application height cannot become a unitless product facet with the same scalar", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [],
+    "Двор 35 м², высота установки примерно 1,5 м",
+    "Двор 35 м², высота установки примерно 1,5 м",
+    [{
+      key: "ves__salmaғy",
+      caption: "Вес",
+      type: "checkbox",
+      unit: null,
+      values: [{ value: "1.5" }, { value: "2" }],
+    }],
+  );
+  assertEquals(projected.added, []);
+  assertEquals(projected.matched, []);
 });
 
 Deno.test("natural customer area projects onto an ASCII-square live facet", () => {

@@ -683,12 +683,36 @@ export function projectLiteralMeasuredCriteria(
     const contextualScores = unitFacets.map((facet) => {
       const labelTokens = `${facet.key} ${facet.caption}`
         .match(/[a-zа-я]{4,}/giu)?.map((token) => normalizeEvidence(token)) ?? [];
-      return { facet, score: labelTokens.filter((token) => contextTokens.has(token)).length };
+      return {
+        facet,
+        score: labelTokens.filter((token) => [...contextTokens].some((contextToken) =>
+          token === contextToken ||
+          token.length >= 5 && contextToken.length >= 5 && token.slice(0, 4) === contextToken.slice(0, 4)
+        )).length,
+      };
     });
     const bestContextScore = Math.max(0, ...contextualScores.map(({ score }) => score));
     const contextualFacets = contextualScores
       .filter(({ score }) => score > 0 && score === bestContextScore)
       .map(({ facet }) => facet);
+    // A lone numeric facet with no declared physical unit is not sufficient
+    // evidence by itself.  The same scalar can describe an installation,
+    // load, room, cable run or product property.  Require either an existing
+    // guarded criterion for that exact facet or a local mention of the facet
+    // meaning in the customer's clause; otherwise keep the measurement as
+    // application context for the reasoning stage.  This prevents, for
+    // example, an installation height of 1.5 m from becoming `Weight = 1.5`
+    // merely because Weight is the only unitless live facet with that value.
+    const hasSchemaUnitEvidence = unitFacets.some((facet) => {
+      const declaredUnit = canonicalMeasurementUnit(facet.unit ?? "");
+      const labelHasUnit = String(facet.caption ?? "")
+        .match(/[a-zа-я°]{1,10}[²³]?\d?/giu)
+        ?.some((token) => canonicalMeasurementUnit(token) === unit) ?? false;
+      return declaredUnit === unit || labelHasUnit;
+    });
+    if (!hasSchemaUnitEvidence && hintedFacets.length === 0 && contextualFacets.length === 0) {
+      continue;
+    }
     const matchingFacets = hintedFacets.length === 1
       ? hintedFacets
       : contextualFacets.length === 1 ? contextualFacets : unitFacets;
