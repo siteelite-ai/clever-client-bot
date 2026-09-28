@@ -1,0 +1,511 @@
+{
+  "schema_version": 3,
+  "source": "Google Doc 21.09 — customer audit 1EeEUI3uRCk3kyBhAy4p8eTJT2S9mT9xDQI69RMPd1JU",
+  "default_expectations": {
+    "max_duration_ms": 30000
+  },
+  "cases": [
+    {
+      "id": "audit-01-vvg-3x1_5-cheapest",
+      "title": "Точный ВВГ 3×1,5 — самый дешёвый",
+      "repeat": 1,
+      "turns": [{
+        "message": "найди кабель ввг 3*1,5 самый дешевый",
+        "expect": {
+          "min_products": 1,
+          "max_products": 1,
+          "require_every_product_title_groups": [["ВВГ"], ["3*1,5", "3×1,5", "3x1,5", "3х1,5"]],
+          "forbid_selection_criteria_any": ["Наименование на казахском языке", "Популярный"],
+          "max_duration_ms": 30000
+        }
+      }]
+    },
+    {
+      "id": "audit-02-topic-boundary-cable-to-motion-light",
+      "title": "Самостоятельный запрос светильника не наследует кабель",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "найди кабель ввг 3*1,5 самый дешевый",
+          "expect": { "min_products": 1, "max_products": 1, "max_duration_ms": 30000 }
+        },
+        {
+          "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000тенге. Дай несколько подходящих вариантов",
+          "expect": {
+            "conversation_boundary": "new_task",
+            "min_products": 3,
+            "max_products": 5,
+            "max_product_price": 4000,
+            "require_every_product_title_any": ["датч", "сенсор", "SNR"],
+            "forbid_product_title": ["ВВГ", "кабель"],
+            "forbid_selection_criteria_any": ["ЖКХ", "ВВГ", "кабель"],
+            "max_duration_ms": 30000
+          }
+        },
+        {
+          "message": "мне нужен бытовой светильник с датчиком движения с ценой не более 4000тенге. Дай несколько подходящих вариантов",
+          "expect": {
+            "conversation_boundary": "new_task",
+            "min_products": 3,
+            "max_products": 5,
+            "max_product_price": 4000,
+            "require_every_product_title_any": ["датч", "сенсор", "SNR"],
+            "forbid_selection_criteria_any": ["ЖКХ", "ВВГ", "кабель"],
+            "max_duration_ms": 30000
+          }
+        }
+      ]
+    },
+    {
+      "id": "audit-03-living-room-25m2",
+      "title": "Основное светодиодное освещение гостиной 25 м²",
+      "repeat": 1,
+      "turns": [{
+        "message": "Хочу заменить люстру на светодиодный светильник в гостиной 25 м². Что можете предложить?",
+        "expect": {
+          "min_products": 3,
+          "max_products": 5,
+          "require_any_text": ["3750", "4000", "5000", "лм", "люмен"],
+          "forbid_every_product_title_any": ["6500K", "ДПО", "ДВО", "линейный", "prismatic", "прожектор"],
+          "forbid_selection_criteria_any": ["офисно-административное", "ЖКХ"],
+          "max_duration_ms": 30000
+        }
+      }]
+    },
+    {
+      "id": "audit-04-yard-floodlight-35m2",
+      "title": "Прожектор для двора после уточнения 35 м² и 1,5 м",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "Нужен прожектор на улицу. Предложи варианты для освещения во дворе частного дома",
+          "expect": {
+            "max_products": 0,
+            "require_text_groups": [["площад", "размер"], ["высот", "монтаж", "установ"]],
+            "max_duration_ms": 10000
+          }
+        },
+        {
+          "message": "35м2 и высота примерно 1,5м",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 3,
+            "max_products": 5,
+            "require_every_product_title_any": ["прожектор"],
+            "max_duration_ms": 30000
+          }
+        }
+      ]
+    },
+    {
+      "id": "audit-05-breaker-1p-16a-c-under-1000",
+      "title": "Автомат 1P 16 А C до 1 000 тенге",
+      "repeat": 1,
+      "turns": [{
+        "message": "Найди автомат до 1000 тенге 1 полюсной, 16 А характеристика С",
+        "expect": {
+          "min_products": 2,
+          "max_products": 5,
+          "max_product_price": 1000,
+          "require_every_product_title_groups": [["1P", "1Р", "1-пол", "1 полюс"], ["16A", "16А", "16 А"], ["х-ка C", "х-ка С", "характеристика C", "характеристика С"]],
+          "forbid_product_title": ["х-ка В", "характеристика B", "характеристика В"],
+          "max_duration_ms": 30000
+        }
+      }]
+    },
+    {
+      "id": "audit-06-corn-e14",
+      "title": "Лампа CORN с цоколем E14",
+      "repeat": 1,
+      "turns": [{
+        "message": "подбери лампу кукуруза на цоколь е14",
+        "expect": {
+          "min_products": 2,
+          "max_products": 5,
+          "require_every_product_title_groups": [["CORN"], ["E14"]],
+          "forbid_product_title": ["G4", "G9", "светильник"],
+          "max_duration_ms": 30000
+        }
+      }]
+    },
+    {
+      "id": "audit-07-vvg-3x1_5-all",
+      "title": "Все позиции ВВГ 3×1,5 без включения командных слов в маркировку",
+      "repeat": 1,
+      "turns": [{
+        "message": "какой есть кабель ввг 3*1,5 покажи все позиции",
+        "expect": {
+          "min_products": 3,
+          "require_every_product_title_groups": [["ВВГ"], ["3*1,5", "3×1,5", "3x1,5", "3х1,5"]],
+          "forbid_assistant_text": ["точной маркировке «какой есть"],
+          "max_duration_ms": 30000
+        }
+      }]
+    },
+    {
+      "id": "audit-08-gx53-lamp-analogs",
+      "title": "Аналоги лампы GX53 остаются лампами",
+      "repeat": 1,
+      "turns": [{
+        "message": "Подбери аналог для этой лампы: Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK",
+        "expect": {
+          "min_products": 2,
+          "max_products": 5,
+          "require_every_product_title_groups": [["лампа"], ["GX53"]],
+          "forbid_product_title": ["Светильник"],
+          "max_duration_ms": 30000
+        }
+      }]
+    },
+    {
+      "id": "audit-09-breaker-25a-apartment",
+      "title": "Безопасное уточнение автомата 25 А и подбор после ответа",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "Мне нужен автоматический выключатель на 25 А для квартиры. Что можете предложить?",
+          "expect": {
+            "max_products": 0,
+            "require_any_text": ["полюс", "фаз", "характерист"],
+            "max_duration_ms": 10000
+          }
+        },
+        {
+          "message": "характеристика С, 1 полюс",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 2,
+            "max_products": 5,
+            "require_every_product_title_groups": [["1P", "1Р", "1 полюс"], ["25A", "25А", "25 А"], ["C", "С"]],
+            "forbid_product_title": ["1P+N", "1Р+N", "1П+Н"],
+            "max_duration_ms": 30000
+          }
+        }
+      ]
+    },
+    {
+      "id": "audit-10-pump-cable-7kw",
+      "title": "Кабель для поверхностного насоса 7 кВт — безопасное продолжение",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "Мне нужен кабель для насоса",
+          "expect": { "max_products": 0, "require_any_text": ["мощн", "ток"], "max_duration_ms": 10000 }
+        },
+        {
+          "message": "поверхностный, стационарный, на улице, 7КВт",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "max_products": 0,
+            "require_text_groups": [["напряж", "220", "380", "фаз"], ["длин", "расстоя"]],
+            "forbid_assistant_text": ["МКЭШ 7*0,75"],
+            "max_duration_ms": 15000
+          }
+        }
+      ]
+    },
+    {
+      "id": "audit-11-motor-breaker-3kw",
+      "title": "Автомат защиты трёхфазного двигателя 3 кВт",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "Подберите автомат для двигателя асинхронный 3 кВТ",
+          "expect": { "max_products": 0, "require_any_text": ["фаз", "напряж"], "max_duration_ms": 10000 }
+        },
+        {
+          "message": "3 фазы",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "max_products": 0,
+            "require_any_text": ["номинальн", "шильдик", "рабоч", "пуск"],
+            "forbid_assistant_text": ["Количество полюсов — 3 квт"],
+            "max_duration_ms": 15000
+          }
+        }
+      ]
+    },
+    {
+      "id": "audit-12-air-conditioner-cable-3kw",
+      "title": "Силовой кабель для кондиционера 3 кВт",
+      "repeat": 1,
+      "turns": [{
+        "message": "Мне нужен кабель для подключения кондиционера мощностью 3 кВт. Что посоветуете?",
+        "expect": {
+          "min_products": 1,
+          "max_products": 5,
+          "require_any_text": ["2,5", "сечен", "медн"],
+          "require_every_product_title_any": ["ВВГ", "NYM", "кабель"],
+          "forbid_product_title": ["UTP", "FTP", "оптическ"],
+          "forbid_selection_criteria_any": ["структурированных систем связи", "волоконно-оптическ"],
+          "max_duration_ms": 30000
+        }
+      }]
+    },
+    {
+      "id": "audit-13-boiler-breaker-trip",
+      "title": "Диагностика отключения автомата бойлера",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "У меня выбивает автомат при включении бойлера. В чем может быть причина?",
+          "expect": {
+            "max_products": 0,
+            "require_text_groups": [["не увелич", "не замен", "опас"], ["мощн", "номинал"], ["электрик", "специалист"]],
+            "max_duration_ms": 15000
+          }
+        },
+        {
+          "message": "5 кВт нет дифавтомата",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "max_products": 0,
+            "require_any_text": ["кабел", "сечен", "УЗО", "диф"],
+            "forbid_assistant_text": ["обязательно установите автомат 25 А"],
+            "max_duration_ms": 15000
+          }
+        }
+      ]
+    },
+    {
+      "id": "audit-14-underground-power-cable",
+      "title": "Силовой кабель для прямой прокладки в земле",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "Какой кабель подойдет для прокладки в земле?",
+          "expect": { "max_products": 0, "require_any_text": ["прямо", "труб", "ПНД"], "max_duration_ms": 10000 }
+        },
+        {
+          "message": "прямо в землю если какой кабель применяется?",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "require_any_text": ["бронир", "ВБбШв", "АВБбШв"],
+            "forbid_assistant_text": ["UTP", "FTP", "витая пара"],
+            "forbid_selection_criteria_any": ["структурированных систем связи"],
+            "max_duration_ms": 30000
+          }
+        }
+      ]
+    },
+    {
+      "id": "audit-15-analog-cctv-outdoor-cable",
+      "title": "Кабель аналогового видеонаблюдения на улице 30 м",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "Есть ли у вас кабель для видеонаблюдения?",
+          "expect": { "max_products": 0, "require_any_text": ["аналог", "IP", "улиц", "помещ"], "max_duration_ms": 10000 }
+        },
+        {
+          "message": "аналоговая, на улице, расстояние 30 метров",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 1,
+            "max_products": 5,
+            "require_any_text": ["коакси", "RG-59", "RG59", "КВК"],
+            "forbid_selection_criteria_any": ["кабелт для погружных", "Кабели для стационарной прокладки на 1 кВ"],
+            "max_duration_ms": 30000
+          }
+        }
+      ]
+    },
+    {
+      "id": "audit-16-warm-e27-lamps",
+      "title": "Тёплые LED-лампы 3 000 K с цоколем E27",
+      "repeat": 1,
+      "turns": [{
+        "message": "Есть ли светодиодные лампы с теплым светом 3000К? на цоколь Е27",
+        "expect": {
+          "min_products": 3,
+          "max_products": 5,
+          "require_every_product_title_groups": [["E27", "Е27"], ["3000K", "3000К", "3000 К"]],
+          "forbid_assistant_text": ["Какой цоколь нужен"],
+          "max_duration_ms": 30000
+        }
+      }]
+    },
+    {
+      "id": "audit-17-parking-floodlights",
+      "title": "Распределённое освещение парковки 500 м²",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "Какие прожекторы подойдут для освещения парковки?",
+          "expect": { "max_products": 0, "require_text_groups": [["площад"], ["высот"]], "max_duration_ms": 10000 }
+        },
+        {
+          "message": "500м2 3 метра",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 3,
+            "max_products": 5,
+            "require_every_product_title_any": ["прожектор"],
+            "forbid_product_title": ["500W", "500Вт"],
+            "require_any_text": ["несколько", "периметр", "равномер"],
+            "max_duration_ms": 30000
+          }
+        }
+      ]
+    },
+    {
+      "id": "audit-18-acti9-c16-analogs",
+      "title": "Каталожные аналоги Schneider Acti9 C16",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "Есть ли аналог автомату Schneider Electric Acti9 C16?",
+          "expect": { "max_products": 0, "require_any_text": ["полюс"], "max_duration_ms": 10000 }
+        },
+        {
+          "message": "1 полюс, подбери их в каталоге",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 2,
+            "max_products": 5,
+            "require_every_product_title_groups": [["1P", "1Р", "1-пол"], ["16A", "16А", "16 А"], ["C", "С"]],
+            "max_duration_ms": 30000
+          }
+        }
+      ]
+    },
+    {
+      "id": "audit-19-apartment-breaker-7kw",
+      "title": "Автомат для типовой однофазной квартиры 7 кВт",
+      "repeat": 1,
+      "turns": [{
+        "message": "Какой автоматический выключатель мне нужен для квартиры с нагрузкой 7 кВт?",
+        "expect": {
+          "require_text_groups": [["30", "32 А", "32А"], ["однофаз", "220", "230"], ["характеристик", "C", "С"]],
+          "forbid_assistant_text": ["Номинал тока понятен. До подбора уточните"],
+          "max_duration_ms": 30000
+        }
+      }]
+    },
+    {
+      "id": "audit-20-vvgng-vs-nym",
+      "title": "Сравнение ВВГнг и NYM для квартиры",
+      "repeat": 1,
+      "turns": [{
+        "message": "Чем отличается кабель ВВГнг от NYM и какой лучше для проводки в квартире?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["ВВГнг"], ["NYM"], ["квартир", "помещ"], ["УФ", "ультрафиолет", "оболоч", "пожар"]],
+          "max_duration_ms": 15000
+        }
+      }]
+    },
+    {
+      "id": "audit-21-floodlight-1000-lumen",
+      "title": "Мощность и площадь прожектора на 1 000 люмен",
+      "repeat": 1,
+      "turns": [{
+        "message": "Какая мощность у светодиодного прожектора на 1000 люмен и какую площадь он освещает?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["Вт", "ватт"], ["лк", "люкс"], ["м²", "площад"]],
+          "forbid_assistant_text": ["спальн"],
+          "max_duration_ms": 15000
+        }
+      }]
+    },
+    {
+      "id": "audit-22-voltage-stabilizer-170v",
+      "title": "Стабилизатор при падении входного напряжения до 170 В",
+      "repeat": 1,
+      "turns": [{
+        "message": "Мне нужен стабилизатор напряжения для дома, если напряжение часто падает до 170 вольт. Что посоветуете?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["мощн", "нагруз", "кВт"], ["входн", "диапазон", "170"]],
+          "forbid_assistant_text": ["объекта размером 170", "плотную фиксацию", "до установки"],
+          "max_duration_ms": 15000
+        }
+      }]
+    },
+    {
+      "id": "audit-23-welding-extension-30m",
+      "title": "Уличный удлинитель для сварочного аппарата 30 м",
+      "repeat": 1,
+      "turns": [{
+        "message": "Подберите удлинитель для подключения сварочного аппарата на улице, длина 30 метров.",
+        "expect": {
+          "min_products": 1,
+          "max_products": 5,
+          "require_every_product_title_groups": [["30м", "30 м", "УК30"], ["КГ", "3х2,5", "3x2,5", "3×2,5"]],
+          "require_any_text": ["IP44", "улич", "термозащит"],
+          "forbid_selection_criteria_any": ["Тип цоколя", "антимоскитная лампа"],
+          "max_duration_ms": 30000
+        }
+      }]
+    },
+    {
+      "id": "audit-24-three-phase-motor-on-220v",
+      "title": "Трёхфазный двигатель в однофазной сети 220 В",
+      "repeat": 1,
+      "turns": [{
+        "message": "Можно ли подключить трехфазный двигатель к однофазной сети 220 В?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["конденсатор"], ["треугольник", "звезд"], ["мощност", "30", "50"], ["шильдик", "220/380", "обмот"]],
+          "max_duration_ms": 15000
+        }
+      }]
+    },
+    {
+      "id": "audit-25-black-hidden-sockets-white-followup",
+      "title": "Цвет розеток меняется в продолжении без потери категории",
+      "repeat": 1,
+      "turns": [
+        {
+          "message": "Есть ли у вас розетки скрытого монтажа черного цвета?",
+          "expect": {
+            "min_products": 3,
+            "max_products": 5,
+            "require_every_product_title_groups": [["розет"], ["черн"]],
+            "max_duration_ms": 30000
+          }
+        },
+        {
+          "message": "а есть белые?",
+          "expect": {
+            "conversation_boundary": "continuation",
+            "min_products": 3,
+            "max_products": 5,
+            "require_every_product_title_groups": [["розет"], ["бел"]],
+            "max_duration_ms": 30000
+          }
+        }
+      ]
+    },
+    {
+      "id": "audit-26-philips-office-cheapest",
+      "title": "Несколько дешёвых офисных светильников Philips",
+      "repeat": 1,
+      "turns": [{
+        "message": "Покажи самые дешевые светильники Philips для офиса",
+        "expect": {
+          "min_products": 3,
+          "max_products": 5,
+          "require_every_product_title_groups": [["Philips", "PHILIPS", "871869", "9290"], ["светильник", "панель", "CoreLine", "Ledinaire"]],
+          "forbid_selection_criteria_any": ["ЖКХ", "улич"],
+          "max_duration_ms": 30000
+        }
+      }]
+    },
+    {
+      "id": "audit-27-house-panel-180m2",
+      "title": "Щит частного дома 180 м² сначала собирает исходные данные",
+      "repeat": 1,
+      "turns": [{
+        "message": "Сколько автоматов нужно поставить в щит для частного дома площадью 180 квадратов?",
+        "expect": {
+          "max_products": 0,
+          "require_text_groups": [["однофаз", "трёхфаз", "220", "380"], ["мощн"], ["плит", "бойлер", "тёпл", "кондиционер", "насос", "сауна"]],
+          "forbid_assistant_text": ["Ниже — варианты, прошедшие эти условия"],
+          "max_duration_ms": 15000
+        }
+      }]
+    }
+  ]
+}

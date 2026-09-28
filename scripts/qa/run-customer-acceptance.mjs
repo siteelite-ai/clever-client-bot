@@ -54,6 +54,10 @@ const selected = onlyIds?.length ? suite.cases.filter((item) => onlyIds.includes
 const missingIds = onlyIds?.filter((id) => !selected.some((item) => item.id === id)) ?? [];
 if (missingIds.length > 0) throw new Error(`Unknown case: ${missingIds.join(', ')}`);
 
+export function resolveExpectations(defaults = {}, expect = {}) {
+  return { ...defaults, ...expect };
+}
+
 export function parseSse(body) {
   let text = '';
   let textBeforeProducts = '';
@@ -244,6 +248,12 @@ export function evaluate(expect = {}, response) {
     const criteriaText = JSON.stringify(response.selectionContract ?? {});
     if (!matchesEveryGroup(criteriaText, expect.require_selection_criteria_groups)) {
       failures.push(`selection contract misses required groups: ${expect.require_selection_criteria_groups.map((group) => `[${group.join(', ')}]`).join(' ')}`);
+    }
+  }
+  if (Array.isArray(expect.forbid_selection_criteria_any)) {
+    const criteriaText = JSON.stringify(response.selectionContract ?? {});
+    for (const phrase of expect.forbid_selection_criteria_any) {
+      if (includesAny(criteriaText, [phrase])) failures.push(`forbidden selection criterion: ${phrase}`);
     }
   }
   if (expect.require_exact_or_split && typeof expect.require_exact_or_split === 'object') {
@@ -437,7 +447,12 @@ export async function main() {
         dialogSlots: {},
       };
       const turns = [];
-      for (const turn of testCase.turns) turns.push(await runTurn(turn, state));
+      for (const turn of testCase.turns) {
+        turns.push(await runTurn({
+          ...turn,
+          expect: resolveExpectations(suite.default_expectations, turn.expect),
+        }, state));
+      }
       caseResult.repeats.push({ run, session_id: state.sessionId, turns, passed: turns.every((turn) => turn.passed) });
       if (stopOnFailure && !caseResult.repeats.at(-1).passed) break;
     }

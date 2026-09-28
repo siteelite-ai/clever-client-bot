@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { DEFAULT_ENDPOINT, evaluate, fetchAcceptanceTurn, parseSse, resolveEndpoint } from './run-customer-acceptance.mjs';
+import { DEFAULT_ENDPOINT, evaluate, fetchAcceptanceTurn, parseSse, resolveEndpoint, resolveExpectations } from './run-customer-acceptance.mjs';
 
 function data(payload) {
   return `data: ${JSON.stringify(payload)}`;
@@ -23,6 +23,13 @@ test('resolveEndpoint rejects unsafe or non-function targets', () => {
   assert.throws(
     () => resolveEndpoint(['node', 'runner', '--endpoint=https://example.com/not-a-function']),
     /one Edge Function/,
+  );
+});
+
+test('suite defaults are inherited and explicit turn expectations win', () => {
+  assert.deepEqual(
+    resolveExpectations({ max_duration_ms: 30_000, max_products: 5 }, { max_products: 1 }),
+    { max_duration_ms: 30_000, max_products: 1 },
   );
 });
 
@@ -417,4 +424,25 @@ test('evaluate enforces a production response-time budget', () => {
     'duration 30001ms > 30000ms',
   ]);
   assert.deepEqual(evaluate({ max_duration_ms: 35_000 }, response), []);
+});
+
+test('evaluate rejects inferred selection criteria that the customer did not request', () => {
+  const response = {
+    text: 'Нашёл варианты.',
+    productsMarkdown: '',
+    links: [],
+    completed: true,
+    diagnosticError: null,
+    serverProductsCount: 0,
+    selectionContract: {
+      mandatory_criteria: [
+        { key: 'С датчиком движения', op: 'eq', value: 'да' },
+        { key: 'Вид светильника', op: 'eq', value: 'светильники для ЖКХ' },
+      ],
+    },
+  };
+
+  assert(evaluate({ forbid_selection_criteria_any: ['ЖКХ'] }, response)
+    .includes('forbidden selection criterion: ЖКХ'));
+  assert.deepEqual(evaluate({ forbid_selection_criteria_any: ['уличный'] }, response), []);
 });
