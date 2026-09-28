@@ -401,3 +401,20 @@ test('evaluate accepts an honest non-catalog answer without cards', () => {
 
   assert.deepEqual(failures, []);
 });
+
+test('evaluate enforces a production response-time budget', () => {
+  const response = {
+    text: 'Готово',
+    productsMarkdown: '',
+    links: [],
+    completed: true,
+    diagnosticError: null,
+    serverProductsCount: 0,
+    durationMs: 30_001,
+  };
+
+  assert.deepEqual(evaluate({ max_duration_ms: 30_000 }, response), [
+    'duration 30001ms > 30000ms',
+  ]);
+  assert.deepEqual(evaluate({ max_duration_ms: 35_000 }, response), []);
+});

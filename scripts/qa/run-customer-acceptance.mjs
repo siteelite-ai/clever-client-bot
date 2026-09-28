@@ -197,6 +197,9 @@ export function evaluate(expect = {}, response) {
   if (Number.isFinite(expect.max_products) && response.links.length > expect.max_products) {
     failures.push(`products ${response.links.length} > ${expect.max_products}`);
   }
+  if (Number.isFinite(expect.max_duration_ms) && Number.isFinite(response.durationMs) && response.durationMs > expect.max_duration_ms) {
+    failures.push(`duration ${response.durationMs}ms > ${expect.max_duration_ms}ms`);
+  }
   for (const phrase of expect.forbid_text ?? []) {
     if (includesAny(allOutput, [phrase])) failures.push(`forbidden text: ${phrase}`);
   }
@@ -387,6 +390,7 @@ async function runTurn({ message, expect }, state) {
     retryDelayMs: 500,
   });
   const parsed = parseSse(raw);
+  parsed.durationMs = Date.now() - startedAt;
   const failures = response.ok ? evaluate(expect, parsed) : [`HTTP ${response.status}`];
   const combined = [parsed.text, parsed.productsMarkdown].filter(Boolean).join('\n\n');
   if (parsed.conversationBoundary?.sessionId) {
@@ -399,7 +403,7 @@ async function runTurn({ message, expect }, state) {
   return {
     message,
     status: response.status,
-    duration_ms: Date.now() - startedAt,
+    duration_ms: parsed.durationMs,
     network_attempts: attempts,
     log_id: parsed.logId,
     diagnostic_error: parsed.diagnosticError,
