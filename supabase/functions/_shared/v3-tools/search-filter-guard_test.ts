@@ -9,6 +9,7 @@ import {
   guardSearchFilters,
   inferReplacementIdentityValues,
   isReplacementIdentityFacet,
+  mergeFacetValuesWithCurrentOverrides,
   projectExplicitReasoningFacetValues,
   productMatchesExcludedReplacementIdentity,
 } from "./search-filter-guard.ts";
@@ -18,6 +19,62 @@ const facets = [
   { key: "kind", values: [{ value: "Светильники для ЖКХ" }, { value: "Бытовые светильники накладные" }] },
   { key: "brand", values: [{ value: "Gauss" }] },
 ];
+
+Deno.test("current continuation facet replaces only the same inherited facet", () => {
+  assertEquals(mergeFacetValuesWithCurrentOverrides(
+    [
+      { key: "mount", value: "Скрытый" },
+      { key: "color", value: "Чёрный" },
+      { key: "ground", value: "Да" },
+    ],
+    [{ key: "color", value: "Белый" }],
+  ), [
+    { key: "mount", value: "Скрытый" },
+    { key: "ground", value: "Да" },
+    { key: "color", value: "Белый" },
+  ]);
+});
+
+Deno.test("elliptical attribute evidence keeps mounting and replaces colour through live facets", () => {
+  const live = [
+    {
+      key: "mount",
+      caption: "Тип монтажа",
+      values: [{ value: "Скрытый" }, { value: "Открытый" }],
+    },
+    {
+      key: "color",
+      caption: "Цвет",
+      values: [{ value: "Чёрный" }, { value: "Белый" }],
+    },
+  ];
+  const base = "Есть ли у вас розетки скрытого монтажа черного цвета?";
+  const current = "а есть белые?";
+  const inherited = guardSearchFilters(
+    { mode: "by_filter" },
+    live,
+    base,
+    base,
+    base,
+  ).user_backed;
+  const override = guardSearchFilters(
+    { mode: "by_filter" },
+    live,
+    current,
+    current,
+    current,
+  ).user_backed;
+
+  assertEquals(inherited, [
+    { key: "mount", value: "Скрытый" },
+    { key: "color", value: "Чёрный" },
+  ]);
+  assertEquals(override, [{ key: "color", value: "Белый" }]);
+  assertEquals(mergeFacetValuesWithCurrentOverrides(inherited, override), [
+    { key: "mount", value: "Скрытый" },
+    { key: "color", value: "Белый" },
+  ]);
+});
 
 Deno.test("filter guard removes a valid but unrequested catalog value", () => {
   const result = guardSearchFilters(

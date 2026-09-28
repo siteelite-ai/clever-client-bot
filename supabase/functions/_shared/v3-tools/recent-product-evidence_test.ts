@@ -8,6 +8,7 @@ import {
   isEvidenceOnlyFollowup,
   isRecentProductShowFollowup,
   isRecentProductPriceSelectionFollowup,
+  latestRenderedSelectionRequest,
   latestRecentProductEvidenceSet,
 } from "./recent-product-evidence.ts";
 import type { ProductFull } from "./types.ts";
@@ -130,6 +131,28 @@ Deno.test("rendered product titles are only lookup hints from controlled product
     },
   ]);
   assertEquals(titles, ["Gauss HALL с сенсором"]);
+});
+
+Deno.test("latest rendered selection request is bound to the newest controlled product batch", () => {
+  assertEquals(latestRenderedSelectionRequest([
+    { role: "user", content: "Найди старый кабель" },
+    {
+      role: "assistant",
+      content: "- **[Старый кабель](https://220volt.kz/catalog/cables/old/)**",
+    },
+    { role: "user", content: "Есть ли розетки скрытого монтажа черного цвета?" },
+    {
+      role: "assistant",
+      content: "- **[Черная розетка](https://220volt.kz/catalog/electrics/socket/)**",
+    },
+  ]), "Есть ли розетки скрытого монтажа черного цвета?");
+});
+
+Deno.test("latest rendered selection request ignores external and prose-only assistant messages", () => {
+  assertEquals(latestRenderedSelectionRequest([
+    { role: "user", content: "Найди розетки" },
+    { role: "assistant", content: "Посмотрите https://example.com/catalog/socket" },
+  ]), null);
 });
 
 Deno.test("prior reasoning excludes rendered product blocks and their numeric metadata", () => {

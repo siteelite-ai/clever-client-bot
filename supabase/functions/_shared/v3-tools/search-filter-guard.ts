@@ -41,6 +41,28 @@ export interface SearchFilterGuardResult {
   dropped: DroppedSearchFilter[];
 }
 
+export interface FacetValueEvidence {
+  key: string;
+  value: string;
+}
+
+/**
+ * Merge a short attribute continuation with the previously proven selection.
+ * A value in the current turn replaces every older value on the same live
+ * facet; values on other facets remain binding. This is category-neutral and
+ * depends only on live facet keys, never on colour/product dictionaries.
+ */
+export function mergeFacetValuesWithCurrentOverrides(
+  inherited: FacetValueEvidence[],
+  current: FacetValueEvidence[],
+): FacetValueEvidence[] {
+  const overriddenKeys = new Set(current.map(({ key }) => key));
+  return [...inherited.filter(({ key }) => !overriddenKeys.has(key)), ...current]
+    .filter((item, index, all) => all.findIndex((candidate) =>
+      candidate.key === item.key && candidate.value === item.value
+    ) === index);
+}
+
 export interface ReasoningFacetProjection {
   kept: Array<{ key: string; value: string }>;
   user_backed: Array<{ key: string; value: string }>;
@@ -309,6 +331,11 @@ const RU_SUFFIXES = [
   "ый", "ий", "ые", "ие", "ых", "их", "ам", "ям", "ах", "ях", "ов", "ев",
   "у", "ю", "а", "я", "о", "е", "ы", "и",
 ];
+const RU_ADJECTIVE_SUFFIXES = [
+  "ыми", "ими", "ого", "его", "ому", "ему",
+  "ая", "яя", "ое", "ее", "ой", "ей", "ом", "ем", "ую", "юю",
+  "ый", "ий", "ые", "ие", "ых", "их",
+];
 
 function stemRu(word: string): string {
   if (word.length < 5) return word;
@@ -326,6 +353,17 @@ function tokensMatchByStem(left: string, right: string): boolean {
   const rightStem = stemRu(right);
   const sharedLength = Math.min(leftStem.length, rightStem.length);
   if (sharedLength >= 4 && leftStem.slice(0, sharedLength) === rightStem.slice(0, sharedLength)) return true;
+  // Short adjective roots are common in live facet values (`белый` →
+  // `белые`). Accept a three-letter root only when both words have an
+  // explicit adjective ending and reduce to the exact same root. This remains
+  // morphological rather than a product/colour dictionary and cannot match a
+  // neighbouring noun merely because its first three letters coincide.
+  if (
+    leftStem === rightStem &&
+    leftStem.length >= 3 &&
+    RU_ADJECTIVE_SUFFIXES.some((suffix) => left.endsWith(suffix)) &&
+    RU_ADJECTIVE_SUFFIXES.some((suffix) => right.endsWith(suffix))
+  ) return true;
   // A previous generic "one changed letter" rule treated unrelated neighbours
   // such as `свет` and `свеча` as the same root. Preserve only the
   // structurally identifiable soft-sign noun → -н- adjective transition

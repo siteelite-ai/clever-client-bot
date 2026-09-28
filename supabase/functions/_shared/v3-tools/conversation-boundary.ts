@@ -36,6 +36,12 @@ const EXPLICIT_NEW_TASK_RE =
 const ELLIPTICAL_ATTRIBUTE_RE =
   /^(?:а\s+)?(?:есть|покажи(?:те)?)\s+(?:ещ[её]\s+)?(?:более\s+)?[\p{L}-]*(?:ые|ие|ее|ой|ая|ое|ого|ую|ых)(?:\s+варианты?)?[?!.,]?$/iu;
 
+/** A structurally incomplete attribute change such as «а есть белые?». */
+export function isEllipticalAttributeFollowup(userMessage: string): boolean {
+  const text = userMessage.replace(/\p{Cc}/gu, " ").replace(/\s+/g, " ").trim();
+  return Boolean(text && ELLIPTICAL_ATTRIBUTE_RE.test(text));
+}
+
 function lexicalWords(value: string): string[] {
   return value.match(/[\p{L}\p{N}]+(?:[.,][\p{N}]+)?/gu) ?? [];
 }
@@ -58,7 +64,7 @@ export function classifyConversationBoundaryLocally(
       reason: "local_followup_reference",
     };
   }
-  if (ELLIPTICAL_ATTRIBUTE_RE.test(text)) {
+  if (isEllipticalAttributeFollowup(text)) {
     return {
       mode: "continuation",
       confidence: 0.98,

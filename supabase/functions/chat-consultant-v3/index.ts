@@ -76,6 +76,7 @@ import {
   guardSearchFilters,
   inferReplacementIdentityValues,
   isReplacementIdentityFacet,
+  mergeFacetValuesWithCurrentOverrides,
   projectExplicitReasoningFacetValues,
   productMatchesExcludedReplacementIdentity,
 } from "../_shared/v3-tools/search-filter-guard.ts";
@@ -115,6 +116,7 @@ import {
   isEvidenceOnlyFollowup,
   isRecentProductShowFollowup,
   isRecentProductPriceSelectionFollowup,
+  latestRenderedSelectionRequest,
   latestRecentProductEvidenceSet,
   loadRecentProductEvidence,
   persistRecentProductEvidence,
@@ -245,6 +247,7 @@ import {
 } from "../_shared/v3-tools/request-validation.ts";
 import {
   classifyConversationBoundary,
+  isEllipticalAttributeFollowup,
   shouldStartNewConversation,
   stripCurrentUserEcho,
 } from "../_shared/v3-tools/conversation-boundary.ts";
@@ -3501,6 +3504,11 @@ async function updateTurnLogEnd(
 
 // ─── Expert loop ────────────────────────────────────────────────────────────
 
+interface EllipticalSelectionContinuation {
+  /** Last user request that produced the newest server-verified product batch. */
+  baseUserMessage: string;
+}
+
 async function runExpertLoop(
   userMessage: string,
   history: ChatHistoryMessage[],
@@ -3514,8 +3522,13 @@ async function runExpertLoop(
   recentProductEvidence: RecentProductEvidence[] = [],
   preExcludedReplacementIds: string[] = [],
   selectionPlan: ReplacementSelectionPlan | null = null,
+  ellipticalContinuation: EllipticalSelectionContinuation | null = null,
 ): Promise<{ finalText: string; productsRendered: number; shownProductIds: string[] }> {
   const now = () => Date.now() - t0;
+  // Category scope comes from the request that produced the latest rendered
+  // batch; constraints are compiled separately below so the current attribute
+  // can replace, rather than be ANDed with, the previous value of that facet.
+  const selectionDiscoveryMessage = ellipticalContinuation?.baseUserMessage ?? userMessage;
   let finalText = "";
   let productsRendered = 0;
   const preExcludedReplacementIdSet = new Set(preExcludedReplacementIds);
@@ -4594,7 +4607,7 @@ async function runExpertLoop(
         ? null
         : forcedToolNameForAgentPhase(agentPhase, agentToolPolicy);
       const compiledInitialDiscovery = step === 0 && agentPhase === "open"
-        ? deterministicInitialDiscoveryToolCall(forcedToolName, userMessage)
+        ? deterministicInitialDiscoveryToolCall(forcedToolName, selectionDiscoveryMessage)
         : null;
       let resp: ORResponse;
       let serverCompiledGroundedSearch = false;
@@ -4876,7 +4889,10 @@ async function runExpertLoop(
       } catch (error) {
         const timeout = (error as Error)?.name === "TimeoutError" || String((error as Error)?.message ?? error).includes("llm_call_timeout:");
         if (step === 0 && timeout && !turnController.signal.aborted) {
-          const deterministicDiscovery = deterministicInitialDiscoveryToolCall(forcedToolName, userMessage);
+          const deterministicDiscovery = deterministicInitialDiscoveryToolCall(
+            forcedToolName,
+            selectionDiscoveryMessage,
+          );
           if (deterministicDiscovery) {
             resp = {
               text: "",
@@ -6358,11 +6374,12 @@ async function runExpertLoop(
           intentMode === "select" &&
           typeof tc.args.noun === "string"
         ) {
-          const discoveryEvidence = `${userMessage}\n${initialSelectionDeclaration(firstAssistantText || assistantReasoning)}`;
+          const discoveryEvidence = `${selectionDiscoveryMessage}\n${userMessage}\n${initialSelectionDeclaration(firstAssistantText || assistantReasoning)}`;
           const customerQueryCompiledByServer = resp.finishReason === "server_compiled_initial_discovery" &&
-            tc.args.noun === userMessage && tc.args.semantic_query === userMessage;
+            tc.args.noun === selectionDiscoveryMessage &&
+            tc.args.semantic_query === selectionDiscoveryMessage;
           if (!customerQueryCompiledByServer && !discoveryNounIsGrounded(tc.args.noun, discoveryEvidence)) {
-            const customerTarget = extractCustomerOwnedDiscoveryTarget(userMessage);
+            const customerTarget = extractCustomerOwnedDiscoveryTarget(selectionDiscoveryMessage);
             if (customerTarget) {
               const rejected = tc.args.noun;
               const groundedNoun = groundDiscoveryNounToCustomerTarget(
@@ -6372,7 +6389,7 @@ async function runExpertLoop(
               tc.args = {
                 ...tc.args,
                 noun: groundedNoun,
-                semantic_query: userMessage,
+                semantic_query: selectionDiscoveryMessage,
               };
               steps.push({
                 step: "v3_discovery_noun_replaced_with_customer_target",
@@ -7988,14 +8005,14 @@ async function runExpertLoop(
         let result = gateShortCircuit ?? await runTool(tc.name, runArgs, ctx);
 
         if (tc.name === "discover_category" && result.ok && intentMode === "select") {
-          const discoveryEvidence = `${userMessage}\n${initialSelectionDeclaration(firstAssistantText || assistantReasoning)}`;
+          const discoveryEvidence = `${selectionDiscoveryMessage}\n${userMessage}\n${initialSelectionDeclaration(firstAssistantText || assistantReasoning)}`;
           const requestedNoun = String(runArgs.noun ?? "").trim();
           const resolvedCategory = (result as DiscoverCategoryOk).category?.pagetitle?.trim() ?? "";
-          const customerTarget = extractCustomerOwnedDiscoveryTarget(userMessage);
+          const customerTarget = extractCustomerOwnedDiscoveryTarget(selectionDiscoveryMessage);
           const groundedCustomerNoun = customerTarget
             ? groundDiscoveryNounToCustomerTarget(requestedNoun, customerTarget)
             : null;
-          const customerOwnedSemanticResolution = runArgs.semantic_query === userMessage &&
+          const customerOwnedSemanticResolution = runArgs.semantic_query === selectionDiscoveryMessage &&
             Boolean(customerTarget) && (
               requestedNoun === customerTarget || requestedNoun === groundedCustomerNoun
             );
@@ -9059,7 +9076,7 @@ async function runExpertLoop(
             // later fallback cannot erase values such as a connector, colour,
             // count or a measured lower bound.
             if (intentMode === "select") {
-              const explicit = guardSearchFilters(
+              const currentExplicit = guardSearchFilters(
                 { mode: "by_filter" },
                 lastDiscover.facets,
                 `${
@@ -9068,19 +9085,37 @@ async function runExpertLoop(
                 `${firstAssistantText}\n${assistantReasoning}`,
                 buildVisibleRequestContract(userMessage),
               );
+              const inheritedExplicit = ellipticalContinuation
+                ? guardSearchFilters(
+                  { mode: "by_filter" },
+                  lastDiscover.facets,
+                  ellipticalContinuation.baseUserMessage,
+                  ellipticalContinuation.baseUserMessage,
+                  ellipticalContinuation.baseUserMessage,
+                  buildVisibleRequestContract(ellipticalContinuation.baseUserMessage),
+                )
+                : null;
               const reasoningProjection = projectExplicitReasoningFacetValues(
                 lastDiscover.facets,
                 `${firstAssistantText}\n${assistantReasoning}`,
                 userMessage,
               );
-              const explicitKept = [...explicit.kept, ...reasoningProjection.kept]
-                .filter((item, index, all) => all.findIndex((candidate) =>
-                  candidate.key === item.key && candidate.value === item.value
-                ) === index);
-              const explicitUserBacked = [...explicit.user_backed, ...reasoningProjection.user_backed]
-                .filter((item, index, all) => all.findIndex((candidate) =>
-                  candidate.key === item.key && candidate.value === item.value
-                ) === index);
+              const currentKept = mergeFacetValuesWithCurrentOverrides(
+                currentExplicit.kept,
+                reasoningProjection.kept,
+              );
+              const currentUserBacked = mergeFacetValuesWithCurrentOverrides(
+                currentExplicit.user_backed,
+                reasoningProjection.user_backed,
+              );
+              const explicitKept = mergeFacetValuesWithCurrentOverrides(
+                inheritedExplicit?.kept ?? [],
+                currentKept,
+              );
+              const explicitUserBacked = mergeFacetValuesWithCurrentOverrides(
+                inheritedExplicit?.user_backed ?? [],
+                currentUserBacked,
+              );
               const explicitCriteria: Criterion[] = explicitKept.map(({ key, value }) => {
                 const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
                 return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
@@ -9164,7 +9199,7 @@ async function runExpertLoop(
             }
             if (intentMode === "select" && !activeSelectionTarget) {
               const bootstrapped = bootstrapSelectionTargetFromDiscovery(
-                `${userMessage}\n${initialSelectionDiscoveryNoun ?? ""}\n${initialSelectionDeclaration(firstAssistantText || assistantReasoning)}`,
+                `${selectionDiscoveryMessage}\n${userMessage}\n${initialSelectionDiscoveryNoun ?? ""}\n${initialSelectionDeclaration(firstAssistantText || assistantReasoning)}`,
                 lastDiscover.resolved_from ?? "",
                 lastDiscover.category?.pagetitle ?? "",
               );
@@ -11806,6 +11841,20 @@ Deno.serve(async (req) => {
       if (recentProductEvidence.length > 0) {
         steps.push({ step: "v3_recent_product_evidence_loaded", ms: Date.now() - t0, meta: { count: recentProductEvidence.length } });
       }
+      const ellipticalBaseRequest = recentProductEvidence.length > 0 &&
+          isEllipticalAttributeFollowup(userMessage)
+        ? latestRenderedSelectionRequest(effectiveHistory)
+        : null;
+      const ellipticalContinuation: EllipticalSelectionContinuation | null = ellipticalBaseRequest
+        ? { baseUserMessage: ellipticalBaseRequest }
+        : null;
+      if (ellipticalContinuation) {
+        steps.push({
+          step: "v3_elliptical_selection_context_resolved",
+          ms: Date.now() - t0,
+          meta: { source: "latest_controlled_product_batch" },
+        });
+      }
 
         const outdoorPoeIntent = classifyOutdoorPoeIntent(userMessage, effectiveHistory);
         const exactCompoundMarkingRequest = classifyExactCompoundMarkingRequest(userMessage);
@@ -11897,7 +11946,7 @@ Deno.serve(async (req) => {
               anchorFilterEnabled: settings.v3_anchor_filter_enabled,
               relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
               criteriaGateEnabled: true,
-            }, recentProductEvidence);
+            }, recentProductEvidence, [], null, ellipticalContinuation);
             productsCount = out.productsRendered;
             const shownProducts = out.shownProductIds
               .map((id) => ctx.cache.get(id))
@@ -11969,7 +12018,7 @@ Deno.serve(async (req) => {
               anchorFilterEnabled: settings.v3_anchor_filter_enabled,
               relaxationHintsEnabled: settings.v3_relaxation_hints_enabled,
               criteriaGateEnabled: true,
-            }, recentProductEvidence);
+            }, recentProductEvidence, [], null, ellipticalContinuation);
             productsCount = out.productsRendered;
             const shownProducts = out.shownProductIds
               .map((id) => ctx.cache.get(id))
@@ -12033,7 +12082,8 @@ Deno.serve(async (req) => {
               criteriaGateEnabled: true,
             }, recentProductEvidence,
               direct.source_candidate_ids ?? [],
-              replacementSelectionPlan);
+              replacementSelectionPlan,
+              ellipticalContinuation);
             productsCount = out.productsRendered;
             const shownProducts = out.shownProductIds
               .map((id) => ctx.cache.get(id))
@@ -12047,7 +12097,7 @@ Deno.serve(async (req) => {
             // Criteria gate — production-инвариант доказательности, а не
             // экспериментальный UX-флаг. Его нельзя выключить настройкой.
             criteriaGateEnabled: true,
-          }, recentProductEvidence);
+          }, recentProductEvidence, [], null, ellipticalContinuation);
           productsCount = out.productsRendered;
           const shownProducts = out.shownProductIds
             .map((id) => ctx.cache.get(id))
