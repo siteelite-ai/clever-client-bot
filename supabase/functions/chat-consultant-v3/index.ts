@@ -36,7 +36,7 @@ import {
 } from "../_shared/v3-tools/budget-cap.ts";
 import { buildAnchorMissingRecoveryQueries, buildCatalogEmptySynthesisMessages, buildCategoryVerificationSearchInput, buildSelectionSearchRecoveryPlan, filterSelectionRecoveryPool, isRecoverableSelectionSearchFailure, rankReasoningSearchQueries, resolveSelectionSearchEvidence, shouldAppendCatalogEmpty, shouldFinalizeMissingAnchorReplacement, shouldFinalizePendingSelection, type SelectionSearchRecoveryAttempt } from "../_shared/v3-tools/selection-search-recovery.ts";
 import { buildDerivedSelectionReasoningMessages, buildDerivedSelectionReasoningToolSchema, hasActionableSelectionContract, hasSelectionMeasurementContext, measuredSelectionContractEvidence, resolveDerivedSelectionReasoning, shouldContinueSelectionPastOptionalClarification, shouldFinalizeDerivedSelectionSearch, shouldProjectDerivedScalarMeasurement, shouldQueueDirectCustomerFacetSearch, shouldRequireDerivedSelectionReasoning } from "../_shared/v3-tools/selection-actionability.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, groundSelectionApplicationContext, initialSelectionDeclaration, parseSelectionTarget, projectModelOnlySelectionTargetExtension, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, groundSelectionApplicationContext, initialSelectionDeclaration, parseSelectionTarget, projectCustomerApplicationFacetCriteria, projectModelOnlySelectionTargetExtension, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "../_shared/v3-tools/selection-contract.ts";
 import { aliasDuplicatesIndependentCatalogClass, declaredAliasIsStructurallyCustomerOwned, extractDeclaredCatalogAlias, extractPostNominalCatalogQualifier, filterProductsByDeclaredAlias, retainRequiredCatalogAlias, titleContainsDeclaredAlias } from "../_shared/v3-tools/declared-alias-contract.ts";
 import {
   alignCompatibilityRelationsWithReasoning,
@@ -9050,6 +9050,31 @@ async function runExpertLoop(
               }
             }
             if (intentMode === "select" && activeSelectionTarget) {
+              const directApplicationCriteria =
+                minimumCompatibilityRelationCount(userMessage) < 2 &&
+                  !reasoningNeedsCompatibilityRelations(userMessage)
+                  ? projectCustomerApplicationFacetCriteria(
+                    activeSelectionTarget,
+                    userMessage,
+                    lastDiscover.facets,
+                  )
+                  : [];
+              if (directApplicationCriteria.length > 0) {
+                userBackedSearchCriteria = mergeUserBackedCriteria(
+                  userBackedSearchCriteria,
+                  directApplicationCriteria,
+                );
+                enforcedSearchCriteria = freezeSelectionCriteria(
+                  [...enforcedSearchCriteria, ...directApplicationCriteria],
+                  "application_context",
+                );
+                latestRenderCriteria = preserveFrozenSelectionCriteria(latestRenderCriteria);
+                steps.push({
+                  step: "v3_customer_application_facets_compiled",
+                  ms: now(),
+                  meta: { criteria: directApplicationCriteria },
+                });
+              }
               const explicitIdentity = !replacementIntent
                 ? explicitPostNominalIdentityFacet(
                   lastDiscover.facets,

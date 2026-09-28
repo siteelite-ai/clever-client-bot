@@ -1,5 +1,5 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
-import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, filterProductsByMandatoryFacetTitleContradictions, groundSelectionApplicationContext, initialSelectionDeclaration, parseSelectionTarget, projectModelOnlySelectionTargetExtension, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
+import { advanceSelectionTarget, bootstrapSelectionTargetFromDiscovery, bootstrapSelectionTargetFromTaxonomy, buildSelectionEvidenceCaption, buildSelectionRenderCaption, continuedSelectionTargetIsGrounded, extractCustomerApplicationContexts, filterProductsByMandatoryFacetTitleContradictions, groundSelectionApplicationContext, initialSelectionDeclaration, parseSelectionTarget, projectCustomerApplicationFacetCriteria, projectModelOnlySelectionTargetExtension, projectSelectionApplicationFacetCriteria, projectSelectionTargetFacetCriteria, promoteSelectionApplicationBackingCriteria, promoteSelectionTargetBackingCriteria, resolveTerminalSelectionTarget, restoreSelectionTargetBackingCriteria, selectionTargetAliasExpansionIsGrounded, selectionTargetDeclarationIsGrounded, selectionTargetExtensionIsCriterionBacked, selectionTargetIsDeclared, selectionTargetMayUseGroundedBase, selectionTargetPreservesGroundedBase, verifySelectionTarget, verifySelectionTargetWithGroundedSearch, verifySelectionTargetWithNamedEntityCategory, verifySelectionTargetWithVisibleTitle } from "./selection-contract.ts";
 import type { ProductRef } from "./types.ts";
 
 function product(id: string, title: string, leaf = ""): ProductRef {
@@ -619,6 +619,41 @@ Deno.test("a compact application constraint compiles through one unique live fac
     unit: undefined,
     level: "A",
   }]);
+});
+
+Deno.test("customer-owned application wording excludes trailing budget commands", () => {
+  assertEquals(
+    extractCustomerApplicationContexts("Покажи светильники Philips для офиса до 20000 тенге"),
+    ["офиса"],
+  );
+  assertEquals(
+    extractCustomerApplicationContexts("Какой ИБП подойдёт для газового котла?"),
+    ["газового котла"],
+  );
+});
+
+Deno.test("customer application compiles only through a unique live non-identity facet", () => {
+  assertEquals(projectCustomerApplicationFacetCriteria(
+    "светильник",
+    "Покажи светильники Philips для офиса",
+    [
+      { key: "use", caption: "Назначение", values: [{ value: "офисный" }, { value: "промышленный" }] },
+      { key: "brand", caption: "Бренд", values: [{ value: "офис" }, { value: "Philips" }] },
+    ],
+  ), [{
+    key: "Назначение",
+    op: "eq",
+    value: "офисный",
+    unit: undefined,
+    level: "A",
+    evidence: "user_explicit",
+  }]);
+
+  assertEquals(projectCustomerApplicationFacetCriteria(
+    "светильник",
+    "Покажи светильники для офиса",
+    [{ key: "use", caption: "Назначение", values: [{ value: "офис" }, { value: "для офиса" }] }],
+  ), []);
 });
 
 Deno.test("application projection cannot derive a subtype from a repeated class noun", () => {

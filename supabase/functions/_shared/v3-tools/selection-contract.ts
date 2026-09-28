@@ -192,6 +192,31 @@ export function groundSelectionApplicationContext(
   };
 }
 
+/**
+ * Extracts customer-owned suitability phrases introduced by the explicit
+ * relation «для …». This is grammatical rather than category-specific and
+ * never translates the phrase into catalog vocabulary by itself.
+ * Price and cardinality commands terminate the phrase; only the later unique
+ * live-facet projection may turn it into a mandatory filter.
+ */
+export function extractCustomerApplicationContexts(userMessage: string): string[] {
+  const source = String(userMessage ?? "").replace(/\s+/gu, " ").trim();
+  if (!source) return [];
+  const stop = /(?:^|\s)(?:до|не\s+более|не\s+дороже|цено(?:й|ю)|стоимост(?:ь|ью)|сам(?:ый|ая|ое|ые|ого|ой|ых)|покажи|предложи|подбери|найди|дай|нужен|нужна|нужны|вариант(?:ы|ов)?|несколько|все)(?=\s|$)/iu;
+  const contexts: string[] = [];
+  for (const match of source.matchAll(/(?:^|[\s,;])для\s+([^,;.!?]+)/giu)) {
+    const rawTail = String(match[1] ?? "").trim();
+    const boundary = rawTail.search(stop);
+    const candidate = (boundary >= 0 ? rawTail.slice(0, boundary) : rawTail)
+      .replace(/^[\s:–—-]+|[\s:–—-]+$/gu, "").trim();
+    if (!candidate || meaningfulTokens(candidate).length === 0) continue;
+    if (contexts.some((known) => normalize(known) === normalize(candidate))) continue;
+    contexts.push(candidate);
+    if (contexts.length >= 4) break;
+  }
+  return contexts;
+}
+
 const META_WORDS = new Set([
   "товар", "товары", "товара", "вариант", "варианты", "модель", "модели",
   "оборудование", "решение", "подходящий", "подходящие", "нужный", "нужные",
@@ -922,6 +947,26 @@ export function projectSelectionApplicationFacetCriteria(
       level: "A" as const,
     }];
   });
+}
+
+/** Compile explicit customer application wording only through one unique
+ * live non-identity facet value. Ambiguous or absent values produce no filter. */
+export function projectCustomerApplicationFacetCriteria(
+  productClass: string,
+  userMessage: string,
+  facets: Array<{
+    key: string;
+    caption?: string | null;
+    unit?: string | null;
+    values?: Array<{ value: string }>;
+  }>,
+): Criterion[] {
+  const applicationContext = extractCustomerApplicationContexts(userMessage);
+  if (!String(productClass ?? "").trim() || applicationContext.length === 0) return [];
+  return projectSelectionApplicationFacetCriteria({
+    product_class: productClass,
+    application_context: applicationContext,
+  }, facets).map((criterion) => ({ ...criterion, evidence: "user_explicit" as const }));
 }
 
 /**
