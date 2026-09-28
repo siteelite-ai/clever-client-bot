@@ -8,6 +8,7 @@ import {
   forcedToolNameForAgentPhase,
   hasActionableSelectionReasoning,
   isToolAllowedInAgentPhase,
+  isGroundedToolCallAllowed,
   nextAgentPhase,
   resolveTerminalLexicalRecoverySource,
   shouldDeferInquiryIntro,
@@ -308,6 +309,16 @@ Deno.test("agent phase: server rejects model-emitted tools outside the advertise
   assert(!isToolAllowedInAgentPhase("terminal_after_search", "unknown_tool"));
   assert(isToolAllowedInAgentPhase("terminal_after_search", "render_products"));
   assert(!isToolAllowedInAgentPhase("search_after_discovery", "propose_clarification", { reasoningRequiresCatalog: true }));
+});
+
+Deno.test("a server-compiled lexical search cannot widen the phase exception to side effects", () => {
+  const policy = {};
+  assert(isGroundedToolCallAllowed("search_after_discovery", "jargon_recover_catalog", policy, true));
+  assert(isGroundedToolCallAllowed("search_after_discovery", "search_catalog", policy, true));
+  assert(!isGroundedToolCallAllowed("search_after_discovery", "jargon_recover_catalog", policy, false));
+  assert(isGroundedToolCallAllowed("terminal_after_search", "jargon_recover_catalog", policy, true));
+  assert(!isGroundedToolCallAllowed("terminal_after_search", "note_state", policy, true));
+  assert(!isGroundedToolCallAllowed("terminal_after_search", "discover_category", policy, true));
 });
 
 Deno.test("agent phase: non-empty ordinary selection search becomes terminal", () => {

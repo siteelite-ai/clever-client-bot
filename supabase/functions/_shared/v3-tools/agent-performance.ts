@@ -338,6 +338,21 @@ export function isToolAllowedInAgentPhase(phase: AgentPhase, tool: string, polic
   return (toolNamesForAgentPhase(phase, policy) as readonly string[]).includes(tool);
 }
 
+/** A server-compiled search is based on already validated customer/live-schema
+ * evidence and may use the lexical helper even though that helper is not
+ * exposed to the model in the current phase. The exception is deliberately
+ * limited to the two retrieval tools; it cannot authorize render, discovery or
+ * side-effect tools. */
+export function isGroundedToolCallAllowed(
+  phase: AgentPhase,
+  tool: string,
+  policy: AgentToolPolicy,
+  serverCompiledGroundedSearch: boolean,
+): tool is ToolName {
+  return isToolAllowedInAgentPhase(phase, tool, policy) ||
+    serverCompiledGroundedSearch && (tool === "search_catalog" || tool === "jargon_recover_catalog");
+}
+
 /**
  * Once quantified reasoning exists, the remaining uncertainty is in tool
  * arguments, not in which protocol phase comes next. OpenRouter still lets the

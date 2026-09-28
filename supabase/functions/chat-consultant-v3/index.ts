@@ -130,6 +130,7 @@ import {
   deterministicInitialDiscoveryToolCall,
   establishesCatalogAttempt,
   forcedToolNameForAgentPhase,
+  isGroundedToolCallAllowed,
   isToolAllowedInAgentPhase,
   nextAgentPhase,
   resolveTerminalLexicalRecoverySource,
@@ -4566,14 +4567,16 @@ async function runExpertLoop(
         ? deterministicInitialDiscoveryToolCall(forcedToolName, userMessage)
         : null;
       let resp: ORResponse;
+      let serverCompiledGroundedSearch = false;
       try {
         if (queuedServerGroundedSearch) {
           const queued = queuedServerGroundedSearch;
           queuedServerGroundedSearch = null;
+          serverCompiledGroundedSearch = true;
           resp = {
             text: "",
             toolCalls: [queued],
-            finishReason: "server_compiled_customer_facet_search",
+            finishReason: "server_compiled_grounded_search",
           };
         } else if (compiledInitialDiscovery) {
           resp = {
@@ -5453,7 +5456,14 @@ async function runExpertLoop(
         // discovery/search is never executed merely because the model ignored
         // the advertised tool set. Every assistant tool_call still receives a
         // matching tool result, keeping the conversation protocol valid.
-        if (!isToolAllowedInAgentPhase(agentPhase, tc.name, enforcementToolPolicy) && !correctiveDiscovery) {
+        if (
+          !isGroundedToolCallAllowed(
+            agentPhase,
+            tc.name,
+            enforcementToolPolicy,
+            serverCompiledGroundedSearch,
+          ) && !correctiveDiscovery
+        ) {
           const phaseHint = agentPhase === "open"
             ? "Сначала выполни discovery/search. Уточнение допустимо после discovery, только если без него поиск объективно невозможен."
             : agentPhase === "search_after_discovery"
