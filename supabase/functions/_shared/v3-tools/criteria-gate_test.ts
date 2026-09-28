@@ -72,6 +72,49 @@ Deno.test("user-backed criteria accumulate monotonically across fallback searche
   assertEquals(mergeUserBackedCriteria([...first, ...second], first), [...first, ...second]);
 });
 
+Deno.test("equivalent numeric facet and emission proofs collapse into one public obligation", () => {
+  assertEquals(mergeUserBackedCriteria([], [
+    {
+      key: "Номинальный ток",
+      op: "eq",
+      value: "25",
+      unit: "а",
+      level: "A",
+      evidence: "user_explicit",
+    },
+    {
+      key: "Номинальный ток",
+      op: "eq",
+      value: 25,
+      level: "A",
+      evidence: "user_explicit",
+    },
+    {
+      key: "А",
+      op: "eq",
+      value: 25,
+      unit: "a",
+      level: "A",
+      evidence: "user_explicit",
+    },
+  ]), [{
+    key: "Номинальный ток",
+    op: "eq",
+    value: "25",
+    unit: "а",
+    level: "A",
+    evidence: "user_explicit",
+  }]);
+});
+
+Deno.test("equal scalars on independently named axes are not collapsed", () => {
+  const criteria = [
+    { key: "Входная мощность", op: "eq" as const, value: 10, unit: "Вт", level: "A" as const, evidence: "user_explicit" as const },
+    { key: "Выходная мощность", op: "eq" as const, value: 10, unit: "Вт", level: "A" as const, evidence: "user_explicit" as const },
+  ];
+  assertEquals(mergeUserBackedCriteria([], criteria), criteria);
+});
+
 Deno.test("rendered-card consensus restores a user-owned emission contract", () => {
   const products = ["one", "two"].map((id) => ({
     id,

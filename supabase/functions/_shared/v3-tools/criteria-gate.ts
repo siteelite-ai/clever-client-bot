@@ -139,6 +139,36 @@ export function mergeUserBackedCriteria(
     // This is a hard-contract boundary: a model hypothesis cannot become a
     // customer obligation merely because a later tool serialized it as A.
     if (!criterionCanEnterMandatoryContract(criterion)) continue;
+    const numericValue = Array.isArray(criterion.value)
+      ? null
+      : Number(String(criterion.value).replace(",", "."));
+    const semanticDuplicate = Number.isFinite(numericValue) && merged.some((known) => {
+      if (
+        known.op !== criterion.op ||
+        (known.exclusive === true) !== (criterion.exclusive === true)
+      ) return false;
+      if (Array.isArray(known.value)) return false;
+      const knownValue = Number(String(known.value).replace(",", "."));
+      if (!Number.isFinite(knownValue) || knownValue !== numericValue) return false;
+      const knownKey = normalizeKey(known.key);
+      const candidateKey = normalizeKey(criterion.key);
+      const knownUnit = canonicalRenderedUnit(String(known.unit ?? ""));
+      const candidateUnit = canonicalRenderedUnit(String(criterion.unit ?? ""));
+      const unitsCompatible = !knownUnit || !candidateUnit || knownUnit === candidateUnit;
+      if (!unitsCompatible) return false;
+      if (knownKey === candidateKey) return true;
+      // Emission recovery may have only a physical unit as its key (`A = 25`)
+      // when compact Markdown lacks trait labels. If a prior live-facet
+      // criterion already owns the same scalar/unit, the unit-only row is the
+      // same proof, not a second customer requirement.
+      const knownKeyAsUnit = canonicalRenderedUnit(known.key);
+      const candidateKeyAsUnit = canonicalRenderedUnit(criterion.key);
+      return Boolean(
+        candidateUnit && knownKeyAsUnit === candidateUnit ||
+        knownUnit && candidateKeyAsUnit === knownUnit
+      );
+    });
+    if (semanticDuplicate) continue;
     const value = Array.isArray(criterion.value)
       ? criterion.value.map((item) => String(item)).join("\u0000")
       : String(criterion.value);
