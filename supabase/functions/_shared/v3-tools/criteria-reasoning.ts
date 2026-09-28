@@ -610,6 +610,7 @@ export function projectLiteralMeasuredCriteria(
   customerText: string,
   reasoningText: string,
   facets: Array<{ key: string; caption: string; type: string; unit: string | null; values?: Array<{ value: string }> }>,
+  userBackedAnchors: Criterion[] = criteria,
 ): LiteralMeasuredProjection {
   const next = (Array.isArray(criteria) ? criteria : []).map((criterion) => ({ ...criterion }));
   const added: Criterion[] = [];
@@ -698,7 +699,7 @@ export function projectLiteralMeasuredCriteria(
     const clausePrefix = occurrence >= 0
       ? customer.slice(Math.max(0, customer.lastIndexOf(".", occurrence) + 1), occurrence)
       : "";
-    const hasUserFacetAnchor = next.some((criterion) => {
+    const hasUserFacetAnchor = userBackedAnchors.some((criterion) => {
       if (criterion.evidence !== "user_explicit") return false;
       const criterionKey = normalizeEvidence(criterion.key);
       return facets.some((facet) => {

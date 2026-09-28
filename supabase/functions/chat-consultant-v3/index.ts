@@ -9144,6 +9144,7 @@ async function runExpertLoop(
                 userMessage,
                 `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
                 lastDiscover.facets,
+                explicitUserBackedCriteria,
               );
               const directLiteralMeasuredCriteria = directLiteralMeasuredProjection.added
                 .map((criterion) => ({ ...criterion, evidence: "user_explicit" as const }));
@@ -9154,6 +9155,7 @@ async function runExpertLoop(
                 userMessage,
                 `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
                 lastDiscover.facets,
+                explicitUserBackedCriteria,
               ).added.map((criterion) => ({ ...criterion, evidence: "user_explicit" as const }));
               const before = userBackedSearchCriteria.length;
               userBackedSearchCriteria = mergeUserBackedCriteria(
