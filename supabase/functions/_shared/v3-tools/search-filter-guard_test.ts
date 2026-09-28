@@ -342,6 +342,40 @@ Deno.test("filter guard accepts a noun value declared through its adjective form
   assertEquals(result.dropped, []);
 });
 
+Deno.test("a neighbouring root word cannot invent a different categorical value", () => {
+  const user = "Есть ли светодиодные изделия с теплым светом?";
+  const result = guardSearchFilters(
+    { mode: "by_filter" },
+    [{
+      key: "shape",
+      caption: "Форма изделия",
+      values: [{ value: "свеча" }, { value: "таблетка" }],
+    }],
+    user,
+    user,
+  );
+
+  assertEquals(result.args.options, undefined);
+  assertEquals(result.user_backed, []);
+});
+
+Deno.test("mixed Cyrillic and Latin lookalikes preserve an explicit technical code", () => {
+  const user = "Есть ли изделия на цоколь Е27?";
+  const result = guardSearchFilters(
+    { mode: "by_filter" },
+    [{
+      key: "connector",
+      caption: "Тип цоколя",
+      values: [{ value: "E14" }, { value: "E27" }, { value: "E40" }],
+    }],
+    user,
+    user,
+  );
+
+  assertEquals(result.args.options, { connector: ["E27"] });
+  assertEquals(result.user_backed, [{ key: "connector", value: "E27" }]);
+});
+
 Deno.test("filter guard completes an explicit user facet omitted by the model", () => {
   const result = guardSearchFilters(
     { mode: "by_filter", options: { sensor: ["да"] } },

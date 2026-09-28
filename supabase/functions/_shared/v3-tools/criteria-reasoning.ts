@@ -44,6 +44,10 @@ export interface ReasoningRangeProjection {
 export interface LiteralMeasuredProjection {
   criteria: Criterion[];
   added: Criterion[];
+  /** Direct customer measurements already present in, or added to, the live
+   * facet contract. This distinguishes a mapped literal from an application
+   * measurement that still needs product-side derivation. */
+  matched: Criterion[];
 }
 
 export interface CriteriaImportanceAlignment {
@@ -609,6 +613,7 @@ export function projectLiteralMeasuredCriteria(
 ): LiteralMeasuredProjection {
   const next = (Array.isArray(criteria) ? criteria : []).map((criterion) => ({ ...criterion }));
   const added: Criterion[] = [];
+  const matched: Criterion[] = [];
   const bounds = collapseBounds(extractReasoningBounds(reasoningText));
   const quantities = extractClientQuantities(customerText);
 
@@ -645,9 +650,16 @@ export function projectLiteralMeasuredCriteria(
     });
     if (unitFacets.length === 0) continue;
 
-    const sameUnitHints = next.filter((criterion) =>
-      canonicalMeasurementUnit(criterion.unit ?? "") === unit
-    );
+    const sameUnitHints = next.filter((criterion) => {
+      const criterionUnit = canonicalMeasurementUnit(criterion.unit ?? "");
+      if (criterionUnit === unit) return true;
+      // A guarded exact live-facet criterion can omit `unit` because legacy
+      // discovery stores it only in the public caption. Its key and exact
+      // scalar still provide a safe, schema-backed disambiguation hint.
+      const scalar = parseNumericFacetValue(String(criterion.value ?? ""));
+      return !criterionUnit && criterion.op === "eq" && scalar !== null &&
+        scalar.min === quantity.value && scalar.max === quantity.value;
+    });
     const hintedFacets = unitFacets.filter((facet) => {
       const labels = [facet.key, facet.caption].map(normalizeEvidence);
       return sameUnitHints.some((criterion) => {
@@ -688,13 +700,18 @@ export function projectLiteralMeasuredCriteria(
       return span !== null && span.min === quantity.value && span.max === quantity.value;
     })?.value;
     if (liveValue === undefined) continue;
-    const alreadyRepresented = next.some((criterion) => {
+    const representedCriterion = next.find((criterion) => {
       const key = normalizeEvidence(criterion.key);
       const facetKey = normalizeEvidence(facet.caption || facet.key);
       if (!(key === facetKey || key.includes(facetKey) || facetKey.includes(key))) return false;
       return criterion.op === "eq" && String(criterion.value) === String(liveValue);
     });
-    if (alreadyRepresented) continue;
+    if (representedCriterion) {
+      if (!matched.some((criterion) => criteriaIdentityMatches(criterion, representedCriterion))) {
+        matched.push({ ...representedCriterion });
+      }
+      continue;
+    }
     const facetMeaning = normalizeEvidence(facet.caption || facet.key);
     const facetDirection = /(?:^| )(?:максимал\p{L}*|maximum|max)(?: |$)/iu.test(facetMeaning)
       ? "min" as const
@@ -713,8 +730,9 @@ export function projectLiteralMeasuredCriteria(
     };
     next.push(criterion);
     added.push(criterion);
+    matched.push(criterion);
   }
-  return { criteria: next, added };
+  return { criteria: next, added, matched };
 }
 
 function parseNumericFacetValue(raw: string): { min: number; max: number } | null {

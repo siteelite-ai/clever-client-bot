@@ -294,7 +294,13 @@ export function productMatchesExcludedReplacementIdentity(
 }
 
 function codeNorm(value: string): string {
-  return norm(value).replace(/\s+/g, "");
+  const lookalikes: Record<string, string> = {
+    а: "a", в: "b", е: "e", к: "k", м: "m", н: "h",
+    о: "o", р: "p", с: "c", т: "t", у: "y", х: "x",
+  };
+  return norm(value)
+    .replace(/[авекмнорстух]/gu, (char) => lookalikes[char] ?? char)
+    .replace(/\s+/g, "");
 }
 
 const RU_SUFFIXES = [
@@ -320,15 +326,17 @@ function tokensMatchByStem(left: string, right: string): boolean {
   const rightStem = stemRu(right);
   const sharedLength = Math.min(leftStem.length, rightStem.length);
   if (sharedLength >= 4 && leftStem.slice(0, sharedLength) === rightStem.slice(0, sharedLength)) return true;
-  // Common Russian noun→adjective derivation changes one final letter after
-  // the same root (e.g. "медь" ↔ "медные"). Accept a single differing code
-  // point only for equal stems with a stable 3-letter root.
-  if (leftStem.length === rightStem.length && leftStem.length >= 4 && leftStem.slice(0, 3) === rightStem.slice(0, 3)) {
-    let differences = 0;
-    for (let index = 0; index < leftStem.length; index++) {
-      if (leftStem[index] !== rightStem[index]) differences += 1;
-    }
-    if (differences === 1) return true;
+  // A previous generic "one changed letter" rule treated unrelated neighbours
+  // such as `свет` and `свеча` as the same root. Preserve only the
+  // structurally identifiable soft-sign noun → -н- adjective transition
+  // (`медь` ↔ `медный`); arbitrary substitutions are not evidence.
+  if (
+    leftStem.length === rightStem.length &&
+    leftStem.length >= 4 &&
+    leftStem.slice(0, -1) === rightStem.slice(0, -1)
+  ) {
+    const endings = new Set([leftStem.at(-1), rightStem.at(-1)]);
+    if (endings.has("ь") && endings.has("н")) return true;
   }
   return false;
 }
@@ -468,6 +476,18 @@ function contradictedByUser(value: string, userEvidence: string): boolean {
 
 function explicitlyAffirmedByUser(value: string, userEvidence: string): boolean {
   if (contradictedByUser(value, userEvidence)) return false;
+  const normalizedValue = norm(value);
+  // Mixed-script technical markings are common in human input (`E27`/`Е27`,
+  // `C16`/`С16`). Treat only values containing both a letter and a digit as
+  // portable codes, then compare their compact visual forms. Ordinary words
+  // continue through the stricter token/morphology path below.
+  if (/\p{L}/u.test(normalizedValue) && /\d/u.test(normalizedValue)) {
+    const wanted = codeNorm(value);
+    const evidenceCodes = String(userEvidence ?? "")
+      .match(/[\p{L}\p{N}][\p{L}\p{N}._/-]*/gu)
+      ?.map(codeNorm) ?? [];
+    if (wanted && evidenceCodes.includes(wanted)) return true;
+  }
   const isEvidenceToken = (token: string) => token.length >= 3 || /\d/.test(token) || /^[a-z]+$/u.test(token);
   const valueTokens = norm(value)
     .split(" ")

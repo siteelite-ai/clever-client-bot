@@ -302,6 +302,39 @@ Deno.test("точное число клиента проецируется на 
   }]);
 });
 
+Deno.test("guarded exact criterion disambiguates an otherwise ambiguous literal measurement", () => {
+  const existing: Criterion = {
+    key: "Цветовая температура, К",
+    op: "eq",
+    value: "3000",
+    level: "A",
+  };
+  const projected = projectLiteralMeasuredCriteria(
+    [existing],
+    "Есть ли варианты 3000К?",
+    "Проверяю точно 3000К.",
+    [
+      {
+        key: "colour_temperature",
+        caption: "Цветовая температура, К",
+        type: "string",
+        unit: null,
+        values: [{ value: "3000" }, { value: "4000" }],
+      },
+      {
+        key: "opaque_number",
+        caption: "Внутренний код",
+        type: "string",
+        unit: null,
+        values: [{ value: "3000" }],
+      },
+    ],
+  );
+
+  assertEquals(projected.added, []);
+  assertEquals(projected.matched, [existing]);
+});
+
 Deno.test("unitless live-фасет выбирается только после исключения явно другой шкалы", () => {
   const projected = projectLiteralMeasuredCriteria(
     [],

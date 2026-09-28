@@ -9064,12 +9064,16 @@ async function runExpertLoop(
                 level: "A" as const,
                 evidence: "user_explicit" as const,
               }));
-              const directLiteralMeasuredCriteria = projectLiteralMeasuredCriteria(
-                [],
+              const directLiteralMeasuredProjection = projectLiteralMeasuredCriteria(
+                explicitCriteria,
                 userMessage,
                 `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
                 lastDiscover.facets,
-              ).added.map((criterion) => ({ ...criterion, evidence: "user_explicit" as const }));
+              );
+              const directLiteralMeasuredCriteria = directLiteralMeasuredProjection.added
+                .map((criterion) => ({ ...criterion, evidence: "user_explicit" as const }));
+              const directMeasuredCriteriaCount = measuredCriteria.length +
+                directLiteralMeasuredProjection.matched.length;
               const literalMeasuredCriteria = projectLiteralMeasuredCriteria(
                 [...explicitCriteria, ...measuredCriteria],
                 userMessage,
@@ -9102,7 +9106,7 @@ async function runExpertLoop(
                 // being committed; the phase transition is applied below.
                 phase: "search_after_discovery",
                 catalogSearchAttempted,
-                directMeasuredCriteriaCount: measuredCriteria.length + directLiteralMeasuredCriteria.length,
+                directMeasuredCriteriaCount,
                 userMessage,
                 reasoningText: `${firstAssistantText}\n${assistantReasoning}`,
               })) {
@@ -9113,7 +9117,7 @@ async function runExpertLoop(
                   meta: {
                     category: lastDiscover.category?.pagetitle ?? "",
                     measured_contexts: true,
-                    direct_measured_criteria: measuredCriteria.length + directLiteralMeasuredCriteria.length,
+                    direct_measured_criteria: directMeasuredCriteriaCount,
                   },
                 });
               }
