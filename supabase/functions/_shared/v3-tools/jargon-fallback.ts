@@ -4,6 +4,8 @@
 // альтернативных канонических термина (например «лампа кукуруза» → corn lamp).
 // Tool calling без свободного текста. Data-agnostic: никаких whitelist'ов.
 
+import { fetchChatCompletionWithFailover } from "./model-provider-failover.ts";
+
 interface JargonFallbackDeps {
   apiKey: string;
   signal?: AbortSignal;
@@ -13,6 +15,8 @@ interface JargonFallbackDeps {
   category?: string;
   /** A stricter retry that asks only for short literal title tokens. */
   strategy?: "broad" | "title_token" | "translation_only";
+  fallbackApiKey?: string | null;
+  fallbackModel?: string;
 }
 
 export interface JargonFallbackResult {
@@ -74,13 +78,21 @@ export async function tryJargonFallback(
       : deps.category
       ? `Категория каталога: «${deps.category}». Запрос клиента: «${query}». Предложи 1–3 канонических термина ИМЕННО В КОНТЕКСТЕ этой категории (форма/тип/подтип товара внутри категории). Кандидаты, не относящиеся к этой категории, НЕ предлагай.`
       : `Запрос: «${query}». Предложи альтернативные термины.`;
-    const res = await fetchImpl("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${deps.apiKey}`,
-        "Content-Type": "application/json",
+    const completion = await fetchChatCompletionWithFailover({
+      primary: {
+        id: "openrouter",
+        url: "https://openrouter.ai/api/v1/chat/completions",
+        apiKey: deps.apiKey,
       },
-      body: JSON.stringify({
+      fallback: deps.fallbackApiKey
+        ? {
+          id: "lovable",
+          url: "https://ai.gateway.lovable.dev/v1/chat/completions",
+          apiKey: deps.fallbackApiKey,
+          model: deps.fallbackModel ?? "google/gemini-3-flash-preview",
+        }
+        : null,
+      body: {
         model: "google/gemini-2.5-flash",
         temperature: deterministicMode ? 0 : 0.3,
         max_tokens: 200,
@@ -90,9 +102,11 @@ export async function tryJargonFallback(
         ],
         tools: [TOOL],
         tool_choice: { type: "function", function: { name: "propose_candidates" } },
-      }),
+      },
       signal,
+      fetchImpl,
     });
+    const res = completion.response;
 
     if (!res.ok) {
       await res.body?.cancel();

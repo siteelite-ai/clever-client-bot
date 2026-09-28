@@ -20,6 +20,8 @@ export interface JargonRecoverCatalogInput {
 
 export interface JargonRecoverCatalogDeps extends CatalogClientDeps {
   openrouterApiKey: string;
+  lovableApiKey?: string | null;
+  lovableModel?: string;
   /** @deprecated A live discovered category is now always used as safe context. */
   categoryContextEnabled?: boolean;
   /**
@@ -258,6 +260,8 @@ export async function executeJargonRecoverCatalog(
 
   const jargon = await tryJargonFallback(source, {
     apiKey: deps.openrouterApiKey,
+    fallbackApiKey: deps.lovableApiKey,
+    fallbackModel: deps.lovableModel,
     category: categoryHint,
     strategy: "translation_only",
     fetchImpl: deps.fetchImpl,
@@ -478,6 +482,8 @@ export async function executeJargonRecoverCatalog(
   if (!matched && !axialFallback) {
     const translated = await tryJargonFallback(source, {
       apiKey: deps.openrouterApiKey,
+      fallbackApiKey: deps.lovableApiKey,
+      fallbackModel: deps.lovableModel,
       category: categoryHint,
       strategy: "title_token",
       fetchImpl: deps.fetchImpl,
@@ -506,6 +512,8 @@ export async function executeJargonRecoverCatalog(
     if (bridged.semantic.length > 0 && normalize(bridgeSource) !== normalize(source)) {
       const bridgeJargon = await tryJargonFallback(bridgeSource, {
         apiKey: deps.openrouterApiKey,
+        fallbackApiKey: deps.lovableApiKey,
+        fallbackModel: deps.lovableModel,
         category: categoryHint,
         strategy: "title_token",
         fetchImpl: deps.fetchImpl,

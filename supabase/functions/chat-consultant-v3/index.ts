@@ -244,6 +244,7 @@ import {
   stripCurrentUserEcho,
 } from "../_shared/v3-tools/conversation-boundary.ts";
 import { classifyPublicFailure, UpstreamHttpError } from "../_shared/v3-tools/public-failure.ts";
+import { fetchChatCompletionWithFailover } from "../_shared/v3-tools/model-provider-failover.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -254,6 +255,8 @@ const corsHeaders = {
 const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const CATALOG_BASE_URL = Deno.env.get("CATALOG_API_BASE_URL") ?? "https://220volt.kz/api";
+const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY") ?? null;
+const LOVABLE_AGENT_MODEL = Deno.env.get("LOVABLE_AGENT_MODEL") ?? "google/gemini-3-flash-preview";
 
 const MODEL = "deepseek/deepseek-v4-flash"; // MoE 284B/13B-active, 1M ctx, optimized for agent workflows. rollback: "deepseek/deepseek-v4-pro"
 const AGENT_MODEL_ROUTING = buildOpenRouterModelRouting(
@@ -371,6 +374,7 @@ interface ToolContext {
   supabase: SupabaseClient;
   catalogToken: string;
   openrouterKey: string;
+  lovableApiKey: string | null;
   selectionReasoningModel: string;
   sessionId: string;
   jargonCategoryContextEnabled: boolean;
@@ -398,6 +402,8 @@ async function runTool(
       {
         ...catalogDeps,
         openrouterApiKey: ctx.openrouterKey,
+        lovableApiKey: ctx.lovableApiKey,
+        lovableModel: LOVABLE_AGENT_MODEL,
         categoryContextEnabled: ctx.jargonCategoryContextEnabled,
         axialModifiersEnabled: ctx.jargonAxialModifiersEnabled,
       },
@@ -774,7 +780,7 @@ async function guardedOutcomeForSearch(
     const semanticSearch = directSemanticSearch?.ok && directSemanticSearch.total > 0
       ? directSemanticSearch
       : semanticQuery
-        ? await executeJargonRecoverCatalog({ query: semanticQuery, per_page: 5, category: typeof args.category === "string" ? args.category : lastDiscover.category.pagetitle }, { ...catalogDeps, openrouterApiKey: ctx.openrouterKey, categoryContextEnabled: ctx.jargonCategoryContextEnabled, axialModifiersEnabled: ctx.jargonAxialModifiersEnabled }, ctx.cache)
+        ? await executeJargonRecoverCatalog({ query: semanticQuery, per_page: 5, category: typeof args.category === "string" ? args.category : lastDiscover.category.pagetitle }, { ...catalogDeps, openrouterApiKey: ctx.openrouterKey, lovableApiKey: ctx.lovableApiKey, lovableModel: LOVABLE_AGENT_MODEL, categoryContextEnabled: ctx.jargonCategoryContextEnabled, axialModifiersEnabled: ctx.jargonAxialModifiersEnabled }, ctx.cache)
         : null;
 
     const confirmedTotal = confirmedSearch.ok ? confirmedSearch.total : 0;
@@ -1898,6 +1904,7 @@ interface ORResponse {
   text: string;
   toolCalls: ORToolCall[];
   finishReason: string;
+  provider?: string;
 }
 
 interface ORToolSchema {
@@ -1951,6 +1958,7 @@ async function callOpenRouter(
   else signal.addEventListener("abort", onOuterAbort, { once: true });
 
   let res: Response;
+  let provider = "openrouter";
   let data: {
     choices?: Array<{
       message?: { content?: string | null; tool_calls?: Array<{ id?: string; function?: { name?: string; arguments?: string } }>; };
@@ -1959,15 +1967,25 @@ async function callOpenRouter(
   };
   try {
     const availableTools = toolSchemas.filter((schema) => availableToolNames.includes(schema.function.name));
-    res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": "https://chat-volt.testdevops.ru",
-        "X-Title": "220volt-chat-consultant-v3",
+    const completion = await fetchChatCompletionWithFailover({
+      primary: {
+        id: "openrouter",
+        url: "https://openrouter.ai/api/v1/chat/completions",
+        apiKey,
+        headers: {
+          "HTTP-Referer": "https://chat-volt.testdevops.ru",
+          "X-Title": "220volt-chat-consultant-v3",
+        },
       },
-      body: JSON.stringify({
+      fallback: LOVABLE_API_KEY
+        ? {
+          id: "lovable",
+          url: "https://ai.gateway.lovable.dev/v1/chat/completions",
+          apiKey: LOVABLE_API_KEY,
+          model: LOVABLE_AGENT_MODEL,
+        }
+        : null,
+      body: {
         ...modelRouting,
         temperature,
         max_tokens: maxTokens,
@@ -1980,9 +1998,11 @@ async function callOpenRouter(
               : "auto",
           }
           : {}),
-      }),
+      },
       signal: localCtrl.signal,
     });
+    res = completion.response;
+    provider = completion.provider;
 
     if (!res.ok) {
       const errText = await res.text();
@@ -2014,7 +2034,7 @@ async function callOpenRouter(
       });
     }
   }
-  return { text, toolCalls, finishReason: data?.choices?.[0]?.finish_reason ?? "stop" };
+  return { text, toolCalls, finishReason: data?.choices?.[0]?.finish_reason ?? "stop", provider };
 }
 
 async function callOpenRouterEvidenceFollowup(
@@ -2995,6 +3015,8 @@ async function selectVerifiedSemanticCompoundProducts(
     baseUrl: CATALOG_BASE_URL,
     apiToken: ctx.catalogToken,
     openrouterApiKey: ctx.openrouterKey,
+    lovableApiKey: ctx.lovableApiKey,
+    lovableModel: LOVABLE_AGENT_MODEL,
     categoryContextEnabled: ctx.jargonCategoryContextEnabled,
     axialModifiersEnabled: ctx.jargonAxialModifiersEnabled,
   }, ctx.cache);
@@ -5096,7 +5118,7 @@ async function runExpertLoop(
       steps.push({
         step: "v3_llm_call",
         ms: now(),
-        meta: { step_index: step, duration_ms: Date.now() - llmStart, has_text: !!resp.text, tool_calls: resp.toolCalls.length, finish: resp.finishReason, phase, timeout_ms: phaseTimeoutMs, ctx_bytes: ctxBytes, agent_phase: agentPhase, available_tools: availableToolNames, forced_tool: forcedToolName },
+        meta: { step_index: step, duration_ms: Date.now() - llmStart, has_text: !!resp.text, tool_calls: resp.toolCalls.length, finish: resp.finishReason, provider: resp.provider ?? "server_compiled", phase, timeout_ms: phaseTimeoutMs, ctx_bytes: ctxBytes, agent_phase: agentPhase, available_tools: availableToolNames, forced_tool: forcedToolName },
       });
 
       const responseHasActionableReasoning = intentMode === "select" && hasActionableSelectionContract(
@@ -11733,6 +11755,7 @@ Deno.serve(async (req) => {
         supabase,
         catalogToken: settings.volt220_api_token!,
         openrouterKey: settings.openrouter_api_key!,
+        lovableApiKey: LOVABLE_API_KEY,
         selectionReasoningModel: settings.classifier_model,
         sessionId: effectiveSessionId,
         jargonCategoryContextEnabled: settings.v3_jargon_category_context_enabled,
