@@ -2,8 +2,44 @@ import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   createProviderQuotaCooldown,
   fetchChatCompletionWithFailover,
+  isChatCompletionFailoverEnabled,
   shouldFailoverChatCompletion,
 } from "./model-provider-failover.ts";
+
+Deno.test("preview failover opt-in cannot enable the production function", () => {
+  assertEquals(
+    isChatCompletionFailoverEnabled({
+      deploymentVariant: "production",
+      previewEnabled: "true",
+    }),
+    false,
+  );
+  assertEquals(
+    isChatCompletionFailoverEnabled({
+      deploymentVariant: "preview",
+      previewEnabled: "true",
+    }),
+    true,
+  );
+  assertEquals(
+    isChatCompletionFailoverEnabled({
+      deploymentVariant: "preview",
+      previewEnabled: "false",
+    }),
+    false,
+  );
+});
+
+Deno.test("legacy global failover remains an explicit project-wide opt-in", () => {
+  assertEquals(
+    isChatCompletionFailoverEnabled({
+      deploymentVariant: "production",
+      globalEnabled: "true",
+      previewEnabled: "false",
+    }),
+    true,
+  );
+});
 
 Deno.test("provider failover is limited to quota, capacity and transient failures", () => {
   for (const status of [402, 408, 409, 429, 500, 503]) {

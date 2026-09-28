@@ -29,6 +29,28 @@ export interface ProviderQuotaCooldown {
   clear(provider: ChatCompletionProvider): void;
 }
 
+export type ChatCompletionDeploymentVariant = "production" | "preview";
+
+export interface ChatCompletionFailoverPolicyInput {
+  deploymentVariant: ChatCompletionDeploymentVariant;
+  globalEnabled?: string | null;
+  previewEnabled?: string | null;
+}
+
+/**
+ * Resolves the provider failover switch without letting a preview-only test
+ * flag alter the production function. The legacy global flag remains an
+ * explicit project-wide opt-in; otherwise only the preview wrapper may use
+ * LOVABLE_AGENT_FAILOVER_PREVIEW_ENABLED.
+ */
+export function isChatCompletionFailoverEnabled(
+  input: ChatCompletionFailoverPolicyInput,
+): boolean {
+  if (input.globalEnabled === "true") return true;
+  return input.deploymentVariant === "preview" &&
+    input.previewEnabled === "true";
+}
+
 interface ProviderQuotaCooldownOptions {
   now?: () => number;
   quotaCooldownMs?: number;

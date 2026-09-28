@@ -436,7 +436,10 @@ import {
   classifyPublicFailure,
   UpstreamHttpError,
 } from "../_shared/v3-tools/public-failure.ts";
-import { fetchChatCompletionWithFailover } from "../_shared/v3-tools/model-provider-failover.ts";
+import {
+  fetchChatCompletionWithFailover,
+  isChatCompletionFailoverEnabled,
+} from "../_shared/v3-tools/model-provider-failover.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -449,8 +452,17 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const CATALOG_BASE_URL = Deno.env.get("CATALOG_API_BASE_URL") ??
   "https://220volt.kz/api";
-const LOVABLE_AGENT_FAILOVER_ENABLED =
-  Deno.env.get("LOVABLE_AGENT_FAILOVER_ENABLED") === "true";
+const DEPLOYMENT_VARIANT =
+  (globalThis as typeof globalThis & {
+    __VOLT220_FUNCTION_VARIANT__?: "preview";
+  }).__VOLT220_FUNCTION_VARIANT__ === "preview"
+    ? "preview"
+    : "production";
+const LOVABLE_AGENT_FAILOVER_ENABLED = isChatCompletionFailoverEnabled({
+  deploymentVariant: DEPLOYMENT_VARIANT,
+  globalEnabled: Deno.env.get("LOVABLE_AGENT_FAILOVER_ENABLED"),
+  previewEnabled: Deno.env.get("LOVABLE_AGENT_FAILOVER_PREVIEW_ENABLED"),
+});
 const LOVABLE_API_KEY = LOVABLE_AGENT_FAILOVER_ENABLED
   ? Deno.env.get("LOVABLE_API_KEY") ?? null
   : null;
