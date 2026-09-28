@@ -637,13 +637,13 @@ Deno.test("customer application compiles only through a unique live non-identity
     "светильник",
     "Покажи светильники Philips для офиса",
     [
-      { key: "use", caption: "Назначение", values: [{ value: "офисный" }, { value: "промышленный" }] },
+      { key: "use", caption: "Назначение", values: [{ value: "офисно-административное освещение" }, { value: "промышленный" }] },
       { key: "brand", caption: "Бренд", values: [{ value: "офис" }, { value: "Philips" }] },
     ],
   ), [{
     key: "Назначение",
     op: "eq",
-    value: "офисный",
+    value: "офисно-административное освещение",
     unit: undefined,
     level: "A",
     evidence: "user_explicit",
@@ -653,6 +653,12 @@ Deno.test("customer application compiles only through a unique live non-identity
     "светильник",
     "Покажи светильники для офиса",
     [{ key: "use", caption: "Назначение", values: [{ value: "офис" }, { value: "для офиса" }] }],
+  ), []);
+
+  assertEquals(projectCustomerApplicationFacetCriteria(
+    "светильник",
+    "Покажи светильники для офиса",
+    [{ key: "use", caption: "Назначение", values: [{ value: "не для офиса" }] }],
   ), []);
 });
 

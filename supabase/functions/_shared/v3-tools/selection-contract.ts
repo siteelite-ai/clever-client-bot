@@ -928,8 +928,9 @@ export function projectSelectionApplicationFacetCriteria(
         if (valueTokens.length === 0) return false;
         return compactContexts.some((context) =>
           context.raw === normalizedValue ||
-          valueTokens.every((valueToken) =>
-            context.qualifierTokens.some((contextToken) =>
+          !/(?:^|\s)(?:не|без)(?:\s|$)/iu.test(normalizedValue) &&
+          context.qualifierTokens.every((contextToken) =>
+            valueTokens.some((valueToken) =>
               valueToken === contextToken ||
               Math.min(valueToken.length, contextToken.length) >= 4 &&
                 editDistanceAtMostOne(valueToken, contextToken)
