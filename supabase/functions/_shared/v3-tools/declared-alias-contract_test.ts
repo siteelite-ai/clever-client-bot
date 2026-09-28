@@ -121,13 +121,17 @@ Deno.test("a post-nominal customer qualifier is lexical evidence, not applicatio
   assertEquals(extractPostNominalCatalogQualifier("покажи прожекторы мощностью от 100 Вт", "прожекторы"), null);
   assertEquals(extractPostNominalCatalogQualifier("нужен провод длиной 50 м", "провод"), null);
   assertEquals(extractPostNominalCatalogQualifier("покажи розетки серии Гармония", "розетки"), null);
+  assertEquals(
+    extractPostNominalCatalogQualifier("подбери светодиодную лампу кукуруза", "Светодиодные лампы"),
+    "кукуруза",
+  );
 });
 
 Deno.test("an unrepresented bound qualifier survives a complete facet projection", () => {
   assertEquals(
     extractUnrepresentedPostNominalCatalogQualifier(
       "подбери лампу кукуруза на цоколь е14",
-      "Лампы",
+      "Светодиодные лампы",
       ["E14"],
     ),
     "кукуруза",

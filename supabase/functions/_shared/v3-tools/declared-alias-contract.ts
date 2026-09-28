@@ -138,10 +138,10 @@ export function extractPostNominalCatalogQualifier(
 ): string | null {
   const nounTokens = normalize(discoveredNoun).split(" ").filter(Boolean);
   if (nounTokens.length === 0) return null;
-  const nounStem = inflectionStem(nounTokens.at(-1)!);
+  const nounStems = new Set(nounTokens.map(inflectionStem));
   const tokens = normalize(customerText).split(" ").filter(Boolean);
   for (let index = 0; index < tokens.length - 1; index += 1) {
-    if (inflectionStem(tokens[index]) !== nounStem) continue;
+    if (!nounStems.has(inflectionStem(tokens[index]))) continue;
     const candidate = tokens[index + 1];
     const following = tokens.slice(index + 2, index + 5);
     const measurementTail = /^\d/u.test(following[0] ?? "") ||
@@ -151,7 +151,7 @@ export function extractPostNominalCatalogQualifier(
       candidate.length < 3 ||
       /^\d/u.test(candidate) ||
       POST_NOMINAL_STOP.has(candidate) ||
-      inflectionStem(candidate) === nounStem ||
+      nounStems.has(inflectionStem(candidate)) ||
       measurementTail
     ) continue;
     return candidate;

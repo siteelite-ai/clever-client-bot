@@ -9205,7 +9205,7 @@ async function runExpertLoop(
               ];
               const unresolvedLexicalQualifier = extractUnrepresentedPostNominalCatalogQualifier(
                 userMessage,
-                initialSelectionDiscoveryNoun ?? lastDiscover.category.pagetitle,
+                lastDiscover.category.pagetitle,
                 representedCustomerEvidence,
               );
               if (unresolvedLexicalQualifier) {
