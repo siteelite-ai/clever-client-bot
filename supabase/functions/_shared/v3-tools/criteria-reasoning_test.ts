@@ -376,6 +376,52 @@ Deno.test("direct product measurement can bind one otherwise unitless live facet
   }]);
 });
 
+Deno.test("bare measurement in an anchored product-spec list binds the unique live facet", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [{
+      key: "Количество полюсов",
+      op: "eq",
+      value: "1",
+      level: "A",
+      evidence: "user_explicit",
+    }],
+    "Найди аппарат до 1000 тенге 1 полюсной, 16 А характеристика С",
+    "Найди аппарат до 1000 тенге 1 полюсной, 16 А характеристика С",
+    [
+      { key: "pole_count", caption: "Количество полюсов", type: "checkbox", unit: null, values: [{ value: "1" }, { value: "2" }] },
+      { key: "cable_section", caption: "Макс. сечение кабеля, мм2", type: "checkbox", unit: null, values: [{ value: "6" }, { value: "16" }] },
+      { key: "rated_current", caption: "Номинальный ток", type: "checkbox", unit: null, values: [{ value: "6" }, { value: "16" }] },
+    ],
+  );
+  assertEquals(projected.added, [{
+    key: "Номинальный ток",
+    op: "eq",
+    value: "16",
+    unit: "а",
+    level: "A",
+  }]);
+});
+
+Deno.test("an unrelated facet anchor cannot turn a named installation height into a product scalar", () => {
+  const projected = projectLiteralMeasuredCriteria(
+    [{
+      key: "Цвет корпуса",
+      op: "eq",
+      value: "черный",
+      level: "A",
+      evidence: "user_explicit",
+    }],
+    "Нужен черный прожектор, высота установки примерно 1,5 м",
+    "Нужен черный прожектор, высота установки примерно 1,5 м",
+    [
+      { key: "colour", caption: "Цвет корпуса", type: "checkbox", unit: null, values: [{ value: "черный" }] },
+      { key: "weight", caption: "Вес", type: "checkbox", unit: null, values: [{ value: "1.5" }, { value: "2" }] },
+    ],
+  );
+  assertEquals(projected.added, []);
+  assertEquals(projected.matched, []);
+});
+
 Deno.test("application load after for-clause cannot bind a unitless product facet", () => {
   const projected = projectLiteralMeasuredCriteria(
     [],

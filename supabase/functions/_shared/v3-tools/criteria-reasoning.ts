@@ -698,11 +698,29 @@ export function projectLiteralMeasuredCriteria(
     const clausePrefix = occurrence >= 0
       ? customer.slice(Math.max(0, customer.lastIndexOf(".", occurrence) + 1), occurrence)
       : "";
+    const hasUserFacetAnchor = next.some((criterion) => {
+      if (criterion.evidence !== "user_explicit") return false;
+      const criterionKey = normalizeEvidence(criterion.key);
+      return facets.some((facet) => {
+        const facetKey = normalizeEvidence(facet.caption || facet.key);
+        return criterionKey === facetKey || criterionKey.includes(facetKey) || facetKey.includes(criterionKey);
+      });
+    });
+    const enumeratedProductMeasurement = Boolean(
+      occurrence >= 0 &&
+      !/[²³]/u.test(quantity.unit) &&
+      hasUserFacetAnchor &&
+      /(?:^|[^\p{L}])(?:нуж\p{L}*|найд\p{L}*|подбер\p{L}*|покаж\p{L}*|предлож\p{L}*|выбер\p{L}*|ищ\p{L}*|хоч\p{L}*)[^.!?]{0,160}$/iu.test(clausePrefix) &&
+      /[,;]\s*$/u.test(clausePrefix) &&
+      !/(?:^|\s)(?:для|под)\s+[^.!?]{0,80}[,;]\s*$/iu.test(clausePrefix)
+    );
     const directProductMeasurement = Boolean(
       occurrence >= 0 &&
       !/[²³]/u.test(quantity.unit) &&
-      /(?:^|[^\p{L}])(?:нуж\p{L}*|найд\p{L}*|подбер\p{L}*|покаж\p{L}*|предлож\p{L}*|выбер\p{L}*|ищ\p{L}*|хоч\p{L}*)[^,;.!?]{0,120}\s(?:на|с)\s*$/iu.test(clausePrefix) &&
-      !/(?:^|\s)(?:для|под)\s+[^,;.!?]{0,80}\s(?:на|с)\s*$/iu.test(clausePrefix)
+      (enumeratedProductMeasurement || (
+        /(?:^|[^\p{L}])(?:нуж\p{L}*|найд\p{L}*|подбер\p{L}*|покаж\p{L}*|предлож\p{L}*|выбер\p{L}*|ищ\p{L}*|хоч\p{L}*)[^,;.!?]{0,120}\s(?:на|с)\s*$/iu.test(clausePrefix) &&
+        !/(?:^|\s)(?:для|под)\s+[^,;.!?]{0,80}\s(?:на|с)\s*$/iu.test(clausePrefix)
+      ))
     );
     // A lone numeric facet with no declared physical unit is not sufficient
     // evidence by itself.  The same scalar can describe an installation,
