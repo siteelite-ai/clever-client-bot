@@ -363,6 +363,7 @@
           "expect": {
             "min_products": 3,
             "max_products": 5,
+            "require_result_cardinality": { "target": 5, "minimum": 3, "mode": "alternatives", "explicit": true },
             "max_product_price": 4000,
             "require_selection_criteria_groups": [
               ["С датчиком движения"],
@@ -384,6 +385,7 @@
           "expect": {
             "min_products": 3,
             "max_products": 5,
+            "require_result_cardinality": { "target": 5, "minimum": 3, "mode": "alternatives", "explicit": true },
             "max_product_price": 4000,
             "require_selection_criteria_groups": [
               ["С датчиком движения"],

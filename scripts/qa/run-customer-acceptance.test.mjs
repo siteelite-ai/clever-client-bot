@@ -192,6 +192,12 @@ test('parseSse and evaluate preserve the server selection contract', () => {
     visible_requirements: [
       { kind: 'count', label: 'двойная розетка', op: 'eq', value: 2 },
     ],
+    result_cardinality: {
+      target: 5,
+      minimum: 3,
+      mode: 'alternatives',
+      explicit: true,
+    },
   };
   const parsed = parseSse([
     data({ v3_event: {
@@ -215,6 +221,16 @@ test('parseSse and evaluate preserve the server selection contract', () => {
   assert(evaluate({ require_selection_criteria_groups: [['Количество разъемов'], ['"value":"1"']] }, parsed)
     .some((failure) => failure.startsWith('selection contract misses required groups')));
   assert.deepEqual(evaluate({ require_selection_criteria_evidence: true }, parsed), []);
+  assert.deepEqual(evaluate({
+    require_result_cardinality: {
+      target: 5,
+      minimum: 3,
+      mode: 'alternatives',
+      explicit: true,
+    },
+  }, parsed), []);
+  assert(evaluate({ require_result_cardinality: { target: 1 } }, parsed)
+    .includes('result cardinality target=5 != 1'));
   assert(evaluate({ require_selection_criteria_evidence: true }, {
     ...parsed,
     selectionContract: {

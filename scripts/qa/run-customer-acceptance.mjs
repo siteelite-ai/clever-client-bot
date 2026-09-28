@@ -271,6 +271,18 @@ export function evaluate(expect = {}, response) {
       }
     }
   }
+  if (expect.require_result_cardinality && typeof expect.require_result_cardinality === 'object') {
+    const actual = response.selectionContract?.result_cardinality;
+    if (!actual || typeof actual !== 'object') {
+      failures.push('rendered products have no machine-readable result cardinality contract');
+    } else {
+      for (const key of ['target', 'minimum', 'mode', 'explicit']) {
+        if (key in expect.require_result_cardinality && actual[key] !== expect.require_result_cardinality[key]) {
+          failures.push(`result cardinality ${key}=${JSON.stringify(actual[key])} != ${JSON.stringify(expect.require_result_cardinality[key])}`);
+        }
+      }
+    }
+  }
   if (expect.require_exact_or_split && typeof expect.require_exact_or_split === 'object') {
     const contract = expect.require_exact_or_split;
     const exact = Array.isArray(contract.exact_title_groups) && response.links.some((link) =>

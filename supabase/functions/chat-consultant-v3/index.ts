@@ -185,6 +185,7 @@ import {
   ensureSearchCapacity,
   expandResultCandidateIds,
   resolveResultCardinality,
+  type ResultCardinalityContract,
   resultCardinalityCandidateWindow,
   resultCardinalityShortfallText,
   resultCardinalitySystemHint,
@@ -276,6 +277,7 @@ type SseEvent =
       hash: string;
       mandatory_criteria: Array<{ key: string; op: string; value: string | number | [number, number]; unit?: string | null; exclusive?: boolean; evidence?: CriterionEvidence; }>;
       visible_requirements?: Array<{ kind: string; label: string; op?: string; value?: string | number; unit?: string; exclusive?: boolean; }>;
+      result_cardinality?: ResultCardinalityContract;
     }; }
   | { type: "contacts"; html: string }
   | { type: "quick_replies"; replies: Array<{ value: string; label: string }>; facet_key: string; }
@@ -3475,6 +3477,11 @@ async function runExpertLoop(
   };
   let latestRenderCriteria: Criterion[] = [];
   let selectionCriteriaPlan: SelectionCriteriaPlan | null = null;
+  // Filled before the first tool call. Keeping it beside the emitted
+  // selection contract makes the requested number of cards observable and
+  // testable instead of leaving a short result indistinguishable from an
+  // intentional one-card answer.
+  let emittedResultCardinality: ResultCardinalityContract | null = null;
   // The plan is mutated inside the freeze helper. Reading it through a small
   // accessor prevents TypeScript control-flow analysis from treating the
   // outer variable as permanently null.
@@ -3580,6 +3587,9 @@ async function runExpertLoop(
         })),
         ...(visibleRequirements.length > 0
           ? { visible_requirements: visibleRequirements }
+          : {}),
+        ...(emittedResultCardinality
+          ? { result_cardinality: { ...emittedResultCardinality } }
           : {}),
       },
     });
@@ -3901,6 +3911,7 @@ async function runExpertLoop(
     ),
     superlative: detectPriceDirection(userMessage)?.kind === "superlative",
   });
+  emittedResultCardinality = resultCardinality;
   let resultCardinalityShortfallAnnounced = false;
   const announceResultCardinalityShortfall = (actual: number, source: string) => {
     const shortfall = resultCardinalityShortfallText(actual, resultCardinality);
@@ -11280,6 +11291,13 @@ Deno.serve(async (req) => {
 
   const body = validation.value;
   const userMessage = body.message;
+  const requestLookupKeys = extractReplacementLookupKeys(userMessage);
+  const requestResultCardinality = resolveResultCardinality(userMessage, {
+    selection: detectUserIntentMode(userMessage) === "select",
+    exactLookup: requestLookupKeys.articles.length > 0 ||
+      requestLookupKeys.modelCodes.length > 0,
+    superlative: detectPriceDirection(userMessage)?.kind === "superlative",
+  });
   const sessionId = body.sessionId ?? crypto.randomUUID();
   const history = body.history;
   const rawSlots = body.slots ?? body.dialogSlots;
@@ -11316,28 +11334,36 @@ Deno.serve(async (req) => {
             out = { type: "delta", content: r.text };
           }
           finalTextAccum += (out as { content: string }).content;
-        } else if (ev.type === "products_block" && !ev.selection_contract) {
+        } else if (ev.type === "products_block") {
           // Product cards must never leave the server without an explicit
           // machine trace. Legacy/direct branches may legitimately have no
           // hard criterion yet; represent that honestly as an empty immutable
           // plan instead of omitting the contract and making the client guess.
-          const emptyPlan = extendSelectionCriteriaPlan(
-            null,
-            [],
-            "render_alignment",
-          );
+          // Cardinality belongs to the request and therefore applies to every
+          // product branch, including bounded direct selectors.
+          const emptyPlan = ev.selection_contract
+            ? null
+            : extendSelectionCriteriaPlan(null, [], "render_alignment");
+          const selectionContract = ev.selection_contract ?? {
+            hash: emptyPlan!.hash,
+            mandatory_criteria: [],
+          };
           out = {
             ...ev,
             selection_contract: {
-              hash: emptyPlan.hash,
-              mandatory_criteria: [],
+              ...selectionContract,
+              result_cardinality: selectionContract.result_cardinality ?? {
+                ...requestResultCardinality,
+              },
             },
           };
-          steps.push({
-            step: "v3_empty_selection_contract_attached",
-            ms: Date.now() - t0,
-            meta: { rendered_count: ev.count, plan_hash: emptyPlan.hash },
-          });
+          if (emptyPlan) {
+            steps.push({
+              step: "v3_empty_selection_contract_attached",
+              ms: Date.now() - t0,
+              meta: { rendered_count: ev.count, plan_hash: emptyPlan.hash },
+            });
+          }
         }
         responseEvents.push(out);
         emit(out);
