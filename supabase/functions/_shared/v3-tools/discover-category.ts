@@ -92,11 +92,19 @@ const LOCAL_CATEGORY_MODIFIER_PREPOSITIONS = new Set([
   "без", "в", "во", "для", "до", "из", "к", "ко", "на", "над", "от", "под", "при", "про", "с", "со", "через",
 ]);
 
+const LOCAL_CATEGORY_NEGATION_WORDS = new Set(["не", "ни"]);
+
 const LOCAL_CATEGORY_RU_SUFFIXES = [
   "ыми", "ими", "ого", "его", "ому", "ему",
   "ая", "яя", "ое", "ее", "ой", "ей", "ом", "ем", "ую", "юю",
   "ый", "ий", "ые", "ие", "ых", "их", "ам", "ям", "ах", "ях", "ов", "ев",
   "у", "ю", "а", "я", "о", "е", "ы", "и",
+];
+
+const LOCAL_CATEGORY_RU_ADJECTIVE_SUFFIXES = [
+  "ыми", "ими", "ого", "его", "ому", "ему",
+  "ая", "яя", "ое", "ее", "ой", "ей", "ом", "ем", "ую", "юю",
+  "ый", "ий", "ые", "ие", "ых", "их", "ым", "им",
 ];
 
 function localCategoryStem(token: string): string {
@@ -125,6 +133,42 @@ function localCategoryTokens(value: string): string[] {
   return normalize(value).split(" ").filter((token) =>
     token.length >= 3 && !LOCAL_CATEGORY_GRAMMAR_WORDS.has(token)
   );
+}
+
+function isLikelyRussianAdjective(token: string): boolean {
+  return /^[а-я]+$/u.test(token) && LOCAL_CATEGORY_RU_ADJECTIVE_SUFFIXES.some((suffix) =>
+    token.endsWith(suffix) && token.length - suffix.length >= 4
+  );
+}
+
+/**
+ * A customer may use the unique first word of a compound live category as a
+ * standalone class name (`автомат` for `Автоматические выключатели`). Permit
+ * that only when the token is head-like rather than an adjective/modifier and
+ * exactly one live category starts with the matching stem. This deliberately
+ * remains fail-closed for shared heads such as `кабель` and for phrases like
+ * `для автоматического ...`; no product alias is encoded here.
+ */
+function resolveUniqueHeadCategory(
+  rawQueryTokens: string[],
+  pagetitles: string[],
+): string[] {
+  const candidates = pagetitles.filter((pagetitle) => {
+    const categoryTokens = localCategoryTokens(pagetitle);
+    if (categoryTokens.length < 2) return false;
+    const categoryHead = categoryTokens[0];
+    return rawQueryTokens.some((queryToken, index) =>
+      queryToken.length >= 5 &&
+      !isLikelyRussianAdjective(queryToken) &&
+      localCategoryTokenMatches(categoryHead, queryToken) &&
+      (index === 0 || (
+        !LOCAL_CATEGORY_MODIFIER_PREPOSITIONS.has(rawQueryTokens[index - 1]) &&
+        !rawQueryTokens.slice(Math.max(0, index - 3), index)
+          .some((token) => LOCAL_CATEGORY_NEGATION_WORDS.has(token))
+      ))
+    );
+  });
+  return candidates.length === 1 ? candidates : [];
 }
 
 function orderedTokenStart(categoryTokens: string[], queryTokens: string[]): number | null {
@@ -191,7 +235,7 @@ export function resolveLocalCategoryPagetitles(
     left.pagetitle.localeCompare(right.pagetitle)
   );
   const best = ranked[0];
-  if (!best) return [];
+  if (!best) return resolveUniqueHeadCategory(rawQueryTokens, pagetitles);
   const tied = ranked.filter((candidate) =>
     candidate.relationRole === best.relationRole &&
     candidate.tokenCount === best.tokenCount &&

@@ -11,6 +11,7 @@ const LIVE_TITLES = [
   "Кабели силовые",
   "Кабели сигнальные",
   "Трубки термоусаживаемые",
+  "Автоматические выключатели",
 ];
 
 Deno.test("local live-taxonomy resolver handles an obvious inflected class without a model", () => {
@@ -47,6 +48,28 @@ Deno.test("local live-taxonomy resolver fails closed on a shared ambiguous class
     noun: "кабель",
     semantic_query: "Нужен кабель",
   }, LIVE_TITLES), []);
+});
+
+Deno.test("local live-taxonomy resolver accepts a unique compound category head", () => {
+  assertEquals(resolveLocalCategoryPagetitles({
+    noun: "Найди автомат до 1000 тенге 1 полюсной, 16 А характеристика С",
+    semantic_query: "Найди автомат до 1000 тенге 1 полюсной, 16 А характеристика С",
+  }, LIVE_TITLES), ["Автоматические выключатели"]);
+});
+
+Deno.test("partial live-taxonomy heads remain fail-closed for modifiers and ambiguity", () => {
+  assertEquals(resolveLocalCategoryPagetitles({
+    noun: "нужно для автоматического включения света",
+    semantic_query: "нужно устройство для автоматического включения света",
+  }, LIVE_TITLES), []);
+  assertEquals(resolveLocalCategoryPagetitles({
+    noun: "не хочу средство для наклеек",
+    semantic_query: "не хочу средство для наклеек, нужна лампа",
+  }, LIVE_TITLES), []);
+  assertEquals(resolveLocalCategoryPagetitles({
+    noun: "нужен кабель",
+    semantic_query: "нужен кабель",
+  }, ["Кабели силовые", "Кабели сигнальные"]), []);
 });
 
 Deno.test("local live-taxonomy resolver does not translate jargon or invent a category", () => {
