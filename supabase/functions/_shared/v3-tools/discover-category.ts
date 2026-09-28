@@ -149,15 +149,14 @@ function isLikelyRussianAdjective(token: string): boolean {
  * remains fail-closed for shared heads such as `кабель` and for phrases like
  * `для автоматического ...`; no product alias is encoded here.
  */
-function collectHeadCategoryCandidates(
+function groundedHeadTokenForCategory(
   rawQueryTokens: string[],
-  pagetitles: string[],
-): string[] {
-  return pagetitles.filter((pagetitle) => {
-    const categoryTokens = localCategoryTokens(pagetitle);
-    if (categoryTokens.length < 2) return false;
-    const categoryHead = categoryTokens[0];
-    return rawQueryTokens.some((queryToken, index) =>
+  pagetitle: string,
+): string | null {
+  const categoryTokens = localCategoryTokens(pagetitle);
+  if (categoryTokens.length < 2) return null;
+  const categoryHead = categoryTokens[0];
+  return rawQueryTokens.find((queryToken, index) =>
       queryToken.length >= 5 &&
       !isLikelyRussianAdjective(queryToken) &&
       localCategoryTokenMatches(categoryHead, queryToken) &&
@@ -166,8 +165,26 @@ function collectHeadCategoryCandidates(
         !rawQueryTokens.slice(Math.max(0, index - 3), index)
           .some((token) => LOCAL_CATEGORY_NEGATION_WORDS.has(token))
       ))
-    );
-  });
+    ) ?? null;
+}
+
+export function resolveGroundedCategoryHeadToken(
+  queryText: string,
+  pagetitle: string,
+): string | null {
+  return groundedHeadTokenForCategory(
+    normalize(queryText).split(" ").filter(Boolean),
+    pagetitle,
+  );
+}
+
+function collectHeadCategoryCandidates(
+  rawQueryTokens: string[],
+  pagetitles: string[],
+): string[] {
+  return pagetitles.filter((pagetitle) =>
+    groundedHeadTokenForCategory(rawQueryTokens, pagetitle) !== null
+  );
 }
 
 function resolveUniqueHeadCategory(
@@ -441,17 +458,17 @@ async function resolvePagetitle(
   const flat = cache.flat;
   const exact = flat.find((c) => normalize(c.pagetitle) === normalize(noun));
   if (exact) return { pagetitle: exact.pagetitle, candidates: [exact.pagetitle], cache };
+  const queryText = [input.semantic_query ?? "", input.noun].join(" ");
+  const rawQueryTokens = normalize(queryText).split(" ").filter(Boolean);
   const localCandidates = resolveLocalCategoryPagetitles(input, flat.map((candidate) => candidate.pagetitle));
   if (localCandidates.length > 0) {
     return {
       pagetitle: localCandidates[0],
-      resolvedFrom: noun,
+      resolvedFrom: groundedHeadTokenForCategory(rawQueryTokens, localCandidates[0]) ?? noun,
       candidates: localCandidates,
       cache,
     };
   }
-  const queryText = [input.semantic_query ?? "", input.noun].join(" ");
-  const rawQueryTokens = normalize(queryText).split(" ").filter(Boolean);
   const headCandidates = collectHeadCategoryCandidates(
     rawQueryTokens,
     flat.map((candidate) => candidate.pagetitle),
@@ -467,7 +484,7 @@ async function resolvePagetitle(
     if (schemaWinner) {
       return {
         pagetitle: schemaWinner,
-        resolvedFrom: noun,
+        resolvedFrom: groundedHeadTokenForCategory(rawQueryTokens, schemaWinner) ?? noun,
         candidates: [schemaWinner],
         cache,
         prefetched,

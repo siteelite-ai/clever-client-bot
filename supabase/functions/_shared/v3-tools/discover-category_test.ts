@@ -1,5 +1,6 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
+  resolveGroundedCategoryHeadToken,
   resolveHeadCategoryByFacetEvidence,
   resolveLocalCategoryPagetitles,
 } from "./discover-category.ts";
@@ -58,6 +59,10 @@ Deno.test("local live-taxonomy resolver accepts a unique compound category head"
     noun: "Найди автомат до 1000 тенге 1 полюсной, 16 А характеристика С",
     semantic_query: "Найди автомат до 1000 тенге 1 полюсной, 16 А характеристика С",
   }, LIVE_TITLES), ["Автоматические выключатели"]);
+  assertEquals(resolveGroundedCategoryHeadToken(
+    "Найди автомат до 1000 тенге 1 полюсной, 16 А характеристика С",
+    "Автоматические выключатели",
+  ), "автомат");
 });
 
 Deno.test("partial live-taxonomy heads remain fail-closed for modifiers and ambiguity", () => {
@@ -65,6 +70,14 @@ Deno.test("partial live-taxonomy heads remain fail-closed for modifiers and ambi
     noun: "нужно для автоматического включения света",
     semantic_query: "нужно устройство для автоматического включения света",
   }, LIVE_TITLES), []);
+  assertEquals(resolveGroundedCategoryHeadToken(
+    "нужно устройство для автоматического включения света",
+    "Автоматические выключатели",
+  ), null);
+  assertEquals(resolveGroundedCategoryHeadToken(
+    "не хочу автомат, нужен другой аппарат",
+    "Автоматические выключатели",
+  ), null);
   assertEquals(resolveLocalCategoryPagetitles({
     noun: "не хочу средство для наклеек",
     semantic_query: "не хочу средство для наклеек, нужна лампа",
