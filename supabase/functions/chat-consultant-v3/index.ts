@@ -145,7 +145,11 @@ import {
   toolNamesForAgentPhase,
 } from "../_shared/v3-tools/agent-performance.ts";
 import { buildSensitiveBackupPowerAnswer, CLEAN_POWER_SAFETY_ANSWER, isCleanPowerSafetyRequest, isSensitiveBackupPowerRequest } from "../_shared/v3-tools/clean-power-safety.ts";
-import { ELECTRICAL_PROTECTION_TRIP_ANSWER, isElectricalProtectionTripDiagnostic } from "../_shared/v3-tools/electrical-trip-safety.ts";
+import {
+  buildElectricalProtectionTripFollowupAnswer,
+  ELECTRICAL_PROTECTION_TRIP_ANSWER,
+  resolveElectricalProtectionTripDiagnostic,
+} from "../_shared/v3-tools/electrical-trip-safety.ts";
 import {
   buildOpenRouterModelRouting,
   type OpenRouterModelRouting,
@@ -11728,6 +11732,10 @@ Deno.serve(async (req) => {
       const effectiveSessionId = startsNewTask ? `session_${crypto.randomUUID()}` : sessionId;
       const effectiveHistory = startsNewTask ? [] : priorHistory;
       const effectiveSlots = startsNewTask ? {} : slots;
+      const electricalTripDiagnostic = resolveElectricalProtectionTripDiagnostic(
+        userMessage,
+        effectiveHistory,
+      );
       steps.push({
         step: "v3_conversation_boundary",
         ms: Date.now() - t0,
@@ -11859,9 +11867,14 @@ Deno.serve(async (req) => {
           steps.push({ step: "v3_sensitive_backup_power_answer", ms: Date.now() - t0 });
           send({ type: "delta", content: buildSensitiveBackupPowerAnswer(userMessage) });
           productsCount = 0;
-        } else if (isElectricalProtectionTripDiagnostic(userMessage)) {
+        } else if (electricalTripDiagnostic) {
           steps.push({ step: "v3_electrical_trip_safety_answer", ms: Date.now() - t0 });
-          send({ type: "delta", content: ELECTRICAL_PROTECTION_TRIP_ANSWER });
+          send({
+            type: "delta",
+            content: electricalTripDiagnostic.followup
+              ? buildElectricalProtectionTripFollowupAnswer(electricalTripDiagnostic.current)
+              : ELECTRICAL_PROTECTION_TRIP_ANSWER,
+          });
           productsCount = 0;
         } else if (broadAssortmentRequest) {
           await answerBroadAssortmentRequest(broadAssortmentToken, ctx, send, steps, t0);
