@@ -6230,7 +6230,9 @@ async function runExpertLoop(
           typeof tc.args.noun === "string"
         ) {
           const discoveryEvidence = `${userMessage}\n${initialSelectionDeclaration(firstAssistantText || assistantReasoning)}`;
-          if (!discoveryNounIsGrounded(tc.args.noun, discoveryEvidence)) {
+          const customerQueryCompiledByServer = resp.finishReason === "server_compiled_initial_discovery" &&
+            tc.args.noun === userMessage && tc.args.semantic_query === userMessage;
+          if (!customerQueryCompiledByServer && !discoveryNounIsGrounded(tc.args.noun, discoveryEvidence)) {
             const customerTarget = extractCustomerOwnedDiscoveryTarget(userMessage);
             if (customerTarget) {
               const rejected = tc.args.noun;
@@ -6261,6 +6263,17 @@ async function runExpertLoop(
                 meta: { rejected: tc.args.noun },
               });
             }
+          } else if (customerQueryCompiledByServer) {
+            // The server did not invent a taxonomy noun here: both fields are
+            // byte-for-byte the customer's current message. Let the live
+            // taxonomy resolver inspect it, then keep the stricter resolved-
+            // category intent check below. Model-authored nouns never receive
+            // this exception.
+            steps.push({
+              step: "v3_customer_query_discovery_allowed",
+              ms: now(),
+              meta: { strategy: "live_taxonomy_then_target_guard" },
+            });
           }
         }
 
