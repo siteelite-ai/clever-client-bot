@@ -33,6 +33,8 @@ const COMPLETE_REQUEST_RE =
   /(?:^|\s)(?:найди|подбери|подберите|покажи|предложи|предложите|посоветуй|посоветуйте|хочу|мне\s+нужен|мне\s+нужна|мне\s+нужно|нам\s+нужен|нам\s+нужна|есть\s+ли|у\s+(?:вас|тебя)\s+есть|можно\s+ли|сколько|чем\s+отличается)(?:\s|[?!.,]|$)/iu;
 const EXPLICIT_NEW_TASK_RE =
   /^(?:новая\s+тема|новый\s+вопрос)(?=\s|[?!:;.,-]|$)/iu;
+const ELLIPTICAL_ATTRIBUTE_RE =
+  /^(?:а\s+)?(?:есть|покажи(?:те)?)\s+(?:ещ[её]\s+)?(?:более\s+)?[\p{L}-]*(?:ые|ие|ее|ой|ая|ое|ого|ую|ых)(?:\s+варианты?)?[?!.,]?$/iu;
 
 function lexicalWords(value: string): string[] {
   return value.match(/[\p{L}\p{N}]+(?:[.,][\p{N}]+)?/gu) ?? [];
@@ -54,6 +56,13 @@ export function classifyConversationBoundaryLocally(
       mode: "continuation",
       confidence: 0.98,
       reason: "local_followup_reference",
+    };
+  }
+  if (ELLIPTICAL_ATTRIBUTE_RE.test(text)) {
+    return {
+      mode: "continuation",
+      confidence: 0.98,
+      reason: "local_elliptical_attribute",
     };
   }
   if (EXPLICIT_NEW_TASK_RE.test(text)) {

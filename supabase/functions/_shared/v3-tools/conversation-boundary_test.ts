@@ -83,7 +83,11 @@ Deno.test("local boundary classifier isolates complete requests without product 
 });
 
 Deno.test("local boundary classifier preserves references and short clarification answers", () => {
-  assertEquals(classifyConversationBoundaryLocally("а есть белые?"), null);
+  assertEquals(classifyConversationBoundaryLocally("а есть белые?"), {
+    mode: "continuation",
+    confidence: 0.98,
+    reason: "local_elliptical_attribute",
+  });
   assertEquals(
     classifyConversationBoundaryLocally("покажи товары этой серии")?.mode,
     "continuation",
