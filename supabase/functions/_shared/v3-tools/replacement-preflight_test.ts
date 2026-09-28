@@ -1,9 +1,11 @@
 import { assertEquals } from "https://deno.land/std@0.224.0/assert/mod.ts";
 import {
   derivePortableAxisTitleRequirements, excludeMandatoryAxisCodesFromSourceModels, extractExplicitSingleLetterCodes, extractReplacementLookupKeys,
+  extractReplacementSourceDescription,
   extractPortableTechnicalRequirements,
   isReplacementIntent,
   portableTechnicalCodeMatchesText, productContainsSourceModel,
+  productBelongsToReplacementSourceScope,
   productTitleSupportsMandatoryAxes,
   productTitleSupportsPortableRequirements, resolveReplacementIntent, resolveReplacementSourceMessage, selectExplicitAnchorAxes,
   shouldApplyReplacementExclusionGuard } from "./replacement-preflight.ts";
@@ -31,6 +33,33 @@ Deno.test("replacement preflight extracts article and source model without measu
     articles: ["929002070102", "871869967897500"],
     modelCodes: ["DN027B", "LED6NW"],
   });
+});
+
+Deno.test("replacement source description follows grammatical request boundaries", () => {
+  assertEquals(
+    extractReplacementSourceDescription(
+      "Подбери аналог для этой лампы: Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK",
+    ),
+    "Лампа светодиодная ECO T75 таблетка 6Вт 230В 6500К GX53 IEK",
+  );
+  assertEquals(
+    extractReplacementSourceDescription(
+      "Светильник DN027B G2 LED6/NW 7W 220-240V D90 R — предложи равноценную замену",
+    ),
+    "Светильник DN027B G2 LED6/NW 7W 220-240V D90 R",
+  );
+  assertEquals(
+    extractReplacementSourceDescription("предложи аналоги на Schneider Acti9 C16"),
+    "Schneider Acti9 C16",
+  );
+});
+
+Deno.test("live source scope rejects a sibling that shares a compatibility code", () => {
+  const scope = ["Светодиодные лампы"];
+  assertEquals(productBelongsToReplacementSourceScope({ leaf_category: "Светодиодные лампы" }, scope), true);
+  assertEquals(productBelongsToReplacementSourceScope({ leaf_category: "Светильники" }, scope), false);
+  assertEquals(productBelongsToReplacementSourceScope({ leaf_category: null }, scope), false);
+  assertEquals(productBelongsToReplacementSourceScope({ leaf_category: "Любая категория" }, []), true);
 });
 
 Deno.test("joined long-form quantity units never become exact product identifiers", () => {

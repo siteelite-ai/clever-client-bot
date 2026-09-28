@@ -163,8 +163,10 @@ import {
   extractExplicitSingleLetterCodes,
   extractPortableTechnicalRequirements,
   extractReplacementLookupKeys,
+  extractReplacementSourceDescription,
   isReplacementIntent,
   portableTechnicalCodeMatchesText,
+  productBelongsToReplacementSourceScope,
   productContainsSourceModel,
   productTitleSupportsMandatoryAxes,
   productTitleSupportsPortableRequirements,
@@ -2450,8 +2452,34 @@ async function selectVerifiedOrdinaryReplacement(
   const budgetCap = extractBudgetCap(userMessage);
   const requiredVisibleCodes = equivalentOnly ? extractExplicitSingleLetterCodes(userMessage) : [];
   const lookup = extractReplacementLookupKeys(userMessage);
+  const sourceDescription = extractReplacementSourceDescription(userMessage);
   const sourceCandidateIds = new Set<string>();
   let anchor: ProductRef | null = null;
+
+  // Resolve only a class that is literally grounded in the customer's source
+  // description. No model fallback is allowed here: the live taxonomy may
+  // confirm the class wording, but it may not invent one from a shared code.
+  const sourceClassDiscovery = await executeDiscoverCategory({
+    noun: sourceDescription,
+    semantic_query: userMessage,
+  }, {
+    baseUrl: CATALOG_BASE_URL,
+    apiToken: ctx.catalogToken,
+    openrouterApiKey: null,
+  });
+  const sourceClassLeaves = sourceClassDiscovery.ok &&
+      selectionTargetIsDeclared(sourceClassDiscovery.category.pagetitle, userMessage)
+    ? sourceClassDiscovery.leaf_categories.map((leaf) => leaf.pagetitle)
+    : [];
+  const sourcePool = new Map<string, ProductRef>();
+  const addSourceCandidates = (products: ProductRef[]) => {
+    for (const product of products) {
+      sourceCandidateIds.add(product.id);
+      if (productBelongsToReplacementSourceScope(product, sourceClassLeaves)) {
+        sourcePool.set(product.id, product);
+      }
+    }
+  };
 
   for (const article of lookup.articles) {
     const found = await executeSearchCatalog({ mode: "by_article", article, per_page: 3 }, {
@@ -2459,12 +2487,25 @@ async function selectVerifiedOrdinaryReplacement(
       apiToken: ctx.catalogToken,
     }, ctx.cache);
     if (found.ok && found.results.length > 0) {
-      for (const product of found.results) sourceCandidateIds.add(product.id);
-      anchor = found.results[0];
-      break;
+      addSourceCandidates(found.results);
+      anchor = found.results.find((product) =>
+        productBelongsToReplacementSourceScope(product, sourceClassLeaves)
+      ) ?? null;
+      if (anchor) break;
     }
   }
   if (!anchor) {
+    if (sourceDescription) {
+      const described = await executeSearchCatalog({
+        mode: "by_query",
+        query: sourceDescription,
+        per_page: 50,
+      }, {
+        baseUrl: CATALOG_BASE_URL,
+        apiToken: ctx.catalogToken,
+      }, ctx.cache);
+      if (described.ok) addSourceCandidates(described.results);
+    }
     for (const code of lookup.modelCodes.slice(0, 3)) {
       let found = await executeSearchCatalog({ mode: "by_pagetitle", pagetitle: code, per_page: 5 }, {
         baseUrl: CATALOG_BASE_URL,
@@ -2492,14 +2533,14 @@ async function selectVerifiedOrdinaryReplacement(
         for (const product of grounded) sourceCandidateIds.add(product.id);
       }
       if (grounded.length === 0) continue;
-      const structuralConstraints = extractCodeConstraints(userMessage);
-      anchor = [...grounded].sort((left, right) => {
-        const score = (product: ProductRef) => structuralConstraints
-          .filter((constraint) => productMatchesCodeConstraint(product, constraint)).length;
-        return score(right) - score(left);
-      })[0];
-      break;
+      addSourceCandidates(grounded);
     }
+    const structuralConstraints = extractCodeConstraints(userMessage);
+    anchor = [...sourcePool.values()].sort((left, right) => {
+      const score = (product: ProductRef) => structuralConstraints
+        .filter((constraint) => productMatchesCodeConstraint(product, constraint)).length;
+      return score(right) - score(left);
+    })[0] ?? null;
   }
 
   if (!anchor?.leaf_category) {
@@ -2516,7 +2557,13 @@ async function selectVerifiedOrdinaryReplacement(
     steps.push({
       step: "v3_replacement_preflight_skipped",
       ms: Date.now() - t0,
-      meta: { reason: anchor ? "anchor_without_leaf_category" : "anchor_not_found", lookup },
+      meta: {
+        reason: anchor ? "anchor_without_leaf_category" : "anchor_not_found",
+        lookup,
+        source_description: sourceDescription,
+        source_class: sourceClassDiscovery.ok ? sourceClassDiscovery.category.pagetitle : null,
+        source_class_leaves: sourceClassLeaves,
+      },
     });
     return {
       handled: false,

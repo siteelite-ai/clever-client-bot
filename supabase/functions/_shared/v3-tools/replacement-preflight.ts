@@ -39,6 +39,47 @@ export interface ReplacementLookupKeys {
   modelCodes: string[];
 }
 
+/**
+ * Extracts the customer's source-product description without knowing any
+ * product vocabulary. A colon after the replacement command and a trailing
+ * replacement clause are high-confidence grammatical boundaries; otherwise
+ * only the replacement command itself is removed. The result is used as a
+ * high-recall catalog lookup and never as proof by itself.
+ */
+export function extractReplacementSourceDescription(message: string): string {
+  const source = String(message ?? "").replace(/\s+/gu, " ").trim();
+  if (!source) return "";
+  const trigger = /(?:аналог\p{L}*|альтернатив\p{L}*|похож\p{L}*|замен\p{L}*|вместо|взамен)/iu;
+  const colon = source.indexOf(":");
+  if (colon >= 0 && trigger.test(source.slice(0, colon))) {
+    return source.slice(colon + 1).replace(/^[\s:–—-]+|[\s:–—-]+$/gu, "").trim();
+  }
+  const trailing = source.match(/^(.*?)[\s,;:–—-]+(?:предлож\p{L}*|подбер\p{L}*|найд\p{L}*|покаж\p{L}*)\s+(?:равноцен\p{L}*\s+)?(?:аналог\p{L}*|альтернатив\p{L}*|замен\p{L}*)(?:\s.*)?$/iu);
+  if (trailing?.[1]?.trim()) return trailing[1].trim();
+  const match = trigger.exec(source);
+  if (!match || match.index === undefined) return source;
+  return source.slice(match.index + match[0].length)
+    .replace(/^(?:\s+(?:для|на|к|ко|этой|этому|этого|этот|эту)){0,5}[\s:–—-]*/iu, "")
+    .replace(/^[\s:–—-]+|[\s:–—-]+$/gu, "")
+    .trim();
+}
+
+/**
+ * A customer-declared source class is compiled to live taxonomy leaves before
+ * anchor selection. When that scope exists, an alphanumeric compatibility
+ * token cannot move the source to a sibling class. Empty scope means that the
+ * customer did not lexically ground a class, so exact identifiers keep the
+ * previous behavior.
+ */
+export function productBelongsToReplacementSourceScope(
+  product: Pick<ProductRef, "leaf_category">,
+  liveLeafCategories: string[],
+): boolean {
+  if (liveLeafCategories.length === 0) return true;
+  const leaf = norm(product.leaf_category ?? "");
+  return Boolean(leaf && liveLeafCategories.some((candidate) => norm(candidate) === leaf));
+}
+
 export interface ReplacementDialogueMessage {
   role: "user" | "assistant";
   content: string;
