@@ -86,9 +86,9 @@ Deno.test("rendered-card consensus restores a user-owned emission contract", () 
       "Покажи ACME на 16 ампер и на 3 полюса",
     ),
     [
-      { key: "Бренд", op: "eq", value: "ACME", level: "A" },
-      { key: "Номинальный ток", op: "eq", value: 16, level: "A" },
-      { key: "Количество полюсов", op: "eq", value: 3, level: "A" },
+      { key: "Бренд", op: "eq", value: "ACME", level: "A", evidence: "user_explicit" },
+      { key: "Номинальный ток", op: "eq", value: 16, level: "A", evidence: "user_explicit" },
+      { key: "Количество полюсов", op: "eq", value: 3, level: "A", evidence: "user_explicit" },
     ],
   );
 });
@@ -113,9 +113,9 @@ Deno.test("rendered-card consensus uses common title measurements when compact c
   assertEquals(
     projectCommonRenderedUserCriteria(products, "Покажи ACME на 16 ампер и на 3 полюса"),
     [
-      { key: "Бренд", op: "eq", value: "ACME Electric", level: "A" },
-      { key: "ампер", op: "eq", value: 16, unit: "a", level: "A" },
-      { key: "полюса", op: "eq", value: 3, unit: "pole", level: "A" },
+      { key: "Бренд", op: "eq", value: "ACME Electric", level: "A", evidence: "user_explicit" },
+      { key: "ампер", op: "eq", value: 16, unit: "a", level: "A", evidence: "user_explicit" },
+      { key: "полюса", op: "eq", value: 3, unit: "pole", level: "A", evidence: "user_explicit" },
     ],
   );
 });
@@ -128,9 +128,9 @@ Deno.test("deterministic markdown cards preserve the same common emission contra
   assertEquals(
     projectCommonRenderedMarkdownUserCriteria(markdown, "Покажи ACME на 16 ампер и на 3 полюса"),
     [
-      { key: "Бренд", op: "eq", value: "ACME Electric", level: "A" },
-      { key: "ампер", op: "eq", value: 16, unit: "a", level: "A" },
-      { key: "полюса", op: "eq", value: 3, unit: "pole", level: "A" },
+      { key: "Бренд", op: "eq", value: "ACME Electric", level: "A", evidence: "user_explicit" },
+      { key: "ампер", op: "eq", value: 16, unit: "a", level: "A", evidence: "user_explicit" },
+      { key: "полюса", op: "eq", value: 3, unit: "pole", level: "A", evidence: "user_explicit" },
     ],
   );
 });
@@ -201,10 +201,18 @@ Deno.test("model assumptions cannot enter the immutable mandatory contract", () 
     key: "Live customer facet", op: "eq" as const, value: "customer value",
     level: "A" as const, evidence: "user_explicit" as const,
   };
-  assertEquals(mergeMandatorySelectionCriteria([assumed, explicit]), [explicit]);
-  assertEquals(mergeUserBackedCriteria([], [assumed, explicit]), [explicit]);
+  const coincidentalCatalogFact = {
+    key: "Shared card metadata", op: "eq" as const, value: "same on every card",
+    level: "A" as const, evidence: "catalog_verified" as const,
+  };
+  assertEquals(mergeMandatorySelectionCriteria([assumed, coincidentalCatalogFact, explicit]), [explicit]);
+  assertEquals(mergeUserBackedCriteria([], [assumed, coincidentalCatalogFact, explicit]), [explicit]);
   assertEquals(
-    extendSelectionCriteriaPlan(null, [assumed, explicit], "reasoning_projection").mandatory_criteria,
+    extendSelectionCriteriaPlan(
+      null,
+      [assumed, coincidentalCatalogFact, explicit],
+      "reasoning_projection",
+    ).mandatory_criteria,
     [explicit],
   );
 });

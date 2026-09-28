@@ -50,6 +50,13 @@ export interface Criterion {
   exclusive?: boolean;
 }
 
+/** Only customer requirements and disclosed necessary derivations may hard-filter. */
+export function criterionCanEnterMandatoryContract(criterion: Criterion): boolean {
+  return criterion.evidence === undefined ||
+    criterion.evidence === "user_explicit" ||
+    criterion.evidence === "derived_required";
+}
+
 
 export type CriterionVerdict = "pass" | "fail" | "unknown";
 
@@ -131,7 +138,7 @@ export function mergeUserBackedCriteria(
     if (!criterion?.key || criterion.value === undefined) continue;
     // This is a hard-contract boundary: a model hypothesis cannot become a
     // customer obligation merely because a later tool serialized it as A.
-    if (criterion.evidence === "model_assumption") continue;
+    if (!criterionCanEnterMandatoryContract(criterion)) continue;
     const value = Array.isArray(criterion.value)
       ? criterion.value.map((item) => String(item)).join("\u0000")
       : String(criterion.value);
@@ -163,7 +170,7 @@ export function mergeMandatorySelectionCriteria(
     [],
     (Array.isArray(criteria) ? criteria : []).filter((criterion) =>
       criterion?.key && criterion.value !== undefined && (criterion.level ?? "A") === "A" &&
-      criterion.evidence !== "model_assumption"
+      criterionCanEnterMandatoryContract(criterion)
     ),
   );
 }
@@ -252,6 +259,7 @@ export function projectCommonRenderedUserCriteria(
       op: "eq",
       value: parseNumSpan(first.value)?.min ?? first.value,
       level: "A",
+      evidence: "user_explicit",
     });
   }
   for (const quantity of extractClientQuantities(userMessage)) {
@@ -277,6 +285,7 @@ export function projectCommonRenderedUserCriteria(
       value: quantity.value,
       unit: expectedUnit,
       level: "A",
+      evidence: "user_explicit",
     });
   }
   return mergeUserBackedCriteria([], criteria);
@@ -362,7 +371,8 @@ export function extendSelectionCriteriaPlan(
 ): SelectionCriteriaPlan {
   const additions = (Array.isArray(incoming) ? incoming : [])
     .filter((criterion) => criterion?.key && criterion.value !== undefined &&
-      (criterion.level ?? "A") === "A" && criterion.evidence !== "model_assumption")
+      (criterion.level ?? "A") === "A")
+    .filter(criterionCanEnterMandatoryContract)
     .map((criterion) => ({ ...criterion, level: "A" as const }));
   const existing = current?.mandatory_criteria.map((criterion) => ({ ...criterion })) ?? [];
   const mandatory = mergeUserBackedCriteria(existing, additions);

@@ -186,8 +186,8 @@ test('parseSse and evaluate preserve the server selection contract', () => {
   const contract = {
     hash: 'selection-test',
     mandatory_criteria: [
-      { key: 'Количество разъемов', op: 'eq', value: '2' },
-      { key: 'Цвет', op: 'eq', value: 'чёрный' },
+      { key: 'Количество разъемов', op: 'eq', value: '2', evidence: 'user_explicit' },
+      { key: 'Цвет', op: 'eq', value: 'чёрный', evidence: 'derived_required' },
     ],
     visible_requirements: [
       { kind: 'count', label: 'двойная розетка', op: 'eq', value: 2 },
@@ -206,6 +206,7 @@ test('parseSse and evaluate preserve the server selection contract', () => {
   assert.deepEqual(evaluate({
     require_selection_criteria_groups: [
       ['Количество разъемов'], ['"value":"2"'], ['Цвет'], ['черн'],
+      ['user_explicit'], ['derived_required'],
     ],
   }, parsed), []);
   assert.deepEqual(evaluate({
@@ -213,6 +214,14 @@ test('parseSse and evaluate preserve the server selection contract', () => {
   }, parsed), []);
   assert(evaluate({ require_selection_criteria_groups: [['Количество разъемов'], ['"value":"1"']] }, parsed)
     .some((failure) => failure.startsWith('selection contract misses required groups')));
+  assert.deepEqual(evaluate({ require_selection_criteria_evidence: true }, parsed), []);
+  assert(evaluate({ require_selection_criteria_evidence: true }, {
+    ...parsed,
+    selectionContract: {
+      ...contract,
+      mandatory_criteria: [{ key: 'Случайное поле', op: 'eq', value: '1', evidence: 'catalog_verified' }],
+    },
+  }).some((failure) => failure.startsWith('mandatory selection criteria have invalid evidence')));
 });
 
 test('evaluate accepts either a true exact intersection or an explicitly labelled axis split', () => {

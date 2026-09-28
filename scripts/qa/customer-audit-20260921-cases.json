@@ -2,7 +2,8 @@
   "schema_version": 3,
   "source": "Google Doc 21.09 — customer audit 1EeEUI3uRCk3kyBhAy4p8eTJT2S9mT9xDQI69RMPd1JU",
   "default_expectations": {
-    "max_duration_ms": 30000
+    "max_duration_ms": 30000,
+    "require_selection_criteria_evidence": true
   },
   "cases": [
     {

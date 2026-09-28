@@ -26,7 +26,7 @@ import { executeLookupKnowledge, type LookupKnowledgeInput } from "../_shared/v3
 import { executeLookupContacts, type LookupContactsInput } from "../_shared/v3-tools/lookup-contacts.ts";
 import { executeRenderProducts, type RenderProductsInput } from "../_shared/v3-tools/render.ts";
 import { applyCriteriaGate, buildCriteriaQuery, extendSelectionCriteriaPlan,
-  type Criterion, filterProductIdsByBudgetCap, filterProductsByExcludedCriteria, isLiteralUserCompactCriterion, mergeFacetOptionConstraints, mergeMandatorySelectionCriteria, mergeUserBackedCriteria, missingSelectionCriteria, projectCatalogFilterEvidence, projectCommonRenderedMarkdownUserCriteria, projectCommonRenderedUserCriteria, projectCriteriaFacetOptions, resolveRenderCriteria, resolveTerminalSelectionCriteria, type SelectionCriteriaPlan, type SelectionCriterionProvenance, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
+  type Criterion, type CriterionEvidence, filterProductIdsByBudgetCap, filterProductsByExcludedCriteria, isLiteralUserCompactCriterion, mergeFacetOptionConstraints, mergeMandatorySelectionCriteria, mergeUserBackedCriteria, missingSelectionCriteria, projectCatalogFilterEvidence, projectCommonRenderedMarkdownUserCriteria, projectCommonRenderedUserCriteria, projectCriteriaFacetOptions, resolveRenderCriteria, resolveTerminalSelectionCriteria, type SelectionCriteriaPlan, type SelectionCriterionProvenance, titleProvesCompactCriterion } from "../_shared/v3-tools/criteria-gate.ts";
 import { correctCriteria, findUnderstatedCriteria } from "../_shared/v3-tools/criteria-consistency.ts";
 import { alignCriteriaImportanceWithReasoning, alignCriteriaWithReasoning, compileMeasuredReasoningSearchContract, demoteUnfrozenRenderCriteria, hasMeasuredSelectionRequirement, projectLiteralMeasuredCriteria, projectReasoningRangeCriteria, promoteMeasuredReasoningCriteria, promoteProjectableMeasuredFallbackCriteria } from "../_shared/v3-tools/criteria-reasoning.ts";
 import { intersectCandidateProofs } from "../_shared/v3-tools/candidate-proof-ledger.ts";
@@ -274,7 +274,7 @@ type SseEvent =
   | { type: "tool_event"; tool: string; phase: "start" | "result"; duration_ms?: number; summary?: string; }
   | { type: "products_block"; markdown: string; count: number; total_available?: number; selection_contract?: {
       hash: string;
-      mandatory_criteria: Array<{ key: string; op: string; value: string | number | [number, number]; unit?: string | null; exclusive?: boolean; }>;
+      mandatory_criteria: Array<{ key: string; op: string; value: string | number | [number, number]; unit?: string | null; exclusive?: boolean; evidence?: CriterionEvidence; }>;
       visible_requirements?: Array<{ kind: string; label: string; op?: string; value?: string | number; unit?: string; exclusive?: boolean; }>;
     }; }
   | { type: "contacts"; html: string }
@@ -2270,6 +2270,7 @@ async function selectVerifiedNamedSeriesRequest(
     op: "eq",
     value: seriesToken,
     level: "A",
+    evidence: "user_explicit",
   }], "selection_target");
   send({
     type: "products_block",
@@ -2278,12 +2279,13 @@ async function selectVerifiedNamedSeriesRequest(
     total_available: products.length,
     selection_contract: {
       hash: plan.hash,
-      mandatory_criteria: plan.mandatory_criteria.map(({ key, op, value, unit, exclusive }) => ({
+      mandatory_criteria: plan.mandatory_criteria.map(({ key, op, value, unit, exclusive, evidence }) => ({
         key,
         op,
         value,
         ...(unit ? { unit } : {}),
         ...(exclusive ? { exclusive } : {}),
+        ...(evidence ? { evidence } : {}),
       })),
     },
   });
@@ -3471,7 +3473,8 @@ async function runExpertLoop(
       event.markdown,
       userMessage,
     );
-    const compatibilityCriteria = compatibilityRelationsToCriteria(activeCompatibilityRelations);
+    const compatibilityCriteria = compatibilityRelationsToCriteria(activeCompatibilityRelations)
+      .map((criterion) => ({ ...criterion, evidence: "derived_required" as const }));
     const accumulatedCriteria = [
       ...userBackedSearchCriteria,
       ...enforcedSearchCriteria,
@@ -3498,6 +3501,7 @@ async function runExpertLoop(
           op: "eq" as const,
           value: namedSeriesEvidence.value,
           level: "A" as const,
+          evidence: "user_explicit" as const,
         }]
         : []),
     ]);
@@ -3526,12 +3530,13 @@ async function runExpertLoop(
         ? {
           selection_contract: {
             hash: emittedPlan.hash,
-            mandatory_criteria: emittedPlan.mandatory_criteria.map(({ key, op, value, unit, exclusive }) => ({
+            mandatory_criteria: emittedPlan.mandatory_criteria.map(({ key, op, value, unit, exclusive, evidence }) => ({
               key,
               op,
               value,
               ...(unit ? { unit } : {}),
               ...(exclusive ? { exclusive } : {}),
+              ...(evidence ? { evidence } : {}),
             })),
             ...(visibleRequirements.length > 0
               ? { visible_requirements: visibleRequirements }
@@ -3545,7 +3550,14 @@ async function runExpertLoop(
     criteria: Criterion[],
     provenance: SelectionCriterionProvenance,
   ): Criterion[] => {
-    const mandatoryInput = criteria.filter((criterion) => (criterion.level ?? "A") === "A");
+    const defaultEvidence: CriterionEvidence = provenance === "render_alignment"
+      ? "catalog_verified"
+      : "derived_required";
+    const attributedCriteria = criteria.map((criterion) => ({
+      ...criterion,
+      evidence: criterion.evidence ?? defaultEvidence,
+    }));
+    const mandatoryInput = attributedCriteria.filter((criterion) => (criterion.level ?? "A") === "A");
     if (!selectionCriteriaPlan && mandatoryInput.length === 0) return [];
     const next = extendSelectionCriteriaPlan(
       selectionCriteriaPlan,
@@ -3554,7 +3566,7 @@ async function runExpertLoop(
     );
     const omittedBeforeFreeze = missingSelectionCriteria(
       selectionCriteriaPlan,
-      criteria,
+      attributedCriteria,
     );
     const changed = next.hash !== selectionCriteriaPlan?.hash;
     selectionCriteriaPlan = next;
@@ -3566,6 +3578,9 @@ async function runExpertLoop(
           plan_hash: next.hash,
           provenance,
           mandatory_count: next.mandatory_criteria.length,
+          rejected_unowned_count: mandatoryInput.filter((criterion) =>
+            criterion.evidence === "model_assumption" || criterion.evidence === "catalog_verified"
+          ).length,
           restored_omissions: omittedBeforeFreeze,
         },
       });
@@ -8860,25 +8875,35 @@ async function runExpertLoop(
               });
               const explicitUserBackedCriteria: Criterion[] = explicitUserBacked.map(({ key, value }) => {
                 const facet = lastDiscover?.facets.find((candidate) => candidate.key === key);
-                return { key: facet?.caption || key, op: "eq", value, level: "A" as const };
+                return {
+                  key: facet?.caption || key,
+                  op: "eq",
+                  value,
+                  level: "A" as const,
+                  evidence: "user_explicit" as const,
+                };
               });
               const measuredCriteria = projectReasoningRangeCriteria(
                 [],
                 userMessage,
                 lastDiscover.facets,
-              ).added.map((criterion) => ({ ...criterion, level: "A" as const }));
+              ).added.map((criterion) => ({
+                ...criterion,
+                level: "A" as const,
+                evidence: "user_explicit" as const,
+              }));
               const directLiteralMeasuredCriteria = projectLiteralMeasuredCriteria(
                 [],
                 userMessage,
                 `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
                 lastDiscover.facets,
-              ).added;
+              ).added.map((criterion) => ({ ...criterion, evidence: "user_explicit" as const }));
               const literalMeasuredCriteria = projectLiteralMeasuredCriteria(
                 [...explicitCriteria, ...measuredCriteria],
                 userMessage,
                 `${userMessage}\n${firstAssistantText}\n${assistantReasoning}`,
                 lastDiscover.facets,
-              ).added;
+              ).added.map((criterion) => ({ ...criterion, evidence: "user_explicit" as const }));
               const before = userBackedSearchCriteria.length;
               userBackedSearchCriteria = mergeUserBackedCriteria(
                 userBackedSearchCriteria,
@@ -8951,6 +8976,7 @@ async function runExpertLoop(
                   op: "eq",
                   value: explicitIdentity.value,
                   level: "A",
+                  evidence: "user_explicit",
                 };
                 userBackedSearchCriteria = mergeUserBackedCriteria(
                   userBackedSearchCriteria,

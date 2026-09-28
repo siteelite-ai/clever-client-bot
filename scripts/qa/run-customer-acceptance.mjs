@@ -256,6 +256,21 @@ export function evaluate(expect = {}, response) {
       if (includesAny(criteriaText, [phrase])) failures.push(`forbidden selection criterion: ${phrase}`);
     }
   }
+  if (expect.require_selection_criteria_evidence === true && response.links.length > 0) {
+    const criteria = response.selectionContract?.mandatory_criteria;
+    if (!Array.isArray(criteria)) {
+      failures.push('rendered products have no machine-readable selection contract');
+    } else {
+      const invalid = criteria.filter((criterion) =>
+        !['user_explicit', 'derived_required'].includes(criterion?.evidence)
+      );
+      if (invalid.length > 0) {
+        failures.push(`mandatory selection criteria have invalid evidence: ${invalid.map((criterion) =>
+          `${criterion?.key ?? 'unknown'}=${criterion?.evidence ?? 'missing'}`
+        ).join(' | ')}`);
+      }
+    }
+  }
   if (expect.require_exact_or_split && typeof expect.require_exact_or_split === 'object') {
     const contract = expect.require_exact_or_split;
     const exact = Array.isArray(contract.exact_title_groups) && response.links.some((link) =>
