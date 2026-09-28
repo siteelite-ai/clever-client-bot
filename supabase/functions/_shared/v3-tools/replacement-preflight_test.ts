@@ -55,7 +55,8 @@ Deno.test("replacement source description follows grammatical request boundaries
 });
 
 Deno.test("live source scope rejects a sibling that shares a compatibility code", () => {
-  const scope = ["Светодиодные лампы"];
+  const scope = ["Лампы", "Светодиодные лампы"];
+  assertEquals(productBelongsToReplacementSourceScope({ leaf_category: "Лампы" }, scope), true);
   assertEquals(productBelongsToReplacementSourceScope({ leaf_category: "Светодиодные лампы" }, scope), true);
   assertEquals(productBelongsToReplacementSourceScope({ leaf_category: "Светильники" }, scope), false);
   assertEquals(productBelongsToReplacementSourceScope({ leaf_category: null }, scope), false);

@@ -2469,7 +2469,10 @@ async function selectVerifiedOrdinaryReplacement(
   });
   const sourceClassLeaves = sourceClassDiscovery.ok &&
       selectionTargetIsDeclared(sourceClassDiscovery.category.pagetitle, userMessage)
-    ? sourceClassDiscovery.leaf_categories.map((leaf) => leaf.pagetitle)
+    ? [
+      sourceClassDiscovery.category.pagetitle,
+      ...sourceClassDiscovery.leaf_categories.map((leaf) => leaf.pagetitle),
+    ]
     : [];
   const sourcePool = new Map<string, ProductRef>();
   const addSourceCandidates = (products: ProductRef[]) => {
