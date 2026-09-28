@@ -2815,7 +2815,31 @@ async function selectVerifiedExactCompoundProducts(
     return [];
   }
 
-  send({ type: "products_block", markdown: rendered.markdown, count: rendered.rendered_count, total_available: verified.length });
+  const exactMarking = `${request.first}×${String(request.second).replace(".", ",")}`;
+  const exactPlan = extendSelectionCriteriaPlan(null, [{
+    key: "Точная составная маркировка",
+    op: "eq",
+    value: exactMarking,
+    level: "A",
+    evidence: "user_explicit",
+  }], "guarded_search");
+  send({
+    type: "products_block",
+    markdown: rendered.markdown,
+    count: rendered.rendered_count,
+    total_available: verified.length,
+    selection_contract: {
+      hash: exactPlan.hash,
+      mandatory_criteria: exactPlan.mandatory_criteria.map(({ key, op, value, unit, exclusive, evidence }) => ({
+        key,
+        op,
+        value,
+        ...(unit ? { unit } : {}),
+        ...(exclusive ? { exclusive } : {}),
+        ...(evidence ? { evidence } : {}),
+      })),
+    },
+  });
   steps.push({
     step: "v3_exact_compound_marking_rendered",
     ms: Date.now() - t0,
@@ -3511,7 +3535,7 @@ async function runExpertLoop(
         emittedCriteria,
         "render_alignment",
       )
-      : plan;
+      : plan ?? extendSelectionCriteriaPlan(null, [], "render_alignment");
     const visibleRequirements = buildVisibleRequestContract(userMessage, {
       productClass: activeSelectionTarget ?? lastDiscover?.category?.pagetitle ?? "",
       taxonomyClass: lastDiscover?.category?.pagetitle ?? "",
@@ -3524,26 +3548,40 @@ async function runExpertLoop(
       ...(unit ? { unit } : {}),
       ...(exclusive ? { exclusive } : {}),
     }));
+    if (intentMode === "select" && !finalText.trim() && activeSelectionTarget) {
+      const caption = buildSelectionRenderCaption(
+        activeSelectionTarget,
+        [...emittedPlan.mandatory_criteria],
+      );
+      rawSend({ type: "delta", content: caption });
+      finalText = caption;
+      if (!firstAssistantText) firstAssistantText = caption;
+      steps.push({
+        step: "v3_selection_contract_caption",
+        ms: now(),
+        meta: {
+          chars: caption.length,
+          criteria: emittedPlan.mandatory_criteria.length,
+          plan_hash: emittedPlan.hash,
+        },
+      });
+    }
     rawSend({
       ...event,
-      ...(emittedPlan
-        ? {
-          selection_contract: {
-            hash: emittedPlan.hash,
-            mandatory_criteria: emittedPlan.mandatory_criteria.map(({ key, op, value, unit, exclusive, evidence }) => ({
-              key,
-              op,
-              value,
-              ...(unit ? { unit } : {}),
-              ...(exclusive ? { exclusive } : {}),
-              ...(evidence ? { evidence } : {}),
-            })),
-            ...(visibleRequirements.length > 0
-              ? { visible_requirements: visibleRequirements }
-              : {}),
-          },
-        }
-        : {}),
+      selection_contract: {
+        hash: emittedPlan.hash,
+        mandatory_criteria: emittedPlan.mandatory_criteria.map(({ key, op, value, unit, exclusive, evidence }) => ({
+          key,
+          op,
+          value,
+          ...(unit ? { unit } : {}),
+          ...(exclusive ? { exclusive } : {}),
+          ...(evidence ? { evidence } : {}),
+        })),
+        ...(visibleRequirements.length > 0
+          ? { visible_requirements: visibleRequirements }
+          : {}),
+      },
     });
   };
   const freezeSelectionCriteria = (
@@ -11278,6 +11316,28 @@ Deno.serve(async (req) => {
             out = { type: "delta", content: r.text };
           }
           finalTextAccum += (out as { content: string }).content;
+        } else if (ev.type === "products_block" && !ev.selection_contract) {
+          // Product cards must never leave the server without an explicit
+          // machine trace. Legacy/direct branches may legitimately have no
+          // hard criterion yet; represent that honestly as an empty immutable
+          // plan instead of omitting the contract and making the client guess.
+          const emptyPlan = extendSelectionCriteriaPlan(
+            null,
+            [],
+            "render_alignment",
+          );
+          out = {
+            ...ev,
+            selection_contract: {
+              hash: emptyPlan.hash,
+              mandatory_criteria: [],
+            },
+          };
+          steps.push({
+            step: "v3_empty_selection_contract_attached",
+            ms: Date.now() - t0,
+            meta: { rendered_count: ev.count, plan_hash: emptyPlan.hash },
+          });
         }
         responseEvents.push(out);
         emit(out);

@@ -46,6 +46,13 @@ Deno.test("evidence follow-up classifier separates questions from a new selectio
   assertEquals(isEvidenceOnlyFollowup("Они точно подходят для 30 квадратных метров?"), true);
   assertEquals(isEvidenceOnlyFollowup("Почему варианты отличаются по цене? Сравни характеристики."), true);
   assertEquals(isEvidenceOnlyFollowup("Тогда подбери подходящий кабель"), false);
+  assertEquals(
+    isEvidenceOnlyFollowup(
+      "мне нужен бытовой светильник с датчиком движения до 4000 тенге. Дай несколько вариантов",
+    ),
+    false,
+  );
+  assertEquals(isEvidenceOnlyFollowup("дай другие подходящие варианты"), false);
 });
 
 Deno.test("recent-product show classifier accepts only a short reference to the shown batch", () => {

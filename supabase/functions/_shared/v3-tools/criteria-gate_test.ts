@@ -101,6 +101,21 @@ Deno.test("rendered-card consensus never claims a trait that differs across card
   assertEquals(projectCommonRenderedUserCriteria(products, "Нужно 16 ампер"), []);
 });
 
+Deno.test("one shared class word cannot promote an unrequested compound catalog value", () => {
+  const products = ["one", "two"].map((id) => ({
+    id,
+    pagetitle: `Generic item ${id}`,
+    vendor: null,
+    price: 100,
+    stock: "in_stock" as const,
+    short_traits: ["Тип товара: устройства для служебных зон"],
+  }));
+  assertEquals(
+    projectCommonRenderedUserCriteria(products, "Нужно бытовое устройство с датчиком"),
+    [],
+  );
+});
+
 Deno.test("rendered-card consensus uses common title measurements when compact cards omit traits", () => {
   const products = ["one", "two"].map((id) => ({
     id,

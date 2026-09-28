@@ -190,9 +190,28 @@ function parsedProductTraits(product: ProductRef): Array<{ label: string; value:
 
 function renderedValueIsCustomerOwned(label: string, value: string, userMessage: string): boolean {
   if (stringEvidenceMatches(value, userMessage)) return true;
-  const valueStems = normalizeKey(value).split(/\s+/u).map(looseStem).filter((stem) => stem.length >= 4);
+  const structuralValueWords = new Set([
+    "для", "под", "при", "или", "между", "and", "or", "for", "with", "without", "the",
+  ]);
+  const valueStems = normalizeKey(value).split(/\s+/u)
+    .filter((token) => token.length >= 3 && !structuralValueWords.has(token))
+    .map(looseStem);
   const userStems = normalizeKey(userMessage).split(/\s+/u).map(looseStem);
-  if (valueStems.some((stem) => userStems.some((candidate) => candidate === stem))) return true;
+  // A shared generic word must not promote an entire compound catalog value
+  // to a customer requirement. For example, asking for a household luminaire
+  // does not mean the customer selected a live value that merely contains the
+  // same class noun plus an unmentioned application suffix. Every meaningful
+  // value token must be grounded; otherwise this remains a catalog fact only.
+  const matchedValueStems = valueStems.filter((stem) =>
+    userStems.some((candidate) => candidate === stem)
+  );
+  const identityLabel = /(?:^|\s)(?:brand|vendor|manufacturer|producer|бренд|производител\p{L}*|торгов\p{L}*\s+марк\p{L}*)(?:\s|$)/u.test(
+    normalizeKey(label),
+  );
+  if (
+    valueStems.length > 0 &&
+    (matchedValueStems.length === valueStems.length || identityLabel && matchedValueStems.length > 0)
+  ) return true;
   const valueSpan = parseNumSpan(value);
   if (!valueSpan || valueSpan.min !== valueSpan.max) return false;
   const numberPattern = String(valueSpan.min).replace(".", "[.,]");

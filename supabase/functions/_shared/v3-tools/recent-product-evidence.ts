@@ -80,7 +80,15 @@ export function extractPriorAssistantProse(
 export function isEvidenceOnlyFollowup(message: string): boolean {
   const normalized = cleanText(message, 800).toLowerCase().replace(/ё/g, "е");
   if (!normalized) return false;
-  if (/(?:^|\s)(?:подбери|подобрать|найди|найти|покажи|предложи|добавь)(?:\s|$)/u.test(normalized)) return false;
+  // Evidence follow-ups must depend on the previous cards. A complete request
+  // remains a new catalog task even when it happens to contain words such as
+  // «вариант» or «подходит». Keep this structural: request frames,
+  // not product/category dictionaries, establish self-contained intent.
+  if (
+    /(?:^|\s)(?:подбери|подобрать|найди|найти|покажи|предложи|добавь|дай|дайте)(?:\s|$)/u.test(normalized) ||
+    /(?:^|\s)(?:мне|нам)\s+нуж(?:ен|на|но|ны)(?:\s|$)/u.test(normalized) ||
+    /(?:^|\s)(?:хочу|ищу|есть\s+ли|у\s+(?:вас|тебя)\s+есть)(?:\s|$)/u.test(normalized)
+  ) return false;
   return /(?:почему|точно|сравн|характерист|единиц|цена|остат|подход|этот|эта|эти|вариант)/u.test(normalized);
 }
 
