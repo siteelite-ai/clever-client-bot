@@ -8612,7 +8612,49 @@ async function runExpertLoop(
             derivedMeasurementMayConstrainIndividualProducts(
               derivedSelectionMeasurementScope,
             );
-          if (ordinaryMeasuredSelection) {
+          const distributedSystemSelection = intentMode === "select" &&
+            !replacementIntent &&
+            !seriesTurnRequiresGrounding &&
+            !compatibilityShapedSearch &&
+            derivedSelectionMeasurementScope === "system_total";
+          if (distributedSystemSelection) {
+            // The structured declaration has already proved that the numeric
+            // result belongs to the whole object/system. A later generic
+            // guard may still rediscover an exact live value from the visible
+            // prose; rebuild the request from the frozen/user-owned criteria
+            // so that aggregate totals cannot re-enter as per-card options.
+            enforcedSearchCriteria = freezeSelectionCriteria(
+              guardedUserBackedCriteria,
+              "guarded_search",
+            );
+            reasoningProjectedSearchCriteria = mergeUserBackedCriteria(
+              reasoningProjectedSearchCriteria,
+              guardedUserBackedCriteria,
+            );
+            latestRenderCriteria = enforcedSearchCriteria.map((criterion) => ({
+              ...criterion,
+            }));
+            const systemScopeProjection = projectCriteriaFacetOptions(
+              enforcedSearchCriteria,
+              lastDiscover.facets,
+            );
+            const current = tc.args as Record<string, unknown>;
+            const { options: _options, ...searchControls } = current;
+            tc.args = {
+              ...searchControls,
+              ...(Object.keys(systemScopeProjection.options).length > 0
+                ? { options: systemScopeProjection.options }
+                : {}),
+            };
+            steps.push({
+              step: "v3_system_total_per_card_filters_removed",
+              ms: now(),
+              meta: {
+                kept_criteria: enforcedSearchCriteria.length,
+                option_keys: Object.keys(systemScopeProjection.options),
+              },
+            });
+          } else if (ordinaryMeasuredSelection) {
             const measuredContractReasoning = measuredSelectionContractEvidence(
               derivedSelectionReasoningEvidence,
               declaredReasoning,
