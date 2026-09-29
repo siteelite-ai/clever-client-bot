@@ -926,14 +926,7 @@ Deno.test("customer application compiles only through a unique live non-identity
         ],
       }],
     ),
-    [{
-      key: "Вид светильника",
-      op: "eq",
-      value: "офисно-административное освещение",
-      unit: undefined,
-      level: "A",
-      evidence: "user_explicit",
-    }],
+    [],
   );
 });
 
@@ -955,14 +948,25 @@ Deno.test("customer application does not bind unrelated compound words by a shor
         },
       ],
     ),
-    [{
-      key: "ПРА",
-      op: "eq",
-      value: "светодиодный драйвер",
-      unit: undefined,
-      level: "A",
-      evidence: "user_explicit",
-    }],
+    [],
+  );
+});
+
+Deno.test("adjacent class modifiers require reasoning instead of direct application filters", () => {
+  assertEquals(
+    extractCustomerApplicationContexts(
+      "Подбери офисные светильники",
+      "светильники",
+    ),
+    ["офисные"],
+  );
+  assertEquals(
+    extractCustomerApplicationContexts(
+      "Подбери офисные светильники",
+      "светильники",
+      { includeAdjacentModifier: false },
+    ),
+    [],
   );
 });
 

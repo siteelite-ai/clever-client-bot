@@ -230,6 +230,7 @@ export function groundSelectionApplicationContext(
 export function extractCustomerApplicationContexts(
   userMessage: string,
   productClass = "",
+  options: { includeAdjacentModifier?: boolean } = {},
 ): string[] {
   const source = String(userMessage ?? "").replace(/\s+/gu, " ").trim();
   if (!source) return [];
@@ -255,7 +256,7 @@ export function extractCustomerApplicationContexts(
   // brands, price words and ambiguous adjectives therefore cannot self-author
   // a filter here.
   const classStems = new Set(meaningfulTokens(productClass));
-  if (classStems.size > 0) {
+  if (options.includeAdjacentModifier !== false && classStems.size > 0) {
     const tokens = normalize(source).split(/\s+/u).filter(Boolean);
     const ignoredModifier =
       /^(?:сам\p{L}*|дешев\p{L}*|дорог\p{L}*|недорог\p{L}*|бюджетн\p{L}*|нескольк\p{L}*|все|кажд\p{L}*|подходящ\p{L}*)$/u;
@@ -1217,6 +1218,7 @@ export function projectCustomerApplicationFacetCriteria(
   const applicationContext = extractCustomerApplicationContexts(
     userMessage,
     productClass,
+    { includeAdjacentModifier: false },
   );
   if (!String(productClass ?? "").trim() || applicationContext.length === 0) {
     return [];
