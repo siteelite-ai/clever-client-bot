@@ -452,12 +452,11 @@ const SUPABASE_URL = Deno.env.get("SUPABASE_URL")!;
 const SERVICE_ROLE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 const CATALOG_BASE_URL = Deno.env.get("CATALOG_API_BASE_URL") ??
   "https://220volt.kz/api";
-const DEPLOYMENT_VARIANT =
-  (globalThis as typeof globalThis & {
+const DEPLOYMENT_VARIANT = (globalThis as typeof globalThis & {
     __VOLT220_FUNCTION_VARIANT__?: "preview";
   }).__VOLT220_FUNCTION_VARIANT__ === "preview"
-    ? "preview"
-    : "production";
+  ? "preview"
+  : "production";
 const LOVABLE_AGENT_FAILOVER_ENABLED = isChatCompletionFailoverEnabled({
   deploymentVariant: DEPLOYMENT_VARIANT,
   globalEnabled: Deno.env.get("LOVABLE_AGENT_FAILOVER_ENABLED"),
@@ -6862,6 +6861,34 @@ async function runExpertLoop(
             )
             : null;
           if (!declaration?.text.trim()) {
+            const declarationArgs = declarationCall?.args &&
+                typeof declarationCall.args === "object"
+              ? declarationCall.args as Record<string, unknown>
+              : {};
+            const arraySizes = Object.fromEntries(
+              Object.entries(declarationArgs)
+                .filter(([, value]) => Array.isArray(value))
+                .map(([key, value]) => [key, (value as unknown[]).length]),
+            );
+            steps.push({
+              step: "v3_derived_selection_reasoning_contract_rejected",
+              ms: now(),
+              meta: {
+                finish: structuredReasoning.finishReason,
+                response_text_chars: structuredReasoning.text.length,
+                tool_call_names: structuredReasoning.toolCalls.map((call) =>
+                  call.name
+                ),
+                declaration_found: Boolean(declarationCall),
+                declaration_keys: Object.keys(declarationArgs).sort(),
+                declaration_reasoning_chars:
+                  typeof declarationArgs.reasoning ===
+                      "string"
+                    ? declarationArgs.reasoning.length
+                    : 0,
+                array_sizes: arraySizes,
+              },
+            });
             throw new Error("derived_selection_reasoning_contract_invalid");
           }
           for (const mapping of declaration.explicitCustomerMappings) {
