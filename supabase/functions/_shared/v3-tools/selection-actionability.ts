@@ -2,6 +2,7 @@ import { hasActionableSelectionReasoning } from "./agent-performance.ts";
 import {
   extractClientQuantities,
   isPhysicalMeasurementUnit,
+  normalizeUnit,
 } from "./criteria-consistency.ts";
 import {
   minimumCompatibilityRelationCount,
@@ -35,6 +36,39 @@ export function hasSelectionMeasurementContext(text: string): boolean {
   return extractClientQuantities(text).some(({ unit }) =>
     isPhysicalMeasurementUnit(unit)
   );
+}
+
+/**
+ * A visible dimensional calculation from the customer's spatial extent
+ * (area/volume) into another physical unit describes the demand of the whole
+ * object. It must not silently become an exact scalar of every individual
+ * product card merely because a model mislabeled `measurement_scope`.
+ *
+ * This is dimension-only and catalog-neutral: no product, category or target
+ * unit vocabulary is embedded here.
+ */
+export function reasoningComputesSystemTotalFromSpatialExtent(
+  customerEvidence: string,
+  reasoningText: string,
+): boolean {
+  const customerExtents = extractClientQuantities(customerEvidence)
+    .map((quantity) => ({ ...quantity, unit: normalizeUnit(quantity.unit) }))
+    .filter(({ unit }) => /[²³]/u.test(unit));
+  if (customerExtents.length === 0) return false;
+  const reasoningQuantities = extractClientQuantities(reasoningText)
+    .map((quantity) => ({ ...quantity, unit: normalizeUnit(quantity.unit) }));
+  const repeatsExtent = customerExtents.some((extent) =>
+    reasoningQuantities.some((quantity) =>
+      quantity.value === extent.value && quantity.unit === extent.unit
+    )
+  );
+  if (!repeatsExtent) return false;
+  const derivesAnotherDimension = reasoningQuantities.some((quantity) =>
+    isPhysicalMeasurementUnit(quantity.unit) &&
+    !customerExtents.some((extent) => extent.unit === quantity.unit)
+  );
+  return derivesAnotherDimension &&
+    /[×xх*][^.!?\n]{0,120}(?:=|≈)/u.test(String(reasoningText ?? ""));
 }
 
 /**
@@ -516,8 +550,14 @@ export function resolveDerivedSelectionReasoning(
   const declaredMeasurementScope = String(
     args.measurement_scope ?? "per_product",
   );
-  const measurementScope = declaredMeasurementScope === "system_total" ||
-      declaredMeasurementScope === "not_applicable"
+  const computedSystemTotal = reasoningComputesSystemTotalFromSpatialExtent(
+    customerEvidence,
+    originalReasoning,
+  );
+  const measurementScope = computedSystemTotal
+    ? "system_total"
+    : declaredMeasurementScope === "system_total" ||
+        declaredMeasurementScope === "not_applicable"
     ? declaredMeasurementScope
     : "per_product";
   const rawRetrievalQuery = visibleFacetText(

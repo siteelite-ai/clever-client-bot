@@ -7,6 +7,7 @@ import {
   hasSelectionSuitabilityContext,
   measuredSelectionContractEvidence,
   resolveDerivedSelectionReasoning,
+  reasoningComputesSystemTotalFromSpatialExtent,
   shouldContinueSelectionPastOptionalClarification,
   shouldFinalizeDerivedSelectionSearch,
   shouldProjectDerivedScalarMeasurement,
@@ -436,6 +437,42 @@ Deno.test("system-total reasoning is visibly marked and cannot masquerade as one
     resolved?.measurementEvidence.includes(
       "распределить между несколькими товарами",
     ),
+    true,
+  );
+});
+
+Deno.test("a spatial calculation cannot masquerade as one-product evidence", () => {
+  const customer =
+    "Нужен светодиодный светильник для гостиной площадью 25 кв. м";
+  const reasoning =
+    "Световой поток = 25 м² × 150 лк = 3750 лм. Нужен поток не менее 3750 лм.";
+  assertEquals(
+    reasoningComputesSystemTotalFromSpatialExtent(customer, reasoning),
+    true,
+  );
+  assertEquals(
+    reasoningComputesSystemTotalFromSpatialExtent(
+      "Нужен кабель длиной 25 м",
+      "25 м × 2 = 50 м кабеля.",
+    ),
+    false,
+  );
+
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning,
+      measurement_scope: "per_product",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: [],
+      explicit_customer_classifications: [],
+    },
+    [],
+    customer,
+  );
+  assertEquals(resolved?.measurementScope, "system_total");
+  assertEquals(
+    resolved?.text.includes("суммарная потребность всей системы"),
     true,
   );
 });
