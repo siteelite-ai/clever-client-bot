@@ -794,6 +794,25 @@ Deno.test("an ordinary illustrative range is not promoted by the word usually al
   assertEquals(projected.added, []);
 });
 
+Deno.test("an unqualified engineering range cannot bind a qualified capability facet", () => {
+  const contract = compileMeasuredReasoningSearchContract(
+    [],
+    "Номинальный ток 25 А соответствует защите линии сечением 2,5–4 мм².",
+    [],
+    [{
+      key: "max_connected_section",
+      caption: "Макс. сечение подключаемого кабеля, мм2",
+      type: "checkbox",
+      unit: "мм²",
+      values: [{ value: "16" }, { value: "25" }, { value: "35" }],
+    }],
+  );
+
+  assertEquals(contract.projected_criteria, []);
+  assertEquals(contract.mandatory_criteria, []);
+  assertEquals(contract.options, {});
+});
+
 Deno.test("direct product measurement can bind one otherwise unitless live facet", () => {
   const projected = projectLiteralMeasuredCriteria(
     [],

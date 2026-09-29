@@ -667,6 +667,11 @@ export function projectReasoningRangeCriteria(
       } else if (/^(?:конечн|финальн|final)/u.test(token)) states.add("final");
       else if (/^(?:входн|input)/u.test(token)) states.add("input");
       else if (/^(?:выходн|output)/u.test(token)) states.add("output");
+      else if (/^(?:макс|максим|предельн|maximum|max)/u.test(token)) {
+        states.add("maximum");
+      } else if (/^(?:мин|миним|minimum|min)/u.test(token)) {
+        states.add("minimum");
+      }
     }
     return states;
   };
@@ -817,8 +822,16 @@ export function projectReasoningRangeCriteria(
         (declaredUnit === range.unit || labelHasUnit);
     });
     const rangeStates = measurementStates(range.context);
+    // A schema caption may describe a capability boundary rather than the
+    // product's actual scalar (for example, "maximum connected cable
+    // section"). Unit equality alone must not map an ordinary engineering
+    // recommendation onto such a qualified facet. If the reasoning does not
+    // declare the same state, only unqualified scalar facets are eligible.
     const stateCompatibleFacets = rangeStates.size === 0
-      ? unitFacets
+      ? unitFacets.filter((facet) => {
+        const facetStates = measurementStates(`${facet.key} ${facet.caption}`);
+        return !facetStates.has("maximum") && !facetStates.has("minimum");
+      })
       : unitFacets.filter((facet) => {
         const facetStates = measurementStates(`${facet.key} ${facet.caption}`);
         return facetStates.size === 0 ||
