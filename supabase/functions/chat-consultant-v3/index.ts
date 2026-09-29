@@ -2969,8 +2969,8 @@ const LLM_TIMEOUT_DERIVED_REASONING_MS = 22_000;
 // bounded by the same reasoning deadline. The primary model retains enough
 // time to complete the forced engineering contract; the retry still leaves a
 // deterministic catalog/finalization reserve before the hard turn timeout.
-const LLM_TIMEOUT_DERIVED_PRIMARY_MS = 12_000;
-const LLM_TIMEOUT_DERIVED_RETRY_MS = 8_500;
+const LLM_TIMEOUT_DERIVED_PRIMARY_MS = 11_500;
+const LLM_TIMEOUT_DERIVED_RETRY_MS = 8_000;
 const LLM_TIMEOUT_CATALOG_PLANNING_MS = 15_000;
 const LLM_TIMEOUT_FINAL_RENDER_MS = 11_000;
 const LLM_TIMEOUT_EMPTY_SYNTHESIS_MS = 3_500;
@@ -6990,7 +6990,7 @@ async function runExpertLoop(
               ms: now(),
               meta: {
                 primary_model: ctx.selectionReasoningModel,
-                retry_model: MODEL,
+                retry_model: GENERAL_INQUIRY_MODEL,
                 primary_timeout_ms: primaryReasoningTimeout,
                 retry_timeout_ms: retryTimeout,
               },
@@ -7006,13 +7006,13 @@ async function runExpertLoop(
               0,
               [reasoningToolSchema],
               1200,
-              AGENT_MODEL_ROUTING,
+              GENERAL_INQUIRY_MODEL_ROUTING,
             );
             steps.push({
               step: "v3_derived_selection_reasoning_retry_recovered",
               ms: now(),
               meta: {
-                retry_model: MODEL,
+                retry_model: GENERAL_INQUIRY_MODEL,
                 retry_timeout_ms: retryTimeout,
               },
             });

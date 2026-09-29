@@ -874,6 +874,48 @@ Deno.test("a customer-grounded class family preserves all matching live variants
   );
 });
 
+Deno.test("a model may refine a customer-owned family only to one member of that family", () => {
+  const liveFacets = [{
+    caption: "Класс применения",
+    type: "string",
+    values: [
+      { value: "бытовые изделия накладные" },
+      { value: "бытовые изделия подвесные" },
+      { value: "промышленные изделия" },
+    ],
+  }];
+  const refined = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для указанного монтажа подходит подвесное исполнение бытового изделия.",
+      compatible_classifications: ["f0v1"],
+      excluded_classifications: [],
+    },
+    liveFacets,
+    "Нужны бытовые изделия",
+  );
+  assertEquals(refined?.compatible, [{
+    key: "Класс применения",
+    value: "бытовые изделия подвесные",
+  }]);
+  assertEquals(refined?.customerGroundedCompatible, []);
+  assertEquals(refined?.familyCompatibleFacetKeys, []);
+
+  const rejectedSibling = resolveDerivedSelectionReasoning(
+    {
+      reasoning: "Для указанного монтажа подходит промышленное исполнение.",
+      compatible_classifications: ["f0v2"],
+      excluded_classifications: [],
+    },
+    liveFacets,
+    "Нужны бытовые изделия",
+  );
+  assertEquals(rejectedSibling?.compatible, [
+    { key: "Класс применения", value: "бытовые изделия накладные" },
+    { key: "Класс применения", value: "бытовые изделия подвесные" },
+  ]);
+});
+
 Deno.test("the established product head cannot ground a narrower classification family", () => {
   const resolved = resolveDerivedSelectionReasoning(
     {
