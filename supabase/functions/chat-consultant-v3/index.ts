@@ -6721,7 +6721,8 @@ async function runExpertLoop(
         )
         : null;
       const compiledAdjacentApplicationSearch =
-        selectionReasoningOnlyRequired && lastDiscover
+        selectionReasoningOnlyRequired && lastDiscover &&
+          !hasSelectionMeasurementContext(userMessage)
           ? (() => {
             const productClass = activeSelectionTarget ??
               lastDiscover.category?.pagetitle ?? "";

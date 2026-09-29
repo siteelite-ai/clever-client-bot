@@ -1024,6 +1024,20 @@ Deno.test("provider fallback projects one unique adjacent application facet and 
     ),
     null,
   );
+
+  assertEquals(
+    projectUniqueAdjacentApplicationFacetCriteria(
+      "прожектор",
+      "Нужен уличный прожектор для двора частного дома",
+      [{
+        key: "installation",
+        caption: "Место установки",
+        values: [{ value: "уличный" }],
+      }],
+    ),
+    null,
+    "a relational application phrase needs full suitability reasoning",
+  );
 });
 
 Deno.test("application projection cannot derive a subtype from a repeated class noun", () => {

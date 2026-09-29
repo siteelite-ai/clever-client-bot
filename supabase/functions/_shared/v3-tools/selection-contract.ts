@@ -1259,6 +1259,7 @@ export function projectUniqueAdjacentApplicationFacetCriteria(
       includeAdjacentModifier: false,
     }).map(normalize),
   );
+  if (relational.size > 0) return null;
   const phrases = extractCustomerApplicationContexts(
     userMessage,
     productClass,
