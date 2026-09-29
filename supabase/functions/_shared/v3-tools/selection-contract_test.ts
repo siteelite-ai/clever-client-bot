@@ -14,6 +14,7 @@ import {
   projectCustomerApplicationFacetCriteria,
   projectModelOnlySelectionTargetExtension,
   projectSelectionApplicationFacetCriteria,
+  projectUniqueAdjacentApplicationFacetCriteria,
   projectSelectionTargetFacetCriteria,
   promoteSelectionApplicationBackingCriteria,
   promoteSelectionTargetBackingCriteria,
@@ -967,6 +968,61 @@ Deno.test("adjacent class modifiers require reasoning instead of direct applicat
       { includeAdjacentModifier: false },
     ),
     [],
+  );
+});
+
+Deno.test("provider fallback projects one unique adjacent application facet and fails closed on ambiguity", () => {
+  assertEquals(
+    projectUniqueAdjacentApplicationFacetCriteria(
+      "светильники",
+      "Подбери несколько самых недорогих офисных светильников Philips",
+      [
+        {
+          key: "kind",
+          caption: "Вид светильника",
+          values: [
+            { value: "офисно-административное освещение" },
+            { value: "промышленное освещение" },
+          ],
+        },
+        {
+          key: "brand",
+          caption: "Бренд",
+          values: [{ value: "Philips" }],
+        },
+      ],
+    ),
+    {
+      phrases: ["офисных"],
+      criteria: [{
+        key: "Вид светильника",
+        op: "eq",
+        value: "офисно-административное освещение",
+        unit: undefined,
+        level: "A",
+        evidence: "user_explicit",
+      }],
+    },
+  );
+
+  assertEquals(
+    projectUniqueAdjacentApplicationFacetCriteria(
+      "светильник",
+      "Нужен белый светильник",
+      [
+        {
+          key: "body_color",
+          caption: "Цвет корпуса",
+          values: [{ value: "белый" }],
+        },
+        {
+          key: "light_color",
+          caption: "Цвет свечения",
+          values: [{ value: "белый" }],
+        },
+      ],
+    ),
+    null,
   );
 });
 

@@ -1232,6 +1232,55 @@ export function projectCustomerApplicationFacetCriteria(
   }));
 }
 
+export interface UniqueAdjacentApplicationFacetProjection {
+  phrases: string[];
+  criteria: Criterion[];
+}
+
+/**
+ * Bounded provider-fallback for an adjective attached directly to the product
+ * class. It is intentionally stricter than ordinary model reasoning: the
+ * adjacent wording must add a real qualifier and the whole live schema must
+ * yield exactly one non-identity facet/value pair. Ambiguous properties such
+ * as a colour shared by body and light axes fail closed.
+ */
+export function projectUniqueAdjacentApplicationFacetCriteria(
+  productClass: string,
+  userMessage: string,
+  facets: Array<{
+    key: string;
+    caption?: string | null;
+    unit?: string | null;
+    values?: Array<{ value: string }>;
+  }>,
+): UniqueAdjacentApplicationFacetProjection | null {
+  const relational = new Set(
+    extractCustomerApplicationContexts(userMessage, productClass, {
+      includeAdjacentModifier: false,
+    }).map(normalize),
+  );
+  const phrases = extractCustomerApplicationContexts(
+    userMessage,
+    productClass,
+  ).filter((phrase) => !relational.has(normalize(phrase)));
+  if (!String(productClass ?? "").trim() || phrases.length === 0) return null;
+  const criteria = projectSelectionApplicationFacetCriteria({
+    product_class: productClass,
+    application_context: phrases,
+  }, facets).map((criterion) => ({
+    ...criterion,
+    evidence: "user_explicit" as const,
+  }));
+  const unique = criteria.filter((criterion, index, all) =>
+    all.findIndex((candidate) =>
+      normalize(candidate.key) === normalize(criterion.key) &&
+      normalize(String(candidate.value ?? "")) ===
+        normalize(String(criterion.value ?? ""))
+    ) === index
+  );
+  return unique.length === 1 ? { phrases, criteria: unique } : null;
+}
+
 /**
  * Decides whether render verification may return to an already grounded base
  * class after the model emitted a richer class phrase. The projection never

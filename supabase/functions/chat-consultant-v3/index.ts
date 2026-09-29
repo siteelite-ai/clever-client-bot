@@ -134,6 +134,7 @@ import {
   projectModelOnlySelectionTargetExtension,
   projectSelectionApplicationFacetCriteria,
   projectSelectionTargetFacetCriteria,
+  projectUniqueAdjacentApplicationFacetCriteria,
   promoteSelectionApplicationBackingCriteria,
   promoteSelectionTargetBackingCriteria,
   resolveTerminalSelectionTarget,
@@ -6719,8 +6720,66 @@ async function runExpertLoop(
           selectionDiscoveryMessage,
         )
         : null;
+      const compiledAdjacentApplicationSearch =
+        selectionReasoningOnlyRequired && lastDiscover
+          ? (() => {
+            const productClass = activeSelectionTarget ??
+              lastDiscover.category?.pagetitle ?? "";
+            const application =
+              projectUniqueAdjacentApplicationFacetCriteria(
+                productClass,
+                userMessage,
+                lastDiscover.facets ?? [],
+              );
+            if (!application) return null;
+            const criteria = mergeMandatorySelectionCriteria([
+              ...userBackedSearchCriteria,
+              ...application.criteria,
+            ]);
+            const projection = projectCriteriaFacetOptions(
+              criteria,
+              lastDiscover.facets ?? [],
+            );
+            if (Object.keys(projection.options).length === 0) return null;
+            const leaves = lastDiscover.leaf_categories.map(({ pagetitle }) =>
+              pagetitle
+            ).filter(Boolean);
+            const price = detectPriceDirection(userMessage);
+            const budget = extractBudgetCap(userMessage);
+            const text = `Явно указанное условие «${
+              application.phrases.join(", ")
+            }» однозначно соответствует параметру каталога «${
+              application.criteria.map((criterion) =>
+                `${criterion.key}: ${String(criterion.value)}`
+              ).join("; ")
+            }». Применяю его вместе с остальными прямо указанными ограничениями.`;
+            return {
+              application,
+              criteria,
+              text,
+              args: {
+                mode: "by_filter",
+                options: projection.options,
+                ...(leaves.length > 0
+                  ? { category_in: leaves }
+                  : { category: lastDiscover.category.pagetitle }),
+                ...(budget !== null ? { max_price: budget } : {}),
+                ...(price?.kind === "superlative" &&
+                    price.direction === "cheaper"
+                  ? { sort_cheapest: true }
+                  : {}),
+                ...(price?.kind === "superlative" &&
+                    price.direction === "more_expensive"
+                  ? { sort_expensive: true }
+                  : {}),
+                per_page: 50,
+              } as Record<string, unknown>,
+            };
+          })()
+          : null;
       const serverCompiledStepAvailable = Boolean(
-        queuedServerGroundedSearch || compiledInitialDiscovery,
+        queuedServerGroundedSearch || compiledInitialDiscovery ||
+          compiledAdjacentApplicationSearch,
       );
       if (
         shouldFinalizeBeforeRemoteAgentStep({
@@ -6772,6 +6831,72 @@ async function runExpertLoop(
             meta: {
               strategy: "live_taxonomy_full_message",
               forced_tool: forcedToolName,
+            },
+          });
+        } else if (compiledAdjacentApplicationSearch && lastDiscover) {
+          const callId = crypto.randomUUID();
+          for (const phrase of compiledAdjacentApplicationSearch.application.phrases) {
+            semanticallyMappedCustomerPhrases.add(phrase);
+          }
+          userBackedSearchCriteria = mergeUserBackedCriteria(
+            userBackedSearchCriteria,
+            compiledAdjacentApplicationSearch.application.criteria,
+          );
+          const compiledOptions =
+            compiledAdjacentApplicationSearch.args.options as Record<
+              string,
+              string[]
+            >;
+          for (const [key, values] of Object.entries(compiledOptions)) {
+            for (const value of values) {
+              if (
+                !userBackedSearchFacetValues.some((known) =>
+                  known.key === key && known.value === value
+                )
+              ) userBackedSearchFacetValues.push({ key, value });
+            }
+          }
+          const frozenCriteria = freezeSelectionCriteria(
+            compiledAdjacentApplicationSearch.criteria,
+            "application_context",
+          );
+          enforcedSearchCriteria = frozenCriteria.map((criterion) => ({
+            ...criterion,
+          }));
+          reasoningProjectedSearchCriteria = mergeUserBackedCriteria(
+            reasoningProjectedSearchCriteria,
+            frozenCriteria,
+          );
+          latestRenderCriteria = preserveFrozenSelectionCriteria(
+            latestRenderCriteria,
+          );
+          derivedStructuredSearchCallId = callId;
+          derivedStructuredSearchPairedCompatibility = false;
+          derivedStructuredSearchGuidedByVisibleReasoning = true;
+          derivedStructuredSearchDiscovery = lastDiscover;
+          structuredSearchSource = "derived_reasoning";
+          serverValidatedDerivedReasoning = true;
+          resp = {
+            text: compiledAdjacentApplicationSearch.text,
+            toolCalls: [{
+              id: callId,
+              name: "search_catalog",
+              args: compiledAdjacentApplicationSearch.args,
+            }],
+            finishReason: "server_compiled_adjacent_application_search",
+          };
+          steps.push({
+            step: "v3_adjacent_application_search_compiled",
+            ms: now(),
+            meta: {
+              phrases: compiledAdjacentApplicationSearch.application.phrases,
+              criteria: compiledAdjacentApplicationSearch.application.criteria,
+              option_keys: Object.keys(
+                (compiledAdjacentApplicationSearch.args.options ?? {}) as Record<
+                  string,
+                  unknown
+                >,
+              ),
             },
           });
         } else if (agentPhase === "inquiry_explanation_ready") {
