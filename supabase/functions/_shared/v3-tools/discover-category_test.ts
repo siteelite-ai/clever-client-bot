@@ -69,6 +69,13 @@ Deno.test("local live-taxonomy resolver categorizes only the destination of a tr
     noun: "Хочу заменить светильник на люстру для гостиной",
     semantic_query: "Хочу заменить светильник на люстру для гостиной",
   }, ["Люстры", "Светильники"]), ["Люстры"]);
+
+  assertEquals(resolveLocalCategoryPagetitles({
+    noun:
+      "Чем заменить люстру: нужен светодиодный светильник для гостиной площадью 25 кв. м?",
+    semantic_query:
+      "Чем заменить люстру: нужен светодиодный светильник для гостиной площадью 25 кв. м?",
+  }, ["Люстры", "Светильники"]), ["Светильники"]);
 });
 
 Deno.test("local live-taxonomy resolver fails closed on a shared ambiguous class", () => {

@@ -487,7 +487,7 @@ const GENERAL_INQUIRY_MODEL_ROUTING = buildOpenRouterModelRouting(
 );
 const MAX_STEPS = 12;
 const MAX_REMOTE_AGENT_STEPS = 1;
-const TURN_TIMEOUT_MS = 20_000;
+const TURN_TIMEOUT_MS = 32_000;
 // Stop starting remote model calls before the hard abort so the ordinary
 // evidence-gated recovery below has time to render a proven pool and close SSE.
 const TURN_SOFT_DEADLINE_MS = 13_000;
@@ -495,7 +495,7 @@ const TURN_SOFT_DEADLINE_MS = 13_000;
 // step: it creates the proof contract that the subsequent catalog query must
 // obey. Give this one bounded step enough room for the configured reasoning
 // model while still reserving time for deterministic search and SSE closure.
-const DERIVED_REASONING_SOFT_DEADLINE_MS = 18_000;
+const DERIVED_REASONING_SOFT_DEADLINE_MS = 26_000;
 const CATALOG_PLANNING_SOFT_DEADLINE_MS = 18_000;
 const MIN_AGENT_STEP_BUDGET_MS = 2_500;
 
@@ -2956,13 +2956,15 @@ interface ORToolSchema {
 const LLM_TIMEOUT_INTRO_MS = 10_000;
 const LLM_TIMEOUT_INTRO_RETRY_MS = 4_000;
 const LLM_TIMEOUT_TOOL_DECISION_MS = 10_000;
-const LLM_TIMEOUT_DERIVED_REASONING_MS = 15_000;
+const LLM_TIMEOUT_DERIVED_REASONING_MS = 22_000;
 // Split the derived-reasoning budget between the configured high-quality
 // model and the independent fast reasoning route. A single silent model must not own
 // the whole turn; the retry still uses the identical forced schema and is
-// bounded by the same 18-second reasoning deadline.
-const LLM_TIMEOUT_DERIVED_PRIMARY_MS = 7_000;
-const LLM_TIMEOUT_DERIVED_RETRY_MS = 6_500;
+// bounded by the same reasoning deadline. The primary model retains enough
+// time to complete the forced engineering contract; the retry still leaves a
+// deterministic catalog/finalization reserve before the hard turn timeout.
+const LLM_TIMEOUT_DERIVED_PRIMARY_MS = 12_000;
+const LLM_TIMEOUT_DERIVED_RETRY_MS = 8_500;
 const LLM_TIMEOUT_CATALOG_PLANNING_MS = 15_000;
 const LLM_TIMEOUT_FINAL_RENDER_MS = 11_000;
 const LLM_TIMEOUT_EMPTY_SYNTHESIS_MS = 3_500;

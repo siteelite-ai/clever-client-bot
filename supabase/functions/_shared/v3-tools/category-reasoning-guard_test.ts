@@ -405,6 +405,12 @@ Deno.test("semantic discovery uses only the explicit customer destination of a t
     "светодиодное освещение",
   );
   assertEquals(
+    extractCustomerOwnedDiscoveryTarget(
+      "Чем заменить люстру: нужен светодиодный светильник для гостиной площадью 25 кв. м?",
+    ),
+    "светодиодный светильник",
+  );
+  assertEquals(
     extractCustomerOwnedDiscoveryTarget("Заменить автомат на 16 А"),
     null,
   );

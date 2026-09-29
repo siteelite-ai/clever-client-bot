@@ -239,6 +239,8 @@ export function extractCustomerOwnedDiscoveryTarget(
   const source = String(customerText ?? "").trim();
   const match = source.match(
     /(?:замен\p{L}*|поменя\p{L}*|смен\p{L}*)[^.!?\n]{0,100}?\s+на\s+([^.!?\n]{2,100})/iu,
+  ) ?? source.match(
+    /(?:чем\s+замен\p{L}*|замен\p{L}*)[^:;!?\n]{1,100}[:;—-]\s*(?:мне\s+)?(?:нуж\p{L}*|ищ\p{L}*|подбер\p{L}*)\s+([^.!?\n]{2,100})/iu,
   );
   if (!match) return null;
   const destination = String(match[1] ?? "")
