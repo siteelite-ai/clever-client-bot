@@ -764,6 +764,21 @@ const COMPOUND_COUNT_PREFIXES: ReadonlyArray<readonly [string, number]> = [
   ["одно", 1],
 ];
 
+const SEPARATED_COUNT_WORDS: ReadonlyMap<string, number> = new Map([
+  ["один", 1], ["одна", 1], ["одно", 1], ["одним", 1], ["одной", 1],
+  ["два", 2], ["две", 2], ["двух", 2], ["двумя", 2],
+  ["три", 3], ["трех", 3], ["тремя", 3],
+  ["четыре", 4], ["четырех", 4], ["четырьмя", 4],
+  ["пять", 5], ["пяти", 5], ["пятью", 5],
+  ["шесть", 6], ["шести", 6], ["шестью", 6],
+  ["семь", 7], ["семи", 7], ["семью", 7],
+  ["восемь", 8], ["восьми", 8], ["восемью", 8],
+  ["девять", 9], ["девяти", 9], ["девятью", 9],
+  ["десять", 10], ["десяти", 10], ["десятью", 10],
+  ["одиннадцать", 11], ["одиннадцати", 11], ["одиннадцатью", 11],
+  ["двенадцать", 12], ["двенадцати", 12], ["двенадцатью", 12],
+]);
+
 const COUNT_FACET_MARKER = /^(?:количеств|числ|number|count)/u;
 const COUNT_ADJECTIVE_ENDINGS = [
   "овыми", "евыми", "ового", "евого", "овому", "евому",
@@ -798,6 +813,24 @@ function compoundCountClaims(evidence: string): Array<{ count: number; nounStem:
   return claims;
 }
 
+function separatedCountClaims(
+  evidence: string,
+): Array<{ count: number; nounStem: string }> {
+  const tokens = norm(evidence).split(" ").filter(Boolean);
+  const claims: Array<{ count: number; nounStem: string }> = [];
+  for (let index = 0; index + 1 < tokens.length; index++) {
+    const rawCount = tokens[index];
+    const numeric = rawCount.match(/^\d+$/u)?.[0];
+    const count = numeric ? Number(numeric) : SEPARATED_COUNT_WORDS.get(rawCount);
+    if (!Number.isInteger(count) || Number(count) < 1 || Number(count) > 12) {
+      continue;
+    }
+    const nounStem = countedNounStem(stemRu(tokens[index + 1]));
+    if (nounStem.length >= 3) claims.push({ count: Number(count), nounStem });
+  }
+  return claims;
+}
+
 /**
  * Resolve morphological cardinality such as `трехжильный`, `двухполюсный`
  * or `четырехэлементный` against a live count facet. The product noun is not
@@ -819,7 +852,10 @@ function compoundCountFacetValue(
     .filter((token) => token.length >= 3);
   if (nounStems.length === 0) return null;
 
-  const claims = compoundCountClaims(evidence).filter(({ nounStem }) =>
+  const claims = [
+    ...compoundCountClaims(evidence),
+    ...separatedCountClaims(evidence),
+  ].filter(({ nounStem }) =>
     nounStems.some((facetStem) =>
       facetStem === nounStem ||
       Math.min(facetStem.length, nounStem.length) >= 3 &&

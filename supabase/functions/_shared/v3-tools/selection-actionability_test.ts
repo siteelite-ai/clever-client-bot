@@ -587,6 +587,32 @@ Deno.test("an exact technical ID becomes required only when visible reasoning st
   assertEquals(hidden?.text.includes("Обязательные параметры"), false);
 });
 
+Deno.test("a separated inflected count in visible reasoning becomes one exact requirement", () => {
+  const resolved = resolveDerivedSelectionReasoning(
+    {
+      reasoning:
+        "Для подключения необходим силовой вариант с тремя жилами: фаза, ноль и защитное заземление.",
+      compatible_classifications: [],
+      excluded_classifications: [],
+      required_facet_values: [],
+    },
+    [{
+      key: "core_count",
+      caption: "Количество жил",
+      values: [{ value: "2" }, { value: "3" }, { value: "4" }],
+    }],
+    "Оборудование мощностью 3 кВт",
+  );
+  assertEquals(resolved?.requiredFacetValues, [{
+    key: "Количество жил",
+    value: "3",
+  }]);
+  assertEquals(
+    resolved?.text.includes("Обязательные параметры: «Количество жил: 3»"),
+    true,
+  );
+});
+
 Deno.test("visible reasoning compiles several exact values from a live-like schema", () => {
   const facets = [
     {

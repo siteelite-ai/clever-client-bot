@@ -206,6 +206,26 @@ Deno.test("a customer-owned compound count retains user provenance", () => {
   );
 });
 
+Deno.test("separated numeric and inflected count phrases project onto the same live count facet", () => {
+  const facets = [
+    { key: "core_count", caption: "Количество жил", values: [{ value: "2" }, { value: "3" }, { value: "4" }] },
+    { key: "pole_count", caption: "Количество полюсов", values: [{ value: "2" }, { value: "3" }] },
+  ];
+  for (const reasoning of [
+    "Для подключения необходимы 3 жилы: фаза, ноль и заземление.",
+    "Для подключения нужен вариант с тремя жилами.",
+  ]) {
+    assertEquals(
+      projectExplicitReasoningFacetValues(
+        facets,
+        reasoning,
+        "Нужно подключить оборудование мощностью 3 кВт.",
+      ),
+      { kept: [{ key: "core_count", value: "3" }], user_backed: [] },
+    );
+  }
+});
+
 Deno.test("an application measurement cannot become an unrelated count facet", () => {
   const facets = [{
     key: "element_count",
