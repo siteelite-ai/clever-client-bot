@@ -937,6 +937,35 @@ Deno.test("customer application compiles only through a unique live non-identity
   );
 });
 
+Deno.test("customer application does not bind unrelated compound words by a short stem", () => {
+  assertEquals(
+    projectCustomerApplicationFacetCriteria(
+      "Светильники",
+      "Хочу заменить люстру на светодиодный светильник в гостиной 25 м²",
+      [
+        {
+          key: "color",
+          caption: "Цвет корпуса",
+          values: [{ value: "светло-серый" }, { value: "белый" }],
+        },
+        {
+          key: "gear",
+          caption: "ПРА",
+          values: [{ value: "светодиодный драйвер" }, { value: "ЭмПРА" }],
+        },
+      ],
+    ),
+    [{
+      key: "ПРА",
+      op: "eq",
+      value: "светодиодный драйвер",
+      unit: undefined,
+      level: "A",
+      evidence: "user_explicit",
+    }],
+  );
+});
+
 Deno.test("application projection cannot derive a subtype from a repeated class noun", () => {
   assertEquals(
     projectSelectionApplicationFacetCriteria(

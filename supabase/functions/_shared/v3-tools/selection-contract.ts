@@ -1145,6 +1145,32 @@ export function projectSelectionApplicationFacetCriteria(
         Number(leftIndex < left.length || rightIndex < right.length) <= 1;
   };
 
+  // Application wording is customer evidence, so a short fixed-length stem
+  // is too permissive here. In particular, unrelated Russian compounds such
+  // as «светодиодный» and «светло-серый» share the first four letters. Accept
+  // exact tokens, one-character typos, or a shared lexical root followed only
+  // by ordinary inflectional endings on both sides. This preserves legitimate
+  // pairs such as «офиса» ↔ «офисно-административное» without allowing one
+  // compound word to prove another.
+  const inflectionalSuffix =
+    /^(?:|а|я|ы|и|е|о|у|ю|ов|ев|ам|ям|ах|ях|ой|ей|ый|ий|ое|ее|ая|яя|ые|ие|ого|его|ому|ему|ым|им|ом|ем|ых|их|но)$/u;
+  const applicationTokenMatches = (left: string, right: string) => {
+    if (left === right) return true;
+    if (
+      Math.min(left.length, right.length) >= 4 &&
+      editDistanceAtMostOne(left, right)
+    ) return true;
+    if (!/[а-я]/u.test(left) || !/[а-я]/u.test(right)) return false;
+    let prefixLength = 0;
+    const max = Math.min(left.length, right.length);
+    while (
+      prefixLength < max && left[prefixLength] === right[prefixLength]
+    ) prefixLength += 1;
+    if (prefixLength < 4) return false;
+    return inflectionalSuffix.test(left.slice(prefixLength)) &&
+      inflectionalSuffix.test(right.slice(prefixLength));
+  };
+
   return (Array.isArray(facets) ? facets : []).flatMap((facet) => {
     if (isItemIdentityLabel(`${facet.key} ${facet.caption ?? ""}`)) return [];
     const matches = (Array.isArray(facet.values) ? facet.values : [])
@@ -1152,16 +1178,14 @@ export function projectSelectionApplicationFacetCriteria(
       .filter(Boolean)
       .filter((value) => {
         const normalizedValue = normalize(value);
-        const valueTokens = meaningfulTokens(value);
+        const valueTokens = meaningfulRawTokens(value);
         if (valueTokens.length === 0) return false;
         return compactContexts.some((context) =>
           context.raw === normalizedValue ||
           !/(?:^|\s)(?:не|без)(?:\s|$)/iu.test(normalizedValue) &&
-            context.qualifierTokens.every((contextToken) =>
+            meaningfulRawTokens(context.raw).every((contextToken) =>
               valueTokens.some((valueToken) =>
-                valueToken === contextToken ||
-                Math.min(valueToken.length, contextToken.length) >= 4 &&
-                  editDistanceAtMostOne(valueToken, contextToken)
+                applicationTokenMatches(valueToken, contextToken)
               )
             )
         );
